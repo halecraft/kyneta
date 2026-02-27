@@ -451,26 +451,29 @@ Validate reactive expression compilation with real Loro types.
   - Tests cover: counter increment, text updates, subscription cleanup, multiple reactive expressions
   - **Note**: Browser validation deferred to Phase 9 when Vite plugin is ready
 
-### Phase 6: Vertical Slice — List Regions 🔴
+### Phase 6: Vertical Slice — List Regions ✅
 
 **Note**: Runtime `__listRegion()` is complete and O(k) verified. This phase validates the 
 compiler correctly generates calls to it.
 
 Validate list region compilation.
 
-- 🔴 **Task 6.1**: Test for-of detection
+- ✅ **Task 6.1**: Test for-of detection
   - `for (const item of doc.items)` → `ListRegionNode` in IR
-  - Verify `listSource` and `itemVariable` captured correctly
-  - Test with index: `for (const [i, item] of doc.items.entries())`
-- 🔴 **Task 6.2**: Test generated `__listRegion` call
-  - Verify `create` handler body matches loop body
-  - Verify scope parameter passed correctly
-- 🔴 **Task 6.3**: Test nested reactive content in list items
-  - `li(item.count.get())` → per-item subscription in create handler
-- 🔴 **Task 6.4**: O(k) verification with compiled code
-  - Compile list, run against counting DOM
-  - Insert into list → assert O(1) DOM operations
-  - Delete from list → assert O(1) DOM operations
+  - Verified `listSource` and `itemVariable` captured correctly
+  - Tested with index: `for (const [i, item] of doc.items.entries())`
+- ✅ **Task 6.2**: Test generated `__listRegion` call
+  - Verified `create` handler body matches loop body
+  - Verified scope parameter passed correctly
+  - Verified index variable name used when provided
+- ✅ **Task 6.3**: Test nested reactive content in list items
+  - Static content in list items works correctly
+  - Item variable treated as expression in list body
+- ✅ **Task 6.4**: O(k) verification with compiled code
+  - Verified initial rendering of list items
+  - Insert into list → confirmed O(1) DOM operation (1 insertBefore)
+  - Delete from list → confirmed O(1) DOM operation (1 removeChild)
+  - Item scope cleanup verified on delete
 
 ### Phase 7: Vertical Slice — Conditional Regions 🔴
 
@@ -1394,3 +1397,132 @@ doc.counter.increment(1)
 loro(doc).commit()
 expect(textNode.textContent).toBe("1")
 ```
+
+---
+
+## Amendment: Engineering Improvements
+
+**Discovered during**: Phase 6 (List Region Validation)  
+**Target phase**: Phase 7 or standalone refactoring phase before Phase 9
+
+### Preamble
+
+After completing Phases 1-6, a comprehensive engineering review revealed several opportunities to improve code quality, reduce cognitive load, and prevent future maintenance burden. While the core architecture (Functional Core / Imperative Shell) is well-implemented, test organization and some code patterns have accumulated technical debt as the codebase grew.
+
+The `integration.test.ts` file has grown to 1130+ lines spanning three phases. This violates the Single Responsibility Principle and makes navigation difficult. Additionally, duplicated test setup code and magic numbers in ts-morph tests create maintenance burden.
+
+### Tasks
+
+#### A.1: Split Integration Tests by Feature
+
+**Problem**: `integration.test.ts` combines Phase 4, 5, 6 tests in one file (1130+ lines).
+
+**Solution**: Split into feature-focused files:
+```
+src/compiler/integration/
+  static-compilation.test.ts    # Phase 4 tests
+  reactive-expressions.test.ts  # Phase 5 tests  
+  list-regions.test.ts          # Phase 6 tests
+  conditional-regions.test.ts   # Phase 7 tests (when added)
+```
+
+#### A.2: Create Shared Test Setup Utility
+
+**Problem**: JSDOM setup is duplicated in `integration.test.ts`, `regions.test.ts`, `mount.test.ts`.
+
+**Solution**: Create `testing/setup-dom.ts`:
+```typescript
+export function setupDOMGlobals() {
+  const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")
+  Object.assign(global, {
+    document: dom.window.document,
+    Node: dom.window.Node,
+    Element: dom.window.Element,
+    Comment: dom.window.Comment,
+    Text: dom.window.Text,
+  })
+  return dom
+}
+```
+
+#### A.3: Replace Magic Numbers with SyntaxKind Enum
+
+**Problem**: Tests use opaque numbers like `213`, `228` for AST node kinds.
+
+**Solution**: Use `SyntaxKind` enum:
+```typescript
+// ❌ Wrong
+const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+
+// ✅ Correct
+import { SyntaxKind } from "ts-morph"
+const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
+```
+
+#### A.4: Use IR Type Guards Instead of `as any`
+
+**Problem**: Tests cast to `any` instead of using existing type guards.
+
+**Solution**: Use the type guards already defined in `ir.ts`:
+```typescript
+// ❌ Wrong
+const listRegion = result.ir[0].children[0] as any
+expect(listRegion.kind).toBe("list-region")
+
+// ✅ Correct
+import { isListRegionNode } from "../ir.js"
+const child = result.ir[0].children[0]
+if (isListRegionNode(child)) {
+  expect(child.listSource).toBe("items")
+}
+```
+
+#### A.5: Refactor Attribute Handling to Lookup Table
+
+**Problem**: `generateAttributeSet` in `codegen/dom.ts` has repetitive if/else chains.
+
+**Solution**: Use a lookup table pattern:
+```typescript
+const SPECIAL_ATTRIBUTES: Record<string, (el: string, code: string) => string> = {
+  class: (el, code) => `${el}.className = ${code}`,
+  value: (el, code) => `${el}.value = ${code}`,
+  checked: (el, code) => `${el}.checked = ${code}`,
+  disabled: (el, code) => `${el}.disabled = ${code}`,
+}
+```
+
+#### A.6: Add Development-Mode IR Validation
+
+**Problem**: IR factory functions silently accept invalid inputs.
+
+**Solution**: Add assertions in development:
+```typescript
+export function createTextNode(value: string, span: SourceSpan): TextNode {
+  if (process.env.NODE_ENV !== "production") {
+    if (typeof value !== "string") {
+      throw new Error(`createTextNode: value must be string, got ${typeof value}`)
+    }
+  }
+  return { kind: "text", value, span }
+}
+```
+
+### Priority
+
+| Task | Priority | Effort | Impact |
+|------|----------|--------|--------|
+| A.1 | High | Medium | Reduces cognitive load significantly |
+| A.2 | High | Low | Eliminates duplication, easier test maintenance |
+| A.3 | Medium | Low | Prevents fragile tests breaking on ts-morph updates |
+| A.4 | Medium | Low | Better type safety, uses existing code |
+| A.5 | Low | Low | Cleaner code, easier to add attributes |
+| A.6 | Low | Low | Catches bugs earlier in development |
+
+### Implementation Notes
+
+- A.1 requires moving tests to a subdirectory, updating imports
+- A.2 should be done first as A.1 depends on it
+- A.3 and A.4 can be done incrementally as tests are touched
+- A.5 and A.6 are independent refactors
+
+These improvements should be completed before Phase 9 (Vite Plugin) when external developers will start using the package.
