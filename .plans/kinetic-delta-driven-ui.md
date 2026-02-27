@@ -414,23 +414,24 @@ Analysis produces IR (pure), code generation consumes IR (pure), orchestration i
   - No runtime implementation — purely for TypeScript type checking
   - Full `Props` and `Child` type support for autocomplete
 
-### Phase 4: Vertical Slice — Static Compilation 🔴
+### Phase 4: Vertical Slice — Static Compilation ✅
 
 **Note**: Phase 3 already created `codegen/dom.ts` and `codegen/html.ts` which handle all IR node 
 types. Phases 4-7 are now about **validation and refinement**, not creating new transform files.
 
 Validate static element compilation end-to-end.
 
-- 🔴 **Task 4.1**: Create compiler integration test with real TypeScript source
+- ✅ **Task 4.1**: Create compiler integration test with real TypeScript source
   - Compile `div(() => { h1("Hello") })` → verify DOM output
   - Compile same source with `target: "html"` → verify HTML output
   - Verify both outputs are syntactically valid
-- 🔴 **Task 4.2**: Test nested static structures
+- ✅ **Task 4.2**: Test nested static structures
   - Deeply nested elements preserve structure
   - Mixed text and element children
   - Props/attributes applied correctly
-- 🔴 **Task 4.3**: Fix any issues discovered in codegen
-  - Phase 3 codegen is "first draft" — may need refinement
+- ✅ **Task 4.3**: Fix any issues discovered in codegen
+  - Fixed `findBuilderCalls` to only return top-level builders, not nested ones
+  - Fixed `analyzeProps` to strip quotes from property names like `"data-testid"`
 
 ### Phase 5: Vertical Slice — Reactive Expressions 🔴
 
@@ -444,11 +445,10 @@ Validate reactive expression compilation with real Loro types.
   - Template literal `p(\`Count: ${doc.count.get()}\`)` → same
 - 🔴 **Task 5.3**: Test reactive attributes
   - `div({ class: doc.className.toString() })` → attribute subscription
-- 🔴 **Task 5.4**: Vertical slice checkpoint (browser validation)
-  - Create minimal Vite project with kinetic plugin
-  - Compile "hello counter" example
-  - Run in browser, verify reactive updates work
-  - **Validates full pipeline before proceeding**
+- 🔴 **Task 5.4**: Reactive integration tests (extend Phase 4 pattern)
+  - Add reactive tests to `integration.test.ts` using real Loro documents
+  - Compile reactive source, execute in jsdom, mutate Loro, verify DOM updates
+  - **Note**: Browser validation deferred to Phase 9 when Vite plugin is ready
 
 ### Phase 6: Vertical Slice — List Regions 🔴
 
@@ -516,11 +516,10 @@ Enable seamless development workflow and **validate full client-side flow** befo
   - Source map passthrough
 - 🔴 **Task 9.2**: Create `vite-plugin-kinetic` package export
 - 🔴 **Task 9.3**: Write integration test with Vite
-- 🔴 **Task 9.4**: Create `tests/compiler-runtime.test.ts`
-  - Compile small snippets, execute in happy-dom
-  - Mutate Loro refs, assert DOM state changes
-  - Verifies compiler output + runtime work together
-  - Covers: static, reactive, list, conditional, binding patterns
+- 🔴 **Task 9.4**: Extend `integration.test.ts` for full coverage
+  - Phase 4 established the compile-and-execute test pattern
+  - Add tests for binding patterns (Phase 8 feature)
+  - Verify all patterns work together in combined scenarios
 - 🔴 **Task 9.5**: Create `tests/integration/todo.test.ts` (client-side)
   - Full todo app with all features (list, conditionals, bindings)
   - **Must pass before proceeding to SSR**
@@ -589,18 +588,17 @@ Validate SSR + hydration with full application.
 | `runtime/subscribe.test.ts` | Subscription lifecycle, cleanup |
 | `runtime/regions.test.ts` | List delta handling (real Loro docs), conditional swap |
 | `runtime/scope.test.ts` | Nested scopes, cascade disposal, subscription counting |
-| `compiler/analyze.test.ts` | Ref access detection, classification, **IR snapshots** |
-| `compiler/transforms/static.test.ts` | Static element compilation, **code snapshots** |
-| `compiler/transforms/reactive.test.ts` | Expression subscription generation, **code snapshots** |
-| `compiler/transforms/list.test.ts` | For-loop to delta-region, O(k) verification, **code snapshots** |
-| `compiler/transforms/conditional.test.ts` | If-statement to region, **code snapshots** |
-| `compiler/transforms/binding.test.ts` | Input binding, **code snapshots** |
-| `compiler-runtime.test.ts` | End-to-end: compile → execute → mutate → assert DOM |
-| `vite/plugin.test.ts` | Vite integration, HMR |
-| `integration/todo.test.ts` | Full client-side app (before SSR) |
-| `server/render.test.ts` | SSR output correctness, **HTML snapshots** |
-| `runtime/hydrate.test.ts` | Hydration adoption, resilience tests, error cases |
-| `integration/ssr.test.ts` | Full SSR + hydration flow |
+| `compiler/ir.test.ts` | IR node creation, dependency collection |
+| `compiler/analyze.test.ts` | AST → IR analysis, reactive detection, **IR snapshots** |
+| `compiler/codegen/dom.test.ts` | IR → DOM code generation, **code structure tests** |
+| `compiler/transform.test.ts` | Full pipeline orchestration tests |
+| `compiler/integration.test.ts` | End-to-end: compile → execute → assert DOM (Phase 4+) |
+| `testing/counting-dom.test.ts` | DOM proxy for O(k) verification |
+| `vite/plugin.test.ts` | Vite integration, HMR (Phase 9) |
+| `tests/integration/todo.test.ts` | Full client-side app (Phase 9) |
+| `server/render.test.ts` | SSR output correctness, **HTML snapshots** (Phase 10) |
+| `runtime/hydrate.test.ts` | Hydration adoption, resilience tests (Phase 10) |
+| `tests/integration/ssr.test.ts` | Full SSR + hydration flow (Phase 11) |
 
 ### Integration Test
 
@@ -678,6 +676,10 @@ project.emit()
 ```
 
 ## File Structure
+
+**Note**: The `src/compiler/transforms/` directory was originally planned but is not needed.
+All transformation logic is organized within `analyze.ts` (AST → IR) and `codegen/*.ts` (IR → output).
+This simpler structure works well at the current scale.
 
 ```
 packages/kinetic/
@@ -1223,3 +1225,91 @@ const expr = createReactiveExpression("`Count: ${count.get()}`", ...)
 // biome-ignore lint/suspicious/noTemplateCurlyInString: source code representation
 const expr = createReactiveExpression("`Count: ${count.get()}`", ...)
 ```
+
+### Implementation Learnings (Phase 4)
+
+#### `findBuilderCalls` Must Filter Nested Calls
+
+The initial implementation of `findBuilderCalls` returned ALL element factory calls with builders,
+including nested ones. This caused each nested element to be compiled as a separate top-level
+builder instead of being a child of its parent.
+
+```typescript
+// ❌ Wrong - returns all builder calls including nested
+const allCalls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)
+for (const call of allCalls) {
+  if (isElementFactory(call) && hasBuilder(call)) {
+    calls.push(call)  // Includes nested calls!
+  }
+}
+
+// ✅ Correct - filter out calls nested inside other builders
+function isNestedBuilderCall(call: CallExpression): boolean {
+  let current = call.getParent()
+  while (current) {
+    if (current.getKind() === SyntaxKind.ArrowFunction) {
+      const funcParent = current.getParent()
+      if (funcParent?.getKind() === SyntaxKind.CallExpression) {
+        const parentCallee = (funcParent as CallExpression).getExpression()
+        if (ELEMENT_FACTORIES.has(parentCallee.getText())) {
+          return true  // This call is inside another builder
+        }
+      }
+    }
+    current = current.getParent()
+  }
+  return false
+}
+```
+
+#### Property Names May Include Quotes
+
+When using string keys in object literals like `{ "data-testid": "value" }`, ts-morph's
+`getText()` returns the name WITH quotes. These must be stripped for setAttribute calls.
+
+```typescript
+// Source: div({ "data-testid": "my-id" }, () => { ... })
+
+// ❌ Wrong - includes quotes
+const name = prop.getChildAtIndex(0)?.getText()  // '"data-testid"'
+_div.setAttribute(name, "my-id")  // InvalidCharacterError!
+
+// ✅ Correct - strip quotes
+let name = prop.getChildAtIndex(0)?.getText() ?? ""
+if ((name.startsWith('"') && name.endsWith('"')) ||
+    (name.startsWith("'") && name.endsWith("'"))) {
+  name = name.slice(1, -1)
+}
+```
+
+#### Integration Tests Need eval() for Generated Code
+
+To execute generated DOM code in tests, we need to use `eval()`. This requires a biome
+lint suppression since eval is flagged as a security risk.
+
+```typescript
+// biome-ignore lint/security/noGlobalEval: Test utility for executing generated code
+const fn = eval(`(${generatedCode})`)
+const node = fn(scope)
+```
+
+#### Multi-Line Function Extraction from Generated Code
+
+Generated code spans multiple lines. Naive regex matching fails:
+
+```typescript
+// ❌ Wrong - only matches first line
+const match = code.match(/const element\d+ = (.*)/)  // Gets "(scope) => {"
+
+// ✅ Correct - find assignment, slice the rest
+const match = code.match(/const element\d+ = /)
+if (!match || match.index === undefined) throw new Error(...)
+const fnCode = code.slice(match.index + match[0].length).trim()
+```
+
+#### ts-morph Property Access Indices
+
+For `PropertyAssignment` nodes like `{ name: value }`:
+- `getChildAtIndex(0)` = property name (may include quotes for string keys)
+- `getChildAtIndex(1)` = colon token
+- `getChildAtIndex(2)` = value expression

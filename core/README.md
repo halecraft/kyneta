@@ -43,9 +43,9 @@ div(() => {
 | Package scaffolding | ✅ |
 | Error taxonomy | ✅ |
 | Type definitions | ✅ |
-| Runtime primitives | 🔴 Not started |
-| Compiler infrastructure | 🔴 Not started |
-| Static extraction | 🔴 Not started |
+| Runtime primitives | ✅ |
+| Compiler infrastructure | ✅ |
+| Static compilation | ✅ |
 | Reactive expressions | 🔴 Not started |
 | List transform | 🔴 Not started |
 | Conditional transform | 🔴 Not started |

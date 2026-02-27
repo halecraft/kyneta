@@ -483,7 +483,14 @@ export function analyzeProps(obj: ObjectLiteralExpression): {
   for (const prop of obj.getProperties()) {
     // Property assignment: { name: value }
     if (prop.getKind() === SyntaxKind.PropertyAssignment) {
-      const name = prop.getChildAtIndex(0)?.getText() ?? ""
+      let name = prop.getChildAtIndex(0)?.getText() ?? ""
+      // Strip quotes from property names like "data-testid"
+      if (
+        (name.startsWith('"') && name.endsWith('"')) ||
+        (name.startsWith("'") && name.endsWith("'"))
+      ) {
+        name = name.slice(1, -1)
+      }
       const valueNode = prop.getChildAtIndex(2)
 
       if (!valueNode || !Node.isExpression(valueNode)) continue
@@ -886,12 +893,52 @@ export function findBuilderCalls(sourceFile: SourceFile): CallExpression[] {
         arg.getKind() === SyntaxKind.FunctionExpression,
     )
 
-    if (hasBuilder) {
+    if (!hasBuilder) {
+      continue
+    }
+
+    // Only include top-level builder calls, not nested ones.
+    // A builder call is nested if it's inside an arrow function that is
+    // an argument to another element factory call.
+    const isNested = isNestedBuilderCall(call)
+    if (!isNested) {
       calls.push(call)
     }
   }
 
   return calls
+}
+
+/**
+ * Check if a call expression is nested inside another builder function.
+ */
+function isNestedBuilderCall(call: CallExpression): boolean {
+  let current: Node | undefined = call.getParent()
+
+  while (current) {
+    // If we find an arrow function or function expression...
+    if (
+      current.getKind() === SyntaxKind.ArrowFunction ||
+      current.getKind() === SyntaxKind.FunctionExpression
+    ) {
+      // Check if its parent is a call expression to an element factory
+      const funcParent = current.getParent()
+      if (funcParent && funcParent.getKind() === SyntaxKind.CallExpression) {
+        const parentCall = funcParent as CallExpression
+        const parentCallee = parentCall.getExpression()
+        if (parentCallee.getKind() === SyntaxKind.Identifier) {
+          const parentName = parentCallee.getText()
+          if (ELEMENT_FACTORIES.has(parentName)) {
+            // This call is inside a builder function of an element factory
+            return true
+          }
+        }
+      }
+    }
+    current = current.getParent()
+  }
+
+  return false
 }
 
 /**

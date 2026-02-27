@@ -165,9 +165,58 @@ describe("findBuilderCalls", () => {
     `,
     )
 
-    // findBuilderCalls finds ALL builder calls, including nested ones
+    // Only the top-level div should be returned, not nested section or p
     const calls = findBuilderCalls(sourceFile)
-    expect(calls.length).toBeGreaterThanOrEqual(1)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].getExpression().getText()).toBe("div")
+  })
+
+  it("should exclude deeply nested builder calls", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        header(() => {
+          nav(() => {
+            ul(() => {
+              li(() => {
+                a("Link")
+              })
+            })
+          })
+        })
+      })
+    `,
+    )
+
+    // Only the outermost div should be returned
+    const calls = findBuilderCalls(sourceFile)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].getExpression().getText()).toBe("div")
+  })
+
+  it("should find multiple top-level builders but exclude their nested children", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      header(() => {
+        h1("Title")
+        nav(() => {
+          a("Link")
+        })
+      })
+
+      footer(() => {
+        p("Footer text")
+      })
+    `,
+    )
+
+    // Should find header and footer, but not nav, h1, a, or p
+    const calls = findBuilderCalls(sourceFile)
+    expect(calls).toHaveLength(2)
+    expect(calls[0].getExpression().getText()).toBe("header")
+    expect(calls[1].getExpression().getText()).toBe("footer")
   })
 
   it("should not find non-builder element calls", () => {
@@ -573,6 +622,42 @@ describe("analyzeProps", () => {
       "mouseenter",
       "input",
     ])
+  })
+
+  it("should strip quotes from string-keyed property names", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      const props = { "data-testid": "my-component", "aria-label": "Close button" }
+    `,
+    )
+
+    const objLiteral = sourceFile.getDescendantsOfKind(210)[0]
+    expect(objLiteral).toBeDefined()
+
+    const result = analyzeProps(objLiteral)
+    expect(result.attributes).toHaveLength(2)
+    // Names should NOT include the quotes
+    expect(result.attributes[0].name).toBe("data-testid")
+    expect(result.attributes[1].name).toBe("aria-label")
+  })
+
+  it("should handle mixed quoted and unquoted property names", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      const props = { class: "btn", "data-value": "123", id: "submit" }
+    `,
+    )
+
+    const objLiteral = sourceFile.getDescendantsOfKind(210)[0]
+    expect(objLiteral).toBeDefined()
+
+    const result = analyzeProps(objLiteral)
+    expect(result.attributes).toHaveLength(3)
+    expect(result.attributes[0].name).toBe("class")
+    expect(result.attributes[1].name).toBe("data-value")
+    expect(result.attributes[2].name).toBe("id")
   })
 })
 
