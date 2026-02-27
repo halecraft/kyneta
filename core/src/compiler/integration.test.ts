@@ -1636,3 +1636,346 @@ describe("compiler integration - bindings", () => {
     })
   })
 })
+
+// =============================================================================
+// Combined Scenarios (Task 9.4)
+// =============================================================================
+
+describe("compiler integration - combined scenarios", () => {
+  beforeEach(() => {
+    __resetSubscriptionIdCounter()
+    __resetScopeIdCounter()
+  })
+
+  describe("Task 9.4: All patterns working together", () => {
+    it("should compile list with reactive content and conditionals", () => {
+      const source = `
+        interface ListRef<T> {
+          toArray(): T[]
+          [Symbol.iterator](): Iterator<T>
+        }
+        interface TextRef {
+          toString(): string
+        }
+        interface CounterRef {
+          get(): number
+          value: number
+        }
+        declare const doc: {
+          items: ListRef<{ name: TextRef, done: CounterRef }>
+          showCompleted: CounterRef
+        }
+
+        div(() => {
+          h1("Todo List")
+
+          if (doc.showCompleted.get() > 0) {
+            p("Showing completed items")
+          }
+
+          for (const item of doc.items) {
+            li(() => {
+              span(item.name.toString())
+              if (item.done.get() > 0) {
+                span(" ✓")
+              }
+            })
+          }
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Should have one builder
+      expect(result.ir.length).toBe(1)
+
+      // Should contain list region
+      expect(result.code).toContain("__listRegion")
+
+      // Should contain conditional region
+      expect(result.code).toContain("__conditionalRegion")
+
+      // Should have subscription calls for reactive content
+      expect(result.code).toContain("doc.showCompleted")
+      expect(result.code).toContain("item.done")
+    })
+
+    it("should compile form with bindings and reactive display", () => {
+      const source = `
+        interface TextRef {
+          toString(): string
+        }
+        interface CounterRef {
+          get(): number
+          value: number
+        }
+        declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
+        declare const doc: {
+          title: TextRef
+          count: CounterRef
+        }
+
+        div(() => {
+          h1("Edit Form")
+
+          input({ type: "text", value: bind(doc.title) })
+
+          p(doc.title.toString())
+
+          input({ type: "checkbox", checked: bind(doc.count) })
+
+          span(doc.count.value.toString())
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Should have bindings
+      expect(result.code).toContain("__bindTextValue")
+      expect(result.code).toContain("__bindChecked")
+
+      // Should have reactive text display
+      expect(result.code).toContain("doc.title.toString()")
+      expect(result.code).toContain("doc.count.value.toString()")
+    })
+
+    it("should compile nested lists with reactive items", () => {
+      const source = `
+        interface ListRef<T> {
+          toArray(): T[]
+          [Symbol.iterator](): Iterator<T>
+        }
+        interface TextRef {
+          toString(): string
+        }
+        declare const doc: {
+          categories: ListRef<{
+            name: TextRef
+            items: ListRef<{ text: TextRef }>
+          }>
+        }
+
+        div(() => {
+          for (const category of doc.categories) {
+            section(() => {
+              h2(category.name.toString())
+
+              ul(() => {
+                for (const item of category.items) {
+                  li(item.text.toString())
+                }
+              })
+            })
+          }
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Should have nested list regions (at least 2 - may include import statement)
+      const listRegionCount = (result.code.match(/__listRegion/g) || []).length
+      expect(listRegionCount).toBeGreaterThanOrEqual(2) // outer and inner lists
+    })
+
+    it("should compile conditional with different content types", () => {
+      const source = `
+        interface CounterRef {
+          get(): number
+          value: number
+        }
+        interface ListRef<T> {
+          toArray(): T[]
+          [Symbol.iterator](): Iterator<T>
+        }
+        declare const doc: {
+          mode: CounterRef
+          items: ListRef<string>
+        }
+
+        div(() => {
+          if (doc.mode.get() === 0) {
+            p("Empty state - no items")
+          } else if (doc.mode.get() === 1) {
+            ul(() => {
+              for (const item of doc.items) {
+                li(item)
+              }
+            })
+          } else {
+            div(() => {
+              h2("Grid view")
+              for (const item of doc.items) {
+                span(item)
+              }
+            })
+          }
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Should have conditional region with multiple branches
+      const conditionalRegion = result.ir[0].children.find(
+        c => c.kind === "conditional-region",
+      )
+      expect(conditionalRegion).toBeDefined()
+      if (
+        conditionalRegion &&
+        conditionalRegion.kind === "conditional-region"
+      ) {
+        expect(conditionalRegion.branches.length).toBe(3)
+      }
+
+      // Should have list regions inside branches
+      expect(result.code).toContain("__listRegion")
+    })
+
+    it("should handle static and reactive content mixed", () => {
+      const source = `
+        interface TextRef {
+          toString(): string
+        }
+        declare const doc: { name: TextRef }
+
+        div(() => {
+          header(() => {
+            h1("Static Title")
+            nav(() => {
+              a({ href: "/" }, "Home")
+              a({ href: "/about" }, "About")
+            })
+          })
+
+          main(() => {
+            p("Welcome, ")
+            span(doc.name.toString())
+            p("!")
+          })
+
+          footer(() => {
+            p("Copyright 2024")
+          })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Should have one builder
+      expect(result.ir.length).toBe(1)
+
+      // Should have static elements
+      expect(result.code).toContain('createElement("header")')
+      expect(result.code).toContain('createElement("nav")')
+      expect(result.code).toContain('createElement("footer")')
+
+      // Should have reactive content
+      expect(result.code).toContain("doc.name.toString()")
+    })
+  })
+
+  describe("Task 9.4: Runtime execution of combined patterns", () => {
+    it("should execute list with static content in items", () => {
+      // Use plain strings - struct items return raw values from toArray()
+      const schema = Shape.doc({
+        items: Shape.list(Shape.plain.string()),
+      })
+      const doc = createTypedDoc(schema)
+
+      // Add initial items
+      doc.items.push("Task 1")
+      doc.items.push("Task 2 ⚡")
+
+      const scope = new Scope("test")
+      const ul = document.createElement("ul")
+
+      // Manually construct what compiled code would generate
+      __listRegion(
+        ul,
+        doc.items,
+        {
+          create: (item: string) => {
+            const li = document.createElement("li")
+            const textNode = document.createTextNode(item)
+            li.appendChild(textNode)
+            return li
+          },
+        },
+        scope,
+      )
+
+      // Should render both items
+      expect(ul.children.length).toBe(2)
+      expect(ul.children[0].textContent).toBe("Task 1")
+      expect(ul.children[1].textContent).toContain("Task 2")
+      expect(ul.children[1].textContent).toContain("⚡")
+
+      scope.dispose()
+    })
+
+    it("should handle reactive updates across multiple features", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+        showDetails: Shape.counter(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "Initial Title")
+
+      const scope = new Scope("test")
+      const container = document.createElement("div")
+
+      // Title element with reactive text
+      const h1 = document.createElement("h1")
+      const titleText = document.createTextNode(doc.title.toString())
+      h1.appendChild(titleText)
+      container.appendChild(h1)
+
+      // Subscribe to title changes
+      __subscribeWithValue(
+        doc.title,
+        () => doc.title.toString(),
+        value => {
+          titleText.textContent = value
+        },
+        scope,
+      )
+
+      // Conditional details section
+      const marker = document.createComment("kinetic:if")
+      container.appendChild(marker)
+
+      __conditionalRegion(
+        marker,
+        doc.showDetails,
+        () => loro(doc.showDetails).value > 0,
+        {
+          whenTrue: () => {
+            const details = document.createElement("p")
+            details.textContent = "Details are visible"
+            return details
+          },
+          whenFalse: () => {
+            const hidden = document.createElement("p")
+            hidden.textContent = "Details hidden"
+            return hidden
+          },
+        },
+        scope,
+      )
+
+      // Initial state
+      expect(container.querySelector("h1")?.textContent).toBe("Initial Title")
+      expect(container.textContent).toContain("Details hidden")
+
+      // Update title
+      doc.title.delete(0, doc.title.toString().length)
+      doc.title.insert(0, "Updated Title")
+      expect(container.querySelector("h1")?.textContent).toBe("Updated Title")
+
+      // Show details
+      doc.showDetails.increment(1)
+      expect(container.textContent).toContain("Details are visible")
+
+      scope.dispose()
+    })
+  })
+})
