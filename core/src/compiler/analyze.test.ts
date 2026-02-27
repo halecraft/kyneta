@@ -831,6 +831,49 @@ describe("analyzeBuilder", () => {
     }
   })
 
+  it("should analyze non-element CallExpression arguments as expressions", () => {
+    // This tests the bug fix: count.get() is a CallExpression but NOT an element factory.
+    // Before the fix, these were silently dropped. Now they're treated as expressions.
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const count: CounterRef
+
+      div(() => {
+        p(count.get())
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const divCall = calls.find(c => c.getExpression().getText() === "div")
+    expect(divCall).toBeDefined()
+    if (!divCall) return
+
+    const builder = analyzeBuilder(divCall)
+    expect(builder).not.toBeNull()
+
+    // The div should have one child: the p element
+    expect(builder?.children).toHaveLength(1)
+    expect(builder?.children[0].kind).toBe("element")
+
+    if (builder?.children[0].kind === "element") {
+      const pElement = builder.children[0]
+      expect(pElement.tag).toBe("p")
+
+      // The p element should have count.get() as a child expression
+      expect(pElement.children).toHaveLength(1)
+      expect(pElement.children[0].kind).toBe("expression")
+
+      if (pElement.children[0].kind === "expression") {
+        expect(pElement.children[0].source).toBe("count.get()")
+        expect(pElement.children[0].expressionKind).toBe("reactive")
+        expect(pElement.children[0].dependencies).toContain("count")
+      }
+    }
+  })
+
   it("should produce serializable IR (snapshot test)", () => {
     const sourceFile = createSourceFile(
       project,

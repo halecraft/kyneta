@@ -804,6 +804,10 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
       const nestedElement = analyzeElementCall(arg as CallExpression)
       if (nestedElement) {
         children.push(nestedElement)
+      } else {
+        // Not an element call - treat as expression (e.g., count.get())
+        const content = analyzeExpression(arg)
+        children.push(content)
       }
     }
     // String or expression

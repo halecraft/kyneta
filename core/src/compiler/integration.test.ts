@@ -3,8 +3,12 @@
  *
  * These tests compile TypeScript source code and execute the generated
  * JavaScript to verify the full pipeline works end-to-end.
+ *
+ * Phase 4: Static compilation tests
+ * Phase 5: Reactive expression tests (using real Loro documents)
  */
 
+import { createTypedDoc, loro, Shape } from "@loro-extended/change"
 import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
@@ -14,7 +18,10 @@ import {
 } from "../runtime/scope.js"
 import {
   __activeSubscriptions,
+  __getActiveSubscriptionCount,
   __resetSubscriptionIdCounter,
+  __subscribe,
+  __subscribeWithValue,
 } from "../runtime/subscribe.js"
 import { transformSource } from "./transform.js"
 
@@ -462,6 +469,323 @@ describe("compiler integration - static compilation", () => {
       expect((node as HTMLAnchorElement).href).toBe("https://example.com/")
 
       scope.dispose()
+    })
+  })
+})
+
+// =============================================================================
+// Phase 5: Reactive Expression Integration Tests
+// =============================================================================
+
+describe("compiler integration - reactive expressions", () => {
+  beforeEach(() => {
+    __resetScopeIdCounter()
+    __resetSubscriptionIdCounter()
+    __activeSubscriptions.clear()
+    __setRootScope(null)
+  })
+
+  describe("Task 5.2: Reactive text content", () => {
+    it("should generate __subscribeWithValue for reactive text", () => {
+      const source = `
+        interface CounterRef {
+          get(): number
+        }
+        declare const count: CounterRef
+
+        div(() => {
+          p(count.get())
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Should detect reactive content
+      expect(result.ir[0].isReactive).toBe(true)
+
+      // Should generate subscription call
+      expect(result.code).toContain("__subscribeWithValue")
+      expect(result.code).toContain("count")
+    })
+
+    it("should generate __subscribeWithValue for template literal with reactive content", () => {
+      const source = `
+        interface CounterRef {
+          get(): number
+        }
+        declare const count: CounterRef
+
+        div(() => {
+          p(\`Count: \${count.get()}\`)
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      expect(result.ir[0].isReactive).toBe(true)
+      expect(result.code).toContain("__subscribeWithValue")
+      expect(result.code).toContain("Count:")
+    })
+
+    it("should execute reactive text and update on change", () => {
+      // Create a real Loro document
+      const schema = Shape.doc({
+        count: Shape.counter(),
+      })
+      const doc = createTypedDoc(schema)
+
+      // Set initial value
+      doc.count.increment(5)
+      loro(doc).commit()
+
+      // Create the element factory manually (simulating compiled code)
+      const scope = new Scope("test")
+      const div = document.createElement("div")
+      const p = document.createElement("p")
+      const text = document.createTextNode("")
+      p.appendChild(text)
+      div.appendChild(p)
+
+      // Subscribe (simulating compiled code)
+      __subscribeWithValue(
+        doc.count,
+        () => doc.count.get(),
+        v => {
+          text.textContent = String(v)
+        },
+        scope,
+      )
+
+      // Initial value should be set
+      expect(text.textContent).toBe("5")
+
+      // Update the document
+      doc.count.increment(3)
+      loro(doc).commit()
+
+      // Text should update
+      expect(text.textContent).toBe("8")
+
+      // Cleanup
+      scope.dispose()
+      expect(__getActiveSubscriptionCount()).toBe(0)
+    })
+  })
+
+  describe("Task 5.3: Reactive attributes", () => {
+    it("should generate __subscribe for reactive class attribute", () => {
+      const source = `
+        interface TextRef {
+          toString(): string
+        }
+        declare const className: TextRef
+
+        div({ class: className.toString() }, () => {
+          p("Hello")
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      expect(result.ir[0].isReactive).toBe(true)
+      expect(result.code).toContain("__subscribe")
+      expect(result.code).toContain("className")
+    })
+
+    it("should execute reactive attribute and update on change", () => {
+      // Create a real Loro document with counter for boolean-like behavior
+      const schema = Shape.doc({
+        activeCount: Shape.counter(),
+      })
+      const doc = createTypedDoc(schema)
+      loro(doc).commit()
+
+      // Create element manually
+      const scope = new Scope("test")
+      const div = document.createElement("div")
+
+      // Initial value (0 = inactive, >0 = active)
+      div.className = doc.activeCount.get() > 0 ? "active" : "inactive"
+
+      // Subscribe (simulating compiled code)
+      __subscribe(
+        doc.activeCount,
+        () => {
+          div.className = doc.activeCount.get() > 0 ? "active" : "inactive"
+        },
+        scope,
+      )
+
+      expect(div.className).toBe("inactive")
+
+      // Update to active
+      doc.activeCount.increment(1)
+      loro(doc).commit()
+
+      expect(div.className).toBe("active")
+
+      scope.dispose()
+    })
+  })
+
+  describe("Task 5.4: Reactive integration with real Loro", () => {
+    it("should handle counter increment reactively", () => {
+      const schema = Shape.doc({
+        clicks: Shape.counter(),
+      })
+      const doc = createTypedDoc(schema)
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const button = document.createElement("button")
+      const textNode = document.createTextNode("")
+      button.appendChild(textNode)
+
+      __subscribeWithValue(
+        doc.clicks,
+        () => `Clicks: ${doc.clicks.get()}`,
+        v => {
+          textNode.textContent = v
+        },
+        scope,
+      )
+
+      expect(textNode.textContent).toBe("Clicks: 0")
+
+      // Simulate clicks
+      doc.clicks.increment(1)
+      loro(doc).commit()
+      expect(textNode.textContent).toBe("Clicks: 1")
+
+      doc.clicks.increment(1)
+      loro(doc).commit()
+      expect(textNode.textContent).toBe("Clicks: 2")
+
+      scope.dispose()
+    })
+
+    it("should handle text updates reactively", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "Hello")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const h1 = document.createElement("h1")
+      const textNode = document.createTextNode("")
+      h1.appendChild(textNode)
+
+      __subscribeWithValue(
+        doc.title,
+        () => doc.title.toString(),
+        v => {
+          textNode.textContent = v
+        },
+        scope,
+      )
+
+      expect(textNode.textContent).toBe("Hello")
+
+      // Update text
+      doc.title.insert(5, " World")
+      loro(doc).commit()
+
+      expect(textNode.textContent).toBe("Hello World")
+
+      scope.dispose()
+    })
+
+    it("should clean up subscriptions on scope dispose", () => {
+      const schema = Shape.doc({
+        value: Shape.counter(),
+      })
+      const doc = createTypedDoc(schema)
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      __subscribeWithValue(
+        doc.value,
+        () => doc.value.get(),
+        v => {
+          textNode.textContent = String(v)
+        },
+        scope,
+      )
+
+      expect(__getActiveSubscriptionCount()).toBe(1)
+
+      scope.dispose()
+
+      expect(__getActiveSubscriptionCount()).toBe(0)
+
+      // Updates after dispose should not change the text
+      const oldContent = textNode.textContent
+      doc.value.increment(100)
+      loro(doc).commit()
+      expect(textNode.textContent).toBe(oldContent)
+    })
+
+    it("should handle multiple reactive expressions", () => {
+      const schema = Shape.doc({
+        firstName: Shape.text(),
+        lastName: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.firstName.insert(0, "John")
+      doc.lastName.insert(0, "Doe")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+
+      const firstNameNode = document.createTextNode("")
+      const lastNameNode = document.createTextNode("")
+      const fullNameNode = document.createTextNode("")
+
+      __subscribeWithValue(
+        doc.firstName,
+        () => doc.firstName.toString(),
+        v => {
+          firstNameNode.textContent = v
+        },
+        scope,
+      )
+
+      __subscribeWithValue(
+        doc.lastName,
+        () => doc.lastName.toString(),
+        v => {
+          lastNameNode.textContent = v
+        },
+        scope,
+      )
+
+      // This simulates a computed expression depending on both
+      const updateFullName = () => {
+        fullNameNode.textContent = `${doc.firstName.toString()} ${doc.lastName.toString()}`
+      }
+      __subscribe(doc.firstName, updateFullName, scope)
+      __subscribe(doc.lastName, updateFullName, scope)
+      updateFullName() // Initial value
+
+      expect(__getActiveSubscriptionCount()).toBe(4)
+      expect(firstNameNode.textContent).toBe("John")
+      expect(lastNameNode.textContent).toBe("Doe")
+      expect(fullNameNode.textContent).toBe("John Doe")
+
+      // Update first name
+      doc.firstName.delete(0, 4)
+      doc.firstName.insert(0, "Jane")
+      loro(doc).commit()
+
+      expect(firstNameNode.textContent).toBe("Jane")
+      expect(fullNameNode.textContent).toBe("Jane Doe")
+
+      scope.dispose()
+      expect(__getActiveSubscriptionCount()).toBe(0)
     })
   })
 })
