@@ -139,6 +139,34 @@ function getProject(): Project {
       "node_modules/@loro-extended/change/index.d.ts",
       LORO_CHANGE_TYPE_STUBS,
     )
+
+    // Also inject a stub for @loro-extended/kinetic so that `import { bind } from "@loro-extended/kinetic"`
+    // resolves correctly and doesn't cause the entire file's types to degrade.
+    sharedProject.createSourceFile(
+      "node_modules/@loro-extended/kinetic/index.d.ts",
+      `
+      export declare function bind<T>(ref: T): { __brand: "kinetic:binding"; ref: T }
+      export declare class Scope { constructor(name?: string) }
+      export declare function mount(element: () => Node, container: Element): { node: Node; dispose: () => void }
+      export declare function __subscribe(ref: unknown, handler: (event: unknown) => void, scope: unknown): number
+      export declare function __subscribeWithValue<T>(ref: unknown, getValue: () => T, onValue: (value: T) => void, scope: unknown): number
+      export declare function __listRegion<T>(parent: Node, listRef: unknown, handlers: { create: (item: T, index: number) => Node }, scope: unknown): void
+      export declare function __conditionalRegion(marker: Comment, conditionRef: unknown, getCondition: () => boolean, handlers: { whenTrue?: () => Node; whenFalse?: () => Node }, scope: unknown): void
+      export declare function __bindTextValue(input: HTMLInputElement, ref: unknown, scope: unknown): void
+      export declare function __bindChecked(input: HTMLInputElement, ref: unknown, scope: unknown): void
+      `,
+    )
+
+    // Stub for loro-crdt so LoroDoc resolves
+    sharedProject.createSourceFile(
+      "node_modules/loro-crdt/index.d.ts",
+      `
+      export declare class LoroDoc {
+        constructor()
+        commit(): void
+      }
+      `,
+    )
   }
   return sharedProject
 }
@@ -588,8 +616,29 @@ export function hasBuilderCalls(source: string): boolean {
   try {
     const sourceFile = parseSource(source, "check.ts")
     const calls = findBuilderCalls(sourceFile)
-    return calls.length > 0
+    const found = calls.length > 0
+
+    // Remove the temporary file to prevent duplicate type declarations
+    // from interfering with subsequent transformSourceInPlace calls
+    // that use the same shared project.
+    const project = getProject()
+    const checkFile = project.getSourceFile("check.ts")
+    if (checkFile) {
+      project.removeSourceFile(checkFile)
+    }
+
+    return found
   } catch {
+    // Clean up on error too
+    try {
+      const project = getProject()
+      const checkFile = project.getSourceFile("check.ts")
+      if (checkFile) {
+        project.removeSourceFile(checkFile)
+      }
+    } catch {
+      // ignore cleanup errors
+    }
     return false
   }
 }

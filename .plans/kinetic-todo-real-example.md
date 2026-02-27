@@ -43,7 +43,8 @@ Users exploring Kinetic have no reference for how to actually use the framework.
 2. **Working Vite dev server** — `pnpm dev` starts Vite with automatic compilation
 3. **TypeScript LSP support** — Editor shows proper types for element factories
 4. **Client-side reactivity** — Adding/removing todos updates DOM via O(k) deltas
-5. **SSR demonstration** — Server renders HTML, client hydrates
+5. **Live collaboration** — Two browser tabs sync via Repo + WebSocket adapter
+6. **SSR + Hydration** — Server renders initial HTML from Repo document, client hydrates
 6. **Minimal boilerplate** — Example is easy to understand and copy
 
 ## The Gap
@@ -54,6 +55,7 @@ Users exploring Kinetic have no reference for how to actually use the framework.
 | Vite integration | Bun server only | Add vite.config.ts with kinetic() |
 | Type definitions | Not configured | Add typeRoots or triple-slash |
 | Dev workflow | `bun run src/server.ts` | `vite dev` with HMR |
+| Live sync | Standalone LoroDoc, no networking | Repo + WebSocket adapter |
 | Documentation | Explains "simulation" | Explains actual usage |
 
 ## Architecture
@@ -67,10 +69,36 @@ examples/kinetic-todo/
 ├── src/
 │   ├── schema.ts           # Shared Loro document schema (keep)
 │   ├── app.ts              # Builder pattern code (NEW)
-│   ├── main.ts             # Client entry: hydrate or mount
-│   └── server.ts           # SSR server (simplified)
+│   ├── main.ts             # Client entry: Repo + mount
+│   └── server.ts           # Repo server: WS + LevelDB + Vite middleware
 └── README.md               # Usage documentation
 ```
+
+The killer demo: open two browser tabs → add a todo in one → see it appear in the other, with O(k) DOM updates and no diffing.
+
+### How Repo Fits In
+
+```
+┌─────────────────────┐         ┌─────────────────────┐
+│   Browser Tab A     │         │   Browser Tab B      │
+│                     │         │                      │
+│  Repo (client)      │         │  Repo (client)       │
+│    ↕ WS adapter     │         │    ↕ WS adapter      │
+│  Kinetic runtime    │         │  Kinetic runtime     │
+│    (delta → DOM)    │         │    (delta → DOM)     │
+└─────────┬───────────┘         └──────────┬───────────┘
+          │         WebSocket              │
+          └────────────┬───────────────────┘
+                       │
+          ┌────────────┴───────────────────┐
+          │   Server                       │
+          │   Repo (service)               │
+          │     ↕ WS adapter               │
+          │     ↕ LevelDB storage adapter  │
+          └────────────────────────────────┘
+```
+
+The client never calls `new LoroDoc()` directly. Instead, `repo.get(docId, schema)` returns a `Doc` that is automatically synced. When another client pushes changes, Repo delivers Loro deltas to the document, and Kinetic's `__listRegion` / `__conditionalRegion` / `__subscribeWithValue` consume those deltas to update the DOM.
 
 ## Phases and Tasks
 
@@ -148,47 +176,73 @@ The compiler must be able to resolve `@loro-extended/change` types for reactive 
 - ✅ **Task 1.6**: Update `examples/kinetic-todo/tsconfig.json` for ambient types
 - ✅ **Task 1.7**: Add `./types/elements` export to `packages/kinetic/package.json`
 
-### Phase 2: Builder Pattern Client Code 🔴
+### Phase 2: Builder Pattern Client Code ✅
 
-- 🔴 **Task 2.1**: Create `src/app.ts` with builder pattern code
+- ✅ **Task 2.1**: Create `src/app.ts` with builder pattern code
   - Use `div`, `h1`, `ul`, `li`, `input`, `button` factories
   - Use `for..of` for todo list (compiles to `__listRegion`)
   - Use `if` for empty state (compiles to `__conditionalRegion`)
   - Use `bind()` for input binding
   - Export factory function for mounting
 
-- 🔴 **Task 2.2**: Create `src/main.ts` as client entry
+- ✅ **Task 2.2**: Create `src/main.ts` as client entry
   - Import from `@loro-extended/change` and `@loro-extended/kinetic`
   - Create LoroDoc and typed document
   - Call `mount()` with app factory
 
-### Phase 3: SSR Integration 🔴
+### Phase 3: Repo Integration + Live Collaboration + SSR 🔴
 
-- 🔴 **Task 3.1**: Simplify `src/server.ts`
-  - Use Hono or Bun.serve for minimal setup
-  - Generate HTML via kinetic SSR utilities
-  - Embed serialized state for hydration
+Replace the standalone `LoroDoc` with `Repo` for server↔client sync, and add SSR so the server renders initial HTML from the document before the client connects. This is the complete Kinetic story:
 
-- 🔴 **Task 3.2**: Update `src/main.ts` for hydration
-  - Detect SSR state on window
-  - If present, hydrate; otherwise, fresh mount
+1. Server has the document in storage via Repo
+2. Server renders initial HTML from that document (SSR)
+3. Client loads, connects via WebSocket, hydrates the existing DOM
+4. From that point, deltas flow both directions with O(k) updates
+
+- 🔴 **Task 3.1**: Rewrite `src/server.ts` with Repo + SSR + Vite middleware
+  - Create `Repo` with `WsServerNetworkAdapter` + `LevelDBStorageAdapter`
+  - Create HTTP server with Vite dev middleware (follows `todo-websocket` pattern)
+  - Attach `WebSocketServer` to the HTTP server
+  - Seed initial data only if document doesn't exist in storage
+  - On `GET /`, render the app to HTML using kinetic SSR utilities + serialized Loro state
+  - Serve the SSR HTML with embedded state script for client hydration
+
+- 🔴 **Task 3.2**: Rewrite `src/main.ts` with client-side Repo + hydration
+  - Create `Repo` with `WsClientNetworkAdapter`
+  - `repo.get("kinetic-todo", TodoSchema)` to get a synced `Doc`
+  - If SSR state exists on window, deserialize into the Doc and hydrate existing DOM
+  - Otherwise, mount fresh (fallback for client-only navigation)
+  - Pass the `Doc` to the compiled app factory
+
+- 🔴 **Task 3.3**: Refactor `src/app.ts` to accept `doc` as a parameter
+  - Change from module-level `const doc = ...` to a function that receives `doc`
+  - This makes the app a pure builder that doesn't own document lifecycle
+  - Server and client both provide the `doc` — server from Repo storage, client from Repo sync
+
+- 🔴 **Task 3.4**: Update `package.json` with Repo + adapter dependencies
+  - Add: `@loro-extended/repo`, `@loro-extended/adapter-websocket`, `@loro-extended/adapter-leveldb`
+  - Add: `ws`, `classic-level`
+  - Update `dev` script to run the server (which embeds Vite) instead of bare `vite`
 
 ### Phase 4: Documentation and Cleanup 🔴
 
 - 🔴 **Task 4.1**: Rewrite `examples/kinetic-todo/README.md`
   - Explain the builder pattern
   - Show vite.config.ts setup
-  - Document dev/build workflow
-  - Explain SSR → hydration flow
+  - Document dev workflow (`pnpm dev` → open two tabs → collaborate)
+  - Explain Repo + WebSocket architecture
+  - Explain SSR → hydration → live sync flow
 
 - 🔴 **Task 4.2**: Update `packages/kinetic/README.md` status table
   - Change Vite plugin from 🔴 to ✅
   - Change SSR + Hydration from 🔴 to ✅
-  - Update test count to 453
+  - Update test count to 459
 
 - 🔴 **Task 4.3**: Add TECHNICAL.md section for example patterns
   - Document ambient type configuration
   - Document triple-slash directive approach
+  - Document `enforce: "pre"` requirement
+  - Document Repo integration pattern for Kinetic
 
 ## Key Implementation Details
 
@@ -388,15 +442,20 @@ describe("kinetic-todo compilation", () => {
 | Change | Direct Impact | Transitive Impact |
 |--------|---------------|-------------------|
 | **Type stub injection** | Compiler resolves types | All reactive detection now works |
+| **`enforce: "pre"`** | Plugin receives raw TS | No impact on other plugins |
+| **`declare global` in elements.d.ts** | Factories are global | Projects using triple-slash get globals |
+| **hasBuilderCalls cleanup** | No leaked check.ts | Fixes duplicate type interference |
 | Delete old `app.ts` | None — example only | None |
 | Add vite.config.ts | Example builds with Vite | None — new file |
 | Import kinetic/vite | Uses existing plugin | None — read-only |
 | Ambient type directive | TypeScript understands elements | None — compile-time only |
+| **Repo + WS adapter** | Example gains live sync | None — read-only dependency on repo/adapter |
 | Update README status | Documentation accuracy | None |
 
 **Risk Assessment**: 
 
 - **Phase 0** has **medium risk** — modifying the compiler's project initialization could affect existing tests. However, injecting type stubs into the in-memory FS should be additive and not break existing behavior (tests use inline declarations which will shadow the stubs).
+- **Phase 3** has **medium risk** — introducing Repo + WebSocket adds moving parts (server process, WS connection, storage). But this follows the exact pattern of `todo-websocket` example, which is proven and stable.
 - All other phases have **low risk** — isolated example changes.
 
 ## Resources for Implementation
@@ -407,7 +466,10 @@ describe("kinetic-todo compilation", () => {
 2. **Ambient types**: `packages/kinetic/src/types/elements.d.ts` — factory declarations
 3. **SSR utilities**: `packages/kinetic/src/server/render.ts` — HTML generation
 4. **Existing schema**: `examples/kinetic-todo/src/schema.ts` — keep this
-5. **Chat example Vite config**: `examples/chat/vite.config.ts` — reference for wasm/topLevelAwait
+5. **todo-websocket server**: `examples/todo-websocket/src/server.ts` — Repo + WS + Vite middleware pattern
+6. **todo-websocket client**: `examples/todo-websocket/src/app.tsx` — Repo client pattern (React, but structure is transferable)
+7. **Repo class**: `packages/repo/src/repo.ts` — `repo.get(docId, schema)` API
+8. **sync() function**: `packages/repo/src/sync.ts` — `sync(doc).waitForSync()` API
 
 ### Package Exports
 
@@ -436,7 +498,7 @@ Use source path (`./src/`) because the file is a `.d.ts` declaration that tsup d
 
 ## Changeset
 
-Not required — this is example code, not a package change. Examples are not versioned.
+Not required for the example changes. However, the `enforce: "pre"`, `declare global` elements.d.ts, type stub injection, and `hasBuilderCalls` cleanup are changes to `@loro-extended/kinetic` that affect all users. These should be included in a changeset for the kinetic package (patch bump).
 
 ## README Updates
 
@@ -507,6 +569,112 @@ A Kinetic example should have:
 6. `src/server.ts` (optional) — SSR server if demonstrating hydration
 
 ## Learnings
+
+### The Intended Architecture: Kinetic + Repo
+
+Kinetic is not a standalone framework — it's the UI layer for Loro documents managed by `@loro-extended/repo`. The intended architecture is:
+
+1. **Server**: `Repo` with storage adapter (LevelDB) + network adapter (WebSocket)
+2. **Client**: `Repo` with network adapter (WebSocket) → `repo.get(docId, schema)` returns a synced `Doc`
+3. **UI**: Kinetic builder patterns compile to delta-driven DOM code that subscribes to the `Doc`
+
+The client never calls `new LoroDoc()` directly. The `Doc` from `repo.get()` is a TypedDoc that automatically receives deltas from other peers. Kinetic's runtime (`__listRegion`, `__conditionalRegion`, `__subscribeWithValue`) subscribes to these deltas and updates the DOM in O(k).
+
+This means the killer demo isn't a single-tab todo app — it's two tabs collaborating in real-time with zero-diff DOM updates.
+
+### SSR Completes the Repo Story
+
+SSR isn't a separate concern from Repo integration — it's the natural starting state. The server already has the document in storage. Rendering it to HTML before the client connects means:
+
+- First paint is instant (no waiting for WebSocket + sync)
+- The client hydrates the existing DOM instead of rebuilding it
+- The transition from SSR → live collaboration is seamless
+
+The server render function is still hand-written (the compiler's `target: "html"` dual-compilation is a future enhancement). But the plumbing — `generateStateScript`, `renderToDocument`, `hydrate` — already exists and should be demonstrated.
+
+### Vite Strips TypeScript Before Plugin Transform (Critical)
+
+**Problem**: By default, Vite uses esbuild to strip TypeScript types before passing code to plugin `transform` hooks. This means `interface`, `type` imports, and type annotations are removed before the Kinetic compiler sees them. Since reactive detection depends on type information (`ListRef`, `TextRef`, etc.), the compiler produces static (non-reactive) output.
+
+**Symptoms**: The compiled output has no `__listRegion`, `__conditionalRegion`, or `__subscribeWithValue` calls — only `__bindTextValue` (which uses name-based detection on `bind()`, not type-based).
+
+**Solution**: Add `enforce: "pre"` to the Vite plugin. This ensures the kinetic transform runs before esbuild strips types:
+
+```typescript
+return {
+  name: "kinetic",
+  enforce: "pre",  // Must run before esbuild strips TypeScript types
+  // ...
+}
+```
+
+### hasBuilderCalls Leaks Files Into Shared Project
+
+**Problem**: `hasBuilderCalls()` calls `parseSource(source, "check.ts")` which creates a file in the shared ts-morph Project. This file was never removed, causing potential duplicate type declarations when `transformSourceInPlace` later creates another file in the same project.
+
+**Solution**: Remove the `check.ts` file after `hasBuilderCalls` completes. This prevents duplicate interfaces from confusing the type checker.
+
+### Ambient Types Must Use declare global
+
+**Problem**: The `elements.d.ts` file originally used `declare const div: ElementFactory` at module scope with exports. This made them module-scoped, not global — users would have to import each element factory.
+
+**Solution**: Wrap all declarations in `declare global { }` and export only the `ElementFactory` type to keep the file a module. This enables `div`, `h1`, etc. to be available as globals via a triple-slash directive.
+
+### Explicit Type Annotation Required for Reactive Detection
+
+**Problem**: `createTypedDoc(TodoSchema, { doc: loroDoc })` returns a complex inferred type that the compiler's type stubs can't fully resolve. The compiler sees `doc.todos` as `any`.
+
+**Solution**: Users declare an explicit interface with imported ref types and annotate the variable:
+
+```typescript
+import { type ListRef, type TextRef } from "@loro-extended/change"
+
+interface TodoDoc {
+  title: TextRef
+  todos: ListRef<string>
+}
+
+const doc: TodoDoc = createTypedDoc(TodoSchema, { doc: loroDoc }) as TodoDoc
+```
+
+This is a known limitation: the type stubs provide interface names but not the full generic type machinery of `@loro-extended/change`. The explicit interface is the documented workaround.
+
+### Type Stubs Needed for All Import Sources
+
+The in-memory filesystem needs stubs not just for `@loro-extended/change`, but also for `@loro-extended/kinetic` (for `bind`, `Scope`, etc.) and `loro-crdt` (for `LoroDoc`). Without these, unresolved imports cause cascading `any` types that degrade the entire type system.
+
+### Server Pattern: Repo + Vite Middleware
+
+The `todo-websocket` example establishes the proven pattern for a Kinetic server:
+
+```typescript
+// 1. Create Repo with adapters
+const wsAdapter = new WsServerNetworkAdapter()
+const storageAdapter = new LevelDBStorageAdapter("data.db")
+new Repo({ adapters: [wsAdapter, storageAdapter] })
+
+// 2. Create HTTP server
+const httpServer = http.createServer()
+
+// 3. Vite dev middleware for serving client code
+const vite = await createViteServer({
+  root,
+  server: { middlewareMode: { server: httpServer } },
+})
+httpServer.on("request", (req, res) => vite.middlewares(req, res))
+
+// 4. WebSocket server on the same HTTP server
+new WebSocketServer({ server: httpServer, path: "/ws" }).on(
+  "connection", ws => {
+    const { start } = wsAdapter.handleConnection({ socket: wrapWsSocket(ws) })
+    start()
+  },
+)
+
+httpServer.listen(5173)
+```
+
+The key insight: the server doesn't serve HTML for the todo app. It just runs Vite middleware (for client code) and a WebSocket endpoint (for Loro sync). The client handles all rendering.
 
 ### Type Resolution in ts-morph In-Memory Filesystem
 

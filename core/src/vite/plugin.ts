@@ -195,6 +195,11 @@ export default function kineticPlugin(
   return {
     name: "kinetic",
 
+    // Run before esbuild strips TypeScript types.
+    // The compiler needs type annotations (interface, type imports, etc.)
+    // to detect reactive types like ListRef, TextRef, CounterRef.
+    enforce: "pre",
+
     // Determine if we're in dev mode
     configResolved(config) {
       isDev = config.command === "serve"
