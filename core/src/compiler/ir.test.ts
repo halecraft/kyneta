@@ -69,8 +69,8 @@ describe("createBuilder - dependency collection", () => {
         ["doc.title"],
         span(),
       )
-      const p = createElement("p", [], [], [reactiveExpr], span())
-      const section = createElement("section", [], [], [p], span())
+      const p = createElement("p", [], [], [], [reactiveExpr], span())
+      const section = createElement("section", [], [], [], [p], span())
       const builder = createBuilder("div", [], [], [section], span())
 
       expect(builder.allDependencies).toContain("doc.title")
@@ -82,7 +82,8 @@ describe("createBuilder - dependency collection", () => {
         "li",
         [],
         [],
-        [createStaticExpression("item", span())],
+        [],
+        [createStaticExpression("item.text", span())],
         span(),
       )
       const listRegion = createListRegion(
@@ -104,7 +105,7 @@ describe("createBuilder - dependency collection", () => {
         ["item.count"],
         span(),
       )
-      const li = createElement("li", [], [], [reactiveExpr], span())
+      const li = createElement("li", [], [], [], [reactiveExpr], span())
       const listRegion = createListRegion(
         "doc.items",
         "item",
@@ -121,6 +122,7 @@ describe("createBuilder - dependency collection", () => {
     it("collects from conditional region subscriptionTarget", () => {
       const p = createElement(
         "p",
+        [],
         [],
         [],
         [createTextNode("Visible", span())],
@@ -148,6 +150,7 @@ describe("createBuilder - dependency collection", () => {
     it("collects from conditional region branch body", () => {
       const reactiveP = createElement(
         "p",
+        [],
         [],
         [],
         [
@@ -198,7 +201,7 @@ describe("createBuilder - dependency collection", () => {
           span(),
         ),
       }
-      const innerDiv = createElement("div", [classAttr], [], [], span())
+      const innerDiv = createElement("div", [classAttr], [], [], [], span())
       const builder = createBuilder("section", [], [], [innerDiv], span())
 
       expect(builder.allDependencies).toContain("item.className")
@@ -218,8 +221,8 @@ describe("createBuilder - dependency collection", () => {
         [],
         [],
         [
-          createElement("p", [], [], [expr1], span()),
-          createElement("p", [], [], [expr2], span()),
+          createElement("p", [], [], [], [expr1], span()),
+          createElement("p", [], [], [], [expr2], span()),
         ],
         span(),
       )
@@ -290,7 +293,14 @@ describe("createBuilder - dependency collection", () => {
         "h1",
         [],
         [],
-        [createReactiveExpression("title.toString()", ["title"], span())],
+        [],
+        [
+          createReactiveExpression(
+            "doc.title.toString()",
+            ["doc.title"],
+            span(),
+          ),
+        ],
         span(),
       )
 
@@ -298,14 +308,16 @@ describe("createBuilder - dependency collection", () => {
         "li",
         [],
         [],
+        [],
         [createReactiveExpression("item.text", ["item.text"], span())],
         span(),
       )
       const listRegion = createListRegion("items", "item", null, [li], span())
-      const ul = createElement("ul", [], [], [listRegion], span())
+      const ul = createElement("ul", [], [], [], [listRegion], span())
 
       const emptyP = createElement(
         "p",
+        [],
         [],
         [],
         [createTextNode("No items", span())],
@@ -342,7 +354,7 @@ describe("createBuilder - dependency collection", () => {
 
       // Should collect all unique dependencies
       expect(builder.allDependencies).toContain("activeClass")
-      expect(builder.allDependencies).toContain("title")
+      expect(builder.allDependencies).toContain("doc.title")
       expect(builder.allDependencies).toContain("items")
       expect(builder.allDependencies).toContain("item.text")
       expect(builder.isReactive).toBe(true)

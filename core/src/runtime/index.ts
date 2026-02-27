@@ -22,6 +22,13 @@ export { __resetScopeIdCounter, Scope } from "./scope.js"
 // =============================================================================
 
 export {
+  __bindChecked,
+  __bindNumericValue,
+  __bindTextValue,
+  bind,
+  isBinding,
+} from "./binding.js"
+export {
   __conditionalRegion,
   __listRegion,
   __staticConditionalRegion,

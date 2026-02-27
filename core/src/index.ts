@@ -58,6 +58,13 @@ export { Scope } from "./runtime/scope.js"
 // =============================================================================
 
 export {
+  __bindChecked,
+  __bindNumericValue,
+  __bindTextValue,
+  bind,
+  isBinding,
+} from "./runtime/binding.js"
+export {
   __conditionalRegion,
   __listRegion,
   __staticConditionalRegion,

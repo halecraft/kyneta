@@ -147,24 +147,44 @@ function parseSource(source: string, filename: string): SourceFile {
 function generateDOMImports(ir: BuilderNode[]): string {
   const imports = new Set<string>()
 
-  function collectImports(node: BuilderNode): void {
-    if (node.isReactive) {
-      imports.add("__subscribe")
-      imports.add("__subscribeWithValue")
-    }
-
-    // Check for list regions
-    for (const child of node.children) {
+  function collectImportsFromChildren(
+    children: (typeof ir)[0]["children"],
+  ): void {
+    for (const child of children) {
       if (child.kind === "list-region") {
         imports.add("__listRegion")
+        collectImportsFromChildren(child.body)
       } else if (child.kind === "conditional-region") {
         if (child.subscriptionTarget) {
           imports.add("__conditionalRegion")
         } else {
           imports.add("__staticConditionalRegion")
         }
+        for (const branch of child.branches) {
+          collectImportsFromChildren(branch.body)
+        }
+      } else if (child.kind === "element") {
+        // Check for bindings on elements
+        for (const binding of child.bindings) {
+          if (binding.bindingType === "checked") {
+            imports.add("__bindChecked")
+          } else {
+            imports.add("__bindTextValue")
+          }
+        }
+        // Recurse into element children
+        collectImportsFromChildren(child.children)
       }
     }
+  }
+
+  function collectImports(node: BuilderNode): void {
+    if (node.isReactive) {
+      imports.add("__subscribe")
+      imports.add("__subscribeWithValue")
+    }
+
+    collectImportsFromChildren(node.children)
   }
 
   for (const builder of ir) {

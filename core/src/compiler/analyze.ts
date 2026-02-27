@@ -38,6 +38,7 @@ import type {
   ChildNode,
   ConditionalBranch,
   ContentNode,
+  ElementBinding,
   EventHandlerNode,
   ExpressionNode,
   SourceSpan,
@@ -471,14 +472,53 @@ export function analyzeExpression(expr: Expression): ContentNode {
 // =============================================================================
 
 /**
+ * Check if a call expression is a bind() call.
+ */
+function isBindCall(expr: Expression): boolean {
+  if (expr.getKind() !== SyntaxKind.CallExpression) {
+    return false
+  }
+  const call = expr as CallExpression
+  const callee = call.getExpression()
+  return callee.getText() === "bind"
+}
+
+/**
+ * Extract the ref source from a bind() call.
+ */
+function extractBindRefSource(expr: CallExpression): string | null {
+  const args = expr.getArguments()
+  if (args.length === 0) {
+    return null
+  }
+  return args[0].getText()
+}
+
+/**
+ * Binding information extracted from props.
+ */
+export interface BindingInfo {
+  /** The attribute being bound (e.g., "value", "checked") */
+  attribute: string
+  /** The ref source (e.g., "doc.title") */
+  refSource: string
+  /** The type of binding */
+  bindingType: "value" | "checked"
+  /** Source span */
+  span: SourceSpan
+}
+
+/**
  * Analyze props object literal.
  */
 export function analyzeProps(obj: ObjectLiteralExpression): {
   attributes: AttributeNode[]
   eventHandlers: EventHandlerNode[]
+  bindings: BindingInfo[]
 } {
   const attributes: AttributeNode[] = []
   const eventHandlers: EventHandlerNode[] = []
+  const bindings: BindingInfo[] = []
 
   for (const prop of obj.getProperties()) {
     // Property assignment: { name: value }
@@ -503,6 +543,18 @@ export function analyzeProps(obj: ObjectLiteralExpression): {
           handlerSource: valueNode.getText(),
           span: getSpan(prop),
         })
+      } else if (isBindCall(valueNode)) {
+        // Two-way binding: value: bind(doc.title)
+        const refSource = extractBindRefSource(valueNode as CallExpression)
+        if (refSource) {
+          const bindingType = name === "checked" ? "checked" : "value"
+          bindings.push({
+            attribute: name,
+            refSource,
+            bindingType,
+            span: getSpan(prop),
+          })
+        }
       } else {
         // Regular attribute
         const value = analyzeExpression(valueNode)
@@ -518,7 +570,7 @@ export function analyzeProps(obj: ObjectLiteralExpression): {
     }
   }
 
-  return { attributes, eventHandlers }
+  return { attributes, eventHandlers, bindings }
 }
 
 // =============================================================================
@@ -768,11 +820,12 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
   const args = call.getArguments() as Expression[]
   if (args.length === 0) {
     // Empty element: div()
-    return createElement(factoryName, [], [], [], getSpan(call))
+    return createElement(factoryName, [], [], [], [], getSpan(call))
   }
 
   let props: AttributeNode[] = []
   let eventHandlers: EventHandlerNode[] = []
+  let bindings: ElementBinding[] = []
   const children: ChildNode[] = []
   let startIndex = 0
 
@@ -782,6 +835,12 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
     const propsResult = analyzeProps(firstArg as ObjectLiteralExpression)
     props = propsResult.attributes
     eventHandlers = propsResult.eventHandlers
+    bindings = propsResult.bindings.map(b => ({
+      attribute: b.attribute,
+      refSource: b.refSource,
+      bindingType: b.bindingType,
+      span: b.span,
+    }))
     startIndex = 1
   }
 
@@ -821,6 +880,7 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
     factoryName,
     props,
     eventHandlers,
+    bindings,
     children,
     getSpan(call),
   )

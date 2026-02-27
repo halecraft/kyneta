@@ -92,6 +92,7 @@ describe("generateDOM", () => {
         "h1",
         [],
         [],
+        [],
         [innerText],
         span(2, 4, 2, 15),
       )
@@ -310,8 +311,9 @@ describe("generateDOM - list regions", () => {
       "li",
       [],
       [],
-      [createStaticExpression("item", span(3, 8, 3, 12))],
-      span(3, 4, 3, 15),
+      [],
+      [createStaticExpression("item.text", span(3, 6, 3, 15))],
+      span(3, 4, 3, 17),
     )
     const listRegion = createListRegion(
       "items",
@@ -335,8 +337,9 @@ describe("generateDOM - list regions", () => {
       "li",
       [],
       [],
-      [createStaticExpression("item", span(3, 8, 3, 12))],
-      span(3, 4, 3, 15),
+      [],
+      [createStaticExpression("item.text", span(3, 6, 3, 15))],
+      span(3, 4, 3, 17),
     )
     const listRegion = createListRegion(
       "items",
@@ -363,8 +366,9 @@ describe("generateDOM - conditional regions", () => {
       "p",
       [],
       [],
-      [createTextNode("Has items", span(3, 6, 3, 17))],
-      span(3, 4, 3, 19),
+      [],
+      [createTextNode("Static content", span(3, 6, 3, 22))],
+      span(3, 4, 3, 24),
     )
     const branch: ConditionalBranch = {
       condition: createReactiveExpression(
@@ -408,8 +412,9 @@ describe("generateDOM - conditional regions", () => {
           "p",
           [],
           [],
-          [createTextNode("Has items", span(3, 6, 3, 17))],
-          span(3, 4, 3, 19),
+          [],
+          [createTextNode("Yes", span(3, 6, 3, 11))],
+          span(3, 4, 3, 13),
         ),
       ],
       span: span(2, 4, 4, 3),
@@ -421,8 +426,9 @@ describe("generateDOM - conditional regions", () => {
           "p",
           [],
           [],
-          [createTextNode("No items", span(5, 6, 5, 16))],
-          span(5, 4, 5, 18),
+          [],
+          [createTextNode("No", span(5, 6, 5, 10))],
+          span(5, 4, 5, 12),
         ),
       ],
       span: span(4, 4, 6, 3),
@@ -449,6 +455,7 @@ describe("generateDOM - conditional regions", () => {
   it("should generate __staticConditionalRegion for static condition", () => {
     const pElement = createElement(
       "p",
+      [],
       [],
       [],
       [createTextNode("Visible", span(3, 6, 3, 15))],
@@ -524,6 +531,7 @@ describe("generateDOM - code validity", () => {
           "li",
           [],
           [],
+          [],
           [createReactiveExpression("item.text", ["item"], span(3, 0, 3, 10))],
           span(2, 0, 4, 1),
         ),
@@ -540,6 +548,7 @@ describe("generateDOM - code validity", () => {
       body: [
         createElement(
           "p",
+          [],
           [],
           [],
           [createTextNode("Yes", span(1, 0, 1, 5))],
@@ -602,6 +611,7 @@ describe("generateDOM - code validity", () => {
           "h1",
           [],
           [],
+          [],
           [createTextNode("Title", span(2, 6, 2, 13))],
           span(2, 4, 2, 15),
         ),
@@ -632,6 +642,7 @@ describe("generateDOM - code validity", () => {
           "p",
           [],
           [],
+          [],
           [
             createReactiveExpression(
               "count.get()",
@@ -639,7 +650,7 @@ describe("generateDOM - code validity", () => {
               span(2, 5, 2, 17),
             ),
           ],
-          span(2, 2, 2, 20),
+          span(2, 4, 2, 19),
         ),
       ],
       span(1, 0, 3, 1),

@@ -496,24 +496,40 @@ Validate conditional region compilation.
   - Generated code structure matches expected pattern
   - **Note**: Runtime behavior tests are in `regions.test.ts` (not duplicated here)
 
-### Phase 8: Input Binding Transform 🔴
+### Phase 8: Input Binding Transform ✅
 
 Implement two-way binding for form inputs.
 
-- 🔴 **Task 8.1**: Create `src/runtime/binding.ts`
+- ✅ **Task 8.1**: Create `src/runtime/binding.ts`
   - `bind(ref)` — create binding marker object
-  - Runtime handling for attaching input listeners
-- 🔴 **Task 8.2**: Add binding detection to `analyze.ts`
-  - Detect `bind()` calls in props
-  - Create `BindingNode` in IR
-- 🔴 **Task 8.3**: Add binding codegen to `codegen/dom.ts`
-  - Generate event handler (onInput/onChange)
-  - Generate subscription for initial value
-- 🔴 **Task 8.4**: Support input types
-  - `<input type="text">` — value binding via `onInput`
-  - `<input type="checkbox">` — checked binding via `onChange`
-  - `<select>` — value binding via `onChange`
-- 🔴 **Task 8.5**: Write unit tests
+  - `isBinding()` — check if value is a binding
+  - `__bindTextValue()` — text input binding with bidirectional sync
+  - `__bindChecked()` — checkbox binding with counter refs
+  - `__bindNumericValue()` — numeric input binding
+- ✅ **Task 8.2**: Add binding detection to `analyze.ts`
+  - `isBindCall()` — detect `bind()` calls in props
+  - `extractBindRefSource()` — extract ref from bind call
+  - `BindingInfo` type and `ElementBinding` in IR
+  - `analyzeProps()` returns bindings array
+- ✅ **Task 8.3**: Add binding codegen to `codegen/dom.ts`
+  - `generateBinding()` — generates `__bindTextValue` or `__bindChecked` calls
+  - `generateDOMImports()` — includes binding imports when needed
+  - `generateElement()` — calls binding generation for elements with bindings
+- ✅ **Task 8.4**: Support input types
+  - `<input type="text">` — value binding via `onInput` ✓
+  - `<input type="checkbox">` — checked binding via `onChange` ✓
+  - `<input type="number">` — numeric binding via `onInput` ✓
+  - `<input type="range">` — numeric binding via `onInput` ✓
+  - `<textarea>` — value binding via `onInput` ✓
+- ✅ **Task 8.5**: Write unit tests
+  - 24 unit tests in `binding.test.ts`
+  - 10 integration tests in `integration.test.ts` (Task 8.1-8.3)
+  - Tests cover: initial sync, ref→input updates, input→ref updates, cleanup
+
+**Implementation Notes**:
+- `loro(ref)` returns raw Loro containers; counters have `.value` property, not `.get()`
+- TypedRefs have `.get()` method wrapping the underlying container
+- Event listeners cleaned up via scope disposal
 
 ### Phase 9: Vite Plugin + Client Integration 🔴
 
@@ -590,7 +606,7 @@ Validate SSR + hydration with full application.
 
 ## Tests
 
-**Current test count**: 240 tests (as of Phase 7)
+**Current test count**: 269 tests (as of Phase 8)
 
 ### Unit Tests
 
@@ -598,6 +614,7 @@ Validate SSR + hydration with full application.
 |------|------------|
 | `runtime/subscribe.test.ts` | Subscription lifecycle, cleanup |
 | `runtime/regions.test.ts` | List delta handling, conditional swap (**canonical runtime tests**) |
+| `runtime/binding.test.ts` | Two-way binding: text, checkbox, numeric (**canonical binding tests**) |
 | `runtime/scope.test.ts` | Nested scopes, cascade disposal, subscription counting |
 | `compiler/ir.test.ts` | IR node creation, dependency collection |
 | `compiler/analyze.test.ts` | AST → IR analysis, reactive detection |
@@ -1454,10 +1471,14 @@ Integration tests should NOT duplicate runtime behavior tests:
 | Test File | Purpose | Example |
 |-----------|---------|---------|
 | `regions.test.ts` | Test runtime functions directly | `__conditionalRegion` branch swapping |
+| `binding.test.ts` | Test binding functions directly | `__bindTextValue`, `__bindChecked` |
 | `integration.test.ts` | Test compiler output | IR structure, generated code patterns |
 
 **Mistake made**: Phase 7 initially added 7 tests calling `__conditionalRegion` directly,
 duplicating coverage from `regions.test.ts`. These were consolidated into 1 end-to-end test.
+
+**Update after Phase 8**: Same pattern repeated—3 runtime tests calling `__bindTextValue`
+were removed from `integration.test.ts` and consolidated into 1 compile-and-verify test.
 
 **Guidance**: Compiler integration tests should verify:
 1. IR structure is correct
@@ -1486,6 +1507,97 @@ The actual work was **validation through tests**, not implementation.
 **Guidance for future phases**: Before starting, check if codegen/runtime was built
 in earlier phases. The phase may be "validation only."
 
+### Implementation Learnings (Phase 8)
+
+#### Loro Container vs TypedRef API Differences
+
+**Critical distinction** that caused bugs during implementation:
+
+| Type | Value Access | Available On |
+|------|-------------|--------------|
+| `LoroCounter` (raw container) | `.value` property | `loro(ref)` return value |
+| `CounterRef` (TypedRef wrapper) | `.get()` method | `doc.count` directly |
+
+```typescript
+// ❌ This fails - LoroCounter doesn't have .get()
+const loroContainer = loro(doc.count)  // Returns LoroCounter
+loroContainer.get()  // TypeError: get is not a function
+
+// ✅ Correct - use .value for raw containers
+loroContainer.value  // Works
+
+// ✅ Or use TypedRef directly
+doc.count.get()  // Works
+```
+
+The `loro()` function unwraps TypedRefs to their underlying Loro containers. Binding
+implementations that call `loro(ref)` must use the raw container API (`.value`, 
+`.increment()`), not the TypedRef API (`.get()`).
+
+#### createElement() Signature Changed
+
+Phase 8 added `bindings` parameter to `createElement()`:
+
+```typescript
+// Before (Phase 1-7)
+createElement(tag, attributes, eventHandlers, children, span)
+
+// After (Phase 8)
+createElement(tag, attributes, eventHandlers, bindings, children, span)
+```
+
+**All existing tests had to be updated** to include the empty `[]` bindings parameter.
+When adding IR node properties, update all `create*()` factory calls in tests.
+
+#### ElementBinding Lives on ElementNode
+
+Initial IR design had `BindingNode` with `element: ElementNode` reference (circular).
+The correct design stores bindings on the element:
+
+```typescript
+interface ElementNode {
+  // ...existing fields...
+  bindings: ElementBinding[]  // Bindings stored here
+}
+
+interface ElementBinding {
+  attribute: string    // "value" or "checked"
+  refSource: string    // "doc.title"
+  bindingType: "value" | "checked"
+  span: SourceSpan
+}
+```
+
+#### analyzeProps() Returns Three Collections
+
+```typescript
+export function analyzeProps(obj): {
+  attributes: AttributeNode[]
+  eventHandlers: EventHandlerNode[]
+  bindings: BindingInfo[]  // NEW in Phase 8
+}
+```
+
+#### Binding Detection is Name-Based
+
+The compiler detects `bind()` calls by checking if the callee text is literally `"bind"`:
+
+```typescript
+function isBindCall(expr: Expression): boolean {
+  return callee.getText() === "bind"  // Simple string match
+}
+```
+
+Aliased imports like `import { bind as b }` won't be detected. Acceptable for MVP.
+
+#### Event Dispatch in JSDOM Requires Global Event
+
+```typescript
+// Ensure Event is from JSDOM window
+global.Event = dom.window.Event
+input.dispatchEvent(new Event("input"))
+```
+
 ---
 
 ## Amendment: Engineering Improvements
@@ -1497,9 +1609,11 @@ in earlier phases. The phase may be "validation only."
 
 After completing Phases 1-6, a comprehensive engineering review revealed several opportunities to improve code quality, reduce cognitive load, and prevent future maintenance burden. While the core architecture (Functional Core / Imperative Shell) is well-implemented, test organization and some code patterns have accumulated technical debt as the codebase grew.
 
-The `integration.test.ts` file has grown to 1200+ lines spanning four phases (4-7). This violates the Single Responsibility Principle and makes navigation difficult. Additionally, duplicated test setup code and magic numbers in ts-morph tests create maintenance burden.
+The `integration.test.ts` file has grown to 1600+ lines spanning five phases (4-8). This violates the Single Responsibility Principle and makes navigation difficult. Additionally, duplicated test setup code and magic numbers in ts-morph tests create maintenance burden.
 
 **Update after Phase 7**: Test duplication was identified and addressed—7 redundant runtime tests were removed, reducing the test count from 246 to 240 while maintaining coverage.
+
+**Update after Phase 8**: Same pattern repeated—3 redundant runtime tests removed from binding section, consolidated to 1 compile-and-verify test. Test count: 271 → 269.
 
 ### Tasks
 
@@ -1511,9 +1625,10 @@ The `integration.test.ts` file has grown to 1200+ lines spanning four phases (4-
 ```
 src/compiler/integration/
   static-compilation.test.ts    # Phase 4 tests
-  reactive-expressions.test.ts  # Phase 5 tests  
+  reactive-expressions.test.ts  # Phase 5 tests
   list-regions.test.ts          # Phase 6 tests
   conditional-regions.test.ts   # Phase 7 tests
+  bindings.test.ts              # Phase 8 tests
 ```
 
 **Note**: After Phase 7 consolidation, conditional region tests are now minimal (10 tests).
@@ -1533,10 +1648,17 @@ export function setupDOMGlobals() {
     Element: dom.window.Element,
     Comment: dom.window.Comment,
     Text: dom.window.Text,
+    Event: dom.window.Event,  // Required for dispatchEvent
+    HTMLInputElement: dom.window.HTMLInputElement,  // Required for binding tests
+    HTMLTextAreaElement: dom.window.HTMLTextAreaElement,
+    HTMLSelectElement: dom.window.HTMLSelectElement,
   })
   return dom
 }
 ```
+
+**Update after Phase 8**: Added `Event`, `HTMLInputElement`, `HTMLTextAreaElement`, 
+`HTMLSelectElement` globals required for binding event dispatch tests.
 
 #### A.3: Replace Magic Numbers with SyntaxKind Enum
 

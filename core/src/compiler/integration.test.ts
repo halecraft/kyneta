@@ -8,11 +8,13 @@
  * Phase 5: Reactive expression tests (using real Loro documents)
  * Phase 6: List region tests
  * Phase 7: Conditional region tests
+ * Phase 8: Binding compilation tests
  */
 
 import { createTypedDoc, loro, Shape } from "@loro-extended/change"
 import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
+
 import { __conditionalRegion, __listRegion } from "../runtime/regions.js"
 import {
   __resetScopeIdCounter,
@@ -39,6 +41,8 @@ global.Node = dom.window.Node
 global.Element = dom.window.Element
 global.Comment = dom.window.Comment
 global.Text = dom.window.Text
+global.Event = dom.window.Event
+global.HTMLInputElement = dom.window.HTMLInputElement
 
 /**
  * Execute generated DOM code and return the created element.
@@ -1445,6 +1449,190 @@ describe("compiler integration - conditional regions", () => {
       expect(result.code).toContain("whenFalse")
 
       scope.dispose()
+    })
+  })
+})
+
+// =============================================================================
+// Phase 8: Binding Tests
+// =============================================================================
+
+describe("compiler integration - bindings", () => {
+  beforeEach(() => {
+    __resetSubscriptionIdCounter()
+    __resetScopeIdCounter()
+  })
+
+  describe("Task 8.1: bind() detection in props", () => {
+    it("should detect bind() call and create binding in element IR", () => {
+      const source = `
+        interface TextRef {
+          toString(): string
+        }
+        declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
+        declare const doc: { title: TextRef }
+
+        div(() => {
+          input({ type: "text", value: bind(doc.title) })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Should have one builder (the div wrapping the input)
+      expect(result.ir.length).toBe(1)
+
+      // The div should have one child (the input element)
+      expect(result.ir[0].children.length).toBe(1)
+      expect(result.ir[0].children[0].kind).toBe("element")
+    })
+
+    it("should extract ref source from bind() call", () => {
+      const source = `
+        interface TextRef {
+          toString(): string
+        }
+        declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
+        declare const doc: { title: TextRef }
+
+        div(() => {
+          input({ type: "text", value: bind(doc.title) })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Check that the generated code contains the binding call
+      expect(result.code).toContain("__bindTextValue")
+      expect(result.code).toContain("doc.title")
+    })
+
+    it("should detect checked binding for checkbox", () => {
+      const source = `
+        interface CounterRef {
+          get(): number
+        }
+        declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
+        declare const doc: { enabled: CounterRef }
+
+        div(() => {
+          input({ type: "checkbox", checked: bind(doc.enabled) })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Should generate __bindChecked for checkbox
+      expect(result.code).toContain("__bindChecked")
+      expect(result.code).toContain("doc.enabled")
+    })
+  })
+
+  describe("Task 8.2: Generated binding code", () => {
+    it("should generate __bindTextValue call for value binding", () => {
+      const source = `
+        interface TextRef {
+          toString(): string
+        }
+        declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
+        declare const doc: { name: TextRef }
+
+        div(() => {
+          input({ type: "text", value: bind(doc.name) })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      expect(result.code).toContain("__bindTextValue")
+      expect(result.code).toContain('createElement("input")')
+    })
+
+    it("should generate __bindChecked call for checked binding", () => {
+      const source = `
+        interface CounterRef {
+          get(): number
+        }
+        declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
+        declare const doc: { active: CounterRef }
+
+        div(() => {
+          input({ type: "checkbox", checked: bind(doc.active) })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      expect(result.code).toContain("__bindChecked")
+      expect(result.code).toContain('createElement("input")')
+    })
+
+    it("should include binding imports when bindings are present", () => {
+      const source = `
+        interface TextRef {
+          toString(): string
+        }
+        declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
+        declare const doc: { title: TextRef }
+
+        div(() => {
+          input({ type: "text", value: bind(doc.title) })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      expect(result.code).toContain("__bindTextValue")
+    })
+  })
+
+  // Note: Runtime behavior tests for __bindTextValue, __bindChecked, etc.
+  // are in binding.test.ts. This section tests compiler integration only.
+
+  describe("Task 8.3: Compile-and-verify integration", () => {
+    it("should compile binding code with correct structure and imports", () => {
+      // This test verifies the full compiler pipeline for bindings:
+      // source → IR → codegen (including imports)
+
+      const textSource = `
+        interface TextRef {
+          toString(): string
+        }
+        declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
+        declare const doc: { title: TextRef }
+
+        div(() => {
+          input({ type: "text", value: bind(doc.title) })
+        })
+      `
+
+      const checkboxSource = `
+        interface CounterRef {
+          get(): number
+        }
+        declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
+        declare const doc: { enabled: CounterRef }
+
+        div(() => {
+          input({ type: "checkbox", checked: bind(doc.enabled) })
+        })
+      `
+
+      const textResult = transformSource(textSource, { target: "dom" })
+      const checkboxResult = transformSource(checkboxSource, { target: "dom" })
+
+      // Text binding generates __bindTextValue
+      expect(textResult.code).toContain("__bindTextValue")
+      expect(textResult.code).toContain("doc.title")
+      expect(textResult.code).toContain('createElement("input")')
+
+      // Checkbox binding generates __bindChecked
+      expect(checkboxResult.code).toContain("__bindChecked")
+      expect(checkboxResult.code).toContain("doc.enabled")
+
+      // Both should have proper element creation
+      expect(textResult.ir[0].children[0].kind).toBe("element")
+      expect(checkboxResult.ir[0].children[0].kind).toBe("element")
     })
   })
 })

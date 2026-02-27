@@ -134,12 +134,29 @@ export interface EventHandlerNode {
 // =============================================================================
 
 /**
+ * A two-way binding on an element attribute.
+ */
+export interface ElementBinding {
+  /** The attribute being bound (e.g., "value", "checked") */
+  attribute: string
+
+  /** The ref source (e.g., "doc.title") */
+  refSource: string
+
+  /** The type of binding */
+  bindingType: "value" | "checked"
+
+  span: SourceSpan
+}
+
+/**
  * An HTML element.
  *
  * Elements can have:
  * - Static or reactive attributes
  * - Static or reactive children
  * - Event handlers
+ * - Two-way bindings
  */
 export interface ElementNode extends IRNodeBase {
   kind: "element"
@@ -152,6 +169,9 @@ export interface ElementNode extends IRNodeBase {
 
   /** Event handlers on this element */
   eventHandlers: EventHandlerNode[]
+
+  /** Two-way bindings on this element */
+  bindings: ElementBinding[]
 
   /** Children of this element */
   children: ChildNode[]
@@ -246,7 +266,11 @@ export interface ConditionalRegionNode extends IRNodeBase {
 // =============================================================================
 
 /**
- * A two-way binding on an input element.
+ * A standalone two-way binding node.
+ *
+ * Note: Bindings are typically stored on ElementNode.bindings.
+ * This node type exists for cases where a binding needs to be
+ * represented as a child node.
  *
  * ```typescript
  * input({ type: "text", value: bind(doc.title) })
@@ -260,9 +284,6 @@ export interface BindingNode extends IRNodeBase {
 
   /** The type of binding based on element/attribute */
   bindingType: "value" | "checked"
-
-  /** The element this binding is attached to */
-  element: ElementNode
 }
 
 // =============================================================================
@@ -448,11 +469,13 @@ export function createElement(
   tag: string,
   attributes: AttributeNode[],
   eventHandlers: EventHandlerNode[],
+  bindings: ElementBinding[],
   children: ChildNode[],
   span: SourceSpan,
 ): ElementNode {
   const isReactive =
     attributes.some(attr => isReactiveContent(attr.value)) ||
+    bindings.length > 0 ||
     children.some(
       child =>
         child.kind === "expression" && child.expressionKind === "reactive",
@@ -468,6 +491,7 @@ export function createElement(
     tag,
     attributes,
     eventHandlers,
+    bindings,
     children,
     isReactive,
     span,

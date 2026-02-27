@@ -305,6 +305,11 @@ function generateElement(
     lines.push(...generateEventHandler(elementVar, handler, state))
   }
 
+  // Set up two-way bindings
+  for (const binding of node.bindings) {
+    lines.push(...generateBinding(elementVar, binding, state))
+  }
+
   // Generate children
   for (const child of node.children) {
     const childResult = generateChild(child, elementVar, state)
@@ -312,6 +317,37 @@ function generateElement(
   }
 
   return { code: lines, varName: elementVar }
+}
+
+// =============================================================================
+// Binding Generation
+// =============================================================================
+
+/**
+ * Generate code for a two-way binding.
+ */
+function generateBinding(
+  elementVar: string,
+  binding: import("../ir.js").ElementBinding,
+  state: CodegenState,
+): string[] {
+  const lines: string[] = []
+  const ind = getIndent(state)
+
+  if (binding.bindingType === "checked") {
+    // Checkbox binding
+    lines.push(
+      `${ind}__bindChecked(${elementVar}, ${binding.refSource}, ${state.scopeVar})`,
+    )
+  } else if (binding.attribute === "value") {
+    // Determine if numeric or text based on element type
+    // For now, assume text - we could enhance this with element type info
+    lines.push(
+      `${ind}__bindTextValue(${elementVar}, ${binding.refSource}, ${state.scopeVar})`,
+    )
+  }
+
+  return lines
 }
 
 // =============================================================================
