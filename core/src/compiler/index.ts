@@ -117,12 +117,19 @@ export {
 export {
   // Testing utilities
   __resetProject,
+  // Types
   type CompileTarget,
+  // Import handling
+  collectRequiredImports,
+  // Functions
   hasBuilderCalls,
+  mergeImports,
+  type TransformInPlaceResult,
   type TransformOptions,
   type TransformResult,
   transformFile,
   transformSource,
+  transformSourceInPlace,
 } from "./transform.js"
 
 // =============================================================================

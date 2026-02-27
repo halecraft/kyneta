@@ -14,12 +14,12 @@
  * @packageDocumentation
  */
 
-import { Project, type SourceFile } from "ts-morph"
+import { type CallExpression, Project, type SourceFile } from "ts-morph"
 import { CompilerError, KineticErrorCode } from "../errors.js"
 import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
 import { generateElementFactory } from "./codegen/dom.js"
 import { generateEscapeHelper, generateHTML } from "./codegen/html.js"
-import type { BuilderNode } from "./ir.js"
+import type { BuilderNode, ChildNode } from "./ir.js"
 
 // =============================================================================
 // Types
@@ -80,6 +80,26 @@ export interface TransformResult {
   ir: BuilderNode[]
 }
 
+/**
+ * Result of in-place transformation.
+ */
+export interface TransformInPlaceResult {
+  /**
+   * The mutated source file (call getFullText() to get the code).
+   */
+  sourceFile: SourceFile
+
+  /**
+   * The IR nodes that were generated.
+   */
+  ir: BuilderNode[]
+
+  /**
+   * The set of runtime imports required.
+   */
+  requiredImports: Set<string>
+}
+
 // =============================================================================
 // Project Management
 // =============================================================================
@@ -138,22 +158,26 @@ function parseSource(source: string, filename: string): SourceFile {
 }
 
 // =============================================================================
-// Code Generation Helpers
+// Import Collection (Functional Core)
 // =============================================================================
 
 /**
- * Generate imports for the runtime functions used in DOM output.
+ * Collect required runtime imports from IR nodes.
+ *
+ * This is a pure function that analyzes the IR and returns the set
+ * of runtime function names that need to be imported.
+ *
+ * @param ir - Array of builder nodes to analyze
+ * @returns Set of import names (e.g., "__subscribe", "__listRegion")
  */
-function generateDOMImports(ir: BuilderNode[]): string {
+export function collectRequiredImports(ir: BuilderNode[]): Set<string> {
   const imports = new Set<string>()
 
-  function collectImportsFromChildren(
-    children: (typeof ir)[0]["children"],
-  ): void {
+  function collectFromChildren(children: ChildNode[]): void {
     for (const child of children) {
       if (child.kind === "list-region") {
         imports.add("__listRegion")
-        collectImportsFromChildren(child.body)
+        collectFromChildren(child.body)
       } else if (child.kind === "conditional-region") {
         if (child.subscriptionTarget) {
           imports.add("__conditionalRegion")
@@ -161,7 +185,7 @@ function generateDOMImports(ir: BuilderNode[]): string {
           imports.add("__staticConditionalRegion")
         }
         for (const branch of child.branches) {
-          collectImportsFromChildren(branch.body)
+          collectFromChildren(branch.body)
         }
       } else if (child.kind === "element") {
         // Check for bindings on elements
@@ -173,31 +197,186 @@ function generateDOMImports(ir: BuilderNode[]): string {
           }
         }
         // Recurse into element children
-        collectImportsFromChildren(child.children)
+        collectFromChildren(child.children)
       }
     }
   }
 
-  function collectImports(node: BuilderNode): void {
+  function collectFromBuilder(node: BuilderNode): void {
     if (node.isReactive) {
       imports.add("__subscribe")
       imports.add("__subscribeWithValue")
     }
-
-    collectImportsFromChildren(node.children)
+    collectFromChildren(node.children)
   }
 
   for (const builder of ir) {
-    collectImports(builder)
+    collectFromBuilder(builder)
   }
 
+  return imports
+}
+
+/**
+ * Generate import statement string from a set of import names.
+ *
+ * @param imports - Set of import names
+ * @returns Import statement string, or empty string if no imports needed
+ */
+function formatImportStatement(imports: Set<string>): string {
   if (imports.size === 0) {
     return ""
   }
-
   const importList = Array.from(imports).sort().join(", ")
   return `import { ${importList} } from "@loro-extended/kinetic"\n`
 }
+
+/**
+ * Generate imports for the runtime functions used in DOM output.
+ * This is the original function, kept for backward compatibility.
+ */
+function generateDOMImports(ir: BuilderNode[]): string {
+  const imports = collectRequiredImports(ir)
+  return formatImportStatement(imports)
+}
+
+// =============================================================================
+// Import Merging (Imperative Shell)
+// =============================================================================
+
+/**
+ * Merge required imports into a source file.
+ *
+ * This function modifies the source file in place:
+ * - If an @loro-extended/kinetic import exists, add missing named imports to it
+ * - If no such import exists, add a new import declaration at the top
+ *
+ * @param sourceFile - The ts-morph SourceFile to modify
+ * @param requiredImports - Set of import names to ensure are present
+ */
+export function mergeImports(
+  sourceFile: SourceFile,
+  requiredImports: Set<string>,
+): void {
+  if (requiredImports.size === 0) {
+    return
+  }
+
+  // Find existing @loro-extended/kinetic import
+  const existingImport = sourceFile.getImportDeclarations().find(decl => {
+    const moduleSpecifier = decl.getModuleSpecifierValue()
+    return moduleSpecifier === "@loro-extended/kinetic"
+  })
+
+  if (existingImport) {
+    // Get existing named imports
+    const namedImports = existingImport.getNamedImports()
+    const existingNames = new Set(namedImports.map(ni => ni.getName()))
+
+    // Add missing imports
+    for (const importName of requiredImports) {
+      if (!existingNames.has(importName)) {
+        existingImport.addNamedImport(importName)
+      }
+    }
+  } else {
+    // Add new import at the top of the file
+    const importNames = Array.from(requiredImports).sort()
+    sourceFile.insertImportDeclaration(0, {
+      moduleSpecifier: "@loro-extended/kinetic",
+      namedImports: importNames,
+    })
+  }
+}
+
+// =============================================================================
+// In-Place Transformation (Imperative Shell)
+// =============================================================================
+
+/**
+ * Transform source code in-place by replacing builder calls.
+ *
+ * This function:
+ * 1. Parses the source into a ts-morph SourceFile
+ * 2. Finds and analyzes all builder calls
+ * 3. Replaces each builder call with its compiled factory code
+ * 4. Returns the mutated source file and required imports
+ *
+ * Use this for Vite plugin / build tool integration where you want
+ * to preserve the original file structure and only replace builder calls.
+ *
+ * @param source - TypeScript source code
+ * @param options - Transform options
+ * @returns Result with mutated source file, IR, and required imports
+ */
+export function transformSourceInPlace(
+  source: string,
+  options: TransformOptions = {},
+): TransformInPlaceResult {
+  const filename = options.filename ?? "input.ts"
+
+  // Parse the source
+  let sourceFile: SourceFile
+  try {
+    sourceFile = parseSource(source, filename)
+  } catch (e) {
+    throw new CompilerError(
+      KineticErrorCode.COMPILER_PARSE_ERROR,
+      `Failed to parse source: ${e instanceof Error ? e.message : String(e)}`,
+      { file: filename, line: 1, column: 0 },
+    )
+  }
+
+  // Find builder calls
+  const calls = findBuilderCalls(sourceFile)
+
+  // Analyze each call and collect replacements
+  const replacements: Array<{ call: CallExpression; ir: BuilderNode }> = []
+
+  for (const call of calls) {
+    try {
+      const builder = analyzeBuilder(call)
+      if (builder) {
+        replacements.push({ call, ir: builder })
+      }
+    } catch (e) {
+      const line = call.getStartLineNumber()
+      const col = call.getStart() - call.getStartLinePos()
+      throw new CompilerError(
+        KineticErrorCode.COMPILER_TRANSFORM_ERROR,
+        `Failed to analyze builder call: ${e instanceof Error ? e.message : String(e)}`,
+        { file: filename, line, column: col },
+      )
+    }
+  }
+
+  // Collect IR nodes
+  const ir = replacements.map(r => r.ir)
+
+  // Collect required imports
+  const requiredImports = collectRequiredImports(ir)
+
+  // Sort replacements by position descending (process back-to-front)
+  // This ensures that replacing earlier nodes doesn't shift the positions
+  // of later nodes that we still need to replace
+  replacements.sort((a, b) => b.call.getStart() - a.call.getStart())
+
+  // Apply replacements
+  for (const { call, ir: builderIr } of replacements) {
+    const factoryCode = generateElementFactory(builderIr)
+    call.replaceWithText(factoryCode)
+  }
+
+  return {
+    sourceFile,
+    ir,
+    requiredImports,
+  }
+}
+
+// =============================================================================
+// Standalone Code Generation
+// =============================================================================
 
 /**
  * Generate the full transformed code for DOM target.
@@ -259,9 +438,12 @@ function generateHTMLOutput(
 // =============================================================================
 
 /**
- * Transform source code.
+ * Transform source code to standalone compiled output.
  *
- * This is the main entry point for the compiler.
+ * This is the main entry point for standalone compilation (tests, CLI).
+ * It generates a complete file with imports and element factories.
+ *
+ * For Vite/build tool integration, use `transformSourceInPlace` instead.
  *
  * @param source - TypeScript source code
  * @param options - Transform options

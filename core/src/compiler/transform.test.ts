@@ -5,8 +5,16 @@
  * They validate that the pipeline produces correct output for real-world patterns.
  */
 
+import { Project } from "ts-morph"
 import { describe, expect, it } from "vitest"
-import { hasBuilderCalls, transformSource } from "./transform.js"
+import { createBuilder, createListRegion, createSpan } from "./ir.js"
+import {
+  collectRequiredImports,
+  hasBuilderCalls,
+  mergeImports,
+  transformSource,
+  transformSourceInPlace,
+} from "./transform.js"
 
 // =============================================================================
 // hasBuilderCalls Tests
@@ -329,5 +337,459 @@ describe("transformSource - IR structure", () => {
     expect(builder.eventHandlers).toHaveLength(2)
     expect(builder.eventHandlers.map(h => h.event)).toContain("click")
     expect(builder.eventHandlers.map(h => h.event)).toContain("mouseenter")
+  })
+})
+
+// =============================================================================
+// collectRequiredImports Tests
+// =============================================================================
+
+describe("collectRequiredImports", () => {
+  const span = createSpan(1, 0, 1, 10)
+
+  it("should return empty set for static-only builders", () => {
+    const builder = createBuilder("div", [], [], [], span)
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.size).toBe(0)
+  })
+
+  it("should include __subscribe for reactive builders", () => {
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "expression",
+          source: "doc.count.get()",
+          expressionKind: "reactive",
+          dependencies: ["doc.count"],
+          span,
+        },
+      ],
+      span,
+    )
+
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.has("__subscribe")).toBe(true)
+    expect(imports.has("__subscribeWithValue")).toBe(true)
+  })
+
+  it("should include __listRegion for list regions", () => {
+    const listRegion = createListRegion("doc.items", "item", null, [], span)
+    const builder = createBuilder("div", [], [], [listRegion], span)
+
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.has("__listRegion")).toBe(true)
+  })
+
+  it("should include __conditionalRegion for reactive conditionals", () => {
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "conditional-region",
+          branches: [
+            {
+              condition: {
+                kind: "expression",
+                source: "doc.visible.get()",
+                expressionKind: "reactive",
+                dependencies: ["doc.visible"],
+                span,
+              },
+              body: [],
+              span,
+            },
+          ],
+          subscriptionTarget: "doc.visible",
+          span,
+        },
+      ],
+      span,
+    )
+
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.has("__conditionalRegion")).toBe(true)
+  })
+
+  it("should include __staticConditionalRegion for static conditionals", () => {
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "conditional-region",
+          branches: [
+            {
+              condition: {
+                kind: "expression",
+                source: "true",
+                expressionKind: "static",
+                dependencies: [],
+                span,
+              },
+              body: [],
+              span,
+            },
+          ],
+          subscriptionTarget: null,
+          span,
+        },
+      ],
+      span,
+    )
+
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.has("__staticConditionalRegion")).toBe(true)
+    expect(imports.has("__conditionalRegion")).toBe(false)
+  })
+
+  it("should include __bindTextValue for value bindings", () => {
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "element",
+          tag: "input",
+          attributes: [],
+          eventHandlers: [],
+          bindings: [
+            {
+              attribute: "value",
+              refSource: "doc.text",
+              bindingType: "value",
+              span,
+            },
+          ],
+          children: [],
+          isReactive: true,
+          span,
+        },
+      ],
+      span,
+    )
+
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.has("__bindTextValue")).toBe(true)
+  })
+
+  it("should include __bindChecked for checked bindings", () => {
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "element",
+          tag: "input",
+          attributes: [],
+          eventHandlers: [],
+          bindings: [
+            {
+              attribute: "checked",
+              refSource: "doc.enabled",
+              bindingType: "checked",
+              span,
+            },
+          ],
+          children: [],
+          isReactive: true,
+          span,
+        },
+      ],
+      span,
+    )
+
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.has("__bindChecked")).toBe(true)
+  })
+
+  it("should collect imports from multiple builders", () => {
+    const builder1 = createBuilder(
+      "div",
+      [],
+      [],
+      [createListRegion("doc.items", "item", null, [], span)],
+      span,
+    )
+    const builder2 = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "conditional-region",
+          branches: [],
+          subscriptionTarget: "doc.visible",
+          span,
+        },
+      ],
+      span,
+    )
+
+    const imports = collectRequiredImports([builder1, builder2])
+
+    expect(imports.has("__listRegion")).toBe(true)
+    expect(imports.has("__conditionalRegion")).toBe(true)
+  })
+})
+
+// =============================================================================
+// mergeImports Tests
+// =============================================================================
+
+describe("mergeImports", () => {
+  function createSourceFile(code: string) {
+    const project = new Project({ useInMemoryFileSystem: true })
+    return project.createSourceFile("test.ts", code)
+  }
+
+  it("should add new import when no kinetic import exists", () => {
+    const sourceFile = createSourceFile("const x = 1\nconst y = 2")
+
+    mergeImports(sourceFile, new Set(["__subscribe", "__listRegion"]))
+
+    const result = sourceFile.getFullText()
+    expect(result).toContain("__listRegion")
+    expect(result).toContain("__subscribe")
+    expect(result).toContain("@loro-extended/kinetic")
+  })
+
+  it("should merge imports with existing kinetic import", () => {
+    const importLine = 'import { mount, Scope } from "@loro-extended/kinetic"'
+    const sourceFile = createSourceFile(importLine + "\n\nconst app = div()")
+
+    mergeImports(sourceFile, new Set(["__subscribe"]))
+
+    const result = sourceFile.getFullText()
+    expect(result).toContain("mount")
+    expect(result).toContain("Scope")
+    expect(result).toContain("__subscribe")
+    const importMatches = result.match(/@loro-extended\/kinetic/g) || []
+    expect(importMatches.length).toBe(1)
+  })
+
+  it("should not duplicate existing imports", () => {
+    const importLine =
+      'import { __subscribe, mount } from "@loro-extended/kinetic"'
+    const sourceFile = createSourceFile(importLine + "\n\nconst app = div()")
+
+    mergeImports(sourceFile, new Set(["__subscribe", "__listRegion"]))
+
+    const result = sourceFile.getFullText()
+    const subscribeMatches = result.match(/__subscribe/g) || []
+    expect(subscribeMatches.length).toBe(1)
+    expect(result).toContain("__listRegion")
+  })
+
+  it("should do nothing when no imports needed", () => {
+    const sourceFile = createSourceFile("const x = 1")
+
+    mergeImports(sourceFile, new Set())
+
+    const result = sourceFile.getFullText()
+    expect(result).not.toContain("@loro-extended/kinetic")
+  })
+
+  it("should preserve other imports", () => {
+    const lines = [
+      'import { LoroDoc } from "loro-crdt"',
+      'import { createTypedDoc } from "@loro-extended/change"',
+      "",
+      "const doc = new LoroDoc()",
+    ]
+    const sourceFile = createSourceFile(lines.join("\n"))
+
+    mergeImports(sourceFile, new Set(["__subscribe"]))
+
+    const result = sourceFile.getFullText()
+    expect(result).toContain("LoroDoc")
+    expect(result).toContain("createTypedDoc")
+    expect(result).toContain("__subscribe")
+  })
+})
+
+// =============================================================================
+// transformSourceInPlace Tests
+// =============================================================================
+
+describe("transformSourceInPlace", () => {
+  it("should replace builder calls in-place", () => {
+    const lines = ["const app = div(() => {", '  h1("Hello")', "})"]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source)
+    const code = result.sourceFile.getFullText()
+
+    expect(code).toContain("document.createElement")
+    expect(code).not.toContain("div(() =>")
+    expect(code).not.toContain('h1("Hello")')
+    expect(code).toContain("const app =")
+  })
+
+  it("should preserve non-builder code exactly", () => {
+    const lines = [
+      "// This is a comment",
+      'const greeting = "Hello"',
+      "",
+      "function helper(x: number) {",
+      "  return x * 2",
+      "}",
+      "",
+      "const app = div(() => {",
+      "  h1(greeting)",
+      "})",
+      "",
+      "export { app, helper }",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source)
+    const code = result.sourceFile.getFullText()
+
+    expect(code).toContain("// This is a comment")
+    expect(code).toContain('const greeting = "Hello"')
+    expect(code).toContain("function helper(x: number)")
+    expect(code).toContain("return x * 2")
+    expect(code).toContain("export { app, helper }")
+  })
+
+  it("should handle multiple builder calls", () => {
+    const lines = [
+      "const header = div(() => {",
+      '  h1("Header")',
+      "})",
+      "",
+      "const content = section(() => {",
+      '  p("Content")',
+      "})",
+      "",
+      "const footer = div(() => {",
+      '  span("Footer")',
+      "})",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source)
+    const code = result.sourceFile.getFullText()
+
+    expect(code).toContain("const header =")
+    expect(code).toContain("const content =")
+    expect(code).toContain("const footer =")
+
+    const createElementCount = (code.match(/document\.createElement/g) || [])
+      .length
+    expect(createElementCount).toBeGreaterThanOrEqual(6)
+
+    expect(code).not.toContain("div(() =>")
+    expect(code).not.toContain("section(() =>")
+  })
+
+  it("should return correct IR nodes", () => {
+    const lines = [
+      "const a = div(() => {",
+      '  h1("A")',
+      "})",
+      "const b = div(() => {",
+      '  h1("B")',
+      "})",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source)
+
+    expect(result.ir.length).toBe(2)
+    expect(result.ir[0].factoryName).toBe("div")
+    expect(result.ir[1].factoryName).toBe("div")
+  })
+
+  it("should return correct required imports for list regions", () => {
+    const lines = [
+      'import type { ListRef } from "@loro-extended/change"',
+      "declare const items: ListRef<string>",
+      "",
+      "const app = div(() => {",
+      "  for (const item of items) {",
+      "    li(item)",
+      "  }",
+      "})",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source)
+
+    expect(result.requiredImports.has("__listRegion")).toBe(true)
+  })
+
+  it("should return empty required imports for static content", () => {
+    const lines = [
+      "const app = div(() => {",
+      '  h1("Static Title")',
+      '  p("Static Content")',
+      "})",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source)
+
+    expect(result.requiredImports.size).toBe(0)
+  })
+
+  it("should handle deeply nested structures", () => {
+    const lines = [
+      "const app = div(() => {",
+      "  header(() => {",
+      "    nav(() => {",
+      "      ul(() => {",
+      '        li("Item 1")',
+      '        li("Item 2")',
+      "      })",
+      "    })",
+      "  })",
+      "})",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source)
+    const code = result.sourceFile.getFullText()
+
+    expect(result.ir.length).toBe(1)
+    expect(code).toContain("document.createElement")
+    expect(code).not.toContain("div(() =>")
+  })
+
+  it("should preserve existing imports", () => {
+    const lines = [
+      'import { LoroDoc } from "loro-crdt"',
+      'import { createTypedDoc, Shape } from "@loro-extended/change"',
+      "",
+      "const schema = Shape.doc({ count: Shape.counter() })",
+      "const doc = createTypedDoc(schema, new LoroDoc())",
+      "",
+      "const app = div(() => {",
+      '  h1("App")',
+      "})",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source)
+    const code = result.sourceFile.getFullText()
+
+    expect(code).toContain("LoroDoc")
+    expect(code).toContain("createTypedDoc")
+    expect(code).toContain("Shape")
   })
 })

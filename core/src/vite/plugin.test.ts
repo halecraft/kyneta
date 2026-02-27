@@ -2,7 +2,7 @@
  * Vite Plugin Tests
  *
  * Tests for the Kinetic Vite plugin functionality.
- * Consolidated for high signal-to-maintenance ratio.
+ * Updated for in-place builder replacement behavior.
  */
 
 import { describe, expect, it } from "vitest"
@@ -115,8 +115,8 @@ describe("Vite Plugin", () => {
     })
   })
 
-  describe("transform output", () => {
-    it("should generate element factory functions", () => {
+  describe("in-place replacement", () => {
+    it("should replace builder calls with compiled factory functions", () => {
       const plugin = kineticPlugin()
       const transform = plugin.transform as (
         code: string,
@@ -132,12 +132,15 @@ describe("Vite Plugin", () => {
 
       const result = transform(source, "/path/to/file.ts")
 
+      // Should contain compiled DOM code
       expect(result?.code).toContain("document.createElement")
-      expect(result?.code).toContain("element0")
-      expect(result?.code).toContain("// === Kinetic Compiled Output ===")
+      // Should NOT contain original builder call syntax
+      expect(result?.code).not.toContain("div(() =>")
+      expect(result?.code).not.toContain("h1(")
+      expect(result?.code).not.toContain("p(")
     })
 
-    it("should preserve original source code", () => {
+    it("should preserve non-builder code", () => {
       const plugin = kineticPlugin()
       const transform = plugin.transform as (
         code: string,
@@ -146,19 +149,30 @@ describe("Vite Plugin", () => {
 
       const source = `
         const greeting = "Hello"
+        const count = 42
 
-        div(() => {
+        const app = div(() => {
           h1(greeting)
         })
+
+        function helper() {
+          return count * 2
+        }
       `
 
       const result = transform(source, "/path/to/file.ts")
 
-      // Original code should be preserved
+      // Non-builder code should be preserved
       expect(result?.code).toContain('const greeting = "Hello"')
+      expect(result?.code).toContain("const count = 42")
+      expect(result?.code).toContain("function helper()")
+      expect(result?.code).toContain("return count * 2")
+      // Builder assignment should now have compiled code
+      expect(result?.code).toContain("const app =")
+      expect(result?.code).toContain("document.createElement")
     })
 
-    it("should compile multiple builder calls", () => {
+    it("should compile multiple builder calls in place", () => {
       const plugin = kineticPlugin()
       const transform = plugin.transform as (
         code: string,
@@ -177,12 +191,69 @@ describe("Vite Plugin", () => {
 
       const result = transform(source, "/path/to/file.ts")
 
-      // Should have multiple compiled elements
-      expect(result?.code).toContain("element0")
-      expect(result?.code).toContain("element1")
+      // Both assignments should be preserved with compiled code
+      expect(result?.code).toContain("const header =")
+      expect(result?.code).toContain("const footer =")
+      // Should have compiled DOM code (multiple createElement calls)
+      const createElementCount = (
+        result?.code.match(/document\.createElement/g) || []
+      ).length
+      expect(createElementCount).toBeGreaterThanOrEqual(2)
+      // Should NOT contain original builder patterns
+      expect(result?.code).not.toContain("div(() =>")
     })
 
-    it("should not duplicate kinetic imports when merging", () => {
+    it("should not contain duplicate code (no append)", () => {
+      const plugin = kineticPlugin()
+      const transform = plugin.transform as (
+        code: string,
+        id: string,
+      ) => { code: string } | null
+
+      const source = `
+        const app = div(() => {
+          h1("Hello")
+        })
+      `
+
+      const result = transform(source, "/path/to/file.ts")
+
+      // Should NOT have the old "Kinetic Compiled Output" comment
+      expect(result?.code).not.toContain("// === Kinetic Compiled Output ===")
+      // Should have exactly one assignment to app
+      const appAssignments = (result?.code.match(/const app =/g) || []).length
+      expect(appAssignments).toBe(1)
+    })
+  })
+
+  describe("import handling", () => {
+    it("should add runtime imports when needed for list regions", () => {
+      const plugin = kineticPlugin()
+      const transform = plugin.transform as (
+        code: string,
+        id: string,
+      ) => { code: string } | null
+
+      // Source with a for-of loop that needs __listRegion
+      const source = `
+        import type { ListRef } from "@loro-extended/change"
+        declare const items: ListRef<string>
+
+        const app = div(() => {
+          for (const item of items) {
+            li(item)
+          }
+        })
+      `
+
+      const result = transform(source, "/path/to/file.ts")
+
+      // Should have __listRegion import
+      expect(result?.code).toContain("__listRegion")
+      expect(result?.code).toContain('@loro-extended/kinetic"')
+    })
+
+    it("should merge imports with existing kinetic imports", () => {
       const plugin = kineticPlugin()
       const transform = plugin.transform as (
         code: string,
@@ -202,14 +273,40 @@ describe("Vite Plugin", () => {
 
       expect(result).not.toBeNull()
 
-      // Count occurrences of the kinetic package reference
-      // Should have at most 2: merged import + compiled section comment
-      const importMatches = result?.code.match(/@loro-extended\/kinetic/g) || []
-      expect(importMatches.length).toBeLessThanOrEqual(2)
+      // Should have exactly one kinetic import declaration
+      const importMatches =
+        result?.code.match(
+          /import\s*\{[^}]+\}\s*from\s*["']@loro-extended\/kinetic["']/g,
+        ) || []
+      expect(importMatches.length).toBe(1)
 
-      // Should still have the original imports preserved or merged
+      // Should still have the original imports
       expect(result?.code).toContain("mount")
       expect(result?.code).toContain("Scope")
+    })
+
+    it("should not add imports for static-only builders", () => {
+      const plugin = kineticPlugin()
+      const transform = plugin.transform as (
+        code: string,
+        id: string,
+      ) => { code: string } | null
+
+      // Simple static builder that doesn't need runtime imports
+      const source = `
+        const app = div(() => {
+          h1("Static Title")
+          p("Static Content")
+        })
+      `
+
+      const result = transform(source, "/path/to/file.ts")
+
+      // Should not have __subscribe or other runtime imports
+      // (static content doesn't need subscriptions)
+      expect(result?.code).not.toContain("__subscribe")
+      expect(result?.code).not.toContain("__listRegion")
+      expect(result?.code).not.toContain("__conditionalRegion")
     })
   })
 

@@ -6,14 +6,18 @@
  *
  * The plugin:
  * 1. Detects files that may contain Kinetic builder patterns
- * 2. Transforms builder calls into compiled DOM manipulation code
+ * 2. Transforms builder calls into compiled DOM manipulation code in-place
  * 3. Supports hot module replacement for development
  *
  * @packageDocumentation
  */
 
 import type { HmrContext, Plugin } from "vite"
-import { hasBuilderCalls, transformSource } from "../compiler/index.js"
+import {
+  hasBuilderCalls,
+  mergeImports,
+  transformSourceInPlace,
+} from "../compiler/index.js"
 
 /**
  * Options for the Kinetic Vite plugin.
@@ -93,13 +97,12 @@ function shouldTransform(
 }
 
 /**
- * Transform source code by replacing builder calls with compiled code.
+ * Transform source code by replacing builder calls with compiled code in-place.
  *
  * This function:
- * 1. Finds all top-level builder calls
- * 2. Compiles each to a factory function
- * 3. Replaces the original calls with the compiled versions
- * 4. Adds necessary runtime imports
+ * 1. Finds all builder calls in the source
+ * 2. Replaces each with its compiled factory function
+ * 3. Merges required runtime imports
  */
 function transformKineticSource(
   code: string,
@@ -119,11 +122,10 @@ function transformKineticSource(
   }
 
   try {
-    // Transform the source
-    const result = transformSource(code, {
+    // Transform the source in-place
+    const result = transformSourceInPlace(code, {
       filename,
       target: "dom",
-      sourcemap: true,
     })
 
     if (result.ir.length === 0) {
@@ -131,96 +133,16 @@ function transformKineticSource(
       return null
     }
 
-    // The current transform generates standalone compiled code.
-    // For Vite, we need to inject this into the original source.
-    //
-    // Strategy:
-    // 1. Find builder call locations in original source
-    // 2. Generate compiled code with unique variable names
-    // 3. Prepend compiled functions and imports to the file
-    // 4. Replace original builder calls with compiled function references
-    //
-    // For now, we use a simpler approach:
-    // - Prepend the compiled code to the file
-    // - The original builder calls remain but are shadowed by the compiled versions
-    //
-    // This works because:
-    // - Builder calls like `div(() => ...)` are expressions
-    // - The compiled code exports the same patterns as factory functions
-    // - TypeScript's ambient declarations make the original calls type-check
-
-    // Extract just the compiled element definitions (without the import line)
-    const compiledLines = result.code.split("\n")
-    const importLine = compiledLines.find(line => line.startsWith("import {"))
-    const compiledCode = compiledLines
-      .filter(line => !line.startsWith("import {"))
-      .join("\n")
-
-    // Build the transformed output
-    const lines: string[] = []
-
-    // Add runtime imports if needed
-    if (importLine) {
-      // Check if the file already imports from @loro-extended/kinetic
-      const hasKineticImport = code.includes("@loro-extended/kinetic")
-
-      if (hasKineticImport) {
-        // Merge imports - extract what we need and add to existing
-        const runtimeImports = importLine.match(/\{([^}]+)\}/)?.[1] ?? ""
-        if (runtimeImports) {
-          // Find the existing kinetic import and extend it
-          const transformedCode = code.replace(
-            /(import\s*\{[^}]*\}\s*from\s*["']@loro-extended\/kinetic["'])/,
-            match => {
-              // Extract existing imports
-              const existingImports = match.match(/\{([^}]+)\}/)?.[1] ?? ""
-              const existingSet = new Set(
-                existingImports.split(",").map(s => s.trim()),
-              )
-              const newImports = runtimeImports.split(",").map(s => s.trim())
-
-              // Add new imports that don't exist
-              for (const imp of newImports) {
-                if (imp && !existingSet.has(imp)) {
-                  existingSet.add(imp)
-                }
-              }
-
-              const combinedImports = Array.from(existingSet)
-                .filter(Boolean)
-                .join(", ")
-              return `import { ${combinedImports} } from "@loro-extended/kinetic"`
-            },
-          )
-          lines.push(transformedCode)
-        } else {
-          lines.push(code)
-        }
-      } else {
-        // Add the import at the top
-        lines.push(importLine)
-        lines.push("")
-        lines.push(code)
-      }
-    } else {
-      lines.push(code)
-    }
-
-    // Append compiled element factories
-    // These can be used by the application code
-    if (compiledCode.trim()) {
-      lines.push("")
-      lines.push("// === Kinetic Compiled Output ===")
-      lines.push(compiledCode)
-    }
+    // Merge required imports into the source file
+    mergeImports(result.sourceFile, result.requiredImports)
 
     if (debug) {
       console.log(`[kinetic] Compiled ${result.ir.length} builder(s)`)
     }
 
     return {
-      code: lines.join("\n"),
-      map: result.map,
+      code: result.sourceFile.getFullText(),
+      map: undefined, // TODO: Generate source maps
     }
   } catch (error) {
     // Log error but don't fail the build - let TypeScript handle syntax errors

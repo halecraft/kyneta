@@ -1963,25 +1963,25 @@ for (const call of calls.sort((a, b) => b.getStart() - a.getStart())) {
 
 ### Tasks
 
-- 🔴 **Task A.0**: Refactor `generateDOMImports()` to `collectRequiredImports()`
+- ✅ **Task A.0**: Refactor `generateDOMImports()` to `collectRequiredImports()`
   - Change return type from `string` to `Set<string>`
   - Extract the import collection logic (recursive child traversal)
   - Keep existing `generateDOMImports()` as thin wrapper for backward compat
   
-- 🔴 **Task A.1**: Create `transformSourceInPlace()` function
+- ✅ **Task A.1**: Create `transformSourceInPlace()` function
   - Parse source into ts-morph SourceFile
   - Call `findBuilderCalls()` and `analyzeBuilder()` for each
   - Sort calls by position descending
   - Replace each call with `generateElementFactory()` output
   - Return `{ sourceFile, ir, requiredImports }`
   
-- 🔴 **Task A.2**: Create `mergeImports()` helper
+- ✅ **Task A.2**: Create `mergeImports()` helper
   - Find existing `@loro-extended/kinetic` import declaration
   - If exists: add missing named imports to it
   - If not exists: add new import declaration at top
   - Use ts-morph APIs (`getImportDeclarations()`, `addNamedImport()`, etc.)
   
-- 🔴 **Task A.3**: Update Vite plugin
+- ✅ **Task A.3**: Update Vite plugin
   - Replace `transformKineticSource()` body with:
     ```typescript
     const result = transformSourceInPlace(code, { filename })
@@ -1991,7 +1991,7 @@ for (const call of calls.sort((a, b) => b.getStart() - a.getStart())) {
     ```
   - Remove all the append/merge logic currently in plugin.ts
   
-- 🔴 **Task A.4**: Add tests for in-place replacement
+- ✅ **Task A.4**: Add tests for in-place replacement
   - Verify original builder calls are removed from output
   - Verify no duplicate code in output
   - Verify non-builder code is preserved exactly (imports, functions, comments)
