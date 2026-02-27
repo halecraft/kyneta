@@ -135,18 +135,18 @@ The compiler must be able to resolve `@loro-extended/change` types for reactive 
   - Verify that `import { ListRef } from "@loro-extended/change"` resolves correctly
   - Verify that `for (const item of doc.items)` produces `__listRegion` in output
 
-### Phase 1: Delete and Scaffold 🔴
+### Phase 1: Delete and Scaffold ✅
 
-- 🔴 **Task 1.1**: Delete `examples/kinetic-todo/src/app.ts` (the hand-written "compiled" code)
-- 🔴 **Task 1.2**: Keep `examples/kinetic-todo/src/schema.ts` (already correct)
-- 🔴 **Task 1.3**: Create `examples/kinetic-todo/vite.config.ts` with kinetic plugin
-- 🔴 **Task 1.4**: Create `examples/kinetic-todo/index.html` (Vite entry)
-- 🔴 **Task 1.5**: Update `examples/kinetic-todo/package.json` with Vite scripts and deps
+- ✅ **Task 1.1**: Delete `examples/kinetic-todo/src/app.ts` (the hand-written "compiled" code)
+- ✅ **Task 1.2**: Keep `examples/kinetic-todo/src/schema.ts` (already correct)
+- ✅ **Task 1.3**: Create `examples/kinetic-todo/vite.config.ts` with kinetic plugin
+- ✅ **Task 1.4**: Create `examples/kinetic-todo/index.html` (Vite entry)
+- ✅ **Task 1.5**: Update `examples/kinetic-todo/package.json` with Vite scripts and deps
   - Add devDependencies: `vite`, `vite-plugin-wasm`, `vite-plugin-top-level-await`
   - Update scripts: `dev` → `vite`, `build` → `vite build`, `preview` → `vite preview`
   - Keep `serve:ssr` → `bun run src/server.ts` for SSR demo
-- 🔴 **Task 1.6**: Update `examples/kinetic-todo/tsconfig.json` for ambient types
-- 🔴 **Task 1.7**: Add `./types/elements` export to `packages/kinetic/package.json`
+- ✅ **Task 1.6**: Update `examples/kinetic-todo/tsconfig.json` for ambient types
+- ✅ **Task 1.7**: Add `./types/elements` export to `packages/kinetic/package.json`
 
 ### Phase 2: Builder Pattern Client Code 🔴
 

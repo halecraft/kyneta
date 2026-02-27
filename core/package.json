@@ -33,6 +33,9 @@
       "import": "./dist/server/index.js",
       "default": "./dist/server/index.js"
     },
+    "./types/elements": {
+      "types": "./src/types/elements.d.ts"
+    },
     "./src": "./src/index.ts",
     "./src/*": "./src/*"
   },
