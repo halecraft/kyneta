@@ -235,11 +235,11 @@ export interface ListRegionHandlers<T> {
  * @internal
  */
 export interface ConditionalRegionHandlers {
-  /** Create the "then" branch content */
-  then: () => Node
+  /** Create the "true" branch content */
+  whenTrue: () => Node
 
-  /** Create the "else" branch content (optional) */
-  else?: () => Node
+  /** Create the "false" branch content (optional) */
+  whenFalse?: () => Node
 }
 
 /**

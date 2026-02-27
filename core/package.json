@@ -50,7 +50,9 @@
   },
   "devDependencies": {
     "@loro-extended/change": "workspace:^",
+    "@types/jsdom": "^21.1.7",
     "@typescript/native-preview": "7.0.0-dev.20260103.1",
+    "jsdom": "^26.1.0",
     "loro-crdt": "^1.10.6",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",

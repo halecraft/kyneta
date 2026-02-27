@@ -47,22 +47,61 @@ export {
 } from "./errors.js"
 
 // =============================================================================
-// Runtime (to be implemented in Phase 2)
+// Runtime
 // =============================================================================
 
-// export { mount, dispose } from "./runtime/mount.js"
-// export { bind } from "./runtime/binding.js"
-// export { Scope } from "./runtime/scope.js"
+export { getRootScope, mount, rootScope } from "./runtime/mount.js"
+export { Scope } from "./runtime/scope.js"
 
 // =============================================================================
-// Element functions (to be implemented in Phase 2)
+// Internal Runtime API (called by compiled code)
 // =============================================================================
 
-// HTML element functions will be exported here:
-// export { div, span, p, h1, h2, h3, h4, h5, h6, ... } from "./runtime/elements.js"
+export {
+  __conditionalRegion,
+  __listRegion,
+  __staticConditionalRegion,
+} from "./runtime/regions.js"
+export {
+  __subscribe,
+  __subscribeMultiple,
+  __subscribeWithValue,
+  __unsubscribe,
+  type SubscriptionId,
+} from "./runtime/subscribe.js"
+
+// =============================================================================
+// Testing utilities
+// =============================================================================
+
+// Testing internals (for resetting state between tests)
+export {
+  __getActiveSubscriptionCount,
+  __resetScopeIdCounter,
+  __resetSubscriptionIdCounter,
+} from "./runtime/index.js"
+export {
+  assertMaxMutations,
+  assertOperationCount,
+  type CountingContainerResult,
+  createCountingContainer,
+  createCounts,
+  type DOMOperationCounts,
+  getTotalMutations,
+} from "./testing/counting-dom.js"
 
 // =============================================================================
 // Types
 // =============================================================================
 
-export type { Binding, Child, Element, Props } from "./types.js"
+export type {
+  Binding,
+  Child,
+  ConditionalRegionHandlers,
+  Element,
+  ListRegionHandlers,
+  MountOptions,
+  MountResult,
+  Props,
+  ScopeInterface,
+} from "./types.js"
