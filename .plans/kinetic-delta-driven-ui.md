@@ -596,7 +596,7 @@ Server-side rendering via dual compilation (no jsdom dependency) with CRDT-based
   - Strict mode re-throws errors, non-strict mode collects mismatches
   - `onMismatch` callback for logging/debugging
 
-### Phase 11: SSR Integration Test 🟡
+### Phase 11: SSR Integration Test ✅
 
 Validate SSR + hydration with full application.
 
@@ -605,10 +605,12 @@ Validate SSR + hydration with full application.
   - Hydrate on client
   - Verify no DOM thrashing
   - Verify post-hydration updates work
-- 🔴 **Task 11.2**: Update `examples/kinetic-todo/` with SSR support
-  - Server entry point
-  - Hydration in client entry
-  - Full SSR example
+- ✅ **Task 11.2**: Create `examples/kinetic-todo/` with SSR support
+  - Server entry point (`src/server.ts`) with Bun HTTP server
+  - Client app (`src/app.ts`) simulating compiled Kinetic output
+  - Shared schema (`src/schema.ts`) for server/client consistency
+  - SSR rendering with hydration markers and state serialization
+  - Import smoke tests
 
 ### Phase 12: Documentation 🔴
 
@@ -619,7 +621,7 @@ Validate SSR + hydration with full application.
 
 ## Tests
 
-**Current test count**: 453 tests (as of Phase 11)
+**Current test count**: 453 tests + 5 example tests (as of Phase 11)
 
 ### Unit Tests
 
