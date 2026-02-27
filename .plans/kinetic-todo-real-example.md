@@ -74,11 +74,11 @@ examples/kinetic-todo/
 
 ## Phases and Tasks
 
-### Phase 0: Type Stub Injection (Prerequisite) 🔴
+### Phase 0: Type Stub Injection (Prerequisite) ✅
 
 The compiler must be able to resolve `@loro-extended/change` types for reactive detection to work. Without this phase, all subsequent phases will fail silently.
 
-- 🔴 **Task 0.1**: Create `packages/kinetic/src/compiler/type-stubs.ts`
+- ✅ **Task 0.1**: Create `packages/kinetic/src/compiler/type-stubs.ts`
   - Define minimal interface stubs for all Loro ref types
   - Include: `TextRef`, `CounterRef`, `ListRef<T>`, `MovableListRef<T>`, `RecordRef<T>`, `StructRef<T>`, `MapRef<K,V>`, `TreeRef<T>`, `PlainValueRef<T>`
   - Include minimal `Shape` builder stubs and `createTypedDoc<T>` signature
@@ -121,7 +121,7 @@ The compiler must be able to resolve `@loro-extended/change` types for reactive 
     `
     ```
 
-- 🔴 **Task 0.2**: Modify `packages/kinetic/src/compiler/transform.ts`
+- ✅ **Task 0.2**: Modify `packages/kinetic/src/compiler/transform.ts`
   - In `getProject()`, after creating the Project, inject type stubs:
     ```typescript
     project.createSourceFile(
@@ -130,7 +130,7 @@ The compiler must be able to resolve `@loro-extended/change` types for reactive 
     )
     ```
 
-- 🔴 **Task 0.3**: Add test for type resolution with real imports
+- ✅ **Task 0.3**: Add test for type resolution with real imports
   - Create test in `packages/kinetic/src/compiler/transform.test.ts`
   - Verify that `import { ListRef } from "@loro-extended/change"` resolves correctly
   - Verify that `for (const item of doc.items)` produces `__listRegion` in output

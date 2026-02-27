@@ -793,3 +793,153 @@ describe("transformSourceInPlace", () => {
     expect(code).toContain("Shape")
   })
 })
+
+// =============================================================================
+// Type Stub Injection Tests
+// =============================================================================
+
+describe("type stub injection", () => {
+  it("should resolve ListRef type from @loro-extended/change import", () => {
+    const source = `
+      import { ListRef } from "@loro-extended/change"
+      declare const items: ListRef<string>
+
+      div(() => {
+        for (const item of items) {
+          li(item)
+        }
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    // Should generate __listRegion because ListRef is detected as reactive
+    expect(result.code).toContain("__listRegion")
+    expect(result.ir.length).toBe(1)
+    expect(result.ir[0].children.length).toBe(1)
+    expect(result.ir[0].children[0].kind).toBe("list-region")
+  })
+
+  it("should resolve TextRef type from @loro-extended/change import", () => {
+    const source = `
+      import { TextRef } from "@loro-extended/change"
+      declare const title: TextRef
+
+      div(() => {
+        h1(title.toString())
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    // Should generate __subscribeWithValue because TextRef is detected as reactive
+    expect(result.code).toContain("__subscribeWithValue")
+    expect(result.ir[0].children[0].kind).toBe("element")
+  })
+
+  it("should resolve CounterRef type from @loro-extended/change import", () => {
+    const source = `
+      import { CounterRef } from "@loro-extended/change"
+      declare const count: CounterRef
+
+      div(() => {
+        if (count.get() > 0) {
+          p("Has items")
+        }
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    // Should generate __conditionalRegion because CounterRef is detected as reactive
+    expect(result.code).toContain("__conditionalRegion")
+    expect(result.ir[0].children[0].kind).toBe("conditional-region")
+  })
+
+  it("should resolve createTypedDoc return type", () => {
+    const source = `
+      import { createTypedDoc, Shape, ListRef } from "@loro-extended/change"
+
+      const schema = Shape.doc({
+        items: Shape.list(Shape.plain.string())
+      })
+
+      declare const doc: { items: ListRef<string> }
+
+      div(() => {
+        for (const item of doc.items) {
+          li(item)
+        }
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    // Should generate __listRegion because doc.items is ListRef
+    expect(result.code).toContain("__listRegion")
+  })
+
+  it("should handle mixed imported and inline types", () => {
+    const source = `
+      import { TextRef, CounterRef } from "@loro-extended/change"
+
+      interface AppDoc {
+        title: TextRef
+        count: CounterRef
+      }
+
+      declare const doc: AppDoc
+
+      div(() => {
+        h1(doc.title.toString())
+        span(String(doc.count.get()))
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    // Both should be detected as reactive
+    expect(result.code).toContain("__subscribeWithValue")
+    // Should have reactive children
+    expect(result.ir[0].isReactive).toBe(true)
+  })
+
+  it("should produce __listRegion for for-of over imported ListRef", () => {
+    // This is the critical test: without type stubs, doc.todos would be `any`
+    // and the for-of would NOT produce __listRegion
+    const source = `
+      import { ListRef } from "@loro-extended/change"
+
+      interface TodoDoc {
+        todos: ListRef<string>
+      }
+
+      declare const doc: TodoDoc
+
+      const app = div(() => {
+        ul(() => {
+          for (const item of doc.todos) {
+            li(item)
+          }
+        })
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    // Critical assertion: __listRegion must be generated
+    expect(result.code).toContain("__listRegion")
+
+    // Verify IR structure
+    expect(result.ir.length).toBe(1)
+    const divChildren = result.ir[0].children
+    expect(divChildren.length).toBe(1)
+    expect(divChildren[0].kind).toBe("element") // ul
+
+    const ulElement = divChildren[0]
+    if (ulElement.kind === "element") {
+      expect(ulElement.children.length).toBe(1)
+      expect(ulElement.children[0].kind).toBe("list-region")
+    }
+  })
+})

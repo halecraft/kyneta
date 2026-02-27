@@ -20,6 +20,7 @@ import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
 import { generateElementFactory } from "./codegen/dom.js"
 import { generateEscapeHelper, generateHTML } from "./codegen/html.js"
 import type { BuilderNode, ChildNode } from "./ir.js"
+import { LORO_CHANGE_TYPE_STUBS } from "./type-stubs.js"
 
 // =============================================================================
 // Types
@@ -112,6 +113,10 @@ let sharedProject: Project | null = null
 
 /**
  * Get or create the shared ts-morph project.
+ *
+ * The project uses an in-memory filesystem with pre-loaded type stubs
+ * for @loro-extended/change. This enables the compiler to resolve types
+ * like ListRef, TextRef, etc. for reactive detection.
  */
 function getProject(): Project {
   if (!sharedProject) {
@@ -126,6 +131,14 @@ function getProject(): Project {
         skipLibCheck: true,
       },
     })
+
+    // Inject type stubs for @loro-extended/change into the in-memory filesystem.
+    // This enables the compiler to resolve types like ListRef, TextRef, etc.
+    // which are required for reactive detection via isReactiveType().
+    sharedProject.createSourceFile(
+      "node_modules/@loro-extended/change/index.d.ts",
+      LORO_CHANGE_TYPE_STUBS,
+    )
   }
   return sharedProject
 }
