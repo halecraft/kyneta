@@ -15,89 +15,149 @@
  */
 
 // =============================================================================
-// IR Types (to be implemented in Phase 3)
+// IR Types
 // =============================================================================
 
-// export type { BuilderNode, StaticElementNode, ReactiveElementNode } from "./ir.js"
-// export type { ListRegionNode, ConditionalRegionNode, BindingNode } from "./ir.js"
+export type {
+  AttributeNode,
+  BindingNode,
+  BuilderNode,
+  ChildNode,
+  ConditionalBranch,
+  ConditionalRegionNode,
+  ContentNode,
+  ElementNode,
+  EventHandlerNode,
+  ExpressionKind,
+  ExpressionNode,
+  IRNodeBase,
+  IRNodeKind,
+  ListRegionNode,
+  SourceSpan,
+  TextNode,
+} from "./ir.js"
+
+export {
+  // Factory functions
+  createBuilder,
+  createConditionalRegion,
+  createElement,
+  createListRegion,
+  createReactiveExpression,
+  createSpan,
+  createStaticExpression,
+  createTextNode,
+  // Type guards
+  isBindingNode,
+  isConditionalRegionNode,
+  isElementNode,
+  isExpressionNode,
+  isListRegionNode,
+  isReactiveContent,
+  isReactiveExpression,
+  isTextNode,
+} from "./ir.js"
 
 // =============================================================================
-// Analysis (to be implemented in Phase 3)
+// Analysis
 // =============================================================================
 
-// export { analyzeBuilder, isReactiveType, expressionIsReactive } from "./analyze.js"
+export {
+  analyzeBuilder,
+  analyzeBuilderFunction,
+  // Element analysis
+  analyzeElementCall,
+  // Expression analysis
+  analyzeExpression,
+  // Statement analysis
+  analyzeForOfStatement,
+  analyzeIfStatement,
+  // Props analysis
+  analyzeProps,
+  analyzeSourceFile,
+  analyzeStatement,
+  analyzeStatementBody,
+  // Constants
+  ELEMENT_FACTORIES,
+  expressionIsReactive,
+  extractDependencies,
+  // Main entry points
+  findBuilderCalls,
+  // Source span helpers
+  getSpan,
+  // Type analysis
+  isReactiveType,
+} from "./analyze.js"
 
 // =============================================================================
-// Code Generation (to be implemented in Phase 3)
+// Code Generation - DOM
 // =============================================================================
 
-// export { generateDOM } from "./codegen/dom.js"
-// export { generateHTML } from "./codegen/html.js"
+export {
+  type DOMCodegenOptions,
+  generateDOM,
+  generateElementFactory,
+} from "./codegen/dom.js"
 
 // =============================================================================
-// Transform (to be implemented in Phase 3)
+// Code Generation - HTML (SSR)
 // =============================================================================
 
-// export { transformFile, transformSource } from "./transform.js"
+export {
+  generateEscapeHelper,
+  generateHTML,
+  generateRenderFunction,
+  type HTMLCodegenOptions,
+} from "./codegen/html.js"
 
 // =============================================================================
-// Placeholder export to satisfy build
+// Transform (Orchestration)
+// =============================================================================
+
+export {
+  // Testing utilities
+  __resetProject,
+  type CompileTarget,
+  hasBuilderCalls,
+  type TransformOptions,
+  type TransformResult,
+  transformFile,
+  transformSource,
+} from "./transform.js"
+
+// =============================================================================
+// Compiler Version
 // =============================================================================
 
 /**
  * Compiler version. Used for cache invalidation.
  */
-export const COMPILER_VERSION = "0.0.1"
+export const COMPILER_VERSION = "0.1.0"
+
+// =============================================================================
+// Convenience Function
+// =============================================================================
 
 /**
- * Compile a source file.
+ * Compile source code to the target output.
+ *
+ * This is the main entry point for the compiler.
+ *
  * @param source - TypeScript source code
  * @param options - Compilation options
- * @returns Compiled output
+ * @returns Compiled output with code and IR
  *
- * @remarks
- * This is a placeholder. Implementation comes in Phase 3.
+ * @example
+ * ```ts
+ * import { compile } from "@loro-extended/kinetic/compiler"
+ *
+ * const result = compile(`
+ *   div(() => {
+ *     h1("Hello, World!")
+ *   })
+ * `)
+ *
+ * console.log(result.code)
+ * ```
  */
-export function compile(
-  _source: string,
-  _options?: CompileOptions,
-): CompileResult {
-  throw new Error("Compiler not yet implemented. See Phase 3 of the plan.")
-}
-
-/**
- * Options for compilation.
- */
-export interface CompileOptions {
-  /**
-   * Target output mode.
-   * - "dom": Generate DOM manipulation code (for client)
-   * - "html": Generate HTML string code (for SSR)
-   */
-  target?: "dom" | "html"
-
-  /**
-   * Path to the source file (for source maps and error reporting).
-   */
-  filename?: string
-
-  /**
-   * Enable source map generation.
-   */
-  sourcemap?: boolean
-}
-
-/**
- * Result of compilation.
- */
-export interface CompileResult {
-  /**
-   * Compiled output code.
-   */
-  code: string
-
-  /**
-   * Source map (if requested).
-   */
-  map?: string
-}
+export { transformSource as compile } from "./transform.js"

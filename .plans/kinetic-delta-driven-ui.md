@@ -370,154 +370,141 @@ Implement the minimal runtime that compiled code calls into.
   This is intentional — the tests serve as the **specification** that the compiler must match.
   When the compiler is built, its output should look like these test fixtures.
 
-### Phase 3: Compiler Infrastructure 🔴
+### Phase 3: Compiler Infrastructure ✅
 
 Set up ts-morph compiler foundation with type-based reactive detection.
 
 **Architecture**: Functional Core / Imperative Shell separation via Intermediate Representation (IR).
 Analysis produces IR (pure), code generation consumes IR (pure), orchestration is the shell.
 
-- 🔴 **Task 3.1**: Create `src/compiler/index.ts` entry point
-- 🔴 **Task 3.2**: Create `src/compiler/ir.ts` — Intermediate Representation types
+- ✅ **Task 3.1**: Create `src/compiler/index.ts` entry point
+- ✅ **Task 3.2**: Create `src/compiler/ir.ts` — Intermediate Representation types
   - `BuilderNode` — analyzed builder function
-  - `StaticElementNode` — element with no reactive deps
-  - `ReactiveElementNode` — element with reactive content/attrs
+  - `ElementNode` — element with attributes, handlers, children
+  - `TextNode`, `ExpressionNode` — content types
   - `ListRegionNode` — for-loop over Loro list
   - `ConditionalRegionNode` — if statement with branches
   - `BindingNode` — two-way input binding
-- 🔴 **Task 3.3**: Create `src/compiler/analyze.ts` — AST → IR (pure functions)
+- ✅ **Task 3.3**: Create `src/compiler/analyze.ts` — AST → IR (pure functions)
   - `analyzeBuilder(node): BuilderNode` — main analysis entry
   - `findBuilderCalls(node)` — locate element function calls with builders
   - `isReactiveType(type)` — check if type includes any Ref type
   - `expressionIsReactive(expr)` — use TypeScript type checker to determine reactivity
-  - `classifyExpression(node)` — static vs reactive based on types
-  - `traceVariableReactivity(identifier)` — follow variable definitions to initializers
-- 🔴 **Task 3.4**: Create `src/compiler/codegen/dom.ts` — IR → DOM code (pure functions)
+  - `extractDependencies(expr)` — extract reactive ref sources
+  - `analyzeStatement()` — statement analysis for control flow
+- ✅ **Task 3.4**: Create `src/compiler/codegen/dom.ts` — IR → DOM code (pure functions)
   - `generateDOM(ir: BuilderNode): string`
   - createElement, appendChild, subscription generation
-- 🔴 **Task 3.5**: Create `src/compiler/codegen/html.ts` — IR → HTML code (pure functions)
+- ✅ **Task 3.5**: Create `src/compiler/codegen/html.ts` — IR → HTML code (pure functions)
   - `generateHTML(ir: BuilderNode): string`
   - Template literals, escaping, hydration markers
-- 🔴 **Task 3.6**: Create `src/compiler/transform.ts` — orchestration (imperative shell)
+- ✅ **Task 3.6**: Create `src/compiler/transform.ts` — orchestration (imperative shell)
   - `transformFile(sourceFile)` — main transformation entry
-  - Source map support for debugging
+  - `transformSource(source)` — string input entry point
+  - `hasBuilderCalls()` — quick detection for Vite plugin
   - Dual output mode selection (DOM vs HTML)
-- 🔴 **Task 3.7**: Write unit tests for analysis (IR output)
+- ✅ **Task 3.7**: Write unit tests for analysis (IR output)
   - Detects builder pattern calls → correct IR nodes
   - Type-based ref detection (direct access, function args, variables)
   - Classifies static vs reactive correctly
-  - Handles closures in same file
-  - **Snapshot tests for IR** (readable, stable, catches regressions)
-- 🔴 **Task 3.8**: Create `src/types/elements.d.ts` — Ambient element factory declarations
+  - IR serialization tests (JSON.stringify works)
+  - 55 new tests covering analysis and codegen
+- ✅ **Task 3.8**: Create `src/types/elements.d.ts` — Ambient element factory declarations
   - `declare function div(...)`, `declare function h1(...)`, etc. for all HTML elements
   - No runtime implementation — purely for TypeScript type checking
-  - Vite plugin auto-injects these declarations into user code
   - Full `Props` and `Child` type support for autocomplete
 
-### Phase 4: Static Extraction Transform 🔴
+### Phase 4: Vertical Slice — Static Compilation 🔴
 
-Compile static elements to direct DOM creation.
+**Note**: Phase 3 already created `codegen/dom.ts` and `codegen/html.ts` which handle all IR node 
+types. Phases 4-7 are now about **validation and refinement**, not creating new transform files.
 
-- 🔴 **Task 4.1**: Create `src/compiler/transforms/static.ts`
-  - Transform StaticElementNode IR to DOM/HTML code
-  - Handle nested static structures
-  - Preserve non-builder mode (expression children)
-- 🔴 **Task 4.2**: Write unit tests
-  - Simple static element
-  - Nested static elements
-  - Mixed static children
-  - **Snapshot tests for generated code** (both DOM and HTML output)
+Validate static element compilation end-to-end.
 
-### Phase 5: Reactive Expression Transform 🔴
+- 🔴 **Task 4.1**: Create compiler integration test with real TypeScript source
+  - Compile `div(() => { h1("Hello") })` → verify DOM output
+  - Compile same source with `target: "html"` → verify HTML output
+  - Verify both outputs are syntactically valid
+- 🔴 **Task 4.2**: Test nested static structures
+  - Deeply nested elements preserve structure
+  - Mixed text and element children
+  - Props/attributes applied correctly
+- 🔴 **Task 4.3**: Fix any issues discovered in codegen
+  - Phase 3 codegen is "first draft" — may need refinement
 
-Compile reactive expressions to subscriptions.
+### Phase 5: Vertical Slice — Reactive Expressions 🔴
 
-- 🔴 **Task 5.1**: Create `src/compiler/transforms/reactive.ts`
-  - Transform ReactiveElementNode IR to DOM/HTML code
-  - Generate `__subscribe()` calls for DOM output
-  - Inline evaluation for HTML output
-- 🔴 **Task 5.2**: Handle reactive attributes
-  - `class: () => expr` → subscription
-  - `style: { prop: () => expr }` → subscription
-- 🔴 **Task 5.3**: Write unit tests
-  - Reactive text content
-  - Reactive attributes
-  - Multiple refs in one expression
-  - **Snapshot tests for generated code**
-- 🔴 **Task 5.4**: Create vertical slice checkpoint
-  - Minimal "hello counter" example: `p(\`Count: ${doc.count.get()}\`)`
-  - Compile with Vite plugin (minimal version)
+Validate reactive expression compilation with real Loro types.
+
+- 🔴 **Task 5.1**: Create test fixture with Loro type definitions
+  - Add mock `@loro-extended/change` types to test project
+  - Verify `isReactiveType()` correctly identifies refs
+- 🔴 **Task 5.2**: Test reactive text content
+  - `p(doc.count.get())` → generates `__subscribeWithValue` call
+  - Template literal `p(\`Count: ${doc.count.get()}\`)` → same
+- 🔴 **Task 5.3**: Test reactive attributes
+  - `div({ class: doc.className.toString() })` → attribute subscription
+- 🔴 **Task 5.4**: Vertical slice checkpoint (browser validation)
+  - Create minimal Vite project with kinetic plugin
+  - Compile "hello counter" example
   - Run in browser, verify reactive updates work
   - **Validates full pipeline before proceeding**
 
-### Phase 6: List Transform (Core Innovation) 🔴
+### Phase 6: Vertical Slice — List Regions 🔴
 
-**Note**: The runtime `__listRegion()` is complete and O(k) verified (see Learnings section). 
-This phase focuses on the **compiler transform**—detecting `for` loops over Loro lists and 
-generating correct `__listRegion()` calls.
+**Note**: Runtime `__listRegion()` is complete and O(k) verified. This phase validates the 
+compiler correctly generates calls to it.
 
-Compile `for` loops to delta-bound list regions.
+Validate list region compilation.
 
-- 🔴 **Task 6.1**: Create `src/compiler/transforms/list.ts`
-  - Transform ListRegionNode IR to DOM/HTML code
-  - Generate `__listRegion()` call with delta handlers (DOM)
-  - Generate map+join pattern (HTML)
-- 🔴 **Task 6.2**: Generate `create` handler and scope management
-  - `create(item, index)` — return DOM node for item
-  - Runtime handles insert/delete position tracking via delta processing
-  - `move` support for MovableList (runtime handles DOM reordering)
-  - Each item gets a child scope for cleanup on delete
-- 🔴 **Task 6.3**: Handle reactive content within list items
-  - Detect ref access within loop body (via IR)
-  - Generate per-item subscriptions for nested reactive expressions
-  - Clean up item subscriptions when item is deleted
-- 🔴 **Task 6.4**: Write unit tests
-  - Simple list compilation
-  - List with reactive item content
-  - Nested lists
-  - MovableList move operations
-  - **Snapshot tests for generated code**
-- 🔴 **Task 6.5**: Write O(k) verification tests
-  - Use counting DOM proxy from Phase 2
-  - Insert into 1000-item list → assert 1 DOM insert
-  - Delete from middle → assert 1 DOM remove
-  - Move operation → assert reorder, not delete+insert
+- 🔴 **Task 6.1**: Test for-of detection
+  - `for (const item of doc.items)` → `ListRegionNode` in IR
+  - Verify `listSource` and `itemVariable` captured correctly
+  - Test with index: `for (const [i, item] of doc.items.entries())`
+- 🔴 **Task 6.2**: Test generated `__listRegion` call
+  - Verify `create` handler body matches loop body
+  - Verify scope parameter passed correctly
+- 🔴 **Task 6.3**: Test nested reactive content in list items
+  - `li(item.count.get())` → per-item subscription in create handler
+- 🔴 **Task 6.4**: O(k) verification with compiled code
+  - Compile list, run against counting DOM
+  - Insert into list → assert O(1) DOM operations
+  - Delete from list → assert O(1) DOM operations
 
-### Phase 7: Conditional Transform 🔴
+### Phase 7: Vertical Slice — Conditional Regions 🔴
 
-Compile `if` statements to conditional regions.
+Validate conditional region compilation.
 
-- 🔴 **Task 7.1**: Create `src/compiler/transforms/conditional.ts`
-  - Transform ConditionalRegionNode IR to DOM/HTML code
-  - Generate `__conditionalRegion()` call (DOM)
-  - Generate ternary with markers (HTML)
-  - **Note**: Subscription target must be a container ref (TextRef, CounterRef, etc.)
-    - If condition uses PlainValueRef, subscribe to parent container instead
-    - Use `whenTrue`/`whenFalse` properties (not `then`/`else` - biome lint)
-- 🔴 **Task 7.2**: Handle else/else-if chains
-- 🔴 **Task 7.3**: Write unit tests
-  - Simple if
-  - If-else
-  - If-else-if-else
-  - Nested conditionals
-  - **Snapshot tests for generated code**
+- 🔴 **Task 7.1**: Test if detection
+  - `if (doc.count.get() > 0)` → `ConditionalRegionNode` in IR
+  - Verify `subscriptionTarget` extracted from condition
+- 🔴 **Task 7.2**: Test generated `__conditionalRegion` call
+  - Verify `whenTrue`/`whenFalse` handlers match branches
+  - Verify marker comment created
+- 🔴 **Task 7.3**: Test else/else-if chains
+  - `if/else` → two branches
+  - `if/else if/else` → three branches with correct conditions
+- 🔴 **Task 7.4**: Test static conditionals
+  - Non-reactive condition → `__staticConditionalRegion` call
 
 ### Phase 8: Input Binding Transform 🔴
 
-Implement two-way binding for form inputs. This is a transform like the others.
+Implement two-way binding for form inputs.
 
 - 🔴 **Task 8.1**: Create `src/runtime/binding.ts`
-  - `bind(ref)` — create binding marker
-  - Runtime handling for input elements
-- 🔴 **Task 8.2**: Create `src/compiler/transforms/binding.ts`
-  - Detect `bind()` in props
-  - Generate event handler + subscription
-- 🔴 **Task 8.3**: Support input types
-  - `<input type="text">` — value binding
-  - `<input type="checkbox">` — checked binding
-  - `<select>` — value binding
-- 🔴 **Task 8.4**: Write unit tests
-  - **Snapshot tests for generated code**
+  - `bind(ref)` — create binding marker object
+  - Runtime handling for attaching input listeners
+- 🔴 **Task 8.2**: Add binding detection to `analyze.ts`
+  - Detect `bind()` calls in props
+  - Create `BindingNode` in IR
+- 🔴 **Task 8.3**: Add binding codegen to `codegen/dom.ts`
+  - Generate event handler (onInput/onChange)
+  - Generate subscription for initial value
+- 🔴 **Task 8.4**: Support input types
+  - `<input type="text">` — value binding via `onInput`
+  - `<input type="checkbox">` — checked binding via `onChange`
+  - `<select>` — value binding via `onChange`
+- 🔴 **Task 8.5**: Write unit tests
 
 ### Phase 9: Vite Plugin + Client Integration 🔴
 
@@ -712,15 +699,9 @@ packages/kinetic/
 │   │   ├── ir.ts             # Intermediate Representation types
 │   │   ├── analyze.ts        # AST → IR (pure functions)
 │   │   ├── transform.ts      # Orchestration (imperative shell)
-│   │   ├── transforms/
-│   │   │   ├── static.ts     # StaticElementNode handling
-│   │   │   ├── reactive.ts   # ReactiveElementNode handling
-│   │   │   ├── list.ts       # ListRegionNode handling
-│   │   │   ├── conditional.ts # ConditionalRegionNode handling
-│   │   │   └── binding.ts    # BindingNode handling
 │   │   └── codegen/
-│   │       ├── dom.ts        # IR → DOM code (pure)
-│   │       └── html.ts       # IR → HTML code (pure)
+│   │       ├── dom.ts        # IR → DOM code (pure) - handles all node types
+│   │       └── html.ts       # IR → HTML code (pure) - handles all node types
 │   ├── testing/
 │   │   └── counting-dom.ts   # DOM proxy for O(k) verification
 │   ├── vite/
@@ -728,25 +709,19 @@ packages/kinetic/
 │   └── server/
 │       ├── render.ts         # renderToString()
 │       └── serialize.ts      # serializeState()
-├── tests/
-│   ├── runtime/
-│   │   ├── subscribe.test.ts
-│   │   ├── regions.test.ts
-│   │   └── scope.test.ts
+├── src/                        # Tests colocated with source (*.test.ts)
+│   ├── runtime/*.test.ts       # Runtime unit tests
 │   ├── compiler/
-│   │   ├── analyze.test.ts
-│   │   └── transforms/
-│   │       ├── static.test.ts
-│   │       ├── reactive.test.ts
-│   │       ├── list.test.ts
-│   │       └── conditional.test.ts
-│   ├── server/
-│   │   └── render.test.ts
-│   ├── vite/
-│   │   └── plugin.test.ts
-│   └── integration/
-│       ├── todo.test.ts      # Client-side (Phase 9)
-│       └── ssr.test.ts       # SSR + hydration (Phase 11)
+│   │   ├── ir.test.ts          # IR dependency collection tests
+│   │   ├── analyze.test.ts     # AST analysis tests
+│   │   ├── transform.test.ts   # Full pipeline integration tests
+│   │   └── codegen/
+│   │       └── dom.test.ts     # DOM codegen tests
+│   └── testing/*.test.ts       # Testing utility tests
+├── tests/                      # Integration tests (separate directory)
+│   ├── integration/
+│   │   ├── todo.test.ts        # Client-side (Phase 9)
+│   │   └── ssr.test.ts         # SSR + hydration (Phase 11)
 ├── package.json
 ├── tsconfig.json
 ├── tsup.config.ts
@@ -1144,4 +1119,107 @@ import type { TextRef, CounterRef, ListRef, ... } from "@loro-extended/change"
 
 // ❌ Internal only
 import type { TypedRef } from "@loro-extended/change"
+```
+
+### Implementation Learnings (Phase 3)
+
+#### ts-morph Node Type Guards Require Value Import
+
+```typescript
+// ❌ Wrong - Node is type-only, causes ReferenceError at runtime
+import { type Node } from "ts-morph"
+if (Node.isExpression(x)) { ... }  // ReferenceError: Node is not defined
+
+// ✅ Correct - Node must be value import for type guards
+import { Node } from "ts-morph"
+if (Node.isExpression(x)) { ... }  // Works
+```
+
+#### ts-morph `getArguments()` Returns `Node[]`, Not `Expression[]`
+
+```typescript
+// ❌ Type error - Node doesn't satisfy Expression
+const args = call.getArguments()
+for (const arg of args) {
+  if (expressionIsReactive(arg)) { ... }  // Error
+}
+
+// ✅ Cast explicitly when you know they're expressions
+const args = call.getArguments() as Expression[]
+```
+
+#### Block Body Access Requires Type Narrowing
+
+ts-morph's `Statement` base type doesn't have `getStatements()`. You must narrow first:
+
+```typescript
+// ❌ Type error - Statement doesn't have getStatements()
+if (stmt.getKind() === SyntaxKind.Block) {
+  for (const s of stmt.getStatements()) { ... }  // Error
+}
+
+// ✅ Narrow the type first
+if (stmt.getKind() === SyntaxKind.Block) {
+  const block = stmt as Block
+  for (const s of block.getStatements()) { ... }
+}
+```
+
+Same pattern applies to `ArrayBindingPattern.getElements()`, `ExpressionStatement.getExpression()`, etc.
+
+#### IR Node Types Simplified from Plan
+
+**Original plan**: Separate `StaticElementNode` and `ReactiveElementNode` types.
+
+**Actual implementation**: Single `ElementNode` type with `isReactive: boolean` flag computed from 
+children and attributes. This simplifies IR handling—no type-switching needed.
+
+#### IR Invariant to Maintain
+
+The `createBuilder` function maintains a critical invariant that should be tested explicitly:
+
+```typescript
+builder.isReactive === (builder.allDependencies.length > 0)
+```
+
+A violation causes either unnecessary subscriptions (performance) or missing subscriptions (stale UI).
+
+#### Balanced Delimiter Check as Syntax Validity Proxy
+
+Testing generated code for valid JavaScript without parsing:
+
+```typescript
+const openBraces = (code.match(/{/g) || []).length
+const closeBraces = (code.match(/}/g) || []).length
+expect(openBraces).toBe(closeBraces)
+
+// Also check for string concatenation errors
+expect(code).not.toContain("undefined")
+expect(code).not.toContain("[object Object]")
+```
+
+#### Don't Test Exact Generated Code
+
+Generated variable names (`_el0`, `_el1`) and whitespace are implementation details:
+
+```typescript
+// ❌ Fragile - breaks on any formatting change
+expect(code).toBe(`const _div0 = document.createElement("div")\n...`)
+
+// ✅ Robust - tests structural correctness
+expect(code).toContain('document.createElement("div")')
+expect(code).toContain("appendChild")
+```
+
+#### Biome Flags Template Strings in Test Data
+
+When test data contains template literal syntax (as source code representation):
+
+```typescript
+// ⚠️ Biome warning: Unexpected template string placeholder
+const expr = createReactiveExpression("`Count: ${count.get()}`", ...)
+
+// ✅ Suppress when intentional
+// biome-ignore lint/suspicious/noTemplateCurlyInString: source code representation
+const expr = createReactiveExpression("`Count: ${count.get()}`", ...)
 ```

@@ -1,0 +1,503 @@
+/**
+ * HTML Code Generation from IR
+ *
+ * This module transforms IR nodes into JavaScript code that generates HTML strings.
+ * Used for server-side rendering (SSR).
+ *
+ * All functions are pure - they take IR and return strings.
+ *
+ * The generated code:
+ * - Produces HTML strings via template literals
+ * - Includes hydration markers for client-side rehydration
+ * - Escapes dynamic content for XSS prevention
+ *
+ * @packageDocumentation
+ */
+
+import type {
+  AttributeNode,
+  BuilderNode,
+  ChildNode,
+  ConditionalRegionNode,
+  ContentNode,
+  ElementNode,
+  ListRegionNode,
+  TextNode,
+} from "../ir.js"
+
+// =============================================================================
+// Code Generation Options
+// =============================================================================
+
+/**
+ * Options for HTML code generation.
+ */
+export interface HTMLCodegenOptions {
+  /**
+   * Include hydration markers in output.
+   * @default true
+   */
+  hydratable?: boolean
+
+  /**
+   * Prefix for generated variable names.
+   * @default "_"
+   */
+  varPrefix?: string
+
+  /**
+   * Indentation string.
+   * @default "  "
+   */
+  indent?: string
+
+  /**
+   * Current indentation level.
+   * @default 0
+   */
+  indentLevel?: number
+}
+
+// =============================================================================
+// Code Generation State
+// =============================================================================
+
+/**
+ * Internal state for code generation.
+ */
+interface CodegenState {
+  hydratable: boolean
+  varPrefix: string
+  indent: string
+  indentLevel: number
+  varCounter: number
+  markerCounter: number
+}
+
+/**
+ * Create initial codegen state from options.
+ */
+function createState(options: HTMLCodegenOptions = {}): CodegenState {
+  return {
+    hydratable: options.hydratable ?? true,
+    varPrefix: options.varPrefix ?? "_",
+    indent: options.indent ?? "  ",
+    indentLevel: options.indentLevel ?? 0,
+    varCounter: 0,
+    markerCounter: 0,
+  }
+}
+
+/**
+ * Generate a unique variable name.
+ */
+function _genVar(state: CodegenState, hint: string = "html"): string {
+  return `${state.varPrefix}${hint}${state.varCounter++}`
+}
+
+/**
+ * Generate a unique marker ID.
+ */
+function genMarkerId(state: CodegenState, type: string): string {
+  return `kinetic:${type}:${state.markerCounter++}`
+}
+
+/**
+ * Get current indentation string.
+ */
+function getIndent(state: CodegenState): string {
+  return state.indent.repeat(state.indentLevel)
+}
+
+/**
+ * Create a child state with increased indentation.
+ */
+function indented(state: CodegenState): CodegenState {
+  return { ...state, indentLevel: state.indentLevel + 1 }
+}
+
+// =============================================================================
+// HTML Escaping
+// =============================================================================
+
+/**
+ * Generate code that escapes HTML content.
+ *
+ * Returns an expression that escapes the given value.
+ */
+function escapeExpr(value: string): string {
+  return `__escapeHtml(${value})`
+}
+
+/**
+ * Escape a static string for HTML.
+ */
+function escapeStatic(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;")
+}
+
+// =============================================================================
+// Void Elements
+// =============================================================================
+
+/**
+ * HTML void elements (self-closing, no end tag).
+ */
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+])
+
+// =============================================================================
+// Content Generation
+// =============================================================================
+
+/**
+ * Generate HTML for text content.
+ */
+function generateTextContent(node: TextNode): string {
+  return JSON.stringify(escapeStatic(node.value))
+}
+
+/**
+ * Generate HTML for content (text or expression).
+ */
+function _generateContent(node: ContentNode): string {
+  if (node.kind === "text") {
+    return generateTextContent(node)
+  }
+
+  // Expression - needs escaping
+  if (node.expressionKind === "static") {
+    return escapeExpr(`String(${node.source})`)
+  }
+
+  // Reactive expression - evaluate at render time
+  return escapeExpr(`String(${node.source})`)
+}
+
+// =============================================================================
+// Attribute Generation
+// =============================================================================
+
+/**
+ * Generate HTML for an attribute.
+ */
+function generateAttribute(attr: AttributeNode): string {
+  const name = attr.name
+  const content = attr.value
+
+  // Boolean attributes
+  if (name === "disabled" || name === "checked" || name === "readonly") {
+    if (content.kind === "text") {
+      return content.value === "true" || content.value === name
+        ? ` ${name}`
+        : ""
+    }
+    // Dynamic boolean - need ternary (content is expression here)
+    const exprContent = content as import("../ir.js").ExpressionNode
+    return `\${${exprContent.source} ? " ${name}" : ""}`
+  }
+
+  // Regular attributes
+  if (content.kind === "text") {
+    const escaped = escapeStatic(content.value)
+    return ` ${name}="${escaped}"`
+  }
+
+  // Dynamic attribute (content is expression here)
+  const exprContent = content as import("../ir.js").ExpressionNode
+  return `\${" ${name}=\\"" + ${escapeExpr(`String(${exprContent.source})`)} + "\\""}`
+}
+
+// =============================================================================
+// Element Generation
+// =============================================================================
+
+/**
+ * Generate HTML for an element node.
+ */
+function generateElement(node: ElementNode, state: CodegenState): string {
+  const parts: string[] = []
+
+  // Opening tag
+  parts.push(`<${node.tag}`)
+
+  // Attributes
+  for (const attr of node.attributes) {
+    parts.push(generateAttribute(attr))
+  }
+
+  // Event handlers are ignored in SSR (client-only)
+
+  // Self-closing for void elements
+  if (VOID_ELEMENTS.has(node.tag)) {
+    parts.push(">")
+    return parts.join("")
+  }
+
+  parts.push(">")
+
+  // Children
+  for (const child of node.children) {
+    parts.push(generateChild(child, state))
+  }
+
+  // Closing tag
+  parts.push(`</${node.tag}>`)
+
+  return parts.join("")
+}
+
+// =============================================================================
+// Child Generation
+// =============================================================================
+
+/**
+ * Generate HTML for a child node.
+ */
+function generateChild(node: ChildNode, state: CodegenState): string {
+  switch (node.kind) {
+    case "element":
+      return generateElement(node, state)
+
+    case "text":
+      return escapeStatic(node.value)
+
+    case "expression":
+      // For expressions, we need to use template literal interpolation
+      return `\${${escapeExpr(`String(${node.source})`)}}`
+
+    case "list-region":
+      return generateListRegion(node, state)
+
+    case "conditional-region":
+      return generateConditionalRegion(node, state)
+
+    case "binding":
+      // Bindings render as their current value in SSR
+      return `\${${escapeExpr(`String(${node.refSource}.get ? ${node.refSource}.get() : ${node.refSource})`)}}`
+
+    default:
+      return ""
+  }
+}
+
+// =============================================================================
+// List Region Generation
+// =============================================================================
+
+/**
+ * Generate HTML for a list region.
+ */
+function generateListRegion(node: ListRegionNode, state: CodegenState): string {
+  const parts: string[] = []
+
+  // Hydration marker (start)
+  if (state.hydratable) {
+    const markerId = genMarkerId(state, "list")
+    parts.push(`<!--${markerId}-->`)
+  }
+
+  // Map over items and generate HTML for each
+  const itemVar = node.itemVariable
+  const indexVar = node.indexVariable ?? "_i"
+
+  // Generate body HTML
+  const bodyParts: string[] = []
+  for (const child of node.body) {
+    bodyParts.push(generateChild(child, state))
+  }
+  const bodyHtml = bodyParts.join("")
+
+  // Wrap in map expression
+  parts.push(
+    `\${${node.listSource}.toArray().map((${itemVar}, ${indexVar}) => \`${bodyHtml}\`).join("")}`,
+  )
+
+  // Hydration marker (end)
+  if (state.hydratable) {
+    parts.push(`<!--/kinetic:list-->`)
+  }
+
+  return parts.join("")
+}
+
+// =============================================================================
+// Conditional Region Generation
+// =============================================================================
+
+/**
+ * Generate HTML for a conditional region.
+ */
+function generateConditionalRegion(
+  node: ConditionalRegionNode,
+  state: CodegenState,
+): string {
+  const parts: string[] = []
+
+  // Hydration marker
+  if (state.hydratable) {
+    const markerId = genMarkerId(state, "if")
+    parts.push(`<!--${markerId}-->`)
+  }
+
+  // Generate ternary expression for branches
+  const branches = node.branches
+  let expr = ""
+
+  for (let i = 0; i < branches.length; i++) {
+    const branch = branches[i]
+
+    if (branch.condition === null) {
+      // Else branch
+      const bodyParts: string[] = []
+      for (const child of branch.body) {
+        bodyParts.push(generateChild(child, state))
+      }
+      expr += `\`${bodyParts.join("")}\``
+    } else {
+      // If or else-if branch
+      const bodyParts: string[] = []
+      for (const child of branch.body) {
+        bodyParts.push(generateChild(child, state))
+      }
+      const bodyHtml = bodyParts.join("")
+
+      if (i === branches.length - 1) {
+        // Last branch with condition but no else
+        expr += `(${branch.condition.source}) ? \`${bodyHtml}\` : ""`
+      } else {
+        expr += `(${branch.condition.source}) ? \`${bodyHtml}\` : `
+      }
+    }
+  }
+
+  // If no else branch was found, add empty string
+  if (
+    branches.length > 0 &&
+    branches[branches.length - 1].condition !== null &&
+    !expr.endsWith('""')
+  ) {
+    expr += '""'
+  }
+
+  parts.push(`\${${expr}}`)
+
+  // Hydration marker (end)
+  if (state.hydratable) {
+    parts.push(`<!--/kinetic:if-->`)
+  }
+
+  return parts.join("")
+}
+
+// =============================================================================
+// Builder Generation
+// =============================================================================
+
+/**
+ * Generate HTML code for a builder node.
+ *
+ * This is the main entry point for HTML code generation.
+ * Returns a template literal string that produces HTML.
+ */
+export function generateHTML(
+  node: BuilderNode,
+  options: HTMLCodegenOptions = {},
+): string {
+  const state = createState(options)
+  const ind = getIndent(state)
+
+  const parts: string[] = []
+
+  // Opening tag
+  parts.push(`<${node.factoryName}`)
+
+  // Props as attributes
+  for (const prop of node.props) {
+    parts.push(generateAttribute(prop))
+  }
+
+  // Event handlers are ignored in SSR
+
+  parts.push(">")
+
+  // Children
+  for (const child of node.children) {
+    parts.push(generateChild(child, state))
+  }
+
+  // Closing tag (unless void element)
+  if (!VOID_ELEMENTS.has(node.factoryName)) {
+    parts.push(`</${node.factoryName}>`)
+  }
+
+  return `${ind}\`${parts.join("")}\``
+}
+
+/**
+ * Generate a complete render function for SSR.
+ *
+ * Returns a function that can be called to produce HTML.
+ */
+export function generateRenderFunction(
+  node: BuilderNode,
+  options: HTMLCodegenOptions = {},
+): string {
+  const state = createState(options)
+  const ind = getIndent(state)
+  const innerState = indented(state)
+  const innerInd = getIndent(innerState)
+
+  const html = generateHTML(node, {
+    ...options,
+    indentLevel: (options.indentLevel ?? 0) + 1,
+  })
+
+  const lines: string[] = []
+  lines.push(`${ind}() => {`)
+  lines.push(`${innerInd}return ${html.trim()}`)
+  lines.push(`${ind}}`)
+
+  return lines.join("\n")
+}
+
+// =============================================================================
+// Escape Function Generation
+// =============================================================================
+
+/**
+ * Generate the __escapeHtml helper function.
+ *
+ * This should be included in the generated module.
+ */
+export function generateEscapeHelper(): string {
+  return `function __escapeHtml(str) {
+  const escapeMap = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#x27;'
+  };
+  return String(str).replace(/[&<>"']/g, (c) => escapeMap[c]);
+}`
+}
