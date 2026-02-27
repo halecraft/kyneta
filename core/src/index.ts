@@ -65,6 +65,18 @@ export {
   isBinding,
 } from "./runtime/binding.js"
 export {
+  adoptNode,
+  adoptTextNode,
+  type ConditionalHydrationHandler,
+  createHydratableMount,
+  type HydrateOptions,
+  type HydrateResult,
+  hydrate,
+  hydrateConditionalRegion,
+  hydrateListRegion,
+  type ListHydrationHandler,
+} from "./runtime/hydrate.js"
+export {
   __conditionalRegion,
   __listRegion,
   __staticConditionalRegion,

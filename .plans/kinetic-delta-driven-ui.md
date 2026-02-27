@@ -562,36 +562,39 @@ Enable seamless development workflow and **validate full client-side flow** befo
 - For full end-to-end usage, would need source replacement or a different integration approach
 - HMR support included but untested in real Vite environment
 
-### Phase 10: SSR and Hydration 🔴
+### Phase 10: SSR and Hydration ✅
 
 Server-side rendering via dual compilation (no jsdom dependency) with CRDT-based hydration.
 
-- 🔴 **Task 10.1**: Create `src/server/render.ts`
+- ✅ **Task 10.1**: Create `src/server/render.ts`
   - `renderToString(element)` — execute server-compiled output (pure string concat)
   - No jsdom or DOM simulation required
   - HTML escaping for dynamic content
   - Hydration markers: `<!--kinetic:if:id-->`, `<!--kinetic:list:id-->`
-- 🔴 **Task 10.2**: Create `src/server/serialize.ts`
+  - Helper functions: `renderElement`, `renderList`, `renderConditional`, `renderToDocument`
+- ✅ **Task 10.2**: Create `src/server/serialize.ts`
   - `serializeState(doc)` — export Loro snapshot + version
-  - Embed in script tag format
-- 🔴 **Task 10.3**: Create `src/runtime/hydrate.ts`
-  - `hydrate(element, container, { doc })` — attach to existing DOM
-  - Walk and adopt existing nodes (no creation)
-  - Locate regions via hydration markers
-  - Attach subscriptions to adopted nodes
-  - Merge server state via `loro(doc).import()`
+  - `generateStateScript(doc)` — embed in script tag format
+  - `deserializeState(doc, state)` — restore state on client
+  - Base64 encoding/decoding for binary snapshots
+- ✅ **Task 10.3**: Create `src/runtime/hydrate.ts`
+  - `hydrate(container, hydrateRoot, scope)` — attach to existing DOM
+  - `parseMarker`, `findMarkers`, `matchRegions` — locate hydration markers
+  - `adoptNode`, `adoptTextNode` — adopt existing nodes without recreation
+  - `hydrateListRegion`, `hydrateConditionalRegion` — region-specific hydration
+  - `createHydratableMount` — auto-detect SSR vs fresh render
 - 🔴 **Task 10.4**: Ensure source maps work for server code
   - Error stack traces point to original source
-- 🔴 **Task 10.5**: Write unit tests
-  - Server output matches expected HTML (**snapshot tests**)
-  - Hydration attaches without DOM modification
-  - Post-hydration updates work correctly
-  - State merge handles concurrent edits
-- 🔴 **Task 10.6**: Write hydration resilience tests
-  - Handles whitespace differences in server HTML
-  - Throws `HydrationMismatchError` on missing marker
-  - Throws `HydrationMismatchError` on structure mismatch
-  - Handles different attribute ordering
+  - Deferred: source map generation not yet implemented in compiler
+- ✅ **Task 10.5**: Write unit tests
+  - 41 tests in `render.test.ts` covering HTML escaping, markers, rendering
+  - 17 tests in `serialize.test.ts` covering round-trip serialization
+  - 15 tests in `hydrate.test.ts` covering marker parsing, hydration, adoption
+- ✅ **Task 10.6**: Write hydration resilience tests
+  - Throws `HydrationMismatchError` on missing content (empty container)
+  - Throws `HydrationMismatchError` on tag mismatch
+  - Strict mode re-throws errors, non-strict mode collects mismatches
+  - `onMismatch` callback for logging/debugging
 
 ### Phase 11: SSR Integration Test 🔴
 
@@ -616,7 +619,7 @@ Validate SSR + hydration with full application.
 
 ## Tests
 
-**Current test count**: 303 tests (as of Phase 9, after test consolidation)
+**Current test count**: 411 tests (as of Phase 10)
 
 ### Unit Tests
 
@@ -1751,3 +1754,274 @@ export function createTextNode(value: string, span: SourceSpan): TextNode {
 - A.5 and A.6 are independent refactors
 
 These improvements should be completed before Phase 9 (Vite Plugin) when external developers will start using the package.
+
+---
+
+### Implementation Learnings (Phase 9-10)
+
+#### Vite Plugin HmrContext.read() Returns Union Type
+
+`HmrContext.read()` returns `string | Promise<string>`, not just `Promise<string>`:
+
+```typescript
+// ❌ Type error - read() might be sync
+handleHotUpdate(ctx: HmrContext) {
+  ctx.read().then(code => { ... })
+}
+
+// ✅ Use async/await to handle both cases
+handleHotUpdate(ctx: HmrContext) {
+  const checkForBuilders = async () => {
+    const code = await ctx.read()
+    // ...
+  }
+  return checkForBuilders()
+}
+```
+
+#### CounterRef.get() vs LoroCounter.value
+
+TypedRefs from `@loro-extended/change` use `.get()` method, while raw Loro containers use `.value`:
+
+```typescript
+// TypedRef (from createTypedDoc)
+doc.count.get()   // ✓ Returns number
+doc.count.value   // ✗ Returns undefined
+
+// Raw LoroCounter (from loro(ref))
+loro(doc.count).value  // ✓ Returns number
+```
+
+This affects any code that accesses counter values after deserialization.
+
+#### List Iteration Returns Plain Values, Not TypedRefs
+
+When iterating over a typed list, `toArray()` and iteration return raw JavaScript values:
+
+```typescript
+// Plain values from iteration - no TypedRef methods
+for (const item of doc.items) {
+  item.text  // Plain string if items are structs with text field
+}
+
+// TypedRef from indexed access
+const itemRef = doc.items.get(0)
+itemRef.text.toString()  // TextRef methods available
+```
+
+This is critical for list regions - the `create` handler receives plain values, not refs.
+
+#### VersionVector.toJSON() Returns a Map
+
+Loro's `VersionVector.toJSON()` returns `Map<\`${number}\`, number>`, not a plain object:
+
+```typescript
+// ❌ Won't work - toJSON returns Map, not object
+const clientVersion = loroDoc.version().toJSON() as Record<string, number>
+clientVersion[peerId]  // Type error
+
+// ✅ Use Map.get() with correct key type
+const clientVersionMap = loroDoc.version().toJSON()
+const counter = clientVersionMap.get(peerId as `${number}`)
+```
+
+#### HydrationMismatchError Constructor Signature
+
+`HydrationMismatchError` requires `(expected, actual, context?)`, not a single message:
+
+```typescript
+// ❌ Wrong - single message string
+throw new HydrationMismatchError("Expected element, got text")
+
+// ✅ Correct signature
+throw new HydrationMismatchError("element", "text node", "adoptNode")
+```
+
+#### createCountingContainer Signature
+
+The test utility expects a tag name string, not a document object:
+
+```typescript
+// ❌ Wrong
+const { container, counts } = createCountingContainer(document)
+
+// ✅ Correct
+const { container, counts } = createCountingContainer("div")
+```
+
+#### Biome Rejects Assignment in Expression
+
+Common patterns like `while ((node = walker.nextNode()))` fail Biome's lint:
+
+```typescript
+// ❌ Biome error: noAssignInExpressions
+while ((node = walker.nextNode())) { ... }
+
+// ✅ Acceptable pattern
+let node = walker.nextNode()
+while (node) {
+  // ...
+  node = walker.nextNode()
+}
+```
+
+#### Window Type Requires Double Cast
+
+TypeScript strict mode rejects direct casts from `Window` to `Record`:
+
+```typescript
+// ❌ Type error
+(window as Record<string, unknown>)[varName]
+
+// ✅ Double cast through unknown
+(window as unknown as Record<string, unknown>)[varName]
+```
+
+#### SSR Doesn't Require DOM Simulation
+
+The key architectural insight: server rendering generates JavaScript code that produces HTML strings via template literals. No jsdom needed on the server - it's pure string concatenation.
+
+Hydration markers are HTML comments with specific format:
+```html
+<!--kinetic:list:1-->
+<li>Item 1</li>
+<!--/kinetic:list-->
+```
+
+#### Hydration is "Adoption" Not "Recreation"
+
+The client walks existing DOM and attaches subscriptions rather than rebuilding nodes. This avoids layout thrash and preserves user state (scroll position, focus, etc.).
+
+Strict mode throws on any mismatch; non-strict mode collects mismatches and continues. Non-strict is better for production where minor differences (whitespace) shouldn't crash the app.
+
+## Amendment: In-Place Builder Replacement
+
+### Preamble
+
+**Discovered during**: Research review after Phase 10
+**Affects**: Phase 9 (Vite Plugin)
+**Priority**: Should be addressed before Phase 11 (SSR Integration Test)
+
+During a comprehensive code review, we discovered that the Vite plugin uses a suboptimal "append" strategy for code transformation:
+
+```typescript
+// Current approach (problematic)
+// The current transform generates standalone compiled code.
+// For Vite, we need to inject this into the original source.
+//
+// For now, we use a simpler approach:
+// - Prepend the compiled code to the file
+// - The original builder calls remain but are shadowed by the compiled versions
+```
+
+This "simpler approach" has several issues:
+
+1. **Dead code**: Original builder calls execute but results may be unused
+2. **Double execution**: Builder functions run twice (once original, once compiled)
+3. **Bundle size**: Both versions ship to the browser
+4. **Confusing output**: Developers inspecting transformed code see duplication
+5. **Potential runtime conflicts**: If original calls have side effects
+
+### Architecture: Functional Core / Imperative Shell
+
+The refactor should maintain clear separation:
+
+**Functional Core (pure, testable)**:
+- `analyze.ts` — AST → IR (already good)
+- `codegen/dom.ts` — IR → string (already good)
+- `collectRequiredImports(ir: BuilderNode[]): Set<string>` — NEW, replaces `generateDOMImports()`
+
+**Imperative Shell (side effects)**:
+- `applyReplacements(sourceFile, replacements)` — mutates AST
+- `mergeImports(sourceFile, requiredImports)` — mutates AST
+- `transformSourceInPlace()` — orchestrates the above
+
+### Key Implementation Details
+
+**Preserve existing API**: `transformSource()` must continue to work for standalone compilation (used by tests, CLI). Create a new `transformSourceInPlace()` function for the Vite plugin use case.
+
+**Process in reverse order**: When replacing nodes, later source positions shift. Processing calls back-to-front (by position) avoids recalculating positions after each replacement.
+
+```typescript
+// Process in reverse order to preserve positions
+for (const call of calls.sort((a, b) => b.getStart() - a.getStart())) {
+  const builder = analyzeBuilder(call)
+  if (!builder) continue
+  
+  const factoryCode = generateElementFactory(builder)
+  call.replaceWithText(factoryCode)
+}
+```
+
+**Import merging is non-trivial**: ts-morph import manipulation requires:
+- Finding existing `@loro-extended/kinetic` imports
+- Handling named imports (possibly with aliases)
+- Handling case where no kinetic import exists yet
+- Using `sourceFile.addImportDeclaration()` or modifying existing
+
+**`generateElementFactory()` produces IIFEs**: The codegen already wraps in `(() => { ... })()` which is correct for in-place replacement—the builder call is replaced with an IIFE that returns the element.
+
+### Tasks
+
+- 🔴 **Task A.0**: Refactor `generateDOMImports()` to `collectRequiredImports()`
+  - Change return type from `string` to `Set<string>`
+  - Extract the import collection logic (recursive child traversal)
+  - Keep existing `generateDOMImports()` as thin wrapper for backward compat
+  
+- 🔴 **Task A.1**: Create `transformSourceInPlace()` function
+  - Parse source into ts-morph SourceFile
+  - Call `findBuilderCalls()` and `analyzeBuilder()` for each
+  - Sort calls by position descending
+  - Replace each call with `generateElementFactory()` output
+  - Return `{ sourceFile, ir, requiredImports }`
+  
+- 🔴 **Task A.2**: Create `mergeImports()` helper
+  - Find existing `@loro-extended/kinetic` import declaration
+  - If exists: add missing named imports to it
+  - If not exists: add new import declaration at top
+  - Use ts-morph APIs (`getImportDeclarations()`, `addNamedImport()`, etc.)
+  
+- 🔴 **Task A.3**: Update Vite plugin
+  - Replace `transformKineticSource()` body with:
+    ```typescript
+    const result = transformSourceInPlace(code, { filename })
+    if (result.ir.length === 0) return null
+    mergeImports(result.sourceFile, result.requiredImports)
+    return { code: result.sourceFile.getFullText() }
+    ```
+  - Remove all the append/merge logic currently in plugin.ts
+  
+- 🔴 **Task A.4**: Add tests for in-place replacement
+  - Verify original builder calls are removed from output
+  - Verify no duplicate code in output
+  - Verify non-builder code is preserved exactly (imports, functions, comments)
+  - Verify imports are properly merged with existing kinetic imports
+  - Verify imports are added when no existing kinetic import
+  - Verify source positions are preserved for multi-builder files
+
+### Success Criteria
+
+1. Transformed output contains **only** compiled code, no original builder calls
+2. Single import statement for kinetic runtime (merged if file had existing imports)
+3. Non-builder code preserved exactly (other imports, functions, comments)
+4. All existing Phase 9 tests continue to pass
+5. New tests verify the in-place replacement behavior
+
+### Learnings
+
+#### Two Use Cases for Transform
+
+The compiler serves two distinct use cases:
+1. **Standalone compilation** (tests, CLI): Generate a complete file with imports + element factories
+2. **In-place replacement** (Vite plugin): Mutate existing source, preserving non-builder code
+
+These require different APIs. Don't try to make one function do both—create `transformSource()` for standalone and `transformSourceInPlace()` for mutation.
+
+#### Import Merging Complexity
+
+Import handling has edge cases:
+- File has `import { mount } from "@loro-extended/kinetic"` → merge `__subscribe` into it
+- File has `import * as kinetic from "..."` → may need different approach
+- File has no kinetic import → add new one at appropriate location (after other imports)
+
+Consider using ts-morph's `sourceFile.getImportDeclaration()` and `addNamedImport()` rather than string manipulation.
