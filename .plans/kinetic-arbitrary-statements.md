@@ -277,32 +277,36 @@ Update the IR types and analysis to capture arbitrary statements, static loops, 
   - Test: Static `for...of` → `StaticLoopNode` with analyzed body
   - Test: Static `if` → `StaticConditionalNode` with analyzed branches
 
-### Phase 2: DOM Codegen Updates 🔴
+### Phase 2: DOM Codegen Updates ✅
 
 Update DOM code generation to emit statements and static loops/conditionals.
 
-- 🔴 **Task 2.1**: Update `generateChild()` to handle `StatementNode` (`codegen/dom.ts`)
+- ✅ **Task 2.1**: Update `generateChild()` to handle `StatementNode` (`codegen/dom.ts`)
   - Emit statement source verbatim with proper indentation
   - Return `{ code: [indented statement] }` (no DOM node produced)
 
-- 🔴 **Task 2.2**: Update `generateChild()` to handle `StaticLoopNode` (`codegen/dom.ts`)
-  - Generate a regular `for...of` loop
-  - Loop body uses `generateBodyWithReturn()` (already extracts shared helper from Phase 0)
-  - Elements created and appended inside loop
+- ✅ **Task 2.2**: Update `generateChild()` to handle `StaticLoopNode` (`codegen/dom.ts`)
+  - Added `generateStaticLoop()` function
+  - Generates regular `for...of` loop with elements appended to parent
+  - Supports index variable via array destructuring pattern
 
-- 🔴 **Task 2.3**: Update `generateChild()` to handle `StaticConditionalNode` (`codegen/dom.ts`)
-  - Generate a regular `if` statement
-  - Branches use `generateBodyWithReturn()`
+- ✅ **Task 2.3**: Update `generateChild()` to handle `StaticConditionalNode` (`codegen/dom.ts`)
+  - Added `generateStaticConditionalNode()` function
+  - Generates regular `if` statement with optional `else` branch
+  - Elements created and appended to parent in each branch
 
-- 🔴 **Task 2.4**: Write DOM codegen unit tests
+- ✅ **Task 2.4**: Write DOM codegen unit tests (9 new tests, 490 total tests pass)
   - Test: Statement emitted verbatim in output
   - Test: Statement inside list region `create` callback
-  - Test: Statement inside conditional branch
   - Test: Interleaved statements and elements preserve order
   - Test: Static loop generates `for...of` with element creation inside
+  - Test: Static loop with index variable
   - Test: Static conditional generates `if` with element creation inside
+  - Test: Static conditional with else branch
+  - Test: Statements inside static loop body
+  - Test: Statements inside static conditional branches
 
-Note: `generateBodyWithReturn()` was extracted in Phase 0 and already iterates children via `generateChild()`, so statements will automatically work once Task 2.1 is complete.
+Note: `generateBodyWithReturn()` was extracted in Phase 0 and already iterates children via `generateChild()`, so statements automatically work in list regions and conditional branches.
 
 ### Phase 3: HTML Codegen Updates 🔴
 

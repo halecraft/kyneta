@@ -22,6 +22,9 @@ import type {
   EventHandlerNode,
   ExpressionNode,
   ListRegionNode,
+  StatementNode,
+  StaticConditionalNode,
+  StaticLoopNode,
   TextNode,
 } from "../ir.js"
 
@@ -426,6 +429,25 @@ function generateChild(
       // This case handles standalone binding nodes if they occur
       break
     }
+
+    case "statement": {
+      // Emit statement source verbatim
+      // Statements don't produce DOM nodes, they just execute
+      lines.push(`${ind}${node.source}`)
+      break
+    }
+
+    case "static-loop": {
+      // Generate a regular for...of loop that runs once at render time
+      lines.push(...generateStaticLoop(node, parentVar, state))
+      break
+    }
+
+    case "static-conditional": {
+      // Generate a regular if statement that runs once at render time
+      lines.push(...generateStaticConditionalNode(node, parentVar, state))
+      break
+    }
   }
 
   return { code: lines }
@@ -617,6 +639,85 @@ function generateStaticConditional(
  */
 function generateBranchBody(body: ChildNode[], state: CodegenState): string[] {
   return generateBodyWithReturn(body, state)
+}
+
+// =============================================================================
+// Static Loop Generation
+// =============================================================================
+
+/**
+ * Generate code for a static loop (non-reactive for...of).
+ *
+ * Unlike list regions which use __listRegion for delta-driven updates,
+ * static loops run once at render time and create elements directly.
+ */
+function generateStaticLoop(
+  node: StaticLoopNode,
+  parentVar: string,
+  state: CodegenState,
+): string[] {
+  const lines: string[] = []
+  const ind = getIndent(state)
+  const innerState = indented(state)
+
+  // Generate for...of loop
+  const loopVar = node.indexVariable
+    ? `[${node.indexVariable}, ${node.itemVariable}]`
+    : node.itemVariable
+
+  lines.push(`${ind}for (const ${loopVar} of ${node.iterableSource}) {`)
+
+  // Generate body - each child is created and appended to parent
+  for (const child of node.body) {
+    const childResult = generateChild(child, parentVar, innerState)
+    lines.push(...childResult.code)
+  }
+
+  lines.push(`${ind}}`)
+
+  return lines
+}
+
+// =============================================================================
+// Static Conditional Node Generation
+// =============================================================================
+
+/**
+ * Generate code for a static conditional node (non-reactive if).
+ *
+ * Unlike conditional regions which use __conditionalRegion for reactive updates,
+ * static conditionals run once at render time and create elements directly.
+ */
+function generateStaticConditionalNode(
+  node: StaticConditionalNode,
+  parentVar: string,
+  state: CodegenState,
+): string[] {
+  const lines: string[] = []
+  const ind = getIndent(state)
+  const innerState = indented(state)
+
+  // Generate if statement
+  lines.push(`${ind}if (${node.conditionSource}) {`)
+
+  // Generate then body
+  for (const child of node.thenBody) {
+    const childResult = generateChild(child, parentVar, innerState)
+    lines.push(...childResult.code)
+  }
+
+  // Generate else body if present
+  if (node.elseBody && node.elseBody.length > 0) {
+    lines.push(`${ind}} else {`)
+    for (const child of node.elseBody) {
+      const childResult = generateChild(child, parentVar, innerState)
+      lines.push(...childResult.code)
+    }
+  }
+
+  lines.push(`${ind}}`)
+
+  return lines
 }
 
 // =============================================================================

@@ -15,7 +15,10 @@ import {
   createListRegion,
   createReactiveExpression,
   createSpan,
+  createStatement,
+  createStaticConditional,
   createStaticExpression,
+  createStaticLoop,
   createTextNode,
   type EventHandlerNode,
 } from "../ir.js"
@@ -668,5 +671,234 @@ describe("generateDOM - code validity", () => {
     const openParens = (code.match(/\(/g) || []).length
     const closeParens = (code.match(/\)/g) || []).length
     expect(openParens).toBe(closeParens)
+  })
+})
+
+// =============================================================================
+// generateDOM Tests - Statements
+// =============================================================================
+
+describe("generateDOM - statements", () => {
+  it("should emit statement source verbatim", () => {
+    const stmt = createStatement("const x = 1", span(2, 4, 2, 15))
+    const builder = createBuilder("div", [], [], [stmt], span(1, 0, 3, 1))
+
+    const code = generateDOM(builder)
+
+    expect(code).toContain("const x = 1")
+  })
+
+  it("should emit statements in list region create callback", () => {
+    const stmt = createStatement(
+      "const item = itemRef.get()",
+      span(3, 6, 3, 32),
+    )
+    const liElement = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createTextNode("item", span(4, 6, 4, 12))],
+      span(4, 4, 4, 14),
+    )
+    const listRegion = createListRegion(
+      "items",
+      "itemRef",
+      null,
+      [stmt, liElement],
+      span(2, 2, 5, 3),
+    )
+    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 6, 1))
+
+    const code = generateDOM(builder)
+
+    expect(code).toContain("__listRegion")
+    expect(code).toContain("const item = itemRef.get()")
+  })
+
+  it("should preserve interleaving of statements and elements", () => {
+    const stmt1 = createStatement('console.log("before")', span(2, 4, 2, 25))
+    const pElement = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createTextNode("Hello", span(3, 6, 3, 13))],
+      span(3, 4, 3, 15),
+    )
+    const stmt2 = createStatement('console.log("after")', span(4, 4, 4, 24))
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [stmt1, pElement, stmt2],
+      span(1, 0, 5, 1),
+    )
+
+    const code = generateDOM(builder)
+
+    // Verify order: stmt1 before p element, stmt2 after
+    const beforeIndex = code.indexOf('console.log("before")')
+    const pIndex = code.indexOf('document.createElement("p")')
+    const afterIndex = code.indexOf('console.log("after")')
+
+    expect(beforeIndex).toBeGreaterThan(-1)
+    expect(pIndex).toBeGreaterThan(-1)
+    expect(afterIndex).toBeGreaterThan(-1)
+    expect(beforeIndex).toBeLessThan(pIndex)
+    expect(pIndex).toBeLessThan(afterIndex)
+  })
+
+  it("should generate static loop as for...of with body", () => {
+    const liElement = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createTextNode("x", span(3, 6, 3, 9))],
+      span(3, 4, 3, 11),
+    )
+    const staticLoop = createStaticLoop(
+      "[1, 2, 3]",
+      "x",
+      null,
+      [liElement],
+      span(2, 2, 4, 3),
+    )
+    const builder = createBuilder("ul", [], [], [staticLoop], span(1, 0, 5, 1))
+
+    const code = generateDOM(builder)
+
+    expect(code).toContain("for (const x of [1, 2, 3])")
+    expect(code).toContain('createElement("li")')
+  })
+
+  it("should generate static loop with index variable", () => {
+    const liElement = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createTextNode("item", span(3, 6, 3, 12))],
+      span(3, 4, 3, 14),
+    )
+    const staticLoop = createStaticLoop(
+      "items.entries()",
+      "item",
+      "i",
+      [liElement],
+      span(2, 2, 4, 3),
+    )
+    const builder = createBuilder("ul", [], [], [staticLoop], span(1, 0, 5, 1))
+
+    const code = generateDOM(builder)
+
+    expect(code).toContain("for (const [i, item] of items.entries())")
+  })
+
+  it("should generate static conditional as if statement", () => {
+    const pElement = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createTextNode("Shown", span(3, 6, 3, 13))],
+      span(3, 4, 3, 15),
+    )
+    const staticCond = createStaticConditional(
+      "true",
+      [pElement],
+      null,
+      span(2, 2, 4, 3),
+    )
+    const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 5, 1))
+
+    const code = generateDOM(builder)
+
+    expect(code).toContain("if (true)")
+    expect(code).toContain('createElement("p")')
+    expect(code).not.toContain("else")
+  })
+
+  it("should generate static conditional with else branch", () => {
+    const pYes = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createTextNode("Yes", span(3, 6, 3, 11))],
+      span(3, 4, 3, 13),
+    )
+    const pNo = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createTextNode("No", span(5, 6, 5, 10))],
+      span(5, 4, 5, 12),
+    )
+    const staticCond = createStaticConditional(
+      "condition",
+      [pYes],
+      [pNo],
+      span(2, 2, 6, 3),
+    )
+    const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 7, 1))
+
+    const code = generateDOM(builder)
+
+    expect(code).toContain("if (condition)")
+    expect(code).toContain("} else {")
+  })
+
+  it("should handle statements inside static loop body", () => {
+    const stmt = createStatement("const doubled = x * 2", span(3, 6, 3, 27))
+    const liElement = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createTextNode("doubled", span(4, 6, 4, 15))],
+      span(4, 4, 4, 17),
+    )
+    const staticLoop = createStaticLoop(
+      "[1, 2, 3]",
+      "x",
+      null,
+      [stmt, liElement],
+      span(2, 2, 5, 3),
+    )
+    const builder = createBuilder("ul", [], [], [staticLoop], span(1, 0, 6, 1))
+
+    const code = generateDOM(builder)
+
+    expect(code).toContain("for (const x of [1, 2, 3])")
+    expect(code).toContain("const doubled = x * 2")
+    expect(code).toContain('createElement("li")')
+  })
+
+  it("should handle statements inside static conditional branches", () => {
+    const stmt = createStatement("const msg = 'hello'", span(3, 6, 3, 25))
+    const pElement = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createTextNode("msg", span(4, 6, 4, 11))],
+      span(4, 4, 4, 13),
+    )
+    const staticCond = createStaticConditional(
+      "showMessage",
+      [stmt, pElement],
+      null,
+      span(2, 2, 5, 3),
+    )
+    const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 6, 1))
+
+    const code = generateDOM(builder)
+
+    expect(code).toContain("if (showMessage)")
+    expect(code).toContain("const msg = 'hello'")
+    expect(code).toContain('createElement("p")')
   })
 })
