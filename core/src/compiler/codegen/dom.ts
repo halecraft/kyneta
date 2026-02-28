@@ -22,7 +22,6 @@ import type {
   EventHandlerNode,
   ExpressionNode,
   ListRegionNode,
-  StatementNode,
   StaticConditionalNode,
   StaticLoopNode,
   TextNode,

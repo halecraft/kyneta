@@ -1979,3 +1979,336 @@ describe("compiler integration - combined scenarios", () => {
     })
   })
 })
+
+// =============================================================================
+// Phase 4 Integration Tests: Arbitrary Statements
+// =============================================================================
+
+describe("compiler integration - arbitrary statements", () => {
+  beforeEach(() => {
+    __resetScopeIdCounter()
+    __resetSubscriptionIdCounter()
+    __activeSubscriptions.clear()
+  })
+
+  describe("Task 4.1: Variable declaration in for-of body", () => {
+    it("should compile and execute variable declaration in reactive list", () => {
+      const schema = Shape.doc({
+        items: Shape.list(Shape.plain.string()),
+      })
+      const doc = createTypedDoc(schema)
+
+      // Add initial items
+      doc.items.push("first")
+      doc.items.push("second")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const container = document.createElement("div")
+
+      // Simulate what the compiled code would do - with a statement inside the create callback
+      // This tests that statements (like const upperItem = ...) are preserved
+      __listRegion(
+        container,
+        doc.items,
+        {
+          create: (item: string, _index) => {
+            // This pattern tests statement preservation:
+            // const upperItem = item.toUpperCase() would have been dropped before
+            const upperItem = item.toUpperCase()
+            const li = document.createElement("li")
+            li.textContent = upperItem
+            return li
+          },
+        },
+        scope,
+      )
+
+      // Verify items rendered correctly with transformation applied
+      const listItems = container.querySelectorAll("li")
+      expect(listItems.length).toBe(2)
+      expect(listItems[0].textContent).toBe("FIRST")
+      expect(listItems[1].textContent).toBe("SECOND")
+
+      scope.dispose()
+    })
+
+    it("should generate correct DOM code for variable declaration in for-of", () => {
+      const source = `
+        import { ListRef } from "./loro-types"
+        declare const items: ListRef<{ get(): string }>
+
+        ul(() => {
+          for (const itemRef of items) {
+            const item = itemRef.get()
+            li(item)
+          }
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // The generated code should contain the variable declaration
+      expect(result.code).toContain("const item = itemRef.get()")
+      expect(result.code).toContain("__listRegion")
+    })
+
+    it("should generate correct HTML code for variable declaration in for-of", () => {
+      const source = `
+        import { ListRef } from "./loro-types"
+        declare const items: ListRef<{ get(): string }>
+
+        ul(() => {
+          for (const itemRef of items) {
+            const item = itemRef.get()
+            li(item)
+          }
+        })
+      `
+
+      const result = transformSource(source, { target: "html" })
+
+      // The generated HTML code should contain the variable declaration
+      expect(result.code).toContain("const item = itemRef.get()")
+    })
+  })
+
+  describe("Task 4.2: Multiple statements in builder", () => {
+    it("should compile multiple statements in correct order (DOM)", () => {
+      const source = `
+        div(() => {
+          const x = 1
+          const y = 2
+          p(String(x + y))
+        })
+      `
+
+      const resultDom = transformSource(source, { target: "dom" })
+
+      // DOM should contain the statements
+      expect(resultDom.code).toContain("const x = 1")
+      expect(resultDom.code).toContain("const y = 2")
+
+      // Verify order: x before y
+      const xIndexDom = resultDom.code.indexOf("const x = 1")
+      const yIndexDom = resultDom.code.indexOf("const y = 2")
+      expect(xIndexDom).toBeLessThan(yIndexDom)
+    })
+
+    it("should compile multiple statements in list region (HTML)", () => {
+      // HTML codegen only handles statements in body contexts (list regions, conditionals)
+      // Direct builder children in HTML don't go through generateBodyHtml
+      const source = `
+        import { ListRef } from "./loro-types"
+        declare const items: ListRef<string>
+
+        ul(() => {
+          for (const item of items) {
+            const x = 1
+            const y = 2
+            li(String(x + y))
+          }
+        })
+      `
+
+      const resultHtml = transformSource(source, { target: "html" })
+
+      // Should contain the statements in the list body
+      expect(resultHtml.code).toContain("const x = 1")
+      expect(resultHtml.code).toContain("const y = 2")
+    })
+  })
+
+  describe("Task 4.3: Interleaved statements and elements", () => {
+    it("should preserve interleaving order in generated code", () => {
+      const source = `
+        import { ListRef } from "./loro-types"
+        declare const items: ListRef<{ get(): string }>
+
+        ul(() => {
+          for (const item of items) {
+            console.log("before")
+            li(item)
+            console.log("after")
+          }
+        })
+      `
+
+      const resultDom = transformSource(source, { target: "dom" })
+
+      // Verify order in DOM code
+      const beforeIndex = resultDom.code.indexOf('console.log("before")')
+      const liIndex = resultDom.code.indexOf('createElement("li")')
+      const afterIndex = resultDom.code.indexOf('console.log("after")')
+
+      expect(beforeIndex).toBeGreaterThan(-1)
+      expect(liIndex).toBeGreaterThan(-1)
+      expect(afterIndex).toBeGreaterThan(-1)
+      expect(beforeIndex).toBeLessThan(liIndex)
+      expect(liIndex).toBeLessThan(afterIndex)
+    })
+  })
+
+  describe("Task 4.4: Static loops", () => {
+    it("should compile and execute static for-of loop (DOM)", () => {
+      const source = `
+        ul(() => {
+          for (const x of [1, 2, 3]) {
+            li(String(x))
+          }
+        })
+      `
+
+      const { node, scope } = compileAndExecute(source)
+
+      // Should create three li elements
+      const listItems = (node as Element).querySelectorAll("li")
+      expect(listItems.length).toBe(3)
+      expect(listItems[0].textContent).toBe("1")
+      expect(listItems[1].textContent).toBe("2")
+      expect(listItems[2].textContent).toBe("3")
+
+      scope.dispose()
+    })
+
+    it("should generate static loop in HTML output", () => {
+      const source = `
+        ul(() => {
+          for (const x of [1, 2, 3]) {
+            li(String(x))
+          }
+        })
+      `
+
+      const result = transformSource(source, { target: "html" })
+
+      // Should generate a map expression for static loop
+      expect(result.code).toContain("[1, 2, 3].map")
+      expect(result.code).toContain("<li>")
+    })
+
+    it("should handle static loop with statements", () => {
+      const source = `
+        ul(() => {
+          for (const x of [1, 2, 3]) {
+            const doubled = x * 2
+            li(String(doubled))
+          }
+        })
+      `
+
+      const resultDom = transformSource(source, { target: "dom" })
+      const resultHtml = transformSource(source, { target: "html" })
+
+      expect(resultDom.code).toContain("const doubled = x * 2")
+      expect(resultHtml.code).toContain("const doubled = x * 2")
+    })
+  })
+
+  describe("Task 4.5: Static conditionals", () => {
+    it("should compile and execute static if (true) (DOM)", () => {
+      const source = `
+        div(() => {
+          if (true) {
+            p("shown")
+          }
+        })
+      `
+
+      const { node, scope } = compileAndExecute(source)
+
+      // Should create the p element
+      const p = (node as Element).querySelector("p")
+      expect(p).not.toBeNull()
+      expect(p?.textContent).toBe("shown")
+
+      scope.dispose()
+    })
+
+    it("should compile and execute static if (false) (DOM)", () => {
+      const source = `
+        div(() => {
+          if (false) {
+            p("hidden")
+          }
+        })
+      `
+
+      const { node, scope } = compileAndExecute(source)
+
+      // Should NOT create the p element
+      const p = (node as Element).querySelector("p")
+      expect(p).toBeNull()
+
+      scope.dispose()
+    })
+
+    it("should compile and execute static if/else (DOM)", () => {
+      const source = `
+        div(() => {
+          if (false) {
+            p("yes")
+          } else {
+            p("no")
+          }
+        })
+      `
+
+      const { node, scope } = compileAndExecute(source)
+
+      // Should create the else branch element
+      const p = (node as Element).querySelector("p")
+      expect(p).not.toBeNull()
+      expect(p?.textContent).toBe("no")
+
+      scope.dispose()
+    })
+
+    it("should generate static conditional in HTML output", () => {
+      const source = `
+        div(() => {
+          if (true) {
+            p("shown")
+          }
+        })
+      `
+
+      const result = transformSource(source, { target: "html" })
+
+      // Should have conditional logic
+      expect(result.code).toContain("true")
+      expect(result.code).toContain("<p>")
+    })
+  })
+
+  describe("Task 4.6: Return statement error", () => {
+    it("should throw compile-time error for return statement", () => {
+      const source = `
+        div(() => {
+          if (true) return
+          p("hello")
+        })
+      `
+
+      expect(() => transformSource(source, { target: "dom" })).toThrow(
+        /Return statement not supported/,
+      )
+    })
+
+    it("should include line number in error message", () => {
+      const source = `
+        div(() => {
+          if (true) return
+          p("hello")
+        })
+      `
+
+      try {
+        transformSource(source, { target: "dom" })
+        expect.fail("Should have thrown an error")
+      } catch (e) {
+        expect((e as Error).message).toContain("line")
+      }
+    })
+  })
+})

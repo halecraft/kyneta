@@ -24,11 +24,20 @@
  * @packageDocumentation
  */
 
-import type { Builder, Child, Element, Props } from "../types.js"
+import type { Binding, Builder, Child, Element, Props } from "../types.js"
 
 // =============================================================================
 // Element Factory Type
 // =============================================================================
+
+/**
+ * Props that may contain Binding values.
+ * Extends Props to allow bind() in value/checked properties.
+ */
+type PropsWithBindings = Omit<Props, "value" | "checked"> & {
+  value?: string | (() => string) | Binding<unknown>
+  checked?: boolean | (() => boolean) | Binding<unknown>
+}
 
 /**
  * Factory function for creating elements.
@@ -38,14 +47,20 @@ import type { Builder, Child, Element, Props } from "../types.js"
  * - `div({ class: "x" }, () => { ... })` - Props + builder
  * - `div("text", span("nested"))` - Children only
  * - `div({ class: "x" }, "text")` - Props + children
+ *
+ * Overload order matters for TypeScript resolution:
+ * 1. Props overloads first (more specific)
+ * 2. Non-props overloads last (catch-all)
  */
 interface ElementFactory {
+  /** Props + builder pattern */
+  (props: PropsWithBindings, builder: Builder): Element
+  /** Props + children pattern */
+  (props: PropsWithBindings, ...children: Child[]): Element
+  /** Props only pattern */
+  (props: PropsWithBindings): Element
   /** Builder pattern - enables control flow */
   (builder: Builder): Element
-  /** Props + builder pattern */
-  (props: Props, builder: Builder): Element
-  /** Props + children pattern */
-  (props: Props, ...children: Child[]): Element
   /** Children only pattern */
   (...children: Child[]): Element
 }

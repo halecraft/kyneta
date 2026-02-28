@@ -22,7 +22,6 @@ import type {
   ContentNode,
   ElementNode,
   ListRegionNode,
-  StatementNode,
   StaticConditionalNode,
   StaticLoopNode,
   TextNode,
@@ -483,11 +482,7 @@ function generateStaticLoopBody(
     ? `[${node.indexVariable}, ${node.itemVariable}]`
     : node.itemVariable
 
-  // Generate inner body using accumulation pattern
-  const innerBody = generateBodyHtml(node.body, state)
-
-  // Wrap in for...of loop - note: innerBody already has let _html, so we need
-  // to restructure to accumulate into outer _html
+  // Generate for...of loop that accumulates to outer _html
   const lines: string[] = []
   lines.push(`for (const ${loopVar} of ${node.iterableSource}) {`)
 
