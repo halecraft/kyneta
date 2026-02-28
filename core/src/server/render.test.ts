@@ -462,3 +462,57 @@ describe("renderToDocument", () => {
     )
   })
 })
+
+// =============================================================================
+// Pretty Printing Tests
+// =============================================================================
+
+describe("pretty printing", () => {
+  it("should format minified HTML when pretty option is true", () => {
+    const render = () => "<div><p>Hello</p><p>World</p></div>"
+    const result = renderToString(render, {}, { pretty: true })
+
+    // Should have newlines and indentation
+    expect(result).toContain("\n")
+    expect(result).toMatch(/<div>\s*\n\s+<p>/)
+  })
+
+  it("should not format HTML when pretty option is false", () => {
+    const render = () => "<div><p>Hello</p></div>"
+    const result = renderToString(render, {}, { pretty: false })
+
+    expect(result).toBe("<div><p>Hello</p></div>")
+  })
+
+  it("should not format HTML by default", () => {
+    const render = () => "<div><p>Hello</p></div>"
+    const result = renderToString(render, {})
+
+    expect(result).toBe("<div><p>Hello</p></div>")
+  })
+
+  it("should preserve hydration markers when pretty printing", () => {
+    const render = () =>
+      "<div><!--kinetic:list:1--><li>Item</li><!--/kinetic:list--></div>"
+    const result = renderToString(render, {}, { pretty: true })
+
+    expect(result).toContain("<!--kinetic:list:1-->")
+    expect(result).toContain("<!--/kinetic:list-->")
+  })
+
+  it("should handle nested elements with pretty printing", () => {
+    const render = () =>
+      '<div class="app"><header><h1>Title</h1></header><main><p>Content</p></main></div>'
+    const result = renderToString(render, {}, { pretty: true })
+
+    // Should be multi-line
+    const lines = result.split("\n")
+    expect(lines.length).toBeGreaterThan(1)
+
+    // Should have proper structure
+    expect(result).toContain("<div")
+    expect(result).toContain("<header>")
+    expect(result).toContain("<h1>Title</h1>")
+    expect(result).toContain("</div>")
+  })
+})

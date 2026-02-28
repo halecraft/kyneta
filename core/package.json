@@ -45,6 +45,7 @@
     "verify": "verify"
   },
   "dependencies": {
+    "js-beautify": "^1.15.4",
     "ts-morph": "^25.0.0"
   },
   "peerDependencies": {
@@ -53,6 +54,7 @@
   },
   "devDependencies": {
     "@loro-extended/change": "workspace:^",
+    "@types/js-beautify": "^1.14.3",
     "@types/jsdom": "^21.1.7",
     "@typescript/native-preview": "7.0.0-dev.20260103.1",
     "jsdom": "^26.1.0",

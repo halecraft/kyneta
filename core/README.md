@@ -36,6 +36,41 @@ div(() => {
 // - No diffing, no reconciliation
 ```
 
+## Server-Side Rendering
+
+Kinetic supports server-side rendering with optional pretty-printing for development:
+
+```typescript
+import { renderToDocument } from '@loro-extended/kinetic/server'
+
+// Load compiled app (Vite plugin auto-compiles to HTML target for SSR)
+const { createApp } = await vite.ssrLoadModule('/src/app.ts')
+const renderApp = createApp(doc)
+
+// Minified output (default, for production)
+const html = renderToDocument(renderApp, doc, {
+  title: 'My App',
+  head: '<style>...</style>',
+  scripts: '<script type="module" src="/src/main.ts"></script>',
+})
+
+// Pretty-printed output (for development/debugging)
+const prettyHtml = renderToDocument(renderApp, doc, {
+  title: 'My App',
+  pretty: true,  // Formats the rendered content with indentation
+})
+```
+
+### SSR Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `hydratable` | `boolean` | `true` | Include hydration markers for client rehydration |
+| `pretty` | `boolean` | `false` | Format HTML with indentation (useful for debugging) |
+| `title` | `string` | - | Document title |
+| `head` | `string` | - | Additional content for `<head>` (styles, meta tags) |
+| `scripts` | `string` | - | Scripts to include before closing `</body>` |
+
 ## Prototype Status
 
 This is an experimental prototype exploring whether compilation can unlock O(k) UI updates from CRDT deltas.

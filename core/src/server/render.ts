@@ -13,6 +13,7 @@
  * @packageDocumentation
  */
 
+import jsBeautify from "js-beautify"
 import type { LoroDoc } from "loro-crdt"
 
 // =============================================================================
@@ -360,17 +361,25 @@ export function renderConditional(
 export function executeRender(
   renderFn: SSRRenderFunction,
   doc: LoroDoc | unknown,
-  _options: RenderToStringOptions = {},
+  options: RenderToStringOptions = {},
 ): string {
   const ctx: SSRContext = {
     doc,
     _markerId: 0,
   }
 
-  const html = renderFn(ctx)
+  let html = renderFn(ctx)
 
-  // Pretty printing is handled at generation time, not here
-  // This function just executes the render
+  // Pretty print if requested (useful for development/debugging)
+  if (options.pretty) {
+    html = jsBeautify.html(html, {
+      indent_size: 2,
+      wrap_line_length: 0, // Don't wrap lines
+      preserve_newlines: false,
+      indent_inner_html: true,
+      extra_liners: [], // Don't add extra lines before any tags
+    })
+  }
 
   return html
 }
