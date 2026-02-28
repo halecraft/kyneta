@@ -42,6 +42,9 @@ export type IRNodeKind =
   | "list-region"
   | "conditional-region"
   | "binding"
+  | "statement"
+  | "static-loop"
+  | "static-conditional"
 
 /**
  * Base interface for all IR nodes.
@@ -287,6 +290,84 @@ export interface BindingNode extends IRNodeBase {
 }
 
 // =============================================================================
+// Statement Types
+// =============================================================================
+
+/**
+ * An arbitrary TypeScript statement that should be emitted verbatim.
+ *
+ * This captures statements that aren't UI-specific constructs but need
+ * to be preserved in the generated code (e.g., variable declarations,
+ * console.log calls, etc.).
+ *
+ * ```typescript
+ * for (const itemRef of doc.items) {
+ *   const item = itemRef.get()  // ← This becomes a StatementNode
+ *   li(item)
+ * }
+ * ```
+ */
+export interface StatementNode extends IRNodeBase {
+  kind: "statement"
+
+  /** The original source text of the statement */
+  source: string
+}
+
+/**
+ * A static (non-reactive) for...of loop.
+ *
+ * Unlike ListRegionNode which is for delta-driven reactive lists,
+ * this represents a loop that runs once at render time.
+ *
+ * ```typescript
+ * for (const x of [1, 2, 3]) {
+ *   li(x)
+ * }
+ * ```
+ */
+export interface StaticLoopNode extends IRNodeBase {
+  kind: "static-loop"
+
+  /** The iterable expression source (e.g., "[1, 2, 3]", "someArray") */
+  iterableSource: string
+
+  /** The loop variable name */
+  itemVariable: string
+
+  /** Optional index variable name */
+  indexVariable: string | null
+
+  /** The analyzed body — elements are still discovered */
+  body: ChildNode[]
+}
+
+/**
+ * A static (non-reactive) conditional.
+ *
+ * Unlike ConditionalRegionNode which subscribes to reactive conditions,
+ * this represents a conditional that evaluates once at render time.
+ *
+ * ```typescript
+ * if (true) {
+ *   p("always shown")
+ * }
+ * ```
+ */
+export interface StaticConditionalNode extends IRNodeBase {
+  kind: "static-conditional"
+
+  /** The condition expression source */
+  conditionSource: string
+
+  /** Then branch body */
+  thenBody: ChildNode[]
+
+  /** Else branch body (if present) */
+  elseBody: ChildNode[] | null
+}
+
+// =============================================================================
 // Union Types
 // =============================================================================
 
@@ -300,6 +381,9 @@ export type ChildNode =
   | ListRegionNode
   | ConditionalRegionNode
   | BindingNode
+  | StatementNode
+  | StaticLoopNode
+  | StaticConditionalNode
 
 // =============================================================================
 // Root Types
@@ -390,6 +474,29 @@ export function isConditionalRegionNode(
  */
 export function isBindingNode(node: ChildNode): node is BindingNode {
   return node.kind === "binding"
+}
+
+/**
+ * Check if a node is a statement.
+ */
+export function isStatementNode(node: ChildNode): node is StatementNode {
+  return node.kind === "statement"
+}
+
+/**
+ * Check if a node is a static loop.
+ */
+export function isStaticLoopNode(node: ChildNode): node is StaticLoopNode {
+  return node.kind === "static-loop"
+}
+
+/**
+ * Check if a node is a static conditional.
+ */
+export function isStaticConditionalNode(
+  node: ChildNode,
+): node is StaticConditionalNode {
+  return node.kind === "static-conditional"
 }
 
 /**
@@ -499,6 +606,20 @@ export function createElement(
 }
 
 /**
+ * Create a statement node.
+ */
+export function createStatement(
+  source: string,
+  span: SourceSpan,
+): StatementNode {
+  return {
+    kind: "statement",
+    source,
+    span,
+  }
+}
+
+/**
  * Create a list region node.
  */
 export function createListRegion(
@@ -523,6 +644,59 @@ export function createListRegion(
     indexVariable,
     body,
     hasReactiveItems,
+    span,
+  }
+}
+
+/**
+ * Create a static loop node.
+ */
+export function createStaticLoop(
+  iterableSource: string,
+  itemVariable: string,
+  indexVariable: string | null,
+  body: ChildNode[],
+  span: SourceSpan,
+): StaticLoopNode {
+  return {
+    kind: "static-loop",
+    iterableSource,
+    itemVariable,
+    indexVariable,
+    body,
+    span,
+  }
+}
+
+/**
+ * Create a static conditional node.
+ */
+export function createStaticConditional(
+  conditionSource: string,
+  thenBody: ChildNode[],
+  elseBody: ChildNode[] | null,
+  span: SourceSpan,
+): StaticConditionalNode {
+  return {
+    kind: "static-conditional",
+    conditionSource,
+    thenBody,
+    elseBody,
+    span,
+  }
+}
+
+/**
+ * Create a conditional branch.
+ */
+export function createConditionalBranch(
+  condition: ExpressionNode | null,
+  body: ChildNode[],
+  span: SourceSpan,
+): ConditionalBranch {
+  return {
+    condition,
+    body,
     span,
   }
 }
@@ -577,6 +751,13 @@ export function createBuilder(
       } else if (node.kind === "list-region") {
         allDependencies.add(node.listSource)
         collectDependencies(node.body)
+      } else if (node.kind === "static-loop") {
+        collectDependencies(node.body)
+      } else if (node.kind === "static-conditional") {
+        collectDependencies(node.thenBody)
+        if (node.elseBody) {
+          collectDependencies(node.elseBody)
+        }
       } else if (node.kind === "conditional-region") {
         if (node.subscriptionTarget) {
           allDependencies.add(node.subscriptionTarget)

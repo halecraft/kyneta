@@ -900,6 +900,303 @@ describe("analyzeBuilder", () => {
 })
 
 // =============================================================================
+// Statement Analysis Tests
+// =============================================================================
+
+describe("analyzeStatement - arbitrary statements", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addLoroTypes(project)
+  })
+
+  it("should capture variable declarations as StatementNode", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        const x = 1
+        p("hello")
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(2)
+
+    // First child should be a statement
+    expect(builder?.children[0].kind).toBe("statement")
+    if (builder?.children[0].kind === "statement") {
+      expect(builder.children[0].source).toContain("const x = 1")
+    }
+
+    // Second child should be the element
+    expect(builder?.children[1].kind).toBe("element")
+  })
+
+  it("should capture expression statements as StatementNode", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        console.log("debug")
+        p("hello")
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(2)
+
+    // First child should be a statement
+    expect(builder?.children[0].kind).toBe("statement")
+    if (builder?.children[0].kind === "statement") {
+      expect(builder.children[0].source).toContain('console.log("debug")')
+    }
+  })
+
+  it("should capture variable declaration inside for...of body", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { ListRef } from "./loro-types"
+      declare const items: ListRef<{ get(): string }>
+
+      ul(() => {
+        for (const itemRef of items) {
+          const item = itemRef.get()
+          li(item)
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(1)
+    expect(builder?.children[0].kind).toBe("list-region")
+
+    if (builder?.children[0].kind === "list-region") {
+      const listRegion = builder.children[0]
+      expect(listRegion.body.length).toBe(2)
+
+      // First should be statement
+      expect(listRegion.body[0].kind).toBe("statement")
+      if (listRegion.body[0].kind === "statement") {
+        expect(listRegion.body[0].source).toContain(
+          "const item = itemRef.get()",
+        )
+      }
+
+      // Second should be element
+      expect(listRegion.body[1].kind).toBe("element")
+    }
+  })
+
+  it("should capture variable declaration inside if body", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const count: CounterRef
+
+      div(() => {
+        if (count.get() > 0) {
+          const msg = "has items"
+          p(msg)
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(1)
+    expect(builder?.children[0].kind).toBe("conditional-region")
+
+    if (builder?.children[0].kind === "conditional-region") {
+      const conditional = builder.children[0]
+      const thenBranch = conditional.branches[0]
+      expect(thenBranch.body.length).toBe(2)
+
+      // First should be statement
+      expect(thenBranch.body[0].kind).toBe("statement")
+      if (thenBranch.body[0].kind === "statement") {
+        expect(thenBranch.body[0].source).toContain('const msg = "has items"')
+      }
+
+      // Second should be element
+      expect(thenBranch.body[1].kind).toBe("element")
+    }
+  })
+
+  it("should preserve statement order", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        const a = 1
+        console.log("first")
+        p("element")
+        const b = 2
+        console.log("second")
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(5)
+
+    expect(builder?.children[0].kind).toBe("statement")
+    expect(builder?.children[1].kind).toBe("statement")
+    expect(builder?.children[2].kind).toBe("element")
+    expect(builder?.children[3].kind).toBe("statement")
+    expect(builder?.children[4].kind).toBe("statement")
+  })
+
+  it("should still recursively analyze block statements", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        {
+          const x = 1
+          p("inside block")
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    // Block contents should be flattened
+    expect(builder?.children.length).toBe(2)
+    expect(builder?.children[0].kind).toBe("statement")
+    expect(builder?.children[1].kind).toBe("element")
+  })
+
+  it("should throw error for return statements", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        if (true) return
+        p("hello")
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+
+    expect(() => analyzeBuilder(calls[0])).toThrow(
+      /Return statement not supported/,
+    )
+  })
+
+  it("should create StaticLoopNode for non-reactive for...of", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      ul(() => {
+        for (const x of [1, 2, 3]) {
+          li(x)
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(1)
+    expect(builder?.children[0].kind).toBe("static-loop")
+
+    if (builder?.children[0].kind === "static-loop") {
+      const staticLoop = builder.children[0]
+      expect(staticLoop.iterableSource).toBe("[1, 2, 3]")
+      expect(staticLoop.itemVariable).toBe("x")
+      expect(staticLoop.body.length).toBe(1)
+      expect(staticLoop.body[0].kind).toBe("element")
+    }
+  })
+
+  it("should create StaticConditionalNode for static if", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        if (true) {
+          p("yes")
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(1)
+    expect(builder?.children[0].kind).toBe("static-conditional")
+
+    if (builder?.children[0].kind === "static-conditional") {
+      const staticCond = builder.children[0]
+      expect(staticCond.conditionSource).toBe("true")
+      expect(staticCond.thenBody.length).toBe(1)
+      expect(staticCond.thenBody[0].kind).toBe("element")
+      expect(staticCond.elseBody).toBeNull()
+    }
+  })
+
+  it("should create StaticConditionalNode with else branch", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        if (false) {
+          p("yes")
+        } else {
+          p("no")
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(1)
+    expect(builder?.children[0].kind).toBe("static-conditional")
+
+    if (builder?.children[0].kind === "static-conditional") {
+      const staticCond = builder.children[0]
+      expect(staticCond.conditionSource).toBe("false")
+      expect(staticCond.thenBody.length).toBe(1)
+      expect(staticCond.elseBody).not.toBeNull()
+      expect(staticCond.elseBody?.length).toBe(1)
+    }
+  })
+})
+
+// =============================================================================
 // Integration Tests (Full Builder Analysis)
 // =============================================================================
 

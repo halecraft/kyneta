@@ -45,12 +45,16 @@ import type {
 } from "./ir.js"
 import {
   createBuilder,
+  createConditionalBranch,
   createConditionalRegion,
   createElement,
   createListRegion,
   createReactiveExpression,
   createSpan,
+  createStatement,
+  createStaticConditional,
   createStaticExpression,
+  createStaticLoop,
   createTextNode,
 } from "./ir.js"
 
@@ -627,17 +631,23 @@ export function analyzeForOfStatement(stmt: ForOfStatement): ChildNode | null {
   const iterExpr = stmt.getExpression()
   const listSource = iterExpr.getText()
 
-  // Check if iterating over a Loro list
-  if (!expressionIsReactive(iterExpr)) {
-    // Not a reactive iteration - could still be compiled but as static
-    // For now, we treat non-reactive for-of as regular static iteration
-    return null
-  }
-
   // Analyze the body
   const body = stmt.getStatement()
   const bodyChildren = analyzeStatementBody(body)
 
+  // Check if iterating over a Loro list (reactive) or static iterable
+  if (!expressionIsReactive(iterExpr)) {
+    // Static iteration - runs once at render time
+    return createStaticLoop(
+      listSource,
+      itemVariable,
+      indexVariable,
+      bodyChildren,
+      span,
+    )
+  }
+
+  // Reactive iteration - delta-driven list region
   return createListRegion(
     listSource,
     itemVariable,
@@ -652,7 +662,6 @@ export function analyzeForOfStatement(stmt: ForOfStatement): ChildNode | null {
  */
 export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
   const span = getSpan(stmt)
-  const branches: ConditionalBranch[] = []
 
   // Analyze the condition
   const condExpr = stmt.getExpression()
@@ -670,40 +679,49 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
   // Analyze then branch
   const thenStmt = stmt.getThenStatement()
   const thenBody = analyzeStatementBody(thenStmt)
-  branches.push({
-    condition,
-    body: thenBody,
-    span: getSpan(thenStmt),
-  })
 
   // Analyze else branch (if present)
   const elseStmt = stmt.getElseStatement()
+  let elseBody: ChildNode[] | null = null
+
   if (elseStmt) {
     // else if -> recurse
     if (elseStmt.getKind() === SyntaxKind.IfStatement) {
       const nestedIf = analyzeIfStatement(elseStmt as IfStatement)
-      if (nestedIf && nestedIf.kind === "conditional-region") {
-        // Merge branches from nested if
-        branches.push(...nestedIf.branches)
-        // Use the first reactive subscription target found
-        if (!subscriptionTarget && nestedIf.subscriptionTarget) {
-          subscriptionTarget = nestedIf.subscriptionTarget
+      if (nestedIf) {
+        // For reactive nested if, merge into conditional region
+        if (nestedIf.kind === "conditional-region") {
+          // Build branches for reactive conditional
+          const branches: ConditionalBranch[] = [
+            createConditionalBranch(condition, thenBody, getSpan(thenStmt)),
+            ...nestedIf.branches,
+          ]
+          // Use the first reactive subscription target found
+          if (!subscriptionTarget && nestedIf.subscriptionTarget) {
+            subscriptionTarget = nestedIf.subscriptionTarget
+          }
+          return createConditionalRegion(branches, subscriptionTarget, span)
         }
+        // For static nested if, wrap it as the else body
+        elseBody = [nestedIf]
       }
     } else {
-      // else -> null condition
-      const elseBody = analyzeStatementBody(elseStmt)
-      branches.push({
-        condition: null,
-        body: elseBody,
-        span: getSpan(elseStmt),
-      })
+      // else -> analyze body
+      elseBody = analyzeStatementBody(elseStmt)
     }
   }
 
-  // Only create a conditional region if the condition is reactive
+  // Static conditional - runs once at render time
   if (!subscriptionTarget && condition.expressionKind === "static") {
-    return null // Static conditional - will be handled differently
+    return createStaticConditional(condition.source, thenBody, elseBody, span)
+  }
+
+  // Reactive conditional - subscribes to condition changes
+  const branches: ConditionalBranch[] = [
+    createConditionalBranch(condition, thenBody, getSpan(thenStmt)),
+  ]
+  if (elseBody !== null && elseStmt) {
+    branches.push(createConditionalBranch(null, elseBody, getSpan(elseStmt)))
   }
 
   return createConditionalRegion(branches, subscriptionTarget, span)
@@ -738,13 +756,30 @@ export function analyzeStatementBody(stmt: Statement): ChildNode[] {
  *
  * Returns an array because some statements may produce multiple children
  * or no children at all.
+ *
+ * Statements that aren't UI-specific (element calls, control flow) are
+ * captured as StatementNode to preserve them in the generated code.
  */
 export function analyzeStatement(stmt: Statement): ChildNode[] | null {
+  const span = getSpan(stmt)
+
+  // Return statement - not supported in builder functions
+  if (stmt.getKind() === SyntaxKind.ReturnStatement) {
+    const line = stmt.getStartLineNumber()
+    throw new Error(
+      `Kinetic Compiler Error: Return statement not supported in builder function at line ${line}.\n` +
+        `Builder functions must produce DOM elements, not return early.`,
+    )
+  }
+
   // Expression statement (most common - element calls)
   if (stmt.getKind() === SyntaxKind.ExpressionStatement) {
     const exprStmt = stmt as ExpressionStatement
     const expr = exprStmt.getExpression()
-    if (!expr) return null
+    if (!expr) {
+      // Empty expression - capture as statement
+      return [createStatement(stmt.getText(), span)]
+    }
 
     // Check for element factory call
     if (expr.getKind() === SyntaxKind.CallExpression) {
@@ -755,7 +790,9 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
       }
     }
 
-    return null
+    // Non-element expression statement (e.g., console.log(), function calls)
+    // Capture as statement to preserve in output
+    return [createStatement(stmt.getText(), span)]
   }
 
   // For..of statement
@@ -764,7 +801,8 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
     if (region) {
       return [region]
     }
-    return null
+    // If analysis fails, capture as statement
+    return [createStatement(stmt.getText(), span)]
   }
 
   // If statement
@@ -773,10 +811,11 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
     if (region) {
       return [region]
     }
-    return null
+    // If analysis fails, capture as statement
+    return [createStatement(stmt.getText(), span)]
   }
 
-  // Block statement
+  // Block statement - recursively analyze contents
   if (stmt.getKind() === SyntaxKind.Block) {
     const block = stmt as Block
     const children: ChildNode[] = []
@@ -789,7 +828,14 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
     return children.length > 0 ? children : null
   }
 
-  return null
+  // Variable declaration (const x = ..., let y = ...)
+  if (stmt.getKind() === SyntaxKind.VariableStatement) {
+    return [createStatement(stmt.getText(), span)]
+  }
+
+  // Any other statement - capture verbatim to preserve in output
+  // This includes: while, switch, try/catch, throw, etc.
+  return [createStatement(stmt.getText(), span)]
 }
 
 // =============================================================================

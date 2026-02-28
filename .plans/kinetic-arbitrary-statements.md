@@ -86,11 +86,7 @@ Add a `StatementNode` to the IR that captures any statement's source text. This:
 - Requires minimal structural changes
 - Allows codegen to emit statements verbatim
 
-### Decision 2: Compute `hasStatements` in IR (FC/IS)
-
-Rather than detecting statements during codegen, compute `hasStatements: boolean` during IR construction. This follows the existing pattern (`hasReactiveItems` on `ListRegionNode`) and keeps codegen pure.
-
-### Decision 3: Always Use Block Body in HTML Codegen
+### Decision 2: Always Use Block Body in HTML Codegen
 
 Rather than conditionally switching between expression body and block body based on statement presence, **always use block body** with HTML accumulation:
 
@@ -215,17 +211,6 @@ export interface StaticConditionalNode extends IRNodeBase {
   hasStatements: boolean
 }
 
-// Update ListRegionNode
-export interface ListRegionNode extends IRNodeBase {
-  // ... existing fields ...
-  hasStatements: boolean  // NEW - computed during IR creation
-}
-
-// Update ConditionalBranch
-export interface ConditionalBranch {
-  // ... existing fields ...
-  hasStatements: boolean  // NEW - computed during IR creation
-}
 ```
 
 ## Phases and Tasks
@@ -249,47 +234,43 @@ Extract duplicate code into shared helpers before adding new functionality.
   - Updated one test that expected single-element optimization (now uses fragment path)
   - All 471 tests pass
 
-### Phase 1: IR and Analysis Updates 🔴
+### Phase 1: IR and Analysis Updates ✅
 
 Update the IR types and analysis to capture arbitrary statements, static loops, and static conditionals.
 
-- 🔴 **Task 1.1**: Add `StatementNode` to IR types (`ir.ts`)
+- ✅ **Task 1.1**: Add `StatementNode` to IR types (`ir.ts`)
   - Add interface definition
   - Update `ChildNode` union type
   - Add `isStatementNode()` type guard
   - Add `createStatement()` factory function
 
-- 🔴 **Task 1.2**: Add `StaticLoopNode` and `StaticConditionalNode` to IR types (`ir.ts`)
+- ✅ **Task 1.2**: Add `StaticLoopNode` and `StaticConditionalNode` to IR types (`ir.ts`)
   - Add interface definitions (see IR Type Addition section)
   - Update `ChildNode` union type
   - Add type guards and factory functions
 
-- 🔴 **Task 1.3**: Add `hasStatements` to `ListRegionNode`, `ConditionalBranch`, and new static nodes (`ir.ts`)
-  - Compute in factory functions
-  - Follows existing pattern of `hasReactiveItems`
-
-- 🔴 **Task 1.4**: Update `analyzeStatement()` to capture unrecognized statements (`analyze.ts`)
+- ✅ **Task 1.3**: Update `analyzeStatement()` to capture unrecognized statements (`analyze.ts`)
   - Instead of returning `null` for unrecognized statements, create `StatementNode`
   - Preserve original source text via `stmt.getText()`
   - Keep existing block statement recursion (don't capture blocks as statements)
   - Variable declarations, non-element expression statements → `StatementNode`
   - **Detect `return` statements → emit compile-time error**
 
-- 🔴 **Task 1.5**: Update `analyzeForOfStatement()` for static loops (`analyze.ts`)
+- ✅ **Task 1.4**: Update `analyzeForOfStatement()` for static loops (`analyze.ts`)
   - When `!expressionIsReactive(iterExpr)`, still analyze body
   - Create `StaticLoopNode` instead of returning `null`
   - Body analysis discovers elements inside static loops
 
-- 🔴 **Task 1.6**: Update `analyzeIfStatement()` for static conditionals (`analyze.ts`)
+- ✅ **Task 1.5**: Update `analyzeIfStatement()` for static conditionals (`analyze.ts`)
   - When condition is static and no reactive subscription target, still analyze branches
   - Create `StaticConditionalNode` instead of returning `null`
   - Branch analysis discovers elements inside static conditionals
 
-- 🔴 **Task 1.7**: Write analysis unit tests
+- ✅ **Task 1.6**: Write analysis unit tests (10 new tests, 481 total tests pass)
   - Test: `const x = 1` inside builder → captured as `StatementNode`
   - Test: `console.log("debug")` inside builder → captured as `StatementNode`
-  - Test: Variable declaration inside `for...of` body → captured, `hasStatements: true`
-  - Test: Variable declaration inside `if` body → captured, `hasStatements: true`
+  - Test: Variable declaration inside `for...of` body → captured as `StatementNode`
+  - Test: Variable declaration inside `if` body → captured as `StatementNode`
   - Test: Multiple statements in sequence → all captured in order
   - Test: Block statement still recursively analyzed (not captured as single statement)
   - Test: `return` statement → compile-time error
@@ -306,18 +287,14 @@ Update DOM code generation to emit statements and static loops/conditionals.
 
 - 🔴 **Task 2.2**: Update `generateChild()` to handle `StaticLoopNode` (`codegen/dom.ts`)
   - Generate a regular `for...of` loop
-  - Loop body calls `generateBodyWithReturn()` or emits children directly
+  - Loop body uses `generateBodyWithReturn()` (already extracts shared helper from Phase 0)
   - Elements created and appended inside loop
 
 - 🔴 **Task 2.3**: Update `generateChild()` to handle `StaticConditionalNode` (`codegen/dom.ts`)
   - Generate a regular `if` statement
-  - Branches call `generateBodyWithReturn()` or emit children directly
+  - Branches use `generateBodyWithReturn()`
 
-- 🔴 **Task 2.4**: Update `generateBodyWithReturn()` for statements
-  - Emit statements in order with other children
-  - Statements don't contribute to fragment, just execute
-
-- 🔴 **Task 2.5**: Write DOM codegen unit tests
+- 🔴 **Task 2.4**: Write DOM codegen unit tests
   - Test: Statement emitted verbatim in output
   - Test: Statement inside list region `create` callback
   - Test: Statement inside conditional branch
@@ -325,45 +302,32 @@ Update DOM code generation to emit statements and static loops/conditionals.
   - Test: Static loop generates `for...of` with element creation inside
   - Test: Static conditional generates `if` with element creation inside
 
+Note: `generateBodyWithReturn()` was extracted in Phase 0 and already iterates children via `generateChild()`, so statements will automatically work once Task 2.1 is complete.
+
 ### Phase 3: HTML Codegen Updates 🔴
 
-Update HTML code generation to emit statements using block body pattern.
+Update HTML code generation to handle new node types. Note: Phase 0 already implemented `generateBodyHtml()` with block body and accumulation pattern, and updated `generateListRegion()` and `generateConditionalRegion()` to use it.
 
-- 🔴 **Task 3.1**: Update `generateBodyHtml()` with accumulation pattern
-  - Initialize: `let _html = ""`
-  - For statements: emit verbatim
-  - For elements: `_html += \`...\``
-  - End: `return _html`
-  - Preserves interleaving of statements and HTML generation
+- ✅ **Task 3.1**: `generateBodyHtml()` with accumulation pattern — **Done in Phase 0**
+  - Already implemented: `let _html = ""; _html += ...; return _html`
+  - List regions and conditionals already use block body syntax
 
-- 🔴 **Task 3.2**: Update `generateElement()` to use `generateBodyHtml()` for children
-  - Ensures statements in element children are handled correctly
-  - Consistent pattern across all body contexts
+- 🔴 **Task 3.2**: Update `generateChild()` to handle `StatementNode` (`codegen/html.ts`)
+  - Return statement source for accumulation in `generateBodyHtml()`
+  - Statements emitted verbatim between HTML accumulations
 
-- 🔴 **Task 3.3**: Update `generateListRegion()` to use block body
-  - Change from: `(item) => \`...\``
-  - Change to: `(item) => { ${generateBodyHtml(body)} }`
+- 🔴 **Task 3.3**: Update `generateChild()` to handle `StaticLoopNode` (`codegen/html.ts`)
+  - Generate `.map()` with block body using `generateBodyHtml()`
 
-- 🔴 **Task 3.4**: Update `generateConditionalRegion()` for statements
-  - Use IIFE pattern when branch has statements: `(() => { ${generateBodyHtml(branch.body)} })()`
-  - Or: always use IIFE for consistency (simpler code path)
-
-- 🔴 **Task 3.5**: Add `generateStaticLoop()` for `StaticLoopNode` (`codegen/html.ts`)
-  - Generate `.map()` with block body
-  - Body uses `generateBodyHtml()`
-
-- 🔴 **Task 3.6**: Add `generateStaticConditional()` for `StaticConditionalNode` (`codegen/html.ts`)
+- 🔴 **Task 3.4**: Update `generateChild()` to handle `StaticConditionalNode` (`codegen/html.ts`)
   - Generate IIFE with `if` statement inside
   - Branches use `generateBodyHtml()`
 
-- 🔴 **Task 3.7**: Write HTML codegen unit tests
-  - Test: List region uses block body with accumulation
-  - Test: Statement in list body emitted before HTML accumulation
+- 🔴 **Task 3.5**: Write HTML codegen unit tests
+  - Test: Statement emitted in list body
   - Test: Interleaved statements and elements in correct order
-  - Test: Conditional with statement in branch uses IIFE
   - Test: Static loop generates `.map()` with block body
   - Test: Static conditional generates IIFE with `if`
-  - Test: Element with statement children uses accumulation pattern
 
 ### Phase 4: Integration Testing 🔴
 
@@ -408,7 +372,7 @@ End-to-end tests with real compilation and execution.
 - 🔴 **Task 5.2**: Add to TECHNICAL.md
   - Document IR node types including StatementNode
   - Document HTML codegen block body / accumulation pattern
-  - Document the FC/IS principle for `hasStatements` in IR
+
 
 ## Unit and Integration Tests
 
@@ -422,16 +386,6 @@ describe("analyzeStatement - arbitrary statements", () => {
 
   it("should capture expression statements as StatementNode", () => {
     // console.log("debug") → StatementNode
-  })
-
-  it("should set hasStatements on ListRegionNode", () => {
-    // for (const item of list) { const x = item.get(); li(x) }
-    // → ListRegionNode.hasStatements === true
-  })
-
-  it("should set hasStatements on ConditionalBranch", () => {
-    // if (cond) { const x = 1; p(x) }
-    // → branch.hasStatements === true
   })
 
   it("should preserve statement order", () => {
@@ -490,20 +444,12 @@ describe("generateDOM - statements", () => {
 
 ```typescript
 describe("generateHTML - statements", () => {
-  it("should use block body with accumulation for list region", () => {
-    // → (item) => { let _html = ""; ... return _html }
-  })
-
-  it("should emit statements before HTML accumulation", () => {
-    // const x = 1; li(x) → const x = 1; _html += `<li>...`
+  it("should emit statement in list body via generateChild", () => {
+    // StatementNode in list body → statement source emitted in block body
   })
 
   it("should preserve interleaving for side effects", () => {
     // [log("a"), element, log("b")] → log("a"); _html += ...; log("b"); return _html
-  })
-
-  it("should use IIFE for conditional branches with statements", () => {
-    // if with statement → (() => { stmt; return `...` })()
   })
 
   it("should generate static loop as .map() with block body", () => {
@@ -512,10 +458,6 @@ describe("generateHTML - statements", () => {
 
   it("should generate static conditional as IIFE with if", () => {
     // StaticConditionalNode → (() => { if (cond) { ... } else { ... } })()
-  })
-
-  it("should handle statements in element children via generateBodyHtml", () => {
-    // div with [stmt, element] children → accumulation pattern
   })
 })
 ```
@@ -558,17 +500,17 @@ describe("compiler integration - statements", () => {
 
 ### Direct Dependencies
 
-1. **`ir.ts`** — New `StatementNode`, `StaticLoopNode`, `StaticConditionalNode` types, `hasStatements` fields
-2. **`analyze.ts`** — Updated `analyzeStatement()`, `analyzeForOfStatement()`, `analyzeIfStatement()`
-3. **`codegen/dom.ts`** — New `generateBodyWithReturn()`, updated `generateChild()` for new node types
-4. **`codegen/html.ts`** — New `generateBodyHtml()`, `generateStaticLoop()`, `generateStaticConditional()`, updated `generateElement()`
+1. **`ir.ts`** — New `StatementNode`, `StaticLoopNode`, `StaticConditionalNode` types (Phase 1 ✅)
+2. **`analyze.ts`** — Updated `analyzeStatement()`, `analyzeForOfStatement()`, `analyzeIfStatement()` (Phase 1 ✅)
+3. **`codegen/dom.ts`** — `generateBodyWithReturn()` extracted (Phase 0 ✅), `generateChild()` needs updates for new node types (Phase 2)
+4. **`codegen/html.ts`** — `generateBodyHtml()` with block body (Phase 0 ✅), `generateChild()` needs updates for new node types (Phase 3)
 
 ### Transitive Dependencies
 
 1. **`transform.ts`** — Orchestrates analysis and codegen; no changes needed (passes IR through)
 2. **`vite/plugin.ts`** — Uses `transform.ts`; no changes needed
-3. **Integration tests** — May need updates if they assert on exact codegen output (due to block body change)
-4. **`kinetic-todo` example** — Will work correctly after fix (currently broken)
+3. **Integration tests** — Some already updated in Phase 0 (block body change); may need more updates in Phase 2/3
+4. **`kinetic-todo` example** — Will work correctly after Phase 4 fix
 
 ### No Impact Expected
 
@@ -663,16 +605,25 @@ During planning, we considered conditionally using block body vs expression body
 3. Consistent with DOM codegen's existing approach
 4. Negligible runtime overhead (`=> { return x }` vs `=> x`)
 
-### FC/IS for Derived Properties
-
-The `hasStatements` flag could be computed during codegen, but computing it during IR creation:
-1. Keeps codegen pure (no analysis logic)
-2. Makes IR self-describing
-3. Follows existing patterns (`hasReactiveItems` on `ListRegionNode`)
+This decision also meant `hasStatements` flag was unnecessary — we removed it from the plan before implementing Phase 1.
 
 ### Statement Capture Scope
 
 Not all statements should be captured as `StatementNode`. Block statements must still be recursively analyzed to discover nested elements. Only "leaf" statements (variable declarations, expression statements that aren't element calls) become `StatementNode`.
+
+### Phase 0 Did More Than Expected
+
+When extracting `generateBodyHtml()` in Phase 0, we implemented the full block body + accumulation pattern and updated both `generateListRegion()` and `generateConditionalRegion()` to use it. This means Phase 3 is simpler than originally planned — we only need to:
+1. Handle `StatementNode` in `generateChild()` (emit source for accumulation)
+2. Handle `StaticLoopNode` and `StaticConditionalNode` in `generateChild()`
+
+### HTML Codegen Generates JavaScript
+
+A key insight: HTML codegen produces **JavaScript template literals**, not pure HTML. The generated code like:
+```javascript
+items.map((item) => { let _html = ""; _html += `<li>${item}</li>`; return _html }).join("")
+```
+...is JavaScript that runs at render time to produce HTML strings. This means statements can exist inside callbacks — they're JavaScript code, not embedded in HTML templates.
 
 ### Static Loops and Conditionals — Principle of Least Surprise
 
