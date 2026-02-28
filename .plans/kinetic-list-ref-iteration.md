@@ -111,67 +111,67 @@ function planDeltaOps<T>(
 
 ## Phases and Tasks
 
-### Phase 0: Refactor to FC/IS Architecture 🔴
+### Phase 0: Refactor to FC/IS Architecture ✅
 
 Extract pure planning functions from imperative DOM manipulation.
 
-- 🔴 **Task 0.1**: Define `ListRegionOp<T>` type
+- ✅ **Task 0.1**: Define `ListRegionOp<T>` type
   - `insert`: index + item (ref)
   - `delete`: index only
   - Export from `regions.ts` for testing
 
-- 🔴 **Task 0.2**: Extract `planInitialRender<T>` function
+- ✅ **Task 0.2**: Extract `planInitialRender<T>` function
   - Pure function: takes listRef, returns `ListRegionOp<T>[]`
   - Uses `listRef.get(i)` to get refs (not `.toArray()`)
 
-- 🔴 **Task 0.3**: Extract `planDeltaOps<T>` function
+- ✅ **Task 0.3**: Extract `planDeltaOps<T>` function
   - Pure function: takes listRef + event, returns `ListRegionOp<T>[]`
   - Uses `listRef.get(index)` after inserts to get refs
   - Only needs insert count from delta, not the raw values
 
-- 🔴 **Task 0.4**: Create `executeOp<T>` function
+- ✅ **Task 0.4**: Create `executeOp<T>` function
   - Imperative: executes single op against DOM
   - Handles insert (create node, appendChild) and delete (removeChild, dispose)
 
-- 🔴 **Task 0.5**: Update `__listRegion` to use new architecture
+- ✅ **Task 0.5**: Update `__listRegion` to use new architecture
   - Plan initial render, execute ops
   - Subscribe: plan delta ops, execute ops
 
-- 🔴 **Task 0.6**: Write unit tests for pure planning functions
+- ✅ **Task 0.6**: Write unit tests for pure planning functions
   - Test `planInitialRender` with mock listRef
   - Test `planDeltaOps` with various delta scenarios
   - No DOM needed — pure function tests
 
-### Phase 1: Store listRef in State 🔴
+### Phase 1: Store listRef in State ✅
 
-- 🔴 **Task 1.1**: Add `listRef` to `ListRegionState` interface
+- ✅ **Task 1.1**: Add `listRef` to `ListRegionState` interface
   - Required for delta handling to call `listRef.get(index)`
 
-- 🔴 **Task 1.2**: Update runtime tests
+- ✅ **Task 1.2**: Update runtime tests
   - Test: Initial render receives `PlainValueRef` for value shapes
   - Test: Delta insert receives `PlainValueRef` (same type!)
   - Test: `.get()` and `.set()` work on received refs
 
-### Phase 2: HTML Codegen — Use Iterator 🔴
+### Phase 2: HTML Codegen — Use Iterator ✅
 
-- 🔴 **Task 2.1**: Update `generateListRegion` in `codegen/html.ts`
+- ✅ **Task 2.1**: Update `generateListRegion` in `codegen/html.ts`
   - Change from: `${listSource}.toArray().map((item, i) => { ... })`
   - Change to: `${[...listSource].map((item, i) => { ... })}`
   - Spread syntax uses iterator, which returns refs
 
-- 🔴 **Task 2.2**: Write HTML codegen tests
+- ✅ **Task 2.2**: Write HTML codegen tests
   - Test: Generated code uses spread (not `.toArray()`)
   - Test: Verify code structure is valid JavaScript
 
-### Phase 3: Integration Verification 🔴
+### Phase 3: Integration Verification ✅
 
-- 🔴 **Task 3.1**: Update kinetic-todo example
+- ✅ **Task 3.1**: Update kinetic-todo example
   - Restore `const item = itemRef.get()` pattern in `app.ts`
   - Verify SSR renders correctly
   - Verify client-side hydration works
   - Verify event handlers can call `itemRef.set()`
 
-- 🔴 **Task 3.2**: Add integration test for ref-based iteration
+- ✅ **Task 3.2**: Add integration test for ref-based iteration
   - Source: `for (const ref of list) { const v = ref.get(); li(v) }`
   - Verify DOM creates elements with correct content
   - Verify HTML output is correct

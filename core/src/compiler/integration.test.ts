@@ -2282,6 +2282,121 @@ describe("compiler integration - arbitrary statements", () => {
     })
   })
 
+  describe("Task 4.5: Ref-based iteration pattern", () => {
+    it("should compile and execute itemRef.get() pattern in list region", () => {
+      const schema = Shape.doc({
+        items: Shape.list(Shape.plain.string()),
+      })
+      const doc = createTypedDoc(schema)
+      doc.items.push("first")
+      doc.items.push("second")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const container = document.createElement("div")
+
+      // Simulate compiled code that uses itemRef.get() pattern
+      // This is what the compiler generates from:
+      //   for (const itemRef of doc.items) {
+      //     const item = itemRef.get()
+      //     li(item)
+      //   }
+      __listRegion(
+        container,
+        doc.items,
+        {
+          create: (
+            itemRef: { get(): string; set(v: string): void },
+            _index,
+          ) => {
+            // This is the pattern the compiler preserves as a statement
+            const item = itemRef.get()
+            const li = document.createElement("li")
+            li.textContent = item
+            return li
+          },
+        },
+        scope,
+      )
+
+      // Verify items rendered correctly
+      const listItems = container.querySelectorAll("li")
+      expect(listItems.length).toBe(2)
+      expect(listItems[0].textContent).toBe("first")
+      expect(listItems[1].textContent).toBe("second")
+
+      scope.dispose()
+    })
+
+    it("should allow .set() on refs received in list region handlers", () => {
+      const schema = Shape.doc({
+        items: Shape.list(Shape.plain.string()),
+      })
+      const doc = createTypedDoc(schema)
+      doc.items.push("original")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const container = document.createElement("div")
+
+      // Capture the ref for later modification
+      const capturedRefs: Array<{ get(): string; set(v: string): void }> = []
+
+      __listRegion(
+        container,
+        doc.items,
+        {
+          create: (
+            itemRef: { get(): string; set(v: string): void },
+            _index,
+          ) => {
+            capturedRefs.push(itemRef)
+            const li = document.createElement("li")
+            li.textContent = itemRef.get()
+            return li
+          },
+        },
+        scope,
+      )
+
+      // Verify we got a ref
+      expect(capturedRefs.length).toBe(1)
+      expect(capturedRefs[0].get()).toBe("original")
+
+      // Modify via the ref (simulating an event handler)
+      capturedRefs[0].set("modified")
+      loro(doc).commit()
+
+      // Verify the change persisted in the document
+      expect(doc.items.get(0)?.get()).toBe("modified")
+
+      scope.dispose()
+    })
+
+    it("should generate HTML with spread syntax for ref preservation", () => {
+      const source = `
+        import { ListRef } from "./loro-types"
+        declare const items: ListRef<{ get(): string }>
+
+        ul(() => {
+          for (const itemRef of items) {
+            const item = itemRef.get()
+            li(item)
+          }
+        })
+      `
+
+      const result = transformSource(source, { target: "html" })
+
+      // Should use spread syntax [...items] instead of .toArray()
+      expect(result.code).toContain("[...items]")
+      expect(result.code).not.toContain(".toArray()")
+
+      // Should preserve the statement
+      expect(result.code).toContain("const item = itemRef.get()")
+    })
+  })
+
   describe("Task 4.6: Return statement error", () => {
     it("should throw compile-time error for return statement", () => {
       const source = `

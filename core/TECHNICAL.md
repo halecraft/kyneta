@@ -203,14 +203,18 @@ Generates JavaScript that produces HTML strings via template literals.
 For list regions and conditionals, HTML codegen uses a block body with accumulation:
 
 ```javascript
-items.toArray().map((item, _i) => {
+[...items].map((itemRef, _i) => {
   let _html = "";
+  const item = itemRef.get();     // statement preserved — unwrap ref
   console.log("before");          // statement preserved
   _html += `<li>${item}</li>`;    // HTML accumulated
   console.log("after");           // statement preserved
   return _html
 }).join("")
 ```
+
+Note: HTML codegen uses spread syntax `[...items]` instead of `.toArray()` to
+preserve `PlainValueRef` for value shapes, enabling two-way binding patterns.
 
 This pattern:
 1. Enables statements to execute between HTML generation
@@ -315,3 +319,31 @@ Generated code calls these runtime functions:
 - `__bindChecked(input, ref, scope)` — Two-way checkbox binding
 
 All runtime functions accept a `scope` parameter for cleanup tracking.
+
+### List Region Architecture
+
+The `__listRegion` runtime follows **Functional Core / Imperative Shell** pattern:
+
+**Functional Core** (pure, testable):
+- `planInitialRender(listRef)` → `ListRegionOp<T>[]`
+- `planDeltaOps(listRef, event)` → `ListRegionOp<T>[]`
+
+**Imperative Shell** (DOM manipulation):
+- `executeOp(parent, state, handlers, op)` — applies single operation
+
+Both planning functions use `listRef.get(index)` to obtain refs, ensuring
+handlers always receive `PlainValueRef<T>` for value shapes. This enables
+the component pattern where refs are passed for two-way binding:
+
+```typescript
+for (const itemRef of doc.items) {
+  const item = itemRef.get()  // Read current value
+  li({ onClick: () => itemRef.set(item.toUpperCase()) }, item)  // Can write!
+}
+```
+
+**Key design decisions:**
+1. Use `listRef.get(index)` instead of `.toArray()` for ref preservation
+2. Delta inserts use `listRef.get(index)` (not raw event values)
+3. Store `listRef` in state for delta handling
+4. HTML codegen uses `[...listSource]` (iterator returns refs)
