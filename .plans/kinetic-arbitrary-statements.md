@@ -374,15 +374,23 @@ End-to-end tests with real compilation and execution.
   - App builds successfully with Vite (type error is pre-existing, unrelated)
   - 15 new integration tests added, 518 total tests pass
 
-### Phase 5: Documentation 🔴
+### Phase 5: Documentation ✅
 
-- 🔴 **Task 5.1**: Update kinetic plan with learnings
-  - Document the statement support addition
-  - Note the "any valid TypeScript" principle
+- ✅ **Task 5.1**: Learnings documented in plan
+  - Block body consistency decision
+  - Statement capture scope rules
+  - Phase 0's strategic value
+  - HTML codegen generates JavaScript insight
+  - Static vs reactive control flow principle
 
-- 🔴 **Task 5.2**: Add to TECHNICAL.md
-  - Document IR node types including StatementNode
-  - Document HTML codegen block body / accumulation pattern
+- ✅ **Task 5.2**: Created TECHNICAL.md (`packages/kinetic/TECHNICAL.md`)
+  - Architecture overview (Functional Core / Imperative Shell)
+  - Complete IR type documentation including StatementNode, StaticLoopNode, StaticConditionalNode
+  - DOM codegen patterns and statement handling
+  - HTML codegen block body / accumulation pattern
+  - Reactive detection explanation
+  - Design decisions and rationale
+  - File structure and runtime dependencies
 
 
 ## Unit and Integration Tests
