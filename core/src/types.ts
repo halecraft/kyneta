@@ -265,19 +265,6 @@ export type InsertionResult =
   | { kind: "single"; node: Node }
   | { kind: "range"; startMarker: Comment; endMarker: Comment }
 
-/**
- * @deprecated Use `InsertionResult` instead. This type will be removed in a future version.
- *
- * A node that was inserted into the DOM and can be reliably removed.
- * Only handles single-element insertions.
- *
- * @internal - Used by region runtime
- */
-export interface TrackedNode {
-  /** The actual DOM node to track (never an empty DocumentFragment) */
-  readonly node: Node
-}
-
 // =============================================================================
 // Conditional Region Operations (Functional Core)
 // =============================================================================

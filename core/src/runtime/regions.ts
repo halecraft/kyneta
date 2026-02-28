@@ -36,7 +36,6 @@ import type {
   InsertionResult,
   ListRegionHandlers,
   ListRegionOp,
-  TrackedNode,
 } from "../types.js"
 import type { Scope } from "./scope.js"
 import { __subscribe } from "./subscribe.js"

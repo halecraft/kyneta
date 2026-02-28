@@ -354,15 +354,26 @@ All region types (list, conditional) share a common algebraic structure based on
 
 #### The Trackability Invariant
 
-Every node inserted into the DOM must remain trackable for removal. This is enforced through the `TrackedNode` type:
+Every node inserted into the DOM must remain trackable for removal. This is enforced through the `InsertionResult` type:
 
 ```typescript
-interface TrackedNode {
-  readonly node: Node  // Never an empty DocumentFragment
-}
+type InsertionResult =
+  | { kind: "single"; node: Node }
+  | { kind: "range"; startMarker: Comment; endMarker: Comment }
 ```
 
-When a `DocumentFragment` is inserted, its children are moved to the parent and the fragment becomes empty. The `insertAndTrack()` helper handles this by tracking the first child instead of the empty fragment, guaranteeing the invariant: "The referenced node is a direct child of the parent it was inserted into."
+**Single elements** (the common case) are tracked directly — no overhead.
+
+**Multi-element fragments** use comment markers to delimit the range:
+
+```html
+<!--kinetic:start-->
+<span>a</span>
+<span>b</span>
+<!--kinetic:end-->
+```
+
+The `insertAndTrack()` helper automatically chooses the appropriate strategy based on fragment child count, and `removeInsertionResult()` handles removal for both cases.
 
 #### Functional Core / Imperative Shell
 
@@ -394,14 +405,14 @@ interface RegionStateBase {
 }
 
 interface ListRegionState<T> extends RegionStateBase {
-  nodes: TrackedNode[]
+  nodes: InsertionResult[]
   scopes: Scope[]
   listRef: ListRefLike<T>
 }
 
 interface ConditionalRegionState extends RegionStateBase {
   currentBranch: "true" | "false" | null
-  currentNode: TrackedNode | null
+  currentNode: InsertionResult | null
   currentScope: Scope | null
 }
 ```
