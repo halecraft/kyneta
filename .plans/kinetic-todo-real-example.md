@@ -191,7 +191,7 @@ The compiler must be able to resolve `@loro-extended/change` types for reactive 
   - Create LoroDoc and typed document
   - Call `mount()` with app factory
 
-### Phase 3: Repo Integration + Live Collaboration + SSR 🔴
+### Phase 3: Repo Integration + Live Collaboration + SSR ✅
 
 Replace the standalone `LoroDoc` with `Repo` for server↔client sync, and add SSR using dual compilation. The same `app.ts` is compiled to DOM code for the client and HTML template literals for the server — no hand-written render functions, no duplication.
 
@@ -203,13 +203,13 @@ The complete flow:
 4. Client Repo connects via WebSocket, deltas flow both directions with O(k) updates
 5. Open second tab → same flow → both tabs collaborate in real-time
 
-- 🔴 **Task 3.1**: Refactor `src/app.ts` to accept `doc` as a parameter
+- ✅ **Task 3.1**: Refactor `src/app.ts` to accept `doc` as a parameter
   - Change from module-level `const doc = ...` to an exported function that receives `doc`
   - The function returns a builder call: `div({ class: "todo-app" }, () => { ... })`
   - Server calls it → gets HTML render function. Client calls it → gets DOM factory.
   - Helper functions (`addTodo`, `removeTodo`) move inside or accept `doc` as closure
 
-- 🔴 **Task 3.2**: Rewrite `src/server.ts` with Repo + SSR + Vite middleware
+- ✅ **Task 3.2**: Rewrite `src/server.ts` with Repo + SSR + Vite middleware
   - Create `Repo` with `WsServerNetworkAdapter` + `LevelDBStorageAdapter`
   - Create HTTP server with Vite dev middleware (follows `todo-websocket` pattern)
   - Attach `WebSocketServer` to the HTTP server
@@ -222,7 +222,7 @@ The complete flow:
     - Execute render function, wrap with `renderToDocument()` + `generateStateScript()`
   - All other requests fall through to Vite middleware (serves client JS, assets, etc.)
 
-- 🔴 **Task 3.3**: Rewrite `src/main.ts` with client-side Repo + hydration
+- ✅ **Task 3.3**: Rewrite `src/main.ts` with client-side Repo + hydration
   - Create `Repo` with `WsClientNetworkAdapter` pointing to `ws://${location.host}/ws`
   - `repo.get("kinetic-todo", TodoSchema)` to get a synced `Doc`
   - Import `createApp` from `./app.ts` (compiled to DOM target by Vite plugin)
@@ -232,7 +232,7 @@ The complete flow:
   - Otherwise, mount fresh (fallback for direct client-side navigation)
   - WebSocket sync connects in the background — subsequent deltas update the DOM via Kinetic's reactive runtime
 
-- 🔴 **Task 3.4**: Update `package.json` with Repo + adapter dependencies
+- ✅ **Task 3.4**: Update `package.json` with Repo + adapter dependencies
   - Add: `@loro-extended/repo`, `@loro-extended/adapter-websocket`, `@loro-extended/adapter-leveldb`
   - Add: `ws`, `classic-level`
   - Update `dev` script to `tsx src/server.ts` (server embeds Vite, no separate Vite process)
