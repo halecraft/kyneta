@@ -425,8 +425,6 @@ Generated code calls these runtime functions:
 
 All runtime functions accept a `scope` parameter for cleanup tracking.
 
-**Note:** Render-time loops and conditionals do not call runtime functions — they emit inline `for...of` loops and `if/else` statements that execute once at render time.
-
 ### List Region Architecture
 
 The `__listRegion` runtime follows **Functional Core / Imperative Shell** pattern:
