@@ -262,6 +262,26 @@ export interface TrackedNode {
   readonly node: Node
 }
 
+// =============================================================================
+// Conditional Region Operations (Functional Core)
+// =============================================================================
+
+/**
+ * Operations for conditional region updates.
+ * Output of pure planning function, input to imperative executor.
+ *
+ * This follows the Functional Core / Imperative Shell pattern:
+ * - planConditionalUpdate() returns these ops (pure)
+ * - executeConditionalOp() applies them to the DOM (imperative)
+ *
+ * @internal - Used by conditional region runtime
+ */
+export type ConditionalRegionOp =
+  | { kind: "noop" }
+  | { kind: "insert"; branch: "true" | "false" }
+  | { kind: "delete" }
+  | { kind: "swap"; toBranch: "true" | "false" }
+
 /**
  * Handlers for conditional region branch switching.
  * @internal

@@ -144,15 +144,15 @@ interface ConditionalRegionState extends RegionStateBase {
 - ✅ Task 1.5: Update all usages to access `.node` property
 - ✅ Task 1.6: Add JSDoc explaining the trackability invariant
 
-### Phase 2: Apply FC/IS to Conditional Regions 🔴
+### Phase 2: Apply FC/IS to Conditional Regions ✅
 
 **Goal**: Separate planning from execution for conditional regions.
 
-- 🔴 Task 2.1: Define `ConditionalRegionOp` discriminated union type
-- 🔴 Task 2.2: Implement `planConditionalUpdate()` pure function
-- 🔴 Task 2.3: Implement `executeConditionalOp()` imperative function
-- 🔴 Task 2.4: Refactor `updateConditionalRegion` to use plan + execute
-- 🔴 Task 2.5: Add unit tests for `planConditionalUpdate()` (pure function testing)
+- ✅ Task 2.1: Define `ConditionalRegionOp` discriminated union type
+- ✅ Task 2.2: Implement `planConditionalUpdate()` pure function
+- ✅ Task 2.3: Implement `executeConditionalOp()` imperative function
+- ✅ Task 2.4: Refactor `updateConditionalRegion` to use plan + execute
+- ✅ Task 2.5: Add unit tests for `planConditionalUpdate()` (pure function testing)
 
 ### Phase 3: Unify State Types 🔴
 

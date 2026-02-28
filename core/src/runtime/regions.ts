@@ -32,6 +32,7 @@
 import type { LoroEventBatch } from "loro-crdt"
 import type {
   ConditionalRegionHandlers,
+  ConditionalRegionOp,
   ListRegionHandlers,
   ListRegionOp,
   TrackedNode,
@@ -379,6 +380,121 @@ interface ConditionalRegionState {
   parentScope: Scope
 }
 
+// =============================================================================
+// Conditional Region - Functional Core (Pure Planning Function)
+// =============================================================================
+
+/**
+ * Plan the operation needed to update a conditional region.
+ *
+ * This is a pure function that determines what DOM operation is needed
+ * based on the current state and new condition. It follows the FC/IS pattern:
+ * - This function (planConditionalUpdate) is the Functional Core
+ * - executeConditionalOp is the Imperative Shell
+ *
+ * @param currentBranch - The currently rendered branch ("true", "false", or null)
+ * @param newCondition - The new condition value
+ * @param hasWhenFalse - Whether a whenFalse handler exists
+ * @returns The operation to perform
+ *
+ * @internal - Exported for testing
+ */
+export function planConditionalUpdate(
+  currentBranch: "true" | "false" | null,
+  newCondition: boolean,
+  hasWhenFalse: boolean,
+): ConditionalRegionOp {
+  const targetBranch: "true" | "false" | null = newCondition
+    ? "true"
+    : hasWhenFalse
+      ? "false"
+      : null
+
+  // No change needed
+  if (currentBranch === targetBranch) {
+    return { kind: "noop" }
+  }
+
+  // From nothing to something
+  if (currentBranch === null && targetBranch !== null) {
+    return { kind: "insert", branch: targetBranch }
+  }
+
+  // From something to nothing
+  if (currentBranch !== null && targetBranch === null) {
+    return { kind: "delete" }
+  }
+
+  // From one branch to another
+  if (currentBranch !== null && targetBranch !== null) {
+    return { kind: "swap", toBranch: targetBranch }
+  }
+
+  // Should never reach here, but TypeScript needs this
+  return { kind: "noop" }
+}
+
+// =============================================================================
+// Conditional Region - Imperative Shell (DOM Manipulation)
+// =============================================================================
+
+/**
+ * Execute a conditional region operation against the DOM.
+ *
+ * This is the imperative shell that performs actual DOM manipulation.
+ * It receives operations from planConditionalUpdate().
+ *
+ * @param parent - The parent DOM node
+ * @param marker - The comment marker for positioning
+ * @param state - The conditional region state (mutated)
+ * @param handlers - The user-provided handlers
+ * @param op - The operation to execute
+ *
+ * @internal
+ */
+function executeConditionalOp(
+  parent: Node,
+  marker: Comment,
+  state: ConditionalRegionState,
+  handlers: ConditionalRegionHandlers,
+  op: ConditionalRegionOp,
+): void {
+  if (op.kind === "noop") {
+    return
+  }
+
+  // Clean up current content (for delete and swap)
+  if (op.kind === "delete" || op.kind === "swap") {
+    if (state.currentNode && state.currentNode.node.parentNode === parent) {
+      parent.removeChild(state.currentNode.node)
+    }
+    if (state.currentScope) {
+      state.currentScope.dispose()
+      state.currentScope = null
+    }
+    state.currentNode = null
+    state.currentBranch = null
+  }
+
+  // Insert new content (for insert and swap)
+  if (op.kind === "insert" || op.kind === "swap") {
+    const branch = op.kind === "insert" ? op.branch : op.toBranch
+    const handler = branch === "true" ? handlers.whenTrue : handlers.whenFalse
+
+    if (handler) {
+      state.currentScope = state.parentScope.createChild()
+      const node = handler()
+      state.currentBranch = branch === "true" ? true : false
+      const referenceNode = marker.nextSibling
+      state.currentNode = insertAndTrack(parent, node, referenceNode)
+    }
+  }
+}
+
+// =============================================================================
+// Conditional Region - Public API
+// =============================================================================
+
 /**
  * Create a conditional region.
  *
@@ -426,6 +542,12 @@ export function __conditionalRegion(
 
 /**
  * Update a conditional region based on current condition.
+ *
+ * This function orchestrates the FC/IS pattern:
+ * 1. Evaluates the condition
+ * 2. Plans the update (pure)
+ * 3. Executes the operation (imperative)
+ *
  * @internal
  */
 function updateConditionalRegion(
@@ -437,38 +559,23 @@ function updateConditionalRegion(
 ): void {
   const condition = getCondition()
 
-  // No change needed
-  if (condition === state.currentBranch) {
-    return
-  }
+  // Convert boolean state to string branch for planning
+  const currentBranch: "true" | "false" | null =
+    state.currentBranch === true
+      ? "true"
+      : state.currentBranch === false
+        ? "false"
+        : null
 
-  // Clean up old branch
-  if (state.currentNode && state.currentNode.node.parentNode === parent) {
-    parent.removeChild(state.currentNode.node)
-  }
-  if (state.currentScope) {
-    state.currentScope.dispose()
-    state.currentScope = null
-  }
-  state.currentNode = null
-  state.currentBranch = null
+  // Plan the update (pure)
+  const op = planConditionalUpdate(
+    currentBranch,
+    condition,
+    handlers.whenFalse !== undefined,
+  )
 
-  // Create new branch
-  if (condition && handlers.whenTrue) {
-    state.currentScope = state.parentScope.createChild()
-    const node = handlers.whenTrue()
-    state.currentBranch = true
-    // Insert after marker, handling DocumentFragment
-    const referenceNode = marker.nextSibling
-    state.currentNode = insertAndTrack(parent, node, referenceNode)
-  } else if (!condition && handlers.whenFalse) {
-    state.currentScope = state.parentScope.createChild()
-    const node = handlers.whenFalse()
-    state.currentBranch = false
-    // Insert after marker, handling DocumentFragment
-    const referenceNode = marker.nextSibling
-    state.currentNode = insertAndTrack(parent, node, referenceNode)
-  }
+  // Execute the operation (imperative)
+  executeConditionalOp(parent, marker, state, handlers, op)
 }
 
 /**

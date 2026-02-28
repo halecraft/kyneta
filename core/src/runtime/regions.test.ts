@@ -16,6 +16,7 @@ import {
   __staticConditionalRegion,
   type ListDeltaEvent,
   type ListRefLike,
+  planConditionalUpdate,
   planDeltaOps,
   planInitialRender,
 } from "./regions.js"
@@ -1085,6 +1086,58 @@ describe("regions", () => {
       const ops = planDeltaOps(mockListRef, event)
 
       expect(ops).toEqual([])
+    })
+  })
+
+  describe("planConditionalUpdate", () => {
+    it("returns noop when condition unchanged (true → true)", () => {
+      const op = planConditionalUpdate("true", true, true)
+      expect(op).toEqual({ kind: "noop" })
+    })
+
+    it("returns noop when condition unchanged (false → false)", () => {
+      const op = planConditionalUpdate("false", false, true)
+      expect(op).toEqual({ kind: "noop" })
+    })
+
+    it("returns noop when condition unchanged (null → false without whenFalse)", () => {
+      const op = planConditionalUpdate(null, false, false)
+      expect(op).toEqual({ kind: "noop" })
+    })
+
+    it("returns insert when going from null to true", () => {
+      const op = planConditionalUpdate(null, true, true)
+      expect(op).toEqual({ kind: "insert", branch: "true" })
+    })
+
+    it("returns insert when going from null to true (no whenFalse)", () => {
+      const op = planConditionalUpdate(null, true, false)
+      expect(op).toEqual({ kind: "insert", branch: "true" })
+    })
+
+    it("returns insert when going from null to false with whenFalse", () => {
+      const op = planConditionalUpdate(null, false, true)
+      expect(op).toEqual({ kind: "insert", branch: "false" })
+    })
+
+    it("returns swap when going from true to false with whenFalse", () => {
+      const op = planConditionalUpdate("true", false, true)
+      expect(op).toEqual({ kind: "swap", toBranch: "false" })
+    })
+
+    it("returns delete when going from true to false without whenFalse", () => {
+      const op = planConditionalUpdate("true", false, false)
+      expect(op).toEqual({ kind: "delete" })
+    })
+
+    it("returns swap when going from false to true", () => {
+      const op = planConditionalUpdate("false", true, true)
+      expect(op).toEqual({ kind: "swap", toBranch: "true" })
+    })
+
+    it("returns swap when going from false to true (no whenFalse)", () => {
+      const op = planConditionalUpdate("false", true, false)
+      expect(op).toEqual({ kind: "swap", toBranch: "true" })
     })
   })
 
