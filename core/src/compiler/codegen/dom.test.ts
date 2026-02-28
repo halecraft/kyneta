@@ -14,12 +14,11 @@ import {
   createConditionalRegion,
   createContent,
   createElement,
-  createListRegion,
   createLiteral,
+  createLoop,
   createSpan,
   createStatement,
   createStaticConditional,
-  createStaticLoop,
   type EventHandlerNode,
 } from "../ir.js"
 import { generateDOM, generateElementFactory } from "./dom.js"
@@ -320,14 +319,16 @@ describe("generateDOM - list regions", () => {
       [createContent("item.text", "render", [], span(3, 6, 3, 15))],
       span(3, 4, 3, 17),
     )
-    const listRegion = createListRegion(
+    const loop = createLoop(
       "items",
+      "reactive",
       "item",
       null,
       [liElement],
+      ["items"],
       span(2, 2, 4, 3),
     )
-    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 5, 1))
+    const builder = createBuilder("ul", [], [], [loop], span(1, 0, 5, 1))
 
     const code = generateDOM(builder)
 
@@ -346,14 +347,16 @@ describe("generateDOM - list regions", () => {
       [createContent("item", "render", [], span(3, 6, 3, 10))],
       span(3, 4, 3, 17),
     )
-    const listRegion = createListRegion(
+    const loop = createLoop(
       "items",
+      "reactive",
       "item",
       "i",
       [liElement],
+      ["items"],
       span(2, 2, 4, 3),
     )
-    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 5, 1))
+    const builder = createBuilder("ul", [], [], [loop], span(1, 0, 5, 1))
 
     const code = generateDOM(builder)
 
@@ -370,14 +373,16 @@ describe("generateDOM - list regions", () => {
       [createContent("item", "render", [], span(3, 6, 3, 10))],
       span(3, 4, 3, 12),
     )
-    const listRegion = createListRegion(
+    const loop = createLoop(
       "items",
+      "reactive",
       "item",
       null,
       [liElement],
+      ["items"],
       span(2, 2, 4, 3),
     )
-    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 5, 1))
+    const builder = createBuilder("ul", [], [], [loop], span(1, 0, 5, 1))
 
     const code = generateDOM(builder)
 
@@ -403,14 +408,16 @@ describe("generateDOM - list regions", () => {
       [createLiteral("second", span(4, 6, 4, 12))],
       span(4, 4, 4, 14),
     )
-    const listRegion = createListRegion(
+    const loop = createLoop(
       "items",
+      "reactive",
       "item",
       null,
       [li1, li2],
+      ["items"],
       span(2, 2, 5, 3),
     )
-    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 6, 1))
+    const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))
 
     const code = generateDOM(builder)
 
@@ -658,8 +665,9 @@ describe("generateElementFactory", () => {
 describe("generateDOM - code validity", () => {
   it("should generate syntactically balanced braces and parentheses", () => {
     // Complex structure that exercises all code paths
-    const listRegion = createListRegion(
+    const loop = createLoop(
       "items",
+      "reactive",
       "item",
       null,
       [
@@ -672,6 +680,7 @@ describe("generateDOM - code validity", () => {
           span(2, 0, 4, 1),
         ),
       ],
+      ["items"],
       span(1, 0, 5, 1),
     )
 
@@ -709,7 +718,7 @@ describe("generateDOM - code validity", () => {
         },
       ],
       [{ event: "click", handlerSource: "() => {}", span: span(1, 0, 1, 10) }],
-      [listRegion, conditionalRegion],
+      [loop, conditionalRegion],
       span(1, 0, 10, 1),
     )
 
@@ -836,14 +845,16 @@ describe("generateDOM - statements", () => {
       [createLiteral("item", span(4, 6, 4, 12))],
       span(4, 4, 4, 14),
     )
-    const listRegion = createListRegion(
+    const loop = createLoop(
       "items",
+      "reactive",
       "itemRef",
       null,
       [stmt, liElement],
+      ["items"],
       span(2, 2, 5, 3),
     )
-    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 6, 1))
+    const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))
 
     const code = generateDOM(builder)
 
@@ -893,14 +904,16 @@ describe("generateDOM - statements", () => {
       [createLiteral("x", span(3, 6, 3, 9))],
       span(3, 4, 3, 11),
     )
-    const staticLoop = createStaticLoop(
+    const renderLoop = createLoop(
       "[1, 2, 3]",
+      "render",
       "x",
       null,
       [liElement],
+      [],
       span(2, 2, 4, 3),
     )
-    const builder = createBuilder("ul", [], [], [staticLoop], span(1, 0, 5, 1))
+    const builder = createBuilder("ul", [], [], [renderLoop], span(1, 0, 5, 1))
 
     const code = generateDOM(builder)
 
@@ -917,14 +930,16 @@ describe("generateDOM - statements", () => {
       [createLiteral("item", span(3, 6, 3, 12))],
       span(3, 4, 3, 14),
     )
-    const staticLoop = createStaticLoop(
+    const renderLoop = createLoop(
       "items.entries()",
+      "render",
       "item",
       "i",
       [liElement],
+      [],
       span(2, 2, 4, 3),
     )
-    const builder = createBuilder("ul", [], [], [staticLoop], span(1, 0, 5, 1))
+    const builder = createBuilder("ul", [], [], [renderLoop], span(1, 0, 5, 1))
 
     const code = generateDOM(builder)
 
@@ -996,14 +1011,16 @@ describe("generateDOM - statements", () => {
       [createLiteral("doubled", span(4, 6, 4, 15))],
       span(4, 4, 4, 17),
     )
-    const staticLoop = createStaticLoop(
+    const renderLoop = createLoop(
       "[1, 2, 3]",
+      "render",
       "x",
       null,
       [stmt, liElement],
+      [],
       span(2, 2, 5, 3),
     )
-    const builder = createBuilder("ul", [], [], [staticLoop], span(1, 0, 6, 1))
+    const builder = createBuilder("ul", [], [], [renderLoop], span(1, 0, 6, 1))
 
     const code = generateDOM(builder)
 

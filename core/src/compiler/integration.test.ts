@@ -832,12 +832,13 @@ describe("compiler integration - list regions", () => {
 
       expect(result.ir).toHaveLength(1)
       expect(result.ir[0].children).toHaveLength(1)
-      expect(result.ir[0].children[0].kind).toBe("list-region")
+      expect(result.ir[0].children[0].kind).toBe("loop")
 
-      const listRegion = result.ir[0].children[0] as any
-      expect(listRegion.listSource).toBe("items")
-      expect(listRegion.itemVariable).toBe("item")
-      expect(listRegion.indexVariable).toBeNull()
+      const loop = result.ir[0].children[0] as any
+      expect(loop.iterableSource).toBe("items")
+      expect(loop.iterableBindingTime).toBe("reactive")
+      expect(loop.itemVariable).toBe("item")
+      expect(loop.indexVariable).toBeNull()
     })
 
     it("should capture index variable from array destructuring", () => {
@@ -856,10 +857,11 @@ describe("compiler integration - list regions", () => {
 
       const result = transformSource(source, { target: "dom" })
 
-      const listRegion = result.ir[0].children[0] as any
-      expect(listRegion.kind).toBe("list-region")
-      expect(listRegion.itemVariable).toBe("item")
-      expect(listRegion.indexVariable).toBe("i")
+      const loop = result.ir[0].children[0] as any
+      expect(loop.kind).toBe("loop")
+      expect(loop.iterableBindingTime).toBe("reactive")
+      expect(loop.itemVariable).toBe("item")
+      expect(loop.indexVariable).toBe("i")
     })
 
     it("should capture loop body as list region body", () => {

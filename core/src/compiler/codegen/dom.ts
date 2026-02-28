@@ -20,10 +20,9 @@ import type {
   ContentNode,
   ElementNode,
   EventHandlerNode,
-  ListRegionNode,
+  LoopNode,
   StatementNode,
   StaticConditionalNode,
-  StaticLoopNode,
 } from "../ir.js"
 import { computeSlotKind, mergeConditionalBodies } from "../ir.js"
 
@@ -381,8 +380,12 @@ function generateChild(
       break
     }
 
-    case "list-region": {
-      lines.push(...generateListRegion(node, parentVar, state))
+    case "loop": {
+      if (node.iterableBindingTime === "reactive") {
+        lines.push(...generateReactiveLoop(node, parentVar, state))
+      } else {
+        lines.push(...generateRenderLoop(node, parentVar, state))
+      }
       break
     }
 
@@ -401,12 +404,6 @@ function generateChild(
       // Emit statement source verbatim
       // Statements don't produce DOM nodes, they just execute
       lines.push(`${ind}${node.source}`)
-      break
-    }
-
-    case "static-loop": {
-      // Generate a regular for...of loop that runs once at render time
-      lines.push(...generateStaticLoop(node, parentVar, state))
       break
     }
 
@@ -580,8 +577,8 @@ function generateBodyWithFragment(
 /**
  * Generate code for a list region.
  */
-function generateListRegion(
-  node: ListRegionNode,
+function generateReactiveLoop(
+  node: LoopNode,
   parentVar: string,
   state: CodegenState,
 ): string[] {
@@ -590,7 +587,7 @@ function generateListRegion(
   const innerState = indented(state)
   const innerInd = getIndent(innerState)
 
-  lines.push(`${ind}__listRegion(${parentVar}, ${node.listSource}, {`)
+  lines.push(`${ind}__listRegion(${parentVar}, ${node.iterableSource}, {`)
 
   // Generate create handler
   const params = node.indexVariable
@@ -762,8 +759,8 @@ function generateBranchBody(body: ChildNode[], state: CodegenState): string[] {
  * Unlike list regions which use __listRegion for delta-driven updates,
  * static loops run once at render time and create elements directly.
  */
-function generateStaticLoop(
-  node: StaticLoopNode,
+function generateRenderLoop(
+  node: LoopNode,
   parentVar: string,
   state: CodegenState,
 ): string[] {

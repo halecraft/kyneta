@@ -48,12 +48,11 @@ import {
   createConditionalRegion,
   createContent,
   createElement,
-  createListRegion,
   createLiteral,
+  createLoop,
   createSpan,
   createStatement,
   createStaticConditional,
-  createStaticLoop,
 } from "./ir.js"
 
 // =============================================================================
@@ -633,24 +632,16 @@ export function analyzeForOfStatement(stmt: ForOfStatement): ChildNode | null {
   const body = stmt.getStatement()
   const bodyChildren = analyzeStatementBody(body)
 
-  // Check if iterating over a Loro list (reactive) or static iterable
-  if (!expressionIsReactive(iterExpr)) {
-    // Static iteration - runs once at render time
-    return createStaticLoop(
-      listSource,
-      itemVariable,
-      indexVariable,
-      bodyChildren,
-      span,
-    )
-  }
+  // Determine binding time from reactivity analysis
+  const isReactive = expressionIsReactive(iterExpr)
 
-  // Reactive iteration - delta-driven list region
-  return createListRegion(
+  return createLoop(
     listSource,
+    isReactive ? "reactive" : "render",
     itemVariable,
     indexVariable,
     bodyChildren,
+    isReactive ? [listSource] : [],
     span,
   )
 }

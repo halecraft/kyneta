@@ -38,11 +38,10 @@ export type IRNodeKind =
   | "builder"
   | "element"
   | "content"
-  | "list-region"
+  | "loop"
   | "conditional-region"
   | "binding"
   | "statement"
-  | "static-loop"
   | "static-conditional"
 
 /**
@@ -250,19 +249,29 @@ export interface ElementNode extends IRNodeBase {
 // =============================================================================
 
 /**
- * A list region from a `for..of` loop over a Loro list.
+ * A loop node — unified representation for both render-time and reactive loops.
+ *
+ * Replaces the former `StaticLoopNode` (render-time) and `ListRegionNode` (reactive).
+ * The `iterableBindingTime` field determines codegen strategy:
+ * - `"render"`: inline `for...of` loop, runs once at render time
+ * - `"reactive"`: `__listRegion` call, delta-driven updates
  *
  * ```typescript
- * for (const item of doc.items) {
- *   li(item.text)
- * }
+ * // Render-time loop (iterableBindingTime: "render")
+ * for (const x of [1, 2, 3]) { li(x) }
+ *
+ * // Reactive loop (iterableBindingTime: "reactive")
+ * for (const item of doc.items) { li(item.text) }
  * ```
  */
-export interface ListRegionNode extends IRNodeBase {
-  kind: "list-region"
+export interface LoopNode extends IRNodeBase {
+  kind: "loop"
 
-  /** The source of the list ref being iterated (e.g., "doc.items") */
-  listSource: string
+  /** The iterable expression source (e.g., "doc.items", "[1, 2, 3]") */
+  iterableSource: string
+
+  /** Binding time of the iterable — determines codegen strategy */
+  iterableBindingTime: BindingTime
 
   /** The loop variable name (e.g., "item") */
   itemVariable: string
@@ -274,7 +283,8 @@ export interface ListRegionNode extends IRNodeBase {
   body: ChildNode[]
 
   /**
-   * Whether items in this list have reactive content that depends on item properties.
+   * Whether items have reactive content that depends on item properties.
+   * Computed via computeHasReactiveItems(body) at IR creation time.
    * If true, each item needs its own subscriptions.
    */
   hasReactiveItems: boolean
@@ -284,6 +294,12 @@ export interface ListRegionNode extends IRNodeBase {
    * Determines whether create handler returns single node or fragment.
    */
   bodySlotKind: SlotKind
+
+  /**
+   * For reactive iterables, the subscription dependencies.
+   * Empty array for render-time loops.
+   */
+  dependencies: string[]
 }
 
 /**
@@ -385,34 +401,6 @@ export interface StatementNode extends IRNodeBase {
 }
 
 /**
- * A static (non-reactive) for...of loop.
- *
- * Unlike ListRegionNode which is for delta-driven reactive lists,
- * this represents a loop that runs once at render time.
- *
- * ```typescript
- * for (const x of [1, 2, 3]) {
- *   li(x)
- * }
- * ```
- */
-export interface StaticLoopNode extends IRNodeBase {
-  kind: "static-loop"
-
-  /** The iterable expression source (e.g., "[1, 2, 3]", "someArray") */
-  iterableSource: string
-
-  /** The loop variable name */
-  itemVariable: string
-
-  /** Optional index variable name */
-  indexVariable: string | null
-
-  /** The analyzed body — elements are still discovered */
-  body: ChildNode[]
-}
-
-/**
  * A static (non-reactive) conditional.
  *
  * Unlike ConditionalRegionNode which subscribes to reactive conditions,
@@ -447,11 +435,10 @@ export interface StaticConditionalNode extends IRNodeBase {
 export type ChildNode =
   | ElementNode
   | ContentValue
-  | ListRegionNode
+  | LoopNode
   | ConditionalRegionNode
   | BindingNode
   | StatementNode
-  | StaticLoopNode
   | StaticConditionalNode
 
 // =============================================================================
@@ -523,10 +510,10 @@ export function isLiteralContent(node: ChildNode): node is ContentValue {
 }
 
 /**
- * Check if a node is a list region.
+ * Check if a node is a loop (any binding time).
  */
-export function isListRegionNode(node: ChildNode): node is ListRegionNode {
-  return node.kind === "list-region"
+export function isLoopNode(node: ChildNode): node is LoopNode {
+  return node.kind === "loop"
 }
 
 /**
@@ -550,13 +537,6 @@ export function isBindingNode(node: ChildNode): node is BindingNode {
  */
 export function isStatementNode(node: ChildNode): node is StatementNode {
   return node.kind === "statement"
-}
-
-/**
- * Check if a node is a static loop.
- */
-export function isStaticLoopNode(node: ChildNode): node is StaticLoopNode {
-  return node.kind === "static-loop"
 }
 
 /**
@@ -625,7 +605,7 @@ export function computeHasReactiveItems(body: ChildNode[]): boolean {
     child =>
       isReactiveContent(child) ||
       (child.kind === "element" && child.isReactive) ||
-      child.kind === "list-region" ||
+      (child.kind === "loop" && child.iterableBindingTime === "reactive") ||
       child.kind === "conditional-region",
   )
 }
@@ -895,7 +875,15 @@ export function mergeNode(
     }
   }
 
-  // Regions, loops, conditionals - not mergeable
+  // Loops - not mergeable (explicit case for future structured reasoning)
+  if (a.kind === "loop" && b.kind === "loop") {
+    return {
+      success: false,
+      reason: { kind: "region-not-mergeable" },
+    }
+  }
+
+  // Regions, conditionals - not mergeable
   return {
     success: false,
     reason: { kind: "region-not-mergeable" },
@@ -1052,7 +1040,8 @@ export function createElement(
     children.some(child => child.kind === "element" && child.isReactive) ||
     children.some(
       child =>
-        child.kind === "list-region" || child.kind === "conditional-region",
+        (child.kind === "loop" && child.iterableBindingTime === "reactive") ||
+        child.kind === "conditional-region",
     )
 
   return {
@@ -1082,45 +1071,27 @@ export function createStatement(
 }
 
 /**
- * Create a list region node.
+ * Create a loop node (unified for render-time and reactive loops).
  */
-export function createListRegion(
-  listSource: string,
-  itemVariable: string,
-  indexVariable: string | null,
-  body: ChildNode[],
-  span: SourceSpan,
-): ListRegionNode {
-  const hasReactiveItems = computeHasReactiveItems(body)
-
-  return {
-    kind: "list-region",
-    listSource,
-    itemVariable,
-    indexVariable,
-    body,
-    hasReactiveItems,
-    bodySlotKind: computeSlotKind(body),
-    span,
-  }
-}
-
-/**
- * Create a static loop node.
- */
-export function createStaticLoop(
+export function createLoop(
   iterableSource: string,
+  iterableBindingTime: BindingTime,
   itemVariable: string,
   indexVariable: string | null,
   body: ChildNode[],
+  dependencies: string[],
   span: SourceSpan,
-): StaticLoopNode {
+): LoopNode {
   return {
-    kind: "static-loop",
+    kind: "loop",
     iterableSource,
+    iterableBindingTime,
     itemVariable,
     indexVariable,
     body,
+    hasReactiveItems: computeHasReactiveItems(body),
+    bodySlotKind: computeSlotKind(body),
+    dependencies,
     span,
   }
 }
@@ -1203,10 +1174,10 @@ export function createBuilder(
           }
         }
         collectDependencies(node.children)
-      } else if (node.kind === "list-region") {
-        allDependencies.add(node.listSource)
-        collectDependencies(node.body)
-      } else if (node.kind === "static-loop") {
+      } else if (node.kind === "loop") {
+        if (node.iterableBindingTime === "reactive") {
+          allDependencies.add(node.iterableSource)
+        }
         collectDependencies(node.body)
       } else if (node.kind === "static-conditional") {
         collectDependencies(node.thenBody)

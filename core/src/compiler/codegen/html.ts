@@ -21,9 +21,8 @@ import type {
   ConditionalRegionNode,
   ContentNode,
   ElementNode,
-  ListRegionNode,
+  LoopNode,
   StaticConditionalNode,
-  StaticLoopNode,
 } from "../ir.js"
 
 // =============================================================================
@@ -297,8 +296,11 @@ function emitBodyChildren(
   for (const child of body) {
     if (child.kind === "statement") {
       lines.push(`${indent}${child.source}`)
-    } else if (child.kind === "static-loop") {
-      lines.push(`${indent}${generateStaticLoopBody(child, state)}`)
+    } else if (
+      child.kind === "loop" &&
+      child.iterableBindingTime !== "reactive"
+    ) {
+      lines.push(`${indent}${generateLoopBody(child, state)}`)
     } else if (child.kind === "static-conditional") {
       lines.push(`${indent}${generateStaticConditionalBody(child, state)}`)
     } else {
@@ -343,8 +345,11 @@ function generateChild(node: ChildNode, state: CodegenState): string {
       // Render-time and reactive - use template literal interpolation
       return `\${${escapeExpr(`String(${node.source})`)}}`
 
-    case "list-region":
-      return generateListRegion(node, state)
+    case "loop":
+      if (node.iterableBindingTime === "reactive") {
+        return generateReactiveLoop(node, state)
+      }
+      return generateLoopInline(node, state)
 
     case "conditional-region":
       return generateConditionalRegion(node, state)
@@ -358,10 +363,6 @@ function generateChild(node: ChildNode, state: CodegenState): string {
       // When called from element children (not body context), we can't emit statements
       // This should not happen in well-formed IR, but return empty for safety
       return ""
-
-    case "static-loop":
-      // Static loops generate a map expression for HTML output
-      return generateStaticLoopInline(node, state)
 
     case "static-conditional":
       // Static conditionals generate an IIFE with if statement
@@ -377,12 +378,12 @@ function generateChild(node: ChildNode, state: CodegenState): string {
 // =============================================================================
 
 /**
- * Generate HTML for a list region.
+ * Generate HTML for a reactive loop (list region).
  *
  * Uses block body with accumulation pattern for consistency and to support
  * statements in the loop body.
  */
-function generateListRegion(node: ListRegionNode, state: CodegenState): string {
+function generateReactiveLoop(node: LoopNode, state: CodegenState): string {
   const parts: string[] = []
 
   // Hydration marker (start)
@@ -399,10 +400,10 @@ function generateListRegion(node: ListRegionNode, state: CodegenState): string {
   const bodyCode = generateBodyHtml(node.body, state)
 
   // Wrap in map expression with block body
-  // Use spread syntax [...listSource] to iterate, which returns refs (PlainValueRef)
+  // Use spread syntax [...iterableSource] to iterate, which returns refs (PlainValueRef)
   // for value shapes, enabling two-way binding patterns like itemRef.get()/set()
   parts.push(
-    `\${[...${node.listSource}].map((${itemVar}, ${indexVar}) => { ${bodyCode} }).join("")}`,
+    `\${[...${node.iterableSource}].map((${itemVar}, ${indexVar}) => { ${bodyCode} }).join("")}`,
   )
 
   // Hydration marker (end)
@@ -478,18 +479,15 @@ function generateConditionalRegion(
 }
 
 // =============================================================================
-// Static Loop Generation
+// Render-Time Loop Generation
 // =============================================================================
 
 /**
- * Generate code for a static loop body (used inside generateBodyHtml).
+ * Generate code for a render-time loop body (used inside generateBodyHtml).
  *
  * Produces a for...of loop that accumulates HTML into the _html variable.
  */
-function generateStaticLoopBody(
-  node: StaticLoopNode,
-  state: CodegenState,
-): string {
+function generateLoopBody(node: LoopNode, state: CodegenState): string {
   const loopVar = node.indexVariable
     ? `[${node.indexVariable}, ${node.itemVariable}]`
     : node.itemVariable
@@ -503,14 +501,11 @@ function generateStaticLoopBody(
 }
 
 /**
- * Generate code for a static loop inline (used in template literal context).
+ * Generate code for a render-time loop inline (used in template literal context).
  *
  * Produces a .map() expression that returns HTML strings.
  */
-function generateStaticLoopInline(
-  node: StaticLoopNode,
-  state: CodegenState,
-): string {
+function generateLoopInline(node: LoopNode, state: CodegenState): string {
   const loopVar = node.indexVariable
     ? `[${node.indexVariable}, ${node.itemVariable}]`
     : node.itemVariable

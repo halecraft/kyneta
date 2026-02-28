@@ -12,12 +12,11 @@ import {
   createConditionalRegion,
   createContent,
   createElement,
-  createListRegion,
   createLiteral,
+  createLoop,
   createSpan,
   createStatement,
   createStaticConditional,
-  createStaticLoop,
 } from "../ir.js"
 import { generateHTML } from "./html.js"
 
@@ -83,14 +82,16 @@ describe("generateHTML - statements", () => {
       [createLiteral("item", span(4, 6, 4, 12))],
       span(4, 4, 4, 14),
     )
-    const listRegion = createListRegion(
+    const loop = createLoop(
       "items",
+      "reactive",
       "itemRef",
       null,
       [stmt, liElement],
+      ["items"],
       span(2, 2, 5, 3),
     )
-    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 6, 1))
+    const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))
 
     const code = generateHTML(builder)
 
@@ -145,14 +146,16 @@ describe("generateHTML - statements", () => {
       span(4, 4, 4, 14),
     )
     const stmt2 = createStatement('console.log("after")', span(5, 6, 5, 26))
-    const listRegion = createListRegion(
+    const loop = createLoop(
       "items",
+      "reactive",
       "item",
       null,
       [stmt1, liElement, stmt2],
+      ["items"],
       span(2, 2, 6, 3),
     )
-    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 7, 1))
+    const builder = createBuilder("ul", [], [], [loop], span(1, 0, 7, 1))
 
     const code = generateHTML(builder)
 
@@ -183,14 +186,16 @@ describe("generateHTML - static loops", () => {
       [createLiteral("x", span(3, 6, 3, 9))],
       span(3, 4, 3, 11),
     )
-    const staticLoop = createStaticLoop(
+    const renderLoop = createLoop(
       "[1, 2, 3]",
+      "render",
       "x",
       null,
       [liElement],
+      [],
       span(2, 2, 4, 3),
     )
-    const builder = createBuilder("ul", [], [], [staticLoop], span(1, 0, 5, 1))
+    const builder = createBuilder("ul", [], [], [renderLoop], span(1, 0, 5, 1))
 
     const code = generateHTML(builder)
 
@@ -208,14 +213,16 @@ describe("generateHTML - static loops", () => {
       [createLiteral("item", span(3, 6, 3, 12))],
       span(3, 4, 3, 14),
     )
-    const staticLoop = createStaticLoop(
+    const renderLoop = createLoop(
       "items.entries()",
+      "render",
       "item",
       "i",
       [liElement],
+      [],
       span(2, 2, 4, 3),
     )
-    const builder = createBuilder("ul", [], [], [staticLoop], span(1, 0, 5, 1))
+    const builder = createBuilder("ul", [], [], [renderLoop], span(1, 0, 5, 1))
 
     const code = generateHTML(builder)
 
@@ -233,14 +240,16 @@ describe("generateHTML - static loops", () => {
       [createLiteral("doubled", span(4, 6, 4, 15))],
       span(4, 4, 4, 17),
     )
-    const staticLoop = createStaticLoop(
+    const renderLoop = createLoop(
       "[1, 2, 3]",
+      "render",
       "x",
       null,
       [stmt, liElement],
+      [],
       span(2, 2, 5, 3),
     )
-    const builder = createBuilder("ul", [], [], [staticLoop], span(1, 0, 6, 1))
+    const builder = createBuilder("ul", [], [], [renderLoop], span(1, 0, 6, 1))
 
     const code = generateHTML(builder)
 
@@ -419,14 +428,16 @@ describe("generateHTML - code validity", () => {
       [createLiteral("item", span(4, 6, 4, 12))],
       span(4, 4, 4, 14),
     )
-    const listRegion = createListRegion(
+    const loop = createLoop(
       "items",
+      "reactive",
       "item",
       null,
       [stmt, liElement],
+      ["items"],
       span(2, 2, 5, 3),
     )
-    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 6, 1))
+    const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))
 
     const code = generateHTML(builder)
 

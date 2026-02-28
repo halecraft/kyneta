@@ -190,8 +190,12 @@ export function collectRequiredImports(ir: BuilderNode[]): Set<string> {
 
   function collectFromChildren(children: ChildNode[]): void {
     for (const child of children) {
-      if (child.kind === "list-region") {
-        imports.add("__listRegion")
+      if (child.kind === "loop") {
+        if (child.iterableBindingTime === "reactive") {
+          imports.add("__listRegion")
+        }
+        // Always recurse into loop body (fixes latent bug where
+        // static-loop bodies were not recursed for imports)
         collectFromChildren(child.body)
       } else if (child.kind === "conditional-region") {
         if (child.subscriptionTarget) {

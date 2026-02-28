@@ -7,7 +7,7 @@
 
 import { Project } from "ts-morph"
 import { describe, expect, it } from "vitest"
-import { createBuilder, createListRegion, createSpan } from "./ir.js"
+import { createBuilder, createLoop, createSpan } from "./ir.js"
 import {
   collectRequiredImports,
   hasBuilderCalls,
@@ -377,9 +377,17 @@ describe("collectRequiredImports", () => {
     expect(imports.has("__subscribeWithValue")).toBe(true)
   })
 
-  it("should include __listRegion for list regions", () => {
-    const listRegion = createListRegion("doc.items", "item", null, [], span)
-    const builder = createBuilder("div", [], [], [listRegion], span)
+  it("should include __listRegion for reactive loops", () => {
+    const loop = createLoop(
+      "doc.items",
+      "reactive",
+      "item",
+      null,
+      [],
+      ["doc.items"],
+      span,
+    )
+    const builder = createBuilder("div", [], [], [loop], span)
 
     const imports = collectRequiredImports([builder])
 
@@ -522,7 +530,17 @@ describe("collectRequiredImports", () => {
       "div",
       [],
       [],
-      [createListRegion("doc.items", "item", null, [], span)],
+      [
+        createLoop(
+          "doc.items",
+          "reactive",
+          "item",
+          null,
+          [],
+          ["doc.items"],
+          span,
+        ),
+      ],
       span,
     )
     const builder2 = createBuilder(
@@ -941,7 +959,7 @@ describe("reactive type resolution from @loro-extended/change", () => {
     expect(result.code).toContain("__listRegion")
     expect(result.ir.length).toBe(1)
     expect(result.ir[0].children.length).toBe(1)
-    expect(result.ir[0].children[0].kind).toBe("list-region")
+    expect(result.ir[0].children[0].kind).toBe("loop")
   })
 
   it("should resolve TextRef type from @loro-extended/change import", () => {
@@ -1063,7 +1081,7 @@ describe("reactive type resolution from @loro-extended/change", () => {
     const ulElement = divChildren[0]
     if (ulElement.kind === "element") {
       expect(ulElement.children.length).toBe(1)
-      expect(ulElement.children[0].kind).toBe("list-region")
+      expect(ulElement.children[0].kind).toBe("loop")
     }
   })
 })

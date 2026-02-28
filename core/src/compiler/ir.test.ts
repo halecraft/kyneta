@@ -15,12 +15,11 @@ import {
   createConditionalRegion,
   createContent,
   createElement,
-  createListRegion,
   createLiteral,
+  createLoop,
   createSpan,
   createStatement,
   createStaticConditional,
-  createStaticLoop,
 } from "./ir.js"
 
 // =============================================================================
@@ -81,7 +80,7 @@ describe("createBuilder - dependency collection", () => {
       expect(builder.isReactive).toBe(true)
     })
 
-    it("collects from list region listSource", () => {
+    it("collects from reactive loop iterableSource", () => {
       const li = createElement(
         "li",
         [],
@@ -90,19 +89,21 @@ describe("createBuilder - dependency collection", () => {
         [createContent("item.text", "render", [], span())],
         span(),
       )
-      const listRegion = createListRegion(
+      const loop = createLoop(
         "doc.items",
+        "reactive",
         "item",
         null,
         [li],
+        ["doc.items"],
         span(),
       )
-      const builder = createBuilder("ul", [], [], [listRegion], span())
+      const builder = createBuilder("ul", [], [], [loop], span())
 
       expect(builder.allDependencies).toContain("doc.items")
     })
 
-    it("collects from list region body (nested reactive content)", () => {
+    it("collects from reactive loop body (nested reactive content)", () => {
       // List where each item has reactive content
       const reactiveExpr = createContent(
         "item.count.get()",
@@ -111,14 +112,16 @@ describe("createBuilder - dependency collection", () => {
         span(),
       )
       const li = createElement("li", [], [], [], [reactiveExpr], span())
-      const listRegion = createListRegion(
+      const loop = createLoop(
         "doc.items",
+        "reactive",
         "item",
         null,
         [li],
+        ["doc.items"],
         span(),
       )
-      const builder = createBuilder("ul", [], [], [listRegion], span())
+      const builder = createBuilder("ul", [], [], [loop], span())
 
       expect(builder.allDependencies).toContain("doc.items")
       expect(builder.allDependencies).toContain("item.count")
@@ -320,8 +323,16 @@ describe("createBuilder - dependency collection", () => {
         [createContent("item.text", "reactive", ["item.text"], span())],
         span(),
       )
-      const listRegion = createListRegion("items", "item", null, [li], span())
-      const ul = createElement("ul", [], [], [], [listRegion], span())
+      const loop = createLoop(
+        "items",
+        "reactive",
+        "item",
+        null,
+        [li],
+        ["items"],
+        span(),
+      )
+      const ul = createElement("ul", [], [], [], [loop], span())
 
       const emptyP = createElement(
         "p",
@@ -436,7 +447,7 @@ describe("computeHasReactiveItems", () => {
     expect(computeHasReactiveItems(body)).toBe(true)
   })
 
-  it("returns true when body contains a list region", () => {
+  it("returns true when body contains a reactive loop", () => {
     const li = createElement(
       "li",
       [],
@@ -445,8 +456,16 @@ describe("computeHasReactiveItems", () => {
       [createLiteral("x", span())],
       span(),
     )
-    const listRegion = createListRegion("items", "item", null, [li], span())
-    expect(computeHasReactiveItems([listRegion])).toBe(true)
+    const loop = createLoop(
+      "items",
+      "reactive",
+      "item",
+      null,
+      [li],
+      ["items"],
+      span(),
+    )
+    expect(computeHasReactiveItems([loop])).toBe(true)
   })
 
   it("returns true when body contains a conditional region", () => {
@@ -468,12 +487,20 @@ describe("computeHasReactiveItems", () => {
     expect(computeHasReactiveItems([condRegion])).toBe(true)
   })
 
-  it("returns false for static loop (shallow — does not recurse)", () => {
+  it("returns false for render-time loop (shallow — does not recurse)", () => {
     const reactiveChild = createContent("x.get()", "reactive", ["x"], span())
     const li = createElement("li", [], [], [], [reactiveChild], span())
-    const staticLoop = createStaticLoop("[1, 2, 3]", "x", null, [li], span())
-    // Shallow check: static-loop is not itself reactive at this level
-    expect(computeHasReactiveItems([staticLoop])).toBe(false)
+    const renderLoop = createLoop(
+      "[1, 2, 3]",
+      "render",
+      "x",
+      null,
+      [li],
+      [],
+      span(),
+    )
+    // Shallow check: render-time loop is not itself reactive at this level
+    expect(computeHasReactiveItems([renderLoop])).toBe(false)
   })
 
   it("returns false for static conditional (shallow — does not recurse)", () => {

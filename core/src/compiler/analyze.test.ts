@@ -791,11 +791,12 @@ describe("analyzeBuilder", () => {
     const builder = analyzeBuilder(ulCall)
     expect(builder).not.toBeNull()
     expect(builder?.children).toHaveLength(1)
-    expect(builder?.children[0].kind).toBe("list-region")
+    expect(builder?.children[0].kind).toBe("loop")
 
-    if (builder?.children[0].kind === "list-region") {
+    if (builder?.children[0].kind === "loop") {
       expect(builder.children[0].itemVariable).toBe("item")
-      expect(builder.children[0].listSource).toBe("items")
+      expect(builder.children[0].iterableSource).toBe("items")
+      expect(builder.children[0].iterableBindingTime).toBe("reactive")
     }
   })
 
@@ -985,10 +986,11 @@ describe("analyzeStatement - arbitrary statements", () => {
 
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(1)
-    expect(builder?.children[0].kind).toBe("list-region")
+    expect(builder?.children[0].kind).toBe("loop")
 
-    if (builder?.children[0].kind === "list-region") {
+    if (builder?.children[0].kind === "loop") {
       const listRegion = builder.children[0]
+      expect(listRegion.iterableBindingTime).toBe("reactive")
       expect(listRegion.body.length).toBe(2)
 
       // First should be statement
@@ -1128,10 +1130,11 @@ describe("analyzeStatement - arbitrary statements", () => {
 
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(1)
-    expect(builder?.children[0].kind).toBe("static-loop")
+    expect(builder?.children[0].kind).toBe("loop")
 
-    if (builder?.children[0].kind === "static-loop") {
+    if (builder?.children[0].kind === "loop") {
       const staticLoop = builder.children[0]
+      expect(staticLoop.iterableBindingTime).toBe("render")
       expect(staticLoop.iterableSource).toBe("[1, 2, 3]")
       expect(staticLoop.itemVariable).toBe("x")
       expect(staticLoop.body.length).toBe(1)
@@ -1303,7 +1306,7 @@ describe("integration: complex builder analysis", () => {
       const ulElement = builder.children[1]
       expect(ulElement.tag).toBe("ul")
       expect(ulElement.children).toHaveLength(1)
-      expect(ulElement.children[0].kind).toBe("list-region")
+      expect(ulElement.children[0].kind).toBe("loop")
     }
   })
 

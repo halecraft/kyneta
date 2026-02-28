@@ -219,25 +219,25 @@ type IRNodeKind =
 - ✅ Task -1.6: Add baseline tests for static else-if chains in `analyze.test.ts`, `dom.test.ts`, and `html.test.ts`. Currently no tests exercise `if/else-if/else` where all conditions are render-time. This produces nested `StaticConditionalNode` in `elseBody` today — captured that behavior before unification changes it to flat branches. Also added `computeHasReactiveItems` unit tests (12 cases) in `ir.test.ts`.
 - ✅ Task -1.7: Verify all tests pass and build succeeds (593 tests, up from 578)
 
-### Phase 0: Unify Loops — LoopNode 🔴
+### Phase 0: Unify Loops — LoopNode ✅
 
 **Goal**: Replace `StaticLoopNode` and `ListRegionNode` with a single `LoopNode`.
 
-- 🔴 Task 0.1: Define `LoopNode` interface in `ir.ts` with `kind: "loop"`, `iterableSource`, `iterableBindingTime`, `itemVariable`, `indexVariable`, `body`, `hasReactiveItems`, `bodySlotKind`, `dependencies`
-- 🔴 Task 0.2: Replace `createStaticLoop` and `createListRegion` with `createLoop(iterableSource, iterableBindingTime, itemVariable, indexVariable, body, dependencies, span)` — factory calls `computeHasReactiveItems(body)` and `computeSlotKind(body)` always (not just for reactive)
-- 🔴 Task 0.3: Update `IRNodeKind` — remove `"list-region"` and `"static-loop"`, add `"loop"`
-- 🔴 Task 0.4: Remove `StaticLoopNode` and `ListRegionNode` interfaces
-- 🔴 Task 0.5: Update `ChildNode` union — replace `StaticLoopNode | ListRegionNode` with `LoopNode`
-- 🔴 Task 0.6: Update type guards — remove `isStaticLoopNode` and `isListRegionNode`, add `isLoopNode`
-- 🔴 Task 0.7: Update `analyzeForOfStatement` in `analyze.ts` — always return `createLoop(...)`, passing `"render"` or `"reactive"` based on `expressionIsReactive`
-- 🔴 Task 0.8: Update `generateChild` in `codegen/dom.ts` — replace `case "list-region"` and `case "static-loop"` with `case "loop"` that dispatches on `node.iterableBindingTime`
-- 🔴 Task 0.9: Update `generateChild` in `codegen/html.ts` — replace `case "list-region"` and `case "static-loop"` with `case "loop"`. Update `emitBodyChildren` (from Phase -1) to handle unified `"loop"` kind.
-- 🔴 Task 0.10: Update `collectDependencies` in `createBuilder` — replace separate `list-region` and `static-loop` branches with single `loop` branch
-- 🔴 Task 0.11: Update `collectRequiredImports` in `transform.ts` — `case "loop"`: add `__listRegion` when `iterableBindingTime === "reactive"`, and always recurse into `node.body` (fixes latent bug where static-loop bodies were not recursed)
-- 🔴 Task 0.12: Update `mergeNode` in tree merge — replace `region-not-mergeable` fallthrough with explicit `case "loop"` (still returns not-mergeable for now, but with structured reason)
-- 🔴 Task 0.13: Update `compiler/index.ts` re-exports — replace `ListRegionNode` → `LoopNode`, `isListRegionNode` → `isLoopNode`, `createListRegion` → `createLoop`. (Note: `StaticLoopNode`, `isStaticLoopNode`, `createStaticLoop` were never exported from `index.ts`, so no removal needed for those.)
-- 🔴 Task 0.14: Update all tests in `ir.test.ts`, `analyze.test.ts`, `dom.test.ts`, `html.test.ts`, `integration.test.ts`, `transform.test.ts`, `tree-merge.test.ts`
-- 🔴 Task 0.15: Verify all tests pass and build succeeds
+- ✅ Task 0.1: Define `LoopNode` interface in `ir.ts` with `kind: "loop"`, `iterableSource`, `iterableBindingTime`, `itemVariable`, `indexVariable`, `body`, `hasReactiveItems`, `bodySlotKind`, `dependencies`
+- ✅ Task 0.2: Replace `createStaticLoop` and `createListRegion` with `createLoop(iterableSource, iterableBindingTime, itemVariable, indexVariable, body, dependencies, span)` — factory calls `computeHasReactiveItems(body)` and `computeSlotKind(body)` always (not just for reactive)
+- ✅ Task 0.3: Update `IRNodeKind` — remove `"list-region"` and `"static-loop"`, add `"loop"`
+- ✅ Task 0.4: Remove `StaticLoopNode` and `ListRegionNode` interfaces
+- ✅ Task 0.5: Update `ChildNode` union — replace `StaticLoopNode | ListRegionNode` with `LoopNode`
+- ✅ Task 0.6: Update type guards — remove `isStaticLoopNode` and `isListRegionNode`, add `isLoopNode`
+- ✅ Task 0.7: Update `analyzeForOfStatement` in `analyze.ts` — always return `createLoop(...)`, passing `"render"` or `"reactive"` based on `expressionIsReactive`
+- ✅ Task 0.8: Update `generateChild` in `codegen/dom.ts` — replace `case "list-region"` and `case "static-loop"` with `case "loop"` that dispatches on `node.iterableBindingTime`. Renamed `generateListRegion` → `generateReactiveLoop`, `generateStaticLoop` → `generateRenderLoop`.
+- ✅ Task 0.9: Update `generateChild` in `codegen/html.ts` — replace `case "list-region"` and `case "static-loop"` with `case "loop"`. Update `emitBodyChildren` (from Phase -1) to handle unified `"loop"` kind. Renamed `generateListRegion` → `generateReactiveLoop`, `generateStaticLoopBody` → `generateLoopBody`, `generateStaticLoopInline` → `generateLoopInline`.
+- ✅ Task 0.10: Update `collectDependencies` in `createBuilder` — replace separate `list-region` and `static-loop` branches with single `loop` branch that checks `iterableBindingTime === "reactive"` before adding iterable as dependency
+- ✅ Task 0.11: Update `collectRequiredImports` in `transform.ts` — `case "loop"`: add `__listRegion` when `iterableBindingTime === "reactive"`, and always recurse into `node.body` (fixes latent bug where static-loop bodies were not recursed)
+- ✅ Task 0.12: Update `mergeNode` in tree merge — added explicit `case "loop"` (still returns not-mergeable, but with structured reason)
+- ✅ Task 0.13: Update `compiler/index.ts` re-exports — replaced `ListRegionNode` → `LoopNode`, `isListRegionNode` → `isLoopNode`, `createListRegion` → `createLoop`. (Note: `StaticLoopNode`, `isStaticLoopNode`, `createStaticLoop` were never exported from `index.ts`, so no removal needed for those.)
+- ✅ Task 0.14: Update all tests in `ir.test.ts`, `analyze.test.ts`, `dom.test.ts`, `html.test.ts`, `integration.test.ts`, `transform.test.ts`. Also fixed stale `"list-region"` reference in `createElement`'s `isReactive` computation.
+- ✅ Task 0.15: All 593 tests pass, no new TypeScript errors in source files (pre-existing `slotKind` missing issues in test files remain — addressed in Phase 1 Task 1.16)
 
 ### Phase 1: Unify Conditionals — ConditionalNode 🔴
 
@@ -503,3 +503,27 @@ The test at `dom.test.ts` L602–607 constructs a `ConditionalBranch` object lit
 ### index.ts export surface is asymmetric
 
 `compiler/index.ts` exports the reactive control flow types (`ListRegionNode`, `ConditionalRegionNode`, `isListRegionNode`, `isConditionalRegionNode`, `createListRegion`, `createConditionalRegion`) but does NOT export the static counterparts (`StaticLoopNode`, `StaticConditionalNode`, `isStaticLoopNode`, `isStaticConditionalNode`, `createStaticLoop`, `createStaticConditional`). This simplifies the Phase 0 and Phase 1 index.ts tasks — we only need to rename/replace the reactive exports, not add or remove static ones.
+
+### `createElement` has a hidden dependency on control flow kind strings
+
+During Phase 0, after replacing `"list-region"` and `"static-loop"` with `"loop"` everywhere obvious, the TypeScript compiler caught a stale `child.kind === "list-region"` inside `createElement`'s `isReactive` computation (ir.ts ~L1040). This wasn't in any `switch` statement or `generateChild` — it was buried in a `children.some(...)` predicate. The lesson: **when replacing a kind discriminant, grep for the old string across the entire file, not just the switch/case blocks.** TypeScript's type narrowing will catch these as unreachable comparisons, but only if you have `strict` mode on. The diagnostic message ("This comparison appears to be unintentional because the types ... have no overlap") is the telltale.
+
+### `computeHasReactiveItems` also needed updating for the new kind
+
+After unifying loops, the shallow reactivity check in `computeHasReactiveItems` needed to change from `child.kind === "list-region"` (always reactive by definition) to `child.kind === "loop" && child.iterableBindingTime === "reactive"` (reactive only when the iterable is reactive). A render-time loop is not reactive at the current level — it doesn't introduce per-item subscriptions. This is a subtle but important semantic: the unified type means you must now **explicitly check the binding time dimension** in places that previously relied on the kind itself being a proxy for reactivity.
+
+### The `emitBodyChildren` extraction paid for itself immediately
+
+Phase -1's `emitBodyChildren` helper extraction meant that Phase 0's html.ts changes were trivial — just updating the kind check from `child.kind === "static-loop"` to `child.kind === "loop" && child.iterableBindingTime !== "reactive"` in one place, rather than doing the same edit 4 times across copy-pasted blocks. The "refactor to make the change easy, then make the easy change" principle proved out concretely: the Phase -1 diff in html.ts was ~60 lines of structural refactoring, while the Phase 0 diff in html.ts was ~30 lines of clean kind-tag updates.
+
+### Factory signature change is the hardest part of test updates
+
+The most tedious part of Phase 0 was updating test files, not source files. Every test that called `createListRegion("items", "item", null, [...], span)` or `createStaticLoop("[1,2,3]", "x", null, [...], span)` needed to change to `createLoop("items", "reactive", "item", null, [...], ["items"], span)` — adding the `iterableBindingTime` and `dependencies` parameters. The source-side changes were clean and mechanical. The test-side changes were voluminous but equally mechanical. Consider: **if your factory function gains new required parameters, count the test call sites before estimating effort.**
+
+### Pre-existing type errors in tests surface during unification
+
+The `ConditionalBranch` object literals in several test files are missing the required `slotKind` field. These are pre-existing TypeScript errors that pass at runtime because JS doesn't enforce interface shapes. During the unification, the diagnostics tool reports them alongside real issues, creating noise. The fix is to use the `createConditionalBranch` factory (which computes `slotKind` via `computeSlotKind`) instead of hand-constructing the object. Planned for Phase 1 Task 1.16, but worth noting: **unification work will surface pre-existing type violations because you're touching every consumer of the changed types.**
+
+### analyzeForOfStatement simplification was dramatic
+
+The original `analyzeForOfStatement` had two separate return paths — one calling `createStaticLoop` and one calling `createListRegion` — each with different parameter shapes. After unification, it's a single `createLoop` call with `isReactive ? "reactive" : "render"` for the binding time and `isReactive ? [listSource] : []` for dependencies. The function went from 30 lines with two branches to 15 lines with one call. This is the payoff of binding-time parameterization: **the analysis code no longer needs to know about codegen differences.**

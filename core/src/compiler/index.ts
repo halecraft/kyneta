@@ -32,7 +32,7 @@ export type {
   EventHandlerNode,
   IRNodeBase,
   IRNodeKind,
-  ListRegionNode,
+  LoopNode,
   MergeFailureReason,
   MergeResult,
   SlotKind,
@@ -47,7 +47,7 @@ export {
   createContent,
   createElement,
   createLiteral,
-  createListRegion,
+  createLoop,
   createSpan,
   // Slot computation
   computeHasReactiveItems,
@@ -62,7 +62,7 @@ export {
   isContentNode,
   isElementNode,
   isLiteralContent,
-  isListRegionNode,
+  isLoopNode,
   isReactiveContent,
 } from "./ir.js"
 
