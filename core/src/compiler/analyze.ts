@@ -40,22 +40,20 @@ import type {
   ContentNode,
   ElementBinding,
   EventHandlerNode,
-  ExpressionNode,
   SourceSpan,
 } from "./ir.js"
 import {
   createBuilder,
   createConditionalBranch,
   createConditionalRegion,
+  createContent,
   createElement,
   createListRegion,
-  createReactiveExpression,
+  createLiteral,
   createSpan,
   createStatement,
   createStaticConditional,
-  createStaticExpression,
   createStaticLoop,
-  createTextNode,
 } from "./ir.js"
 
 // =============================================================================
@@ -447,28 +445,28 @@ export function analyzeExpression(expr: Expression): ContentNode {
   const span = getSpan(expr)
   const source = expr.getText()
 
-  // String literal -> text node
+  // String literal -> literal content
   if (expr.getKind() === SyntaxKind.StringLiteral) {
     // Strip quotes
     const value = source.slice(1, -1)
-    return createTextNode(value, span)
+    return createLiteral(value, span)
   }
 
-  // No substitution template literal -> text node
+  // No substitution template literal -> literal content
   if (expr.getKind() === SyntaxKind.NoSubstitutionTemplateLiteral) {
     // Strip backticks
     const value = source.slice(1, -1)
-    return createTextNode(value, span)
+    return createLiteral(value, span)
   }
 
   // Check if reactive
   if (expressionIsReactive(expr)) {
     const deps = extractDependencies(expr)
-    return createReactiveExpression(source, deps, span)
+    return createContent(source, "reactive", deps, span)
   }
 
-  // Static expression
-  return createStaticExpression(source, span)
+  // Render-time expression
+  return createContent(source, "render", [], span)
 }
 
 // =============================================================================
@@ -665,12 +663,12 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
 
   // Analyze the condition
   const condExpr = stmt.getExpression()
-  const condition = analyzeExpression(condExpr) as ExpressionNode
+  const condition = analyzeExpression(condExpr)
 
   // Extract subscription target
   let subscriptionTarget: string | null = null
   if (
-    condition.expressionKind === "reactive" &&
+    condition.bindingTime === "reactive" &&
     condition.dependencies.length > 0
   ) {
     subscriptionTarget = condition.dependencies[0]
@@ -712,7 +710,7 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
   }
 
   // Static conditional - runs once at render time
-  if (!subscriptionTarget && condition.expressionKind === "static") {
+  if (!subscriptionTarget && condition.bindingTime !== "reactive") {
     return createStaticConditional(condition.source, thenBody, elseBody, span)
   }
 

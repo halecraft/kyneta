@@ -37,8 +37,7 @@ export interface SourceSpan {
 export type IRNodeKind =
   | "builder"
   | "element"
-  | "text"
-  | "expression"
+  | "content"
   | "list-region"
   | "conditional-region"
   | "binding"
@@ -59,28 +58,38 @@ export interface IRNodeBase {
 // =============================================================================
 
 /**
- * Classification of expressions by reactivity.
+ * Binding time classification: when a value becomes known.
+ *
+ * This corresponds to partial evaluation's static/dynamic classification:
+ * - **literal**: Value known at compile time (string literals)
+ * - **render**: Value known at render time (static expressions)
+ * - **reactive**: Value varies at runtime (reactive expressions with dependencies)
  */
-export type ExpressionKind = "static" | "reactive"
+export type BindingTime = "literal" | "render" | "reactive"
 
 /**
- * A captured expression from the source code.
+ * A value at a content position (text, attribute value, etc).
  *
- * Expressions are either static (can be evaluated once) or reactive
- * (must be re-evaluated when dependencies change).
+ * Unifies the concept of "content" across all binding times. The `bindingTime`
+ * field determines when the value becomes known and how it should be generated.
+ *
+ * - **literal**: `source` is a JSON-encoded string literal (e.g., `"Hello"`)
+ * - **render**: `source` is a JavaScript expression evaluated once (e.g., `42`, `someVar`)
+ * - **reactive**: `source` is a JavaScript expression with reactive dependencies (e.g., `doc.count`)
  */
-export interface ExpressionNode extends IRNodeBase {
-  kind: "expression"
+export interface ContentValue extends IRNodeBase {
+  kind: "content"
 
-  /** The original source text of the expression */
+  /** The source text of the value (JSON string for literals, JS expression otherwise) */
   source: string
 
-  /** Whether this expression is static or reactive */
-  expressionKind: ExpressionKind
+  /** When this value becomes known */
+  bindingTime: BindingTime
 
   /**
-   * For reactive expressions, the refs that this expression depends on.
+   * For reactive content, the refs that this value depends on.
    * Each entry is the source text of the ref access (e.g., "doc.count", "item.text").
+   * Empty array for literal and render binding times.
    */
   dependencies: string[]
 }
@@ -90,19 +99,9 @@ export interface ExpressionNode extends IRNodeBase {
 // =============================================================================
 
 /**
- * Static text content (string literal).
+ * Content at any binding time (text, attribute values, etc).
  */
-export interface TextNode extends IRNodeBase {
-  kind: "text"
-
-  /** The text content */
-  value: string
-}
-
-/**
- * Dynamic content that may be static or reactive.
- */
-export type ContentNode = TextNode | ExpressionNode
+export type ContentNode = ContentValue
 
 // =============================================================================
 // Attribute Types
@@ -376,8 +375,7 @@ export interface StaticConditionalNode extends IRNodeBase {
  */
 export type ChildNode =
   | ElementNode
-  | TextNode
-  | ExpressionNode
+  | ContentValue
   | ListRegionNode
   | ConditionalRegionNode
   | BindingNode
@@ -440,17 +438,17 @@ export function isElementNode(node: ChildNode): node is ElementNode {
 }
 
 /**
- * Check if a node is a text node.
+ * Check if a node is content (any binding time).
  */
-export function isTextNode(node: ChildNode): node is TextNode {
-  return node.kind === "text"
+export function isContentNode(node: ChildNode): node is ContentValue {
+  return node.kind === "content"
 }
 
 /**
- * Check if a node is an expression.
+ * Check if a node is literal content (compile-time known).
  */
-export function isExpressionNode(node: ChildNode): node is ExpressionNode {
-  return node.kind === "expression"
+export function isLiteralContent(node: ChildNode): node is ContentValue {
+  return node.kind === "content" && node.bindingTime === "literal"
 }
 
 /**
@@ -500,17 +498,10 @@ export function isStaticConditionalNode(
 }
 
 /**
- * Check if an expression is reactive.
- */
-export function isReactiveExpression(node: ExpressionNode): boolean {
-  return node.expressionKind === "reactive"
-}
-
-/**
- * Check if content is reactive.
+ * Check if content is reactive (varies at runtime).
  */
 export function isReactiveContent(node: ContentNode): boolean {
-  return node.kind === "expression" && node.expressionKind === "reactive"
+  return node.bindingTime === "reactive"
 }
 
 // =============================================================================
@@ -530,43 +521,29 @@ export function createSpan(
 }
 
 /**
- * Create a text node.
+ * Create a content value with specified binding time.
  */
-export function createTextNode(value: string, span: SourceSpan): TextNode {
-  return { kind: "text", value, span }
-}
-
-/**
- * Create a static expression node.
- */
-export function createStaticExpression(
+export function createContent(
   source: string,
-  span: SourceSpan,
-): ExpressionNode {
-  return {
-    kind: "expression",
-    source,
-    expressionKind: "static",
-    dependencies: [],
-    span,
-  }
-}
-
-/**
- * Create a reactive expression node.
- */
-export function createReactiveExpression(
-  source: string,
+  bindingTime: BindingTime,
   dependencies: string[],
   span: SourceSpan,
-): ExpressionNode {
+): ContentValue {
   return {
-    kind: "expression",
+    kind: "content",
     source,
-    expressionKind: "reactive",
+    bindingTime,
     dependencies,
     span,
   }
+}
+
+/**
+ * Create literal content (compile-time string).
+ * Convenience wrapper that JSON-stringifies the value.
+ */
+export function createLiteral(value: string, span: SourceSpan): ContentValue {
+  return createContent(JSON.stringify(value), "literal", [], span)
 }
 
 /**
@@ -583,10 +560,7 @@ export function createElement(
   const isReactive =
     attributes.some(attr => isReactiveContent(attr.value)) ||
     bindings.length > 0 ||
-    children.some(
-      child =>
-        child.kind === "expression" && child.expressionKind === "reactive",
-    ) ||
+    children.some(child => isReactiveContent(child)) ||
     children.some(child => child.kind === "element" && child.isReactive) ||
     children.some(
       child =>
@@ -631,7 +605,7 @@ export function createListRegion(
 ): ListRegionNode {
   const hasReactiveItems = body.some(
     child =>
-      (child.kind === "expression" && child.expressionKind === "reactive") ||
+      isReactiveContent(child) ||
       (child.kind === "element" && child.isReactive) ||
       child.kind === "list-region" ||
       child.kind === "conditional-region",
@@ -732,16 +706,13 @@ export function createBuilder(
 
   function collectDependencies(nodes: ChildNode[]): void {
     for (const node of nodes) {
-      if (node.kind === "expression" && node.expressionKind === "reactive") {
+      if (isReactiveContent(node)) {
         for (const dep of node.dependencies) {
           allDependencies.add(dep)
         }
       } else if (node.kind === "element") {
         for (const attr of node.attributes) {
-          if (
-            attr.value.kind === "expression" &&
-            attr.value.expressionKind === "reactive"
-          ) {
+          if (isReactiveContent(attr.value)) {
             for (const dep of attr.value.dependencies) {
               allDependencies.add(dep)
             }
@@ -778,10 +749,7 @@ export function createBuilder(
 
   // Also collect from props
   for (const prop of props) {
-    if (
-      prop.value.kind === "expression" &&
-      prop.value.expressionKind === "reactive"
-    ) {
+    if (isReactiveContent(prop.value)) {
       for (const dep of prop.value.dependencies) {
         allDependencies.add(dep)
       }

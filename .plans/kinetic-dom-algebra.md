@@ -94,58 +94,70 @@ This plan implements **Levels 0–2**. Level 3 (partial hoisting) is deferred to
 
 ## Problem Statement
 
-1. **Compile-time knowledge is discarded**: `checkCanOptimizeDirectReturn` computes body cardinality (`single` vs `multi`) but uses it only for code shape selection. The runtime re-discovers cardinality by inspecting `node.nodeType` in `insertAndTrack`.
+**Foundation**: Kinetic already has binding-time analysis via the type system (`ExpressionKind = "static" | "reactive"`), slot abstraction (`InsertionResult`), and FC/IS region architecture. This plan builds on that foundation.
 
-2. **Content values have implicit binding times**: `TextNode` and `ExpressionNode` represent the same concept (a value at a content position) at different binding times, but the IR encodes this as two separate types. Every consumer — codegen, tree merge, reactive detection — must handle both types and their cross-products independently.
+**Remaining gaps**:
+
+1. **Content values have implicit binding times**: `TextNode` and `ExpressionNode` represent the same concept (a value at a content position) at different binding times, but the IR encodes this as two separate types. This creates parallel code paths throughout analysis, codegen, and makes tree merge logic complex (handling cross-product of type combinations).
+
+2. **Terminology obscures intent**: `InsertionResult` describes the mechanism (insertion), not the role (removable handle). The conceptual framework of "slots" is clearer and aligns with DOM literature.
 
 3. **Conditional branches always fully allocate/free**: Even when both branches of a conditional produce identical DOM structure, the runtime removes all content and creates it fresh on every swap. This is pure waste when only values differ.
 
-4. **No path toward structural optimization**: Without IR-level structural comparison and a compile-time-to-runtime annotation bridge, hoisting is impossible.
+4. **No tree merge algorithm**: Structurally identical conditional branches cannot be dissolved into the Applicative layer because no algorithm exists to detect structural equivalence and promote diverging values to reactive.
+
+5. **Compile-time body analysis not fully leveraged**: `checkCanOptimizeDirectReturn` computes body cardinality but this knowledge stays in codegen. The runtime re-discovers it by inspecting `node.nodeType`. A full `SlotKind` bridge would eliminate this duplication.
 
 ## Success Criteria
 
-1. `TextNode` and `ExpressionNode` are unified into `ContentValue` with explicit `bindingTime`
-2. The IR computes `SlotKind` for every region body and conditional branch at analysis time
-3. Codegen emits `SlotKind` as part of handler configuration
-4. Runtime uses `SlotKind` to select insertion strategy without `nodeType` inspection
-5. `InsertionResult` is renamed to `Slot` to reflect its true role
-6. Structurally identical conditional branches are dissolved into in-place updates via tree merge — no `__conditionalRegion` call emitted, no new IR node types introduced
-7. All existing tests pass
-8. New tests verify `ContentValue` unification, `SlotKind` computation, tree merge, and dissolved conditional codegen
-9. TECHNICAL.md documents the DOM Algebra, Applicative/Monadic framework, binding-time analysis, and ChildNode taxonomy
+1. **ContentValue unification**: `TextNode` and `ExpressionNode` are replaced by a single `ContentValue` interface with explicit `bindingTime: "literal" | "render" | "reactive"`. All parallel code paths in analyze.ts and codegen are collapsed into binding-time dispatch.
+
+2. **Slot terminology**: `InsertionResult` is renamed to `Slot` throughout the codebase (types.ts, regions.ts, all call sites). `insertAndTrack` becomes `claimSlot`, `removeInsertionResult` becomes `releaseSlot`.
+
+3. **SlotKind bridge**: `computeSlotKind(body: ChildNode[]): SlotKind` computes slot kind from IR body structure. Region nodes (`ListRegionNode`, `ConditionalBranch`) store computed `slotKind` field. Codegen emits it in handler objects. Runtime `claimSlot()` accepts optional `slotKind` parameter.
+
+4. **Tree merge algorithm**: `mergeConditionalBodies(branches): MergeResult<ChildNode[]>` recursively merges structurally-equivalent branches, promoting diverging literal/render values to reactive with ternary sources. Returns structured failure reasons via `MergeResult<T>` type.
+
+5. **Conditional dissolution**: When tree merge succeeds, `generateConditionalRegion()` emits pure Applicative code (direct element creation with ternary subscriptions) — no `__conditionalRegion()` call, no marker comment. When merge fails, falls back to standard region codegen.
+
+6. **Test coverage**: Unit tests for `ContentValue` factories, `computeSlotKind`, tree merge functions, and `MergeResult` outcomes. Codegen tests verify dissolved output (no runtime call) and fallback output. Integration tests verify DOM updates in-place without node replacement.
+
+7. **Documentation**: TECHNICAL.md updated with DOM Algebra section, Applicative/Monadic framework, binding-time analysis, and slot vocabulary. Region Algebra section updated to use new terminology.
+
+8. **Regression safety**: All existing tests pass without modification (except for terminology updates in assertions).
 
 ## The Gap
 
-| Aspect | Current | Target |
-|--------|---------|--------|
-| Content value representation | `TextNode` + `ExpressionNode` (two types, implicit binding time) | `ContentValue` (one type, explicit `bindingTime`) |
-| Body cardinality | Computed in codegen, discarded | Computed in IR, flows to runtime via `SlotKind` |
-| `InsertionResult` naming | Describes mechanism (insertion) | `Slot` — describes role (removable handle) |
-| Region handler types | `create: () => Node` (opaque) | `slotKind` annotation alongside handler |
-| `insertAndTrack` | Runtime branch on `nodeType` | `SlotKind`-dispatched `claimSlot` function |
-| IR node taxonomy | Flat `ChildNode` union | Documented Applicative/Monadic classification |
-| Identical branches | Full remove + insert on swap | Dissolved via tree merge into existing IR node types |
-| Structural comparison | Nonexistent | `mergeConditionalBodies` — one function that checks equivalence and merges simultaneously |
+| Aspect | Current State | This Plan |
+|--------|---------------|-----------|
+| Content value representation | `TextNode \| ExpressionNode` (union, binding time implicit in type) | `ContentValue` (unified interface, explicit `bindingTime` field) |
+| Binding-time classification | `ExpressionKind = "static" \| "reactive"` (exists but incomplete—missing compile-time literals) | `BindingTime = "literal" \| "render" \| "reactive"` (complete three-stage spectrum) |
+| Slot terminology | `InsertionResult` (mechanism-focused) | `Slot` (role-focused, aligns with DOM literature) |
+| Body cardinality | `checkCanOptimizeDirectReturn()` computes in codegen, not stored | `computeSlotKind()` computes in IR, stored as `slotKind` field, flows to runtime |
+| Runtime insertion | `insertAndTrack()` inspects `node.nodeType` dynamically | `claimSlot()` dispatches on compile-time `slotKind` annotation |
+| Conditional optimization | Always emit `__conditionalRegion()`, full remove+insert on swap | Tree merge dissolves identical structure into Applicative code with in-place value updates |
+| Structural comparison | Nonexistent | `mergeConditionalBodies()` with `MergeResult<T>` type for structured outcomes |
+| IR documentation | Region Algebra documented, ChildNode taxonomy undocumented | Full Applicative/Monadic framework documented with binding-time analysis |
 
 ## Vocabulary
 
-These terms are used consistently throughout this plan and should be adopted in code and documentation:
+These terms establish a consistent vocabulary for the DOM algebra framework. Some map to existing implementations (for clarity), others are new (for tree merge):
 
-- **ContentValue**: The unified IR type for all value-producing content (replaces `TextNode` and `ExpressionNode`). Has a `bindingTime` field.
-- **BindingTime**: `"literal" | "render" | "reactive"` — when a value becomes known. Corresponds to partial evaluation's static/dynamic classification.
-- **Slot**: A runtime handle to DOM content that can be removed. Replaces `InsertionResult`.
-- **SingleSlot**: Tracks one DOM node directly. `{ kind: "single"; node: Node }`
-- **RangeSlot**: Tracks multiple sibling nodes via comment markers. `{ kind: "range"; startMarker: Comment; endMarker: Comment }`
-- **SlotKind**: `"single" | "range"` — compile-time annotation that determines which Slot strategy to use.
-- **Applicative**: DOM structure that is fixed at compile time; only values change at runtime (via subscriptions). No Slot needed.
-- **Monadic**: DOM structure that varies at runtime (items added/removed, branches swapped). Requires Slots.
-- **Tree merge**: The operation that takes N structurally-equivalent branch bodies and produces a single merged body, promoting literal/render values to reactive at divergence points. Either succeeds completely or fails at the first incompatible position.
-- **Dissolution**: When tree merge succeeds for all branches of a conditional, the conditional is eliminated — dissolved into the Applicative layer.
+- **ContentValue**: The unified IR type for all value-producing content. Unifies `TextNode` and `ExpressionNode` (currently separate). Has a `bindingTime` field.
+- **BindingTime**: `"literal" | "render" | "reactive"` — when a value becomes known. Maps to existing `ExpressionKind = "static" | "reactive"` but makes the three-stage spectrum explicit.
+- **Slot**: A runtime handle to DOM content that can be removed. Renames `InsertionResult` (currently implemented) for conceptual clarity.
+- **SingleSlot**: Tracks one DOM node directly. `{ kind: "single"; node: Node }` (exists as `InsertionResult`)
+- **RangeSlot**: Tracks multiple sibling nodes via comment markers. `{ kind: "range"; startMarker: Comment; endMarker: Comment }` (exists as `InsertionResult`)
+- **SlotKind**: `"single" | "range"` — compile-time annotation that determines which Slot strategy to use. Will be computed from IR body structure.
+- **Applicative Layer**: DOM structure that is fixed at compile time; only values change at runtime (via subscriptions). No Slot needed.
+- **Monadic Layer**: DOM structure that varies at runtime (items added/removed, branches swapped). Requires Slots.
+- **Tree merge**: The operation that takes N structurally-equivalent branch bodies and produces a single merged body, promoting literal/render values to reactive at divergence points. Either succeeds completely or fails at the first incompatible position. **New contribution of this plan.**
+- **Dissolution**: When tree merge succeeds for all branches of a conditional, the conditional is eliminated — dissolved into the Applicative layer. **New optimization enabled by tree merge.**
 - **Binding-time promotion**: The tree merge operation at a divergence point: a literal or render-time value is promoted to reactive with a ternary source expression.
 
 ## Core Type Definitions
 
-### ContentValue (replaces TextNode + ExpressionNode)
+### ContentValue (unifies TextNode + ExpressionNode)
 
 ```typescript
 /**
@@ -203,9 +215,15 @@ type ContentNode = ContentValue
  * @internal
  */
 type SlotKind = "single" | "range"
+
+function computeSlotKind(body: ChildNode[]): SlotKind {
+  // Returns "single" if body produces exactly one DOM node
+  // Returns "range" otherwise (zero, multiple, or regions)
+  // Implementation will analyze body structure
+}
 ```
 
-### Slot (runtime handle, replaces InsertionResult)
+### Slot (runtime handle, renamed from InsertionResult)
 
 ```typescript
 /**
@@ -299,6 +317,35 @@ interface ConditionalRegionHandlers {
 }
 ```
 
+### MergeResult type for tree merge outcomes
+
+```typescript
+type MergeResult<T> =
+  | { success: true; value: T }
+  | { success: false; reason: MergeFailureReason }
+
+type MergeFailureReason =
+  | { kind: "different-kinds"; aKind: IRNodeKind; bKind: IRNodeKind }
+  | { kind: "different-tags"; aTag: string; bTag: string }
+  | { kind: "different-child-counts"; aCount: number; bCount: number }
+  | { kind: "different-attribute-sets"; aAttrs: string[]; bAttrs: string[] }
+  | { kind: "different-event-handlers"; aHandlers: string[]; bHandlers: string[] }
+  | { kind: "incompatible-binding-times"; aTime: BindingTime; bTime: BindingTime }
+  | { kind: "different-dependencies"; aDeps: string[]; bDeps: string[] }
+  | { kind: "different-statement-sources"; aSource: string; bSource: string }
+  | { kind: "region-not-mergeable" }
+  | { kind: "child-merge-failed"; index: number; childReason: MergeFailureReason }
+```
+
+**Purpose**: Expresses the outcome of tree merge attempts with structured failure reasons for debugging and optimization metrics.
+
+**Success case**: Returns the merged IR node.
+
+**Failure cases**: Returns a tagged reason indicating why the merge failed. This enables:
+- Better error messages during development
+- Metrics collection (which merge patterns fail most often)
+- Future optimization: partial hoisting when only some children merge
+
 ### Slot-aware insertion (replaces insertAndTrack)
 
 ```typescript
@@ -330,6 +377,8 @@ function releaseSlot(parent: Node, slot: Slot): void
 
 ## Phases and Tasks
 
+**Note**: Phases 0 and 1 are primarily unification and renaming for conceptual clarity. Phase 2 (tree merge) is the novel contribution that enables conditional dissolution.
+
 ### Phase 0: Unify TextNode + ExpressionNode into ContentValue 🔴
 
 **Goal**: Replace the two-type content representation with a single `ContentValue` type annotated with `bindingTime`. This collapses parallel code paths throughout the IR, analysis, and codegen layers, and establishes the foundation for binding-time-based tree merge.
@@ -338,10 +387,9 @@ function releaseSlot(parent: Node, slot: Slot): void
 - 🔴 Task 0.2: Define `ContentValue` interface in `ir.ts` with `kind: "content"`, `source: string`, `bindingTime: BindingTime`, `dependencies: string[]`
 - 🔴 Task 0.3: Update `ContentNode` to alias `ContentValue` (was `TextNode | ExpressionNode`)
 - 🔴 Task 0.4: Replace factory functions:
-  - `createTextNode(value, span)` → `createContent(JSON.stringify(value), "literal", [], span)` (or wrapper that quotes the value)
-  - `createStaticExpression(source, span)` → `createContent(source, "render", [], span)`
-  - `createReactiveExpression(source, deps, span)` → `createContent(source, "reactive", deps, span)`
-  - Keep old factory names as thin wrappers for migration (deprecated, delegate to `createContent`)
+  - Remove `createTextNode`, `createStaticExpression`, `createReactiveExpression`
+  - Add `createContent(source: string, bindingTime: BindingTime, dependencies: string[], span: SourceSpan): ContentValue`
+  - Add convenience wrapper `createLiteral(value: string, span: SourceSpan)` that calls `createContent(JSON.stringify(value), "literal", [], span)`
 - 🔴 Task 0.5: Update `IRNodeKind` — remove `"text"` and `"expression"`, add `"content"`
 - 🔴 Task 0.6: Remove `TextNode` and `ExpressionNode` interfaces (or keep as deprecated aliases for `ContentValue` during migration)
 - 🔴 Task 0.7: Update `ExpressionKind` references — `"static" | "reactive"` is replaced by `bindingTime` on `ContentValue`
@@ -368,7 +416,7 @@ function releaseSlot(parent: Node, slot: Slot): void
 - 🔴 Task 0.17: Update `ir.ts` — update `isReactiveContent`, `createElement` (the `isReactive` computation), `createListRegion` (the `hasReactiveItems` check), and `createBuilder` (dependency collection) to use `bindingTime` instead of `expressionKind`
 - 🔴 Task 0.18: Update all tests in `ir.test.ts`, `analyze.test.ts`, `dom.test.ts`, `html.test.ts`, and `integration.test.ts` to use `ContentValue` and `createContent` (or wrapper factories)
 - 🔴 Task 0.19: Verify all existing tests pass
-- 🔴 Task 0.20: Remove deprecated `TextNode`, `ExpressionNode`, `ExpressionKind` types and old factory functions once all consumers are migrated
+- 🔴 Task 0.20: Remove `TextNode`, `ExpressionNode`, `ExpressionKind` types
 
 ### Phase 1: Slot Vocabulary and SlotKind Bridge 🔴
 
@@ -386,7 +434,8 @@ function releaseSlot(parent: Node, slot: Slot): void
 - 🔴 Task 1.10: Refactor `checkCanOptimizeDirectReturn` to delegate to `computeSlotKind` (eliminate duplication)
 - 🔴 Task 1.11: Update `generateListRegion` and `generateConditionalRegion` in `dom.ts` to emit `slotKind` property in handler objects
 - 🔴 Task 1.12: Update handler type definitions in `types.ts` to include optional `slotKind?: SlotKind`
-- 🔴 Task 1.13: Implement `claimSlot(parent, content, before, slotKind?)` using `SlotKind` dispatch with fallback to `nodeType` inspection when omitted
+- 🔴 Task 1.13: Update `claimSlot(parent, content, before, slotKind?)` signature to accept optional `slotKind` parameter
+- 🔴 Task 1.13a: Implement `SlotKind` dispatch in `claimSlot` with fallback to `nodeType` inspection when omitted
 - 🔴 Task 1.14: Update `executeOp`, `executeConditionalOp`, and `__staticConditionalRegion` to pass `handlers.slotKind` to `claimSlot`
 - 🔴 Task 1.15: Update all test references in `regions.test.ts`
 - 🔴 Task 1.16: Add unit tests for `computeSlotKind` (all body patterns)
@@ -399,18 +448,22 @@ function releaseSlot(parent: Node, slot: Slot): void
 
 **Goal**: Implement the recursive tree merge that dissolves structurally-equivalent conditional branches into existing IR node types. When the merge succeeds, codegen emits Applicative code (direct element creation + conditional subscriptions) with no `__conditionalRegion` call. The `ContentValue` unification from Phase 0 makes the merge logic clean: mergeability is a single check on `bindingTime`, not a cross-product of type combinations.
 
-- 🔴 Task 2.1: Implement `mergeContentValue(a: ContentValue, b: ContentValue, condition): ContentValue | null` — the core merge for content positions. If `a` and `b` are identical, return as-is. If both have liftable binding times (`"literal"` or `"render"`), promote to `"reactive"` with ternary source. Otherwise return `null`.
-- 🔴 Task 2.2: Implement `mergeNode(a: ChildNode, b: ChildNode, condition): ChildNode | null` — the recursive pairwise merge function that delegates to `mergeContentValue` for content positions. Core rules:
+**Decision (Question 5)**: Dissolution will inline directly (Option B) — no marker comment. This achieves true dissolution with no runtime overhead. Generated code is indistinguishable from hand-written optimal code.
+
+- 🔴 Task 2.1: Define `MergeResult<T>` discriminated union type for expressing merge outcomes with reason for failure
+- 🔴 Task 2.2: Implement `mergeContentValue(a: ContentValue, b: ContentValue, condition: ExpressionNode): MergeResult<ContentValue>` — the core merge for content positions. If `a` and `b` are identical, return as-is. If both have liftable binding times (`"literal"` or `"render"`), promote to `"reactive"` with ternary source. Otherwise return failure with reason.
+- 🔴 Task 2.3: Implement `mergeNode(a: ChildNode, b: ChildNode, condition: ExpressionNode): MergeResult<ChildNode>` — the recursive pairwise merge function that delegates to `mergeContentValue` for content positions. Core rules:
   - Both `kind: "content"` → delegate to `mergeContentValue`
   - Both `kind: "element"` with same tag, same attribute names, same event names, same child count → recurse into attributes (merge content values), children (merge nodes), check event handlers identical
   - Both `kind: "statement"` with identical source → keep as-is
   - Both `kind: "statement"` with different source → null
   - Different kinds → null
   - Region, loop, conditional → null
-- 🔴 Task 2.3: Implement `mergeConditionalBodies(branches, conditions, target): ChildNode[] | null` — walks N branch bodies in parallel, calling `mergeNode` for each position. For N > 2, synthesizes nested ternaries (`a ? X : b ? Y : Z`).
-- 🔴 Task 2.4: Update `generateConditionalRegion` in `dom.ts` to attempt tree merge before emitting `__conditionalRegion`. If merge succeeds, generate the merged body as standard Applicative code (no handler object, no runtime call).
-- 🔴 Task 2.5: Ensure conditionals without an else branch are not merge candidates (one branch may produce zero nodes — not structurally equivalent to producing some nodes)
-- 🔴 Task 2.6: Add unit tests for `mergeContentValue`:
+- 🔴 Task 2.4: Implement `mergeConditionalBodies(branches: ConditionalBranch[]): MergeResult<ChildNode[]>` — walks N branch bodies in parallel, calling `mergeNode` for each position. For N > 2, synthesizes nested ternaries (`a ? X : b ? Y : Z`).
+- 🔴 Task 2.5: Update `generateConditionalRegion` in `dom.ts` to attempt tree merge before emitting `__conditionalRegion`. If merge succeeds, generate the merged body as standard Applicative code (direct inline, no marker comment, no handler object, no runtime call).
+- 🔴 Task 2.6: Ensure conditionals without an else branch are not merge candidates (one branch may produce zero nodes — not structurally equivalent to producing some nodes)
+- 🔴 Task 2.7: Add unit tests for `MergeResult` type and helpers
+- 🔴 Task 2.8: Add unit tests for `mergeContentValue`:
   - Two literals with same value → kept as-is
   - Two literals with different values → promoted to reactive with ternary
   - Literal + render-time → promoted to reactive with ternary
@@ -418,7 +471,7 @@ function releaseSlot(parent: Node, slot: Slot): void
   - Two reactive with same source and deps → kept as-is
   - Two reactive with different deps → null
   - Reactive + literal → null
-- 🔴 Task 2.7: Add unit tests for `mergeNode`:
+- 🔴 Task 2.9: Add unit tests for `mergeNode`:
   - Same element, different content children → merged with promoted ContentValue
   - Same element, different static attribute values → merged with promoted ContentValue in attribute
   - Same element, identical reactive content → kept as-is
@@ -429,23 +482,24 @@ function releaseSlot(parent: Node, slot: Slot): void
   - Statement with identical source → kept as-is
   - Statement with different source → null
   - Region node → null
-- 🔴 Task 2.8: Add unit tests for `mergeConditionalBodies`:
+- 🔴 Task 2.10: Add unit tests for `mergeConditionalBodies`:
   - Two branches, fully mergeable → merged body
   - Two branches, not mergeable → null
   - Three branches (if/else if/else), all mergeable → nested ternaries
   - Three branches, one incompatible → null
   - Branches with mixed identical and diverging positions → correct merge
-- 🔴 Task 2.9: Add codegen tests verifying dissolved output:
+- 🔴 Task 2.11: Add codegen tests verifying dissolved output:
   - No `__conditionalRegion` in output
+  - No marker comment in output
   - Direct `createElement` calls present
   - Ternary expression in subscription callback
   - Correct subscription target
-- 🔴 Task 2.10: Add codegen tests verifying fallback when merge fails:
+- 🔴 Task 2.12: Add codegen tests verifying fallback when merge fails:
   - Different tags → standard `__conditionalRegion` output
   - No else branch → standard `__conditionalRegion` output
   - Reactive content with different deps → standard `__conditionalRegion` output
-- 🔴 Task 2.11: Add integration tests: compile a conditional with identical branches, execute it, verify DOM updates in-place on condition change without node replacement
-- 🔴 Task 2.12: Verify all existing tests pass
+- 🔴 Task 2.13: Add integration tests: compile a conditional with identical branches, execute it, verify DOM updates in-place on condition change without node replacement
+- 🔴 Task 2.14: Verify all existing tests pass
 
 ### Phase 3: Documentation 🔴
 
@@ -1180,7 +1234,30 @@ a literal value is promoted to reactive when it needs to vary based on a conditi
 
 ## Learnings
 
-These insights emerged during the design process and informed the final architecture. They are recorded here for reference during implementation and future design work.
+These insights emerged during the design process and research phase, and informed the final architecture. They are recorded here for reference during implementation and future design work.
+
+### Research findings: Most foundational types already exist
+
+Deep-dive research revealed that the conceptual framework of binding-time analysis, slots, and region algebra is already partially implemented:
+
+1. **Binding-time analysis exists implicitly**: `ExpressionKind = "static" | "reactive"` already performs binding-time classification via the type system. The unification into `ContentValue` makes this explicit and eliminates cross-product complexity.
+
+2. **InsertionResult is the slot abstraction**: The existing `InsertionResult` type with `single | range` kinds already models slots. Renaming to `Slot` improves conceptual clarity and mathematical precision.
+
+3. **Region Algebra with FC/IS is complete**: Recent work (kinetic-region-algebra plan) implemented the trackability invariant, unified state types, and FC/IS pattern for both list and conditional regions.
+
+4. **Direct-return optimization exists**: `checkCanOptimizeDirectReturn()` in dom.ts already implements Level 1 optimization (avoiding fragment overhead for single-element bodies).
+
+**Impact on plan**: Phase 0 and Phase 1 are primarily unification and renaming for conceptual clarity, not new functionality. Phase 2 (tree merge) is the genuine innovation — no conditional dissolution exists today.
+
+### The plan is about conceptual clarity, not just optimization
+
+The DOM algebra framework provides:
+- **Simplicity**: Unified types eliminate parallel code paths
+- **Mathematical correctness**: Binding-time analysis has formal semantics from partial evaluation theory
+- **Maintainability**: Clear vocabulary (Slot, ContentValue, binding time) makes the system easier to understand and extend
+
+These benefits matter even when existing code "works" — this is foundational infrastructure that will pay dividends in future optimization work.
 
 ### The pipeline is three stages of partial evaluation
 
@@ -1223,3 +1300,7 @@ Level 3 (partial hoisting — shared prefix promoted, residual remains as a redu
 ### N-branch merge generalizes naturally
 
 The tree merge function accepts N branches (not just two), supporting `if/else if/else` chains. At divergence points, it synthesizes nested ternaries (`a ? X : b ? Y : Z`). This fell out of the design naturally once `mergeConditionalBodies` was parameterized over an array of branches rather than hard-coded for two.
+
+### Dissolution inlines directly without markers
+
+After analyzing trade-offs, dissolution will emit pure Applicative code with no marker comments. This achieves true zero-overhead dissolution where generated code is indistinguishable from hand-written optimal code. Source maps provide debugging context, and the generated code can include a comment if needed. The alternative (keeping marker comments) would contradict the optimization's goal of eliminating runtime overhead.

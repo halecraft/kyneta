@@ -20,12 +20,10 @@ import type {
   ContentNode,
   ElementNode,
   EventHandlerNode,
-  ExpressionNode,
   ListRegionNode,
   StatementNode,
   StaticConditionalNode,
   StaticLoopNode,
-  TextNode,
 } from "../ir.js"
 
 // =============================================================================
@@ -115,38 +113,20 @@ function indented(state: CodegenState): CodegenState {
 // =============================================================================
 
 /**
- * Generate code for text content.
- */
-function generateTextContent(
-  node: TextNode,
-  _state: CodegenState,
-): { code: string; isLiteral: true; value: string } {
-  // Escape the text for JavaScript string literal
-  const escaped = JSON.stringify(node.value)
-  return { code: escaped, isLiteral: true, value: node.value }
-}
-
-/**
- * Generate code for an expression.
- */
-function generateExpression(
-  node: ExpressionNode,
-  _state: CodegenState,
-): { code: string; isLiteral: false } {
-  return { code: node.source, isLiteral: false }
-}
-
-/**
- * Generate code for content (text or expression).
+ * Generate code for content at any binding time.
  */
 function generateContent(
   node: ContentNode,
-  state: CodegenState,
+  _state: CodegenState,
 ): { code: string; isLiteral: boolean; value?: string } {
-  if (node.kind === "text") {
-    return generateTextContent(node, state)
+  if (node.bindingTime === "literal") {
+    // source is already a JSON-encoded string literal
+    // Extract the actual string value for the return type
+    const value = JSON.parse(node.source)
+    return { code: node.source, isLiteral: true, value }
   }
-  return generateExpression(node, state)
+  // For "render" and "reactive" binding times, source is a JS expression
+  return { code: node.source, isLiteral: false }
 }
 
 // =============================================================================
@@ -167,16 +147,8 @@ function generateAttributeSet(
 
   // Special handling for common attributes
   if (attr.name === "class") {
-    if (
-      attr.value.kind === "expression" &&
-      attr.value.expressionKind === "reactive"
-    ) {
-      // Reactive class - needs subscription
-      lines.push(`${ind}${elementVar}.className = ${content.code}`)
-    } else {
-      lines.push(`${ind}${elementVar}.className = ${content.code}`)
-    }
-  } else if (attr.name === "style" && attr.value.kind !== "text") {
+    lines.push(`${ind}${elementVar}.className = ${content.code}`)
+  } else if (attr.name === "style" && attr.value.bindingTime !== "literal") {
     // Style can be object or string
     lines.push(`${ind}Object.assign(${elementVar}.style, ${content.code})`)
   } else if (attr.name === "value") {
@@ -209,10 +181,7 @@ function generateAttributeSubscription(
   attr: AttributeNode,
   state: CodegenState,
 ): string[] {
-  if (
-    attr.value.kind !== "expression" ||
-    attr.value.expressionKind !== "reactive"
-  ) {
+  if (attr.value.bindingTime !== "reactive") {
     return []
   }
 
@@ -378,26 +347,23 @@ function generateChild(
       break
     }
 
-    case "text": {
+    case "content": {
       const textVar = genVar(state, "text")
-      lines.push(
-        `${ind}const ${textVar} = document.createTextNode(${JSON.stringify(node.value)})`,
-      )
-      lines.push(`${ind}${parentVar}.appendChild(${textVar})`)
-      break
-    }
 
-    case "expression": {
-      if (node.expressionKind === "static") {
-        // Static expression - evaluate once
-        const textVar = genVar(state, "text")
+      if (node.bindingTime === "literal") {
+        // Literal - source is JSON-encoded string
+        lines.push(
+          `${ind}const ${textVar} = document.createTextNode(${node.source})`,
+        )
+        lines.push(`${ind}${parentVar}.appendChild(${textVar})`)
+      } else if (node.bindingTime === "render") {
+        // Render-time - evaluate once
         lines.push(
           `${ind}const ${textVar} = document.createTextNode(String(${node.source}))`,
         )
         lines.push(`${ind}${parentVar}.appendChild(${textVar})`)
       } else {
-        // Reactive expression - needs subscription
-        const textVar = genVar(state, "text")
+        // Reactive - needs subscription
         lines.push(`${ind}const ${textVar} = document.createTextNode("")`)
         lines.push(`${ind}${parentVar}.appendChild(${textVar})`)
 
@@ -502,21 +468,21 @@ function generateBodyWithReturn(
       const result = generateElement(domNode, state)
       lines.push(...result.code)
       lines.push(`${ind}return ${result.varName}`)
-    } else if (domNode.kind === "text") {
+    } else if (domNode.kind === "content") {
+      // For content, create a text node
       const textVar = genVar(state, "text")
-      lines.push(
-        `${ind}const ${textVar} = document.createTextNode(${JSON.stringify(domNode.value)})`,
-      )
-      lines.push(`${ind}return ${textVar}`)
-    } else if (domNode.kind === "expression") {
-      // For expressions, create a text node
-      const textVar = genVar(state, "text")
-      if (domNode.expressionKind === "static") {
+      if (domNode.bindingTime === "literal") {
+        // Literal - source is JSON-encoded string
+        lines.push(
+          `${ind}const ${textVar} = document.createTextNode(${domNode.source})`,
+        )
+      } else if (domNode.bindingTime === "render") {
+        // Render-time - evaluate once
         lines.push(
           `${ind}const ${textVar} = document.createTextNode(String(${domNode.source}))`,
         )
       } else {
-        // Reactive expression - create text node, will be updated via subscription
+        // Reactive - create text node, will be updated via subscription
         lines.push(`${ind}const ${textVar} = document.createTextNode("")`)
         if (domNode.dependencies.length > 0) {
           const dep = domNode.dependencies[0]
@@ -548,11 +514,9 @@ function generateBodyWithReturn(
  * 2. There is exactly one DOM-producing node
  * 3. The DOM node is a simple type (element, text, or expression)
  */
-function checkCanOptimizeDirectReturn(
-  body: ChildNode[],
-): {
+function checkCanOptimizeDirectReturn(body: ChildNode[]): {
   leadingStatements: StatementNode[]
-  domNode: ElementNode | TextNode | ExpressionNode
+  domNode: ElementNode | ContentNode
 } | null {
   const leadingStatements: StatementNode[] = []
   let domNode: ChildNode | null = null
@@ -571,11 +535,7 @@ function checkCanOptimizeDirectReturn(
         return null
       }
       // Check if it's a simple DOM-producing type
-      if (
-        child.kind === "element" ||
-        child.kind === "text" ||
-        child.kind === "expression"
-      ) {
+      if (child.kind === "element" || child.kind === "content") {
         domNode = child
         seenDomNode = true
       } else {
@@ -592,7 +552,7 @@ function checkCanOptimizeDirectReturn(
 
   return {
     leadingStatements,
-    domNode: domNode as ElementNode | TextNode | ExpressionNode,
+    domNode: domNode as ElementNode | ContentNode,
   }
 }
 

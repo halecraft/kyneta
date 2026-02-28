@@ -24,7 +24,6 @@ import type {
   ListRegionNode,
   StaticConditionalNode,
   StaticLoopNode,
-  TextNode,
 } from "../ir.js"
 
 // =============================================================================
@@ -172,26 +171,16 @@ const VOID_ELEMENTS = new Set([
 // =============================================================================
 
 /**
- * Generate HTML for text content.
- */
-function generateTextContent(node: TextNode): string {
-  return JSON.stringify(escapeStatic(node.value))
-}
-
-/**
- * Generate HTML for content (text or expression).
+ * Generate HTML for content at any binding time.
  */
 function _generateContent(node: ContentNode): string {
-  if (node.kind === "text") {
-    return generateTextContent(node)
+  if (node.bindingTime === "literal") {
+    // Literal - source is JSON-encoded string, extract and escape
+    const value = JSON.parse(node.source)
+    return JSON.stringify(escapeStatic(value))
   }
 
-  // Expression - needs escaping
-  if (node.expressionKind === "static") {
-    return escapeExpr(`String(${node.source})`)
-  }
-
-  // Reactive expression - evaluate at render time
+  // Render-time and reactive - both need escaping
   return escapeExpr(`String(${node.source})`)
 }
 
@@ -208,25 +197,25 @@ function generateAttribute(attr: AttributeNode): string {
 
   // Boolean attributes
   if (name === "disabled" || name === "checked" || name === "readonly") {
-    if (content.kind === "text") {
-      return content.value === "true" || content.value === name
-        ? ` ${name}`
-        : ""
+    if (content.bindingTime === "literal") {
+      // Extract the actual string value from JSON-encoded source
+      const value = JSON.parse(content.source)
+      return value === "true" || value === name ? ` ${name}` : ""
     }
-    // Dynamic boolean - need ternary (content is expression here)
-    const exprContent = content as import("../ir.js").ExpressionNode
-    return `\${${exprContent.source} ? " ${name}" : ""}`
+    // Dynamic boolean - need ternary
+    return `\${${content.source} ? " ${name}" : ""}`
   }
 
   // Regular attributes
-  if (content.kind === "text") {
-    const escaped = escapeStatic(content.value)
+  if (content.bindingTime === "literal") {
+    // Extract the actual string value from JSON-encoded source
+    const value = JSON.parse(content.source)
+    const escaped = escapeStatic(value)
     return ` ${name}="${escaped}"`
   }
 
-  // Dynamic attribute (content is expression here)
-  const exprContent = content as import("../ir.js").ExpressionNode
-  return `\${" ${name}=\\"" + ${escapeExpr(`String(${exprContent.source})`)} + "\\""}`
+  // Dynamic attribute (render-time or reactive)
+  return `\${" ${name}=\\"" + ${escapeExpr(`String(${content.source})`)} + "\\""}`
 }
 
 // =============================================================================
@@ -326,11 +315,13 @@ function generateChild(node: ChildNode, state: CodegenState): string {
     case "element":
       return generateElement(node, state)
 
-    case "text":
-      return escapeStatic(node.value)
-
-    case "expression":
-      // For expressions, we need to use template literal interpolation
+    case "content":
+      if (node.bindingTime === "literal") {
+        // Literal - source is JSON-encoded string, extract and escape
+        const value = JSON.parse(node.source)
+        return escapeStatic(value)
+      }
+      // Render-time and reactive - use template literal interpolation
       return `\${${escapeExpr(`String(${node.source})`)}}`
 
     case "list-region":

@@ -12,12 +12,11 @@ import {
   type ConditionalBranch,
   createBuilder,
   createConditionalRegion,
+  createContent,
   createElement,
   createListRegion,
-  createReactiveExpression,
+  createLiteral,
   createSpan,
-  createStaticExpression,
-  createTextNode,
 } from "./ir.js"
 
 // =============================================================================
@@ -39,7 +38,7 @@ describe("createBuilder - dependency collection", () => {
         "div",
         [],
         [],
-        [createTextNode("Hello", span())],
+        [createLiteral("Hello", span())],
         span(),
       )
 
@@ -52,7 +51,7 @@ describe("createBuilder - dependency collection", () => {
         "div",
         [],
         [],
-        [createReactiveExpression("count.get()", ["count"], span())],
+        [createContent("count.get()", "reactive", ["count"], span())],
         span(),
       )
 
@@ -64,8 +63,9 @@ describe("createBuilder - dependency collection", () => {
   describe("collects dependencies from nested structures", () => {
     it("collects from deeply nested elements", () => {
       // div > section > p > reactive expression
-      const reactiveExpr = createReactiveExpression(
+      const reactiveExpr = createContent(
         "doc.title.toString()",
+        "reactive",
         ["doc.title"],
         span(),
       )
@@ -83,7 +83,7 @@ describe("createBuilder - dependency collection", () => {
         [],
         [],
         [],
-        [createStaticExpression("item.text", span())],
+        [createContent("item.text", "render", [], span())],
         span(),
       )
       const listRegion = createListRegion(
@@ -100,8 +100,9 @@ describe("createBuilder - dependency collection", () => {
 
     it("collects from list region body (nested reactive content)", () => {
       // List where each item has reactive content
-      const reactiveExpr = createReactiveExpression(
+      const reactiveExpr = createContent(
         "item.count.get()",
+        "reactive",
         ["item.count"],
         span(),
       )
@@ -125,12 +126,13 @@ describe("createBuilder - dependency collection", () => {
         [],
         [],
         [],
-        [createTextNode("Visible", span())],
+        [createLiteral("Visible", span())],
         span(),
       )
       const branch: ConditionalBranch = {
-        condition: createReactiveExpression(
+        condition: createContent(
           "doc.visible.get()",
+          "reactive",
           ["doc.visible"],
           span(),
         ),
@@ -154,8 +156,9 @@ describe("createBuilder - dependency collection", () => {
         [],
         [],
         [
-          createReactiveExpression(
+          createContent(
             "doc.message.toString()",
+            "reactive",
             ["doc.message"],
             span(),
           ),
@@ -163,8 +166,9 @@ describe("createBuilder - dependency collection", () => {
         span(),
       )
       const branch: ConditionalBranch = {
-        condition: createReactiveExpression(
+        condition: createContent(
           "doc.show.get()",
+          "reactive",
           ["doc.show"],
           span(),
         ),
@@ -181,8 +185,9 @@ describe("createBuilder - dependency collection", () => {
     it("collects from reactive props", () => {
       const classAttr: AttributeNode = {
         name: "class",
-        value: createReactiveExpression(
+        value: createContent(
           'doc.active.get() ? "active" : "inactive"',
+          "reactive",
           ["doc.active"],
           span(),
         ),
@@ -195,8 +200,9 @@ describe("createBuilder - dependency collection", () => {
     it("collects from element attributes (not just props)", () => {
       const classAttr: AttributeNode = {
         name: "class",
-        value: createReactiveExpression(
+        value: createContent(
           "item.className",
+          "reactive",
           ["item.className"],
           span(),
         ),
@@ -210,22 +216,14 @@ describe("createBuilder - dependency collection", () => {
 
   describe("deduplicates dependencies", () => {
     it("same dependency used multiple times appears once", () => {
-      const expr1 = createReactiveExpression("count.get()", ["count"], span())
-      const expr2 = createReactiveExpression(
+      const expr1 = createContent("count.get()", "reactive", ["count"], span())
+      const expr2 = createContent(
         "count.get() * 2",
+        "reactive",
         ["count"],
         span(),
       )
-      const builder = createBuilder(
-        "div",
-        [],
-        [],
-        [
-          createElement("p", [], [], [], [expr1], span()),
-          createElement("p", [], [], [], [expr2], span()),
-        ],
-        span(),
-      )
+      const builder = createBuilder("div", [], [], [expr1, expr2], span())
 
       const countOccurrences = builder.allDependencies.filter(
         d => d === "count",
@@ -235,20 +233,20 @@ describe("createBuilder - dependency collection", () => {
   })
 
   describe("does NOT collect from static content", () => {
-    it("static expressions do not add dependencies", () => {
-      const staticExpr = createStaticExpression("42", span())
-      const builder = createBuilder("p", [], [], [staticExpr], span())
+    it("render-time expressions do not add dependencies", () => {
+      const renderExpr = createContent("42", "render", [], span())
+      const builder = createBuilder("p", [], [], [renderExpr], span())
 
       expect(builder.allDependencies).toHaveLength(0)
       expect(builder.isReactive).toBe(false)
     })
 
-    it("text nodes do not add dependencies", () => {
+    it("literal content does not add dependencies", () => {
       const builder = createBuilder(
-        "p",
+        "div",
+        [{ name: "title", value: createLiteral("Hello", span()) }],
         [],
         [],
-        [createTextNode("Hello, World!", span())],
         span(),
       )
 
@@ -256,15 +254,15 @@ describe("createBuilder - dependency collection", () => {
       expect(builder.isReactive).toBe(false)
     })
 
-    it("static props do not add dependencies", () => {
-      const staticAttr: AttributeNode = {
+    it("render-time props do not add dependencies", () => {
+      const classAttr: AttributeNode = {
         name: "class",
-        value: createTextNode("container", span()),
+        value: createContent('"container"', "render", [], span()),
       }
-      const builder = createBuilder("div", [staticAttr], [], [], span())
+      const builder = createBuilder("div", [classAttr], [], [], span())
 
-      expect(builder.allDependencies).toHaveLength(0)
       expect(builder.isReactive).toBe(false)
+      expect(builder.allDependencies).toHaveLength(0)
     })
   })
 
@@ -286,7 +284,12 @@ describe("createBuilder - dependency collection", () => {
 
       const classAttr: AttributeNode = {
         name: "class",
-        value: createReactiveExpression("activeClass", ["activeClass"], span()),
+        value: createContent(
+          "activeClass",
+          "reactive",
+          ["activeClass"],
+          span(),
+        ),
       }
 
       const h1 = createElement(
@@ -295,8 +298,9 @@ describe("createBuilder - dependency collection", () => {
         [],
         [],
         [
-          createReactiveExpression(
+          createContent(
             "doc.title.toString()",
+            "reactive",
             ["doc.title"],
             span(),
           ),
@@ -309,7 +313,7 @@ describe("createBuilder - dependency collection", () => {
         [],
         [],
         [],
-        [createReactiveExpression("item.text", ["item.text"], span())],
+        [createContent("item.text", "reactive", ["item.text"], span())],
         span(),
       )
       const listRegion = createListRegion("items", "item", null, [li], span())
@@ -320,13 +324,14 @@ describe("createBuilder - dependency collection", () => {
         [],
         [],
         [],
-        [createTextNode("No items", span())],
+        [createLiteral("No items", span())],
         span(),
       )
 
       const thenBranch: ConditionalBranch = {
-        condition: createReactiveExpression(
+        condition: createContent(
           "items.length > 0",
+          "reactive",
           ["items"],
           span(),
         ),

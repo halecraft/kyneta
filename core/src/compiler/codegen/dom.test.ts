@@ -11,15 +11,14 @@ import {
   type ConditionalBranch,
   createBuilder,
   createConditionalRegion,
+  createContent,
   createElement,
   createListRegion,
-  createReactiveExpression,
+  createLiteral,
   createSpan,
   createStatement,
   createStaticConditional,
-  createStaticExpression,
   createStaticLoop,
-  createTextNode,
   type EventHandlerNode,
 } from "../ir.js"
 import { generateDOM, generateElementFactory } from "./dom.js"
@@ -67,7 +66,7 @@ describe("generateDOM", () => {
     })
 
     it("should generate code for element with text child", () => {
-      const textNode = createTextNode("Hello, World!", span(1, 4, 1, 20))
+      const textNode = createLiteral("Hello, World!", span(1, 4, 1, 20))
       const builder = createBuilder("p", [], [], [textNode], span(1, 0, 1, 22))
 
       const code = generateDOM(builder)
@@ -79,7 +78,7 @@ describe("generateDOM", () => {
     })
 
     it("should generate code for element with static expression child", () => {
-      const expr = createStaticExpression("42", span(1, 4, 1, 6))
+      const expr = createContent("42", "render", [], span(1, 4, 1, 6))
       const builder = createBuilder("span", [], [], [expr], span(1, 0, 1, 10))
 
       const code = generateDOM(builder)
@@ -90,7 +89,7 @@ describe("generateDOM", () => {
     })
 
     it("should generate code for nested elements", () => {
-      const innerText = createTextNode("Title", span(2, 6, 2, 13))
+      const innerText = createLiteral("Title", span(2, 6, 2, 13))
       const h1Element = createElement(
         "h1",
         [],
@@ -121,7 +120,7 @@ describe("generateDOM", () => {
     it("should generate code for static class attribute", () => {
       const classAttr: AttributeNode = {
         name: "class",
-        value: createTextNode("container", span(1, 5, 1, 18)),
+        value: createLiteral("container", span(1, 5, 1, 18)),
       }
       const builder = createBuilder(
         "div",
@@ -140,7 +139,7 @@ describe("generateDOM", () => {
     it("should generate code for static id attribute", () => {
       const idAttr: AttributeNode = {
         name: "id",
-        value: createTextNode("main", span(1, 5, 1, 12)),
+        value: createLiteral("main", span(1, 5, 1, 12)),
       }
       const builder = createBuilder("div", [idAttr], [], [], span(1, 0, 1, 15))
 
@@ -154,7 +153,7 @@ describe("generateDOM", () => {
     it("should generate code for data attributes", () => {
       const dataAttr: AttributeNode = {
         name: "data-testid",
-        value: createTextNode("my-test", span(1, 5, 1, 20)),
+        value: createLiteral("my-test", span(1, 5, 1, 20)),
       }
       const builder = createBuilder(
         "div",
@@ -173,7 +172,7 @@ describe("generateDOM", () => {
     it("should generate code for value attribute on input", () => {
       const valueAttr: AttributeNode = {
         name: "value",
-        value: createTextNode("initial", span(1, 10, 1, 20)),
+        value: createLiteral("initial", span(1, 10, 1, 20)),
       }
       const builder = createBuilder(
         "input",
@@ -191,8 +190,9 @@ describe("generateDOM", () => {
     it("should generate code for reactive class attribute", () => {
       const classAttr: AttributeNode = {
         name: "class",
-        value: createReactiveExpression(
+        value: createContent(
           'isActive ? "active" : "inactive"',
+          "reactive",
           ["isActive"],
           span(1, 5, 1, 40),
         ),
@@ -261,10 +261,11 @@ describe("generateDOM", () => {
 
   describe("reactive expressions", () => {
     it("should generate subscription for reactive text content", () => {
-      const reactiveExpr = createReactiveExpression(
+      const reactiveExpr = createContent(
         "count.get()",
+        "reactive",
         ["count"],
-        span(1, 4, 1, 16),
+        span(1, 4, 1, 15),
       )
       const builder = createBuilder(
         "span",
@@ -282,11 +283,11 @@ describe("generateDOM", () => {
     })
 
     it("should generate subscription for template literal content", () => {
-      const reactiveExpr = createReactiveExpression(
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: This is source code, not a template literal
+      const reactiveExpr = createContent(
         "`Count: ${count.get()}`",
+        "reactive",
         ["count"],
-        span(1, 4, 1, 28),
+        span(1, 4, 1, 27),
       )
       const builder = createBuilder(
         "p",
@@ -315,7 +316,7 @@ describe("generateDOM - list regions", () => {
       [],
       [],
       [],
-      [createStaticExpression("item.text", span(3, 6, 3, 15))],
+      [createContent("item.text", "render", [], span(3, 6, 3, 15))],
       span(3, 4, 3, 17),
     )
     const listRegion = createListRegion(
@@ -341,7 +342,7 @@ describe("generateDOM - list regions", () => {
       [],
       [],
       [],
-      [createStaticExpression("item.text", span(3, 6, 3, 15))],
+      [createContent("item", "render", [], span(3, 6, 3, 10))],
       span(3, 4, 3, 17),
     )
     const listRegion = createListRegion(
@@ -365,7 +366,7 @@ describe("generateDOM - list regions", () => {
       [],
       [],
       [],
-      [createStaticExpression("item", span(3, 6, 3, 10))],
+      [createContent("item", "render", [], span(3, 6, 3, 10))],
       span(3, 4, 3, 12),
     )
     const listRegion = createListRegion(
@@ -390,7 +391,7 @@ describe("generateDOM - list regions", () => {
       [],
       [],
       [],
-      [createTextNode("first", span(3, 6, 3, 11))],
+      [createLiteral("first", span(3, 6, 3, 11))],
       span(3, 4, 3, 13),
     )
     const li2 = createElement(
@@ -398,7 +399,7 @@ describe("generateDOM - list regions", () => {
       [],
       [],
       [],
-      [createTextNode("second", span(4, 6, 4, 12))],
+      [createLiteral("second", span(4, 6, 4, 12))],
       span(4, 4, 4, 14),
     )
     const listRegion = createListRegion(
@@ -429,12 +430,13 @@ describe("generateDOM - conditional regions", () => {
       [],
       [],
       [],
-      [createTextNode("Static content", span(3, 6, 3, 22))],
+      [createLiteral("Static content", span(3, 6, 3, 22))],
       span(3, 4, 3, 24),
     )
     const branch: ConditionalBranch = {
-      condition: createReactiveExpression(
+      condition: createContent(
         "count.get() > 0",
+        "reactive",
         ["count"],
         span(2, 6, 2, 22),
       ),
@@ -464,8 +466,9 @@ describe("generateDOM - conditional regions", () => {
 
   it("should generate __conditionalRegion with else branch", () => {
     const trueBranch: ConditionalBranch = {
-      condition: createReactiveExpression(
+      condition: createContent(
         "count.get() > 0",
+        "reactive",
         ["count"],
         span(2, 6, 2, 22),
       ),
@@ -475,7 +478,7 @@ describe("generateDOM - conditional regions", () => {
           [],
           [],
           [],
-          [createTextNode("Yes", span(3, 6, 3, 11))],
+          [createLiteral("Yes", span(3, 6, 3, 11))],
           span(3, 4, 3, 13),
         ),
       ],
@@ -489,7 +492,7 @@ describe("generateDOM - conditional regions", () => {
           [],
           [],
           [],
-          [createTextNode("No", span(5, 6, 5, 10))],
+          [createLiteral("No", span(5, 6, 5, 10))],
           span(5, 4, 5, 12),
         ),
       ],
@@ -520,11 +523,11 @@ describe("generateDOM - conditional regions", () => {
       [],
       [],
       [],
-      [createTextNode("Visible", span(3, 6, 3, 15))],
+      [createLiteral("Visible", span(3, 6, 3, 15))],
       span(3, 4, 3, 17),
     )
     const branch: ConditionalBranch = {
-      condition: createStaticExpression("true", span(2, 6, 2, 10)),
+      condition: createContent("true", "render", [], span(2, 6, 2, 10)),
       body: [pElement],
       span: span(2, 4, 4, 3),
     }
@@ -557,7 +560,7 @@ describe("generateElementFactory", () => {
       "div",
       [],
       [],
-      [createTextNode("Hello", span(1, 4, 1, 11))],
+      [createLiteral("Hello", span(1, 4, 1, 11))],
       span(1, 0, 1, 13),
     )
 
@@ -594,7 +597,7 @@ describe("generateDOM - code validity", () => {
           [],
           [],
           [],
-          [createReactiveExpression("item.text", ["item"], span(3, 0, 3, 10))],
+          [createContent("item.text", "reactive", ["item"], span(3, 0, 3, 10))],
           span(2, 0, 4, 1),
         ),
       ],
@@ -602,8 +605,9 @@ describe("generateDOM - code validity", () => {
     )
 
     const conditionalBranch = {
-      condition: createReactiveExpression(
+      condition: createContent(
         "count.get() > 0",
+        "reactive",
         ["count"],
         span(1, 0, 1, 15),
       ),
@@ -613,7 +617,7 @@ describe("generateDOM - code validity", () => {
           [],
           [],
           [],
-          [createTextNode("Yes", span(1, 0, 1, 5))],
+          [createLiteral("Yes", span(1, 0, 1, 5))],
           span(1, 0, 1, 10),
         ),
       ],
@@ -630,7 +634,7 @@ describe("generateDOM - code validity", () => {
       [
         {
           name: "class",
-          value: createReactiveExpression("cls", ["cls"], span(1, 0, 1, 5)),
+          value: createContent("cls", "reactive", ["cls"], span(1, 0, 1, 5)),
         },
       ],
       [{ event: "click", handlerSource: "() => {}", span: span(1, 0, 1, 10) }],
@@ -664,7 +668,7 @@ describe("generateDOM - code validity", () => {
       [
         {
           name: "class",
-          value: createTextNode("container", span(1, 5, 1, 18)),
+          value: createLiteral("container", span(1, 5, 1, 18)),
         },
       ],
       [],
@@ -674,7 +678,7 @@ describe("generateDOM - code validity", () => {
           [],
           [],
           [],
-          [createTextNode("Title", span(2, 6, 2, 13))],
+          [createLiteral("Title", span(2, 6, 2, 13))],
           span(2, 4, 2, 15),
         ),
       ],
@@ -706,10 +710,11 @@ describe("generateDOM - code validity", () => {
           [],
           [],
           [
-            createReactiveExpression(
+            createContent(
               "count.get()",
+              "reactive",
               ["count"],
-              span(2, 5, 2, 17),
+              span(3, 6, 3, 18),
             ),
           ],
           span(2, 4, 2, 19),
@@ -757,7 +762,7 @@ describe("generateDOM - statements", () => {
       [],
       [],
       [],
-      [createTextNode("item", span(4, 6, 4, 12))],
+      [createLiteral("item", span(4, 6, 4, 12))],
       span(4, 4, 4, 14),
     )
     const listRegion = createListRegion(
@@ -782,7 +787,7 @@ describe("generateDOM - statements", () => {
       [],
       [],
       [],
-      [createTextNode("Hello", span(3, 6, 3, 13))],
+      [createLiteral("Hello", span(3, 6, 3, 13))],
       span(3, 4, 3, 15),
     )
     const stmt2 = createStatement('console.log("after")', span(4, 4, 4, 24))
@@ -814,7 +819,7 @@ describe("generateDOM - statements", () => {
       [],
       [],
       [],
-      [createTextNode("x", span(3, 6, 3, 9))],
+      [createLiteral("x", span(3, 6, 3, 9))],
       span(3, 4, 3, 11),
     )
     const staticLoop = createStaticLoop(
@@ -838,7 +843,7 @@ describe("generateDOM - statements", () => {
       [],
       [],
       [],
-      [createTextNode("item", span(3, 6, 3, 12))],
+      [createLiteral("item", span(3, 6, 3, 12))],
       span(3, 4, 3, 14),
     )
     const staticLoop = createStaticLoop(
@@ -861,7 +866,7 @@ describe("generateDOM - statements", () => {
       [],
       [],
       [],
-      [createTextNode("Shown", span(3, 6, 3, 13))],
+      [createLiteral("Shown", span(3, 6, 3, 13))],
       span(3, 4, 3, 15),
     )
     const staticCond = createStaticConditional(
@@ -885,7 +890,7 @@ describe("generateDOM - statements", () => {
       [],
       [],
       [],
-      [createTextNode("Yes", span(3, 6, 3, 11))],
+      [createLiteral("Yes", span(3, 6, 3, 11))],
       span(3, 4, 3, 13),
     )
     const pNo = createElement(
@@ -893,7 +898,7 @@ describe("generateDOM - statements", () => {
       [],
       [],
       [],
-      [createTextNode("No", span(5, 6, 5, 10))],
+      [createLiteral("No", span(5, 6, 5, 10))],
       span(5, 4, 5, 12),
     )
     const staticCond = createStaticConditional(
@@ -917,7 +922,7 @@ describe("generateDOM - statements", () => {
       [],
       [],
       [],
-      [createTextNode("doubled", span(4, 6, 4, 15))],
+      [createLiteral("doubled", span(4, 6, 4, 15))],
       span(4, 4, 4, 17),
     )
     const staticLoop = createStaticLoop(
@@ -943,7 +948,7 @@ describe("generateDOM - statements", () => {
       [],
       [],
       [],
-      [createTextNode("msg", span(4, 6, 4, 11))],
+      [createLiteral("msg", span(4, 6, 4, 11))],
       span(4, 4, 4, 13),
     )
     const staticCond = createStaticConditional(

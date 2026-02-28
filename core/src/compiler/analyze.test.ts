@@ -17,7 +17,7 @@ import {
   findBuilderCalls,
   isReactiveType,
 } from "./analyze.js"
-import type { ExpressionNode } from "./ir.js"
+import type { ContentValue } from "./ir.js"
 
 // =============================================================================
 // Test Helpers
@@ -508,9 +508,11 @@ describe("analyzeExpression", () => {
     expect(stringLiteral).toBeDefined()
 
     const result = analyzeExpression(stringLiteral)
-    expect(result.kind).toBe("text")
-    if (result.kind === "text") {
-      expect(result.value).toBe("Hello, World!")
+    expect(result.kind).toBe("content")
+    expect(result.bindingTime).toBe("literal")
+    if (result.kind === "content" && result.bindingTime === "literal") {
+      // source is JSON-encoded, so it includes the quotes
+      expect(result.source).toBe('"Hello, World!"')
     }
   })
 
@@ -526,9 +528,9 @@ describe("analyzeExpression", () => {
     expect(numLiteral).toBeDefined()
 
     const result = analyzeExpression(numLiteral)
-    expect(result.kind).toBe("expression")
-    if (result.kind === "expression") {
-      expect(result.expressionKind).toBe("static")
+    expect(result.kind).toBe("content")
+    if (result.kind === "content") {
+      expect(result.bindingTime).toBe("render")
       expect(result.source).toBe("42")
     }
   })
@@ -546,9 +548,9 @@ describe("analyzeExpression", () => {
     const callExpr = sourceFile.getDescendantsOfKind(213)[0]
     expect(callExpr).toBeDefined()
 
-    const result = analyzeExpression(callExpr) as ExpressionNode
-    expect(result.kind).toBe("expression")
-    expect(result.expressionKind).toBe("reactive")
+    const result = analyzeExpression(callExpr) as ContentValue
+    expect(result.kind).toBe("content")
+    expect(result.bindingTime).toBe("reactive")
     expect(result.dependencies).toContain("count")
   })
 })
@@ -864,11 +866,11 @@ describe("analyzeBuilder", () => {
 
       // The p element should have count.get() as a child expression
       expect(pElement.children).toHaveLength(1)
-      expect(pElement.children[0].kind).toBe("expression")
+      expect(pElement.children[0].kind).toBe("content")
 
-      if (pElement.children[0].kind === "expression") {
+      if (pElement.children[0].kind === "content") {
         expect(pElement.children[0].source).toBe("count.get()")
-        expect(pElement.children[0].expressionKind).toBe("reactive")
+        expect(pElement.children[0].bindingTime).toBe("reactive")
         expect(pElement.children[0].dependencies).toContain("count")
       }
     }
@@ -1137,7 +1139,7 @@ describe("analyzeStatement - arbitrary statements", () => {
     }
   })
 
-  it("should create StaticConditionalNode for static if", () => {
+  it("should create StaticConditionalNode for static if", async () => {
     const sourceFile = createSourceFile(
       project,
       `
@@ -1165,7 +1167,7 @@ describe("analyzeStatement - arbitrary statements", () => {
     }
   })
 
-  it("should create StaticConditionalNode with else branch", () => {
+  it("should create StaticConditionalNode with else branch", async () => {
     const sourceFile = createSourceFile(
       project,
       `

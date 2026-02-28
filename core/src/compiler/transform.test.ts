@@ -361,9 +361,9 @@ describe("collectRequiredImports", () => {
       [],
       [
         {
-          kind: "expression",
+          kind: "content",
           source: "doc.count.get()",
-          expressionKind: "reactive",
+          bindingTime: "reactive",
           dependencies: ["doc.count"],
           span,
         },
@@ -397,9 +397,9 @@ describe("collectRequiredImports", () => {
           branches: [
             {
               condition: {
-                kind: "expression",
+                kind: "content",
                 source: "doc.visible.get()",
-                expressionKind: "reactive",
+                bindingTime: "reactive",
                 dependencies: ["doc.visible"],
                 span,
               },
@@ -430,9 +430,9 @@ describe("collectRequiredImports", () => {
           branches: [
             {
               condition: {
-                kind: "expression",
+                kind: "content",
                 source: "true",
-                expressionKind: "static",
+                bindingTime: "render",
                 dependencies: [],
                 span,
               },

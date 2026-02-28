@@ -10,14 +10,14 @@ import {
   type ConditionalBranch,
   createBuilder,
   createConditionalRegion,
+  createContent,
   createElement,
   createListRegion,
+  createLiteral,
   createSpan,
   createStatement,
   createStaticConditional,
-  createStaticExpression,
   createStaticLoop,
-  createTextNode,
 } from "../ir.js"
 import { generateHTML } from "./html.js"
 
@@ -53,7 +53,7 @@ describe("generateHTML", () => {
     })
 
     it("should generate HTML for element with text child", () => {
-      const textNode = createTextNode("Hello", span(1, 4, 1, 11))
+      const textNode = createLiteral("Hello", span(1, 4, 1, 11))
       const builder = createBuilder("p", [], [], [textNode], span(1, 0, 1, 13))
 
       const code = generateHTML(builder)
@@ -80,7 +80,7 @@ describe("generateHTML - statements", () => {
       [],
       [],
       [],
-      [createTextNode("item", span(4, 6, 4, 12))],
+      [createLiteral("item", span(4, 6, 4, 12))],
       span(4, 4, 4, 14),
     )
     const listRegion = createListRegion(
@@ -107,11 +107,11 @@ describe("generateHTML - statements", () => {
       [],
       [],
       [],
-      [createTextNode("msg", span(4, 6, 4, 11))],
+      [createLiteral("msg", span(4, 6, 4, 11))],
       span(4, 4, 4, 13),
     )
     const branch: ConditionalBranch = {
-      condition: createStaticExpression("showMessage", span(2, 6, 2, 17)),
+      condition: createContent("showMessage", "render", [], span(2, 6, 2, 17)),
       body: [stmt, pElement],
       span: span(2, 4, 5, 3),
     }
@@ -141,7 +141,7 @@ describe("generateHTML - statements", () => {
       [],
       [],
       [],
-      [createTextNode("item", span(4, 6, 4, 12))],
+      [createLiteral("item", span(4, 6, 4, 12))],
       span(4, 4, 4, 14),
     )
     const stmt2 = createStatement('console.log("after")', span(5, 6, 5, 26))
@@ -180,7 +180,7 @@ describe("generateHTML - static loops", () => {
       [],
       [],
       [],
-      [createTextNode("x", span(3, 6, 3, 9))],
+      [createLiteral("x", span(3, 6, 3, 9))],
       span(3, 4, 3, 11),
     )
     const staticLoop = createStaticLoop(
@@ -205,7 +205,7 @@ describe("generateHTML - static loops", () => {
       [],
       [],
       [],
-      [createTextNode("item", span(3, 6, 3, 12))],
+      [createLiteral("item", span(3, 6, 3, 12))],
       span(3, 4, 3, 14),
     )
     const staticLoop = createStaticLoop(
@@ -230,7 +230,7 @@ describe("generateHTML - static loops", () => {
       [],
       [],
       [],
-      [createTextNode("doubled", span(4, 6, 4, 15))],
+      [createLiteral("doubled", span(4, 6, 4, 15))],
       span(4, 4, 4, 17),
     )
     const staticLoop = createStaticLoop(
@@ -261,7 +261,7 @@ describe("generateHTML - static conditionals", () => {
       [],
       [],
       [],
-      [createTextNode("Shown", span(3, 6, 3, 13))],
+      [createLiteral("Shown", span(3, 6, 3, 13))],
       span(3, 4, 3, 15),
     )
     const staticCond = createStaticConditional(
@@ -285,7 +285,7 @@ describe("generateHTML - static conditionals", () => {
       [],
       [],
       [],
-      [createTextNode("Yes", span(3, 6, 3, 11))],
+      [createLiteral("Yes", span(3, 6, 3, 11))],
       span(3, 4, 3, 13),
     )
     const pNo = createElement(
@@ -293,7 +293,7 @@ describe("generateHTML - static conditionals", () => {
       [],
       [],
       [],
-      [createTextNode("No", span(5, 6, 5, 10))],
+      [createLiteral("No", span(5, 6, 5, 10))],
       span(5, 4, 5, 12),
     )
     const staticCond = createStaticConditional(
@@ -318,7 +318,7 @@ describe("generateHTML - static conditionals", () => {
       [],
       [],
       [],
-      [createTextNode("msg", span(4, 6, 4, 11))],
+      [createLiteral("msg", span(4, 6, 4, 11))],
       span(4, 4, 4, 13),
     )
     const staticCond = createStaticConditional(
@@ -347,7 +347,7 @@ describe("generateHTML - code validity", () => {
       "div",
       [],
       [],
-      [createTextNode("Hello", span(1, 4, 1, 11))],
+      [createLiteral("Hello", span(1, 4, 1, 11))],
       span(1, 0, 1, 13),
     )
 
@@ -365,7 +365,7 @@ describe("generateHTML - code validity", () => {
       [],
       [],
       [],
-      [createTextNode("item", span(4, 6, 4, 12))],
+      [createLiteral("item", span(4, 6, 4, 12))],
       span(4, 4, 4, 14),
     )
     const listRegion = createListRegion(
