@@ -230,23 +230,24 @@ export interface ConditionalBranch {
 
 ## Phases and Tasks
 
-### Phase 0: Refactor — Extract Shared Helpers 🔴
+### Phase 0: Refactor — Extract Shared Helpers ✅
 
 Extract duplicate code into shared helpers before adding new functionality.
 
-- 🔴 **Task 0.1**: Extract `generateBodyWithReturn()` in DOM codegen (`codegen/dom.ts`)
+- ✅ **Task 0.1**: Extract `generateBodyWithReturn()` in DOM codegen (`codegen/dom.ts`)
   - Consolidates logic from `generateListRegion()` and `generateBranchBody()`
   - Handles: emit children, wrap in fragment if needed, return
   - Remove single-element optimization (always use fragment path)
 
-- 🔴 **Task 0.2**: Extract `generateBodyHtml()` in HTML codegen (`codegen/html.ts`)
+- ✅ **Task 0.2**: Extract `generateBodyHtml()` in HTML codegen (`codegen/html.ts`)
   - Consolidates body iteration from `generateListRegion()` and `generateConditionalRegion()`
   - Uses block body with HTML accumulation pattern
   - Returns string suitable for block body: `let _html = ""; _html += ...; return _html`
 
-- 🔴 **Task 0.3**: Verify existing tests still pass after refactor
+- ✅ **Task 0.3**: Verify existing tests still pass after refactor
   - Run `pnpm turbo run verify --filter=@loro-extended/kinetic`
-  - No behavioral changes expected, just structural
+  - Updated one test that expected single-element optimization (now uses fragment path)
+  - All 471 tests pass
 
 ### Phase 1: IR and Analysis Updates 🔴
 

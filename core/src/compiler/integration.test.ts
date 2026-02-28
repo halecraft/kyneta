@@ -927,8 +927,8 @@ describe("compiler integration - list regions", () => {
 
       // Should create li element
       expect(result.code).toContain('document.createElement("li")')
-      // Should return the element
-      expect(result.code).toContain("return _li")
+      // Should return fragment (we always use fragment path for consistency)
+      expect(result.code).toContain("return _frag")
     })
 
     it("should use index variable when provided", () => {

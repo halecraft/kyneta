@@ -432,6 +432,48 @@ function generateChild(
 }
 
 // =============================================================================
+// Body Generation Helper
+// =============================================================================
+
+/**
+ * Generate code for a body that must return a DOM node.
+ *
+ * This is used by list regions (create callback) and conditional regions
+ * (whenTrue/whenFalse callbacks). It handles:
+ * - Empty body → return empty text node
+ * - Any children → wrap in fragment, return fragment
+ *
+ * Note: We always use the fragment path for consistency and to support
+ * statements (which don't produce DOM nodes but need to execute).
+ */
+function generateBodyWithReturn(
+  body: ChildNode[],
+  state: CodegenState,
+): string[] {
+  const lines: string[] = []
+  const ind = getIndent(state)
+
+  if (body.length === 0) {
+    // Empty body
+    lines.push(`${ind}return document.createTextNode("")`)
+    return lines
+  }
+
+  // Always use fragment for consistency (supports statements + multiple elements)
+  const fragVar = genVar(state, "frag")
+  lines.push(`${ind}const ${fragVar} = document.createDocumentFragment()`)
+
+  for (const child of body) {
+    const childResult = generateChild(child, fragVar, state)
+    lines.push(...childResult.code)
+  }
+
+  lines.push(`${ind}return ${fragVar}`)
+
+  return lines
+}
+
+// =============================================================================
 // List Region Generation
 // =============================================================================
 
@@ -457,30 +499,9 @@ function generateListRegion(
 
   lines.push(`${innerInd}create: ${params} => {`)
 
-  // Generate body - need to create a single root element or fragment
+  // Generate body using shared helper
   const bodyState = indented(innerState)
-  const bodyInd = getIndent(bodyState)
-
-  if (node.body.length === 1 && node.body[0].kind === "element") {
-    // Single element - return it directly
-    const result = generateElement(node.body[0], bodyState)
-    lines.push(...result.code)
-    lines.push(`${bodyInd}return ${result.varName}`)
-  } else if (node.body.length > 0) {
-    // Multiple children - wrap in fragment
-    const fragVar = genVar(bodyState, "frag")
-    lines.push(`${bodyInd}const ${fragVar} = document.createDocumentFragment()`)
-
-    for (const child of node.body) {
-      const childResult = generateChild(child, fragVar, bodyState)
-      lines.push(...childResult.code)
-    }
-
-    lines.push(`${bodyInd}return ${fragVar}`)
-  } else {
-    // Empty body
-    lines.push(`${bodyInd}return document.createTextNode("")`)
-  }
+  lines.push(...generateBodyWithReturn(node.body, bodyState))
 
   lines.push(`${innerInd}},`)
   lines.push(`${ind}}, ${state.scopeVar})`)
@@ -590,33 +611,12 @@ function generateStaticConditional(
 
 /**
  * Generate code for a branch body.
+ *
+ * @deprecated Use generateBodyWithReturn instead. This is kept for API compatibility
+ * but delegates to the shared helper.
  */
 function generateBranchBody(body: ChildNode[], state: CodegenState): string[] {
-  const lines: string[] = []
-  const ind = getIndent(state)
-
-  if (body.length === 1 && body[0].kind === "element") {
-    // Single element - return it directly
-    const result = generateElement(body[0], state)
-    lines.push(...result.code)
-    lines.push(`${ind}return ${result.varName}`)
-  } else if (body.length > 0) {
-    // Multiple children - wrap in fragment
-    const fragVar = genVar(state, "frag")
-    lines.push(`${ind}const ${fragVar} = document.createDocumentFragment()`)
-
-    for (const child of body) {
-      const childResult = generateChild(child, fragVar, state)
-      lines.push(...childResult.code)
-    }
-
-    lines.push(`${ind}return ${fragVar}`)
-  } else {
-    // Empty body
-    lines.push(`${ind}return document.createTextNode("")`)
-  }
-
-  return lines
+  return generateBodyWithReturn(body, state)
 }
 
 // =============================================================================

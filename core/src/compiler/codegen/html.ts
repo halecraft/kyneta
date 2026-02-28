@@ -267,6 +267,38 @@ function generateElement(node: ElementNode, state: CodegenState): string {
 }
 
 // =============================================================================
+// Body Generation Helper
+// =============================================================================
+
+/**
+ * Generate HTML for a body with block body syntax and accumulation pattern.
+ *
+ * This is used by list regions and conditional regions. It handles:
+ * - Statements (emitted verbatim)
+ * - Elements (accumulated into _html)
+ * - Proper interleaving of statements and HTML generation
+ *
+ * Returns code suitable for a block body: `let _html = ""; ...; return _html`
+ */
+function generateBodyHtml(body: ChildNode[], state: CodegenState): string {
+  const lines: string[] = []
+
+  lines.push(`let _html = ""`)
+
+  for (const child of body) {
+    // For now, all children are HTML-producing (statements will be added in Phase 1)
+    const childHtml = generateChild(child, state)
+    if (childHtml) {
+      lines.push(`_html += \`${childHtml}\``)
+    }
+  }
+
+  lines.push(`return _html`)
+
+  return lines.join("; ")
+}
+
+// =============================================================================
 // Child Generation
 // =============================================================================
 
@@ -306,6 +338,9 @@ function generateChild(node: ChildNode, state: CodegenState): string {
 
 /**
  * Generate HTML for a list region.
+ *
+ * Uses block body with accumulation pattern for consistency and to support
+ * statements in the loop body.
  */
 function generateListRegion(node: ListRegionNode, state: CodegenState): string {
   const parts: string[] = []
@@ -320,16 +355,12 @@ function generateListRegion(node: ListRegionNode, state: CodegenState): string {
   const itemVar = node.itemVariable
   const indexVar = node.indexVariable ?? "_i"
 
-  // Generate body HTML
-  const bodyParts: string[] = []
-  for (const child of node.body) {
-    bodyParts.push(generateChild(child, state))
-  }
-  const bodyHtml = bodyParts.join("")
+  // Generate body using shared helper with block body syntax
+  const bodyCode = generateBodyHtml(node.body, state)
 
-  // Wrap in map expression
+  // Wrap in map expression with block body
   parts.push(
-    `\${${node.listSource}.toArray().map((${itemVar}, ${indexVar}) => \`${bodyHtml}\`).join("")}`,
+    `\${${node.listSource}.toArray().map((${itemVar}, ${indexVar}) => { ${bodyCode} }).join("")}`,
   )
 
   // Hydration marker (end)
@@ -346,6 +377,8 @@ function generateListRegion(node: ListRegionNode, state: CodegenState): string {
 
 /**
  * Generate HTML for a conditional region.
+ *
+ * Uses IIFE with block body for branches to support statements.
  */
 function generateConditionalRegion(
   node: ConditionalRegionNode,
@@ -359,7 +392,7 @@ function generateConditionalRegion(
     parts.push(`<!--${markerId}-->`)
   }
 
-  // Generate ternary expression for branches
+  // Generate ternary expression for branches using IIFE for each branch
   const branches = node.branches
   let expr = ""
 
@@ -367,25 +400,18 @@ function generateConditionalRegion(
     const branch = branches[i]
 
     if (branch.condition === null) {
-      // Else branch
-      const bodyParts: string[] = []
-      for (const child of branch.body) {
-        bodyParts.push(generateChild(child, state))
-      }
-      expr += `\`${bodyParts.join("")}\``
+      // Else branch - use IIFE with block body
+      const bodyCode = generateBodyHtml(branch.body, state)
+      expr += `(() => { ${bodyCode} })()`
     } else {
-      // If or else-if branch
-      const bodyParts: string[] = []
-      for (const child of branch.body) {
-        bodyParts.push(generateChild(child, state))
-      }
-      const bodyHtml = bodyParts.join("")
+      // If or else-if branch - use IIFE with block body
+      const bodyCode = generateBodyHtml(branch.body, state)
 
       if (i === branches.length - 1) {
         // Last branch with condition but no else
-        expr += `(${branch.condition.source}) ? \`${bodyHtml}\` : ""`
+        expr += `(${branch.condition.source}) ? (() => { ${bodyCode} })() : ""`
       } else {
-        expr += `(${branch.condition.source}) ? \`${bodyHtml}\` : `
+        expr += `(${branch.condition.source}) ? (() => { ${bodyCode} })() : `
       }
     }
   }
