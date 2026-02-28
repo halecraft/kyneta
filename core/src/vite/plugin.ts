@@ -107,6 +107,7 @@ function shouldTransform(
 function transformKineticSource(
   code: string,
   filename: string,
+  target: "dom" | "html",
   debug: boolean,
 ): { code: string; map?: string } | null {
   // Quick check - does this file have any builder patterns?
@@ -122,10 +123,10 @@ function transformKineticSource(
   }
 
   try {
-    // Transform the source in-place
+    // Transform the source in-place using the specified target
     const result = transformSourceInPlace(code, {
       filename,
-      target: "dom",
+      target,
     })
 
     if (result.ir.length === 0) {
@@ -211,14 +212,20 @@ export default function kineticPlugin(
     },
 
     // Transform files containing Kinetic builder patterns
-    transform(code, id) {
+    transform(code, id, transformOptions) {
       // Skip if file shouldn't be transformed
       if (!shouldTransform(id, extensions, options.include, options.exclude)) {
         return null
       }
 
+      // Auto-detect target from Vite's SSR context.
+      // When the server calls vite.ssrLoadModule(), Vite passes ssr: true.
+      // This means the same app.ts is compiled to HTML for the server and
+      // DOM for the client — no separate files or configuration needed.
+      const target = transformOptions?.ssr ? "html" : "dom"
+
       // Transform the source
-      return transformKineticSource(code, id, debug)
+      return transformKineticSource(code, id, target, debug)
     },
 
     // Handle hot module replacement

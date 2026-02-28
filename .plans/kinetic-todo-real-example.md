@@ -44,8 +44,8 @@ Users exploring Kinetic have no reference for how to actually use the framework.
 3. **TypeScript LSP support** — Editor shows proper types for element factories
 4. **Client-side reactivity** — Adding/removing todos updates DOM via O(k) deltas
 5. **Live collaboration** — Two browser tabs sync via Repo + WebSocket adapter
-6. **SSR + Hydration** — Server renders initial HTML from Repo document, client hydrates
-6. **Minimal boilerplate** — Example is easy to understand and copy
+6. **SSR + Hydration** — Server renders initial HTML from the same `app.ts` via dual compilation, client hydrates
+7. **Minimal boilerplate** — Example is easy to understand and copy
 
 ## The Gap
 
@@ -54,8 +54,9 @@ Users exploring Kinetic have no reference for how to actually use the framework.
 | Builder pattern code | Hand-written DOM calls | Write actual builder patterns |
 | Vite integration | Bun server only | Add vite.config.ts with kinetic() |
 | Type definitions | Not configured | Add typeRoots or triple-slash |
-| Dev workflow | `bun run src/server.ts` | `vite dev` with HMR |
+| Dev workflow | `bun run src/server.ts` | `pnpm dev` starts server with embedded Vite |
 | Live sync | Standalone LoroDoc, no networking | Repo + WebSocket adapter |
+| SSR | Hand-written `parts.push()` HTML | Same `app.ts` compiled to HTML via `vite.ssrLoadModule()` |
 | Documentation | Explains "simulation" | Explains actual usage |
 
 ## Architecture
@@ -192,37 +193,49 @@ The compiler must be able to resolve `@loro-extended/change` types for reactive 
 
 ### Phase 3: Repo Integration + Live Collaboration + SSR 🔴
 
-Replace the standalone `LoroDoc` with `Repo` for server↔client sync, and add SSR so the server renders initial HTML from the document before the client connects. This is the complete Kinetic story:
+Replace the standalone `LoroDoc` with `Repo` for server↔client sync, and add SSR using dual compilation. The same `app.ts` is compiled to DOM code for the client and HTML template literals for the server — no hand-written render functions, no duplication.
 
-1. Server has the document in storage via Repo
-2. Server renders initial HTML from that document (SSR)
-3. Client loads, connects via WebSocket, hydrates the existing DOM
-4. From that point, deltas flow both directions with O(k) updates
+The complete flow:
 
-- 🔴 **Task 3.1**: Rewrite `src/server.ts` with Repo + SSR + Vite middleware
+1. Server starts Repo with LevelDB storage
+2. Browser requests `/` → server calls `repo.get()` then `await sync(doc).waitForSync({ kind: "storage" })` to load persisted state → calls `vite.ssrLoadModule('/src/app.ts')` which compiles to HTML target automatically → renders fully-loaded doc to HTML with serialized Loro state
+3. Client loads, Kinetic plugin compiles same `app.ts` to DOM target → deserializes embedded state into doc → hydrates existing DOM
+4. Client Repo connects via WebSocket, deltas flow both directions with O(k) updates
+5. Open second tab → same flow → both tabs collaborate in real-time
+
+- 🔴 **Task 3.1**: Refactor `src/app.ts` to accept `doc` as a parameter
+  - Change from module-level `const doc = ...` to an exported function that receives `doc`
+  - The function returns a builder call: `div({ class: "todo-app" }, () => { ... })`
+  - Server calls it → gets HTML render function. Client calls it → gets DOM factory.
+  - Helper functions (`addTodo`, `removeTodo`) move inside or accept `doc` as closure
+
+- 🔴 **Task 3.2**: Rewrite `src/server.ts` with Repo + SSR + Vite middleware
   - Create `Repo` with `WsServerNetworkAdapter` + `LevelDBStorageAdapter`
   - Create HTTP server with Vite dev middleware (follows `todo-websocket` pattern)
   - Attach `WebSocketServer` to the HTTP server
   - Seed initial data only if document doesn't exist in storage
-  - On `GET /`, render the app to HTML using kinetic SSR utilities + serialized Loro state
-  - Serve the SSR HTML with embedded state script for client hydration
+  - On `GET /`:
+    - `const doc = repo.get("kinetic-todo", TodoSchema)`
+    - `await sync(doc).waitForSync({ kind: "storage" })` — **critical**: waits for LevelDB to load persisted state before rendering, otherwise the doc is empty
+    - Load `app.ts` via `vite.ssrLoadModule()` (compiled to HTML target automatically)
+    - Call the app function with the fully-loaded doc to get an HTML render function
+    - Execute render function, wrap with `renderToDocument()` + `generateStateScript()`
+  - All other requests fall through to Vite middleware (serves client JS, assets, etc.)
 
-- 🔴 **Task 3.2**: Rewrite `src/main.ts` with client-side Repo + hydration
-  - Create `Repo` with `WsClientNetworkAdapter`
+- 🔴 **Task 3.3**: Rewrite `src/main.ts` with client-side Repo + hydration
+  - Create `Repo` with `WsClientNetworkAdapter` pointing to `ws://${location.host}/ws`
   - `repo.get("kinetic-todo", TodoSchema)` to get a synced `Doc`
-  - If SSR state exists on window, deserialize into the Doc and hydrate existing DOM
-  - Otherwise, mount fresh (fallback for client-only navigation)
-  - Pass the `Doc` to the compiled app factory
-
-- 🔴 **Task 3.3**: Refactor `src/app.ts` to accept `doc` as a parameter
-  - Change from module-level `const doc = ...` to a function that receives `doc`
-  - This makes the app a pure builder that doesn't own document lifecycle
-  - Server and client both provide the `doc` — server from Repo storage, client from Repo sync
+  - Import `createApp` from `./app.ts` (compiled to DOM target by Vite plugin)
+  - If SSR state exists on `window.__KINETIC_STATE__`:
+    - Deserialize into the Doc (instant — no network wait needed for first paint)
+    - Hydrate existing DOM with the compiled app factory
+  - Otherwise, mount fresh (fallback for direct client-side navigation)
+  - WebSocket sync connects in the background — subsequent deltas update the DOM via Kinetic's reactive runtime
 
 - 🔴 **Task 3.4**: Update `package.json` with Repo + adapter dependencies
   - Add: `@loro-extended/repo`, `@loro-extended/adapter-websocket`, `@loro-extended/adapter-leveldb`
   - Add: `ws`, `classic-level`
-  - Update `dev` script to run the server (which embeds Vite) instead of bare `vite`
+  - Update `dev` script to `tsx src/server.ts` (server embeds Vite, no separate Vite process)
 
 ### Phase 4: Documentation and Cleanup 🔴
 
@@ -236,12 +249,13 @@ Replace the standalone `LoroDoc` with `Repo` for server↔client sync, and add S
 - 🔴 **Task 4.2**: Update `packages/kinetic/README.md` status table
   - Change Vite plugin from 🔴 to ✅
   - Change SSR + Hydration from 🔴 to ✅
-  - Update test count to 459
+  - Update test count to 466
 
 - 🔴 **Task 4.3**: Add TECHNICAL.md section for example patterns
   - Document ambient type configuration
   - Document triple-slash directive approach
   - Document `enforce: "pre"` requirement
+  - Document dual compilation via `vite.ssrLoadModule()`
   - Document Repo integration pattern for Kinetic
 
 ## Key Implementation Details
@@ -443,6 +457,7 @@ describe("kinetic-todo compilation", () => {
 |--------|---------------|-------------------|
 | **Type stub injection** | Compiler resolves types | All reactive detection now works |
 | **`enforce: "pre"`** | Plugin receives raw TS | No impact on other plugins |
+| **Dual compilation (SSR)** | `vite.ssrLoadModule()` gets HTML target | Eliminates hand-written server render functions |
 | **`declare global` in elements.d.ts** | Factories are global | Projects using triple-slash get globals |
 | **hasBuilderCalls cleanup** | No leaked check.ts | Fixes duplicate type interference |
 | Delete old `app.ts` | None — example only | None |
@@ -498,7 +513,7 @@ Use source path (`./src/`) because the file is a `.d.ts` declaration that tsup d
 
 ## Changeset
 
-Not required for the example changes. However, the `enforce: "pre"`, `declare global` elements.d.ts, type stub injection, and `hasBuilderCalls` cleanup are changes to `@loro-extended/kinetic` that affect all users. These should be included in a changeset for the kinetic package (patch bump).
+Not required for the example changes. However, the `enforce: "pre"`, `declare global` elements.d.ts, type stub injection, `hasBuilderCalls` cleanup, and dual compilation support are changes to `@loro-extended/kinetic` that affect all users. These should be included in a changeset for the kinetic package (patch bump).
 
 ## README Updates
 
@@ -562,11 +577,11 @@ export default defineConfig({
 
 A Kinetic example should have:
 1. `vite.config.ts` — with kinetic() plugin and wasm support
-2. `index.html` — Vite entry point with `<div id="root">`
+2. `index.html` — Vite entry point with `<div id="root">` and `<script src="/src/main.ts">`
 3. `src/schema.ts` — Loro document schema (shared server/client)
-4. `src/app.ts` — Builder pattern UI code with triple-slash directive
-5. `src/main.ts` — Client entry: mount or hydrate
-6. `src/server.ts` (optional) — SSR server if demonstrating hydration
+4. `src/app.ts` — Builder pattern UI code with triple-slash directive; exports a function that accepts `doc` and returns a builder call
+5. `src/main.ts` — Client entry: Repo + mount or hydrate
+6. `src/server.ts` — Repo server with Vite middleware, SSR via `vite.ssrLoadModule()`
 
 ## Learnings
 
@@ -582,7 +597,7 @@ The client never calls `new LoroDoc()` directly. The `Doc` from `repo.get()` is 
 
 This means the killer demo isn't a single-tab todo app — it's two tabs collaborating in real-time with zero-diff DOM updates.
 
-### SSR Completes the Repo Story
+### SSR via Dual Compilation (No Hand-Written HTML)
 
 SSR isn't a separate concern from Repo integration — it's the natural starting state. The server already has the document in storage. Rendering it to HTML before the client connects means:
 
@@ -590,7 +605,37 @@ SSR isn't a separate concern from Repo integration — it's the natural starting
 - The client hydrates the existing DOM instead of rebuilding it
 - The transition from SSR → live collaboration is seamless
 
-The server render function is still hand-written (the compiler's `target: "html"` dual-compilation is a future enhancement). But the plumbing — `generateStateScript`, `renderToDocument`, `hydrate` — already exists and should be demonstrated.
+Previously, SSR required hand-written `parts.push()` render functions that duplicated the UI from `app.ts`. This was eliminated by enabling dual compilation:
+
+- `transformSourceInPlace` now respects `options.target`, calling `generateRenderFunction` (HTML) or `generateElementFactory` (DOM)
+- The Vite plugin auto-detects the target from `transformOptions.ssr` — when the server calls `vite.ssrLoadModule('/src/app.ts')`, Vite passes `ssr: true` and the plugin compiles to HTML target automatically
+- One `app.ts`, two outputs, zero duplication
+
+```typescript
+// server.ts — no parts.push(), no manual HTML
+const doc = repo.get("kinetic-todo", TodoSchema)
+await sync(doc).waitForSync({ kind: "storage" })  // load from LevelDB first!
+
+const { createApp } = await vite.ssrLoadModule('/src/app.ts')
+// createApp is compiled to HTML target: (doc) => () => `<div>...</div>`
+const renderApp = createApp(doc)
+const html = renderApp()  // HTML string with fully-loaded data
+```
+
+### Repo Document Loading Lifecycle
+
+`repo.get()` returns a Doc immediately, but it may be empty. Storage adapters load data asynchronously. The lifecycle is:
+
+1. `repo.get(docId, schema)` → returns Doc (synchronous, potentially empty)
+2. Storage adapter begins loading persisted data in the background
+3. `await sync(doc).waitForSync({ kind: "storage" })` → resolves when storage load completes (or confirms doc is absent)
+4. Doc now has full persisted state — safe to read/render
+
+**Server** must await storage before SSR, otherwise it renders empty HTML.
+
+**Client** has two paths:
+- **With SSR state**: Deserialize `window.__KINETIC_STATE__` into the doc immediately (no await needed — the data is already in the page). Hydrate, then let `waitForSync({ kind: "network" })` catch up in the background.
+- **Without SSR state**: Either `await sync(doc).waitForSync({ kind: "network" })` before mounting (slower first paint), or mount optimistically and let the UI update reactively as data arrives (faster first paint, content pops in).
 
 ### Vite Strips TypeScript Before Plugin Transform (Critical)
 
@@ -643,9 +688,9 @@ This is a known limitation: the type stubs provide interface names but not the f
 
 The in-memory filesystem needs stubs not just for `@loro-extended/change`, but also for `@loro-extended/kinetic` (for `bind`, `Scope`, etc.) and `loro-crdt` (for `LoroDoc`). Without these, unresolved imports cause cascading `any` types that degrade the entire type system.
 
-### Server Pattern: Repo + Vite Middleware
+### Server Pattern: Repo + Vite Middleware + SSR
 
-The `todo-websocket` example establishes the proven pattern for a Kinetic server:
+The `todo-websocket` example establishes the proven pattern for a Kinetic server. With dual compilation, we extend it with SSR:
 
 ```typescript
 // 1. Create Repo with adapters
@@ -653,28 +698,43 @@ const wsAdapter = new WsServerNetworkAdapter()
 const storageAdapter = new LevelDBStorageAdapter("data.db")
 new Repo({ adapters: [wsAdapter, storageAdapter] })
 
-// 2. Create HTTP server
+// 2. Create HTTP + Vite
 const httpServer = http.createServer()
-
-// 3. Vite dev middleware for serving client code
 const vite = await createViteServer({
   root,
   server: { middlewareMode: { server: httpServer } },
 })
-httpServer.on("request", (req, res) => vite.middlewares(req, res))
 
-// 4. WebSocket server on the same HTTP server
+// 3. SSR: intercept GET / before Vite middleware
+httpServer.on("request", async (req, res) => {
+  if (req.url === "/" || req.url === "/index.html") {
+    // Wait for storage to load persisted state — without this, doc is empty
+    const doc = repo.get("kinetic-todo", TodoSchema)
+    await sync(doc).waitForSync({ kind: "storage" })
+
+    // vite.ssrLoadModule compiles app.ts with target: "html"
+    const { createApp } = await vite.ssrLoadModule('/src/app.ts')
+    const renderApp = createApp(doc)
+    const html = renderToDocument(renderApp, doc, { ... })
+    res.end(html)
+  } else {
+    vite.middlewares(req, res)
+  }
+})
+
+// 4. WebSocket for Loro sync
 new WebSocketServer({ server: httpServer, path: "/ws" }).on(
   "connection", ws => {
-    const { start } = wsAdapter.handleConnection({ socket: wrapWsSocket(ws) })
-    start()
+    wsAdapter.handleConnection({ socket: wrapWsSocket(ws) }).start()
   },
 )
 
 httpServer.listen(5173)
 ```
 
-The key insight: the server doesn't serve HTML for the todo app. It just runs Vite middleware (for client code) and a WebSocket endpoint (for Loro sync). The client handles all rendering.
+Two key insights:
+1. `vite.ssrLoadModule()` runs the same `app.ts` through the kinetic Vite plugin with `ssr: true`, which auto-selects the HTML target. No separate server render file needed.
+2. `await sync(doc).waitForSync({ kind: "storage" })` must be called before rendering — `repo.get()` returns a doc immediately but the LevelDB adapter loads persisted data asynchronously. Without the await, the server renders an empty document.
 
 ### Type Resolution in ts-morph In-Memory Filesystem
 

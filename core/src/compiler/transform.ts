@@ -18,7 +18,11 @@ import { type CallExpression, Project, type SourceFile } from "ts-morph"
 import { CompilerError, KineticErrorCode } from "../errors.js"
 import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
 import { generateElementFactory } from "./codegen/dom.js"
-import { generateEscapeHelper, generateHTML } from "./codegen/html.js"
+import {
+  generateEscapeHelper,
+  generateHTML,
+  generateRenderFunction,
+} from "./codegen/html.js"
 import type { BuilderNode, ChildNode } from "./ir.js"
 import { LORO_CHANGE_TYPE_STUBS } from "./type-stubs.js"
 
@@ -402,10 +406,22 @@ export function transformSourceInPlace(
   // of later nodes that we still need to replace
   replacements.sort((a, b) => b.call.getStart() - a.call.getStart())
 
-  // Apply replacements
+  // Apply replacements using the appropriate codegen target
+  const target = options.target ?? "dom"
   for (const { call, ir: builderIr } of replacements) {
-    const factoryCode = generateElementFactory(builderIr)
+    const factoryCode =
+      target === "html"
+        ? generateRenderFunction(builderIr, {
+            hydratable: options.hydratable ?? true,
+          })
+        : generateElementFactory(builderIr)
     call.replaceWithText(factoryCode)
+  }
+
+  // For HTML target, inject the __escapeHtml helper into the source file.
+  // The HTML codegen emits calls to __escapeHtml() in template literals.
+  if (target === "html" && ir.length > 0) {
+    sourceFile.insertStatements(0, generateEscapeHelper())
   }
 
   return {

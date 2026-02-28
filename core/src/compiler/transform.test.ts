@@ -795,6 +795,130 @@ describe("transformSourceInPlace", () => {
 })
 
 // =============================================================================
+// transformSourceInPlace - HTML Target Tests
+// =============================================================================
+
+describe("transformSourceInPlace - HTML target", () => {
+  it("should generate HTML template literal instead of DOM code", () => {
+    const source = `const app = div(() => {\n  h1("Hello")\n})`
+
+    const result = transformSourceInPlace(source, { target: "html" })
+    const code = result.sourceFile.getFullText()
+
+    // Should contain HTML tags in template literal
+    expect(code).toContain("<div>")
+    expect(code).toContain("<h1>")
+    expect(code).toContain("Hello")
+    expect(code).toContain("</h1>")
+    expect(code).toContain("</div>")
+
+    // Should NOT contain DOM APIs
+    expect(code).not.toContain("document.createElement")
+    expect(code).not.toContain("appendChild")
+  })
+
+  it("should inject __escapeHtml helper for HTML target", () => {
+    const source = `const app = div(() => {\n  h1("Hello")\n})`
+
+    const result = transformSourceInPlace(source, { target: "html" })
+    const code = result.sourceFile.getFullText()
+
+    expect(code).toContain("function __escapeHtml(str)")
+  })
+
+  it("should not inject __escapeHtml helper for DOM target", () => {
+    const source = `const app = div(() => {\n  h1("Hello")\n})`
+
+    const result = transformSourceInPlace(source, { target: "dom" })
+    const code = result.sourceFile.getFullText()
+
+    expect(code).not.toContain("__escapeHtml")
+  })
+
+  it("should preserve non-builder code in HTML target", () => {
+    const lines = [
+      'const greeting = "Hello"',
+      "",
+      "const app = div(() => {",
+      "  h1(greeting)",
+      "})",
+      "",
+      "console.log(app)",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source, { target: "html" })
+    const code = result.sourceFile.getFullText()
+
+    expect(code).toContain('const greeting = "Hello"')
+    expect(code).toContain("console.log(app)")
+    expect(code).toContain("<div>")
+    expect(code).toContain("<h1>")
+  })
+
+  it("should generate list map expression for for-of loops", () => {
+    const lines = [
+      'import { ListRef } from "@loro-extended/change"',
+      "declare const items: ListRef<string>",
+      "",
+      "const app = div(() => {",
+      "  for (const item of items) {",
+      "    li(item)",
+      "  }",
+      "})",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source, { target: "html" })
+    const code = result.sourceFile.getFullText()
+
+    // Should produce a .map() call for the list
+    expect(code).toContain(".toArray().map(")
+    expect(code).toContain("<li>")
+    // Should have hydration markers
+    expect(code).toContain("kinetic:list")
+  })
+
+  it("should generate ternary for conditional regions", () => {
+    const lines = [
+      'import { CounterRef } from "@loro-extended/change"',
+      "declare const count: CounterRef",
+      "",
+      "const app = div(() => {",
+      "  if (count.get() > 0) {",
+      '    p("Has items")',
+      "  } else {",
+      '    p("Empty")',
+      "  }",
+      "})",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source, { target: "html" })
+    const code = result.sourceFile.getFullText()
+
+    // Should produce a ternary for the conditional
+    expect(code).toContain("count.get() > 0")
+    expect(code).toContain("Has items")
+    expect(code).toContain("Empty")
+    // Should have hydration markers
+    expect(code).toContain("kinetic:if")
+  })
+
+  it("should produce a render function (not a scope factory)", () => {
+    const source = `const app = div(() => {\n  h1("Hello")\n})`
+
+    const result = transformSourceInPlace(source, { target: "html" })
+    const code = result.sourceFile.getFullText()
+
+    // HTML target produces () => `...` (no scope parameter)
+    expect(code).toContain("const app = () =>")
+    // DOM target produces (scope) => { ... }
+    expect(code).not.toContain("(scope) =>")
+  })
+})
+
+// =============================================================================
 // Type Stub Injection Tests
 // =============================================================================
 
