@@ -72,9 +72,9 @@ The in-memory filesystem approach has caused a cascade of DX compromises:
   - Remove the import from `transform.ts`
   - Remove from `compiler/index.ts` if exported
 
-### Phase 2: Clean Up Example — Remove loroDoc Anti-Pattern 🔴
+### Phase 2: Clean Up Example — Remove loroDoc Anti-Pattern ✅
 
-- 🔴 **Task 2.1**: Refactor `app.ts` — remove loroDoc and inline schema
+- ✅ **Task 2.1**: Refactor `app.ts` — remove loroDoc and inline schema
   - Change `createApp(doc: AppDoc, loroDoc: LoroDoc)` to `createApp(doc)`
   - The `doc` parameter type: `ReturnType<typeof createTypedDoc<typeof TodoSchema>>`
   - Import `TodoSchema` from `./schema.js` (cross-file import now works)
@@ -83,11 +83,11 @@ The in-memory filesystem approach has caused a cascade of DX compromises:
   - Remove the `loro()` call for clearing text input — use `doc.newTodoText.delete(0, ...)` directly
   - Delete the inline `_schema` / `AppDoc` type definitions
 
-- 🔴 **Task 2.2**: Update `server.ts` — remove loroDoc from createApp call
+- ✅ **Task 2.2**: Update `server.ts` — remove loroDoc from createApp call
   - Change `createApp(doc, loroDoc)` to `createApp(doc)`
   - Keep `sync(doc).loroDoc` only where needed for `generateStateScript` / `deserializeState`
 
-- 🔴 **Task 2.3**: Update `main.ts` — remove loroDoc from createApp call
+- ✅ **Task 2.3**: Update `main.ts` — remove loroDoc from createApp call
   - Change `createApp(doc, loroDoc)` to `createApp(doc)`
   - Remove `loroDoc.commit()` from the seed logic (auto-commit handles it)
   - Keep `syncRef.loroDoc` only for `deserializeState`
