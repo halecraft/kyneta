@@ -14,13 +14,13 @@ import {
   __conditionalRegion,
   __listRegion,
   __staticConditionalRegion,
-  insertAndTrack,
+  claimSlot,
   type ListDeltaEvent,
   type ListRefLike,
   planConditionalUpdate,
   planDeltaOps,
   planInitialRender,
-  removeInsertionResult,
+  releaseSlot,
 } from "./regions.js"
 import { __resetScopeIdCounter, Scope } from "./scope.js"
 import {
@@ -1143,10 +1143,10 @@ describe("regions", () => {
     })
   })
 
-  // Unit tests for insertAndTrack focus on NEW multi-element behavior.
+  // Unit tests for claimSlot focus on NEW multi-element behavior.
   // Single-element fragment handling is already tested by integration tests
   // (e.g., "should delete items when create handler returns DocumentFragment").
-  describe("insertAndTrack - multi-element fragments", () => {
+  describe("claimSlot - multi-element fragments", () => {
     it("returns range kind with start/end markers for multi-element fragment", () => {
       const parent = document.createElement("div")
       const frag = document.createDocumentFragment()
@@ -1157,14 +1157,14 @@ describe("regions", () => {
       frag.appendChild(span1)
       frag.appendChild(span2)
 
-      const result = insertAndTrack(parent, frag, null)
+      const slot = claimSlot(parent, frag, null)
 
-      expect(result.kind).toBe("range")
-      if (result.kind === "range") {
-        expect(result.startMarker.nodeType).toBe(Node.COMMENT_NODE)
-        expect(result.endMarker.nodeType).toBe(Node.COMMENT_NODE)
-        expect(result.startMarker.textContent).toBe("kinetic:start")
-        expect(result.endMarker.textContent).toBe("kinetic:end")
+      expect(slot.kind).toBe("range")
+      if (slot.kind === "range") {
+        expect(slot.startMarker.nodeType).toBe(Node.COMMENT_NODE)
+        expect(slot.endMarker.nodeType).toBe(Node.COMMENT_NODE)
+        expect(slot.startMarker.textContent).toBe("kinetic:start")
+        expect(slot.endMarker.textContent).toBe("kinetic:end")
       }
       // Parent should have: startMarker, span1, span2, endMarker
       expect(parent.childNodes.length).toBe(4)
@@ -1172,7 +1172,7 @@ describe("regions", () => {
     })
   })
 
-  describe("removeInsertionResult - multi-element", () => {
+  describe("releaseSlot - multi-element", () => {
     it("removes all nodes in range including markers", () => {
       const parent = document.createElement("div")
       const frag = document.createDocumentFragment()
@@ -1180,10 +1180,10 @@ describe("regions", () => {
       frag.appendChild(document.createElement("span"))
       frag.appendChild(document.createElement("span"))
 
-      const result = insertAndTrack(parent, frag, null)
+      const slot = claimSlot(parent, frag, null)
       expect(parent.querySelectorAll("span").length).toBe(3)
 
-      removeInsertionResult(parent, result)
+      releaseSlot(parent, slot)
 
       expect(parent.childNodes.length).toBe(0)
       expect(parent.querySelectorAll("span").length).toBe(0)

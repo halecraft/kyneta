@@ -10,6 +10,7 @@ import {
   type AttributeNode,
   type ConditionalBranch,
   createBuilder,
+  createConditionalBranch,
   createConditionalRegion,
   createContent,
   createElement,
@@ -604,14 +605,14 @@ describe("generateDOM - code validity", () => {
       span(1, 0, 5, 1),
     )
 
-    const conditionalBranch = {
-      condition: createContent(
+    const conditionalBranch = createConditionalBranch(
+      createContent(
         "count.get() > 0",
         "reactive",
         ["count"],
         span(1, 0, 1, 15),
       ),
-      body: [
+      [
         createElement(
           "p",
           [],
@@ -621,8 +622,8 @@ describe("generateDOM - code validity", () => {
           span(1, 0, 1, 10),
         ),
       ],
-      span: span(1, 0, 2, 1),
-    }
+      span(1, 0, 2, 1),
+    )
     const conditionalRegion = createConditionalRegion(
       [conditionalBranch],
       "count",

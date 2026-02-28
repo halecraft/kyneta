@@ -104,6 +104,23 @@ export interface ContentValue extends IRNodeBase {
 export type ContentNode = ContentValue
 
 // =============================================================================
+// Slot Types (Compile-Time Annotations)
+// =============================================================================
+
+/**
+ * Slot kind classification: how many DOM nodes a body produces.
+ *
+ * Computed at compile time from IR body structure, flows to runtime via
+ * handler configuration to optimize insertion strategy.
+ *
+ * - **single**: Body produces exactly one DOM node (element or text)
+ * - **range**: Body produces zero, multiple, or region nodes (requires markers)
+ *
+ * @internal
+ */
+export type SlotKind = "single" | "range"
+
+// =============================================================================
 // Attribute Types
 // =============================================================================
 
@@ -218,6 +235,12 @@ export interface ListRegionNode extends IRNodeBase {
    * If true, each item needs its own subscriptions.
    */
   hasReactiveItems: boolean
+
+  /**
+   * Slot kind for the body - computed at IR creation time.
+   * Determines whether create handler returns single node or fragment.
+   */
+  bodySlotKind: SlotKind
 }
 
 /**
@@ -229,6 +252,11 @@ export interface ConditionalBranch {
 
   /** The content to render when this branch is active */
   body: ChildNode[]
+
+  /**
+   * Slot kind for this branch's body - computed at IR creation time.
+   */
+  slotKind: SlotKind
 
   span: SourceSpan
 }
@@ -505,6 +533,39 @@ export function isReactiveContent(node: ContentNode): boolean {
 }
 
 // =============================================================================
+// Slot Kind Computation
+// =============================================================================
+
+/**
+ * Compute the slot kind for a body of child nodes.
+ *
+ * Returns "single" if the body produces exactly one DOM node (element or content).
+ * Returns "range" for all other cases (zero nodes, multiple nodes, regions, etc).
+ *
+ * This analysis enables compile-time optimization: when we know a body produces
+ * a single node, we can avoid fragment overhead and marker comments.
+ */
+export function computeSlotKind(body: ChildNode[]): SlotKind {
+  // Filter out statements (they don't produce DOM nodes)
+  const domProducingNodes = body.filter(node => node.kind !== "statement")
+
+  // Empty or multiple DOM-producing nodes -> range
+  if (domProducingNodes.length !== 1) {
+    return "range"
+  }
+
+  const node = domProducingNodes[0]
+
+  // Single element or content node -> single
+  if (node.kind === "element" || node.kind === "content") {
+    return "single"
+  }
+
+  // Regions, loops, conditionals -> range (they may produce multiple nodes)
+  return "range"
+}
+
+// =============================================================================
 // Factory Functions (for creating IR nodes)
 // =============================================================================
 
@@ -618,6 +679,7 @@ export function createListRegion(
     indexVariable,
     body,
     hasReactiveItems,
+    bodySlotKind: computeSlotKind(body),
     span,
   }
 }
@@ -664,13 +726,14 @@ export function createStaticConditional(
  * Create a conditional branch.
  */
 export function createConditionalBranch(
-  condition: ExpressionNode | null,
+  condition: ContentNode | null,
   body: ChildNode[],
   span: SourceSpan,
 ): ConditionalBranch {
   return {
     condition,
     body,
+    slotKind: computeSlotKind(body),
     span,
   }
 }

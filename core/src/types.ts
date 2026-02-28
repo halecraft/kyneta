@@ -203,7 +203,21 @@ export interface MountResult {
 }
 
 // =============================================================================
-// Runtime Internal Types (used by compiled code)
+// Slot Types
+// =============================================================================
+
+/**
+ * Slot kind classification: how many DOM nodes a body produces.
+ *
+ * - **single**: Body produces exactly one DOM node (element or text)
+ * - **range**: Body produces zero, multiple, or region nodes (requires markers)
+ *
+ * @internal
+ */
+export type SlotKind = "single" | "range"
+
+// =============================================================================
+// List Region Handlers
 // =============================================================================
 
 /**
@@ -228,6 +242,12 @@ export interface ListRegionHandlers<T> {
    * If not provided, move is treated as delete + insert.
    */
   move?: (fromIndex: number, toIndex: number) => void
+
+  /**
+   * Optional slot kind hint from compile-time analysis.
+   * When provided, optimizes insertion by avoiding runtime inspection.
+   */
+  slotKind?: SlotKind
 }
 
 // =============================================================================
@@ -249,19 +269,19 @@ export type ListRegionOp<T> =
 // =============================================================================
 
 /**
- * Result of inserting content into the DOM.
+ * A slot is a runtime handle to DOM content that can be removed.
  *
  * Guarantees the trackability invariant: all inserted content can be removed.
  *
- * - **single**: A single DOM node was inserted. This is the common case with
- *   no overhead — the node is tracked directly.
+ * - **single**: A single DOM node. This is the common case with no overhead —
+ *   the node is tracked directly.
  *
- * - **range**: Multiple sibling nodes were inserted (from a multi-element
- *   fragment). Start and end comment markers delimit the range for removal.
+ * - **range**: Multiple sibling nodes (from a multi-element fragment). Start
+ *   and end comment markers delimit the range for removal.
  *
  * @internal - Used by region runtime
  */
-export type InsertionResult =
+export type Slot =
   | { kind: "single"; node: Node }
   | { kind: "range"; startMarker: Comment; endMarker: Comment }
 
@@ -295,6 +315,12 @@ export interface ConditionalRegionHandlers {
 
   /** Create the "false" branch content (optional) */
   whenFalse?: () => Node
+
+  /**
+   * Optional slot kind hint from compile-time analysis.
+   * When provided, optimizes insertion by avoiding runtime inspection.
+   */
+  slotKind?: SlotKind
 }
 
 /**

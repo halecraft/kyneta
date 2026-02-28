@@ -25,6 +25,7 @@ import type {
   StaticConditionalNode,
   StaticLoopNode,
 } from "../ir.js"
+import { computeSlotKind } from "../ir.js"
 
 // =============================================================================
 // Code Generation Options
@@ -509,47 +510,39 @@ function generateBodyWithReturn(
  * Returns the leading statements and single DOM node if optimization is possible,
  * or null if the fragment approach is required.
  *
+ * Delegates to computeSlotKind for body analysis, then verifies no interleaving.
+ *
  * Optimization is possible when:
- * 1. All statements come before any DOM-producing nodes (no interleaving)
- * 2. There is exactly one DOM-producing node
- * 3. The DOM node is a simple type (element, text, or expression)
+ * 1. computeSlotKind returns "single" (exactly one DOM node)
+ * 2. All statements come before the DOM node (no interleaving)
  */
 function checkCanOptimizeDirectReturn(body: ChildNode[]): {
   leadingStatements: StatementNode[]
   domNode: ElementNode | ContentNode
 } | null {
+  // Use computeSlotKind to determine if body produces single node
+  if (computeSlotKind(body) !== "single") {
+    return null
+  }
+
+  // Find the single DOM-producing node and verify no interleaving
   const leadingStatements: StatementNode[] = []
   let domNode: ChildNode | null = null
-  let seenDomNode = false
 
   for (const child of body) {
     if (child.kind === "statement") {
-      if (seenDomNode) {
-        // Statement after a DOM node - interleaving detected, can't optimize
+      if (domNode) {
+        // Statement after DOM node - interleaving detected
         return null
       }
       leadingStatements.push(child)
     } else {
-      if (seenDomNode) {
-        // Multiple DOM nodes - can't optimize
-        return null
-      }
-      // Check if it's a simple DOM-producing type
-      if (child.kind === "element" || child.kind === "content") {
-        domNode = child
-        seenDomNode = true
-      } else {
-        // Complex node type (list-region, conditional-region, etc.) - can't optimize
-        return null
-      }
+      // This is the DOM node (computeSlotKind guarantees only one)
+      domNode = child
     }
   }
 
-  if (!domNode) {
-    // No DOM node found (only statements) - can't optimize
-    return null
-  }
-
+  // computeSlotKind returned "single" so domNode must exist
   return {
     leadingStatements,
     domNode: domNode as ElementNode | ContentNode,
@@ -611,6 +604,10 @@ function generateListRegion(
   lines.push(...generateBodyWithReturn(node.body, bodyState))
 
   lines.push(`${innerInd}},`)
+
+  // Emit slotKind from compile-time analysis
+  lines.push(`${innerInd}slotKind: ${JSON.stringify(node.bodySlotKind)},`)
+
   lines.push(`${ind}}, ${state.scopeVar})`)
 
   return lines
@@ -673,6 +670,11 @@ function generateConditionalRegion(
     lines.push(`${innerInd}},`)
   }
 
+  // Emit slotKind from compile-time analysis (use first branch's slotKind)
+  lines.push(
+    `${innerInd}slotKind: ${JSON.stringify(node.branches[0].slotKind)},`,
+  )
+
   lines.push(`${ind}}, ${state.scopeVar})`)
 
   return lines
@@ -710,6 +712,11 @@ function generateStaticConditional(
     lines.push(...generateBranchBody(elseBranch.body, indented(innerState)))
     lines.push(`${innerInd}},`)
   }
+
+  // Emit slotKind from compile-time analysis
+  lines.push(
+    `${innerInd}slotKind: ${JSON.stringify(node.branches[0].slotKind)},`,
+  )
 
   lines.push(`${ind}}, ${state.scopeVar})`)
 
