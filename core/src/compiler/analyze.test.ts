@@ -1196,6 +1196,53 @@ describe("analyzeStatement - arbitrary statements", () => {
       expect(staticCond.elseBody?.length).toBe(1)
     }
   })
+
+  it("should create nested StaticConditionalNode for static else-if chain", async () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        if (a) {
+          p("first")
+        } else if (b) {
+          p("second")
+        } else {
+          p("third")
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(1)
+    expect(builder?.children[0].kind).toBe("static-conditional")
+
+    if (builder?.children[0].kind === "static-conditional") {
+      const outer = builder.children[0]
+      expect(outer.conditionSource).toBe("a")
+      expect(outer.thenBody.length).toBe(1)
+      expect(outer.thenBody[0].kind).toBe("element")
+
+      // The else-if produces a nested StaticConditionalNode in elseBody
+      // (This is the pre-unification nesting behavior — Phase 1 will flatten to branches)
+      expect(outer.elseBody).not.toBeNull()
+      expect(outer.elseBody?.length).toBe(1)
+      expect(outer.elseBody?.[0].kind).toBe("static-conditional")
+
+      if (outer.elseBody?.[0].kind === "static-conditional") {
+        const inner = outer.elseBody[0]
+        expect(inner.conditionSource).toBe("b")
+        expect(inner.thenBody.length).toBe(1)
+        expect(inner.thenBody[0].kind).toBe("element")
+        expect(inner.elseBody).not.toBeNull()
+        expect(inner.elseBody?.length).toBe(1)
+        expect(inner.elseBody?.[0].kind).toBe("element")
+      }
+    }
+  })
 })
 
 // =============================================================================

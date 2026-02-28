@@ -271,33 +271,52 @@ function generateElement(node: ElementNode, state: CodegenState): string {
  *
  * Returns code suitable for a block body: `let _html = ""; ...; return _html`
  */
-function generateBodyHtml(body: ChildNode[], state: CodegenState): string {
+/**
+ * Walk a body of child nodes, emitting lines that accumulate HTML into `_html`.
+ *
+ * This is the shared helper that eliminates the 4x copy-paste across
+ * `generateBodyHtml`, `generateStaticLoopBody`, and `generateStaticConditionalBody`.
+ *
+ * Each line is either:
+ * - A statement source (emitted verbatim)
+ * - A static-loop/conditional block (recursive structure)
+ * - `_html += \`...\`` for HTML-producing children
+ *
+ * @param body - The child nodes to walk
+ * @param state - Codegen state
+ * @param indent - Indentation prefix for each line (e.g., "  " inside a loop/conditional)
+ * @returns Array of code lines
+ */
+function emitBodyChildren(
+  body: ChildNode[],
+  state: CodegenState,
+  indent: string = "",
+): string[] {
   const lines: string[] = []
 
-  lines.push(`let _html = ""`)
-
   for (const child of body) {
-    // Statements are emitted verbatim (they execute, but don't produce HTML)
     if (child.kind === "statement") {
-      lines.push(child.source)
-    }
-    // Static loops generate a for...of that accumulates HTML
-    else if (child.kind === "static-loop") {
-      lines.push(generateStaticLoopBody(child, state))
-    }
-    // Static conditionals generate an if statement that accumulates HTML
-    else if (child.kind === "static-conditional") {
-      lines.push(generateStaticConditionalBody(child, state))
-    }
-    // All other children produce HTML fragments
-    else {
+      lines.push(`${indent}${child.source}`)
+    } else if (child.kind === "static-loop") {
+      lines.push(`${indent}${generateStaticLoopBody(child, state)}`)
+    } else if (child.kind === "static-conditional") {
+      lines.push(`${indent}${generateStaticConditionalBody(child, state)}`)
+    } else {
       const childHtml = generateChild(child, state)
       if (childHtml) {
-        lines.push(`_html += \`${childHtml}\``)
+        lines.push(`${indent}_html += \`${childHtml}\``)
       }
     }
   }
 
+  return lines
+}
+
+function generateBodyHtml(body: ChildNode[], state: CodegenState): string {
+  const lines: string[] = []
+
+  lines.push(`let _html = ""`)
+  lines.push(...emitBodyChildren(body, state))
   lines.push(`return _html`)
 
   return lines.join("; ")
@@ -475,26 +494,9 @@ function generateStaticLoopBody(
     ? `[${node.indexVariable}, ${node.itemVariable}]`
     : node.itemVariable
 
-  // Generate for...of loop that accumulates to outer _html
   const lines: string[] = []
   lines.push(`for (const ${loopVar} of ${node.iterableSource}) {`)
-
-  // Generate body content that accumulates to _html
-  for (const child of node.body) {
-    if (child.kind === "statement") {
-      lines.push(`  ${child.source}`)
-    } else if (child.kind === "static-loop") {
-      lines.push(`  ${generateStaticLoopBody(child, state)}`)
-    } else if (child.kind === "static-conditional") {
-      lines.push(`  ${generateStaticConditionalBody(child, state)}`)
-    } else {
-      const childHtml = generateChild(child, state)
-      if (childHtml) {
-        lines.push(`  _html += \`${childHtml}\``)
-      }
-    }
-  }
-
+  lines.push(...emitBodyChildren(node.body, state, "  "))
   lines.push(`}`)
 
   return lines.join("; ")
@@ -536,40 +538,11 @@ function generateStaticConditionalBody(
   const lines: string[] = []
 
   lines.push(`if (${node.conditionSource}) {`)
+  lines.push(...emitBodyChildren(node.thenBody, state, "  "))
 
-  // Generate then body content
-  for (const child of node.thenBody) {
-    if (child.kind === "statement") {
-      lines.push(`  ${child.source}`)
-    } else if (child.kind === "static-loop") {
-      lines.push(`  ${generateStaticLoopBody(child, state)}`)
-    } else if (child.kind === "static-conditional") {
-      lines.push(`  ${generateStaticConditionalBody(child, state)}`)
-    } else {
-      const childHtml = generateChild(child, state)
-      if (childHtml) {
-        lines.push(`  _html += \`${childHtml}\``)
-      }
-    }
-  }
-
-  // Generate else body if present
   if (node.elseBody && node.elseBody.length > 0) {
     lines.push(`} else {`)
-    for (const child of node.elseBody) {
-      if (child.kind === "statement") {
-        lines.push(`  ${child.source}`)
-      } else if (child.kind === "static-loop") {
-        lines.push(`  ${generateStaticLoopBody(child, state)}`)
-      } else if (child.kind === "static-conditional") {
-        lines.push(`  ${generateStaticConditionalBody(child, state)}`)
-      } else {
-        const childHtml = generateChild(child, state)
-        if (childHtml) {
-          lines.push(`  _html += \`${childHtml}\``)
-        }
-      }
-    }
+    lines.push(...emitBodyChildren(node.elseBody, state, "  "))
   }
 
   lines.push(`}`)

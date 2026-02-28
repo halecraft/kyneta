@@ -335,6 +335,57 @@ describe("generateHTML - static conditionals", () => {
     expect(code).toContain("const msg = 'hello'")
     expect(code).toContain("<p>")
   })
+
+  it("should generate nested if/else-if/else for static else-if chain", () => {
+    const pFirst = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("First", span(3, 6, 3, 13))],
+      span(3, 4, 3, 15),
+    )
+    const pSecond = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("Second", span(5, 6, 5, 14))],
+      span(5, 4, 5, 16),
+    )
+    const pThird = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("Third", span(7, 6, 7, 13))],
+      span(7, 4, 7, 15),
+    )
+
+    // Pre-unification: static else-if produces nested StaticConditionalNode in elseBody
+    const innerCond = createStaticConditional(
+      "condB",
+      [pSecond],
+      [pThird],
+      span(4, 2, 8, 3),
+    )
+    const outerCond = createStaticConditional(
+      "condA",
+      [pFirst],
+      [innerCond],
+      span(2, 2, 8, 3),
+    )
+    const builder = createBuilder("div", [], [], [outerCond], span(1, 0, 9, 1))
+
+    const code = generateHTML(builder)
+
+    // Should produce nested conditional structure
+    expect(code).toContain("condA")
+    expect(code).toContain("condB")
+    expect(code).toContain("<p>First</p>")
+    expect(code).toContain("<p>Second</p>")
+    expect(code).toContain("<p>Third</p>")
+  })
 })
 
 // =============================================================================

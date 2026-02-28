@@ -50,6 +50,7 @@ export {
   createListRegion,
   createSpan,
   // Slot computation
+  computeHasReactiveItems,
   computeSlotKind,
   // Tree merge
   mergeConditionalBodies,

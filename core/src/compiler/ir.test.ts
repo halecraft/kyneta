@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest"
 import {
   type AttributeNode,
   type ConditionalBranch,
+  computeHasReactiveItems,
   createBuilder,
   createConditionalRegion,
   createContent,
@@ -17,6 +18,9 @@ import {
   createListRegion,
   createLiteral,
   createSpan,
+  createStatement,
+  createStaticConditional,
+  createStaticLoop,
 } from "./ir.js"
 
 // =============================================================================
@@ -370,5 +374,122 @@ describe("createBuilder - dependency collection", () => {
       ).length
       expect(itemsCount).toBe(1)
     })
+  })
+})
+
+// =============================================================================
+// computeHasReactiveItems Tests
+// =============================================================================
+
+describe("computeHasReactiveItems", () => {
+  it("returns false for empty body", () => {
+    expect(computeHasReactiveItems([])).toBe(false)
+  })
+
+  it("returns false for purely static body", () => {
+    const body = [
+      createLiteral("Hello", span()),
+      createElement("p", [], [], [], [createLiteral("World", span())], span()),
+    ]
+    expect(computeHasReactiveItems(body)).toBe(false)
+  })
+
+  it("returns false for render-time content", () => {
+    const body = [createContent("someVar", "render", [], span())]
+    expect(computeHasReactiveItems(body)).toBe(false)
+  })
+
+  it("returns false for statements only", () => {
+    const body = [createStatement("console.log('hi')", span())]
+    expect(computeHasReactiveItems(body)).toBe(false)
+  })
+
+  it("returns true for reactive content", () => {
+    const body = [
+      createContent("item.text.get()", "reactive", ["item.text"], span()),
+    ]
+    expect(computeHasReactiveItems(body)).toBe(true)
+  })
+
+  it("returns true for element with reactive attributes", () => {
+    const attr: AttributeNode = {
+      name: "class",
+      value: createContent(
+        "item.active.get() ? 'on' : 'off'",
+        "reactive",
+        ["item.active"],
+        span(),
+      ),
+    }
+    const body = [createElement("div", [attr], [], [], [], span())]
+    expect(computeHasReactiveItems(body)).toBe(true)
+  })
+
+  it("returns true for element with reactive children", () => {
+    const reactiveChild = createContent(
+      "item.count.get()",
+      "reactive",
+      ["item.count"],
+      span(),
+    )
+    const body = [createElement("span", [], [], [], [reactiveChild], span())]
+    expect(computeHasReactiveItems(body)).toBe(true)
+  })
+
+  it("returns true when body contains a list region", () => {
+    const li = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createLiteral("x", span())],
+      span(),
+    )
+    const listRegion = createListRegion("items", "item", null, [li], span())
+    expect(computeHasReactiveItems([listRegion])).toBe(true)
+  })
+
+  it("returns true when body contains a conditional region", () => {
+    const p = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("Yes", span())],
+      span(),
+    )
+    const branch: ConditionalBranch = {
+      condition: createContent("cond.get()", "reactive", ["cond"], span()),
+      body: [p],
+      slotKind: "single",
+      span: span(),
+    }
+    const condRegion = createConditionalRegion([branch], "cond", span())
+    expect(computeHasReactiveItems([condRegion])).toBe(true)
+  })
+
+  it("returns false for static loop (shallow — does not recurse)", () => {
+    const reactiveChild = createContent("x.get()", "reactive", ["x"], span())
+    const li = createElement("li", [], [], [], [reactiveChild], span())
+    const staticLoop = createStaticLoop("[1, 2, 3]", "x", null, [li], span())
+    // Shallow check: static-loop is not itself reactive at this level
+    expect(computeHasReactiveItems([staticLoop])).toBe(false)
+  })
+
+  it("returns false for static conditional (shallow — does not recurse)", () => {
+    const reactiveChild = createContent("x.get()", "reactive", ["x"], span())
+    const p = createElement("p", [], [], [], [reactiveChild], span())
+    const staticCond = createStaticConditional("true", [p], null, span())
+    // Shallow check: static-conditional is not itself reactive at this level
+    expect(computeHasReactiveItems([staticCond])).toBe(false)
+  })
+
+  it("returns true when mixed with non-reactive siblings", () => {
+    const body = [
+      createLiteral("static", span()),
+      createContent("item.name.get()", "reactive", ["item.name"], span()),
+      createElement("br", [], [], [], [], span()),
+    ]
+    expect(computeHasReactiveItems(body)).toBe(true)
   })
 })

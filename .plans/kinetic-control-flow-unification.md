@@ -207,17 +207,17 @@ type IRNodeKind =
 
 ## Phases and Tasks
 
-### Phase -1: Extract HTML body-walking helper 🔴
+### Phase -1: Extract HTML body-walking helper ✅
 
 **Goal**: Eliminate the 4x copy-paste in `html.ts` before the unification touches those code paths. This makes the subsequent phases smaller and less error-prone. Also add baseline tests for static else-if chains (no coverage exists today).
 
-- 🔴 Task -1.1: Extract `emitBodyChildren(body: ChildNode[], state: CodegenState): string[]` in `html.ts` that walks a body array and returns lines of code (statement source, static-loop/conditional recursion, or `_html += \`...\``). This is the pattern currently duplicated in `generateBodyHtml`, `generateStaticLoopBody`, and `generateStaticConditionalBody` (twice).
-- 🔴 Task -1.2: Refactor `generateBodyHtml` to delegate to `emitBodyChildren`
-- 🔴 Task -1.3: Refactor `generateStaticLoopBody` to delegate to `emitBodyChildren`
-- 🔴 Task -1.4: Refactor `generateStaticConditionalBody` to delegate to `emitBodyChildren`
-- 🔴 Task -1.5: Extract `computeHasReactiveItems(body: ChildNode[]): boolean` as a pure function in `ir.ts`, alongside `computeSlotKind`. This is a **shallow** check (direct children only) — it answers "do items at this level need their own subscriptions?" not "does any transitive descendant have reactive content?" Preserve the existing semantics from `createListRegion`'s inline computation. Update `createListRegion` (soon `createLoop`) to call it.
-- 🔴 Task -1.6: Add baseline tests for static else-if chains in `analyze.test.ts` and `dom.test.ts`. Currently no tests exercise `if/else-if/else` where all conditions are render-time. This produces nested `StaticConditionalNode` in `elseBody` today — capture that behavior before unification changes it to flat branches. Also add a DOM codegen test and an HTML codegen test for the same pattern.
-- 🔴 Task -1.7: Verify all tests pass and build succeeds
+- ✅ Task -1.1: Extract `emitBodyChildren(body: ChildNode[], state: CodegenState, indent?: string): string[]` in `html.ts` that walks a body array and returns lines of code (statement source, static-loop/conditional recursion, or `_html += \`...\``). This is the pattern currently duplicated in `generateBodyHtml`, `generateStaticLoopBody`, and `generateStaticConditionalBody` (twice).
+- ✅ Task -1.2: Refactor `generateBodyHtml` to delegate to `emitBodyChildren`
+- ✅ Task -1.3: Refactor `generateStaticLoopBody` to delegate to `emitBodyChildren`
+- ✅ Task -1.4: Refactor `generateStaticConditionalBody` to delegate to `emitBodyChildren`
+- ✅ Task -1.5: Extract `computeHasReactiveItems(body: ChildNode[]): boolean` as a pure function in `ir.ts`, alongside `computeSlotKind`. This is a **shallow** check (direct children only) — it answers "do items at this level need their own subscriptions?" not "does any transitive descendant have reactive content?" Preserve the existing semantics from `createListRegion`'s inline computation. Update `createListRegion` (soon `createLoop`) to call it. Added to `compiler/index.ts` exports.
+- ✅ Task -1.6: Add baseline tests for static else-if chains in `analyze.test.ts`, `dom.test.ts`, and `html.test.ts`. Currently no tests exercise `if/else-if/else` where all conditions are render-time. This produces nested `StaticConditionalNode` in `elseBody` today — captured that behavior before unification changes it to flat branches. Also added `computeHasReactiveItems` unit tests (12 cases) in `ir.test.ts`.
+- ✅ Task -1.7: Verify all tests pass and build succeeds (593 tests, up from 578)
 
 ### Phase 0: Unify Loops — LoopNode 🔴
 

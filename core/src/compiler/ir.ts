@@ -608,6 +608,28 @@ export function computeSlotKind(body: ChildNode[]): SlotKind {
   return "range"
 }
 
+/**
+ * Whether any direct child in a body has reactive content.
+ *
+ * Shallow check — does not recurse into nested loops/conditionals.
+ * Answers: "do items at this level need their own subscriptions?"
+ *
+ * A child is considered reactive if it:
+ * - Is reactive content (binding time === "reactive")
+ * - Is an element with reactive attributes or children
+ * - Is a list region (reactive by definition)
+ * - Is a conditional region (reactive by definition)
+ */
+export function computeHasReactiveItems(body: ChildNode[]): boolean {
+  return body.some(
+    child =>
+      isReactiveContent(child) ||
+      (child.kind === "element" && child.isReactive) ||
+      child.kind === "list-region" ||
+      child.kind === "conditional-region",
+  )
+}
+
 // =============================================================================
 // Tree Merge Functions
 // =============================================================================
@@ -1069,13 +1091,7 @@ export function createListRegion(
   body: ChildNode[],
   span: SourceSpan,
 ): ListRegionNode {
-  const hasReactiveItems = body.some(
-    child =>
-      isReactiveContent(child) ||
-      (child.kind === "element" && child.isReactive) ||
-      child.kind === "list-region" ||
-      child.kind === "conditional-region",
-  )
+  const hasReactiveItems = computeHasReactiveItems(body)
 
   return {
     kind: "list-region",
