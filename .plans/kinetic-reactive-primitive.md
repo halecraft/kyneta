@@ -229,15 +229,15 @@ export function __subscribe(ref: Reactive, handler: () => void, scope: Scope) {
 - ✅ Task 0.8: Add unit tests for symbol identity and type guard
 - ✅ Task 0.9: Add to workspace `pnpm-workspace.yaml` if needed (not needed — `packages/*` already included)
 
-### Phase 1: Implement LocalRef 🔴
+### Phase 1: Implement LocalRef ✅
 
 **Goal**: Provide UI-only reactive state with subscribe function.
 
-- 🔴 Task 1.1: Implement `LocalRef<T>` class in `packages/reactive/src/index.ts`
-- 🔴 Task 1.2: Implement `[REACTIVE]` subscribe function on LocalRef
-- 🔴 Task 1.3: Implement `get()`, `set()`, `subscribe()` methods
-- 🔴 Task 1.4: Ensure `set()` only notifies if value changed (`===` check)
-- 🔴 Task 1.5: Add unit tests for LocalRef behavior
+- ✅ Task 1.1: Implement `LocalRef<T>` class in `packages/reactive/src/index.ts`
+- ✅ Task 1.2: Implement `[REACTIVE]` subscribe function on LocalRef
+- ✅ Task 1.3: Implement `get()`, `set()`, `subscribe()` methods
+- ✅ Task 1.4: Ensure `set()` only notifies if value changed (`===` check)
+- ✅ Task 1.5: Add unit tests for LocalRef behavior (11 tests)
 
 ### Phase 2: Update @loro-extended/kinetic 🔴
 
