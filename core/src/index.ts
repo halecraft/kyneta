@@ -76,11 +76,7 @@ export {
   hydrateListRegion,
   type ListHydrationHandler,
 } from "./runtime/hydrate.js"
-export {
-  __conditionalRegion,
-  __listRegion,
-  __staticConditionalRegion,
-} from "./runtime/regions.js"
+export { __conditionalRegion, __listRegion } from "./runtime/regions.js"
 export {
   __subscribe,
   __subscribeMultiple,

@@ -165,36 +165,52 @@ interface ElementNode {
 
 ### Control Flow Nodes
 
-#### `ListRegionNode`
-Reactive list iteration (delta-driven updates).
+Control flow nodes are **parameterized by binding time** — a single type handles both render-time and reactive cases, with codegen dispatching on the binding-time field. This mirrors the `ContentValue` pattern where `bindingTime` determines behavior.
+
+#### `LoopNode`
+Unified loop representation for both render-time and reactive iteration.
 
 ```typescript
-interface ListRegionNode {
-  kind: "list-region"
-  listSource: string            // e.g., "doc.todos"
-  itemVariable: string          // e.g., "item"
-  indexVariable: string | null  // e.g., "i" (optional)
-  body: ChildNode[]             // Template for each item
-  hasReactiveItems: boolean
+interface LoopNode {
+  kind: "loop"
+  iterableSource: string              // e.g., "doc.todos", "[1, 2, 3]"
+  iterableBindingTime: BindingTime    // "render" or "reactive"
+  itemVariable: string                // e.g., "item"
+  indexVariable: string | null        // e.g., "i" (optional)
+  body: ChildNode[]                   // Template for each item
+  hasReactiveItems: boolean           // Computed at IR creation
+  bodySlotKind: SlotKind              // Computed at IR creation
+  dependencies: string[]              // Empty for render-time
 }
 ```
 
-#### `ConditionalRegionNode`
-Reactive conditional rendering.
+**Codegen dispatch:**
+- `iterableBindingTime === "render"` → inline `for...of` loop
+- `iterableBindingTime === "reactive"` → `__listRegion()` with delta handlers
+
+#### `ConditionalNode`
+Unified conditional representation for both render-time and reactive branches.
 
 ```typescript
-interface ConditionalRegionNode {
-  kind: "conditional-region"
-  branches: ConditionalBranch[]
-  subscriptionTarget: string | null  // Reactive dependency
+interface ConditionalNode {
+  kind: "conditional"
+  branches: ConditionalBranch[]       // Flat array (else-if chains not nested)
+  subscriptionTarget: string | null   // null = render-time, string = reactive
 }
 
 interface ConditionalBranch {
-  condition: ContentValue | null  // null = else branch
+  condition: ContentValue | null      // null = else branch
   body: ChildNode[]
-  slotKind: SlotKind              // Computed at IR creation
+  slotKind: SlotKind                  // Computed at IR creation
+  span: SourceSpan
 }
 ```
+
+**Codegen dispatch:**
+- `subscriptionTarget === null` → inline `if/else-if/else` chain
+- `subscriptionTarget !== null` → attempt tree-merge dissolution, fallback to `__conditionalRegion()`
+
+**Note:** Else-if chains always produce flat `branches` arrays, not nested conditionals. The analysis phase flattens AST nesting into the branches array.
 
 ### Statement Preservation Nodes
 
@@ -217,51 +233,29 @@ interface StatementNode {
 
 **Not captured as statements:**
 - Element factory calls → `ElementNode`
-- Reactive `for...of` → `ListRegionNode`
-- Reactive `if` → `ConditionalRegionNode`
+- `for...of` loops → `LoopNode`
+- `if` statements → `ConditionalNode`
 - Block statements → recursively analyzed
 - Return statements → compile-time error
 
-#### `StaticLoopNode`
-Non-reactive `for...of` loops that run once at render time.
-
-```typescript
-interface StaticLoopNode {
-  kind: "static-loop"
-  iterableSource: string        // e.g., "[1, 2, 3]"
-  itemVariable: string          // e.g., "x"
-  indexVariable: string | null
-  body: ChildNode[]
-}
-```
-
-#### `StaticConditionalNode`
-Non-reactive `if` statements that evaluate once at render time.
-
-```typescript
-interface StaticConditionalNode {
-  kind: "static-conditional"
-  conditionSource: string       // e.g., "true", "items.length > 0"
-  thenBody: ChildNode[]
-  elseBody: ChildNode[] | null
-}
-```
-
 ### Union Type
 
-All child nodes are unified under `ChildNode`:
+All child nodes are unified under `ChildNode` (6 members in 3 categories):
 
 ```typescript
 type ChildNode =
-  | ElementNode
-  | ContentValue
-  | ListRegionNode
-  | ConditionalRegionNode
-  | BindingNode
-  | StatementNode
-  | StaticLoopNode
-  | StaticConditionalNode
+  | ElementNode      // Applicative: fixed structure
+  | ContentValue     // Applicative: fixed structure
+  | LoopNode         // Monadic: dynamic structure (binding-time parameterized)
+  | ConditionalNode  // Monadic: dynamic structure (binding-time parameterized)
+  | BindingNode      // Effects: side effects
+  | StatementNode    // Effects: side effects
 ```
+
+The taxonomy reflects the algebraic structure:
+- **Applicative** nodes have fixed DOM structure at compile time
+- **Monadic** nodes have dynamic structure determined by runtime values
+- **Effects** nodes produce side effects without DOM structure
 
 ## Code Generation
 
@@ -349,14 +343,14 @@ The compiler detects reactive types by analyzing TypeScript's type system:
 
 When a reactive type is detected:
 - Expressions become `ContentValue` with `bindingTime: "reactive"`
-- Loops over `ListRef` become `ListRegionNode`
-- Conditionals with reactive conditions become `ConditionalRegionNode`
+- Loops over `ListRef` become `LoopNode` with `iterableBindingTime: "reactive"`
+- Conditionals with reactive conditions become `ConditionalNode` with `subscriptionTarget: string`
 
 Non-reactive equivalents:
 - Literal expressions: `bindingTime: "literal"`
 - Render-time expressions: `bindingTime: "render"`
-- Static loops: `StaticLoopNode`
-- Static conditionals: `StaticConditionalNode`
+- Render-time loops: `LoopNode` with `iterableBindingTime: "render"`
+- Render-time conditionals: `ConditionalNode` with `subscriptionTarget: null`
 
 ## Design Decisions
 
@@ -386,13 +380,20 @@ Kinetic Compiler Error: Return statement not supported in builder function at li
 Builder functions must produce DOM elements, not return early.
 ```
 
-### Static vs Reactive Control Flow
+### Binding-Time Parameterization
 
-The compiler distinguishes between:
-- **Reactive**: Subscribes to changes, delta-driven updates
-- **Static**: Evaluates once at render time
+The compiler uses **binding time** as the universal parameterization axis for all value-producing and control-flow constructs:
 
-Users don't need to know this distinction — both "just work" with natural TypeScript syntax. The compiler analyzes the iterable/condition to determine which to use.
+| Construct | Binding-Time Field | Render-Time | Reactive |
+|-----------|-------------------|-------------|----------|
+| `ContentValue` | `bindingTime` | `"literal"` or `"render"` | `"reactive"` |
+| `LoopNode` | `iterableBindingTime` | `"render"` | `"reactive"` |
+| `ConditionalNode` | `subscriptionTarget` | `null` | `string` (ref path) |
+
+Users don't need to know this distinction — both "just work" with natural TypeScript syntax. The compiler analyzes expressions using TypeScript's type system to determine binding time, then generates appropriate code:
+
+- **Render-time**: Inline control flow (`for`, `if/else`), evaluates once
+- **Reactive**: Runtime region management (`__listRegion`, `__conditionalRegion`), delta-driven updates
 
 ## File Structure
 
@@ -419,11 +420,12 @@ Generated code calls these runtime functions:
 - `__subscribeWithValue(ref, getter, callback, scope)` — Reactive subscriptions
 - `__listRegion(parent, list, handlers, scope)` — Delta-driven list rendering
 - `__conditionalRegion(marker, target, condition, handlers, scope)` — Reactive conditionals
-- `__staticConditionalRegion(marker, condition, handlers, scope)` — Static conditionals
 - `__bindTextValue(input, ref, scope)` — Two-way text binding
 - `__bindChecked(input, ref, scope)` — Two-way checkbox binding
 
 All runtime functions accept a `scope` parameter for cleanup tracking.
+
+**Note:** Render-time loops and conditionals do not call runtime functions — they emit inline `for...of` loops and `if/else` statements that execute once at render time.
 
 ### List Region Architecture
 

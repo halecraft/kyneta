@@ -44,15 +44,14 @@ import type {
 } from "./ir.js"
 import {
   createBuilder,
+  createConditional,
   createConditionalBranch,
-  createConditionalRegion,
   createContent,
   createElement,
   createLiteral,
   createLoop,
   createSpan,
   createStatement,
-  createStaticConditional,
 } from "./ir.js"
 
 // =============================================================================
@@ -648,6 +647,12 @@ export function analyzeForOfStatement(stmt: ForOfStatement): ChildNode | null {
 
 /**
  * Analyze an if statement.
+ *
+ * Always produces a unified ConditionalNode with flat branches.
+ * - subscriptionTarget === null → render-time conditional
+ * - subscriptionTarget !== null → reactive conditional
+ *
+ * Else-if chains are flattened into the branches array (not nested).
  */
 export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
   const span = getSpan(stmt)
@@ -656,7 +661,7 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
   const condExpr = stmt.getExpression()
   const condition = analyzeExpression(condExpr)
 
-  // Extract subscription target
+  // Extract subscription target for reactive conditions
   let subscriptionTarget: string | null = null
   if (
     condition.bindingTime === "reactive" &&
@@ -669,51 +674,34 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
   const thenStmt = stmt.getThenStatement()
   const thenBody = analyzeStatementBody(thenStmt)
 
-  // Analyze else branch (if present)
-  const elseStmt = stmt.getElseStatement()
-  let elseBody: ChildNode[] | null = null
-
-  if (elseStmt) {
-    // else if -> recurse
-    if (elseStmt.getKind() === SyntaxKind.IfStatement) {
-      const nestedIf = analyzeIfStatement(elseStmt as IfStatement)
-      if (nestedIf) {
-        // For reactive nested if, merge into conditional region
-        if (nestedIf.kind === "conditional-region") {
-          // Build branches for reactive conditional
-          const branches: ConditionalBranch[] = [
-            createConditionalBranch(condition, thenBody, getSpan(thenStmt)),
-            ...nestedIf.branches,
-          ]
-          // Use the first reactive subscription target found
-          if (!subscriptionTarget && nestedIf.subscriptionTarget) {
-            subscriptionTarget = nestedIf.subscriptionTarget
-          }
-          return createConditionalRegion(branches, subscriptionTarget, span)
-        }
-        // For static nested if, wrap it as the else body
-        elseBody = [nestedIf]
-      }
-    } else {
-      // else -> analyze body
-      elseBody = analyzeStatementBody(elseStmt)
-    }
-  }
-
-  // Static conditional - runs once at render time
-  if (!subscriptionTarget && condition.bindingTime !== "reactive") {
-    return createStaticConditional(condition.source, thenBody, elseBody, span)
-  }
-
-  // Reactive conditional - subscribes to condition changes
+  // Build branches array - always use flat structure
   const branches: ConditionalBranch[] = [
     createConditionalBranch(condition, thenBody, getSpan(thenStmt)),
   ]
-  if (elseBody !== null && elseStmt) {
-    branches.push(createConditionalBranch(null, elseBody, getSpan(elseStmt)))
+
+  // Analyze else branch (if present)
+  const elseStmt = stmt.getElseStatement()
+
+  if (elseStmt) {
+    // else if -> recurse and flatten
+    if (elseStmt.getKind() === SyntaxKind.IfStatement) {
+      const nestedIf = analyzeIfStatement(elseStmt as IfStatement)
+      if (nestedIf && nestedIf.kind === "conditional") {
+        // Flatten: merge nested branches into this conditional
+        branches.push(...nestedIf.branches)
+        // Inherit subscription target if we don't have one
+        if (!subscriptionTarget && nestedIf.subscriptionTarget) {
+          subscriptionTarget = nestedIf.subscriptionTarget
+        }
+      }
+    } else {
+      // else -> analyze body and add as final branch with null condition
+      const elseBody = analyzeStatementBody(elseStmt)
+      branches.push(createConditionalBranch(null, elseBody, getSpan(elseStmt)))
+    }
   }
 
-  return createConditionalRegion(branches, subscriptionTarget, span)
+  return createConditional(branches, subscriptionTarget, span)
 }
 
 /**

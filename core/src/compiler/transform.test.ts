@@ -401,7 +401,7 @@ describe("collectRequiredImports", () => {
       [],
       [
         {
-          kind: "conditional-region",
+          kind: "conditional",
           branches: [
             {
               condition: {
@@ -412,6 +412,7 @@ describe("collectRequiredImports", () => {
                 span,
               },
               body: [],
+              slotKind: "range",
               span,
             },
           ],
@@ -427,14 +428,14 @@ describe("collectRequiredImports", () => {
     expect(imports.has("__conditionalRegion")).toBe(true)
   })
 
-  it("should include __staticConditionalRegion for static conditionals", () => {
+  it("should NOT include __conditionalRegion for render-time conditionals", () => {
     const builder = createBuilder(
       "div",
       [],
       [],
       [
         {
-          kind: "conditional-region",
+          kind: "conditional",
           branches: [
             {
               condition: {
@@ -445,6 +446,7 @@ describe("collectRequiredImports", () => {
                 span,
               },
               body: [],
+              slotKind: "range",
               span,
             },
           ],
@@ -457,7 +459,7 @@ describe("collectRequiredImports", () => {
 
     const imports = collectRequiredImports([builder])
 
-    expect(imports.has("__staticConditionalRegion")).toBe(true)
+    // Render-time conditionals emit inline if, no runtime import needed
     expect(imports.has("__conditionalRegion")).toBe(false)
   })
 
@@ -549,7 +551,7 @@ describe("collectRequiredImports", () => {
       [],
       [
         {
-          kind: "conditional-region",
+          kind: "conditional",
           branches: [],
           subscriptionTarget: "doc.visible",
           span,
@@ -588,7 +590,7 @@ describe("mergeImports", () => {
 
   it("should merge imports with existing kinetic import", () => {
     const importLine = 'import { mount, Scope } from "@loro-extended/kinetic"'
-    const sourceFile = createSourceFile(importLine + "\n\nconst app = div()")
+    const sourceFile = createSourceFile(`${importLine}\n\nconst app = div()`)
 
     mergeImports(sourceFile, new Set(["__subscribe"]))
 
@@ -603,7 +605,7 @@ describe("mergeImports", () => {
   it("should not duplicate existing imports", () => {
     const importLine =
       'import { __subscribe, mount } from "@loro-extended/kinetic"'
-    const sourceFile = createSourceFile(importLine + "\n\nconst app = div()")
+    const sourceFile = createSourceFile(`${importLine}\n\nconst app = div()`)
 
     mergeImports(sourceFile, new Set(["__subscribe", "__listRegion"]))
 
@@ -995,7 +997,7 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
     // Should generate __conditionalRegion because CounterRef is detected as reactive
     expect(result.code).toContain("__conditionalRegion")
-    expect(result.ir[0].children[0].kind).toBe("conditional-region")
+    expect(result.ir[0].children[0].kind).toBe("conditional")
   })
 
   it("should resolve createTypedDoc return type", () => {

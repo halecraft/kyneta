@@ -33,9 +33,9 @@ import type { LoroEventBatch } from "loro-crdt"
 import type {
   ConditionalRegionHandlers,
   ConditionalRegionOp,
-  Slot,
   ListRegionHandlers,
   ListRegionOp,
+  Slot,
 } from "../types.js"
 import type { Scope } from "./scope.js"
 import { __subscribe } from "./subscribe.js"
@@ -74,9 +74,10 @@ export function claimSlot(
     // Compile-time analysis determined this is a single node
     if (
       content.nodeType === Node.DOCUMENT_FRAGMENT_NODE &&
-      content.childNodes.length === 1
+      content.childNodes.length === 1 &&
+      content.firstChild
     ) {
-      const child = content.firstChild!
+      const child = content.firstChild
       parent.insertBefore(content, referenceNode)
       return { kind: "single", node: child }
     }
@@ -114,9 +115,9 @@ export function claimSlot(
       const placeholder = document.createTextNode("")
       parent.insertBefore(placeholder, referenceNode)
       return { kind: "single", node: placeholder }
-    } else if (childCount === 1) {
+    } else if (childCount === 1 && content.firstChild) {
       // Single-element fragment - track the child directly (no overhead)
-      const child = content.firstChild!
+      const child = content.firstChild
       parent.insertBefore(content, referenceNode)
       return { kind: "single", node: child }
     } else {
@@ -679,46 +680,4 @@ function updateConditionalRegion(
 
   // Execute the operation (imperative)
   executeConditionalOp(parent, marker, state, handlers, op)
-}
-
-/**
- * Create a simple conditional region that doesn't need a ref subscription.
- * Used for static conditions evaluated once.
- *
- * @param marker - A comment node marking the position
- * @param condition - The condition value
- * @param handlers - Callbacks for creating branches
- * @param scope - The scope that owns this region
- *
- * @internal - Called by compiled code
- */
-export function __staticConditionalRegion(
-  marker: Comment,
-  condition: boolean,
-  handlers: ConditionalRegionHandlers,
-  scope: Scope,
-): void {
-  const parent = marker.parentNode
-  if (!parent) {
-    throw new Error("Conditional region marker must have a parent node")
-  }
-
-  let node: Node | null = null
-
-  if (condition && handlers.whenTrue) {
-    node = handlers.whenTrue()
-  } else if (!condition && handlers.whenFalse) {
-    node = handlers.whenFalse()
-  }
-
-  if (node) {
-    // Insert after marker, handling DocumentFragment
-    const referenceNode = marker.nextSibling
-    const slot = claimSlot(parent, node, referenceNode, handlers.slotKind)
-
-    // Register cleanup using releaseSlot for proper multi-element handling
-    scope.onDispose(() => {
-      releaseSlot(parent, slot)
-    })
-  }
 }

@@ -825,9 +825,9 @@ describe("analyzeBuilder", () => {
     const builder = analyzeBuilder(divCall)
     expect(builder).not.toBeNull()
     expect(builder?.children).toHaveLength(1)
-    expect(builder?.children[0].kind).toBe("conditional-region")
+    expect(builder?.children[0].kind).toBe("conditional")
 
-    if (builder?.children[0].kind === "conditional-region") {
+    if (builder?.children[0].kind === "conditional") {
       expect(builder.children[0].branches).toHaveLength(2)
       expect(builder.children[0].branches[0].condition).not.toBeNull()
       expect(builder.children[0].branches[1].condition).toBeNull() // else branch
@@ -1027,9 +1027,9 @@ describe("analyzeStatement - arbitrary statements", () => {
 
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(1)
-    expect(builder?.children[0].kind).toBe("conditional-region")
+    expect(builder?.children[0].kind).toBe("conditional")
 
-    if (builder?.children[0].kind === "conditional-region") {
+    if (builder?.children[0].kind === "conditional") {
       const conditional = builder.children[0]
       const thenBranch = conditional.branches[0]
       expect(thenBranch.body.length).toBe(2)
@@ -1159,14 +1159,15 @@ describe("analyzeStatement - arbitrary statements", () => {
 
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(1)
-    expect(builder?.children[0].kind).toBe("static-conditional")
+    expect(builder?.children[0].kind).toBe("conditional")
 
-    if (builder?.children[0].kind === "static-conditional") {
-      const staticCond = builder.children[0]
-      expect(staticCond.conditionSource).toBe("true")
-      expect(staticCond.thenBody.length).toBe(1)
-      expect(staticCond.thenBody[0].kind).toBe("element")
-      expect(staticCond.elseBody).toBeNull()
+    if (builder?.children[0].kind === "conditional") {
+      const conditional = builder.children[0]
+      expect(conditional.subscriptionTarget).toBeNull() // render-time
+      expect(conditional.branches.length).toBe(1)
+      expect(conditional.branches[0].condition?.source).toBe("true")
+      expect(conditional.branches[0].body.length).toBe(1)
+      expect(conditional.branches[0].body[0].kind).toBe("element")
     }
   })
 
@@ -1189,14 +1190,16 @@ describe("analyzeStatement - arbitrary statements", () => {
 
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(1)
-    expect(builder?.children[0].kind).toBe("static-conditional")
+    expect(builder?.children[0].kind).toBe("conditional")
 
-    if (builder?.children[0].kind === "static-conditional") {
-      const staticCond = builder.children[0]
-      expect(staticCond.conditionSource).toBe("false")
-      expect(staticCond.thenBody.length).toBe(1)
-      expect(staticCond.elseBody).not.toBeNull()
-      expect(staticCond.elseBody?.length).toBe(1)
+    if (builder?.children[0].kind === "conditional") {
+      const conditional = builder.children[0]
+      expect(conditional.subscriptionTarget).toBeNull() // render-time
+      expect(conditional.branches.length).toBe(2)
+      expect(conditional.branches[0].condition?.source).toBe("false")
+      expect(conditional.branches[0].body.length).toBe(1)
+      expect(conditional.branches[1].condition).toBeNull() // else branch
+      expect(conditional.branches[1].body.length).toBe(1)
     }
   })
 
@@ -1221,29 +1224,25 @@ describe("analyzeStatement - arbitrary statements", () => {
 
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(1)
-    expect(builder?.children[0].kind).toBe("static-conditional")
+    expect(builder?.children[0].kind).toBe("conditional")
 
-    if (builder?.children[0].kind === "static-conditional") {
-      const outer = builder.children[0]
-      expect(outer.conditionSource).toBe("a")
-      expect(outer.thenBody.length).toBe(1)
-      expect(outer.thenBody[0].kind).toBe("element")
+    if (builder?.children[0].kind === "conditional") {
+      const conditional = builder.children[0]
+      expect(conditional.subscriptionTarget).toBeNull() // render-time
 
-      // The else-if produces a nested StaticConditionalNode in elseBody
-      // (This is the pre-unification nesting behavior — Phase 1 will flatten to branches)
-      expect(outer.elseBody).not.toBeNull()
-      expect(outer.elseBody?.length).toBe(1)
-      expect(outer.elseBody?.[0].kind).toBe("static-conditional")
+      // Post-unification: else-if chains produce flat branches array
+      expect(conditional.branches.length).toBe(3)
+      expect(conditional.branches[0].condition?.source).toBe("a")
+      expect(conditional.branches[0].body.length).toBe(1)
+      expect(conditional.branches[0].body[0].kind).toBe("element")
 
-      if (outer.elseBody?.[0].kind === "static-conditional") {
-        const inner = outer.elseBody[0]
-        expect(inner.conditionSource).toBe("b")
-        expect(inner.thenBody.length).toBe(1)
-        expect(inner.thenBody[0].kind).toBe("element")
-        expect(inner.elseBody).not.toBeNull()
-        expect(inner.elseBody?.length).toBe(1)
-        expect(inner.elseBody?.[0].kind).toBe("element")
-      }
+      expect(conditional.branches[1].condition?.source).toBe("b")
+      expect(conditional.branches[1].body.length).toBe(1)
+      expect(conditional.branches[1].body[0].kind).toBe("element")
+
+      expect(conditional.branches[2].condition).toBeNull() // else branch
+      expect(conditional.branches[2].body.length).toBe(1)
+      expect(conditional.branches[2].body[0].kind).toBe("element")
     }
   })
 })

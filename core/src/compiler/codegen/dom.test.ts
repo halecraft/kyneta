@@ -8,17 +8,15 @@
 import { describe, expect, it } from "vitest"
 import {
   type AttributeNode,
-  type ConditionalBranch,
   createBuilder,
+  createConditional,
   createConditionalBranch,
-  createConditionalRegion,
   createContent,
   createElement,
   createLiteral,
   createLoop,
   createSpan,
   createStatement,
-  createStaticConditional,
   type EventHandlerNode,
 } from "../ir.js"
 import { generateDOM, generateElementFactory } from "./dom.js"
@@ -284,6 +282,7 @@ describe("generateDOM", () => {
 
     it("should generate subscription for template literal content", () => {
       const reactiveExpr = createContent(
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: testing template literal source code
         "`Count: ${count.get()}`",
         "reactive",
         ["count"],
@@ -441,17 +440,17 @@ describe("generateDOM - conditional regions", () => {
       [createLiteral("Static content", span(3, 6, 3, 22))],
       span(3, 4, 3, 24),
     )
-    const branch: ConditionalBranch = {
-      condition: createContent(
+    const branch = createConditionalBranch(
+      createContent(
         "count.get() > 0",
         "reactive",
         ["count"],
         span(2, 6, 2, 22),
       ),
-      body: [pElement],
-      span: span(2, 4, 4, 3),
-    }
-    const conditionalRegion = createConditionalRegion(
+      [pElement],
+      span(2, 4, 4, 3),
+    )
+    const conditionalRegion = createConditional(
       [branch],
       "count",
       span(2, 2, 4, 3),
@@ -508,7 +507,7 @@ describe("generateDOM - conditional regions", () => {
       ],
       span(4, 4, 6, 3),
     )
-    const conditionalRegion = createConditionalRegion(
+    const conditionalRegion = createConditional(
       [trueBranch, falseBranch],
       "count",
       span(2, 2, 6, 3),
@@ -573,7 +572,7 @@ describe("generateDOM - conditional regions", () => {
       ],
       span(4, 4, 6, 3),
     )
-    const conditionalRegion = createConditionalRegion(
+    const conditionalRegion = createConditional(
       [trueBranch, falseBranch],
       "count",
       span(2, 2, 6, 3),
@@ -595,36 +594,39 @@ describe("generateDOM - conditional regions", () => {
     expect(code).toContain("createComment")
   })
 
-  it("should generate __staticConditionalRegion for static condition", () => {
+  it("should generate inline if for render-time condition", () => {
     const pElement = createElement(
       "p",
       [],
       [],
       [],
-      [createLiteral("Visible", span(3, 6, 3, 15))],
-      span(3, 4, 3, 17),
+      [createLiteral("Static content", span(3, 6, 3, 22))],
+      span(3, 4, 3, 24),
     )
-    const branch: ConditionalBranch = {
-      condition: createContent("true", "render", [], span(2, 6, 2, 10)),
-      body: [pElement],
-      span: span(2, 4, 4, 3),
-    }
-    const conditionalRegion = createConditionalRegion(
+    const branch = createConditionalBranch(
+      createContent("true", "render", [], span(2, 6, 2, 10)),
+      [pElement],
+      span(2, 4, 4, 3),
+    )
+    const conditionalNode = createConditional(
       [branch],
-      null, // No subscription target - static condition
+      null, // No subscription target - render-time condition
       span(2, 2, 4, 3),
     )
     const builder = createBuilder(
       "div",
       [],
       [],
-      [conditionalRegion],
+      [conditionalNode],
       span(1, 0, 5, 1),
     )
 
     const code = generateDOM(builder)
 
-    expect(code).toContain("__staticConditionalRegion")
+    // Render-time conditionals emit inline if, not __staticConditionalRegion
+    expect(code).toContain("if (true)")
+    expect(code).not.toContain("__staticConditionalRegion")
+    expect(code).not.toContain("__conditionalRegion")
   })
 })
 
@@ -703,7 +705,7 @@ describe("generateDOM - code validity", () => {
       ],
       span(1, 0, 2, 1),
     )
-    const conditionalRegion = createConditionalRegion(
+    const conditionalRegion = createConditional(
       [conditionalBranch],
       "count",
       span(1, 0, 3, 1),
@@ -955,12 +957,12 @@ describe("generateDOM - statements", () => {
       [createLiteral("Shown", span(3, 6, 3, 13))],
       span(3, 4, 3, 15),
     )
-    const staticCond = createStaticConditional(
-      "true",
+    const branch = createConditionalBranch(
+      createContent("true", "render", [], span(2, 4, 2, 8)),
       [pElement],
-      null,
       span(2, 2, 4, 3),
     )
+    const staticCond = createConditional([branch], null, span(2, 2, 4, 3))
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 5, 1))
 
     const code = generateDOM(builder)
@@ -987,10 +989,15 @@ describe("generateDOM - statements", () => {
       [createLiteral("No", span(5, 6, 5, 10))],
       span(5, 4, 5, 12),
     )
-    const staticCond = createStaticConditional(
-      "condition",
+    const thenBranch = createConditionalBranch(
+      createContent("condition", "render", [], span(2, 4, 2, 13)),
       [pYes],
-      [pNo],
+      span(2, 2, 4, 3),
+    )
+    const elseBranch = createConditionalBranch(null, [pNo], span(4, 2, 6, 3))
+    const staticCond = createConditional(
+      [thenBranch, elseBranch],
+      null,
       span(2, 2, 6, 3),
     )
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 7, 1))
@@ -1039,12 +1046,12 @@ describe("generateDOM - statements", () => {
       [createLiteral("msg", span(4, 6, 4, 11))],
       span(4, 4, 4, 13),
     )
-    const staticCond = createStaticConditional(
-      "showMessage",
+    const branch = createConditionalBranch(
+      createContent("showMessage", "render", [], span(2, 4, 2, 15)),
       [stmt, pElement],
-      null,
       span(2, 2, 5, 3),
     )
+    const staticCond = createConditional([branch], null, span(2, 2, 5, 3))
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 6, 1))
 
     const code = generateDOM(builder)
@@ -1080,20 +1087,24 @@ describe("generateDOM - statements", () => {
       span(7, 4, 7, 15),
     )
 
-    // Pre-unification: static else-if produces nested StaticConditionalNode in elseBody
-    const innerCond = createStaticConditional(
-      "condB",
-      [pSecond],
-      [pThird],
-      span(4, 2, 8, 3),
-    )
-    const outerCond = createStaticConditional(
-      "condA",
+    // Post-unification: static else-if uses flat branches array
+    const branchA = createConditionalBranch(
+      createContent("condA", "render", [], span(2, 4, 2, 9)),
       [pFirst],
-      [innerCond],
+      span(2, 2, 4, 3),
+    )
+    const branchB = createConditionalBranch(
+      createContent("condB", "render", [], span(4, 4, 4, 9)),
+      [pSecond],
+      span(4, 2, 6, 3),
+    )
+    const elseBranch = createConditionalBranch(null, [pThird], span(6, 2, 8, 3))
+    const staticCond = createConditional(
+      [branchA, branchB, elseBranch],
+      null,
       span(2, 2, 8, 3),
     )
-    const builder = createBuilder("div", [], [], [outerCond], span(1, 0, 9, 1))
+    const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 9, 1))
 
     const code = generateDOM(builder)
 

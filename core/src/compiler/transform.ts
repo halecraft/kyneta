@@ -197,12 +197,12 @@ export function collectRequiredImports(ir: BuilderNode[]): Set<string> {
         // Always recurse into loop body (fixes latent bug where
         // static-loop bodies were not recursed for imports)
         collectFromChildren(child.body)
-      } else if (child.kind === "conditional-region") {
-        if (child.subscriptionTarget) {
+      } else if (child.kind === "conditional") {
+        // Only add __conditionalRegion for reactive conditionals
+        if (child.subscriptionTarget !== null) {
           imports.add("__conditionalRegion")
-        } else {
-          imports.add("__staticConditionalRegion")
         }
+        // Always recurse into branch bodies
         for (const branch of child.branches) {
           collectFromChildren(branch.body)
         }

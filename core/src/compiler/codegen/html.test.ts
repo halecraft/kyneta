@@ -7,16 +7,15 @@
 
 import { describe, expect, it } from "vitest"
 import {
-  type ConditionalBranch,
   createBuilder,
-  createConditionalRegion,
+  createConditional,
+  createConditionalBranch,
   createContent,
   createElement,
   createLiteral,
   createLoop,
   createSpan,
   createStatement,
-  createStaticConditional,
 } from "../ir.js"
 import { generateHTML } from "./html.js"
 
@@ -111,12 +110,17 @@ describe("generateHTML - statements", () => {
       [createLiteral("msg", span(4, 6, 4, 11))],
       span(4, 4, 4, 13),
     )
-    const branch: ConditionalBranch = {
-      condition: createContent("showMessage", "render", [], span(2, 6, 2, 17)),
-      body: [stmt, pElement],
-      span: span(2, 4, 5, 3),
-    }
-    const conditionalRegion = createConditionalRegion(
+    const branch = createConditionalBranch(
+      createContent(
+        "showMessage",
+        "reactive",
+        ["showMessage"],
+        span(2, 6, 2, 17),
+      ),
+      [stmt, pElement],
+      span(2, 4, 5, 3),
+    )
+    const conditionalRegion = createConditional(
       [branch],
       "showMessage",
       span(2, 2, 5, 3),
@@ -273,12 +277,12 @@ describe("generateHTML - static conditionals", () => {
       [createLiteral("Shown", span(3, 6, 3, 13))],
       span(3, 4, 3, 15),
     )
-    const staticCond = createStaticConditional(
-      "true",
+    const branch = createConditionalBranch(
+      createContent("true", "render", [], span(2, 4, 2, 8)),
       [pElement],
-      null,
       span(2, 2, 4, 3),
     )
+    const staticCond = createConditional([branch], null, span(2, 2, 4, 3))
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 5, 1))
 
     const code = generateHTML(builder)
@@ -305,19 +309,25 @@ describe("generateHTML - static conditionals", () => {
       [createLiteral("No", span(5, 6, 5, 10))],
       span(5, 4, 5, 12),
     )
-    const staticCond = createStaticConditional(
-      "condition",
+    const thenBranch = createConditionalBranch(
+      createContent("condition", "render", [], span(2, 4, 2, 13)),
       [pYes],
-      [pNo],
+      span(2, 2, 4, 3),
+    )
+    const elseBranch = createConditionalBranch(null, [pNo], span(4, 2, 6, 3))
+    const staticCond = createConditional(
+      [thenBranch, elseBranch],
+      null,
       span(2, 2, 6, 3),
     )
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 7, 1))
 
     const code = generateHTML(builder)
 
-    // Should have if/else structure
+    // Should have ternary structure with both branches
     expect(code).toContain("condition")
-    expect(code).toContain("else")
+    expect(code).toContain("<p>Yes</p>")
+    expect(code).toContain("<p>No</p>")
   })
 
   it("should handle statements inside static conditional", () => {
@@ -330,12 +340,12 @@ describe("generateHTML - static conditionals", () => {
       [createLiteral("msg", span(4, 6, 4, 11))],
       span(4, 4, 4, 13),
     )
-    const staticCond = createStaticConditional(
-      "showMessage",
+    const branch = createConditionalBranch(
+      createContent("showMessage", "render", [], span(2, 4, 2, 15)),
       [stmt, pElement],
-      null,
       span(2, 2, 5, 3),
     )
+    const staticCond = createConditional([branch], null, span(2, 2, 5, 3))
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 6, 1))
 
     const code = generateHTML(builder)
@@ -371,24 +381,28 @@ describe("generateHTML - static conditionals", () => {
       span(7, 4, 7, 15),
     )
 
-    // Pre-unification: static else-if produces nested StaticConditionalNode in elseBody
-    const innerCond = createStaticConditional(
-      "condB",
-      [pSecond],
-      [pThird],
-      span(4, 2, 8, 3),
-    )
-    const outerCond = createStaticConditional(
-      "condA",
+    // Post-unification: static else-if uses flat branches array
+    const branchA = createConditionalBranch(
+      createContent("condA", "render", [], span(2, 4, 2, 9)),
       [pFirst],
-      [innerCond],
+      span(2, 2, 4, 3),
+    )
+    const branchB = createConditionalBranch(
+      createContent("condB", "render", [], span(4, 4, 4, 9)),
+      [pSecond],
+      span(4, 2, 6, 3),
+    )
+    const elseBranch = createConditionalBranch(null, [pThird], span(6, 2, 8, 3))
+    const staticCond = createConditional(
+      [branchA, branchB, elseBranch],
+      null,
       span(2, 2, 8, 3),
     )
-    const builder = createBuilder("div", [], [], [outerCond], span(1, 0, 9, 1))
+    const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 9, 1))
 
     const code = generateHTML(builder)
 
-    // Should produce nested conditional structure
+    // Should produce flat conditional structure with else-if
     expect(code).toContain("condA")
     expect(code).toContain("condB")
     expect(code).toContain("<p>First</p>")

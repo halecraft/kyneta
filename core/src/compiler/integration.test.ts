@@ -1148,7 +1148,7 @@ describe("compiler integration - conditional regions", () => {
   })
 
   describe("Task 7.1: if detection", () => {
-    it("should detect if statement and create ConditionalRegionNode in IR", () => {
+    it("should detect if statement and create ConditionalNode in IR", () => {
       const source = `
         interface CounterRef {
           get(): number
@@ -1169,10 +1169,10 @@ describe("compiler integration - conditional regions", () => {
 
       // Should have a conditional region as a child
       const conditionalRegion = result.ir[0].children.find(
-        c => c.kind === "conditional-region",
+        c => c.kind === "conditional",
       )
       expect(conditionalRegion).toBeDefined()
-      expect(conditionalRegion?.kind).toBe("conditional-region")
+      expect(conditionalRegion?.kind).toBe("conditional")
     })
 
     it("should capture subscription target from condition", () => {
@@ -1192,7 +1192,7 @@ describe("compiler integration - conditional regions", () => {
       const result = transformSource(source, { target: "dom" })
 
       const conditionalRegion = result.ir[0].children.find(
-        c => c.kind === "conditional-region",
+        c => c.kind === "conditional",
       ) as any
 
       expect(conditionalRegion.subscriptionTarget).toBe("doc.count")
@@ -1215,7 +1215,7 @@ describe("compiler integration - conditional regions", () => {
       const result = transformSource(source, { target: "dom" })
 
       const conditionalRegion = result.ir[0].children.find(
-        c => c.kind === "conditional-region",
+        c => c.kind === "conditional",
       ) as any
 
       expect(conditionalRegion.branches[0].condition.source).toBe(
@@ -1316,7 +1316,7 @@ describe("compiler integration - conditional regions", () => {
       const result = transformSource(source, { target: "dom" })
 
       const conditionalRegion = result.ir[0].children.find(
-        c => c.kind === "conditional-region",
+        c => c.kind === "conditional",
       ) as any
 
       expect(conditionalRegion.branches.length).toBe(2)
@@ -1345,7 +1345,7 @@ describe("compiler integration - conditional regions", () => {
       const result = transformSource(source, { target: "dom" })
 
       const conditionalRegion = result.ir[0].children.find(
-        c => c.kind === "conditional-region",
+        c => c.kind === "conditional",
       ) as any
 
       expect(conditionalRegion.branches.length).toBe(3)
@@ -1377,7 +1377,7 @@ describe("compiler integration - conditional regions", () => {
       const result = transformSource(source, { target: "dom" })
 
       const conditionalRegion = result.ir[0].children.find(
-        c => c.kind === "conditional-region",
+        c => c.kind === "conditional",
       ) as any
 
       // Check that branches have body content
@@ -1825,13 +1825,10 @@ describe("compiler integration - combined scenarios", () => {
 
       // Should have conditional region with multiple branches
       const conditionalRegion = result.ir[0].children.find(
-        c => c.kind === "conditional-region",
+        c => c.kind === "conditional",
       )
       expect(conditionalRegion).toBeDefined()
-      if (
-        conditionalRegion &&
-        conditionalRegion.kind === "conditional-region"
-      ) {
+      if (conditionalRegion && conditionalRegion.kind === "conditional") {
         expect(conditionalRegion.branches.length).toBe(3)
       }
 

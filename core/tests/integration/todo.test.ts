@@ -153,6 +153,7 @@ function renderTodoApp(doc: TodoDoc, container: Element, scope: Scope): void {
               destroyBtn.textContent = "×"
               destroyBtn.addEventListener("click", () => {
                 // Find current index by value comparison (indices may have shifted)
+                // biome-ignore lint/complexity/useIndexOf: ListRef doesn't have indexOf
                 const currentIndex = doc.todos.findIndex(t => t === item)
                 if (currentIndex >= 0) {
                   doc.todos.delete(currentIndex, 1)

@@ -16,13 +16,12 @@ import type {
   AttributeNode,
   BuilderNode,
   ChildNode,
-  ConditionalRegionNode,
+  ConditionalNode,
   ContentNode,
   ElementNode,
   EventHandlerNode,
   LoopNode,
   StatementNode,
-  StaticConditionalNode,
 } from "../ir.js"
 import { computeSlotKind, mergeConditionalBodies } from "../ir.js"
 
@@ -389,8 +388,8 @@ function generateChild(
       break
     }
 
-    case "conditional-region": {
-      lines.push(...generateConditionalRegion(node, parentVar, state))
+    case "conditional": {
+      lines.push(...generateConditional(node, parentVar, state))
       break
     }
 
@@ -404,12 +403,6 @@ function generateChild(
       // Emit statement source verbatim
       // Statements don't produce DOM nodes, they just execute
       lines.push(`${ind}${node.source}`)
-      break
-    }
-
-    case "static-conditional": {
-      // Generate a regular if statement that runs once at render time
-      lines.push(...generateStaticConditionalNode(node, parentVar, state))
       break
     }
   }
@@ -615,10 +608,14 @@ function generateReactiveLoop(
 // =============================================================================
 
 /**
- * Generate code for a conditional region.
+ * Generate code for a conditional.
+ *
+ * Unified generator that dispatches on binding time:
+ * - subscriptionTarget === null → render-time inline if
+ * - subscriptionTarget !== null → reactive conditional (dissolution or __conditionalRegion)
  */
-function generateConditionalRegion(
-  node: ConditionalRegionNode,
+function generateConditional(
+  node: ConditionalNode,
   parentVar: string,
   state: CodegenState,
 ): string[] {
@@ -628,26 +625,16 @@ function generateConditionalRegion(
   // Generate condition function
   const conditionExpr = node.branches[0].condition
   if (!conditionExpr) {
-    // No condition - shouldn't happen for valid conditional regions
+    // No condition - shouldn't happen for valid conditionals
     return lines
   }
 
-  const subscriptionTarget =
-    node.subscriptionTarget ?? conditionExpr.dependencies[0]
-
-  if (!subscriptionTarget) {
-    // Static conditional - use __staticConditionalRegion
-    const markerVar = genVar(state, "marker")
-    lines.push(
-      `${ind}const ${markerVar} = document.createComment("kinetic:if")`,
-    )
-    lines.push(`${ind}${parentVar}.appendChild(${markerVar})`)
-    lines.push(...generateStaticConditional(node, markerVar, state))
-    return lines
+  // Render-time conditional: emit inline if statement
+  if (node.subscriptionTarget === null) {
+    return generateRenderConditional(node, parentVar, state)
   }
 
-  // Check if we can dissolve via tree merge (Level 2 optimization)
-  // Requires: else branch exists (all branches present)
+  // Reactive conditional: try dissolution first, fallback to __conditionalRegion
   const elseBranch = node.branches.find(b => b.condition === null)
   if (elseBranch) {
     const mergeResult = mergeConditionalBodies(node.branches)
@@ -671,7 +658,7 @@ function generateConditionalRegion(
   const innerInd = getIndent(innerState)
 
   lines.push(
-    `${ind}__conditionalRegion(${markerVar}, ${subscriptionTarget}, () => ${conditionExpr.source}, {`,
+    `${ind}__conditionalRegion(${markerVar}, ${node.subscriptionTarget}, () => ${conditionExpr.source}, {`,
   )
 
   // Generate whenTrue handler
@@ -697,44 +684,41 @@ function generateConditionalRegion(
 }
 
 /**
- * Generate code for a static conditional (non-reactive).
+ * Generate code for a render-time conditional (inline if statement).
+ *
+ * Emits a plain if/else-if/else chain that runs once at render time.
+ * No markers, no runtime region calls.
  */
-function generateStaticConditional(
-  node: ConditionalRegionNode,
-  markerVar: string,
+function generateRenderConditional(
+  node: ConditionalNode,
+  parentVar: string,
   state: CodegenState,
 ): string[] {
   const lines: string[] = []
   const ind = getIndent(state)
   const innerState = indented(state)
-  const innerInd = getIndent(innerState)
 
-  const conditionExpr = node.branches[0].condition
-  if (!conditionExpr) return lines
+  for (let i = 0; i < node.branches.length; i++) {
+    const branch = node.branches[i]
+    const isFirst = i === 0
+    const isElse = branch.condition === null
 
-  lines.push(
-    `${ind}__staticConditionalRegion(${markerVar}, ${conditionExpr.source}, {`,
-  )
+    if (isElse) {
+      lines.push(`${ind}} else {`)
+    } else if (isFirst) {
+      lines.push(`${ind}if (${branch.condition?.source}) {`)
+    } else {
+      lines.push(`${ind}} else if (${branch.condition?.source}) {`)
+    }
 
-  // Generate whenTrue handler
-  lines.push(`${innerInd}whenTrue: () => {`)
-  lines.push(...generateBranchBody(node.branches[0].body, indented(innerState)))
-  lines.push(`${innerInd}},`)
-
-  // Generate whenFalse handler (if else branch exists)
-  const elseBranch = node.branches.find(b => b.condition === null)
-  if (elseBranch) {
-    lines.push(`${innerInd}whenFalse: () => {`)
-    lines.push(...generateBranchBody(elseBranch.body, indented(innerState)))
-    lines.push(`${innerInd}},`)
+    // Generate branch body
+    for (const child of branch.body) {
+      const childResult = generateChild(child, parentVar, innerState)
+      lines.push(...childResult.code)
+    }
   }
 
-  // Emit slotKind from compile-time analysis
-  lines.push(
-    `${innerInd}slotKind: ${JSON.stringify(node.branches[0].slotKind)},`,
-  )
-
-  lines.push(`${ind}}, ${state.scopeVar})`)
+  lines.push(`${ind}}`)
 
   return lines
 }
@@ -779,48 +763,6 @@ function generateRenderLoop(
   for (const child of node.body) {
     const childResult = generateChild(child, parentVar, innerState)
     lines.push(...childResult.code)
-  }
-
-  lines.push(`${ind}}`)
-
-  return lines
-}
-
-// =============================================================================
-// Static Conditional Node Generation
-// =============================================================================
-
-/**
- * Generate code for a static conditional node (non-reactive if).
- *
- * Unlike conditional regions which use __conditionalRegion for reactive updates,
- * static conditionals run once at render time and create elements directly.
- */
-function generateStaticConditionalNode(
-  node: StaticConditionalNode,
-  parentVar: string,
-  state: CodegenState,
-): string[] {
-  const lines: string[] = []
-  const ind = getIndent(state)
-  const innerState = indented(state)
-
-  // Generate if statement
-  lines.push(`${ind}if (${node.conditionSource}) {`)
-
-  // Generate then body
-  for (const child of node.thenBody) {
-    const childResult = generateChild(child, parentVar, innerState)
-    lines.push(...childResult.code)
-  }
-
-  // Generate else body if present
-  if (node.elseBody && node.elseBody.length > 0) {
-    lines.push(`${ind}} else {`)
-    for (const child of node.elseBody) {
-      const childResult = generateChild(child, parentVar, innerState)
-      lines.push(...childResult.code)
-    }
   }
 
   lines.push(`${ind}}`)

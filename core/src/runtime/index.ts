@@ -28,11 +28,7 @@ export {
   bind,
   isBinding,
 } from "./binding.js"
-export {
-  __conditionalRegion,
-  __listRegion,
-  __staticConditionalRegion,
-} from "./regions.js"
+export { __conditionalRegion, __listRegion } from "./regions.js"
 export {
   __activeSubscriptions,
   __getActiveSubscriptionCount,

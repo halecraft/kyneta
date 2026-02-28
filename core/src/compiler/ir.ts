@@ -39,10 +39,9 @@ export type IRNodeKind =
   | "element"
   | "content"
   | "loop"
-  | "conditional-region"
+  | "conditional"
   | "binding"
   | "statement"
-  | "static-conditional"
 
 /**
  * Base interface for all IR nodes.
@@ -321,9 +320,17 @@ export interface ConditionalBranch {
 }
 
 /**
- * A conditional region from an `if` statement.
+ * A conditional from an `if` statement.
+ *
+ * Unified type parameterized by binding time via subscriptionTarget:
+ * - subscriptionTarget === null → render-time conditional (inline if)
+ * - subscriptionTarget !== null → reactive conditional (__conditionalRegion)
  *
  * ```typescript
+ * // Render-time conditional (subscriptionTarget: null)
+ * if (true) { p("always shown") }
+ *
+ * // Reactive conditional (subscriptionTarget: "doc.count")
  * if (doc.count.get() > 0) {
  *   p("Has items")
  * } else {
@@ -331,8 +338,8 @@ export interface ConditionalBranch {
  * }
  * ```
  */
-export interface ConditionalRegionNode extends IRNodeBase {
-  kind: "conditional-region"
+export interface ConditionalNode extends IRNodeBase {
+  kind: "conditional"
 
   /**
    * The branches of this conditional.
@@ -344,8 +351,7 @@ export interface ConditionalRegionNode extends IRNodeBase {
 
   /**
    * For reactive conditions, the ref to subscribe to.
-   * This may be different from the condition expression if the condition
-   * uses a PlainValueRef (we subscribe to the parent container instead).
+   * Null for render-time conditionals.
    */
   subscriptionTarget: string | null
 }
@@ -400,31 +406,6 @@ export interface StatementNode extends IRNodeBase {
   source: string
 }
 
-/**
- * A static (non-reactive) conditional.
- *
- * Unlike ConditionalRegionNode which subscribes to reactive conditions,
- * this represents a conditional that evaluates once at render time.
- *
- * ```typescript
- * if (true) {
- *   p("always shown")
- * }
- * ```
- */
-export interface StaticConditionalNode extends IRNodeBase {
-  kind: "static-conditional"
-
-  /** The condition expression source */
-  conditionSource: string
-
-  /** Then branch body */
-  thenBody: ChildNode[]
-
-  /** Else branch body (if present) */
-  elseBody: ChildNode[] | null
-}
-
 // =============================================================================
 // Union Types
 // =============================================================================
@@ -436,10 +417,9 @@ export type ChildNode =
   | ElementNode
   | ContentValue
   | LoopNode
-  | ConditionalRegionNode
+  | ConditionalNode
   | BindingNode
   | StatementNode
-  | StaticConditionalNode
 
 // =============================================================================
 // Root Types
@@ -517,12 +497,10 @@ export function isLoopNode(node: ChildNode): node is LoopNode {
 }
 
 /**
- * Check if a node is a conditional region.
+ * Check if a node is a conditional.
  */
-export function isConditionalRegionNode(
-  node: ChildNode,
-): node is ConditionalRegionNode {
-  return node.kind === "conditional-region"
+export function isConditionalNode(node: ChildNode): node is ConditionalNode {
+  return node.kind === "conditional"
 }
 
 /**
@@ -537,15 +515,6 @@ export function isBindingNode(node: ChildNode): node is BindingNode {
  */
 export function isStatementNode(node: ChildNode): node is StatementNode {
   return node.kind === "statement"
-}
-
-/**
- * Check if a node is a static conditional.
- */
-export function isStaticConditionalNode(
-  node: ChildNode,
-): node is StaticConditionalNode {
-  return node.kind === "static-conditional"
 }
 
 /**
@@ -606,7 +575,7 @@ export function computeHasReactiveItems(body: ChildNode[]): boolean {
       isReactiveContent(child) ||
       (child.kind === "element" && child.isReactive) ||
       (child.kind === "loop" && child.iterableBindingTime === "reactive") ||
-      child.kind === "conditional-region",
+      (child.kind === "conditional" && child.subscriptionTarget !== null),
   )
 }
 
@@ -830,8 +799,21 @@ export function mergeNode(
     // Merge attributes
     const mergedAttributes: AttributeNode[] = []
     for (let i = 0; i < a.attributes.length; i++) {
-      const aAttr = a.attributes.find(attr => attr.name === aAttrNames[i])!
-      const bAttr = b.attributes.find(attr => attr.name === aAttrNames[i])!
+      const attrName = aAttrNames[i]
+      const aAttr = a.attributes.find(attr => attr.name === attrName)
+      const bAttr = b.attributes.find(attr => attr.name === attrName)
+
+      // Safety: we've verified attribute sets match above, so both must exist
+      if (!aAttr || !bAttr) {
+        return {
+          success: false,
+          reason: {
+            kind: "different-attribute-sets",
+            aAttrs: aAttrNames,
+            bAttrs: bAttrNames,
+          },
+        }
+      }
 
       const valueResult = mergeContentValue(aAttr.value, bAttr.value, condition)
       if (!valueResult.success) {
@@ -883,7 +865,15 @@ export function mergeNode(
     }
   }
 
-  // Regions, conditionals - not mergeable
+  // Conditionals - not mergeable (explicit case for future structured reasoning)
+  if (a.kind === "conditional" && b.kind === "conditional") {
+    return {
+      success: false,
+      reason: { kind: "region-not-mergeable" },
+    }
+  }
+
+  // Bindings, statements - not mergeable
   return {
     success: false,
     reason: { kind: "region-not-mergeable" },
@@ -930,13 +920,19 @@ export function mergeConditionalBodies(
 
   // For 2 branches: simple binary merge
   if (branches.length === 2) {
-    const condition = branches[0].condition!
+    const firstCondition = branches[0].condition
+    if (!firstCondition) {
+      return {
+        success: false,
+        reason: { kind: "region-not-mergeable" },
+      }
+    }
     const mergedBody: ChildNode[] = []
 
     for (let i = 0; i < bodyLength; i++) {
       const nodeA = branches[0].body[i]
       const nodeB = branches[1].body[i]
-      const result = mergeNode(nodeA, nodeB, condition)
+      const result = mergeNode(nodeA, nodeB, firstCondition)
 
       if (!result.success) {
         return result
@@ -963,10 +959,16 @@ export function mergeConditionalBodies(
       branchIndex--
     ) {
       const branch = branches[branchIndex]
-      const condition = branch.condition!
+      const branchCondition = branch.condition
+      if (!branchCondition) {
+        return {
+          success: false,
+          reason: { kind: "region-not-mergeable" },
+        }
+      }
       const nodeA = branch.body[nodeIndex]
 
-      const result = mergeNode(nodeA, current, condition)
+      const result = mergeNode(nodeA, current, branchCondition)
       if (!result.success) {
         return result
       }
@@ -1041,7 +1043,7 @@ export function createElement(
     children.some(
       child =>
         (child.kind === "loop" && child.iterableBindingTime === "reactive") ||
-        child.kind === "conditional-region",
+        (child.kind === "conditional" && child.subscriptionTarget !== null),
     )
 
   return {
@@ -1097,24 +1099,6 @@ export function createLoop(
 }
 
 /**
- * Create a static conditional node.
- */
-export function createStaticConditional(
-  conditionSource: string,
-  thenBody: ChildNode[],
-  elseBody: ChildNode[] | null,
-  span: SourceSpan,
-): StaticConditionalNode {
-  return {
-    kind: "static-conditional",
-    conditionSource,
-    thenBody,
-    elseBody,
-    span,
-  }
-}
-
-/**
  * Create a conditional branch.
  */
 export function createConditionalBranch(
@@ -1131,15 +1115,19 @@ export function createConditionalBranch(
 }
 
 /**
- * Create a conditional region node.
+ * Create a conditional node.
+ *
+ * Unified factory for both render-time and reactive conditionals.
+ * - subscriptionTarget === null → render-time conditional
+ * - subscriptionTarget !== null → reactive conditional
  */
-export function createConditionalRegion(
+export function createConditional(
   branches: ConditionalBranch[],
   subscriptionTarget: string | null,
   span: SourceSpan,
-): ConditionalRegionNode {
+): ConditionalNode {
   return {
-    kind: "conditional-region",
+    kind: "conditional",
     branches,
     subscriptionTarget,
     span,
@@ -1179,12 +1167,7 @@ export function createBuilder(
           allDependencies.add(node.iterableSource)
         }
         collectDependencies(node.body)
-      } else if (node.kind === "static-conditional") {
-        collectDependencies(node.thenBody)
-        if (node.elseBody) {
-          collectDependencies(node.elseBody)
-        }
-      } else if (node.kind === "conditional-region") {
+      } else if (node.kind === "conditional") {
         if (node.subscriptionTarget) {
           allDependencies.add(node.subscriptionTarget)
         }

@@ -18,11 +18,10 @@ import type {
   AttributeNode,
   BuilderNode,
   ChildNode,
-  ConditionalRegionNode,
+  ConditionalNode,
   ContentNode,
   ElementNode,
   LoopNode,
-  StaticConditionalNode,
 } from "../ir.js"
 
 // =============================================================================
@@ -301,8 +300,11 @@ function emitBodyChildren(
       child.iterableBindingTime !== "reactive"
     ) {
       lines.push(`${indent}${generateLoopBody(child, state)}`)
-    } else if (child.kind === "static-conditional") {
-      lines.push(`${indent}${generateStaticConditionalBody(child, state)}`)
+    } else if (
+      child.kind === "conditional" &&
+      child.subscriptionTarget === null
+    ) {
+      lines.push(`${indent}${generateConditionalBody(child, state)}`)
     } else {
       const childHtml = generateChild(child, state)
       if (childHtml) {
@@ -351,8 +353,8 @@ function generateChild(node: ChildNode, state: CodegenState): string {
       }
       return generateLoopInline(node, state)
 
-    case "conditional-region":
-      return generateConditionalRegion(node, state)
+    case "conditional":
+      return generateConditional(node, state)
 
     case "binding":
       // Bindings render as their current value in SSR
@@ -363,10 +365,6 @@ function generateChild(node: ChildNode, state: CodegenState): string {
       // When called from element children (not body context), we can't emit statements
       // This should not happen in well-formed IR, but return empty for safety
       return ""
-
-    case "static-conditional":
-      // Static conditionals generate an IIFE with if statement
-      return generateStaticConditionalInline(node, state)
 
     default:
       return ""
@@ -419,18 +417,22 @@ function generateReactiveLoop(node: LoopNode, state: CodegenState): string {
 // =============================================================================
 
 /**
- * Generate HTML for a conditional region.
+ * Generate HTML for a conditional.
+ *
+ * Unified generator that dispatches on binding time:
+ * - subscriptionTarget === null → render-time, no markers
+ * - subscriptionTarget !== null → reactive, includes hydration markers
  *
  * Uses IIFE with block body for branches to support statements.
  */
-function generateConditionalRegion(
-  node: ConditionalRegionNode,
+function generateConditional(
+  node: ConditionalNode,
   state: CodegenState,
 ): string {
   const parts: string[] = []
 
-  // Hydration marker
-  if (state.hydratable) {
+  // Hydration marker (only for reactive conditionals)
+  if (state.hydratable && node.subscriptionTarget !== null) {
     const markerId = genMarkerId(state, "if")
     parts.push(`<!--${markerId}-->`)
   }
@@ -470,8 +472,8 @@ function generateConditionalRegion(
 
   parts.push(`\${${expr}}`)
 
-  // Hydration marker (end)
-  if (state.hydratable) {
+  // Hydration marker (end, only for reactive conditionals)
+  if (state.hydratable && node.subscriptionTarget !== null) {
     parts.push(`<!--/kinetic:if-->`)
   }
 
@@ -518,53 +520,39 @@ function generateLoopInline(node: LoopNode, state: CodegenState): string {
 }
 
 // =============================================================================
-// Static Conditional Generation
+// Render-Time Conditional Generation
 // =============================================================================
 
 /**
- * Generate code for a static conditional body (used inside generateBodyHtml).
+ * Generate code for a render-time conditional body (used inside generateBodyHtml).
  *
- * Produces an if statement that accumulates HTML into the _html variable.
+ * Produces an if/else-if/else chain that accumulates HTML into the _html variable.
  */
-function generateStaticConditionalBody(
-  node: StaticConditionalNode,
+function generateConditionalBody(
+  node: ConditionalNode,
   state: CodegenState,
 ): string {
   const lines: string[] = []
 
-  lines.push(`if (${node.conditionSource}) {`)
-  lines.push(...emitBodyChildren(node.thenBody, state, "  "))
+  for (let i = 0; i < node.branches.length; i++) {
+    const branch = node.branches[i]
+    const isFirst = i === 0
+    const isElse = branch.condition === null
 
-  if (node.elseBody && node.elseBody.length > 0) {
-    lines.push(`} else {`)
-    lines.push(...emitBodyChildren(node.elseBody, state, "  "))
+    if (isElse) {
+      lines.push(`} else {`)
+    } else if (isFirst) {
+      lines.push(`if (${branch.condition?.source}) {`)
+    } else {
+      lines.push(`} else if (${branch.condition?.source}) {`)
+    }
+
+    lines.push(...emitBodyChildren(branch.body, state, "  "))
   }
 
   lines.push(`}`)
 
   return lines.join("; ")
-}
-
-/**
- * Generate code for a static conditional inline (used in template literal context).
- *
- * Produces an IIFE with an if statement that returns HTML.
- */
-function generateStaticConditionalInline(
-  node: StaticConditionalNode,
-  state: CodegenState,
-): string {
-  // Generate body using accumulation pattern for then branch
-  const thenBodyCode = generateBodyHtml(node.thenBody, state)
-
-  if (node.elseBody && node.elseBody.length > 0) {
-    // Has else branch - use IIFE with if/else
-    const elseBodyCode = generateBodyHtml(node.elseBody, state)
-    return `\${(() => { if (${node.conditionSource}) { ${thenBodyCode} } else { ${elseBodyCode} } })()}`
-  } else {
-    // No else branch - use ternary with IIFE for then, empty string for else
-    return `\${(${node.conditionSource}) ? (() => { ${thenBodyCode} })() : ""}`
-  }
 }
 
 // =============================================================================

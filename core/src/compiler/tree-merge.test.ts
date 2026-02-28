@@ -16,7 +16,6 @@ import {
   mergeConditionalBodies,
   mergeContentValue,
   mergeNode,
-  type MergeResult,
 } from "./ir.js"
 
 // =============================================================================

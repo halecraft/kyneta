@@ -90,7 +90,7 @@ This is an experimental prototype exploring whether compilation can unlock O(k) 
 | Vite plugin | 🔴 | Placeholder only |
 | SSR + Hydration | 🔴 | Codegen exists, wiring needed |
 
-**Test coverage**: 578 tests passing
+**Test coverage**: 588 tests passing
 
 ## How It Works
 

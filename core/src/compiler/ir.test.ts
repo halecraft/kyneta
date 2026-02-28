@@ -9,17 +9,16 @@
 import { describe, expect, it } from "vitest"
 import {
   type AttributeNode,
-  type ConditionalBranch,
   computeHasReactiveItems,
   createBuilder,
-  createConditionalRegion,
+  createConditional,
+  createConditionalBranch,
   createContent,
   createElement,
   createLiteral,
   createLoop,
   createSpan,
   createStatement,
-  createStaticConditional,
 } from "./ir.js"
 
 // =============================================================================
@@ -136,21 +135,12 @@ describe("createBuilder - dependency collection", () => {
         [createLiteral("Visible", span())],
         span(),
       )
-      const branch: ConditionalBranch = {
-        condition: createContent(
-          "doc.visible.get()",
-          "reactive",
-          ["doc.visible"],
-          span(),
-        ),
-        body: [p],
-        span: span(),
-      }
-      const conditional = createConditionalRegion(
-        [branch],
-        "doc.visible",
+      const branch = createConditionalBranch(
+        createContent("doc.visible.get()", "reactive", ["doc.visible"], span()),
+        [p],
         span(),
       )
+      const conditional = createConditional([branch], "doc.visible", span())
       const builder = createBuilder("div", [], [], [conditional], span())
 
       expect(builder.allDependencies).toContain("doc.visible")
@@ -172,17 +162,12 @@ describe("createBuilder - dependency collection", () => {
         ],
         span(),
       )
-      const branch: ConditionalBranch = {
-        condition: createContent(
-          "doc.show.get()",
-          "reactive",
-          ["doc.show"],
-          span(),
-        ),
-        body: [reactiveP],
-        span: span(),
-      }
-      const conditional = createConditionalRegion([branch], "doc.show", span())
+      const branch = createConditionalBranch(
+        createContent("doc.show.get()", "reactive", ["doc.show"], span()),
+        [reactiveP],
+        span(),
+      )
+      const conditional = createConditional([branch], "doc.show", span())
       const builder = createBuilder("div", [], [], [conditional], span())
 
       expect(builder.allDependencies).toContain("doc.show")
@@ -343,22 +328,13 @@ describe("createBuilder - dependency collection", () => {
         span(),
       )
 
-      const thenBranch: ConditionalBranch = {
-        condition: createContent(
-          "items.length > 0",
-          "reactive",
-          ["items"],
-          span(),
-        ),
-        body: [ul],
-        span: span(),
-      }
-      const elseBranch: ConditionalBranch = {
-        condition: null,
-        body: [emptyP],
-        span: span(),
-      }
-      const conditional = createConditionalRegion(
+      const thenBranch = createConditionalBranch(
+        createContent("items.length > 0", "reactive", ["items"], span()),
+        [ul],
+        span(),
+      )
+      const elseBranch = createConditionalBranch(null, [emptyP], span())
+      const conditional = createConditional(
         [thenBranch, elseBranch],
         "items",
         span(),
@@ -468,7 +444,7 @@ describe("computeHasReactiveItems", () => {
     expect(computeHasReactiveItems([loop])).toBe(true)
   })
 
-  it("returns true when body contains a conditional region", () => {
+  it("returns true when body contains a reactive conditional", () => {
     const p = createElement(
       "p",
       [],
@@ -477,13 +453,12 @@ describe("computeHasReactiveItems", () => {
       [createLiteral("Yes", span())],
       span(),
     )
-    const branch: ConditionalBranch = {
-      condition: createContent("cond.get()", "reactive", ["cond"], span()),
-      body: [p],
-      slotKind: "single",
-      span: span(),
-    }
-    const condRegion = createConditionalRegion([branch], "cond", span())
+    const branch = createConditionalBranch(
+      createContent("cond.get()", "reactive", ["cond"], span()),
+      [p],
+      span(),
+    )
+    const condRegion = createConditional([branch], "cond", span())
     expect(computeHasReactiveItems([condRegion])).toBe(true)
   })
 
@@ -503,12 +478,17 @@ describe("computeHasReactiveItems", () => {
     expect(computeHasReactiveItems([renderLoop])).toBe(false)
   })
 
-  it("returns false for static conditional (shallow — does not recurse)", () => {
+  it("returns false for render-time conditional (shallow — does not recurse)", () => {
     const reactiveChild = createContent("x.get()", "reactive", ["x"], span())
     const p = createElement("p", [], [], [], [reactiveChild], span())
-    const staticCond = createStaticConditional("true", [p], null, span())
-    // Shallow check: static-conditional is not itself reactive at this level
-    expect(computeHasReactiveItems([staticCond])).toBe(false)
+    const branch = createConditionalBranch(
+      createContent("true", "render", [], span()),
+      [p],
+      span(),
+    )
+    const renderCond = createConditional([branch], null, span())
+    // Shallow check: render-time conditional is not itself reactive at this level
+    expect(computeHasReactiveItems([renderCond])).toBe(false)
   })
 
   it("returns true when mixed with non-reactive siblings", () => {

@@ -239,36 +239,36 @@ type IRNodeKind =
 - ✅ Task 0.14: Update all tests in `ir.test.ts`, `analyze.test.ts`, `dom.test.ts`, `html.test.ts`, `integration.test.ts`, `transform.test.ts`. Also fixed stale `"list-region"` reference in `createElement`'s `isReactive` computation.
 - ✅ Task 0.15: All 593 tests pass, no new TypeScript errors in source files (pre-existing `slotKind` missing issues in test files remain — addressed in Phase 1 Task 1.16)
 
-### Phase 1: Unify Conditionals — ConditionalNode 🔴
+### Phase 1: Unify Conditionals — ConditionalNode ✅
 
 **Goal**: Replace `StaticConditionalNode` and `ConditionalRegionNode` with a single `ConditionalNode`. Remove the `__staticConditionalRegion` codegen path.
 
-- 🔴 Task 1.1: Define `ConditionalNode` interface in `ir.ts` with `kind: "conditional"`, `branches`, `subscriptionTarget`
-- 🔴 Task 1.2: Replace `createStaticConditional` and `createConditionalRegion` with `createConditional(branches, subscriptionTarget, span)` — `subscriptionTarget` is null for render-time conditionals
-- 🔴 Task 1.3: Update `analyzeIfStatement` in `analyze.ts` — always produce `ConditionalNode`. Render-time conditionals create branches with render-time conditions (the condition is already a `ContentValue` from `analyzeExpression`). Static else-if chains produce flat branches, not nested `StaticConditionalNode` in elseBody. The reactive path already produces flat branches. Note: the recursive `analyzeIfStatement` call for `else if` currently checks `nestedIf.kind === "conditional-region"` to decide whether to flatten; after unification, the check becomes `nestedIf.kind === "conditional"` (always true), so flattening always happens — which is exactly what we want.
-- 🔴 Task 1.4: Update `IRNodeKind` — remove `"conditional-region"` and `"static-conditional"`, add `"conditional"`
-- 🔴 Task 1.5: Remove `StaticConditionalNode` and `ConditionalRegionNode` interfaces
-- 🔴 Task 1.6: Update `ChildNode` union — replace `StaticConditionalNode | ConditionalRegionNode` with `ConditionalNode`
-- 🔴 Task 1.7: Update type guards — remove `isStaticConditionalNode` and `isConditionalRegionNode`, add `isConditionalNode`
-- 🔴 Task 1.8: Update `generateChild` in `codegen/dom.ts` — replace `case "conditional-region"` and `case "static-conditional"` with `case "conditional"` containing a single `generateConditional` function. This function dispatches: `subscriptionTarget === null` → render-time inline `if` from branches (replaces both `generateStaticConditionalNode` and `generateStaticConditional`); `subscriptionTarget !== null` → attempt dissolution, then fallback to `__conditionalRegion`.
-- 🔴 Task 1.9: Remove `generateStaticConditional` (emitted `__staticConditionalRegion`) and `generateStaticConditionalNode` (emitted inline `if`) from `dom.ts`. The unified `generateConditional` handles both via binding-time dispatch. Render-time conditionals always emit inline `if` — no `__staticConditionalRegion` runtime call.
-- 🔴 Task 1.10: Update `generateChild` in `codegen/html.ts` — replace `case "conditional-region"` and `case "static-conditional"` with `case "conditional"`. Update `emitBodyChildren` for unified `"conditional"` kind. Remove `generateStaticConditionalInline` and `generateStaticConditionalBody`.
-- 🔴 Task 1.11: Update `collectDependencies` in `createBuilder` — replace separate `conditional-region` and `static-conditional` branches with single `conditional` branch that walks all branch bodies
-- 🔴 Task 1.12: Update `collectRequiredImports` in `transform.ts` — `case "conditional"`: add `__conditionalRegion` when `subscriptionTarget !== null`, always recurse into branch bodies (fixes latent bug). Remove `__staticConditionalRegion` import — it's no longer emitted.
-- 🔴 Task 1.13: Update `mergeNode` in tree merge — explicit `case "conditional"` (not-mergeable with structured reason)
-- 🔴 Task 1.14: Update `compiler/index.ts` re-exports — replace `ConditionalRegionNode` → `ConditionalNode`, `isConditionalRegionNode` → `isConditionalNode`, `createConditionalRegion` → `createConditional`. (Note: `StaticConditionalNode`, `isStaticConditionalNode`, `createStaticConditional` were never exported from `index.ts`, so no removal needed for those.)
-- 🔴 Task 1.15: Remove `__staticConditionalRegion` runtime function from `regions.ts` and its export from `types.ts`. Research confirmed no hand-written application code or integration tests call it directly — it's only referenced via codegen output and one `dom.test.ts` assertion (updated in Task 1.16). The `integration.test.ts` reference is a comment only.
-- 🔴 Task 1.16: Update all tests. Specific attention: `dom.test.ts` has a test `"should generate __staticConditionalRegion for static condition"` that manually constructs a `ConditionalRegionNode` with `subscriptionTarget: null` — update to assert inline `if` output instead. Also fix: that test constructs a `ConditionalBranch` object literal missing the required `slotKind` field — use `createConditionalBranch` factory instead.
-- 🔴 Task 1.17: Verify all tests pass and build succeeds
+- ✅ Task 1.1: Define `ConditionalNode` interface in `ir.ts` with `kind: "conditional"`, `branches`, `subscriptionTarget`
+- ✅ Task 1.2: Replace `createStaticConditional` and `createConditionalRegion` with `createConditional(branches, subscriptionTarget, span)` — `subscriptionTarget` is null for render-time conditionals
+- ✅ Task 1.3: Update `analyzeIfStatement` in `analyze.ts` — always produce `ConditionalNode`. Render-time conditionals create branches with render-time conditions (the condition is already a `ContentValue` from `analyzeExpression`). Static else-if chains produce flat branches, not nested nodes. The recursive `analyzeIfStatement` call for `else if` now always flattens because `nestedIf.kind === "conditional"` is always true.
+- ✅ Task 1.4: Update `IRNodeKind` — removed `"conditional-region"` and `"static-conditional"`, added `"conditional"`
+- ✅ Task 1.5: Remove `StaticConditionalNode` and `ConditionalRegionNode` interfaces
+- ✅ Task 1.6: Update `ChildNode` union — replaced `StaticConditionalNode | ConditionalRegionNode` with `ConditionalNode` (now 6 members)
+- ✅ Task 1.7: Update type guards — removed `isStaticConditionalNode` and `isConditionalRegionNode`, added `isConditionalNode`
+- ✅ Task 1.8: Update `generateChild` in `codegen/dom.ts` — replaced `case "conditional-region"` and `case "static-conditional"` with `case "conditional"` containing a single `generateConditional` function that dispatches on `subscriptionTarget`
+- ✅ Task 1.9: Removed `generateStaticConditional` and `generateStaticConditionalNode` from `dom.ts`. Added `generateRenderConditional` for inline if/else-if/else chains.
+- ✅ Task 1.10: Update `generateChild` in `codegen/html.ts` — replaced `case "conditional-region"` and `case "static-conditional"` with `case "conditional"`. Updated `emitBodyChildren` for unified `"conditional"` kind. Replaced `generateStaticConditionalInline` and `generateStaticConditionalBody` with `generateConditionalBody`.
+- ✅ Task 1.11: Update `collectDependencies` in `createBuilder` — replaced separate `conditional-region` and `static-conditional` branches with single `conditional` branch
+- ✅ Task 1.12: Update `collectRequiredImports` in `transform.ts` — `case "conditional"`: add `__conditionalRegion` when `subscriptionTarget !== null`, always recurse into branch bodies. Removed `__staticConditionalRegion` import path.
+- ✅ Task 1.13: Update `mergeNode` in tree merge — added explicit `case "conditional"` (not-mergeable with structured reason)
+- ✅ Task 1.14: Update `compiler/index.ts` re-exports — replaced `ConditionalRegionNode` → `ConditionalNode`, `isConditionalRegionNode` → `isConditionalNode`, `createConditionalRegion` → `createConditional`
+- ✅ Task 1.15: Removed `__staticConditionalRegion` runtime function from `regions.ts` and its exports from `index.ts` and `runtime/index.ts`
+- ✅ Task 1.16: Updated all tests in `dom.test.ts`, `html.test.ts`, `ir.test.ts`, `analyze.test.ts`, `transform.test.ts`, `integration.test.ts`, `regions.test.ts`. Removed 6 `__staticConditionalRegion` tests. Fixed test that asserted `__staticConditionalRegion` to assert inline `if` instead.
+- ✅ Task 1.17: All 588 tests pass (down from 593 due to removed `__staticConditionalRegion` tests), no TypeScript errors
 
-### Phase 2: Documentation 🔴
+### Phase 2: Documentation ✅
 
 **Goal**: Update documentation to reflect the unified IR and the binding-time principle extended to control flow.
 
-- 🔴 Task 2.1: Update `packages/kinetic/TECHNICAL.md` — replace StaticLoopNode/ListRegionNode/StaticConditionalNode/ConditionalRegionNode sections with LoopNode/ConditionalNode, update ChildNode union, update IRNodeKind
-- 🔴 Task 2.2: Add section to TECHNICAL.md explaining the binding-time principle as the organizing pattern: values (ContentValue), loops (LoopNode), conditionals (ConditionalNode) all parameterized by binding time
-- 🔴 Task 2.3: Update File Structure section in TECHNICAL.md if any files changed
-- 🔴 Task 2.4: Update `packages/kinetic/README.md` test count
+- ✅ Task 2.1: Update `packages/kinetic/TECHNICAL.md` — replaced StaticLoopNode/ListRegionNode/StaticConditionalNode/ConditionalRegionNode sections with LoopNode/ConditionalNode, updated ChildNode union (now 6 members in 3 categories: Applicative, Monadic, Effects)
+- ✅ Task 2.2: Add section to TECHNICAL.md explaining the binding-time principle as the organizing pattern — added "Binding-Time Parameterization" section with table showing ContentValue, LoopNode, ConditionalNode binding-time fields
+- ✅ Task 2.3: Update File Structure section in TECHNICAL.md if any files changed — no file structure changes, only type unification
+- ✅ Task 2.4: Update `packages/kinetic/README.md` test count — updated from 578 to 588
 
 ## Tests
 
