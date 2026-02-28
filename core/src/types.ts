@@ -244,6 +244,24 @@ export type ListRegionOp<T> =
   | { kind: "insert"; index: number; item: T }
   | { kind: "delete"; index: number }
 
+// =============================================================================
+// Tracked Node (Trackability Invariant)
+// =============================================================================
+
+/**
+ * A node that was inserted into the DOM and can be reliably removed.
+ *
+ * This type exists because DocumentFragment nodes become empty after insertion,
+ * making them untrackable. TrackedNode guarantees the invariant:
+ * "The referenced node is a direct child of the parent it was inserted into."
+ *
+ * @internal - Used by region runtime
+ */
+export interface TrackedNode {
+  /** The actual DOM node to track (never an empty DocumentFragment) */
+  readonly node: Node
+}
+
 /**
  * Handlers for conditional region branch switching.
  * @internal

@@ -357,6 +357,65 @@ describe("generateDOM - list regions", () => {
 
     expect(code).toContain("(item, i)")
   })
+
+  // Optimization tests: single element should return directly, not wrapped in fragment
+  it("should return element directly when create body has single element", () => {
+    const liElement = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createStaticExpression("item", span(3, 6, 3, 10))],
+      span(3, 4, 3, 12),
+    )
+    const listRegion = createListRegion(
+      "items",
+      "item",
+      null,
+      [liElement],
+      span(2, 2, 4, 3),
+    )
+    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 5, 1))
+
+    const code = generateDOM(builder)
+
+    // Should return the element directly, not a fragment
+    expect(code).toContain("return _li")
+    expect(code).not.toContain("createDocumentFragment")
+  })
+
+  it("should use fragment when create body has multiple elements", () => {
+    const li1 = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createTextNode("first", span(3, 6, 3, 11))],
+      span(3, 4, 3, 13),
+    )
+    const li2 = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createTextNode("second", span(4, 6, 4, 12))],
+      span(4, 4, 4, 14),
+    )
+    const listRegion = createListRegion(
+      "items",
+      "item",
+      null,
+      [li1, li2],
+      span(2, 2, 5, 3),
+    )
+    const builder = createBuilder("ul", [], [], [listRegion], span(1, 0, 6, 1))
+
+    const code = generateDOM(builder)
+
+    // Should use fragment for multiple elements
+    expect(code).toContain("createDocumentFragment")
+    expect(code).toContain("return _frag")
+  })
 })
 
 // =============================================================================

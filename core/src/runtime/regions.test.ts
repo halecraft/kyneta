@@ -1,4 +1,9 @@
-import { createTypedDoc, loro, Shape } from "@loro-extended/change"
+import {
+  createTypedDoc,
+  loro,
+  type PlainValueRef,
+  Shape,
+} from "@loro-extended/change"
 import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
@@ -54,9 +59,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string, _index: number) => {
+          create: (itemRef: PlainValueRef<string>, _index: number) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -83,9 +88,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string) => {
+          create: (itemRef: PlainValueRef<string>) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -109,9 +114,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string) => {
+          create: (itemRef: PlainValueRef<string>) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -154,9 +159,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string) => {
+          create: (itemRef: PlainValueRef<string>) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -195,9 +200,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string) => {
+          create: (itemRef: PlainValueRef<string>) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -236,9 +241,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string) => {
+          create: (itemRef: PlainValueRef<string>) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -254,6 +259,64 @@ describe("regions", () => {
       expect(container.children.length).toBe(2)
       expect(container.children[0].textContent).toBe("a")
       expect(container.children[1].textContent).toBe("d")
+
+      scope.dispose()
+    })
+
+    // Regression test: The original bug was that when create() returns a
+    // DocumentFragment (as compiled code does), the fragment becomes empty
+    // after insertion and can't be tracked for removal. This test verifies
+    // that delete works correctly with fragment-returning handlers.
+    it("should delete items when create handler returns DocumentFragment", () => {
+      const schema = Shape.doc({
+        items: Shape.list(Shape.plain.string()),
+      })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+      const container = document.createElement("ul")
+
+      // Add initial items
+      doc.items.push("item1")
+      doc.items.push("item2")
+      doc.items.push("item3")
+      loro(doc).commit()
+
+      __listRegion(
+        container,
+        doc.items,
+        {
+          // Return a DocumentFragment (mimicking compiled code behavior)
+          create: (itemRef: PlainValueRef<string>) => {
+            const frag = document.createDocumentFragment()
+            const li = document.createElement("li")
+            li.textContent = itemRef.get()
+            frag.appendChild(li)
+            return frag
+          },
+        },
+        scope,
+      )
+
+      expect(container.children.length).toBe(3)
+      expect(container.children[0].textContent).toBe("item1")
+      expect(container.children[1].textContent).toBe("item2")
+      expect(container.children[2].textContent).toBe("item3")
+
+      // Delete middle item - this failed before the fix because the
+      // fragment's parentNode was null after insertion
+      doc.items.delete(1, 1)
+      loro(doc).commit()
+
+      expect(container.children.length).toBe(2)
+      expect(container.children[0].textContent).toBe("item1")
+      expect(container.children[1].textContent).toBe("item3")
+
+      // Delete first item
+      doc.items.delete(0, 1)
+      loro(doc).commit()
+
+      expect(container.children.length).toBe(1)
+      expect(container.children[0].textContent).toBe("item3")
 
       scope.dispose()
     })
@@ -274,9 +337,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string) => {
+          create: (itemRef: PlainValueRef<string>) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -312,9 +375,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string) => {
+          create: (itemRef: PlainValueRef<string>) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -350,9 +413,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string) => {
+          create: (itemRef: PlainValueRef<string>) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -392,9 +455,9 @@ describe("regions", () => {
         container,
         doc.items,
         {
-          create: (item: string) => {
+          create: (itemRef: PlainValueRef<string>) => {
             const li = document.createElement("li")
-            li.textContent = item
+            li.textContent = itemRef.get()
             return li
           },
         },
@@ -652,6 +715,67 @@ describe("regions", () => {
 
       expect(__getActiveSubscriptionCount()).toBe(0)
     })
+
+    // Regression test: Same DocumentFragment issue as list regions.
+    // When whenTrue/whenFalse return fragments, branch swapping failed
+    // because the fragment's parentNode was null after insertion.
+    it("should swap branches when handlers return DocumentFragment", () => {
+      const schema = Shape.doc({
+        count: Shape.counter(),
+      })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+      const container = document.createElement("div")
+      const marker = document.createComment("if")
+      container.appendChild(marker)
+
+      // Start with count > 0
+      doc.count.increment(1)
+      loro(doc).commit()
+
+      __conditionalRegion(
+        marker,
+        doc.count,
+        () => doc.count.get() > 0,
+        {
+          // Return DocumentFragments (mimicking compiled code behavior)
+          whenTrue: () => {
+            const frag = document.createDocumentFragment()
+            const p = document.createElement("p")
+            p.textContent = "visible"
+            frag.appendChild(p)
+            return frag
+          },
+          whenFalse: () => {
+            const frag = document.createDocumentFragment()
+            const p = document.createElement("p")
+            p.textContent = "hidden"
+            frag.appendChild(p)
+            return frag
+          },
+        },
+        scope,
+      )
+
+      expect(container.children.length).toBe(1)
+      expect(container.children[0].textContent).toBe("visible")
+
+      // Swap to false branch - this failed before the fix
+      doc.count.increment(-1)
+      loro(doc).commit()
+
+      expect(container.children.length).toBe(1)
+      expect(container.children[0].textContent).toBe("hidden")
+
+      // Swap back to true branch
+      doc.count.increment(1)
+      loro(doc).commit()
+
+      expect(container.children.length).toBe(1)
+      expect(container.children[0].textContent).toBe("visible")
+
+      scope.dispose()
+    })
   })
 
   describe("__staticConditionalRegion", () => {
@@ -760,6 +884,38 @@ describe("regions", () => {
 
       expect(container.children.length).toBe(1)
 
+      scope.dispose()
+
+      expect(container.children.length).toBe(0)
+    })
+
+    // Regression test: When handler returns DocumentFragment, cleanup failed
+    // because the tracked node was the empty fragment, not the actual element.
+    it("should remove node on scope dispose when handler returns DocumentFragment", () => {
+      const scope = new Scope()
+      const container = document.createElement("div")
+      const marker = document.createComment("static-if")
+      container.appendChild(marker)
+
+      __staticConditionalRegion(
+        marker,
+        true,
+        {
+          whenTrue: () => {
+            const frag = document.createDocumentFragment()
+            const p = document.createElement("p")
+            p.textContent = "fragment content"
+            frag.appendChild(p)
+            return frag
+          },
+        },
+        scope,
+      )
+
+      expect(container.children.length).toBe(1)
+      expect(container.children[0].textContent).toBe("fragment content")
+
+      // This failed before the fix - fragment.parentNode was null
       scope.dispose()
 
       expect(container.children.length).toBe(0)

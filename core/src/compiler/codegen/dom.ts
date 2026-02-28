@@ -22,6 +22,7 @@ import type {
   EventHandlerNode,
   ExpressionNode,
   ListRegionNode,
+  StatementNode,
   StaticConditionalNode,
   StaticLoopNode,
   TextNode,
@@ -462,10 +463,12 @@ function generateChild(
  * This is used by list regions (create callback) and conditional regions
  * (whenTrue/whenFalse callbacks). It handles:
  * - Empty body → return empty text node
- * - Any children → wrap in fragment, return fragment
+ * - Single element with leading statements only → return element directly
+ * - Multiple elements or interleaved statements → wrap in fragment, return fragment
  *
- * Note: We always use the fragment path for consistency and to support
- * statements (which don't produce DOM nodes but need to execute).
+ * Returning elements directly (instead of always using fragments) is important
+ * because DocumentFragment nodes become empty after insertion and lose their
+ * parentNode reference, breaking subsequent removal operations.
  */
 function generateBodyWithReturn(
   body: ChildNode[],
@@ -480,7 +483,130 @@ function generateBodyWithReturn(
     return lines
   }
 
-  // Always use fragment for consistency (supports statements + multiple elements)
+  // Check if we can use the direct-return optimization:
+  // - All statements must come before any DOM-producing node (no interleaving)
+  // - There must be exactly one DOM-producing node
+  // - The DOM-producing node must be a simple type (element, text, expression)
+  const canOptimize = checkCanOptimizeDirectReturn(body)
+
+  if (canOptimize) {
+    const { leadingStatements, domNode } = canOptimize
+
+    // Emit leading statements first
+    for (const stmt of leadingStatements) {
+      lines.push(`${ind}${stmt.source}`)
+    }
+
+    if (domNode.kind === "element") {
+      // Generate element and return it directly
+      const result = generateElement(domNode, state)
+      lines.push(...result.code)
+      lines.push(`${ind}return ${result.varName}`)
+    } else if (domNode.kind === "text") {
+      const textVar = genVar(state, "text")
+      lines.push(
+        `${ind}const ${textVar} = document.createTextNode(${JSON.stringify(domNode.value)})`,
+      )
+      lines.push(`${ind}return ${textVar}`)
+    } else if (domNode.kind === "expression") {
+      // For expressions, create a text node
+      const textVar = genVar(state, "text")
+      if (domNode.expressionKind === "static") {
+        lines.push(
+          `${ind}const ${textVar} = document.createTextNode(String(${domNode.source}))`,
+        )
+      } else {
+        // Reactive expression - create text node, will be updated via subscription
+        lines.push(`${ind}const ${textVar} = document.createTextNode("")`)
+        if (domNode.dependencies.length > 0) {
+          const dep = domNode.dependencies[0]
+          lines.push(
+            `${ind}__subscribeWithValue(${dep}, () => ${domNode.source}, (v) => {`,
+          )
+          lines.push(`${ind}${state.indent}${textVar}.textContent = String(v)`)
+          lines.push(`${ind}}, ${state.scopeVar})`)
+        }
+      }
+      lines.push(`${ind}return ${textVar}`)
+    }
+
+    return lines
+  }
+
+  // Multiple DOM nodes, interleaved statements, or complex structure: use fragment
+  return generateBodyWithFragment(body, state)
+}
+
+/**
+ * Check if a body can use the direct-return optimization.
+ *
+ * Returns the leading statements and single DOM node if optimization is possible,
+ * or null if the fragment approach is required.
+ *
+ * Optimization is possible when:
+ * 1. All statements come before any DOM-producing nodes (no interleaving)
+ * 2. There is exactly one DOM-producing node
+ * 3. The DOM node is a simple type (element, text, or expression)
+ */
+function checkCanOptimizeDirectReturn(
+  body: ChildNode[],
+): {
+  leadingStatements: StatementNode[]
+  domNode: ElementNode | TextNode | ExpressionNode
+} | null {
+  const leadingStatements: StatementNode[] = []
+  let domNode: ChildNode | null = null
+  let seenDomNode = false
+
+  for (const child of body) {
+    if (child.kind === "statement") {
+      if (seenDomNode) {
+        // Statement after a DOM node - interleaving detected, can't optimize
+        return null
+      }
+      leadingStatements.push(child)
+    } else {
+      if (seenDomNode) {
+        // Multiple DOM nodes - can't optimize
+        return null
+      }
+      // Check if it's a simple DOM-producing type
+      if (
+        child.kind === "element" ||
+        child.kind === "text" ||
+        child.kind === "expression"
+      ) {
+        domNode = child
+        seenDomNode = true
+      } else {
+        // Complex node type (list-region, conditional-region, etc.) - can't optimize
+        return null
+      }
+    }
+  }
+
+  if (!domNode) {
+    // No DOM node found (only statements) - can't optimize
+    return null
+  }
+
+  return {
+    leadingStatements,
+    domNode: domNode as ElementNode | TextNode | ExpressionNode,
+  }
+}
+
+/**
+ * Generate body code using a DocumentFragment container.
+ * Used when there are multiple DOM-producing nodes.
+ */
+function generateBodyWithFragment(
+  body: ChildNode[],
+  state: CodegenState,
+): string[] {
+  const lines: string[] = []
+  const ind = getIndent(state)
+
   const fragVar = genVar(state, "frag")
   lines.push(`${ind}const ${fragVar} = document.createDocumentFragment()`)
 

@@ -34,9 +34,58 @@ import type {
   ConditionalRegionHandlers,
   ListRegionHandlers,
   ListRegionOp,
+  TrackedNode,
 } from "../types.js"
 import type { Scope } from "./scope.js"
 import { __subscribe } from "./subscribe.js"
+
+// =============================================================================
+// Fragment Handling Helper
+// =============================================================================
+
+/**
+ * Insert a node into the DOM and return a TrackedNode for later removal.
+ *
+ * When a DocumentFragment is inserted, its children are moved to the parent
+ * and the fragment becomes empty with no parentNode. This helper handles that
+ * case by tracking the first child instead of the empty fragment.
+ *
+ * The returned TrackedNode guarantees the invariant:
+ * "The referenced node is a direct child of the parent it was inserted into."
+ *
+ * @param parent - The parent node to insert into
+ * @param content - The node to insert (may be a DocumentFragment)
+ * @param referenceNode - Insert before this node (or append if null)
+ * @returns TrackedNode for reliable removal
+ *
+ * @internal
+ */
+function insertAndTrack(
+  parent: Node,
+  content: Node,
+  referenceNode: Node | null,
+): TrackedNode {
+  if (content.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+    // For fragments, track the first child (which will become a direct child of parent)
+    // Note: This assumes single-element fragments. For multi-element, we'd need
+    // a more complex tracking strategy (e.g., start/end markers).
+    const firstChild = content.firstChild
+    if (!firstChild) {
+      // Empty fragment - create a placeholder text node
+      const placeholder = document.createTextNode("")
+      parent.insertBefore(placeholder, referenceNode)
+      return { node: placeholder }
+    } else {
+      // Insert the fragment (moves children to parent)
+      parent.insertBefore(content, referenceNode)
+      // Track the first child that was moved
+      return { node: firstChild }
+    }
+  } else {
+    parent.insertBefore(content, referenceNode)
+    return { node: content }
+  }
+}
 
 // =============================================================================
 // List Region - Types
@@ -76,8 +125,8 @@ export interface ListRefLike<T> {
  * @internal
  */
 interface ListRegionState<T> {
-  /** The DOM nodes for each item, in order */
-  nodes: Node[]
+  /** Tracked nodes for each item, in order */
+  nodes: TrackedNode[]
   /** Scopes for each item (for nested subscriptions) */
   scopes: Scope[]
   /** The parent scope */
@@ -201,19 +250,21 @@ function executeOp<T>(
     const node = handlers.create(op.item, op.index)
 
     // Insert into DOM at correct position
-    const referenceNode = state.nodes[op.index] || null
-    parent.insertBefore(node, referenceNode)
+    const referenceNode = state.nodes[op.index]?.node || null
 
-    // Update state
-    state.nodes.splice(op.index, 0, node)
+    // Handle DocumentFragment: use helper to get the actual tracked node
+    const trackedNode = insertAndTrack(parent, node, referenceNode)
+
+    // Update state with the actual tracked node (not the empty fragment)
+    state.nodes.splice(op.index, 0, trackedNode)
     state.scopes.splice(op.index, 0, itemScope)
   } else if (op.kind === "delete") {
-    const node = state.nodes[op.index]
+    const tracked = state.nodes[op.index]
     const itemScope = state.scopes[op.index]
 
     // Remove from DOM
-    if (node && node.parentNode === parent) {
-      parent.removeChild(node)
+    if (tracked && tracked.node.parentNode === parent) {
+      parent.removeChild(tracked.node)
     }
 
     // Dispose the item's scope (cleans up subscriptions)
@@ -320,8 +371,8 @@ export function __listRegion<T>(
 interface ConditionalRegionState {
   /** Current branch: true = "then", false = "else", null = neither */
   currentBranch: boolean | null
-  /** The current DOM node */
-  currentNode: Node | null
+  /** The tracked node for current content */
+  currentNode: TrackedNode | null
   /** Scope for the current branch */
   currentScope: Scope | null
   /** The parent scope */
@@ -392,8 +443,8 @@ function updateConditionalRegion(
   }
 
   // Clean up old branch
-  if (state.currentNode && state.currentNode.parentNode === parent) {
-    parent.removeChild(state.currentNode)
+  if (state.currentNode && state.currentNode.node.parentNode === parent) {
+    parent.removeChild(state.currentNode.node)
   }
   if (state.currentScope) {
     state.currentScope.dispose()
@@ -405,24 +456,18 @@ function updateConditionalRegion(
   // Create new branch
   if (condition && handlers.whenTrue) {
     state.currentScope = state.parentScope.createChild()
-    state.currentNode = handlers.whenTrue()
+    const node = handlers.whenTrue()
     state.currentBranch = true
-    // Insert after marker
-    if (marker.nextSibling) {
-      parent.insertBefore(state.currentNode, marker.nextSibling)
-    } else {
-      parent.appendChild(state.currentNode)
-    }
+    // Insert after marker, handling DocumentFragment
+    const referenceNode = marker.nextSibling
+    state.currentNode = insertAndTrack(parent, node, referenceNode)
   } else if (!condition && handlers.whenFalse) {
     state.currentScope = state.parentScope.createChild()
-    state.currentNode = handlers.whenFalse()
+    const node = handlers.whenFalse()
     state.currentBranch = false
-    // Insert after marker
-    if (marker.nextSibling) {
-      parent.insertBefore(state.currentNode, marker.nextSibling)
-    } else {
-      parent.appendChild(state.currentNode)
-    }
+    // Insert after marker, handling DocumentFragment
+    const referenceNode = marker.nextSibling
+    state.currentNode = insertAndTrack(parent, node, referenceNode)
   }
 }
 
@@ -457,17 +502,14 @@ export function __staticConditionalRegion(
   }
 
   if (node) {
-    // Insert after marker
-    if (marker.nextSibling) {
-      parent.insertBefore(node, marker.nextSibling)
-    } else {
-      parent.appendChild(node)
-    }
+    // Insert after marker, handling DocumentFragment
+    const referenceNode = marker.nextSibling
+    const trackedNode = insertAndTrack(parent, node, referenceNode)
 
-    // Register cleanup
+    // Register cleanup using the tracked node (not the potentially empty fragment)
     scope.onDispose(() => {
-      if (node?.parentNode) {
-        node.parentNode.removeChild(node)
+      if (trackedNode.node.parentNode) {
+        trackedNode.node.parentNode.removeChild(trackedNode.node)
       }
     })
   }
