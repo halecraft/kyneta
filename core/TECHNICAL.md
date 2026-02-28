@@ -347,3 +347,63 @@ for (const itemRef of doc.items) {
 2. Delta inserts use `listRef.get(index)` (not raw event values)
 3. Store `listRef` in state for delta handling
 4. HTML codegen uses `[...listSource]` (iterator returns refs)
+
+### Region Algebra
+
+All region types (list, conditional) share a common algebraic structure based on three principles:
+
+#### The Trackability Invariant
+
+Every node inserted into the DOM must remain trackable for removal. This is enforced through the `TrackedNode` type:
+
+```typescript
+interface TrackedNode {
+  readonly node: Node  // Never an empty DocumentFragment
+}
+```
+
+When a `DocumentFragment` is inserted, its children are moved to the parent and the fragment becomes empty. The `insertAndTrack()` helper handles this by tracking the first child instead of the empty fragment, guaranteeing the invariant: "The referenced node is a direct child of the parent it was inserted into."
+
+#### Functional Core / Imperative Shell
+
+Both region types follow FC/IS for testability and clarity:
+
+| Region Type | Planning (Pure) | Execution (Imperative) |
+|-------------|-----------------|------------------------|
+| List | `planInitialRender()`, `planDeltaOps()` | `executeOps()` |
+| Conditional | `planConditionalUpdate()` | `executeConditionalOp()` |
+
+The planning functions are pure — they take state and return operations without side effects. The execution functions apply those operations to the DOM.
+
+**Conditional region operations:**
+```typescript
+type ConditionalRegionOp =
+  | { kind: "noop" }
+  | { kind: "insert"; branch: "true" | "false" }
+  | { kind: "delete" }
+  | { kind: "swap"; toBranch: "true" | "false" }
+```
+
+#### Unified State Types
+
+Both region types extend `RegionStateBase`:
+
+```typescript
+interface RegionStateBase {
+  parentScope: Scope
+}
+
+interface ListRegionState<T> extends RegionStateBase {
+  nodes: TrackedNode[]
+  scopes: Scope[]
+  listRef: ListRefLike<T>
+}
+
+interface ConditionalRegionState extends RegionStateBase {
+  currentBranch: "true" | "false" | null
+  currentNode: TrackedNode | null
+  currentScope: Scope | null
+}
+```
+
+This unified structure makes the region system easier to understand, test, and extend.
