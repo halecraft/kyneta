@@ -92,24 +92,24 @@ The in-memory filesystem approach has caused a cascade of DX compromises:
   - Remove `loroDoc.commit()` from the seed logic (auto-commit handles it)
   - Keep `syncRef.loroDoc` only for `deserializeState`
 
-### Phase 3: Update Tests 🔴
+### Phase 3: Update Tests ✅
 
-- 🔴 **Task 3.1**: Update `transform.test.ts` type stub injection tests
+- ✅ **Task 3.1**: Update `transform.test.ts` type stub injection tests
   - The "type stub injection" describe block tests that imports from `@loro-extended/change` resolve
   - These tests pass source strings with `import { ListRef } from "@loro-extended/change"`
   - With real FS, these imports resolve natively — the tests should still pass but the test descriptions should be updated to reflect "real filesystem resolution" instead of "type stub injection"
 
-- 🔴 **Task 3.2**: Update `transform.test.ts` zero-ceremony tests
+- ✅ **Task 3.2**: Update `transform.test.ts` zero-ceremony tests
   - These tests verify `createTypedDoc(Schema)` resolves reactive types
   - Should continue passing with real FS (types come from real `.d.ts` files)
   - Update descriptions if they reference type stubs
 
-- 🔴 **Task 3.3**: Address test files that use virtual paths
+- ✅ **Task 3.3**: Address test files that use virtual paths
   - Tests that call `transformSource(source)` without a filename default to `"input.ts"`
   - With real FS, this resolves relative to the project root — `node_modules` is accessible
   - Verify these tests still pass; if not, adjust the default path
 
-- 🔴 **Task 3.4**: Verify SSR end-to-end
+- ✅ **Task 3.4**: Verify SSR end-to-end
   - Start the kinetic-todo dev server
   - Confirm `GET /` returns SSR HTML with hydration markers and reactive regions
   - Confirm the client script tag is included

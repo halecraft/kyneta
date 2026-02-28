@@ -919,10 +919,10 @@ describe("transformSourceInPlace - HTML target", () => {
 })
 
 // =============================================================================
-// Type Stub Injection Tests
+// Reactive Type Resolution Tests
 // =============================================================================
 
-describe("type stub injection", () => {
+describe("reactive type resolution from @loro-extended/change", () => {
   it("should resolve ListRef type from @loro-extended/change import", () => {
     const source = `
       import { ListRef } from "@loro-extended/change"
@@ -1029,8 +1029,8 @@ describe("type stub injection", () => {
   })
 
   it("should produce __listRegion for for-of over imported ListRef", () => {
-    // This is the critical test: without type stubs, doc.todos would be `any`
-    // and the for-of would NOT produce __listRegion
+    // Critical test: the compiler must resolve ListRef from @loro-extended/change
+    // to detect doc.todos as reactive and generate __listRegion
     const source = `
       import { ListRef } from "@loro-extended/change"
 
@@ -1069,10 +1069,10 @@ describe("type stub injection", () => {
 })
 
 // =============================================================================
-// Zero-Ceremony Reactive Detection Tests
+// Schema-Inferred Reactive Detection Tests
 // =============================================================================
 
-describe("zero-ceremony reactive detection", () => {
+describe("schema-inferred reactive detection (zero ceremony)", () => {
   it("should detect reactive types from createTypedDoc without explicit interface", () => {
     const source = `
       import { createTypedDoc, Shape } from "@loro-extended/change"
