@@ -25,7 +25,7 @@ import type {
   StaticConditionalNode,
   StaticLoopNode,
 } from "../ir.js"
-import { computeSlotKind } from "../ir.js"
+import { computeSlotKind, mergeConditionalBodies } from "../ir.js"
 
 // =============================================================================
 // Code Generation Options
@@ -627,11 +627,6 @@ function generateConditionalRegion(
 ): string[] {
   const lines: string[] = []
   const ind = getIndent(state)
-  const markerVar = genVar(state, "marker")
-
-  // Create marker comment
-  lines.push(`${ind}const ${markerVar} = document.createComment("kinetic:if")`)
-  lines.push(`${ind}${parentVar}.appendChild(${markerVar})`)
 
   // Generate condition function
   const conditionExpr = node.branches[0].condition
@@ -645,11 +640,36 @@ function generateConditionalRegion(
 
   if (!subscriptionTarget) {
     // Static conditional - use __staticConditionalRegion
+    const markerVar = genVar(state, "marker")
+    lines.push(
+      `${ind}const ${markerVar} = document.createComment("kinetic:if")`,
+    )
+    lines.push(`${ind}${parentVar}.appendChild(${markerVar})`)
     lines.push(...generateStaticConditional(node, markerVar, state))
     return lines
   }
 
-  // Reactive conditional
+  // Check if we can dissolve via tree merge (Level 2 optimization)
+  // Requires: else branch exists (all branches present)
+  const elseBranch = node.branches.find(b => b.condition === null)
+  if (elseBranch) {
+    const mergeResult = mergeConditionalBodies(node.branches)
+    if (mergeResult.success) {
+      // Dissolution successful - emit pure Applicative code
+      // No marker, no __conditionalRegion call, just direct elements with ternaries
+      for (const child of mergeResult.value) {
+        const childResult = generateChild(child, parentVar, state)
+        lines.push(...childResult.code)
+      }
+      return lines
+    }
+  }
+
+  // Fallback: standard reactive conditional with __conditionalRegion
+  const markerVar = genVar(state, "marker")
+  lines.push(`${ind}const ${markerVar} = document.createComment("kinetic:if")`)
+  lines.push(`${ind}${parentVar}.appendChild(${markerVar})`)
+
   const innerState = indented(state)
   const innerInd = getIndent(innerState)
 
@@ -662,8 +682,7 @@ function generateConditionalRegion(
   lines.push(...generateBranchBody(node.branches[0].body, indented(innerState)))
   lines.push(`${innerInd}},`)
 
-  // Generate whenFalse handler (if else branch exists)
-  const elseBranch = node.branches.find(b => b.condition === null)
+  // Generate whenFalse handler
   if (elseBranch) {
     lines.push(`${innerInd}whenFalse: () => {`)
     lines.push(...generateBranchBody(elseBranch.body, indented(innerState)))

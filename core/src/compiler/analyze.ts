@@ -567,7 +567,7 @@ export function analyzeProps(obj: ObjectLiteralExpression): {
     // Shorthand property: { name }
     if (prop.getKind() === SyntaxKind.ShorthandPropertyAssignment) {
       const name = prop.getText()
-      const value = createStaticExpression(name, getSpan(prop))
+      const value = createContent(name, "render", [], getSpan(prop))
       attributes.push({ name, value })
     }
   }

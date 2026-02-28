@@ -465,15 +465,17 @@ describe("generateDOM - conditional regions", () => {
     expect(code).toContain("createComment")
   })
 
-  it("should generate __conditionalRegion with else branch", () => {
-    const trueBranch: ConditionalBranch = {
-      condition: createContent(
+  it("should dissolve conditional with identical structure (Level 2)", () => {
+    // Conditional with identical structure but different literal content
+    // Should be dissolved into direct element creation with ternary
+    const trueBranch = createConditionalBranch(
+      createContent(
         "count.get() > 0",
         "reactive",
         ["count"],
         span(2, 6, 2, 22),
       ),
-      body: [
+      [
         createElement(
           "p",
           [],
@@ -483,11 +485,11 @@ describe("generateDOM - conditional regions", () => {
           span(3, 4, 3, 13),
         ),
       ],
-      span: span(2, 4, 4, 3),
-    }
-    const falseBranch: ConditionalBranch = {
-      condition: null,
-      body: [
+      span(2, 4, 4, 3),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [
         createElement(
           "p",
           [],
@@ -497,8 +499,8 @@ describe("generateDOM - conditional regions", () => {
           span(5, 4, 5, 12),
         ),
       ],
-      span: span(4, 4, 6, 3),
-    }
+      span(4, 4, 6, 3),
+    )
     const conditionalRegion = createConditionalRegion(
       [trueBranch, falseBranch],
       "count",
@@ -514,8 +516,76 @@ describe("generateDOM - conditional regions", () => {
 
     const code = generateDOM(builder)
 
+    // Should NOT contain __conditionalRegion (dissolved)
+    expect(code).not.toContain("__conditionalRegion")
+    expect(code).not.toContain("whenTrue")
+    expect(code).not.toContain("whenFalse")
+    expect(code).not.toContain("createComment")
+
+    // Should contain direct element creation
+    expect(code).toContain('createElement("p")')
+
+    // Should contain ternary expression
+    expect(code).toContain("?")
+    expect(code).toContain('"Yes"')
+    expect(code).toContain('"No"')
+  })
+
+  it("should fallback to __conditionalRegion when structure differs", () => {
+    // Conditional with different element types - cannot dissolve
+    const trueBranch = createConditionalBranch(
+      createContent(
+        "count.get() > 0",
+        "reactive",
+        ["count"],
+        span(2, 6, 2, 22),
+      ),
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("Paragraph", span(3, 6, 3, 11))],
+          span(3, 4, 3, 13),
+        ),
+      ],
+      span(2, 4, 4, 3),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "div",
+          [],
+          [],
+          [],
+          [createLiteral("Div", span(5, 6, 5, 10))],
+          span(5, 4, 5, 12),
+        ),
+      ],
+      span(4, 4, 6, 3),
+    )
+    const conditionalRegion = createConditionalRegion(
+      [trueBranch, falseBranch],
+      "count",
+      span(2, 2, 6, 3),
+    )
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [conditionalRegion],
+      span(1, 0, 7, 1),
+    )
+
+    const code = generateDOM(builder)
+
+    // Should contain __conditionalRegion (not dissolved)
+    expect(code).toContain("__conditionalRegion")
     expect(code).toContain("whenTrue")
     expect(code).toContain("whenFalse")
+    expect(code).toContain("createComment")
   })
 
   it("should generate __staticConditionalRegion for static condition", () => {

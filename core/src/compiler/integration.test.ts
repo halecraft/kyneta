@@ -1263,7 +1263,7 @@ describe("compiler integration - conditional regions", () => {
       expect(result.code).toContain('createElement("p")')
     })
 
-    it("should generate whenFalse handler when else branch exists", () => {
+    it("should dissolve conditional with identical structure", () => {
       const source = `
         interface CounterRef {
           get(): number
@@ -1281,8 +1281,16 @@ describe("compiler integration - conditional regions", () => {
 
       const result = transformSource(source, { target: "dom" })
 
-      expect(result.code).toContain("whenTrue: () => {")
-      expect(result.code).toContain("whenFalse: () => {")
+      // Should dissolve - no __conditionalRegion call or handlers
+      expect(result.code).not.toContain("whenTrue")
+      expect(result.code).not.toContain("whenFalse")
+      expect(result.code).not.toContain("__conditionalRegion(")
+
+      // Should have direct element creation with ternary
+      expect(result.code).toContain('createElement("p")')
+      expect(result.code).toContain("?")
+      expect(result.code).toContain('"Visible!"')
+      expect(result.code).toContain('"Hidden!"')
     })
   })
 
@@ -1380,9 +1388,9 @@ describe("compiler integration - conditional regions", () => {
   // are in regions.test.ts. This section tests compiler integration only.
 
   describe("Task 7.4: Compile-and-execute integration", () => {
-    it("should compile and execute conditional that switches branches reactively", () => {
+    it("should compile and execute dissolved conditional reactively", () => {
       // This test verifies the full pipeline: source → IR → codegen → execute
-      // It catches codegen bugs that unit tests might miss
+      // With identical structure, the conditional should be dissolved
 
       const schema = Shape.doc({
         count: Shape.counter(),
@@ -1391,28 +1399,22 @@ describe("compiler integration - conditional regions", () => {
       // Start with count = 0 (false condition)
       loro(doc).commit()
 
-      // Manually construct what compiled code would produce
-      // (We can't easily eval the generated code since it references doc)
+      // Manually construct what dissolved code would produce
+      // Dissolved conditionals create element directly with ternary in subscription
       const scope = new Scope("test")
       const container = document.createElement("div")
-      const marker = document.createComment("kinetic:if")
-      container.appendChild(marker)
 
-      __conditionalRegion(
-        marker,
+      const p = document.createElement("p")
+      const text = document.createTextNode("")
+      p.appendChild(text)
+      container.appendChild(p)
+
+      // Subscribe to reactive content
+      __subscribeWithValue(
         doc.count,
-        () => doc.count.get() > 0,
-        {
-          whenTrue: () => {
-            const p = document.createElement("p")
-            p.textContent = "Has items"
-            return p
-          },
-          whenFalse: () => {
-            const p = document.createElement("p")
-            p.textContent = "Empty"
-            return p
-          },
+        () => (doc.count.get() > 0 ? "Has items" : "Empty"),
+        v => {
+          text.textContent = String(v)
         },
         scope,
       )
@@ -1442,11 +1444,16 @@ describe("compiler integration - conditional regions", () => {
       `
       const result = transformSource(source, { target: "dom" })
 
-      // The compiled code should have the same structure
-      expect(result.code).toContain("__conditionalRegion")
-      expect(result.code).toContain("doc.count.get() > 0")
-      expect(result.code).toContain("whenTrue")
-      expect(result.code).toContain("whenFalse")
+      // The compiled code should be dissolved (no __conditionalRegion call)
+      expect(result.code).not.toContain("__conditionalRegion(")
+      expect(result.code).not.toContain("whenTrue")
+      expect(result.code).not.toContain("whenFalse")
+
+      // Should have direct element creation with ternary
+      expect(result.code).toContain('createElement("p")')
+      expect(result.code).toContain("?")
+      expect(result.code).toContain('"Has items"')
+      expect(result.code).toContain('"Empty"')
 
       scope.dispose()
     })

@@ -121,6 +121,49 @@ export type ContentNode = ContentValue
 export type SlotKind = "single" | "range"
 
 // =============================================================================
+// Tree Merge Types
+// =============================================================================
+
+/**
+ * Result of a tree merge operation.
+ *
+ * Discriminated union expressing success or failure with structured reasons.
+ */
+export type MergeResult<T> =
+  | { success: true; value: T }
+  | { success: false; reason: MergeFailureReason }
+
+/**
+ * Structured failure reasons for tree merge operations.
+ *
+ * Provides detailed information about why a merge failed, useful for
+ * debugging and optimization metrics.
+ */
+export type MergeFailureReason =
+  | { kind: "different-kinds"; aKind: IRNodeKind; bKind: IRNodeKind }
+  | { kind: "different-tags"; aTag: string; bTag: string }
+  | { kind: "different-child-counts"; aCount: number; bCount: number }
+  | { kind: "different-attribute-sets"; aAttrs: string[]; bAttrs: string[] }
+  | {
+      kind: "different-event-handlers"
+      aHandlers: string[]
+      bHandlers: string[]
+    }
+  | {
+      kind: "incompatible-binding-times"
+      aTime: BindingTime
+      bTime: BindingTime
+    }
+  | { kind: "different-dependencies"; aDeps: string[]; bDeps: string[] }
+  | { kind: "different-statement-sources"; aSource: string; bSource: string }
+  | { kind: "region-not-mergeable" }
+  | {
+      kind: "child-merge-failed"
+      index: number
+      childReason: MergeFailureReason
+    }
+
+// =============================================================================
 // Attribute Types
 // =============================================================================
 
@@ -248,7 +291,7 @@ export interface ListRegionNode extends IRNodeBase {
  */
 export interface ConditionalBranch {
   /** The condition expression (null for else branch) */
-  condition: ExpressionNode | null
+  condition: ContentValue | null
 
   /** The content to render when this branch is active */
   body: ChildNode[]
@@ -526,10 +569,10 @@ export function isStaticConditionalNode(
 }
 
 /**
- * Check if content is reactive (varies at runtime).
+ * Check if a node is reactive content (varies at runtime).
  */
-export function isReactiveContent(node: ContentNode): boolean {
-  return node.bindingTime === "reactive"
+export function isReactiveContent(node: ChildNode): node is ContentValue {
+  return node.kind === "content" && node.bindingTime === "reactive"
 }
 
 // =============================================================================
@@ -563,6 +606,368 @@ export function computeSlotKind(body: ChildNode[]): SlotKind {
 
   // Regions, loops, conditionals -> range (they may produce multiple nodes)
   return "range"
+}
+
+// =============================================================================
+// Tree Merge Functions
+// =============================================================================
+
+/**
+ * Merge two content values at a divergence point.
+ *
+ * If both values are identical, returns as-is.
+ * If both have liftable binding times (literal or render), promotes to reactive
+ * with ternary source expression.
+ * Otherwise, returns failure.
+ *
+ * @param a - First content value
+ * @param b - Second content value
+ * @param condition - The condition expression for the ternary
+ * @returns MergeResult with merged content or failure reason
+ */
+export function mergeContentValue(
+  a: ContentValue,
+  b: ContentValue,
+  condition: ContentValue,
+): MergeResult<ContentValue> {
+  // Identical content - keep as-is
+  if (
+    a.source === b.source &&
+    a.bindingTime === b.bindingTime &&
+    JSON.stringify(a.dependencies) === JSON.stringify(b.dependencies)
+  ) {
+    return { success: true, value: a }
+  }
+
+  // Both literal or render-time - can promote to reactive with ternary
+  if (
+    (a.bindingTime === "literal" || a.bindingTime === "render") &&
+    (b.bindingTime === "literal" || b.bindingTime === "render")
+  ) {
+    // Create ternary expression
+    const ternarySource = `${condition.source} ? ${a.source} : ${b.source}`
+    return {
+      success: true,
+      value: {
+        kind: "content",
+        source: ternarySource,
+        bindingTime: "reactive",
+        dependencies: condition.dependencies,
+        span: a.span,
+      },
+    }
+  }
+
+  // Special case: liftable (literal/render) + reactive with ternary
+  // This enables nested ternaries for N-branch merge
+  // Example: merge "A" with "b ? B : C" using condition "a"
+  // Results in: "a ? A : (b ? B : C)"
+  if (
+    (a.bindingTime === "literal" || a.bindingTime === "render") &&
+    b.bindingTime === "reactive"
+  ) {
+    // Build nested ternary
+    const ternarySource = `${condition.source} ? ${a.source} : (${b.source})`
+    // Merge dependencies: condition deps + b's deps
+    const mergedDeps = [
+      ...condition.dependencies,
+      ...b.dependencies.filter(d => !condition.dependencies.includes(d)),
+    ]
+    return {
+      success: true,
+      value: {
+        kind: "content",
+        source: ternarySource,
+        bindingTime: "reactive",
+        dependencies: mergedDeps,
+        span: a.span,
+      },
+    }
+  }
+
+  // Reactive + liftable: reverse case (less common but possible)
+  if (
+    a.bindingTime === "reactive" &&
+    (b.bindingTime === "literal" || b.bindingTime === "render")
+  ) {
+    const ternarySource = `${condition.source} ? (${a.source}) : ${b.source}`
+    const mergedDeps = [
+      ...condition.dependencies,
+      ...a.dependencies.filter(d => !condition.dependencies.includes(d)),
+    ]
+    return {
+      success: true,
+      value: {
+        kind: "content",
+        source: ternarySource,
+        bindingTime: "reactive",
+        dependencies: mergedDeps,
+        span: a.span,
+      },
+    }
+  }
+
+  // Two reactive with same dependencies - keep as-is (already handled above)
+  // Two reactive with different dependencies - cannot merge
+  if (a.bindingTime === "reactive" && b.bindingTime === "reactive") {
+    return {
+      success: false,
+      reason: {
+        kind: "incompatible-binding-times",
+        aTime: a.bindingTime,
+        bTime: b.bindingTime,
+      },
+    }
+  }
+
+  // Should not reach here, but handle as incompatible
+  return {
+    success: false,
+    reason: {
+      kind: "incompatible-binding-times",
+      aTime: a.bindingTime,
+      bTime: b.bindingTime,
+    },
+  }
+}
+
+/**
+ * Recursively merge two child nodes.
+ *
+ * Checks structural equivalence and delegates to mergeContentValue for
+ * content positions. Returns merged node or failure reason.
+ *
+ * @param a - First child node
+ * @param b - Second child node
+ * @param condition - The condition expression for ternaries
+ * @returns MergeResult with merged node or failure reason
+ */
+export function mergeNode(
+  a: ChildNode,
+  b: ChildNode,
+  condition: ContentValue,
+): MergeResult<ChildNode> {
+  // Different kinds - cannot merge
+  if (a.kind !== b.kind) {
+    return {
+      success: false,
+      reason: { kind: "different-kinds", aKind: a.kind, bKind: b.kind },
+    }
+  }
+
+  // Content nodes - delegate to mergeContentValue
+  if (a.kind === "content" && b.kind === "content") {
+    return mergeContentValue(a, b, condition)
+  }
+
+  // Statement nodes - must have identical source
+  if (a.kind === "statement" && b.kind === "statement") {
+    if (a.source === b.source) {
+      return { success: true, value: a }
+    }
+    return {
+      success: false,
+      reason: {
+        kind: "different-statement-sources",
+        aSource: a.source,
+        bSource: b.source,
+      },
+    }
+  }
+
+  // Element nodes - check structural equivalence and recurse
+  if (a.kind === "element" && b.kind === "element") {
+    // Different tags - cannot merge
+    if (a.tag !== b.tag) {
+      return {
+        success: false,
+        reason: { kind: "different-tags", aTag: a.tag, bTag: b.tag },
+      }
+    }
+
+    // Different child counts - cannot merge
+    if (a.children.length !== b.children.length) {
+      return {
+        success: false,
+        reason: {
+          kind: "different-child-counts",
+          aCount: a.children.length,
+          bCount: b.children.length,
+        },
+      }
+    }
+
+    // Different attribute sets - cannot merge
+    const aAttrNames = a.attributes.map(attr => attr.name).sort()
+    const bAttrNames = b.attributes.map(attr => attr.name).sort()
+    if (JSON.stringify(aAttrNames) !== JSON.stringify(bAttrNames)) {
+      return {
+        success: false,
+        reason: {
+          kind: "different-attribute-sets",
+          aAttrs: aAttrNames,
+          bAttrs: bAttrNames,
+        },
+      }
+    }
+
+    // Different event handlers - cannot merge
+    const aHandlers = a.eventHandlers.map(h => h.handlerSource).sort()
+    const bHandlers = b.eventHandlers.map(h => h.handlerSource).sort()
+    if (JSON.stringify(aHandlers) !== JSON.stringify(bHandlers)) {
+      return {
+        success: false,
+        reason: {
+          kind: "different-event-handlers",
+          aHandlers,
+          bHandlers,
+        },
+      }
+    }
+
+    // Merge attributes
+    const mergedAttributes: AttributeNode[] = []
+    for (let i = 0; i < a.attributes.length; i++) {
+      const aAttr = a.attributes.find(attr => attr.name === aAttrNames[i])!
+      const bAttr = b.attributes.find(attr => attr.name === aAttrNames[i])!
+
+      const valueResult = mergeContentValue(aAttr.value, bAttr.value, condition)
+      if (!valueResult.success) {
+        return valueResult
+      }
+
+      mergedAttributes.push({
+        name: aAttr.name,
+        value: valueResult.value,
+      })
+    }
+
+    // Merge children recursively
+    const mergedChildren: ChildNode[] = []
+    for (let i = 0; i < a.children.length; i++) {
+      const childResult = mergeNode(a.children[i], b.children[i], condition)
+      if (!childResult.success) {
+        return {
+          success: false,
+          reason: {
+            kind: "child-merge-failed",
+            index: i,
+            childReason: childResult.reason,
+          },
+        }
+      }
+      mergedChildren.push(childResult.value)
+    }
+
+    // Create merged element
+    return {
+      success: true,
+      value: createElement(
+        a.tag,
+        mergedAttributes,
+        a.eventHandlers,
+        a.bindings,
+        mergedChildren,
+        a.span,
+      ),
+    }
+  }
+
+  // Regions, loops, conditionals - not mergeable
+  return {
+    success: false,
+    reason: { kind: "region-not-mergeable" },
+  }
+}
+
+/**
+ * Merge conditional branch bodies.
+ *
+ * Walks N branch bodies in parallel, calling mergeNode for each position.
+ * For N > 2, synthesizes nested ternaries.
+ *
+ * Returns merged body if all branches are structurally equivalent,
+ * otherwise returns failure.
+ *
+ * @param branches - Array of conditional branches to merge
+ * @returns MergeResult with merged body or failure reason
+ */
+export function mergeConditionalBodies(
+  branches: ConditionalBranch[],
+): MergeResult<ChildNode[]> {
+  // Must have at least 2 branches (if and else)
+  if (branches.length < 2) {
+    return {
+      success: false,
+      reason: { kind: "region-not-mergeable" },
+    }
+  }
+
+  // All branches must have same body length
+  const bodyLength = branches[0].body.length
+  for (let i = 1; i < branches.length; i++) {
+    if (branches[i].body.length !== bodyLength) {
+      return {
+        success: false,
+        reason: {
+          kind: "different-child-counts",
+          aCount: bodyLength,
+          bCount: branches[i].body.length,
+        },
+      }
+    }
+  }
+
+  // For 2 branches: simple binary merge
+  if (branches.length === 2) {
+    const condition = branches[0].condition!
+    const mergedBody: ChildNode[] = []
+
+    for (let i = 0; i < bodyLength; i++) {
+      const nodeA = branches[0].body[i]
+      const nodeB = branches[1].body[i]
+      const result = mergeNode(nodeA, nodeB, condition)
+
+      if (!result.success) {
+        return result
+      }
+
+      mergedBody.push(result.value)
+    }
+
+    return { success: true, value: mergedBody }
+  }
+
+  // For N > 2 branches: nested ternary merge
+  // Build from right to left: a ? X : (b ? Y : Z)
+  const mergedBody: ChildNode[] = []
+
+  for (let nodeIndex = 0; nodeIndex < bodyLength; nodeIndex++) {
+    // Start with the last (else) branch
+    let current = branches[branches.length - 1].body[nodeIndex]
+
+    // Work backwards through conditions
+    for (
+      let branchIndex = branches.length - 2;
+      branchIndex >= 0;
+      branchIndex--
+    ) {
+      const branch = branches[branchIndex]
+      const condition = branch.condition!
+      const nodeA = branch.body[nodeIndex]
+
+      const result = mergeNode(nodeA, current, condition)
+      if (!result.success) {
+        return result
+      }
+
+      current = result.value
+    }
+
+    mergedBody.push(current)
+  }
+
+  return { success: true, value: mergedBody }
 }
 
 // =============================================================================

@@ -20,42 +20,49 @@
 
 export type {
   AttributeNode,
+  BindingTime,
   BindingNode,
   BuilderNode,
   ChildNode,
   ConditionalBranch,
   ConditionalRegionNode,
   ContentNode,
+  ContentValue,
   ElementNode,
   EventHandlerNode,
-  ExpressionKind,
-  ExpressionNode,
   IRNodeBase,
   IRNodeKind,
   ListRegionNode,
+  MergeFailureReason,
+  MergeResult,
+  SlotKind,
   SourceSpan,
-  TextNode,
 } from "./ir.js"
 
 export {
   // Factory functions
   createBuilder,
+  createConditionalBranch,
   createConditionalRegion,
+  createContent,
   createElement,
+  createLiteral,
   createListRegion,
-  createReactiveExpression,
   createSpan,
-  createStaticExpression,
-  createTextNode,
+  // Slot computation
+  computeSlotKind,
+  // Tree merge
+  mergeConditionalBodies,
+  mergeContentValue,
+  mergeNode,
   // Type guards
   isBindingNode,
   isConditionalRegionNode,
+  isContentNode,
   isElementNode,
-  isExpressionNode,
+  isLiteralContent,
   isListRegionNode,
   isReactiveContent,
-  isReactiveExpression,
-  isTextNode,
 } from "./ir.js"
 
 // =============================================================================

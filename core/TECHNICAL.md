@@ -18,9 +18,133 @@ Kinetic follows a **Functional Core / Imperative Shell** architecture via an Int
 - **IR** (`ir.ts`): Serializable data structures representing the UI
 - **Codegen** (`codegen/dom.ts`, `codegen/html.ts`): Transforms IR into JavaScript code
 
+## DOM Algebra: Applicative/Monadic Decomposition
+
+Kinetic's compilation pipeline performs **partial evaluation** at three stages, decomposing UI code into Applicative (static structure) and Monadic (dynamic structure) layers.
+
+### Binding-Time Analysis
+
+The compiler classifies values by **when they become known**:
+
+```typescript
+type BindingTime = "literal" | "render" | "reactive"
+```
+
+- **literal**: Value known at compile time (string literals like `"Hello"`)
+- **render**: Value known at render time (static expressions like `42`, `someVar`)
+- **reactive**: Value varies at runtime (reactive expressions like `doc.count.get()`)
+
+This classification enables **binding-time promotion**: when branches diverge only in values, literals and render-time values can be promoted to reactive with ternary expressions.
+
+### ContentValue: Unified Content Representation
+
+All content (text, attribute values, etc.) is represented by a single type:
+
+```typescript
+interface ContentValue {
+  kind: "content"
+  source: string              // JSON string for literals, JS expression otherwise
+  bindingTime: BindingTime
+  dependencies: string[]      // Reactive deps (e.g., ["doc.count"])
+  span: SourceSpan
+}
+```
+
+This replaces the previous `TextNode | ExpressionNode` union, making binding-time explicit and eliminating cross-product complexity in tree merge logic.
+
+### Slots: Trackable DOM Handles
+
+A **Slot** is a runtime handle to DOM content that can be removed:
+
+```typescript
+type Slot =
+  | { kind: "single"; node: Node }
+  | { kind: "range"; startMarker: Comment; endMarker: Comment }
+```
+
+**SlotKind** is computed at compile time from IR body structure:
+
+```typescript
+type SlotKind = "single" | "range"
+
+function computeSlotKind(body: ChildNode[]): SlotKind {
+  // Returns "single" if body produces exactly one DOM node
+  // Returns "range" otherwise (zero, multiple, or regions)
+}
+```
+
+The SlotKind flows from IR → codegen → runtime, enabling optimization:
+- When `slotKind: "single"` is provided, `claimSlot()` avoids runtime `nodeType` inspection
+- Handler objects include optional `slotKind` field
+- Runtime dispatches on compile-time knowledge instead of runtime checks
+
+### Tree Merge and Conditional Dissolution
+
+**Tree merge** recursively compares conditional branches to detect structural equivalence:
+
+```typescript
+function mergeConditionalBodies(
+  branches: ConditionalBranch[]
+): MergeResult<ChildNode[]>
+```
+
+When branches have identical structure but different values:
+1. Literals/render-time values are promoted to reactive with ternaries
+2. The conditional is **dissolved** into pure Applicative code
+3. No `__conditionalRegion` call, no marker, no handlers
+
+**Example dissolution:**
+
+```typescript
+// Source:
+if (doc.count.get() > 0) {
+  p("Yes")
+} else {
+  p("No")
+}
+
+// Dissolved output:
+const _p0 = document.createElement("p")
+const _text1 = document.createTextNode("")
+_p0.appendChild(_text1)
+__subscribeWithValue(doc.count, () => doc.count.get() > 0 ? "Yes" : "No", (v) => {
+  _text1.textContent = String(v)
+}, scope)
+```
+
+**Mergeability rules:**
+- Same element tags ✓
+- Same attribute names (different values OK) ✓
+- Same child counts ✓
+- Identical event handlers ✓
+- Different tags ✗
+- Reactive content with different dependencies ✗
+- No else branch ✗
+
+**N-branch support:** For `if/else-if/else` chains, nested ternaries are synthesized: `a ? X : (b ? Y : Z)`
+
+### Optimization Levels
+
+1. **Direct-return optimization**: Single-element bodies return element directly (no fragment)
+2. **Conditional dissolution**: Structurally identical branches dissolved into ternaries
+3. **Partial hoisting** (future): Shared prefix hoisted, residual remains as reduced conditional
+
 ## Intermediate Representation (IR)
 
 ### Core Node Types
+
+#### `ContentValue`
+All value-producing content (text, attribute values).
+
+```typescript
+interface ContentValue {
+  kind: "content"
+  source: string
+  bindingTime: "literal" | "render" | "reactive"
+  dependencies: string[]
+  span: SourceSpan
+}
+```
 
 #### `ElementNode`
 Represents an HTML element with attributes, event handlers, and children.
@@ -37,27 +161,7 @@ interface ElementNode {
 }
 ```
 
-#### `TextNode`
-Static text content.
 
-```typescript
-interface TextNode {
-  kind: "text"
-  value: string
-}
-```
-
-#### `ExpressionNode`
-Dynamic content that may be static or reactive.
-
-```typescript
-interface ExpressionNode {
-  kind: "expression"
-  source: string                 // Original source code
-  expressionKind: "static" | "reactive"
-  dependencies: string[]         // Reactive dependencies (e.g., "doc.title")
-}
-```
 
 ### Control Flow Nodes
 
@@ -86,8 +190,9 @@ interface ConditionalRegionNode {
 }
 
 interface ConditionalBranch {
-  condition: ExpressionNode | null  // null = else branch
+  condition: ContentValue | null  // null = else branch
   body: ChildNode[]
+  slotKind: SlotKind              // Computed at IR creation
 }
 ```
 
@@ -149,8 +254,7 @@ All child nodes are unified under `ChildNode`:
 ```typescript
 type ChildNode =
   | ElementNode
-  | TextNode
-  | ExpressionNode
+  | ContentValue
   | ListRegionNode
   | ConditionalRegionNode
   | BindingNode
@@ -244,12 +348,13 @@ The compiler detects reactive types by analyzing TypeScript's type system:
 3. **Property access chains**: `doc.items[0].get()`
 
 When a reactive type is detected:
-- Expressions become `ExpressionNode` with `expressionKind: "reactive"`
+- Expressions become `ContentValue` with `bindingTime: "reactive"`
 - Loops over `ListRef` become `ListRegionNode`
 - Conditionals with reactive conditions become `ConditionalRegionNode`
 
 Non-reactive equivalents:
-- Static expressions: `expressionKind: "static"`
+- Literal expressions: `bindingTime: "literal"`
+- Render-time expressions: `bindingTime: "render"`
 - Static loops: `StaticLoopNode`
 - Static conditionals: `StaticConditionalNode`
 
@@ -354,10 +459,10 @@ All region types (list, conditional) share a common algebraic structure based on
 
 #### The Trackability Invariant
 
-Every node inserted into the DOM must remain trackable for removal. This is enforced through the `InsertionResult` type:
+Every node inserted into the DOM must remain trackable for removal. This is enforced through the `Slot` type:
 
 ```typescript
-type InsertionResult =
+type Slot =
   | { kind: "single"; node: Node }
   | { kind: "range"; startMarker: Comment; endMarker: Comment }
 ```
@@ -373,7 +478,7 @@ type InsertionResult =
 <!--kinetic:end-->
 ```
 
-The `insertAndTrack()` helper automatically chooses the appropriate strategy based on fragment child count, and `removeInsertionResult()` handles removal for both cases.
+The `claimSlot()` helper automatically chooses the appropriate strategy. When compile-time `slotKind` is provided, it dispatches directly without runtime inspection. The `releaseSlot()` function handles removal for both cases.
 
 #### Functional Core / Imperative Shell
 
@@ -405,14 +510,14 @@ interface RegionStateBase {
 }
 
 interface ListRegionState<T> extends RegionStateBase {
-  nodes: InsertionResult[]
+  slots: Slot[]
   scopes: Scope[]
   listRef: ListRefLike<T>
 }
 
 interface ConditionalRegionState extends RegionStateBase {
   currentBranch: "true" | "false" | null
-  currentNode: InsertionResult | null
+  currentSlot: Slot | null
   currentScope: Scope | null
 }
 ```
