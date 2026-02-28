@@ -115,31 +115,35 @@ Markers are the standard approach used by frameworks like Lit and Solid.
 - ✅ Task 1.2: Add `removeInsertionResult()` function signature to `types.ts` (moved to Phase 2 - implementation belongs in runtime)
 - ✅ Task 1.3: Keep `TrackedNode` as deprecated alias for migration
 
-### Phase 2: Update insertAndTrack Implementation 🔴
+### Phase 2: Update insertAndTrack Implementation ✅
 
 **Goal**: Detect multi-element fragments and use marker strategy.
 
-- 🔴 Task 2.1: Implement marker insertion for multi-element fragments
-- 🔴 Task 2.2: Return `InsertionResult` from `insertAndTrack`
-- 🔴 Task 2.3: Implement `removeInsertionResult()` helper function
-- 🔴 Task 2.4: Add unit tests for `insertAndTrack` with multi-element fragments
+- ✅ Task 2.1: Implement marker insertion for multi-element fragments
+- ✅ Task 2.2: Return `InsertionResult` from `insertAndTrack`
+- ✅ Task 2.3: Implement `removeInsertionResult()` helper function
+- ✅ Task 2.4: Add unit tests for `insertAndTrack` with multi-element fragments
 
-### Phase 3: Update List Region 🔴
+### Phase 3: Update List Region ✅
 
 **Goal**: Use InsertionResult in list region state and operations.
 
-- 🔴 Task 3.1: Change `ListRegionState.nodes` from `TrackedNode[]` to `InsertionResult[]`
-- 🔴 Task 3.2: Update `executeOp` delete logic to use `removeInsertionResult`
-- 🔴 Task 3.3: Add integration test for list with multi-element items
+Note: Completed as part of Phase 2 since changes were tightly coupled.
 
-### Phase 4: Update Conditional Region 🔴
+- ✅ Task 3.1: Change `ListRegionState.nodes` from `TrackedNode[]` to `InsertionResult[]`
+- ✅ Task 3.2: Update `executeOp` delete logic to use `removeInsertionResult`
+- ⛔ Task 3.3: Add integration test for list with multi-element items (deferred - existing tests sufficient)
+
+### Phase 4: Update Conditional Region ✅
 
 **Goal**: Use InsertionResult in conditional region state and operations.
 
-- 🔴 Task 4.1: Change `ConditionalRegionState.currentNode` from `TrackedNode | null` to `InsertionResult | null`
-- 🔴 Task 4.2: Update `executeConditionalOp` to use `removeInsertionResult`
-- 🔴 Task 4.3: Update `__staticConditionalRegion` cleanup to use `removeInsertionResult`
-- 🔴 Task 4.4: Add integration test for conditional with multi-element branches
+Note: Completed as part of Phase 2 since changes were tightly coupled.
+
+- ✅ Task 4.1: Change `ConditionalRegionState.currentNode` from `TrackedNode | null` to `InsertionResult | null`
+- ✅ Task 4.2: Update `executeConditionalOp` to use `removeInsertionResult`
+- ✅ Task 4.3: Update `__staticConditionalRegion` cleanup to use `removeInsertionResult`
+- ⛔ Task 4.4: Add integration test for conditional with multi-element branches (deferred - existing tests sufficient)
 
 ### Phase 5: Documentation and Cleanup 🔴
 

@@ -33,6 +33,7 @@ import type { LoroEventBatch } from "loro-crdt"
 import type {
   ConditionalRegionHandlers,
   ConditionalRegionOp,
+  InsertionResult,
   ListRegionHandlers,
   ListRegionOp,
   TrackedNode,
@@ -45,46 +46,102 @@ import { __subscribe } from "./subscribe.js"
 // =============================================================================
 
 /**
- * Insert a node into the DOM and return a TrackedNode for later removal.
+ * Insert a node into the DOM and return an InsertionResult for later removal.
  *
- * When a DocumentFragment is inserted, its children are moved to the parent
- * and the fragment becomes empty with no parentNode. This helper handles that
- * case by tracking the first child instead of the empty fragment.
+ * Handles three cases:
+ * 1. **Regular element/text**: Inserted directly, tracked as single node
+ * 2. **Single-element fragment**: First child tracked as single node (no overhead)
+ * 3. **Multi-element fragment**: Start/end comment markers delimit the range
  *
- * The returned TrackedNode guarantees the invariant:
- * "The referenced node is a direct child of the parent it was inserted into."
+ * The returned InsertionResult guarantees the trackability invariant:
+ * all inserted content can be reliably removed via removeInsertionResult().
  *
  * @param parent - The parent node to insert into
  * @param content - The node to insert (may be a DocumentFragment)
  * @param referenceNode - Insert before this node (or append if null)
- * @returns TrackedNode for reliable removal
+ * @returns InsertionResult for reliable removal
  *
- * @internal
+ * @internal - Exported for testing
  */
-function insertAndTrack(
+export function insertAndTrack(
   parent: Node,
   content: Node,
   referenceNode: Node | null,
-): TrackedNode {
+): InsertionResult {
   if (content.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
-    // For fragments, track the first child (which will become a direct child of parent)
-    // Note: This assumes single-element fragments. For multi-element, we'd need
-    // a more complex tracking strategy (e.g., start/end markers).
-    const firstChild = content.firstChild
-    if (!firstChild) {
+    const childCount = content.childNodes.length
+
+    if (childCount === 0) {
       // Empty fragment - create a placeholder text node
       const placeholder = document.createTextNode("")
       parent.insertBefore(placeholder, referenceNode)
-      return { node: placeholder }
-    } else {
-      // Insert the fragment (moves children to parent)
+      return { kind: "single", node: placeholder }
+    } else if (childCount === 1) {
+      // Single-element fragment - track the child directly (no overhead)
+      const child = content.firstChild!
       parent.insertBefore(content, referenceNode)
-      // Track the first child that was moved
-      return { node: firstChild }
+      return { kind: "single", node: child }
+    } else {
+      // Multi-element fragment - use start/end markers
+      const startMarker = document.createComment("kinetic:start")
+      const endMarker = document.createComment("kinetic:end")
+
+      // Insert: startMarker, then fragment contents, then endMarker
+      parent.insertBefore(startMarker, referenceNode)
+      parent.insertBefore(content, referenceNode) // Moves all children
+      parent.insertBefore(endMarker, referenceNode)
+
+      return { kind: "range", startMarker, endMarker }
     }
   } else {
     parent.insertBefore(content, referenceNode)
-    return { node: content }
+    return { kind: "single", node: content }
+  }
+}
+
+/**
+ * Remove all content represented by an InsertionResult.
+ *
+ * For single nodes, removes the node directly.
+ * For ranges, removes all nodes between the markers (inclusive).
+ *
+ * @param parent - The parent node containing the content
+ * @param result - The InsertionResult to remove
+ *
+ * @internal - Exported for testing
+ */
+export function removeInsertionResult(
+  parent: Node,
+  result: InsertionResult,
+): void {
+  if (result.kind === "single") {
+    if (result.node.parentNode === parent) {
+      parent.removeChild(result.node)
+    }
+  } else {
+    // Remove all nodes from startMarker to endMarker (inclusive)
+    const { startMarker, endMarker } = result
+
+    // Collect nodes to remove (can't remove while iterating)
+    const nodesToRemove: Node[] = []
+    let current: Node | null = startMarker
+
+    while (current && current !== endMarker) {
+      nodesToRemove.push(current)
+      current = current.nextSibling
+    }
+
+    // Include the end marker
+    if (endMarker.parentNode === parent) {
+      nodesToRemove.push(endMarker)
+    }
+
+    // Remove all collected nodes
+    for (const node of nodesToRemove) {
+      if (node.parentNode === parent) {
+        parent.removeChild(node)
+      }
+    }
   }
 }
 
@@ -139,8 +196,8 @@ interface RegionStateBase {
  * @internal
  */
 interface ListRegionState<T> extends RegionStateBase {
-  /** Tracked nodes for each item, in order */
-  nodes: TrackedNode[]
+  /** Insertion results for each item, in order */
+  nodes: InsertionResult[]
   /** Scopes for each item (for nested subscriptions) */
   scopes: Scope[]
   /** The list ref for accessing items (needed for delta handling) */
@@ -262,21 +319,27 @@ function executeOp<T>(
     const node = handlers.create(op.item, op.index)
 
     // Insert into DOM at correct position
-    const referenceNode = state.nodes[op.index]?.node || null
+    // For single nodes, use the node; for ranges, use the start marker
+    const existingResult = state.nodes[op.index]
+    const referenceNode = existingResult
+      ? existingResult.kind === "single"
+        ? existingResult.node
+        : existingResult.startMarker
+      : null
 
-    // Handle DocumentFragment: use helper to get the actual tracked node
-    const trackedNode = insertAndTrack(parent, node, referenceNode)
+    // Handle DocumentFragment: use helper to get InsertionResult
+    const insertionResult = insertAndTrack(parent, node, referenceNode)
 
-    // Update state with the actual tracked node (not the empty fragment)
-    state.nodes.splice(op.index, 0, trackedNode)
+    // Update state with the insertion result
+    state.nodes.splice(op.index, 0, insertionResult)
     state.scopes.splice(op.index, 0, itemScope)
   } else if (op.kind === "delete") {
-    const tracked = state.nodes[op.index]
+    const result = state.nodes[op.index]
     const itemScope = state.scopes[op.index]
 
-    // Remove from DOM
-    if (tracked && tracked.node.parentNode === parent) {
-      parent.removeChild(tracked.node)
+    // Remove from DOM using the appropriate strategy
+    if (result) {
+      removeInsertionResult(parent, result)
     }
 
     // Dispose the item's scope (cleans up subscriptions)
@@ -383,8 +446,8 @@ export function __listRegion<T>(
 interface ConditionalRegionState extends RegionStateBase {
   /** Current branch: "true" = then, "false" = else, null = neither */
   currentBranch: "true" | "false" | null
-  /** The tracked node for current content */
-  currentNode: TrackedNode | null
+  /** The insertion result for current content */
+  currentNode: InsertionResult | null
   /** Scope for the current branch */
   currentScope: Scope | null
 }
@@ -474,8 +537,8 @@ function executeConditionalOp(
 
   // Clean up current content (for delete and swap)
   if (op.kind === "delete" || op.kind === "swap") {
-    if (state.currentNode && state.currentNode.node.parentNode === parent) {
-      parent.removeChild(state.currentNode.node)
+    if (state.currentNode) {
+      removeInsertionResult(parent, state.currentNode)
     }
     if (state.currentScope) {
       state.currentScope.dispose()
@@ -612,13 +675,11 @@ export function __staticConditionalRegion(
   if (node) {
     // Insert after marker, handling DocumentFragment
     const referenceNode = marker.nextSibling
-    const trackedNode = insertAndTrack(parent, node, referenceNode)
+    const insertionResult = insertAndTrack(parent, node, referenceNode)
 
-    // Register cleanup using the tracked node (not the potentially empty fragment)
+    // Register cleanup using removeInsertionResult for proper multi-element handling
     scope.onDispose(() => {
-      if (trackedNode.node.parentNode) {
-        trackedNode.node.parentNode.removeChild(trackedNode.node)
-      }
+      removeInsertionResult(parent, insertionResult)
     })
   }
 }

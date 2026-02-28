@@ -14,11 +14,13 @@ import {
   __conditionalRegion,
   __listRegion,
   __staticConditionalRegion,
+  insertAndTrack,
   type ListDeltaEvent,
   type ListRefLike,
   planConditionalUpdate,
   planDeltaOps,
   planInitialRender,
+  removeInsertionResult,
 } from "./regions.js"
 import { __resetScopeIdCounter, Scope } from "./scope.js"
 import {
@@ -1138,6 +1140,53 @@ describe("regions", () => {
     it("returns swap when going from false to true (no whenFalse)", () => {
       const op = planConditionalUpdate("false", true, false)
       expect(op).toEqual({ kind: "swap", toBranch: "true" })
+    })
+  })
+
+  // Unit tests for insertAndTrack focus on NEW multi-element behavior.
+  // Single-element fragment handling is already tested by integration tests
+  // (e.g., "should delete items when create handler returns DocumentFragment").
+  describe("insertAndTrack - multi-element fragments", () => {
+    it("returns range kind with start/end markers for multi-element fragment", () => {
+      const parent = document.createElement("div")
+      const frag = document.createDocumentFragment()
+      const span1 = document.createElement("span")
+      span1.textContent = "a"
+      const span2 = document.createElement("span")
+      span2.textContent = "b"
+      frag.appendChild(span1)
+      frag.appendChild(span2)
+
+      const result = insertAndTrack(parent, frag, null)
+
+      expect(result.kind).toBe("range")
+      if (result.kind === "range") {
+        expect(result.startMarker.nodeType).toBe(Node.COMMENT_NODE)
+        expect(result.endMarker.nodeType).toBe(Node.COMMENT_NODE)
+        expect(result.startMarker.textContent).toBe("kinetic:start")
+        expect(result.endMarker.textContent).toBe("kinetic:end")
+      }
+      // Parent should have: startMarker, span1, span2, endMarker
+      expect(parent.childNodes.length).toBe(4)
+      expect(parent.querySelectorAll("span").length).toBe(2)
+    })
+  })
+
+  describe("removeInsertionResult - multi-element", () => {
+    it("removes all nodes in range including markers", () => {
+      const parent = document.createElement("div")
+      const frag = document.createDocumentFragment()
+      frag.appendChild(document.createElement("span"))
+      frag.appendChild(document.createElement("span"))
+      frag.appendChild(document.createElement("span"))
+
+      const result = insertAndTrack(parent, frag, null)
+      expect(parent.querySelectorAll("span").length).toBe(3)
+
+      removeInsertionResult(parent, result)
+
+      expect(parent.childNodes.length).toBe(0)
+      expect(parent.querySelectorAll("span").length).toBe(0)
     })
   })
 
