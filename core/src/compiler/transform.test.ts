@@ -1067,3 +1067,147 @@ describe("type stub injection", () => {
     }
   })
 })
+
+// =============================================================================
+// Zero-Ceremony Reactive Detection Tests
+// =============================================================================
+
+describe("zero-ceremony reactive detection", () => {
+  it("should detect reactive types from createTypedDoc without explicit interface", () => {
+    const source = `
+      import { createTypedDoc, Shape } from "@loro-extended/change"
+
+      const TodoSchema = Shape.doc({
+        title: Shape.text(),
+        todos: Shape.list(Shape.plain.string()),
+        completedCount: Shape.counter(),
+      })
+
+      const doc = createTypedDoc(TodoSchema)
+
+      div(() => {
+        h1(doc.title.toString())
+        for (const item of doc.todos) {
+          li(item)
+        }
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    // Should detect TextRef on doc.title → __subscribeWithValue
+    expect(result.code).toContain("__subscribeWithValue")
+    // Should detect ListRef on doc.todos → __listRegion
+    expect(result.code).toContain("__listRegion")
+    // Builder should be reactive
+    expect(result.ir[0].isReactive).toBe(true)
+  })
+
+  it("should detect conditional reactive types from schema inference", () => {
+    const source = `
+      import { createTypedDoc, Shape } from "@loro-extended/change"
+
+      const Schema = Shape.doc({
+        count: Shape.counter(),
+      })
+
+      const doc = createTypedDoc(Schema)
+
+      div(() => {
+        if (doc.count.get() > 0) {
+          p("Has items")
+        }
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    // Should detect CounterRef → __conditionalRegion
+    expect(result.code).toContain("__conditionalRegion")
+  })
+
+  it("should work with schema defined inline", () => {
+    const source = `
+      import { createTypedDoc, Shape } from "@loro-extended/change"
+
+      const doc = createTypedDoc(Shape.doc({
+        items: Shape.list(Shape.plain.string()),
+      }))
+
+      div(() => {
+        for (const item of doc.items) {
+          li(item)
+        }
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    expect(result.code).toContain("__listRegion")
+  })
+
+  it("should work with createTypedDoc options parameter", () => {
+    const source = `
+      import { createTypedDoc, Shape } from "@loro-extended/change"
+
+      const Schema = Shape.doc({
+        title: Shape.text(),
+        items: Shape.list(Shape.plain.string()),
+      })
+
+      const doc = createTypedDoc(Schema, { doc: {} as any })
+
+      div(() => {
+        h1(doc.title.toString())
+        for (const item of doc.items) {
+          li(item)
+        }
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    expect(result.code).toContain("__subscribeWithValue")
+    expect(result.code).toContain("__listRegion")
+  })
+
+  it("should produce both DOM and HTML targets from same schema-inferred source", () => {
+    const source = `
+      import { createTypedDoc, Shape } from "@loro-extended/change"
+
+      const Schema = Shape.doc({
+        title: Shape.text(),
+        items: Shape.list(Shape.plain.string()),
+      })
+
+      const doc = createTypedDoc(Schema)
+
+      div(() => {
+        h1(doc.title.toString())
+        if (doc.items.toArray().length > 0) {
+          ul(() => {
+            for (const item of doc.items) {
+              li(item)
+            }
+          })
+        } else {
+          p("No items")
+        }
+      })
+    `
+
+    const domResult = transformSource(source, { target: "dom" })
+    const htmlResult = transformSource(source, { target: "html" })
+
+    // DOM target: reactive runtime calls
+    expect(domResult.code).toContain("__subscribeWithValue")
+    expect(domResult.code).toContain("__listRegion")
+    expect(domResult.code).toContain("__conditionalRegion")
+
+    // HTML target: template literals with map/ternary
+    expect(htmlResult.code).toContain(".toArray().map(")
+    expect(htmlResult.code).toContain("<h1>")
+    expect(htmlResult.code).toContain("kinetic:list")
+    expect(htmlResult.code).toContain("kinetic:if")
+  })
+})
