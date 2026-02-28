@@ -605,11 +605,7 @@ SSR isn't a separate concern from Repo integration — it's the natural starting
 - The client hydrates the existing DOM instead of rebuilding it
 - The transition from SSR → live collaboration is seamless
 
-Previously, SSR required hand-written `parts.push()` render functions that duplicated the UI from `app.ts`. This was eliminated by enabling dual compilation:
-
-- `transformSourceInPlace` now respects `options.target`, calling `generateRenderFunction` (HTML) or `generateElementFactory` (DOM)
-- The Vite plugin auto-detects the target from `transformOptions.ssr` — when the server calls `vite.ssrLoadModule('/src/app.ts')`, Vite passes `ssr: true` and the plugin compiles to HTML target automatically
-- One `app.ts`, two outputs, zero duplication
+The compiler's `transformSourceInPlace` respects `options.target`, calling `generateRenderFunction` (HTML) or `generateElementFactory` (DOM). The Vite plugin auto-detects the target from `transformOptions.ssr` — when the server calls `vite.ssrLoadModule('/src/app.ts')`, Vite passes `ssr: true` and the plugin compiles to HTML target automatically. One `app.ts`, two outputs, zero duplication.
 
 ```typescript
 // server.ts — no parts.push(), no manual HTML
@@ -617,7 +613,6 @@ const doc = repo.get("kinetic-todo", TodoSchema)
 await sync(doc).waitForSync({ kind: "storage" })  // load from LevelDB first!
 
 const { createApp } = await vite.ssrLoadModule('/src/app.ts')
-// createApp is compiled to HTML target: (doc) => () => `<div>...</div>`
 const renderApp = createApp(doc)
 const html = renderApp()  // HTML string with fully-loaded data
 ```
@@ -637,6 +632,12 @@ const html = renderApp()  // HTML string with fully-loaded data
 - **With SSR state**: Deserialize `window.__KINETIC_STATE__` into the doc immediately (no await needed — the data is already in the page). Hydrate, then let `waitForSync({ kind: "network" })` catch up in the background.
 - **Without SSR state**: Either `await sync(doc).waitForSync({ kind: "network" })` before mounting (slower first paint), or mount optimistically and let the UI update reactively as data arrives (faster first paint, content pops in).
 
+### TypedDoc Auto-Commits — Don't Pass Raw LoroDoc
+
+TypedDoc refs call `commitIfAuto()` after each mutation (`push`, `delete`, `insert`, `set`, `increment`, etc.). There is no need to import `loro-crdt`, obtain a raw `LoroDoc`, or call `commit()` manually. The only exception is `change(doc, draft => { ... })` blocks, which batch mutations and commit at the end.
+
+This means `createApp(doc)` needs only the typed document — no `loroDoc` parameter, no `loro-crdt` import, no `loro()` escape hatch in the app code. The server can obtain the raw `LoroDoc` via `sync(doc).loroDoc` for `generateStateScript()` / `deserializeState()` — but this is plumbing, not app code.
+
 ### Vite Strips TypeScript Before Plugin Transform (Critical)
 
 **Problem**: By default, Vite uses esbuild to strip TypeScript types before passing code to plugin `transform` hooks. This means `interface`, `type` imports, and type annotations are removed before the Kinetic compiler sees them. Since reactive detection depends on type information (`ListRef`, `TextRef`, etc.), the compiler produces static (non-reactive) output.
@@ -653,66 +654,78 @@ return {
 }
 ```
 
-### hasBuilderCalls Leaks Files Into Shared Project
+### Real Filesystem Replaces Type Stubs
 
-**Problem**: `hasBuilderCalls()` calls `parseSource(source, "check.ts")` which creates a file in the shared ts-morph Project. This file was never removed, causing potential duplicate type declarations when `transformSourceInPlace` later creates another file in the same project.
+**Previous approach**: The compiler used `useInMemoryFileSystem: true` with 289 lines of hand-written type stubs that approximated the `@loro-extended/change` Shape type hierarchy. This required manual maintenance, couldn't resolve cross-file imports, and forced schema duplication in `app.ts`.
 
-**Solution**: Remove the `check.ts` file after `hasBuilderCalls` completes. This prevents duplicate interfaces from confusing the type checker.
+**New approach**: The compiler uses `useInMemoryFileSystem: false` with `moduleResolution: Bundler` (100). The Vite plugin passes the file's real absolute path (from the `id` parameter), enabling ts-morph to resolve `node_modules` and relative imports naturally. No stubs needed.
+
+**Key requirements**:
+- The source file must be created at its **real path** in the ts-morph Project. ts-morph's module resolution walks up from the file's directory to find `node_modules`. If the file is created at a virtual path like `"input.ts"`, only the project root's `node_modules` is searched.
+- Use `{ overwrite: true }` when calling `createSourceFile` — with real FS, ts-morph may auto-discover the file from disk, causing a conflict.
+- Do NOT use `tsConfigFilePath` — it loads all referenced files, taking 500ms+. Use manual `compilerOptions` instead (~0.2ms).
+- Use `moduleResolution: 100` (Bundler), not `2` (NodeJs) — Bundler resolution handles pnpm workspace symlinks correctly.
+
+**Performance**: Project creation is ~0.2ms. Per-file parse+resolve is ~57ms on first access, with subsequent accesses benefiting from ts-morph's type caching. This is acceptable for Vite dev server transforms.
+
+**Corrected assumption**: The original plan stated "Why not use real filesystem? — Slower, path resolution varies, issues with pnpm symlinks." All three concerns were wrong:
+- Performance is acceptable (~57ms, not seconds)
+- Path resolution works when the file's real path is used
+- pnpm symlinks resolve correctly with `moduleResolution: Bundler`
+
+### The In-Memory Filesystem Journey (Historical)
+
+The progression was:
+1. **Phase 0**: In-memory FS couldn't resolve types → added 40-line type stubs for refs
+2. **Phase 2**: Vite stripped TypeScript before transform → added `enforce: "pre"`
+3. **Phase 2**: `hasBuilderCalls` leaked files into shared project → added cleanup
+4. **Zero-ceremony**: Stubs couldn't resolve `createTypedDoc` generics → expanded stubs to 289 lines modeling the full Shape hierarchy
+5. **Real FS**: Discovered that `useInMemoryFileSystem: false` with the file's real path resolves everything natively → deleted all 289 lines of stubs
+
+The lesson: when a workaround requires escalating complexity (40 → 289 lines), question the original constraint. The in-memory FS was chosen for "simplicity" but the stubs it required became the most complex and fragile part of the compiler.
+
+### hasBuilderCalls Must Clean Up After Itself
+
+`hasBuilderCalls()` creates a temporary file (`check.ts`) in the shared ts-morph Project to parse source code. With real FS and the shared singleton Project, leftover files from previous calls can cause duplicate type declarations. The function removes `check.ts` after checking, in both success and error paths.
 
 ### Ambient Types Must Use declare global
 
-**Problem**: The `elements.d.ts` file originally used `declare const div: ElementFactory` at module scope with exports. This made them module-scoped, not global — users would have to import each element factory.
+The `elements.d.ts` file must use `declare global { }` to make element factories (`div`, `h1`, etc.) available as globals. Module-scoped `declare const` with exports requires explicit imports. The `declare global` approach enables `/// <reference types="@loro-extended/kinetic/types/elements" />` to work.
 
-**Solution**: Wrap all declarations in `declare global { }` and export only the `ElementFactory` type to keep the file a module. This enables `div`, `h1`, etc. to be available as globals via a triple-slash directive.
+### Event Handler Prop Naming
 
-### Explicit Type Annotation Required for Reactive Detection
+The compiler's `isEventHandlerProp()` function expects camelCase event names where the third character is uppercase:
+- ✅ `onClick`, `onInput`, `onChange`
+- ❌ `onclick`, `oninput`, `onchange`
 
-**Problem**: `createTypedDoc(TodoSchema, { doc: loroDoc })` returns a complex inferred type that the compiler's type stubs can't fully resolve. The compiler sees `doc.todos` as `any`.
-
-**Solution**: Users declare an explicit interface with imported ref types and annotate the variable:
-
-```typescript
-import { type ListRef, type TextRef } from "@loro-extended/change"
-
-interface TodoDoc {
-  title: TextRef
-  todos: ListRef<string>
-}
-
-const doc: TodoDoc = createTypedDoc(TodoSchema, { doc: loroDoc }) as TodoDoc
-```
-
-This is a known limitation: the type stubs provide interface names but not the full generic type machinery of `@loro-extended/change`. The explicit interface is the documented workaround.
-
-### Type Stubs Needed for All Import Sources
-
-The in-memory filesystem needs stubs not just for `@loro-extended/change`, but also for `@loro-extended/kinetic` (for `bind`, `Scope`, etc.) and `loro-crdt` (for `LoroDoc`). Without these, unresolved imports cause cascading `any` types that degrade the entire type system.
+This matches React conventions but differs from native DOM attributes.
 
 ### Server Pattern: Repo + Vite Middleware + SSR
 
-The `todo-websocket` example establishes the proven pattern for a Kinetic server. With dual compilation, we extend it with SSR:
+The `todo-websocket` example establishes the proven pattern for a Kinetic server:
 
 ```typescript
 // 1. Create Repo with adapters
 const wsAdapter = new WsServerNetworkAdapter()
 const storageAdapter = new LevelDBStorageAdapter("data.db")
-new Repo({ adapters: [wsAdapter, storageAdapter] })
+const repo = new Repo({
+  identity: { name: "server", type: "service" },
+  adapters: [wsAdapter, storageAdapter],
+})
 
 // 2. Create HTTP + Vite
 const httpServer = http.createServer()
 const vite = await createViteServer({
   root,
-  server: { middlewareMode: { server: httpServer } },
+  server: { middlewareMode: true },
 })
 
 // 3. SSR: intercept GET / before Vite middleware
 httpServer.on("request", async (req, res) => {
   if (req.url === "/" || req.url === "/index.html") {
-    // Wait for storage to load persisted state — without this, doc is empty
     const doc = repo.get("kinetic-todo", TodoSchema)
     await sync(doc).waitForSync({ kind: "storage" })
 
-    // vite.ssrLoadModule compiles app.ts with target: "html"
     const { createApp } = await vite.ssrLoadModule('/src/app.ts')
     const renderApp = createApp(doc)
     const html = renderToDocument(renderApp, doc, { ... })
@@ -732,39 +745,7 @@ new WebSocketServer({ server: httpServer, path: "/ws" }).on(
 httpServer.listen(5173)
 ```
 
-Two key insights:
+Key insights:
 1. `vite.ssrLoadModule()` runs the same `app.ts` through the kinetic Vite plugin with `ssr: true`, which auto-selects the HTML target. No separate server render file needed.
 2. `await sync(doc).waitForSync({ kind: "storage" })` must be called before rendering — `repo.get()` returns a doc immediately but the LevelDB adapter loads persisted data asynchronously. Without the await, the server renders an empty document.
-
-### Type Resolution in ts-morph In-Memory Filesystem
-
-**Problem**: ts-morph with `useInMemoryFileSystem: true` cannot resolve imports from `node_modules`. All external types become `any`.
-
-**Discovery process**: We wrote a test script that compared type resolution across different ts-morph configurations:
-- In-memory FS: `doc.items` → `any` (reactive detection fails)
-- In-memory FS + manual stubs: `doc.items` → `ListRef<string>` (reactive detection works)
-- Real FS + path mappings: `doc.items` → full type (reactive detection works)
-
-**Solution**: Inject minimal type stubs for `@loro-extended/change` into the in-memory filesystem before parsing user code. The stubs only need interface names and key method signatures — just enough for the type checker to identify reactive types.
-
-**Why not use real filesystem?**: 
-- Slower (filesystem access on every transform)
-- Path resolution varies by project structure
-- Issues with symlinked node_modules (pnpm workspaces)
-- The in-memory approach is simpler and sufficient
-
-### Event Handler Prop Naming
-
-The compiler's `isEventHandlerProp()` function expects camelCase event names where the third character is uppercase:
-- ✅ `onClick`, `onInput`, `onChange`
-- ❌ `onclick`, `oninput`, `onchange`
-
-This matches React conventions but differs from native DOM attributes.
-
-### Type Stub Maintenance
-
-The type stubs in `type-stubs.ts` must be kept in sync with `@loro-extended/change`'s public API. However:
-- The stubs only need interface names and method signatures
-- Implementation details don't matter
-- The public API surface is stable
-- Consider generating stubs from the actual types in a build step (future enhancement)
+3. `createApp(doc)` takes only the typed document — the server gets `loroDoc` via `sync(doc).loroDoc` for serialization, but the app code never touches it.

@@ -24,7 +24,6 @@ import {
   generateRenderFunction,
 } from "./codegen/html.js"
 import type { BuilderNode, ChildNode } from "./ir.js"
-import { LORO_CHANGE_TYPE_STUBS } from "./type-stubs.js"
 
 // =============================================================================
 // Types
@@ -118,59 +117,28 @@ let sharedProject: Project | null = null
 /**
  * Get or create the shared ts-morph project.
  *
- * The project uses an in-memory filesystem with pre-loaded type stubs
- * for @loro-extended/change. This enables the compiler to resolve types
- * like ListRef, TextRef, etc. for reactive detection.
+ * The project uses the real filesystem so that imports from node_modules
+ * resolve naturally — no type stubs needed. The Vite plugin passes the
+ * file's real absolute path, enabling ts-morph's module resolution to
+ * find @loro-extended/change, @loro-extended/kinetic, etc. via pnpm
+ * workspace symlinks.
+ *
+ * Key: moduleResolution must be Bundler (100) for pnpm compatibility.
+ * Do NOT use tsConfigFilePath — it's 500ms+ due to loading all files.
  */
 function getProject(): Project {
   if (!sharedProject) {
     sharedProject = new Project({
-      useInMemoryFileSystem: true,
+      useInMemoryFileSystem: false,
       compilerOptions: {
         target: 99, // ESNext
         module: 99, // ESNext
-        moduleResolution: 2, // NodeJs
+        moduleResolution: 100, // Bundler — resolves pnpm symlinks correctly
         strict: true,
         esModuleInterop: true,
         skipLibCheck: true,
       },
     })
-
-    // Inject type stubs for @loro-extended/change into the in-memory filesystem.
-    // This enables the compiler to resolve types like ListRef, TextRef, etc.
-    // which are required for reactive detection via isReactiveType().
-    sharedProject.createSourceFile(
-      "node_modules/@loro-extended/change/index.d.ts",
-      LORO_CHANGE_TYPE_STUBS,
-    )
-
-    // Also inject a stub for @loro-extended/kinetic so that `import { bind } from "@loro-extended/kinetic"`
-    // resolves correctly and doesn't cause the entire file's types to degrade.
-    sharedProject.createSourceFile(
-      "node_modules/@loro-extended/kinetic/index.d.ts",
-      `
-      export declare function bind<T>(ref: T): { __brand: "kinetic:binding"; ref: T }
-      export declare class Scope { constructor(name?: string) }
-      export declare function mount(element: () => Node, container: Element): { node: Node; dispose: () => void }
-      export declare function __subscribe(ref: unknown, handler: (event: unknown) => void, scope: unknown): number
-      export declare function __subscribeWithValue<T>(ref: unknown, getValue: () => T, onValue: (value: T) => void, scope: unknown): number
-      export declare function __listRegion<T>(parent: Node, listRef: unknown, handlers: { create: (item: T, index: number) => Node }, scope: unknown): void
-      export declare function __conditionalRegion(marker: Comment, conditionRef: unknown, getCondition: () => boolean, handlers: { whenTrue?: () => Node; whenFalse?: () => Node }, scope: unknown): void
-      export declare function __bindTextValue(input: HTMLInputElement, ref: unknown, scope: unknown): void
-      export declare function __bindChecked(input: HTMLInputElement, ref: unknown, scope: unknown): void
-      `,
-    )
-
-    // Stub for loro-crdt so LoroDoc resolves
-    sharedProject.createSourceFile(
-      "node_modules/loro-crdt/index.d.ts",
-      `
-      export declare class LoroDoc {
-        constructor()
-        commit(): void
-      }
-      `,
-    )
   }
   return sharedProject
 }
@@ -193,13 +161,15 @@ export function __resetProject(): void {
 function parseSource(source: string, filename: string): SourceFile {
   const project = getProject()
 
-  // Remove existing file if present (for re-parsing)
+  // Remove existing file if present (for re-parsing).
+  // With real filesystem, ts-morph may auto-discover files from disk,
+  // so we must remove before re-creating with new source content.
   const existing = project.getSourceFile(filename)
   if (existing) {
     project.removeSourceFile(existing)
   }
 
-  return project.createSourceFile(filename, source)
+  return project.createSourceFile(filename, source, { overwrite: true })
 }
 
 // =============================================================================
