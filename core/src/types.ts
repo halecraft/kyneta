@@ -245,15 +245,31 @@ export type ListRegionOp<T> =
   | { kind: "delete"; index: number }
 
 // =============================================================================
-// Tracked Node (Trackability Invariant)
+// Insertion Result (Trackability Invariant)
 // =============================================================================
 
 /**
- * A node that was inserted into the DOM and can be reliably removed.
+ * Result of inserting content into the DOM.
  *
- * This type exists because DocumentFragment nodes become empty after insertion,
- * making them untrackable. TrackedNode guarantees the invariant:
- * "The referenced node is a direct child of the parent it was inserted into."
+ * Guarantees the trackability invariant: all inserted content can be removed.
+ *
+ * - **single**: A single DOM node was inserted. This is the common case with
+ *   no overhead — the node is tracked directly.
+ *
+ * - **range**: Multiple sibling nodes were inserted (from a multi-element
+ *   fragment). Start and end comment markers delimit the range for removal.
+ *
+ * @internal - Used by region runtime
+ */
+export type InsertionResult =
+  | { kind: "single"; node: Node }
+  | { kind: "range"; startMarker: Comment; endMarker: Comment }
+
+/**
+ * @deprecated Use `InsertionResult` instead. This type will be removed in a future version.
+ *
+ * A node that was inserted into the DOM and can be reliably removed.
+ * Only handles single-element insertions.
  *
  * @internal - Used by region runtime
  */

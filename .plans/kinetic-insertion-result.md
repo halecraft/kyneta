@@ -107,13 +107,13 @@ Markers are the standard approach used by frameworks like Lit and Solid.
 
 ## Phases and Tasks
 
-### Phase 1: Define InsertionResult Type 🔴
+### Phase 1: Define InsertionResult Type ✅
 
 **Goal**: Add the new type alongside existing TrackedNode.
 
-- 🔴 Task 1.1: Add `InsertionResult` discriminated union to `types.ts`
-- 🔴 Task 1.2: Add `removeInsertionResult()` function signature to `types.ts`
-- 🔴 Task 1.3: Keep `TrackedNode` as deprecated alias for migration
+- ✅ Task 1.1: Add `InsertionResult` discriminated union to `types.ts`
+- ✅ Task 1.2: Add `removeInsertionResult()` function signature to `types.ts` (moved to Phase 2 - implementation belongs in runtime)
+- ✅ Task 1.3: Keep `TrackedNode` as deprecated alias for migration
 
 ### Phase 2: Update insertAndTrack Implementation 🔴
 
