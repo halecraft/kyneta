@@ -11,11 +11,13 @@
  * This test validates that the client-side implementation is production-ready
  * before proceeding to SSR (Phase 10).
  *
- * Note: Loro list iteration returns plain JavaScript values, not TypedRefs.
- * For nested reactive content, use doc.items.get(index) to get TypedRefs.
+ * Note: List region handlers receive PlainValueRef for value shapes, enabling
+ * two-way binding patterns. Use `.get()` to read and `.set()` to write.
  *
  * @packageDocumentation
  */
+
+import type { PlainValueRef } from "@loro-extended/change"
 
 import { createTypedDoc, loro, Shape } from "@loro-extended/change"
 import { JSDOM } from "jsdom"
@@ -132,7 +134,10 @@ function renderTodoApp(doc: TodoDoc, container: Element, scope: Scope): void {
           todoList,
           doc.todos,
           {
-            create: (item: string, index: number) => {
+            create: (itemRef: PlainValueRef<string>, index: number) => {
+              // Get the current value from the ref
+              const item = itemRef.get()
+
               const li = document.createElement("li")
               li.dataset.testid = "todo-item"
               li.dataset.index = String(index)
@@ -147,8 +152,8 @@ function renderTodoApp(doc: TodoDoc, container: Element, scope: Scope): void {
               destroyBtn.className = "destroy"
               destroyBtn.textContent = "×"
               destroyBtn.addEventListener("click", () => {
-                // Find current index (may have changed)
-                const currentIndex = doc.todos.toArray().indexOf(item)
+                // Find current index by value comparison (indices may have shifted)
+                const currentIndex = doc.todos.findIndex(t => t === item)
                 if (currentIndex >= 0) {
                   doc.todos.delete(currentIndex, 1)
                 }

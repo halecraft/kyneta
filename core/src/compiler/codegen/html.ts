@@ -389,8 +389,10 @@ function generateListRegion(node: ListRegionNode, state: CodegenState): string {
   const bodyCode = generateBodyHtml(node.body, state)
 
   // Wrap in map expression with block body
+  // Use spread syntax [...listSource] to iterate, which returns refs (PlainValueRef)
+  // for value shapes, enabling two-way binding patterns like itemRef.get()/set()
   parts.push(
-    `\${${node.listSource}.toArray().map((${itemVar}, ${indexVar}) => { ${bodyCode} }).join("")}`,
+    `\${[...${node.listSource}].map((${itemVar}, ${indexVar}) => { ${bodyCode} }).join("")}`,
   )
 
   // Hydration marker (end)

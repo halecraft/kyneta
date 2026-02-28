@@ -230,6 +230,20 @@ export interface ListRegionHandlers<T> {
   move?: (fromIndex: number, toIndex: number) => void
 }
 
+// =============================================================================
+// List Region Operations (Functional Core)
+// =============================================================================
+
+/**
+ * Operations that can be performed on a list region.
+ * These are the output of pure planning functions and input to the imperative shell.
+ *
+ * @internal - Used by list region runtime
+ */
+export type ListRegionOp<T> =
+  | { kind: "insert"; index: number; item: T }
+  | { kind: "delete"; index: number }
+
 /**
  * Handlers for conditional region branch switching.
  * @internal

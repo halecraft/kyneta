@@ -9,6 +9,10 @@ import {
   __conditionalRegion,
   __listRegion,
   __staticConditionalRegion,
+  type ListDeltaEvent,
+  type ListRefLike,
+  planDeltaOps,
+  planInitialRender,
 } from "./regions.js"
 import { __resetScopeIdCounter, Scope } from "./scope.js"
 import {
@@ -759,6 +763,322 @@ describe("regions", () => {
       scope.dispose()
 
       expect(container.children.length).toBe(0)
+    })
+  })
+
+  // ===========================================================================
+  // Pure Planning Function Tests (Functional Core)
+  // ===========================================================================
+
+  describe("planInitialRender", () => {
+    it("should create insert ops for each item in the list", () => {
+      const mockListRef: ListRefLike<{ index: number; value: string }> = {
+        length: 3,
+        get: (i: number) => ({ index: i, value: `item${i}` }),
+      }
+
+      const ops = planInitialRender(mockListRef)
+
+      expect(ops).toEqual([
+        { kind: "insert", index: 0, item: { index: 0, value: "item0" } },
+        { kind: "insert", index: 1, item: { index: 1, value: "item1" } },
+        { kind: "insert", index: 2, item: { index: 2, value: "item2" } },
+      ])
+    })
+
+    it("should return empty array for empty list", () => {
+      const mockListRef: ListRefLike<string> = {
+        length: 0,
+        get: () => undefined,
+      }
+
+      const ops = planInitialRender(mockListRef)
+
+      expect(ops).toEqual([])
+    })
+
+    it("should skip undefined items", () => {
+      const mockListRef: ListRefLike<string> = {
+        length: 3,
+        get: (i: number) => (i === 1 ? undefined : `item${i}`),
+      }
+
+      const ops = planInitialRender(mockListRef)
+
+      expect(ops).toEqual([
+        { kind: "insert", index: 0, item: "item0" },
+        { kind: "insert", index: 2, item: "item2" },
+      ])
+    })
+  })
+
+  describe("planDeltaOps", () => {
+    /**
+     * Create a mock event for testing planDeltaOps.
+     *
+     * Uses the minimal ListDeltaEvent interface which captures only
+     * what planDeltaOps actually needs:
+     * - event.events[].diff.type === "list"
+     * - event.events[].diff.diff (the delta array)
+     */
+    function createMockListEvent(
+      deltas: Array<{ retain?: number; delete?: number; insert?: unknown[] }>,
+    ): ListDeltaEvent {
+      return {
+        events: [
+          {
+            diff: {
+              type: "list",
+              diff: deltas,
+            },
+          },
+        ],
+      }
+    }
+
+    it("should use listRef.get() for inserts, not raw delta values", () => {
+      // The listRef returns objects with isRef marker to prove we're using .get()
+      const mockListRef: ListRefLike<{ index: number; isRef: true }> = {
+        length: 2,
+        get: (i: number) => ({ index: i, isRef: true }),
+      }
+
+      // The delta contains raw strings — we should NOT use these
+      const event = createMockListEvent([{ insert: ["raw1", "raw2"] }])
+
+      const ops = planDeltaOps(mockListRef, event)
+
+      // Should use listRef.get(), not the raw values from delta
+      expect(ops).toEqual([
+        { kind: "insert", index: 0, item: { index: 0, isRef: true } },
+        { kind: "insert", index: 1, item: { index: 1, isRef: true } },
+      ])
+    })
+
+    it("should generate delete ops at correct indices", () => {
+      const mockListRef: ListRefLike<string> = {
+        length: 1,
+        get: () => "remaining",
+      }
+
+      const event = createMockListEvent([{ delete: 2 }])
+
+      const ops = planDeltaOps(mockListRef, event)
+
+      // Both deletes should be at index 0 (delete doesn't advance index)
+      expect(ops).toEqual([
+        { kind: "delete", index: 0 },
+        { kind: "delete", index: 0 },
+      ])
+    })
+
+    it("should handle retain operations correctly", () => {
+      const mockListRef: ListRefLike<{ index: number }> = {
+        length: 4,
+        get: (i: number) => ({ index: i }),
+      }
+
+      // Retain 2, then insert 1
+      const event = createMockListEvent([{ retain: 2 }, { insert: ["new"] }])
+
+      const ops = planDeltaOps(mockListRef, event)
+
+      // Insert should be at index 2 (after retaining 2)
+      expect(ops).toEqual([{ kind: "insert", index: 2, item: { index: 2 } }])
+    })
+
+    it("should handle mixed operations", () => {
+      const mockListRef: ListRefLike<{ index: number }> = {
+        length: 3,
+        get: (i: number) => ({ index: i }),
+      }
+
+      // Retain 1, delete 1, insert 1
+      const event = createMockListEvent([
+        { retain: 1 },
+        { delete: 1 },
+        { insert: ["new"] },
+      ])
+
+      const ops = planDeltaOps(mockListRef, event)
+
+      expect(ops).toEqual([
+        { kind: "delete", index: 1 },
+        { kind: "insert", index: 1, item: { index: 1 } },
+      ])
+    })
+
+    it("should skip non-list diffs", () => {
+      const mockListRef: ListRefLike<string> = {
+        length: 1,
+        get: () => "item",
+      }
+
+      // Create a text event (not list) to verify it's skipped
+      const event: ListDeltaEvent = {
+        events: [
+          {
+            diff: {
+              type: "text",
+              diff: [],
+            },
+          },
+        ],
+      }
+
+      const ops = planDeltaOps(mockListRef, event)
+
+      expect(ops).toEqual([])
+    })
+  })
+
+  describe("__listRegion - ref preservation", () => {
+    it("should pass refs from listRef.get() to create handler for initial render", () => {
+      const schema = Shape.doc({
+        items: Shape.list(Shape.plain.string()),
+      })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+      const container = document.createElement("ul")
+
+      // Add initial items
+      doc.items.push("item1")
+      doc.items.push("item2")
+      loro(doc).commit()
+
+      const receivedItems: unknown[] = []
+
+      __listRegion(
+        container,
+        doc.items,
+        {
+          create: (item: unknown, _index: number) => {
+            receivedItems.push(item)
+            // Check if item has .get() method (is a PlainValueRef)
+            const li = document.createElement("li")
+            if (typeof item === "object" && item !== null && "get" in item) {
+              li.textContent = String((item as { get(): string }).get())
+            } else {
+              li.textContent = String(item)
+            }
+            return li
+          },
+        },
+        scope,
+      )
+
+      // Items should be PlainValueRef instances (have .get() method)
+      expect(receivedItems.length).toBe(2)
+      for (const item of receivedItems) {
+        expect(typeof item).toBe("object")
+        expect(item).not.toBeNull()
+        expect(typeof (item as { get?: unknown }).get).toBe("function")
+      }
+
+      // Verify the actual values
+      expect((receivedItems[0] as { get(): string }).get()).toBe("item1")
+      expect((receivedItems[1] as { get(): string }).get()).toBe("item2")
+
+      scope.dispose()
+    })
+
+    it("should pass refs from listRef.get() to create handler for delta inserts", () => {
+      const schema = Shape.doc({
+        items: Shape.list(Shape.plain.string()),
+      })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+      const container = document.createElement("ul")
+
+      const receivedItems: unknown[] = []
+
+      __listRegion(
+        container,
+        doc.items,
+        {
+          create: (item: unknown, _index: number) => {
+            receivedItems.push(item)
+            const li = document.createElement("li")
+            if (typeof item === "object" && item !== null && "get" in item) {
+              li.textContent = String((item as { get(): string }).get())
+            } else {
+              li.textContent = String(item)
+            }
+            return li
+          },
+        },
+        scope,
+      )
+
+      // Initial render: no items
+      expect(receivedItems.length).toBe(0)
+
+      // Push items via delta
+      doc.items.push("delta1")
+      doc.items.push("delta2")
+      loro(doc).commit()
+
+      // Delta-inserted items should also be PlainValueRef instances
+      expect(receivedItems.length).toBe(2)
+      for (const item of receivedItems) {
+        expect(typeof item).toBe("object")
+        expect(item).not.toBeNull()
+        expect(typeof (item as { get?: unknown }).get).toBe("function")
+      }
+
+      // Verify the actual values
+      expect((receivedItems[0] as { get(): string }).get()).toBe("delta1")
+      expect((receivedItems[1] as { get(): string }).get()).toBe("delta2")
+
+      scope.dispose()
+    })
+
+    it("should allow calling .set() on received refs", () => {
+      const schema = Shape.doc({
+        items: Shape.list(Shape.plain.string()),
+      })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+      const container = document.createElement("ul")
+
+      doc.items.push("original")
+      loro(doc).commit()
+
+      // Store refs in an array to avoid TypeScript control flow analysis issues
+      const capturedRefs: Array<{ get(): string; set(v: string): void }> = []
+
+      __listRegion(
+        container,
+        doc.items,
+        {
+          create: (item: unknown, _index: number) => {
+            if (typeof item === "object" && item !== null && "get" in item) {
+              capturedRefs.push(item as { get(): string; set(v: string): void })
+            }
+            const li = document.createElement("li")
+            if (typeof item === "object" && item !== null && "get" in item) {
+              li.textContent = (item as { get(): string }).get()
+            } else {
+              li.textContent = String(item)
+            }
+            return li
+          },
+        },
+        scope,
+      )
+
+      expect(capturedRefs.length).toBe(1)
+      const capturedRef = capturedRefs[0]
+      expect(capturedRef.get()).toBe("original")
+
+      // Modify via the ref
+      capturedRef.set("modified")
+      loro(doc).commit()
+
+      // Verify the change persisted
+      expect(doc.items.get(0)?.get()).toBe("modified")
+
+      scope.dispose()
     })
   })
 })

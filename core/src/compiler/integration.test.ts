@@ -2012,9 +2012,10 @@ describe("compiler integration - arbitrary statements", () => {
         container,
         doc.items,
         {
-          create: (item: string, _index) => {
+          create: (itemRef: { get(): string }, _index) => {
             // This pattern tests statement preservation:
             // const upperItem = item.toUpperCase() would have been dropped before
+            const item = itemRef.get()
             const upperItem = item.toUpperCase()
             const li = document.createElement("li")
             li.textContent = upperItem
