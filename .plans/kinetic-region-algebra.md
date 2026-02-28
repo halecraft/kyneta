@@ -154,14 +154,14 @@ interface ConditionalRegionState extends RegionStateBase {
 - ✅ Task 2.4: Refactor `updateConditionalRegion` to use plan + execute
 - ✅ Task 2.5: Add unit tests for `planConditionalUpdate()` (pure function testing)
 
-### Phase 3: Unify State Types 🔴
+### Phase 3: Unify State Types ✅
 
 **Goal**: Extract common structure into a base type for clarity.
 
-- 🔴 Task 3.1: Define `RegionStateBase` interface
-- 🔴 Task 3.2: Update `ListRegionState` to extend `RegionStateBase`
-- 🔴 Task 3.3: Update `ConditionalRegionState` to extend `RegionStateBase`
-- 🔴 Task 3.4: Change `currentBranch` from `boolean | null` to `"true" | "false" | null` for clarity
+- ✅ Task 3.1: Define `RegionStateBase` interface
+- ✅ Task 3.2: Update `ListRegionState` to extend `RegionStateBase`
+- ✅ Task 3.3: Update `ConditionalRegionState` to extend `RegionStateBase`
+- ✅ Task 3.4: Change `currentBranch` from `boolean | null` to `"true" | "false" | null` for clarity
 
 ### Phase 4: Documentation 🔴
 

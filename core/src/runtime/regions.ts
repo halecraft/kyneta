@@ -122,16 +122,27 @@ export interface ListRefLike<T> {
 }
 
 /**
+ * Base state shared by all region types.
+ *
+ * Regions (list, conditional) manage DOM content that updates reactively.
+ * They all need a parent scope for creating child scopes during rendering.
+ *
+ * @internal
+ */
+interface RegionStateBase {
+  /** The parent scope that owns this region */
+  parentScope: Scope
+}
+
+/**
  * State for a list region.
  * @internal
  */
-interface ListRegionState<T> {
+interface ListRegionState<T> extends RegionStateBase {
   /** Tracked nodes for each item, in order */
   nodes: TrackedNode[]
   /** Scopes for each item (for nested subscriptions) */
   scopes: Scope[]
-  /** The parent scope */
-  parentScope: Scope
   /** The list ref for accessing items (needed for delta handling) */
   listRef: ListRefLike<T>
 }
@@ -369,15 +380,13 @@ export function __listRegion<T>(
  * State for a conditional region.
  * @internal
  */
-interface ConditionalRegionState {
-  /** Current branch: true = "then", false = "else", null = neither */
-  currentBranch: boolean | null
+interface ConditionalRegionState extends RegionStateBase {
+  /** Current branch: "true" = then, "false" = else, null = neither */
+  currentBranch: "true" | "false" | null
   /** The tracked node for current content */
   currentNode: TrackedNode | null
   /** Scope for the current branch */
   currentScope: Scope | null
-  /** The parent scope */
-  parentScope: Scope
 }
 
 // =============================================================================
@@ -484,7 +493,7 @@ function executeConditionalOp(
     if (handler) {
       state.currentScope = state.parentScope.createChild()
       const node = handler()
-      state.currentBranch = branch === "true" ? true : false
+      state.currentBranch = branch
       const referenceNode = marker.nextSibling
       state.currentNode = insertAndTrack(parent, node, referenceNode)
     }
@@ -559,17 +568,9 @@ function updateConditionalRegion(
 ): void {
   const condition = getCondition()
 
-  // Convert boolean state to string branch for planning
-  const currentBranch: "true" | "false" | null =
-    state.currentBranch === true
-      ? "true"
-      : state.currentBranch === false
-        ? "false"
-        : null
-
-  // Plan the update (pure)
+  // Plan the update (pure) - currentBranch is already "true" | "false" | null
   const op = planConditionalUpdate(
-    currentBranch,
+    state.currentBranch,
     condition,
     handlers.whenFalse !== undefined,
   )
