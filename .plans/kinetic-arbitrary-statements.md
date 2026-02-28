@@ -308,7 +308,7 @@ Update DOM code generation to emit statements and static loops/conditionals.
 
 Note: `generateBodyWithReturn()` was extracted in Phase 0 and already iterates children via `generateChild()`, so statements automatically work in list regions and conditional branches.
 
-### Phase 3: HTML Codegen Updates 🔴
+### Phase 3: HTML Codegen Updates ✅
 
 Update HTML code generation to handle new node types. Note: Phase 0 already implemented `generateBodyHtml()` with block body and accumulation pattern, and updated `generateListRegion()` and `generateConditionalRegion()` to use it.
 
@@ -316,22 +316,30 @@ Update HTML code generation to handle new node types. Note: Phase 0 already impl
   - Already implemented: `let _html = ""; _html += ...; return _html`
   - List regions and conditionals already use block body syntax
 
-- 🔴 **Task 3.2**: Update `generateChild()` to handle `StatementNode` (`codegen/html.ts`)
-  - Return statement source for accumulation in `generateBodyHtml()`
-  - Statements emitted verbatim between HTML accumulations
+- ✅ **Task 3.2**: Update `generateBodyHtml()` and `generateChild()` to handle `StatementNode` (`codegen/html.ts`)
+  - `generateBodyHtml()` checks for statement nodes and emits source verbatim
+  - `generateChild()` returns empty string for statements (handled by body context)
 
-- 🔴 **Task 3.3**: Update `generateChild()` to handle `StaticLoopNode` (`codegen/html.ts`)
-  - Generate `.map()` with block body using `generateBodyHtml()`
+- ✅ **Task 3.3**: Update `generateChild()` to handle `StaticLoopNode` (`codegen/html.ts`)
+  - Added `generateStaticLoopInline()` — generates `.map()` with block body
+  - Added `generateStaticLoopBody()` — generates `for...of` for body accumulation context
 
-- 🔴 **Task 3.4**: Update `generateChild()` to handle `StaticConditionalNode` (`codegen/html.ts`)
-  - Generate IIFE with `if` statement inside
-  - Branches use `generateBodyHtml()`
+- ✅ **Task 3.4**: Update `generateChild()` to handle `StaticConditionalNode` (`codegen/html.ts`)
+  - Added `generateStaticConditionalInline()` — generates IIFE with `if` statement
+  - Added `generateStaticConditionalBody()` — generates `if` for body accumulation context
 
-- 🔴 **Task 3.5**: Write HTML codegen unit tests
-  - Test: Statement emitted in list body
-  - Test: Interleaved statements and elements in correct order
-  - Test: Static loop generates `.map()` with block body
-  - Test: Static conditional generates IIFE with `if`
+- ✅ **Task 3.5**: Write HTML codegen unit tests (13 new tests, 503 total tests pass)
+  - Created `codegen/html.test.ts` with comprehensive test coverage
+  - Test: Statement emitted in list region body
+  - Test: Statement emitted in conditional region body
+  - Test: Interleaved statements and elements preserve order
+  - Test: Static loop generates `.map()` expression
+  - Test: Static loop with index variable
+  - Test: Statements inside static loop
+  - Test: Static conditional generates IIFE
+  - Test: Static conditional with else branch
+  - Test: Statements inside static conditional
+  - Test: Code validity (balanced braces, parentheses, backticks)
 
 ### Phase 4: Integration Testing 🔴
 

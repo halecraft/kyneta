@@ -22,6 +22,9 @@ import type {
   ContentNode,
   ElementNode,
   ListRegionNode,
+  StatementNode,
+  StaticConditionalNode,
+  StaticLoopNode,
   TextNode,
 } from "../ir.js"
 
@@ -286,10 +289,24 @@ function generateBodyHtml(body: ChildNode[], state: CodegenState): string {
   lines.push(`let _html = ""`)
 
   for (const child of body) {
-    // For now, all children are HTML-producing (statements will be added in Phase 1)
-    const childHtml = generateChild(child, state)
-    if (childHtml) {
-      lines.push(`_html += \`${childHtml}\``)
+    // Statements are emitted verbatim (they execute, but don't produce HTML)
+    if (child.kind === "statement") {
+      lines.push(child.source)
+    }
+    // Static loops generate a for...of that accumulates HTML
+    else if (child.kind === "static-loop") {
+      lines.push(generateStaticLoopBody(child, state))
+    }
+    // Static conditionals generate an if statement that accumulates HTML
+    else if (child.kind === "static-conditional") {
+      lines.push(generateStaticConditionalBody(child, state))
+    }
+    // All other children produce HTML fragments
+    else {
+      const childHtml = generateChild(child, state)
+      if (childHtml) {
+        lines.push(`_html += \`${childHtml}\``)
+      }
     }
   }
 
@@ -326,6 +343,20 @@ function generateChild(node: ChildNode, state: CodegenState): string {
     case "binding":
       // Bindings render as their current value in SSR
       return `\${${escapeExpr(`String(${node.refSource}.get ? ${node.refSource}.get() : ${node.refSource})`)}}`
+
+    case "statement":
+      // Statements don't produce HTML directly - they're handled by generateBodyHtml()
+      // When called from element children (not body context), we can't emit statements
+      // This should not happen in well-formed IR, but return empty for safety
+      return ""
+
+    case "static-loop":
+      // Static loops generate a map expression for HTML output
+      return generateStaticLoopInline(node, state)
+
+    case "static-conditional":
+      // Static conditionals generate an IIFE with if statement
+      return generateStaticConditionalInline(node, state)
 
     default:
       return ""
@@ -433,6 +464,151 @@ function generateConditionalRegion(
   }
 
   return parts.join("")
+}
+
+// =============================================================================
+// Static Loop Generation
+// =============================================================================
+
+/**
+ * Generate code for a static loop body (used inside generateBodyHtml).
+ *
+ * Produces a for...of loop that accumulates HTML into the _html variable.
+ */
+function generateStaticLoopBody(
+  node: StaticLoopNode,
+  state: CodegenState,
+): string {
+  const loopVar = node.indexVariable
+    ? `[${node.indexVariable}, ${node.itemVariable}]`
+    : node.itemVariable
+
+  // Generate inner body using accumulation pattern
+  const innerBody = generateBodyHtml(node.body, state)
+
+  // Wrap in for...of loop - note: innerBody already has let _html, so we need
+  // to restructure to accumulate into outer _html
+  const lines: string[] = []
+  lines.push(`for (const ${loopVar} of ${node.iterableSource}) {`)
+
+  // Generate body content that accumulates to _html
+  for (const child of node.body) {
+    if (child.kind === "statement") {
+      lines.push(`  ${child.source}`)
+    } else if (child.kind === "static-loop") {
+      lines.push(`  ${generateStaticLoopBody(child, state)}`)
+    } else if (child.kind === "static-conditional") {
+      lines.push(`  ${generateStaticConditionalBody(child, state)}`)
+    } else {
+      const childHtml = generateChild(child, state)
+      if (childHtml) {
+        lines.push(`  _html += \`${childHtml}\``)
+      }
+    }
+  }
+
+  lines.push(`}`)
+
+  return lines.join("; ")
+}
+
+/**
+ * Generate code for a static loop inline (used in template literal context).
+ *
+ * Produces a .map() expression that returns HTML strings.
+ */
+function generateStaticLoopInline(
+  node: StaticLoopNode,
+  state: CodegenState,
+): string {
+  const loopVar = node.indexVariable
+    ? `[${node.indexVariable}, ${node.itemVariable}]`
+    : node.itemVariable
+
+  // Generate body using accumulation pattern
+  const bodyCode = generateBodyHtml(node.body, state)
+
+  // Wrap in map expression with block body
+  return `\${${node.iterableSource}.map((${loopVar}) => { ${bodyCode} }).join("")}`
+}
+
+// =============================================================================
+// Static Conditional Generation
+// =============================================================================
+
+/**
+ * Generate code for a static conditional body (used inside generateBodyHtml).
+ *
+ * Produces an if statement that accumulates HTML into the _html variable.
+ */
+function generateStaticConditionalBody(
+  node: StaticConditionalNode,
+  state: CodegenState,
+): string {
+  const lines: string[] = []
+
+  lines.push(`if (${node.conditionSource}) {`)
+
+  // Generate then body content
+  for (const child of node.thenBody) {
+    if (child.kind === "statement") {
+      lines.push(`  ${child.source}`)
+    } else if (child.kind === "static-loop") {
+      lines.push(`  ${generateStaticLoopBody(child, state)}`)
+    } else if (child.kind === "static-conditional") {
+      lines.push(`  ${generateStaticConditionalBody(child, state)}`)
+    } else {
+      const childHtml = generateChild(child, state)
+      if (childHtml) {
+        lines.push(`  _html += \`${childHtml}\``)
+      }
+    }
+  }
+
+  // Generate else body if present
+  if (node.elseBody && node.elseBody.length > 0) {
+    lines.push(`} else {`)
+    for (const child of node.elseBody) {
+      if (child.kind === "statement") {
+        lines.push(`  ${child.source}`)
+      } else if (child.kind === "static-loop") {
+        lines.push(`  ${generateStaticLoopBody(child, state)}`)
+      } else if (child.kind === "static-conditional") {
+        lines.push(`  ${generateStaticConditionalBody(child, state)}`)
+      } else {
+        const childHtml = generateChild(child, state)
+        if (childHtml) {
+          lines.push(`  _html += \`${childHtml}\``)
+        }
+      }
+    }
+  }
+
+  lines.push(`}`)
+
+  return lines.join("; ")
+}
+
+/**
+ * Generate code for a static conditional inline (used in template literal context).
+ *
+ * Produces an IIFE with an if statement that returns HTML.
+ */
+function generateStaticConditionalInline(
+  node: StaticConditionalNode,
+  state: CodegenState,
+): string {
+  // Generate body using accumulation pattern for then branch
+  const thenBodyCode = generateBodyHtml(node.thenBody, state)
+
+  if (node.elseBody && node.elseBody.length > 0) {
+    // Has else branch - use IIFE with if/else
+    const elseBodyCode = generateBodyHtml(node.elseBody, state)
+    return `\${(() => { if (${node.conditionSource}) { ${thenBodyCode} } else { ${elseBodyCode} } })()}`
+  } else {
+    // No else branch - use ternary with IIFE for then, empty string for else
+    return `\${(${node.conditionSource}) ? (() => { ${thenBodyCode} })() : ""}`
+  }
 }
 
 // =============================================================================
