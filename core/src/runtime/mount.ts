@@ -9,7 +9,7 @@
 
 import { InvalidMountTargetError } from "../errors.js"
 import type { MountOptions, MountResult } from "../types.js"
-import { __setRootScope, Scope } from "./scope.js"
+import { setRootScope, Scope } from "./scope.js"
 
 /**
  * Mount a Kinetic element to a DOM container.
@@ -48,7 +48,7 @@ export function mount(
 
   // Create the root scope
   const rootScope = new Scope("root")
-  __setRootScope(rootScope)
+  setRootScope(rootScope)
 
   let node: Node
 
@@ -83,7 +83,7 @@ export function mount(
     dispose: () => {
       // Dispose the root scope (cascades to all children)
       rootScope.dispose()
-      __setRootScope(null)
+      setRootScope(null)
 
       // Remove from DOM if still attached
       if (node.parentNode === container) {

@@ -18,7 +18,7 @@ import { loro } from "@loro-extended/change"
 import type { LoroText } from "loro-crdt"
 import type { Binding } from "../types.js"
 import type { Scope } from "../runtime/scope.js"
-import { __subscribe as subscribe } from "../runtime/subscribe.js"
+import { subscribe } from "../runtime/subscribe.js"
 
 // =============================================================================
 // Binding Creation
@@ -88,7 +88,7 @@ export function isBinding(value: unknown): value is Binding<unknown> {
  *
  * @internal - Called by compiled code
  */
-export function __bindTextValue(
+export function bindTextValue(
   element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
   ref: unknown,
   scope: Scope,
@@ -159,7 +159,7 @@ export function __bindTextValue(
  *
  * @internal - Called by compiled code
  */
-export function __bindChecked(
+export function bindChecked(
   element: HTMLInputElement,
   ref: unknown,
   scope: Scope,
@@ -240,7 +240,7 @@ export function __bindChecked(
  *
  * @internal - Called by compiled code
  */
-export function __bindNumericValue(
+export function bindNumericValue(
   element: HTMLInputElement,
   ref: unknown,
   scope: Scope,

@@ -26,16 +26,16 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   conditionalRegion,
   listRegion,
-  __resetScopeIdCounter,
   subscribeWithValue,
   Scope,
 } from "../../src/index.js"
 import { bindTextValue } from "../../src/loro/index.js"
-import { __resetSubscriptionIdCounter } from "../../src/runtime/subscribe.js"
 import {
+  resetScopeIdCounter,
+  resetSubscriptionIdCounter,
   assertMaxMutations,
   createCountingContainer,
-} from "../../src/testing/counting-dom.js"
+} from "../../src/testing/index.js"
 
 // Set up DOM globals
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")
@@ -210,8 +210,8 @@ function renderTodoApp(doc: TodoDoc, container: Element, scope: Scope): void {
 
 describe("Todo App Integration", () => {
   beforeEach(() => {
-    __resetSubscriptionIdCounter()
-    __resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    resetScopeIdCounter()
   })
 
   describe("Initial render", () => {

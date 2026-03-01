@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ScopeDisposedError } from "../errors.js"
-import { __resetScopeIdCounter, Scope } from "./scope.js"
+import { resetScopeIdCounter, Scope } from "./scope.js"
 
 describe("Scope", () => {
   beforeEach(() => {
-    __resetScopeIdCounter()
+    resetScopeIdCounter()
   })
 
   describe("creation", () => {

@@ -27,33 +27,30 @@ let subscriptionIdCounter = 0
 
 /**
  * Reset the subscription ID counter (for testing).
- * @internal
  */
-export function __resetSubscriptionIdCounter(): void {
+export function resetSubscriptionIdCounter(): void {
   subscriptionIdCounter = 0
 }
 
 /**
  * Active subscriptions map for debugging and testing.
- * @internal
  */
-export const __activeSubscriptions = new Map<
+export const activeSubscriptions = new Map<
   SubscriptionId,
   { ref: unknown; unsubscribe: () => void }
 >()
 
 /**
  * Get the count of active subscriptions.
- * @internal - For testing
  */
-export function __getActiveSubscriptionCount(): number {
-  return __activeSubscriptions.size
+export function getActiveSubscriptionCount(): number {
+  return activeSubscriptions.size
 }
 
 /**
  * Subscribe to a reactive ref's changes.
  *
- * This is an internal function called by compiled code.
+ * This function is called by compiled code.
  * It subscribes via the [REACTIVE] symbol and registers
  * cleanup with the provided scope.
  *
@@ -66,10 +63,8 @@ export function __getActiveSubscriptionCount(): number {
  * @param handler - Called when the ref changes, with a delta describing the change
  * @param scope - The scope that owns this subscription
  * @returns Subscription ID for manual unsubscription (rarely needed)
- *
- * @internal - Called by compiled code
  */
-export function __subscribe(
+export function subscribe(
   ref: unknown,
   handler: (delta: ReactiveDelta) => void,
   scope: Scope,
@@ -79,21 +74,21 @@ export function __subscribe(
   // Validate that ref is reactive
   if (!isReactive(ref)) {
     throw new Error(
-      "__subscribe called with non-reactive value. " +
+      "subscribe called with non-reactive value. " +
         "Expected a value with [REACTIVE] property.",
     )
   }
 
   // Subscribe via the [REACTIVE] symbol
   // The ref's [REACTIVE] implementation handles translation to ReactiveDelta
-  const unsubscribe = ref[REACTIVE](ref, handler)
+  const unsubscribeFn = ref[REACTIVE](ref, handler)
 
   // Track the subscription
-  __activeSubscriptions.set(id, { ref, unsubscribe })
+  activeSubscriptions.set(id, { ref, unsubscribe: unsubscribeFn })
 
   // Register cleanup with the scope
   scope.onDispose(() => {
-    __unsubscribe(id)
+    unsubscribe(id)
   })
 
   return id
@@ -105,19 +100,17 @@ export function __subscribe(
  * Usually not called directly - scopes handle cleanup automatically.
  * Use this only for manual subscription management.
  *
- * @param id - The subscription ID returned by __subscribe
+ * @param id - The subscription ID returned by subscribe
  * @returns true if the subscription was found and removed
- *
- * @internal
  */
-export function __unsubscribe(id: SubscriptionId): boolean {
-  const subscription = __activeSubscriptions.get(id)
+export function unsubscribe(id: SubscriptionId): boolean {
+  const subscription = activeSubscriptions.get(id)
   if (!subscription) {
     return false
   }
 
   subscription.unsubscribe()
-  __activeSubscriptions.delete(id)
+  activeSubscriptions.delete(id)
   return true
 }
 
@@ -136,10 +129,8 @@ export function __unsubscribe(id: SubscriptionId): boolean {
  * @param onValue - Called with the value (initial and on changes)
  * @param scope - The scope that owns this subscription
  * @returns Subscription ID
- *
- * @internal - Called by compiled code
  */
-export function __subscribeWithValue<T>(
+export function subscribeWithValue<T>(
   ref: unknown,
   getValue: () => T,
   onValue: (value: T) => void,
@@ -149,7 +140,7 @@ export function __subscribeWithValue<T>(
   onValue(getValue())
 
   // Subscribe to changes — ignore the delta and re-read the value
-  return __subscribe(
+  return subscribe(
     ref,
     (_delta: ReactiveDelta) => {
       onValue(getValue())
@@ -165,15 +156,13 @@ export function __subscribeWithValue<T>(
  * @param handler - Called when any ref changes
  * @param scope - The scope that owns these subscriptions
  * @returns Array of subscription IDs
- *
- * @internal - Called by compiled code
  */
-export function __subscribeMultiple(
+export function subscribeMultiple(
   refs: unknown[],
   handler: () => void,
   scope: Scope,
 ): SubscriptionId[] {
   // Wrap the void handler to accept and ignore the delta
   const wrappedHandler = (_delta: ReactiveDelta) => handler()
-  return refs.map(ref => __subscribe(ref, wrappedHandler, scope))
+  return refs.map(ref => subscribe(ref, wrappedHandler, scope))
 }

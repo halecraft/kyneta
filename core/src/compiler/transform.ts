@@ -155,7 +155,7 @@ function getProject(): Project {
  * Reset the shared project (for testing).
  * @internal
  */
-export function __resetProject(): void {
+export function resetProject(): void {
   sharedProject = null
 }
 

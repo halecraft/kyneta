@@ -87,27 +87,6 @@ export {
 } from "./runtime/index.js"
 
 // =============================================================================
-// Testing utilities
-// =============================================================================
-
-// Testing internals (for resetting state between tests)
-export {
-  __activeSubscriptions,
-  __getActiveSubscriptionCount,
-  __resetScopeIdCounter,
-  __resetSubscriptionIdCounter,
-} from "./runtime/index.js"
-export {
-  assertMaxMutations,
-  assertOperationCount,
-  type CountingContainerResult,
-  createCountingContainer,
-  createCounts,
-  type DOMOperationCounts,
-  getTotalMutations,
-} from "./testing/counting-dom.js"
-
-// =============================================================================
 // Types
 // =============================================================================
 

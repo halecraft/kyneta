@@ -168,7 +168,7 @@ The phases are numbered for reference but should be implemented in the following
 - ✅ Task 0a.8: Update all tests importing runtime functions
 - ✅ Task 0a.9: Remove old `__*` exports from main entry (no deprecation needed for experimental framework)
 
-### Phase 0b: Eliminate All __ Prefixes 🔴
+### Phase 0b: Eliminate All __ Prefixes ✅
 
 **Goal**: Remove all remaining `__` prefixes from function definitions and organize testing utilities into a dedicated subpath.
 
@@ -182,26 +182,28 @@ The phases are numbered for reference but should be implemented in the following
 
 **Tasks**:
 
-- 🔴 Task 0b.1: Rename internal implementations (remove `__` prefix):
+- ✅ Task 0b.1: Rename internal implementations (remove `__` prefix):
   - `subscribe.ts`: `__subscribe` → `subscribe`, `__subscribeWithValue` → `subscribeWithValue`, etc.
   - `regions.ts`: `__listRegion` → `listRegion`, `__conditionalRegion` → `conditionalRegion`
   - `binding.ts`: `__bindTextValue` → `bindTextValue`, `__bindChecked` → `bindChecked`, `__bindNumericValue` → `bindNumericValue`
+  - `scope.ts`: `__resetScopeIdCounter` → `resetScopeIdCounter`, `__setRootScope` → `setRootScope`
+  - `transform.ts`: `__resetProject` → `resetProject`
 
-- 🔴 Task 0b.2: Remove `as` re-exports (export directly with clean names)
+- ✅ Task 0b.2: Remove `as` re-exports (export directly with clean names)
 
-- 🔴 Task 0b.3: Create `src/testing/runtime.ts` for runtime testing utilities:
-  - Move `resetScopeIdCounter` from `scope.ts`
-  - Move `resetSubscriptionIdCounter`, `activeSubscriptions`, `getActiveSubscriptionCount` from `subscribe.ts`
-  - Move `setRootScope` from `scope.ts`
-  - Move `resetProject` from `transform.ts`
+- ✅ Task 0b.3: Create `src/testing/index.ts` exporting all testing utilities:
+  - `resetScopeIdCounter`, `setRootScope` from `scope.ts`
+  - `resetSubscriptionIdCounter`, `activeSubscriptions`, `getActiveSubscriptionCount` from `subscribe.ts`
+  - `resetProject` from `transform.ts`
+  - DOM counting utilities from `counting-dom.ts`
 
-- 🔴 Task 0b.4: Update `src/testing/index.ts` to export runtime testing utilities
+- ✅ Task 0b.4: Add `"./testing"` export to `package.json`
 
-- 🔴 Task 0b.5: Add `"./testing"` export to `package.json`
+- ✅ Task 0b.5: Update all test imports to use testing module for test utilities
 
-- 🔴 Task 0b.6: Update all test imports to use `@loro-extended/kinetic/testing` for test utilities
+- ✅ Task 0b.6: Remove testing utility exports from main entry and `/runtime`
 
-- 🔴 Task 0b.7: Remove testing utility exports from main entry and `/runtime`
+- ✅ Task 0b.7: Update codegen to emit clean binding names (`bindTextValue`, `bindChecked`)
 
 ### Phase 2: Extract Incremental Subscription Pattern 🔴
 

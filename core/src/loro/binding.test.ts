@@ -9,14 +9,14 @@ import { createTypedDoc, loro, Shape } from "@loro-extended/change"
 import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
-  __bindChecked,
-  __bindNumericValue,
-  __bindTextValue,
+  bindChecked,
+  bindNumericValue,
+  bindTextValue,
   bind,
   isBinding,
 } from "./binding.js"
-import { __resetScopeIdCounter, Scope } from "../runtime/scope.js"
-import { __resetSubscriptionIdCounter } from "../runtime/subscribe.js"
+import { resetScopeIdCounter, Scope } from "../runtime/scope.js"
+import { resetSubscriptionIdCounter } from "../runtime/subscribe.js"
 
 // Set up DOM globals for testing
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")
@@ -71,13 +71,13 @@ describe("isBinding()", () => {
 })
 
 // =============================================================================
-// __bindTextValue Tests
+// bindTextValue Tests
 // =============================================================================
 
-describe("__bindTextValue", () => {
+describe("bindTextValue", () => {
   beforeEach(() => {
-    __resetSubscriptionIdCounter()
-    __resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    resetScopeIdCounter()
   })
 
   it("should set initial value from text ref", () => {
@@ -91,7 +91,7 @@ describe("__bindTextValue", () => {
     const input = document.createElement("input")
     const scope = new Scope("test")
 
-    __bindTextValue(input, doc.title, scope)
+    bindTextValue(input, doc.title, scope)
 
     expect(input.value).toBe("Hello")
 
@@ -109,7 +109,7 @@ describe("__bindTextValue", () => {
     const input = document.createElement("input")
     const scope = new Scope("test")
 
-    __bindTextValue(input, doc.title, scope)
+    bindTextValue(input, doc.title, scope)
 
     expect(input.value).toBe("Hello")
 
@@ -133,7 +133,7 @@ describe("__bindTextValue", () => {
     const input = document.createElement("input")
     const scope = new Scope("test")
 
-    __bindTextValue(input, doc.title, scope)
+    bindTextValue(input, doc.title, scope)
 
     // Simulate user input
     input.value = "User typed"
@@ -154,7 +154,7 @@ describe("__bindTextValue", () => {
     const input = document.createElement("input")
     const scope = new Scope("test")
 
-    __bindTextValue(input, doc.title, scope)
+    bindTextValue(input, doc.title, scope)
 
     // Dispose the scope
     scope.dispose()
@@ -179,7 +179,7 @@ describe("__bindTextValue", () => {
     const textarea = document.createElement("textarea")
     const scope = new Scope("test")
 
-    __bindTextValue(textarea, doc.content, scope)
+    bindTextValue(textarea, doc.content, scope)
 
     expect(textarea.value).toBe("Initial content")
 
@@ -202,7 +202,7 @@ describe("__bindTextValue", () => {
     const input = document.createElement("input")
     const scope = new Scope("test")
 
-    __bindTextValue(input, doc.title, scope)
+    bindTextValue(input, doc.title, scope)
 
     expect(input.value).toBe("")
 
@@ -211,13 +211,13 @@ describe("__bindTextValue", () => {
 })
 
 // =============================================================================
-// __bindChecked Tests
+// bindChecked Tests
 // =============================================================================
 
-describe("__bindChecked", () => {
+describe("bindChecked", () => {
   beforeEach(() => {
-    __resetSubscriptionIdCounter()
-    __resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    resetScopeIdCounter()
   })
 
   it("should set initial checked state from counter (> 0 = true)", () => {
@@ -232,7 +232,7 @@ describe("__bindChecked", () => {
     checkbox.type = "checkbox"
     const scope = new Scope("test")
 
-    __bindChecked(checkbox, doc.enabled, scope)
+    bindChecked(checkbox, doc.enabled, scope)
 
     expect(checkbox.checked).toBe(true)
 
@@ -251,7 +251,7 @@ describe("__bindChecked", () => {
     checkbox.type = "checkbox"
     const scope = new Scope("test")
 
-    __bindChecked(checkbox, doc.enabled, scope)
+    bindChecked(checkbox, doc.enabled, scope)
 
     expect(checkbox.checked).toBe(false)
 
@@ -269,7 +269,7 @@ describe("__bindChecked", () => {
     checkbox.type = "checkbox"
     const scope = new Scope("test")
 
-    __bindChecked(checkbox, doc.enabled, scope)
+    bindChecked(checkbox, doc.enabled, scope)
 
     expect(checkbox.checked).toBe(false)
 
@@ -299,7 +299,7 @@ describe("__bindChecked", () => {
     checkbox.type = "checkbox"
     const scope = new Scope("test")
 
-    __bindChecked(checkbox, doc.enabled, scope)
+    bindChecked(checkbox, doc.enabled, scope)
 
     // Toggle on
     checkbox.checked = true
@@ -327,7 +327,7 @@ describe("__bindChecked", () => {
     checkbox.type = "checkbox"
     const scope = new Scope("test")
 
-    __bindChecked(checkbox, doc.enabled, scope)
+    bindChecked(checkbox, doc.enabled, scope)
 
     scope.dispose()
 
@@ -340,13 +340,13 @@ describe("__bindChecked", () => {
 })
 
 // =============================================================================
-// __bindNumericValue Tests
+// bindNumericValue Tests
 // =============================================================================
 
-describe("__bindNumericValue", () => {
+describe("bindNumericValue", () => {
   beforeEach(() => {
-    __resetSubscriptionIdCounter()
-    __resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    resetScopeIdCounter()
   })
 
   it("should set initial value from counter", () => {
@@ -361,7 +361,7 @@ describe("__bindNumericValue", () => {
     input.type = "number"
     const scope = new Scope("test")
 
-    __bindNumericValue(input, doc.count, scope)
+    bindNumericValue(input, doc.count, scope)
 
     expect(input.value).toBe("42")
 
@@ -380,7 +380,7 @@ describe("__bindNumericValue", () => {
     input.type = "number"
     const scope = new Scope("test")
 
-    __bindNumericValue(input, doc.count, scope)
+    bindNumericValue(input, doc.count, scope)
 
     expect(input.value).toBe("10")
 
@@ -404,7 +404,7 @@ describe("__bindNumericValue", () => {
     input.type = "number"
     const scope = new Scope("test")
 
-    __bindNumericValue(input, doc.count, scope)
+    bindNumericValue(input, doc.count, scope)
 
     // Simulate user changing the value
     input.value = "25"
@@ -429,7 +429,7 @@ describe("__bindNumericValue", () => {
     input.max = "100"
     const scope = new Scope("test")
 
-    __bindNumericValue(input, doc.volume, scope)
+    bindNumericValue(input, doc.volume, scope)
 
     expect(input.value).toBe("50")
 
@@ -453,7 +453,7 @@ describe("__bindNumericValue", () => {
     input.type = "number"
     const scope = new Scope("test")
 
-    __bindNumericValue(input, doc.count, scope)
+    bindNumericValue(input, doc.count, scope)
 
     expect(input.value).toBe("0")
 
@@ -472,7 +472,7 @@ describe("__bindNumericValue", () => {
     input.type = "number"
     const scope = new Scope("test")
 
-    __bindNumericValue(input, doc.count, scope)
+    bindNumericValue(input, doc.count, scope)
 
     expect(input.value).toBe("-5")
 
@@ -491,7 +491,7 @@ describe("__bindNumericValue", () => {
     input.type = "number"
     const scope = new Scope("test")
 
-    __bindNumericValue(input, doc.count, scope)
+    bindNumericValue(input, doc.count, scope)
 
     scope.dispose()
 

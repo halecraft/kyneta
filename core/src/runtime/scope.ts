@@ -35,9 +35,8 @@ function generateScopeId(): string {
 
 /**
  * Reset the scope ID counter (for testing).
- * @internal
  */
-export function __resetScopeIdCounter(): void {
+export function resetScopeIdCounter(): void {
   scopeIdCounter = 0
 }
 
@@ -181,9 +180,9 @@ export let rootScope: Scope | null = null
 
 /**
  * Set the root scope.
- * @internal - Called by mount()
+ * Called by mount().
  */
-export function __setRootScope(scope: Scope | null): void {
+export function setRootScope(scope: Scope | null): void {
   rootScope = scope
 }
 

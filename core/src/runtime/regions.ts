@@ -7,7 +7,7 @@
  *
  * ## List Region Architecture (Functional Core / Imperative Shell)
  *
- * The `__listRegion` runtime follows FC/IS pattern:
+ * The `listRegion` runtime follows FC/IS pattern:
  *
  * **Functional Core** (pure, testable):
  * - `planInitialRender(listRef)` → `ListRegionOp<T>[]`
@@ -38,7 +38,7 @@ import type {
   Slot,
 } from "../types.js"
 import type { Scope } from "./scope.js"
-import { __subscribe as subscribe } from "./subscribe.js"
+import { subscribe } from "./subscribe.js"
 
 // =============================================================================
 // Fragment Handling Helper
@@ -410,7 +410,7 @@ function executeOps<T>(
  *
  * @internal - Called by compiled code
  */
-export function __listRegion<T>(
+export function listRegion<T>(
   parent: Node,
   listRef: unknown,
   handlers: ListRegionHandlers<T>,
@@ -609,7 +609,7 @@ function executeConditionalOp(
  *
  * @internal - Called by compiled code
  */
-export function __conditionalRegion(
+export function conditionalRegion(
   marker: Comment,
   conditionRef: unknown,
   getCondition: () => boolean,

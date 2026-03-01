@@ -315,13 +315,13 @@ function generateBinding(
   if (binding.bindingType === "checked") {
     // Checkbox binding
     lines.push(
-      `${ind}__bindChecked(${elementVar}, ${binding.refSource}, ${state.scopeVar})`,
+      `${ind}bindChecked(${elementVar}, ${binding.refSource}, ${state.scopeVar})`,
     )
   } else if (binding.attribute === "value") {
     // Determine if numeric or text based on element type
     // For now, assume text - we could enhance this with element type info
     lines.push(
-      `${ind}__bindTextValue(${elementVar}, ${binding.refSource}, ${state.scopeVar})`,
+      `${ind}bindTextValue(${elementVar}, ${binding.refSource}, ${state.scopeVar})`,
     )
   }
 

@@ -2,10 +2,10 @@ import { JSDOM } from "jsdom"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { InvalidMountTargetError } from "../errors.js"
 import { mount, rootScope } from "./mount.js"
-import { __resetScopeIdCounter, __setRootScope } from "./scope.js"
+import { resetScopeIdCounter, setRootScope } from "./scope.js"
 import {
-  __activeSubscriptions,
-  __resetSubscriptionIdCounter,
+  activeSubscriptions,
+  resetSubscriptionIdCounter,
 } from "./subscribe.js"
 
 // Set up DOM globals for testing
@@ -16,15 +16,15 @@ global.Element = dom.window.Element
 
 describe("mount", () => {
   beforeEach(() => {
-    __resetScopeIdCounter()
-    __resetSubscriptionIdCounter()
-    __activeSubscriptions.clear()
-    __setRootScope(null)
+    resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    activeSubscriptions.clear()
+    setRootScope(null)
     document.body.innerHTML = ""
   })
 
   afterEach(() => {
-    __setRootScope(null)
+    setRootScope(null)
     document.body.innerHTML = ""
   })
 

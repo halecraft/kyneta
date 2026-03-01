@@ -16,7 +16,7 @@
 
 import { HydrationMismatchError } from "../errors.js"
 import type { Scope } from "./scope.js"
-import { __subscribe as subscribe } from "./subscribe.js"
+import { subscribe } from "./subscribe.js"
 
 // =============================================================================
 // Types

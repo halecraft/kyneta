@@ -303,7 +303,7 @@ export interface ElementNode extends IRNodeBase {
  * Replaces the former `StaticLoopNode` (render-time) and `ListRegionNode` (reactive).
  * The `iterableBindingTime` field determines codegen strategy:
  * - `"render"`: inline `for...of` loop, runs once at render time
- * - `"reactive"`: `__listRegion` call, delta-driven updates
+ * - `"reactive"`: `listRegion` call, delta-driven updates
  *
  * ```typescript
  * // Render-time loop (iterableBindingTime: "render")
@@ -374,7 +374,7 @@ export interface ConditionalBranch {
  *
  * Unified type parameterized by binding time via subscriptionTarget:
  * - subscriptionTarget === null → render-time conditional (inline if)
- * - subscriptionTarget !== null → reactive conditional (__conditionalRegion)
+ * - subscriptionTarget !== null → reactive conditional (conditionalRegion)
  *
  * ```typescript
  * // Render-time conditional (subscriptionTarget: null)

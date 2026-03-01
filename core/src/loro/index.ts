@@ -20,9 +20,9 @@
  */
 
 export {
-  __bindChecked as bindChecked,
-  __bindNumericValue as bindNumericValue,
-  __bindTextValue as bindTextValue,
+  bindChecked,
+  bindNumericValue,
+  bindTextValue,
   bind,
   isBinding,
 } from "./binding.js"

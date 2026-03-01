@@ -12,8 +12,8 @@ import {
   createCountingContainer,
 } from "../testing/counting-dom.js"
 import {
-  __conditionalRegion,
-  __listRegion,
+  conditionalRegion,
+  listRegion,
   claimSlot,
   type ListRefLike,
   planConditionalUpdate,
@@ -21,11 +21,11 @@ import {
   planInitialRender,
   releaseSlot,
 } from "./regions.js"
-import { __resetScopeIdCounter, Scope } from "./scope.js"
+import { resetScopeIdCounter, Scope } from "./scope.js"
 import {
-  __activeSubscriptions,
-  __getActiveSubscriptionCount,
-  __resetSubscriptionIdCounter,
+  activeSubscriptions,
+  getActiveSubscriptionCount,
+  resetSubscriptionIdCounter,
 } from "./subscribe.js"
 
 // Set up DOM globals for testing
@@ -37,12 +37,12 @@ global.Comment = dom.window.Comment
 
 describe("regions", () => {
   beforeEach(() => {
-    __resetScopeIdCounter()
-    __resetSubscriptionIdCounter()
-    __activeSubscriptions.clear()
+    resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    activeSubscriptions.clear()
   })
 
-  describe("__listRegion", () => {
+  describe("listRegion", () => {
     it("should render initial list items", () => {
       const schema = Shape.doc({
         items: Shape.list(Shape.plain.string()),
@@ -57,7 +57,7 @@ describe("regions", () => {
       doc.items.push("item3")
       loro(doc).commit()
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -86,7 +86,7 @@ describe("regions", () => {
       const scope = new Scope()
       const container = document.createElement("ul")
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -112,7 +112,7 @@ describe("regions", () => {
       const scope = new Scope()
       const container = document.createElement("ul")
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -157,7 +157,7 @@ describe("regions", () => {
       doc.items.push("third")
       loro(doc).commit()
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -198,7 +198,7 @@ describe("regions", () => {
       doc.items.push("item3")
       loro(doc).commit()
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -239,7 +239,7 @@ describe("regions", () => {
       doc.items.push("d")
       loro(doc).commit()
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -283,7 +283,7 @@ describe("regions", () => {
       doc.items.push("item3")
       loro(doc).commit()
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -335,7 +335,7 @@ describe("regions", () => {
       }
       loro(doc).commit()
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -373,7 +373,7 @@ describe("regions", () => {
       doc.items.push("c")
       loro(doc).commit()
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -411,7 +411,7 @@ describe("regions", () => {
       const scope = new Scope()
       const container = document.createElement("ul")
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -429,7 +429,7 @@ describe("regions", () => {
       loro(doc).commit()
 
       // 1 subscription for the list itself
-      const subscriptionsBefore = __getActiveSubscriptionCount()
+      const subscriptionsBefore = getActiveSubscriptionCount()
       expect(subscriptionsBefore).toBeGreaterThanOrEqual(1)
 
       // Delete an item
@@ -453,7 +453,7 @@ describe("regions", () => {
       doc.items.push("item2")
       loro(doc).commit()
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -466,15 +466,15 @@ describe("regions", () => {
         scope,
       )
 
-      expect(__getActiveSubscriptionCount()).toBeGreaterThanOrEqual(1)
+      expect(getActiveSubscriptionCount()).toBeGreaterThanOrEqual(1)
 
       scope.dispose()
 
-      expect(__getActiveSubscriptionCount()).toBe(0)
+      expect(getActiveSubscriptionCount()).toBe(0)
     })
   })
 
-  describe("__conditionalRegion", () => {
+  describe("conditionalRegion", () => {
     it("should render whenTrue branch when condition is true", () => {
       const schema = Shape.doc({
         count: Shape.counter(),
@@ -489,7 +489,7 @@ describe("regions", () => {
       doc.count.increment(1)
       loro(doc).commit()
 
-      __conditionalRegion(
+      conditionalRegion(
         marker,
         doc.count,
         () => doc.count.get() > 0,
@@ -526,7 +526,7 @@ describe("regions", () => {
 
       // Count is 0 (falsy) by default
 
-      __conditionalRegion(
+      conditionalRegion(
         marker,
         doc.count,
         () => doc.count.get() > 0,
@@ -563,7 +563,7 @@ describe("regions", () => {
 
       // Count is 0 (falsy) by default
 
-      __conditionalRegion(
+      conditionalRegion(
         marker,
         doc.count,
         () => doc.count.get() > 0,
@@ -598,7 +598,7 @@ describe("regions", () => {
       doc.count.increment(1)
       loro(doc).commit()
 
-      __conditionalRegion(
+      conditionalRegion(
         marker,
         doc.count,
         () => doc.count.get() > 0,
@@ -650,7 +650,7 @@ describe("regions", () => {
       doc.count.increment(1)
       loro(doc).commit()
 
-      __conditionalRegion(
+      conditionalRegion(
         marker,
         doc.count,
         () => doc.count.get() > 0,
@@ -670,7 +670,7 @@ describe("regions", () => {
       )
 
       // Initial subscription count
-      const initialCount = __getActiveSubscriptionCount()
+      const initialCount = getActiveSubscriptionCount()
       expect(initialCount).toBeGreaterThanOrEqual(1)
 
       // Swap condition - old branch scope should be disposed
@@ -678,7 +678,7 @@ describe("regions", () => {
       loro(doc).commit()
 
       // Subscription count should remain stable (old cleaned up, new created)
-      expect(__getActiveSubscriptionCount()).toBeGreaterThanOrEqual(1)
+      expect(getActiveSubscriptionCount()).toBeGreaterThanOrEqual(1)
 
       scope.dispose()
     })
@@ -697,7 +697,7 @@ describe("regions", () => {
       doc.count.increment(1)
       loro(doc).commit()
 
-      __conditionalRegion(
+      conditionalRegion(
         marker,
         doc.count,
         () => doc.count.get() > 0,
@@ -711,11 +711,11 @@ describe("regions", () => {
         scope,
       )
 
-      expect(__getActiveSubscriptionCount()).toBeGreaterThanOrEqual(1)
+      expect(getActiveSubscriptionCount()).toBeGreaterThanOrEqual(1)
 
       scope.dispose()
 
-      expect(__getActiveSubscriptionCount()).toBe(0)
+      expect(getActiveSubscriptionCount()).toBe(0)
     })
 
     // Regression test: Same DocumentFragment issue as list regions.
@@ -735,7 +735,7 @@ describe("regions", () => {
       doc.count.increment(1)
       loro(doc).commit()
 
-      __conditionalRegion(
+      conditionalRegion(
         marker,
         doc.count,
         () => doc.count.get() > 0,
@@ -1012,7 +1012,7 @@ describe("regions", () => {
     })
   })
 
-  describe("__listRegion - ref preservation", () => {
+  describe("listRegion - ref preservation", () => {
     it("should pass refs from listRef.get() to create handler for initial render", () => {
       const schema = Shape.doc({
         items: Shape.list(Shape.plain.string()),
@@ -1028,7 +1028,7 @@ describe("regions", () => {
 
       const receivedItems: unknown[] = []
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -1072,7 +1072,7 @@ describe("regions", () => {
 
       const receivedItems: unknown[] = []
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -1127,7 +1127,7 @@ describe("regions", () => {
       // Store refs in an array to avoid TypeScript control flow analysis issues
       const capturedRefs: Array<{ get(): string; set(v: string): void }> = []
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {

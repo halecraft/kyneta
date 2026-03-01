@@ -21,19 +21,17 @@ import {
   subscribe,
   subscribeMultiple,
   subscribeWithValue,
-  __activeSubscriptions,
-  __getActiveSubscriptionCount,
-  __resetSubscriptionIdCounter,
+  Scope,
 } from "../runtime/index.js"
 import {
-  __resetScopeIdCounter,
-  __setRootScope,
-  Scope,
-} from "../runtime/scope.js"
-import {
+  activeSubscriptions,
+  getActiveSubscriptionCount,
+  resetSubscriptionIdCounter,
+  resetScopeIdCounter,
+  setRootScope,
   assertMaxMutations,
   createCountingContainer,
-} from "../testing/counting-dom.js"
+} from "../testing/index.js"
 import { transformSource } from "./transform.js"
 
 // Set up DOM globals for testing
@@ -107,10 +105,10 @@ function compileAndExecute(source: string): { node: Node; scope: Scope } {
 
 describe("compiler integration - static compilation", () => {
   beforeEach(() => {
-    __resetScopeIdCounter()
-    __resetSubscriptionIdCounter()
-    __activeSubscriptions.clear()
-    __setRootScope(null)
+    resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    activeSubscriptions.clear()
+    setRootScope(null)
   })
 
   describe("Task 4.1: Basic static compilation", () => {
@@ -492,10 +490,10 @@ describe("compiler integration - static compilation", () => {
 
 describe("compiler integration - reactive expressions", () => {
   beforeEach(() => {
-    __resetScopeIdCounter()
-    __resetSubscriptionIdCounter()
-    __activeSubscriptions.clear()
-    __setRootScope(null)
+    resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    activeSubscriptions.clear()
+    setRootScope(null)
   })
 
   describe("Task 5.2: Reactive text content", () => {
@@ -577,7 +575,7 @@ describe("compiler integration - reactive expressions", () => {
 
       // Cleanup
       scope.dispose()
-      expect(__getActiveSubscriptionCount()).toBe(0)
+      expect(getActiveSubscriptionCount()).toBe(0)
     })
   })
 
@@ -723,11 +721,11 @@ describe("compiler integration - reactive expressions", () => {
         scope,
       )
 
-      expect(__getActiveSubscriptionCount()).toBe(1)
+      expect(getActiveSubscriptionCount()).toBe(1)
 
       scope.dispose()
 
-      expect(__getActiveSubscriptionCount()).toBe(0)
+      expect(getActiveSubscriptionCount()).toBe(0)
 
       // Updates after dispose should not change the text
       const oldContent = textNode.textContent
@@ -778,7 +776,7 @@ describe("compiler integration - reactive expressions", () => {
       subscribe(doc.lastName, updateFullName, scope)
       updateFullName() // Initial value
 
-      expect(__getActiveSubscriptionCount()).toBe(4)
+      expect(getActiveSubscriptionCount()).toBe(4)
       expect(firstNameNode.textContent).toBe("John")
       expect(lastNameNode.textContent).toBe("Doe")
       expect(fullNameNode.textContent).toBe("John Doe")
@@ -792,7 +790,7 @@ describe("compiler integration - reactive expressions", () => {
       expect(fullNameNode.textContent).toBe("Jane Doe")
 
       scope.dispose()
-      expect(__getActiveSubscriptionCount()).toBe(0)
+      expect(getActiveSubscriptionCount()).toBe(0)
     })
 
     it("should use subscribeMultiple for expressions with multiple dependencies", () => {
@@ -821,7 +819,7 @@ describe("compiler integration - reactive expressions", () => {
       )
 
       // Should create 2 subscriptions (one per ref)
-      expect(__getActiveSubscriptionCount()).toBe(2)
+      expect(getActiveSubscriptionCount()).toBe(2)
       expect(fullNameNode.textContent).toBe("John Doe")
 
       // Update first name only - should trigger update
@@ -837,7 +835,7 @@ describe("compiler integration - reactive expressions", () => {
       expect(fullNameNode.textContent).toBe("Jane Smith")
 
       scope.dispose()
-      expect(__getActiveSubscriptionCount()).toBe(0)
+      expect(getActiveSubscriptionCount()).toBe(0)
     })
   })
 })
@@ -848,10 +846,10 @@ describe("compiler integration - reactive expressions", () => {
 
 describe("compiler integration - list regions", () => {
   beforeEach(() => {
-    __resetScopeIdCounter()
-    __resetSubscriptionIdCounter()
-    __activeSubscriptions.clear()
-    __setRootScope(null)
+    resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    activeSubscriptions.clear()
+    setRootScope(null)
   })
 
   describe("Task 6.1: for-of detection", () => {
@@ -1170,8 +1168,8 @@ describe("compiler integration - list regions", () => {
 
 describe("compiler integration - conditional regions", () => {
   beforeEach(() => {
-    __resetSubscriptionIdCounter()
-    __resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    resetScopeIdCounter()
   })
 
   describe("Task 7.1: if detection", () => {
@@ -1478,8 +1476,8 @@ describe("compiler integration - conditional regions", () => {
 
 describe("compiler integration - bindings", () => {
   beforeEach(() => {
-    __resetSubscriptionIdCounter()
-    __resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    resetScopeIdCounter()
   })
 
   describe("Task 8.1: bind() detection in props", () => {
@@ -1518,7 +1516,7 @@ describe("compiler integration - bindings", () => {
       const result = transformSource(source, { target: "dom" })
 
       // Check that the generated code contains the binding call
-      expect(result.code).toContain("__bindTextValue")
+      expect(result.code).toContain("bindTextValue")
       expect(result.code).toContain("doc.title")
     })
 
@@ -1535,14 +1533,14 @@ describe("compiler integration - bindings", () => {
 
       const result = transformSource(source, { target: "dom" })
 
-      // Should generate __bindChecked for checkbox
-      expect(result.code).toContain("__bindChecked")
+      // Should generate bindChecked for checkbox
+      expect(result.code).toContain("bindChecked")
       expect(result.code).toContain("doc.enabled")
     })
   })
 
   describe("Task 8.2: Generated binding code", () => {
-    it("should generate __bindTextValue call for value binding", () => {
+    it("should generate bindTextValue call for value binding", () => {
       const source = `
         import { TextRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
@@ -1555,11 +1553,11 @@ describe("compiler integration - bindings", () => {
 
       const result = transformSource(source, { target: "dom" })
 
-      expect(result.code).toContain("__bindTextValue")
+      expect(result.code).toContain("bindTextValue")
       expect(result.code).toContain('createElement("input")')
     })
 
-    it("should generate __bindChecked call for checked binding", () => {
+    it("should generate bindChecked call for checked binding", () => {
       const source = `
         import { CounterRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
@@ -1572,7 +1570,7 @@ describe("compiler integration - bindings", () => {
 
       const result = transformSource(source, { target: "dom" })
 
-      expect(result.code).toContain("__bindChecked")
+      expect(result.code).toContain("bindChecked")
       expect(result.code).toContain('createElement("input")')
     })
 
@@ -1589,11 +1587,11 @@ describe("compiler integration - bindings", () => {
 
       const result = transformSource(source, { target: "dom" })
 
-      expect(result.code).toContain("__bindTextValue")
+      expect(result.code).toContain("bindTextValue")
     })
   })
 
-  // Note: Runtime behavior tests for __bindTextValue, __bindChecked, etc.
+  // Note: Runtime behavior tests for bindTextValue, bindChecked, etc.
   // are in binding.test.ts. This section tests compiler integration only.
 
   describe("Task 8.3: Compile-and-verify integration", () => {
@@ -1624,13 +1622,13 @@ describe("compiler integration - bindings", () => {
       const textResult = transformSource(textSource, { target: "dom" })
       const checkboxResult = transformSource(checkboxSource, { target: "dom" })
 
-      // Text binding generates __bindTextValue
-      expect(textResult.code).toContain("__bindTextValue")
+      // Text binding generates bindTextValue
+      expect(textResult.code).toContain("bindTextValue")
       expect(textResult.code).toContain("doc.title")
       expect(textResult.code).toContain('createElement("input")')
 
-      // Checkbox binding generates __bindChecked
-      expect(checkboxResult.code).toContain("__bindChecked")
+      // Checkbox binding generates bindChecked
+      expect(checkboxResult.code).toContain("bindChecked")
       expect(checkboxResult.code).toContain("doc.enabled")
 
       // Both should have proper element creation
@@ -1646,8 +1644,8 @@ describe("compiler integration - bindings", () => {
 
 describe("compiler integration - combined scenarios", () => {
   beforeEach(() => {
-    __resetSubscriptionIdCounter()
-    __resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    resetScopeIdCounter()
   })
 
   describe("Task 9.4: All patterns working together", () => {
@@ -1718,8 +1716,8 @@ describe("compiler integration - combined scenarios", () => {
       const result = transformSource(source, { target: "dom" })
 
       // Should have bindings
-      expect(result.code).toContain("__bindTextValue")
-      expect(result.code).toContain("__bindChecked")
+      expect(result.code).toContain("bindTextValue")
+      expect(result.code).toContain("bindChecked")
 
       // Should have reactive text display
       expect(result.code).toContain("doc.title.toString()")
@@ -1955,9 +1953,9 @@ describe("compiler integration - combined scenarios", () => {
 
 describe("compiler integration - arbitrary statements", () => {
   beforeEach(() => {
-    __resetScopeIdCounter()
-    __resetSubscriptionIdCounter()
-    __activeSubscriptions.clear()
+    resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    activeSubscriptions.clear()
   })
 
   describe("Task 4.1: Variable declaration in for-of body", () => {

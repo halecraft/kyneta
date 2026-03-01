@@ -19,7 +19,6 @@ import { beforeEach, describe, expect, it } from "vitest"
 
 import {
   listRegion,
-  __resetScopeIdCounter,
   subscribeWithValue,
   adoptNode,
   adoptTextNode,
@@ -28,13 +27,16 @@ import {
   hydrate,
   Scope,
 } from "../../src/index.js"
-import { __resetSubscriptionIdCounter } from "../../src/runtime/subscribe.js"
 import {
   escapeHtml,
   renderList,
   type SSRContext,
 } from "../../src/server/index.js"
-import { createCountingContainer } from "../../src/testing/counting-dom.js"
+import {
+  resetScopeIdCounter,
+  resetSubscriptionIdCounter,
+  createCountingContainer,
+} from "../../src/testing/index.js"
 
 // =============================================================================
 // DOM Setup
@@ -239,8 +241,8 @@ function hydrateTodoApp(
 
 describe("SSR Integration", () => {
   beforeEach(() => {
-    __resetSubscriptionIdCounter()
-    __resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    resetScopeIdCounter()
   })
 
   // ===========================================================================

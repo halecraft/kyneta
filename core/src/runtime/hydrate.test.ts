@@ -19,7 +19,7 @@ import {
   nextElementNode,
   parseMarker,
 } from "./hydrate.js"
-import { __resetScopeIdCounter, Scope } from "./scope.js"
+import { resetScopeIdCounter, Scope } from "./scope.js"
 
 // Set up DOM globals
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")
@@ -35,7 +35,7 @@ global.Text = dom.window.Text
 // =============================================================================
 
 beforeEach(() => {
-  __resetScopeIdCounter()
+  resetScopeIdCounter()
 })
 
 // =============================================================================

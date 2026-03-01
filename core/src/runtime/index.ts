@@ -11,6 +11,11 @@
  * import { subscribe, listRegion, conditionalRegion } from "@loro-extended/kinetic/runtime"
  * ```
  *
+ * **For tests** (reset functions, subscription tracking):
+ * ```typescript
+ * import { resetScopeIdCounter, activeSubscriptions } from "@loro-extended/kinetic/testing"
+ * ```
+ *
  * Note: Loro-specific bindings (bindTextValue, bindChecked, etc.)
  * are exported from "@loro-extended/kinetic/loro" instead, to maintain
  * a clean separation between Loro-agnostic runtime and Loro-specific features.
@@ -23,34 +28,21 @@
 // =============================================================================
 
 export { getRootScope, mount, rootScope } from "./mount.js"
-export { __resetScopeIdCounter, Scope } from "./scope.js"
+export { Scope } from "./scope.js"
 
 // =============================================================================
 // Compiler Runtime API (for generated code)
 // =============================================================================
 
 export {
-  __subscribe as subscribe,
-  __subscribeMultiple as subscribeMultiple,
-  __subscribeWithValue as subscribeWithValue,
-  __unsubscribe as unsubscribe,
+  subscribe,
+  subscribeMultiple,
+  subscribeWithValue,
+  unsubscribe,
   type SubscriptionId,
 } from "./subscribe.js"
 
-export {
-  __listRegion as listRegion,
-  __conditionalRegion as conditionalRegion,
-} from "./regions.js"
-
-// =============================================================================
-// Testing Utilities (internal, not for generated code)
-// =============================================================================
-
-export {
-  __activeSubscriptions,
-  __getActiveSubscriptionCount,
-  __resetSubscriptionIdCounter,
-} from "./subscribe.js"
+export { listRegion, conditionalRegion } from "./regions.js"
 
 // =============================================================================
 // Runtime version

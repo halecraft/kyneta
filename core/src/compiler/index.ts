@@ -124,7 +124,7 @@ export {
 
 export {
   // Testing utilities
-  __resetProject,
+  resetProject,
   // Types
   type CompileTarget,
   // Import handling
