@@ -127,14 +127,25 @@ type Assertion =
   | { type: 'eq'; value: unknown }      // Path equals value
   | { type: 'exists' }                   // Path exists (for containers)
   | { type: 'deleted' }                  // Path is deleted (tombstone)
-  | { type: 'after'; target: OpId }      // Ordering: this comes after target
-  | { type: 'before'; target: OpId };    // Ordering: this comes before target
+  | { type: 'seq_element';              // Sequence element (List/Text via Fugue)
+      value: unknown;                    // The element value (or character for Text)
+      originLeft: OpId | null;           // Element to the left when this was inserted
+      originRight: OpId | null;          // Element to the right when this was inserted
+    };
 ```
 
-**Design decision**: Minimal assertion types to start. Future extensions:
+**Design decision**: The `seq_element` assertion is a compound type that captures all
+information needed for Fugue's interleaving algorithm in a single assertion. An earlier
+design used separate `before`/`after` assertions for ordering, but research into the
+Fugue paper (Weidner & Kleppmann 2023) revealed this is insufficient: Fugue requires
+both `originLeft` AND `originRight` to resolve concurrent insert ordering. The compound
+assertion avoids coordination problems between multiple constraints per element.
+
+**Future extensions**:
 - Type constraints: `{ type: 'hasType'; typeId: string }`
 - Range constraints: `{ type: 'inRange'; min: number; max: number }`
 - Reference constraints: `{ type: 'references'; target: Path }`
+- Rich text marks: `{ type: 'mark'; key: string; value: unknown; start: Anchor; end: Anchor }`
 
 ### Constraints
 
@@ -185,28 +196,77 @@ interface Solver {
 
 ### List Solver (Fugue-style)
 
-**Constraint representation**:
-- Each element: `{ path: [listId, elemId], assertion: { type: 'eq', value } }`
-- Ordering: `{ path: [listId, elemId], assertion: { type: 'after', target: leftOrigin } }`
-- Deletion: `{ path: [listId, elemId], assertion: { type: 'deleted' } }`
+**Constraint representation** (hybrid `seq_element` approach):
+- Each element: `{ path: [listId, "elem", elemIdStr], assertion: { type: 'seq_element', value, originLeft, originRight } }`
+- Deletion: `{ path: [listId, "elem", elemIdStr], assertion: { type: 'deleted' } }`
 
-**Algorithm**:
-1. Collect all element constraints for the list
-2. Build partial order graph from `after` constraints
-3. Topological sort with Fugue tiebreaking:
-   - When ambiguous (multiple elements after same origin), use:
-     - First: compare peer ID (higher wins)
-     - Then: compare counter (higher wins)
-4. Filter out deleted elements
-5. Return ordered array of values
+Each `seq_element` constraint captures all Fugue metadata in a single assertion:
+the element's value, its left origin (the element to the left when inserted), and its
+right origin (the element to the right when inserted). This eliminates the need for
+separate ordering constraints and ensures the solver has all information needed for
+Fugue's interleaving algorithm.
 
-**Equivalence**: Matches Loro's Fugue interleaving semantics.
+**Why `seq_element` instead of separate `before`/`after` constraints:**
+
+The Fugue paper (Weidner & Kleppmann 2023) and analysis of Loro's implementation
+(`loro-ts/src/fugue/crdt-rope.ts` lines 548-620) revealed that Fugue's interleaving
+requires **both** `originLeft` AND `originRight` for correct ordering. When concurrent
+inserts share the same `originLeft`, Fugue compares their `originRight` positions.
+Separate `after` constraints only capture `originLeft`, which is insufficient for
+Fugue-equivalent interleaving. A compound `seq_element` assertion avoids coordination
+problems between multiple constraints and makes the solver self-contained.
+
+**Algorithm** (Fugue tree-based ordering):
+1. Collect all `seq_element` constraints for the list
+2. Build a Fugue tree: each element is a node; elements with the same `originLeft`
+   are siblings (children of the node identified by `originLeft`)
+3. Order siblings using Fugue's interleaving rules:
+   - Same `originRight`: **lower peer ID goes first** (left)
+   - Different `originRight`: compare `originRight` positions in the current tree
+     ordering — the element whose `originRight` is further left goes first
+   - "Visited set" walk: when a sibling's `originLeft` differs from ours but is a
+     descendant of ours, continue scanning (do not break). This handles transitive
+     origin relationships from nested concurrent inserts.
+4. Depth-first traversal of the tree produces the total order
+5. Filter out elements that have `deleted` constraints
+6. Return ordered array of values
+
+**Peer ID tiebreaker direction:** Fugue uses **lower peer ID goes left**, which is the
+opposite of Map LWW (higher peer ID wins). This is intentional — for text and lists,
+consistent left-to-right ordering of concurrent inserts is more natural. This difference
+is confirmed in `loro-ts/src/fugue/crdt-rope.ts` line 590: "Lower peer ID wins (goes
+first/left). If existing element has HIGHER peer ID than new content, break (insert
+before it)."
+
+**Tombstone preservation:** Deleted elements remain in the Fugue tree because future
+inserts from other peers may reference them as `originLeft` or `originRight`. The solver
+must maintain tombstones in the tree structure but exclude them from the output array.
+
+**Equivalence**: Matches Loro's Fugue interleaving semantics when the same operations
+are applied. The solver is a deterministic function of the constraint set, matching
+Weidner's canonical CRDT semantic model ("pure function of the operation history").
+
+**Reference implementation**: Port interleaving logic from
+`loro-ts/src/fugue/crdt-rope.ts` `findInsertPosition()` (lines 548-620) and
+`calculateOrigins()` (lines 460-530).
 
 ### Text Solver
 
-**Implementation**: Thin wrapper over List Solver where values are characters (or strings for optimization).
+**Implementation**: Thin wrapper over List Solver where each `seq_element` value is a
+single character. The solver concatenates the ordered characters into a string.
 
-**Future optimization**: Run-length encoding for character spans.
+**Multi-character inserts**: When a user inserts "Hello" at position 3, five `seq_element`
+constraints are created — one per character. The characters chain left-to-right:
+- First character: `originLeft` = element at position 2, `originRight` = element at position 3
+- Second character: `originLeft` = first character's OpId, `originRight` = element at position 3
+- Third through fifth: continue the chain
+
+This matches how Loro's Fugue tracker handles multi-character inserts: each character gets
+its own ID (consecutive counters from the same peer), and origins chain left-to-right.
+
+**Future optimization**: Run-length encoding — store a span of consecutive characters from
+the same peer as a single constraint with a string value. The solver would handle splitting
+and slicing of spans, similar to `FugueSpan` in `loro-ts/src/fugue/span.ts`.
 
 ## Constraint Store
 
@@ -389,14 +449,18 @@ interface InspectorSnapshot {
 2. Simpler implementation
 3. HLC adds complexity without clear benefit for our use case
 
-### Why separate assertion types for `before`/`after`?
+### Why compound `seq_element` instead of separate `before`/`after`?
 
-**Considered**: Single `order: { left: OpId, right: OpId }` constraint.
+**Original design**: Separate `after` assertion for ordering (`{ type: 'after', target: leftOrigin }`).
 
-**Decided** separate types because:
-1. Matches Fugue's left-origin model
-2. Simpler constraint generation on insert
-3. More natural for the constraint language
+**Revised to compound `seq_element`** after researching the Fugue paper, because:
+1. Fugue requires **both** `originLeft` and `originRight` for interleaving resolution
+2. When concurrent inserts share the same `originLeft`, Fugue compares `originRight`
+   positions — separate `after` constraints only capture `originLeft`
+3. A single compound assertion per element avoids the need to correlate multiple
+   constraints and ensures atomicity
+4. The solver has all information needed for the Fugue algorithm in one place
+5. Matches Fugue's `FugueSpan` structure: `(id, content, originLeft, originRight, status)`
 
 ### Why typed views instead of typed constraints?
 
@@ -444,8 +508,14 @@ Higher-level constraints capturing user intent:
 
 1. **Concurrent Constraint Programming**: Saraswat, V. A. (1993). *Concurrent Constraint Programming*. MIT Press.
 
-2. **Fugue**: Weidner, M., et al. (2023). "The Art of the Fugue: Minimizing Interleaving in Collaborative Text Editing."
+2. **Fugue**: Weidner, M. & Kleppmann, M. (2023). "The Art of the Fugue: Minimizing Interleaving in Collaborative Text Editing." IEEE TPDS, vol. 36, no. 11. [arXiv:2305.00583](https://arxiv.org/abs/2305.00583). Defines the Fugue and FugueMax algorithms and proves the maximal non-interleaving property. Key reference for the List/Text solver.
 
-3. **CRDTs**: Shapiro, M., et al. (2011). "Conflict-free Replicated Data Types." SSS 2011.
+3. **CRDT Survey (Semantic Techniques)**: Weidner, M. (2023). "CRDT Survey, Part 2: Semantic Techniques." [Blog post](https://mattweidner.com/2023/09/26/crdt-survey-2.html). Describes CRDTs as "pure function of operation history" — the canonical semantic model that maps directly to Prism's solver approach. Covers list CRDT positions, LWW, unique sets, composition techniques.
 
-4. **Delta CRDTs**: Almeida, P. S., et al. (2018). "Delta State Replicated Data Types." Journal of Parallel and Distributed Computing.
+4. **CRDT Survey (Algorithmic Techniques)**: Weidner, M. (2024). "CRDT Survey, Part 3: Algorithmic Techniques." [Blog post](https://mattweidner.com/2023/09/26/crdt-survey-3.html). Covers op-based vs state-based CRDTs, vector clocks (dot IDs), optimized state-based unique sets.
+
+5. **CRDTs**: Shapiro, M., et al. (2011). "Conflict-free Replicated Data Types." SSS 2011.
+
+6. **Delta CRDTs**: Almeida, P. S., et al. (2018). "Delta State Replicated Data Types." Journal of Parallel and Distributed Computing.
+
+7. **Peritext**: Litt, S., et al. (2021). "Peritext: A CRDT for Collaborative Rich Text Editing." Relevant for future rich text mark support.

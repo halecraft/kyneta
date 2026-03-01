@@ -196,8 +196,8 @@ export function pathChild(path: Path, segment: PathSegment): Path {
 export function pathCompare(a: Path, b: Path): number {
 	const minLen = Math.min(a.length, b.length);
 	for (let i = 0; i < minLen; i++) {
-		const segA = a[i];
-		const segB = b[i];
+		const segA = a[i]!;
+		const segB = b[i]!;
 
 		// Different types: numbers come before strings
 		if (typeof segA !== typeof segB) {

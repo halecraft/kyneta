@@ -6,7 +6,7 @@
  */
 
 import type { OpId } from "./types.js";
-import { opIdEquals } from "./types.js";
+import { opIdEquals, opIdToString } from "./types.js";
 
 // ============================================================================
 // Assertion Types
@@ -43,26 +43,21 @@ export interface DeletedAssertion {
 }
 
 /**
- * Before assertion - asserts ordering (this element comes before target).
+ * Sequence element assertion - asserts an element in a List or Text.
  *
- * Used for List/Text ordering constraints. The element at this path
- * should be positioned before the element identified by target.
- */
-export interface BeforeAssertion {
-	readonly type: "before";
-	readonly target: OpId;
-}
-
-/**
- * After assertion - asserts ordering (this element comes after target).
+ * This captures Fugue's semantics where each insert operation records:
+ * - The element value
+ * - originLeft: The element to the left when this was inserted (null = start of list)
+ * - originRight: The element to the right when this was inserted (null = end of list)
  *
- * Used for List/Text ordering constraints. The element at this path
- * should be positioned after the element identified by target.
- * This corresponds to the "left origin" in Fugue terminology.
+ * The solver uses originLeft/originRight to reconstruct the Fugue tree
+ * and compute the correct interleaving for concurrent inserts.
  */
-export interface AfterAssertion {
-	readonly type: "after";
-	readonly target: OpId;
+export interface SeqElementAssertion {
+	readonly type: "seq_element";
+	readonly value: unknown;
+	readonly originLeft: OpId | null;
+	readonly originRight: OpId | null;
 }
 
 /**
@@ -75,8 +70,7 @@ export type Assertion =
 	| EqAssertion
 	| ExistsAssertion
 	| DeletedAssertion
-	| BeforeAssertion
-	| AfterAssertion;
+	| SeqElementAssertion;
 
 // ============================================================================
 // Assertion Constructors
@@ -106,21 +100,21 @@ export function deleted(): DeletedAssertion {
 }
 
 /**
- * Create a before assertion.
+ * Create a sequence element assertion.
  *
- * @param target - The OpId of the element this should come before
- */
-export function before(target: OpId): BeforeAssertion {
-	return { type: "before", target };
-}
-
-/**
- * Create an after assertion.
+ * This is the primary assertion type for List and Text elements.
+ * Each element in a sequence is represented by one seq_element constraint.
  *
- * @param target - The OpId of the element this should come after (left origin)
+ * @param value - The element value (any JSON-compatible value for List, single char for Text)
+ * @param originLeft - OpId of the element to the left when inserted, or null for start
+ * @param originRight - OpId of the element to the right when inserted, or null for end
  */
-export function after(target: OpId): AfterAssertion {
-	return { type: "after", target };
+export function seqElement(
+	value: unknown,
+	originLeft: OpId | null,
+	originRight: OpId | null,
+): SeqElementAssertion {
+	return { type: "seq_element", value, originLeft, originRight };
 }
 
 // ============================================================================
@@ -130,8 +124,8 @@ export function after(target: OpId): AfterAssertion {
 /**
  * Check if two assertions are equal.
  *
- * For value equality in `eq` assertions, uses deep equality via JSON serialization.
- * This is simple but sufficient for JSON-compatible values.
+ * For value equality in `eq` and `seq_element` assertions, uses deep equality
+ * via JSON serialization. This is simple but sufficient for JSON-compatible values.
  */
 export function assertionEquals(a: Assertion, b: Assertion): boolean {
 	if (a.type !== b.type) return false;
@@ -149,14 +143,33 @@ export function assertionEquals(a: Assertion, b: Assertion): boolean {
 			// No additional data to compare
 			return true;
 
-		case "before": {
-			const bBefore = b as BeforeAssertion;
-			return opIdEquals(a.target, bBefore.target);
-		}
-
-		case "after": {
-			const bAfter = b as AfterAssertion;
-			return opIdEquals(a.target, bAfter.target);
+		case "seq_element": {
+			const bSeq = b as SeqElementAssertion;
+			// Compare value
+			if (JSON.stringify(a.value) !== JSON.stringify(bSeq.value)) {
+				return false;
+			}
+			// Compare originLeft
+			if (a.originLeft === null && bSeq.originLeft !== null) return false;
+			if (a.originLeft !== null && bSeq.originLeft === null) return false;
+			if (
+				a.originLeft !== null &&
+				bSeq.originLeft !== null &&
+				!opIdEquals(a.originLeft, bSeq.originLeft)
+			) {
+				return false;
+			}
+			// Compare originRight
+			if (a.originRight === null && bSeq.originRight !== null) return false;
+			if (a.originRight !== null && bSeq.originRight === null) return false;
+			if (
+				a.originRight !== null &&
+				bSeq.originRight !== null &&
+				!opIdEquals(a.originRight, bSeq.originRight)
+			) {
+				return false;
+			}
+			return true;
 		}
 	}
 }
@@ -172,10 +185,15 @@ export function assertionToString(assertion: Assertion): string {
 			return "exists()";
 		case "deleted":
 			return "deleted()";
-		case "before":
-			return `before(${assertion.target.peer}@${assertion.target.counter})`;
-		case "after":
-			return `after(${assertion.target.peer}@${assertion.target.counter})`;
+		case "seq_element": {
+			const left = assertion.originLeft
+				? opIdToString(assertion.originLeft)
+				: "null";
+			const right = assertion.originRight
+				? opIdToString(assertion.originRight)
+				: "null";
+			return `seq_element(${JSON.stringify(assertion.value)}, left=${left}, right=${right})`;
+		}
 	}
 }
 
@@ -205,28 +223,10 @@ export function isDeletedAssertion(
 }
 
 /**
- * Type guard for BeforeAssertion.
+ * Type guard for SeqElementAssertion.
  */
-export function isBeforeAssertion(
+export function isSeqElementAssertion(
 	assertion: Assertion,
-): assertion is BeforeAssertion {
-	return assertion.type === "before";
-}
-
-/**
- * Type guard for AfterAssertion.
- */
-export function isAfterAssertion(
-	assertion: Assertion,
-): assertion is AfterAssertion {
-	return assertion.type === "after";
-}
-
-/**
- * Check if an assertion is an ordering assertion (before or after).
- */
-export function isOrderingAssertion(
-	assertion: Assertion,
-): assertion is BeforeAssertion | AfterAssertion {
-	return assertion.type === "before" || assertion.type === "after";
+): assertion is SeqElementAssertion {
+	return assertion.type === "seq_element";
 }

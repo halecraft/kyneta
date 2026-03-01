@@ -104,51 +104,6 @@ export interface Solver<T = unknown> {
 }
 
 // ============================================================================
-// Solver Registry
-// ============================================================================
-
-/**
- * Container types that can be solved.
- */
-export type ContainerType = "map" | "list" | "text" | "counter";
-
-/**
- * Registry mapping container types to their solvers.
- */
-export interface SolverRegistry {
-	readonly map: Solver<unknown>;
-	readonly list: Solver<unknown[]>;
-	readonly text: Solver<string>;
-	readonly counter: Solver<number>;
-}
-
-/**
- * Create a solver registry with the provided solvers.
- */
-export function createSolverRegistry(
-	solvers: Partial<SolverRegistry>,
-): SolverRegistry {
-	return {
-		map: solvers.map ?? createNoOpSolver(),
-		list: solvers.list ?? createNoOpSolver(),
-		text: solvers.text ?? createNoOpSolver(),
-		counter: solvers.counter ?? createNoOpSolver(),
-	};
-}
-
-/**
- * A no-op solver that always returns empty.
- * Used as a placeholder for unimplemented solvers.
- */
-export function createNoOpSolver<T>(): Solver<T> {
-	return {
-		solve(): SolvedValue<T> {
-			return solvedEmpty<T>();
-		},
-	};
-}
-
-// ============================================================================
 // Solver Utilities
 // ============================================================================
 

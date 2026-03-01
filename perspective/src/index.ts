@@ -21,9 +21,16 @@ export {
 	createOpId,
 	opIdEquals,
 	opIdToString,
+	opIdFromString,
+	opIdCompare,
 	pathEquals,
 	pathToString,
+	pathFromString,
 	pathStartsWith,
+	pathParent,
+	pathLast,
+	pathChild,
+	pathCompare,
 } from "./core/types.js";
 
 // Assertions
@@ -32,51 +39,186 @@ export type {
 	EqAssertion,
 	ExistsAssertion,
 	DeletedAssertion,
-	BeforeAssertion,
-	AfterAssertion,
+	SeqElementAssertion,
 } from "./core/assertions.js";
 
 export {
 	eq,
 	exists,
 	deleted,
-	before,
-	after,
+	seqElement,
 	assertionEquals,
+	assertionToString,
+	isEqAssertion,
+	isExistsAssertion,
+	isDeletedAssertion,
+	isSeqElementAssertion,
 } from "./core/assertions.js";
 
 // Constraints
 export type { Constraint, ConstraintMetadata } from "./core/constraint.js";
 
-export { createConstraint } from "./core/constraint.js";
+export {
+	createConstraint,
+	createConstraintWithId,
+	constraintEquals,
+	constraintSameId,
+	constraintKey,
+	constraintToString,
+	constraintCompareLWW,
+	findLWWWinner,
+	partitionByLWW,
+} from "./core/constraint.js";
 
 // Version Vector
-export type { VersionVector } from "./core/version-vector.js";
+export type {
+	VersionVector,
+	MutableVersionVector,
+	VVCompareResult,
+} from "./core/version-vector.js";
 
 export {
 	createVersionVector,
+	vvFromObject,
+	vvClone,
 	vvGet,
+	vvHasSeen,
 	vvSet,
-	vvMerge,
+	vvExtend,
 	vvCompare,
 	vvIncludes,
-	vvClone,
+	vvEquals,
+	vvMerge,
+	vvMergeInto,
+	vvDiff,
+	vvToObject,
+	vvToString,
+	vvTotalOps,
+	vvPeers,
+	vvIsEmpty,
 } from "./core/version-vector.js";
 
 // Constraint Store
-export type { ConstraintStore } from "./store/constraint-store.js";
+export type {
+	ConstraintStore,
+	TellResult,
+	ConstraintDelta,
+} from "./store/constraint-store.js";
 
 export {
 	createConstraintStore,
 	tell,
+	tellMany,
 	ask,
+	askPrefix,
 	getConstraintsForPath,
+	getAllConstraints,
+	getConstraintCount,
+	hasConstraint,
+	getConstraint,
+	getVersionVector,
+	getLamport,
+	getNextLamport,
 	exportDelta,
 	importDelta,
 	mergeStores,
+	iterPaths,
+	iterConstraints,
+	iterByPath,
 } from "./store/constraint-store.js";
 
 // Solver
 export type { Solver, SolvedValue } from "./solver/solver.js";
 
-export { createMapSolver } from "./solver/map-solver.js";
+export {
+	solvedEmpty,
+	solvedFromConstraint,
+	solvedDeleted,
+	filterByAssertionType,
+	hasConflicts,
+	isDeleted,
+	isEmpty,
+} from "./solver/solver.js";
+
+// Map Solver
+export type { MapSolver, SolvedMap } from "./solver/map-solver.js";
+
+export {
+	createMapSolver,
+	solveMapConstraints,
+	solveMap,
+	solvedMapToObject,
+	solvedMapHasConflicts,
+	solvedMapConflictKeys,
+} from "./solver/map-solver.js";
+
+// List Solver
+export type { ListSolver, SolvedList } from "./solver/list-solver.js";
+
+export {
+	createListSolver,
+	solveListConstraints,
+	solveList,
+	solvedListToArray,
+	solvedListHasConflicts,
+	solvedListGet,
+} from "./solver/list-solver.js";
+
+// Fugue Algorithm
+export type { FugueNode, FugueResult } from "./solver/fugue.js";
+
+export {
+	buildFugueTree,
+	findNode,
+	getActiveIndex,
+	getNodeAtIndex,
+	computeInsertOrigins,
+	getIdAtIndex,
+} from "./solver/fugue.js";
+
+// Views
+export type {
+	View,
+	ViewChangeEvent,
+	ViewChangeCallback,
+	Unsubscribe,
+} from "./views/view.js";
+
+export { createViewChangeEvent, isActualChange } from "./views/view.js";
+
+// Map View
+export type {
+	MapView,
+	MapViewConfig,
+	ReactiveMapView,
+} from "./views/map-view.js";
+
+export { createMapView, createReactiveMapView } from "./views/map-view.js";
+
+// List View
+export type {
+	ListView,
+	ListViewConfig,
+	ReactiveListView,
+} from "./views/list-view.js";
+
+export { createListView, createReactiveListView } from "./views/list-view.js";
+
+// Handles
+export type { Handle } from "./handles/handle.js";
+
+// Map Handle
+export type {
+	MapHandle,
+	MapHandleConfig,
+} from "./handles/map-handle.js";
+
+export { createMapHandle, mergeMapHandles } from "./handles/map-handle.js";
+
+// List Handle
+export type {
+	ListHandle,
+	ListHandleConfig,
+} from "./handles/list-handle.js";
+
+export { createListHandle, mergeListHandles } from "./handles/list-handle.js";
