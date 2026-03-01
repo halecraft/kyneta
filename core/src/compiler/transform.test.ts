@@ -642,6 +642,76 @@ describe("collectRequiredImports", () => {
     expect(runtime.has("subscribeMultiple")).toBe(false)
     expect(runtime.has("subscribe")).toBe(true)
   })
+
+  it("should include textRegion for direct TextRef read", () => {
+    const directTextRead = {
+      kind: "content" as const,
+      source: "doc.title.get()",
+      bindingTime: "reactive" as const,
+      dependencies: [dep("doc.title", "text")],
+      span,
+      directReadSource: "doc.title",
+    }
+    const builder = createBuilder("p", [], [], [directTextRead], span)
+    builder.isReactive = true
+
+    const { runtime } = collectRequiredImports([builder])
+
+    expect(runtime.has("textRegion")).toBe(true)
+  })
+
+  it("should NOT include textRegion for non-direct TextRef read", () => {
+    const nonDirectRead = {
+      kind: "content" as const,
+      source: "doc.title.get().toUpperCase()",
+      bindingTime: "reactive" as const,
+      dependencies: [dep("doc.title", "text")],
+      span,
+      // no directReadSource — this is not a direct read
+    }
+    const builder = createBuilder("p", [], [], [nonDirectRead], span)
+    builder.isReactive = true
+
+    const { runtime } = collectRequiredImports([builder])
+
+    expect(runtime.has("textRegion")).toBe(false)
+  })
+
+  it("should NOT include textRegion for non-text deltaKind even with directReadSource", () => {
+    const replaceRead = {
+      kind: "content" as const,
+      source: "count.get()",
+      bindingTime: "reactive" as const,
+      dependencies: [dep("count", "replace")], // deltaKind is "replace", not "text"
+      span,
+      directReadSource: "count",
+    }
+    const builder = createBuilder("span", [], [], [replaceRead], span)
+    builder.isReactive = true
+
+    const { runtime } = collectRequiredImports([builder])
+
+    expect(runtime.has("textRegion")).toBe(false)
+    expect(runtime.has("subscribe")).toBe(true)
+  })
+
+  it("should NOT include textRegion for multi-dependency content", () => {
+    const multiDepRead = {
+      kind: "content" as const,
+      source: "doc.title.get() + doc.subtitle.get()",
+      bindingTime: "reactive" as const,
+      dependencies: [dep("doc.title", "text"), dep("doc.subtitle", "text")],
+      span,
+      // no directReadSource — multi-dep is never direct
+    }
+    const builder = createBuilder("span", [], [], [multiDepRead], span)
+    builder.isReactive = true
+
+    const { runtime } = collectRequiredImports([builder])
+
+    expect(runtime.has("textRegion")).toBe(false)
+    expect(runtime.has("subscribeMultiple")).toBe(true)
+  })
 })
 
 // =============================================================================

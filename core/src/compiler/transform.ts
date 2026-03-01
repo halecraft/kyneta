@@ -100,9 +100,12 @@ export interface TransformInPlaceResult {
   ir: BuilderNode[]
 
   /**
-   * The set of runtime imports required.
+   * The imports required by the generated code.
    */
-  requiredImports: Set<string>
+  requiredImports: {
+    runtime: Set<string>
+    loro: Set<string>
+  }
 }
 
 // =============================================================================
@@ -254,6 +257,15 @@ export function collectRequiredImports(ir: BuilderNode[]): {
         // Recurse into element children
         collectFromChildren(child.children)
       } else if (child.kind === "content") {
+        // Check for direct TextRef read (enables textRegion optimization)
+        if (
+          child.bindingTime === "reactive" &&
+          child.directReadSource &&
+          child.dependencies.length === 1 &&
+          child.dependencies[0].deltaKind === "text"
+        ) {
+          runtime.add("textRegion")
+        }
         // Check for multi-dependency content (text nodes)
         if (child.bindingTime === "reactive" && child.dependencies.length > 1) {
           runtime.add("subscribeMultiple")

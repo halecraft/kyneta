@@ -81,16 +81,16 @@ The runtime function that generated code calls for direct TextRef reads.
 - ✅ Task 3.4: Add unit tests for `textRegion` with mock TextRef emitting text deltas
 - ✅ Task 3.5: Add unit test for `textRegion` fallback (non-text delta triggers full replacement)
 
-### Phase 4: Codegen & Import Updates 🔴
+### Phase 4: Codegen & Import Updates ✅
 
 Wire the IR's `directReadSource` + `deltaKind` into code generation. First eliminate pre-existing duplication, then add the new branch once.
 
-- 🔴 Task 4.1: Extract `generateReactiveContentSubscription(node: ContentNode, textVar: string, state: CodegenState): string[]` helper from the duplicated reactive-content codegen in `generateChild` (L372–399) and `generateBodyWithReturn` (L498–530). Both callers use the helper and handle text-node creation + placement themselves.
-- 🔴 Task 4.2: Add `textRegion` branch to the extracted helper: when `node.directReadSource && node.dependencies[0].deltaKind === "text"`, emit `textRegion(textVar, node.directReadSource, scopeVar)` instead of `subscribeWithValue`/`subscribeMultiple`
-- 🔴 Task 4.3: Update `collectRequiredImports` to add `"textRegion"` to runtime imports when a content node has `directReadSource` and `dependencies[0].deltaKind === "text"`
-- 🔴 Task 4.4: Add codegen test: direct TextRef read generates `textRegion`
-- 🔴 Task 4.5: Add codegen test: non-direct TextRef read falls back to `subscribeWithValue`
-- 🔴 Task 4.6: Add codegen test: multi-dep expression with TextRef falls back to `subscribeMultiple`
+- ✅ Task 4.1: Extract `generateReactiveContentSubscription(node: ContentNode, textVar: string, state: CodegenState): string[]` helper from the duplicated reactive-content codegen in `generateChild` (L372–399) and `generateBodyWithReturn` (L498–530). Both callers use the helper and handle text-node creation + placement themselves.
+- ✅ Task 4.2: Add `textRegion` branch to the extracted helper: when `node.directReadSource && node.dependencies[0].deltaKind === "text"`, emit `textRegion(textVar, node.directReadSource, scopeVar)` instead of `subscribeWithValue`/`subscribeMultiple`
+- ✅ Task 4.3: Update `collectRequiredImports` to add `"textRegion"` to runtime imports when a content node has `directReadSource` and `dependencies[0].deltaKind === "text"`
+- ✅ Task 4.4: Add codegen test: direct TextRef read generates `textRegion`
+- ✅ Task 4.5: Add codegen test: non-direct TextRef read falls back to `subscribeWithValue`
+- ✅ Task 4.6: Add codegen test: multi-dep expression with TextRef falls back to `subscribeMultiple`
 
 ### Phase 5: Integration Tests 🔴
 

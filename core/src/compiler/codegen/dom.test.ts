@@ -372,6 +372,110 @@ describe("generateDOM", () => {
       expect(code).toContain(".className =")
     })
   })
+
+  describe("text patching with textRegion", () => {
+    it("should generate textRegion for direct TextRef read", () => {
+      // doc.title.get() where doc.title is a TextRef
+      // directReadSource = "doc.title", dep has deltaKind = "text"
+      const directRead = createContent(
+        "doc.title.get()",
+        "reactive",
+        [dep("doc.title", "text")],
+        span(1, 4, 1, 20),
+        "doc.title", // directReadSource
+      )
+      const builder = createBuilder(
+        "p",
+        [],
+        [],
+        [directRead],
+        span(1, 0, 1, 22),
+      )
+
+      const code = generateDOM(builder)
+
+      // Should use textRegion instead of subscribeWithValue
+      expect(code).toContain("textRegion")
+      expect(code).toContain("doc.title")
+      expect(code).not.toContain("subscribeWithValue")
+      expect(code).not.toContain("textContent")
+    })
+
+    it("should generate subscribeWithValue for non-direct TextRef read", () => {
+      // doc.title.get().toUpperCase() — directReadSource is undefined
+      const nonDirectRead = createContent(
+        "doc.title.get().toUpperCase()",
+        "reactive",
+        [dep("doc.title", "text")],
+        span(1, 4, 1, 32),
+        // no directReadSource — this is not a direct read
+      )
+      const builder = createBuilder(
+        "p",
+        [],
+        [],
+        [nonDirectRead],
+        span(1, 0, 1, 34),
+      )
+
+      const code = generateDOM(builder)
+
+      // Should use subscribeWithValue, NOT textRegion
+      expect(code).toContain("subscribeWithValue")
+      expect(code).toContain("textContent")
+      expect(code).not.toContain("textRegion")
+    })
+
+    it("should generate subscribeMultiple for multi-dep expression with TextRef", () => {
+      // doc.title.get() + doc.subtitle.get() — two deps, uses subscribeMultiple
+      const multiDepRead = createContent(
+        "doc.title.get() + ' - ' + doc.subtitle.get()",
+        "reactive",
+        [dep("doc.title", "text"), dep("doc.subtitle", "text")],
+        span(1, 4, 1, 48),
+        // no directReadSource — multi-dep is never a direct read
+      )
+      const builder = createBuilder(
+        "span",
+        [],
+        [],
+        [multiDepRead],
+        span(1, 0, 1, 50),
+      )
+
+      const code = generateDOM(builder)
+
+      // Should use subscribeMultiple, NOT textRegion
+      expect(code).toContain("subscribeMultiple")
+      expect(code).toContain("[doc.title, doc.subtitle]")
+      expect(code).not.toContain("textRegion")
+    })
+
+    it("should generate subscribeWithValue for non-text deltaKind even with directReadSource", () => {
+      // Edge case: directReadSource is set but deltaKind is not "text"
+      // This shouldn't happen in practice, but codegen should handle it safely
+      const replaceRead = createContent(
+        "count.get()",
+        "reactive",
+        [dep("count", "replace")], // deltaKind is "replace", not "text"
+        span(1, 4, 1, 16),
+        "count", // directReadSource is set
+      )
+      const builder = createBuilder(
+        "span",
+        [],
+        [],
+        [replaceRead],
+        span(1, 0, 1, 18),
+      )
+
+      const code = generateDOM(builder)
+
+      // Should use subscribeWithValue because deltaKind is not "text"
+      expect(code).toContain("subscribeWithValue")
+      expect(code).not.toContain("textRegion")
+    })
+  })
 })
 
 // =============================================================================

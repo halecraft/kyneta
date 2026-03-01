@@ -108,6 +108,76 @@ function indented(state: CodegenState): CodegenState {
 }
 
 // =============================================================================
+// Reactive Content Subscription Helper
+// =============================================================================
+
+/**
+ * Generate subscription code for reactive content.
+ *
+ * This is the shared logic for reactive text content subscriptions, used by
+ * both `generateChild` and `generateBodyWithReturn`. The caller is responsible
+ * for creating the text node and handling placement (appendChild vs return).
+ *
+ * Handles three cases:
+ * 1. Direct TextRef read (node.directReadSource && deltaKind === "text"):
+ *    → emit textRegion(textVar, directReadSource, scopeVar)
+ * 2. Single dependency:
+ *    → emit subscribeWithValue(dep, getter, setter, scopeVar)
+ * 3. Multiple dependencies:
+ *    → emit subscribeMultiple([deps], callback, scopeVar)
+ *
+ * @param node - The reactive content node
+ * @param textVar - The variable name of the text node
+ * @param state - The codegen state
+ * @returns Array of code lines for the subscription
+ */
+function generateReactiveContentSubscription(
+  node: ContentNode,
+  textVar: string,
+  state: CodegenState,
+): string[] {
+  const lines: string[] = []
+  const ind = getIndent(state)
+
+  if (node.dependencies.length === 0) {
+    return lines
+  }
+
+  // Check for direct TextRef read optimization
+  if (
+    node.directReadSource &&
+    node.dependencies.length === 1 &&
+    node.dependencies[0].deltaKind === "text"
+  ) {
+    // Direct read of a TextRef — use textRegion for surgical updates
+    lines.push(
+      `${ind}textRegion(${textVar}, ${node.directReadSource}, ${state.scopeVar})`,
+    )
+  } else if (node.dependencies.length === 1) {
+    // Single dependency - use subscribeWithValue
+    const dep = node.dependencies[0]
+    lines.push(
+      `${ind}subscribeWithValue(${dep.source}, () => ${node.source}, (v) => {`,
+    )
+    lines.push(`${ind}${state.indent}${textVar}.textContent = String(v)`)
+    lines.push(`${ind}}, ${state.scopeVar})`)
+  } else {
+    // Multiple dependencies - use subscribeMultiple with initial render
+    const depSources = node.dependencies.map(d => d.source).join(", ")
+    // Set initial value
+    lines.push(`${ind}${textVar}.textContent = String(${node.source})`)
+    // Subscribe to all dependencies
+    lines.push(`${ind}subscribeMultiple([${depSources}], () => {`)
+    lines.push(
+      `${ind}${state.indent}${textVar}.textContent = String(${node.source})`,
+    )
+    lines.push(`${ind}}, ${state.scopeVar})`)
+  }
+
+  return lines
+}
+
+// =============================================================================
 // Content Generation
 // =============================================================================
 
@@ -373,31 +443,8 @@ function generateChild(
         lines.push(`${ind}const ${textVar} = document.createTextNode("")`)
         lines.push(`${ind}${parentVar}.appendChild(${textVar})`)
 
-        // Initial value + subscription
-        if (node.dependencies.length > 0) {
-          if (node.dependencies.length === 1) {
-            // Single dependency - use subscribeWithValue
-            const dep = node.dependencies[0]
-            lines.push(
-              `${ind}subscribeWithValue(${dep.source}, () => ${node.source}, (v) => {`,
-            )
-            lines.push(
-              `${ind}${state.indent}${textVar}.textContent = String(v)`,
-            )
-            lines.push(`${ind}}, ${state.scopeVar})`)
-          } else {
-            // Multiple dependencies - use subscribeMultiple with initial render
-            const depSources = node.dependencies.map(d => d.source).join(", ")
-            // Set initial value
-            lines.push(`${ind}${textVar}.textContent = String(${node.source})`)
-            // Subscribe to all dependencies
-            lines.push(`${ind}subscribeMultiple([${depSources}], () => {`)
-            lines.push(
-              `${ind}${state.indent}${textVar}.textContent = String(${node.source})`,
-            )
-            lines.push(`${ind}}, ${state.scopeVar})`)
-          }
-        }
+        // Generate subscription code using shared helper
+        lines.push(...generateReactiveContentSubscription(node, textVar, state))
       }
       break
     }
@@ -498,34 +545,10 @@ function generateBodyWithReturn(
       } else {
         // Reactive - create text node, will be updated via subscription
         lines.push(`${ind}const ${textVar} = document.createTextNode("")`)
-        if (domNode.dependencies.length > 0) {
-          if (domNode.dependencies.length === 1) {
-            // Single dependency - use subscribeWithValue
-            const dep = domNode.dependencies[0]
-            lines.push(
-              `${ind}subscribeWithValue(${dep.source}, () => ${domNode.source}, (v) => {`,
-            )
-            lines.push(
-              `${ind}${state.indent}${textVar}.textContent = String(v)`,
-            )
-            lines.push(`${ind}}, ${state.scopeVar})`)
-          } else {
-            // Multiple dependencies - use subscribeMultiple with initial render
-            const depSources = domNode.dependencies
-              .map(d => d.source)
-              .join(", ")
-            // Set initial value
-            lines.push(
-              `${ind}${textVar}.textContent = String(${domNode.source})`,
-            )
-            // Subscribe to all dependencies
-            lines.push(`${ind}subscribeMultiple([${depSources}], () => {`)
-            lines.push(
-              `${ind}${state.indent}${textVar}.textContent = String(${domNode.source})`,
-            )
-            lines.push(`${ind}}, ${state.scopeVar})`)
-          }
-        }
+        // Generate subscription code using shared helper
+        lines.push(
+          ...generateReactiveContentSubscription(domNode, textVar, state),
+        )
       }
       lines.push(`${ind}return ${textVar}`)
     }
