@@ -157,19 +157,19 @@ Where `"reactive"` means "value changes at runtime, but the expression is derive
 
 ## Phases and Tasks
 
-### Phase 1: Define ReactiveDelta Type System 🔴
+### Phase 1: Define ReactiveDelta Type System ✅
 
 **Goal**: Establish the delta vocabulary in `@loro-extended/reactive`.
 
-- 🔴 Task 1.1: Define `ReactiveDelta` discriminated union (all variants)
-- 🔴 Task 1.2: Define `DeltaKind` type alias (`ReactiveDelta["type"]`)
-- 🔴 Task 1.3: Define individual op types (`TextDeltaOp`, `ListDeltaOp`, `MapDeltaOp`, `TreeDeltaOp`)
-- 🔴 Task 1.4: Update `ReactiveSubscribe` to `(self, callback: (delta: D) => void) => () => void`
-- 🔴 Task 1.5: Update `Reactive` interface to `Reactive<D extends ReactiveDelta = ReactiveDelta>`
-- 🔴 Task 1.6: Update `isReactive` type guard (unchanged behavior, updated generics)
-- 🔴 Task 1.7: Update `LocalRef` to emit `{ type: "replace" }` in its `[REACTIVE]` callback
-- 🔴 Task 1.8: Add tests for `ReactiveDelta` type discriminants
-- 🔴 Task 1.9: Update existing `LocalRef` tests to assert delta payload
+- ✅ Task 1.1: Define `ReactiveDelta` discriminated union (all variants)
+- ✅ Task 1.2: Define `DeltaKind` type alias (`ReactiveDelta["type"]`)
+- ✅ Task 1.3: Define individual op types (`TextDeltaOp`, `ListDeltaOp`, `MapDeltaOp`, `TreeDeltaOp`)
+- ✅ Task 1.4: Update `ReactiveSubscribe` to `(self, callback: (delta: D) => void) => () => void`
+- ✅ Task 1.5: Update `Reactive` interface to `Reactive<D extends ReactiveDelta = ReactiveDelta>`
+- ✅ Task 1.6: Update `isReactive` type guard (unchanged behavior, updated generics)
+- ✅ Task 1.7: Update `LocalRef` to emit `{ type: "replace" }` in its `[REACTIVE]` callback
+- ✅ Task 1.8: Add tests for `ReactiveDelta` type discriminants (21 new tests)
+- ✅ Task 1.9: Update existing `LocalRef` tests to assert delta payload
 
 ### Phase 2: Update @loro-extended/change [REACTIVE] Implementations 🔴
 
