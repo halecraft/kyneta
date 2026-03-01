@@ -499,9 +499,7 @@ describe("compiler integration - reactive expressions", () => {
   describe("Task 5.2: Reactive text content", () => {
     it("should generate __subscribeWithValue for reactive text", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const count: CounterRef
 
         div(() => {
@@ -521,9 +519,7 @@ describe("compiler integration - reactive expressions", () => {
 
     it("should generate __subscribeWithValue for template literal with reactive content", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const count: CounterRef
 
         div(() => {
@@ -586,9 +582,7 @@ describe("compiler integration - reactive expressions", () => {
   describe("Task 5.3: Reactive attributes", () => {
     it("should generate __subscribe for reactive class attribute", () => {
       const source = `
-        interface TextRef {
-          toString(): string
-        }
+        import { TextRef } from "@loro-extended/change"
         declare const className: TextRef
 
         div({ class: className.toString() }, () => {
@@ -816,9 +810,7 @@ describe("compiler integration - list regions", () => {
   describe("Task 6.1: for-of detection", () => {
     it("should detect for-of loop and create ListRegionNode in IR", () => {
       const source = `
-        interface ListRef<T> {
-          toArray(): T[]
-        }
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
 
         ul(() => {
@@ -843,9 +835,7 @@ describe("compiler integration - list regions", () => {
 
     it("should capture index variable from array destructuring", () => {
       const source = `
-        interface ListRef<T> {
-          entries(): Iterable<[number, T]>
-        }
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
 
         ul(() => {
@@ -866,9 +856,7 @@ describe("compiler integration - list regions", () => {
 
     it("should capture loop body as list region body", () => {
       const source = `
-        interface ListRef<T> {
-          toArray(): T[]
-        }
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
 
         ul(() => {
@@ -890,9 +878,7 @@ describe("compiler integration - list regions", () => {
   describe("Task 6.2: Generated __listRegion call", () => {
     it("should generate __listRegion call with correct parameters", () => {
       const source = `
-        interface ListRef<T> {
-          toArray(): T[]
-        }
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
 
         ul(() => {
@@ -913,9 +899,7 @@ describe("compiler integration - list regions", () => {
 
     it("should generate create handler that returns element", () => {
       const source = `
-        interface ListRef<T> {
-          toArray(): T[]
-        }
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
 
         ul(() => {
@@ -935,9 +919,7 @@ describe("compiler integration - list regions", () => {
 
     it("should use index variable when provided", () => {
       const source = `
-        interface ListRef<T> {
-          entries(): Iterable<[number, T]>
-        }
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
 
         ul(() => {
@@ -957,9 +939,7 @@ describe("compiler integration - list regions", () => {
   describe("Task 6.3: Nested reactive content in list items", () => {
     it("should handle static content in list items", () => {
       const source = `
-        interface ListRef<T> {
-          toArray(): T[]
-        }
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
 
         ul(() => {
@@ -1150,9 +1130,7 @@ describe("compiler integration - conditional regions", () => {
   describe("Task 7.1: if detection", () => {
     it("should detect if statement and create ConditionalNode in IR", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
 
         div(() => {
@@ -1177,9 +1155,7 @@ describe("compiler integration - conditional regions", () => {
 
     it("should capture subscription target from condition", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
 
         div(() => {
@@ -1200,9 +1176,7 @@ describe("compiler integration - conditional regions", () => {
 
     it("should capture condition expression source", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
 
         div(() => {
@@ -1227,9 +1201,7 @@ describe("compiler integration - conditional regions", () => {
   describe("Task 7.2: Generated __conditionalRegion call", () => {
     it("should generate __conditionalRegion call with marker", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
 
         div(() => {
@@ -1247,9 +1219,7 @@ describe("compiler integration - conditional regions", () => {
 
     it("should generate whenTrue handler that returns element", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
 
         div(() => {
@@ -1267,9 +1237,7 @@ describe("compiler integration - conditional regions", () => {
 
     it("should dissolve conditional with identical structure", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
 
         div(() => {
@@ -1299,9 +1267,7 @@ describe("compiler integration - conditional regions", () => {
   describe("Task 7.3: else/else-if chains", () => {
     it("should handle if/else with two branches", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
 
         div(() => {
@@ -1326,9 +1292,7 @@ describe("compiler integration - conditional regions", () => {
 
     it("should handle if/else-if/else with three branches", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
 
         div(() => {
@@ -1360,9 +1324,7 @@ describe("compiler integration - conditional regions", () => {
 
     it("should capture body content for each branch", () => {
       const source = `
-        interface TextRef {
-          toString(): string
-        }
+        import { TextRef } from "@loro-extended/change"
         declare const doc: { status: TextRef }
 
         div(() => {
@@ -1431,9 +1393,7 @@ describe("compiler integration - conditional regions", () => {
 
       // Verify the generated code structure matches what we executed
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
 
         div(() => {
@@ -1475,9 +1435,7 @@ describe("compiler integration - bindings", () => {
   describe("Task 8.1: bind() detection in props", () => {
     it("should detect bind() call and create binding in element IR", () => {
       const source = `
-        interface TextRef {
-          toString(): string
-        }
+        import { TextRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
         declare const doc: { title: TextRef }
 
@@ -1498,9 +1456,7 @@ describe("compiler integration - bindings", () => {
 
     it("should extract ref source from bind() call", () => {
       const source = `
-        interface TextRef {
-          toString(): string
-        }
+        import { TextRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
         declare const doc: { title: TextRef }
 
@@ -1518,9 +1474,7 @@ describe("compiler integration - bindings", () => {
 
     it("should detect checked binding for checkbox", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
         declare const doc: { enabled: CounterRef }
 
@@ -1540,9 +1494,7 @@ describe("compiler integration - bindings", () => {
   describe("Task 8.2: Generated binding code", () => {
     it("should generate __bindTextValue call for value binding", () => {
       const source = `
-        interface TextRef {
-          toString(): string
-        }
+        import { TextRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
         declare const doc: { name: TextRef }
 
@@ -1559,9 +1511,7 @@ describe("compiler integration - bindings", () => {
 
     it("should generate __bindChecked call for checked binding", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
         declare const doc: { active: CounterRef }
 
@@ -1578,9 +1528,7 @@ describe("compiler integration - bindings", () => {
 
     it("should include binding imports when bindings are present", () => {
       const source = `
-        interface TextRef {
-          toString(): string
-        }
+        import { TextRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
         declare const doc: { title: TextRef }
 
@@ -1604,9 +1552,7 @@ describe("compiler integration - bindings", () => {
       // source → IR → codegen (including imports)
 
       const textSource = `
-        interface TextRef {
-          toString(): string
-        }
+        import { TextRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
         declare const doc: { title: TextRef }
 
@@ -1616,9 +1562,7 @@ describe("compiler integration - bindings", () => {
       `
 
       const checkboxSource = `
-        interface CounterRef {
-          get(): number
-        }
+        import { CounterRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
         declare const doc: { enabled: CounterRef }
 
@@ -1659,17 +1603,7 @@ describe("compiler integration - combined scenarios", () => {
   describe("Task 9.4: All patterns working together", () => {
     it("should compile list with reactive content and conditionals", () => {
       const source = `
-        interface ListRef<T> {
-          toArray(): T[]
-          [Symbol.iterator](): Iterator<T>
-        }
-        interface TextRef {
-          toString(): string
-        }
-        interface CounterRef {
-          get(): number
-          value: number
-        }
+        import { ListRef, TextRef, CounterRef } from "@loro-extended/change"
         declare const doc: {
           items: ListRef<{ name: TextRef, done: CounterRef }>
           showCompleted: CounterRef
@@ -1711,13 +1645,7 @@ describe("compiler integration - combined scenarios", () => {
 
     it("should compile form with bindings and reactive display", () => {
       const source = `
-        interface TextRef {
-          toString(): string
-        }
-        interface CounterRef {
-          get(): number
-          value: number
-        }
+        import { TextRef, CounterRef } from "@loro-extended/change"
         declare function bind<T>(ref: T): { __brand: "kinetic:binding", ref: T }
         declare const doc: {
           title: TextRef
@@ -1750,13 +1678,7 @@ describe("compiler integration - combined scenarios", () => {
 
     it("should compile nested lists with reactive items", () => {
       const source = `
-        interface ListRef<T> {
-          toArray(): T[]
-          [Symbol.iterator](): Iterator<T>
-        }
-        interface TextRef {
-          toString(): string
-        }
+        import { ListRef, TextRef } from "@loro-extended/change"
         declare const doc: {
           categories: ListRef<{
             name: TextRef
@@ -1788,14 +1710,7 @@ describe("compiler integration - combined scenarios", () => {
 
     it("should compile conditional with different content types", () => {
       const source = `
-        interface CounterRef {
-          get(): number
-          value: number
-        }
-        interface ListRef<T> {
-          toArray(): T[]
-          [Symbol.iterator](): Iterator<T>
-        }
+        import { CounterRef, ListRef } from "@loro-extended/change"
         declare const doc: {
           mode: CounterRef
           items: ListRef<string>
@@ -1838,9 +1753,7 @@ describe("compiler integration - combined scenarios", () => {
 
     it("should handle static and reactive content mixed", () => {
       const source = `
-        interface TextRef {
-          toString(): string
-        }
+        import { TextRef } from "@loro-extended/change"
         declare const doc: { name: TextRef }
 
         div(() => {

@@ -249,51 +249,44 @@ export function __subscribe(ref: Reactive, handler: () => void, scope: Scope) {
 
 **Note**: Phase 2 compiler detection is blocked until Phase 3 adds `[REACTIVE]` to the change package types. The compiler tests import from `@loro-extended/change` which doesn't have `[REACTIVE]` yet.
 
-### Phase 3: Update @loro-extended/change 🔴
+### Phase 3: Update @loro-extended/change ✅
 
 **Goal**: Loro refs implement Reactive interface from shared package.
 
-**Must be done before Phase 2b** — the compiler tests import real types from `@loro-extended/change`, which need `[REACTIVE]` for structural detection to work.
+- ✅ Task 3.1: Add `@loro-extended/reactive` as dependency
+- ✅ Task 3.2: Add `[REACTIVE]` function to `TextRef` (via TypedRef base class)
+- ✅ Task 3.3: Add `[REACTIVE]` function to `CounterRef` (via TypedRef base class)
+- ✅ Task 3.4: Add `[REACTIVE]` function to `ListRef`, `MovableListRef` (via TypedRef base class)
+- ✅ Task 3.5: Add `[REACTIVE]` function to `RecordRef`, `StructRef` (StructRef via Proxy handler)
+- ✅ Task 3.6: Add `[REACTIVE]` function to `TreeRef` (via TypedRef base class)
+- ✅ Task 3.7: Add `[REACTIVE]` function to `PlainValueRef` (via factory)
+- ✅ Task 3.8: Re-export `REACTIVE` from index (for advanced users)
+- ✅ Task 3.9: Add tests verifying `[REACTIVE]` presence on all ref types (23 tests)
 
-- 🔴 Task 3.1: Add `@loro-extended/reactive` as dependency
-- 🔴 Task 3.2: Add `[REACTIVE]` function to `TextRef`
-- 🔴 Task 3.3: Add `[REACTIVE]` function to `CounterRef`
-- 🔴 Task 3.4: Add `[REACTIVE]` function to `ListRef`, `MovableListRef`
-- 🔴 Task 3.5: Add `[REACTIVE]` function to `RecordRef`, `StructRef`
-- 🔴 Task 3.6: Add `[REACTIVE]` function to `TreeRef`
-- 🔴 Task 3.7: Add `[REACTIVE]` function to `PlainValueRef` (via Proxy handler)
-- 🔴 Task 3.8: Re-export `REACTIVE` from index (for advanced users)
-- 🔴 Task 3.9: Add tests verifying `[REACTIVE]` presence on all ref types
+### Phase 4: Complete Compiler Detection ✅
 
-### Phase 4: Complete Compiler Detection 🔴
+**Goal**: Pure structural detection using `isTypeAssignableTo`. No fallbacks, no hardcoded type names.
 
-**Goal**: Verify compiler detection works with real types; remove any fallbacks.
+- ✅ Task 4.1: Use `skipFileDependencyResolution: true` + manual `resolveAndAddModule` for external packages
+- ✅ Task 4.2: Create `resolveReactiveImports()` to add `@loro-extended/*` declaration files to the project
+- ✅ Task 4.3: Find existing `Reactive` interface in project via `getReactiveInterfaceType()`
+- ✅ Task 4.4: Use `checker.isTypeAssignableTo(candidateType, reactiveType)` for detection
+- ✅ Task 4.5: Cache interface node (not compiler type) to survive TypeChecker invalidation
+- ✅ Task 4.6: Handle union types (reactive if any branch is reactive)
+- ✅ Task 4.7: Exclude `any`/`unknown` from reactive detection
+- ✅ Task 4.8: Update integration tests to import real types from `@loro-extended/change`
+- ✅ Task 4.9: Update analyze tests to share a single `Reactive` interface across mock types
+- ✅ Task 4.10: All 593 kinetic tests passing, all 935 change tests passing
 
-Now that `@loro-extended/change` types have `[REACTIVE]`, the compiler's structural detection should work.
+### Phase 5: Update Runtime Subscribe ⛔ SUPERSEDED
 
-- 🔴 Task 4.1: Verify all transform.test.ts tests pass with structural detection
-- 🔴 Task 4.2: Remove any remaining fallback code if present
-- 🔴 Task 4.3: Add test: custom user type with `[REACTIVE]` is detected
-- 🔴 Task 4.4: Add test: type without `[REACTIVE]` is NOT detected (even if named "TextRef")
+> **Superseded by [delta-driven-reactivity.md](./delta-driven-reactivity.md).**
+> The original Phase 5 proposed updating `__subscribe` to use `ref[REACTIVE](ref, () => void)` — a uniform but delta-unaware callback. The delta-driven plan replaces this with a delta-aware callback (`(delta: ReactiveDelta) => void`) that carries structured change information, enabling O(k) DOM patching for text, lists, maps, and trees.
 
-### Phase 5: Update Runtime Subscribe 🔴
+### Phase 6: Documentation ⛔ SUPERSEDED
 
-**Goal**: Runtime uses `[REACTIVE]` function uniformly.
-
-- 🔴 Task 5.1: Import `REACTIVE`, `Reactive` from `@loro-extended/reactive`
-- 🔴 Task 5.2: Update `__subscribe` to use `ref[REACTIVE](ref, handler)`
-- 🔴 Task 5.3: Remove `loro()` import and usage from subscribe.ts
-- 🔴 Task 5.4: Add runtime tests for function-based subscription
-- 🔴 Task 5.5: Add integration test: LocalRef in conditional region
-### Phase 6: Documentation 🔴
-
-**Goal**: Document the reactive primitive system.
-
-- 🔴 Task 6.1: Add README.md to `packages/reactive/`
-- 🔴 Task 6.2: Add "Reactive Primitives" section to kinetic/TECHNICAL.md
-- 🔴 Task 6.3: Document `LocalRef` usage patterns
-- 🔴 Task 6.4: Document how to create custom reactive types
-- 🔴 Task 6.5: Update change package docs noting `[REACTIVE]` function
+> **Superseded by [delta-driven-reactivity.md](./delta-driven-reactivity.md) Phase 6.**
+> Documentation tasks are covered by the delta-driven plan, which documents the four-level binding-time lattice (`literal < render < reactive < delta`) and the `ReactiveDelta` type system.
 
 ## Tests
 
@@ -930,14 +923,49 @@ This works because:
 
 ### Phase Ordering: Types Before Detection
 
-The compiler detection (Phase 2b) depends on the `@loro-extended/change` types having `[REACTIVE]`. The transform tests use the real filesystem and import real types from `@loro-extended/change`. Until those types have `[REACTIVE]`, the structural detection will fail.
+The compiler detection depends on the `@loro-extended/change` types having `[REACTIVE]`. The transform tests use the real filesystem and import real types from `@loro-extended/change`. Until those types have `[REACTIVE]`, the structural detection will fail.
 
-**Correct order**:
+**Correct order** (validated):
 1. Phase 3: Add `[REACTIVE]` to `@loro-extended/change` types
-2. Phase 4: Verify compiler detection works with real types
+2. Phase 4: Complete compiler detection with real types
 3. Phase 5: Update runtime to use `[REACTIVE]` uniformly
 
-This ordering ensures each phase can be tested in isolation with real dependencies.
+### Manual Module Resolution for ts-morph
+
+The key discovery: ts-morph with `skipFileDependencyResolution: true` allows fast project creation while still supporting full type analysis. The trick is to manually resolve external packages:
+
+```typescript
+const project = new Project({
+  useInMemoryFileSystem: false,
+  skipFileDependencyResolution: true,
+  compilerOptions: { moduleResolution: ts.ModuleResolutionKind.Bundler },
+})
+
+// Manually resolve and add external declaration files
+const resolved = ts.resolveModuleName(
+  "@loro-extended/change",
+  sourceFile.getFilePath(),
+  compilerOptions,
+  project.getModuleResolutionHost()
+).resolvedModule
+
+project.addSourceFileAtPath(resolved.resolvedFileName)
+project.resolveSourceFileDependencies()
+```
+
+This gives us the best of both worlds: fast project creation (no tsconfig loading) and full type analysis of external packages.
+
+### isTypeAssignableTo Works — With Caveats
+
+Using `checker.isTypeAssignableTo(candidateType, reactiveType)` is the correct approach, but with important caveats:
+
+1. **Cache the interface node, not the compiler type.** Calling `resolveSourceFileDependencies()` multiple times invalidates the TypeChecker. Caching the `ts.Type` object makes it stale. Instead, cache the `InterfaceDeclaration` node and call `.getType().compilerType` each time to get a fresh type.
+
+2. **`any` is assignable to everything.** Undeclared identifiers have type `any`, which passes `isTypeAssignableTo`. Explicitly check for and exclude `any` and `unknown`.
+
+3. **Handle unions explicitly.** `LocalRef<T> | null` is not assignable to `Reactive` (because `null` isn't). Check union branches individually.
+
+4. **Find the existing Reactive interface.** Don't create a new probe interface — a re-imported `unique symbol` creates a distinct type. Find the `Reactive` interface that's already in the project's type graph.
 
 ### Hybrid Detection is Wrong
 
@@ -973,6 +1001,12 @@ function isReactiveType(type: Type): boolean {
 3. Ideally, filter subscription events by path for efficiency (optional optimization)
 
 This is more complex than class-based refs but follows the same pattern.
+
+### ts-morph External Type Resolution — Solved
+
+When ts-morph creates a Project without `tsConfigFilePath`, it can parse imports but cannot fully resolve external package types. The TypeChecker returns empty results for properties.
+
+**Solution**: Use `skipFileDependencyResolution: true` and manually resolve + add declaration files using `ts.resolveModuleName()`. This is fast (no tsconfig overhead) and gives full type analysis. See "Manual Module Resolution for ts-morph" above.
 
 ### ts-morph `type.getProperties()` Does NOT Return Symbol-Keyed Properties
 

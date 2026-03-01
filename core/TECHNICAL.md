@@ -335,15 +335,40 @@ ${(() => { if (condition) { let _html = ""; _html += `<p>yes</p>`; return _html 
 
 ## Reactive Detection
 
-The compiler detects reactive types by analyzing TypeScript's type system:
+The compiler detects reactive types structurally using TypeScript's `isTypeAssignableTo`. A type is reactive if it implements the `Reactive` interface from `@loro-extended/reactive`:
 
-1. **Direct ref types**: `TextRef`, `CounterRef`, `ListRef<T>`, etc.
-2. **Method calls on refs**: `doc.title.get()`, `doc.count.value`
-3. **Property access chains**: `doc.items[0].get()`
+```typescript
+// @loro-extended/reactive
+export const REACTIVE = Symbol.for("kinetic:reactive")
+export type ReactiveSubscribe = (self: unknown, callback: () => void) => () => void
+export interface Reactive {
+  readonly [REACTIVE]: ReactiveSubscribe
+}
+```
+
+Detection is implemented in `reactive-detection.ts` and works as follows:
+
+1. **Find the `Reactive` interface** in the project's type graph (cached per project)
+2. **Check `isTypeAssignableTo(candidateType, reactiveType)`** — pure structural typing
+3. **Handle edge cases**: exclude `any`/`unknown`, check union branches individually
+
+This replaces the previous approach of hardcoding type names (`TextRef`, `CounterRef`, etc.). Any type with a `[REACTIVE]` symbol property is now detected — including `LocalRef` for UI-only state and user-defined reactive types.
+
+### Module Resolution
+
+The compiler uses `skipFileDependencyResolution: true` for fast project creation, then manually resolves `@loro-extended/*` packages via `ts.resolveModuleName()` and `project.addSourceFileAtPath()`. This avoids the ~500ms overhead of `tsConfigFilePath` while still enabling full type analysis of external packages.
+
+### Caveats
+
+- **Cache interface nodes, not compiler types.** `resolveSourceFileDependencies()` invalidates the TypeChecker, making cached `ts.Type` objects stale. The interface `InterfaceDeclaration` node is stable.
+- **`any` is assignable to everything.** Undeclared identifiers are `any` and must be explicitly excluded.
+- **Union types need branch-level checking.** `LocalRef<T> | null` is not assignable to `Reactive`, but the `LocalRef<T>` branch is.
+
+### Binding-Time Classification
 
 When a reactive type is detected:
 - Expressions become `ContentValue` with `bindingTime: "reactive"`
-- Loops over `ListRef` become `LoopNode` with `iterableBindingTime: "reactive"`
+- Loops over reactive iterables become `LoopNode` with `iterableBindingTime: "reactive"`
 - Conditionals with reactive conditions become `ConditionalNode` with `subscriptionTarget: string`
 
 Non-reactive equivalents:
@@ -399,18 +424,28 @@ Users don't need to know this distinction — both "just work" with natural Type
 
 ```
 packages/kinetic/src/compiler/
-├── analyze.ts          # AST → IR analysis
-├── analyze.test.ts     # Analysis unit tests
-├── ir.ts               # IR type definitions and factories
-├── ir.test.ts          # IR unit tests
-├── transform.ts        # Orchestrates analysis + codegen
-├── transform.test.ts   # Transform tests
-├── integration.test.ts # End-to-end compilation tests
+├── analyze.ts               # AST → IR analysis (imports isReactiveType)
+├── analyze.test.ts          # Analysis unit tests
+├── reactive-detection.ts    # Reactive type detection via isTypeAssignableTo
+├── ir.ts                    # IR type definitions and factories
+├── ir.test.ts               # IR unit tests
+├── transform.ts             # Orchestrates analysis + codegen + module resolution
+├── transform.test.ts        # Transform tests
+├── integration.test.ts      # End-to-end compilation tests
 └── codegen/
-    ├── dom.ts          # DOM code generation
-    ├── dom.test.ts     # DOM codegen tests
-    ├── html.ts         # HTML code generation
-    └── html.test.ts    # HTML codegen tests
+    ├── dom.ts               # DOM code generation
+    ├── dom.test.ts          # DOM codegen tests
+    ├── html.ts              # HTML code generation
+    └── html.test.ts         # HTML codegen tests
+```
+
+### Cross-Package Dependencies
+
+```
+@loro-extended/reactive       # REACTIVE symbol, Reactive interface, LocalRef
+    ↑
+    ├── @loro-extended/change # Implements Reactive on all TypedRefs
+    └── @loro-extended/kinetic # Re-exports; compiler detects; runtime subscribes
 ```
 
 ## Runtime Dependencies

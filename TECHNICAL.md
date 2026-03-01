@@ -194,6 +194,9 @@ The library uses well-known symbols to provide clean separation between differen
 | `INTERNAL_SYMBOL` | (internal) | Private implementation details |
 | `LORO_SYMBOL` | `loro()` | Access native Loro types directly |
 | `EXT_SYMBOL` | `ext()` | Access loro-extended-specific features |
+| `REACTIVE` | `isReactive()` | Reactive subscribe function (from `@loro-extended/reactive`) |
+
+> **`REACTIVE`** is defined in `@loro-extended/reactive` (not in `@loro-extended/change`) to ensure TypeScript type identity across packages. Both `change` and `kinetic` import the same symbol. Uses `Symbol.for("kinetic:reactive")` for runtime identity. See [packages/kinetic/TECHNICAL.md](./packages/kinetic/TECHNICAL.md) for compiler detection details.
 
 **Design Rationale**: TypedDoc and TypedRef are Proxy objects where property names map to schema fields. Symbols provide a clean namespace for library functionality without polluting the user's schema namespace.
 

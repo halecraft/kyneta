@@ -14,7 +14,8 @@
  * @packageDocumentation
  */
 
-import { type CallExpression, Project, type SourceFile } from "ts-morph"
+import { type CallExpression, Project, type SourceFile, ts } from "ts-morph"
+import { resolveReactiveImports } from "./reactive-detection.js"
 import { CompilerError, KineticErrorCode } from "../errors.js"
 import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
 import { generateElementFactory } from "./codegen/dom.js"
@@ -123,17 +124,24 @@ let sharedProject: Project | null = null
  * find @loro-extended/change, @loro-extended/kinetic, etc. via pnpm
  * workspace symlinks.
  *
- * Key: moduleResolution must be Bundler (100) for pnpm compatibility.
+ * Key configuration:
+ * - moduleResolution: Bundler (100) for pnpm compatibility
+ * - skipFileDependencyResolution: true — we manually resolve external
+ *   packages to avoid loading all of node_modules. This is necessary
+ *   because TypeScript needs the .d.ts files to properly analyze types
+ *   from external packages (like detecting [REACTIVE] properties).
+ *
  * Do NOT use tsConfigFilePath — it's 500ms+ due to loading all files.
  */
 function getProject(): Project {
   if (!sharedProject) {
     sharedProject = new Project({
       useInMemoryFileSystem: false,
+      skipFileDependencyResolution: true, // We manually resolve needed modules
       compilerOptions: {
-        target: 99, // ESNext
-        module: 99, // ESNext
-        moduleResolution: 100, // Bundler — resolves pnpm symlinks correctly
+        target: ts.ScriptTarget.ESNext,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
         strict: true,
         esModuleInterop: true,
         skipLibCheck: true,
@@ -157,6 +165,10 @@ export function __resetProject(): void {
 
 /**
  * Parse source code into a ts-morph SourceFile.
+ *
+ * After creating the source file, this resolves any @loro-extended imports
+ * so that TypeScript can fully analyze external reactive types (detecting
+ * [REACTIVE] properties, etc.).
  */
 function parseSource(source: string, filename: string): SourceFile {
   const project = getProject()
@@ -169,7 +181,14 @@ function parseSource(source: string, filename: string): SourceFile {
     project.removeSourceFile(existing)
   }
 
-  return project.createSourceFile(filename, source, { overwrite: true })
+  const sourceFile = project.createSourceFile(filename, source, {
+    overwrite: true,
+  })
+
+  // Resolve @loro-extended imports so TypeScript can analyze reactive types
+  resolveReactiveImports(project, sourceFile)
+
+  return sourceFile
 }
 
 // =============================================================================

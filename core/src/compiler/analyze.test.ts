@@ -49,31 +49,46 @@ function createSourceFile(
 }
 
 /**
+ * Add the shared reactive type definitions (REACTIVE symbol, Reactive interface).
+ * This must be called before addLoroTypes or addReactiveTypes.
+ */
+function addBaseReactiveTypes(project: Project) {
+  project.createSourceFile(
+    "reactive-base.d.ts",
+    `
+    export const REACTIVE: unique symbol
+    export type ReactiveSubscribe = (self: unknown, callback: () => void) => () => void
+    export interface Reactive {
+      readonly [REACTIVE]: ReactiveSubscribe
+    }
+  `,
+    { overwrite: true },
+  )
+}
+
+/**
  * Add Loro type definitions to the project.
- * These mock types include the [REACTIVE] symbol to match the real implementation.
+ * Imports REACTIVE from the shared base to ensure type identity.
  */
 function addLoroTypes(project: Project) {
+  addBaseReactiveTypes(project)
   project.createSourceFile(
     "loro-types.d.ts",
     `
-    declare const REACTIVE: unique symbol
-    type ReactiveSubscribe = (self: unknown, callback: () => void) => () => void
+    import { REACTIVE, ReactiveSubscribe, Reactive } from "./reactive-base"
 
-    export interface TextRef {
-      readonly [REACTIVE]: ReactiveSubscribe
+    export interface TextRef extends Reactive {
       insert(pos: number, text: string): void
       delete(pos: number, len: number): void
       toString(): string
     }
 
-    export interface CounterRef {
-      readonly [REACTIVE]: ReactiveSubscribe
+    export interface CounterRef extends Reactive {
       get(): number
       increment(n: number): void
     }
 
-    export interface ListRef<T> {
-      readonly [REACTIVE]: ReactiveSubscribe
+    export interface ListRef<T> extends Reactive {
       push(item: T): void
       insert(index: number, item: T): void
       delete(index: number, len?: number): void
@@ -82,8 +97,7 @@ function addLoroTypes(project: Project) {
       length: number
     }
 
-    export interface StructRef<T> {
-      readonly [REACTIVE]: ReactiveSubscribe
+    export interface StructRef<T> extends Reactive {
       get<K extends keyof T>(key: K): T[K]
     }
   `,
@@ -92,17 +106,16 @@ function addLoroTypes(project: Project) {
 }
 
 /**
- * Add reactive type definitions (REACTIVE symbol and Reactive interface) to the project.
+ * Add reactive type definitions (LocalRef, etc.) to the project.
+ * Imports REACTIVE from the shared base to ensure type identity.
  */
 function addReactiveTypes(project: Project) {
+  addBaseReactiveTypes(project)
   project.createSourceFile(
     "reactive-types.d.ts",
     `
-    export const REACTIVE: unique symbol
-    export type ReactiveSubscribe = (self: unknown, callback: () => void) => () => void
-    export interface Reactive {
-      readonly [REACTIVE]: ReactiveSubscribe
-    }
+    import { REACTIVE, ReactiveSubscribe, Reactive } from "./reactive-base"
+    export { REACTIVE, ReactiveSubscribe, Reactive }
     export class LocalRef<T> implements Reactive {
       readonly [REACTIVE]: ReactiveSubscribe
       constructor(initial: T)
