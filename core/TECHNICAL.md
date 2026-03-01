@@ -36,6 +36,36 @@ type BindingTime = "literal" | "render" | "reactive"
 
 This classification enables **binding-time promotion**: when branches diverge only in values, literals and render-time values can be promoted to reactive with ternary expressions.
 
+### Delta Kind: An Orthogonal Property
+
+For reactive dependencies, the compiler also tracks **delta kind** — what kind of structured change information the source provides:
+
+```typescript
+type DeltaKind = "replace" | "text" | "list" | "map" | "tree"
+```
+
+Delta kind is **orthogonal to binding time**, not a fourth level. All reactive values change at runtime (same *when*), but they differ in *how much structural information* accompanies the notification:
+
+```
+literal  <  render  <  reactive
+                         ├── replace (re-read + replace)
+                         ├── text (character-level patch)
+                         ├── list (structural list ops)
+                         ├── map (key-level patch)
+                         └── tree (hierarchical ops)
+```
+
+Each reactive dependency is represented as:
+
+```typescript
+interface Dependency {
+  source: string      // e.g., "doc.title", "doc.items"
+  deltaKind: DeltaKind
+}
+```
+
+The `deltaKind` is an **optimization hint** that codegen can dispatch on. When the expression is a "direct read" and the delta kind is rich (text, list, etc.), codegen can emit specialized patch code. Otherwise it falls back to replace semantics. The fallback is always safe.
+
 ### ContentValue: Unified Content Representation
 
 All content (text, attribute values, etc.) is represented by a single type:
@@ -45,12 +75,12 @@ interface ContentValue {
   kind: "content"
   source: string              // JSON string for literals, JS expression otherwise
   bindingTime: BindingTime
-  dependencies: string[]      // Reactive deps (e.g., ["doc.count"])
+  dependencies: Dependency[]  // Reactive deps with delta kind
   span: SourceSpan
 }
 ```
 
-This replaces the previous `TextNode | ExpressionNode` union, making binding-time explicit and eliminating cross-product complexity in tree merge logic.
+This replaces the previous `TextNode | ExpressionNode` union, making binding-time explicit and eliminating cross-product complexity in tree merge logic. Each dependency now carries both the source expression and its delta kind, enabling codegen to make optimization decisions.
 
 ### Slots: Trackable DOM Handles
 
@@ -453,15 +483,64 @@ packages/kinetic/src/compiler/
 
 ## Runtime Dependencies
 
-Generated code calls these runtime functions:
+Generated code calls these runtime functions from `@loro-extended/kinetic`:
 
-- `__subscribeWithValue(ref, getter, callback, scope)` — Reactive subscriptions
+- `__subscribe(ref, handler, scope)` — Low-level reactive subscription (delta-aware)
+- `__subscribeWithValue(ref, getter, callback, scope)` — Subscribe + immediate call with value
 - `__listRegion(parent, list, handlers, scope)` — Delta-driven list rendering
 - `__conditionalRegion(marker, target, condition, handlers, scope)` — Reactive conditionals
+
+And from `@loro-extended/kinetic/loro` (Loro-specific):
+
 - `__bindTextValue(input, ref, scope)` — Two-way text binding
 - `__bindChecked(input, ref, scope)` — Two-way checkbox binding
+- `__bindNumericValue(input, ref, scope)` — Two-way numeric binding
 
 All runtime functions accept a `scope` parameter for cleanup tracking.
+
+### Delta-Aware Subscription
+
+The core `__subscribe` function uses the `[REACTIVE]` symbol from `@loro-extended/reactive`:
+
+```typescript
+function __subscribe(
+  ref: unknown,
+  handler: (delta: ReactiveDelta) => void,
+  scope: Scope,
+): SubscriptionId {
+  if (!isReactive(ref)) {
+    throw new Error("__subscribe called with non-reactive value")
+  }
+  const unsubscribe = ref[REACTIVE](ref, handler)
+  scope.onDispose(() => unsubscribe())
+  return id
+}
+```
+
+The handler receives a `ReactiveDelta` describing what changed. This enables:
+- **List regions**: Extract `delta.ops` for O(k) DOM updates
+- **Text content**: (Future) Use `insertData`/`deleteData` for surgical text updates
+- **Fallback**: For `"replace"` deltas or complex expressions, re-read the entire value
+
+### Loro-Agnostic Core Runtime
+
+The core runtime (`@loro-extended/kinetic`) has **no imports from `@loro-extended/change`**. It depends only on `@loro-extended/reactive` for the `REACTIVE` symbol and delta types. This enables:
+
+1. **Custom reactive types** — `LocalRef` and user-defined reactives work without Loro
+2. **Future extensibility** — Other CRDT libraries could provide their own bindings
+3. **Clear dependency graph** — Core runtime is minimal and portable
+
+### Loro Bindings Subpath
+
+Two-way bindings (`bind:value`, `bind:checked`) require direct Loro container access for mutations. They live in a separate subpath:
+
+```typescript
+// Generated code for components with bindings:
+import { __subscribe } from "@loro-extended/kinetic"
+import { __bindTextValue } from "@loro-extended/kinetic/loro"
+```
+
+The binding functions use `loro()` to access raw Loro containers for write operations, while still using `__subscribe` (via `[REACTIVE]`) for the read/subscribe side.
 
 ### List Region Architecture
 
@@ -469,10 +548,27 @@ The `__listRegion` runtime follows **Functional Core / Imperative Shell** patter
 
 **Functional Core** (pure, testable):
 - `planInitialRender(listRef)` → `ListRegionOp<T>[]`
-- `planDeltaOps(listRef, event)` → `ListRegionOp<T>[]`
+- `planDeltaOps(listRef, deltaOps: ListDeltaOp[])` → `ListRegionOp<T>[]`
 
 **Imperative Shell** (DOM manipulation):
 - `executeOp(parent, state, handlers, op)` — applies single operation
+
+The `__listRegion` subscribe callback receives `ReactiveDelta` and dispatches:
+
+```typescript
+__subscribe(listRef, (delta: ReactiveDelta) => {
+  if (delta.type === "list") {
+    // O(k) update where k = number of changed items
+    const ops = planDeltaOps(state.listRef, delta.ops)
+    executeOps(parent, state, handlers, ops)
+  } else {
+    // Fallback: full re-render for "replace" or other delta types
+    clearAll(state)
+    const ops = planInitialRender(state.listRef)
+    executeOps(parent, state, handlers, ops)
+  }
+}, scope)
+```
 
 Both planning functions use `listRef.get(index)` to obtain refs, ensuring
 handlers always receive `PlainValueRef<T>` for value shapes. This enables
@@ -487,9 +583,10 @@ for (const itemRef of doc.items) {
 
 **Key design decisions:**
 1. Use `listRef.get(index)` instead of `.toArray()` for ref preservation
-2. Delta inserts use `listRef.get(index)` (not raw event values)
+2. Delta inserts use count only — `listRef.get(index)` fetches actual values
 3. Store `listRef` in state for delta handling
-4. HTML codegen uses `[...listSource]` (iterator returns refs)
+4. Non-list deltas (e.g., `"replace"`) trigger full re-render as fallback
+5. HTML codegen uses `[...listSource]` (iterator returns refs)
 
 ### Region Algebra
 

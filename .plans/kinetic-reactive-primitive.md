@@ -286,7 +286,7 @@ export function __subscribe(ref: Reactive, handler: () => void, scope: Scope) {
 ### Phase 6: Documentation ⛔ SUPERSEDED
 
 > **Superseded by [delta-driven-reactivity.md](./delta-driven-reactivity.md) Phase 6.**
-> Documentation tasks are covered by the delta-driven plan, which documents the four-level binding-time lattice (`literal < render < reactive < delta`) and the `ReactiveDelta` type system.
+> Documentation tasks are covered by the delta-driven plan, which documents the three-level binding-time lattice (`literal < render < reactive`) with delta kind as an **orthogonal property** on reactive dependencies, and the `ReactiveDelta` type system.
 
 ## Tests
 

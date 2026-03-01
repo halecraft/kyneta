@@ -198,6 +198,29 @@ The library uses well-known symbols to provide clean separation between differen
 
 > **`REACTIVE`** is defined in `@loro-extended/reactive` (not in `@loro-extended/change`) to ensure TypeScript type identity across packages. Both `change` and `kinetic` import the same symbol. Uses `Symbol.for("kinetic:reactive")` for runtime identity. See [packages/kinetic/TECHNICAL.md](./packages/kinetic/TECHNICAL.md) for compiler detection details.
 
+#### REACTIVE Callback Signature
+
+The `[REACTIVE]` property has type `ReactiveSubscribe<D>`:
+
+```typescript
+type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> = (
+  self: unknown,
+  callback: (delta: D) => void,
+) => () => void
+```
+
+The callback receives a **delta** describing what changed, not just a void notification. Delta types:
+
+| Delta Kind | Emitted By | DOM Optimization |
+|------------|------------|------------------|
+| `"replace"` | `CounterRef`, `LocalRef`, `PlainValueRef` | Re-read entire value |
+| `"text"` | `TextRef` | Character-level patches |
+| `"list"` | `ListRef`, `MovableListRef` | O(k) insert/delete |
+| `"map"` | `RecordRef`, `StructRef` | Update changed keys only |
+| `"tree"` | `TreeRef` | Structural tree updates |
+
+The generic parameter `D` allows compile-time inference of which delta kind a type emits. The Kinetic compiler uses this to determine optimization opportunities.
+
 **Design Rationale**: TypedDoc and TypedRef are Proxy objects where property names map to schema fields. Symbols provide a clean namespace for library functionality without polluting the user's schema namespace.
 
 ### Distinguishing TypedDocs from Refs

@@ -271,20 +271,20 @@ Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation t
 - ✅ Task 5.14: Add integration test: component with `bind:value` imports from `kinetic/loro` (covered by existing tests)
 - ✅ Task 5.15: Verify all 602+ kinetic tests pass
 
-### Phase 6: Documentation 🔴
+### Phase 6: Documentation ✅
 
 **Goal**: Document the delta-driven reactivity model and the `kinetic/loro` subpath architecture.
 
-- 🔴 Task 6.1: Update `packages/reactive/README.md` with `ReactiveDelta` types and contract
-- 🔴 Task 6.2: Update `packages/kinetic/TECHNICAL.md` — update "Binding-Time Analysis" section with delta kind as orthogonal property
+- ✅ Task 6.1: Update `packages/reactive/README.md` with `ReactiveDelta` types and contract
+- ✅ Task 6.2: Update `packages/kinetic/TECHNICAL.md` — update "Binding-Time Analysis" section with delta kind as orthogonal property
 - ✅ Task 6.3: ~~Update `packages/kinetic/TECHNICAL.md` — update "Reactive Detection" section~~ (done in compiler fix commit)
-- 🔴 Task 6.4: Update `packages/kinetic/TECHNICAL.md` — update "Runtime Dependencies" for delta-aware subscribe
-- 🔴 Task 6.5: Update `packages/kinetic/TECHNICAL.md` — document `kinetic/loro` subpath and binding architecture
-- 🔴 Task 6.6: Update `packages/change/TECHNICAL.md` — document `reactive-bridge.ts` and delta translation
-- 🔴 Task 6.7: Update root `TECHNICAL.md` — update symbol table for `REACTIVE` with delta callback
-- 🔴 Task 6.8: Document how to create custom reactive types with delta support
-- 🔴 Task 6.9: Update `kinetic-reactive-primitive.md` — mark Phases 5–6 as superseded by this plan
-- 🔴 Task 6.10: Add `packages/kinetic/src/loro/README.md` explaining Loro-specific bindings
+- ✅ Task 6.4: Update `packages/kinetic/TECHNICAL.md` — update "Runtime Dependencies" for delta-aware subscribe
+- ✅ Task 6.5: Update `packages/kinetic/TECHNICAL.md` — document `kinetic/loro` subpath and binding architecture
+- ✅ Task 6.6: Update `packages/change/TECHNICAL.md` — document `reactive-bridge.ts` and delta translation
+- ✅ Task 6.7: Update root `TECHNICAL.md` — update symbol table for `REACTIVE` with delta callback
+- ✅ Task 6.8: Document how to create custom reactive types with delta support (in reactive README)
+- ✅ Task 6.9: Update `kinetic-reactive-primitive.md` — mark Phases 5–6 as superseded by this plan
+- ✅ Task 6.10: Add `packages/kinetic/src/loro/README.md` explaining Loro-specific bindings
 
 ## Tests
 
