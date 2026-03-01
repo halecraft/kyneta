@@ -38,6 +38,11 @@
       "import": "./dist/loro/index.js",
       "default": "./dist/loro/index.js"
     },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js",
+      "default": "./dist/runtime/index.js"
+    },
     "./types/elements": {
       "types": "./src/types/elements.d.ts"
     },

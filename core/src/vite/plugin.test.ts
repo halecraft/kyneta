@@ -234,7 +234,7 @@ describe("Vite Plugin", () => {
         id: string,
       ) => { code: string } | null
 
-      // Source with a for-of loop that needs __listRegion
+      // Source with a for-of loop that needs listRegion
       const source = `
         import type { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
@@ -248,9 +248,9 @@ describe("Vite Plugin", () => {
 
       const result = transform(source, "component.ts")
 
-      // Should have __listRegion import
-      expect(result?.code).toContain("__listRegion")
-      expect(result?.code).toContain('@loro-extended/kinetic"')
+      // Should have listRegion import from /runtime
+      expect(result?.code).toContain("listRegion")
+      expect(result?.code).toContain('@loro-extended/kinetic/runtime"')
     })
 
     it("should merge imports with existing kinetic imports", () => {
@@ -273,16 +273,10 @@ describe("Vite Plugin", () => {
 
       expect(result).not.toBeNull()
 
-      // Should have exactly one kinetic import declaration
-      const importMatches =
-        result?.code.match(
-          /import\s*\{[^}]+\}\s*from\s*["']@loro-extended\/kinetic["']/g,
-        ) || []
-      expect(importMatches.length).toBe(1)
-
-      // Should still have the original imports
+      // Original kinetic import should still be there
       expect(result?.code).toContain("mount")
       expect(result?.code).toContain("Scope")
+      expect(result?.code).toContain('@loro-extended/kinetic"')
     })
 
     it("should not add imports for static-only builders", () => {
@@ -302,11 +296,11 @@ describe("Vite Plugin", () => {
 
       const result = transform(source, "/path/to/file.ts")
 
-      // Should not have __subscribe or other runtime imports
+      // Should not have subscribe or other runtime imports
       // (static content doesn't need subscriptions)
-      expect(result?.code).not.toContain("__subscribe")
-      expect(result?.code).not.toContain("__listRegion")
-      expect(result?.code).not.toContain("__conditionalRegion")
+      expect(result?.code).not.toContain("subscribe")
+      expect(result?.code).not.toContain("listRegion")
+      expect(result?.code).not.toContain("conditionalRegion")
     })
   })
 

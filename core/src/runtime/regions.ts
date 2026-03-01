@@ -38,7 +38,7 @@ import type {
   Slot,
 } from "../types.js"
 import type { Scope } from "./scope.js"
-import { __subscribe } from "./subscribe.js"
+import { __subscribe as subscribe } from "./subscribe.js"
 
 // =============================================================================
 // Fragment Handling Helper
@@ -432,7 +432,7 @@ export function __listRegion<T>(
   executeOps(parent, state, handlers, initialOps)
 
   // Subscribe to changes
-  __subscribe(
+  subscribe(
     listRef,
     (delta: ReactiveDelta) => {
       // Only process list deltas — other delta types trigger full re-render
@@ -632,7 +632,7 @@ export function __conditionalRegion(
   updateConditionalRegion(parent, marker, state, getCondition, handlers)
 
   // Subscribe to changes
-  __subscribe(
+  subscribe(
     conditionRef,
     () => {
       updateConditionalRegion(parent, marker, state, getCondition, handlers)

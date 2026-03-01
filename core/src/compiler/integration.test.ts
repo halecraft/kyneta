@@ -15,20 +15,21 @@ import { createTypedDoc, loro, Shape } from "@loro-extended/change"
 import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
 
-import { __conditionalRegion, __listRegion } from "../runtime/regions.js"
+import {
+  conditionalRegion,
+  listRegion,
+  subscribe,
+  subscribeMultiple,
+  subscribeWithValue,
+  __activeSubscriptions,
+  __getActiveSubscriptionCount,
+  __resetSubscriptionIdCounter,
+} from "../runtime/index.js"
 import {
   __resetScopeIdCounter,
   __setRootScope,
   Scope,
 } from "../runtime/scope.js"
-import {
-  __activeSubscriptions,
-  __getActiveSubscriptionCount,
-  __resetSubscriptionIdCounter,
-  __subscribe,
-  __subscribeMultiple,
-  __subscribeWithValue,
-} from "../runtime/subscribe.js"
 import {
   assertMaxMutations,
   createCountingContainer,
@@ -498,7 +499,7 @@ describe("compiler integration - reactive expressions", () => {
   })
 
   describe("Task 5.2: Reactive text content", () => {
-    it("should generate __subscribeWithValue for reactive text", () => {
+    it("should generate subscribeWithValue for reactive text", () => {
       const source = `
         import { CounterRef } from "@loro-extended/change"
         declare const count: CounterRef
@@ -514,11 +515,11 @@ describe("compiler integration - reactive expressions", () => {
       expect(result.ir[0].isReactive).toBe(true)
 
       // Should generate subscription call
-      expect(result.code).toContain("__subscribeWithValue")
+      expect(result.code).toContain("subscribeWithValue")
       expect(result.code).toContain("count")
     })
 
-    it("should generate __subscribeWithValue for template literal with reactive content", () => {
+    it("should generate subscribeWithValue for template literal with reactive content", () => {
       const source = `
         import { CounterRef } from "@loro-extended/change"
         declare const count: CounterRef
@@ -531,7 +532,7 @@ describe("compiler integration - reactive expressions", () => {
       const result = transformSource(source, { target: "dom" })
 
       expect(result.ir[0].isReactive).toBe(true)
-      expect(result.code).toContain("__subscribeWithValue")
+      expect(result.code).toContain("subscribeWithValue")
       expect(result.code).toContain("Count:")
     })
 
@@ -555,7 +556,7 @@ describe("compiler integration - reactive expressions", () => {
       div.appendChild(p)
 
       // Subscribe (simulating compiled code)
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.count,
         () => doc.count.get(),
         v => {
@@ -581,7 +582,7 @@ describe("compiler integration - reactive expressions", () => {
   })
 
   describe("Task 5.3: Reactive attributes", () => {
-    it("should generate __subscribe for reactive class attribute", () => {
+    it("should generate subscribe for reactive class attribute", () => {
       const source = `
         import { TextRef } from "@loro-extended/change"
         declare const className: TextRef
@@ -594,7 +595,7 @@ describe("compiler integration - reactive expressions", () => {
       const result = transformSource(source, { target: "dom" })
 
       expect(result.ir[0].isReactive).toBe(true)
-      expect(result.code).toContain("__subscribe")
+      expect(result.code).toContain("subscribe")
       expect(result.code).toContain("className")
     })
 
@@ -614,7 +615,7 @@ describe("compiler integration - reactive expressions", () => {
       div.className = doc.activeCount.get() > 0 ? "active" : "inactive"
 
       // Subscribe (simulating compiled code)
-      __subscribe(
+      subscribe(
         doc.activeCount,
         () => {
           div.className = doc.activeCount.get() > 0 ? "active" : "inactive"
@@ -647,7 +648,7 @@ describe("compiler integration - reactive expressions", () => {
       const textNode = document.createTextNode("")
       button.appendChild(textNode)
 
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.clicks,
         () => `Clicks: ${doc.clicks.get()}`,
         v => {
@@ -683,7 +684,7 @@ describe("compiler integration - reactive expressions", () => {
       const textNode = document.createTextNode("")
       h1.appendChild(textNode)
 
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.title,
         () => doc.title.toString(),
         v => {
@@ -713,7 +714,7 @@ describe("compiler integration - reactive expressions", () => {
       const scope = new Scope("test")
       const textNode = document.createTextNode("")
 
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.value,
         () => doc.value.get(),
         v => {
@@ -751,7 +752,7 @@ describe("compiler integration - reactive expressions", () => {
       const lastNameNode = document.createTextNode("")
       const fullNameNode = document.createTextNode("")
 
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.firstName,
         () => doc.firstName.toString(),
         v => {
@@ -760,7 +761,7 @@ describe("compiler integration - reactive expressions", () => {
         scope,
       )
 
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.lastName,
         () => doc.lastName.toString(),
         v => {
@@ -773,8 +774,8 @@ describe("compiler integration - reactive expressions", () => {
       const updateFullName = () => {
         fullNameNode.textContent = `${doc.firstName.toString()} ${doc.lastName.toString()}`
       }
-      __subscribe(doc.firstName, updateFullName, scope)
-      __subscribe(doc.lastName, updateFullName, scope)
+      subscribe(doc.firstName, updateFullName, scope)
+      subscribe(doc.lastName, updateFullName, scope)
       updateFullName() // Initial value
 
       expect(__getActiveSubscriptionCount()).toBe(4)
@@ -794,7 +795,7 @@ describe("compiler integration - reactive expressions", () => {
       expect(__getActiveSubscriptionCount()).toBe(0)
     })
 
-    it("should use __subscribeMultiple for expressions with multiple dependencies", () => {
+    it("should use subscribeMultiple for expressions with multiple dependencies", () => {
       const schema = Shape.doc({
         firstName: Shape.text(),
         lastName: Shape.text(),
@@ -810,8 +811,8 @@ describe("compiler integration - reactive expressions", () => {
       // Set initial value
       fullNameNode.textContent = `${doc.firstName.toString()} ${doc.lastName.toString()}`
 
-      // Subscribe to both dependencies with a single __subscribeMultiple call
-      __subscribeMultiple(
+      // Subscribe to both dependencies with a single subscribeMultiple call
+      subscribeMultiple(
         [doc.firstName, doc.lastName],
         () => {
           fullNameNode.textContent = `${doc.firstName.toString()} ${doc.lastName.toString()}`
@@ -921,8 +922,8 @@ describe("compiler integration - list regions", () => {
     })
   })
 
-  describe("Task 6.2: Generated __listRegion call", () => {
-    it("should generate __listRegion call with correct parameters", () => {
+  describe("Task 6.2: Generated listRegion call", () => {
+    it("should generate listRegion call with correct parameters", () => {
       const source = `
         import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
@@ -936,7 +937,7 @@ describe("compiler integration - list regions", () => {
 
       const result = transformSource(source, { target: "dom" })
 
-      expect(result.code).toContain("__listRegion")
+      expect(result.code).toContain("listRegion")
       expect(result.code).toContain("items")
       expect(result.code).toContain("create:")
       expect(result.code).toContain("(item, _index)")
@@ -1016,7 +1017,7 @@ describe("compiler integration - list regions", () => {
       const scope = new Scope("test")
       const ul = document.createElement("ul")
 
-      __listRegion(
+      listRegion(
         ul,
         doc.items,
         {
@@ -1052,7 +1053,7 @@ describe("compiler integration - list regions", () => {
 
       const scope = new Scope("test")
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -1094,7 +1095,7 @@ describe("compiler integration - list regions", () => {
 
       const scope = new Scope("test")
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -1135,7 +1136,7 @@ describe("compiler integration - list regions", () => {
       const scope = new Scope("test")
       const ul = document.createElement("ul")
 
-      __listRegion(
+      listRegion(
         ul,
         doc.items,
         {
@@ -1247,8 +1248,8 @@ describe("compiler integration - conditional regions", () => {
     })
   })
 
-  describe("Task 7.2: Generated __conditionalRegion call", () => {
-    it("should generate __conditionalRegion call with marker", () => {
+  describe("Task 7.2: Generated conditionalRegion call", () => {
+    it("should generate conditionalRegion call with marker", () => {
       const source = `
         import { CounterRef } from "@loro-extended/change"
         declare const doc: { count: CounterRef }
@@ -1262,7 +1263,7 @@ describe("compiler integration - conditional regions", () => {
 
       const result = transformSource(source, { target: "dom" })
 
-      expect(result.code).toContain("__conditionalRegion")
+      expect(result.code).toContain("conditionalRegion")
       expect(result.code).toContain('document.createComment("kinetic:if")')
     })
 
@@ -1300,10 +1301,10 @@ describe("compiler integration - conditional regions", () => {
 
       const result = transformSource(source, { target: "dom" })
 
-      // Should dissolve - no __conditionalRegion call or handlers
+      // Should dissolve - no conditionalRegion call or handlers
       expect(result.code).not.toContain("whenTrue")
       expect(result.code).not.toContain("whenFalse")
-      expect(result.code).not.toContain("__conditionalRegion(")
+      expect(result.code).not.toContain("conditionalRegion(")
 
       // Should have direct element creation with ternary
       expect(result.code).toContain('createElement("p")')
@@ -1397,7 +1398,7 @@ describe("compiler integration - conditional regions", () => {
     })
   })
 
-  // Note: Runtime behavior tests for __conditionalRegion and __staticConditionalRegion
+  // Note: Runtime behavior tests for conditionalRegion and __staticConditionalRegion
   // are in regions.test.ts. This section tests compiler integration only.
 
   describe("Task 7.4: Compile-and-execute integration", () => {
@@ -1423,7 +1424,7 @@ describe("compiler integration - conditional regions", () => {
       container.appendChild(p)
 
       // Subscribe to reactive content
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.count,
         () => (doc.count.get() > 0 ? "Has items" : "Empty"),
         v => {
@@ -1455,8 +1456,8 @@ describe("compiler integration - conditional regions", () => {
       `
       const result = transformSource(source, { target: "dom" })
 
-      // The compiled code should be dissolved (no __conditionalRegion call)
-      expect(result.code).not.toContain("__conditionalRegion(")
+      // The compiled code should be dissolved (no conditionalRegion call)
+      expect(result.code).not.toContain("conditionalRegion(")
       expect(result.code).not.toContain("whenTrue")
       expect(result.code).not.toContain("whenFalse")
 
@@ -1682,10 +1683,10 @@ describe("compiler integration - combined scenarios", () => {
       expect(result.ir.length).toBe(1)
 
       // Should contain list region
-      expect(result.code).toContain("__listRegion")
+      expect(result.code).toContain("listRegion")
 
       // Should contain conditional region
-      expect(result.code).toContain("__conditionalRegion")
+      expect(result.code).toContain("conditionalRegion")
 
       // Should have subscription calls for reactive content
       expect(result.code).toContain("doc.showCompleted")
@@ -1753,7 +1754,7 @@ describe("compiler integration - combined scenarios", () => {
       const result = transformSource(source, { target: "dom" })
 
       // Should have nested list regions (at least 2 - may include import statement)
-      const listRegionCount = (result.code.match(/__listRegion/g) || []).length
+      const listRegionCount = (result.code.match(/listRegion/g) || []).length
       expect(listRegionCount).toBeGreaterThanOrEqual(2) // outer and inner lists
     })
 
@@ -1797,7 +1798,7 @@ describe("compiler integration - combined scenarios", () => {
       }
 
       // Should have list regions inside branches
-      expect(result.code).toContain("__listRegion")
+      expect(result.code).toContain("listRegion")
     })
 
     it("should handle static and reactive content mixed", () => {
@@ -1857,7 +1858,7 @@ describe("compiler integration - combined scenarios", () => {
       const ul = document.createElement("ul")
 
       // Manually construct what compiled code would generate
-      __listRegion(
+      listRegion(
         ul,
         doc.items,
         {
@@ -1898,7 +1899,7 @@ describe("compiler integration - combined scenarios", () => {
       container.appendChild(h1)
 
       // Subscribe to title changes
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.title,
         () => doc.title.toString(),
         value => {
@@ -1911,7 +1912,7 @@ describe("compiler integration - combined scenarios", () => {
       const marker = document.createComment("kinetic:if")
       container.appendChild(marker)
 
-      __conditionalRegion(
+      conditionalRegion(
         marker,
         doc.showDetails,
         () => loro(doc.showDetails).value > 0,
@@ -1976,7 +1977,7 @@ describe("compiler integration - arbitrary statements", () => {
 
       // Simulate what the compiled code would do - with a statement inside the create callback
       // This tests that statements (like const upperItem = ...) are preserved
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -2019,7 +2020,7 @@ describe("compiler integration - arbitrary statements", () => {
 
       // The generated code should contain the variable declaration
       expect(result.code).toContain("const item = itemRef.get()")
-      expect(result.code).toContain("__listRegion")
+      expect(result.code).toContain("listRegion")
     })
 
     it("should generate correct HTML code for variable declaration in for-of", () => {
@@ -2269,7 +2270,7 @@ describe("compiler integration - arbitrary statements", () => {
       //     const item = itemRef.get()
       //     li(item)
       //   }
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {
@@ -2310,7 +2311,7 @@ describe("compiler integration - arbitrary statements", () => {
       // Capture the ref for later modification
       const capturedRefs: Array<{ get(): string; set(v: string): void }> = []
 
-      __listRegion(
+      listRegion(
         container,
         doc.items,
         {

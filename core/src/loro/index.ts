@@ -12,17 +12,17 @@
  * @example
  * ```ts
  * // In compiled code:
- * import { __subscribe } from "@loro-extended/kinetic"
- * import { __bindTextValue } from "@loro-extended/kinetic/loro"
+ * import { subscribe } from "@loro-extended/kinetic/runtime"
+ * import { bindTextValue } from "@loro-extended/kinetic/loro"
  * ```
  *
  * @packageDocumentation
  */
 
 export {
-  __bindChecked,
-  __bindNumericValue,
-  __bindTextValue,
+  __bindChecked as bindChecked,
+  __bindNumericValue as bindNumericValue,
+  __bindTextValue as bindTextValue,
   bind,
   isBinding,
 } from "./binding.js"

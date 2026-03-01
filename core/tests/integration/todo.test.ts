@@ -24,13 +24,13 @@ import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
-  __conditionalRegion,
-  __listRegion,
+  conditionalRegion,
+  listRegion,
   __resetScopeIdCounter,
-  __subscribeWithValue,
+  subscribeWithValue,
   Scope,
 } from "../../src/index.js"
-import { __bindTextValue } from "../../src/loro/index.js"
+import { bindTextValue } from "../../src/loro/index.js"
 import { __resetSubscriptionIdCounter } from "../../src/runtime/subscribe.js"
 import {
   assertMaxMutations,
@@ -89,7 +89,7 @@ function renderTodoApp(doc: TodoDoc, container: Element, scope: Scope): void {
   newTodoInput.type = "text"
   newTodoInput.placeholder = "What needs to be done?"
   newTodoInput.className = "new-todo"
-  __bindTextValue(newTodoInput, doc.newTodoText, scope)
+  bindTextValue(newTodoInput, doc.newTodoText, scope)
   header.appendChild(newTodoInput)
 
   // Add todo on Enter
@@ -120,7 +120,7 @@ function renderTodoApp(doc: TodoDoc, container: Element, scope: Scope): void {
   const mainMarker = document.createComment("kinetic:if:main")
   main.appendChild(mainMarker)
 
-  __conditionalRegion(
+  conditionalRegion(
     mainMarker,
     doc.todos,
     () => doc.todos.toArray().length > 0,
@@ -130,7 +130,7 @@ function renderTodoApp(doc: TodoDoc, container: Element, scope: Scope): void {
         todoList.className = "todo-list"
 
         // List region for todos
-        __listRegion(
+        listRegion(
           todoList,
           doc.todos,
           {
@@ -188,7 +188,7 @@ function renderTodoApp(doc: TodoDoc, container: Element, scope: Scope): void {
   // Item count
   const countSpan = document.createElement("span")
   countSpan.className = "todo-count"
-  __subscribeWithValue(
+  subscribeWithValue(
     doc.todos,
     () => {
       const count = doc.todos.toArray().length

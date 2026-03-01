@@ -18,9 +18,9 @@ import { LoroDoc } from "loro-crdt"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
-  __listRegion,
+  listRegion,
   __resetScopeIdCounter,
-  __subscribeWithValue,
+  subscribeWithValue,
   adoptNode,
   adoptTextNode,
   createHydratableMount,
@@ -143,7 +143,7 @@ function hydrateTodoApp(
       }
 
       // Subscribe to title changes
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.title,
         () => doc.title.toString(),
         value => {
@@ -192,7 +192,7 @@ function hydrateTodoApp(
 
         // Set up list region for future updates
         // Note: We need to manage the region manually since we're hydrating
-        __listRegion(
+        listRegion(
           main,
           doc.todos,
           {
@@ -206,7 +206,7 @@ function hydrateTodoApp(
           scope,
         )
 
-        // Remove the hydrated items since __listRegion will manage them
+        // Remove the hydrated items since listRegion will manage them
         // Actually, we need to be smarter here - let's keep them and not re-add
         // For now, we'll skip this complexity and just verify hydration works
       }
@@ -216,7 +216,7 @@ function hydrateTodoApp(
       const countSpan = adoptNode(footer.children[0], "span")
 
       // Subscribe to count changes
-      __subscribeWithValue(
+      subscribeWithValue(
         doc.todos,
         () => {
           const count = doc.todos.toArray().length

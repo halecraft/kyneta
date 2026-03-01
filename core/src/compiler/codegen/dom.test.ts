@@ -216,7 +216,7 @@ describe("generateDOM", () => {
       const code = generateDOM(builder)
 
       expect(code).toContain(".className =")
-      expect(code).toContain("__subscribe")
+      expect(code).toContain("subscribe")
     })
   })
 
@@ -285,7 +285,7 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      expect(code).toContain("__subscribeWithValue")
+      expect(code).toContain("subscribeWithValue")
       expect(code).toContain("count.get()")
       expect(code).toContain("textContent")
     })
@@ -308,13 +308,13 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      expect(code).toContain("__subscribeWithValue")
+      expect(code).toContain("subscribeWithValue")
       expect(code).toContain("count")
     })
   })
 
   describe("multi-dependency subscriptions", () => {
-    it("should generate __subscribeMultiple for text content with multiple dependencies", () => {
+    it("should generate subscribeMultiple for text content with multiple dependencies", () => {
       const reactiveExpr = createContent(
         "first.get() + ' ' + last.get()",
         "reactive",
@@ -331,8 +331,8 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      // Uses __subscribeMultiple with array of deps
-      expect(code).toContain("__subscribeMultiple")
+      // Uses subscribeMultiple with array of deps
+      expect(code).toContain("subscribeMultiple")
       expect(code).toContain("[first, last]")
       // Sets initial value synchronously before subscribing
       const lines = code.split("\n")
@@ -340,14 +340,14 @@ describe("generateDOM", () => {
         l => l.includes("textContent = String(") && !l.includes("=>"),
       )
       const subscribeLine = lines.findIndex(l =>
-        l.includes("__subscribeMultiple"),
+        l.includes("subscribeMultiple"),
       )
       expect(initialSetLine).toBeGreaterThan(-1)
       expect(subscribeLine).toBeGreaterThan(-1)
       expect(initialSetLine).toBeLessThan(subscribeLine)
     })
 
-    it("should generate __subscribeMultiple for attribute with multiple dependencies", () => {
+    it("should generate subscribeMultiple for attribute with multiple dependencies", () => {
       const classAttr: AttributeNode = {
         name: "class",
         value: createContent(
@@ -367,7 +367,7 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      expect(code).toContain("__subscribeMultiple")
+      expect(code).toContain("subscribeMultiple")
       expect(code).toContain("[theme, defaultTheme]")
       expect(code).toContain(".className =")
     })
@@ -379,7 +379,7 @@ describe("generateDOM", () => {
 // =============================================================================
 
 describe("generateDOM - list regions", () => {
-  it("should generate __listRegion call", () => {
+  it("should generate listRegion call", () => {
     const liElement = createElement(
       "li",
       [],
@@ -401,7 +401,7 @@ describe("generateDOM - list regions", () => {
 
     const code = generateDOM(builder)
 
-    expect(code).toContain("__listRegion")
+    expect(code).toContain("listRegion")
     expect(code).toContain("items")
     expect(code).toContain("create:")
     expect(code).toContain("item")
@@ -501,7 +501,7 @@ describe("generateDOM - list regions", () => {
 // =============================================================================
 
 describe("generateDOM - conditional regions", () => {
-  it("should generate __conditionalRegion call for reactive condition", () => {
+  it("should generate conditionalRegion call for reactive condition", () => {
     const pElement = createElement(
       "p",
       [],
@@ -535,7 +535,7 @@ describe("generateDOM - conditional regions", () => {
 
     const code = generateDOM(builder)
 
-    expect(code).toContain("__conditionalRegion")
+    expect(code).toContain("conditionalRegion")
     expect(code).toContain("count")
     expect(code).toContain("whenTrue")
     expect(code).toContain("createComment")
@@ -592,8 +592,8 @@ describe("generateDOM - conditional regions", () => {
 
     const code = generateDOM(builder)
 
-    // Should NOT contain __conditionalRegion (dissolved)
-    expect(code).not.toContain("__conditionalRegion")
+    // Should NOT contain conditionalRegion (dissolved)
+    expect(code).not.toContain("conditionalRegion")
     expect(code).not.toContain("whenTrue")
     expect(code).not.toContain("whenFalse")
     expect(code).not.toContain("createComment")
@@ -607,7 +607,7 @@ describe("generateDOM - conditional regions", () => {
     expect(code).toContain('"No"')
   })
 
-  it("should fallback to __conditionalRegion when structure differs", () => {
+  it("should fallback to conditionalRegion when structure differs", () => {
     // Conditional with different element types - cannot dissolve
     const trueBranch = createConditionalBranch(
       createContent(
@@ -657,8 +657,8 @@ describe("generateDOM - conditional regions", () => {
 
     const code = generateDOM(builder)
 
-    // Should contain __conditionalRegion (not dissolved)
-    expect(code).toContain("__conditionalRegion")
+    // Should contain conditionalRegion (not dissolved)
+    expect(code).toContain("conditionalRegion")
     expect(code).toContain("whenTrue")
     expect(code).toContain("whenFalse")
     expect(code).toContain("createComment")
@@ -696,7 +696,7 @@ describe("generateDOM - conditional regions", () => {
     // Render-time conditionals emit inline if, not __staticConditionalRegion
     expect(code).toContain("if (true)")
     expect(code).not.toContain("__staticConditionalRegion")
-    expect(code).not.toContain("__conditionalRegion")
+    expect(code).not.toContain("conditionalRegion")
   })
 })
 
@@ -942,7 +942,7 @@ describe("generateDOM - statements", () => {
 
     const code = generateDOM(builder)
 
-    expect(code).toContain("__listRegion")
+    expect(code).toContain("listRegion")
     expect(code).toContain("const item = itemRef.get()")
   })
 

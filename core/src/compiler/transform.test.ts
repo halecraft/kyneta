@@ -363,12 +363,13 @@ describe("collectRequiredImports", () => {
 
   it("should return empty set for static-only builders", () => {
     const builder = createBuilder("div", [], [], [], span)
-    const imports = collectRequiredImports([builder])
+    const { runtime, loro } = collectRequiredImports([builder])
 
-    expect(imports.size).toBe(0)
+    expect(runtime.size).toBe(0)
+    expect(loro.size).toBe(0)
   })
 
-  it("should include __subscribe for reactive builders", () => {
+  it("should include subscribe for reactive builders", () => {
     const builder = createBuilder(
       "div",
       [],
@@ -385,13 +386,13 @@ describe("collectRequiredImports", () => {
       span,
     )
 
-    const imports = collectRequiredImports([builder])
+    const { runtime } = collectRequiredImports([builder])
 
-    expect(imports.has("__subscribe")).toBe(true)
-    expect(imports.has("__subscribeWithValue")).toBe(true)
+    expect(runtime.has("subscribe")).toBe(true)
+    expect(runtime.has("subscribeWithValue")).toBe(true)
   })
 
-  it("should include __listRegion for reactive loops", () => {
+  it("should include listRegion for reactive loops", () => {
     const loop = createLoop(
       "doc.items",
       "reactive",
@@ -403,12 +404,12 @@ describe("collectRequiredImports", () => {
     )
     const builder = createBuilder("div", [], [], [loop], span)
 
-    const imports = collectRequiredImports([builder])
+    const { runtime } = collectRequiredImports([builder])
 
-    expect(imports.has("__listRegion")).toBe(true)
+    expect(runtime.has("listRegion")).toBe(true)
   })
 
-  it("should include __conditionalRegion for reactive conditionals", () => {
+  it("should include conditionalRegion for reactive conditionals", () => {
     const builder = createBuilder(
       "div",
       [],
@@ -437,12 +438,12 @@ describe("collectRequiredImports", () => {
       span,
     )
 
-    const imports = collectRequiredImports([builder])
+    const { runtime } = collectRequiredImports([builder])
 
-    expect(imports.has("__conditionalRegion")).toBe(true)
+    expect(runtime.has("conditionalRegion")).toBe(true)
   })
 
-  it("should NOT include __conditionalRegion for render-time conditionals", () => {
+  it("should NOT include conditionalRegion for render-time conditionals", () => {
     const builder = createBuilder(
       "div",
       [],
@@ -471,13 +472,13 @@ describe("collectRequiredImports", () => {
       span,
     )
 
-    const imports = collectRequiredImports([builder])
+    const { runtime } = collectRequiredImports([builder])
 
     // Render-time conditionals emit inline if, no runtime import needed
-    expect(imports.has("__conditionalRegion")).toBe(false)
+    expect(runtime.has("conditionalRegion")).toBe(false)
   })
 
-  it("should include __bindTextValue for value bindings", () => {
+  it("should include bindTextValue for value bindings", () => {
     const builder = createBuilder(
       "div",
       [],
@@ -504,12 +505,12 @@ describe("collectRequiredImports", () => {
       span,
     )
 
-    const imports = collectRequiredImports([builder])
+    const { loro } = collectRequiredImports([builder])
 
-    expect(imports.has("__bindTextValue")).toBe(true)
+    expect(loro.has("bindTextValue")).toBe(true)
   })
 
-  it("should include __bindChecked for checked bindings", () => {
+  it("should include bindChecked for checked bindings", () => {
     const builder = createBuilder(
       "div",
       [],
@@ -536,9 +537,9 @@ describe("collectRequiredImports", () => {
       span,
     )
 
-    const imports = collectRequiredImports([builder])
+    const { loro } = collectRequiredImports([builder])
 
-    expect(imports.has("__bindChecked")).toBe(true)
+    expect(loro.has("bindChecked")).toBe(true)
   })
 
   it("should collect imports from multiple builders", () => {
@@ -574,13 +575,13 @@ describe("collectRequiredImports", () => {
       span,
     )
 
-    const imports = collectRequiredImports([builder1, builder2])
+    const { runtime } = collectRequiredImports([builder1, builder2])
 
-    expect(imports.has("__listRegion")).toBe(true)
-    expect(imports.has("__conditionalRegion")).toBe(true)
+    expect(runtime.has("listRegion")).toBe(true)
+    expect(runtime.has("conditionalRegion")).toBe(true)
   })
 
-  it("should include __subscribeMultiple for multi-dependency text content", () => {
+  it("should include subscribeMultiple for multi-dependency text content", () => {
     const multiDepContent = {
       kind: "content" as const,
       source: "first.get() + ' ' + last.get()",
@@ -591,12 +592,12 @@ describe("collectRequiredImports", () => {
     const builder = createBuilder("span", [], [], [multiDepContent], span)
     builder.isReactive = true
 
-    const imports = collectRequiredImports([builder])
+    const { runtime } = collectRequiredImports([builder])
 
-    expect(imports.has("__subscribeMultiple")).toBe(true)
+    expect(runtime.has("subscribeMultiple")).toBe(true)
   })
 
-  it("should include __subscribeMultiple for multi-dependency attributes", () => {
+  it("should include subscribeMultiple for multi-dependency attributes", () => {
     const multiDepAttr = {
       name: "class",
       value: {
@@ -620,12 +621,12 @@ describe("collectRequiredImports", () => {
     const builder = createBuilder("div", [], [], [element], span)
     builder.isReactive = true
 
-    const imports = collectRequiredImports([builder])
+    const { runtime } = collectRequiredImports([builder])
 
-    expect(imports.has("__subscribeMultiple")).toBe(true)
+    expect(runtime.has("subscribeMultiple")).toBe(true)
   })
 
-  it("should NOT include __subscribeMultiple for single-dependency content", () => {
+  it("should NOT include subscribeMultiple for single-dependency content", () => {
     const singleDepContent = {
       kind: "content" as const,
       source: "title.get()",
@@ -636,10 +637,10 @@ describe("collectRequiredImports", () => {
     const builder = createBuilder("span", [], [], [singleDepContent], span)
     builder.isReactive = true
 
-    const imports = collectRequiredImports([builder])
+    const { runtime } = collectRequiredImports([builder])
 
-    expect(imports.has("__subscribeMultiple")).toBe(false)
-    expect(imports.has("__subscribe")).toBe(true)
+    expect(runtime.has("subscribeMultiple")).toBe(false)
+    expect(runtime.has("subscribe")).toBe(true)
   })
 })
 
@@ -656,45 +657,62 @@ describe("mergeImports", () => {
   it("should add new import when no kinetic import exists", () => {
     const sourceFile = createSourceFile("const x = 1\nconst y = 2")
 
-    mergeImports(sourceFile, new Set(["__subscribe", "__listRegion"]))
+    mergeImports(sourceFile, {
+      runtime: new Set(["subscribe", "listRegion"]),
+      loro: new Set(),
+    })
 
     const result = sourceFile.getFullText()
-    expect(result).toContain("__listRegion")
-    expect(result).toContain("__subscribe")
-    expect(result).toContain("@loro-extended/kinetic")
+    expect(result).toContain("listRegion")
+    expect(result).toContain("subscribe")
+    expect(result).toContain("@loro-extended/kinetic/runtime")
   })
 
-  it("should merge imports with existing kinetic import", () => {
-    const importLine = 'import { mount, Scope } from "@loro-extended/kinetic"'
+  it("should merge imports with existing kinetic/runtime import", () => {
+    const importLine =
+      'import { subscribe } from "@loro-extended/kinetic/runtime"'
     const sourceFile = createSourceFile(`${importLine}\n\nconst app = div()`)
 
-    mergeImports(sourceFile, new Set(["__subscribe"]))
+    mergeImports(sourceFile, {
+      runtime: new Set(["subscribe", "listRegion"]),
+      loro: new Set(),
+    })
 
     const result = sourceFile.getFullText()
-    expect(result).toContain("mount")
-    expect(result).toContain("Scope")
-    expect(result).toContain("__subscribe")
-    const importMatches = result.match(/@loro-extended\/kinetic/g) || []
+    expect(result).toContain("subscribe")
+    expect(result).toContain("listRegion")
+    const importMatches =
+      result.match(/@loro-extended\/kinetic\/runtime/g) || []
     expect(importMatches.length).toBe(1)
   })
 
   it("should not duplicate existing imports", () => {
     const importLine =
-      'import { __subscribe, mount } from "@loro-extended/kinetic"'
+      'import { subscribe } from "@loro-extended/kinetic/runtime"'
     const sourceFile = createSourceFile(`${importLine}\n\nconst app = div()`)
 
-    mergeImports(sourceFile, new Set(["__subscribe", "__listRegion"]))
+    mergeImports(sourceFile, {
+      runtime: new Set(["subscribe", "listRegion"]),
+      loro: new Set(),
+    })
 
     const result = sourceFile.getFullText()
-    const subscribeMatches = result.match(/__subscribe/g) || []
-    expect(subscribeMatches.length).toBe(1)
-    expect(result).toContain("__listRegion")
+    // "subscribe" appears once in import, "listRegion" added
+    expect(result).toContain("subscribe")
+    expect(result).toContain("listRegion")
+    // Only one import statement for /runtime
+    const importMatches =
+      result.match(/@loro-extended\/kinetic\/runtime/g) || []
+    expect(importMatches.length).toBe(1)
   })
 
   it("should do nothing when no imports needed", () => {
     const sourceFile = createSourceFile("const x = 1")
 
-    mergeImports(sourceFile, new Set())
+    mergeImports(sourceFile, {
+      runtime: new Set(),
+      loro: new Set(),
+    })
 
     const result = sourceFile.getFullText()
     expect(result).not.toContain("@loro-extended/kinetic")
@@ -709,12 +727,15 @@ describe("mergeImports", () => {
     ]
     const sourceFile = createSourceFile(lines.join("\n"))
 
-    mergeImports(sourceFile, new Set(["__subscribe"]))
+    mergeImports(sourceFile, {
+      runtime: new Set(["subscribe"]),
+      loro: new Set(),
+    })
 
     const result = sourceFile.getFullText()
     expect(result).toContain("LoroDoc")
     expect(result).toContain("createTypedDoc")
-    expect(result).toContain("__subscribe")
+    expect(result).toContain("subscribe")
   })
 })
 
@@ -827,7 +848,7 @@ describe("transformSourceInPlace", () => {
 
     const result = transformSourceInPlace(source)
 
-    expect(result.requiredImports.has("__listRegion")).toBe(true)
+    expect(result.requiredImports.runtime.has("listRegion")).toBe(true)
   })
 
   it("should return empty required imports for static content", () => {
@@ -841,7 +862,8 @@ describe("transformSourceInPlace", () => {
 
     const result = transformSourceInPlace(source)
 
-    expect(result.requiredImports.size).toBe(0)
+    expect(result.requiredImports.runtime.size).toBe(0)
+    expect(result.requiredImports.loro.size).toBe(0)
   })
 
   it("should handle deeply nested structures", () => {
@@ -1033,8 +1055,8 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Should generate __listRegion because ListRef is detected as reactive
-    expect(result.code).toContain("__listRegion")
+    // Should generate listRegion because ListRef is detected as reactive
+    expect(result.code).toContain("listRegion")
     expect(result.ir.length).toBe(1)
     expect(result.ir[0].children.length).toBe(1)
     expect(result.ir[0].children[0].kind).toBe("loop")
@@ -1052,8 +1074,8 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Should generate __subscribeWithValue because TextRef is detected as reactive
-    expect(result.code).toContain("__subscribeWithValue")
+    // Should generate subscribeWithValue because TextRef is detected as reactive
+    expect(result.code).toContain("subscribeWithValue")
     expect(result.ir[0].children[0].kind).toBe("element")
   })
 
@@ -1071,8 +1093,8 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Should generate __conditionalRegion because CounterRef is detected as reactive
-    expect(result.code).toContain("__conditionalRegion")
+    // Should generate conditionalRegion because CounterRef is detected as reactive
+    expect(result.code).toContain("conditionalRegion")
     expect(result.ir[0].children[0].kind).toBe("conditional")
   })
 
@@ -1095,8 +1117,8 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Should generate __listRegion because doc.items is ListRef
-    expect(result.code).toContain("__listRegion")
+    // Should generate listRegion because doc.items is ListRef
+    expect(result.code).toContain("listRegion")
   })
 
   it("should handle mixed imported and inline types", () => {
@@ -1119,14 +1141,14 @@ describe("reactive type resolution from @loro-extended/change", () => {
     const result = transformSource(source, { target: "dom" })
 
     // Both should be detected as reactive
-    expect(result.code).toContain("__subscribeWithValue")
+    expect(result.code).toContain("subscribeWithValue")
     // Should have reactive children
     expect(result.ir[0].isReactive).toBe(true)
   })
 
-  it("should produce __listRegion for for-of over imported ListRef", () => {
+  it("should produce listRegion for for-of over imported ListRef", () => {
     // Critical test: the compiler must resolve ListRef from @loro-extended/change
-    // to detect doc.todos as reactive and generate __listRegion
+    // to detect doc.todos as reactive and generate listRegion
     const source = `
       import { ListRef } from "@loro-extended/change"
 
@@ -1147,8 +1169,8 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Critical assertion: __listRegion must be generated
-    expect(result.code).toContain("__listRegion")
+    // Critical assertion: listRegion must be generated
+    expect(result.code).toContain("listRegion")
 
     // Verify IR structure
     expect(result.ir.length).toBe(1)
@@ -1191,10 +1213,10 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Should detect TextRef on doc.title → __subscribeWithValue
-    expect(result.code).toContain("__subscribeWithValue")
-    // Should detect ListRef on doc.todos → __listRegion
-    expect(result.code).toContain("__listRegion")
+    // Should detect TextRef on doc.title → subscribeWithValue
+    expect(result.code).toContain("subscribeWithValue")
+    // Should detect ListRef on doc.todos → listRegion
+    expect(result.code).toContain("listRegion")
     // Builder should be reactive
     expect(result.ir[0].isReactive).toBe(true)
   })
@@ -1218,8 +1240,8 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Should detect CounterRef → __conditionalRegion
-    expect(result.code).toContain("__conditionalRegion")
+    // Should detect CounterRef → conditionalRegion
+    expect(result.code).toContain("conditionalRegion")
   })
 
   it("should work with schema defined inline", () => {
@@ -1239,7 +1261,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    expect(result.code).toContain("__listRegion")
+    expect(result.code).toContain("listRegion")
   })
 
   it("should work with createTypedDoc options parameter", () => {
@@ -1263,8 +1285,8 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    expect(result.code).toContain("__subscribeWithValue")
-    expect(result.code).toContain("__listRegion")
+    expect(result.code).toContain("subscribeWithValue")
+    expect(result.code).toContain("listRegion")
   })
 
   it("should produce both DOM and HTML targets from same schema-inferred source", () => {
@@ -1296,9 +1318,9 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
     const htmlResult = transformSource(source, { target: "html" })
 
     // DOM target: reactive runtime calls
-    expect(domResult.code).toContain("__subscribeWithValue")
-    expect(domResult.code).toContain("__listRegion")
-    expect(domResult.code).toContain("__conditionalRegion")
+    expect(domResult.code).toContain("subscribeWithValue")
+    expect(domResult.code).toContain("listRegion")
+    expect(domResult.code).toContain("conditionalRegion")
 
     // HTML target: template literals with map/ternary (spread syntax for ref preservation)
     expect(htmlResult.code).toContain("].map(")

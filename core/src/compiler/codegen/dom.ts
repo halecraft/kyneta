@@ -6,7 +6,7 @@
  *
  * The generated code:
  * - Uses direct DOM APIs (createElement, appendChild, etc.)
- * - Calls runtime functions (__subscribe, __listRegion, __conditionalRegion)
+ * - Calls runtime functions (subscribe, listRegion, conditionalRegion)
  * - Manages scopes for cleanup
  *
  * @packageDocumentation
@@ -207,15 +207,15 @@ function generateAttributeSubscription(
   }
 
   if (deps.length === 1) {
-    // Single dependency - use __subscribe
+    // Single dependency - use subscribe
     const dep = deps[0]
-    lines.push(`${ind}__subscribe(${dep.source}, () => {`)
+    lines.push(`${ind}subscribe(${dep.source}, () => {`)
     lines.push(`${ind}${state.indent}${updateCode}`)
     lines.push(`${ind}}, ${state.scopeVar})`)
   } else {
-    // Multiple dependencies - use __subscribeMultiple
+    // Multiple dependencies - use subscribeMultiple
     const depSources = deps.map(d => d.source).join(", ")
-    lines.push(`${ind}__subscribeMultiple([${depSources}], () => {`)
+    lines.push(`${ind}subscribeMultiple([${depSources}], () => {`)
     lines.push(`${ind}${state.indent}${updateCode}`)
     lines.push(`${ind}}, ${state.scopeVar})`)
   }
@@ -376,22 +376,22 @@ function generateChild(
         // Initial value + subscription
         if (node.dependencies.length > 0) {
           if (node.dependencies.length === 1) {
-            // Single dependency - use __subscribeWithValue
+            // Single dependency - use subscribeWithValue
             const dep = node.dependencies[0]
             lines.push(
-              `${ind}__subscribeWithValue(${dep.source}, () => ${node.source}, (v) => {`,
+              `${ind}subscribeWithValue(${dep.source}, () => ${node.source}, (v) => {`,
             )
             lines.push(
               `${ind}${state.indent}${textVar}.textContent = String(v)`,
             )
             lines.push(`${ind}}, ${state.scopeVar})`)
           } else {
-            // Multiple dependencies - use __subscribeMultiple with initial render
+            // Multiple dependencies - use subscribeMultiple with initial render
             const depSources = node.dependencies.map(d => d.source).join(", ")
             // Set initial value
             lines.push(`${ind}${textVar}.textContent = String(${node.source})`)
             // Subscribe to all dependencies
-            lines.push(`${ind}__subscribeMultiple([${depSources}], () => {`)
+            lines.push(`${ind}subscribeMultiple([${depSources}], () => {`)
             lines.push(
               `${ind}${state.indent}${textVar}.textContent = String(${node.source})`,
             )
@@ -500,17 +500,17 @@ function generateBodyWithReturn(
         lines.push(`${ind}const ${textVar} = document.createTextNode("")`)
         if (domNode.dependencies.length > 0) {
           if (domNode.dependencies.length === 1) {
-            // Single dependency - use __subscribeWithValue
+            // Single dependency - use subscribeWithValue
             const dep = domNode.dependencies[0]
             lines.push(
-              `${ind}__subscribeWithValue(${dep.source}, () => ${domNode.source}, (v) => {`,
+              `${ind}subscribeWithValue(${dep.source}, () => ${domNode.source}, (v) => {`,
             )
             lines.push(
               `${ind}${state.indent}${textVar}.textContent = String(v)`,
             )
             lines.push(`${ind}}, ${state.scopeVar})`)
           } else {
-            // Multiple dependencies - use __subscribeMultiple with initial render
+            // Multiple dependencies - use subscribeMultiple with initial render
             const depSources = domNode.dependencies
               .map(d => d.source)
               .join(", ")
@@ -519,7 +519,7 @@ function generateBodyWithReturn(
               `${ind}${textVar}.textContent = String(${domNode.source})`,
             )
             // Subscribe to all dependencies
-            lines.push(`${ind}__subscribeMultiple([${depSources}], () => {`)
+            lines.push(`${ind}subscribeMultiple([${depSources}], () => {`)
             lines.push(
               `${ind}${state.indent}${textVar}.textContent = String(${domNode.source})`,
             )
@@ -623,7 +623,7 @@ function generateReactiveLoop(
   const innerState = indented(state)
   const innerInd = getIndent(innerState)
 
-  lines.push(`${ind}__listRegion(${parentVar}, ${node.iterableSource}, {`)
+  lines.push(`${ind}listRegion(${parentVar}, ${node.iterableSource}, {`)
 
   // Generate create handler
   const params = node.indexVariable
@@ -655,7 +655,7 @@ function generateReactiveLoop(
  *
  * Unified generator that dispatches on binding time:
  * - subscriptionTarget === null → render-time inline if
- * - subscriptionTarget !== null → reactive conditional (dissolution or __conditionalRegion)
+ * - subscriptionTarget !== null → reactive conditional (dissolution or conditionalRegion)
  */
 function generateConditional(
   node: ConditionalNode,
@@ -677,13 +677,13 @@ function generateConditional(
     return generateRenderConditional(node, parentVar, state)
   }
 
-  // Reactive conditional: try dissolution first, fallback to __conditionalRegion
+  // Reactive conditional: try dissolution first, fallback to conditionalRegion
   const elseBranch = node.branches.find(b => b.condition === null)
   if (elseBranch) {
     const mergeResult = mergeConditionalBodies(node.branches)
     if (mergeResult.success) {
       // Dissolution successful - emit pure Applicative code
-      // No marker, no __conditionalRegion call, just direct elements with ternaries
+      // No marker, no conditionalRegion call, just direct elements with ternaries
       for (const child of mergeResult.value) {
         const childResult = generateChild(child, parentVar, state)
         lines.push(...childResult.code)
@@ -692,7 +692,7 @@ function generateConditional(
     }
   }
 
-  // Fallback: standard reactive conditional with __conditionalRegion
+  // Fallback: standard reactive conditional with conditionalRegion
   const markerVar = genVar(state, "marker")
   lines.push(`${ind}const ${markerVar} = document.createComment("kinetic:if")`)
   lines.push(`${ind}${parentVar}.appendChild(${markerVar})`)
@@ -701,7 +701,7 @@ function generateConditional(
   const innerInd = getIndent(innerState)
 
   lines.push(
-    `${ind}__conditionalRegion(${markerVar}, ${node.subscriptionTarget?.source}, () => ${conditionExpr.source}, {`,
+    `${ind}conditionalRegion(${markerVar}, ${node.subscriptionTarget?.source}, () => ${conditionExpr.source}, {`,
   )
 
   // Generate whenTrue handler
@@ -783,7 +783,7 @@ function generateBranchBody(body: ChildNode[], state: CodegenState): string[] {
 /**
  * Generate code for a static loop (non-reactive for...of).
  *
- * Unlike list regions which use __listRegion for delta-driven updates,
+ * Unlike list regions which use listRegion for delta-driven updates,
  * static loops run once at render time and create elements directly.
  */
 function generateRenderLoop(

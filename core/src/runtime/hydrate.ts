@@ -16,7 +16,7 @@
 
 import { HydrationMismatchError } from "../errors.js"
 import type { Scope } from "./scope.js"
-import { __subscribe } from "./subscribe.js"
+import { __subscribe as subscribe } from "./subscribe.js"
 
 // =============================================================================
 // Types
@@ -407,7 +407,7 @@ export function hydrateConditionalRegion(
   }
 
   // Subscribe to condition changes
-  __subscribe(
+  subscribe(
     handler.conditionRef,
     () => {
       // On condition change, the region needs to swap content

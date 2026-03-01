@@ -119,10 +119,11 @@ The phases are numbered for reference but should be implemented in the following
 |-------|-------|-----------|
 | 1st | Phase 1 | No dependencies; unblocks Phase 4's direct-read detection (needs `.get()` on TextRef) |
 | 2nd | Phase 3 | No dependencies; fixes a **correctness bug** where only `deps[0]` is subscribed |
-| 3rd | Phase 0 | Establish runtime subpath structure before adding new functions in Phases 2 & 4 |
-| 4th | Phase 2 | Prerequisite for Phase 4; pure refactoring after structure is in place |
-| 5th | Phase 4 | Depends on Phases 1 and 2; most complex phase |
-| 6th | Phase 5 | Documents all features after implementation |
+| 3rd | Phase 0a | Establish runtime subpath structure before adding new functions in Phases 2 & 4 |
+| 4th | Phase 0b | Clean up remaining `__` prefixes; organize testing utilities into `/testing` subpath |
+| 5th | Phase 2 | Prerequisite for Phase 4; pure refactoring after structure is in place |
+| 6th | Phase 4 | Depends on Phases 1 and 2; most complex phase |
+| 7th | Phase 5 | Documents all features after implementation |
 
 ### Phase 1: Unify Scalar Read Interface & state() API ✅
 
@@ -151,21 +152,56 @@ The phases are numbered for reference but should be implemented in the following
 - ✅ Task 3.5: Add codegen tests for multi-dependency text content
 - ✅ Task 3.6: Add integration test: expression with two reactive dependencies updates on either change
 
-### Phase 0: Runtime Subpath Refactor 🔴
+### Phase 0a: Runtime Subpath Refactor ✅
 
 **Goal**: Move runtime functions to `@loro-extended/kinetic/runtime` with clean names.
 
 > **Note**: `packages/kinetic/src/runtime/index.ts` already exists. This phase adds a package.json export and renames functions.
 
-- 🔴 Task 0.1: Update `package.json` exports to add `"./runtime"` subpath pointing to `dist/runtime/index.js`
-- 🔴 Task 0.2: Rename exports: `__subscribe` → `subscribe`, `__subscribeWithValue` → `subscribeWithValue`, etc.
-- 🔴 Task 0.3: Rename exports: `__listRegion` → `listRegion`, `__conditionalRegion` → `conditionalRegion`
-- 🔴 Task 0.4: Keep `__reset*` and `__activeSubscriptions` as internal (testing utilities, not generated code)
-- 🔴 Task 0.5: Update `collectRequiredImports` in `transform.ts` to use new names
-- 🔴 Task 0.6: Update `mergeImports` to import from `@loro-extended/kinetic/runtime` instead of main entry
-- 🔴 Task 0.7: Update codegen in `dom.ts` to emit new function names
-- 🔴 Task 0.8: Update all tests importing runtime functions
-- 🔴 Task 0.9: Deprecate old `__*` exports from main entry (keep for backward compat, add JSDoc deprecation)
+- ✅ Task 0a.1: Update `package.json` exports to add `"./runtime"` subpath pointing to `dist/runtime/index.js`
+- ✅ Task 0a.2: Rename exports: `__subscribe` → `subscribe`, `__subscribeWithValue` → `subscribeWithValue`, etc.
+- ✅ Task 0a.3: Rename exports: `__listRegion` → `listRegion`, `__conditionalRegion` → `conditionalRegion`
+- ✅ Task 0a.4: Keep `__reset*` and `__activeSubscriptions` as internal (testing utilities, not generated code)
+- ✅ Task 0a.5: Update `collectRequiredImports` in `transform.ts` to use new names and return `{ runtime, loro }` structure
+- ✅ Task 0a.6: Update `mergeImports` to import from `@loro-extended/kinetic/runtime` and `@loro-extended/kinetic/loro`
+- ✅ Task 0a.7: Update codegen in `dom.ts` to emit new function names
+- ✅ Task 0a.8: Update all tests importing runtime functions
+- ✅ Task 0a.9: Remove old `__*` exports from main entry (no deprecation needed for experimental framework)
+
+### Phase 0b: Eliminate All __ Prefixes 🔴
+
+**Goal**: Remove all remaining `__` prefixes from function definitions and organize testing utilities into a dedicated subpath.
+
+> **Rationale**: The `__` prefix convention was used to signal "internal" or "testing only", but module structure is a better way to communicate intent. Prefixes are ugly, inconsistent, and don't provide real encapsulation.
+
+**Approach**: Use module boundaries instead of naming conventions:
+- `/runtime` → functions called by generated code
+- `/loro` → Loro-specific bindings
+- `/testing` → test utilities (reset functions, active subscription tracking)
+- `/compiler` → compiler internals
+
+**Tasks**:
+
+- 🔴 Task 0b.1: Rename internal implementations (remove `__` prefix):
+  - `subscribe.ts`: `__subscribe` → `subscribe`, `__subscribeWithValue` → `subscribeWithValue`, etc.
+  - `regions.ts`: `__listRegion` → `listRegion`, `__conditionalRegion` → `conditionalRegion`
+  - `binding.ts`: `__bindTextValue` → `bindTextValue`, `__bindChecked` → `bindChecked`, `__bindNumericValue` → `bindNumericValue`
+
+- 🔴 Task 0b.2: Remove `as` re-exports (export directly with clean names)
+
+- 🔴 Task 0b.3: Create `src/testing/runtime.ts` for runtime testing utilities:
+  - Move `resetScopeIdCounter` from `scope.ts`
+  - Move `resetSubscriptionIdCounter`, `activeSubscriptions`, `getActiveSubscriptionCount` from `subscribe.ts`
+  - Move `setRootScope` from `scope.ts`
+  - Move `resetProject` from `transform.ts`
+
+- 🔴 Task 0b.4: Update `src/testing/index.ts` to export runtime testing utilities
+
+- 🔴 Task 0b.5: Add `"./testing"` export to `package.json`
+
+- 🔴 Task 0b.6: Update all test imports to use `@loro-extended/kinetic/testing` for test utilities
+
+- 🔴 Task 0b.7: Remove testing utility exports from main entry and `/runtime`
 
 ### Phase 2: Extract Incremental Subscription Pattern 🔴
 
@@ -505,6 +541,19 @@ The codegen has an explicit TODO comment at `dom.ts:193`:
 ```
 This confirms the plan's assessment. The fix is straightforward since `__subscribeMultiple` already works.
 
+### __ Prefix Convention Should Be Eliminated
+
+The `__` prefix was used for two purposes:
+1. Mark functions as "internal" (called by generated code, not users)
+2. Mark functions as "testing only" (reset state between tests)
+
+Both are code smells. Module structure is the right way to communicate intent:
+- **Public API** → exported from main entry points
+- **Generated code API** → exported from `/runtime` and `/loro`
+- **Testing utilities** → exported from `/testing`
+
+This eliminates the need for any naming conventions and makes the codebase cleaner.
+
 ### Runtime Naming Convention
 
 The `__` prefix was established early to signal "compiler-internal, don't call directly." However:
@@ -602,16 +651,25 @@ Pattern matching on source text (e.g., "ends with `.get()`") is fragile. Structu
 | `packages/kinetic/src/compiler/codegen/dom.ts` | Update `generateAttributeSubscription`, `generateChild`, `generateBodyWithReturn` to use `__subscribeMultiple` when `deps.length > 1` |
 | `packages/kinetic/src/compiler/codegen/dom.test.ts` | Add tests for multi-dep codegen |
 
-**Phase 0 (Runtime Subpath Refactor)**:
+**Phase 0a (Runtime Subpath Refactor)**:
 | File | Changes |
 |------|---------|
 | `packages/kinetic/package.json` | Add `"./runtime"` export pointing to `dist/runtime/index.js` |
-| `packages/kinetic/src/runtime/index.ts` | Export clean names (`subscribe`, `listRegion`, etc.) alongside `__*` versions |
-| `packages/kinetic/src/runtime/subscribe.ts` | Add clean-name exports |
-| `packages/kinetic/src/runtime/regions.ts` | Add clean-name exports |
-| `packages/kinetic/src/index.ts` | Add deprecation JSDoc to `__*` re-exports |
+| `packages/kinetic/src/runtime/index.ts` | Export clean names (`subscribe`, `listRegion`, etc.) via `as` re-exports |
 | `packages/kinetic/src/compiler/transform.ts` | Update `collectRequiredImports` and `mergeImports` to use `/runtime` subpath and clean names |
 | `packages/kinetic/src/compiler/codegen/dom.ts` | Emit clean function names instead of `__*` |
+
+**Phase 0b (Eliminate All __ Prefixes)**:
+| File | Changes |
+|------|---------|
+| `packages/kinetic/src/runtime/subscribe.ts` | Rename `__subscribe` → `subscribe`, etc. (function definitions) |
+| `packages/kinetic/src/runtime/regions.ts` | Rename `__listRegion` → `listRegion`, etc. |
+| `packages/kinetic/src/loro/binding.ts` | Rename `__bindTextValue` → `bindTextValue`, etc. |
+| `packages/kinetic/src/runtime/scope.ts` | Remove `__` from `resetScopeIdCounter`, `setRootScope` |
+| `packages/kinetic/src/runtime/index.ts` | Remove `as` re-exports, export directly |
+| `packages/kinetic/src/testing/runtime.ts` | New file: testing utilities moved here |
+| `packages/kinetic/src/testing/index.ts` | Export testing utilities |
+| `packages/kinetic/package.json` | Add `"./testing"` export |
 
 **Phase 2 (Extract subscribeIncremental)**:
 | File | Changes |

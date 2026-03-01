@@ -201,37 +201,45 @@ function parseSource(source: string, filename: string): SourceFile {
  * This is a pure function that analyzes the IR and returns the set
  * of runtime function names that need to be imported.
  *
+ * Returns two sets:
+ * - `runtime`: Functions from `@loro-extended/kinetic/runtime` (subscribe, listRegion, etc.)
+ * - `loro`: Functions from `@loro-extended/kinetic/loro` (bindTextValue, bindChecked, etc.)
+ *
  * @param ir - Array of builder nodes to analyze
- * @returns Set of import names (e.g., "__subscribe", "__listRegion")
+ * @returns Object with `runtime` and `loro` import sets
  */
-export function collectRequiredImports(ir: BuilderNode[]): Set<string> {
-  const imports = new Set<string>()
+export function collectRequiredImports(ir: BuilderNode[]): {
+  runtime: Set<string>
+  loro: Set<string>
+} {
+  const runtime = new Set<string>()
+  const loro = new Set<string>()
 
   function collectFromChildren(children: ChildNode[]): void {
     for (const child of children) {
       if (child.kind === "loop") {
         if (child.iterableBindingTime === "reactive") {
-          imports.add("__listRegion")
+          runtime.add("listRegion")
         }
         // Always recurse into loop body (fixes latent bug where
         // static-loop bodies were not recursed for imports)
         collectFromChildren(child.body)
       } else if (child.kind === "conditional") {
-        // Only add __conditionalRegion for reactive conditionals
+        // Only add conditionalRegion for reactive conditionals
         if (child.subscriptionTarget !== null) {
-          imports.add("__conditionalRegion")
+          runtime.add("conditionalRegion")
         }
         // Always recurse into branch bodies
         for (const branch of child.branches) {
           collectFromChildren(branch.body)
         }
       } else if (child.kind === "element") {
-        // Check for bindings on elements
+        // Check for bindings on elements (these come from /loro subpath)
         for (const binding of child.bindings) {
           if (binding.bindingType === "checked") {
-            imports.add("__bindChecked")
+            loro.add("bindChecked")
           } else {
-            imports.add("__bindTextValue")
+            loro.add("bindTextValue")
           }
         }
         // Check for multi-dependency attributes
@@ -240,7 +248,7 @@ export function collectRequiredImports(ir: BuilderNode[]): Set<string> {
             attr.value.bindingTime === "reactive" &&
             attr.value.dependencies.length > 1
           ) {
-            imports.add("__subscribeMultiple")
+            runtime.add("subscribeMultiple")
           }
         }
         // Recurse into element children
@@ -248,7 +256,7 @@ export function collectRequiredImports(ir: BuilderNode[]): Set<string> {
       } else if (child.kind === "content") {
         // Check for multi-dependency content (text nodes)
         if (child.bindingTime === "reactive" && child.dependencies.length > 1) {
-          imports.add("__subscribeMultiple")
+          runtime.add("subscribeMultiple")
         }
       }
     }
@@ -256,8 +264,8 @@ export function collectRequiredImports(ir: BuilderNode[]): Set<string> {
 
   function collectFromBuilder(node: BuilderNode): void {
     if (node.isReactive) {
-      imports.add("__subscribe")
-      imports.add("__subscribeWithValue")
+      runtime.add("subscribe")
+      runtime.add("subscribeWithValue")
     }
     collectFromChildren(node.children)
   }
@@ -266,30 +274,36 @@ export function collectRequiredImports(ir: BuilderNode[]): Set<string> {
     collectFromBuilder(builder)
   }
 
-  return imports
+  return { runtime, loro }
 }
 
 /**
- * Generate import statement string from a set of import names.
+ * Generate import statement string from a set of import names and module specifier.
  *
  * @param imports - Set of import names
+ * @param moduleSpecifier - The module to import from
  * @returns Import statement string, or empty string if no imports needed
  */
-function formatImportStatement(imports: Set<string>): string {
+function formatImportStatement(
+  imports: Set<string>,
+  moduleSpecifier: string,
+): string {
   if (imports.size === 0) {
     return ""
   }
   const importList = Array.from(imports).sort().join(", ")
-  return `import { ${importList} } from "@loro-extended/kinetic"\n`
+  return `import { ${importList} } from "${moduleSpecifier}"\n`
 }
 
 /**
  * Generate imports for the runtime functions used in DOM output.
- * This is the original function, kept for backward compatibility.
  */
 function generateDOMImports(ir: BuilderNode[]): string {
-  const imports = collectRequiredImports(ir)
-  return formatImportStatement(imports)
+  const { runtime, loro } = collectRequiredImports(ir)
+  let result = ""
+  result += formatImportStatement(runtime, "@loro-extended/kinetic/runtime")
+  result += formatImportStatement(loro, "@loro-extended/kinetic/loro")
+  return result
 }
 
 // =============================================================================
@@ -297,27 +311,28 @@ function generateDOMImports(ir: BuilderNode[]): string {
 // =============================================================================
 
 /**
- * Merge required imports into a source file.
+ * Merge required imports into a source file for a specific module.
  *
  * This function modifies the source file in place:
- * - If an @loro-extended/kinetic import exists, add missing named imports to it
+ * - If an import for the module exists, add missing named imports to it
  * - If no such import exists, add a new import declaration at the top
  *
  * @param sourceFile - The ts-morph SourceFile to modify
  * @param requiredImports - Set of import names to ensure are present
+ * @param moduleSpecifier - The module to import from
  */
-export function mergeImports(
+function mergeImportsForModule(
   sourceFile: SourceFile,
   requiredImports: Set<string>,
+  moduleSpecifier: string,
 ): void {
   if (requiredImports.size === 0) {
     return
   }
 
-  // Find existing @loro-extended/kinetic import
+  // Find existing import for this module
   const existingImport = sourceFile.getImportDeclarations().find(decl => {
-    const moduleSpecifier = decl.getModuleSpecifierValue()
-    return moduleSpecifier === "@loro-extended/kinetic"
+    return decl.getModuleSpecifierValue() === moduleSpecifier
   })
 
   if (existingImport) {
@@ -335,10 +350,37 @@ export function mergeImports(
     // Add new import at the top of the file
     const importNames = Array.from(requiredImports).sort()
     sourceFile.insertImportDeclaration(0, {
-      moduleSpecifier: "@loro-extended/kinetic",
+      moduleSpecifier,
       namedImports: importNames,
     })
   }
+}
+
+/**
+ * Merge required imports into a source file.
+ *
+ * This function modifies the source file in place, adding imports from
+ * the appropriate subpaths:
+ * - Runtime functions from `@loro-extended/kinetic/runtime`
+ * - Loro bindings from `@loro-extended/kinetic/loro`
+ *
+ * @param sourceFile - The ts-morph SourceFile to modify
+ * @param requiredImports - Object with `runtime` and `loro` import sets
+ */
+export function mergeImports(
+  sourceFile: SourceFile,
+  requiredImports: { runtime: Set<string>; loro: Set<string> },
+): void {
+  mergeImportsForModule(
+    sourceFile,
+    requiredImports.runtime,
+    "@loro-extended/kinetic/runtime",
+  )
+  mergeImportsForModule(
+    sourceFile,
+    requiredImports.loro,
+    "@loro-extended/kinetic/loro",
+  )
 }
 
 // =============================================================================

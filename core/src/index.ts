@@ -54,12 +54,8 @@ export { getRootScope, mount, rootScope } from "./runtime/mount.js"
 export { Scope } from "./runtime/scope.js"
 
 // =============================================================================
-// Internal Runtime API (called by compiled code)
+// Hydration API
 // =============================================================================
-
-// Note: Loro-specific bindings (__bindTextValue, __bindChecked, __bindNumericValue,
-// bind, isBinding) are exported from "@loro-extended/kinetic/loro" subpath only.
-// This keeps the core runtime Loro-agnostic.
 
 export {
   adoptNode,
@@ -73,14 +69,22 @@ export {
   hydrateListRegion,
   type ListHydrationHandler,
 } from "./runtime/hydrate.js"
-export { __conditionalRegion, __listRegion } from "./runtime/regions.js"
+
+// =============================================================================
+// Runtime API (re-exported from /runtime subpath)
+// =============================================================================
+
+// Compiled code imports from @loro-extended/kinetic/runtime directly.
+// These are re-exported here for convenience.
 export {
-  __subscribe,
-  __subscribeMultiple,
-  __subscribeWithValue,
-  __unsubscribe,
+  conditionalRegion,
+  listRegion,
+  subscribe,
+  subscribeMultiple,
+  subscribeWithValue,
+  unsubscribe,
   type SubscriptionId,
-} from "./runtime/subscribe.js"
+} from "./runtime/index.js"
 
 // =============================================================================
 // Testing utilities
@@ -88,6 +92,7 @@ export {
 
 // Testing internals (for resetting state between tests)
 export {
+  __activeSubscriptions,
   __getActiveSubscriptionCount,
   __resetScopeIdCounter,
   __resetSubscriptionIdCounter,

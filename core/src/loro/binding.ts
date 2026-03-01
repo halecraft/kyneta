@@ -18,7 +18,7 @@ import { loro } from "@loro-extended/change"
 import type { LoroText } from "loro-crdt"
 import type { Binding } from "../types.js"
 import type { Scope } from "../runtime/scope.js"
-import { __subscribe } from "../runtime/subscribe.js"
+import { __subscribe as subscribe } from "../runtime/subscribe.js"
 
 // =============================================================================
 // Binding Creation
@@ -108,7 +108,7 @@ export function __bindTextValue(
   element.value = getValue()
 
   // Subscribe to changes from the ref
-  __subscribe(
+  subscribe(
     ref,
     () => {
       const newValue = getValue()
@@ -187,7 +187,7 @@ export function __bindChecked(
   element.checked = getValue()
 
   // Subscribe to changes from the ref
-  __subscribe(
+  subscribe(
     ref,
     () => {
       const newValue = getValue()
@@ -265,7 +265,7 @@ export function __bindNumericValue(
   element.value = String(getValue())
 
   // Subscribe to changes from the ref
-  __subscribe(
+  subscribe(
     ref,
     () => {
       const newValue = String(getValue())
