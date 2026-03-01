@@ -52,14 +52,14 @@ For `doc.title.get()` where `doc.title` is a `TextRef`, the runtime receives `{ 
 
 ## Phases and Tasks
 
-### Phase 1: Pure Text Patch Functions 🔴
+### Phase 1: Pure Text Patch Functions ✅
 
 Runtime functions with zero DOM or subscription dependencies. Pure input→output.
 
-- 🔴 Task 1.1: Implement `planTextPatch(ops: TextDeltaOp[]): TextPatchOp[]` in new file `runtime/text-patch.ts`
-- 🔴 Task 1.2: Implement `patchText(textNode: Text, ops: TextDeltaOp[]): void` composing plan + execute
-- 🔴 Task 1.3: Add unit tests for `planTextPatch` (retain+insert, retain+delete, complex sequences, empty ops, insert-at-start)
-- 🔴 Task 1.4: Add unit tests for `patchText` with jsdom Text nodes
+- ✅ Task 1.1: Implement `planTextPatch(ops: TextDeltaOp[]): TextPatchOp[]` in new file `runtime/text-patch.ts`
+- ✅ Task 1.2: Implement `patchText(textNode: Text, ops: TextDeltaOp[]): void` composing plan + execute
+- ✅ Task 1.3: Add unit tests for `planTextPatch` (retain+insert, retain+delete, complex sequences, empty ops, insert-at-start)
+- ✅ Task 1.4: Add unit tests for `patchText` with jsdom Text nodes
 
 ### Phase 2: IR Extension & Direct-Read Detection 🔴
 
