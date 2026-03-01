@@ -21,6 +21,7 @@ import {
   subscribe,
   subscribeMultiple,
   subscribeWithValue,
+  textRegion,
   Scope,
 } from "../runtime/index.js"
 import {
@@ -2392,6 +2393,440 @@ describe("compiler integration - arbitrary statements", () => {
       } catch (e) {
         expect((e as Error).message).toContain("line")
       }
+    })
+  })
+})
+
+// =============================================================================
+// Phase 5 Integration Tests: Text Patching
+// =============================================================================
+
+describe("compiler integration - text patching", () => {
+  beforeEach(() => {
+    resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    activeSubscriptions.clear()
+    setRootScope(null)
+  })
+
+  describe("Task 5.1: Direct TextRef read uses insertData for character insertion", () => {
+    it("should use insertData for text insertion via textRegion", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "Hello")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      // Track insertData calls
+      let insertDataCalls: Array<{ offset: number; data: string }> = []
+      const originalInsertData = textNode.insertData.bind(textNode)
+      textNode.insertData = (offset: number, data: string) => {
+        insertDataCalls.push({ offset, data })
+        originalInsertData(offset, data)
+      }
+
+      // Use textRegion (the surgical patching function)
+      textRegion(textNode, doc.title, scope)
+
+      expect(textNode.textContent).toBe("Hello")
+
+      // Reset tracking
+      insertDataCalls = []
+
+      // Insert " World" at the end
+      doc.title.insert(5, " World")
+      loro(doc).commit()
+
+      // Should have used insertData, not textContent replacement
+      expect(insertDataCalls.length).toBe(1)
+      expect(insertDataCalls[0]).toEqual({ offset: 5, data: " World" })
+      expect(textNode.textContent).toBe("Hello World")
+
+      scope.dispose()
+    })
+
+    it("should use insertData for insertion at start", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "World")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      let insertDataCalls: Array<{ offset: number; data: string }> = []
+      const originalInsertData = textNode.insertData.bind(textNode)
+      textNode.insertData = (offset: number, data: string) => {
+        insertDataCalls.push({ offset, data })
+        originalInsertData(offset, data)
+      }
+
+      textRegion(textNode, doc.title, scope)
+      insertDataCalls = []
+
+      // Insert "Hello " at the start
+      doc.title.insert(0, "Hello ")
+      loro(doc).commit()
+
+      expect(insertDataCalls.length).toBe(1)
+      expect(insertDataCalls[0]).toEqual({ offset: 0, data: "Hello " })
+      expect(textNode.textContent).toBe("Hello World")
+
+      scope.dispose()
+    })
+  })
+
+  describe("Task 5.2: Direct TextRef read uses deleteData for character deletion", () => {
+    it("should use deleteData for text deletion via textRegion", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "Hello World")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      // Track deleteData calls
+      let deleteDataCalls: Array<{ offset: number; count: number }> = []
+      const originalDeleteData = textNode.deleteData.bind(textNode)
+      textNode.deleteData = (offset: number, count: number) => {
+        deleteDataCalls.push({ offset, count })
+        originalDeleteData(offset, count)
+      }
+
+      textRegion(textNode, doc.title, scope)
+      expect(textNode.textContent).toBe("Hello World")
+
+      deleteDataCalls = []
+
+      // Delete " World" (6 characters starting at index 5)
+      doc.title.delete(5, 6)
+      loro(doc).commit()
+
+      expect(deleteDataCalls.length).toBe(1)
+      expect(deleteDataCalls[0]).toEqual({ offset: 5, count: 6 })
+      expect(textNode.textContent).toBe("Hello")
+
+      scope.dispose()
+    })
+
+    it("should use deleteData for deletion at start", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "Hello World")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      let deleteDataCalls: Array<{ offset: number; count: number }> = []
+      const originalDeleteData = textNode.deleteData.bind(textNode)
+      textNode.deleteData = (offset: number, count: number) => {
+        deleteDataCalls.push({ offset, count })
+        originalDeleteData(offset, count)
+      }
+
+      textRegion(textNode, doc.title, scope)
+      deleteDataCalls = []
+
+      // Delete "Hello " (6 characters starting at index 0)
+      doc.title.delete(0, 6)
+      loro(doc).commit()
+
+      expect(deleteDataCalls.length).toBe(1)
+      expect(deleteDataCalls[0]).toEqual({ offset: 0, count: 6 })
+      expect(textNode.textContent).toBe("World")
+
+      scope.dispose()
+    })
+  })
+
+  describe("Task 5.3: Non-direct read uses full replacement", () => {
+    it("should use textContent replacement for transformed text", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "hello")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      // Track both surgical and replacement operations
+      let insertDataCalls = 0
+      let deleteDataCalls = 0
+      let textContentSets = 0
+
+      const originalInsertData = textNode.insertData.bind(textNode)
+      textNode.insertData = (offset: number, data: string) => {
+        insertDataCalls++
+        originalInsertData(offset, data)
+      }
+
+      const originalDeleteData = textNode.deleteData.bind(textNode)
+      textNode.deleteData = (offset: number, count: number) => {
+        deleteDataCalls++
+        originalDeleteData(offset, count)
+      }
+
+      // Track textContent sets via property descriptor
+      let _textContent = ""
+      Object.defineProperty(textNode, "textContent", {
+        get() {
+          return _textContent
+        },
+        set(value: string) {
+          textContentSets++
+          _textContent = value
+        },
+        configurable: true,
+      })
+
+      // Non-direct read: .toUpperCase() transformation
+      // Use subscribeWithValue (what codegen emits for non-direct reads)
+      subscribeWithValue(
+        doc.title,
+        () => doc.title.get().toUpperCase(),
+        v => {
+          textNode.textContent = String(v)
+        },
+        scope,
+      )
+
+      expect(textNode.textContent).toBe("HELLO")
+      textContentSets = 0 // Reset after initial
+
+      // Update text
+      doc.title.insert(5, " world")
+      loro(doc).commit()
+
+      // Should use textContent replacement, NOT insertData/deleteData
+      expect(textContentSets).toBeGreaterThan(0)
+      expect(insertDataCalls).toBe(0)
+      expect(deleteDataCalls).toBe(0)
+      expect(textNode.textContent).toBe("HELLO WORLD")
+
+      scope.dispose()
+    })
+
+    it("should use textContent replacement for template literals", () => {
+      const schema = Shape.doc({
+        name: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.name.insert(0, "Alice")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      let insertDataCalls = 0
+      let textContentSets = 0
+
+      const originalInsertData = textNode.insertData.bind(textNode)
+      textNode.insertData = (offset: number, data: string) => {
+        insertDataCalls++
+        originalInsertData(offset, data)
+      }
+
+      let _textContent = ""
+      Object.defineProperty(textNode, "textContent", {
+        get() {
+          return _textContent
+        },
+        set(value: string) {
+          textContentSets++
+          _textContent = value
+        },
+        configurable: true,
+      })
+
+      // Template literal (non-direct read)
+      subscribeWithValue(
+        doc.name,
+        () => `Hello, ${doc.name.get()}!`,
+        v => {
+          textNode.textContent = String(v)
+        },
+        scope,
+      )
+
+      expect(textNode.textContent).toBe("Hello, Alice!")
+      textContentSets = 0
+
+      doc.name.delete(0, 5)
+      doc.name.insert(0, "Bob")
+      loro(doc).commit()
+
+      expect(textContentSets).toBeGreaterThan(0)
+      expect(insertDataCalls).toBe(0)
+      expect(textNode.textContent).toBe("Hello, Bob!")
+
+      scope.dispose()
+    })
+  })
+
+  describe("Task 5.4: Multi-dep text expression uses replace semantics", () => {
+    it("should use textContent replacement for multi-dependency expressions", () => {
+      const schema = Shape.doc({
+        firstName: Shape.text(),
+        lastName: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.firstName.insert(0, "John")
+      doc.lastName.insert(0, "Doe")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      let insertDataCalls = 0
+      let textContentSets = 0
+
+      const originalInsertData = textNode.insertData.bind(textNode)
+      textNode.insertData = (offset: number, data: string) => {
+        insertDataCalls++
+        originalInsertData(offset, data)
+      }
+
+      let _textContent = ""
+      Object.defineProperty(textNode, "textContent", {
+        get() {
+          return _textContent
+        },
+        set(value: string) {
+          textContentSets++
+          _textContent = value
+        },
+        configurable: true,
+      })
+
+      // Multi-dependency expression — uses subscribeMultiple
+      textNode.textContent = `${doc.firstName.get()} ${doc.lastName.get()}`
+      textContentSets = 0
+
+      subscribeMultiple(
+        [doc.firstName, doc.lastName],
+        () => {
+          textNode.textContent = `${doc.firstName.get()} ${doc.lastName.get()}`
+        },
+        scope,
+      )
+
+      // Update first name
+      doc.firstName.delete(0, 4)
+      doc.firstName.insert(0, "Jane")
+      loro(doc).commit()
+
+      // Should use textContent replacement
+      expect(textContentSets).toBeGreaterThan(0)
+      expect(insertDataCalls).toBe(0)
+      expect(textNode.textContent).toBe("Jane Doe")
+
+      // Update last name
+      textContentSets = 0
+      doc.lastName.delete(0, 3)
+      doc.lastName.insert(0, "Smith")
+      loro(doc).commit()
+
+      expect(textContentSets).toBeGreaterThan(0)
+      expect(textNode.textContent).toBe("Jane Smith")
+
+      scope.dispose()
+    })
+  })
+
+  describe("textRegion surgical updates", () => {
+    it("should handle multiple sequential edits with surgical updates", () => {
+      const schema = Shape.doc({
+        content: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.content.insert(0, "abc")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      let insertDataCalls: Array<{ offset: number; data: string }> = []
+      let deleteDataCalls: Array<{ offset: number; count: number }> = []
+
+      const originalInsertData = textNode.insertData.bind(textNode)
+      textNode.insertData = (offset: number, data: string) => {
+        insertDataCalls.push({ offset, data })
+        originalInsertData(offset, data)
+      }
+
+      const originalDeleteData = textNode.deleteData.bind(textNode)
+      textNode.deleteData = (offset: number, count: number) => {
+        deleteDataCalls.push({ offset, count })
+        originalDeleteData(offset, count)
+      }
+
+      textRegion(textNode, doc.content, scope)
+      expect(textNode.textContent).toBe("abc")
+
+      // First edit: insert "X" at position 1 → "aXbc"
+      insertDataCalls = []
+      doc.content.insert(1, "X")
+      loro(doc).commit()
+
+      expect(insertDataCalls).toEqual([{ offset: 1, data: "X" }])
+      expect(textNode.textContent).toBe("aXbc")
+
+      // Second edit: delete "X" → "abc"
+      deleteDataCalls = []
+      doc.content.delete(1, 1)
+      loro(doc).commit()
+
+      expect(deleteDataCalls).toEqual([{ offset: 1, count: 1 }])
+      expect(textNode.textContent).toBe("abc")
+
+      // Third edit: insert "123" at end → "abc123"
+      insertDataCalls = []
+      doc.content.insert(3, "123")
+      loro(doc).commit()
+
+      expect(insertDataCalls).toEqual([{ offset: 3, data: "123" }])
+      expect(textNode.textContent).toBe("abc123")
+
+      scope.dispose()
+    })
+
+    it("should clean up subscription on scope dispose", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "Hello")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const textNode = document.createTextNode("")
+
+      textRegion(textNode, doc.title, scope)
+      expect(getActiveSubscriptionCount()).toBe(1)
+
+      scope.dispose()
+      expect(getActiveSubscriptionCount()).toBe(0)
+
+      // Changes after dispose should not affect the text node
+      const oldContent = textNode.textContent
+      doc.title.insert(5, " World")
+      loro(doc).commit()
+
+      expect(textNode.textContent).toBe(oldContent)
     })
   })
 })

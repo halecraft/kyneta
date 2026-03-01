@@ -39,6 +39,8 @@ For `doc.title.get()` where `doc.title` is a `TextRef`, the runtime receives `{ 
 4. The `planTextPatch` function is pure and independently testable
 5. All existing tests pass (608+ kinetic, 968+ change, 57+ reactive)
 
+**Achieved**: 662 kinetic tests (up from 635 baseline), 968 change, 57 reactive — all passing.
+
 ## The Gap
 
 | Aspect | Current | Target |
@@ -92,14 +94,14 @@ Wire the IR's `directReadSource` + `deltaKind` into code generation. First elimi
 - ✅ Task 4.5: Add codegen test: non-direct TextRef read falls back to `subscribeWithValue`
 - ✅ Task 4.6: Add codegen test: multi-dep expression with TextRef falls back to `subscribeMultiple`
 
-### Phase 5: Integration Tests 🔴
+### Phase 5: Integration Tests ✅
 
 End-to-end tests with real `TextRef` and Loro docs.
 
-- 🔴 Task 5.1: Integration test — TextRef direct read with character insertion uses `insertData`
-- 🔴 Task 5.2: Integration test — TextRef direct read with character deletion uses `deleteData`
-- 🔴 Task 5.3: Integration test — non-direct read (template literal) uses full replacement
-- 🔴 Task 5.4: Integration test — multi-dep text expression uses replace semantics
+- ✅ Task 5.1: Integration test — TextRef direct read with character insertion uses `insertData`
+- ✅ Task 5.2: Integration test — TextRef direct read with character deletion uses `deleteData`
+- ✅ Task 5.3: Integration test — non-direct read (template literal) uses full replacement
+- ✅ Task 5.4: Integration test — multi-dep text expression uses replace semantics
 
 ### Phase 6: Documentation 🔴
 
@@ -510,6 +512,56 @@ if (directReadSource !== undefined) {
   result.directReadSource = directReadSource
 }
 ```
+
+### Stale Build Artifacts Can Cause Mysterious Failures
+
+During integration testing, `doc.title.get()` returned `undefined` even though the method was clearly defined in `TextRef`. The cause: **stale build artifacts** in `packages/change`. After running `pnpm build` in that package, the method appeared.
+
+**Lesson**: When methods appear undefined on Loro refs, rebuild the dependent package (`packages/change`) first before debugging further.
+
+### Pre-existing Type Mismatch in `TransformInPlaceResult`
+
+The `TransformInPlaceResult.requiredImports` field was typed as `Set<string>` but `collectRequiredImports` actually returns `{ runtime: Set<string>; loro: Set<string> }`. Tests passed because Vitest doesn't run TypeScript type checking during execution.
+
+**Fixed in Phase 4**: Updated the interface to match the actual return type.
+
+### Codegen Condition Must Check `dependencies.length === 1`
+
+The `textRegion` dispatch condition requires checking both `directReadSource` AND `dependencies.length === 1`:
+
+```typescript
+// CORRECT
+if (directReadSource && deps.length === 1 && deps[0].deltaKind === "text")
+
+// WRONG (would access deps[0] on empty array for edge cases)
+if (directReadSource && deps[0]?.deltaKind === "text")
+```
+
+Multi-dep expressions can never use surgical patching — the delta describes changes to one source, but the output depends on multiple sources.
+
+### Testing O(k) vs O(n) Behavior with Method Spying
+
+To verify surgical updates, tests spy on DOM methods rather than just checking final content:
+
+```typescript
+let insertDataCalls: Array<{ offset: number; data: string }> = []
+const originalInsertData = textNode.insertData.bind(textNode)
+textNode.insertData = (offset: number, data: string) => {
+  insertDataCalls.push({ offset, data })
+  originalInsertData(offset, data)
+}
+
+// After edit, verify surgical API was called
+expect(insertDataCalls).toEqual([{ offset: 5, data: " World" }])
+```
+
+### `textRegion` Follows `listRegion` Pattern Exactly
+
+No new abstraction (like `subscribeIncremental`) was needed. The implementation mirrors `listRegion`:
+1. Cast ref to typed interface (`TextRefLike`)
+2. Set initial value via `ref.get()`
+3. Subscribe with `subscribe(ref, delta => ...)`
+4. Dispatch on `delta.type`: surgical path for `"text"`, fallback for others
 
 ## Changeset
 
