@@ -57,13 +57,10 @@ export { Scope } from "./runtime/scope.js"
 // Internal Runtime API (called by compiled code)
 // =============================================================================
 
-export {
-  __bindChecked,
-  __bindNumericValue,
-  __bindTextValue,
-  bind,
-  isBinding,
-} from "./runtime/binding.js"
+// Note: Loro-specific bindings (__bindTextValue, __bindChecked, __bindNumericValue,
+// bind, isBinding) are exported from "@loro-extended/kinetic/loro" subpath only.
+// This keeps the core runtime Loro-agnostic.
+
 export {
   adoptNode,
   adoptTextNode,

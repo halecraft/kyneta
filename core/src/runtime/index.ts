@@ -7,6 +7,10 @@
  * These functions are prefixed with `__` to indicate they are internal
  * and called by compiled code, not user code directly.
  *
+ * Note: Loro-specific bindings (__bindTextValue, __bindChecked, etc.)
+ * are exported from "@loro-extended/kinetic/loro" instead, to maintain
+ * a clean separation between Loro-agnostic runtime and Loro-specific features.
+ *
  * @packageDocumentation
  */
 
@@ -21,13 +25,6 @@ export { __resetScopeIdCounter, Scope } from "./scope.js"
 // Internal API (called by compiled code)
 // =============================================================================
 
-export {
-  __bindChecked,
-  __bindNumericValue,
-  __bindTextValue,
-  bind,
-  isBinding,
-} from "./binding.js"
 export { __conditionalRegion, __listRegion } from "./regions.js"
 export {
   __activeSubscriptions,

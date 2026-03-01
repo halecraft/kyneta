@@ -29,7 +29,7 @@
  * @packageDocumentation
  */
 
-import type { LoroEventBatch } from "loro-crdt"
+import type { ListDeltaOp, ReactiveDelta } from "@loro-extended/reactive"
 import type {
   ConditionalRegionHandlers,
   ConditionalRegionOp,
@@ -186,23 +186,6 @@ export function releaseSlot(parent: Node, slot: Slot): void {
 // =============================================================================
 
 /**
- * Minimal interface for list delta events.
- *
- * This captures what `planDeltaOps` actually needs from a LoroEventBatch,
- * enabling proper typing for tests without requiring full LoroEventBatch mocks.
- *
- * @internal - Used for testing
- */
-export interface ListDeltaEvent {
-  events: Array<{
-    diff: {
-      type: string
-      diff: Array<{ retain?: number; delete?: number; insert?: unknown[] }>
-    }
-  }>
-}
-
-/**
  * Minimal interface for list refs used by planning functions.
  * This allows testing without real ListRef instances.
  * @internal
@@ -269,58 +252,48 @@ export function planInitialRender<T>(
 }
 
 /**
- * Plan operations from a list delta event.
+ * Plan operations based on list delta ops from a ReactiveDelta.
  *
- * This is a pure function that processes Loro delta events and returns
- * the corresponding list region operations. For inserts, it uses
- * `listRef.get(index)` to obtain refs (not the raw values from the delta).
+ * Converts Kinetic's ListDeltaOp[] into ListRegionOp[] for DOM manipulation.
+ * For inserts, it uses `listRef.get(index)` to obtain refs (not raw values).
  *
- * @param listRef - The list ref (already updated by Loro)
- * @param event - The Loro event batch
+ * @param listRef - The list ref (already updated by the source)
+ * @param deltaOps - The list delta operations from a ReactiveDelta
  * @returns Array of operations to apply
  *
  * @internal - Exported for testing
  */
 export function planDeltaOps<T>(
   listRef: ListRefLike<T>,
-  event: ListDeltaEvent | LoroEventBatch,
+  deltaOps: ListDeltaOp[],
 ): ListRegionOp<T>[] {
   const ops: ListRegionOp<T>[] = []
+  let index = 0
 
-  for (const diff of event.events) {
-    if (diff.diff.type !== "list") continue
-
-    const deltas = diff.diff.diff as Array<{
-      retain?: number
-      delete?: number
-      insert?: unknown[]
-    }>
-    let index = 0
-
-    for (const delta of deltas) {
-      if (delta.retain !== undefined) {
-        // Skip over retained items
-        index += delta.retain
-      } else if (delta.delete !== undefined) {
-        // Delete items at current index
-        // Note: We generate delete ops in order, but execution must
-        // delete from the same index repeatedly (not advancing)
-        for (let i = 0; i < delta.delete; i++) {
-          ops.push({ kind: "delete", index })
-        }
-        // Don't advance index - next op is at same position
-      } else if (delta.insert !== undefined) {
-        // Insert items at current index
-        // IMPORTANT: Use listRef.get() to get refs, NOT the raw delta values
-        const insertCount = (delta.insert as unknown[]).length
-        for (let i = 0; i < insertCount; i++) {
-          const item = listRef.get(index + i)
-          if (item !== undefined) {
-            ops.push({ kind: "insert", index: index + i, item })
-          }
-        }
-        index += insertCount
+  for (const delta of deltaOps) {
+    if ("retain" in delta) {
+      // Skip over retained items
+      index += delta.retain
+    } else if ("delete" in delta) {
+      // Delete items at current index
+      // Note: We generate delete ops in order, but execution must
+      // delete from the same index repeatedly (not advancing)
+      for (let i = 0; i < delta.delete; i++) {
+        ops.push({ kind: "delete", index })
       }
+      // Don't advance index - next op is at same position
+    } else if ("insert" in delta) {
+      // Insert items at current index
+      // IMPORTANT: Use listRef.get() to get refs, NOT raw values
+      // delta.insert is a COUNT, not an array of values
+      const insertCount = delta.insert
+      for (let i = 0; i < insertCount; i++) {
+        const item = listRef.get(index + i)
+        if (item !== undefined) {
+          ops.push({ kind: "insert", index: index + i, item })
+        }
+      }
+      index += insertCount
     }
   }
 
@@ -461,10 +434,26 @@ export function __listRegion<T>(
   // Subscribe to changes
   __subscribe(
     listRef,
-    event => {
-      // Plan and execute delta operations
-      const deltaOps = planDeltaOps(state.listRef, event)
-      executeOps(parent, state, handlers, deltaOps)
+    (delta: ReactiveDelta) => {
+      // Only process list deltas — other delta types trigger full re-render
+      if (delta.type === "list") {
+        const regionOps = planDeltaOps(state.listRef, delta.ops)
+        executeOps(parent, state, handlers, regionOps)
+      } else {
+        // Fallback: non-list delta (e.g., "replace") — full re-render
+        // Clear existing items
+        for (let i = state.slots.length - 1; i >= 0; i--) {
+          const slot = state.slots[i]
+          const itemScope = state.scopes[i]
+          if (slot) releaseSlot(parent, slot)
+          if (itemScope) itemScope.dispose()
+        }
+        state.slots = []
+        state.scopes = []
+        // Re-render all items
+        const newOps = planInitialRender(state.listRef)
+        executeOps(parent, state, handlers, newOps)
+      }
     },
     scope,
   )

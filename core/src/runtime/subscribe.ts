@@ -1,20 +1,22 @@
 /**
- * Subscription management for Loro refs.
+ * Subscription management for reactive refs.
  *
- * Provides functions for subscribing to Loro container changes and
+ * Provides functions for subscribing to reactive value changes and
  * managing subscription lifecycles within scopes.
+ *
+ * This module is Loro-agnostic — it uses the [REACTIVE] symbol from
+ * @loro-extended/reactive to subscribe to any reactive type (LocalRef,
+ * Loro refs, custom reactive types).
  *
  * @packageDocumentation
  */
 
-import { loro } from "@loro-extended/change"
-import type { Container, LoroDoc, LoroEventBatch } from "loro-crdt"
+import {
+  isReactive,
+  REACTIVE,
+  type ReactiveDelta,
+} from "@loro-extended/reactive"
 import type { Scope } from "./scope.js"
-
-/**
- * A subscribable Loro object (container or doc).
- */
-type Subscribable = Container | LoroDoc
 
 /**
  * Subscription ID for tracking and cleanup.
@@ -49,14 +51,19 @@ export function __getActiveSubscriptionCount(): number {
 }
 
 /**
- * Subscribe to a Loro ref's changes.
+ * Subscribe to a reactive ref's changes.
  *
  * This is an internal function called by compiled code.
- * It subscribes to the underlying Loro container and registers
+ * It subscribes via the [REACTIVE] symbol and registers
  * cleanup with the provided scope.
  *
- * @param ref - A typed ref (TextRef, ListRef, etc.) or the underlying Loro container
- * @param handler - Called when the ref changes
+ * Works with any type that implements the Reactive interface:
+ * - LocalRef from @loro-extended/reactive
+ * - Loro typed refs (TextRef, ListRef, etc.) from @loro-extended/change
+ * - Custom reactive types
+ *
+ * @param ref - A reactive value (must have [REACTIVE] property)
+ * @param handler - Called when the ref changes, with a delta describing the change
  * @param scope - The scope that owns this subscription
  * @returns Subscription ID for manual unsubscription (rarely needed)
  *
@@ -64,17 +71,22 @@ export function __getActiveSubscriptionCount(): number {
  */
 export function __subscribe(
   ref: unknown,
-  handler: (event: LoroEventBatch) => void,
+  handler: (delta: ReactiveDelta) => void,
   scope: Scope,
 ): SubscriptionId {
   const id = ++subscriptionIdCounter
 
-  // Get the underlying Loro container
-  // loro() handles both TypedRefs and raw Loro containers
-  const container = loro(ref as Parameters<typeof loro>[0]) as Subscribable
+  // Validate that ref is reactive
+  if (!isReactive(ref)) {
+    throw new Error(
+      "__subscribe called with non-reactive value. " +
+        "Expected a value with [REACTIVE] property.",
+    )
+  }
 
-  // Subscribe to the container
-  const unsubscribe = container.subscribe(handler)
+  // Subscribe via the [REACTIVE] symbol
+  // The ref's [REACTIVE] implementation handles translation to ReactiveDelta
+  const unsubscribe = ref[REACTIVE](ref, handler)
 
   // Track the subscription
   __activeSubscriptions.set(id, { ref, unsubscribe })
@@ -88,7 +100,7 @@ export function __subscribe(
 }
 
 /**
- * Unsubscribe from a Loro ref.
+ * Unsubscribe from a reactive ref.
  *
  * Usually not called directly - scopes handle cleanup automatically.
  * Use this only for manual subscription management.
@@ -110,13 +122,16 @@ export function __unsubscribe(id: SubscriptionId): boolean {
 }
 
 /**
- * Subscribe to a Loro ref and call handler immediately with current value.
+ * Subscribe to a reactive ref and call handler immediately with current value.
  *
  * This is useful for reactive expressions where you want to:
  * 1. Set the initial value
  * 2. Update on changes
  *
- * @param ref - A typed ref
+ * The delta is ignored — this function always re-reads the value via getValue().
+ * This is the fallback for expressions where delta-based patching isn't possible.
+ *
+ * @param ref - A reactive value
  * @param getValue - Function to get the current value from the ref
  * @param onValue - Called with the value (initial and on changes)
  * @param scope - The scope that owns this subscription
@@ -133,10 +148,10 @@ export function __subscribeWithValue<T>(
   // Call immediately with current value
   onValue(getValue())
 
-  // Subscribe to changes
+  // Subscribe to changes — ignore the delta and re-read the value
   return __subscribe(
     ref,
-    () => {
+    (_delta: ReactiveDelta) => {
       onValue(getValue())
     },
     scope,
@@ -146,7 +161,7 @@ export function __subscribeWithValue<T>(
 /**
  * Subscribe to multiple refs and call handler when any changes.
  *
- * @param refs - Array of typed refs
+ * @param refs - Array of reactive values
  * @param handler - Called when any ref changes
  * @param scope - The scope that owns these subscriptions
  * @returns Array of subscription IDs
@@ -158,5 +173,7 @@ export function __subscribeMultiple(
   handler: () => void,
   scope: Scope,
 ): SubscriptionId[] {
-  return refs.map(ref => __subscribe(ref, handler, scope))
+  // Wrap the void handler to accept and ignore the delta
+  const wrappedHandler = (_delta: ReactiveDelta) => handler()
+  return refs.map(ref => __subscribe(ref, wrappedHandler, scope))
 }

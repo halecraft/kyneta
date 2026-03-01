@@ -1,4 +1,10 @@
 import { createTypedDoc, loro, Shape } from "@loro-extended/change"
+import {
+  LocalRef,
+  REACTIVE,
+  type ReactiveDelta,
+  type ReactiveSubscribe,
+} from "@loro-extended/reactive"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { __resetScopeIdCounter, Scope } from "./scope.js"
 import {
@@ -382,6 +388,102 @@ describe("subscribe", () => {
       // Dispose root (cascades to remaining child)
       root.dispose()
       expect(__getActiveSubscriptionCount()).toBe(0)
+    })
+  })
+
+  describe("LocalRef support", () => {
+    it("should subscribe to LocalRef and receive replace deltas", () => {
+      const ref = new LocalRef(0)
+      const scope = new Scope()
+      const deltas: ReactiveDelta[] = []
+
+      __subscribe(ref, delta => deltas.push(delta), scope)
+
+      ref.set(1)
+      ref.set(2)
+
+      expect(deltas).toEqual([{ type: "replace" }, { type: "replace" }])
+
+      scope.dispose()
+    })
+
+    it("should work with __subscribeWithValue for LocalRef", () => {
+      const ref = new LocalRef("initial")
+      const scope = new Scope()
+      const values: string[] = []
+
+      __subscribeWithValue(
+        ref,
+        () => ref.get(),
+        value => values.push(value),
+        scope,
+      )
+
+      expect(values).toEqual(["initial"])
+
+      ref.set("updated")
+
+      expect(values).toEqual(["initial", "updated"])
+
+      scope.dispose()
+    })
+
+    it("should unsubscribe LocalRef when scope is disposed", () => {
+      const ref = new LocalRef(0)
+      const scope = new Scope()
+      const handler = vi.fn()
+
+      __subscribe(ref, handler, scope)
+
+      ref.set(1)
+      expect(handler).toHaveBeenCalledTimes(1)
+
+      scope.dispose()
+
+      ref.set(2)
+      expect(handler).toHaveBeenCalledTimes(1) // No additional calls
+    })
+  })
+
+  describe("custom reactive types", () => {
+    it("should subscribe to custom reactive type", () => {
+      // Create a minimal custom reactive type
+      const listeners = new Set<(delta: ReactiveDelta) => void>()
+      const customReactive = {
+        [REACTIVE]: ((
+          self: unknown,
+          callback: (delta: ReactiveDelta) => void,
+        ) => {
+          listeners.add(callback)
+          return () => listeners.delete(callback)
+        }) as ReactiveSubscribe,
+      }
+
+      const scope = new Scope()
+      const received: ReactiveDelta[] = []
+
+      __subscribe(customReactive, delta => received.push(delta), scope)
+
+      // Emit a delta manually
+      listeners.forEach(cb => cb({ type: "replace" }))
+
+      expect(received).toEqual([{ type: "replace" }])
+
+      scope.dispose()
+
+      // Should be unsubscribed
+      expect(listeners.size).toBe(0)
+    })
+
+    it("should throw for non-reactive values", () => {
+      const scope = new Scope()
+      const notReactive = { foo: "bar" }
+
+      expect(() => {
+        __subscribe(notReactive, () => {}, scope)
+      }).toThrow("non-reactive")
+
+      scope.dispose()
     })
   })
 })

@@ -15,8 +15,8 @@ import {
   bind,
   isBinding,
 } from "./binding.js"
-import { __resetScopeIdCounter, Scope } from "./scope.js"
-import { __resetSubscriptionIdCounter } from "./subscribe.js"
+import { __resetScopeIdCounter, Scope } from "../runtime/scope.js"
+import { __resetSubscriptionIdCounter } from "../runtime/subscribe.js"
 
 // Set up DOM globals for testing
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")

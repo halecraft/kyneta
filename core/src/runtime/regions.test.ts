@@ -4,6 +4,7 @@ import {
   type PlainValueRef,
   Shape,
 } from "@loro-extended/change"
+import type { ListDeltaOp } from "@loro-extended/reactive"
 import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
@@ -14,7 +15,6 @@ import {
   __conditionalRegion,
   __listRegion,
   claimSlot,
-  type ListDeltaEvent,
   type ListRefLike,
   planConditionalUpdate,
   planDeltaOps,
@@ -827,29 +827,6 @@ describe("regions", () => {
   })
 
   describe("planDeltaOps", () => {
-    /**
-     * Create a mock event for testing planDeltaOps.
-     *
-     * Uses the minimal ListDeltaEvent interface which captures only
-     * what planDeltaOps actually needs:
-     * - event.events[].diff.type === "list"
-     * - event.events[].diff.diff (the delta array)
-     */
-    function createMockListEvent(
-      deltas: Array<{ retain?: number; delete?: number; insert?: unknown[] }>,
-    ): ListDeltaEvent {
-      return {
-        events: [
-          {
-            diff: {
-              type: "list",
-              diff: deltas,
-            },
-          },
-        ],
-      }
-    }
-
     it("should use listRef.get() for inserts, not raw delta values", () => {
       // The listRef returns objects with isRef marker to prove we're using .get()
       const mockListRef: ListRefLike<{ index: number; isRef: true }> = {
@@ -857,10 +834,10 @@ describe("regions", () => {
         get: (i: number) => ({ index: i, isRef: true }),
       }
 
-      // The delta contains raw strings — we should NOT use these
-      const event = createMockListEvent([{ insert: ["raw1", "raw2"] }])
+      // delta.insert is a COUNT (2), not raw values
+      const deltaOps: ListDeltaOp[] = [{ insert: 2 }]
 
-      const ops = planDeltaOps(mockListRef, event)
+      const ops = planDeltaOps(mockListRef, deltaOps)
 
       // Should use listRef.get(), not the raw values from delta
       expect(ops).toEqual([
@@ -875,9 +852,9 @@ describe("regions", () => {
         get: () => "remaining",
       }
 
-      const event = createMockListEvent([{ delete: 2 }])
+      const deltaOps: ListDeltaOp[] = [{ delete: 2 }]
 
-      const ops = planDeltaOps(mockListRef, event)
+      const ops = planDeltaOps(mockListRef, deltaOps)
 
       // Both deletes should be at index 0 (delete doesn't advance index)
       expect(ops).toEqual([
@@ -893,9 +870,9 @@ describe("regions", () => {
       }
 
       // Retain 2, then insert 1
-      const event = createMockListEvent([{ retain: 2 }, { insert: ["new"] }])
+      const deltaOps: ListDeltaOp[] = [{ retain: 2 }, { insert: 1 }]
 
-      const ops = planDeltaOps(mockListRef, event)
+      const ops = planDeltaOps(mockListRef, deltaOps)
 
       // Insert should be at index 2 (after retaining 2)
       expect(ops).toEqual([{ kind: "insert", index: 2, item: { index: 2 } }])
@@ -908,13 +885,13 @@ describe("regions", () => {
       }
 
       // Retain 1, delete 1, insert 1
-      const event = createMockListEvent([
+      const deltaOps: ListDeltaOp[] = [
         { retain: 1 },
         { delete: 1 },
-        { insert: ["new"] },
-      ])
+        { insert: 1 },
+      ]
 
-      const ops = planDeltaOps(mockListRef, event)
+      const ops = planDeltaOps(mockListRef, deltaOps)
 
       expect(ops).toEqual([
         { kind: "delete", index: 1 },
@@ -922,25 +899,15 @@ describe("regions", () => {
       ])
     })
 
-    it("should skip non-list diffs", () => {
+    it("should handle empty delta ops", () => {
       const mockListRef: ListRefLike<string> = {
         length: 1,
         get: () => "item",
       }
 
-      // Create a text event (not list) to verify it's skipped
-      const event: ListDeltaEvent = {
-        events: [
-          {
-            diff: {
-              type: "text",
-              diff: [],
-            },
-          },
-        ],
-      }
+      const deltaOps: ListDeltaOp[] = []
 
-      const ops = planDeltaOps(mockListRef, event)
+      const ops = planDeltaOps(mockListRef, deltaOps)
 
       expect(ops).toEqual([])
     })

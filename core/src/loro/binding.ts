@@ -17,8 +17,8 @@
 import { loro } from "@loro-extended/change"
 import type { LoroText } from "loro-crdt"
 import type { Binding } from "../types.js"
-import type { Scope } from "./scope.js"
-import { __subscribe } from "./subscribe.js"
+import type { Scope } from "../runtime/scope.js"
+import { __subscribe } from "../runtime/subscribe.js"
 
 // =============================================================================
 // Binding Creation

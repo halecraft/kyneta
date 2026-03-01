@@ -33,6 +33,11 @@
       "import": "./dist/server/index.js",
       "default": "./dist/server/index.js"
     },
+    "./loro": {
+      "types": "./dist/loro/index.d.ts",
+      "import": "./dist/loro/index.js",
+      "default": "./dist/loro/index.js"
+    },
     "./types/elements": {
       "types": "./src/types/elements.d.ts"
     },

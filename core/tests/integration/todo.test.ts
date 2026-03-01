@@ -24,13 +24,13 @@ import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
-  __bindTextValue,
   __conditionalRegion,
   __listRegion,
   __resetScopeIdCounter,
   __subscribeWithValue,
   Scope,
 } from "../../src/index.js"
+import { __bindTextValue } from "../../src/loro/index.js"
 import { __resetSubscriptionIdCounter } from "../../src/runtime/subscribe.js"
 import {
   assertMaxMutations,
