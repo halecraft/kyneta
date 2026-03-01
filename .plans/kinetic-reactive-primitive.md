@@ -239,51 +239,61 @@ export function __subscribe(ref: Reactive, handler: () => void, scope: Scope) {
 - ✅ Task 1.4: Ensure `set()` only notifies if value changed (`===` check)
 - ✅ Task 1.5: Add unit tests for LocalRef behavior (11 tests)
 
-### Phase 2: Update @loro-extended/kinetic 🔴
+### Phase 2: Update @loro-extended/kinetic (partial) ⚠️
 
 **Goal**: Kinetic re-exports from reactive and uses for detection.
 
-- 🔴 Task 2.1: Add `@loro-extended/reactive` as dependency
-- 🔴 Task 2.2: Re-export `REACTIVE`, `ReactiveSubscribe`, `Reactive`, `LocalRef`, `isReactive` from index
-- 🔴 Task 2.3: Import `Reactive` type in compiler for `isTypeAssignableTo` check
-- 🔴 Task 2.4: Update `isReactiveType()` to use `tsChecker.isTypeAssignableTo(type, ReactiveType)`
-- 🔴 Task 2.5: Remove `LORO_REF_TYPES` hardcoded set
-- 🔴 Task 2.6: Update `expressionIsReactive()` if needed
-- 🔴 Task 2.7: Add compiler tests for symbol-based detection
+- ✅ Task 2.1: Add `@loro-extended/reactive` as dependency
+- ✅ Task 2.2: Re-export `REACTIVE`, `ReactiveSubscribe`, `Reactive`, `LocalRef`, `isReactive` from index
+- ⚠️ Task 2.3-2.7: Implemented with symbol property detection (blocked by Phase 3)
 
-### Phase 3: Update Runtime Subscribe 🔴
+**Note**: Phase 2 compiler detection is blocked until Phase 3 adds `[REACTIVE]` to the change package types. The compiler tests import from `@loro-extended/change` which doesn't have `[REACTIVE]` yet.
 
-**Goal**: Runtime uses `[REACTIVE]` function uniformly.
-
-- 🔴 Task 3.1: Import `REACTIVE`, `Reactive` from `@loro-extended/reactive`
-- 🔴 Task 3.2: Update `__subscribe` to use `ref[REACTIVE](ref, handler)`
-- 🔴 Task 3.3: Remove `loro()` import and usage from subscribe.ts
-- 🔴 Task 3.4: Add runtime tests for function-based subscription
-- 🔴 Task 3.5: Add integration test: LocalRef in conditional region
-
-### Phase 4: Update @loro-extended/change 🔴
+### Phase 3: Update @loro-extended/change 🔴
 
 **Goal**: Loro refs implement Reactive interface from shared package.
 
-- 🔴 Task 4.1: Add `@loro-extended/reactive` as dependency
-- 🔴 Task 4.2: Add `[REACTIVE]` function to `TextRef`
-- 🔴 Task 4.3: Add `[REACTIVE]` function to `CounterRef`
-- 🔴 Task 4.4: Add `[REACTIVE]` function to `ListRef`, `MovableListRef`
-- 🔴 Task 4.5: Add `[REACTIVE]` function to `RecordRef`, `StructRef`
-- 🔴 Task 4.6: Add `[REACTIVE]` function to `TreeRef`
-- 🔴 Task 4.7: Add `[REACTIVE]` function to `PlainValueRef` (via Proxy handler)
-- 🔴 Task 4.8: Re-export `REACTIVE` from index (for advanced users)
-- 🔴 Task 4.9: Add tests verifying `[REACTIVE]` presence on all ref types
+**Must be done before Phase 2b** — the compiler tests import real types from `@loro-extended/change`, which need `[REACTIVE]` for structural detection to work.
 
-### Phase 5: Documentation 🔴
+- 🔴 Task 3.1: Add `@loro-extended/reactive` as dependency
+- 🔴 Task 3.2: Add `[REACTIVE]` function to `TextRef`
+- 🔴 Task 3.3: Add `[REACTIVE]` function to `CounterRef`
+- 🔴 Task 3.4: Add `[REACTIVE]` function to `ListRef`, `MovableListRef`
+- 🔴 Task 3.5: Add `[REACTIVE]` function to `RecordRef`, `StructRef`
+- 🔴 Task 3.6: Add `[REACTIVE]` function to `TreeRef`
+- 🔴 Task 3.7: Add `[REACTIVE]` function to `PlainValueRef` (via Proxy handler)
+- 🔴 Task 3.8: Re-export `REACTIVE` from index (for advanced users)
+- 🔴 Task 3.9: Add tests verifying `[REACTIVE]` presence on all ref types
+
+### Phase 4: Complete Compiler Detection 🔴
+
+**Goal**: Verify compiler detection works with real types; remove any fallbacks.
+
+Now that `@loro-extended/change` types have `[REACTIVE]`, the compiler's structural detection should work.
+
+- 🔴 Task 4.1: Verify all transform.test.ts tests pass with structural detection
+- 🔴 Task 4.2: Remove any remaining fallback code if present
+- 🔴 Task 4.3: Add test: custom user type with `[REACTIVE]` is detected
+- 🔴 Task 4.4: Add test: type without `[REACTIVE]` is NOT detected (even if named "TextRef")
+
+### Phase 5: Update Runtime Subscribe 🔴
+
+**Goal**: Runtime uses `[REACTIVE]` function uniformly.
+
+- 🔴 Task 5.1: Import `REACTIVE`, `Reactive` from `@loro-extended/reactive`
+- 🔴 Task 5.2: Update `__subscribe` to use `ref[REACTIVE](ref, handler)`
+- 🔴 Task 5.3: Remove `loro()` import and usage from subscribe.ts
+- 🔴 Task 5.4: Add runtime tests for function-based subscription
+- 🔴 Task 5.5: Add integration test: LocalRef in conditional region
+### Phase 6: Documentation 🔴
 
 **Goal**: Document the reactive primitive system.
 
-- 🔴 Task 5.1: Add README.md to `packages/reactive/`
-- 🔴 Task 5.2: Add "Reactive Primitives" section to kinetic/TECHNICAL.md
-- 🔴 Task 5.3: Document `LocalRef` usage patterns
-- 🔴 Task 5.4: Document how to create custom reactive types
-- 🔴 Task 5.5: Update change package docs noting `[REACTIVE]` function
+- 🔴 Task 6.1: Add README.md to `packages/reactive/`
+- 🔴 Task 6.2: Add "Reactive Primitives" section to kinetic/TECHNICAL.md
+- 🔴 Task 6.3: Document `LocalRef` usage patterns
+- 🔴 Task 6.4: Document how to create custom reactive types
+- 🔴 Task 6.5: Update change package docs noting `[REACTIVE]` function
 
 ## Tests
 
@@ -918,6 +928,42 @@ This works because:
 - TypeScript sees the same symbol type in both contexts
 - Structural compatibility check confirms the type has `[REACTIVE]`
 
+### Phase Ordering: Types Before Detection
+
+The compiler detection (Phase 2b) depends on the `@loro-extended/change` types having `[REACTIVE]`. The transform tests use the real filesystem and import real types from `@loro-extended/change`. Until those types have `[REACTIVE]`, the structural detection will fail.
+
+**Correct order**:
+1. Phase 3: Add `[REACTIVE]` to `@loro-extended/change` types
+2. Phase 4: Verify compiler detection works with real types
+3. Phase 5: Update runtime to use `[REACTIVE]` uniformly
+
+This ordering ensures each phase can be tested in isolation with real dependencies.
+
+### Hybrid Detection is Wrong
+
+**Mistake**: The initial Phase 2 implementation used a "hybrid" approach:
+1. Try to detect `[REACTIVE]` via symbol property name heuristics
+2. Fall back to hardcoded type names (`KNOWN_REACTIVE_TYPES`)
+
+**Why it's wrong**: If we're still falling back to hardcoded type names, we haven't achieved the goal. The symbol-based design exists precisely to eliminate hardcoded type lists.
+
+**Correct approach**: Use TypeScript's `isTypeAssignableTo` directly. Load the `Reactive` interface type from the project's type system and check if candidate types are assignable to it. No fallbacks, no hardcoded names — pure structural typing.
+
+```typescript
+// WRONG (hybrid):
+function isReactiveType(type: Type): boolean {
+  if (hasSymbolProperty(type, "kinetic:reactive")) return true
+  if (KNOWN_REACTIVE_TYPES.has(typeName)) return true  // ❌ Defeats the purpose
+  ...
+}
+
+// RIGHT (pure structural):
+function isReactiveType(type: Type): boolean {
+  const reactiveType = getReactiveInterfaceType(project)
+  return tsChecker.isTypeAssignableTo(type.compilerType, reactiveType)
+}
+```
+
 ### PlainValueRef Requires Special Handling
 
 `PlainValueRef` is not a class—it's a Proxy created by a factory. Adding `[REACTIVE]` requires:
@@ -927,3 +973,50 @@ This works because:
 3. Ideally, filter subscription events by path for efficiency (optional optimization)
 
 This is more complex than class-based refs but follows the same pattern.
+
+### ts-morph `type.getProperties()` Does NOT Return Symbol-Keyed Properties
+
+When inspecting types via ts-morph:
+
+```typescript
+const type = expr.getType()
+type.getProperties()  // Returns [] for symbol-keyed properties!
+```
+
+Symbol-keyed properties are hidden from ts-morph's API. To access them, you must use the underlying TypeScript compiler API:
+
+```typescript
+const tsChecker = (type as any)._context?.typeChecker?.compilerObject
+const properties = tsChecker.getPropertiesOfType(type.compilerType)
+```
+
+Symbol properties appear with mangled names like `__@REACTIVE@123` or `__@kinetic@reactive@456`.
+
+**However**, this is fragile and version-dependent. The correct approach is to use `isTypeAssignableTo` instead of inspecting properties directly.
+
+### TypeScript Version Conflicts in ts-morph
+
+ts-morph bundles its own TypeScript version (`@ts-morph/common`). Casting between ts-morph's types and the project's TypeScript types can fail:
+
+```typescript
+// This fails with type incompatibility errors:
+import type * as ts from "typescript"
+const tsType = type.compilerType as ts.Type  // ❌ Type error
+
+// Solution: cast through unknown
+const tsType = type.compilerType as unknown
+const tsChecker = ... as unknown
+```
+
+### JSDoc Nested Comment Pitfall
+
+esbuild's parser fails on nested `/* */` comments in JSDoc:
+
+```typescript
+/**
+ * @example
+ * return () => { /* unsubscribe */ }  // ❌ Parse error
+ */
+```
+
+Avoid nested block comments in JSDoc examples. Use `// comment` or omit the inner comment.

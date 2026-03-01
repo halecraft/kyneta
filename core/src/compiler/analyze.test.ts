@@ -50,23 +50,30 @@ function createSourceFile(
 
 /**
  * Add Loro type definitions to the project.
+ * These mock types include the [REACTIVE] symbol to match the real implementation.
  */
 function addLoroTypes(project: Project) {
   project.createSourceFile(
     "loro-types.d.ts",
     `
+    declare const REACTIVE: unique symbol
+    type ReactiveSubscribe = (self: unknown, callback: () => void) => () => void
+
     export interface TextRef {
+      readonly [REACTIVE]: ReactiveSubscribe
       insert(pos: number, text: string): void
       delete(pos: number, len: number): void
       toString(): string
     }
 
     export interface CounterRef {
+      readonly [REACTIVE]: ReactiveSubscribe
       get(): number
       increment(n: number): void
     }
 
     export interface ListRef<T> {
+      readonly [REACTIVE]: ReactiveSubscribe
       push(item: T): void
       insert(index: number, item: T): void
       delete(index: number, len?: number): void
@@ -76,7 +83,32 @@ function addLoroTypes(project: Project) {
     }
 
     export interface StructRef<T> {
+      readonly [REACTIVE]: ReactiveSubscribe
       get<K extends keyof T>(key: K): T[K]
+    }
+  `,
+    { overwrite: true },
+  )
+}
+
+/**
+ * Add reactive type definitions (REACTIVE symbol and Reactive interface) to the project.
+ */
+function addReactiveTypes(project: Project) {
+  project.createSourceFile(
+    "reactive-types.d.ts",
+    `
+    export const REACTIVE: unique symbol
+    export type ReactiveSubscribe = (self: unknown, callback: () => void) => () => void
+    export interface Reactive {
+      readonly [REACTIVE]: ReactiveSubscribe
+    }
+    export class LocalRef<T> implements Reactive {
+      readonly [REACTIVE]: ReactiveSubscribe
+      constructor(initial: T)
+      get(): T
+      set(value: T): void
+      subscribe(callback: () => void): () => void
     }
   `,
     { overwrite: true },
@@ -349,6 +381,114 @@ describe("isReactiveType", () => {
         const type = initializer.getType()
         expect(isReactiveType(type)).toBe(false)
       }
+    }
+  })
+
+  it("should detect LocalRef as reactive", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { LocalRef } from "./reactive-types"
+      declare const isOpen: LocalRef<boolean>
+      const x = isOpen
+    `,
+    )
+
+    addReactiveTypes(project)
+
+    const varDecl = sourceFile.getVariableDeclaration("x")
+    expect(varDecl).toBeDefined()
+    if (varDecl) {
+      const initializer = varDecl.getInitializer()
+      expect(initializer).toBeDefined()
+      if (initializer) {
+        const type = initializer.getType()
+        expect(isReactiveType(type)).toBe(true)
+      }
+    }
+  })
+})
+
+// =============================================================================
+// Symbol-based Reactive Detection Tests
+// =============================================================================
+
+describe("symbol-based reactive detection", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addReactiveTypes(project)
+  })
+
+  it("detects LocalRef as reactive by name", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { LocalRef } from "./reactive-types"
+      const isOpen = new LocalRef(false)
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("isOpen")
+    expect(varDecl).toBeDefined()
+    if (varDecl) {
+      const type = varDecl.getType()
+      expect(isReactiveType(type)).toBe(true)
+    }
+  })
+
+  it("does not detect unbranded subscribable as reactive", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      class NotReactive {
+        subscribe(cb: () => void) { return () => {} }
+        get() { return 42 }
+      }
+      const obj = new NotReactive()
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("obj")
+    expect(varDecl).toBeDefined()
+    if (varDecl) {
+      const type = varDecl.getType()
+      expect(isReactiveType(type)).toBe(false)
+    }
+  })
+
+  it("does not detect plain objects as reactive", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      const obj = { value: 42, subscribe: () => () => {} }
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("obj")
+    expect(varDecl).toBeDefined()
+    if (varDecl) {
+      const type = varDecl.getType()
+      expect(isReactiveType(type)).toBe(false)
+    }
+  })
+
+  it("detects reactive type in union", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { LocalRef } from "./reactive-types"
+      declare const maybeRef: LocalRef<number> | null
+      const x = maybeRef
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("x")
+    expect(varDecl).toBeDefined()
+    if (varDecl) {
+      const type = varDecl.getType()
+      expect(isReactiveType(type)).toBe(true)
     }
   })
 })

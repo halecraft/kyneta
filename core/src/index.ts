@@ -120,3 +120,15 @@ export type {
   Props,
   ScopeInterface,
 } from "./types.js"
+
+// =============================================================================
+// Reactive Primitives (re-exported from @loro-extended/reactive)
+// =============================================================================
+
+export {
+  isReactive,
+  LocalRef,
+  REACTIVE,
+  type Reactive,
+  type ReactiveSubscribe,
+} from "@loro-extended/reactive"

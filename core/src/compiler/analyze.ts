@@ -13,6 +13,7 @@
  * @packageDocumentation
  */
 
+import { isReactiveType } from "./reactive-detection.js"
 import {
   type ArrayBindingPattern,
   type ArrowFunction,
@@ -32,6 +33,7 @@ import {
   type TemplateExpression,
   type Type,
 } from "ts-morph"
+
 import type {
   AttributeNode,
   BuilderNode,
@@ -192,27 +194,6 @@ export const ELEMENT_FACTORIES = new Set([
 ])
 
 /**
- * Loro ref type names that indicate reactivity.
- */
-const LORO_REF_TYPES = new Set([
-  "TextRef",
-  "CounterRef",
-  "ListRef",
-  "MovableListRef",
-  "MapRef",
-  "RecordRef",
-  "StructRef",
-  "TreeRef",
-  // Also match the Loro container types directly
-  "LoroText",
-  "LoroCounter",
-  "LoroList",
-  "LoroMovableList",
-  "LoroMap",
-  "LoroTree",
-])
-
-/**
  * Event handler prop names (start with "on").
  */
 function isEventHandlerProp(name: string): boolean {
@@ -242,56 +223,8 @@ export function getSpan(node: Node): SourceSpan {
 // Type Analysis
 // =============================================================================
 
-/**
- * Check if a type is or contains a Loro ref type.
- *
- * This recursively checks union types, intersection types, and type arguments.
- */
-export function isReactiveType(type: Type): boolean {
-  // Check the type symbol name
-  const symbol = type.getSymbol()
-  if (symbol) {
-    const name = symbol.getName()
-    if (LORO_REF_TYPES.has(name)) {
-      return true
-    }
-  }
-
-  // Check alias symbol (for type aliases)
-  const aliasSymbol = type.getAliasSymbol()
-  if (aliasSymbol) {
-    const name = aliasSymbol.getName()
-    if (LORO_REF_TYPES.has(name)) {
-      return true
-    }
-  }
-
-  // Check type text for ref patterns
-  const typeText = type.getText()
-  for (const refType of LORO_REF_TYPES) {
-    if (typeText.includes(refType)) {
-      return true
-    }
-  }
-
-  // Check union types
-  if (type.isUnion()) {
-    return type.getUnionTypes().some(t => isReactiveType(t))
-  }
-
-  // Check intersection types
-  if (type.isIntersection()) {
-    return type.getIntersectionTypes().some(t => isReactiveType(t))
-  }
-
-  // Check type arguments (for generic types)
-  const typeArgs = type.getTypeArguments()
-  if (typeArgs.length > 0) {
-    return typeArgs.some(t => isReactiveType(t))
-  }
-
-  return false
-}
+// isReactiveType is imported from ./reactive-detection.js
+export { isReactiveType }
 
 /**
  * Check if an expression accesses a reactive ref.

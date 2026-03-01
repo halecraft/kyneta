@@ -45,6 +45,7 @@
     "verify": "verify"
   },
   "dependencies": {
+    "@loro-extended/reactive": "workspace:^",
     "js-beautify": "^1.15.4",
     "ts-morph": "^25.0.0"
   },
