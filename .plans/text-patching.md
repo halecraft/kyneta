@@ -71,15 +71,15 @@ Compiler changes to detect when a content expression is a direct `.get()` / `.to
 - ✅ Task 2.4: Call `detectDirectRead` from `analyzeExpression` and pass result to `createContent`
 - ✅ Task 2.5: Add analyze tests for direct-read detection (positive and negative cases)
 
-### Phase 3: `textRegion` Runtime Function 🔴
+### Phase 3: `textRegion` Runtime Function ✅
 
 The runtime function that generated code calls for direct TextRef reads.
 
-- 🔴 Task 3.1: Define `TextRefLike` interface in `runtime/text-patch.ts` (mirrors `ListRefLike` pattern from `regions.ts`)
-- 🔴 Task 3.2: Implement `textRegion(textNode: Text, ref: unknown, scope: Scope): void` in `runtime/text-patch.ts`, casting `ref` to `TextRefLike` internally
-- 🔴 Task 3.3: Export `textRegion` from `runtime/index.ts`
-- 🔴 Task 3.4: Add unit tests for `textRegion` with mock TextRef emitting text deltas
-- 🔴 Task 3.5: Add unit test for `textRegion` fallback (non-text delta triggers full replacement)
+- ✅ Task 3.1: Define `TextRefLike` interface in `runtime/text-patch.ts` (mirrors `ListRefLike` pattern from `regions.ts`)
+- ✅ Task 3.2: Implement `textRegion(textNode: Text, ref: unknown, scope: Scope): void` in `runtime/text-patch.ts`, casting `ref` to `TextRefLike` internally
+- ✅ Task 3.3: Export `textRegion` from `runtime/index.ts`
+- ✅ Task 3.4: Add unit tests for `textRegion` with mock TextRef emitting text deltas
+- ✅ Task 3.5: Add unit test for `textRegion` fallback (non-text delta triggers full replacement)
 
 ### Phase 4: Codegen & Import Updates 🔴
 

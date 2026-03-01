@@ -8,11 +8,14 @@
  * Follows the Functional Core / Imperative Shell pattern:
  * - `planTextPatch` (pure): converts cursor-based deltas to offset-based ops
  * - `patchText` (imperative): applies ops to a DOM Text node
+ * - `textRegion` (imperative): subscribes to a TextRef and applies surgical patches
  *
  * @packageDocumentation
  */
 
-import type { TextDeltaOp } from "@loro-extended/reactive"
+import type { ReactiveDelta, TextDeltaOp } from "@loro-extended/reactive"
+import type { Scope } from "./scope.js"
+import { subscribe } from "./subscribe.js"
 
 // =============================================================================
 // Types
@@ -27,6 +30,19 @@ import type { TextDeltaOp } from "@loro-extended/reactive"
 export type TextPatchOp =
   | { kind: "insert"; offset: number; text: string }
   | { kind: "delete"; offset: number; count: number }
+
+/**
+ * Minimal interface for text refs used by textRegion.
+ *
+ * This allows the runtime to remain Loro-agnostic — any type with
+ * a `get()` method returning a string works (TextRef, custom text reactives, etc.).
+ *
+ * @internal
+ */
+export interface TextRefLike {
+  /** Get the current text value */
+  get(): string
+}
 
 // =============================================================================
 // Functional Core (Pure)
@@ -110,4 +126,52 @@ export function patchText(textNode: Text, ops: TextDeltaOp[]): void {
       textNode.deleteData(op.offset, op.count)
     }
   }
+}
+
+// =============================================================================
+// Text Region (Subscription-Aware DOM Updates)
+// =============================================================================
+
+/**
+ * Subscribe to a TextRef and apply surgical text patches to a DOM Text node.
+ *
+ * This is the runtime function that generated code calls for direct TextRef reads.
+ * It follows the same pattern as `listRegion` and `conditionalRegion`:
+ * 1. Set initial value
+ * 2. Subscribe to changes
+ * 3. Apply surgical patches for text deltas, fall back to full replacement otherwise
+ *
+ * @param textNode - The DOM Text node to manage
+ * @param ref - The reactive text ref (must have a `get()` method)
+ * @param scope - The scope for subscription cleanup
+ *
+ * @example
+ * Generated code for `{doc.title.get()}` where `doc.title` is a TextRef:
+ * ```typescript
+ * const _text0 = document.createTextNode("")
+ * parent.appendChild(_text0)
+ * textRegion(_text0, doc.title, scope)
+ * ```
+ */
+export function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
+  // Cast to TextRefLike — the ref must have .get()
+  const typedRef = ref as TextRefLike
+
+  // Set initial value
+  textNode.textContent = typedRef.get()
+
+  // Subscribe to changes
+  subscribe(
+    ref,
+    (delta: ReactiveDelta) => {
+      if (delta.type === "text") {
+        // Surgical update — O(k) where k is the edit size
+        patchText(textNode, delta.ops)
+      } else {
+        // Fallback for non-text deltas (e.g., "replace") — O(n) full replacement
+        textNode.textContent = typedRef.get()
+      }
+    },
+    scope,
+  )
 }

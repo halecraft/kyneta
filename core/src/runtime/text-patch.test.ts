@@ -1,12 +1,32 @@
 /**
  * Tests for text-patch.ts
  *
- * Phase 1 of text patching: pure functions with zero DOM or subscription dependencies.
+ * Phase 1: Pure functions with zero DOM or subscription dependencies.
+ * Phase 3: textRegion subscription-aware DOM updates.
  */
 
+import { createTypedDoc, loro, Shape } from "@loro-extended/change"
+import {
+  REACTIVE,
+  type ReactiveDelta,
+  type ReactiveSubscribe,
+  type TextDeltaOp,
+} from "@loro-extended/reactive"
 import { JSDOM } from "jsdom"
-import { describe, expect, it } from "vitest"
-import { patchText, planTextPatch, type TextPatchOp } from "./text-patch.js"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { resetScopeIdCounter, Scope } from "./scope.js"
+import {
+  activeSubscriptions,
+  getActiveSubscriptionCount,
+  resetSubscriptionIdCounter,
+} from "./subscribe.js"
+import {
+  patchText,
+  planTextPatch,
+  textRegion,
+  type TextPatchOp,
+  type TextRefLike,
+} from "./text-patch.js"
 
 // Set up DOM globals for testing
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")
@@ -52,7 +72,7 @@ describe("planTextPatch", () => {
   })
 
   it("handles empty ops", () => {
-    const ops: { retain?: number; insert?: string; delete?: number }[] = []
+    const ops: TextDeltaOp[] = []
     const result = planTextPatch(ops)
 
     expect(result).toEqual([])
@@ -158,5 +178,250 @@ describe("patchText", () => {
     patchText(text, [{ delete: 3 }, { insert: "new" }])
 
     expect(text.textContent).toBe("new")
+  })
+})
+
+// =============================================================================
+// textRegion Tests
+// =============================================================================
+
+describe("textRegion", () => {
+  beforeEach(() => {
+    resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    activeSubscriptions.clear()
+  })
+
+  afterEach(() => {
+    activeSubscriptions.clear()
+  })
+
+  describe("with mock TextRef", () => {
+    /**
+     * Create a mock TextRef for testing.
+     * Allows manual triggering of deltas to verify textRegion behavior.
+     */
+    function createMockTextRef(initialValue: string): {
+      ref: TextRefLike & { [REACTIVE]: ReactiveSubscribe }
+      emit: (delta: ReactiveDelta) => void
+      setValue: (value: string) => void
+    } {
+      let currentValue = initialValue
+      let callback: ((delta: ReactiveDelta) => void) | null = null
+
+      const ref = {
+        get: () => currentValue,
+        [REACTIVE]: ((_self: unknown, cb: (delta: ReactiveDelta) => void) => {
+          callback = cb
+          return () => {
+            callback = null
+          }
+        }) as ReactiveSubscribe,
+      }
+
+      return {
+        ref,
+        emit: (delta: ReactiveDelta) => {
+          callback?.(delta)
+        },
+        setValue: (value: string) => {
+          currentValue = value
+        },
+      }
+    }
+
+    it("sets initial text content from ref.get()", () => {
+      const { ref } = createMockTextRef("Hello")
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      textRegion(textNode, ref, scope)
+
+      expect(textNode.textContent).toBe("Hello")
+
+      scope.dispose()
+    })
+
+    it("applies text delta via insertData", () => {
+      const { ref, emit, setValue } = createMockTextRef("Hello")
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      textRegion(textNode, ref, scope)
+      expect(textNode.textContent).toBe("Hello")
+
+      // Simulate text insert: "Hello" → "Hello World"
+      setValue("Hello World")
+      emit({ type: "text", ops: [{ retain: 5 }, { insert: " World" }] })
+
+      expect(textNode.textContent).toBe("Hello World")
+
+      scope.dispose()
+    })
+
+    it("applies text delta via deleteData", () => {
+      const { ref, emit, setValue } = createMockTextRef("Hello World")
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      textRegion(textNode, ref, scope)
+      expect(textNode.textContent).toBe("Hello World")
+
+      // Simulate text delete: "Hello World" → "Hello"
+      setValue("Hello")
+      emit({ type: "text", ops: [{ retain: 5 }, { delete: 6 }] })
+
+      expect(textNode.textContent).toBe("Hello")
+
+      scope.dispose()
+    })
+
+    it("falls back to full replacement for non-text delta", () => {
+      const { ref, emit, setValue } = createMockTextRef("old value")
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      textRegion(textNode, ref, scope)
+      expect(textNode.textContent).toBe("old value")
+
+      // Simulate a "replace" delta (e.g., from a LocalRef or full replacement)
+      setValue("new value")
+      emit({ type: "replace" })
+
+      expect(textNode.textContent).toBe("new value")
+
+      scope.dispose()
+    })
+
+    it("registers cleanup with scope", () => {
+      const { ref } = createMockTextRef("test")
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      expect(getActiveSubscriptionCount()).toBe(0)
+
+      textRegion(textNode, ref, scope)
+
+      expect(getActiveSubscriptionCount()).toBe(1)
+
+      scope.dispose()
+
+      expect(getActiveSubscriptionCount()).toBe(0)
+    })
+
+    it("handles multiple text deltas in sequence", () => {
+      const { ref, emit, setValue } = createMockTextRef("abc")
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      textRegion(textNode, ref, scope)
+      expect(textNode.textContent).toBe("abc")
+
+      // First edit: "abc" → "abXc"
+      setValue("abXc")
+      emit({ type: "text", ops: [{ retain: 2 }, { insert: "X" }] })
+      expect(textNode.textContent).toBe("abXc")
+
+      // Second edit: "abXc" → "abXYc"
+      setValue("abXYc")
+      emit({ type: "text", ops: [{ retain: 3 }, { insert: "Y" }] })
+      expect(textNode.textContent).toBe("abXYc")
+
+      // Third edit: "abXYc" → "aXYc" (delete 'b')
+      setValue("aXYc")
+      emit({ type: "text", ops: [{ retain: 1 }, { delete: 1 }] })
+      expect(textNode.textContent).toBe("aXYc")
+
+      scope.dispose()
+    })
+  })
+
+  describe("with real Loro TextRef", () => {
+    it("renders initial value from TextRef", () => {
+      const schema = Shape.doc({ title: Shape.text() })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      // Set initial value
+      doc.title.insert(0, "Hello")
+      loro(doc).commit()
+
+      textRegion(textNode, doc.title, scope)
+
+      expect(textNode.textContent).toBe("Hello")
+
+      scope.dispose()
+    })
+
+    it("applies insert delta from Loro TextRef", () => {
+      const schema = Shape.doc({ title: Shape.text() })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      // Set initial value
+      doc.title.insert(0, "Hello")
+      loro(doc).commit()
+
+      textRegion(textNode, doc.title, scope)
+      expect(textNode.textContent).toBe("Hello")
+
+      // Insert " World" at end
+      doc.title.insert(5, " World")
+      loro(doc).commit()
+
+      expect(textNode.textContent).toBe("Hello World")
+
+      scope.dispose()
+    })
+
+    it("applies delete delta from Loro TextRef", () => {
+      const schema = Shape.doc({ title: Shape.text() })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      // Set initial value
+      doc.title.insert(0, "Hello World")
+      loro(doc).commit()
+
+      textRegion(textNode, doc.title, scope)
+      expect(textNode.textContent).toBe("Hello World")
+
+      // Delete " World"
+      doc.title.delete(5, 6)
+      loro(doc).commit()
+
+      expect(textNode.textContent).toBe("Hello")
+
+      scope.dispose()
+    })
+
+    it("unsubscribes when scope is disposed", () => {
+      const schema = Shape.doc({ title: Shape.text() })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+      const textNode = document.createTextNode("")
+
+      doc.title.insert(0, "Hello")
+      loro(doc).commit()
+
+      textRegion(textNode, doc.title, scope)
+      expect(textNode.textContent).toBe("Hello")
+
+      expect(getActiveSubscriptionCount()).toBe(1)
+
+      scope.dispose()
+
+      expect(getActiveSubscriptionCount()).toBe(0)
+
+      // Changes after dispose should not affect the text node
+      doc.title.insert(5, " World")
+      loro(doc).commit()
+
+      // Text node should still have old value
+      expect(textNode.textContent).toBe("Hello")
+    })
   })
 })
