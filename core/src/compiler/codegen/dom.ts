@@ -209,7 +209,7 @@ function generateAttributeSubscription(
     updateCode = `${elementVar}.setAttribute(${JSON.stringify(attr.name)}, ${attr.value.source})`
   }
 
-  lines.push(`${ind}__subscribe(${dep}, () => {`)
+  lines.push(`${ind}__subscribe(${dep.source}, () => {`)
   lines.push(`${ind}${state.indent}${updateCode}`)
   lines.push(`${ind}}, ${state.scopeVar})`)
 
@@ -370,7 +370,7 @@ function generateChild(
         if (node.dependencies.length > 0) {
           const dep = node.dependencies[0]
           lines.push(
-            `${ind}__subscribeWithValue(${dep}, () => ${node.source}, (v) => {`,
+            `${ind}__subscribeWithValue(${dep.source}, () => ${node.source}, (v) => {`,
           )
           lines.push(`${ind}${state.indent}${textVar}.textContent = String(v)`)
           lines.push(`${ind}}, ${state.scopeVar})`)
@@ -478,7 +478,7 @@ function generateBodyWithReturn(
         if (domNode.dependencies.length > 0) {
           const dep = domNode.dependencies[0]
           lines.push(
-            `${ind}__subscribeWithValue(${dep}, () => ${domNode.source}, (v) => {`,
+            `${ind}__subscribeWithValue(${dep.source}, () => ${domNode.source}, (v) => {`,
           )
           lines.push(`${ind}${state.indent}${textVar}.textContent = String(v)`)
           lines.push(`${ind}}, ${state.scopeVar})`)
@@ -658,7 +658,7 @@ function generateConditional(
   const innerInd = getIndent(innerState)
 
   lines.push(
-    `${ind}__conditionalRegion(${markerVar}, ${node.subscriptionTarget}, () => ${conditionExpr.source}, {`,
+    `${ind}__conditionalRegion(${markerVar}, ${node.subscriptionTarget?.source}, () => ${conditionExpr.source}, {`,
   )
 
   // Generate whenTrue handler

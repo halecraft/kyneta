@@ -17,6 +17,8 @@ import {
   createLoop,
   createSpan,
   createStatement,
+  type Dependency,
+  type DeltaKind,
   type EventHandlerNode,
 } from "../ir.js"
 import { generateDOM, generateElementFactory } from "./dom.js"
@@ -35,6 +37,14 @@ function span(
   endCol: number,
 ) {
   return createSpan(startLine, startCol, endLine, endCol)
+}
+
+/**
+ * Create a dependency with a given source and optional delta kind.
+ * Defaults to "replace" for simplicity in tests.
+ */
+function dep(source: string, deltaKind: DeltaKind = "replace"): Dependency {
+  return { source, deltaKind }
 }
 
 /**
@@ -191,7 +201,7 @@ describe("generateDOM", () => {
         value: createContent(
           'isActive ? "active" : "inactive"',
           "reactive",
-          ["isActive"],
+          [dep("isActive")],
           span(1, 5, 1, 40),
         ),
       }
@@ -262,7 +272,7 @@ describe("generateDOM", () => {
       const reactiveExpr = createContent(
         "count.get()",
         "reactive",
-        ["count"],
+        [dep("count")],
         span(1, 4, 1, 15),
       )
       const builder = createBuilder(
@@ -285,7 +295,7 @@ describe("generateDOM", () => {
         // biome-ignore lint/suspicious/noTemplateCurlyInString: testing template literal source code
         "`Count: ${count.get()}`",
         "reactive",
-        ["count"],
+        [dep("count")],
         span(1, 4, 1, 27),
       )
       const builder = createBuilder(
@@ -324,7 +334,7 @@ describe("generateDOM - list regions", () => {
       "item",
       null,
       [liElement],
-      ["items"],
+      [dep("items")],
       span(2, 2, 4, 3),
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 5, 1))
@@ -352,7 +362,7 @@ describe("generateDOM - list regions", () => {
       "item",
       "i",
       [liElement],
-      ["items"],
+      [dep("items")],
       span(2, 2, 4, 3),
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 5, 1))
@@ -378,7 +388,7 @@ describe("generateDOM - list regions", () => {
       "item",
       null,
       [liElement],
-      ["items"],
+      [dep("items")],
       span(2, 2, 4, 3),
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 5, 1))
@@ -413,7 +423,7 @@ describe("generateDOM - list regions", () => {
       "item",
       null,
       [li1, li2],
-      ["items"],
+      [dep("items")],
       span(2, 2, 5, 3),
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))
@@ -444,7 +454,7 @@ describe("generateDOM - conditional regions", () => {
       createContent(
         "count.get() > 0",
         "reactive",
-        ["count"],
+        [dep("count")],
         span(2, 6, 2, 22),
       ),
       [pElement],
@@ -452,7 +462,7 @@ describe("generateDOM - conditional regions", () => {
     )
     const conditionalRegion = createConditional(
       [branch],
-      "count",
+      dep("count"),
       span(2, 2, 4, 3),
     )
     const builder = createBuilder(
@@ -478,7 +488,7 @@ describe("generateDOM - conditional regions", () => {
       createContent(
         "count.get() > 0",
         "reactive",
-        ["count"],
+        [dep("count")],
         span(2, 6, 2, 22),
       ),
       [
@@ -509,7 +519,7 @@ describe("generateDOM - conditional regions", () => {
     )
     const conditionalRegion = createConditional(
       [trueBranch, falseBranch],
-      "count",
+      dep("count"),
       span(2, 2, 6, 3),
     )
     const builder = createBuilder(
@@ -543,7 +553,7 @@ describe("generateDOM - conditional regions", () => {
       createContent(
         "count.get() > 0",
         "reactive",
-        ["count"],
+        [dep("count")],
         span(2, 6, 2, 22),
       ),
       [
@@ -574,7 +584,7 @@ describe("generateDOM - conditional regions", () => {
     )
     const conditionalRegion = createConditional(
       [trueBranch, falseBranch],
-      "count",
+      dep("count"),
       span(2, 2, 6, 3),
     )
     const builder = createBuilder(
@@ -678,11 +688,18 @@ describe("generateDOM - code validity", () => {
           [],
           [],
           [],
-          [createContent("item.text", "reactive", ["item"], span(3, 0, 3, 10))],
+          [
+            createContent(
+              "item.text",
+              "reactive",
+              [dep("item")],
+              span(3, 0, 3, 10),
+            ),
+          ],
           span(2, 0, 4, 1),
         ),
       ],
-      ["items"],
+      [dep("items")],
       span(1, 0, 5, 1),
     )
 
@@ -690,7 +707,7 @@ describe("generateDOM - code validity", () => {
       createContent(
         "count.get() > 0",
         "reactive",
-        ["count"],
+        [dep("count")],
         span(1, 0, 1, 15),
       ),
       [
@@ -707,7 +724,7 @@ describe("generateDOM - code validity", () => {
     )
     const conditionalRegion = createConditional(
       [conditionalBranch],
-      "count",
+      dep("count"),
       span(1, 0, 3, 1),
     )
 
@@ -716,7 +733,12 @@ describe("generateDOM - code validity", () => {
       [
         {
           name: "class",
-          value: createContent("cls", "reactive", ["cls"], span(1, 0, 1, 5)),
+          value: createContent(
+            "cls",
+            "reactive",
+            [dep("cls")],
+            span(1, 0, 1, 5),
+          ),
         },
       ],
       [{ event: "click", handlerSource: "() => {}", span: span(1, 0, 1, 10) }],
@@ -795,7 +817,7 @@ describe("generateDOM - code validity", () => {
             createContent(
               "count.get()",
               "reactive",
-              ["count"],
+              [dep("count")],
               span(3, 6, 3, 18),
             ),
           ],
@@ -853,7 +875,7 @@ describe("generateDOM - statements", () => {
       "itemRef",
       null,
       [stmt, liElement],
-      ["items"],
+      [dep("items")],
       span(2, 2, 5, 3),
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))

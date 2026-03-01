@@ -16,6 +16,8 @@ import {
   createLoop,
   createSpan,
   createStatement,
+  type Dependency,
+  type DeltaKind,
 } from "../ir.js"
 import { generateHTML } from "./html.js"
 
@@ -33,6 +35,14 @@ function span(
   endCol: number,
 ) {
   return createSpan(startLine, startCol, endLine, endCol)
+}
+
+/**
+ * Create a dependency with a given source and optional delta kind.
+ * Defaults to "replace" for simplicity in tests.
+ */
+function dep(source: string, deltaKind: DeltaKind = "replace"): Dependency {
+  return { source, deltaKind }
 }
 
 // =============================================================================
@@ -87,7 +97,7 @@ describe("generateHTML - statements", () => {
       "itemRef",
       null,
       [stmt, liElement],
-      ["items"],
+      [dep("items")],
       span(2, 2, 5, 3),
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))
@@ -114,7 +124,7 @@ describe("generateHTML - statements", () => {
       createContent(
         "showMessage",
         "reactive",
-        ["showMessage"],
+        [dep("showMessage")],
         span(2, 6, 2, 17),
       ),
       [stmt, pElement],
@@ -122,7 +132,7 @@ describe("generateHTML - statements", () => {
     )
     const conditionalRegion = createConditional(
       [branch],
-      "showMessage",
+      dep("showMessage"),
       span(2, 2, 5, 3),
     )
     const builder = createBuilder(
@@ -156,7 +166,7 @@ describe("generateHTML - statements", () => {
       "item",
       null,
       [stmt1, liElement, stmt2],
-      ["items"],
+      [dep("items")],
       span(2, 2, 6, 3),
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 7, 1))
@@ -448,7 +458,7 @@ describe("generateHTML - code validity", () => {
       "item",
       null,
       [stmt, liElement],
-      ["items"],
+      [dep("items")],
       span(2, 2, 5, 3),
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))

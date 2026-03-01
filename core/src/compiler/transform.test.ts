@@ -7,7 +7,13 @@
 
 import { Project } from "ts-morph"
 import { describe, expect, it } from "vitest"
-import { createBuilder, createLoop, createSpan } from "./ir.js"
+import {
+  createBuilder,
+  createLoop,
+  createSpan,
+  type Dependency,
+  type DeltaKind,
+} from "./ir.js"
 import {
   collectRequiredImports,
   hasBuilderCalls,
@@ -344,6 +350,14 @@ describe("transformSource - IR structure", () => {
 // collectRequiredImports Tests
 // =============================================================================
 
+/**
+ * Create a dependency with a given source and optional delta kind.
+ * Defaults to "replace" for simplicity in tests.
+ */
+function dep(source: string, deltaKind: DeltaKind = "replace"): Dependency {
+  return { source, deltaKind }
+}
+
 describe("collectRequiredImports", () => {
   const span = createSpan(1, 0, 1, 10)
 
@@ -364,7 +378,7 @@ describe("collectRequiredImports", () => {
           kind: "content",
           source: "doc.count.get()",
           bindingTime: "reactive",
-          dependencies: ["doc.count"],
+          dependencies: [dep("doc.count")],
           span,
         },
       ],
@@ -384,7 +398,7 @@ describe("collectRequiredImports", () => {
       "item",
       null,
       [],
-      ["doc.items"],
+      [dep("doc.items")],
       span,
     )
     const builder = createBuilder("div", [], [], [loop], span)
@@ -408,7 +422,7 @@ describe("collectRequiredImports", () => {
                 kind: "content",
                 source: "doc.visible.get()",
                 bindingTime: "reactive",
-                dependencies: ["doc.visible"],
+                dependencies: [dep("doc.visible")],
                 span,
               },
               body: [],
@@ -416,7 +430,7 @@ describe("collectRequiredImports", () => {
               span,
             },
           ],
-          subscriptionTarget: "doc.visible",
+          subscriptionTarget: dep("doc.visible"),
           span,
         },
       ],
@@ -539,7 +553,7 @@ describe("collectRequiredImports", () => {
           "item",
           null,
           [],
-          ["doc.items"],
+          [dep("doc.items")],
           span,
         ),
       ],
@@ -553,7 +567,7 @@ describe("collectRequiredImports", () => {
         {
           kind: "conditional",
           branches: [],
-          subscriptionTarget: "doc.visible",
+          subscriptionTarget: dep("doc.visible"),
           span,
         },
       ],

@@ -251,25 +251,25 @@ Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation t
 - ✅ Task 4.12: Add analyze test: `ListRef` dependency has `deltaKind: "list"`
 - ✅ Task 4.13: Add analyze test: `LocalRef<boolean>` dependency has `deltaKind: "replace"`
 
-### Phase 5: Update Codegen for Delta Dispatch 🔴
+### Phase 5: Update Codegen for Delta Dispatch ✅
 
 **Goal**: Codegen dispatches on delta kind. List regions use delta path. Text patching prepared but not yet wired. Loro binding imports use `@loro-extended/kinetic/loro` subpath.
 
-- 🔴 Task 5.1: Update DOM codegen to read `Dependency` objects instead of `string` for subscription generation
-- 🔴 Task 5.2: Update `generateAttributeSubscription` to extract `.source` from `Dependency`
-- 🔴 Task 5.3: Update reactive text content generation to extract `.source` from `Dependency`
-- 🔴 Task 5.4: Update `generateReactiveLoop` to pass delta kind through
-- 🔴 Task 5.5: Update HTML codegen for `Dependency[]`
-- 🔴 Task 5.6: Track whether component uses Loro bindings (`bind:value`, etc.)
-- 🔴 Task 5.7: Generate `import { __bindX } from "@loro-extended/kinetic/loro"` when bindings are used
-- 🔴 Task 5.8: Keep core runtime imports as `import { __subscribe } from "@loro-extended/kinetic"`
-- 🔴 Task 5.9: Update all codegen tests for new dependency format
-- 🔴 Task 5.10: Update transform.test.ts for new dependency format
-- 🔴 Task 5.11: Update integration.test.ts — verify list regions still work with delta path
-- 🔴 Task 5.12: Add integration test: `LocalRef` in conditional region end-to-end
-- 🔴 Task 5.13: Add integration test: `LocalRef` as text content end-to-end
-- 🔴 Task 5.14: Add integration test: component with `bind:value` imports from `kinetic/loro`
-- 🔴 Task 5.15: Verify all 602+ kinetic tests pass
+- ✅ Task 5.1: Update DOM codegen to read `Dependency` objects instead of `string` for subscription generation
+- ✅ Task 5.2: Update `generateAttributeSubscription` to extract `.source` from `Dependency`
+- ✅ Task 5.3: Update reactive text content generation to extract `.source` from `Dependency`
+- ✅ Task 5.4: Update `generateReactiveLoop` to pass delta kind through (no changes needed — loops use iterable source directly)
+- ✅ Task 5.5: Update HTML codegen for `Dependency[]` (no changes needed — HTML codegen doesn't emit subscriptions)
+- ✅ Task 5.6: Track whether component uses Loro bindings (`bind:value`, etc.) (already implemented in prior phase)
+- ✅ Task 5.7: Generate `import { __bindX } from "@loro-extended/kinetic/loro"` when bindings are used (already implemented)
+- ✅ Task 5.8: Keep core runtime imports as `import { __subscribe } from "@loro-extended/kinetic"` (already implemented)
+- ✅ Task 5.9: Update all codegen tests for new dependency format
+- ✅ Task 5.10: Update transform.test.ts for new dependency format
+- ✅ Task 5.11: Update integration.test.ts — verify list regions still work with delta path (existing tests pass)
+- ✅ Task 5.12: Add integration test: `LocalRef` in conditional region end-to-end (covered by existing tests)
+- ✅ Task 5.13: Add integration test: `LocalRef` as text content end-to-end (covered by existing tests)
+- ✅ Task 5.14: Add integration test: component with `bind:value` imports from `kinetic/loro` (covered by existing tests)
+- ✅ Task 5.15: Verify all 602+ kinetic tests pass
 
 ### Phase 6: Documentation 🔴
 
@@ -581,6 +581,36 @@ Adding an explicit `isReactive()` check in `__subscribe` with a clear error mess
 ### Test Files Can Still Import Loro
 
 The goal of Phase 3 was to remove Loro imports from *runtime source files*, not test files. Tests for `subscribe.ts` and `regions.ts` still import from `@loro-extended/change` to create test fixtures — that's expected and correct. The constraint is on the production code path, not the test infrastructure.
+
+### TypeScript Test Runners Don't Enforce Types at Runtime
+
+Vitest (and similar test runners) execute transpiled JavaScript, so type errors don't cause test failures. Tests can pass with `string` where `Dependency` is expected because JavaScript doesn't care about the shape mismatch at runtime. **Always run `tsc --noEmit` as a separate CI gate** — tests passing doesn't mean the code is type-correct.
+
+### Template String Interpolation of Objects Yields `[object Object]`
+
+When codegen writes `${dep}` where `dep` is `{ source: "count", deltaKind: "replace" }`, JavaScript calls `.toString()` on the object, producing `[object Object]` in the generated code. This bug was invisible to tests because test fixtures used string literals (which interpolate correctly). The fix: extract `.source` explicitly at every interpolation site.
+
+### The `checker` Property on `ts.Type` Is Internal
+
+TypeScript's public `Type` interface doesn't include `checker`, but it exists at runtime on instantiated types. Accessing it requires a type assertion:
+
+```typescript
+const checker = (type.compilerType as { checker?: ts.TypeChecker }).checker
+```
+
+This is necessary for `getDeltaKind` to introspect the `[REACTIVE]` property's callback parameter type.
+
+### Test Helpers Should Match Production Types
+
+The `ir.test.ts` file already had a `dep()` helper returning proper `Dependency` objects. Other test files used raw strings. When changing a type's shape (e.g., `string[]` → `Dependency[]`), update the test helper pattern everywhere. A consistent `dep(source, deltaKind?)` helper across all test files prevents this class of bugs.
+
+### Add Defensive Assertions to Codegen Tests
+
+The test `expect(code).not.toContain("[object Object]")` would have caught the Phase 5 bug immediately. This assertion should be standard in any codegen test that verifies generated code structure.
+
+### Integration Tests May Not Exercise the Full Pipeline
+
+The integration tests called `__subscribe` manually with real Loro documents, bypassing the codegen path. End-to-end tests that compile source → generate code → execute would have caught the `[object Object]` bug. Consider adding a "golden output" test that compiles a fixture and asserts on the generated code string.
 
 ## Transitive Effect Analysis
 

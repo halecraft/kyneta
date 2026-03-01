@@ -13,6 +13,8 @@ import {
   createLiteral,
   createSpan,
   createStatement,
+  type Dependency,
+  type DeltaKind,
   mergeConditionalBodies,
   mergeContentValue,
   mergeNode,
@@ -26,12 +28,20 @@ function span() {
   return createSpan(1, 0, 1, 10)
 }
 
+/**
+ * Create a dependency with a given source and optional delta kind.
+ * Defaults to "replace" for simplicity in tests.
+ */
+function dep(source: string, deltaKind: DeltaKind = "replace"): Dependency {
+  return { source, deltaKind }
+}
+
 // =============================================================================
 // mergeContentValue Tests
 // =============================================================================
 
 describe("mergeContentValue", () => {
-  const condition = createContent("x", "reactive", ["x"], span())
+  const condition = createContent("x", "reactive", [dep("x")], span())
 
   it("keeps identical literals as-is", () => {
     const a = createLiteral("Hello", span())
@@ -92,8 +102,8 @@ describe("mergeContentValue", () => {
   })
 
   it("keeps identical reactive expressions as-is", () => {
-    const a = createContent("doc.count", "reactive", ["doc.count"], span())
-    const b = createContent("doc.count", "reactive", ["doc.count"], span())
+    const a = createContent("doc.count", "reactive", [dep("doc.count")], span())
+    const b = createContent("doc.count", "reactive", [dep("doc.count")], span())
 
     const result = mergeContentValue(a, b, condition)
 
@@ -105,8 +115,8 @@ describe("mergeContentValue", () => {
   })
 
   it("returns failure for reactive with different deps", () => {
-    const a = createContent("doc.count", "reactive", ["doc.count"], span())
-    const b = createContent("doc.total", "reactive", ["doc.total"], span())
+    const a = createContent("doc.count", "reactive", [dep("doc.count")], span())
+    const b = createContent("doc.total", "reactive", [dep("doc.total")], span())
 
     const result = mergeContentValue(a, b, condition)
 
@@ -117,7 +127,7 @@ describe("mergeContentValue", () => {
   })
 
   it("merges reactive + literal into nested ternary", () => {
-    const a = createContent("doc.count", "reactive", ["doc.count"], span())
+    const a = createContent("doc.count", "reactive", [dep("doc.count")], span())
     const b = createLiteral("Static", span())
 
     const result = mergeContentValue(a, b, condition)
@@ -137,7 +147,7 @@ describe("mergeContentValue", () => {
 // =============================================================================
 
 describe("mergeNode", () => {
-  const condition = createContent("x", "reactive", ["x"], span())
+  const condition = createContent("x", "reactive", [dep("x")], span())
 
   it("merges same element with different literal content children", () => {
     const a = createElement(
@@ -201,7 +211,12 @@ describe("mergeNode", () => {
   })
 
   it("keeps identical reactive content as-is", () => {
-    const expr = createContent("doc.title", "reactive", ["doc.title"], span())
+    const expr = createContent(
+      "doc.title",
+      "reactive",
+      [dep("doc.title")],
+      span(),
+    )
     const a = createElement("p", [], [], [], [expr], span())
     const b = createElement("p", [], [], [], [expr], span())
 
@@ -223,7 +238,7 @@ describe("mergeNode", () => {
       [],
       [],
       [],
-      [createContent("doc.a", "reactive", ["doc.a"], span())],
+      [createContent("doc.a", "reactive", [dep("doc.a")], span())],
       span(),
     )
     const b = createElement(
@@ -231,7 +246,7 @@ describe("mergeNode", () => {
       [],
       [],
       [],
-      [createContent("doc.b", "reactive", ["doc.b"], span())],
+      [createContent("doc.b", "reactive", [dep("doc.b")], span())],
       span(),
     )
 
@@ -402,7 +417,7 @@ describe("mergeConditionalBodies", () => {
 
     const branches = [
       createConditionalBranch(
-        createContent("x", "reactive", ["x"], span()),
+        createContent("x", "reactive", [dep("x")], span()),
         bodyA,
         span(),
       ),
@@ -432,7 +447,7 @@ describe("mergeConditionalBodies", () => {
 
     const branches = [
       createConditionalBranch(
-        createContent("x", "reactive", ["x"], span()),
+        createContent("x", "reactive", [dep("x")], span()),
         bodyA,
         span(),
       ),
@@ -457,12 +472,12 @@ describe("mergeConditionalBodies", () => {
 
     const branches = [
       createConditionalBranch(
-        createContent("a", "reactive", ["a"], span()),
+        createContent("a", "reactive", [dep("a")], span()),
         bodyA,
         span(),
       ),
       createConditionalBranch(
-        createContent("b", "reactive", ["b"], span()),
+        createContent("b", "reactive", [dep("b")], span()),
         bodyB,
         span(),
       ),
@@ -498,7 +513,7 @@ describe("mergeConditionalBodies", () => {
 
     const branches = [
       createConditionalBranch(
-        createContent("x", "reactive", ["x"], span()),
+        createContent("x", "reactive", [dep("x")], span()),
         bodyA,
         span(),
       ),
@@ -518,7 +533,7 @@ describe("mergeConditionalBodies", () => {
 
     const branches = [
       createConditionalBranch(
-        createContent("x", "reactive", ["x"], span()),
+        createContent("x", "reactive", [dep("x")], span()),
         bodyA,
         span(),
       ),

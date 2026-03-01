@@ -295,7 +295,9 @@ export function getDeltaKind(type: Type): DeltaKind {
   try {
     // Get the property's type
     // The property type is ReactiveSubscribe<D> = (self, callback: (delta: D) => void) => () => void
-    const checker = type.compilerType.checker
+    // Note: `checker` is not part of the public ts.Type interface but is available
+    // on instantiated types. We use a type assertion to access it.
+    const checker = (type.compilerType as { checker?: ts.TypeChecker }).checker
     if (!checker) {
       return "replace"
     }
