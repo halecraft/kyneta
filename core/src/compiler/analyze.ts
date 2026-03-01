@@ -360,10 +360,19 @@ export function extractDependencies(expr: Expression): Dependency[] {
     }
 
     // Identifier that is a reactive type
+    // Skip identifiers that are property names within a PropertyAccessExpression
+    // (e.g., skip "title" in "doc.title" — we already captured "doc.title" above)
     if (node.getKind() === SyntaxKind.Identifier) {
-      const type = (node as Expression).getType()
-      if (isReactiveType(type)) {
-        addDep(node.getText(), type)
+      const parent = node.getParent()
+      const isPropertyName =
+        parent?.getKind() === SyntaxKind.PropertyAccessExpression &&
+        (parent as PropertyAccessExpression).getName() === node.getText()
+
+      if (!isPropertyName) {
+        const type = (node as Expression).getType()
+        if (isReactiveType(type)) {
+          addDep(node.getText(), type)
+        }
       }
     }
 

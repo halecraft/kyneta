@@ -397,6 +397,32 @@ The compiler uses `skipFileDependencyResolution: true` for fast project creation
 - **Union types need branch-level checking.** `LocalRef<T> | null` doesn't itself have a `[REACTIVE]` property, but the `LocalRef<T>` branch does.
 - **`links.nameType` is a TypeScript internal.** It has been stable across TS 4.x–6.x and is fundamental to computed property name handling, but layers 2 and 3 serve as fallbacks if it ever changes.
 
+### Direct-Read Detection
+
+For text patching optimization, the compiler detects when an expression is a "direct read" — i.e., the expression is exactly `ref.get()` or `ref.toString()` with no transformation or combination.
+
+**Detection algorithm** (implemented in `detectDirectRead`):
+1. Root node must be a `CallExpression`
+2. Callee must be a `PropertyAccessExpression` (`receiver.method`)
+3. Method name must be `"get"` or `"toString"`
+4. Call must have zero arguments
+5. Receiver's type must be reactive (`isReactiveType`)
+
+**Key insight**: Checking the *root* node type implicitly rejects nested `.get()` calls. If `title.get()` is inside a larger expression like `title.get().toUpperCase()`, the root is the outer `toUpperCase()` call, not the inner `get()`.
+
+**Examples:**
+| Expression | Direct Read? | Reason |
+|------------|--------------|--------|
+| `title.get()` | ✅ Yes | Root is `.get()` on reactive |
+| `doc.title.get()` | ✅ Yes | Property access chain, root is `.get()` |
+| `title.toString()` | ✅ Yes | `.toString()` is equivalent |
+| `title.get().toUpperCase()` | ❌ No | Root is `.toUpperCase()`, not `.get()` |
+| `title.get() + suffix` | ❌ No | Root is `BinaryExpression` |
+| `` `Hello ${title.get()}` `` | ❌ No | Root is `TemplateExpression` |
+| `title.get(0)` | ❌ No | Has arguments |
+
+When detected, the IR's `ContentValue.directReadSource` is set to the receiver's source text (e.g., `"doc.title"`), enabling codegen to emit `textRegion` instead of `subscribeWithValue`.
+
 ### Binding-Time Classification
 
 When a reactive type is detected:
@@ -483,33 +509,35 @@ packages/kinetic/src/compiler/
 
 ## Runtime Dependencies
 
-Generated code calls these runtime functions from `@loro-extended/kinetic`:
+Generated code imports runtime functions from `@loro-extended/kinetic/runtime`:
 
-- `__subscribe(ref, handler, scope)` — Low-level reactive subscription (delta-aware)
-- `__subscribeWithValue(ref, getter, callback, scope)` — Subscribe + immediate call with value
-- `__listRegion(parent, list, handlers, scope)` — Delta-driven list rendering
-- `__conditionalRegion(marker, target, condition, handlers, scope)` — Reactive conditionals
+- `subscribe(ref, handler, scope)` — Low-level reactive subscription (delta-aware)
+- `subscribeWithValue(ref, getter, callback, scope)` — Subscribe + immediate call with value
+- `subscribeMultiple(refs, callback, scope)` — Subscribe to multiple dependencies
+- `listRegion(parent, list, handlers, scope)` — Delta-driven list rendering
+- `conditionalRegion(marker, target, condition, handlers, scope)` — Reactive conditionals
+- `textRegion(textNode, ref, scope)` — Surgical text patching for direct TextRef reads
 
 And from `@loro-extended/kinetic/loro` (Loro-specific):
 
-- `__bindTextValue(input, ref, scope)` — Two-way text binding
-- `__bindChecked(input, ref, scope)` — Two-way checkbox binding
-- `__bindNumericValue(input, ref, scope)` — Two-way numeric binding
+- `bindTextValue(input, ref, scope)` — Two-way text binding
+- `bindChecked(input, ref, scope)` — Two-way checkbox binding
+- `bindNumericValue(input, ref, scope)` — Two-way numeric binding
 
 All runtime functions accept a `scope` parameter for cleanup tracking.
 
 ### Delta-Aware Subscription
 
-The core `__subscribe` function uses the `[REACTIVE]` symbol from `@loro-extended/reactive`:
+The core `subscribe` function uses the `[REACTIVE]` symbol from `@loro-extended/reactive`:
 
 ```typescript
-function __subscribe(
+function subscribe(
   ref: unknown,
   handler: (delta: ReactiveDelta) => void,
   scope: Scope,
 ): SubscriptionId {
   if (!isReactive(ref)) {
-    throw new Error("__subscribe called with non-reactive value")
+    throw new Error("subscribe called with non-reactive value")
   }
   const unsubscribe = ref[REACTIVE](ref, handler)
   scope.onDispose(() => unsubscribe())
@@ -519,12 +547,12 @@ function __subscribe(
 
 The handler receives a `ReactiveDelta` describing what changed. This enables:
 - **List regions**: Extract `delta.ops` for O(k) DOM updates
-- **Text content**: (Future) Use `insertData`/`deleteData` for surgical text updates
+- **Text regions**: Use `insertData`/`deleteData` for O(k) surgical text updates
 - **Fallback**: For `"replace"` deltas or complex expressions, re-read the entire value
 
 ### Loro-Agnostic Core Runtime
 
-The core runtime (`@loro-extended/kinetic`) has **no imports from `@loro-extended/change`**. It depends only on `@loro-extended/reactive` for the `REACTIVE` symbol and delta types. This enables:
+The core runtime (`@loro-extended/kinetic/runtime`) has **no imports from `@loro-extended/change`**. It depends only on `@loro-extended/reactive` for the `REACTIVE` symbol and delta types. This enables:
 
 1. **Custom reactive types** — `LocalRef` and user-defined reactives work without Loro
 2. **Future extensibility** — Other CRDT libraries could provide their own bindings
@@ -536,15 +564,15 @@ Two-way bindings (`bind:value`, `bind:checked`) require direct Loro container ac
 
 ```typescript
 // Generated code for components with bindings:
-import { __subscribe } from "@loro-extended/kinetic"
-import { __bindTextValue } from "@loro-extended/kinetic/loro"
+import { subscribe } from "@loro-extended/kinetic/runtime"
+import { bindTextValue } from "@loro-extended/kinetic/loro"
 ```
 
-The binding functions use `loro()` to access raw Loro containers for write operations, while still using `__subscribe` (via `[REACTIVE]`) for the read/subscribe side.
+The binding functions use `loro()` to access raw Loro containers for write operations, while still using `subscribe` (via `[REACTIVE]`) for the read/subscribe side.
 
 ### List Region Architecture
 
-The `__listRegion` runtime follows **Functional Core / Imperative Shell** pattern:
+The `listRegion` runtime follows **Functional Core / Imperative Shell** pattern:
 
 **Functional Core** (pure, testable):
 - `planInitialRender(listRef)` → `ListRegionOp<T>[]`
@@ -553,10 +581,10 @@ The `__listRegion` runtime follows **Functional Core / Imperative Shell** patter
 **Imperative Shell** (DOM manipulation):
 - `executeOp(parent, state, handlers, op)` — applies single operation
 
-The `__listRegion` subscribe callback receives `ReactiveDelta` and dispatches:
+The `listRegion` subscribe callback receives `ReactiveDelta` and dispatches:
 
 ```typescript
-__subscribe(listRef, (delta: ReactiveDelta) => {
+subscribe(listRef, (delta: ReactiveDelta) => {
   if (delta.type === "list") {
     // O(k) update where k = number of changed items
     const ops = planDeltaOps(state.listRef, delta.ops)
@@ -587,6 +615,70 @@ for (const itemRef of doc.items) {
 3. Store `listRef` in state for delta handling
 4. Non-list deltas (e.g., `"replace"`) trigger full re-render as fallback
 5. HTML codegen uses `[...listSource]` (iterator returns refs)
+
+### Text Region Architecture
+
+The `textRegion` runtime enables **O(k) surgical text updates** for direct `TextRef` reads, where k is the edit size rather than the full string length.
+
+**When it applies:**
+- Expression is exactly `ref.get()` or `ref.toString()` on a single `TextRef`
+- The dependency has `deltaKind: "text"`
+- The expression is a "direct read" — not transformed (e.g., `.toUpperCase()`) or combined with other deps
+
+**Functional Core** (pure, testable):
+- `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
+
+**Imperative Shell** (DOM manipulation):
+- `patchText(textNode, ops)` — applies patches via `insertData`/`deleteData`
+- `textRegion(textNode, ref, scope)` — subscription-aware wrapper
+
+The `textRegion` function follows the same pattern as `listRegion`:
+
+```typescript
+function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
+  const typedRef = ref as TextRefLike
+  textNode.textContent = typedRef.get()  // Initial value
+
+  subscribe(ref, (delta: ReactiveDelta) => {
+    if (delta.type === "text") {
+      // O(k) surgical update
+      patchText(textNode, delta.ops)
+    } else {
+      // Fallback for non-text deltas
+      textNode.textContent = typedRef.get()
+    }
+  }, scope)
+}
+```
+
+**Delta cursor model:**
+Text deltas use cursor-based operations applied left-to-right:
+- `retain: n` — advance cursor by n (no output)
+- `insert: s` — insert at cursor, cursor advances by `s.length`
+- `delete: n` — delete n chars at cursor, **cursor does NOT advance**
+
+The "cursor doesn't advance on delete" is critical — subsequent ops apply at the same position.
+
+**Codegen dispatch:**
+```typescript
+// In generateReactiveContentSubscription:
+if (directReadSource && deps.length === 1 && deps[0].deltaKind === "text") {
+  // Direct TextRef read — surgical patching
+  emit: textRegion(textVar, directReadSource, scopeVar)
+} else if (deps.length === 1) {
+  // Single dep, non-direct — full replacement
+  emit: subscribeWithValue(...)
+} else {
+  // Multi-dep — full replacement
+  emit: subscribeMultiple(...)
+}
+```
+
+**Key design decisions:**
+1. `TextRefLike` interface keeps runtime Loro-agnostic (mirrors `ListRefLike`)
+2. Non-text deltas (e.g., `"replace"` from `LocalRef`) trigger full `textContent` replacement
+3. Multi-dep expressions always use `subscribeMultiple` — delta describes one source, not output
+4. Direct-read detection is structural AST analysis at the expression root
 
 ### Region Algebra
 

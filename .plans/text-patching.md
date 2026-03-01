@@ -103,11 +103,11 @@ End-to-end tests with real `TextRef` and Loro docs.
 - ✅ Task 5.3: Integration test — non-direct read (template literal) uses full replacement
 - ✅ Task 5.4: Integration test — multi-dep text expression uses replace semantics
 
-### Phase 6: Documentation 🔴
+### Phase 6: Documentation ✅
 
-- 🔴 Task 6.1: Update `TECHNICAL.md` — document text patching optimization in a new "Text Region Architecture" section alongside List Region Architecture
-- 🔴 Task 6.2: Update `TECHNICAL.md` — fix stale `__` prefix references in Runtime Dependencies section (pre-existing debt)
-- 🔴 Task 6.3: Update `TECHNICAL.md` — add direct-read detection to the Reactive Detection section
+- ✅ Task 6.1: Update `TECHNICAL.md` — document text patching optimization in a new "Text Region Architecture" section alongside List Region Architecture
+- ✅ Task 6.2: Update `TECHNICAL.md` — fix stale `__` prefix references in Runtime Dependencies section (pre-existing debt)
+- ✅ Task 6.3: Update `TECHNICAL.md` — add direct-read detection to the Reactive Detection section
 
 ## Critical Type Declarations
 
