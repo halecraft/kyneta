@@ -70,13 +70,15 @@ input({ type: "text", value: bind(doc.title) })
 
 Type guard to check if a value is a binding marker.
 
-## LocalRef and Bindings
+## Local State and Bindings
 
-`LocalRef` works with the core runtime via `[REACTIVE]`, but **does not participate in two-way bindings**. For local UI state, use event handlers instead:
+Local state created with `state()` works with the core runtime via `[REACTIVE]`, but **does not participate in two-way bindings**. For local UI state, use event handlers instead:
 
 ```typescript
-// ✅ LocalRef with event handlers
-const searchQuery = new LocalRef("")
+import { state } from "@loro-extended/kinetic"
+
+// ✅ state() with event handlers
+const searchQuery = state("")
 
 input({
   type: "text",
@@ -84,8 +86,8 @@ input({
   onInput: (e) => searchQuery.set(e.target.value),
 })
 
-// ❌ This won't work — LocalRef isn't a Loro container
+// ❌ This won't work — state() returns a LocalRef, not a Loro container
 input({ type: "text", value: bind(searchQuery) })
 ```
 
-This is by design — `LocalRef` is for ephemeral UI state that doesn't need collaborative sync.
+This is by design — `state()` is for ephemeral UI state that doesn't need collaborative sync.

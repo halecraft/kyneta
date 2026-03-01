@@ -124,19 +124,19 @@ The phases are numbered for reference but should be implemented in the following
 | 5th | Phase 4 | Depends on Phases 1 and 2; most complex phase |
 | 6th | Phase 5 | Documents all features after implementation |
 
-### Phase 1: Unify Scalar Read Interface & state() API 🔴
+### Phase 1: Unify Scalar Read Interface & state() API ✅
 
 **Goal**: Establish `.get()` as the universal read method for scalar reactives, and provide ergonomic `state()` function.
 
-- 🔴 Task 1.1: Add `.get(): string` method to `TextRef` as alias for `.toString()`
-- 🔴 Task 1.2: Add tests for `TextRef.get()`
-- 🔴 Task 1.3: Add `state<T>(initial: T): LocalRef<T>` function to `@loro-extended/reactive`
-- 🔴 Task 1.4: Export `state` from `@loro-extended/reactive` index
-- 🔴 Task 1.5: Export `state` from `@loro-extended/kinetic` index
-- 🔴 Task 1.6: Update `reactive/README.md` to prefer `state()` in examples
-- 🔴 Task 1.7: Update `kinetic/src/loro/README.md` to use `state()` in examples
-- 🔴 Task 1.8: Add JSDoc note to `LocalRef` constructor suggesting `state()` as preferred API
-- 🔴 Task 1.9: Add tests for `state()` function
+- ✅ Task 1.1: Add `.get(): string` method to `TextRef` as alias for `.toString()`
+- ✅ Task 1.2: Add tests for `TextRef.get()`
+- ✅ Task 1.3: Add `state<T>(initial: T): LocalRef<T>` function to `@loro-extended/reactive`
+- ✅ Task 1.4: Export `state` from `@loro-extended/reactive` index
+- ✅ Task 1.5: Export `state` from `@loro-extended/kinetic` index
+- ✅ Task 1.6: Update `reactive/README.md` to prefer `state()` in examples
+- ✅ Task 1.7: Update `kinetic/src/loro/README.md` to use `state()` in examples
+- ✅ Task 1.8: Add JSDoc note to `LocalRef` constructor suggesting `state()` as preferred API
+- ✅ Task 1.9: Add tests for `state()` function
 
 ### Phase 3: Multi-Dependency Subscriptions 🔴
 

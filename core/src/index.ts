@@ -128,4 +128,5 @@ export {
   REACTIVE,
   type Reactive,
   type ReactiveSubscribe,
+  state,
 } from "@loro-extended/reactive"
