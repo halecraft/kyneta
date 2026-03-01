@@ -1171,7 +1171,10 @@ describe("compiler integration - conditional regions", () => {
         c => c.kind === "conditional",
       ) as any
 
-      expect(conditionalRegion.subscriptionTarget).toBe("doc.count")
+      expect(conditionalRegion.subscriptionTarget).toEqual({
+        source: "doc.count",
+        deltaKind: "replace",
+      })
     })
 
     it("should capture condition expression source", () => {

@@ -19,11 +19,28 @@ import {
   createLoop,
   createSpan,
   createStatement,
+  type Dependency,
+  type DeltaKind,
 } from "./ir.js"
 
 // =============================================================================
 // Test Helpers
 // =============================================================================
+
+/**
+ * Create a dependency with a given source and optional delta kind.
+ * Defaults to "replace" for simplicity in tests.
+ */
+function dep(source: string, deltaKind: DeltaKind = "replace"): Dependency {
+  return { source, deltaKind }
+}
+
+/**
+ * Check if allDependencies contains a dependency with the given source.
+ */
+function hasDep(deps: Dependency[], source: string): boolean {
+  return deps.some(d => d.source === source)
+}
 
 function span() {
   return createSpan(1, 0, 1, 10)
@@ -53,7 +70,7 @@ describe("createBuilder - dependency collection", () => {
         "div",
         [],
         [],
-        [createContent("count.get()", "reactive", ["count"], span())],
+        [createContent("count.get()", "reactive", [dep("count")], span())],
         span(),
       )
 
@@ -68,14 +85,14 @@ describe("createBuilder - dependency collection", () => {
       const reactiveExpr = createContent(
         "doc.title.toString()",
         "reactive",
-        ["doc.title"],
+        [dep("doc.title", "text")],
         span(),
       )
       const p = createElement("p", [], [], [], [reactiveExpr], span())
       const section = createElement("section", [], [], [], [p], span())
       const builder = createBuilder("div", [], [], [section], span())
 
-      expect(builder.allDependencies).toContain("doc.title")
+      expect(hasDep(builder.allDependencies, "doc.title")).toBe(true)
       expect(builder.isReactive).toBe(true)
     })
 
@@ -94,12 +111,12 @@ describe("createBuilder - dependency collection", () => {
         "item",
         null,
         [li],
-        ["doc.items"],
+        [dep("doc.items", "list")],
         span(),
       )
       const builder = createBuilder("ul", [], [], [loop], span())
 
-      expect(builder.allDependencies).toContain("doc.items")
+      expect(hasDep(builder.allDependencies, "doc.items")).toBe(true)
     })
 
     it("collects from reactive loop body (nested reactive content)", () => {
@@ -107,7 +124,7 @@ describe("createBuilder - dependency collection", () => {
       const reactiveExpr = createContent(
         "item.count.get()",
         "reactive",
-        ["item.count"],
+        [dep("item.count")],
         span(),
       )
       const li = createElement("li", [], [], [], [reactiveExpr], span())
@@ -117,13 +134,13 @@ describe("createBuilder - dependency collection", () => {
         "item",
         null,
         [li],
-        ["doc.items"],
+        [dep("doc.items", "list")],
         span(),
       )
       const builder = createBuilder("ul", [], [], [loop], span())
 
-      expect(builder.allDependencies).toContain("doc.items")
-      expect(builder.allDependencies).toContain("item.count")
+      expect(hasDep(builder.allDependencies, "doc.items")).toBe(true)
+      expect(hasDep(builder.allDependencies, "item.count")).toBe(true)
     })
 
     it("collects from conditional region subscriptionTarget", () => {
@@ -136,14 +153,23 @@ describe("createBuilder - dependency collection", () => {
         span(),
       )
       const branch = createConditionalBranch(
-        createContent("doc.visible.get()", "reactive", ["doc.visible"], span()),
+        createContent(
+          "doc.visible.get()",
+          "reactive",
+          [dep("doc.visible")],
+          span(),
+        ),
         [p],
         span(),
       )
-      const conditional = createConditional([branch], "doc.visible", span())
+      const conditional = createConditional(
+        [branch],
+        dep("doc.visible"),
+        span(),
+      )
       const builder = createBuilder("div", [], [], [conditional], span())
 
-      expect(builder.allDependencies).toContain("doc.visible")
+      expect(hasDep(builder.allDependencies, "doc.visible")).toBe(true)
     })
 
     it("collects from conditional region branch body", () => {
@@ -156,22 +182,22 @@ describe("createBuilder - dependency collection", () => {
           createContent(
             "doc.message.toString()",
             "reactive",
-            ["doc.message"],
+            [dep("doc.message", "text")],
             span(),
           ),
         ],
         span(),
       )
       const branch = createConditionalBranch(
-        createContent("doc.show.get()", "reactive", ["doc.show"], span()),
+        createContent("doc.show.get()", "reactive", [dep("doc.show")], span()),
         [reactiveP],
         span(),
       )
-      const conditional = createConditional([branch], "doc.show", span())
+      const conditional = createConditional([branch], dep("doc.show"), span())
       const builder = createBuilder("div", [], [], [conditional], span())
 
-      expect(builder.allDependencies).toContain("doc.show")
-      expect(builder.allDependencies).toContain("doc.message")
+      expect(hasDep(builder.allDependencies, "doc.show")).toBe(true)
+      expect(hasDep(builder.allDependencies, "doc.message")).toBe(true)
     })
 
     it("collects from reactive props", () => {
@@ -180,13 +206,13 @@ describe("createBuilder - dependency collection", () => {
         value: createContent(
           'doc.active.get() ? "active" : "inactive"',
           "reactive",
-          ["doc.active"],
+          [dep("doc.active")],
           span(),
         ),
       }
       const builder = createBuilder("div", [classAttr], [], [], span())
 
-      expect(builder.allDependencies).toContain("doc.active")
+      expect(hasDep(builder.allDependencies, "doc.active")).toBe(true)
     })
 
     it("collects from element attributes (not just props)", () => {
@@ -195,30 +221,35 @@ describe("createBuilder - dependency collection", () => {
         value: createContent(
           "item.className",
           "reactive",
-          ["item.className"],
+          [dep("item.className")],
           span(),
         ),
       }
       const innerDiv = createElement("div", [classAttr], [], [], [], span())
       const builder = createBuilder("section", [], [], [innerDiv], span())
 
-      expect(builder.allDependencies).toContain("item.className")
+      expect(hasDep(builder.allDependencies, "item.className")).toBe(true)
     })
   })
 
   describe("deduplicates dependencies", () => {
     it("same dependency used multiple times appears once", () => {
-      const expr1 = createContent("count.get()", "reactive", ["count"], span())
+      const expr1 = createContent(
+        "count.get()",
+        "reactive",
+        [dep("count")],
+        span(),
+      )
       const expr2 = createContent(
         "count.get() * 2",
         "reactive",
-        ["count"],
+        [dep("count")],
         span(),
       )
       const builder = createBuilder("div", [], [], [expr1, expr2], span())
 
       const countOccurrences = builder.allDependencies.filter(
-        d => d === "count",
+        d => d.source === "count",
       ).length
       expect(countOccurrences).toBe(1)
     })
@@ -279,7 +310,7 @@ describe("createBuilder - dependency collection", () => {
         value: createContent(
           "activeClass",
           "reactive",
-          ["activeClass"],
+          [dep("activeClass")],
           span(),
         ),
       }
@@ -293,7 +324,7 @@ describe("createBuilder - dependency collection", () => {
           createContent(
             "doc.title.toString()",
             "reactive",
-            ["doc.title"],
+            [dep("doc.title", "text")],
             span(),
           ),
         ],
@@ -305,16 +336,16 @@ describe("createBuilder - dependency collection", () => {
         [],
         [],
         [],
-        [createContent("item.text", "reactive", ["item.text"], span())],
+        [createContent("item.text", "reactive", [dep("item.text")], span())],
         span(),
       )
       const loop = createLoop(
-        "items",
+        "doc.items",
         "reactive",
         "item",
         null,
         [li],
-        ["items"],
+        [dep("doc.items", "list")],
         span(),
       )
       const ul = createElement("ul", [], [], [], [loop], span())
@@ -328,15 +359,21 @@ describe("createBuilder - dependency collection", () => {
         span(),
       )
 
-      const thenBranch = createConditionalBranch(
-        createContent("items.length > 0", "reactive", ["items"], span()),
+      // Conditional branches
+      const ifBranch = createConditionalBranch(
+        createContent(
+          "doc.items.length > 0",
+          "reactive",
+          [dep("doc.items", "list")],
+          span(),
+        ),
         [ul],
         span(),
       )
       const elseBranch = createConditionalBranch(null, [emptyP], span())
       const conditional = createConditional(
-        [thenBranch, elseBranch],
-        "items",
+        [ifBranch, elseBranch],
+        dep("doc.items", "list"),
         span(),
       )
 
@@ -349,15 +386,15 @@ describe("createBuilder - dependency collection", () => {
       )
 
       // Should collect all unique dependencies
-      expect(builder.allDependencies).toContain("activeClass")
-      expect(builder.allDependencies).toContain("doc.title")
-      expect(builder.allDependencies).toContain("items")
-      expect(builder.allDependencies).toContain("item.text")
+      expect(hasDep(builder.allDependencies, "activeClass")).toBe(true)
+      expect(hasDep(builder.allDependencies, "doc.title")).toBe(true)
+      expect(hasDep(builder.allDependencies, "doc.items")).toBe(true)
+      expect(hasDep(builder.allDependencies, "item.text")).toBe(true)
       expect(builder.isReactive).toBe(true)
 
       // Should not have duplicates
       const itemsCount = builder.allDependencies.filter(
-        d => d === "items",
+        d => d.source === "doc.items",
       ).length
       expect(itemsCount).toBe(1)
     })
@@ -393,7 +430,7 @@ describe("computeHasReactiveItems", () => {
 
   it("returns true for reactive content", () => {
     const body = [
-      createContent("item.text.get()", "reactive", ["item.text"], span()),
+      createContent("count.get()", "reactive", [dep("count")], span()),
     ]
     expect(computeHasReactiveItems(body)).toBe(true)
   })
@@ -404,7 +441,7 @@ describe("computeHasReactiveItems", () => {
       value: createContent(
         "item.active.get() ? 'on' : 'off'",
         "reactive",
-        ["item.active"],
+        [dep("item.active")],
         span(),
       ),
     }
@@ -416,7 +453,7 @@ describe("computeHasReactiveItems", () => {
     const reactiveChild = createContent(
       "item.count.get()",
       "reactive",
-      ["item.count"],
+      [dep("item.count")],
       span(),
     )
     const body = [createElement("span", [], [], [], [reactiveChild], span())]
@@ -438,7 +475,7 @@ describe("computeHasReactiveItems", () => {
       "item",
       null,
       [li],
-      ["items"],
+      [dep("items", "list")],
       span(),
     )
     expect(computeHasReactiveItems([loop])).toBe(true)
@@ -454,16 +491,21 @@ describe("computeHasReactiveItems", () => {
       span(),
     )
     const branch = createConditionalBranch(
-      createContent("cond.get()", "reactive", ["cond"], span()),
+      createContent("cond.get()", "reactive", [dep("cond")], span()),
       [p],
       span(),
     )
-    const condRegion = createConditional([branch], "cond", span())
+    const condRegion = createConditional([branch], dep("cond"), span())
     expect(computeHasReactiveItems([condRegion])).toBe(true)
   })
 
   it("returns false for render-time loop (shallow — does not recurse)", () => {
-    const reactiveChild = createContent("x.get()", "reactive", ["x"], span())
+    const reactiveChild = createContent(
+      "x.get()",
+      "reactive",
+      [dep("x")],
+      span(),
+    )
     const li = createElement("li", [], [], [], [reactiveChild], span())
     const renderLoop = createLoop(
       "[1, 2, 3]",
@@ -479,7 +521,12 @@ describe("computeHasReactiveItems", () => {
   })
 
   it("returns false for render-time conditional (shallow — does not recurse)", () => {
-    const reactiveChild = createContent("x.get()", "reactive", ["x"], span())
+    const reactiveChild = createContent(
+      "x.get()",
+      "reactive",
+      [dep("x")],
+      span(),
+    )
     const p = createElement("p", [], [], [], [reactiveChild], span())
     const branch = createConditionalBranch(
       createContent("true", "render", [], span()),
@@ -494,7 +541,7 @@ describe("computeHasReactiveItems", () => {
   it("returns true when mixed with non-reactive siblings", () => {
     const body = [
       createLiteral("static", span()),
-      createContent("item.name.get()", "reactive", ["item.name"], span()),
+      createContent("item.name.get()", "reactive", [dep("item.name")], span()),
       createElement("br", [], [], [], [], span()),
     ]
     expect(computeHasReactiveItems(body)).toBe(true)

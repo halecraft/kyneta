@@ -17,6 +17,7 @@ import {
   findBuilderCalls,
   isReactiveType,
 } from "./analyze.js"
+import { resolveReactiveImports } from "./reactive-detection.js"
 import type { ContentValue } from "./ir.js"
 
 // =============================================================================
@@ -82,20 +83,28 @@ function addLoroTypes(project: Project) {
   project.createSourceFile(
     "loro-types.d.ts",
     `
-    import { REACTIVE, ReactiveSubscribe, Reactive } from "./reactive-base"
+    import { REACTIVE, ReactiveSubscribe, Reactive, ReactiveDelta } from "./reactive-base"
 
-    export interface TextRef extends Reactive {
+    type TextDelta = { type: "text"; ops: unknown[] }
+    type ListDelta = { type: "list"; ops: unknown[] }
+    type MapDelta = { type: "map"; ops: { keys: string[] } }
+    type ReplaceDelta = { type: "replace" }
+
+    export interface TextRef extends Reactive<TextDelta> {
+      readonly [REACTIVE]: ReactiveSubscribe<TextDelta>
       insert(pos: number, text: string): void
       delete(pos: number, len: number): void
       toString(): string
     }
 
-    export interface CounterRef extends Reactive {
+    export interface CounterRef extends Reactive<ReplaceDelta> {
+      readonly [REACTIVE]: ReactiveSubscribe<ReplaceDelta>
       get(): number
       increment(n: number): void
     }
 
-    export interface ListRef<T> extends Reactive {
+    export interface ListRef<T> extends Reactive<ListDelta> {
+      readonly [REACTIVE]: ReactiveSubscribe<ListDelta>
       push(item: T): void
       insert(index: number, item: T): void
       delete(index: number, len?: number): void
@@ -104,7 +113,8 @@ function addLoroTypes(project: Project) {
       length: number
     }
 
-    export interface StructRef<T> extends Reactive {
+    export interface StructRef<T> extends Reactive<MapDelta> {
+      readonly [REACTIVE]: ReactiveSubscribe<MapDelta>
       get<K extends keyof T>(key: K): T[K]
     }
   `,
@@ -608,7 +618,7 @@ describe("extractDependencies", () => {
     expect(callExpr).toBeDefined()
 
     const deps = extractDependencies(callExpr)
-    expect(deps).toContain("count")
+    expect(deps.some(d => d.source === "count")).toBe(true)
   })
 
   it("should extract dependency from nested property access", () => {
@@ -641,6 +651,84 @@ describe("extractDependencies", () => {
 
     const deps = extractDependencies(stringLiteral)
     expect(deps).toHaveLength(0)
+  })
+
+  it("TextRef dependency has deltaKind 'text'", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      title.toString()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    expect(callExpr).toBeDefined()
+
+    const deps = extractDependencies(callExpr)
+    expect(deps.length).toBe(1)
+    expect(deps[0].source).toBe("title")
+    expect(deps[0].deltaKind).toBe("text")
+  })
+
+  it("ListRef dependency has deltaKind 'list'", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { ListRef } from "./loro-types"
+      declare const items: ListRef<string>
+      items.length
+    `,
+    )
+
+    const propAccess = sourceFile.getDescendantsOfKind(211)[0]
+    expect(propAccess).toBeDefined()
+
+    const deps = extractDependencies(propAccess)
+    expect(deps.length).toBe(1)
+    expect(deps[0].source).toBe("items")
+    expect(deps[0].deltaKind).toBe("list")
+  })
+
+  it("LocalRef dependency has deltaKind 'replace'", () => {
+    // Use local stub instead of real module for reliable type resolution
+    addReactiveTypes(project)
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { LocalRef } from "./reactive-types"
+      declare const isOpen: LocalRef<boolean>
+      isOpen.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    expect(callExpr).toBeDefined()
+
+    const deps = extractDependencies(callExpr)
+    expect(deps.length).toBe(1)
+    expect(deps[0].source).toBe("isOpen")
+    expect(deps[0].deltaKind).toBe("replace")
+  })
+
+  it("CounterRef dependency has deltaKind 'replace'", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const count: CounterRef
+      count.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    expect(callExpr).toBeDefined()
+
+    const deps = extractDependencies(callExpr)
+    expect(deps.length).toBe(1)
+    expect(deps[0].source).toBe("count")
+    expect(deps[0].deltaKind).toBe("replace")
   })
 })
 
@@ -711,7 +799,7 @@ describe("analyzeExpression", () => {
     const result = analyzeExpression(callExpr) as ContentValue
     expect(result.kind).toBe("content")
     expect(result.bindingTime).toBe("reactive")
-    expect(result.dependencies).toContain("count")
+    expect(result.dependencies.some(d => d.source === "count")).toBe(true)
   })
 })
 
@@ -1032,7 +1120,9 @@ describe("analyzeBuilder", () => {
       if (pElement.children[0].kind === "content") {
         expect(pElement.children[0].source).toBe("count.get()")
         expect(pElement.children[0].bindingTime).toBe("reactive")
-        expect(pElement.children[0].dependencies).toContain("count")
+        expect(
+          pElement.children[0].dependencies.some(d => d.source === "count"),
+        ).toBe(true)
       }
     }
   })

@@ -28,6 +28,7 @@
  */
 
 import { type Project, type SourceFile, ts, type Type } from "ts-morph"
+import type { DeltaKind } from "./ir.js"
 
 // =============================================================================
 // Module Resolution
@@ -245,4 +246,125 @@ export function isReactiveType(type: Type): boolean {
   }
 
   return false
+}
+
+/**
+ * Get the delta kind for a reactive type.
+ *
+ * This inspects the `[REACTIVE]` property's type to determine what kind of
+ * deltas the reactive emits. The property has type `ReactiveSubscribe<D>`
+ * which is `(self, callback: (delta: D) => void) => () => void`.
+ *
+ * We extract `D` by:
+ * 1. Getting the `[REACTIVE]` property type
+ * 2. Getting the call signature's second parameter (the callback)
+ * 3. Getting the callback's first parameter type (the delta type `D`)
+ * 4. Reading the `type` property's literal type from that delta
+ *
+ * Falls back to "replace" for unknown types or extraction failures.
+ *
+ * @param type - The ts-morph Type to inspect (must be reactive)
+ * @returns The delta kind this type emits
+ */
+export function getDeltaKind(type: Type): DeltaKind {
+  // Handle union types: use the first reactive branch's delta kind
+  if (type.isUnion()) {
+    for (const t of type.getUnionTypes()) {
+      if (isReactiveType(t)) {
+        return getDeltaKind(t)
+      }
+    }
+    return "replace"
+  }
+
+  // Find the [REACTIVE] property
+  const properties = type.compilerType.getProperties()
+  let reactiveProperty: ts.Symbol | undefined
+
+  for (const prop of properties) {
+    if (isReactiveSymbolProperty(prop)) {
+      reactiveProperty = prop
+      break
+    }
+  }
+
+  if (!reactiveProperty) {
+    return "replace"
+  }
+
+  try {
+    // Get the property's type
+    // The property type is ReactiveSubscribe<D> = (self, callback: (delta: D) => void) => () => void
+    const checker = type.compilerType.checker
+    if (!checker) {
+      return "replace"
+    }
+
+    const propType = checker.getTypeOfSymbol(reactiveProperty)
+    const callSignatures = propType.getCallSignatures()
+
+    if (callSignatures.length === 0) {
+      return "replace"
+    }
+
+    // Get the second parameter (callback: (delta: D) => void)
+    const sig = callSignatures[0]
+    const params = sig.getParameters()
+
+    if (params.length < 2) {
+      return "replace"
+    }
+
+    const callbackParam = params[1]
+    const callbackType = checker.getTypeOfSymbol(callbackParam)
+
+    // The callback type is (delta: D) => void
+    const callbackSignatures = callbackType.getCallSignatures()
+
+    if (callbackSignatures.length === 0) {
+      return "replace"
+    }
+
+    // Get the first parameter of the callback (delta: D)
+    const callbackSig = callbackSignatures[0]
+    const deltaParams = callbackSig.getParameters()
+
+    if (deltaParams.length === 0) {
+      return "replace"
+    }
+
+    const deltaParam = deltaParams[0]
+    const deltaType = checker.getTypeOfSymbol(deltaParam)
+
+    // Now extract the "type" property from the delta type
+    // The delta type is { type: "text" | "list" | ... ; ops?: ... }
+    const typeProperty = deltaType.getProperty("type")
+
+    if (!typeProperty) {
+      return "replace"
+    }
+
+    const typePropertyType = checker.getTypeOfSymbol(typeProperty)
+
+    // Check if it's a string literal type
+    if (typePropertyType.isStringLiteral()) {
+      const value = typePropertyType.value as string
+      if (
+        value === "replace" ||
+        value === "text" ||
+        value === "list" ||
+        value === "map" ||
+        value === "tree"
+      ) {
+        return value
+      }
+    }
+
+    // For union types like "replace" | "text" | ..., we can't determine a single kind
+    // Fall back to replace
+    return "replace"
+  } catch {
+    // Any extraction failure falls back to replace
+    return "replace"
+  }
 }

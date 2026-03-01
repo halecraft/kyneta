@@ -13,7 +13,7 @@
  * @packageDocumentation
  */
 
-import { isReactiveType } from "./reactive-detection.js"
+import { getDeltaKind, isReactiveType } from "./reactive-detection.js"
 import {
   type ArrayBindingPattern,
   type ArrowFunction,
@@ -40,6 +40,7 @@ import type {
   ChildNode,
   ConditionalBranch,
   ContentNode,
+  Dependency,
   ElementBinding,
   EventHandlerNode,
   SourceSpan,
@@ -317,18 +318,29 @@ export function expressionIsReactive(expr: Expression): boolean {
 /**
  * Extract the reactive dependencies from an expression.
  *
- * Returns an array of source text for each ref access (e.g., ["doc.count", "item.text"]).
+ * Returns an array of dependencies, each with source text and delta kind.
  */
-export function extractDependencies(expr: Expression): string[] {
-  const deps: string[] = []
+export function extractDependencies(expr: Expression): Dependency[] {
+  // Use a Map to deduplicate by source, keeping the first occurrence
+  const depsMap = new Map<string, Dependency>()
+
+  function addDep(source: string, type: Type): void {
+    if (!depsMap.has(source)) {
+      depsMap.set(source, {
+        source,
+        deltaKind: getDeltaKind(type),
+      })
+    }
+  }
 
   function visit(node: Node): void {
     // Property access on a reactive type
     if (node.getKind() === SyntaxKind.PropertyAccessExpression) {
       const propAccess = node as PropertyAccessExpression
-      const objType = propAccess.getExpression().getType()
+      const objExpr = propAccess.getExpression()
+      const objType = objExpr.getType()
       if (isReactiveType(objType)) {
-        deps.push(propAccess.getExpression().getText())
+        addDep(objExpr.getText(), objType)
       }
     }
 
@@ -342,7 +354,7 @@ export function extractDependencies(expr: Expression): string[] {
         const objExpr = propAccess.getExpression()
         const objType = objExpr.getType()
         if (isReactiveType(objType)) {
-          deps.push(objExpr.getText())
+          addDep(objExpr.getText(), objType)
         }
       }
     }
@@ -351,7 +363,7 @@ export function extractDependencies(expr: Expression): string[] {
     if (node.getKind() === SyntaxKind.Identifier) {
       const type = (node as Expression).getType()
       if (isReactiveType(type)) {
-        deps.push(node.getText())
+        addDep(node.getText(), type)
       }
     }
 
@@ -361,8 +373,7 @@ export function extractDependencies(expr: Expression): string[] {
 
   visit(expr)
 
-  // Deduplicate
-  return [...new Set(deps)]
+  return Array.from(depsMap.values())
 }
 
 // =============================================================================
@@ -567,13 +578,18 @@ export function analyzeForOfStatement(stmt: ForOfStatement): ChildNode | null {
   // Determine binding time from reactivity analysis
   const isReactive = expressionIsReactive(iterExpr)
 
+  // Extract dependencies with delta kind for reactive loops
+  const dependencies: Dependency[] = isReactive
+    ? [{ source: listSource, deltaKind: getDeltaKind(iterExpr.getType()) }]
+    : []
+
   return createLoop(
     listSource,
     isReactive ? "reactive" : "render",
     itemVariable,
     indexVariable,
     bodyChildren,
-    isReactive ? [listSource] : [],
+    dependencies,
     span,
   )
 }
@@ -595,7 +611,7 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
   const condition = analyzeExpression(condExpr)
 
   // Extract subscription target for reactive conditions
-  let subscriptionTarget: string | null = null
+  let subscriptionTarget: Dependency | null = null
   if (
     condition.bindingTime === "reactive" &&
     condition.dependencies.length > 0

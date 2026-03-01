@@ -61,7 +61,7 @@ Phases 5–6 of that plan are **superseded by this plan**. The original Phase 5 
 6. `__subscribe` uses `ref[REACTIVE](ref, callback)` uniformly — no `loro()` calls in subscribe.ts
 7. `__listRegion` consumes list deltas via the `[REACTIVE]` path instead of raw `LoroEventBatch`
 8. `LocalRef<T>` emits `{ type: "replace" }` deltas and works end-to-end
-9. All existing tests pass (598 kinetic, 964 change, 46 reactive)
+9. All existing tests pass (602 kinetic, 964 change, 46 reactive)
 
 ## The Gap
 
@@ -233,23 +233,23 @@ Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation t
 - ✅ Task 3.23: Verify all existing subscribe.test.ts and regions.test.ts tests pass
 - ✅ Task 3.24: Verify `src/loro/binding.test.ts` tests pass
 
-### Phase 4: Update Compiler IR and Analysis 🔴
+### Phase 4: Update Compiler IR and Analysis ✅
 
 **Goal**: IR carries delta kind on dependencies. `BindingTime` is unchanged.
 
-- 🔴 Task 4.1: Add `DeltaKind` type to ir.ts (imported from `@loro-extended/reactive` or redefined)
-- 🔴 Task 4.2: Add `Dependency` interface to ir.ts (`{ source: string; deltaKind: DeltaKind }`)
-- 🔴 Task 4.3: Update `ContentValue.dependencies` from `string[]` to `Dependency[]`
-- 🔴 Task 4.4: Add `getDeltaKind(type: Type): DeltaKind` to reactive-detection.ts — inspects the `[REACTIVE]` property's type to determine delta kind (see Learnings: "getDeltaKind Must Use Property Type Inspection, Not Interface Type Parameter Extraction")
-- 🔴 Task 4.5: Update `extractDependencies` in analyze.ts to return `Dependency[]` with delta kind
-- 🔴 Task 4.6: Update `LoopNode.dependencies` to `Dependency[]`
-- 🔴 Task 4.7: Update `ConditionalNode` to store dependency with delta kind
-- 🔴 Task 4.8: Update all IR factory functions (`createContent`, `createLoop`, etc.) for new types
-- 🔴 Task 4.9: Update all IR tests
-- 🔴 Task 4.10: Update all analyze tests for `Dependency[]` format
-- 🔴 Task 4.11: Add analyze test: `TextRef` dependency has `deltaKind: "text"`
-- 🔴 Task 4.12: Add analyze test: `ListRef` dependency has `deltaKind: "list"`
-- 🔴 Task 4.13: Add analyze test: `LocalRef<boolean>` dependency has `deltaKind: "replace"`
+- ✅ Task 4.1: Add `DeltaKind` type to ir.ts (imported from `@loro-extended/reactive` or redefined)
+- ✅ Task 4.2: Add `Dependency` interface to ir.ts (`{ source: string; deltaKind: DeltaKind }`)
+- ✅ Task 4.3: Update `ContentValue.dependencies` from `string[]` to `Dependency[]`
+- ✅ Task 4.4: Add `getDeltaKind(type: Type): DeltaKind` to reactive-detection.ts — inspects the `[REACTIVE]` property's type to determine delta kind (see Learnings: "getDeltaKind Must Use Property Type Inspection, Not Interface Type Parameter Extraction")
+- ✅ Task 4.5: Update `extractDependencies` in analyze.ts to return `Dependency[]` with delta kind
+- ✅ Task 4.6: Update `LoopNode.dependencies` to `Dependency[]`
+- ✅ Task 4.7: Update `ConditionalNode` to store dependency with delta kind
+- ✅ Task 4.8: Update all IR factory functions (`createContent`, `createLoop`, etc.) for new types
+- ✅ Task 4.9: Update all IR tests
+- ✅ Task 4.10: Update all analyze tests for `Dependency[]` format
+- ✅ Task 4.11: Add analyze test: `TextRef` dependency has `deltaKind: "text"`
+- ✅ Task 4.12: Add analyze test: `ListRef` dependency has `deltaKind: "list"`
+- ✅ Task 4.13: Add analyze test: `LocalRef<boolean>` dependency has `deltaKind: "replace"`
 
 ### Phase 5: Update Codegen for Delta Dispatch 🔴
 
@@ -269,7 +269,7 @@ Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation t
 - 🔴 Task 5.12: Add integration test: `LocalRef` in conditional region end-to-end
 - 🔴 Task 5.13: Add integration test: `LocalRef` as text content end-to-end
 - 🔴 Task 5.14: Add integration test: component with `bind:value` imports from `kinetic/loro`
-- 🔴 Task 5.15: Verify all 598+ kinetic tests pass
+- 🔴 Task 5.15: Verify all 602+ kinetic tests pass
 
 ### Phase 6: Documentation 🔴
 
@@ -685,9 +685,9 @@ Adding `Reactive<D>` broke `isTypeAssignableTo` checks because `getType()` on a 
 | `packages/kinetic/src/runtime/regions.ts` | Consume `ReactiveDelta` in `__listRegion` | ✅ |
 | `packages/kinetic/src/runtime/index.ts` | Remove binding exports (moved to `kinetic/loro`) | ✅ |
 | `packages/kinetic/package.json` | Add `"./loro"` export | ✅ |
-| `packages/kinetic/src/compiler/ir.ts` | `Dependency`, `DeltaKind` | 🔴 |
-| `packages/kinetic/src/compiler/analyze.ts` | `extractDependencies` → `Dependency[]`, delta classification | 🔴 |
-| `packages/kinetic/src/compiler/reactive-detection.ts` | `getDeltaKind()` (Phase 4 addition) | 🔴 |
+| `packages/kinetic/src/compiler/ir.ts` | `Dependency`, `DeltaKind` | ✅ |
+| `packages/kinetic/src/compiler/analyze.ts` | `extractDependencies` → `Dependency[]`, delta classification | ✅ |
+| `packages/kinetic/src/compiler/reactive-detection.ts` | `getDeltaKind()` (Phase 4 addition) | ✅ |
 | `packages/kinetic/src/compiler/codegen/dom.ts` | Read `Dependency` objects | 🔴 |
 | `packages/kinetic/src/compiler/codegen/html.ts` | Read `Dependency` objects | 🔴 |
 | `packages/kinetic/src/compiler/transform.ts` | Pass through new types | 🔴 |

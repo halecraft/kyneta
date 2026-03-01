@@ -66,6 +66,56 @@ export interface IRNodeBase {
 export type BindingTime = "literal" | "render" | "reactive"
 
 /**
+ * Delta kind classification: what type of structured changes a reactive emits.
+ *
+ * This is an orthogonal property to binding time — it describes *how much*
+ * structural information accompanies a change notification, not *when* the
+ * change occurs.
+ *
+ * - **replace**: Opaque change — re-read entire value (default, like other frameworks)
+ * - **text**: Character-level ops — enables surgical text node updates
+ * - **list**: Structural list ops — enables O(k) list region updates
+ * - **map**: Key-level changes — enables patching only changed entries
+ * - **tree**: Hierarchical changes — enables structural tree updates
+ */
+export type DeltaKind = "replace" | "text" | "list" | "map" | "tree"
+
+/**
+ * A reactive dependency with its delta kind.
+ *
+ * Each dependency represents a reactive value that an expression depends on.
+ * The `deltaKind` tells codegen what optimizations are possible when this
+ * dependency changes.
+ *
+ * @example
+ * ```typescript
+ * // For expression: doc.title.toString()
+ * const dep: Dependency = {
+ *   source: "doc.title",
+ *   deltaKind: "text"
+ * }
+ *
+ * // For expression: doc.items.length
+ * const dep: Dependency = {
+ *   source: "doc.items",
+ *   deltaKind: "list"
+ * }
+ *
+ * // For expression: isOpen.get()
+ * const dep: Dependency = {
+ *   source: "isOpen",
+ *   deltaKind: "replace"
+ * }
+ * ```
+ */
+export interface Dependency {
+  /** Source expression text (e.g., "doc.title", "doc.items") */
+  source: string
+  /** What kind of delta this dependency emits */
+  deltaKind: DeltaKind
+}
+
+/**
  * A value at a content position (text, attribute value, etc).
  *
  * Unifies the concept of "content" across all binding times. The `bindingTime`
@@ -86,10 +136,10 @@ export interface ContentValue extends IRNodeBase {
 
   /**
    * For reactive content, the refs that this value depends on.
-   * Each entry is the source text of the ref access (e.g., "doc.count", "item.text").
+   * Each dependency includes the source text and delta kind.
    * Empty array for literal and render binding times.
    */
-  dependencies: string[]
+  dependencies: Dependency[]
 }
 
 // =============================================================================
@@ -298,7 +348,7 @@ export interface LoopNode extends IRNodeBase {
    * For reactive iterables, the subscription dependencies.
    * Empty array for render-time loops.
    */
-  dependencies: string[]
+  dependencies: Dependency[]
 }
 
 /**
@@ -350,10 +400,10 @@ export interface ConditionalNode extends IRNodeBase {
   branches: ConditionalBranch[]
 
   /**
-   * For reactive conditions, the ref to subscribe to.
+   * For reactive conditions, the dependency to subscribe to.
    * Null for render-time conditionals.
    */
-  subscriptionTarget: string | null
+  subscriptionTarget: Dependency | null
 }
 
 // =============================================================================
@@ -456,7 +506,7 @@ export interface BuilderNode extends IRNodeBase {
    * All refs that are accessed anywhere in this builder.
    * Used for determining what subscriptions are needed at the top level.
    */
-  allDependencies: string[]
+  allDependencies: Dependency[]
 
   /**
    * Whether this builder has any reactive content.
@@ -1004,7 +1054,7 @@ export function createSpan(
 export function createContent(
   source: string,
   bindingTime: BindingTime,
-  dependencies: string[],
+  dependencies: Dependency[],
   span: SourceSpan,
 ): ContentValue {
   return {
@@ -1081,7 +1131,7 @@ export function createLoop(
   itemVariable: string,
   indexVariable: string | null,
   body: ChildNode[],
-  dependencies: string[],
+  dependencies: Dependency[],
   span: SourceSpan,
 ): LoopNode {
   return {
@@ -1123,7 +1173,7 @@ export function createConditionalBranch(
  */
 export function createConditional(
   branches: ConditionalBranch[],
-  subscriptionTarget: string | null,
+  subscriptionTarget: Dependency | null,
   span: SourceSpan,
 ): ConditionalNode {
   return {
@@ -1144,43 +1194,51 @@ export function createBuilder(
   children: ChildNode[],
   span: SourceSpan,
 ): BuilderNode {
-  // Collect all dependencies from the tree
-  const allDependencies = new Set<string>()
+  // Collect all dependencies from the tree, keyed by source to deduplicate
+  const allDependenciesMap = new Map<string, Dependency>()
+
+  function addDep(dep: Dependency): void {
+    // Keep first occurrence (all occurrences should have same deltaKind)
+    if (!allDependenciesMap.has(dep.source)) {
+      allDependenciesMap.set(dep.source, dep)
+    }
+  }
 
   function collectDependencies(nodes: ChildNode[]): void {
     for (const node of nodes) {
       if (isReactiveContent(node)) {
         for (const dep of node.dependencies) {
-          allDependencies.add(dep)
+          addDep(dep)
         }
       } else if (node.kind === "element") {
         for (const attr of node.attributes) {
           if (isReactiveContent(attr.value)) {
             for (const dep of attr.value.dependencies) {
-              allDependencies.add(dep)
+              addDep(dep)
             }
           }
         }
         collectDependencies(node.children)
       } else if (node.kind === "loop") {
-        if (node.iterableBindingTime === "reactive") {
-          allDependencies.add(node.iterableSource)
+        for (const dep of node.dependencies) {
+          addDep(dep)
         }
         collectDependencies(node.body)
       } else if (node.kind === "conditional") {
         if (node.subscriptionTarget) {
-          allDependencies.add(node.subscriptionTarget)
+          addDep(node.subscriptionTarget)
         }
         for (const branch of node.branches) {
           if (branch.condition) {
             for (const dep of branch.condition.dependencies) {
-              allDependencies.add(dep)
+              addDep(dep)
             }
           }
           collectDependencies(branch.body)
         }
       } else if (node.kind === "binding") {
-        allDependencies.add(node.refSource)
+        // Bindings are tracked separately, not as dependencies
+        // The refSource is used for binding generation, not subscription
       }
     }
   }
@@ -1189,14 +1247,14 @@ export function createBuilder(
   for (const prop of props) {
     if (isReactiveContent(prop.value)) {
       for (const dep of prop.value.dependencies) {
-        allDependencies.add(dep)
+        addDep(dep)
       }
     }
   }
 
   collectDependencies(children)
 
-  const isReactive = allDependencies.size > 0
+  const isReactive = allDependenciesMap.size > 0
 
   return {
     kind: "builder",
@@ -1204,7 +1262,7 @@ export function createBuilder(
     props,
     eventHandlers,
     children,
-    allDependencies: Array.from(allDependencies),
+    allDependencies: Array.from(allDependenciesMap.values()),
     isReactive,
     span,
   }
