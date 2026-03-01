@@ -61,15 +61,15 @@ Runtime functions with zero DOM or subscription dependencies. Pure input→outpu
 - ✅ Task 1.3: Add unit tests for `planTextPatch` (retain+insert, retain+delete, complex sequences, empty ops, insert-at-start)
 - ✅ Task 1.4: Add unit tests for `patchText` with jsdom Text nodes
 
-### Phase 2: IR Extension & Direct-Read Detection 🔴
+### Phase 2: IR Extension & Direct-Read Detection ✅
 
 Compiler changes to detect when a content expression is a direct `.get()` / `.toString()` call on a single reactive dependency.
 
-- 🔴 Task 2.1: Add `directReadSource?: string` field to `ContentValue` interface in `ir.ts`
-- 🔴 Task 2.2: Update `createContent` factory to accept optional `directReadSource` parameter
-- 🔴 Task 2.3: Implement `detectDirectRead(expr: Expression): string | undefined` in `analyze.ts`
-- 🔴 Task 2.4: Call `detectDirectRead` from `analyzeExpression` and pass result to `createContent`
-- 🔴 Task 2.5: Add analyze tests for direct-read detection (positive and negative cases)
+- ✅ Task 2.1: Add `directReadSource?: string` field to `ContentValue` interface in `ir.ts`
+- ✅ Task 2.2: Update `createContent` factory to accept optional `directReadSource` parameter
+- ✅ Task 2.3: Implement `detectDirectRead(expr: Expression): string | undefined` in `analyze.ts`
+- ✅ Task 2.4: Call `detectDirectRead` from `analyzeExpression` and pass result to `createContent`
+- ✅ Task 2.5: Add analyze tests for direct-read detection (positive and negative cases)
 
 ### Phase 3: `textRegion` Runtime Function 🔴
 
@@ -98,7 +98,7 @@ End-to-end tests with real `TextRef` and Loro docs.
 
 - 🔴 Task 5.1: Integration test — TextRef direct read with character insertion uses `insertData`
 - 🔴 Task 5.2: Integration test — TextRef direct read with character deletion uses `deleteData`
-- 🔴 Task 5.3: Integration test — non-direct read (e.g., `.toUpperCase()`) uses full replacement
+- 🔴 Task 5.3: Integration test — non-direct read (template literal) uses full replacement
 - 🔴 Task 5.4: Integration test — multi-dep text expression uses replace semantics
 
 ### Phase 6: Documentation 🔴
@@ -359,8 +359,8 @@ describe("text patching codegen", () => {
   // → output contains "textRegion"
 
   it("generates subscribeWithValue for non-direct TextRef read")
-  // createContent("title.get().toUpperCase()", "reactive", [dep("title", "text")], span)
-  // → output contains "subscribeWithValue", NOT "textRegion"
+  // createContent("`Hello ${title.get()}`", "reactive", [dep("title", "text")], span)
+  // directReadSource is undefined → output contains "subscribeWithValue", NOT "textRegion"
 
   it("generates subscribeMultiple for multi-dep with TextRef")
   // two deps, one is text → subscribeMultiple, NOT textRegion
@@ -376,16 +376,18 @@ Added to: `compiler/integration.test.ts`
 ```typescript
 describe("text patching integration", () => {
   it("compiles direct TextRef read with textRegion call")
-  // Full compile from source → verify textRegion in output + import
+  // Full compile from source: p(doc.title.get())
+  // → verify textRegion in output + import from runtime
 
   it("compiles non-direct TextRef read with subscribeWithValue")
-  // Full compile from source → verify subscribeWithValue, no textRegion
+  // Full compile from source: p(`Hello ${doc.title.get()}`)
+  // → verify subscribeWithValue, no textRegion (template literal is reactive but not direct)
 
   it("runtime: textRegion applies insert delta to DOM text node")
-  // Create real TextRef, subscribe via textRegion, insert text, verify DOM
+  // Create real TextRef, subscribe via textRegion, insert text, verify DOM uses insertData
 
   it("runtime: textRegion applies delete delta to DOM text node")
-  // Create real TextRef, subscribe via textRegion, delete text, verify DOM
+  // Create real TextRef, subscribe via textRegion, delete text, verify DOM uses deleteData
 })
 ```
 
@@ -473,6 +475,41 @@ describe("text patching integration", () => {
 | `packages/kinetic/src/compiler/analyze.test.ts` | `detectDirectRead` positive/negative cases |
 | `packages/kinetic/src/compiler/codegen/dom.test.ts` | `textRegion` codegen tests, validates extraction is behavior-preserving |
 | `packages/kinetic/src/compiler/integration.test.ts` | End-to-end compile + runtime tests |
+
+## Learnings
+
+### `expressionIsReactive` Limitation
+
+The `expressionIsReactive` function doesn't recursively traverse into call chains. For `title.get().toUpperCase()`:
+- The receiver of `toUpperCase()` is `title.get()` which has type `string`
+- `isReactiveType(string)` returns false
+- The function doesn't dig deeper to find that `title` is reactive
+
+**Consequence**: `title.get().toUpperCase()` is classified as **render-time**, not reactive. This is existing behavior and not a bug introduced by this work. In practice, such expressions typically appear in contexts where the parent (like a builder argument) extracts dependencies differently.
+
+**Impact on tests**: Test cases for "non-direct reads" should use template literals (which ARE detected as reactive) rather than chained method calls.
+
+### Text Delta Cursor Model
+
+Loro's `TextDeltaOp` uses cursor-based operations:
+- `retain: n` — advance cursor by n characters
+- `insert: s` — insert string s at cursor position, then advance cursor by s.length
+- `delete: n` — delete n characters at cursor position, cursor does NOT advance
+
+The last point is critical: after a delete, subsequent ops apply at the same position. This is why `planTextPatch` doesn't increment the cursor on delete ops.
+
+### Test Type Definitions Need Maintenance
+
+The test helpers (`addLoroTypes`, `addReactiveTypes`) create minimal `.d.ts` stubs. When testing new features, these may need updating. For this work, we added `get(): string` to `TextRef` in the test type definitions to match the real implementation.
+
+### Optional IR Fields Pattern
+
+When adding optional fields to IR nodes, conditionally set them to keep serialized IR clean:
+```typescript
+if (directReadSource !== undefined) {
+  result.directReadSource = directReadSource
+}
+```
 
 ## Changeset
 

@@ -11,6 +11,7 @@ import {
   analyzeBuilder,
   analyzeExpression,
   analyzeProps,
+  detectDirectRead,
   ELEMENT_FACTORIES,
   expressionIsReactive,
   extractDependencies,
@@ -95,6 +96,7 @@ function addLoroTypes(project: Project) {
       insert(pos: number, text: string): void
       delete(pos: number, len: number): void
       toString(): string
+      get(): string
     }
 
     export interface CounterRef extends Reactive<ReplaceDelta> {
@@ -800,6 +802,198 @@ describe("analyzeExpression", () => {
     expect(result.kind).toBe("content")
     expect(result.bindingTime).toBe("reactive")
     expect(result.dependencies.some(d => d.source === "count")).toBe(true)
+  })
+})
+
+// =============================================================================
+// detectDirectRead Tests
+// =============================================================================
+
+describe("detectDirectRead", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addLoroTypes(project)
+  })
+
+  it("detects title.get() as direct read", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      title.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    expect(callExpr).toBeDefined()
+
+    const result = detectDirectRead(callExpr)
+    expect(result).toBe("title")
+  })
+
+  it("detects title.toString() as direct read", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      title.toString()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    expect(callExpr).toBeDefined()
+
+    const result = detectDirectRead(callExpr)
+    expect(result).toBe("title")
+  })
+
+  it("detects doc.title.get() as direct read with full path", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const doc: { title: TextRef }
+      doc.title.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    expect(callExpr).toBeDefined()
+
+    const result = detectDirectRead(callExpr)
+    expect(result).toBe("doc.title")
+  })
+
+  it("rejects title.get().toUpperCase() — root is outer call", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      title.get().toUpperCase()
+    `,
+    )
+
+    // Get the outermost call expression (toUpperCase())
+    const allCalls = sourceFile.getDescendantsOfKind(213)
+    const outerCall = allCalls.find(c => c.getText().includes("toUpperCase"))
+    expect(outerCall).toBeDefined()
+
+    const result = detectDirectRead(outerCall!)
+    expect(result).toBeUndefined()
+  })
+
+  it("rejects title.get() + subtitle.get() — root is binary expr", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      declare const subtitle: TextRef
+      title.get() + subtitle.get()
+    `,
+    )
+
+    // Get the binary expression (the root)
+    const binaryExpr = sourceFile.getDescendantsOfKind(226)[0]
+    expect(binaryExpr).toBeDefined()
+
+    const result = detectDirectRead(binaryExpr)
+    expect(result).toBeUndefined()
+  })
+
+  it("rejects template literal with embedded .get()", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      \`Hello \${title.get()}\`
+    `,
+    )
+
+    // Get the template expression (the root)
+    const templateExpr = sourceFile.getDescendantsOfKind(228)[0]
+    expect(templateExpr).toBeDefined()
+
+    const result = detectDirectRead(templateExpr)
+    expect(result).toBeUndefined()
+  })
+
+  it("rejects title.get('arg') — has arguments", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { ListRef } from "./loro-types"
+      declare const items: ListRef<string>
+      items.get(0)
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    expect(callExpr).toBeDefined()
+
+    const result = detectDirectRead(callExpr)
+    expect(result).toBeUndefined()
+  })
+
+  it("rejects non-reactive receiver", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      const obj = { get: () => "hello" }
+      obj.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    expect(callExpr).toBeDefined()
+
+    const result = detectDirectRead(callExpr)
+    expect(result).toBeUndefined()
+  })
+
+  it("sets directReadSource on ContentValue for direct reads", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      title.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    expect(callExpr).toBeDefined()
+
+    const result = analyzeExpression(callExpr) as ContentValue
+    expect(result.kind).toBe("content")
+    expect(result.bindingTime).toBe("reactive")
+    expect(result.directReadSource).toBe("title")
+  })
+
+  it("leaves directReadSource undefined for non-direct reads (template literal)", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      \`Hello \${title.get()}\`
+    `,
+    )
+
+    // Get the template expression (the root)
+    const templateExpr = sourceFile.getDescendantsOfKind(228)[0]
+    expect(templateExpr).toBeDefined()
+
+    const result = analyzeExpression(templateExpr) as ContentValue
+    expect(result.kind).toBe("content")
+    expect(result.bindingTime).toBe("reactive")
+    expect(result.directReadSource).toBeUndefined()
   })
 })
 

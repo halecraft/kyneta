@@ -140,6 +140,16 @@ export interface ContentValue extends IRNodeBase {
    * Empty array for literal and render binding times.
    */
   dependencies: Dependency[]
+
+  /**
+   * For direct reads (e.g., `ref.get()` or `ref.toString()`), the source text
+   * of the reactive ref. This enables surgical text patching when the
+   * dependency has deltaKind "text".
+   *
+   * Undefined for non-direct reads (e.g., `ref.get().toUpperCase()`,
+   * `ref.get() + other.get()`, template literals).
+   */
+  directReadSource?: string
 }
 
 // =============================================================================
@@ -1056,14 +1066,19 @@ export function createContent(
   bindingTime: BindingTime,
   dependencies: Dependency[],
   span: SourceSpan,
+  directReadSource?: string,
 ): ContentValue {
-  return {
+  const result: ContentValue = {
     kind: "content",
     source,
     bindingTime,
     dependencies,
     span,
   }
+  if (directReadSource !== undefined) {
+    result.directReadSource = directReadSource
+  }
+  return result
 }
 
 /**

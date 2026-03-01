@@ -377,6 +377,70 @@ export function extractDependencies(expr: Expression): Dependency[] {
 }
 
 // =============================================================================
+// Direct-Read Detection
+// =============================================================================
+
+/**
+ * Detect if an expression is a direct read on a reactive ref.
+ *
+ * A direct read is when the expression is exactly `ref.get()` or `ref.toString()`
+ * on a single reactive dependency — not nested inside a transformation like
+ * `.toUpperCase()` or combined with other expressions.
+ *
+ * This enables surgical text patching: when the dependency has deltaKind "text",
+ * the runtime can use insertData/deleteData instead of full textContent replacement.
+ *
+ * @param expr - The expression to check
+ * @returns The source text of the reactive ref if this is a direct read, else undefined
+ *
+ * @example
+ * detectDirectRead(parse("title.get()")) // → "title"
+ * detectDirectRead(parse("doc.title.get()")) // → "doc.title"
+ * detectDirectRead(parse("title.toString()")) // → "title"
+ * detectDirectRead(parse("title.get().toUpperCase()")) // → undefined (root is outer call)
+ * detectDirectRead(parse("title.get() + subtitle.get()")) // → undefined (root is binary)
+ */
+export function detectDirectRead(expr: Expression): string | undefined {
+  // 1. Must be a CallExpression
+  if (expr.getKind() !== SyntaxKind.CallExpression) {
+    return undefined
+  }
+
+  const call = expr as CallExpression
+
+  // 2. Must have zero arguments
+  if (call.getArguments().length > 0) {
+    return undefined
+  }
+
+  const callee = call.getExpression()
+
+  // 3. Must be a PropertyAccessExpression (receiver.method)
+  if (callee.getKind() !== SyntaxKind.PropertyAccessExpression) {
+    return undefined
+  }
+
+  const propAccess = callee as PropertyAccessExpression
+  const methodName = propAccess.getName()
+
+  // 4. Method must be .get() or .toString()
+  if (methodName !== "get" && methodName !== "toString") {
+    return undefined
+  }
+
+  // 5. Receiver must be reactive
+  const receiver = propAccess.getExpression()
+  const receiverType = receiver.getType()
+
+  if (!isReactiveType(receiverType)) {
+    return undefined
+  }
+
+  // All checks pass — return the receiver source text
+  return receiver.getText()
+}
+
+// =============================================================================
 // Expression Analysis
 // =============================================================================
 
@@ -404,7 +468,9 @@ export function analyzeExpression(expr: Expression): ContentNode {
   // Check if reactive
   if (expressionIsReactive(expr)) {
     const deps = extractDependencies(expr)
-    return createContent(source, "reactive", deps, span)
+    // Check for direct read (enables surgical text patching)
+    const directReadSource = detectDirectRead(expr)
+    return createContent(source, "reactive", deps, span, directReadSource)
   }
 
   // Render-time expression
