@@ -239,6 +239,28 @@ This enables correct caching when performance optimization is needed.
 
 The `HandleContext`/`MutableHandleContext` abstraction was designed for a future `PrismDoc` that didn't exist yet. It sat unused while both `MapHandle` and `ListHandle` implemented their own internal state management with closures. Similarly, `SolverRegistry`/`createSolverRegistry`/`createNoOpSolver` were designed for a PrismDoc-level solver dispatch that was never built. Both were dead code that added confusion. In an experiment, delete speculative abstractions rather than leaving them for "when we need them" — if the need arises, they can be rebuilt to fit the actual shape of the problem.
 
+### Text Is Truly Just List<char> — No Separate Solver Needed
+
+The original plan called for a `TextSolver` that wraps `ListSolver`. In practice, this was unnecessary indirection. `TextView` can use `ListSolver` directly and join the character values into a string. The "solver" for text IS the list solver — the only difference is presentation (array vs string). This reinforces the principle: don't add abstractions until you have a concrete reason.
+
+### Unicode Requires Codepoint Iteration, Not String Indexing
+
+JavaScript's `string[i]` gives UTF-16 code units, not Unicode codepoints. For emoji like "🎉" (which is two UTF-16 code units), this would create two constraints instead of one. The solution is to use `[...text]` spread syntax, which iterates by codepoint:
+
+```typescript
+// Wrong: "🎉".length === 2, and "🎉"[0] === "\uD83C"
+for (let i = 0; i < text.length; i++) { ... }
+
+// Correct: [...\"🎉\"].length === 1, and [...\"🎉\"][0] === "🎉"
+for (const char of [...text]) { ... }
+```
+
+This matches Loro's behavior where each Unicode codepoint is one element.
+
+### Replace Semantics Can Differ Between Implementations
+
+A `replace(pos, len, text)` operation is semantically "delete range, then insert". However, the order of constraint creation (all deletes first, then all inserts) can affect interleaving with concurrent operations. In testing, we found one edge case where Prism and Loro produced different results for a concurrent replace + insert scenario. This isn't a bug — it's a consequence of `replace` being a compound operation. For equivalence testing, we focused on primitive operations (insert, delete) which have unambiguous semantics.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.

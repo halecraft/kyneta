@@ -356,7 +356,7 @@ is a future optimization.
 
 ---
 
-### Phase 4: Text Container 🔴
+### Phase 4: Text Container ✅
 
 Text is a List where values are characters, with a string-oriented API.
 
@@ -381,28 +381,29 @@ and slicing of spans, similar to `FugueSpan` in loro-ts.
 
 #### Tasks
 
-1. 🔴 **Text solver** (`src/solver/text-solver.ts`)
-   - Thin wrapper over List solver
-   - Concatenate solved character values into string output
-   - Validate that all `seq_element` values are single characters (or strings for spans)
-
-2. 🔴 **Text view** (`src/views/text-view.ts`)
+1. ✅ **Text view** (`src/views/text-view.ts`)
+   - No separate TextSolver needed — TextView uses ListSolver directly and joins chars
    - toString(): full text content
    - length: character count
    - slice(start, end): substring extraction
+   - charAt(index): single character access
+   - Same path convention as List (Text is just List<char>)
 
-3. 🔴 **Text handle** (`src/handles/text-handle.ts`)
+2. ✅ **Text handle** (`src/handles/text-handle.ts`)
    - insert(pos, text): expands multi-character string into per-character `seq_element`
      constraints with chained `originLeft` values
    - delete(pos, length): creates `deleted` constraints for each character in range
+   - append(), prepend(), replace(), clear() convenience methods
    - Resolves position indices to element OpIds using current solved state
+   - Handles Unicode correctly (uses `[...text]` spread for codepoint iteration)
 
-4. 🔴 **Equivalence tests** (`tests/equivalence/text-equivalence.test.ts`)
+3. ✅ **Equivalence tests** (`tests/equivalence/text-equivalence.test.ts`)
    - Concurrent inserts produce same interleaving as Loro Text
    - Two users typing at same position concurrently
    - One user types while another deletes at overlapping position
    - Sequential typing from same user produces correct chaining
    - Multi-character insert + concurrent single-character insert
+   - Unicode: emoji, CJK, mixed scripts
 
 #### Tests
 - Text interleaving matches Loro Text/Fugue for concurrent scenarios
@@ -756,11 +757,28 @@ Key implementation details:
 - Lower peer ID goes left (opposite of Map LWW)
 - Equivalence tests use order-preserving `peerIdToNum()` mapping (see Learnings)
 
+### Phase 4 Complete ✅
+
+Text container implemented as thin wrapper over List:
+
+- **393 tests passing** total (107 new for Text)
+- No separate TextSolver — TextView uses ListSolver directly and joins characters
+- Same path convention as List (conceptual simplicity: "Text is List<char>")
+- TextHandle exposes string-oriented API: insert, delete, append, prepend, replace, clear
+- Multi-character insert chains `originLeft` correctly (each char points to previous)
+- Unicode handled correctly via `[...text]` spread (codepoint iteration, not UTF-16)
+- **28 Loro equivalence tests** verify identical interleaving for concurrent edits
+- ReactiveTextView follows same pattern as List/Map reactive views
+
+Design decisions:
+- Kept it simple: no TextSolver class, just view + handle
+- `replace()` is delete-then-insert (compound operation)
+- Performance note: O(n) `askPrefix` remains the bottleneck (acknowledged, not fixed)
+
 ### Next Steps
 
-1. Implement Text container as thin wrapper over List (Phase 4)
-2. Implement subscriptions and introspection (Phase 5)
-3. Implement PrismDoc integration (Phase 6)
+1. Implement subscriptions and introspection (Phase 5)
+2. Implement PrismDoc integration (Phase 6)
 
 ### Research Completed
 

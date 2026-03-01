@@ -223,3 +223,20 @@ export type {
 } from "./handles/list-handle.js";
 
 export { createListHandle, mergeListHandles } from "./handles/list-handle.js";
+
+// Text View
+export type {
+	TextView,
+	TextViewConfig,
+	ReactiveTextView,
+} from "./views/text-view.js";
+
+export { createTextView, createReactiveTextView } from "./views/text-view.js";
+
+// Text Handle
+export type {
+	TextHandle,
+	TextHandleConfig,
+} from "./handles/text-handle.js";
+
+export { createTextHandle, mergeTextHandles } from "./handles/text-handle.js";

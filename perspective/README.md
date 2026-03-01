@@ -67,46 +67,79 @@ bun install
 ## Usage
 
 ```typescript
-import { PrismDoc } from "prism";
+import {
+  createConstraintStore,
+  createMapHandle,
+  createListHandle,
+  createTextHandle,
+  mergeStores,
+} from "prism";
 
-// Create a document
-const doc = new PrismDoc({ peerId: "alice" });
+// Create a constraint store and handles
+const store = createConstraintStore();
 
-// Get typed handles
-const profile = doc.getMap("profile");
+const profile = createMapHandle({
+  peerId: "alice",
+  store,
+  path: ["profile"],
+});
 
-// Make changes (internally creates constraints)
+// Make changes (creates constraints internally)
 profile.set("name", "Alice");
 profile.set("age", 30);
 
-// Read values (internally solves constraints)
-console.log(profile.get("name")); // "Alice"
+// Read values (solves constraints)
+console.log(profile.view().getKey("name")); // "Alice"
 
-// Subscribe to changes
-profile.subscribe((event) => {
-  console.log("Changed:", event.before, "→", event.after);
+// Work with lists
+const todos = createListHandle({
+  peerId: "alice",
+  store: profile.getStore(),
+  path: ["todos"],
 });
+todos.push({ text: "Learn CRDTs", done: false });
 
-// Sync with another peer
-const doc2 = new PrismDoc({ peerId: "bob" });
-const delta = doc.exportDelta(doc2.versionVector());
-doc2.importDelta(delta);
-// Both docs converge to the same state
+// Work with text
+const doc = createTextHandle({
+  peerId: "alice",
+  store: todos.getStore(),
+  path: ["content"],
+});
+doc.append("Hello, world!");
+console.log(doc.toString()); // "Hello, world!"
+
+// Sync with another peer (merge constraint stores)
+const bobStore = createConstraintStore();
+const bobProfile = createMapHandle({
+  peerId: "bob",
+  store: bobStore,
+  path: ["profile"],
+});
+bobProfile.set("name", "Bob");
+
+// Merge: set union of constraints
+const merged = mergeStores(profile.getStore(), bobProfile.getStore());
+// Both peers converge to the same state
 ```
 
 ## Project Status
 
 🚧 **Experimental** — This is a research project exploring CCS concepts.
 
-### Implemented
+### Implemented (Phases 1-4)
 
-- [ ] Core constraint types and store
-- [ ] Map container with LWW resolution
-- [ ] List container with Fugue-style ordering
-- [ ] Text container
-- [ ] Subscriptions (state, constraints, conflicts)
-- [ ] Introspection API
-- [ ] Simulated sync
+- [x] Core constraint types and store
+- [x] Map container with LWW resolution
+- [x] List container with Fugue-style ordering
+- [x] Text container
+- [x] Basic reactive views with subscriptions
+- [x] 393 tests including Loro equivalence tests
+
+### Not Yet Implemented (Phases 5-6)
+
+- [ ] Introspection API (explain why a value is what it is)
+- [ ] PrismDoc coordinator (unified document interface)
+- [ ] Constraint compaction
 
 ## Architecture
 
