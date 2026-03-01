@@ -12,25 +12,25 @@ But Loro CRDTs provide structured deltas — not just "something changed" but "h
 
 Meanwhile, the existing `[REACTIVE]` subscribe function uses a `() => void` callback signature, which structurally prevents delta information from flowing to consumers. This forces the runtime to either (a) re-read entire values or (b) bypass `[REACTIVE]` entirely for delta-aware code paths (which is what `__listRegion` does today via `__subscribe` + `LoroEventBatch`).
 
-### The Insight: Delta Is a Fourth Binding-Time Level
+### The Insight: Delta Kind Is a Refinement of Reactive
 
-Partial evaluation theory says: the more you know statically, the more you can specialize. Today's lattice:
+The three binding-time levels are temporal — *when* does the value become known:
 
-```
-literal  <  render  <  reactive
-```
+1. **literal**: compile time
+2. **render**: mount time
+3. **reactive**: runtime (repeatedly, on change)
 
-The `reactive` level means "value varies at runtime, changes opaque." But when the source provides structured deltas, we know *more* — we know the shape of the change. This enables a strictly more specialized residualization:
+Delta information arrives at the same *time* as reactive — when the source changes. The difference is *how much structural information* accompanies the notification. That's a property of the *source*, not a separate temporal level.
 
-- **reactive** ("replace"): re-read entire value, replace DOM content
-- **delta**: apply structured patch to DOM content directly
+So `BindingTime` stays as `"literal" | "render" | "reactive"`. But reactive dependencies carry a `DeltaKind` that tells codegen *how* to subscribe and update:
 
-This is a genuine fourth level because the **residualized code is structurally different**:
+- `"replace"`: re-read entire value, replace DOM content (the default, equivalent to every other reactive framework)
+- `"text"`: character-level ops — enables `textNode.insertData(offset, chars)`
+- `"list"`: structural list ops — enables `__listRegion` with insert/delete at indices
+- `"map"`: key-level ops — enables patching only changed entries (future)
+- `"tree"`: hierarchical ops — enables structural tree updates (future)
 
-- `reactive` generates: `subscribe → re-read → textNode.textContent = newValue`
-- `delta("text")` generates: `subscribe → textNode.insertData(offset, chars)`
-
-The delta level is parameterized by *kind* (text, list, map, tree), where `"replace"` is the degenerate case equivalent to level 3.
+`DeltaKind` is an optimization hint that codegen dispatches on. When the expression is a "direct read" and the delta kind is rich (text, list, etc.), codegen can emit specialized patch code. Otherwise it falls back to replace semantics. The fallback is always safe.
 
 ### Relationship to Prior Work
 
@@ -46,17 +46,17 @@ Phases 5–6 of that plan are **superseded by this plan**. The original Phase 5 
 
 1. The `ReactiveSubscribe` callback signature is `() => void` — it cannot carry delta information
 2. The runtime's `__subscribe` uses `loro()` to get Loro containers and passes raw `LoroEventBatch` — coupling the runtime to Loro's event format
-3. `__listRegion` already operates at the "delta" level but the IR doesn't reflect this — it's classified as `"reactive"` like everything else
+3. `__listRegion` already consumes structured deltas but the IR doesn't carry delta kind — it's classified as `"reactive"` like everything else
 4. Text content always re-reads and replaces the entire string, even for single-character edits
 5. There is no mechanism for `LocalRef` or custom reactive types to express structured deltas
-6. The binding-time lattice lacks a fourth level, preventing the compiler from generating delta-specialized code
+6. The IR lacks delta kind information on dependencies, preventing the compiler from generating delta-specialized code
 
 ## Success Criteria
 
 1. `ReactiveSubscribe` callback receives a `ReactiveDelta` discriminated union describing what changed
 2. Every `[REACTIVE]` implementation translates its native events into `ReactiveDelta` — no Loro types leak to consumers
 3. The IR carries delta kind on dependencies (not just `string[]` but `{ source, deltaKind }[]`)
-4. `BindingTime` becomes `"literal" | "render" | "reactive" | "delta"` in the IR
+4. `BindingTime` remains `"literal" | "render" | "reactive"` — delta kind is an orthogonal property on dependencies, not a fourth binding time
 5. Codegen dispatches on delta kind to emit specialized code (list deltas today, text deltas as next target)
 6. `__subscribe` uses `ref[REACTIVE](ref, callback)` uniformly — no `loro()` calls in subscribe.ts
 7. `__listRegion` consumes list deltas via the `[REACTIVE]` path instead of raw `LoroEventBatch`
@@ -68,7 +68,7 @@ Phases 5–6 of that plan are **superseded by this plan**. The original Phase 5 
 | Aspect | Current | Target |
 |--------|---------|--------|
 | `ReactiveSubscribe` callback | `() => void` | `(delta: ReactiveDelta) => void` |
-| IR binding time | `"literal" \| "render" \| "reactive"` | `"literal" \| "render" \| "reactive" \| "delta"` |
+| Codegen dispatch | Uniform `__subscribeWithValue` | Dispatches on `DeltaKind` per dependency |
 | IR dependencies | `string[]` | `Array<{ source: string; deltaKind: DeltaKind }>` |
 | `__subscribe` | Uses `loro()`, passes `LoroEventBatch` | Uses `ref[REACTIVE]`, receives `ReactiveDelta` |
 | `__listRegion` | Consumes `LoroEventBatch` directly | Consumes `ReactiveDelta` of type `"list"` |
@@ -147,13 +147,13 @@ export interface Dependency {
 }
 ```
 
-### Updated BindingTime
+### BindingTime (Unchanged)
 
 ```typescript
-export type BindingTime = "literal" | "render" | "reactive" | "delta"
+export type BindingTime = "literal" | "render" | "reactive"
 ```
 
-Where `"reactive"` means "value changes at runtime, but the expression is derived (transformed) so deltas can't be applied directly" and `"delta"` means "value changes at runtime, expression is a direct read of the source, and deltas can be applied surgically."
+`BindingTime` is not extended. Delta kind is an orthogonal property carried on each `Dependency`, not a fourth binding-time level. Whether codegen can exploit structured deltas is a codegen optimization decision based on the dependency's `deltaKind` and whether the expression is a direct read — not a binding-time classification.
 
 ## Phases and Tasks
 
@@ -171,21 +171,21 @@ Where `"reactive"` means "value changes at runtime, but the expression is derive
 - ✅ Task 1.8: Add tests for `ReactiveDelta` type discriminants (21 new tests)
 - ✅ Task 1.9: Update existing `LocalRef` tests to assert delta payload
 
-### Phase 2: Update @loro-extended/change [REACTIVE] Implementations 🔴
+### Phase 2: Update @loro-extended/change [REACTIVE] Implementations ✅
 
 **Goal**: Each ref's `[REACTIVE]` translates `LoroEventBatch` → `ReactiveDelta`. No Loro types leak.
 
-- 🔴 Task 2.1: Create `translateDiff(diff: Diff): ReactiveDelta` helper in a new `reactive-bridge.ts` module
-- 🔴 Task 2.2: Update `TypedRef` base class `[REACTIVE]` to translate events and pass `ReactiveDelta` to callback
-- 🔴 Task 2.3: `TextRef` emits `{ type: "text", ops }` — translate Loro's `TextDiff` → `TextDeltaOp[]`
-- 🔴 Task 2.4: `CounterRef` emits `{ type: "replace" }` — counter increment not useful for DOM
-- 🔴 Task 2.5: `ListRef` emits `{ type: "list", ops }` — translate Loro's `ListDiff` → `ListDeltaOp[]` (insert carries count, not values)
-- 🔴 Task 2.6: `MovableListRef` emits `{ type: "list", ops }` — same translation as ListRef
-- 🔴 Task 2.7: `RecordRef` and `StructRef` emit `{ type: "map", ops }` — translate Loro's `MapDiff` → `MapDeltaOp`
-- 🔴 Task 2.8: `TreeRef` emits `{ type: "tree", ops }` — translate Loro's `TreeDiff` → `TreeDeltaOp[]`
-- 🔴 Task 2.9: `PlainValueRef` emits `{ type: "replace" }` — scalar value, no structural delta
-- 🔴 Task 2.10: Update existing reactive.test.ts to assert delta payloads for each ref type
-- 🔴 Task 2.11: Add translation unit tests in `reactive-bridge.test.ts`
+- ✅ Task 2.1: Create `translateDiff(diff: Diff): ReactiveDelta` helper in a new `reactive-bridge.ts` module
+- ✅ Task 2.2: Update `TypedRef` base class `[REACTIVE]` to translate events via `translateEventBatch`
+- ✅ Task 2.3: `TextRef` emits `{ type: "text", ops }` — via base class + `translateDiff` dispatching on `Diff.type`
+- ✅ Task 2.4: `CounterRef` emits `{ type: "replace" }` — `translateDiff` maps `CounterDiff` → replace
+- ✅ Task 2.5: `ListRef` emits `{ type: "list", ops }` — insert carries count, not values
+- ✅ Task 2.6: `MovableListRef` emits `{ type: "list", ops }` — same translation via base class
+- ✅ Task 2.7: `RecordRef` and `StructRef` emit `{ type: "map", ops }` — StructRef Proxy handler updated
+- ✅ Task 2.8: `TreeRef` emits `{ type: "tree", ops }` — via base class
+- ✅ Task 2.9: `PlainValueRef` emits `{ type: "replace" }` — factory updated
+- ✅ Task 2.10: Update existing reactive.test.ts — 5 new delta-specific tests (28 total)
+- ✅ Task 2.11: Add translation unit tests in `reactive-bridge.test.ts` (24 tests)
 
 Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation that calls `container.subscribe(() => callback())`. After this phase, the base class implementation should translate the Loro event through `translateDiff`. Subclass-specific behavior (TextRef emitting text deltas vs CounterRef emitting replace) is determined by the `Diff.type` field in the Loro event, not by overriding `[REACTIVE]`. The `StructRef` Proxy handler and `PlainValueRef` factory have their own implementations that must also be updated.
 
@@ -210,24 +210,21 @@ Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation t
 
 ### Phase 4: Update Compiler IR and Analysis 🔴
 
-**Goal**: IR carries delta kind. Compiler distinguishes `"reactive"` from `"delta"` binding time.
+**Goal**: IR carries delta kind on dependencies. `BindingTime` is unchanged.
 
-- 🔴 Task 4.1: Add `DeltaKind` type to ir.ts
+- 🔴 Task 4.1: Add `DeltaKind` type to ir.ts (imported from `@loro-extended/reactive` or redefined)
 - 🔴 Task 4.2: Add `Dependency` interface to ir.ts (`{ source: string; deltaKind: DeltaKind }`)
 - 🔴 Task 4.3: Update `ContentValue.dependencies` from `string[]` to `Dependency[]`
-- 🔴 Task 4.4: Add `"delta"` to `BindingTime` type
-- 🔴 Task 4.5: Add `getDeltaKind(type: Type): DeltaKind` to reactive-detection.ts — inspects type parameter of `Reactive<D>` to determine delta kind
-- 🔴 Task 4.6: Update `extractDependencies` in analyze.ts to return `Dependency[]` with delta kind
-- 🔴 Task 4.7: Update `analyzeExpression` to classify as `"delta"` when: single dependency, direct read expression, delta kind is not `"replace"`
-- 🔴 Task 4.8: Update `LoopNode.dependencies` to `Dependency[]`
-- 🔴 Task 4.9: Update `ConditionalNode` to store dependency with delta kind
-- 🔴 Task 4.10: Update all IR factory functions (`createContent`, `createLoop`, etc.) for new types
-- 🔴 Task 4.11: Update all IR tests
-- 🔴 Task 4.12: Update all analyze tests for `Dependency[]` format
-- 🔴 Task 4.13: Add analyze test: `TextRef` expression classified as `deltaKind: "text"`
-- 🔴 Task 4.14: Add analyze test: `doc.title.toString().toUpperCase()` degrades to `"reactive"` (derived expression)
-- 🔴 Task 4.15: Add analyze test: `LocalRef<boolean>` classified as `deltaKind: "replace"`
-- 🔴 Task 4.16: Add analyze test: template literal with reactive interpolation degrades to `"reactive"`
+- 🔴 Task 4.4: Add `getDeltaKind(type: Type): DeltaKind` to reactive-detection.ts — inspects type parameter of `Reactive<D>` to determine delta kind
+- 🔴 Task 4.5: Update `extractDependencies` in analyze.ts to return `Dependency[]` with delta kind
+- 🔴 Task 4.6: Update `LoopNode.dependencies` to `Dependency[]`
+- 🔴 Task 4.7: Update `ConditionalNode` to store dependency with delta kind
+- 🔴 Task 4.8: Update all IR factory functions (`createContent`, `createLoop`, etc.) for new types
+- 🔴 Task 4.9: Update all IR tests
+- 🔴 Task 4.10: Update all analyze tests for `Dependency[]` format
+- 🔴 Task 4.11: Add analyze test: `TextRef` dependency has `deltaKind: "text"`
+- 🔴 Task 4.12: Add analyze test: `ListRef` dependency has `deltaKind: "list"`
+- 🔴 Task 4.13: Add analyze test: `LocalRef<boolean>` dependency has `deltaKind: "replace"`
 
 ### Phase 5: Update Codegen for Delta Dispatch 🔴
 
@@ -250,7 +247,7 @@ Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation t
 **Goal**: Document the delta-driven reactivity model.
 
 - 🔴 Task 6.1: Update `packages/reactive/README.md` with `ReactiveDelta` types and contract
-- 🔴 Task 6.2: Update `packages/kinetic/TECHNICAL.md` — new "Binding-Time Lattice" section documenting four levels
+- 🔴 Task 6.2: Update `packages/kinetic/TECHNICAL.md` — update "Binding-Time Analysis" section with delta kind as orthogonal property
 - 🔴 Task 6.3: Update `packages/kinetic/TECHNICAL.md` — update "Reactive Detection" section for delta kind extraction
 - 🔴 Task 6.4: Update `packages/kinetic/TECHNICAL.md` — update "Runtime Dependencies" for delta-aware subscribe
 - 🔴 Task 6.5: Update `packages/change/TECHNICAL.md` — document `reactive-bridge.ts` and delta translation
@@ -402,19 +399,45 @@ describe("delta kind extraction", () => {
     // → extractDependencies returns [{ source: "isOpen", deltaKind: "replace" }]
   })
 
-  it("direct read of TextRef classified as delta binding time", () => {
-    // h1(doc.title.toString()) → bindingTime: "delta", deltaKind: "text"
+  it("TextRef expression is reactive with deltaKind 'text' on dependency", () => {
+    // h1(doc.title.toString()) → bindingTime: "reactive", dep.deltaKind: "text"
   })
 
-  it("derived expression degrades to reactive", () => {
-    // h1(doc.title.toString().toUpperCase()) → bindingTime: "reactive"
+  it("derived expression is reactive with deltaKind 'text' on dependency", () => {
+    // h1(doc.title.toString().toUpperCase()) → bindingTime: "reactive", dep.deltaKind: "text"
+    // (codegen decides whether to exploit delta based on expression shape)
   })
 
-  it("template literal with reactive interpolation degrades to reactive", () => {
-    // p(`Count: ${doc.count.get()}`) → bindingTime: "reactive"
+  it("template literal with reactive interpolation is reactive", () => {
+    // p(`Count: ${doc.count.get()}`) → bindingTime: "reactive", dep.deltaKind: "replace"
   })
 })
 ```
+
+## Learnings
+
+### Three Levels, Not Four
+
+We initially framed delta as a fourth binding-time level. After discussion, we concluded this is wrong. Binding-time levels are temporal — *when* does information become available. `literal` = compile time, `render` = mount time, `reactive` = runtime. Delta information arrives at runtime, the same moment as reactive. The difference is *how much* structural information accompanies the notification, not *when* it arrives.
+
+`DeltaKind` is an orthogonal property on reactive dependencies — a refinement that tells codegen what optimizations are possible. The lattice remains three levels; the third level is parameterized:
+
+```
+literal  <  render  <  reactive
+                         ├── replace (re-read + replace)
+                         ├── text (character-level patch)
+                         ├── list (structural list ops)
+                         ├── map (key-level patch)
+                         └── tree (hierarchical ops)
+```
+
+### `translateEventBatch` Calls Back Per-Diff, Not Per-Batch
+
+A `LoroEventBatch` can contain multiple `LoroEvent` entries. The `[REACTIVE]` implementation calls the subscriber once per diff, not once per batch. This was a conscious design decision — merging diffs would complicate the delta types for no clear consumer benefit.
+
+### reactive-bridge Uses Local Interfaces, Not Loro Imports
+
+`reactive-bridge.ts` defines its own `LoroDelta`, `LoroListDiff`, etc. interfaces. This keeps the module's import boundary clean — it depends only on `@loro-extended/reactive` types, not `loro-crdt`. The `translateDiff` function accepts `unknown` and casts internally.
 
 ## Transitive Effect Analysis
 
@@ -441,7 +464,7 @@ describe("delta kind extraction", () => {
 | `kinetic/src/runtime/subscribe.ts` | Uses `ref[REACTIVE]`, removes `loro()` import | High — core runtime change |
 | `kinetic/src/runtime/regions.ts` | `__listRegion` consumes `ReactiveDelta` not `LoroEventBatch` | High — delta format change |
 | `kinetic/src/runtime/binding.ts` | Remove `loro()` usage | Medium |
-| `kinetic/src/compiler/ir.ts` | `Dependency` type, `"delta"` binding time | High — IR schema change |
+| `kinetic/src/compiler/ir.ts` | `Dependency` type, `DeltaKind` | High — IR schema change |
 | `kinetic/src/compiler/analyze.ts` | `extractDependencies` returns `Dependency[]`, delta kind extraction | High |
 | `kinetic/src/compiler/reactive-detection.ts` | Add `getDeltaKind()` | Medium |
 | `kinetic/src/compiler/codegen/dom.ts` | Read `Dependency` objects, dispatch on delta kind | High |
@@ -618,7 +641,7 @@ Delta-driven reactivity: structured change propagation
 - `__subscribe` uses `ref[REACTIVE]` uniformly — no `loro()` calls in runtime
 - `__listRegion` consumes `ReactiveDelta` list deltas instead of raw `LoroEventBatch`
 - IR carries `DeltaKind` on dependencies for compile-time delta dispatch
-- `BindingTime` extended with `"delta"` level for direct-read expressions
+- `BindingTime` unchanged — delta kind is an orthogonal optimization hint
 - `LocalRef` works end-to-end in all reactive contexts
 ```
 
@@ -634,33 +657,29 @@ Update the symbol table entry for `REACTIVE`:
 
 ### packages/kinetic/TECHNICAL.md
 
-**New section: "Binding-Time Lattice"** (replace current "Binding-Time Analysis"):
+**Update section: "Binding-Time Analysis"** — add delta kind as orthogonal property:
 
-The compiler classifies values by **when they become known** and **how much is known about changes**:
+The compiler classifies values by **when they become known**:
 
 ```
-literal  <  render  <  reactive  <  delta
+literal  <  render  <  reactive
 ```
 
 - **literal**: Value known at compile time. Residualize to constant.
 - **render**: Value known at mount time. Residualize to one-shot evaluation.
-- **reactive**: Value varies at runtime, change is opaque or expression is derived. Residualize to subscribe + re-read + replace.
-- **delta**: Value varies at runtime, expression is a direct read, source provides structured deltas. Residualize to subscribe + apply patch.
+- **reactive**: Value varies at runtime. Residualize to subscribe + update.
 
-The `delta` level is parameterized by `DeltaKind`:
+Reactive dependencies carry an additional `DeltaKind` property describing what kind of structured change the source provides. This is an orthogonal optimization hint — not a fourth binding-time level — because delta information arrives at the same *time* as reactive (when the source changes). The difference is *how much structural information* accompanies the notification.
 
-| DeltaKind | Source Types | DOM Residualization |
+| DeltaKind | Source Types | DOM Strategy |
 |-----------|-------------|---------------------|
-| `"replace"` | `LocalRef`, `CounterRef`, `PlainValueRef` | Re-read + replace (same as reactive) |
-| `"text"` | `TextRef` | `textNode.insertData()` / `deleteData()` |
+| `"replace"` | `LocalRef`, `CounterRef`, `PlainValueRef` | Re-read + replace (default) |
+| `"text"` | `TextRef` | `textNode.insertData()` / `deleteData()` (when direct read) |
 | `"list"` | `ListRef`, `MovableListRef` | `__listRegion` with structural ops |
 | `"map"` | `RecordRef`, `StructRef` | (future) patch changed keys only |
 | `"tree"` | `TreeRef` | (future) structural tree ops |
 
-An expression degrades from `delta` to `reactive` when:
-- It has multiple dependencies
-- The expression transforms the value (e.g., `.toUpperCase()`)
-- The expression interpolates into a template literal
+Codegen dispatches on `DeltaKind` to choose the update strategy. Whether the delta can actually be exploited depends on the expression shape — a direct read like `doc.title.toString()` is delta-eligible, while a derived expression like `doc.title.toString().toUpperCase()` falls back to replace semantics. This is a codegen decision, not a binding-time classification.
 
 **Update section: "Reactive Detection"**:
 
