@@ -190,10 +190,7 @@ function generateAttributeSubscription(
 
   if (deps.length === 0) return []
 
-  // Subscribe to the first dependency (most common case)
-  // TODO: Handle multiple dependencies with __subscribeMultiple
-  const dep = deps[0]
-
+  // Generate the update code
   let updateCode: string
   if (attr.name === "class") {
     updateCode = `${elementVar}.className = ${attr.value.source}`
@@ -209,9 +206,19 @@ function generateAttributeSubscription(
     updateCode = `${elementVar}.setAttribute(${JSON.stringify(attr.name)}, ${attr.value.source})`
   }
 
-  lines.push(`${ind}__subscribe(${dep.source}, () => {`)
-  lines.push(`${ind}${state.indent}${updateCode}`)
-  lines.push(`${ind}}, ${state.scopeVar})`)
+  if (deps.length === 1) {
+    // Single dependency - use __subscribe
+    const dep = deps[0]
+    lines.push(`${ind}__subscribe(${dep.source}, () => {`)
+    lines.push(`${ind}${state.indent}${updateCode}`)
+    lines.push(`${ind}}, ${state.scopeVar})`)
+  } else {
+    // Multiple dependencies - use __subscribeMultiple
+    const depSources = deps.map(d => d.source).join(", ")
+    lines.push(`${ind}__subscribeMultiple([${depSources}], () => {`)
+    lines.push(`${ind}${state.indent}${updateCode}`)
+    lines.push(`${ind}}, ${state.scopeVar})`)
+  }
 
   return lines
 }
@@ -368,12 +375,28 @@ function generateChild(
 
         // Initial value + subscription
         if (node.dependencies.length > 0) {
-          const dep = node.dependencies[0]
-          lines.push(
-            `${ind}__subscribeWithValue(${dep.source}, () => ${node.source}, (v) => {`,
-          )
-          lines.push(`${ind}${state.indent}${textVar}.textContent = String(v)`)
-          lines.push(`${ind}}, ${state.scopeVar})`)
+          if (node.dependencies.length === 1) {
+            // Single dependency - use __subscribeWithValue
+            const dep = node.dependencies[0]
+            lines.push(
+              `${ind}__subscribeWithValue(${dep.source}, () => ${node.source}, (v) => {`,
+            )
+            lines.push(
+              `${ind}${state.indent}${textVar}.textContent = String(v)`,
+            )
+            lines.push(`${ind}}, ${state.scopeVar})`)
+          } else {
+            // Multiple dependencies - use __subscribeMultiple with initial render
+            const depSources = node.dependencies.map(d => d.source).join(", ")
+            // Set initial value
+            lines.push(`${ind}${textVar}.textContent = String(${node.source})`)
+            // Subscribe to all dependencies
+            lines.push(`${ind}__subscribeMultiple([${depSources}], () => {`)
+            lines.push(
+              `${ind}${state.indent}${textVar}.textContent = String(${node.source})`,
+            )
+            lines.push(`${ind}}, ${state.scopeVar})`)
+          }
         }
       }
       break
@@ -476,12 +499,32 @@ function generateBodyWithReturn(
         // Reactive - create text node, will be updated via subscription
         lines.push(`${ind}const ${textVar} = document.createTextNode("")`)
         if (domNode.dependencies.length > 0) {
-          const dep = domNode.dependencies[0]
-          lines.push(
-            `${ind}__subscribeWithValue(${dep.source}, () => ${domNode.source}, (v) => {`,
-          )
-          lines.push(`${ind}${state.indent}${textVar}.textContent = String(v)`)
-          lines.push(`${ind}}, ${state.scopeVar})`)
+          if (domNode.dependencies.length === 1) {
+            // Single dependency - use __subscribeWithValue
+            const dep = domNode.dependencies[0]
+            lines.push(
+              `${ind}__subscribeWithValue(${dep.source}, () => ${domNode.source}, (v) => {`,
+            )
+            lines.push(
+              `${ind}${state.indent}${textVar}.textContent = String(v)`,
+            )
+            lines.push(`${ind}}, ${state.scopeVar})`)
+          } else {
+            // Multiple dependencies - use __subscribeMultiple with initial render
+            const depSources = domNode.dependencies
+              .map(d => d.source)
+              .join(", ")
+            // Set initial value
+            lines.push(
+              `${ind}${textVar}.textContent = String(${domNode.source})`,
+            )
+            // Subscribe to all dependencies
+            lines.push(`${ind}__subscribeMultiple([${depSources}], () => {`)
+            lines.push(
+              `${ind}${state.indent}${textVar}.textContent = String(${domNode.source})`,
+            )
+            lines.push(`${ind}}, ${state.scopeVar})`)
+          }
         }
       }
       lines.push(`${ind}return ${textVar}`)

@@ -138,18 +138,18 @@ The phases are numbered for reference but should be implemented in the following
 - ✅ Task 1.8: Add JSDoc note to `LocalRef` constructor suggesting `state()` as preferred API
 - ✅ Task 1.9: Add tests for `state()` function
 
-### Phase 3: Multi-Dependency Subscriptions 🔴
+### Phase 3: Multi-Dependency Subscriptions ✅
 
 **Goal**: Subscribe to all dependencies in an expression, not just the first one.
 
 > **Note**: `__subscribeMultiple` already exists and is tested. This phase only requires codegen changes to use it.
 
-- 🔴 Task 3.1: Update `generateAttributeSubscription` in `dom.ts` to use `subscribeMultiple` when `deps.length > 1`
-- 🔴 Task 3.2: Update reactive text content generation in `generateChild` to use `subscribeMultiple` when `deps.length > 1`
-- 🔴 Task 3.3: Update `generateBodyWithReturn` for multi-dependency text content
-- 🔴 Task 3.4: Add codegen tests for multi-dependency attributes
-- 🔴 Task 3.5: Add codegen tests for multi-dependency text content
-- 🔴 Task 3.6: Add integration test: expression with two reactive dependencies updates on either change
+- ✅ Task 3.1: Update `generateAttributeSubscription` in `dom.ts` to use `subscribeMultiple` when `deps.length > 1`
+- ✅ Task 3.2: Update reactive text content generation in `generateChild` to use `subscribeMultiple` when `deps.length > 1`
+- ✅ Task 3.3: Update `generateBodyWithReturn` for multi-dependency text content
+- ✅ Task 3.4: Add codegen tests for multi-dependency attributes
+- ✅ Task 3.5: Add codegen tests for multi-dependency text content
+- ✅ Task 3.6: Add integration test: expression with two reactive dependencies updates on either change
 
 ### Phase 0: Runtime Subpath Refactor 🔴
 

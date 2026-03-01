@@ -26,6 +26,7 @@ import {
   __getActiveSubscriptionCount,
   __resetSubscriptionIdCounter,
   __subscribe,
+  __subscribeMultiple,
   __subscribeWithValue,
 } from "../runtime/subscribe.js"
 import {
@@ -788,6 +789,51 @@ describe("compiler integration - reactive expressions", () => {
 
       expect(firstNameNode.textContent).toBe("Jane")
       expect(fullNameNode.textContent).toBe("Jane Doe")
+
+      scope.dispose()
+      expect(__getActiveSubscriptionCount()).toBe(0)
+    })
+
+    it("should use __subscribeMultiple for expressions with multiple dependencies", () => {
+      const schema = Shape.doc({
+        firstName: Shape.text(),
+        lastName: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.firstName.insert(0, "John")
+      doc.lastName.insert(0, "Doe")
+      loro(doc).commit()
+
+      const scope = new Scope("test")
+      const fullNameNode = document.createTextNode("")
+
+      // Set initial value
+      fullNameNode.textContent = `${doc.firstName.toString()} ${doc.lastName.toString()}`
+
+      // Subscribe to both dependencies with a single __subscribeMultiple call
+      __subscribeMultiple(
+        [doc.firstName, doc.lastName],
+        () => {
+          fullNameNode.textContent = `${doc.firstName.toString()} ${doc.lastName.toString()}`
+        },
+        scope,
+      )
+
+      // Should create 2 subscriptions (one per ref)
+      expect(__getActiveSubscriptionCount()).toBe(2)
+      expect(fullNameNode.textContent).toBe("John Doe")
+
+      // Update first name only - should trigger update
+      doc.firstName.delete(0, 4)
+      doc.firstName.insert(0, "Jane")
+      loro(doc).commit()
+      expect(fullNameNode.textContent).toBe("Jane Doe")
+
+      // Update last name only - should also trigger update
+      doc.lastName.delete(0, 3)
+      doc.lastName.insert(0, "Smith")
+      loro(doc).commit()
+      expect(fullNameNode.textContent).toBe("Jane Smith")
 
       scope.dispose()
       expect(__getActiveSubscriptionCount()).toBe(0)

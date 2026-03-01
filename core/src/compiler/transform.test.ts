@@ -579,6 +579,68 @@ describe("collectRequiredImports", () => {
     expect(imports.has("__listRegion")).toBe(true)
     expect(imports.has("__conditionalRegion")).toBe(true)
   })
+
+  it("should include __subscribeMultiple for multi-dependency text content", () => {
+    const multiDepContent = {
+      kind: "content" as const,
+      source: "first.get() + ' ' + last.get()",
+      bindingTime: "reactive" as const,
+      dependencies: [dep("first"), dep("last")],
+      span,
+    }
+    const builder = createBuilder("span", [], [], [multiDepContent], span)
+    builder.isReactive = true
+
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.has("__subscribeMultiple")).toBe(true)
+  })
+
+  it("should include __subscribeMultiple for multi-dependency attributes", () => {
+    const multiDepAttr = {
+      name: "class",
+      value: {
+        kind: "content" as const,
+        source: "theme.get() + ' ' + variant.get()",
+        bindingTime: "reactive" as const,
+        dependencies: [dep("theme"), dep("variant")],
+        span,
+      },
+    }
+    const element = {
+      kind: "element" as const,
+      tag: "div",
+      attributes: [multiDepAttr],
+      eventHandlers: [],
+      bindings: [],
+      children: [],
+      span,
+      isReactive: true,
+    }
+    const builder = createBuilder("div", [], [], [element], span)
+    builder.isReactive = true
+
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.has("__subscribeMultiple")).toBe(true)
+  })
+
+  it("should NOT include __subscribeMultiple for single-dependency content", () => {
+    const singleDepContent = {
+      kind: "content" as const,
+      source: "title.get()",
+      bindingTime: "reactive" as const,
+      dependencies: [dep("title")],
+      span,
+    }
+    const builder = createBuilder("span", [], [], [singleDepContent], span)
+    builder.isReactive = true
+
+    const imports = collectRequiredImports([builder])
+
+    expect(imports.has("__subscribeMultiple")).toBe(false)
+    expect(imports.has("__subscribe")).toBe(true)
+  })
 })
 
 // =============================================================================

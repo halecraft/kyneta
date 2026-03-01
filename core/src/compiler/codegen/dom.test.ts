@@ -312,6 +312,66 @@ describe("generateDOM", () => {
       expect(code).toContain("count")
     })
   })
+
+  describe("multi-dependency subscriptions", () => {
+    it("should generate __subscribeMultiple for text content with multiple dependencies", () => {
+      const reactiveExpr = createContent(
+        "first.get() + ' ' + last.get()",
+        "reactive",
+        [dep("first"), dep("last")],
+        span(1, 4, 1, 35),
+      )
+      const builder = createBuilder(
+        "span",
+        [],
+        [],
+        [reactiveExpr],
+        span(1, 0, 1, 40),
+      )
+
+      const code = generateDOM(builder)
+
+      // Uses __subscribeMultiple with array of deps
+      expect(code).toContain("__subscribeMultiple")
+      expect(code).toContain("[first, last]")
+      // Sets initial value synchronously before subscribing
+      const lines = code.split("\n")
+      const initialSetLine = lines.findIndex(
+        l => l.includes("textContent = String(") && !l.includes("=>"),
+      )
+      const subscribeLine = lines.findIndex(l =>
+        l.includes("__subscribeMultiple"),
+      )
+      expect(initialSetLine).toBeGreaterThan(-1)
+      expect(subscribeLine).toBeGreaterThan(-1)
+      expect(initialSetLine).toBeLessThan(subscribeLine)
+    })
+
+    it("should generate __subscribeMultiple for attribute with multiple dependencies", () => {
+      const classAttr: AttributeNode = {
+        name: "class",
+        value: createContent(
+          "isActive ? theme.get() : defaultTheme.get()",
+          "reactive",
+          [dep("theme"), dep("defaultTheme")],
+          span(1, 5, 1, 50),
+        ),
+      }
+      const builder = createBuilder(
+        "div",
+        [classAttr],
+        [],
+        [],
+        span(1, 0, 1, 55),
+      )
+
+      const code = generateDOM(builder)
+
+      expect(code).toContain("__subscribeMultiple")
+      expect(code).toContain("[theme, defaultTheme]")
+      expect(code).toContain(".className =")
+    })
+  })
 })
 
 // =============================================================================

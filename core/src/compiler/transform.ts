@@ -234,8 +234,22 @@ export function collectRequiredImports(ir: BuilderNode[]): Set<string> {
             imports.add("__bindTextValue")
           }
         }
+        // Check for multi-dependency attributes
+        for (const attr of child.attributes) {
+          if (
+            attr.value.bindingTime === "reactive" &&
+            attr.value.dependencies.length > 1
+          ) {
+            imports.add("__subscribeMultiple")
+          }
+        }
         // Recurse into element children
         collectFromChildren(child.children)
+      } else if (child.kind === "content") {
+        // Check for multi-dependency content (text nodes)
+        if (child.bindingTime === "reactive" && child.dependencies.length > 1) {
+          imports.add("__subscribeMultiple")
+        }
       }
     }
   }
