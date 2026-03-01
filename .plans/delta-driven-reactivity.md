@@ -37,7 +37,7 @@ So `BindingTime` stays as `"literal" | "render" | "reactive"`. But reactive depe
 The [kinetic-reactive-primitive.md](./kinetic-reactive-primitive.md) plan (Phases 0–4 complete) established:
 
 - `@loro-extended/reactive` package with `REACTIVE` symbol, `Reactive` interface, `LocalRef`
-- Structural compiler detection via `isTypeAssignableTo`
+- Structural compiler detection via property-level symbol check (originally `isTypeAssignableTo`, replaced — see Learnings)
 - `[REACTIVE]` on all `@loro-extended/change` refs
 
 Phases 5–6 of that plan are **superseded by this plan**. The original Phase 5 proposed updating `__subscribe` to use `ref[REACTIVE](ref, () => void)` — a uniform but delta-unaware callback. This plan replaces that with a delta-aware callback that carries structured change information.
@@ -61,7 +61,7 @@ Phases 5–6 of that plan are **superseded by this plan**. The original Phase 5 
 6. `__subscribe` uses `ref[REACTIVE](ref, callback)` uniformly — no `loro()` calls in subscribe.ts
 7. `__listRegion` consumes list deltas via the `[REACTIVE]` path instead of raw `LoroEventBatch`
 8. `LocalRef<T>` emits `{ type: "replace" }` deltas and works end-to-end
-9. All existing tests pass (593 kinetic, 935 change, 25 reactive)
+9. All existing tests pass (593 kinetic, 964 change, 46 reactive)
 
 ## The Gap
 
@@ -74,6 +74,7 @@ Phases 5–6 of that plan are **superseded by this plan**. The original Phase 5 
 | `__listRegion` | Consumes `LoroEventBatch` directly | Consumes `ReactiveDelta` of type `"list"` |
 | Text updates | `textNode.textContent = newValue` | `textNode.insertData(offset, chars)` (when direct read) |
 | `LocalRef` runtime | Not tested end-to-end in compiler | Emits `{ type: "replace" }`, works in all contexts |
+| Loro bindings | In core runtime (`kinetic/src/runtime/binding.ts`) | Separate subpath (`@loro-extended/kinetic/loro`) |
 
 ## Core Type Definitions
 
@@ -191,22 +192,46 @@ Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation t
 
 ### Phase 3: Update Kinetic Runtime Subscribe 🔴
 
-**Goal**: `__subscribe` uses `ref[REACTIVE](ref, callback)` uniformly. No `loro()` calls.
+**Goal**: `__subscribe` uses `ref[REACTIVE](ref, callback)` uniformly. No `loro()` calls in core runtime. Loro-specific bindings move to `@loro-extended/kinetic/loro` subpath.
 
-- 🔴 Task 3.1: Import `REACTIVE`, `Reactive`, `ReactiveDelta` from `@loro-extended/reactive`
-- 🔴 Task 3.2: Update `__subscribe` signature: `handler` becomes `(delta: ReactiveDelta) => void`
-- 🔴 Task 3.3: Implement `__subscribe` body: `ref[REACTIVE](ref, handler)` — no `loro()` import
-- 🔴 Task 3.4: Update `__subscribeWithValue` to ignore delta (re-reads value regardless)
-- 🔴 Task 3.5: Update `__subscribeMultiple` for new signature
-- 🔴 Task 3.6: Remove `loro` import from subscribe.ts
-- 🔴 Task 3.7: Remove `LoroEventBatch` type from subscribe.ts
-- 🔴 Task 3.8: Update `__listRegion` in regions.ts to receive `ReactiveDelta` and extract list ops
-- 🔴 Task 3.9: Update `planDeltaOps` to accept Kinetic's `ListDeltaOp[]` instead of `LoroEventBatch`
-- 🔴 Task 3.10: Update `ListDeltaEvent` test helper interface to match new delta shape
-- 🔴 Task 3.11: Update `binding.ts` to remove `loro()` usage (bindings still use `__subscribe` with `"replace"` semantics)
-- 🔴 Task 3.12: Add runtime tests: `LocalRef` with `__subscribe` emits `{ type: "replace" }`
-- 🔴 Task 3.13: Add runtime tests: custom reactive type works with `__subscribe`
-- 🔴 Task 3.14: Verify all existing subscribe.test.ts and regions.test.ts tests pass
+#### Part A: Move Loro Bindings to Subpath
+
+- 🔴 Task 3.1: Create `packages/kinetic/src/loro/` directory
+- 🔴 Task 3.2: Move `binding.ts` → `src/loro/binding.ts`
+- 🔴 Task 3.3: Move `binding.test.ts` → `src/loro/binding.test.ts`
+- 🔴 Task 3.4: Create `src/loro/index.ts` exporting `__bindTextValue`, `__bindChecked`, `__bindNumericValue`
+- 🔴 Task 3.5: Update `package.json` exports: add `"./loro": "./src/loro/index.ts"`
+- 🔴 Task 3.6: Update any internal imports that reference the old `binding.ts` path
+
+#### Part B: Decouple Core Runtime from Loro
+
+- 🔴 Task 3.7: Import `REACTIVE`, `isReactive`, `ReactiveDelta` from `@loro-extended/reactive` in subscribe.ts
+- 🔴 Task 3.8: Update `__subscribe` signature: `handler` becomes `(delta: ReactiveDelta) => void`
+- 🔴 Task 3.9: Implement `__subscribe` body: `ref[REACTIVE](ref, handler)` — no `loro()` import
+- 🔴 Task 3.10: Update `__subscribeWithValue` to ignore delta (re-reads value regardless)
+- 🔴 Task 3.11: Update `__subscribeMultiple` for new signature
+- 🔴 Task 3.12: Remove `loro` import from subscribe.ts
+- 🔴 Task 3.13: Remove `LoroEventBatch` type from subscribe.ts
+- 🔴 Task 3.14: Verify `src/runtime/` has no imports from `@loro-extended/change`
+
+#### Part C: Update List Regions for ReactiveDelta
+
+- 🔴 Task 3.15: Update `__listRegion` in regions.ts to receive `ReactiveDelta` and extract list ops
+- 🔴 Task 3.16: Update `planDeltaOps` to accept Kinetic's `ListDeltaOp[]` instead of `LoroEventBatch`
+- 🔴 Task 3.17: Add fallback: if `delta.type !== "list"`, trigger full re-render
+- 🔴 Task 3.18: Update `ListDeltaEvent` test helper interface to match new delta shape
+
+#### Part D: Update Loro Bindings Subscribe Path
+
+- 🔴 Task 3.19: Update `src/loro/binding.ts` subscribe calls to use `[REACTIVE]` path
+- 🔴 Task 3.20: Verify write path retains `loro()` for mutations
+
+#### Part E: Tests
+
+- 🔴 Task 3.21: Add runtime tests: `LocalRef` with `__subscribe` emits `{ type: "replace" }`
+- 🔴 Task 3.22: Add runtime tests: custom reactive type works with `__subscribe`
+- 🔴 Task 3.23: Verify all existing subscribe.test.ts and regions.test.ts tests pass
+- 🔴 Task 3.24: Verify `src/loro/binding.test.ts` tests pass
 
 ### Phase 4: Update Compiler IR and Analysis 🔴
 
@@ -215,7 +240,7 @@ Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation t
 - 🔴 Task 4.1: Add `DeltaKind` type to ir.ts (imported from `@loro-extended/reactive` or redefined)
 - 🔴 Task 4.2: Add `Dependency` interface to ir.ts (`{ source: string; deltaKind: DeltaKind }`)
 - 🔴 Task 4.3: Update `ContentValue.dependencies` from `string[]` to `Dependency[]`
-- 🔴 Task 4.4: Add `getDeltaKind(type: Type): DeltaKind` to reactive-detection.ts — inspects type parameter of `Reactive<D>` to determine delta kind
+- 🔴 Task 4.4: Add `getDeltaKind(type: Type): DeltaKind` to reactive-detection.ts — inspects the `[REACTIVE]` property's type to determine delta kind (see Learnings: "getDeltaKind Must Use Property Type Inspection, Not Interface Type Parameter Extraction")
 - 🔴 Task 4.5: Update `extractDependencies` in analyze.ts to return `Dependency[]` with delta kind
 - 🔴 Task 4.6: Update `LoopNode.dependencies` to `Dependency[]`
 - 🔴 Task 4.7: Update `ConditionalNode` to store dependency with delta kind
@@ -228,32 +253,38 @@ Note: `TypedRef` base class currently has a single `[REACTIVE]` implementation t
 
 ### Phase 5: Update Codegen for Delta Dispatch 🔴
 
-**Goal**: Codegen dispatches on delta kind. List regions use delta path. Text patching prepared but not yet wired.
+**Goal**: Codegen dispatches on delta kind. List regions use delta path. Text patching prepared but not yet wired. Loro binding imports use `@loro-extended/kinetic/loro` subpath.
 
 - 🔴 Task 5.1: Update DOM codegen to read `Dependency` objects instead of `string` for subscription generation
 - 🔴 Task 5.2: Update `generateAttributeSubscription` to extract `.source` from `Dependency`
 - 🔴 Task 5.3: Update reactive text content generation to extract `.source` from `Dependency`
 - 🔴 Task 5.4: Update `generateReactiveLoop` to pass delta kind through
 - 🔴 Task 5.5: Update HTML codegen for `Dependency[]`
-- 🔴 Task 5.6: Update all codegen tests for new dependency format
-- 🔴 Task 5.7: Update transform.test.ts for new dependency format
-- 🔴 Task 5.8: Update integration.test.ts — verify list regions still work with delta path
-- 🔴 Task 5.9: Add integration test: `LocalRef` in conditional region end-to-end
-- 🔴 Task 5.10: Add integration test: `LocalRef` as text content end-to-end
-- 🔴 Task 5.11: Verify all 593+ kinetic tests pass
+- 🔴 Task 5.6: Track whether component uses Loro bindings (`bind:value`, etc.)
+- 🔴 Task 5.7: Generate `import { __bindX } from "@loro-extended/kinetic/loro"` when bindings are used
+- 🔴 Task 5.8: Keep core runtime imports as `import { __subscribe } from "@loro-extended/kinetic"`
+- 🔴 Task 5.9: Update all codegen tests for new dependency format
+- 🔴 Task 5.10: Update transform.test.ts for new dependency format
+- 🔴 Task 5.11: Update integration.test.ts — verify list regions still work with delta path
+- 🔴 Task 5.12: Add integration test: `LocalRef` in conditional region end-to-end
+- 🔴 Task 5.13: Add integration test: `LocalRef` as text content end-to-end
+- 🔴 Task 5.14: Add integration test: component with `bind:value` imports from `kinetic/loro`
+- 🔴 Task 5.15: Verify all 593+ kinetic tests pass
 
 ### Phase 6: Documentation 🔴
 
-**Goal**: Document the delta-driven reactivity model.
+**Goal**: Document the delta-driven reactivity model and the `kinetic/loro` subpath architecture.
 
 - 🔴 Task 6.1: Update `packages/reactive/README.md` with `ReactiveDelta` types and contract
 - 🔴 Task 6.2: Update `packages/kinetic/TECHNICAL.md` — update "Binding-Time Analysis" section with delta kind as orthogonal property
-- 🔴 Task 6.3: Update `packages/kinetic/TECHNICAL.md` — update "Reactive Detection" section for delta kind extraction
+- ✅ Task 6.3: ~~Update `packages/kinetic/TECHNICAL.md` — update "Reactive Detection" section~~ (done in compiler fix commit)
 - 🔴 Task 6.4: Update `packages/kinetic/TECHNICAL.md` — update "Runtime Dependencies" for delta-aware subscribe
-- 🔴 Task 6.5: Update `packages/change/TECHNICAL.md` — document `reactive-bridge.ts` and delta translation
-- 🔴 Task 6.6: Update root `TECHNICAL.md` — update symbol table for `REACTIVE` with delta callback
-- 🔴 Task 6.7: Document how to create custom reactive types with delta support
-- 🔴 Task 6.8: Update `kinetic-reactive-primitive.md` — mark Phases 5–6 as superseded by this plan
+- 🔴 Task 6.5: Update `packages/kinetic/TECHNICAL.md` — document `kinetic/loro` subpath and binding architecture
+- 🔴 Task 6.6: Update `packages/change/TECHNICAL.md` — document `reactive-bridge.ts` and delta translation
+- 🔴 Task 6.7: Update root `TECHNICAL.md` — update symbol table for `REACTIVE` with delta callback
+- 🔴 Task 6.8: Document how to create custom reactive types with delta support
+- 🔴 Task 6.9: Update `kinetic-reactive-primitive.md` — mark Phases 5–6 as superseded by this plan
+- 🔴 Task 6.10: Add `packages/kinetic/src/loro/README.md` explaining Loro-specific bindings
 
 ## Tests
 
@@ -375,6 +406,26 @@ describe("__listRegion with delta path", () => {
   // Existing list region tests should continue passing
   // with the delta flowing through [REACTIVE] instead of raw LoroEventBatch
 })
+
+describe("kinetic/loro subpath", () => {
+  it("binding functions are exported from @loro-extended/kinetic/loro", () => {
+    // import { __bindTextValue, __bindChecked, __bindNumericValue } from "@loro-extended/kinetic/loro"
+    expect(typeof __bindTextValue).toBe("function")
+    expect(typeof __bindChecked).toBe("function")
+    expect(typeof __bindNumericValue).toBe("function")
+  })
+
+  it("core runtime does not export binding functions", () => {
+    // import * as kinetic from "@loro-extended/kinetic"
+    // Binding functions should NOT be present
+    expect("__bindTextValue" in kinetic).toBe(false)
+  })
+
+  it("core runtime has no @loro-extended/change imports", () => {
+    // Verify src/runtime/ files don't import from @loro-extended/change
+    // This is a static analysis / build verification test
+  })
+})
 ```
 
 ### Phase 4: Compiler Analysis
@@ -439,6 +490,78 @@ A `LoroEventBatch` can contain multiple `LoroEvent` entries. The `[REACTIVE]` im
 
 `reactive-bridge.ts` defines its own `LoroDelta`, `LoroListDiff`, etc. interfaces. This keeps the module's import boundary clean — it depends only on `@loro-extended/reactive` types, not `loro-crdt`. The `translateDiff` function accepts `unknown` and casts internally.
 
+### `isTypeAssignableTo` Breaks on Generic Interfaces
+
+Adding `Reactive<D extends ReactiveDelta = ReactiveDelta>` broke the compiler's `isReactiveType()` function. The root cause: `InterfaceDeclaration.getType().compilerType` on a generic interface returns the **generic type constructor** with an unresolved type parameter `D`, not an instantiation with the default. `isTypeAssignableTo(ListRef<string>, Reactive<D>)` then fails because TypeScript can't prove the assignment with `D` unresolved.
+
+**Fix**: Replaced the entire detection strategy with property-level symbol checking. Instead of finding the `Reactive` interface and checking assignability, we check whether the **candidate type itself** has a property keyed by the `[REACTIVE]` unique symbol. This uses a three-layer approach:
+
+1. **Symbol.for() tracing** — walk the property key's `nameType.symbol.valueDeclaration` AST to find `Symbol.for("kinetic:reactive")`. Works for `.ts` source files.
+2. **Symbol declaration name** — check `nameType.symbol.escapedName === "REACTIVE"`. Works for `.d.ts` files where the initializer is erased.
+3. **Property escaped name** — fallback to `compilerSymbol.escapedName.startsWith("__@REACTIVE@")`.
+
+This approach is immune to changes in the `Reactive` interface's generic signature. The `getReactiveInterfaceType()` function and `reactiveInterfaceCache` were removed entirely.
+
+**Key API detail**: `compilerSymbol.links.nameType` is TypeScript-internal but has been stable across TS 4.x–6.x. It's fundamental to computed property name handling. Layers 2 and 3 serve as fallbacks.
+
+### `getDeltaKind` Must Use Property Type Inspection, Not Interface Type Parameter Extraction
+
+Phase 4's Task 4.4 originally proposed extracting `D` from `Reactive<D>` to determine delta kind. This won't work for the same reason `isTypeAssignableTo` failed — the generic parameter isn't easily extractable from an instantiated type in the `.d.ts` context.
+
+Instead, `getDeltaKind` should inspect the **type of the `[REACTIVE]` property** on the candidate type. For example, `ListRef`'s `[REACTIVE]` property has type `ReactiveSubscribe<{ type: "list"; ops: ListDeltaOp[] }>`. The delta kind can be extracted from the callback parameter's type. Alternatively, since the `[REACTIVE]` property type is `ReactiveSubscribe<D>` which is `(self, callback: (delta: D) => void) => () => void`, we can:
+
+1. Get the `[REACTIVE]` property type on the candidate
+2. Get its call signature's second parameter (the callback)
+3. Get the callback's first parameter type (the delta type `D`)
+4. Read the `type` discriminant from that delta type
+
+If this proves too fragile, a simpler alternative: map known type names to delta kinds at the IR level (`TextRef` → `"text"`, `ListRef` → `"list"`, `LocalRef` → `"replace"`, etc.), with `"replace"` as the default for unknown reactive types. This is less general but sufficient for the current set of reactive types.
+
+### binding.ts Write Path Needs `loro()` — Only Subscribe Side Can Be Updated
+
+The plan's Task 3.11 originally said "remove `loro()` usage" from `binding.ts`. In reality, the three binding functions (`__bindTextValue`, `__bindChecked`, `__bindNumericValue`) use `loro()` for two purposes:
+
+1. **Subscribe side**: `__subscribe(ref, handler, scope)` — this can and should use `[REACTIVE]`
+2. **Write side**: direct Loro container mutation on input events (e.g., `textRef.delete(0, len)` + `textRef.insert(0, newValue)`) — this **must** retain `loro()` because the binding needs the raw Loro container to perform mutations
+
+Task 3.11 has been updated to reflect this: update the subscribe calls, keep `loro()` for the write path.
+
+### Loro Bindings Are a Loro-Specific Feature — Separate Subpath
+
+Two-way bindings (`bind:value`, `bind:checked`) are fundamentally about syncing DOM inputs with Loro collaborative state. They require direct access to Loro containers for mutations. This is intentionally asymmetric with the read path:
+
+- **Read path (subscribe)**: Fully decoupled via `[REACTIVE]`. Any type implementing `Reactive` can participate. `LocalRef`, custom reactive types, and Loro refs all work uniformly.
+- **Write path (bindings)**: Loro-specific. Uses `loro()` to get the raw container for mutations like `textRef.delete()` + `textRef.insert()`.
+
+Rather than hiding this asymmetry, we make it explicit by moving Loro bindings to a separate subpath:
+
+```
+@loro-extended/kinetic          # Core runtime — Loro-agnostic
+├── __subscribe (uses [REACTIVE])
+├── __subscribeWithValue
+├── __listRegion (receives ReactiveDelta)
+└── __conditionalRegion
+
+@loro-extended/kinetic/loro     # Loro-specific extensions
+├── __bindTextValue
+├── __bindChecked
+└── __bindNumericValue
+```
+
+Benefits:
+1. **Clear separation of concerns** — the core runtime has no Loro imports
+2. **Explicit in imports** — `import { __bindX } from "@loro-extended/kinetic/loro"` makes the Loro dependency visible
+3. **Enables future extensibility** — other CRDT libraries could have their own binding subpaths
+4. **`LocalRef` story is clear** — it works for rendering via `[REACTIVE]`, but doesn't participate in `bind:value` (use event handlers instead)
+
+### Test File Paths Affect Module Resolution
+
+`ts.resolveModuleName` uses the source file's path to locate `node_modules`. Creating test source files at `/tmp/...` or `/path/to/file.ts` causes module resolution to fail silently — types resolve to `any` with zero properties. Test source files must use paths relative to the project root (e.g., `"component.ts"`) so that `node_modules` is reachable via the standard resolution algorithm.
+
+### `__listRegion` Will Receive One Delta Per Call, Not a Batch
+
+Because `translateEventBatch` calls the subscriber once per diff (not once per batch), and `__subscribe` will forward `ReactiveDelta` directly, the `__listRegion` subscriber will receive exactly **one** `ReactiveDelta` per invocation. This simplifies `planDeltaOps`: it receives a single `ReactiveDelta` and extracts `ops` if `type === "list"`. For non-list deltas (e.g., `"replace"` from a transaction touching the container's parent), it should trigger a full re-render.
+
 ## Transitive Effect Analysis
 
 ### Package Dependency Graph
@@ -455,20 +578,23 @@ A `LoroEventBatch` can contain multiple `LoroEvent` entries. The `[REACTIVE]` im
 
 ### Direct Impact
 
-| File | Change | Risk |
-|------|--------|------|
-| `reactive/src/index.ts` | Add `ReactiveDelta`, update `ReactiveSubscribe<D>`, `Reactive<D>` | Medium — generic type parameter may affect downstream inference |
-| `change/src/typed-refs/base.ts` | `[REACTIVE]` translates `LoroEventBatch` → `ReactiveDelta` | Medium — base class change affects all refs |
-| `change/src/typed-refs/struct-ref.ts` | Proxy handler `[REACTIVE]` translates events | Medium — Proxy-specific implementation |
-| `change/src/plain-value-ref/factory.ts` | Factory `[REACTIVE]` emits `{ type: "replace" }` | Low |
-| `kinetic/src/runtime/subscribe.ts` | Uses `ref[REACTIVE]`, removes `loro()` import | High — core runtime change |
-| `kinetic/src/runtime/regions.ts` | `__listRegion` consumes `ReactiveDelta` not `LoroEventBatch` | High — delta format change |
-| `kinetic/src/runtime/binding.ts` | Remove `loro()` usage | Medium |
-| `kinetic/src/compiler/ir.ts` | `Dependency` type, `DeltaKind` | High — IR schema change |
-| `kinetic/src/compiler/analyze.ts` | `extractDependencies` returns `Dependency[]`, delta kind extraction | High |
-| `kinetic/src/compiler/reactive-detection.ts` | Add `getDeltaKind()` | Medium |
-| `kinetic/src/compiler/codegen/dom.ts` | Read `Dependency` objects, dispatch on delta kind | High |
-| `kinetic/src/compiler/codegen/html.ts` | Read `Dependency` objects | Medium |
+| File | Change | Risk | Status |
+|------|--------|------|--------|
+| `reactive/src/index.ts` | Add `ReactiveDelta`, update `ReactiveSubscribe<D>`, `Reactive<D>` | ~~Medium~~ Low — generic param risk resolved | ✅ |
+| `change/src/typed-refs/base.ts` | `[REACTIVE]` translates `LoroEventBatch` → `ReactiveDelta` | Medium — base class change affects all refs | ✅ |
+| `change/src/typed-refs/struct-ref.ts` | Proxy handler `[REACTIVE]` translates events | Medium — Proxy-specific implementation | ✅ |
+| `change/src/plain-value-ref/factory.ts` | Factory `[REACTIVE]` emits `{ type: "replace" }` | Low | ✅ |
+| `kinetic/src/compiler/reactive-detection.ts` | Replaced `isTypeAssignableTo` with property-level detection | ~~Medium~~ Low — resolved | ✅ |
+| `kinetic/src/runtime/subscribe.ts` | Uses `ref[REACTIVE]`, removes `loro()` import | High — core runtime change | 🔴 |
+| `kinetic/src/runtime/regions.ts` | `__listRegion` consumes `ReactiveDelta` not `LoroEventBatch` | High — delta format change | 🔴 |
+| `kinetic/src/runtime/binding.ts` | **Moved** to `src/loro/binding.ts` | Medium — file move | 🔴 |
+| `kinetic/src/loro/index.ts` | **New** — exports Loro-specific bindings | Low — new file | 🔴 |
+| `kinetic/package.json` | Add `"./loro"` subpath export | Low | 🔴 |
+| `kinetic/src/compiler/ir.ts` | `Dependency` type, `DeltaKind` | High — IR schema change | 🔴 |
+| `kinetic/src/compiler/analyze.ts` | `extractDependencies` returns `Dependency[]`, delta kind extraction | High | 🔴 |
+| `kinetic/src/compiler/reactive-detection.ts` | Add `getDeltaKind()` | Medium | 🔴 |
+| `kinetic/src/compiler/codegen/dom.ts` | Read `Dependency` objects, dispatch on delta kind | High | 🔴 |
+| `kinetic/src/compiler/codegen/html.ts` | Read `Dependency` objects | Medium | 🔴 |
 
 ### Transitive Impact
 
@@ -483,7 +609,8 @@ A `LoroEventBatch` can contain multiple `LoroEvent` entries. The `[REACTIVE]` im
 | `kinetic/src/compiler/ir.test.ts` | `ir.ts` | Factory function signatures change |
 | `kinetic/src/runtime/subscribe.test.ts` | `subscribe.ts` | Handler signature changes |
 | `kinetic/src/runtime/regions.test.ts` | `regions.ts` | Delta event format changes |
-| `kinetic/src/runtime/binding.test.ts` | `binding.ts` | May need updates if `loro()` removal affects setup |
+| `kinetic/src/loro/binding.test.ts` | `binding.ts` | Moved from `src/runtime/`, path updates |
+| `kinetic/src/runtime/index.ts` | Exports | Remove binding exports (moved to `kinetic/loro`) |
 | `kinetic/src/compiler/tree-merge.test.ts` | `ir.ts` | Dependencies format in test data |
 
 ### Breaking Change Assessment
@@ -495,45 +622,56 @@ A `LoroEventBatch` can contain multiple `LoroEvent` entries. The `[REACTIVE]` im
 - IR types change — these are internal compiler types, not public
 - Runtime subscribe signatures change — called by generated code, not users
 
-### Risk: Generic Type Parameter Inference
+### Risk: Generic Type Parameter Inference ✅ RESOLVED
 
-Adding `Reactive<D>` where `D extends ReactiveDelta` could affect `isTypeAssignableTo` checks if the compiler doesn't resolve the default type parameter correctly. Mitigation: the compiler checks assignability to `Reactive` (with default), not to a specific `Reactive<TextDelta>`.
+Adding `Reactive<D>` broke `isTypeAssignableTo` checks because `getType()` on a generic interface returns a type with unresolved parameters. **Fixed by replacing with property-level detection** — see Learnings: "`isTypeAssignableTo` Breaks on Generic Interfaces".
 
 ### Risk: `planDeltaOps` Format Change
 
-`planDeltaOps` currently parses `LoroEventBatch` with its `events[].diff.type === "list"` structure. After the change, it receives `ListDeltaOp[]` directly — a much simpler input. But all existing region tests construct `ListDeltaEvent` objects in the old format. These must be updated.
+`planDeltaOps` currently parses `LoroEventBatch` with its `events[].diff.type === "list"` structure. After the change, it receives a single `ReactiveDelta` per call (because `translateEventBatch` calls back per-diff). It must check `delta.type === "list"` and extract `delta.ops`, or fall back to full re-render for `"replace"` deltas. All existing region tests construct `ListDeltaEvent` objects in the old format — these must be updated.
 
-### Risk: Multi-Event Batches
+### Risk: Multi-Event Batches ✅ RESOLVED
 
-A `LoroEventBatch` can contain multiple events (e.g., a transaction touching multiple containers). The `[REACTIVE]` implementation on a specific ref only receives events for its own container, but the `LoroEventBatch` wraps them in an array. The `translateDiff` helper must handle the case where `events` contains zero relevant diffs (emit no callback) or multiple (emit one delta per diff, or merge).
+`translateEventBatch` calls the subscriber once per diff, not once per batch. Each `[REACTIVE]` callback invocation delivers exactly one `ReactiveDelta`. This is already implemented and tested.
 
 ## Resources for Implementation
 
 ### Files to Create
 
-- `packages/change/src/reactive-bridge.ts` — `translateDiff()` helper
-- `packages/change/src/reactive-bridge.test.ts` — translation unit tests
+- ✅ `packages/change/src/reactive-bridge.ts` — `translateDiff()` helper
+- ✅ `packages/change/src/reactive-bridge.test.ts` — translation unit tests
+- 🔴 `packages/kinetic/src/loro/index.ts` — Loro-specific binding exports
+- 🔴 `packages/kinetic/src/loro/binding.ts` — moved from `src/runtime/binding.ts`
+- 🔴 `packages/kinetic/src/loro/binding.test.ts` — moved from `src/runtime/binding.test.ts`
 
 ### Files to Modify
 
 | File | Summary |
 |------|---------|
-| `packages/reactive/src/index.ts` | `ReactiveDelta`, updated `ReactiveSubscribe<D>`, `Reactive<D>`, `LocalRef` |
-| `packages/reactive/src/index.test.ts` | Delta assertion tests |
-| `packages/change/src/typed-refs/base.ts` | `[REACTIVE]` emits translated delta |
-| `packages/change/src/typed-refs/struct-ref.ts` | Proxy handler `[REACTIVE]` emits translated delta |
-| `packages/change/src/plain-value-ref/factory.ts` | `[REACTIVE]` emits `{ type: "replace" }` with delta callback |
-| `packages/change/src/typed-refs/reactive.test.ts` | Assert delta payloads |
-| `packages/kinetic/src/runtime/subscribe.ts` | Use `[REACTIVE]`, remove `loro()` |
-| `packages/kinetic/src/runtime/regions.ts` | Consume `ReactiveDelta` in `__listRegion` |
-| `packages/kinetic/src/runtime/binding.ts` | Remove `loro()` usage |
-| `packages/kinetic/src/compiler/ir.ts` | `Dependency`, `DeltaKind`, `"delta"` binding time |
-| `packages/kinetic/src/compiler/analyze.ts` | `extractDependencies` → `Dependency[]`, delta classification |
-| `packages/kinetic/src/compiler/reactive-detection.ts` | `getDeltaKind()` |
-| `packages/kinetic/src/compiler/codegen/dom.ts` | Read `Dependency` objects |
-| `packages/kinetic/src/compiler/codegen/html.ts` | Read `Dependency` objects |
-| `packages/kinetic/src/compiler/transform.ts` | Pass through new types |
-| All test files in kinetic/src/compiler/ and kinetic/src/runtime/ | Update dependency format and delta assertions |
+| File | Summary | Status |
+|------|---------|--------|
+| `packages/reactive/src/index.ts` | `ReactiveDelta`, updated `ReactiveSubscribe<D>`, `Reactive<D>`, `LocalRef` | ✅ |
+| `packages/reactive/src/index.test.ts` | Delta assertion tests | ✅ |
+| `packages/change/src/typed-refs/base.ts` | `[REACTIVE]` emits translated delta | ✅ |
+| `packages/change/src/typed-refs/struct-ref.ts` | Proxy handler `[REACTIVE]` emits translated delta | ✅ |
+| `packages/change/src/plain-value-ref/factory.ts` | `[REACTIVE]` emits `{ type: "replace" }` with delta callback | ✅ |
+| `packages/change/src/typed-refs/reactive.test.ts` | Assert delta payloads | ✅ |
+| `packages/kinetic/src/compiler/reactive-detection.ts` | Property-level detection replacing `isTypeAssignableTo` | ✅ |
+| `packages/kinetic/src/compiler/analyze.test.ts` | Updated stubs for `Reactive<D>` | ✅ |
+| `packages/kinetic/src/compiler/integration.test.ts` | Fixed `./loro-types` → `@loro-extended/change` imports | ✅ |
+| `packages/kinetic/src/vite/plugin.test.ts` | Fixed file path for module resolution | ✅ |
+| `packages/kinetic/TECHNICAL.md` | Updated Reactive Detection section | ✅ |
+| `packages/kinetic/src/runtime/subscribe.ts` | Use `[REACTIVE]`, remove `loro()` | 🔴 |
+| `packages/kinetic/src/runtime/regions.ts` | Consume `ReactiveDelta` in `__listRegion` | 🔴 |
+| `packages/kinetic/src/runtime/index.ts` | Remove binding exports (moved to `kinetic/loro`) | 🔴 |
+| `packages/kinetic/package.json` | Add `"./loro"` export | 🔴 |
+| `packages/kinetic/src/compiler/ir.ts` | `Dependency`, `DeltaKind` | 🔴 |
+| `packages/kinetic/src/compiler/analyze.ts` | `extractDependencies` → `Dependency[]`, delta classification | 🔴 |
+| `packages/kinetic/src/compiler/reactive-detection.ts` | `getDeltaKind()` (Phase 4 addition) | 🔴 |
+| `packages/kinetic/src/compiler/codegen/dom.ts` | Read `Dependency` objects | 🔴 |
+| `packages/kinetic/src/compiler/codegen/html.ts` | Read `Dependency` objects | 🔴 |
+| `packages/kinetic/src/compiler/transform.ts` | Pass through new types | 🔴 |
+| All test files in kinetic/src/compiler/ and kinetic/src/runtime/ | Update dependency format and delta assertions | 🔴 |
 
 ### Files for Reference
 
@@ -541,27 +679,27 @@ A `LoroEventBatch` can contain multiple events (e.g., a transaction touching mul
 - `global-docs/loro-index.md` — Loro documentation links
 - `.plans/kinetic-reactive-primitive.md` — Prior plan (Phases 0–4 complete, 5–6 superseded)
 
-### Key Code Section: Current [REACTIVE] on TypedRef (to be updated)
+### Key Code Section: [REACTIVE] on TypedRef ✅ DONE
 
 ```typescript
-// packages/change/src/typed-refs/base.ts
+// packages/change/src/typed-refs/base.ts — CURRENT (updated in Phase 2)
 readonly [REACTIVE]: ReactiveSubscribe = (
   self: unknown,
-  callback: () => void,
+  callback: (delta: ReactiveDelta) => void,
 ) => {
   const ref = self as TypedRef<Shape>
   const container = ref[INTERNAL_SYMBOL].getContainer()
-  const unsubscribe = container.subscribe(() => callback())
+  const unsubscribe = container.subscribe(event => {
+    translateEventBatch(event, callback)
+  })
   return unsubscribe
 }
 ```
 
-Target: translate `LoroEventBatch` through `translateDiff`, pass `ReactiveDelta` to `callback`.
-
-### Key Code Section: Current planDeltaOps (to be simplified)
+### Key Code Section: Current planDeltaOps (to be simplified in Phase 3)
 
 ```typescript
-// packages/kinetic/src/runtime/regions.ts — current
+// packages/kinetic/src/runtime/regions.ts — current (still consuming LoroEventBatch)
 export function planDeltaOps<T>(
   listRef: ListRefLike<T>,
   event: ListDeltaEvent | LoroEventBatch,
@@ -574,12 +712,12 @@ export function planDeltaOps<T>(
 }
 ```
 
-Target: receives `ListDeltaOp[]` directly — no unwrapping, no type filtering.
+Target: receives a single `ReactiveDelta`. If `delta.type === "list"`, extract `delta.ops` as `ListDeltaOp[]`. If `delta.type === "replace"`, trigger full re-render. Other delta types are ignored.
 
-### Key Code Section: Current __subscribe (to be replaced)
+### Key Code Section: Current __subscribe (to be replaced in Phase 3)
 
 ```typescript
-// packages/kinetic/src/runtime/subscribe.ts — current
+// packages/kinetic/src/runtime/subscribe.ts — current (still using loro())
 import { loro } from "@loro-extended/change"
 export function __subscribe(ref: unknown, handler: (event: LoroEventBatch) => void, scope: Scope) {
   const container = loro(ref as any) as Subscribable

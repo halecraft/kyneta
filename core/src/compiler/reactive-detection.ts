@@ -4,17 +4,25 @@
  * This module provides functions to detect whether TypeScript types implement
  * the Reactive interface from @loro-extended/reactive.
  *
- * Detection uses TypeScript's structural type system via `isTypeAssignableTo`,
- * checking if a type is assignable to the `Reactive` interface. This is more
- * robust than property enumeration because it:
- * - Handles unions, intersections, and base types correctly
- * - Avoids reliance on mangled `__@...` symbol names
- * - Lets TypeScript do what it's good at
+ * Detection uses a three-layer property-level strategy that checks whether
+ * a candidate type has a property keyed by the `[REACTIVE]` unique symbol:
  *
- * The key insight: we must use the **same** `Reactive` interface that the
- * types under test reference. Creating a new probe with a re-imported symbol
- * creates a distinct `unique symbol` type. Instead, we find the existing
- * `Reactive` interface already in the project's type graph.
+ * 1. **Symbol.for() tracing** — When the symbol's declaration has an
+ *    initializer (source files), we walk the AST to verify it's
+ *    `Symbol.for("kinetic:reactive")`. This is the most robust check.
+ *
+ * 2. **Symbol declaration name** — In `.d.ts` files the initializer is
+ *    erased, but the `unique symbol` type still carries a reference back
+ *    to the variable that declared it. We check that variable's name
+ *    is `"REACTIVE"`.
+ *
+ * 3. **Property escaped name** — As a last-resort fallback, we check
+ *    the property's own mangled name (`__@REACTIVE@<id>`).
+ *
+ * This approach is more robust than the previous `isTypeAssignableTo`
+ * strategy because it works regardless of whether the `Reactive` interface
+ * has generic type parameters (which caused `isTypeAssignableTo` to fail
+ * when `Reactive<D>` was introduced).
  *
  * @packageDocumentation
  */
@@ -108,89 +116,100 @@ export function resolveReactiveImports(
 }
 
 // =============================================================================
-// Reactive Interface Discovery
-// =============================================================================
-
-/**
- * Cache for the Reactive interface node per project.
- * We cache the interface node (not the compiler type) because the compiler
- * type can become stale when `resolveSourceFileDependencies()` is called
- * multiple times, invalidating the TypeChecker.
- */
-const reactiveInterfaceCache = new WeakMap<
-  Project,
-  import("ts-morph").InterfaceDeclaration
->()
-
-/**
- * Find the Reactive interface type in the project.
- *
- * Instead of creating a probe interface (which creates a distinct `unique symbol`
- * type), we find the **existing** `Reactive` interface that types in the project
- * already reference.
- *
- * Search order:
- * 1. Look for an interface named "Reactive" that has a member whose name
- *    contains "REACTIVE" (the mangled symbol name pattern `__@REACTIVE@...`).
- * 2. Search all source files in the project.
- *
- * @param project - The ts-morph Project
- * @returns The TypeScript compiler type for the Reactive interface, or undefined
- */
-function getReactiveInterfaceType(project: Project): ts.Type | undefined {
-  // Check if we've already found the Reactive interface node for this project
-  const cachedNode = reactiveInterfaceCache.get(project)
-  if (cachedNode) {
-    // Always get a fresh compiler type from the node — the TypeChecker may
-    // have been invalidated by resolveSourceFileDependencies() calls.
-    return cachedNode.getType().compilerType
-  }
-
-  // Search all source files for an interface named "Reactive"
-  // that has a symbol-keyed member matching the REACTIVE pattern.
-  for (const sf of project.getSourceFiles()) {
-    const reactiveInterface = sf.getInterface("Reactive")
-    if (!reactiveInterface) {
-      continue
-    }
-
-    // Verify this is the right Reactive interface by checking its members.
-    // The real Reactive interface has a [REACTIVE] symbol property, which
-    // appears as a member with a computed property name.
-    const members = reactiveInterface.getMembers()
-    const hasReactiveSymbol = members.some(m => {
-      // Check if member has a computed property name like [REACTIVE]
-      const nameNode =
-        "getNameNode" in m ? (m as any).getNameNode?.() : undefined
-      if (!nameNode) return false
-      return nameNode.getKindName() === "ComputedPropertyName"
-    })
-
-    if (hasReactiveSymbol) {
-      // Cache the interface node, not the type — the type can go stale
-      reactiveInterfaceCache.set(project, reactiveInterface)
-      return reactiveInterface.getType().compilerType
-    }
-  }
-
-  return undefined
-}
-
-// =============================================================================
 // Type Detection
 // =============================================================================
 
 /**
- * Check if a type is reactive using structural assignability.
+ * Check whether a single compiler symbol represents the `[REACTIVE]` property.
  *
- * A type is reactive if it is assignable to the `Reactive` interface, which
- * means it has a `[REACTIVE]` symbol property with the correct signature.
+ * Uses a three-layer strategy, from most to least robust:
  *
- * This approach is more robust than property enumeration because:
- * - It handles unions (reactive if any branch is reactive)
- * - It handles intersections (reactive if the combined type is reactive)
- * - It handles inheritance (reactive if base class is reactive)
- * - It doesn't rely on mangled symbol names
+ * 1. **Symbol.for() tracing** — If the symbol's value declaration has an
+ *    initializer, verify it's `Symbol.for("kinetic:reactive")`.
+ * 2. **Symbol declaration name** — The `unique symbol` type's backing
+ *    variable has `escapedName === "REACTIVE"`.
+ * 3. **Property escaped name** — The property's own mangled name starts
+ *    with `__@REACTIVE@`.
+ *
+ * @param compilerSymbol - The compiler symbol to inspect
+ * @returns true if this property is keyed by the REACTIVE symbol
+ */
+function isReactiveSymbolProperty(compilerSymbol: ts.Symbol): boolean {
+  // Access the symbol's internal links to get the nameType.
+  // For computed property names like [REACTIVE], TypeScript stores the
+  // type of the key expression (the unique symbol type) as `nameType`.
+  const links = (compilerSymbol as any).links as
+    | Record<string, unknown>
+    | undefined
+  const nameType = links?.nameType as ts.Type | undefined
+
+  if (nameType) {
+    // The property is keyed by a computed name. Check if it's a unique symbol.
+    // ts.TypeFlags.UniqueESSymbol = 8192
+    if ((nameType.flags & ts.TypeFlags.UniqueESSymbol) !== 0) {
+      const nameSymbol = nameType.symbol
+
+      // Layer 1: Trace to Symbol.for("kinetic:reactive") initializer.
+      // Available when the symbol is defined in a .ts source file.
+      if (nameSymbol?.valueDeclaration) {
+        const valueDecl = nameSymbol.valueDeclaration
+        if (ts.isVariableDeclaration(valueDecl) && valueDecl.initializer) {
+          const init = valueDecl.initializer
+          if (
+            ts.isCallExpression(init) &&
+            ts.isPropertyAccessExpression(init.expression) &&
+            init.expression.name.text === "for" &&
+            init.arguments.length > 0 &&
+            ts.isStringLiteral(init.arguments[0]) &&
+            init.arguments[0].text === "kinetic:reactive"
+          ) {
+            return true
+          }
+        }
+      }
+
+      // Layer 2: Check the symbol's declaration name.
+      // In .d.ts files the initializer is erased, but the unique symbol
+      // type still references the variable that declared it. Its
+      // escapedName is the clean variable name (e.g., "REACTIVE"),
+      // not the mangled property name.
+      if (nameSymbol) {
+        const symName = nameSymbol.escapedName as string
+        if (symName === "REACTIVE") {
+          return true
+        }
+      }
+    }
+  }
+
+  // Layer 3: Mangled property name fallback.
+  // TypeScript encodes unique-symbol-keyed properties as __@NAME@<id>
+  // in the property's own escapedName.
+  const escapedName = compilerSymbol.escapedName as string
+  if (escapedName.startsWith("__@REACTIVE@")) {
+    return true
+  }
+
+  return false
+}
+
+/**
+ * Check if a type is reactive.
+ *
+ * A type is reactive if it has a property keyed by the `[REACTIVE]` unique
+ * symbol from `@loro-extended/reactive`. This is the property that the
+ * Kinetic compiler uses to identify reactive types, and the runtime uses
+ * to subscribe to changes.
+ *
+ * The detection is purely property-level — it does not rely on
+ * `isTypeAssignableTo` against the `Reactive` interface, which avoids
+ * issues with generic type parameters on the interface.
+ *
+ * Handles:
+ * - Direct types (TextRef, ListRef<T>, LocalRef<T>, etc.)
+ * - Union types (reactive if any branch is reactive)
+ * - Types from `.d.ts` files (where `Symbol.for()` initializers are erased)
+ * - Types from `.ts` source files (where initializers are available)
  *
  * @param type - The ts-morph Type to check
  * @returns true if the type implements Reactive
@@ -200,38 +219,30 @@ function getReactiveInterfaceType(project: Project): ts.Type | undefined {
  * const varDecl = sourceFile.getVariableDeclaration("myRef")
  * const type = varDecl.getType()
  * if (isReactiveType(type)) {
- *   // This type implements Reactive
+ *   // This type implements Reactive — it has a [REACTIVE] property
  * }
  * ```
  */
 export function isReactiveType(type: Type): boolean {
-  // Get the project from the type's internal context
-  const project = (type as any)._context?.project as Project | undefined
-  if (!project) {
-    return false
-  }
-
-  const reactiveType = getReactiveInterfaceType(project)
-  if (!reactiveType) {
-    return false
-  }
-
-  // Exclude `any` and `unknown` — they are assignable to everything,
-  // but they are not reactive types.
+  // Exclude `any` and `unknown` — they match everything but are not reactive.
   const typeText = type.getText()
   if (typeText === "any" || typeText === "unknown") {
     return false
   }
 
-  // Handle union types: reactive if any branch is reactive
-  // e.g., LocalRef<number> | null → true because LocalRef is reactive
+  // Handle union types: reactive if any branch is reactive.
+  // e.g., LocalRef<number> | null → true because LocalRef is reactive.
   if (type.isUnion()) {
     return type.getUnionTypes().some(t => isReactiveType(t))
   }
 
-  const checker = project.getTypeChecker().compilerObject
-  const candidateType = type.compilerType
+  // Check the type's properties for one keyed by the REACTIVE symbol.
+  const properties = type.compilerType.getProperties()
+  for (const prop of properties) {
+    if (isReactiveSymbolProperty(prop)) {
+      return true
+    }
+  }
 
-  // Use TypeScript's structural assignability check
-  return checker.isTypeAssignableTo(candidateType, reactiveType)
+  return false
 }

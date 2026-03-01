@@ -335,24 +335,27 @@ ${(() => { if (condition) { let _html = ""; _html += `<p>yes</p>`; return _html 
 
 ## Reactive Detection
 
-The compiler detects reactive types structurally using TypeScript's `isTypeAssignableTo`. A type is reactive if it implements the `Reactive` interface from `@loro-extended/reactive`:
+The compiler detects reactive types by checking whether a candidate type has a property keyed by the `[REACTIVE]` unique symbol from `@loro-extended/reactive`:
 
 ```typescript
 // @loro-extended/reactive
 export const REACTIVE = Symbol.for("kinetic:reactive")
-export type ReactiveSubscribe = (self: unknown, callback: () => void) => () => void
-export interface Reactive {
-  readonly [REACTIVE]: ReactiveSubscribe
+export type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> =
+  (self: unknown, callback: (delta: D) => void) => () => void
+export interface Reactive<D extends ReactiveDelta = ReactiveDelta> {
+  readonly [REACTIVE]: ReactiveSubscribe<D>
 }
 ```
 
-Detection is implemented in `reactive-detection.ts` and works as follows:
+Detection is implemented in `reactive-detection.ts` using a three-layer property-level strategy:
 
-1. **Find the `Reactive` interface** in the project's type graph (cached per project)
-2. **Check `isTypeAssignableTo(candidateType, reactiveType)`** — pure structural typing
-3. **Handle edge cases**: exclude `any`/`unknown`, check union branches individually
+1. **Symbol.for() tracing** — When the symbol's declaration has an initializer (source files), walk the AST to verify it's `Symbol.for("kinetic:reactive")`. This is the most robust check.
+2. **Symbol declaration name** — In `.d.ts` files the initializer is erased, but the `unique symbol` type still carries a reference back to the variable that declared it. Check that variable's `escapedName` is `"REACTIVE"`.
+3. **Property escaped name** — As a last-resort fallback, check the property's own mangled name starts with `__@REACTIVE@`.
 
-This replaces the previous approach of hardcoding type names (`TextRef`, `CounterRef`, etc.). Any type with a `[REACTIVE]` symbol property is now detected — including `LocalRef` for UI-only state and user-defined reactive types.
+Additionally: exclude `any`/`unknown`, check union branches individually.
+
+This approach replaced an earlier `isTypeAssignableTo(candidate, Reactive)` strategy. That broke when `Reactive` gained a generic parameter `<D>` — TypeScript's `getType()` on a generic interface returns a type with an unresolved type parameter, which fails assignability checks. The property-level approach is immune to changes in the `Reactive` interface's generic signature.
 
 ### Module Resolution
 
@@ -360,9 +363,9 @@ The compiler uses `skipFileDependencyResolution: true` for fast project creation
 
 ### Caveats
 
-- **Cache interface nodes, not compiler types.** `resolveSourceFileDependencies()` invalidates the TypeChecker, making cached `ts.Type` objects stale. The interface `InterfaceDeclaration` node is stable.
 - **`any` is assignable to everything.** Undeclared identifiers are `any` and must be explicitly excluded.
-- **Union types need branch-level checking.** `LocalRef<T> | null` is not assignable to `Reactive`, but the `LocalRef<T>` branch is.
+- **Union types need branch-level checking.** `LocalRef<T> | null` doesn't itself have a `[REACTIVE]` property, but the `LocalRef<T>` branch does.
+- **`links.nameType` is a TypeScript internal.** It has been stable across TS 4.x–6.x and is fundamental to computed property name handling, but layers 2 and 3 serve as fallbacks if it ever changes.
 
 ### Binding-Time Classification
 
@@ -426,7 +429,7 @@ Users don't need to know this distinction — both "just work" with natural Type
 packages/kinetic/src/compiler/
 ├── analyze.ts               # AST → IR analysis (imports isReactiveType)
 ├── analyze.test.ts          # Analysis unit tests
-├── reactive-detection.ts    # Reactive type detection via isTypeAssignableTo
+├── reactive-detection.ts    # Reactive type detection via property-level symbol check
 ├── ir.ts                    # IR type definitions and factories
 ├── ir.test.ts               # IR unit tests
 ├── transform.ts             # Orchestrates analysis + codegen + module resolution

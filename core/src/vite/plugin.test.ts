@@ -246,7 +246,7 @@ describe("Vite Plugin", () => {
         })
       `
 
-      const result = transform(source, "/path/to/file.ts")
+      const result = transform(source, "component.ts")
 
       // Should have __listRegion import
       expect(result?.code).toContain("__listRegion")

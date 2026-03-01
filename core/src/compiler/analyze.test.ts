@@ -57,9 +57,16 @@ function addBaseReactiveTypes(project: Project) {
     "reactive-base.d.ts",
     `
     export const REACTIVE: unique symbol
-    export type ReactiveSubscribe = (self: unknown, callback: () => void) => () => void
-    export interface Reactive {
-      readonly [REACTIVE]: ReactiveSubscribe
+    export type ReactiveDelta =
+      | { type: "replace" }
+      | { type: "text"; ops: unknown[] }
+      | { type: "list"; ops: unknown[] }
+      | { type: "map"; ops: { keys: string[] } }
+      | { type: "tree"; ops: unknown[] }
+    export type DeltaKind = ReactiveDelta["type"]
+    export type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> = (self: unknown, callback: (delta: D) => void) => () => void
+    export interface Reactive<D extends ReactiveDelta = ReactiveDelta> {
+      readonly [REACTIVE]: ReactiveSubscribe<D>
     }
   `,
     { overwrite: true },
@@ -114,14 +121,14 @@ function addReactiveTypes(project: Project) {
   project.createSourceFile(
     "reactive-types.d.ts",
     `
-    import { REACTIVE, ReactiveSubscribe, Reactive } from "./reactive-base"
-    export { REACTIVE, ReactiveSubscribe, Reactive }
-    export class LocalRef<T> implements Reactive {
-      readonly [REACTIVE]: ReactiveSubscribe
+    import { REACTIVE, ReactiveSubscribe, Reactive, ReactiveDelta } from "./reactive-base"
+    export { REACTIVE, ReactiveSubscribe, Reactive, ReactiveDelta }
+    export class LocalRef<T> implements Reactive<{ type: "replace" }> {
+      readonly [REACTIVE]: ReactiveSubscribe<{ type: "replace" }>
       constructor(initial: T)
       get(): T
       set(value: T): void
-      subscribe(callback: () => void): () => void
+      subscribe(callback: (delta: { type: "replace" }) => void): () => void
     }
   `,
     { overwrite: true },

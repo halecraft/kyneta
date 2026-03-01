@@ -1955,7 +1955,7 @@ describe("compiler integration - arbitrary statements", () => {
 
     it("should generate correct DOM code for variable declaration in for-of", () => {
       const source = `
-        import { ListRef } from "./loro-types"
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<{ get(): string }>
 
         ul(() => {
@@ -1975,7 +1975,7 @@ describe("compiler integration - arbitrary statements", () => {
 
     it("should generate correct HTML code for variable declaration in for-of", () => {
       const source = `
-        import { ListRef } from "./loro-types"
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<{ get(): string }>
 
         ul(() => {
@@ -2019,7 +2019,7 @@ describe("compiler integration - arbitrary statements", () => {
       // HTML codegen only handles statements in body contexts (list regions, conditionals)
       // Direct builder children in HTML don't go through generateBodyHtml
       const source = `
-        import { ListRef } from "./loro-types"
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
 
         ul(() => {
@@ -2042,7 +2042,7 @@ describe("compiler integration - arbitrary statements", () => {
   describe("Task 4.3: Interleaved statements and elements", () => {
     it("should preserve interleaving order in generated code", () => {
       const source = `
-        import { ListRef } from "./loro-types"
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<{ get(): string }>
 
         ul(() => {
@@ -2294,7 +2294,7 @@ describe("compiler integration - arbitrary statements", () => {
 
     it("should generate HTML with spread syntax for ref preservation", () => {
       const source = `
-        import { ListRef } from "./loro-types"
+        import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<{ get(): string }>
 
         ul(() => {
