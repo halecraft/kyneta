@@ -33,6 +33,7 @@ import { createViewChangeEvent } from "./view.js";
  * A view over a Map container's constraints.
  *
  * Provides typed access to map entries with conflict tracking.
+ * Extends the base View interface with map-specific operations.
  */
 export interface MapView<V = unknown> extends View<Record<string, V>> {
 	/**
@@ -87,7 +88,7 @@ export interface MapView<V = unknown> extends View<Record<string, V>> {
 }
 
 // ============================================================================
-// Map View Implementation
+// Map View Configuration
 // ============================================================================
 
 /**
@@ -101,54 +102,83 @@ export interface MapViewConfig {
 	path: Path;
 }
 
+// ============================================================================
+// Shared Implementation Core
+// ============================================================================
+
 /**
- * Create a MapView over a constraint store.
- *
- * @param config Configuration including store and path
- * @returns A MapView instance
+ * Core operations for map views, shared between regular and reactive views.
+ * This follows the "extract shared logic" pattern to reduce duplication.
  */
-export function createMapView<V = unknown>(config: MapViewConfig): MapView<V> {
-	const { store, path } = config;
+interface MapViewCore<V> {
+	getConstraints(): Constraint[];
+	computeSolvedMap(): SolvedMap;
+	getValue(): Record<string, V> | undefined;
+	getKeyConstraints(key: string): Constraint[];
+}
 
-	// Subscription management
-	const subscribers = new Set<ViewChangeCallback<Record<string, V>>>();
-
-	/**
-	 * Get constraints for this map (all children of path).
-	 */
-	function getMapConstraints(): Constraint[] {
-		return askPrefix(store, path);
+/**
+ * Create the core operations for a map view.
+ */
+function createMapViewCore<V>(
+	getStore: () => ConstraintStore,
+	path: Path,
+): MapViewCore<V> {
+	function getConstraints(): Constraint[] {
+		return askPrefix(getStore(), path);
 	}
 
-	/**
-	 * Compute the solved map (fresh on every call).
-	 */
 	function computeSolvedMap(): SolvedMap {
-		return solveMap(getMapConstraints(), path);
+		return solveMap(getConstraints(), path);
 	}
 
-	// Build the view object
+	function getValue(): Record<string, V> | undefined {
+		const solved = computeSolvedMap();
+		if (solved.keys.length === 0) {
+			return undefined;
+		}
+		const result: Record<string, V> = {};
+		for (const key of solved.keys) {
+			const entry = solved.entries.get(key);
+			if (entry?.value !== undefined) {
+				result[key] = entry.value as V;
+			}
+		}
+		return result;
+	}
+
+	function getKeyConstraints(key: string): Constraint[] {
+		const keyPath = pathChild(path, key);
+		return ask(getStore(), keyPath);
+	}
+
+	return {
+		getConstraints,
+		computeSolvedMap,
+		getValue,
+		getKeyConstraints,
+	};
+}
+
+/**
+ * Build the map-specific methods that are shared between view types.
+ * These methods operate on a core and don't depend on reactivity.
+ */
+function buildMapMethods<V>(
+	core: MapViewCore<V>,
+	subscribers: Set<ViewChangeCallback<Record<string, V>>>,
+	path: Path,
+): MapView<V> {
 	const view: MapView<V> = {
 		path,
 
 		get(): Record<string, V> | undefined {
-			const solved = computeSolvedMap();
-			if (solved.keys.length === 0) {
-				return undefined;
-			}
-			const result: Record<string, V> = {};
-			for (const key of solved.keys) {
-				const entry = solved.entries.get(key);
-				if (entry?.value !== undefined) {
-					result[key] = entry.value as V;
-				}
-			}
-			return result;
+			return core.getValue();
 		},
 
 		getSolved(): SolvedValue<Record<string, V>> {
-			const obj = view.get();
-			const solved = computeSolvedMap();
+			const obj = core.getValue();
+			const solved = core.computeSolvedMap();
 
 			// Aggregate conflicts from all keys
 			const allConflicts: Constraint[] = [];
@@ -181,32 +211,32 @@ export function createMapView<V = unknown>(config: MapViewConfig): MapView<V> {
 		},
 
 		getKey(key: string): V | undefined {
-			const solved = computeSolvedMap();
+			const solved = core.computeSolvedMap();
 			const entry = solved.entries.get(key);
 			return entry?.value as V | undefined;
 		},
 
 		getKeySolved(key: string): SolvedValue<V> {
-			const keyPath = pathChild(path, key);
-			const constraints = ask(store, keyPath);
+			const constraints = core.getKeyConstraints(key);
 			if (constraints.length === 0) {
 				return solvedEmpty<V>();
 			}
+			const keyPath = pathChild(path, key);
 			return solveMapConstraints(constraints, keyPath) as SolvedValue<V>;
 		},
 
 		has(key: string): boolean {
-			const solved = computeSolvedMap();
+			const solved = core.computeSolvedMap();
 			return solved.keys.includes(key);
 		},
 
 		keys(): string[] {
-			const solved = computeSolvedMap();
+			const solved = core.computeSolvedMap();
 			return [...solved.keys];
 		},
 
 		entries(): Array<[string, V]> {
-			const solved = computeSolvedMap();
+			const solved = core.computeSolvedMap();
 			const result: Array<[string, V]> = [];
 			for (const key of solved.keys) {
 				const entry = solved.entries.get(key);
@@ -218,7 +248,7 @@ export function createMapView<V = unknown>(config: MapViewConfig): MapView<V> {
 		},
 
 		size(): number {
-			const solved = computeSolvedMap();
+			const solved = core.computeSolvedMap();
 			return solved.keys.length;
 		},
 
@@ -227,21 +257,21 @@ export function createMapView<V = unknown>(config: MapViewConfig): MapView<V> {
 		},
 
 		getSolvedMap(): SolvedMap {
-			return computeSolvedMap();
+			return core.computeSolvedMap();
 		},
 
 		conflictKeys(): string[] {
-			const solved = computeSolvedMap();
+			const solved = core.computeSolvedMap();
 			return Array.from(solved.conflicts.keys());
 		},
 
 		hasConflicts(): boolean {
-			const solved = computeSolvedMap();
+			const solved = core.computeSolvedMap();
 			return solved.conflicts.size > 0;
 		},
 
 		getConstraints(): readonly Constraint[] {
-			return getMapConstraints();
+			return core.getConstraints();
 		},
 
 		subscribe(callback: ViewChangeCallback<Record<string, V>>): Unsubscribe {
@@ -253,6 +283,26 @@ export function createMapView<V = unknown>(config: MapViewConfig): MapView<V> {
 	};
 
 	return view;
+}
+
+// ============================================================================
+// Map View Implementation
+// ============================================================================
+
+/**
+ * Create a MapView over a constraint store.
+ *
+ * @param config Configuration including store and path
+ * @returns A MapView instance
+ */
+export function createMapView<V = unknown>(config: MapViewConfig): MapView<V> {
+	const { store, path } = config;
+	const subscribers = new Set<ViewChangeCallback<Record<string, V>>>();
+
+	// Create core with a fixed store reference
+	const core = createMapViewCore<V>(() => store, path);
+
+	return buildMapMethods(core, subscribers, path);
 }
 
 // ============================================================================
@@ -292,144 +342,22 @@ export function createReactiveMapView<V = unknown>(
 	let currentStore = config.store;
 	const subscribers = new Set<ViewChangeCallback<Record<string, V>>>();
 
-	let cachedValue: Record<string, V> | undefined = undefined;
+	// Create core with a dynamic store reference
+	const core = createMapViewCore<V>(() => currentStore, path);
 
-	function getMapConstraints(): Constraint[] {
-		return askPrefix(currentStore, path);
-	}
+	// Build the base view methods
+	const baseView = buildMapMethods(core, subscribers, path);
 
-	function computeSolvedMap(): SolvedMap {
-		return solveMap(getMapConstraints(), path);
-	}
+	// Initialize cached value for change detection
+	let cachedValue: Record<string, V> | undefined = core.getValue();
 
-	function getValue(): Record<string, V> | undefined {
-		const solved = computeSolvedMap();
-		if (solved.keys.length === 0) {
-			return undefined;
-		}
-		const result: Record<string, V> = {};
-		for (const key of solved.keys) {
-			const entry = solved.entries.get(key);
-			if (entry?.value !== undefined) {
-				result[key] = entry.value as V;
-			}
-		}
-		return result;
-	}
-
-	const view: ReactiveMapView<V> = {
-		path,
-
-		get(): Record<string, V> | undefined {
-			return getValue();
-		},
-
-		getSolved(): SolvedValue<Record<string, V>> {
-			const solved = computeSolvedMap();
-			const obj = getValue();
-
-			const allConflicts: Constraint[] = [];
-			for (const conflicts of solved.conflicts.values()) {
-				allConflicts.push(...conflicts);
-			}
-
-			let determinedBy: Constraint | undefined;
-			for (const entry of solved.entries.values()) {
-				if (entry.determinedBy) {
-					if (
-						!determinedBy ||
-						entry.determinedBy.metadata.lamport > determinedBy.metadata.lamport
-					) {
-						determinedBy = entry.determinedBy;
-					}
-				}
-			}
-
-			return {
-				value: obj,
-				determinedBy,
-				conflicts: allConflicts,
-				resolution:
-					allConflicts.length > 0
-						? `map with ${solved.keys.length} keys, ${allConflicts.length} conflicts`
-						: `map with ${solved.keys.length} keys`,
-			};
-		},
-
-		getKey(key: string): V | undefined {
-			const solved = computeSolvedMap();
-			const entry = solved.entries.get(key);
-			return entry?.value as V | undefined;
-		},
-
-		getKeySolved(key: string): SolvedValue<V> {
-			const keyPath = pathChild(path, key);
-			const constraints = ask(currentStore, keyPath);
-			if (constraints.length === 0) {
-				return solvedEmpty<V>();
-			}
-			return solveMapConstraints(constraints, keyPath) as SolvedValue<V>;
-		},
-
-		has(key: string): boolean {
-			const solved = computeSolvedMap();
-			return solved.keys.includes(key);
-		},
-
-		keys(): string[] {
-			const solved = computeSolvedMap();
-			return [...solved.keys];
-		},
-
-		entries(): Array<[string, V]> {
-			const solved = computeSolvedMap();
-			const result: Array<[string, V]> = [];
-			for (const key of solved.keys) {
-				const entry = solved.entries.get(key);
-				if (entry?.value !== undefined) {
-					result.push([key, entry.value as V]);
-				}
-			}
-			return result;
-		},
-
-		size(): number {
-			const solved = computeSolvedMap();
-			return solved.keys.length;
-		},
-
-		toObject(): Record<string, V> {
-			return view.get() ?? {};
-		},
-
-		getSolvedMap(): SolvedMap {
-			return computeSolvedMap();
-		},
-
-		conflictKeys(): string[] {
-			const solved = computeSolvedMap();
-			return Array.from(solved.conflicts.keys());
-		},
-
-		hasConflicts(): boolean {
-			const solved = computeSolvedMap();
-			return solved.conflicts.size > 0;
-		},
-
-		getConstraints(): readonly Constraint[] {
-			return getMapConstraints();
-		},
-
-		subscribe(callback: ViewChangeCallback<Record<string, V>>): Unsubscribe {
-			subscribers.add(callback);
-			return () => {
-				subscribers.delete(callback);
-			};
-		},
+	// Extend with reactive capabilities
+	const reactiveView: ReactiveMapView<V> = {
+		...baseView,
 
 		notifyConstraintsChanged(addedConstraints: Constraint[]): void {
 			const before = cachedValue;
-			const after = getValue();
+			const after = core.getValue();
 			cachedValue = after;
 
 			// Notify subscribers if value changed
@@ -439,7 +367,7 @@ export function createReactiveMapView<V = unknown>(
 					before,
 					after,
 					addedConstraints,
-					view.getSolved(),
+					reactiveView.getSolved(),
 				);
 				for (const callback of subscribers) {
 					callback(event);
@@ -452,8 +380,5 @@ export function createReactiveMapView<V = unknown>(
 		},
 	};
 
-	// Initialize cached value for change detection in reactive view
-	cachedValue = getValue();
-
-	return view;
+	return reactiveView;
 }

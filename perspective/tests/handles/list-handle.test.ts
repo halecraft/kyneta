@@ -383,9 +383,9 @@ describe("ListHandle", () => {
 
 			handle.pushMany(["A", "B", "C"]);
 
-			expect(handle.view().get(0)).toBe("A");
-			expect(handle.view().get(1)).toBe("B");
-			expect(handle.view().get(2)).toBe("C");
+			expect(handle.view().getAt(0)).toBe("A");
+			expect(handle.view().getAt(1)).toBe("B");
+			expect(handle.view().getAt(2)).toBe("C");
 		});
 
 		it("should return undefined for out of bounds", () => {
@@ -393,8 +393,8 @@ describe("ListHandle", () => {
 
 			handle.push("A");
 
-			expect(handle.view().get(-1)).toBeUndefined();
-			expect(handle.view().get(5)).toBeUndefined();
+			expect(handle.view().getAt(-1)).toBeUndefined();
+			expect(handle.view().getAt(5)).toBeUndefined();
 		});
 	});
 
@@ -633,8 +633,8 @@ describe("Edge Cases", () => {
 		}
 
 		expect(handle.view().length()).toBe(100);
-		expect(handle.view().get(0)).toBe(0);
-		expect(handle.view().get(99)).toBe(99);
+		expect(handle.view().getAt(0)).toBe(0);
+		expect(handle.view().getAt(99)).toBe(99);
 	});
 
 	it("should handle rapid insertions and deletions", () => {

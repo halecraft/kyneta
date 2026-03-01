@@ -148,18 +148,18 @@ describe("ListView", () => {
 			const store = buildTestStore();
 			const view = createListView({ store, path: ["list"] });
 
-			expect(view.get(0)).toBe("A");
-			expect(view.get(1)).toBe("B");
-			expect(view.get(2)).toBe("C");
+			expect(view.getAt(0)).toBe("A");
+			expect(view.getAt(1)).toBe("B");
+			expect(view.getAt(2)).toBe("C");
 		});
 
 		it("should return undefined for out of bounds", () => {
 			const store = buildTestStore();
 			const view = createListView({ store, path: ["list"] });
 
-			expect(view.get(-1)).toBeUndefined();
-			expect(view.get(3)).toBeUndefined();
-			expect(view.get(100)).toBeUndefined();
+			expect(view.getAt(-1)).toBeUndefined();
+			expect(view.getAt(3)).toBeUndefined();
+			expect(view.getAt(100)).toBeUndefined();
 		});
 	});
 
@@ -187,19 +187,19 @@ describe("ListView", () => {
 		});
 	});
 
-	describe("getArray", () => {
+	describe("get", () => {
 		it("should return array of values", () => {
 			const store = buildTestStore();
 			const view = createListView({ store, path: ["list"] });
 
-			expect(view.getArray()).toEqual(["A", "B", "C"]);
+			expect(view.get()).toEqual(["A", "B", "C"]);
 		});
 
 		it("should return undefined for empty list", () => {
 			const store = createConstraintStore();
 			const view = createListView({ store, path: ["list"] });
 
-			expect(view.getArray()).toBeUndefined();
+			expect(view.get()).toBeUndefined();
 		});
 	});
 
@@ -587,13 +587,13 @@ describe("ReactiveListView", () => {
 	});
 
 	describe("all ListView methods work", () => {
-		it("should support get", () => {
+		it("should support getAt", () => {
 			const store = buildTestStore();
 			const view = createReactiveListView({ store, path: ["list"] });
 
-			expect(view.get(0)).toBe("A");
-			expect(view.get(1)).toBe("B");
-			expect(view.get(2)).toBe("C");
+			expect(view.getAt(0)).toBe("A");
+			expect(view.getAt(1)).toBe("B");
+			expect(view.getAt(2)).toBe("C");
 		});
 
 		it("should support first and last", () => {

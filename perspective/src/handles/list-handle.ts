@@ -214,7 +214,7 @@ export function createListHandle<V = unknown>(
 		},
 
 		get(): V[] | undefined {
-			return handle.view().getArray();
+			return handle.view().get();
 		},
 
 		insert(index: number, value: V): Constraint {
@@ -354,7 +354,7 @@ export function createListHandle<V = unknown>(
 			const len = v.length();
 			if (len === 0) return undefined;
 
-			const value = v.get(len - 1);
+			const value = v.getAt(len - 1);
 			const constraint = handle.delete(len - 1);
 
 			if (value === undefined || !constraint) {
@@ -369,7 +369,7 @@ export function createListHandle<V = unknown>(
 			const len = v.length();
 			if (len === 0) return undefined;
 
-			const value = v.get(0);
+			const value = v.getAt(0);
 			const constraint = handle.delete(0);
 
 			if (value === undefined || !constraint) {

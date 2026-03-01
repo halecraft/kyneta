@@ -50,6 +50,14 @@ export interface ConstraintStore {
 
 	/** Current Lamport clock */
 	readonly lamport: Lamport;
+
+	/**
+	 * Generation counter - monotonically increasing on every mutation.
+	 *
+	 * Used for cache invalidation: if the generation hasn't changed,
+	 * cached solved values are still valid.
+	 */
+	readonly generation: number;
 }
 
 /**
@@ -60,6 +68,7 @@ interface MutableConstraintStore {
 	byPath: Map<string, Set<string>>;
 	versionVector: MutableVersionVector;
 	lamport: Lamport;
+	generation: number;
 }
 
 // ============================================================================
@@ -75,11 +84,15 @@ export function createConstraintStore(): ConstraintStore {
 		byPath: new Map(),
 		versionVector: createVersionVector(),
 		lamport: 0,
+		generation: 0,
 	};
 }
 
 /**
- * Clone a constraint store.
+ * Clone a constraint store with an incremented generation.
+ *
+ * The generation is bumped because cloning is typically done
+ * in preparation for mutation (tell, merge).
  */
 export function cloneStore(store: ConstraintStore): MutableConstraintStore {
 	const constraints = new Map(store.constraints);
@@ -92,6 +105,7 @@ export function cloneStore(store: ConstraintStore): MutableConstraintStore {
 		byPath,
 		versionVector: vvClone(store.versionVector),
 		lamport: store.lamport,
+		generation: store.generation + 1,
 	};
 }
 
@@ -345,6 +359,16 @@ export function getLamport(store: ConstraintStore): Lamport {
  */
 export function getNextLamport(store: ConstraintStore): Lamport {
 	return store.lamport + 1;
+}
+
+/**
+ * Get the current generation counter.
+ *
+ * Used for cache invalidation: compare generations to detect if
+ * the store has been mutated since the last cache entry.
+ */
+export function getGeneration(store: ConstraintStore): number {
+	return store.generation;
 }
 
 // ============================================================================

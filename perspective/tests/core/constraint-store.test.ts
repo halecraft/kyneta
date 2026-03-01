@@ -22,6 +22,7 @@ import {
 	getConstraint,
 	getVersionVector,
 	getLamport,
+	getGeneration,
 	exportDelta,
 	importDelta,
 	mergeStores,
@@ -40,7 +41,95 @@ describe("ConstraintStore", () => {
 
 			expect(getConstraintCount(store)).toBe(0);
 			expect(getLamport(store)).toBe(0);
+			expect(getGeneration(store)).toBe(0);
 			expect(getAllConstraints(store)).toEqual([]);
+		});
+	});
+
+	describe("generation counter", () => {
+		it("should increment generation on tell", () => {
+			const store = createConstraintStore();
+			expect(getGeneration(store)).toBe(0);
+
+			const constraint1 = createConstraint("alice", 0, 1, ["key1"], eq("value1"));
+			const result1 = tell(store, constraint1);
+			expect(getGeneration(result1.store)).toBe(1);
+
+			const constraint2 = createConstraint("alice", 1, 2, ["key2"], eq("value2"));
+			const result2 = tell(result1.store, constraint2);
+			expect(getGeneration(result2.store)).toBe(2);
+		});
+
+		it("should increment generation on tellMany", () => {
+			const store = createConstraintStore();
+			expect(getGeneration(store)).toBe(0);
+
+			const constraints = [
+				createConstraint("alice", 0, 1, ["key1"], eq("value1")),
+				createConstraint("alice", 1, 2, ["key2"], eq("value2")),
+			];
+			const result = tellMany(store, constraints);
+			expect(getGeneration(result.store)).toBe(1);
+		});
+
+		it("should not increment generation for duplicate constraints", () => {
+			const store = createConstraintStore();
+			const constraint = createConstraint("alice", 0, 1, ["key"], eq("value"));
+
+			const result1 = tell(store, constraint);
+			expect(getGeneration(result1.store)).toBe(1);
+
+			// Same constraint again - should not create a new store
+			const result2 = tell(result1.store, constraint);
+			expect(result2.isNew).toBe(false);
+			expect(getGeneration(result2.store)).toBe(1);
+			expect(result2.store).toBe(result1.store); // Same reference
+		});
+
+		it("should increment generation on mergeStores", () => {
+			const store1 = createConstraintStore();
+			const store2 = createConstraintStore();
+
+			const c1 = createConstraint("alice", 0, 1, ["key1"], eq("value1"));
+			const c2 = createConstraint("bob", 0, 1, ["key2"], eq("value2"));
+
+			const s1 = tell(store1, c1).store;
+			const s2 = tell(store2, c2).store;
+
+			expect(getGeneration(s1)).toBe(1);
+			expect(getGeneration(s2)).toBe(1);
+
+			const merged = mergeStores(s1, s2);
+			expect(getGeneration(merged)).toBe(2); // s1.generation + 1
+		});
+
+		it("should be usable for cache invalidation", () => {
+			let store = createConstraintStore();
+			let cachedGeneration = getGeneration(store);
+			let cachedValue: string | null = null;
+
+			// Simulate caching pattern
+			function getValue(): string {
+				if (getGeneration(store) !== cachedGeneration) {
+					// Cache is invalid, recompute
+					cachedValue = "computed";
+					cachedGeneration = getGeneration(store);
+				}
+				return cachedValue ?? "default";
+			}
+
+			expect(getValue()).toBe("default");
+
+			// Add a constraint
+			const c = createConstraint("alice", 0, 1, ["key"], eq("value"));
+			store = tell(store, c).store;
+
+			// Cache should be invalidated
+			expect(getGeneration(store)).not.toBe(cachedGeneration);
+			expect(getValue()).toBe("computed");
+
+			// Now cache should be valid
+			expect(getGeneration(store)).toBe(cachedGeneration);
 		});
 	});
 

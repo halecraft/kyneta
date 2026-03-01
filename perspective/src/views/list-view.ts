@@ -29,45 +29,16 @@ import { createViewChangeEvent } from "./view.js";
  * A view over a List container's constraints.
  *
  * Provides typed access to list elements with ordering and conflict tracking.
+ * Extends the base View interface with list-specific operations.
  */
-export interface ListView<V = unknown> {
-	/** The path this view is rooted at */
-	readonly path: Path;
-
-	/**
-	 * Get the full solved value including conflict information.
-	 */
-	getSolved(): SolvedValue<V[]>;
-
-	/**
-	 * Subscribe to changes in this view.
-	 */
-	subscribe(callback: ViewChangeCallback<V[]>): Unsubscribe;
-
-	/**
-	 * Check if this view has any conflicts.
-	 */
-	hasConflicts(): boolean;
-
-	/**
-	 * Get all constraints affecting this view.
-	 */
-	getConstraints(): readonly Constraint[];
-
+export interface ListView<V = unknown> extends View<V[]> {
 	/**
 	 * Get the value at a specific index.
 	 *
 	 * @param index The index to look up
 	 * @returns The value, or undefined if index is out of bounds
 	 */
-	get(index: number): V | undefined;
-
-	/**
-	 * Get the full array value.
-	 *
-	 * @returns The ordered array of values, or undefined if empty
-	 */
-	getArray(): V[] | undefined;
+	getAt(index: number): V | undefined;
 
 	/**
 	 * Get the length of the list.
@@ -161,7 +132,7 @@ export interface ListView<V = unknown> {
 }
 
 // ============================================================================
-// List View Implementation
+// List View Configuration
 // ============================================================================
 
 /**
@@ -175,56 +146,76 @@ export interface ListViewConfig {
 	path: Path;
 }
 
+// ============================================================================
+// Shared Implementation Core
+// ============================================================================
+
 /**
- * Create a ListView over a constraint store.
- *
- * @param config Configuration including store and path
- * @returns A ListView instance
+ * Core operations for list views, shared between regular and reactive views.
+ * This follows the "extract shared logic" pattern to reduce duplication.
  */
-export function createListView<V = unknown>(
-	config: ListViewConfig,
-): ListView<V> {
-	const { store, path } = config;
+interface ListViewCore<V> {
+	getConstraints(): Constraint[];
+	computeSolvedList(): SolvedList;
+	getValue(): V[] | undefined;
+}
 
-	// Subscription management
-	const subscribers = new Set<ViewChangeCallback<V[]>>();
-
-	/**
-	 * Get constraints for this list (all children of path).
-	 */
-	function getListConstraints(): Constraint[] {
-		return askPrefix(store, path);
+/**
+ * Create the core operations for a list view.
+ */
+function createListViewCore<V>(
+	getStore: () => ConstraintStore,
+	path: Path,
+): ListViewCore<V> {
+	function getConstraints(): Constraint[] {
+		return askPrefix(getStore(), path);
 	}
 
-	/**
-	 * Compute the solved list (fresh on every call).
-	 */
 	function computeSolvedList(): SolvedList {
-		return solveList(getListConstraints(), path);
+		return solveList(getConstraints(), path);
 	}
 
-	// Build the view object
+	function getValue(): V[] | undefined {
+		const solved = computeSolvedList();
+		if (solved.length === 0) {
+			return undefined;
+		}
+		return [...solved.values] as V[];
+	}
+
+	return {
+		getConstraints,
+		computeSolvedList,
+		getValue,
+	};
+}
+
+/**
+ * Build the list-specific methods that are shared between view types.
+ * These methods operate on a core and don't depend on reactivity.
+ */
+function buildListMethods<V>(
+	core: ListViewCore<V>,
+	subscribers: Set<ViewChangeCallback<V[]>>,
+	path: Path,
+): ListView<V> {
 	const view: ListView<V> = {
 		path,
 
-		get(index: number): V | undefined {
-			const solved = computeSolvedList();
+		get(): V[] | undefined {
+			return core.getValue();
+		},
+
+		getAt(index: number): V | undefined {
+			const solved = core.computeSolvedList();
 			if (index < 0 || index >= solved.length) {
 				return undefined;
 			}
 			return solved.values[index] as V;
 		},
 
-		getArray(): V[] | undefined {
-			const solved = computeSolvedList();
-			if (solved.length === 0) {
-				return undefined;
-			}
-			return [...solved.values] as V[];
-		},
-
 		getSolved(): SolvedValue<V[]> {
-			const solved = computeSolvedList();
+			const solved = core.computeSolvedList();
 
 			if (solved.length === 0 && solved.tombstoneCount === 0) {
 				return solvedEmpty();
@@ -255,51 +246,51 @@ export function createListView<V = unknown>(
 		},
 
 		length(): number {
-			return computeSolvedList().length;
+			return core.computeSolvedList().length;
 		},
 
 		isEmpty(): boolean {
-			return computeSolvedList().length === 0;
+			return core.computeSolvedList().length === 0;
 		},
 
 		first(): V | undefined {
-			const solved = computeSolvedList();
+			const solved = core.computeSolvedList();
 			if (solved.length === 0) return undefined;
 			return solved.values[0] as V;
 		},
 
 		last(): V | undefined {
-			const solved = computeSolvedList();
+			const solved = core.computeSolvedList();
 			if (solved.length === 0) return undefined;
 			return solved.values[solved.length - 1] as V;
 		},
 
 		toArray(): V[] {
-			return [...computeSolvedList().values] as V[];
+			return [...core.computeSolvedList().values] as V[];
 		},
 
 		*values(): IterableIterator<V> {
-			for (const value of computeSolvedList().values) {
+			for (const value of core.computeSolvedList().values) {
 				yield value as V;
 			}
 		},
 
 		*entries(): IterableIterator<[number, V]> {
-			const values = computeSolvedList().values;
+			const values = core.computeSolvedList().values;
 			for (let i = 0; i < values.length; i++) {
 				yield [i, values[i] as V];
 			}
 		},
 
 		forEach(callback: (value: V, index: number) => void): void {
-			const values = computeSolvedList().values;
+			const values = core.computeSolvedList().values;
 			for (let i = 0; i < values.length; i++) {
 				callback(values[i] as V, i);
 			}
 		},
 
 		map<U>(callback: (value: V, index: number) => U): U[] {
-			const values = computeSolvedList().values;
+			const values = core.computeSolvedList().values;
 			const result: U[] = [];
 			for (let i = 0; i < values.length; i++) {
 				result.push(callback(values[i] as V, i));
@@ -308,7 +299,7 @@ export function createListView<V = unknown>(
 		},
 
 		filter(predicate: (value: V, index: number) => boolean): V[] {
-			const values = computeSolvedList().values;
+			const values = core.computeSolvedList().values;
 			const result: V[] = [];
 			for (let i = 0; i < values.length; i++) {
 				if (predicate(values[i] as V, i)) {
@@ -319,7 +310,7 @@ export function createListView<V = unknown>(
 		},
 
 		find(predicate: (value: V, index: number) => boolean): V | undefined {
-			const values = computeSolvedList().values;
+			const values = core.computeSolvedList().values;
 			for (let i = 0; i < values.length; i++) {
 				if (predicate(values[i] as V, i)) {
 					return values[i] as V;
@@ -329,7 +320,7 @@ export function createListView<V = unknown>(
 		},
 
 		findIndex(predicate: (value: V, index: number) => boolean): number {
-			const values = computeSolvedList().values;
+			const values = core.computeSolvedList().values;
 			for (let i = 0; i < values.length; i++) {
 				if (predicate(values[i] as V, i)) {
 					return i;
@@ -343,7 +334,7 @@ export function createListView<V = unknown>(
 		},
 
 		every(predicate: (value: V, index: number) => boolean): boolean {
-			const values = computeSolvedList().values;
+			const values = core.computeSolvedList().values;
 			for (let i = 0; i < values.length; i++) {
 				if (!predicate(values[i] as V, i)) {
 					return false;
@@ -353,15 +344,15 @@ export function createListView<V = unknown>(
 		},
 
 		getSolvedList(): SolvedList {
-			return computeSolvedList();
+			return core.computeSolvedList();
 		},
 
 		tombstoneCount(): number {
-			return computeSolvedList().tombstoneCount;
+			return core.computeSolvedList().tombstoneCount;
 		},
 
 		hasConcurrentInserts(): boolean {
-			return computeSolvedList().conflicts.length > 0;
+			return core.computeSolvedList().conflicts.length > 0;
 		},
 
 		hasConflicts(): boolean {
@@ -369,12 +360,12 @@ export function createListView<V = unknown>(
 		},
 
 		getNode(index: number): FugueNode | undefined {
-			const solved = computeSolvedList();
+			const solved = core.computeSolvedList();
 			return getNodeAtIndex(solved.fugue, index);
 		},
 
 		getConstraints(): readonly Constraint[] {
-			return getListConstraints();
+			return core.getConstraints();
 		},
 
 		subscribe(callback: ViewChangeCallback<V[]>): Unsubscribe {
@@ -386,6 +377,28 @@ export function createListView<V = unknown>(
 	};
 
 	return view;
+}
+
+// ============================================================================
+// List View Implementation
+// ============================================================================
+
+/**
+ * Create a ListView over a constraint store.
+ *
+ * @param config Configuration including store and path
+ * @returns A ListView instance
+ */
+export function createListView<V = unknown>(
+	config: ListViewConfig,
+): ListView<V> {
+	const { store, path } = config;
+	const subscribers = new Set<ViewChangeCallback<V[]>>();
+
+	// Create core with a fixed store reference
+	const core = createListViewCore<V>(() => store, path);
+
+	return buildListMethods(core, subscribers, path);
 }
 
 // ============================================================================
@@ -422,202 +435,22 @@ export function createReactiveListView<V = unknown>(
 	let currentStore = config.store;
 	const subscribers = new Set<ViewChangeCallback<V[]>>();
 
-	let cachedValue: V[] | undefined = undefined;
+	// Create core with a dynamic store reference
+	const core = createListViewCore<V>(() => currentStore, path);
 
-	function getListConstraints(): Constraint[] {
-		return askPrefix(currentStore, path);
-	}
+	// Build the base view methods
+	const baseView = buildListMethods(core, subscribers, path);
 
-	function computeSolvedList(): SolvedList {
-		return solveList(getListConstraints(), path);
-	}
+	// Initialize cached value for change detection
+	let cachedValue: V[] | undefined = core.getValue();
 
-	function getValue(): V[] | undefined {
-		const solved = computeSolvedList();
-		if (solved.length === 0) {
-			return undefined;
-		}
-		return [...solved.values] as V[];
-	}
-
-	const view: ReactiveListView<V> = {
-		path,
-
-		get(index: number): V | undefined {
-			const solved = computeSolvedList();
-			if (index < 0 || index >= solved.length) {
-				return undefined;
-			}
-			return solved.values[index] as V;
-		},
-
-		getArray(): V[] | undefined {
-			return getValue();
-		},
-
-		getSolved(): SolvedValue<V[]> {
-			const solved = computeSolvedList();
-
-			if (solved.length === 0 && solved.tombstoneCount === 0) {
-				return solvedEmpty();
-			}
-
-			let determinedBy: Constraint | undefined;
-			for (const node of solved.fugue.activeNodes) {
-				if (
-					!determinedBy ||
-					node.constraint.metadata.lamport > determinedBy.metadata.lamport
-				) {
-					determinedBy = node.constraint;
-				}
-			}
-
-			const arr = [...solved.values] as V[];
-
-			return {
-				value: arr,
-				determinedBy,
-				conflicts: [...solved.conflicts],
-				resolution:
-					solved.conflicts.length > 0
-						? `list with ${solved.length} elements, ${solved.conflicts.length} concurrent inserts`
-						: `list with ${solved.length} elements`,
-			};
-		},
-
-		length(): number {
-			return computeSolvedList().length;
-		},
-
-		isEmpty(): boolean {
-			return computeSolvedList().length === 0;
-		},
-
-		first(): V | undefined {
-			const solved = computeSolvedList();
-			if (solved.length === 0) return undefined;
-			return solved.values[0] as V;
-		},
-
-		last(): V | undefined {
-			const solved = computeSolvedList();
-			if (solved.length === 0) return undefined;
-			return solved.values[solved.length - 1] as V;
-		},
-
-		toArray(): V[] {
-			return [...computeSolvedList().values] as V[];
-		},
-
-		*values(): IterableIterator<V> {
-			for (const value of computeSolvedList().values) {
-				yield value as V;
-			}
-		},
-
-		*entries(): IterableIterator<[number, V]> {
-			const values = computeSolvedList().values;
-			for (let i = 0; i < values.length; i++) {
-				yield [i, values[i] as V];
-			}
-		},
-
-		forEach(callback: (value: V, index: number) => void): void {
-			const values = computeSolvedList().values;
-			for (let i = 0; i < values.length; i++) {
-				callback(values[i] as V, i);
-			}
-		},
-
-		map<U>(callback: (value: V, index: number) => U): U[] {
-			const values = computeSolvedList().values;
-			const result: U[] = [];
-			for (let i = 0; i < values.length; i++) {
-				result.push(callback(values[i] as V, i));
-			}
-			return result;
-		},
-
-		filter(predicate: (value: V, index: number) => boolean): V[] {
-			const values = computeSolvedList().values;
-			const result: V[] = [];
-			for (let i = 0; i < values.length; i++) {
-				if (predicate(values[i] as V, i)) {
-					result.push(values[i] as V);
-				}
-			}
-			return result;
-		},
-
-		find(predicate: (value: V, index: number) => boolean): V | undefined {
-			const values = computeSolvedList().values;
-			for (let i = 0; i < values.length; i++) {
-				if (predicate(values[i] as V, i)) {
-					return values[i] as V;
-				}
-			}
-			return undefined;
-		},
-
-		findIndex(predicate: (value: V, index: number) => boolean): number {
-			const values = computeSolvedList().values;
-			for (let i = 0; i < values.length; i++) {
-				if (predicate(values[i] as V, i)) {
-					return i;
-				}
-			}
-			return -1;
-		},
-
-		some(predicate: (value: V, index: number) => boolean): boolean {
-			return view.findIndex(predicate) !== -1;
-		},
-
-		every(predicate: (value: V, index: number) => boolean): boolean {
-			const values = computeSolvedList().values;
-			for (let i = 0; i < values.length; i++) {
-				if (!predicate(values[i] as V, i)) {
-					return false;
-				}
-			}
-			return true;
-		},
-
-		getSolvedList(): SolvedList {
-			return computeSolvedList();
-		},
-
-		tombstoneCount(): number {
-			return computeSolvedList().tombstoneCount;
-		},
-
-		hasConcurrentInserts(): boolean {
-			return computeSolvedList().conflicts.length > 0;
-		},
-
-		hasConflicts(): boolean {
-			return view.hasConcurrentInserts();
-		},
-
-		getNode(index: number): FugueNode | undefined {
-			const solved = computeSolvedList();
-			return getNodeAtIndex(solved.fugue, index);
-		},
-
-		getConstraints(): readonly Constraint[] {
-			return getListConstraints();
-		},
-
-		subscribe(callback: ViewChangeCallback<V[]>): Unsubscribe {
-			subscribers.add(callback);
-			return () => {
-				subscribers.delete(callback);
-			};
-		},
+	// Extend with reactive capabilities
+	const reactiveView: ReactiveListView<V> = {
+		...baseView,
 
 		notifyConstraintsChanged(addedConstraints: Constraint[]): void {
 			const before = cachedValue;
-			const after = getValue();
+			const after = core.getValue();
 			cachedValue = after;
 
 			// Notify subscribers if value changed
@@ -627,7 +460,7 @@ export function createReactiveListView<V = unknown>(
 					before,
 					after,
 					addedConstraints,
-					view.getSolved(),
+					reactiveView.getSolved(),
 				);
 				for (const callback of subscribers) {
 					callback(event);
@@ -640,8 +473,5 @@ export function createReactiveListView<V = unknown>(
 		},
 	};
 
-	// Initialize cached value for change detection in reactive view
-	cachedValue = getValue();
-
-	return view;
+	return reactiveView;
 }

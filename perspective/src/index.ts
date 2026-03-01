@@ -119,6 +119,7 @@ export {
 	getVersionVector,
 	getLamport,
 	getNextLamport,
+	getGeneration,
 	exportDelta,
 	importDelta,
 	mergeStores,

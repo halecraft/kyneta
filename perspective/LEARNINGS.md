@@ -209,16 +209,27 @@ This was discovered when we added true Loro comparison to concurrent list tests:
 
 **Implication for Phase 4 (Text):** The same `peerIdToNum()` helper must be used in text equivalence tests.
 
-### Caching Requires a Store Generation Counter
+### Caching Requires a Store Generation Counter ✅ (Implemented)
 
 The original view cache used `constraints.size` as an invalidation proxy. This was unsound: if a constraint were ever replaced (same size) or if caching were per-path, a size check would miss invalidation. The cache was removed entirely in favor of fresh solves on every access.
 
-A correct caching approach needs either:
-1. A monotonically increasing generation counter on the store (bumped on every `tell`)
-2. Explicit dirty-path tracking (set of paths affected since last solve)
-3. Structural sharing (persistent data structure) so identity comparison works
+**Solution implemented:** The `ConstraintStore` now has a `generation: number` field that increments on every mutation (`tell()`, `tellMany()`, `mergeStores()`). Use `getGeneration(store)` to compare against a cached generation value. If they differ, the cache is stale.
 
-Option 1 is simplest and should be added when caching is reintroduced for performance.
+```typescript
+// Caching pattern
+let cachedGeneration = getGeneration(store);
+let cachedValue: T | null = null;
+
+function getValue(): T {
+  if (getGeneration(store) !== cachedGeneration) {
+    cachedValue = computeExpensiveValue(store);
+    cachedGeneration = getGeneration(store);
+  }
+  return cachedValue!;
+}
+```
+
+This enables correct caching when performance optimization is needed.
 
 ### `askPrefix` Will Be the Performance Bottleneck for Text
 

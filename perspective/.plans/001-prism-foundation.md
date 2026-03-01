@@ -823,17 +823,16 @@ by creating a fresh view on every `.view()` call. This means:
 
 This is fine for now. PrismDoc (Phase 6) will manage the wiring.
 
-### Caching Requires a Store Generation Counter
+### Caching Requires a Store Generation Counter ✅ (Implemented)
 
 The removed cache used `constraints.size` as an invalidation proxy. This was unsound:
 if a constraint were ever replaced (same size) or if caching were per-path, a size check
-would miss invalidation. A correct approach needs either:
+would miss invalidation.
 
-1. A monotonically increasing generation counter on the store (bumped on every `tell`)
-2. Explicit dirty-path tracking (set of paths affected since last solve)
-3. Structural sharing (persistent data structure) so identity comparison works
-
-Option 1 is simplest and should be added when caching is reintroduced.
+**Solution:** `ConstraintStore` now has a `generation: number` field that increments on
+every mutation (`tell()`, `tellMany()`, `mergeStores()`). Use `getGeneration(store)` to
+compare against a cached generation value. If they differ, the cache is stale. This
+enables correct caching when performance optimization is needed.
 
 ### `askPrefix` Will Be the Performance Bottleneck for Text
 
