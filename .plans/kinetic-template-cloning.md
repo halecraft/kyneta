@@ -62,7 +62,7 @@ PR 4 (template-cloning codegen)      — planWalk(), CodegenResult, module decla
 PR 5 (lazy scope / numeric IDs)      — INDEPENDENT of 1–4
 PR 6 (CRDT batch ops)                — INDEPENDENT of 1–5
 
-PR 7 (component recognition)         — soft dep on PR 2 (walker); no hard dep on 3–4
+PR 7 (component recognition)         — INDEPENDENT (walker not needed for component detection)
 
 PR 8 (conditional scope creation)    — INDEPENDENT (uses existing LoopNode.hasReactiveItems)
 
@@ -87,7 +87,7 @@ Extract duplicated HTML constants and escape functions into a shared module. Pur
 
 *Files: `compiler/html-constants.ts` (new), `codegen/html.ts`, `server/render.ts`*
 
-### PR 2: refactor(packages/kinetic): generator-based IR walker 🔴
+### PR 2: refactor(packages/kinetic): generator-based IR walker ✅
 
 Implement a generator-based IR walker that yields structural events. This creates a clean separation: the walker describes structure, consumers decide what to do with each event. SSR codegen and template extraction become thin consumers of the same event stream.
 
@@ -117,16 +117,18 @@ function* walkIR(node: ChildNode, pathStack?: number[]): Generator<WalkEvent>
 
 **Tasks:**
 
-1. Create `compiler/walk.ts` with `WalkEvent` type union and `walkIR` generator function 🔴
-2. Implement `walkElement`, `walkContent`, `walkChild` as internal generators that yield events 🔴
-3. Use mutable `pathStack: number[]` internally, copy to `[...pathStack]` only when yielding events that need paths 🔴
-4. Walker performs HTML escaping for static text/attributes (consumer doesn't need to) 🔴
-5. Use shared `VOID_ELEMENTS` from `html-constants.ts` for void element handling 🔴
-6. Unit tests for walker: verify event sequence for various IR structures; verify paths are correct; verify static values are escaped 🔴
-7. Rewrite `generateElement` / `generateChild` in `codegen/html.ts` as a consumer of `walkIR` events 🔴
-8. Existing HTML codegen tests pass unchanged (same output, different internal structure) 🔴
+1. Create `compiler/walk.ts` with `WalkEvent` type union and `walkIR` generator function ✅
+2. Implement `walkElement`, `walkContent`, `walkChild` as internal generators that yield events ✅
+3. Use mutable `pathStack: number[]` internally, copy to `[...pathStack]` only when yielding events that need paths ✅
+4. Walker performs HTML escaping for static text/attributes (consumer doesn't need to) ✅
+5. Use shared `VOID_ELEMENTS` from `html-constants.ts` for void element handling ✅
+6. Unit tests for walker: verify event sequence for various IR structures; verify paths are correct; verify static values are escaped ✅
+7. ~~Rewrite `generateElement` / `generateChild` in `codegen/html.ts` as a consumer of `walkIR` events~~ DEFERRED — SSR codegen requires recursive descent into loops/conditionals; walker is designed for template extraction (PR 3)
+8. Added `walkLoopBody` and `walkBranchBody` helpers for consumers that need to walk region bodies ✅
 
-*Files: `compiler/walk.ts` (new), `compiler/walk.test.ts` (new), `codegen/html.ts`*
+*Files: `compiler/walk.ts` (new), `compiler/walk.test.ts` (new)*
+
+**Note:** The walker is the foundation for template extraction (PR 3). SSR codegen (`html.ts`) already shares constants via PR 1 and has complex loop/conditional handling that doesn't map cleanly to event-based processing. Full html.ts integration deferred to avoid unnecessary refactoring.
 
 ### PR 3: feat(packages/kinetic): template extraction from IR 🔴
 
@@ -261,7 +263,7 @@ Exploit the structural information in CRDT deltas for batched DOM operations.
 
 ### PR 7: feat(packages/kinetic): component recognition via ComponentFactory 🔴
 
-*Soft dependency on PR 2 (parameterized walk for HTML codegen). No hard dependency on PRs 3–4 (template cloning). Can be prioritized ahead of template cloning if desired.*
+*Independent of PRs 1–6. Can be prioritized at any point. Components work with current `createElement` codegen; template cloning (PRs 3–4) makes them faster later.*
 
 Extend element recognition to support user-defined component functions alongside HTML tags.
 
@@ -320,12 +322,12 @@ Skip scope allocation for list items that have no reactive content.
 | # | PR | Type | Why here |
 |---|-----|------|----------|
 | 1 | Shared constants | refactor | Foundation: eliminates duplication before any new consumer is added |
-| 2 | Generator-based walker | refactor | Prep: creates event stream that both SSR and template extraction consume |
+| 2 | Generator-based walker | refactor | Prep: creates event stream for template extraction (not SSR — see Learnings) |
 | 3 | Template extraction | feat (infra) | Core abstraction: `TemplateNode` type exists, no consumers yet |
 | 4 | Template-cloning codegen | feat | First consumer of `TemplateNode`; user-visible perf improvement |
 | 5 | Lazy scope / numeric IDs | perf | Independent, low-risk, ships whenever ready |
 | 6 | CRDT batch ops | feat | Independent, high-value, ships whenever ready |
-| 7 | Component recognition | feat | Marquee user-facing feature; benefits from templates but doesn't require them |
+| 7 | Component recognition | feat | Independent, marquee user-facing feature; works with current codegen |
 | 8 | Conditional scope creation | perf | Independent; uses existing `LoopNode.hasReactiveItems` from IR |
 | 9 | README / package.json | docs | Final polish after all features land |
 
@@ -334,8 +336,7 @@ Skip scope allocation for list items that have no reactive content.
 ### Compiler Changes (PRs 1–4, 7)
 
 - **`codegen/html.ts`** and **`server/render.ts`** — PR 1 extracts shared constants. Both files lose private `VOID_ELEMENTS` and escape functions, gaining imports from `html-constants.ts`. Low-risk mechanical change.
-- **`codegen/html.ts`** — PR 2 refactors `generateElement` to consume events from the new `walkIR` generator. The existing public interface is unchanged; internally it iterates over `WalkEvent`s and builds the template literal string.
-- **`compiler/walk.ts`** (new) — PR 2 adds the generator-based walker. This is a new file with no dependencies on existing code except `ir.ts` types and `html-constants.ts`.
+- **`compiler/walk.ts`** (new) — PR 2 adds the generator-based walker. This is a new file with no dependencies on existing code except `ir.ts` types and `html-constants.ts`. **Note:** `codegen/html.ts` does NOT use the walker — SSR codegen requires recursive descent into loops/conditionals, which doesn't map to event-based processing. The walker is for template extraction (PR 3).
 - **`ir.ts`** — Adding `TemplateNode` type (PR 3) and optional `factorySource` field on `ElementNode` (PR 7). No new `ChildNode` variant, so no cascade through pattern-match sites. The `factorySource` field is optional, so existing code that doesn't check it continues to work unchanged.
 - **`analyze.ts`** — Changing the recognition logic (PR 7) affects `findBuilderCalls`, `isNestedBuilderCall`, `analyzeElementCall`, `analyzeBuilder`, `analyzeStatement`. All callers of `ELEMENT_FACTORIES` are affected. The set remains for HTML tags; type-based detection is additive.
 - **`elements.d.ts`** — Unchanged. Global declarations remain.
@@ -507,6 +508,21 @@ Several pieces already exist that simplify implementation:
 
 - `elements.d.ts` is at `src/types/elements.d.ts` — provides global ambient declarations for HTML element factories
 - The globals coexist with explicit imports; no changes needed for component support
+
+### Implementation Learnings (PRs 1-2)
+
+**IR Factory Parameter Order** — The `createElement` and `createBuilder` functions in `ir.ts` have non-obvious parameter orders:
+```typescript
+// createElement: tag, attributes, eventHandlers, bindings, children, span
+// createBuilder: factoryName, props, eventHandlers, children, span
+```
+Not `(tag, children, ...)` as one might assume. TypeScript may not catch order mistakes if types overlap.
+
+**Walker vs SSR Codegen Mismatch** — The generator walker yields `regionPlaceholder` events for loops/conditionals, treating them as opaque holes. But SSR codegen needs to *descend into* loops/conditionals to generate `.map()` expressions and ternaries. 
+
+**Key insight:** The walker is optimized for **template extraction** (where regions become comment placeholder holes), not for SSR codegen (which needs recursive code generation). SSR codegen shares constants (PR 1) but doesn't benefit from event-based walking. This is why PR 2 task 7 (html.ts rewrite) was deferred.
+
+**Escape Function Implementations** — `escapeStatic` in `codegen/html.ts` used chained `.replace()` calls, while `escapeHtml` in `server/render.ts` used regex + lookup map. Consolidated to regex version in `html-constants.ts`.
 
 ## Changeset
 
