@@ -18,7 +18,10 @@ import { type CallExpression, Project, type SourceFile, ts } from "ts-morph"
 import { resolveReactiveImports } from "./reactive-detection.js"
 import { CompilerError, KineticErrorCode } from "../errors.js"
 import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
-import { generateElementFactory } from "./codegen/dom.js"
+import {
+  generateElementFactory,
+  generateElementFactoryWithResult,
+} from "./codegen/dom.js"
 import {
   generateEscapeHelper,
   generateHTML,
@@ -467,22 +470,39 @@ export function transformSourceInPlace(
   // of later nodes that we still need to replace
   replacements.sort((a, b) => b.call.getStart() - a.call.getStart())
 
+  // Collect all module declarations from template cloning
+  const allModuleDeclarations: string[] = []
+
   // Apply replacements using the appropriate codegen target
+  // IMPORTANT: Do replacements BEFORE insertions to avoid stale AST references
   const target = options.target ?? "dom"
   for (const { call, ir: builderIr } of replacements) {
-    const factoryCode =
-      target === "html"
-        ? generateRenderFunction(builderIr, {
-            hydratable: options.hydratable ?? true,
-          })
-        : generateElementFactory(builderIr)
-    call.replaceWithText(factoryCode)
+    if (target === "html") {
+      const factoryCode = generateRenderFunction(builderIr, {
+        hydratable: options.hydratable ?? true,
+      })
+      call.replaceWithText(factoryCode)
+    } else {
+      // Use template cloning for DOM target
+      const result = generateElementFactoryWithResult(builderIr)
+      call.replaceWithText(result.code)
+      allModuleDeclarations.push(...result.moduleDeclarations)
+    }
   }
 
   // For HTML target, inject the __escapeHtml helper into the source file.
   // The HTML codegen emits calls to __escapeHtml() in template literals.
   if (target === "html" && ir.length > 0) {
     sourceFile.insertStatements(0, generateEscapeHelper())
+  }
+
+  // For DOM target with template cloning, inject template declarations at top of file
+  // This is done AFTER replacements to avoid invalidating AST references
+  if (target === "dom" && allModuleDeclarations.length > 0) {
+    // Insert all declarations as statements at the top
+    for (const decl of allModuleDeclarations) {
+      sourceFile.insertStatements(0, decl)
+    }
   }
 
   return {

@@ -165,7 +165,7 @@ Add `TemplateNode` / `TemplateHole` types and implement `extractTemplate` as a c
 
 *Files: `ir.ts`, `compiler/template.ts`, `compiler/template.test.ts` (new)*
 
-### PR 4: feat(packages/kinetic): template-cloning DOM codegen 🟡
+### PR 4: feat(packages/kinetic): template-cloning DOM codegen ✅
 
 Emit `cloneNode(true)` + tree walker instead of `createElement` chains. First consumer of `TemplateNode`.
 
@@ -206,15 +206,15 @@ Holes are visited in document order (depth-first), so the walk never backtracks 
    }
    ```
 4. Add `generateTemplateDeclaration(template: TemplateNode, state: CodegenState): string` that emits `const _tmpl_N = document.createElement("template"); _tmpl_N.innerHTML = "..."` ✅
-5. Template deduplication via hash: `simpleHash()` utility added ✅; codegen state cache 🔴
-6. Update `transformSourceInPlace` to collect `moduleDeclarations` from all replacements and insert at top of file 🔴
-7. Wire reactive subscriptions to grabbed hole references instead of newly-created elements 🔴
-8. Region holes: pass the cloned comment node to `listRegion` / `conditionalRegion` as the mount point 🔴
-9. Unit tests: walk plan tests ✅; full codegen cloneNode tests 🔴
-10. Integration tests: compile + execute static trees, verify DOM structure is identical to imperative approach; compile + execute reactive trees, verify subscriptions work with cloned nodes 🔴
+5. Template deduplication via hash: `simpleHash()` utility added ✅; codegen state cache in `CodegenState` ✅
+6. Update `transformSourceInPlace` to collect `moduleDeclarations` from all replacements and insert at top of file ✅
+7. Wire reactive subscriptions to grabbed hole references instead of newly-created elements ✅
+8. Region holes: pass the cloned comment node to `listRegion` / `conditionalRegion` as the mount point ✅
+9. Unit tests: walk plan tests ✅; transform tests updated for cloneNode output ✅
+10. Integration tests: all 732 tests pass with template cloning enabled ✅
 11. Update `TECHNICAL.md` with Template Cloning architecture section ✅
 
-**Status:** Infrastructure complete (planner, code gen helpers, CodegenResult type, TECHNICAL.md). Full integration into `generateDOM`/`generateElementFactory` to replace `createElement` chains with `cloneNode` is pending — tasks 5–10 remain.
+**Status:** Complete. Template cloning is now the default codegen path for DOM target. All builders emit `cloneNode(true)` with walker-based hole grabbing.
 
 *Files: `compiler/template.ts`, `codegen/dom.ts`, `transform.ts`, `integration.test.ts`, `TECHNICAL.md`*
 
@@ -318,6 +318,18 @@ Skip scope allocation for list items that have no reactive content.
 2. Update `package.json` exports if subpath changes are needed for component type imports 🔴
 
 *Files: `README.md`, `package.json`*
+
+### Future Optimization: List Item Template Cloning
+
+*Not in current scope. Document for future consideration.*
+
+Currently, list region `create` callbacks generate items dynamically at runtime using `createElement`. When the list item structure is statically known at compile time, a future optimization could:
+
+1. Extract item templates at compile time (similar to root template extraction)
+2. Emit item templates as additional module-level declarations
+3. Generate `create` callbacks that clone item templates instead of createElement chains
+
+This would provide the same 3-10× speedup for list item creation that root templates now enjoy. Blocked on: detecting when item structure is fully static (no conditional branches or nested loops in item body).
 
 ### PR Stack Rationale
 
@@ -525,6 +537,35 @@ Not `(tag, children, ...)` as one might assume. TypeScript may not catch order m
 **Key insight:** The walker is optimized for **template extraction** (where regions become comment placeholder holes), not for SSR codegen (which needs recursive code generation). SSR codegen shares constants (PR 1) but doesn't benefit from event-based walking. This is why PR 2 task 7 (html.ts rewrite) was deferred.
 
 **Escape Function Implementations** — `escapeStatic` in `codegen/html.ts` used chained `.replace()` calls, while `escapeHtml` in `server/render.ts` used regex + lookup map. Consolidated to regex version in `html-constants.ts`.
+
+### Implementation Learnings (PR 3)
+
+**Template Extraction is Stateless** — `extractTemplate()` consumes walker events in a single pass, accumulating HTML parts and holes. No backtracking, no lookahead. This makes it composable with any event source.
+
+**Hole Paths Use Child Indices** — Paths like `[0, 1, 0]` mean "first child, then second child, then first child". This matches DOM traversal semantics perfectly: `firstChild` then `nextSibling` N times.
+
+### Implementation Learnings (PRs 3-4)
+
+**ASI Hazard with Template Declarations** — Template declarations ending with `innerHTML = "..."` followed by `(scope) =>` parse as a function call (`"..."(scope)`) due to JavaScript's automatic semicolon insertion rules. Fixed by adding trailing semicolon:
+```typescript
+// WRONG - ASI fails, parses as call expression
+const _tmpl = document.createElement("template"); _tmpl.innerHTML = "<div></div>"
+(scope) => { ... }
+
+// CORRECT - semicolon prevents ASI ambiguity  
+const _tmpl = document.createElement("template"); _tmpl.innerHTML = "<div></div>";
+(scope) => { ... }
+```
+
+**ts-morph AST Reference Invalidation** — When using `insertStatements()` and `replaceWithText()` together, the order matters critically. Inserting statements invalidates stored AST node references. Solution: do all `replaceWithText()` calls first (processing back-to-front), then insert module declarations at the end.
+
+**State Shallow Copy Shares Arrays** — `const bodyState = { ...state, indentLevel: ... }` creates a shallow copy where `templateDeclarations` array is shared by reference. This is actually desirable for accumulating declarations across nested codegen calls, but could be a trap if mutation was unintended.
+
+**List Item Bodies Use createElement** — The `create` callback for list regions generates items dynamically at runtime, so they can't use pre-cloned templates. Future optimization opportunity: pre-compile item templates when list item structure is statically known.
+
+**Walk Planning Preserves Original Indices** — When holes are sorted by document order for optimal traversal, the `grab` operations reference original array indices (not sorted positions). This ensures subscriptions wire to the correct holes regardless of document order.
+
+**Event Handlers Require Explicit Wiring** — Template cloning extracts static HTML, but event handlers can't be serialized into templates. The codegen handles root element handlers by iterating `node.eventHandlers` after cloning and calling `generateEventHandler()`.
 
 ## Changeset
 

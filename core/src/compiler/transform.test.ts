@@ -877,9 +877,16 @@ describe("transformSourceInPlace", () => {
     expect(code).toContain("const content =")
     expect(code).toContain("const footer =")
 
-    const createElementCount = (code.match(/document\.createElement/g) || [])
-      .length
-    expect(createElementCount).toBeGreaterThanOrEqual(6)
+    // With template cloning, we should have:
+    // - Template declarations using createElement("template")
+    // - cloneNode calls instead of individual createElement calls
+    const templateCreateCount = (
+      code.match(/document\.createElement\("template"\)/g) || []
+    ).length
+    expect(templateCreateCount).toBeGreaterThanOrEqual(3) // one per builder
+
+    const cloneNodeCount = (code.match(/\.cloneNode\(true\)/g) || []).length
+    expect(cloneNodeCount).toBeGreaterThanOrEqual(3) // one per builder
 
     expect(code).not.toContain("div(() =>")
     expect(code).not.toContain("section(() =>")

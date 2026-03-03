@@ -514,7 +514,7 @@ export function generateTemplateDeclaration(
   varName: string,
 ): string {
   const escapedHtml = JSON.stringify(html)
-  return `const ${varName} = document.createElement("template"); ${varName}.innerHTML = ${escapedHtml}`
+  return `const ${varName} = document.createElement("template"); ${varName}.innerHTML = ${escapedHtml};`
 }
 
 /**
