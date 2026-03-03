@@ -359,6 +359,8 @@ function generateEventHandler(
  *
  * Returns { code: string[], varName: string } where code is the lines to execute
  * and varName is the variable holding the created element.
+ *
+ * For components (factorySource is present), emits a component call instead of createElement.
  */
 function generateElement(
   node: ElementNode,
@@ -368,7 +370,44 @@ function generateElement(
   const ind = getIndent(state)
   const elementVar = genVar(state, node.tag)
 
-  // Create the element
+  // Check if this is a component call
+  if (node.factorySource) {
+    // Component: call the factory function
+    // The factory returns an Element (a function), which we call with a child scope
+    //
+    // Component signature: (props?) => (scope) => Node
+    // Usage: MyComponent({ title: "Hi" }) becomes MyComponent({ title: "Hi" })(scope.createChild())
+    const hasProps = node.attributes.length > 0 || node.eventHandlers.length > 0
+
+    if (hasProps) {
+      // Build props object
+      const propsEntries: string[] = []
+      for (const attr of node.attributes) {
+        propsEntries.push(`${attr.name}: ${attr.value.source}`)
+      }
+      for (const handler of node.eventHandlers) {
+        const propName = `on${handler.event.charAt(0).toUpperCase()}${handler.event.slice(1)}`
+        propsEntries.push(`${propName}: ${handler.handlerSource}`)
+      }
+      const propsArg = `{ ${propsEntries.join(", ")} }`
+      lines.push(
+        `${ind}const ${elementVar} = ${node.factorySource}(${propsArg})(${state.scopeVar}.createChild())`,
+      )
+    } else {
+      // No props: MyComponent()
+      lines.push(
+        `${ind}const ${elementVar} = ${node.factorySource}()(${state.scopeVar}.createChild())`,
+      )
+    }
+
+    // Note: Component children (builder pattern) are not yet supported.
+    // Components are expected to manage their own children internally.
+    // Future enhancement: pass children as builder callback.
+
+    return { code: lines, varName: elementVar }
+  }
+
+  // Regular HTML element: create with createElement
   lines.push(
     `${ind}const ${elementVar} = document.createElement(${JSON.stringify(node.tag)})`,
   )
@@ -914,19 +953,27 @@ function generateHoleSetup(
 
   switch (hole.kind) {
     case "text": {
-      // Dynamic text content - wire subscription to the grabbed text node
+      // Dynamic text content — the grabbed node is a comment placeholder
+      // (<!---->) that we replace with a real Text node so subscriptions
+      // can update it via .textContent / .data.
       const contentNode = hole.contentNode
       if (!contentNode) break
+
+      const textVar = genVar(state, "text")
+      lines.push(`${ind}const ${textVar} = document.createTextNode("")`)
+      lines.push(
+        `${ind}${nodeRef}.parentNode.replaceChild(${textVar}, ${nodeRef})`,
+      )
 
       if (contentNode.bindingTime === "render") {
         // Render-time - set once
         lines.push(
-          `${ind}${nodeRef}.textContent = String(${contentNode.source})`,
+          `${ind}${textVar}.textContent = String(${contentNode.source})`,
         )
       } else if (contentNode.bindingTime === "reactive") {
         // Reactive - needs subscription
         lines.push(
-          ...generateReactiveContentSubscription(contentNode, nodeRef, state),
+          ...generateReactiveContentSubscription(contentNode, textVar, state),
         )
       }
       break
@@ -989,9 +1036,11 @@ function generateHoleSetup(
     case "event": {
       // Event handler - attach to the grabbed element
       const eventName = hole.eventName
-      if (!eventName) break
-      // Note: We need the handler source, which isn't currently on TemplateHole
-      // For now, skip - this will be handled by falling back to createElement path
+      const handlerSource = hole.handlerSource
+      if (!eventName || !handlerSource) break
+      lines.push(
+        `${ind}${nodeRef}.addEventListener(${JSON.stringify(eventName)}, ${handlerSource})`,
+      )
       break
     }
 
@@ -1026,6 +1075,21 @@ function generateHoleSetup(
       } else if (regionNode.kind === "conditional") {
         lines.push(...generateConditionalWithMarker(regionNode, nodeRef, state))
       }
+      break
+    }
+
+    case "component": {
+      // Component hole — the grabbed node is a comment placeholder.
+      // Generate the component element via the existing generateElement()
+      // helper (which handles factorySource), then replace the placeholder.
+      const elementNode = hole.elementNode
+      if (!elementNode) break
+
+      const result = generateElement(elementNode, state)
+      lines.push(...result.code)
+      lines.push(
+        `${ind}${nodeRef}.parentNode.replaceChild(${result.varName}, ${nodeRef})`,
+      )
       break
     }
   }

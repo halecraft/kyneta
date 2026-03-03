@@ -133,6 +133,21 @@ export interface RegionPlaceholderEvent {
 }
 
 /**
+ * Event emitted for a component placeholder.
+ *
+ * Components are opaque to the walker — they cannot be serialized as
+ * HTML into a template.  Instead, consumers should emit a placeholder
+ * (e.g., a comment node) and instantiate the component at runtime.
+ */
+export interface ComponentPlaceholderEvent {
+  type: "componentPlaceholder"
+  /** The element node with `factorySource` set */
+  node: ElementNode
+  /** Path to this component position */
+  path: number[]
+}
+
+/**
  * Event emitted for a two-way binding.
  */
 export interface BindingEvent {
@@ -159,6 +174,7 @@ export type WalkEvent =
   | StaticTextEvent
   | DynamicContentEvent
   | RegionPlaceholderEvent
+  | ComponentPlaceholderEvent
   | BindingEvent
 
 // =============================================================================
@@ -259,11 +275,26 @@ function* walkBuilder(
 
 /**
  * Walk an element node.
+ *
+ * If the element has `factorySource` (it's a component invocation),
+ * yield a single `componentPlaceholder` event instead of walking
+ * it as HTML.  Components are opaque at the template level — they
+ * are instantiated at runtime, not serialized into innerHTML.
  */
 function* walkElement(
   node: ElementNode,
   pathStack: number[],
 ): Generator<WalkEvent, void, undefined> {
+  // Components cannot be serialized into a template — emit placeholder
+  if (node.factorySource) {
+    yield {
+      type: "componentPlaceholder",
+      node,
+      path: [...pathStack],
+    }
+    return
+  }
+
   // Emit element start
   yield {
     type: "elementStart",

@@ -51,25 +51,24 @@ If DOM creation is unified around template cloning, then a "component" and an "H
 ### Dependency Graph
 
 ```
-PR 1 (shared constants)              — foundation (VOID_ELEMENTS, escapeHtml, marker helpers)
+PR 1 (shared constants)              ✅
   ↓
-PR 2 (generator walker)              — WalkEvent stream, walkIR() generator
+PR 2 (generator walker)              ✅
   ↓
-PR 3 (template extraction)           — TemplateNode/TemplateHole types, extractTemplate()
+PR 3 (template extraction)           ✅
   ↓
-PR 4 (template-cloning codegen)      — planWalk(), CodegenResult, module declarations
+PR 4 (template-cloning codegen)      ✅
 
-PR 5 (lazy scope / numeric IDs)      — INDEPENDENT of 1–4
-PR 6 (CRDT batch ops)                — INDEPENDENT of 1–5
+PR 5 (lazy scope / numeric IDs)      ✅
+PR 6 (CRDT batch ops)                ✅
+PR 7 (component recognition)         ✅
 
-PR 7 (component recognition)         — INDEPENDENT (walker not needed for component detection)
+PR 8 (conditional scope creation)    🔴 — INDEPENDENT (uses existing LoopNode.hasReactiveItems)
 
-PR 8 (conditional scope creation)    — INDEPENDENT (uses existing LoopNode.hasReactiveItems)
-
-PR 9 (README / package.json)         — after all features land
+PR 9 (README / package.json / docs)  🔴 — after all features land
 ```
 
-PRs 5, 6, and 7 can merge in any order relative to each other and to PRs 3–4. Two parallel tracks converge: "compiler gets template cloning" and "runtime gets batch ops + lighter scopes." PR 7 (components) is the marquee user-facing feature and could be prioritized ahead of PRs 3–4 if desired — components work with `createElement` codegen; template cloning makes them faster later.
+PRs 1–7 are complete. PR 8 is the last feature PR. PR 9 absorbs deferred documentation from PRs 4, 6, and 7 (TECHNICAL.md sections for Delta Region Algebra, Batch Operations, and Component Model).
 
 ### PR 1: refactor(packages/kinetic): extract shared HTML constants ✅
 
@@ -267,7 +266,7 @@ Exploit the structural information in CRDT deltas for batched DOM operations.
 
 *Files: `regions.ts`, `regions.test.ts`, `types.ts`, `TECHNICAL.md`*
 
-### PR 7: feat(packages/kinetic): component recognition via ComponentFactory 🔴
+### PR 7: feat(packages/kinetic): component recognition via ComponentFactory ✅
 
 *Independent of PRs 1–6. Can be prioritized at any point. Components work with current `createElement` codegen; template cloning (PRs 3–4) makes them faster later.*
 
@@ -275,7 +274,7 @@ Extend element recognition to support user-defined component functions alongside
 
 **Tasks:**
 
-1. Define `ComponentFactory` type in `types.ts` that the compiler recognizes 🔴
+1. Define `ComponentFactory` type in `types.ts` that the compiler recognizes ✅
 
    ```typescript
    /** A component is a function that takes optional props + optional builder and returns an Element. */
@@ -286,16 +285,18 @@ Extend element recognition to support user-defined component functions alongside
      | (() => Element)
    ```
 
-2. In `analyze.ts`, replace the `ELEMENT_FACTORIES.has(name)` check with a two-tier detection: first check if the name is a known HTML tag (lowercase, in a set), then check if the callee's TypeScript type satisfies `ComponentFactory` via property-level type inspection (similar pattern to `isReactiveType`) 🔴
-3. Extend `ElementNode` with an optional `factorySource?: string` field instead of adding a new `ComponentNode` variant to `ChildNode`. When `factorySource` is present, the node represents a component invocation (codegen emits a function call); when absent, it's a plain HTML element (codegen emits `createElement`). This avoids the transitive effect cascade of a new `ChildNode` variant through `computeSlotKind`, `mergeNode`, `generateChild` (both codegens), `collectRequiredImports`, and `createBuilder` 🔴
-4. In DOM codegen, when `node.factorySource` is present, emit a component call as `const _node = factorySource(scope.createChild())` for prop-less components, or with a props object argument when props are present. The component returns a `Node` that gets `appendChild`-ed to the parent 🔴
-5. In HTML codegen, when `node.factorySource` is present, emit a component call the same way — the component's SSR variant returns an HTML string that gets concatenated 🔴
-6. Keep `elements.d.ts` global ambient declarations as-is — globals for HTML tags and explicit imports for components can coexist. Add `ComponentFactory` as a new export from `types.ts`. Revisit global removal later based on community preference 🔴
-7. Unit tests: PascalCase functions with `ComponentFactory` type are recognized as components; lowercase HTML tags still work; components receive props correctly; components can contain children via builder pattern 🔴
-8. Integration tests: compile a component definition + usage site, execute, verify DOM output 🔴
-9. Update `TECHNICAL.md` with Component Model section 🔴
+2. In `analyze.ts`, replace the `ELEMENT_FACTORIES.has(name)` check with a two-tier detection: first check if the name is a known HTML tag (lowercase, in a set), then check if the callee's TypeScript type satisfies `ComponentFactory` via property-level type inspection (similar pattern to `isReactiveType`) ✅
+3. Extend `ElementNode` with an optional `factorySource?: string` field instead of adding a new `ComponentNode` variant to `ChildNode`. When `factorySource` is present, the node represents a component invocation (codegen emits a function call); when absent, it's a plain HTML element (codegen emits `createElement`). This avoids the transitive effect cascade of a new `ChildNode` variant through `computeSlotKind`, `mergeNode`, `generateChild` (both codegens), `collectRequiredImports`, and `createBuilder` ✅
+4. In DOM codegen, when `node.factorySource` is present, emit a component call as `const _node = factorySource(props)(scope.createChild())` for prop components, or `factorySource()(scope.createChild())` for prop-less components. The component returns a `Node` that gets `appendChild`-ed to the parent ✅
+5. In HTML codegen, when `node.factorySource` is present, emit a component call the same way — the component's SSR variant returns an HTML string that gets concatenated 🔴 (deferred: SSR components not yet needed)
+6. Keep `elements.d.ts` global ambient declarations as-is — globals for HTML tags and explicit imports for components can coexist. Add `ComponentFactory` as a new export from `types.ts`. Revisit global removal later based on community preference ✅
+7. Unit tests: functions with `ComponentFactory` type are recognized as components; lowercase HTML tags still work; components receive props correctly ✅
+8. Integration tests: compile a component definition + usage site — component calls detected in findBuilderCalls ✅
+9. Update `TECHNICAL.md` with Component Model section 🔴 (deferred to PR 9)
 
-*Files: `types.ts`, `ir.ts`, `analyze.ts`, `reactive-detection.ts`, `codegen/dom.ts`, `codegen/html.ts`, `TECHNICAL.md`*
+**Status:** Complete. Components are recognized via `isComponentFactoryType()` type detection. `ElementNode.factorySource` distinguishes components from HTML elements. DOM codegen emits `factorySource(props)(scope.createChild())`. Builder callback passing deferred to future enhancement. All 746 tests pass.
+
+*Files: `types.ts`, `ir.ts`, `analyze.ts`, `reactive-detection.ts`, `codegen/dom.ts`*
 
 ### PR 8: perf(packages/kinetic): conditional scope creation for static list items 🔴
 
@@ -314,14 +315,17 @@ Skip scope allocation for list items that have no reactive content.
 
 *Files: `regions.ts`, `types.ts`, `codegen/dom.ts`*
 
-### PR 9: docs(packages/kinetic): README and package.json updates 🔴
+### PR 9: docs(packages/kinetic): README, TECHNICAL.md, and package.json updates 🔴
 
 *After all feature PRs have landed.*
 
 1. Update `README.md`: document `ComponentFactory`, update feature table, add component examples 🔴
 2. Update `package.json` exports if subpath changes are needed for component type imports 🔴
+3. Add Component Model section to `TECHNICAL.md` (deferred from PR 7) 🔴
+4. Add Delta Region Algebra section to `TECHNICAL.md` (deferred from PR 4/6) 🔴
+5. Document `Scope.id` type change (`string` → `number`) as a migration note 🔴
 
-*Files: `README.md`, `package.json`*
+*Files: `README.md`, `package.json`, `TECHNICAL.md`*
 
 ### Future Optimization: List Item Template Cloning
 
@@ -334,6 +338,18 @@ Currently, list region `create` callbacks generate items dynamically at runtime 
 3. Generate `create` callbacks that clone item templates instead of createElement chains
 
 This would provide the same 3-10× speedup for list item creation that root templates now enjoy. Blocked on: detecting when item structure is fully static (no conditional branches or nested loops in item body).
+
+### Future Enhancement: Component Builder Callbacks
+
+*Not in current scope. Document for future consideration.*
+
+Currently, components only accept props. The `ComponentFactory` type supports builder callbacks (`(props, builder) => Element`), but the compiler does not yet pass children as a builder callback at the usage site. Implementing this requires:
+
+1. Detecting when a component call has children (builder argument)
+2. Compiling the children IR into a nested function that the component receives
+3. The component calls the builder to render children into its own DOM tree
+
+This is the difference between `Card({ title: "Hi" })` (works today) and `Card({ title: "Hi" }, () => { p("body") })` (children passed as builder — not yet wired).
 
 ### PR Stack Rationale
 
@@ -571,6 +587,58 @@ const _tmpl = document.createElement("template"); _tmpl.innerHTML = "<div></div>
 
 **Event Handlers Require Explicit Wiring** — Template cloning extracts static HTML, but event handlers can't be serialized into templates. The codegen handles root element handlers by iterating `node.eventHandlers` after cloning and calling `generateEventHandler()`.
 
+### Implementation Learnings (PRs 5-7)
+
+**Scope.id is now a number** — `Scope.id`, `ScopeInterface.id`, and `ScopeDisposedError.scopeId` all changed from `string` to `number`. Any code comparing scope IDs to string values like `"scope-1"` will fail silently (loose equality) or obviously (strict equality). Tests should use numeric assertions: `expect(scope.id).toBe(1)`.
+
+**SyntaxKind values differ across TypeScript versions** — Never hardcode enum values like `78` for `SyntaxKind.CallExpression`. In the ts-morph version used here, `CallExpression = 213`. Always `import { SyntaxKind } from "ts-morph"` and use the named constant.
+
+**isComponentFactoryType cannot use kinetic's own imports in tests** — In-memory test files can't resolve `@loro-extended/kinetic` imports without adding the full package to the test project. Tests must inline the type definitions (`type Element = () => Node; type ComponentFactory<P = {}> = (props: P) => Element`).
+
+**createElement factory now has 7 parameters** — The `createElement()` IR factory gained an optional 7th parameter `factorySource?: string`. Existing callers (6 args) are unaffected. The parameter order is: `tag, attributes, eventHandlers, bindings, children, span, factorySource`.
+
+**planDeltaOps behavior changed for count > 1** — Previously, `{ delete: 2 }` produced two individual `{ kind: "delete", index: 0 }` ops. Now it produces one `{ kind: "batch-delete", index: 0, count: 2 }`. Any test or code that expected N individual ops for a count-N delta must be updated.
+
+**Range API for batch delete is O(1)** — `document.createRange()` + `setStartBefore` + `setEndAfter` + `deleteContents()` removes an arbitrary contiguous DOM range in one browser operation, regardless of node count. Significantly faster than N individual `removeChild` calls.
+
+### Post-PR 7 Correctness Fixes
+
+A deep-dive code review after PR 7 revealed four correctness gaps in the template-cloning pipeline. All four were fixed, bringing the test count from 746 to 754.
+
+#### 1. Event Handler Holes Were Silently Dropped
+
+**Problem:** `TemplateHole` stored `eventName` but not `handlerSource`. The `generateHoleSetup` case for `"event"` holes was a no-op with a TODO comment ("this will be handled by falling back to createElement path"), but `canUseTemplateCloning()` always returned `true` — no fallback ever happened. Any event handler on a non-root child element was silently ignored.
+
+**Fix:** Added `handlerSource?: string` to `TemplateHole`. The template extractor now stores `event.handler.handlerSource` alongside `event.handler.event`. The `generateHoleSetup` event case emits `nodeRef.addEventListener(eventName, handlerSource)`.
+
+**Files:** `ir.ts` (TemplateHole), `template.ts` (extraction), `codegen/dom.ts` (hole setup)
+
+#### 2. Dynamic Text Holes Produced No DOM Node
+
+**Problem:** For dynamic text content, `extractTemplate()` recorded a hole but emitted nothing into the HTML string. For `<p>Hello {reactive} world</p>`, the template produced `<p>Hello  world</p>` — the browser merges adjacent text into one Text node, so the walker couldn't reach the expected child index. Even for single-dynamic-child cases like `<p>{reactive}</p>`, the `<p>` would have zero children in the clone, and `_holes[N].textContent` would set the element's text content (working accidentally but semantically wrong for mixed content).
+
+**Fix:** Dynamic text holes now emit `<!---->` (an empty comment) as a positional placeholder. For `<p>Hello {reactive} world</p>`, the template produces `<p>Hello <!----> world</p>`, preserving three distinct child nodes. The `generateHoleSetup` text case now replaces the comment with a real Text node at runtime (`document.createTextNode("") + parentNode.replaceChild()`), then wires subscriptions to that text node.
+
+This matches Solid.js's approach, which uses `<!>` comment placeholders for the same reason.
+
+**Files:** `template.ts` (extraction), `codegen/dom.ts` (hole setup), `template.test.ts` (updated expectations)
+
+#### 3. Component Elements Were Serialized as Invalid HTML
+
+**Problem:** The walker treated component `ElementNode`s (those with `factorySource`) identically to HTML elements — yielding `elementStart`/`elementEnd` events with the component name as the tag. Template extraction would produce `<Avatar src="photo.jpg"></Avatar>`, which the browser parses as an unknown element, not a component invocation. The generated DOM would be wrong.
+
+**Fix:** Added `ComponentPlaceholderEvent` to the walker and `"component"` to `TemplateHoleKind`. When `walkElement()` encounters a node with `factorySource`, it yields a single `componentPlaceholder` event instead of walking the component as HTML. The template extractor emits `<!---->` and records a `{ kind: "component", elementNode }` hole. The `generateHoleSetup` component case uses `generateElement()` (which already handles `factorySource` correctly) to instantiate the component, then replaces the placeholder comment.
+
+**Files:** `walk.ts` (ComponentPlaceholderEvent), `ir.ts` (TemplateHoleKind, TemplateHole.elementNode), `template.ts` (extraction), `codegen/dom.ts` (hole setup)
+
+#### 4. `new Scope("test")` Type Errors in Integration Tests
+
+**Problem:** PR 5 changed `Scope.id` from `string` to `number`, but 27 call sites in `integration.test.ts` still passed `"test"` as the constructor argument. TypeScript reported errors but tests passed at runtime because JavaScript doesn't enforce types. This was a type regression.
+
+**Fix:** Changed all 27 occurrences of `new Scope("test")` to `new Scope()` (auto-generated numeric ID). Zero TypeScript diagnostics remain.
+
+**Files:** `integration.test.ts`
+
 ## Changeset
 
 This plan constitutes a **minor** version bump for `@loro-extended/kinetic`:
@@ -579,4 +647,5 @@ This plan constitutes a **minor** version bump for `@loro-extended/kinetic`:
 - **New feature**: User-defined component support via `ComponentFactory` type
 - **New feature**: CRDT-aware batch DOM operations
 - **Performance**: Lazy scopes, numeric IDs, reduced per-item overhead
-- No breaking changes (global element declarations retained)
+- **Semi-breaking**: `Scope.id` changed from `string` to `number` (internal API, not user-facing)
+- Global element declarations retained (no breaking changes to public API)

@@ -168,6 +168,35 @@ describe("extractTemplate", () => {
         path: [0],
         contentNode: reactive,
       })
+      // Dynamic text emits a comment placeholder so the cloned DOM has a
+      // real node at this child position for the walker to grab
+      expect(template.html).toBe("<p><!----></p>")
+    })
+
+    it("should emit comment placeholder for each dynamic text in mixed content", () => {
+      const reactive1 = makeReactiveContent()
+      const reactive2 = {
+        kind: "content" as const,
+        source: "doc.count.get()",
+        bindingTime: "reactive" as const,
+        dependencies: [{ source: "doc.count", deltaKind: "replace" as const }],
+        span: makeSpan(),
+      }
+      // "Hello " + reactive1 + " and " + reactive2 + "!"
+      const node = makeBuilder("p", [
+        makeLiteral("Hello "),
+        reactive1,
+        makeLiteral(" and "),
+        reactive2,
+        makeLiteral("!"),
+      ])
+      const template = extractTemplate(node)
+
+      // Each dynamic text gets its own comment placeholder
+      expect(template.html).toBe("<p>Hello <!----> and <!---->!</p>")
+      expect(template.holes).toHaveLength(2)
+      expect(template.holes[0]).toMatchObject({ kind: "text", path: [1] })
+      expect(template.holes[1]).toMatchObject({ kind: "text", path: [3] })
     })
 
     it("should record hole for dynamic attribute", () => {
@@ -202,6 +231,48 @@ describe("extractTemplate", () => {
       })
       // No HTML output for events
       expect(template.html).toBe("<button></button>")
+    })
+
+    it("should store handlerSource on event holes", () => {
+      const handler = {
+        event: "input",
+        handlerSource: "(e) => doc.title.insert(0, e.target.value)",
+        span: makeSpan(),
+      }
+      const node = makeBuilder("input", [], [], [handler])
+      const template = extractTemplate(node)
+
+      expect(template.holes).toHaveLength(1)
+      expect(template.holes[0]).toMatchObject({
+        kind: "event",
+        eventName: "input",
+        handlerSource: "(e) => doc.title.insert(0, e.target.value)",
+        path: [],
+      })
+    })
+
+    it("should store handlerSource on child element event holes", () => {
+      const handler = {
+        event: "click",
+        handlerSource: "handleClick",
+        span: makeSpan(),
+      }
+      const button = createElement(
+        "button",
+        [],
+        [handler],
+        [],
+        [createLiteral("Click me", makeSpan())],
+        makeSpan(),
+      )
+      const node = makeBuilder("div", [button])
+      const template = extractTemplate(node)
+
+      const eventHole = template.holes.find(h => h.kind === "event")
+      expect(eventHole).toBeDefined()
+      expect(eventHole!.handlerSource).toBe("handleClick")
+      expect(eventHole!.eventName).toBe("click")
+      expect(eventHole!.path).toEqual([0])
     })
 
     it("should record hole for two-way binding", () => {
@@ -362,11 +433,127 @@ describe("extractTemplate", () => {
       ])
       const template = extractTemplate(node)
 
-      expect(template.html).toBe("<p>Hello, !</p>")
+      expect(template.html).toBe("<p>Hello, <!---->!</p>")
       expect(template.holes).toHaveLength(1)
       expect(template.holes[0]).toMatchObject({
         kind: "text",
         path: [1],
+      })
+    })
+
+    it("should preserve correct child indices with comment placeholders", () => {
+      // "A" + dynamic + "B" + dynamic + "C"
+      // Children: [0]=text "A", [1]=comment, [2]=text "B", [3]=comment, [4]=text "C"
+      const reactive1 = makeReactiveContent()
+      const reactive2 = {
+        kind: "content" as const,
+        source: "doc.count.get()",
+        bindingTime: "reactive" as const,
+        dependencies: [{ source: "doc.count", deltaKind: "replace" as const }],
+        span: makeSpan(),
+      }
+      const node = makeBuilder("p", [
+        makeLiteral("A"),
+        reactive1,
+        makeLiteral("B"),
+        reactive2,
+        makeLiteral("C"),
+      ])
+      const template = extractTemplate(node)
+
+      expect(template.html).toBe("<p>A<!---->B<!---->C</p>")
+      // The two dynamic holes should reference correct child indices
+      expect(template.holes[0]).toMatchObject({ kind: "text", path: [1] })
+      expect(template.holes[1]).toMatchObject({ kind: "text", path: [3] })
+    })
+
+    it("should handle single dynamic text child (no siblings)", () => {
+      const reactive = makeReactiveContent()
+      const node = makeBuilder("span", [reactive])
+      const template = extractTemplate(node)
+
+      expect(template.html).toBe("<span><!----></span>")
+      expect(template.holes).toHaveLength(1)
+      expect(template.holes[0]).toMatchObject({ kind: "text", path: [0] })
+    })
+
+    // ===========================================================================
+    // Component Placeholder Tests
+    // ===========================================================================
+
+    describe("component placeholders", () => {
+      it("should emit comment placeholder for component elements", () => {
+        const component = createElement(
+          "Avatar",
+          [{ name: "src", value: makeLiteral("photo.jpg") }],
+          [],
+          [],
+          [],
+          makeSpan(),
+          "Avatar", // factorySource makes it a component
+        )
+        const node = makeBuilder("div", [component])
+        const template = extractTemplate(node)
+
+        // Component should NOT be serialized as <Avatar> — just a placeholder
+        expect(template.html).toBe("<div><!----></div>")
+        expect(template.html).not.toContain("<Avatar")
+        expect(template.holes).toHaveLength(1)
+        expect(template.holes[0]).toMatchObject({
+          kind: "component",
+          path: [0],
+        })
+        expect(template.holes[0].elementNode).toBeDefined()
+        expect(template.holes[0].elementNode!.factorySource).toBe("Avatar")
+      })
+
+      it("should handle component between static elements", () => {
+        const component = createElement(
+          "Separator",
+          [],
+          [],
+          [],
+          [],
+          makeSpan(),
+          "Separator",
+        )
+        const node = makeBuilder("div", [
+          makeElement("h1", [makeLiteral("Title")]),
+          component,
+          makeElement("p", [makeLiteral("Content")]),
+        ])
+        const template = extractTemplate(node)
+
+        expect(template.html).toBe(
+          "<div><h1>Title</h1><!----><p>Content</p></div>",
+        )
+        expect(template.holes).toHaveLength(1)
+        expect(template.holes[0]).toMatchObject({
+          kind: "component",
+          path: [1],
+        })
+      })
+
+      it("should handle component with props stored on elementNode", () => {
+        const component = createElement(
+          "Card",
+          [
+            { name: "title", value: makeLiteral("Hello") },
+            { name: "class", value: makeReactiveContent() },
+          ],
+          [],
+          [],
+          [],
+          makeSpan(),
+          "Card",
+        )
+        const node = makeBuilder("div", [component])
+        const template = extractTemplate(node)
+
+        const hole = template.holes.find(h => h.kind === "component")
+        expect(hole).toBeDefined()
+        expect(hole!.elementNode!.attributes).toHaveLength(2)
+        expect(hole!.elementNode!.tag).toBe("Card")
       })
     })
 

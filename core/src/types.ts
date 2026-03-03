@@ -140,6 +140,59 @@ export type BindFunction = <T>(
  */
 export type Builder = () => void
 
+// =============================================================================
+// Component Types
+// =============================================================================
+
+/**
+ * A component is a function that takes optional props + optional builder
+ * and returns an Element.
+ *
+ * Components are user-defined functions that encapsulate UI logic.
+ * The compiler recognizes functions typed as ComponentFactory and
+ * treats their invocations as component instantiation rather than
+ * regular function calls.
+ *
+ * Components create their own scope for subscriptions and receive
+ * a child scope from their parent when instantiated.
+ *
+ * @example
+ * ```ts
+ * // Props + builder component
+ * const Card: ComponentFactory<{ title: string }> = (props, builder) => {
+ *   return div(() => {
+ *     h2(props.title)
+ *     builder?.()
+ *   })
+ * }
+ *
+ * // Usage
+ * Card({ title: "Hello" }, () => {
+ *   p("Card content")
+ * })
+ *
+ * // Props-only component
+ * const Avatar: ComponentFactory<{ src: string }> = (props) => {
+ *   return img({ src: props.src, class: "avatar" })
+ * }
+ *
+ * // Builder-only component
+ * const Container: ComponentFactory = (builder) => {
+ *   return div({ class: "container" }, builder)
+ * }
+ *
+ * // No-args component
+ * const Spacer: ComponentFactory = () => {
+ *   return div({ class: "spacer" })
+ * }
+ * ```
+ */
+export type ComponentFactory<P extends Record<string, unknown> = {}> =
+  | ((props: P, builder: Builder) => Element)
+  | ((props: P) => Element)
+  | ((builder: Builder) => Element)
+  | (() => Element)
+
 /**
  * Element factory function signature.
  * Supports multiple calling patterns via overloads.

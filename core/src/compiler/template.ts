@@ -148,6 +148,7 @@ function processEvent(
         path: event.path,
         kind: "event",
         eventName: event.handler.event,
+        handlerSource: event.handler.handlerSource,
       })
       // No HTML output for event handlers
       return inOpeningTag
@@ -184,8 +185,12 @@ function processEvent(
         kind: "text",
         contentNode: event.node,
       })
-      // Emit empty text placeholder (will be a text node in cloned DOM)
-      // Using an empty string means no visible placeholder in HTML
+      // Emit a comment placeholder so the cloned DOM has a real node at
+      // this child position.  Without it, adjacent static text would merge
+      // into one Text node and the walker couldn't reach the correct child
+      // index (e.g. "Hello <!----> world" keeps three children instead of
+      // one merged "Hello  world" text node).
+      htmlParts.push("<!---->")
       return false
 
     case "regionPlaceholder":
@@ -207,6 +212,21 @@ function processEvent(
       // Emit comment markers for hydration compatibility
       htmlParts.push(markers.open)
       htmlParts.push(markers.close)
+      return false
+
+    case "componentPlaceholder":
+      // Close opening tag if needed
+      if (inOpeningTag) {
+        htmlParts.push(">")
+      }
+      // Record hole for component — instantiated at runtime, not serialized
+      holes.push({
+        path: event.path,
+        kind: "component",
+        elementNode: event.node,
+      })
+      // Emit a comment placeholder so the walker can grab a reference node
+      htmlParts.push("<!---->")
       return false
   }
 

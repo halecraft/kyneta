@@ -1,8 +1,9 @@
 /**
- * Reactive Type Detection
+ * Reactive Type Detection and Component Factory Detection
  *
  * This module provides functions to detect whether TypeScript types implement
- * the Reactive interface from @loro-extended/reactive.
+ * the Reactive interface from @loro-extended/reactive, and whether types
+ * implement the ComponentFactory interface from Kinetic.
  *
  * Detection uses a three-layer property-level strategy that checks whether
  * a candidate type has a property keyed by the `[REACTIVE]` unique symbol:
@@ -369,4 +370,77 @@ export function getDeltaKind(type: Type): DeltaKind {
     // Any extraction failure falls back to replace
     return "replace"
   }
+}
+
+// =============================================================================
+// Component Factory Detection
+// =============================================================================
+
+/**
+ * Check if a type is a ComponentFactory.
+ *
+ * A ComponentFactory is a function type that:
+ * - Returns an Element (a function that returns Node)
+ * - Optionally takes props (an object) as first argument
+ * - Optionally takes a Builder (a function) as second argument
+ *
+ * This detection works by checking if the type has call signatures where:
+ * 1. The return type is a function type (Element = () => Node)
+ * 2. Parameters are either empty, props object, builder function, or both
+ *
+ * @param type - The ts-morph Type to check
+ * @returns true if the type is a ComponentFactory
+ */
+export function isComponentFactoryType(type: Type): boolean {
+  // Exclude primitive types
+  const typeText = type.getText()
+  if (
+    typeText === "any" ||
+    typeText === "unknown" ||
+    typeText === "never" ||
+    typeText === "void" ||
+    typeText === "undefined" ||
+    typeText === "null"
+  ) {
+    return false
+  }
+
+  // Must be a function type (have call signatures)
+  const callSignatures = type.getCallSignatures()
+  if (callSignatures.length === 0) {
+    return false
+  }
+
+  // Check if any call signature returns an Element-like type
+  // Element = () => Node, which is a function returning Node
+  for (const sig of callSignatures) {
+    const returnType = sig.getReturnType()
+
+    // Element is a function type: () => Node
+    const returnCallSigs = returnType.getCallSignatures()
+    if (returnCallSigs.length > 0) {
+      // Check if it returns something Node-like
+      const innerReturnType = returnCallSigs[0].getReturnType()
+      const innerReturnText = innerReturnType.getText()
+
+      // Node, Element, HTMLElement, etc. or a union containing Node
+      if (
+        innerReturnText === "Node" ||
+        innerReturnText.includes("Node") ||
+        innerReturnText.includes("Element") ||
+        innerReturnText.includes("HTMLElement")
+      ) {
+        return true
+      }
+    }
+
+    // Also check if return type text contains "Element" directly
+    // This handles cases where Element type alias is used
+    const returnText = returnType.getText()
+    if (returnText === "Element" || returnText.includes("=> Node")) {
+      return true
+    }
+  }
+
+  return false
 }

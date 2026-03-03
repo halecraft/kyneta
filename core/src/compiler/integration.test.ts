@@ -98,7 +98,7 @@ function compileAndExecute(source: string): { node: Node; scope: Scope } {
   const startIndex = assignmentMatch.index + assignmentMatch[0].length
   const fnCode = code.slice(startIndex).trim()
 
-  const scope = new Scope("test")
+  const scope = new Scope()
   const node = executeGeneratedCode(fnCode, scope)
 
   return { node, scope }
@@ -547,7 +547,7 @@ describe("compiler integration - reactive expressions", () => {
       loro(doc).commit()
 
       // Create the element factory manually (simulating compiled code)
-      const scope = new Scope("test")
+      const scope = new Scope()
       const div = document.createElement("div")
       const p = document.createElement("p")
       const text = document.createTextNode("")
@@ -607,7 +607,7 @@ describe("compiler integration - reactive expressions", () => {
       loro(doc).commit()
 
       // Create element manually
-      const scope = new Scope("test")
+      const scope = new Scope()
       const div = document.createElement("div")
 
       // Initial value (0 = inactive, >0 = active)
@@ -642,7 +642,7 @@ describe("compiler integration - reactive expressions", () => {
       const doc = createTypedDoc(schema)
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const button = document.createElement("button")
       const textNode = document.createTextNode("")
       button.appendChild(textNode)
@@ -678,7 +678,7 @@ describe("compiler integration - reactive expressions", () => {
       doc.title.insert(0, "Hello")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const h1 = document.createElement("h1")
       const textNode = document.createTextNode("")
       h1.appendChild(textNode)
@@ -710,7 +710,7 @@ describe("compiler integration - reactive expressions", () => {
       const doc = createTypedDoc(schema)
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       subscribeWithValue(
@@ -745,7 +745,7 @@ describe("compiler integration - reactive expressions", () => {
       doc.lastName.insert(0, "Doe")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
 
       const firstNameNode = document.createTextNode("")
       const lastNameNode = document.createTextNode("")
@@ -804,7 +804,7 @@ describe("compiler integration - reactive expressions", () => {
       doc.lastName.insert(0, "Doe")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const fullNameNode = document.createTextNode("")
 
       // Set initial value
@@ -1013,7 +1013,7 @@ describe("compiler integration - list regions", () => {
       doc.items.push("item3")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const ul = document.createElement("ul")
 
       listRegion(
@@ -1050,7 +1050,7 @@ describe("compiler integration - list regions", () => {
       }
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
 
       listRegion(
         container,
@@ -1092,7 +1092,7 @@ describe("compiler integration - list regions", () => {
       }
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
 
       listRegion(
         container,
@@ -1132,7 +1132,7 @@ describe("compiler integration - list regions", () => {
       doc.items.push("c")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const ul = document.createElement("ul")
 
       listRegion(
@@ -1414,7 +1414,7 @@ describe("compiler integration - conditional regions", () => {
 
       // Manually construct what dissolved code would produce
       // Dissolved conditionals create element directly with ternary in subscription
-      const scope = new Scope("test")
+      const scope = new Scope()
       const container = document.createElement("div")
 
       const p = document.createElement("p")
@@ -1853,7 +1853,7 @@ describe("compiler integration - combined scenarios", () => {
       doc.items.push("Task 1")
       doc.items.push("Task 2 ⚡")
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const ul = document.createElement("ul")
 
       // Manually construct what compiled code would generate
@@ -1888,7 +1888,7 @@ describe("compiler integration - combined scenarios", () => {
       const doc = createTypedDoc(schema)
       doc.title.insert(0, "Initial Title")
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const container = document.createElement("div")
 
       // Title element with reactive text
@@ -1971,7 +1971,7 @@ describe("compiler integration - arbitrary statements", () => {
       doc.items.push("second")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const container = document.createElement("div")
 
       // Simulate what the compiled code would do - with a statement inside the create callback
@@ -2260,7 +2260,7 @@ describe("compiler integration - arbitrary statements", () => {
       doc.items.push("second")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const container = document.createElement("div")
 
       // Simulate compiled code that uses itemRef.get() pattern
@@ -2304,7 +2304,7 @@ describe("compiler integration - arbitrary statements", () => {
       doc.items.push("original")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const container = document.createElement("div")
 
       // Capture the ref for later modification
@@ -2418,7 +2418,7 @@ describe("compiler integration - text patching", () => {
       doc.title.insert(0, "Hello")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       // Track insertData calls
@@ -2457,7 +2457,7 @@ describe("compiler integration - text patching", () => {
       doc.title.insert(0, "World")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       let insertDataCalls: Array<{ offset: number; data: string }> = []
@@ -2491,7 +2491,7 @@ describe("compiler integration - text patching", () => {
       doc.title.insert(0, "Hello World")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       // Track deleteData calls
@@ -2526,7 +2526,7 @@ describe("compiler integration - text patching", () => {
       doc.title.insert(0, "Hello World")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       let deleteDataCalls: Array<{ offset: number; count: number }> = []
@@ -2560,7 +2560,7 @@ describe("compiler integration - text patching", () => {
       doc.title.insert(0, "hello")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       // Track both surgical and replacement operations
@@ -2628,7 +2628,7 @@ describe("compiler integration - text patching", () => {
       doc.name.insert(0, "Alice")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       let insertDataCalls = 0
@@ -2688,7 +2688,7 @@ describe("compiler integration - text patching", () => {
       doc.lastName.insert(0, "Doe")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       let insertDataCalls = 0
@@ -2756,7 +2756,7 @@ describe("compiler integration - text patching", () => {
       doc.content.insert(0, "abc")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       let insertDataCalls: Array<{ offset: number; data: string }> = []
@@ -2812,7 +2812,7 @@ describe("compiler integration - text patching", () => {
       doc.title.insert(0, "Hello")
       loro(doc).commit()
 
-      const scope = new Scope("test")
+      const scope = new Scope()
       const textNode = document.createTextNode("")
 
       textRegion(textNode, doc.title, scope)

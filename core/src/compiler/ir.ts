@@ -197,6 +197,7 @@ export type TemplateHoleKind =
   | "event"
   | "binding"
   | "region"
+  | "component"
 
 /**
  * A dynamic hole in a template.
@@ -224,6 +225,9 @@ export interface TemplateHole {
   /** For event holes: the event name (without "on" prefix) */
   eventName?: string
 
+  /** For event holes: the handler function source expression */
+  handlerSource?: string
+
   /** For binding holes: the binding type */
   bindingType?: "value" | "checked"
 
@@ -235,6 +239,9 @@ export interface TemplateHole {
 
   /** For text/attribute holes: the original ContentNode for codegen */
   contentNode?: ContentNode
+
+  /** For component holes: the original ElementNode with factorySource */
+  elementNode?: ElementNode
 }
 
 /**
@@ -382,6 +389,19 @@ export interface ElementNode extends IRNodeBase {
    * Computed during analysis for quick filtering.
    */
   isReactive: boolean
+
+  /**
+   * For component invocations: the source expression to call.
+   * When present, this node represents a component call (not an HTML element).
+   * The codegen emits `factorySource(scope.createChild())` instead of `createElement(tag)`.
+   *
+   * When absent (undefined), this is a regular HTML element.
+   *
+   * @example
+   * // For `MyComponent({ title: "Hi" })`, factorySource = "MyComponent"
+   * // For `div(() => {...})`, factorySource = undefined
+   */
+  factorySource?: string
 }
 
 // =============================================================================
@@ -1172,6 +1192,14 @@ export function createLiteral(value: string, span: SourceSpan): ContentValue {
 
 /**
  * Create an element node.
+ *
+ * @param tag - HTML tag name or component name
+ * @param attributes - Attributes on this element
+ * @param eventHandlers - Event handlers
+ * @param bindings - Two-way bindings
+ * @param children - Child nodes
+ * @param span - Source location
+ * @param factorySource - For components: the source expression to call
  */
 export function createElement(
   tag: string,
@@ -1180,6 +1208,7 @@ export function createElement(
   bindings: ElementBinding[],
   children: ChildNode[],
   span: SourceSpan,
+  factorySource?: string,
 ): ElementNode {
   const isReactive =
     attributes.some(attr => isReactiveContent(attr.value)) ||
@@ -1192,7 +1221,7 @@ export function createElement(
         (child.kind === "conditional" && child.subscriptionTarget !== null),
     )
 
-  return {
+  const element: ElementNode = {
     kind: "element",
     tag,
     attributes,
@@ -1202,6 +1231,12 @@ export function createElement(
     isReactive,
     span,
   }
+
+  if (factorySource !== undefined) {
+    element.factorySource = factorySource
+  }
+
+  return element
 }
 
 /**

@@ -13,7 +13,11 @@
  * @packageDocumentation
  */
 
-import { getDeltaKind, isReactiveType } from "./reactive-detection.js"
+import {
+  getDeltaKind,
+  isComponentFactoryType,
+  isReactiveType,
+} from "./reactive-detection.js"
 import {
   type ArrayBindingPattern,
   type ArrowFunction,
@@ -193,6 +197,53 @@ export const ELEMENT_FACTORIES = new Set([
   "slot",
   "noscript",
 ])
+
+/**
+ * Result of checking if a call expression is an element or component.
+ */
+interface ElementOrComponentInfo {
+  /** Whether this is a recognized element/component call */
+  isElementOrComponent: boolean
+  /** The tag/factory name */
+  name: string
+  /** Whether this is a user-defined component (vs HTML element) */
+  isComponent: boolean
+}
+
+/**
+ * Check if a call expression is to an HTML element factory or a ComponentFactory.
+ *
+ * Two-tier detection:
+ * 1. If the callee name is in ELEMENT_FACTORIES, it's an HTML element
+ * 2. Otherwise, check if the callee's type is ComponentFactory
+ *
+ * @param call - The call expression to check
+ * @returns Info about whether this is an element/component call
+ */
+function checkElementOrComponent(call: CallExpression): ElementOrComponentInfo {
+  const callee = call.getExpression()
+
+  // Must be a simple identifier for now
+  if (callee.getKind() !== SyntaxKind.Identifier) {
+    return { isElementOrComponent: false, name: "", isComponent: false }
+  }
+
+  const name = callee.getText()
+
+  // First check: HTML element factory
+  if (ELEMENT_FACTORIES.has(name)) {
+    return { isElementOrComponent: true, name, isComponent: false }
+  }
+
+  // Second check: ComponentFactory type
+  // PascalCase is a hint but not required - we rely on types
+  const calleeType = callee.getType()
+  if (isComponentFactoryType(calleeType)) {
+    return { isElementOrComponent: true, name, isComponent: true }
+  }
+
+  return { isElementOrComponent: false, name: "", isComponent: false }
+}
 
 /**
  * Event handler prop names (start with "on").
@@ -853,21 +904,27 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
  * - div({ class: "x" }, "text")  - props + children
  */
 export function analyzeElementCall(call: CallExpression): ChildNode | null {
-  // Get the function being called
-  const callee = call.getExpression()
-  if (callee.getKind() !== SyntaxKind.Identifier) {
+  // Check if this is an HTML element or component call
+  const info = checkElementOrComponent(call)
+  if (!info.isElementOrComponent) {
     return null
   }
 
-  const factoryName = callee.getText()
-  if (!ELEMENT_FACTORIES.has(factoryName)) {
-    return null
-  }
+  const factoryName = info.name
+  const isComponent = info.isComponent
 
   const args = call.getArguments() as Expression[]
   if (args.length === 0) {
-    // Empty element: div()
-    return createElement(factoryName, [], [], [], [], getSpan(call))
+    // Empty element/component: div() or MyComponent()
+    return createElement(
+      factoryName,
+      [],
+      [],
+      [],
+      [],
+      getSpan(call),
+      isComponent ? factoryName : undefined,
+    )
   }
 
   let props: AttributeNode[] = []
@@ -930,6 +987,7 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
     bindings,
     children,
     getSpan(call),
+    isComponent ? factoryName : undefined,
   )
 }
 
@@ -986,13 +1044,9 @@ export function findBuilderCalls(sourceFile: SourceFile): CallExpression[] {
   const allCalls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)
 
   for (const call of allCalls) {
-    const callee = call.getExpression()
-    if (callee.getKind() !== SyntaxKind.Identifier) {
-      continue
-    }
-
-    const name = callee.getText()
-    if (!ELEMENT_FACTORIES.has(name)) {
+    // Use two-tier detection: HTML elements OR ComponentFactory types
+    const info = checkElementOrComponent(call)
+    if (!info.isElementOrComponent) {
       continue
     }
 
@@ -1032,17 +1086,14 @@ function isNestedBuilderCall(call: CallExpression): boolean {
       current.getKind() === SyntaxKind.ArrowFunction ||
       current.getKind() === SyntaxKind.FunctionExpression
     ) {
-      // Check if its parent is a call expression to an element factory
+      // Check if its parent is a call expression to an element factory or component
       const funcParent = current.getParent()
       if (funcParent && funcParent.getKind() === SyntaxKind.CallExpression) {
         const parentCall = funcParent as CallExpression
-        const parentCallee = parentCall.getExpression()
-        if (parentCallee.getKind() === SyntaxKind.Identifier) {
-          const parentName = parentCallee.getText()
-          if (ELEMENT_FACTORIES.has(parentName)) {
-            // This call is inside a builder function of an element factory
-            return true
-          }
+        const parentInfo = checkElementOrComponent(parentCall)
+        if (parentInfo.isElementOrComponent) {
+          // This call is inside a builder function of an element factory or component
+          return true
         }
       }
     }
@@ -1056,17 +1107,16 @@ function isNestedBuilderCall(call: CallExpression): boolean {
  * Analyze a builder call and produce IR.
  *
  * This is the main entry point for analyzing a single element factory call.
+ * Supports both HTML elements and ComponentFactory-typed functions.
  */
 export function analyzeBuilder(call: CallExpression): BuilderNode | null {
-  const callee = call.getExpression()
-  if (callee.getKind() !== SyntaxKind.Identifier) {
+  // Use two-tier detection: HTML elements OR ComponentFactory types
+  const info = checkElementOrComponent(call)
+  if (!info.isElementOrComponent) {
     return null
   }
 
-  const factoryName = callee.getText()
-  if (!ELEMENT_FACTORIES.has(factoryName)) {
-    return null
-  }
+  const factoryName = info.name
 
   const args = call.getArguments()
   if (args.length === 0) {

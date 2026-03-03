@@ -5,10 +5,11 @@
  * TypeScript AST into IR nodes.
  */
 
-import { Project } from "ts-morph"
+import { Project, SyntaxKind } from "ts-morph"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
   analyzeBuilder,
+  analyzeElementCall,
   analyzeExpression,
   analyzeProps,
   detectDirectRead,
@@ -18,7 +19,10 @@ import {
   findBuilderCalls,
   isReactiveType,
 } from "./analyze.js"
-import { resolveReactiveImports } from "./reactive-detection.js"
+import {
+  isComponentFactoryType,
+  resolveReactiveImports,
+} from "./reactive-detection.js"
 import type { ContentValue } from "./ir.js"
 
 // =============================================================================
@@ -170,6 +174,133 @@ describe("ELEMENT_FACTORIES", () => {
     expect(ELEMENT_FACTORIES.has("document")).toBe(false)
     expect(ELEMENT_FACTORIES.has("window")).toBe(false)
     expect(ELEMENT_FACTORIES.has("Math")).toBe(false)
+  })
+})
+
+// =============================================================================
+// ComponentFactory Detection Tests
+// =============================================================================
+
+describe("ComponentFactory detection", () => {
+  it("should recognize a function that returns () => Node as ComponentFactory", () => {
+    const project = createProject()
+    const sourceFile = project.createSourceFile(
+      "component.ts",
+      `
+      type Element = () => Node
+      type ComponentFactory<P extends Record<string, unknown> = {}> = (props: P) => Element
+
+      const MyComponent: ComponentFactory<{ title: string }> = (props) => {
+        return () => document.createElement("div")
+      }
+      `,
+      { overwrite: true },
+    )
+
+    const myComponentDecl = sourceFile.getVariableDeclaration("MyComponent")
+    expect(myComponentDecl).toBeDefined()
+
+    const type = myComponentDecl!.getType()
+    expect(isComponentFactoryType(type)).toBe(true)
+  })
+
+  it("should not recognize regular functions as ComponentFactory", () => {
+    const project = createProject()
+    const sourceFile = project.createSourceFile(
+      "regular.ts",
+      `
+      const regularFunc = (x: number) => x * 2
+      const stringFunc = (s: string) => s.toUpperCase()
+      `,
+      { overwrite: true },
+    )
+
+    const regularDecl = sourceFile.getVariableDeclaration("regularFunc")
+    const stringDecl = sourceFile.getVariableDeclaration("stringFunc")
+
+    expect(isComponentFactoryType(regularDecl!.getType())).toBe(false)
+    expect(isComponentFactoryType(stringDecl!.getType())).toBe(false)
+  })
+
+  it("should recognize component usage in analyzeElementCall", () => {
+    const project = createProject()
+    const sourceFile = project.createSourceFile(
+      "usage.ts",
+      `
+      type Element = () => Node
+      type ComponentFactory<P extends Record<string, unknown> = {}> = (props: P) => Element
+
+      const Avatar: ComponentFactory<{ src: string }> = (props) => {
+        return () => document.createElement("img")
+      }
+
+      const result = Avatar({ src: "photo.jpg" })
+      `,
+      { overwrite: true },
+    )
+
+    // Find the Avatar call
+    const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)
+    const avatarCall = calls.find(c => c.getExpression().getText() === "Avatar")
+    expect(avatarCall).toBeDefined()
+
+    const ir = analyzeElementCall(avatarCall!)
+    expect(ir).not.toBeNull()
+    expect(ir?.kind).toBe("element")
+    if (ir?.kind === "element") {
+      expect(ir.tag).toBe("Avatar")
+      expect(ir.factorySource).toBe("Avatar")
+      expect(ir.attributes.length).toBe(1)
+      expect(ir.attributes[0].name).toBe("src")
+    }
+  })
+
+  it("should still recognize HTML elements without factorySource", () => {
+    const project = createProject()
+    // Use the shared project helper that has ambient declarations
+    const sourceFile = createSourceFile(
+      project,
+      `
+      declare function div(props?: any, ...children: any[]): any
+      const result = div({ class: "container" })
+      `,
+    )
+
+    const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)
+    const divCall = calls.find(c => c.getExpression().getText() === "div")
+    expect(divCall).toBeDefined()
+
+    const ir = analyzeElementCall(divCall!)
+    expect(ir).not.toBeNull()
+    expect(ir?.kind).toBe("element")
+    if (ir?.kind === "element") {
+      expect(ir.tag).toBe("div")
+      expect(ir.factorySource).toBeUndefined()
+    }
+  })
+
+  it("should include component calls in findBuilderCalls", () => {
+    const project = createProject()
+    const sourceFile = project.createSourceFile(
+      "builder.ts",
+      `
+      type Element = () => Node
+      type ComponentFactory<P extends Record<string, unknown> = {}> = (props: P) => Element
+
+      const Card: ComponentFactory<{ title: string }> = (props) => {
+        return () => document.createElement("div")
+      }
+
+      const app = Card({ title: "Test" }, () => {
+        // builder content
+      })
+      `,
+      { overwrite: true },
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    expect(calls.length).toBe(1)
+    expect(calls[0].getExpression().getText()).toBe("Card")
   })
 })
 
