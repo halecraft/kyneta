@@ -263,6 +263,8 @@ export interface ListRegionHandlers<T> {
 export type ListRegionOp<T> =
   | { kind: "insert"; index: number; item: T }
   | { kind: "delete"; index: number }
+  | { kind: "batch-insert"; index: number; count: number }
+  | { kind: "batch-delete"; index: number; count: number }
 
 // =============================================================================
 // Insertion Result (Trackability Invariant)

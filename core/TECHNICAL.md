@@ -877,3 +877,71 @@ interface CodegenResult {
 ```
 
 The `transformSourceInPlace` function collects all `moduleDeclarations` and inserts them at the top of the transformed file.
+
+## Batch List Operations
+
+List regions exploit CRDT delta structure to perform batch DOM operations, reducing O(N) individual operations to O(1) batch operations for contiguous inserts/deletes.
+
+### Batch Operation Types
+
+The `ListRegionOp` type includes batch variants:
+
+```typescript
+type ListRegionOp<T> =
+  | { kind: "insert"; index: number; item: T }
+  | { kind: "delete"; index: number }
+  | { kind: "batch-insert"; index: number; count: number }
+  | { kind: "batch-delete"; index: number; count: number }
+```
+
+Note: `batch-insert` carries `count`, not `items: T[]`. The executor calls `listRef.get(index + i)` during execution. This keeps the planning function pure (no item fetching) and avoids allocating a large intermediate array for big batches.
+
+### Planning: Emit Batch Ops for Contiguous Operations
+
+The `planDeltaOps` function emits batch operations when count > 1:
+
+```typescript
+// For delta { delete: 50 } → single batch-delete
+ops.push({ kind: "batch-delete", index, count: 50 })
+
+// For delta { insert: 100 } → single batch-insert  
+ops.push({ kind: "batch-insert", index, count: 100 })
+
+// For delta { delete: 1 } or { insert: 1 } → individual ops
+ops.push({ kind: "delete", index })
+ops.push({ kind: "insert", index, item })
+```
+
+### Execution: O(1) DOM Operations
+
+**Batch Insert** uses DocumentFragment:
+```typescript
+// Create all items, collect into fragment
+const fragment = document.createDocumentFragment()
+for (let i = 0; i < op.count; i++) {
+  const item = listRef.get(op.index + i)
+  const node = handlers.create(item, op.index + i)
+  fragment.appendChild(node)
+}
+// Single DOM insertion
+parent.insertBefore(fragment, referenceNode)
+```
+
+**Batch Delete** uses Range API:
+```typescript
+const range = document.createRange()
+range.setStartBefore(startSlot.node)
+range.setEndAfter(endSlot.node)
+// Single DOM operation removes all content
+range.deleteContents()
+```
+
+### Performance Characteristics
+
+| Operation | Without Batching | With Batching |
+|-----------|------------------|---------------|
+| Insert 100 items | 100 `insertBefore` calls | 1 `insertBefore` call |
+| Delete 50 items | 50 `removeChild` calls | 1 `deleteContents` call |
+| State updates | 100 `splice` calls | 1 `splice` call |
+
+This is especially valuable for CRDT synchronization where remote peers may send large batches of changes.

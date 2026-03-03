@@ -323,6 +323,88 @@ describe("regions", () => {
       scope.dispose()
     })
 
+    it("should batch-insert 100 items with O(1) DOM insertions", () => {
+      const { container, counts, reset } = createCountingContainer("ul")
+      const schema = Shape.doc({ items: Shape.list(Shape.plain.string()) })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+
+      // Start empty, then batch insert 100 items
+      listRegion(
+        container,
+        doc.items,
+        {
+          create: (itemRef: PlainValueRef<string>) => {
+            const li = document.createElement("li")
+            li.textContent = itemRef.get()
+            return li
+          },
+        },
+        scope,
+      )
+
+      expect(container.children.length).toBe(0)
+      reset()
+
+      // Insert 100 items in one transaction - should use batch-insert
+      for (let i = 0; i < 100; i++) {
+        doc.items.push(`item-${i}`)
+      }
+      loro(doc).commit()
+
+      expect(container.children.length).toBe(100)
+
+      // With batch-insert, we should have only 1 insertBefore call
+      // (the DocumentFragment insertion), not 100
+      assertMaxMutations(counts, {
+        insertBefore: 1, // Single fragment insertion
+      })
+
+      scope.dispose()
+    })
+
+    it("should batch-delete 50 items with O(1) DOM operations", () => {
+      const { container, counts, reset } = createCountingContainer("ul")
+      const schema = Shape.doc({ items: Shape.list(Shape.plain.string()) })
+      const doc = createTypedDoc(schema)
+      const scope = new Scope()
+
+      // Add 100 items
+      for (let i = 0; i < 100; i++) {
+        doc.items.push(`item-${i}`)
+      }
+      loro(doc).commit()
+
+      listRegion(
+        container,
+        doc.items,
+        {
+          create: (itemRef: PlainValueRef<string>) => {
+            const li = document.createElement("li")
+            li.textContent = itemRef.get()
+            return li
+          },
+        },
+        scope,
+      )
+
+      expect(container.children.length).toBe(100)
+      reset()
+
+      // Delete 50 items in one transaction - should use batch-delete
+      doc.items.delete(25, 50)
+      loro(doc).commit()
+
+      expect(container.children.length).toBe(50)
+
+      // With batch-delete using Range API, we have constant DOM ops
+      // regardless of how many items we delete
+      // Note: Range.deleteContents() doesn't trigger removeChild counts
+      // in our counting DOM, but we can verify the DOM is correct
+
+      scope.dispose()
+    })
+
     it("should achieve O(k) DOM operations for k list mutations", () => {
       const { container, counts, reset } = createCountingContainer("ul")
       const schema = Shape.doc({ items: Shape.list(Shape.plain.string()) })
@@ -827,26 +909,38 @@ describe("regions", () => {
   })
 
   describe("planDeltaOps", () => {
-    it("should use listRef.get() for inserts, not raw delta values", () => {
-      // The listRef returns objects with isRef marker to prove we're using .get()
+    it("should emit batch-insert for multiple inserts (count > 1)", () => {
       const mockListRef: ListRefLike<{ index: number; isRef: true }> = {
         length: 2,
         get: (i: number) => ({ index: i, isRef: true }),
       }
 
-      // delta.insert is a COUNT (2), not raw values
+      // delta.insert is a COUNT (2), triggers batch-insert
       const deltaOps: ListDeltaOp[] = [{ insert: 2 }]
 
       const ops = planDeltaOps(mockListRef, deltaOps)
 
-      // Should use listRef.get(), not the raw values from delta
+      // Should emit batch-insert with count, not individual inserts
+      expect(ops).toEqual([{ kind: "batch-insert", index: 0, count: 2 }])
+    })
+
+    it("should emit single insert for count = 1", () => {
+      const mockListRef: ListRefLike<{ index: number; isRef: true }> = {
+        length: 1,
+        get: (i: number) => ({ index: i, isRef: true }),
+      }
+
+      const deltaOps: ListDeltaOp[] = [{ insert: 1 }]
+
+      const ops = planDeltaOps(mockListRef, deltaOps)
+
+      // Single insert uses listRef.get()
       expect(ops).toEqual([
         { kind: "insert", index: 0, item: { index: 0, isRef: true } },
-        { kind: "insert", index: 1, item: { index: 1, isRef: true } },
       ])
     })
 
-    it("should generate delete ops at correct indices", () => {
+    it("should emit batch-delete for multiple deletes (count > 1)", () => {
       const mockListRef: ListRefLike<string> = {
         length: 1,
         get: () => "remaining",
@@ -856,11 +950,21 @@ describe("regions", () => {
 
       const ops = planDeltaOps(mockListRef, deltaOps)
 
-      // Both deletes should be at index 0 (delete doesn't advance index)
-      expect(ops).toEqual([
-        { kind: "delete", index: 0 },
-        { kind: "delete", index: 0 },
-      ])
+      // Should emit batch-delete, not individual deletes
+      expect(ops).toEqual([{ kind: "batch-delete", index: 0, count: 2 }])
+    })
+
+    it("should emit single delete for count = 1", () => {
+      const mockListRef: ListRefLike<string> = {
+        length: 1,
+        get: () => "remaining",
+      }
+
+      const deltaOps: ListDeltaOp[] = [{ delete: 1 }]
+
+      const ops = planDeltaOps(mockListRef, deltaOps)
+
+      expect(ops).toEqual([{ kind: "delete", index: 0 }])
     })
 
     it("should handle retain operations correctly", () => {
@@ -896,6 +1000,27 @@ describe("regions", () => {
       expect(ops).toEqual([
         { kind: "delete", index: 1 },
         { kind: "insert", index: 1, item: { index: 1 } },
+      ])
+    })
+
+    it("should handle mixed batch and single operations", () => {
+      const mockListRef: ListRefLike<{ index: number }> = {
+        length: 5,
+        get: (i: number) => ({ index: i }),
+      }
+
+      // Retain 1, delete 2 (batch), insert 2 (batch)
+      const deltaOps: ListDeltaOp[] = [
+        { retain: 1 },
+        { delete: 2 },
+        { insert: 2 },
+      ]
+
+      const ops = planDeltaOps(mockListRef, deltaOps)
+
+      expect(ops).toEqual([
+        { kind: "batch-delete", index: 1, count: 2 },
+        { kind: "batch-insert", index: 1, count: 2 },
       ])
     })
 

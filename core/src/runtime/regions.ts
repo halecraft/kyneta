@@ -257,6 +257,10 @@ export function planInitialRender<T>(
  * Converts Kinetic's ListDeltaOp[] into ListRegionOp[] for DOM manipulation.
  * For inserts, it uses `listRef.get(index)` to obtain refs (not raw values).
  *
+ * Emits batch operations when count > 1 for better DOM performance:
+ * - batch-insert: One DocumentFragment insertion instead of N insertBefore calls
+ * - batch-delete: One Range.deleteContents() instead of N removeChild calls
+ *
  * @param listRef - The list ref (already updated by the source)
  * @param deltaOps - The list delta operations from a ReactiveDelta
  * @returns Array of operations to apply
@@ -275,22 +279,26 @@ export function planDeltaOps<T>(
       // Skip over retained items
       index += delta.retain
     } else if ("delete" in delta) {
-      // Delete items at current index
-      // Note: We generate delete ops in order, but execution must
-      // delete from the same index repeatedly (not advancing)
-      for (let i = 0; i < delta.delete; i++) {
+      const deleteCount = delta.delete
+      if (deleteCount > 1) {
+        // Batch delete: one Range operation instead of N removeChild calls
+        ops.push({ kind: "batch-delete", index, count: deleteCount })
+      } else {
+        // Single delete
         ops.push({ kind: "delete", index })
       }
       // Don't advance index - next op is at same position
     } else if ("insert" in delta) {
-      // Insert items at current index
-      // IMPORTANT: Use listRef.get() to get refs, NOT raw values
-      // delta.insert is a COUNT, not an array of values
       const insertCount = delta.insert
-      for (let i = 0; i < insertCount; i++) {
-        const item = listRef.get(index + i)
+      if (insertCount > 1) {
+        // Batch insert: one DocumentFragment insertion instead of N insertBefore calls
+        // Note: batch-insert carries count, not items. Executor calls listRef.get()
+        ops.push({ kind: "batch-insert", index, count: insertCount })
+      } else {
+        // Single insert: use listRef.get() to get ref
+        const item = listRef.get(index)
         if (item !== undefined) {
-          ops.push({ kind: "insert", index: index + i, item })
+          ops.push({ kind: "insert", index, item })
         }
       }
       index += insertCount
@@ -358,6 +366,97 @@ function executeOp<T>(
     // Update state
     state.slots.splice(op.index, 1)
     state.scopes.splice(op.index, 1)
+  } else if (op.kind === "batch-insert") {
+    // Batch insert: create all items, collect into DocumentFragment, single DOM insertion
+    const fragment = document.createDocumentFragment()
+    const newSlots: Slot[] = []
+    const newScopes: Scope[] = []
+
+    for (let i = 0; i < op.count; i++) {
+      const item = state.listRef.get(op.index + i)
+      if (item === undefined) continue
+
+      const itemScope = state.parentScope.createChild()
+      const node = handlers.create(item, op.index + i)
+
+      // For batch insert, we always use single-node slots within the fragment
+      // The fragment itself handles the batching
+      if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+        // Fragment returned by handler - extract its children
+        const child = node.firstChild
+        if (child && node.childNodes.length === 1) {
+          fragment.appendChild(node) // Moves the child
+          newSlots.push({ kind: "single", node: child })
+        } else if (node.childNodes.length > 1) {
+          // Multi-child fragment - need range markers
+          const startMarker = document.createComment("kinetic:item")
+          const endMarker = document.createComment("/kinetic:item")
+          fragment.appendChild(startMarker)
+          fragment.appendChild(node) // Moves all children
+          fragment.appendChild(endMarker)
+          newSlots.push({ kind: "range", startMarker, endMarker })
+        }
+      } else {
+        fragment.appendChild(node)
+        newSlots.push({ kind: "single", node })
+      }
+      newScopes.push(itemScope)
+    }
+
+    // Single DOM insertion for all items
+    const existingResult = state.slots[op.index]
+    const referenceNode = existingResult
+      ? existingResult.kind === "single"
+        ? existingResult.node
+        : existingResult.startMarker
+      : null
+    parent.insertBefore(fragment, referenceNode)
+
+    // Update state with single splice
+    state.slots.splice(op.index, 0, ...newSlots)
+    state.scopes.splice(op.index, 0, ...newScopes)
+  } else if (op.kind === "batch-delete") {
+    // Batch delete: use Range API for contiguous slot removal
+    const startIndex = op.index
+    const endIndex = op.index + op.count - 1
+
+    // Get the range boundaries from slots
+    const startSlot = state.slots[startIndex]
+    const endSlot = state.slots[endIndex]
+
+    if (startSlot && endSlot) {
+      // Use Range API for efficient batch removal
+      const range = document.createRange()
+
+      // Set start before the first slot
+      if (startSlot.kind === "single") {
+        range.setStartBefore(startSlot.node)
+      } else {
+        range.setStartBefore(startSlot.startMarker)
+      }
+
+      // Set end after the last slot
+      if (endSlot.kind === "single") {
+        range.setEndAfter(endSlot.node)
+      } else {
+        range.setEndAfter(endSlot.endMarker)
+      }
+
+      // Single DOM operation to delete all content
+      range.deleteContents()
+    }
+
+    // Dispose all scopes in the range
+    for (let i = 0; i < op.count; i++) {
+      const scope = state.scopes[op.index + i]
+      if (scope) {
+        scope.dispose()
+      }
+    }
+
+    // Update state with single splice
+    state.slots.splice(op.index, op.count)
+    state.scopes.splice(op.index, op.count)
   }
 }
 

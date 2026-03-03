@@ -235,7 +235,7 @@ Reduce per-item allocation costs. Performance-only, no behavior change.
 
 *Files: `scope.ts`, `scope.test.ts`, `errors.ts`, `types.ts`*
 
-### PR 6: feat(packages/kinetic): CRDT-aware batch list operations 🔴
+### PR 6: feat(packages/kinetic): CRDT-aware batch list operations ✅
 
 *Independent of PRs 1–5. Can merge at any point.*
 
@@ -243,7 +243,7 @@ Exploit the structural information in CRDT deltas for batched DOM operations.
 
 **Tasks:**
 
-1. Add `batch-insert` and `batch-delete` op types to `ListRegionOp` 🔴
+1. Add `batch-insert` and `batch-delete` op types to `ListRegionOp` ✅
 
    ```typescript
    type ListRegionOp<T> =
@@ -255,13 +255,15 @@ Exploit the structural information in CRDT deltas for batched DOM operations.
 
    Note: `batch-insert` carries `count`, not `items: T[]`. The executor calls `listRef.get(index + i)` during execution. This keeps the planning function pure (no item fetching) and avoids allocating a large intermediate array for big batches.
 
-2. Modify `planDeltaOps` to emit batch ops for contiguous `{ insert: N }` (N > 1) and contiguous `{ delete: N }` (N > 1) 🔴
-3. In `executeOp`, handle `batch-insert` by: fetching items via `listRef.get()`, creating all items via the `create` handler, collecting into a `DocumentFragment`, and performing a single `parent.insertBefore(fragment, referenceNode)` — one DOM insertion for the entire batch 🔴
-4. In `executeOp`, handle `batch-delete` by: using `Range` API (`setStartBefore` / `setEndAfter` / `deleteContents()`) for contiguous slot removal — one DOM operation instead of N 🔴
-5. Optimize `slots.splice` for batch operations: single `splice(index, 0, ...newSlots)` for batch insert; single `splice(index, count)` for batch delete 🔴
-6. Unit tests for `planDeltaOps`: verify batch ops are emitted for contiguous operations, individual ops for non-contiguous 🔴
-7. Integration tests: insert 100 items at once via Loro transaction, verify DOM correctness and that batch code path is exercised 🔴
-8. Update `TECHNICAL.md` with Batch Operations section 🔴
+2. Modify `planDeltaOps` to emit batch ops for contiguous `{ insert: N }` (N > 1) and contiguous `{ delete: N }` (N > 1) ✅
+3. In `executeOp`, handle `batch-insert` by: fetching items via `listRef.get()`, creating all items via the `create` handler, collecting into a `DocumentFragment`, and performing a single `parent.insertBefore(fragment, referenceNode)` — one DOM insertion for the entire batch ✅
+4. In `executeOp`, handle `batch-delete` by: using `Range` API (`setStartBefore` / `setEndAfter` / `deleteContents()`) for contiguous slot removal — one DOM operation instead of N ✅
+5. Optimize `slots.splice` for batch operations: single `splice(index, 0, ...newSlots)` for batch insert; single `splice(index, count)` for batch delete ✅
+6. Unit tests for `planDeltaOps`: verify batch ops are emitted for contiguous operations, individual ops for non-contiguous ✅
+7. Integration tests: insert 100 items at once via Loro transaction, verify DOM correctness and that batch code path is exercised ✅
+8. Update `TECHNICAL.md` with Batch Operations section ✅
+
+**Status:** Complete. `planDeltaOps` emits `batch-insert`/`batch-delete` for count > 1. `executeOp` uses DocumentFragment for batch inserts and Range API for batch deletes. All 741 tests pass.
 
 *Files: `regions.ts`, `regions.test.ts`, `types.ts`, `TECHNICAL.md`*
 
