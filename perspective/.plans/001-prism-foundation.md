@@ -131,21 +131,21 @@ interface ViewChangeEvent<T> {
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         PrismDoc                            │
-│  - Manages peers, version vectors, constraint store        │
-│  - Coordinates tell/ask/solve                              │
-└─────────────────────────┬───────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                         PrismDoc                    │
+│  - Manages peers, version vectors, constraint store │
+│  - Coordinates tell/ask/solve                       │
+└─────────────────────────┬───────────────────────────┘
                           │
         ┌─────────────────┼─────────────────┐
         │                 │                 │
         ▼                 ▼                 ▼
-┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│ ConstraintStore│ │    Solver     │ │  ViewManager  │
+┌────────────────┐ ┌───────────────┐ ┌────────────────┐
+│ ConstraintStore│ │    Solver     │ │  ViewManager   │
 │ - Storage      │ │ - MapSolver   │ │ - Subscriptions│
 │ - Query by path│ │ - ListSolver  │ │ - Projections  │
 │ - Version track│ │ - TextSolver  │ │ - Diff compute │
-└───────────────┘ └───────────────┘ └───────────────┘
+└────────────────┘ └───────────────┘ └────────────────┘
 ```
 
 ## Phases and Tasks
@@ -467,7 +467,7 @@ coordinator layer. The existing `SolvedValue` type (`determinedBy`, `conflicts`,
 
 ---
 
-### Phase 6: PrismDoc Integration 🔴
+### Phase 6: PrismDoc Integration ✅
 
 Top-level document API tying everything together.
 
@@ -479,22 +479,30 @@ will introduce its own coordination layer.
 
 #### Tasks
 
-1. 🔴 **PrismDoc class** (`src/doc/prism-doc.ts`)
-   - Container management (getMap, getList, getText)
+1. ✅ **PrismDoc class** (`src/doc/prism-doc.ts`)
+   - Container management (getMap, getList, getText) with string or array paths
    - Single shared constraint store ownership
    - Peer ID and clock management
-   - Wire handles so mutations to any container are visible to all views
-   - Wire ReactiveViews' `updateStore()` and `notifyConstraintsChanged()` automatically
+   - Doc-bound handles: mutations via any handle update the shared store
+   - Fresh views on every `.view()` call see all mutations
+   - Subscription wiring: onConstraintAdded, onStateChanged, onStateChangedPrefix, onConflict
+   - Introspection and inspector access via `introspect()` and `inspector()`
 
-2. 🔴 **Sync simulation** (`src/sync/local-sync.ts`)
-   - Simulated peer-to-peer sync
-   - Delta computation and application (uses existing `exportDelta`/`importDelta`)
-   - Version vector exchange
+2. ✅ **Sync** (integrated into `src/doc/prism-doc.ts`)
+   - `exportDelta(theirVV)` / `importDelta(delta)` for delta-based sync
+   - `merge(other)` for direct store merge
+   - `syncDocs(a, b)` convenience for bidirectional delta exchange
+   - Subscriptions fire on import and merge
 
-3. 🔴 **Integration tests** (`tests/integration.test.ts`)
-   - Multi-container documents
-   - Sync between simulated peers
-   - Full convergence verification
+3. ✅ **Integration tests** (`tests/integration.test.ts`)
+   - 47 tests covering multi-container documents
+   - Sync between simulated peers (delta, merge, syncDocs)
+   - Full convergence verification (commutativity, idempotence, 3-peer)
+   - Cross-handle visibility (shared store)
+   - Container isolation
+   - Subscription wiring through PrismDoc
+   - Introspection through PrismDoc
+   - Complex scenarios: collaborative editing, offline sync, concurrent list edits
 
 #### Tests
 - Multi-peer sync converges
@@ -801,9 +809,26 @@ Design decisions:
 - Conflict tracking per path (detected when losers appear, resolved when gone)
 - Inspector provides both programmatic and human-readable output
 
-### Next Steps
+### Phase 6 Complete ✅
 
-1. Implement PrismDoc integration (Phase 6)
+PrismDoc integration implemented:
+
+- **476 tests passing** total (47 new integration tests)
+- PrismDoc owns single shared constraint store, coordinates all access
+- Doc-bound handles (DocMapHandle, DocListHandle, DocTextHandle) share store
+- Mutations via any handle immediately visible through any view
+- Subscription wiring: callbacks fire on local mutation, import, and merge
+- Sync via delta export/import and direct merge
+- `syncDocs(a, b)` convenience for bidirectional sync
+- Introspection and inspector accessible through PrismDoc
+- Integration tests cover: multi-container, 3-peer convergence,
+  offline sync, concurrent list edits with deletes, subscription wiring
+
+### All Phases Complete 🎉
+
+The Prism Foundation Plan (001) is fully implemented. All six phases
+are complete with 476 passing tests covering correctness, Loro
+equivalence, and end-to-end integration.
 
 ### Research Completed
 

@@ -1938,3 +1938,25 @@ When constraints are replicated data:
 │   Solver (internal or external)     │  ← This can be anywhere
 └─────────────────────────────────────┘
 ```
+
+---
+
+1. Causal retraction preserves the semilattice.** Retractions are constraints, not removals. The constraint set still only grows. The Active set (what the solver sees) is a deterministic function of the full set. Convergence is preserved end-to-end.
+
+2. **Dominance has a unique fixed point.** The retraction DAG is acyclic (causality guarantees this). Dominance is computed by topological traversal. Undo/redo falls out of parity in retraction chains.
+
+3. **The solver is unchanged by retraction.** Active(C) is a preprocessing step. The solver never sees retractions. Separation of concerns: retraction logic is shared infrastructure, solvers are domain-specific.
+
+4. **Compound constraints decompose into structural + value.** A `seq_element` bundles positioning (structural) and content (value). Decomposing them means tombstones disappear — deletion is just retraction of the value constraint. The ordering tree is immutable; only visibility changes.
+
+5. **Map and Sequence are the same underlying structure.** Both are nodes with child edges. The difference is whether edges carry **causal binding** (Sequence: each edge encodes its birth context, always unique, never conflicts) or are **context-free** (Map: edges target user-named slots, can conflict).
+
+6. **A CCS document is a monotonically growing DAG of typed, causally-ordered events.** "Document nodes" and "constraints" are the same kind of thing — events referencing earlier events. The document tree is a projection. The DAG is the truth.
+
+7. **CCS supports a relational algebra at two levels.** Level 1: queries over the event DAG (history, causality, authorship). Level 2: queries over the projected state (the document). The `determined_by` bridge connects them. Both levels are incrementally maintainable.
+
+8. **CCS is naturally expressed as stratified Datalog.** Constraint-events are EDB facts. The solver is IDB rules. Projected state is the minimal model. Semi-naive evaluation gives incremental maintenance. If solver rules are stored as constraint-events, the solver itself becomes replicated, retractable, evolvable data.
+
+9. **CALM validates the design.** Monotonic parts (constraint union, the grow-only DAG) are coordination-free. Non-monotonic parts (retraction, LWW aggregation) require stratification — which is exactly the layered architecture we arrived at.
+
+10. **CCS is the fusion of two lineages.** CRDT insight: convergence is set union on a semilattice. Dedalus/CALM insight: distributed programs are Datalog with time. The constraint-event DAG is simultaneously the CRDT state, the Datalog EDB, and the replication protocol.

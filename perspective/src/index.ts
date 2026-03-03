@@ -291,3 +291,14 @@ export {
 	summarizeStore,
 	exportStoreJSON,
 } from "./introspection/inspector.js";
+
+// PrismDoc
+export type {
+	DocMapHandle,
+	DocListHandle,
+	DocTextHandle,
+	PrismDoc,
+	PrismDocConfig,
+} from "./doc/prism-doc.js";
+
+export { createPrismDoc, syncDocs } from "./doc/prism-doc.js";

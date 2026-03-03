@@ -48,43 +48,55 @@ From Concurrent Constraint Programming (CCP):
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                           PrismDoc                              │
-│  - Peer identity and clock management                          │
-│  - Container registry                                           │
-│  - Sync coordination                                            │
+│  - Single shared constraint store ownership                    │
+│  - Peer identity and clock management (counter, lamport)       │
+│  - Doc-bound handle creation (getMap, getList, getText)        │
+│  - Sync coordination (exportDelta, importDelta, merge)         │
+│  - Wires SubscriptionManager automatically on mutations        │
 └────────────────────────────────┬────────────────────────────────┘
                                  │
-         ┌───────────────────────┼───────────────────────┐
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ ConstraintStore │    │     Solvers     │    │   ViewManager   │
-│                 │    │                 │    │                 │
-│ - Storage       │    │ - MapSolver     │    │ - Subscriptions │
-│ - Indexing      │    │ - ListSolver    │    │ - Diff compute  │
-│ - VV tracking   │    │ - TextSolver    │    │ - Caching       │
-│ - Delta export  │    │                 │    │                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┴───────────────────────┘
+       ┌─────────────────────────┼─────────────────────────┐
+       │                         │                         │
+       ▼                         ▼                         ▼
+┌───────────────┐    ┌─────────────────────┐    ┌─────────────────┐
+│ConstraintStore│    │      Solvers        │    │ Subscription    │
+│               │    │                     │    │ Manager         │
+│ - Storage     │    │ - MapSolver (LWW)   │    │                 │
+│ - Indexing    │    │ - ListSolver (Fugue) │    │ - Constraint CB │
+│ - VV tracking │    │ - (Text uses List)  │    │ - State CB      │
+│ - Delta export│    │                     │    │ - Conflict CB   │
+│ - Generation  │    │                     │    │                 │
+└───────────────┘    └─────────────────────┘    └─────────────────┘
+       │                         │                         │
+       └─────────────────────────┴─────────────────────────┘
                                  │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                          Handles                                │
-│  MapHandle, ListHandle, TextHandle                              │
-│  - User-facing mutation API                                     │
-│  - Constraint generation                                        │
-│  - View projection                                              │
-└─────────────────────────────────────────────────────────────────┘
+       ┌─────────────────────────┼─────────────────────────┐
+       │                         │                         │
+       ▼                         ▼                         ▼
+┌───────────────┐    ┌─────────────────────┐    ┌─────────────────┐
+│  Views        │    │   Introspection     │    │   Inspector     │
+│               │    │                     │    │                 │
+│ - MapView     │    │ - explain(path)     │    │ - exportJSON()  │
+│ - ListView    │    │ - getConflicts()    │    │ - getStatistics │
+│ - TextView    │    │ - formatExplanation │    │ - dump/summarize│
+└───────────────┘    └─────────────────────┘    └─────────────────┘
 ```
+
+Note: There is no separate TextSolver. TextView uses ListSolver directly and
+joins the character values into a string. Text is conceptually `List<char>`.
 
 ### Data Flow
 
-1. **Mutation**: User calls `handle.set("key", value)`
-2. **Constraint Generation**: Handle creates constraint with current Lamport clock
-3. **Tell**: Constraint added to ConstraintStore
-4. **Notification**: SubscriptionManager notified of new constraint
-5. **Solve**: Affected paths re-solved (or cache invalidated)
-6. **Emit**: Subscribers receive before/after state change events
+1. **Mutation**: User calls `handle.set("key", value)` on a doc-bound handle
+2. **Constraint Generation**: PrismDoc creates constraint with current Lamport clock
+3. **Tell**: Constraint added to the shared ConstraintStore (immutable; returns new store)
+4. **Store Update**: PrismDoc replaces its store reference with the new store
+5. **Notification**: PrismDoc calls SubscriptionManager with new constraints + previous state
+6. **Emit**: Subscribers receive before/after state change and conflict events
+7. **Views**: Fresh views created on demand via `handle.view()` close over the current store
+
+The same flow applies to `importDelta` and `merge`: constraints are applied to the
+store, and subscribers are notified with the set of newly-added constraints.
 
 ## Core Types
 
@@ -250,10 +262,12 @@ Weidner's canonical CRDT semantic model ("pure function of the operation history
 `loro-ts/src/fugue/crdt-rope.ts` `findInsertPosition()` (lines 548-620) and
 `calculateOrigins()` (lines 460-530).
 
-### Text Solver
+### Text (No Separate Solver)
 
-**Implementation**: Thin wrapper over List Solver where each `seq_element` value is a
-single character. The solver concatenates the ordered characters into a string.
+Text has no dedicated solver. `TextView` uses `ListSolver` directly and joins the
+character values into a string. This was a deliberate simplification: the original plan
+called for a `TextSolver` wrapper, but since the only difference is presentation
+(array vs string), the indirection was unnecessary.
 
 **Multi-character inserts**: When a user inserts "Hello" at position 3, five `seq_element`
 constraints are created — one per character. The characters chain left-to-right:
@@ -273,20 +287,27 @@ and slicing of spans, similar to `FugueSpan` in `loro-ts/src/fugue/span.ts`.
 ### Storage Strategy
 
 ```typescript
-class ConstraintStore {
+interface ConstraintStore {
   // Primary storage: all constraints
-  private constraints: Map<string, Constraint>;  // id -> constraint
+  readonly constraints: ReadonlyMap<string, Constraint>;  // opIdString -> constraint
   
   // Index: constraints by path (for efficient solving)
-  private byPath: Map<string, Set<string>>;      // pathKey -> constraint ids
+  readonly byPath: ReadonlyMap<string, ReadonlySet<string>>;  // pathKey -> opIdStrings
   
   // Version tracking
-  private versionVector: Map<PeerID, Counter>;
+  readonly versionVector: VersionVector;  // ReadonlyMap<PeerID, Counter>
   
   // Lamport clock
-  private lamport: Lamport;
+  readonly lamport: Lamport;
+  
+  // Cache invalidation (monotonically increasing on every mutation)
+  readonly generation: number;
 }
 ```
+
+The store is **immutable**: `tell()` and `tellMany()` return a new store. PrismDoc
+manages the mutable store reference internally. `tellMany()` avoids cloning when all
+constraints are duplicates (generation is not bumped).
 
 ### Version Vector Operations
 
@@ -300,54 +321,55 @@ vv[constraint.id.peer] = max(vv[constraint.id.peer] ?? 0, constraint.id.counter 
 constraint.id.counter >= (theirVV[constraint.id.peer] ?? 0)
 ```
 
-### Caching Strategy (v0.1)
+### Caching Strategy
 
-Simple memoization with full invalidation:
+Caching is not yet implemented. Views re-solve on every access. The `generation`
+counter on `ConstraintStore` enables correct cache invalidation when caching is added:
 
 ```typescript
-class CachedSolver {
-  private cache: Map<string, SolvedValue>;
-  
-  solve(path: Path): SolvedValue {
-    const key = pathToKey(path);
-    if (this.cache.has(key)) return this.cache.get(key)!;
-    
-    const result = this.solver.solve(this.store.getConstraints(path), path);
-    this.cache.set(key, result);
-    return result;
+let cachedGeneration = getGeneration(store);
+let cachedValue: T | null = null;
+
+function getValue(): T {
+  if (getGeneration(store) !== cachedGeneration) {
+    cachedValue = solve(store);
+    cachedGeneration = getGeneration(store);
   }
-  
-  invalidate(affectedPaths: Path[]): void {
-    for (const path of affectedPaths) {
-      this.cache.delete(pathToKey(path));
-    }
-  }
+  return cachedValue!;
 }
 ```
 
-**Future optimization**: Incremental solving—update cache directly when possible.
+An earlier cache used `constraints.size` as invalidation proxy, which was unsound
+(same size doesn't mean same content). The generation counter is correct and cheap.
 
 ## Sync Protocol
 
-### Local Simulation
+### Sync Mechanisms
 
-For this experimental phase, sync is simulated locally:
+PrismDoc supports three sync approaches:
+
+1. **Delta sync**: `exportDelta(theirVV)` / `importDelta(delta)` — sends only unseen constraints
+2. **Direct merge**: `doc.merge(other)` — set union of two stores
+3. **Bidirectional**: `syncDocs(a, b)` — convenience that exchanges deltas in both directions
 
 ```typescript
-function sync(doc1: PrismDoc, doc2: PrismDoc): void {
-  // Bidirectional delta exchange
-  const delta1to2 = doc1.exportDelta(doc2.versionVector());
-  const delta2to1 = doc2.exportDelta(doc1.versionVector());
-  
-  doc2.importDelta(delta1to2);
-  doc1.importDelta(delta2to1);
-}
+// Delta sync
+const delta = alice.exportDelta(bob.getVersionVector());
+bob.importDelta(delta);
+
+// Direct merge
+alice.merge(bob);
+
+// Bidirectional convenience
+syncDocs(alice, bob);
 ```
+
+All three approaches fire subscription callbacks on the receiving doc.
 
 ### Delta Format
 
 ```typescript
-interface Delta {
+interface ConstraintDelta {
   constraints: Constraint[];
   fromVV: VersionVector;  // Sender's VV at time of export
 }
@@ -357,75 +379,106 @@ interface Delta {
 
 Since merge is constraint union and solve is deterministic:
 - Order of delta application doesn't matter
-- Duplicate deltas are idempotent
+- Duplicate deltas are idempotent (tellMany skips known constraints)
 - All replicas converge to same state
+- Verified with 3-peer convergence tests and all merge-order permutations
 
 ## Subscriptions
+
+Centralized event delivery via `SubscriptionManager`. PrismDoc wires this
+automatically—subscribers are notified on local mutations, imports, and merges.
 
 ### Event Types
 
 ```typescript
-// State change event
-interface StateChangeEvent<T> {
+interface ConstraintAddedEvent {
+  type: "constraint_added";
+  constraints: readonly Constraint[];
+  affectedPaths: readonly Path[];
+  generation: number;
+}
+
+interface StateChangedEvent<T> {
+  type: "state_changed";
   path: Path;
   before: T | undefined;
   after: T | undefined;
-  triggeredBy: Constraint[];
+  causingConstraints: readonly Constraint[];
+  solved: SolvedValue<T>;
 }
 
-// Constraint change event
-interface ConstraintChangeEvent {
-  added: Constraint[];
-  // Future: retracted: Constraint[];
-}
-
-// Conflict event
 interface ConflictEvent {
+  type: "conflict_detected" | "conflict_resolved";
   path: Path;
-  winner: Constraint;
-  losers: Constraint[];
-  resolution: string;  // Human-readable explanation
+  winner: Constraint | undefined;
+  losers: readonly Constraint[];
+  resolution: string;
 }
 ```
 
 ### Subscription Scopes
 
-- **Document-level**: All changes
-- **Path-level**: Changes to specific path (exact or prefix match)
-- **Constraint-level**: Raw constraint additions
+- **`onConstraintAdded`**: All constraint additions (store-level)
+- **`onStateChanged(path)`**: State changes at an exact path
+- **`onStateChangedPrefix(prefix)`**: State changes under a path prefix (includes exact match)
+- **`onConflict`**: Conflict detection and resolution events
+
+State change callbacks only fire when the value actually changes (compared via
+`JSON.stringify`). Conflict tracking is stateful per path: `conflict_detected` fires
+when losers first appear, `conflict_resolved` when they disappear.
 
 ## Introspection
+
+Accessed via `doc.introspect()` (IntrospectionAPI) and `doc.inspector()` (ConstraintInspector).
 
 ### Explain API
 
 ```typescript
-interface Explanation {
+interface Explanation<T> {
   path: Path;
-  currentValue: unknown;
-  determinedBy: Constraint;
-  conflicts: Constraint[];
-  resolution: string;
-  allConstraints: Constraint[];  // All constraints affecting this path
+  value: T | undefined;
+  hasValue: boolean;
+  determinedBy: ConstraintInfo | undefined;  // Winning constraint
+  conflicts: readonly ConstraintInfo[];       // Losing constraints
+  hasConflicts: boolean;
+  resolution: string;                         // Human-readable explanation
+  allConstraints: readonly ConstraintInfo[];  // All constraints at this path
 }
 
-function explain(store: ConstraintStore, path: Path): Explanation;
+// ConstraintInfo wraps Constraint with display-friendly fields
+interface ConstraintInfo {
+  id: OpId;
+  idString: string;       // e.g. "alice@5"
+  peer: string;
+  lamport: number;
+  assertionType: string;
+  value: unknown;
+  path: Path;
+  pathString: string;
+  constraint: Constraint;  // Original object
+}
 ```
+
+Additional methods: `getConstraintsFor(path)`, `getConstraintsUnder(prefix)`,
+`getConflicts()` (store-wide conflict report), `hasConflictsAt(path)`,
+`formatExplanation()`, `formatConflictReport()`.
 
 ### Constraint Inspector
 
-For debugging, export full constraint store state:
+Debug utility for visualizing and exporting constraint store state:
 
 ```typescript
-interface InspectorSnapshot {
-  constraints: Constraint[];
-  versionVector: Record<PeerID, Counter>;
-  solvedPaths: Array<{
-    path: Path;
-    value: unknown;
-    constraintCount: number;
-  }>;
-}
+inspector.exportSnapshot()    // JSON-serializable StoreSnapshot
+inspector.exportJSON()        // String (pretty or compact)
+inspector.getStatistics()     // Counts by type, peer, path; max constrained path
+inspector.listConstraints()   // All constraints as summary lines
+inspector.listConstraintsAt(path)   // Filter by path
+inspector.listConstraintsFrom(peer) // Filter by peer
+inspector.summarize()         // Human-readable summary string
+inspector.dump()              // Detailed constraint dump string
 ```
+
+Convenience functions: `dumpStore(store)`, `summarizeStore(store)`, `exportStoreJSON(store)`.
 
 ## Design Decisions Log
 
@@ -467,6 +520,24 @@ interface InspectorSnapshot {
 **Decided**: Constraints are untyped; types are added at the view layer.
 
 **Rationale**: Aligns with CCS philosophy—constraints are primitive assertions, interpretation (including types) is separate. This also enables schema evolution without changing stored constraints.
+
+### Why doc-bound handles instead of standalone handles with shared store?
+
+**Context**: Phases 1-4 used standalone handles (MapHandle, ListHandle, TextHandle) that each
+owned their own store reference, counter, and lamport via closures. Merge required explicit
+`_updateStore()` calls. This was ergonomically painful and error-prone.
+
+**Decided**: PrismDoc creates lightweight "doc-bound handles" (DocMapHandle, DocListHandle,
+DocTextHandle) that delegate all state management to PrismDoc. Handles are thin wrappers
+that generate constraints and call `applyConstraint()` on the doc's shared state.
+
+**Benefits**:
+1. Mutations via any handle are immediately visible through any other handle or view
+2. No `_updateStore()` wiring needed
+3. Subscriptions fire automatically on any mutation
+4. Single source of truth for counter and lamport (no drift between handles)
+
+The standalone handles still exist and are useful for testing in isolation.
 
 ## Future Work
 

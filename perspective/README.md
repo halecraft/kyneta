@@ -67,66 +67,53 @@ bun install
 ## Usage
 
 ```typescript
-import {
-  createConstraintStore,
-  createMapHandle,
-  createListHandle,
-  createTextHandle,
-  mergeStores,
-} from "prism";
+import { createPrismDoc, syncDocs } from "prism";
 
-// Create a constraint store and handles
-const store = createConstraintStore();
+// Create a document
+const alice = createPrismDoc({ peerId: "alice" });
 
-const profile = createMapHandle({
-  peerId: "alice",
-  store,
-  path: ["profile"],
-});
+// Get typed handles — all share the same constraint store
+const profile = alice.getMap("profile");
+const todos = alice.getList<string>("todos");
+const notes = alice.getText("notes");
 
 // Make changes (creates constraints internally)
 profile.set("name", "Alice");
 profile.set("age", 30);
+todos.push("Learn CRDTs");
+notes.append("Hello, world!");
 
 // Read values (solves constraints)
-console.log(profile.view().getKey("name")); // "Alice"
+console.log(profile.get());          // { name: "Alice", age: 30 }
+console.log(todos.get());            // ["Learn CRDTs"]
+console.log(notes.toString());       // "Hello, world!"
 
-// Work with lists
-const todos = createListHandle({
-  peerId: "alice",
-  store: profile.getStore(),
-  path: ["todos"],
+// Mutations through any handle are visible to all views
+const profile2 = alice.getMap("profile");
+console.log(profile2.get());         // { name: "Alice", age: 30 }
+
+// Subscribe to changes
+alice.onStateChanged(["profile", "name"], (event) => {
+  console.log("Changed:", event.before, "→", event.after);
 });
-todos.push({ text: "Learn CRDTs", done: false });
 
-// Work with text
-const doc = createTextHandle({
-  peerId: "alice",
-  store: todos.getStore(),
-  path: ["content"],
-});
-doc.append("Hello, world!");
-console.log(doc.toString()); // "Hello, world!"
+// Introspection: why is this value what it is?
+const explanation = alice.introspect().explain(["profile", "name"]);
+console.log(explanation.resolution); // "single constraint from alice"
 
-// Sync with another peer (merge constraint stores)
-const bobStore = createConstraintStore();
-const bobProfile = createMapHandle({
-  peerId: "bob",
-  store: bobStore,
-  path: ["profile"],
-});
-bobProfile.set("name", "Bob");
+// Sync with another peer
+const bob = createPrismDoc({ peerId: "bob" });
+bob.getMap("profile").set("name", "Bob");
 
-// Merge: set union of constraints
-const merged = mergeStores(profile.getStore(), bobProfile.getStore());
-// Both peers converge to the same state
+syncDocs(alice, bob);
+// Both docs converge to the same state
 ```
 
 ## Project Status
 
 🚧 **Experimental** — This is a research project exploring CCS concepts.
 
-### Implemented (Phases 1-5)
+### Implemented (Phases 1-6) ✅
 
 - [x] Core constraint types and store
 - [x] Map container with LWW resolution
@@ -136,29 +123,35 @@ const merged = mergeStores(profile.getStore(), bobProfile.getStore());
 - [x] Subscription manager (centralized event coordination)
 - [x] Introspection API (explain why a value is what it is)
 - [x] Constraint inspector (debugging and JSON export)
-- [x] 460 tests including Loro equivalence tests
+- [x] PrismDoc coordinator (unified document interface)
+- [x] Sync via delta export/import and direct merge
+- [x] 476 tests including Loro equivalence and integration tests
 
-### Not Yet Implemented (Phase 6)
+### Future Work
 
-- [ ] PrismDoc coordinator (unified document interface)
 - [ ] Constraint compaction
+- [ ] Run-length encoding for Text
+- [ ] Cross-container constraints
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                     PrismDoc                        │
-│  Manages peers, version vectors, constraint store  │
-└─────────────────────────┬───────────────────────────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ConstraintStore│  │   Solvers    │  │ ViewManager  │
-│ - tell()      │  │ - Map (LWW)  │  │ - subscribe()│
-│ - ask()       │  │ - List       │  │ - diff()     │
-│ - merge()     │  │ - Text       │  │              │
-└──────────────┘  └──────────────┘  └──────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                        PrismDoc                          │
+│  Owns shared ConstraintStore, peer ID, clocks            │
+│  Creates doc-bound handles (getMap, getList, getText)    │
+│  Wires subscriptions, sync (delta/merge), introspection  │
+└───────────────────────────┬──────────────────────────────┘
+                            │
+       ┌────────────────────┼────────────────────┐
+       ▼                    ▼                    ▼
+┌──────────────┐  ┌──────────────────┐  ┌────────────────┐
+│ConstraintStore│  │    Solvers       │  │ Subscription   │
+│ - tell/ask    │  │ - Map (LWW)     │  │ Manager        │
+│ - merge       │  │ - List (Fugue)  │  │ - state CB     │
+│ - delta sync  │  │ - (Text = List) │  │ - conflict CB  │
+│ - generation  │  │                 │  │ - constraint CB│
+└──────────────┘  └──────────────────┘  └────────────────┘
 ```
 
 ## Theoretical Foundation
@@ -175,9 +168,24 @@ Key terminology from Concurrent Constraint Programming:
 - **Ask**: Query the result of solving constraints
 - **Solve**: Compute state that satisfies all constraints
 
+## Development
+
+```bash
+bun install          # Install dependencies
+bun run test         # Run tests in watch mode
+bun run test:run     # Run tests once
+bun run typecheck    # TypeScript type checking
+```
+
+Key testing patterns:
+- **Loro equivalence tests** compare Prism output against `loro-crdt` for identical interleaving
+- `peerIdToNum()` ensures Loro's numeric peer IDs preserve the same ordering as Prism's string peer IDs
+- Integration tests in `tests/integration.test.ts` cover the full PrismDoc stack
+
 ## Documentation
 
 - [TECHNICAL.md](./TECHNICAL.md) — Architecture, algorithms, design decisions
+- [LEARNINGS.md](./LEARNINGS.md) — Discoveries, corrections, and open questions from implementation
 
 ## Related Work
 
