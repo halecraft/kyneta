@@ -126,18 +126,20 @@ const merged = mergeStores(profile.getStore(), bobProfile.getStore());
 
 🚧 **Experimental** — This is a research project exploring CCS concepts.
 
-### Implemented (Phases 1-4)
+### Implemented (Phases 1-5)
 
 - [x] Core constraint types and store
 - [x] Map container with LWW resolution
 - [x] List container with Fugue-style ordering
 - [x] Text container
-- [x] Basic reactive views with subscriptions
-- [x] 393 tests including Loro equivalence tests
+- [x] Reactive views with subscriptions
+- [x] Subscription manager (centralized event coordination)
+- [x] Introspection API (explain why a value is what it is)
+- [x] Constraint inspector (debugging and JSON export)
+- [x] 460 tests including Loro equivalence tests
 
-### Not Yet Implemented (Phases 5-6)
+### Not Yet Implemented (Phase 6)
 
-- [ ] Introspection API (explain why a value is what it is)
 - [ ] PrismDoc coordinator (unified document interface)
 - [ ] Constraint compaction
 

@@ -197,19 +197,26 @@ export function tellMany(
 		return { store, isNew: false, affectedPaths: [] };
 	}
 
-	const mutable = cloneStore(store);
-	const affectedPaths: Path[] = [];
-	let anyNew = false;
-
+	// First pass: check if any constraints are actually new.
+	// This avoids cloning (and bumping generation) when all are duplicates.
+	const newConstraints: Constraint[] = [];
 	for (const constraint of constraints) {
 		const key = constraintKey(constraint);
-
-		// Skip duplicates
-		if (mutable.constraints.has(key)) {
-			continue;
+		if (!store.constraints.has(key)) {
+			newConstraints.push(constraint);
 		}
+	}
 
-		anyNew = true;
+	if (newConstraints.length === 0) {
+		return { store, isNew: false, affectedPaths: [] };
+	}
+
+	const mutable = cloneStore(store);
+	const affectedPaths: Path[] = [];
+	const anyNew = true;
+
+	for (const constraint of newConstraints) {
+		const key = constraintKey(constraint);
 
 		// Add constraint
 		mutable.constraints.set(key, constraint);

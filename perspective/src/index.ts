@@ -240,3 +240,54 @@ export type {
 } from "./handles/text-handle.js";
 
 export { createTextHandle, mergeTextHandles } from "./handles/text-handle.js";
+
+// Subscription Manager
+export type {
+	ConstraintAddedEvent,
+	StateChangedEvent,
+	ConflictEvent,
+	SubscriptionEvent,
+	ConstraintCallback,
+	StateChangeCallback,
+	ConflictCallback,
+	SubscriptionManager,
+} from "./events/subscription-manager.js";
+
+export {
+	createSubscriptionManager,
+	createConstraintAddedEvent,
+	createStateChangedEvent,
+	createConflictEvent,
+} from "./events/subscription-manager.js";
+
+// Introspection API
+export type {
+	Explanation,
+	ConstraintInfo,
+	ConflictSummary,
+	ConflictReport,
+	IntrospectionAPI,
+	IntrospectionConfig,
+} from "./introspection/explain.js";
+
+export {
+	createIntrospectionAPI,
+	explainSolvedValue,
+} from "./introspection/explain.js";
+
+// Constraint Inspector
+export type {
+	ConstraintJSON,
+	StoreSnapshot,
+	StoreStatistics,
+	ConstraintSummaryLine,
+	ConstraintInspector,
+	InspectorConfig,
+} from "./introspection/inspector.js";
+
+export {
+	createConstraintInspector,
+	dumpStore,
+	summarizeStore,
+	exportStoreJSON,
+} from "./introspection/inspector.js";

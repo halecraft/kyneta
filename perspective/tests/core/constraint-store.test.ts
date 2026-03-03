@@ -103,6 +103,22 @@ describe("ConstraintStore", () => {
 			expect(getGeneration(merged)).toBe(2); // s1.generation + 1
 		});
 
+		it("should not bump generation for tellMany when all constraints are duplicates", () => {
+			const store = createConstraintStore();
+			const constraint = createConstraint("alice", 0, 1, ["key"], eq("value"));
+
+			const s1 = tell(store, constraint).store;
+			expect(getGeneration(s1)).toBe(1);
+
+			// tellMany with the same constraint — all duplicates
+			const result = tellMany(s1, [constraint]);
+			expect(result.isNew).toBe(false);
+			// Generation should NOT bump — nothing changed
+			expect(getGeneration(result.store)).toBe(1);
+			// Same store reference returned (no clone)
+			expect(result.store).toBe(s1);
+		});
+
 		it("should be usable for cache invalidation", () => {
 			let store = createConstraintStore();
 			let cachedGeneration = getGeneration(store);

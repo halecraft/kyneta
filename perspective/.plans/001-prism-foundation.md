@@ -414,7 +414,7 @@ and slicing of spans, similar to `FugueSpan` in loro-ts.
 
 ---
 
-### Phase 5: Subscriptions & Introspection 🔴
+### Phase 5: Subscriptions & Introspection ✅
 
 Event system and debugging capabilities.
 
@@ -425,34 +425,45 @@ coordinator layer. The existing `SolvedValue` type (`determinedBy`, `conflicts`,
 
 #### Tasks
 
-1. 🔴 **Subscription manager** (`src/events/subscription-manager.ts`)
-   - Centralized subscription registry (currently each view manages its own subscribers)
-   - Subscribe to constraint changes (store-level)
-   - Subscribe to path-specific state changes
-   - Unsubscribe support
+1. ✅ **Subscription manager** (`src/events/subscription-manager.ts`)
+   - Centralized subscription registry
+   - `onConstraintAdded()`: Subscribe to all constraint additions
+   - `onStateChanged(path)`: Subscribe to state changes at exact path
+   - `onStateChangedPrefix(prefix)`: Subscribe to changes under a path prefix
+   - `onConflict()`: Subscribe to conflict detection events
+   - `notifyConstraintsAdded()`: Coordinator calls this to trigger events
+   - Unsubscribe support via returned function
 
-2. 🔴 **State diff computation** (`src/events/state-diff.ts`)
-   - Compute before/after state for affected paths
-   - Replace current `JSON.stringify` comparison with structural diff
-   - Emit ViewChangeEvent with both states
+2. ✅ **State diff computation** (integrated into subscription-manager.ts)
+   - Computes before/after state for affected paths
+   - Uses `JSON.stringify` comparison (simple but sufficient)
+   - Emits StateChangedEvent with both states
 
-3. 🔴 **Conflict subscription** (`src/events/conflict-events.ts`)
-   - Emit when new constraints create/resolve conflicts
-   - Include conflict details (which constraints, resolution)
+3. ✅ **Conflict subscription** (integrated into subscription-manager.ts)
+   - Emits `conflict_detected` when new conflicts appear
+   - Emits `conflict_resolved` when conflicts disappear
+   - Tracks previous conflict state per path
 
-4. 🔴 **Introspection API** (`src/introspection/explain.ts`)
-   - explain(path): Why does this path have this value? (wraps existing SolvedValue)
-   - getConstraintsFor(path): All constraints affecting a path (wraps existing ask/askPrefix)
-   - getConflicts(): All current conflicts across all paths
+4. ✅ **Introspection API** (`src/introspection/explain.ts`)
+   - `explain(path)`: Why does this path have this value?
+   - `getConstraintsFor(path)`: All constraints affecting exact path
+   - `getConstraintsUnder(prefix)`: All constraints under a path prefix
+   - `getConflicts()`: All current conflicts across all paths
+   - `hasConflictsAt(path)`: Quick check for conflicts
+   - `formatExplanation()` / `formatConflictReport()`: Human-readable output
 
-5. 🔴 **Constraint inspector** (`src/introspection/inspector.ts`)
-   - Debug utility for visualizing constraint store
-   - Export to JSON for external tooling
+5. ✅ **Constraint inspector** (`src/introspection/inspector.ts`)
+   - `exportSnapshot()`: JSON-serializable store snapshot
+   - `exportJSON()`: String export for external tools
+   - `getStatistics()`: Constraint counts, peer breakdown, assertion types
+   - `listConstraints()` / `listConstraintsAt()` / `listConstraintsFrom()`
+   - `summarize()` / `dump()`: Human-readable debug output
+   - Convenience functions: `dumpStore()`, `summarizeStore()`, `exportStoreJSON()`
 
 #### Tests
-- Subscription callbacks fire correctly
-- Before/after state accuracy
-- Conflict detection and resolution reporting
+- 17 subscription manager tests (callbacks, unsubscribe, conflict tracking)
+- 23 introspection API tests (explain, constraints, conflicts, formatting)
+- 27 inspector tests (export, statistics, listing, summarize, dump)
 
 ---
 
@@ -775,10 +786,24 @@ Design decisions:
 - `replace()` is delete-then-insert (compound operation)
 - Performance note: O(n) `askPrefix` remains the bottleneck (acknowledged, not fixed)
 
+### Phase 5 Complete ✅
+
+Subscriptions and introspection implemented:
+
+- **460 tests passing** total (67 new for Phase 5)
+- SubscriptionManager provides centralized event coordination
+- IntrospectionAPI wraps SolvedValue with user-friendly explain/conflict APIs
+- ConstraintInspector enables debugging and JSON export
+- All integrated into main index.ts exports
+
+Design decisions:
+- State diff uses JSON.stringify (simple, sufficient for JSON values)
+- Conflict tracking per path (detected when losers appear, resolved when gone)
+- Inspector provides both programmatic and human-readable output
+
 ### Next Steps
 
-1. Implement subscriptions and introspection (Phase 5)
-2. Implement PrismDoc integration (Phase 6)
+1. Implement PrismDoc integration (Phase 6)
 
 ### Research Completed
 
