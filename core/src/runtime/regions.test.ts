@@ -554,6 +554,223 @@ describe("regions", () => {
 
       expect(getActiveSubscriptionCount()).toBe(0)
     })
+
+    describe("conditional scope creation (isReactive)", () => {
+      it("should skip scope allocation when isReactive is false", () => {
+        const schema = Shape.doc({
+          items: Shape.list(Shape.plain.string()),
+        })
+        const doc = createTypedDoc(schema)
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        doc.items.push("item1")
+        doc.items.push("item2")
+        doc.items.push("item3")
+        loro(doc).commit()
+
+        listRegion(
+          container,
+          doc.items,
+          {
+            create: (itemRef: PlainValueRef<string>) => {
+              const li = document.createElement("li")
+              li.textContent = itemRef.get()
+              return li
+            },
+            isReactive: false,
+          },
+          scope,
+        )
+
+        expect(container.children.length).toBe(3)
+        // No child scopes should be created for static items
+        expect(scope.childCount).toBe(0)
+
+        scope.dispose()
+      })
+
+      it("should allocate scopes when isReactive is true", () => {
+        const schema = Shape.doc({
+          items: Shape.list(Shape.plain.string()),
+        })
+        const doc = createTypedDoc(schema)
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        doc.items.push("item1")
+        doc.items.push("item2")
+        loro(doc).commit()
+
+        listRegion(
+          container,
+          doc.items,
+          {
+            create: (itemRef: PlainValueRef<string>) => {
+              const li = document.createElement("li")
+              li.textContent = itemRef.get()
+              return li
+            },
+            isReactive: true,
+          },
+          scope,
+        )
+
+        expect(container.children.length).toBe(2)
+        // Each item should get a child scope
+        expect(scope.childCount).toBe(2)
+
+        scope.dispose()
+      })
+
+      it("should allocate scopes by default (isReactive omitted)", () => {
+        const schema = Shape.doc({
+          items: Shape.list(Shape.plain.string()),
+        })
+        const doc = createTypedDoc(schema)
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        doc.items.push("item1")
+        doc.items.push("item2")
+        loro(doc).commit()
+
+        listRegion(
+          container,
+          doc.items,
+          {
+            create: (itemRef: PlainValueRef<string>) => {
+              const li = document.createElement("li")
+              li.textContent = itemRef.get()
+              return li
+            },
+            // isReactive not specified — should default to allocating scopes
+          },
+          scope,
+        )
+
+        expect(container.children.length).toBe(2)
+        expect(scope.childCount).toBe(2)
+
+        scope.dispose()
+      })
+
+      it("should not create scopes for inserted items when isReactive is false", () => {
+        const schema = Shape.doc({
+          items: Shape.list(Shape.plain.string()),
+        })
+        const doc = createTypedDoc(schema)
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        loro(doc).commit()
+
+        listRegion(
+          container,
+          doc.items,
+          {
+            create: (itemRef: PlainValueRef<string>) => {
+              const li = document.createElement("li")
+              li.textContent = itemRef.get()
+              return li
+            },
+            isReactive: false,
+          },
+          scope,
+        )
+
+        expect(container.children.length).toBe(0)
+        expect(scope.childCount).toBe(0)
+
+        // Insert items after initial render
+        doc.items.push("a")
+        doc.items.push("b")
+        loro(doc).commit()
+
+        expect(container.children.length).toBe(2)
+        // Still no child scopes
+        expect(scope.childCount).toBe(0)
+
+        scope.dispose()
+      })
+
+      it("should safely delete items when isReactive is false (no scopes to dispose)", () => {
+        const schema = Shape.doc({
+          items: Shape.list(Shape.plain.string()),
+        })
+        const doc = createTypedDoc(schema)
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        doc.items.push("x")
+        doc.items.push("y")
+        doc.items.push("z")
+        loro(doc).commit()
+
+        listRegion(
+          container,
+          doc.items,
+          {
+            create: (itemRef: PlainValueRef<string>) => {
+              const li = document.createElement("li")
+              li.textContent = itemRef.get()
+              return li
+            },
+            isReactive: false,
+          },
+          scope,
+        )
+
+        expect(container.children.length).toBe(3)
+
+        // Delete middle item — should not throw even though scope is null
+        doc.items.delete(1, 1)
+        loro(doc).commit()
+
+        expect(container.children.length).toBe(2)
+        expect(container.children[0].textContent).toBe("x")
+        expect(container.children[1].textContent).toBe("z")
+
+        scope.dispose()
+      })
+
+      it("should skip scopes for batch-inserted items when isReactive is false", () => {
+        const schema = Shape.doc({
+          items: Shape.list(Shape.plain.string()),
+        })
+        const doc = createTypedDoc(schema)
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        loro(doc).commit()
+
+        listRegion(
+          container,
+          doc.items,
+          {
+            create: (itemRef: PlainValueRef<string>) => {
+              const li = document.createElement("li")
+              li.textContent = itemRef.get()
+              return li
+            },
+            isReactive: false,
+          },
+          scope,
+        )
+
+        // Batch insert 5 items at once
+        for (let i = 0; i < 5; i++) {
+          doc.items.push(`item${i}`)
+        }
+        loro(doc).commit()
+
+        expect(container.children.length).toBe(5)
+        // No child scopes even for batch inserts
+        expect(scope.childCount).toBe(0)
+
+        scope.dispose()
+      })
+    })
   })
 
   describe("conditionalRegion", () => {

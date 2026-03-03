@@ -738,6 +738,9 @@ function generateReactiveLoop(
   // Emit slotKind from compile-time analysis
   lines.push(`${innerInd}slotKind: ${JSON.stringify(node.bodySlotKind)},`)
 
+  // Emit isReactive from compile-time analysis — skips scope allocation for static items
+  lines.push(`${innerInd}isReactive: ${node.hasReactiveItems},`)
+
   lines.push(`${ind}}, ${state.scopeVar})`)
 
   return lines
@@ -1127,6 +1130,9 @@ function generateReactiveLoopWithMarker(
 
   // Emit slotKind from compile-time analysis
   lines.push(`${innerInd}slotKind: ${JSON.stringify(node.bodySlotKind)},`)
+
+  // Emit isReactive from compile-time analysis — skips scope allocation for static items
+  lines.push(`${innerInd}isReactive: ${node.hasReactiveItems},`)
 
   lines.push(`${ind}}, ${state.scopeVar})`)
 

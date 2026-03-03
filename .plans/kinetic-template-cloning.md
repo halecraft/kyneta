@@ -63,12 +63,12 @@ PR 5 (lazy scope / numeric IDs)      ✅
 PR 6 (CRDT batch ops)                ✅
 PR 7 (component recognition)         ✅
 
-PR 8 (conditional scope creation)    🔴 — INDEPENDENT (uses existing LoopNode.hasReactiveItems)
+PR 8 (conditional scope creation)    ✅
 
 PR 9 (README / package.json / docs)  🔴 — after all features land
 ```
 
-PRs 1–7 are complete. PR 8 is the last feature PR. PR 9 absorbs deferred documentation from PRs 4, 6, and 7 (TECHNICAL.md sections for Delta Region Algebra, Batch Operations, and Component Model).
+PRs 1–8 are complete. PR 9 is the final docs PR, absorbing deferred documentation from PRs 4, 6, and 7 (TECHNICAL.md sections for Delta Region Algebra, Batch Operations, and Component Model).
 
 ### PR 1: refactor(packages/kinetic): extract shared HTML constants ✅
 
@@ -298,7 +298,7 @@ Extend element recognition to support user-defined component functions alongside
 
 *Files: `types.ts`, `ir.ts`, `analyze.ts`, `reactive-detection.ts`, `codegen/dom.ts`*
 
-### PR 8: perf(packages/kinetic): conditional scope creation for static list items 🔴
+### PR 8: perf(packages/kinetic): conditional scope creation for static list items ✅
 
 *Independent of PR 7. Can merge whenever ready.*
 
@@ -308,12 +308,14 @@ Skip scope allocation for list items that have no reactive content.
 
 **Tasks:**
 
-1. Add `isReactive` field to `ListRegionHandlers` 🔴
-2. Codegen emits `isReactive: ${node.hasReactiveItems}` — no new analysis needed, just emit existing IR field 🔴
-3. `executeOp` skips `createChild()` when `isReactive` is false 🔴
-4. Unit tests: static items get no scope, reactive items get scope 🔴
+1. Add `isReactive` field to `ListRegionHandlers` ✅
+2. Codegen emits `isReactive: ${node.hasReactiveItems}` — no new analysis needed, just emit existing IR field ✅
+3. `executeOp` skips `createChild()` when `isReactive` is false ✅
+4. Unit tests: static items get no scope, reactive items get scope ✅
 
-*Files: `regions.ts`, `types.ts`, `codegen/dom.ts`*
+**Status:** Complete. `ListRegionHandlers.isReactive` defaults to true (conservative). When false, `executeOp` stores `null` instead of creating child scopes for insert and batch-insert. Delete paths already guarded with `if (scope)`. Both codegen paths (`generateReactiveLoop` and `generateReactiveLoopWithMarker`) emit `isReactive: ${node.hasReactiveItems}`. 6 new tests cover static items, reactive items, default behavior, dynamic inserts, deletes, and batch inserts. All 760 tests pass.
+
+*Files: `regions.ts`, `types.ts`, `codegen/dom.ts`, `regions.test.ts`*
 
 ### PR 9: docs(packages/kinetic): README, TECHNICAL.md, and package.json updates 🔴
 

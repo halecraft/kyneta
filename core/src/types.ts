@@ -301,6 +301,15 @@ export interface ListRegionHandlers<T> {
    * When provided, optimizes insertion by avoiding runtime inspection.
    */
   slotKind?: SlotKind
+
+  /**
+   * Whether list items contain reactive content (subscriptions).
+   * When false, item scopes are skipped — no `createChild()` per item.
+   * Derived from `LoopNode.hasReactiveItems` at compile time.
+   *
+   * Defaults to true (conservative: always allocate scopes).
+   */
+  isReactive?: boolean
 }
 
 // =============================================================================

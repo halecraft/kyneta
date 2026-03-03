@@ -217,8 +217,8 @@ interface RegionStateBase {
 interface ListRegionState<T> extends RegionStateBase {
   /** Slots for each item, in order */
   slots: Slot[]
-  /** Scopes for each item (for nested subscriptions) */
-  scopes: Scope[]
+  /** Scopes for each item (for nested subscriptions). Null when item is static (no reactive content). */
+  scopes: (Scope | null)[]
   /** The list ref for accessing items (needed for delta handling) */
   listRef: ListRefLike<T>
 }
@@ -331,8 +331,12 @@ function executeOp<T>(
   handlers: ListRegionHandlers<T>,
   op: ListRegionOp<T>,
 ): void {
+  // When isReactive is explicitly false, skip scope allocation for items.
+  // Default to true (conservative) when not specified.
+  const needsScope = handlers.isReactive !== false
+
   if (op.kind === "insert") {
-    const itemScope = state.parentScope.createChild()
+    const itemScope = needsScope ? state.parentScope.createChild() : null
     const node = handlers.create(op.item, op.index)
 
     // Insert into DOM at correct position
@@ -370,13 +374,14 @@ function executeOp<T>(
     // Batch insert: create all items, collect into DocumentFragment, single DOM insertion
     const fragment = document.createDocumentFragment()
     const newSlots: Slot[] = []
-    const newScopes: Scope[] = []
+
+    const newScopes: (Scope | null)[] = []
 
     for (let i = 0; i < op.count; i++) {
       const item = state.listRef.get(op.index + i)
       if (item === undefined) continue
 
-      const itemScope = state.parentScope.createChild()
+      const itemScope = needsScope ? state.parentScope.createChild() : null
       const node = handlers.create(item, op.index + i)
 
       // For batch insert, we always use single-node slots within the fragment
