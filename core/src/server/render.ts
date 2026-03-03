@@ -16,6 +16,16 @@
 import jsBeautify from "js-beautify"
 import type { LoroDoc } from "loro-crdt"
 
+import {
+  escapeHtml,
+  isVoidElement,
+  VOID_ELEMENTS,
+} from "../compiler/html-constants.js"
+
+// Re-export escapeHtml for public API compatibility
+// (users may import from "@loro-extended/kinetic/server")
+export { escapeHtml, isVoidElement }
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -69,44 +79,6 @@ export interface RenderToStringOptions {
 export type SSRRenderFunction = (ctx: SSRContext) => string
 
 // =============================================================================
-// HTML Escaping
-// =============================================================================
-
-/**
- * Map of characters to their HTML entity equivalents.
- */
-const HTML_ESCAPE_MAP: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#x27;",
-}
-
-/**
- * Regex for matching characters that need escaping.
- */
-const HTML_ESCAPE_REGEX = /[&<>"']/g
-
-/**
- * Escape a string for safe inclusion in HTML.
- *
- * This prevents XSS attacks by escaping special characters.
- *
- * @param str - The string to escape
- * @returns The escaped string
- *
- * @example
- * ```ts
- * escapeHtml('<script>alert("xss")</script>')
- * // Returns: '&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;'
- * ```
- */
-export function escapeHtml(str: string): string {
-  return String(str).replace(HTML_ESCAPE_REGEX, char => HTML_ESCAPE_MAP[char])
-}
-
-// =============================================================================
 // Hydration Markers
 // =============================================================================
 
@@ -140,40 +112,6 @@ export function openMarker(id: string): string {
  */
 export function closeMarker(type: string): string {
   return `<!--/kinetic:${type}-->`
-}
-
-// =============================================================================
-// Void Elements
-// =============================================================================
-
-/**
- * HTML void elements (self-closing, no end tag).
- */
-const VOID_ELEMENTS = new Set([
-  "area",
-  "base",
-  "br",
-  "col",
-  "embed",
-  "hr",
-  "img",
-  "input",
-  "link",
-  "meta",
-  "param",
-  "source",
-  "track",
-  "wbr",
-])
-
-/**
- * Check if a tag is a void element.
- *
- * @param tag - The HTML tag name
- * @returns true if the tag is a void element
- */
-export function isVoidElement(tag: string): boolean {
-  return VOID_ELEMENTS.has(tag.toLowerCase())
 }
 
 // =============================================================================

@@ -23,6 +23,7 @@ import type {
   ElementNode,
   LoopNode,
 } from "../ir.js"
+import { escapeHtml, VOID_ELEMENTS } from "../html-constants.js"
 
 // =============================================================================
 // Code Generation Options
@@ -128,42 +129,6 @@ function escapeExpr(value: string): string {
   return `__escapeHtml(${value})`
 }
 
-/**
- * Escape a static string for HTML.
- */
-function escapeStatic(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;")
-}
-
-// =============================================================================
-// Void Elements
-// =============================================================================
-
-/**
- * HTML void elements (self-closing, no end tag).
- */
-const VOID_ELEMENTS = new Set([
-  "area",
-  "base",
-  "br",
-  "col",
-  "embed",
-  "hr",
-  "img",
-  "input",
-  "link",
-  "meta",
-  "param",
-  "source",
-  "track",
-  "wbr",
-])
-
 // =============================================================================
 // Content Generation
 // =============================================================================
@@ -175,7 +140,7 @@ function _generateContent(node: ContentNode): string {
   if (node.bindingTime === "literal") {
     // Literal - source is JSON-encoded string, extract and escape
     const value = JSON.parse(node.source)
-    return JSON.stringify(escapeStatic(value))
+    return JSON.stringify(escapeHtml(value))
   }
 
   // Render-time and reactive - both need escaping
@@ -208,7 +173,7 @@ function generateAttribute(attr: AttributeNode): string {
   if (content.bindingTime === "literal") {
     // Extract the actual string value from JSON-encoded source
     const value = JSON.parse(content.source)
-    const escaped = escapeStatic(value)
+    const escaped = escapeHtml(value)
     return ` ${name}="${escaped}"`
   }
 
@@ -342,7 +307,7 @@ function generateChild(node: ChildNode, state: CodegenState): string {
       if (node.bindingTime === "literal") {
         // Literal - source is JSON-encoded string, extract and escape
         const value = JSON.parse(node.source)
-        return escapeStatic(value)
+        return escapeHtml(value)
       }
       // Render-time and reactive - use template literal interpolation
       return `\${${escapeExpr(`String(${node.source})`)}}`

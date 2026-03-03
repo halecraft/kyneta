@@ -71,19 +71,19 @@ PR 9 (README / package.json)         — after all features land
 
 PRs 5, 6, and 7 can merge in any order relative to each other and to PRs 3–4. Two parallel tracks converge: "compiler gets template cloning" and "runtime gets batch ops + lighter scopes." PR 7 (components) is the marquee user-facing feature and could be prioritized ahead of PRs 3–4 if desired — components work with `createElement` codegen; template cloning makes them faster later.
 
-### PR 1: refactor(packages/kinetic): extract shared HTML constants 🔴
+### PR 1: refactor(packages/kinetic): extract shared HTML constants ✅
 
 Extract duplicated HTML constants and escape functions into a shared module. Pure mechanical refactor, zero behavior change.
 
 **Tasks:**
 
-1. Create `compiler/html-constants.ts` exporting: 🔴
+1. Create `compiler/html-constants.ts` exporting: ✅
    - `VOID_ELEMENTS` set (currently duplicated in `codegen/html.ts` L150–165 and `server/render.ts` L142–157)
    - `escapeHtml(str: string): string` function (currently `escapeStatic` in `codegen/html.ts` and `escapeHtml` in `server/render.ts` — same logic, different implementations)
    - `generateRegionMarkers(type: "list" | "if", id: number): { open: string, close: string }` helper for consistent marker format across SSR and template extraction
-2. Update `codegen/html.ts` to import `VOID_ELEMENTS` and `escapeHtml` from `html-constants.ts`, removing its private `VOID_ELEMENTS` and `escapeStatic` 🔴
-3. Update `server/render.ts` to import `VOID_ELEMENTS` and `escapeHtml` from `html-constants.ts`, removing its private copies (keep re-exporting `escapeHtml` from server subpath for public API compatibility) 🔴
-4. Verify all existing tests pass after extraction 🔴
+2. Update `codegen/html.ts` to import `VOID_ELEMENTS` and `escapeHtml` from `html-constants.ts`, removing its private `VOID_ELEMENTS` and `escapeStatic` ✅
+3. Update `server/render.ts` to import `VOID_ELEMENTS` and `escapeHtml` from `html-constants.ts`, removing its private copies (keep re-exporting `escapeHtml` from server subpath for public API compatibility) ✅
+4. Verify all existing tests pass after extraction ✅
 
 *Files: `compiler/html-constants.ts` (new), `codegen/html.ts`, `server/render.ts`*
 
