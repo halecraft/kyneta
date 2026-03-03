@@ -485,16 +485,21 @@ Users don't need to know this distinction — both "just work" with natural Type
 packages/kinetic/src/compiler/
 ├── analyze.ts               # AST → IR analysis (imports isReactiveType)
 ├── analyze.test.ts          # Analysis unit tests
-├── reactive-detection.ts    # Reactive type detection via property-level symbol check
+├── reactive-detection.ts    # Reactive type + ComponentFactory detection
+├── html-constants.ts        # Shared HTML constants (VOID_ELEMENTS, escapeHtml)
 ├── ir.ts                    # IR type definitions and factories
 ├── ir.test.ts               # IR unit tests
+├── walk.ts                  # Generator-based IR walker (WalkEvent stream)
+├── walk.test.ts             # Walker unit tests
+├── template.ts              # Template extraction + walk planning (NavOp)
+├── template.test.ts         # Template extraction tests
 ├── transform.ts             # Orchestrates analysis + codegen + module resolution
 ├── transform.test.ts        # Transform tests
 ├── integration.test.ts      # End-to-end compilation tests
 └── codegen/
-    ├── dom.ts               # DOM code generation
+    ├── dom.ts               # DOM code generation (template cloning + createElement)
     ├── dom.test.ts          # DOM codegen tests
-    ├── html.ts              # HTML code generation
+    ├── html.ts              # HTML code generation (SSR)
     └── html.test.ts         # HTML codegen tests
 ```
 
@@ -945,3 +950,165 @@ range.deleteContents()
 | State updates | 100 `splice` calls | 1 `splice` call |
 
 This is especially valuable for CRDT synchronization where remote peers may send large batches of changes.
+
+## Component Model
+
+Kinetic supports user-defined components alongside HTML element factories. Components are ordinary TypeScript functions typed as `ComponentFactory` — the compiler recognizes them via the type system.
+
+### ComponentFactory Type
+
+```typescript
+type ComponentFactory<P extends Record<string, unknown> = {}> =
+  | ((props: P, builder: Builder) => Element)
+  | ((props: P) => Element)
+  | ((builder: Builder) => Element)
+  | (() => Element)
+```
+
+A component is any function whose type satisfies `ComponentFactory`: it returns an `Element` (which is `() => Node`), and optionally accepts props and/or a builder callback.
+
+### Two-Tier Detection
+
+The compiler uses a two-tier strategy in `checkElementOrComponent()`:
+
+1. **HTML tag check** — If the callee name is in `ELEMENT_FACTORIES` (130 known HTML tags), it's an HTML element. Fast path, no type checking.
+2. **Type-based check** — Otherwise, `isComponentFactoryType()` inspects the callee's TypeScript type via call signatures. If the return type is a function returning `Node`, it's recognized as a component.
+
+This means component detection is purely type-driven — no naming conventions required (though PascalCase is idiomatic).
+
+### IR Representation
+
+Components reuse `ElementNode` with an optional `factorySource` field rather than introducing a new `ChildNode` variant:
+
+```typescript
+interface ElementNode {
+  kind: "element"
+  tag: string              // "Avatar", "Card", etc.
+  factorySource?: string   // "Avatar" — present for components, absent for HTML
+  attributes: AttributeNode[]
+  eventHandlers: EventHandlerNode[]
+  // ...
+}
+```
+
+This avoids a cascade of changes through every `switch (node.kind)` site in codegen, slot computation, and tree merging.
+
+### Codegen Output
+
+For an HTML element:
+```typescript
+const _div0 = document.createElement("div")
+```
+
+For a component:
+```typescript
+const _Avatar0 = Avatar({ src: "photo.jpg" })(scope.createChild())
+```
+
+The component factory is called with props, returning an `Element` (a scope-accepting function), which is immediately called with a child scope. The returned `Node` is then `appendChild`-ed to its parent.
+
+### Template Cloning Interaction
+
+Components cannot be serialized into `template.innerHTML` — the browser would create an unknown element like `<Avatar>`, not a component invocation. The walker yields a `componentPlaceholder` event instead of walking component children as HTML:
+
+```typescript
+// Walker sees ElementNode with factorySource → yields placeholder
+yield { type: "componentPlaceholder", node, path: [...pathStack] }
+```
+
+The template extractor emits a `<!---->` comment placeholder and records a `{ kind: "component", elementNode }` hole. At runtime, the codegen instantiates the component via `generateElement()` and replaces the comment:
+
+```typescript
+// Generated code for a component hole
+const _Avatar0 = Avatar({ src: "photo.jpg" })(scope.createChild())
+_holes[0].parentNode.replaceChild(_Avatar0, _holes[0])
+```
+
+### Current Limitations
+
+- **Builder callbacks not wired**: The `ComponentFactory` type supports `(props, builder) => Element`, but the compiler does not yet pass children as a builder callback at call sites. Components must manage their own children internally.
+- **SSR not implemented**: HTML codegen does not yet handle `factorySource`. Components are DOM-only for now.
+
+## Conditional Scope Creation
+
+List regions can skip per-item scope allocation when items contain no reactive content, reducing overhead for static list rendering.
+
+### Mechanism
+
+The IR computes `LoopNode.hasReactiveItems` at analysis time via `computeHasReactiveItems(body)`. The codegen emits this as `isReactive: true/false` in the `ListRegionHandlers` object:
+
+```typescript
+listRegion(parent, doc.items, {
+  create: (item, _index) => {
+    const _li0 = document.createElement("li")
+    _li0.textContent = String(item.get())
+    return _li0
+  },
+  slotKind: "single",
+  isReactive: false,  // No reactive content → skip scope allocation
+}, scope)
+```
+
+### Runtime Behavior
+
+When `isReactive` is `false`, the `executeOp` function stores `null` instead of creating a child scope:
+
+```typescript
+const needsScope = handlers.isReactive !== false
+const itemScope = needsScope ? state.parentScope.createChild() : null
+```
+
+The `scopes` array is typed as `(Scope | null)[]`. Delete and batch-delete paths already guard with `if (scope)` before calling `scope.dispose()`, so null entries are handled safely.
+
+### When It Matters
+
+This optimization is most valuable for large static lists — e.g., rendering 1000 items where each item is a simple `<li>` with no subscriptions. Without this optimization, 1000 `Scope` objects would be allocated (each with a `Set` for children tracking in the parent). With it, zero scopes are allocated for the items.
+
+## Delta Region Algebra
+
+Text patching, list regions, and conditional regions all follow the same **Functional Core / Imperative Shell** pattern, forming a unified "delta region" algebra.
+
+### The Pattern
+
+Every delta region has three phases:
+
+1. **Initial render** — Read current value, create DOM
+2. **Subscribe** — Register for delta notifications
+3. **Delta dispatch** — Apply surgical updates or fall back to full re-render
+
+| Region Type | Planning (Pure) | Execution (Imperative) | Delta Type |
+|-------------|-----------------|------------------------|------------|
+| Text | `planTextPatch(ops)` | `patchText(node, ops)` | `"text"` |
+| List | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"list"` |
+| Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition ref |
+
+### Delta Dispatch Strategy
+
+Each region type handles its matching delta surgically:
+
+- **Text deltas** → `insertData` / `deleteData` on Text nodes (character-level)
+- **List deltas** → `insertBefore` / `removeChild` on parent (element-level)
+- **Condition changes** → `replaceChild` for branch swapping
+
+When a delta type doesn't match the region type (e.g., a "replace" delta arrives at a list region), the region falls back to full re-render — clear all items and re-create from scratch.
+
+### Composability
+
+Delta regions compose naturally:
+
+```
+┌─ div (template clone) ─────────────────────────┐
+│  ┌─ h1 ─────────────────────────────────────┐   │
+│  │  textRegion(doc.title)  ← text deltas    │   │
+│  └───────────────────────────────────────────┘   │
+│  ┌─ conditionalRegion(doc.showDetails) ──────┐   │
+│  │  ┌─ listRegion(doc.items) ─────────────┐  │   │
+│  │  │  ┌─ li ────────────────────────┐    │  │   │
+│  │  │  │  textRegion(item.text)      │    │  │   │
+│  │  │  └─────────────────────────────┘    │  │   │
+│  │  └─────────────────────────────────────┘  │   │
+│  └────────────────────────────────────────────┘   │
+└───────────────────────────────────────────────────┘
+```
+
+Each region independently subscribes to its own reactive source. Parent disposal cascades to children via the `Scope` tree. Template cloning provides the static structure; delta regions fill in the dynamic holes.

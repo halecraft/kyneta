@@ -3,10 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { InvalidMountTargetError } from "../errors.js"
 import { mount, rootScope } from "./mount.js"
 import { resetScopeIdCounter, setRootScope } from "./scope.js"
-import {
-  activeSubscriptions,
-  resetSubscriptionIdCounter,
-} from "./subscribe.js"
+import { activeSubscriptions, resetSubscriptionIdCounter } from "./subscribe.js"
 
 // Set up DOM globals for testing
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")
@@ -91,7 +88,7 @@ describe("mount", () => {
       const result = mount(element, container)
 
       expect(rootScope).not.toBe(null)
-      expect(rootScope?.id).toBe("root")
+      expect(typeof rootScope?.id).toBe("number")
 
       result.dispose()
     })

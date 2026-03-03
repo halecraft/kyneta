@@ -100,7 +100,9 @@ export { bind, isBinding } from "./loro/index.js"
 
 export type {
   Binding,
+  Builder,
   Child,
+  ComponentFactory,
   ConditionalRegionHandlers,
   Element,
   ListRegionHandlers,

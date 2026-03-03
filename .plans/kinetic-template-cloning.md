@@ -65,10 +65,10 @@ PR 7 (component recognition)         ✅
 
 PR 8 (conditional scope creation)    ✅
 
-PR 9 (README / package.json / docs)  🔴 — after all features land
+PR 9 (README / package.json / docs)  ✅
 ```
 
-PRs 1–8 are complete. PR 9 is the final docs PR, absorbing deferred documentation from PRs 4, 6, and 7 (TECHNICAL.md sections for Delta Region Algebra, Batch Operations, and Component Model).
+PRs 1–9 are all complete. The template cloning & component unification plan is finished.
 
 ### PR 1: refactor(packages/kinetic): extract shared HTML constants ✅
 
@@ -317,17 +317,22 @@ Skip scope allocation for list items that have no reactive content.
 
 *Files: `regions.ts`, `types.ts`, `codegen/dom.ts`, `regions.test.ts`*
 
-### PR 9: docs(packages/kinetic): README, TECHNICAL.md, and package.json updates 🔴
+### PR 9: docs(packages/kinetic): README, TECHNICAL.md, and package.json updates ✅
 
 *After all feature PRs have landed.*
 
-1. Update `README.md`: document `ComponentFactory`, update feature table, add component examples 🔴
-2. Update `package.json` exports if subpath changes are needed for component type imports 🔴
-3. Add Component Model section to `TECHNICAL.md` (deferred from PR 7) 🔴
-4. Add Delta Region Algebra section to `TECHNICAL.md` (deferred from PR 4/6) 🔴
-5. Document `Scope.id` type change (`string` → `number`) as a migration note 🔴
+1. Update `README.md`: document `ComponentFactory`, update feature table, add component examples ✅
+2. Update `package.json` exports if subpath changes are needed for component type imports ✅ (no subpath changes needed; added `ComponentFactory` and `Builder` to root `index.ts` exports)
+3. Add Component Model section to `TECHNICAL.md` (deferred from PR 7) ✅
+4. Add Delta Region Algebra section to `TECHNICAL.md` (deferred from PR 4/6) ✅
+5. Document `Scope.id` type change (`string` → `number`) as a migration note ✅
+6. Add Conditional Scope Creation section to `TECHNICAL.md` ✅
+7. Update File Structure section in `TECHNICAL.md` with new files from PRs 1-4 ✅
+8. Update test count (760), feature table, comparison table, compilation model, runtime list ✅
 
-*Files: `README.md`, `package.json`, `TECHNICAL.md`*
+**Status:** Complete. All documentation updated. `ComponentFactory` and `Builder` exported from main entry point. All 760 tests pass.
+
+*Files: `README.md`, `TECHNICAL.md`, `src/index.ts`*
 
 ### Future Optimization: List Item Template Cloning
 

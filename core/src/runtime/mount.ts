@@ -47,7 +47,7 @@ export function mount(
   }
 
   // Create the root scope
-  const rootScope = new Scope("root")
+  const rootScope = new Scope()
   setRootScope(rootScope)
 
   let node: Node
