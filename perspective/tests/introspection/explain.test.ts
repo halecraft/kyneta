@@ -130,76 +130,9 @@ describe("IntrospectionAPI", () => {
 		});
 	});
 
-	describe("getConstraintsFor", () => {
-		it("should return constraints for exact path", () => {
-			let store = createConstraintStore();
-			const c1 = createTestConstraint("alice", 0, 1, ["user", "name"], "Alice");
-			const c2 = createTestConstraint("alice", 1, 2, ["user", "age"], 30);
-			store = tellMany(store, [c1, c2]).store;
-
-			const api = createTestAPI(store);
-			const constraints = api.getConstraintsFor(["user", "name"]);
-
-			expect(constraints).toHaveLength(1);
-			expect(constraints[0]?.peer).toBe("alice");
-			expect(constraints[0]?.value).toBe("Alice");
-		});
-
-		it("should return empty array for nonexistent path", () => {
-			const store = createConstraintStore();
-			const api = createTestAPI(store);
-			const constraints = api.getConstraintsFor(["nonexistent"]);
-
-			expect(constraints).toHaveLength(0);
-		});
-
-		it("should return multiple constraints at same path", () => {
-			let store = createConstraintStore();
-			const c1 = createTestConstraint("alice", 0, 1, ["key"], "value1");
-			const c2 = createTestConstraint("bob", 0, 2, ["key"], "value2");
-			store = tellMany(store, [c1, c2]).store;
-
-			const api = createTestAPI(store);
-			const constraints = api.getConstraintsFor(["key"]);
-
-			expect(constraints).toHaveLength(2);
-		});
-	});
-
-	describe("getConstraintsUnder", () => {
-		it("should return constraints under prefix", () => {
-			let store = createConstraintStore();
-			const c1 = createTestConstraint("alice", 0, 1, ["user", "name"], "Alice");
-			const c2 = createTestConstraint("alice", 1, 2, ["user", "age"], 30);
-			const c3 = createTestConstraint("alice", 2, 3, ["profile"], "data");
-			store = tellMany(store, [c1, c2, c3]).store;
-
-			const api = createTestAPI(store);
-			const constraints = api.getConstraintsUnder(["user"]);
-
-			expect(constraints).toHaveLength(2);
-		});
-
-		it("should return empty array for nonexistent prefix", () => {
-			const store = createConstraintStore();
-			const api = createTestAPI(store);
-			const constraints = api.getConstraintsUnder(["nonexistent"]);
-
-			expect(constraints).toHaveLength(0);
-		});
-
-		it("should include deeply nested constraints", () => {
-			let store = createConstraintStore();
-			const c1 = createTestConstraint("alice", 0, 1, ["a", "b", "c"], "deep");
-			const c2 = createTestConstraint("alice", 1, 2, ["a", "b"], "shallow");
-			store = tellMany(store, [c1, c2]).store;
-
-			const api = createTestAPI(store);
-			const constraints = api.getConstraintsUnder(["a"]);
-
-			expect(constraints).toHaveLength(2);
-		});
-	});
+	// Note: getConstraintsFor and getConstraintsUnder are thin wrappers
+	// over ask/askPrefix (tested in constraint-store.test.ts) plus
+	// toConstraintInfo formatting. Not worth separate test sections.
 
 	describe("getConflicts", () => {
 		it("should return empty report when no conflicts", () => {

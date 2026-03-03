@@ -473,63 +473,8 @@ describe("ReactiveTextView", () => {
 		});
 	});
 
-	describe("all TextView methods work", () => {
-		it("should support get and toString", () => {
-			const store = buildTestStore();
-			const view = createReactiveTextView({ store, path: ["text"] });
-
-			expect(view.get()).toBe("Hello");
-			expect(view.toString()).toBe("Hello");
-		});
-
-		it("should support length and isEmpty", () => {
-			const store = buildTestStore();
-			const view = createReactiveTextView({ store, path: ["text"] });
-
-			expect(view.length()).toBe(5);
-			expect(view.isEmpty()).toBe(false);
-		});
-
-		it("should support charAt", () => {
-			const store = buildTestStore();
-			const view = createReactiveTextView({ store, path: ["text"] });
-
-			expect(view.charAt(0)).toBe("H");
-			expect(view.charAt(4)).toBe("o");
-		});
-
-		it("should support slice", () => {
-			const store = buildTestStore();
-			const view = createReactiveTextView({ store, path: ["text"] });
-
-			expect(view.slice(0, 2)).toBe("He");
-			expect(view.slice(2)).toBe("llo");
-		});
-
-		it("should support getSolvedList", () => {
-			const store = buildTestStore();
-			const view = createReactiveTextView({ store, path: ["text"] });
-
-			const solved = view.getSolvedList();
-			expect(solved.length).toBe(5);
-			expect(solved.values).toEqual(["H", "e", "l", "l", "o"]);
-		});
-
-		it("should support tombstone and conflict tracking", () => {
-			let store = buildTestStore();
-
-			// Delete 'e'
-			const del = createDeleteConstraint("alice", 5, 6, ["text"], {
-				peer: "alice",
-				counter: 1,
-			});
-			store = tell(store, del).store;
-
-			const view = createReactiveTextView({ store, path: ["text"] });
-			expect(view.tombstoneCount()).toBe(1);
-			expect(view.hasConflicts()).toBe(false);
-		});
-	});
+	// Note: ReactiveTextView inherits all TextView methods via spread.
+	// Those methods are tested in the TextView section above.
 });
 
 describe("Edge Cases", () => {
