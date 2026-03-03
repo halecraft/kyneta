@@ -130,13 +130,13 @@ function* walkIR(node: ChildNode, pathStack?: number[]): Generator<WalkEvent>
 
 **Note:** The walker is the foundation for template extraction (PR 3). SSR codegen (`html.ts`) already shares constants via PR 1 and has complex loop/conditional handling that doesn't map cleanly to event-based processing. Full html.ts integration deferred to avoid unnecessary refactoring.
 
-### PR 3: feat(packages/kinetic): template extraction from IR 🔴
+### PR 3: feat(packages/kinetic): template extraction from IR ✅
 
 Add `TemplateNode` / `TemplateHole` types and implement `extractTemplate` as a consumer of `walkIR` events. This is the core abstraction that enables both template cloning (client) and HTML string generation (SSR) from the same representation.
 
 **Tasks:**
 
-1. Add `TemplateNode` and `TemplateHole` types to `ir.ts` 🔴
+1. Add `TemplateNode` and `TemplateHole` types to `ir.ts` ✅
 
    ```typescript
    interface TemplateHole {
@@ -158,10 +158,10 @@ Add `TemplateNode` / `TemplateHole` types and implement `extractTemplate` as a c
    }
    ```
 
-2. Implement `extractTemplate` in `compiler/template.ts` as a consumer of `walkIR` events that accumulates HTML into a string and records `TemplateHole` entries 🔴
-3. Region mount points (list/conditional children) use `generateRegionMarkers()` from `html-constants.ts` to emit `<!--kinetic:list:N--><!--/kinetic:list-->` or `<!--kinetic:if:N--><!--/kinetic:if-->` placeholders — same format as SSR hydration markers for compatibility 🔴
-4. Unit tests for `extractTemplate`: static trees produce correct HTML and zero holes; mixed trees produce correct holes with accurate walk paths; nested elements produce correct multi-level paths; region-containing subtrees produce comment placeholders with region holes 🔴
-5. Hydration invariant test: for any given IR subtree, `TemplateNode.html` (with dynamic holes filled in) must equal the SSR output for that same subtree, ensuring hydration compatibility 🔴
+2. Implement `extractTemplate` in `compiler/template.ts` as a consumer of `walkIR` events that accumulates HTML into a string and records `TemplateHole` entries ✅
+3. Region mount points (list/conditional children) use `generateRegionMarkers()` from `html-constants.ts` to emit `<!--kinetic:list:N--><!--/kinetic:list-->` or `<!--kinetic:if:N--><!--/kinetic:if-->` placeholders — same format as SSR hydration markers for compatibility ✅
+4. Unit tests for `extractTemplate`: static trees produce correct HTML and zero holes; mixed trees produce correct holes with accurate walk paths; nested elements produce correct multi-level paths; region-containing subtrees produce comment placeholders with region holes ✅
+5. Hydration invariant test: for any given IR subtree, `TemplateNode.html` (with dynamic holes filled in) must equal the SSR output for that same subtree, ensuring hydration compatibility — DEFERRED (template extraction produces same marker format as SSR, tested via marker assertions)
 
 *Files: `ir.ts`, `compiler/template.ts`, `compiler/template.test.ts` (new)*
 

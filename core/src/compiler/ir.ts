@@ -179,6 +179,87 @@ export type ContentNode = ContentValue
 export type SlotKind = "single" | "range"
 
 // =============================================================================
+// Template Types (for Template Cloning)
+// =============================================================================
+
+/**
+ * Kind of dynamic hole in a template.
+ *
+ * - **text**: Dynamic text content position
+ * - **attribute**: Dynamic attribute value
+ * - **event**: Event handler attachment point
+ * - **binding**: Two-way binding attachment point
+ * - **region**: List or conditional region mount point
+ */
+export type TemplateHoleKind =
+  | "text"
+  | "attribute"
+  | "event"
+  | "binding"
+  | "region"
+
+/**
+ * A dynamic hole in a template.
+ *
+ * Holes represent positions in the static HTML where runtime code needs to:
+ * - Insert dynamic text content
+ * - Set dynamic attribute values
+ * - Attach event handlers
+ * - Set up two-way bindings
+ * - Mount list or conditional regions
+ *
+ * The `path` array describes how to navigate from the template root to this hole
+ * using `firstChild` and `nextSibling` operations.
+ */
+export interface TemplateHole {
+  /** Walk path from template root: indices into children arrays at each level */
+  path: number[]
+
+  /** What kind of dynamic content this hole represents */
+  kind: TemplateHoleKind
+
+  /** For attribute holes: the attribute name */
+  attributeName?: string
+
+  /** For event holes: the event name (without "on" prefix) */
+  eventName?: string
+
+  /** For binding holes: the binding type */
+  bindingType?: "value" | "checked"
+
+  /** For binding holes: the ref source expression */
+  refSource?: string
+
+  /** For region holes: the original IR node (LoopNode or ConditionalNode) */
+  regionNode?: LoopNode | ConditionalNode
+
+  /** For text/attribute holes: the original ContentNode for codegen */
+  contentNode?: ContentNode
+}
+
+/**
+ * A template extracted from IR for template cloning.
+ *
+ * Represents a static HTML string with holes where dynamic content goes.
+ * Used by both:
+ * - **Client**: `template.innerHTML = html; template.content.cloneNode(true)`
+ * - **SSR**: HTML string generation with interpolations
+ *
+ * The holes are ordered by document position (depth-first pre-order),
+ * enabling efficient single-pass tree walking to grab all hole references.
+ */
+export interface TemplateNode {
+  /** Static HTML string (use as template.innerHTML) */
+  html: string
+
+  /** Ordered list of dynamic holes with walk paths */
+  holes: TemplateHole[]
+
+  /** Counter used for generating unique region marker IDs */
+  markerIdCounter: number
+}
+
+// =============================================================================
 // Tree Merge Types
 // =============================================================================
 

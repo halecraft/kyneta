@@ -362,10 +362,17 @@ describe("walkIR", () => {
     })
 
     it("should yield regionPlaceholder for reactive conditionals", () => {
+      const reactiveDep = { source: "doc.title", deltaKind: "text" as const }
       const conditional = createConditional(
-        [createConditionalBranch(makeReactiveContent(), [makeLiteral("Yes")])],
+        [
+          createConditionalBranch(
+            makeReactiveContent(),
+            [makeLiteral("Yes")],
+            makeSpan(),
+          ),
+        ],
+        reactiveDep,
         makeSpan(),
-        makeReactiveContent(),
       )
       const node = makeBuilder("div", [conditional])
       const events = collectEvents(node)
@@ -381,9 +388,15 @@ describe("walkIR", () => {
 
     it("should yield regionPlaceholder for render-time conditionals", () => {
       const conditional = createConditional(
-        [createConditionalBranch(makeLiteral("true"), [makeLiteral("Yes")])],
-        makeSpan(),
+        [
+          createConditionalBranch(
+            makeLiteral("true"),
+            [makeLiteral("Yes")],
+            makeSpan(),
+          ),
+        ],
         null,
+        makeSpan(),
       )
       const node = makeBuilder("div", [conditional])
       const events = collectEvents(node)
