@@ -9,6 +9,11 @@ import {
   isStatic,
   getHolesByKind,
   countHolesByKind,
+  planWalk,
+  generateWalkCode,
+  generateTemplateDeclaration,
+  simpleHash,
+  type NavOp,
 } from "./template.js"
 import {
   createBuilder,
@@ -453,6 +458,188 @@ describe("utility functions", () => {
 
       expect(counts.get("text")).toBe(2)
       expect(counts.get("event")).toBe(1)
+    })
+
+    // =============================================================================
+    // Walk Planning Tests
+    // =============================================================================
+
+    describe("planWalk", () => {
+      it("should return empty array for no holes", () => {
+        const ops = planWalk([])
+        expect(ops).toEqual([])
+      })
+
+      it("should handle single hole at root level", () => {
+        const holes = [{ path: [0], kind: "text" as const }]
+        const ops = planWalk(holes)
+
+        expect(ops).toEqual([{ op: "down" }, { op: "grab", holeIndex: 0 }])
+      })
+
+      it("should handle single hole nested two levels", () => {
+        const holes = [{ path: [0, 0], kind: "text" as const }]
+        const ops = planWalk(holes)
+
+        expect(ops).toEqual([
+          { op: "down" },
+          { op: "down" },
+          { op: "grab", holeIndex: 0 },
+        ])
+      })
+
+      it("should handle sibling holes", () => {
+        const holes = [
+          { path: [0], kind: "text" as const },
+          { path: [1], kind: "text" as const },
+        ]
+        const ops = planWalk(holes)
+
+        expect(ops).toEqual([
+          { op: "down" },
+          { op: "grab", holeIndex: 0 },
+          { op: "right" },
+          { op: "grab", holeIndex: 1 },
+        ])
+      })
+
+      it("should handle nested then sibling", () => {
+        // Template: <div><span><!--hole 0--></span><p><!--hole 1--></p></div>
+        // Paths: [0, 0] and [1, 0]
+        const holes = [
+          { path: [0, 0], kind: "text" as const },
+          { path: [1, 0], kind: "text" as const },
+        ]
+        const ops = planWalk(holes)
+
+        // From root: down to [0], down to [0,0], grab
+        // Then: up to [0], right to [1], down to [1,0], grab
+        expect(ops).toContainEqual({ op: "grab", holeIndex: 0 })
+        expect(ops).toContainEqual({ op: "grab", holeIndex: 1 })
+        expect(ops.filter(op => op.op === "grab")).toHaveLength(2)
+      })
+
+      it("should preserve original hole indices when sorting", () => {
+        // Holes provided out of document order
+        const holes = [
+          { path: [1], kind: "text" as const },
+          { path: [0], kind: "text" as const },
+        ]
+        const ops = planWalk(holes)
+
+        // Should grab index 1 (path [0]) first, then index 0 (path [1])
+        const grabs = ops.filter(
+          (op): op is { op: "grab"; holeIndex: number } => op.op === "grab",
+        )
+        expect(grabs[0].holeIndex).toBe(1) // original index of [0]
+        expect(grabs[1].holeIndex).toBe(0) // original index of [1]
+      })
+
+      it("should handle complex nested structure", () => {
+        // Template: <div><h1><!--hole 0--></h1><ul><li><!--hole 1--></li></ul></div>
+        // Paths: [0, 0] (inside h1) and [1, 0, 0] (inside li inside ul)
+        const holes = [
+          { path: [0, 0], kind: "text" as const },
+          { path: [1, 0, 0], kind: "text" as const },
+        ]
+        const ops = planWalk(holes)
+
+        expect(ops.filter(op => op.op === "grab")).toHaveLength(2)
+      })
+
+      it("should handle root-level attribute hole", () => {
+        // Attribute on root element - path is []
+        const holes = [
+          { path: [], kind: "attribute" as const, attributeName: "class" },
+        ]
+        const ops = planWalk(holes)
+
+        // Root element - just grab, no navigation needed
+        expect(ops).toEqual([{ op: "grab", holeIndex: 0 }])
+      })
+    })
+
+    // =============================================================================
+    // Code Generation Tests
+    // =============================================================================
+
+    describe("generateWalkCode", () => {
+      it("should return empty array for no holes", () => {
+        const code = generateWalkCode([], 0, "_root", "  ")
+        expect(code).toEqual([])
+      })
+
+      it("should generate code for simple walk", () => {
+        const ops: NavOp[] = [{ op: "down" }, { op: "grab", holeIndex: 0 }]
+        const code = generateWalkCode(ops, 1, "_root", "")
+
+        expect(code).toContain("const _holes = new Array(1)")
+        expect(code).toContain("let _n = _root")
+        expect(code).toContain("_n = _n.firstChild")
+        expect(code).toContain("_holes[0] = _n")
+      })
+
+      it("should generate all navigation operations", () => {
+        const ops: NavOp[] = [
+          { op: "down" },
+          { op: "right" },
+          { op: "up" },
+          { op: "grab", holeIndex: 0 },
+        ]
+        const code = generateWalkCode(ops, 1, "_el", "  ")
+
+        expect(code.some(line => line.includes("_n.firstChild"))).toBe(true)
+        expect(code.some(line => line.includes("_n.nextSibling"))).toBe(true)
+        expect(code.some(line => line.includes("_n.parentNode"))).toBe(true)
+        expect(code.some(line => line.includes("_holes[0] = _n"))).toBe(true)
+      })
+
+      it("should apply indentation", () => {
+        const ops: NavOp[] = [{ op: "grab", holeIndex: 0 }]
+        const code = generateWalkCode(ops, 1, "_root", "    ")
+
+        expect(code.every(line => line.startsWith("    "))).toBe(true)
+      })
+    })
+
+    describe("generateTemplateDeclaration", () => {
+      it("should generate template creation code", () => {
+        const code = generateTemplateDeclaration("<div>Hello</div>", "_tmpl_0")
+
+        expect(code).toContain(
+          'const _tmpl_0 = document.createElement("template")',
+        )
+        expect(code).toContain('_tmpl_0.innerHTML = "<div>Hello</div>"')
+      })
+
+      it("should escape quotes in HTML", () => {
+        const code = generateTemplateDeclaration(
+          '<div class="test">Hi</div>',
+          "_tmpl_1",
+        )
+
+        // Should use JSON.stringify which escapes quotes
+        expect(code).toContain('\\"test\\"')
+      })
+    })
+
+    describe("simpleHash", () => {
+      it("should return consistent hash for same input", () => {
+        const hash1 = simpleHash("<div>Hello</div>")
+        const hash2 = simpleHash("<div>Hello</div>")
+        expect(hash1).toBe(hash2)
+      })
+
+      it("should return different hashes for different inputs", () => {
+        const hash1 = simpleHash("<div>Hello</div>")
+        const hash2 = simpleHash("<div>World</div>")
+        expect(hash1).not.toBe(hash2)
+      })
+
+      it("should return string", () => {
+        const hash = simpleHash("<div></div>")
+        expect(typeof hash).toBe("string")
+      })
     })
   })
 })

@@ -165,7 +165,7 @@ Add `TemplateNode` / `TemplateHole` types and implement `extractTemplate` as a c
 
 *Files: `ir.ts`, `compiler/template.ts`, `compiler/template.test.ts` (new)*
 
-### PR 4: feat(packages/kinetic): template-cloning DOM codegen 🔴
+### PR 4: feat(packages/kinetic): template-cloning DOM codegen 🟡
 
 Emit `cloneNode(true)` + tree walker instead of `createElement` chains. First consumer of `TemplateNode`.
 
@@ -196,23 +196,25 @@ Holes are visited in document order (depth-first), so the walk never backtracks 
 
 **Tasks:**
 
-1. Implement `planWalk(holes: TemplateHole[]): NavOp[]` in `compiler/template.ts` — converts paths to optimal traversal 🔴
-2. Implement `generateWalkCode(plan: NavOp[], holeCount: number): string[]` — emits DOM navigation code 🔴
-3. Modify codegen return type to include module-level declarations: 🔴
+1. Implement `planWalk(holes: TemplateHole[]): NavOp[]` in `compiler/template.ts` — converts paths to optimal traversal ✅
+2. Implement `generateWalkCode(plan: NavOp[], holeCount: number): string[]` — emits DOM navigation code ✅
+3. Modify codegen return type to include module-level declarations: ✅
    ```typescript
    interface CodegenResult {
      code: string
      moduleDeclarations: string[]
    }
    ```
-4. Add `generateTemplateDeclaration(template: TemplateNode, state: CodegenState): string` that emits `const _tmpl_N = document.createElement("template"); _tmpl_N.innerHTML = "..."` 🔴
-5. Template deduplication via hash: maintain `Map<string, string>` of `htmlHash → templateVarName` in codegen state. Same template HTML reuses same declaration 🔴
+4. Add `generateTemplateDeclaration(template: TemplateNode, state: CodegenState): string` that emits `const _tmpl_N = document.createElement("template"); _tmpl_N.innerHTML = "..."` ✅
+5. Template deduplication via hash: `simpleHash()` utility added ✅; codegen state cache 🔴
 6. Update `transformSourceInPlace` to collect `moduleDeclarations` from all replacements and insert at top of file 🔴
 7. Wire reactive subscriptions to grabbed hole references instead of newly-created elements 🔴
 8. Region holes: pass the cloned comment node to `listRegion` / `conditionalRegion` as the mount point 🔴
-9. Unit tests: generated code uses `cloneNode`; walk plan is optimal; walker paths match expected hole positions; reactive subscriptions target correct nodes 🔴
+9. Unit tests: walk plan tests ✅; full codegen cloneNode tests 🔴
 10. Integration tests: compile + execute static trees, verify DOM structure is identical to imperative approach; compile + execute reactive trees, verify subscriptions work with cloned nodes 🔴
-11. Update `TECHNICAL.md` with Template Cloning architecture section 🔴
+11. Update `TECHNICAL.md` with Template Cloning architecture section ✅
+
+**Status:** Infrastructure complete (planner, code gen helpers, CodegenResult type, TECHNICAL.md). Full integration into `generateDOM`/`generateElementFactory` to replace `createElement` chains with `cloneNode` is pending — tasks 5–10 remain.
 
 *Files: `compiler/template.ts`, `codegen/dom.ts`, `transform.ts`, `integration.test.ts`, `TECHNICAL.md`*
 

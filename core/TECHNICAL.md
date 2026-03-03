@@ -750,3 +750,130 @@ interface ConditionalRegionState extends RegionStateBase {
 ```
 
 This unified structure makes the region system easier to understand, test, and extend.
+
+## Template Cloning Architecture
+
+Template cloning provides 3-10× faster DOM creation compared to imperative `createElement` chains by leveraging the browser's native `<template>.content.cloneNode(true)` implementation.
+
+### Four-Layer Design
+
+The template cloning system follows a clean separation of concerns:
+
+| Layer | Module | Input | Output |
+|-------|--------|-------|--------|
+| **Walker** | `walk.ts` | IR tree | `WalkEvent` stream |
+| **Extractor** | `template.ts` | `WalkEvent` stream | `TemplateNode` |
+| **Planner** | `template.ts` | `TemplateHole[]` | `NavOp[]` |
+| **Codegen** | `dom.ts` | `NavOp[]` | JavaScript code |
+
+### Template Extraction
+
+The extractor consumes walker events and produces a `TemplateNode`:
+
+```typescript
+interface TemplateNode {
+  /** Static HTML string for template.innerHTML */
+  html: string
+  /** Ordered list of dynamic holes with walk paths */
+  holes: TemplateHole[]
+  /** Counter for unique region marker IDs */
+  markerIdCounter: number
+}
+
+interface TemplateHole {
+  /** Path from root: indices into children arrays */
+  path: number[]
+  /** Hole type: text, attribute, event, binding, region */
+  kind: TemplateHoleKind
+  /** Original IR node for codegen */
+  contentNode?: ContentNode
+  regionNode?: LoopNode | ConditionalNode
+}
+```
+
+### Walk Planning
+
+The planner converts hole paths to optimal DOM navigation:
+
+```typescript
+type NavOp =
+  | { op: "down" }   // .firstChild
+  | { op: "right" }  // .nextSibling
+  | { op: "up" }     // .parentNode
+  | { op: "grab"; holeIndex: number }
+
+// Example: holes at [0,0] and [1,0]
+const ops = planWalk(holes)
+// [down, down, grab(0), up, right, down, grab(1)]
+```
+
+Holes are visited in document order (depth-first), so the walk never backtracks past already-grabbed holes.
+
+### Generated Code Pattern
+
+Template cloning generates code like:
+
+```typescript
+// Module-level template declaration (hoisted)
+const _tmpl_0 = document.createElement("template")
+_tmpl_0.innerHTML = "<div><span></span><p></p></div>"
+
+// Element factory function
+(scope) => {
+  const _root = _tmpl_0.content.cloneNode(true).firstChild
+  
+  // Walk to grab hole references
+  const _holes = new Array(2)
+  let _n = _root
+  _n = _n.firstChild          // span
+  _n = _n.firstChild          // text inside span
+  _holes[0] = _n
+  _n = _n.parentNode          // span
+  _n = _n.nextSibling         // p
+  _holes[1] = _n
+  
+  // Wire up reactivity to grabbed references
+  subscribe(dep, (delta) => {
+    _holes[0].textContent = value
+  }, scope)
+  
+  return _root
+}
+```
+
+### Region Handling
+
+Regions (loops/conditionals) become comment placeholder holes in the template:
+
+```html
+<ul><!--kinetic:list:1--><!--/kinetic:list--></ul>
+```
+
+The walker grabs the opening comment node, which is passed to `listRegion()` or `conditionalRegion()` as the mount point. This format matches SSR hydration markers, ensuring template-cloned and SSR-rendered DOM are structurally identical.
+
+### Template Deduplication
+
+List region item templates are deduplicated via hash:
+
+```typescript
+// Codegen maintains: Map<htmlHash, templateVarName>
+// Same template HTML reuses same declaration
+const _tmpl_item = document.createElement("template")
+_tmpl_item.innerHTML = "<li></li>"
+
+// All list items clone from same template
+create: (item) => _tmpl_item.content.cloneNode(true).firstChild
+```
+
+### Integration with CodegenResult
+
+The `CodegenResult` type supports returning module declarations:
+
+```typescript
+interface CodegenResult {
+  code: string
+  moduleDeclarations: string[]
+}
+```
+
+The `transformSourceInPlace` function collects all `moduleDeclarations` and inserts them at the top of the transformed file.

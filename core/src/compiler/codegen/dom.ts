@@ -26,6 +26,24 @@ import type {
 import { computeSlotKind, mergeConditionalBodies } from "../ir.js"
 
 // =============================================================================
+// Code Generation Result
+// =============================================================================
+
+/**
+ * Result of code generation, including module-level declarations.
+ *
+ * This allows codegen to return both the function body and any declarations
+ * that should be hoisted to module scope (e.g., template elements).
+ */
+export interface CodegenResult {
+  /** The generated function body code */
+  code: string
+
+  /** Module-level declarations to hoist (e.g., template elements) */
+  moduleDeclarations: string[]
+}
+
+// =============================================================================
 // Code Generation Options
 // =============================================================================
 
@@ -912,6 +930,35 @@ export function generateElementFactory(
   lines.push(`${ind}}`)
 
   return lines.join("\n")
+}
+
+/**
+ * Generate an element factory function with module declarations.
+ *
+ * Returns a CodegenResult containing both the function code and any
+ * module-level declarations (like template elements) that should be
+ * hoisted to the top of the file.
+ *
+ * This is the newer API that supports template cloning optimizations.
+ * Currently returns empty moduleDeclarations; template cloning will
+ * populate this in a future update.
+ */
+export function generateElementFactoryWithResult(
+  node: BuilderNode,
+  options: DOMCodegenOptions = {},
+): CodegenResult {
+  const code = generateElementFactory(node, options)
+
+  // TODO: When template cloning is fully integrated, this will:
+  // 1. Extract template from IR
+  // 2. Generate template declaration
+  // 3. Generate cloneNode-based code instead of createElement
+  // 4. Return template declarations in moduleDeclarations
+
+  return {
+    code,
+    moduleDeclarations: [],
+  }
 }
 
 // =============================================================================
