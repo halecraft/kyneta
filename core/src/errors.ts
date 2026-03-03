@@ -98,12 +98,12 @@ export class HydrationMismatchError extends KineticError {
  * stale closures referencing a cleaned-up region.
  */
 export class ScopeDisposedError extends KineticError {
-  readonly scopeId: string
+  readonly scopeId: number
 
-  constructor(scopeId: string) {
+  constructor(scopeId: number) {
     super(
       KineticErrorCode.SCOPE_DISPOSED,
-      `Scope "${scopeId}" has been disposed. This usually indicates a stale closure referencing a cleaned-up region.`,
+      `Scope ${scopeId} has been disposed. This usually indicates a stale closure referencing a cleaned-up region.`,
     )
     this.name = "ScopeDisposedError"
     this.scopeId = scopeId

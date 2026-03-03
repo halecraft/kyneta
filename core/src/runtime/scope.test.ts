@@ -8,15 +8,57 @@ describe("Scope", () => {
   })
 
   describe("creation", () => {
-    it("should assign unique IDs (auto-generated or custom)", () => {
+    it("should assign unique numeric IDs (auto-generated or custom)", () => {
       const scope1 = new Scope()
       const scope2 = new Scope()
-      const custom = new Scope("my-scope")
+      const custom = new Scope(999)
 
-      expect(scope1.id).toBe("scope-1")
-      expect(scope2.id).toBe("scope-2")
-      expect(custom.id).toBe("my-scope")
+      expect(scope1.id).toBe(1)
+      expect(scope2.id).toBe(2)
+      expect(custom.id).toBe(999)
       expect(scope1.disposed).toBe(false)
+    })
+  })
+
+  describe("lazy allocation", () => {
+    it("should not allocate cleanups array until first onDispose", () => {
+      const scope = new Scope()
+
+      expect(scope.hasAllocatedCleanups).toBe(false)
+      expect(scope.cleanupCount).toBe(0)
+
+      scope.onDispose(() => {})
+
+      expect(scope.hasAllocatedCleanups).toBe(true)
+      expect(scope.cleanupCount).toBe(1)
+    })
+
+    it("should not allocate children set until first createChild", () => {
+      const scope = new Scope()
+
+      expect(scope.hasAllocatedChildren).toBe(false)
+      expect(scope.childCount).toBe(0)
+
+      scope.createChild()
+
+      expect(scope.hasAllocatedChildren).toBe(true)
+      expect(scope.childCount).toBe(1)
+    })
+
+    it("should safely dispose with null cleanups and children", () => {
+      // This is the key null-safety test - dispose must not crash
+      // when neither cleanups nor children have been allocated
+      const scope = new Scope()
+
+      expect(scope.hasAllocatedCleanups).toBe(false)
+      expect(scope.hasAllocatedChildren).toBe(false)
+
+      // Should not throw
+      scope.dispose()
+
+      expect(scope.disposed).toBe(true)
+      expect(scope.cleanupCount).toBe(0)
+      expect(scope.childCount).toBe(0)
     })
   })
 
@@ -108,7 +150,7 @@ describe("Scope", () => {
 
   describe("child scopes", () => {
     it("should create child scopes", () => {
-      const parent = new Scope("parent")
+      const parent = new Scope(100)
       const child = parent.createChild()
 
       expect(parent.childCount).toBe(1)
@@ -212,7 +254,7 @@ describe("Scope", () => {
 
   describe("real-world scenarios", () => {
     it("should handle list item cleanup pattern", () => {
-      const listScope = new Scope("list")
+      const listScope = new Scope(1000)
       const itemCleanups: string[] = []
 
       // Simulate adding 3 list items
@@ -239,7 +281,7 @@ describe("Scope", () => {
     })
 
     it("should handle conditional region swap pattern", () => {
-      const conditionalScope = new Scope("conditional")
+      const conditionalScope = new Scope(2000)
       let currentBranchScope: Scope | null = null
       const cleanups: string[] = []
 
@@ -258,6 +300,34 @@ describe("Scope", () => {
       conditionalScope.dispose()
 
       expect(cleanups).toEqual(["then cleanup", "else cleanup"])
+    })
+
+    it("should minimize allocations for static list items (no cleanups needed)", () => {
+      // Simulates a list with purely static items that don't need subscriptions
+      const listScope = new Scope()
+
+      // Create 100 child scopes but don't register any cleanups
+      const childScopes: Scope[] = []
+      for (let i = 0; i < 100; i++) {
+        childScopes.push(listScope.createChild())
+      }
+
+      // Children set is allocated (we have children)
+      expect(listScope.hasAllocatedChildren).toBe(true)
+      expect(listScope.childCount).toBe(100)
+
+      // But none of the children have allocated cleanups arrays
+      for (const child of childScopes) {
+        expect(child.hasAllocatedCleanups).toBe(false)
+      }
+
+      // Dispose should work without issues
+      listScope.dispose()
+
+      expect(listScope.disposed).toBe(true)
+      for (const child of childScopes) {
+        expect(child.disposed).toBe(true)
+      }
     })
   })
 })

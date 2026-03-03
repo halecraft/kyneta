@@ -329,7 +329,7 @@ export interface ConditionalRegionHandlers {
  */
 export interface ScopeInterface {
   /** Unique identifier for this scope */
-  readonly id: string
+  readonly id: number
 
   /** Whether this scope has been disposed */
   readonly disposed: boolean

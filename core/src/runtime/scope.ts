@@ -5,6 +5,10 @@
  * When a region is destroyed (item deleted, condition becomes false), its scope disposes
  * all nested subscriptions automatically. This prevents memory leaks without manual cleanup.
  *
+ * Performance optimizations:
+ * - Lazy allocation: cleanups array and children set are not allocated until first use
+ * - Numeric IDs: uses numbers instead of strings to avoid allocation in tight loops
+ *
  * @example
  * ```ts
  * const scope = new Scope()
@@ -29,8 +33,8 @@ let scopeIdCounter = 0
 /**
  * Generate a unique scope ID.
  */
-function generateScopeId(): string {
-  return `scope-${++scopeIdCounter}`
+function generateScopeId(): number {
+  return ++scopeIdCounter
 }
 
 /**
@@ -49,21 +53,21 @@ export function resetScopeIdCounter(): void {
  */
 export class Scope {
   /** Unique identifier for this scope */
-  readonly id: string
+  readonly id: number
 
   /** Whether this scope has been disposed */
   private _disposed = false
 
-  /** Cleanup functions to call on dispose */
-  private cleanups: Array<() => void> = []
+  /** Cleanup functions to call on dispose (lazy - null until first use) */
+  private cleanups: Array<() => void> | null = null
 
-  /** Child scopes (for cascading dispose) */
-  private children: Set<Scope> = new Set()
+  /** Child scopes (for cascading dispose) (lazy - null until first use) */
+  private children: Set<Scope> | null = null
 
   /** Parent scope (for removal on dispose) */
   private parent: Scope | null = null
 
-  constructor(id?: string) {
+  constructor(id?: number) {
     this.id = id ?? generateScopeId()
   }
 
@@ -85,6 +89,10 @@ export class Scope {
     if (this._disposed) {
       throw new ScopeDisposedError(this.id)
     }
+    // Lazy allocation: create array only when first cleanup is added
+    if (this.cleanups === null) {
+      this.cleanups = []
+    }
     this.cleanups.push(cleanup)
   }
 
@@ -101,6 +109,10 @@ export class Scope {
     }
     const child = new Scope()
     child.parent = this
+    // Lazy allocation: create set only when first child is added
+    if (this.children === null) {
+      this.children = new Set()
+    }
     this.children.add(child)
     return child
   }
@@ -119,25 +131,29 @@ export class Scope {
     this._disposed = true
 
     // Dispose children first (depth-first)
-    for (const child of this.children) {
-      child.dispose()
+    if (this.children !== null) {
+      for (const child of this.children) {
+        child.dispose()
+      }
+      this.children.clear()
     }
-    this.children.clear()
 
     // Call cleanups in reverse order (LIFO)
-    while (this.cleanups.length > 0) {
-      const cleanup = this.cleanups.pop()
-      try {
-        cleanup?.()
-      } catch (e) {
-        // Log but don't throw - we want to continue cleanup
-        console.error(`Error in scope cleanup for ${this.id}:`, e)
+    if (this.cleanups !== null) {
+      while (this.cleanups.length > 0) {
+        const cleanup = this.cleanups.pop()
+        try {
+          cleanup?.()
+        } catch (e) {
+          // Log but don't throw - we want to continue cleanup
+          console.error(`Error in scope cleanup for scope ${this.id}:`, e)
+        }
       }
     }
 
     // Remove from parent's children set
     if (this.parent) {
-      this.parent.children.delete(this)
+      this.parent.children?.delete(this)
       this.parent = null
     }
   }
@@ -148,7 +164,7 @@ export class Scope {
    * @internal - For testing
    */
   get cleanupCount(): number {
-    return this.cleanups.length
+    return this.cleanups?.length ?? 0
   }
 
   /**
@@ -156,7 +172,7 @@ export class Scope {
    * @internal - For testing
    */
   get childCount(): number {
-    return this.children.size
+    return this.children?.size ?? 0
   }
 
   /**
@@ -164,11 +180,29 @@ export class Scope {
    * @internal - For testing
    */
   get totalCleanupCount(): number {
-    let total = this.cleanups.length
-    for (const child of this.children) {
-      total += child.totalCleanupCount
+    let total = this.cleanups?.length ?? 0
+    if (this.children !== null) {
+      for (const child of this.children) {
+        total += child.totalCleanupCount
+      }
     }
     return total
+  }
+
+  /**
+   * Check if the cleanups array has been allocated.
+   * @internal - For testing lazy allocation
+   */
+  get hasAllocatedCleanups(): boolean {
+    return this.cleanups !== null
+  }
+
+  /**
+   * Check if the children set has been allocated.
+   * @internal - For testing lazy allocation
+   */
+  get hasAllocatedChildren(): boolean {
+    return this.children !== null
   }
 }
 

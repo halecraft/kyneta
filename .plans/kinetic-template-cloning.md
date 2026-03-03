@@ -218,7 +218,7 @@ Holes are visited in document order (depth-first), so the walk never backtracks 
 
 *Files: `compiler/template.ts`, `codegen/dom.ts`, `transform.ts`, `integration.test.ts`, `TECHNICAL.md`*
 
-### PR 5: perf(packages/kinetic): lazy scope allocation and numeric IDs 🔴
+### PR 5: perf(packages/kinetic): lazy scope allocation and numeric IDs ✅
 
 *Independent of PRs 1–4. Can merge at any point.*
 
@@ -226,12 +226,14 @@ Reduce per-item allocation costs. Performance-only, no behavior change.
 
 **Tasks:**
 
-1. Make `Scope` lazy: don't allocate `cleanups` array or `children` set until first use. Use `null` sentinel and allocate on demand in `onDispose` and `createChild` 🔴
-2. Change scope IDs from string template literals to numeric counters — `id: number` instead of `id: string`. Eliminates string allocation in tight loops 🔴
-3. Update `ScopeDisposedError` and test assertions that match on scope ID strings 🔴
-4. Unit tests: verify lazy scope doesn't allocate until needed; verify numeric IDs work; verify dispose handles `null` cleanups/children without crashing 🔴
+1. Make `Scope` lazy: don't allocate `cleanups` array or `children` set until first use. Use `null` sentinel and allocate on demand in `onDispose` and `createChild` ✅
+2. Change scope IDs from string template literals to numeric counters — `id: number` instead of `id: string`. Eliminates string allocation in tight loops ✅
+3. Update `ScopeDisposedError` and test assertions that match on scope ID strings ✅
+4. Unit tests: verify lazy scope doesn't allocate until needed; verify numeric IDs work; verify dispose handles `null` cleanups/children without crashing ✅
 
-*Files: `scope.ts`, `scope.test.ts`, `errors.ts`, `types.ts`, `testing/runtime.ts`*
+**Status:** Complete. Scope now uses lazy allocation (null sentinel for cleanups/children) and numeric IDs. Added `hasAllocatedCleanups` and `hasAllocatedChildren` getters for testing. All 741 tests pass.
+
+*Files: `scope.ts`, `scope.test.ts`, `errors.ts`, `types.ts`*
 
 ### PR 6: feat(packages/kinetic): CRDT-aware batch list operations 🔴
 
