@@ -561,10 +561,10 @@ function generateHTMLOutput(
     const builder = ir[i]
     const varName = `render${i}`
 
-    const html = generateHTML(builder, {
+    const htmlLines = generateHTML(builder, {
       hydratable: options.hydratable ?? true,
     })
-    lines.push(`const ${varName} = () => { ${html} }`)
+    lines.push(`const ${varName} = () => { ${htmlLines.join("; ")} }`)
     lines.push("")
   }
 

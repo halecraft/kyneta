@@ -425,7 +425,7 @@ function emitConditional(
 export function generateHTML(
   node: BuilderNode,
   options: HTMLCodegenOptions = {},
-): string {
+): string[] {
   const state = createState(options)
 
   const lines: string[] = []
@@ -452,7 +452,7 @@ export function generateHTML(
 
   lines.push(`return _html`)
 
-  return lines.join("; ")
+  return lines
 }
 
 /**
@@ -470,11 +470,13 @@ export function generateRenderFunction(
   const innerState = indented(state)
   const innerInd = getIndent(innerState)
 
-  const html = generateHTML(node, options)
+  const htmlLines = generateHTML(node, options)
 
   const lines: string[] = []
   lines.push(`${ind}() => {`)
-  lines.push(`${innerInd}${html.split("; ").join(`\n${innerInd}`)}`)
+  for (const line of htmlLines) {
+    lines.push(`${innerInd}${line}`)
+  }
   lines.push(`${ind}}`)
 
   return lines.join("\n")

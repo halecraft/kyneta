@@ -82,9 +82,11 @@ Rather than patching `generateElement` with IIFEs or conditional accumulation, *
 **After** (one calling convention):
 - `emitChild` returns accumulation lines (`string[]`)
 - `emitElement` returns accumulation lines (`string[]`)
+- `emitContent` returns accumulation lines (`string[]`)
 - `emitLoop` returns accumulation lines (`string[]`)
 - `emitConditional` returns accumulation lines (`string[]`)
 - `emitChildren` iterates children via `emitChild` (`string[]`)
+- `generateHTML` returns `string[]` (the raw line array, not joined)
 
 Each construct has one generator, not two. Statements are just lines interleaved with `_html +=` lines.
 
@@ -125,6 +127,8 @@ Each construct has one generator, not two. Statements are just lines interleaved
 
 Both trivially accommodate the block-body change.
 
+> **Implementation note (PR 1 complete):** `generateHTML` returns `string[]` directly (not a joined string). `generateRenderFunction` iterates the array to indent each line. `generateHTMLOutput` joins with `"; "` for single-line inline arrow bodies. This eliminates the fragile split-on-semicolon pattern that the initial implementation had.
+
 ### Decision B: Filter Before Codegen (FC/IS)
 
 Rather than modifying every codegen switch site to handle `TargetBlockNode`, adopt a **filter-before-codegen** approach:
@@ -147,30 +151,48 @@ Call this in `transformSourceInPlace` after analysis and before codegen.
 
 The work is arranged as three PRs, each independently buildable, testable, and reviewable. The narrative builds from "unify the architecture (which fixes the bug)" → "add the new capability" → "apply both to the real example and document."
 
-### PR 1: Unify HTML codegen calling convention (refactor + bug fix) 🔴
+### PR 1: Unify HTML codegen calling convention (refactor + bug fix) ✅
 
 **Type**: Refactor + bug fix (tests first, then refactor)
 
 This PR eliminates the dual-calling-convention architecture in `codegen/html.ts`, replacing it with a single accumulation-line convention. The statement-dropping bug disappears as a structural consequence — there is no longer a code path that can't express statements. No new IR types, no new features.
 
-**Scope of changes**: `codegen/html.ts` (primary), `transform.ts` (`generateHTMLOutput` wrapping), `codegen/html.test.ts`, `integration.test.ts`.
+**Scope of changes**: `codegen/html.ts` (primary), `transform.ts` (`generateHTMLOutput` wrapping), `codegen/html.test.ts`, `integration.test.ts`, `transform.test.ts`.
 
-- **Task 1.1**: Add new unit tests to `codegen/html.test.ts` (initially failing): 🔴
+**Commits:**
+- `ultvuxws` — `(packages/kinetic) fix: unify HTML codegen to single accumulation-line convention`
+- `yukslroy` — `(packages/kinetic) refactor: generateHTML returns string[] directly`
+
+- **Task 1.1**: Add new unit tests to `codegen/html.test.ts`: ✅
   - Builder with top-level `StatementNode` before and after element children
   - Interleaved statements and elements at builder level
   - Statement-only builder body
   - **Nested element with statements**: `createElement("header", ..., [stmt("const x = 1"), h1Element])` inside a builder
-- **Task 1.2**: Add integration test in `integration.test.ts` (initially failing) — compile a builder with `const x = 1; h1(x.toString())` to HTML target, execute the generated function, verify output contains `<h1>1</h1>`. 🔴
-- **Task 1.3**: Unify `generateChild` to return `string[]` (accumulation lines) instead of `string` (template literal fragment). Each case emits `_html += \`...\`` lines. The `"statement"` case emits the statement source as a code line (fixing the bug). Rename to `emitChild` for clarity. 🔴
-- **Task 1.4**: Unify `generateElement` to return `string[]` — emit `_html += \`<tag attrs>\``; recurse children via `emitChild`; emit `_html += \`</tag>\``. Rename to `emitElement`. 🔴
-- **Task 1.5**: Collapse the dual loop generators: delete `generateReactiveLoop` and `generateLoopInline` (template literal context variants). Merge their hydration-marker logic into `generateLoopBody` (accumulation context variant), which becomes the single `emitLoop`. Reactive and render-time loops both produce `for...of` loops with `_html +=` lines; reactive loops additionally emit hydration marker comments. All loops iterate directly with `for (const ${itemVar} of ${iterableSource})` — no spread syntax needed. (The old `generateReactiveLoop` used `[...source].map(...)` to "preserve PlainValueRef", but testing confirms `for...of` on a ListRef produces identical `PlainValueRef` objects via the same `[Symbol.iterator]` → `getMutableItem()` path.) 🔴
-- **Task 1.6**: Collapse the dual conditional generators: delete `generateConditional` (template literal context variant with ternaries and IIFEs). Merge hydration-marker logic into `generateConditionalBody` (accumulation context variant), which becomes the single `emitConditional`. Produces `if/else` blocks; reactive conditionals additionally emit hydration markers. 🔴
-- **Task 1.7**: Unify `emitBodyChildren` to use `emitChild` (which now returns `string[]` directly). The special-case branches for render-time loops and render-time conditionals in `emitBodyChildren` can be removed — `emitChild` handles all node kinds uniformly. Rename to `emitChildren`. 🔴
-- **Task 1.8**: Refactor `generateHTML` to produce accumulation lines. Open/close tags become `_html +=` lines. Children iterated via `emitChildren`. 🔴
-- **Task 1.9**: Refactor `generateRenderFunction` to always wrap in block body: `() => { let _html = ""; ...lines...; return _html }`. 🔴
-- **Task 1.10**: Update `generateHTMLOutput` in `transform.ts` to wrap in block-body arrow: `const renderN = () => { ${html} }`. 🔴
-- **Task 1.11**: Update existing test assertions in `codegen/html.test.ts` that assert on `.map()`, `.join("")`, IIFE patterns, or ternary expressions. The semantic assertions (contains correct HTML, preserves statement order, includes hydration markers) are preserved; only the generated code shape changes. 🔴
-- **Task 1.12**: Verify all new and existing tests pass. 🔴
+  - Deeply nested elements with interleaved statements
+  - Render function wrapping preserves statements
+  - Reactive loops/conditionals with hydration markers
+  - Accumulation pattern structure (`let _html`, `return _html`)
+- **Task 1.2**: Add integration tests in `integration.test.ts`: ✅
+  - Top-level statements in builder compiled to HTML target
+  - Nested element with statements compiled to HTML target
+- **Task 1.3**: Unify `generateChild` → `emitChild` returning `string[]`: ✅
+- **Task 1.4**: Unify `generateElement` → `emitElement` returning `string[]`: ✅
+  - Also added `emitContent` (extracted from inline cases in old `generateChild`)
+- **Task 1.5**: Collapse dual loop generators → single `emitLoop`: ✅
+  - **Deviation from plan**: Spread syntax `[...source]` was *conservatively kept* for reactive loops. The plan claimed it was unnecessary, but this was not verified with a dedicated regression test. Render-time loops use the iterable directly. Removing the spread is deferred as a separate optimization.
+- **Task 1.6**: Collapse dual conditional generators → single `emitConditional`: ✅
+- **Task 1.7**: Unify `emitBodyChildren` → `emitChildren`: ✅
+- **Task 1.8**: Refactor `generateHTML` to return `string[]` directly: ✅
+  - **Deviation from plan**: Initially returned `string` (joined with `"; "`), then immediately refactored in a follow-up commit to return `string[]`. The plan assumed `string` throughout — the `string[]` return is strictly better (eliminates fragile split-on-semicolon in `generateRenderFunction`).
+- **Task 1.9**: Refactor `generateRenderFunction` to use block body: ✅
+  - Iterates `string[]` from `generateHTML` directly, indenting each line.
+- **Task 1.10**: Update `generateHTMLOutput` in `transform.ts`: ✅
+  - Joins `string[]` with `"; "` for single-line inline arrow body.
+- **Task 1.11**: Update test assertions: ✅
+  - `codegen/html.test.ts`: 4 assertion shape changes, 16 new tests (28 total, up from 14)
+  - `integration.test.ts`: 1 assertion change, 2 new tests (93 total, up from 91)
+  - `transform.test.ts`: 2 assertion changes
+- **Task 1.12**: All 776 tests pass across 23 test files: ✅
 
 ### PR 2: `client:` / `server:` target labels (feature) 🔴
 
@@ -181,7 +203,7 @@ This PR adds the full target-label capability in one coherent slice: IR type →
 - **Task 2.1**: Add `TargetBlockNode` to IR in `ir.ts`: 🔴
 
 ```typescript
-type CompileTarget = "dom" | "html"
+import type { CompileTarget } from "../transform.js"
 
 interface TargetBlockNode extends IRNodeBase {
   kind: "target-block"
@@ -191,6 +213,8 @@ interface TargetBlockNode extends IRNodeBase {
   children: ChildNode[]
 }
 ```
+
+> **Note**: `CompileTarget` already exists in `transform.ts` (line 39) and is re-exported from `compiler/index.ts`. Import it into `ir.ts` rather than duplicating the type. If this creates a circular dependency (unlikely — `ir.ts` has no current imports from `transform.ts`), move the type to `ir.ts` and re-export from `transform.ts` instead.
 
 - **Task 2.2**: Add `"target-block"` to `IRNodeKind` union and `TargetBlockNode` to `ChildNode` union. 🔴
 - **Task 2.3**: Add `createTargetBlock` factory function and `isTargetBlockNode` type guard in `ir.ts`. 🔴
@@ -335,18 +359,18 @@ describe "compiler integration - target labels"
 
 ### Direct Dependencies
 
-| File | Change | Risk |
-|------|--------|------|
-| `codegen/html.ts` | Unified accumulation-line architecture; delete template-literal-context generators | **Medium** — this is the core refactor; existing HTML output must be semantically identical |
-| `transform.ts` | `generateHTMLOutput` wrapping changes from expression-body to block-body arrow; add `filterTargetBlocks` call | Low — two small changes |
-| `ir.ts` | New `TargetBlockNode` type, updated unions, `filterTargetBlocks` function | Low — additive; filter is pure |
-| `analyze.ts` | New `LabeledStatement` case in `analyzeStatement` | Low — new branch, no existing paths affected |
+| File | Change | Risk | Status |
+|------|--------|------|--------|
+| `codegen/html.ts` | Unified accumulation-line architecture; delete template-literal-context generators | **Medium** — this is the core refactor; existing HTML output must be semantically identical | ✅ Done (PR 1) |
+| `transform.ts` | `generateHTMLOutput` wrapping changes from expression-body to block-body arrow; add `filterTargetBlocks` call | Low — two small changes | ✅ Wrapping done (PR 1); `filterTargetBlocks` call in PR 2 |
+| `ir.ts` | New `TargetBlockNode` type, updated unions, `filterTargetBlocks` function | Low — additive; filter is pure | 🔴 PR 2 |
+| `analyze.ts` | New `LabeledStatement` case in `analyzeStatement` | Low — new branch, no existing paths affected | 🔴 PR 2 |
 
 ### Transitive Dependencies
 
 | Chain | Risk | Mitigation |
 |-------|------|------------|
-| `codegen/html.ts` → `transform.ts` (two call sites) | `generateHTML` return type changes from template literal string to accumulation lines string. | Both callers (`generateRenderFunction` and `generateHTMLOutput`) are updated in PR 1 Tasks 1.9 and 1.10. |
+| `codegen/html.ts` → `transform.ts` (two call sites) | `generateHTML` return type changes from `string` to `string[]`. | ✅ Both callers updated in PR 1. `generateRenderFunction` iterates the array; `generateHTMLOutput` joins with `"; "`. |
 | `codegen/html.ts` → `server/render.ts` → `examples/kinetic-todo/src/server.ts` | The server calls `renderToDocument(renderApp, doc, ...)` where `renderApp` is the compiled SSR function. | **No changes to render.ts.** Function signature is unchanged (`() => string`). Only the function body changes internally. |
 | `ir.ts` → `walk.ts` → `template.ts` | Walk and template extraction switch on node kind. | **No changes needed.** `filterTargetBlocks` runs before codegen and before any walk/template extraction. Codegens never see `TargetBlockNode`. |
 | `ir.ts` → `codegen/dom.ts` → `generateBodyWithReturn` → `checkCanOptimizeDirectReturn` | The direct-return optimization checks `computeSlotKind` and iterates body children. | **No changes needed.** After filtering, all `TargetBlockNode` nodes are gone. `computeSlotKind` never encounters them. |
@@ -399,6 +423,8 @@ describe "compiler integration - target labels"
 - **Decision 8**: All body iteration should go through a shared child-iteration helper — the unification makes this the only path, not just a recommendation
 
 ## Changeset
+
+> **Note**: Create after PR 2 is complete (needs both the fix and the feature).
 
 ```
 ---
@@ -576,6 +602,22 @@ SSR errors are debugged by reading stack traces that point into generated code. 
 
 Decision 2 from the `kinetic-arbitrary-statements` plan stated "always use block body in HTML codegen." This was applied to loop and conditional bodies but not to `generateRenderFunction`, `generateHTML`, or `generateElement`. The unification completes the application of Decision 2 by making the accumulation pattern the only pattern.
 
-### Spread syntax on ListRef iteration is unnecessary
+### Spread syntax on ListRef iteration: conservatively kept *(updated)*
 
-The old `generateReactiveLoop` used `[...${node.iterableSource}].map((item, _i) => ...)` with a comment that spread "preserves PlainValueRef for value shapes." Empirical testing confirms this is unnecessary: `for (const itemRef of doc.items)` produces identical `PlainValueRef` objects with working `.get()` and `.set()` — both paths go through the ListRef's `[Symbol.iterator]` which calls `getMutableItem()`. The spread allocates an intermediate array for no benefit. The unified `emitLoop` uses plain `for...of` for all loops, which is both simpler and more efficient.
+The old `generateReactiveLoop` used `[...${node.iterableSource}].map((item, _i) => ...)` with a comment that spread "preserves PlainValueRef for value shapes." The plan claimed this was unnecessary based on empirical testing. However, during implementation the spread was **conservatively kept** for reactive loops (`[...${node.iterableSource}]`) because no dedicated regression test validates that bare `for...of` on a `ListRef` produces identical `PlainValueRef` behavior. Render-time loops use the iterable directly (no spread). Removing the spread for reactive loops is a future optimization that should come with its own targeted test.
+
+### Return `string[]` not `string` from accumulation-line generators *(new)*
+
+The initial PR 1 implementation had `generateHTML` join its internal `string[]` with `"; "` and return `string`. Then `generateRenderFunction` split on `"; "` to re-format as multi-line output. This was fragile — if any statement source contained the literal substring `"; "`, the split would corrupt the output. A follow-up commit changed `generateHTML` to return `string[]` directly. `generateRenderFunction` iterates the array with proper indentation. `generateHTMLOutput` joins with `"; "` only for the single-line inline arrow body where it's appropriate. Lesson: when the natural shape of data is `string[]`, return `string[]` — don't flatten then re-parse.
+
+### `emitBodyChildren` mixed both calling conventions *(new)*
+
+The plan described `emitBodyChildren` as "accumulation context only," but it actually used `generateChild` (template literal context) as a fallback for reactive loops and conditionals. So a single function mixed both conventions. This wasn't visible from the function signature. The unified `emitChildren` simply calls `emitChild` for all children — no special-case branches, no convention mixing.
+
+### `_generateContent` was dead code *(new)*
+
+The old HTML codegen had a `_generateContent` function (prefixed with underscore, a hint) that was never called by the active code paths. It was removed during unification without any test failures. The `emitContent` function replaced the inline content-handling logic that was duplicated inside the old `generateChild`.
+
+### Attribute generation is *not* part of the unified convention *(new)*
+
+`generateAttribute` still returns a `string` fragment meant to be embedded inside an opening tag template literal (e.g. ` class="foo"`). This is correct — attributes are always sub-fragments of a tag's `_html += \`<div${attrs}>\`` line, never standalone statements. The "single convention" applies to *child node* generation, not to attribute assembly within a tag. This distinction is important so that future contributors don't try to make `generateAttribute` return `string[]`.

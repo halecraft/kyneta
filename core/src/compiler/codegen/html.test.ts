@@ -50,6 +50,15 @@ function dep(source: string, deltaKind: DeltaKind = "replace"): Dependency {
   return { source, deltaKind }
 }
 
+/**
+ * Join generateHTML's string[] output into a single string for assertions.
+ */
+function htmlLines(
+  ...args: Parameters<typeof generateHTML>
+): string {
+  return generateHTML(...args).join("; ")
+}
+
 // =============================================================================
 // generateHTML Tests - Basic Elements
 // =============================================================================
@@ -59,7 +68,7 @@ describe("generateHTML", () => {
     it("should generate HTML for empty element", () => {
       const builder = createBuilder("div", [], [], [], span(1, 0, 1, 10))
 
-      const code = generateHTML(builder)
+      const code = htmlLines(builder)
 
       expect(code).toContain("<div>")
       expect(code).toContain("</div>")
@@ -69,7 +78,7 @@ describe("generateHTML", () => {
       const textNode = createLiteral("Hello", span(1, 4, 1, 11))
       const builder = createBuilder("p", [], [], [textNode], span(1, 0, 1, 13))
 
-      const code = generateHTML(builder)
+      const code = htmlLines(builder)
 
       expect(code).toContain("<p>")
       expect(code).toContain("Hello")
@@ -101,7 +110,7 @@ describe("generateHTML - top-level statements", () => {
       span(1, 0, 4, 1),
     )
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Statement must be preserved in output
     expect(code).toContain("const x = 1")
@@ -143,7 +152,7 @@ describe("generateHTML - top-level statements", () => {
       span(1, 0, 6, 1),
     )
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // All pieces present
     expect(code).toContain("const x = 1")
@@ -165,7 +174,7 @@ describe("generateHTML - top-level statements", () => {
     const stmt = createStatement("console.log('hi')", span(2, 4, 2, 21))
     const builder = createBuilder("div", [], [], [stmt], span(1, 0, 3, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Statement preserved
     expect(code).toContain("console.log('hi')")
@@ -192,7 +201,7 @@ describe("generateHTML - top-level statements", () => {
       span(1, 0, 4, 1),
     )
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     expect(code).toContain("<h1>")
     expect(code).toContain("console.log('done')")
@@ -228,7 +237,7 @@ describe("generateHTML - nested element statements", () => {
     )
     const builder = createBuilder("div", [], [], [header], span(1, 0, 6, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Statement preserved inside nested element
     expect(code).toContain("const x = 1")
@@ -266,7 +275,7 @@ describe("generateHTML - nested element statements", () => {
     )
     const builder = createBuilder("div", [], [], [section], span(1, 0, 8, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     expect(code).toContain("const msg = 'hi'")
     expect(code).toContain("<section>")
@@ -304,7 +313,7 @@ describe("generateHTML - statements", () => {
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should contain the statement source in the generated code
     expect(code).toContain("const item = itemRef.get()")
@@ -345,7 +354,7 @@ describe("generateHTML - statements", () => {
       span(1, 0, 6, 1),
     )
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should contain the statement in the generated code
     expect(code).toContain("const msg = 'hello'")
@@ -373,7 +382,7 @@ describe("generateHTML - statements", () => {
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 7, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Verify order: stmt1 before li, stmt2 after
     const beforeIndex = code.indexOf('console.log("before")')
@@ -413,7 +422,7 @@ describe("generateHTML - static loops", () => {
     )
     const builder = createBuilder("ul", [], [], [renderLoop], span(1, 0, 5, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should generate a for...of loop (not .map().join())
     expect(code).toContain("for (const x of [1, 2, 3])")
@@ -441,7 +450,7 @@ describe("generateHTML - static loops", () => {
     )
     const builder = createBuilder("ul", [], [], [renderLoop], span(1, 0, 5, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should include destructuring pattern
     expect(code).toContain("[i, item]")
@@ -470,7 +479,7 @@ describe("generateHTML - static loops", () => {
     )
     const builder = createBuilder("ul", [], [], [renderLoop], span(1, 0, 6, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should use for...of loop
     expect(code).toContain("for (const x of [1, 2, 3])")
@@ -501,7 +510,7 @@ describe("generateHTML - static conditionals", () => {
     const staticCond = createConditional([branch], null, span(2, 2, 4, 3))
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 5, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should generate an if block (not ternary/IIFE)
     expect(code).toContain("if (true)")
@@ -538,7 +547,7 @@ describe("generateHTML - static conditionals", () => {
     )
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 7, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should have if/else structure with both branches
     expect(code).toContain("if (condition)")
@@ -567,7 +576,7 @@ describe("generateHTML - static conditionals", () => {
     const staticCond = createConditional([branch], null, span(2, 2, 5, 3))
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 6, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     expect(code).toContain("showMessage")
     expect(code).toContain("const msg = 'hello'")
@@ -618,7 +627,7 @@ describe("generateHTML - static conditionals", () => {
     )
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 9, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should produce flat if/else-if/else structure
     expect(code).toContain("if (condA)")
@@ -646,7 +655,7 @@ describe("generateHTML - accumulation pattern", () => {
       span(1, 0, 1, 13),
     )
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     expect(code).toContain('let _html = ""')
     expect(code).toContain("return _html")
@@ -661,7 +670,7 @@ describe("generateHTML - accumulation pattern", () => {
       span(1, 0, 1, 13),
     )
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Opening tag, content, closing tag — all via _html +=
     expect(code).toContain("_html += `<div>`")
@@ -683,7 +692,7 @@ describe("generateHTML - code validity", () => {
       span(1, 0, 1, 13),
     )
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should have balanced braces
     const openBraces = (code.match(/{/g) || []).length
@@ -717,7 +726,7 @@ describe("generateHTML - code validity", () => {
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 6, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Check for balanced braces (basic syntax check)
     const openBraces = (code.match(/{/g) || []).length
@@ -804,7 +813,7 @@ describe("generateHTML - reactive loops", () => {
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 5, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should contain hydration markers
     expect(code).toContain("kinetic:list:")
@@ -833,7 +842,7 @@ describe("generateHTML - reactive loops", () => {
     )
     const builder = createBuilder("ul", [], [], [loop], span(1, 0, 5, 1))
 
-    const code = generateHTML(builder, { hydratable: false })
+    const code = htmlLines(builder, { hydratable: false })
 
     // Should NOT contain hydration markers
     expect(code).not.toContain("kinetic:list")
@@ -871,7 +880,7 @@ describe("generateHTML - reactive conditionals", () => {
     )
     const builder = createBuilder("div", [], [], [cond], span(1, 0, 5, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should contain hydration markers
     expect(code).toContain("kinetic:if:")
@@ -897,7 +906,7 @@ describe("generateHTML - reactive conditionals", () => {
     const staticCond = createConditional([branch], null, span(2, 2, 4, 3))
     const builder = createBuilder("div", [], [], [staticCond], span(1, 0, 5, 1))
 
-    const code = generateHTML(builder)
+    const code = htmlLines(builder)
 
     // Should NOT contain hydration markers
     expect(code).not.toContain("kinetic:if")
