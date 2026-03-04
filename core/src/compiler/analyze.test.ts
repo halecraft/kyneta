@@ -723,6 +723,73 @@ describe("expressionIsReactive", () => {
     expect(numLiteral).toBeDefined()
     expect(expressionIsReactive(numLiteral)).toBe(false)
   })
+
+  it("should detect chained method call on reactive ref as reactive", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const count: CounterRef
+      count.get().toString()
+    `,
+    )
+
+    // Find the outermost call expression: count.get().toString()
+    const callExprs = sourceFile.getDescendantsOfKind(213) // CallExpression
+    const chained = callExprs.find(c => c.getText() === "count.get().toString()")
+    expect(chained).toBeDefined()
+    expect(expressionIsReactive(chained!)).toBe(true)
+  })
+
+  it("should detect deeply chained method call on reactive ref as reactive", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const count: CounterRef
+      count.get().toFixed(2).trim()
+    `,
+    )
+
+    const callExprs = sourceFile.getDescendantsOfKind(213)
+    const chained = callExprs.find(
+      c => c.getText() === "count.get().toFixed(2).trim()",
+    )
+    expect(chained).toBeDefined()
+    expect(expressionIsReactive(chained!)).toBe(true)
+  })
+
+  it("should detect chained method call on LocalRef as reactive", () => {
+    addReactiveTypes(project)
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { LocalRef } from "./reactive-types"
+      declare const x: LocalRef<number>
+      x.get().toString()
+    `,
+    )
+
+    const callExprs = sourceFile.getDescendantsOfKind(213)
+    const chained = callExprs.find(c => c.getText() === "x.get().toString()")
+    expect(chained).toBeDefined()
+    expect(expressionIsReactive(chained!)).toBe(true)
+  })
+
+  it("should not detect chained call on non-reactive as reactive", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      const x = 42
+      x.toString().trim()
+    `,
+    )
+
+    const callExprs = sourceFile.getDescendantsOfKind(213)
+    const chained = callExprs.find(c => c.getText() === "x.toString().trim()")
+    expect(chained).toBeDefined()
+    expect(expressionIsReactive(chained!)).toBe(false)
+  })
 })
 
 // =============================================================================

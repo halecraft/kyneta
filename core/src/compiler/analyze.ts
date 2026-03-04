@@ -318,6 +318,14 @@ export function expressionIsReactive(expr: Expression): boolean {
       if (isReactiveType(objType)) {
         return true
       }
+      // Recursively check the callee's object expression for deeper chains.
+      // e.g., x.get().toString() — the immediate object x.get() returns
+      // number (not reactive), but x.get() itself calls a method on x
+      // which IS reactive. Without this, chained expressions like
+      // x.get().toString() are misclassified as render-time.
+      if (expressionIsReactive(propAccess.getExpression())) {
+        return true
+      }
     }
 
     // Check arguments

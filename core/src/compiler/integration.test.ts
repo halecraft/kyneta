@@ -3147,4 +3147,61 @@ describe("compiler integration - text patching", () => {
       scope.dispose()
     })
   })
+
+  // ===========================================================================
+  // state() Reactive Detection — Chained Method Calls
+  // ===========================================================================
+
+  describe("state() reactive detection with chained method calls", () => {
+    it("should detect state().get().toString() as reactive and subscribe", () => {
+      // The bug: expressionIsReactive did not recurse through chained call
+      // expressions, so x.get().toString() was classified as render-time
+      // (evaluated once) instead of reactive (subscribed).
+      const source = `
+        import { state } from "@loro-extended/reactive"
+
+        const app = div(() => {
+          const x = state(0)
+          p(x.get().toString())
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // The content node must be classified as reactive — it should have
+      // a subscribe() call in the generated code, not just textContent = ...
+      expect(result.ir[0].isReactive).toBe(true)
+      expect(result.ir[0].allDependencies.length).toBeGreaterThan(0)
+
+      // The generated code should contain a subscription, not a one-shot set
+      expect(result.code).toContain("subscribe")
+    })
+
+    it("should classify chained x.get().toString() as reactive in IR", () => {
+      const source = `
+        import { state } from "@loro-extended/reactive"
+
+        const app = div(() => {
+          const x = state(42)
+          span(x.get().toString())
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+      const builder = result.ir[0]
+
+      // Find the span element's content child
+      const spanEl = builder.children.find(
+        c => c.kind === "element" && (c as { tag: string }).tag === "span",
+      )
+      expect(spanEl).toBeDefined()
+      if (spanEl?.kind === "element") {
+        const content = spanEl.children[0]
+        expect(content.kind).toBe("content")
+        if (content.kind === "content") {
+          expect(content.bindingTime).toBe("reactive")
+        }
+      }
+    })
+  })
 })
