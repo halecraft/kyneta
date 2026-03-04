@@ -556,7 +556,7 @@ function generateHTMLOutput(
   lines.push(generateEscapeHelper())
   lines.push("")
 
-  // Generate each builder as a render function
+  // Generate each builder as a render function with block body
   for (let i = 0; i < ir.length; i++) {
     const builder = ir[i]
     const varName = `render${i}`
@@ -564,7 +564,7 @@ function generateHTMLOutput(
     const html = generateHTML(builder, {
       hydratable: options.hydratable ?? true,
     })
-    lines.push(`const ${varName} = () => ${html}`)
+    lines.push(`const ${varName} = () => { ${html} }`)
     lines.push("")
   }
 

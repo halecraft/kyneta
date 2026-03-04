@@ -6,10 +6,20 @@
  *
  * All functions are pure - they take IR and return strings.
  *
- * The generated code:
- * - Produces HTML strings via template literals
- * - Includes hydration markers for client-side rehydration
- * - Escapes dynamic content for XSS prevention
+ * Architecture: Unified accumulation-line calling convention.
+ * Every codegen function returns `string[]` (code lines that accumulate into `_html`).
+ * There is one generator per IR construct, not two. Statements are lines interleaved
+ * with `_html +=` lines. This mirrors the DOM codegen architecture.
+ *
+ * Generated output pattern:
+ *   () => {
+ *     let _html = ""
+ *     _html += `<div class="app">`
+ *     const x = 1
+ *     _html += `<h1>${__escapeHtml(String(x))}</h1>`
+ *     _html += `</div>`
+ *     return _html
+ *   }
  *
  * @packageDocumentation
  */
@@ -130,29 +140,13 @@ function escapeExpr(value: string): string {
 }
 
 // =============================================================================
-// Content Generation
-// =============================================================================
-
-/**
- * Generate HTML for content at any binding time.
- */
-function _generateContent(node: ContentNode): string {
-  if (node.bindingTime === "literal") {
-    // Literal - source is JSON-encoded string, extract and escape
-    const value = JSON.parse(node.source)
-    return JSON.stringify(escapeHtml(value))
-  }
-
-  // Render-time and reactive - both need escaping
-  return escapeExpr(`String(${node.source})`)
-}
-
-// =============================================================================
 // Attribute Generation
 // =============================================================================
 
 /**
  * Generate HTML for an attribute.
+ *
+ * Returns a string fragment to be embedded inside an opening tag template literal.
  */
 function generateAttribute(attr: AttributeNode): string {
   const name = attr.name
@@ -182,342 +176,233 @@ function generateAttribute(attr: AttributeNode): string {
 }
 
 // =============================================================================
-// Element Generation
+// Unified Accumulation-Line Generators
 // =============================================================================
 
 /**
- * Generate HTML for an element node.
+ * Emit accumulation lines for a single child node.
+ *
+ * Every IR node kind is handled here. Statements emit their source verbatim.
+ * HTML-producing nodes emit `_html += \`...\`` lines.
+ *
+ * @param node - The child node to emit
+ * @param state - Codegen state
+ * @param indent - Indentation prefix for each emitted line
+ * @returns Array of code lines
  */
-function generateElement(node: ElementNode, state: CodegenState): string {
-  const parts: string[] = []
+function emitChild(
+  node: ChildNode,
+  state: CodegenState,
+  indent: string = "",
+): string[] {
+  switch (node.kind) {
+    case "statement":
+      return [`${indent}${node.source}`]
 
-  // Opening tag
-  parts.push(`<${node.tag}`)
+    case "element":
+      return emitElement(node, state, indent)
 
-  // Attributes
+    case "content":
+      return emitContent(node, indent)
+
+    case "loop":
+      return emitLoop(node, state, indent)
+
+    case "conditional":
+      return emitConditional(node, state, indent)
+
+    case "binding":
+      // Bindings render as their current value in SSR
+      return [
+        `${indent}_html += \`\${${escapeExpr(`String(${node.refSource}.get ? ${node.refSource}.get() : ${node.refSource})`)}}\``,
+      ]
+
+    default:
+      return []
+  }
+}
+
+/**
+ * Emit accumulation lines for a content node.
+ */
+function emitContent(node: ContentNode, indent: string = ""): string[] {
+  if (node.bindingTime === "literal") {
+    // Literal - source is JSON-encoded string, extract and escape
+    const value = JSON.parse(node.source)
+    const escaped = escapeHtml(value)
+    return [`${indent}_html += ${JSON.stringify(escaped)}`]
+  }
+  // Render-time and reactive - use template literal interpolation with escaping
+  return [
+    `${indent}_html += \`\${${escapeExpr(`String(${node.source})`)}}\``,
+  ]
+}
+
+/**
+ * Emit accumulation lines for an element node.
+ *
+ * Opening tag, children (via emitChildren), closing tag — all as `_html +=` lines.
+ * Statements in children are naturally interleaved.
+ */
+function emitElement(
+  node: ElementNode,
+  state: CodegenState,
+  indent: string = "",
+): string[] {
+  const lines: string[] = []
+
+  // Opening tag with attributes
+  const tagParts: string[] = []
+  tagParts.push(`<${node.tag}`)
   for (const attr of node.attributes) {
-    parts.push(generateAttribute(attr))
+    tagParts.push(generateAttribute(attr))
   }
 
   // Event handlers are ignored in SSR (client-only)
 
   // Self-closing for void elements
   if (VOID_ELEMENTS.has(node.tag)) {
-    parts.push(">")
-    return parts.join("")
+    tagParts.push(">")
+    lines.push(`${indent}_html += \`${tagParts.join("")}\``)
+    return lines
   }
 
-  parts.push(">")
+  tagParts.push(">")
+  lines.push(`${indent}_html += \`${tagParts.join("")}\``)
 
   // Children
-  for (const child of node.children) {
-    parts.push(generateChild(child, state))
-  }
+  lines.push(...emitChildren(node.children, state, indent))
 
   // Closing tag
-  parts.push(`</${node.tag}>`)
+  lines.push(`${indent}_html += \`</${node.tag}>\``)
 
-  return parts.join("")
+  return lines
 }
 
-// =============================================================================
-// Body Generation Helper
-// =============================================================================
-
 /**
- * Generate HTML for a body with block body syntax and accumulation pattern.
+ * Emit accumulation lines for all children in a body.
  *
- * This is used by list regions and conditional regions. It handles:
- * - Statements (emitted verbatim)
- * - Elements (accumulated into _html)
- * - Proper interleaving of statements and HTML generation
- *
- * Returns code suitable for a block body: `let _html = ""; ...; return _html`
- */
-/**
- * Walk a body of child nodes, emitting lines that accumulate HTML into `_html`.
- *
- * This is the shared helper that eliminates the 4x copy-paste across
- * `generateBodyHtml`, `generateStaticLoopBody`, and `generateStaticConditionalBody`.
- *
- * Each line is either:
- * - A statement source (emitted verbatim)
- * - A static-loop/conditional block (recursive structure)
- * - `_html += \`...\`` for HTML-producing children
+ * This is the unified child iteration — every child goes through `emitChild`.
  *
  * @param body - The child nodes to walk
  * @param state - Codegen state
- * @param indent - Indentation prefix for each line (e.g., "  " inside a loop/conditional)
+ * @param indent - Indentation prefix for each line
  * @returns Array of code lines
  */
-function emitBodyChildren(
+function emitChildren(
   body: ChildNode[],
   state: CodegenState,
   indent: string = "",
 ): string[] {
   const lines: string[] = []
-
   for (const child of body) {
-    if (child.kind === "statement") {
-      lines.push(`${indent}${child.source}`)
-    } else if (
-      child.kind === "loop" &&
-      child.iterableBindingTime !== "reactive"
-    ) {
-      lines.push(`${indent}${generateLoopBody(child, state)}`)
-    } else if (
-      child.kind === "conditional" &&
-      child.subscriptionTarget === null
-    ) {
-      lines.push(`${indent}${generateConditionalBody(child, state)}`)
-    } else {
-      const childHtml = generateChild(child, state)
-      if (childHtml) {
-        lines.push(`${indent}_html += \`${childHtml}\``)
-      }
-    }
+    lines.push(...emitChild(child, state, indent))
+  }
+  return lines
+}
+
+// =============================================================================
+// Loop Generation
+// =============================================================================
+
+/**
+ * Emit accumulation lines for a loop (both reactive and render-time).
+ *
+ * All loops produce `for...of` loops that accumulate into `_html`.
+ * Reactive loops additionally emit hydration marker comments.
+ */
+function emitLoop(
+  node: LoopNode,
+  state: CodegenState,
+  indent: string = "",
+): string[] {
+  const lines: string[] = []
+
+  const isReactive = node.iterableBindingTime === "reactive"
+
+  // Hydration markers (only for reactive loops)
+  if (state.hydratable && isReactive) {
+    const markerId = genMarkerId(state, "list")
+    lines.push(`${indent}_html += \`<!--${markerId}-->\``)
+  }
+
+  // Loop variable pattern
+  const loopVar = node.indexVariable
+    ? `[${node.indexVariable}, ${node.itemVariable}]`
+    : node.itemVariable
+
+  // Iterable source — reactive loops use spread to get PlainValueRef objects
+  const iterableExpr = isReactive
+    ? `[...${node.iterableSource}]`
+    : node.iterableSource
+
+  // Emit for...of loop
+  lines.push(`${indent}for (const ${loopVar} of ${iterableExpr}) {`)
+
+  // Loop body children
+  lines.push(...emitChildren(node.body, state, indent + "  "))
+
+  lines.push(`${indent}}`)
+
+  // Hydration markers (end, only for reactive loops)
+  if (state.hydratable && isReactive) {
+    lines.push(`${indent}_html += \`<!--/kinetic:list-->\``)
   }
 
   return lines
 }
 
-function generateBodyHtml(body: ChildNode[], state: CodegenState): string {
-  const lines: string[] = []
-
-  lines.push(`let _html = ""`)
-  lines.push(...emitBodyChildren(body, state))
-  lines.push(`return _html`)
-
-  return lines.join("; ")
-}
-
 // =============================================================================
-// Child Generation
+// Conditional Generation
 // =============================================================================
 
 /**
- * Generate HTML for a child node.
- */
-function generateChild(node: ChildNode, state: CodegenState): string {
-  switch (node.kind) {
-    case "element":
-      return generateElement(node, state)
-
-    case "content":
-      if (node.bindingTime === "literal") {
-        // Literal - source is JSON-encoded string, extract and escape
-        const value = JSON.parse(node.source)
-        return escapeHtml(value)
-      }
-      // Render-time and reactive - use template literal interpolation
-      return `\${${escapeExpr(`String(${node.source})`)}}`
-
-    case "loop":
-      if (node.iterableBindingTime === "reactive") {
-        return generateReactiveLoop(node, state)
-      }
-      return generateLoopInline(node, state)
-
-    case "conditional":
-      return generateConditional(node, state)
-
-    case "binding":
-      // Bindings render as their current value in SSR
-      return `\${${escapeExpr(`String(${node.refSource}.get ? ${node.refSource}.get() : ${node.refSource})`)}}`
-
-    case "statement":
-      // Statements don't produce HTML directly - they're handled by generateBodyHtml()
-      // When called from element children (not body context), we can't emit statements
-      // This should not happen in well-formed IR, but return empty for safety
-      return ""
-
-    default:
-      return ""
-  }
-}
-
-// =============================================================================
-// List Region Generation
-// =============================================================================
-
-/**
- * Generate HTML for a reactive loop (list region).
+ * Emit accumulation lines for a conditional (both reactive and render-time).
  *
- * Uses block body with accumulation pattern for consistency and to support
- * statements in the loop body.
+ * Produces `if/else-if/else` blocks that accumulate into `_html`.
+ * Reactive conditionals additionally emit hydration markers.
  */
-function generateReactiveLoop(node: LoopNode, state: CodegenState): string {
-  const parts: string[] = []
-
-  // Hydration marker (start)
-  if (state.hydratable) {
-    const markerId = genMarkerId(state, "list")
-    parts.push(`<!--${markerId}-->`)
-  }
-
-  // Map over items and generate HTML for each
-  const itemVar = node.itemVariable
-  const indexVar = node.indexVariable ?? "_i"
-
-  // Generate body using shared helper with block body syntax
-  const bodyCode = generateBodyHtml(node.body, state)
-
-  // Wrap in map expression with block body
-  // Use spread syntax [...iterableSource] to iterate, which returns refs (PlainValueRef)
-  // for value shapes, enabling two-way binding patterns like itemRef.get()/set()
-  parts.push(
-    `\${[...${node.iterableSource}].map((${itemVar}, ${indexVar}) => { ${bodyCode} }).join("")}`,
-  )
-
-  // Hydration marker (end)
-  if (state.hydratable) {
-    parts.push(`<!--/kinetic:list-->`)
-  }
-
-  return parts.join("")
-}
-
-// =============================================================================
-// Conditional Region Generation
-// =============================================================================
-
-/**
- * Generate HTML for a conditional.
- *
- * Unified generator that dispatches on binding time:
- * - subscriptionTarget === null → render-time, no markers
- * - subscriptionTarget !== null → reactive, includes hydration markers
- *
- * Uses IIFE with block body for branches to support statements.
- */
-function generateConditional(
+function emitConditional(
   node: ConditionalNode,
   state: CodegenState,
-): string {
-  const parts: string[] = []
+  indent: string = "",
+): string[] {
+  const lines: string[] = []
 
-  // Hydration marker (only for reactive conditionals)
-  if (state.hydratable && node.subscriptionTarget !== null) {
+  const isReactive = node.subscriptionTarget !== null
+
+  // Hydration markers (only for reactive conditionals)
+  if (state.hydratable && isReactive) {
     const markerId = genMarkerId(state, "if")
-    parts.push(`<!--${markerId}-->`)
+    lines.push(`${indent}_html += \`<!--${markerId}-->\``)
   }
 
-  // Generate ternary expression for branches using IIFE for each branch
-  const branches = node.branches
-  let expr = ""
-
-  for (let i = 0; i < branches.length; i++) {
-    const branch = branches[i]
-
-    if (branch.condition === null) {
-      // Else branch - use IIFE with block body
-      const bodyCode = generateBodyHtml(branch.body, state)
-      expr += `(() => { ${bodyCode} })()`
-    } else {
-      // If or else-if branch - use IIFE with block body
-      const bodyCode = generateBodyHtml(branch.body, state)
-
-      if (i === branches.length - 1) {
-        // Last branch with condition but no else
-        expr += `(${branch.condition.source}) ? (() => { ${bodyCode} })() : ""`
-      } else {
-        expr += `(${branch.condition.source}) ? (() => { ${bodyCode} })() : `
-      }
-    }
-  }
-
-  // If no else branch was found, add empty string
-  if (
-    branches.length > 0 &&
-    branches[branches.length - 1].condition !== null &&
-    !expr.endsWith('""')
-  ) {
-    expr += '""'
-  }
-
-  parts.push(`\${${expr}}`)
-
-  // Hydration marker (end, only for reactive conditionals)
-  if (state.hydratable && node.subscriptionTarget !== null) {
-    parts.push(`<!--/kinetic:if-->`)
-  }
-
-  return parts.join("")
-}
-
-// =============================================================================
-// Render-Time Loop Generation
-// =============================================================================
-
-/**
- * Generate code for a render-time loop body (used inside generateBodyHtml).
- *
- * Produces a for...of loop that accumulates HTML into the _html variable.
- */
-function generateLoopBody(node: LoopNode, state: CodegenState): string {
-  const loopVar = node.indexVariable
-    ? `[${node.indexVariable}, ${node.itemVariable}]`
-    : node.itemVariable
-
-  const lines: string[] = []
-  lines.push(`for (const ${loopVar} of ${node.iterableSource}) {`)
-  lines.push(...emitBodyChildren(node.body, state, "  "))
-  lines.push(`}`)
-
-  return lines.join("; ")
-}
-
-/**
- * Generate code for a render-time loop inline (used in template literal context).
- *
- * Produces a .map() expression that returns HTML strings.
- */
-function generateLoopInline(node: LoopNode, state: CodegenState): string {
-  const loopVar = node.indexVariable
-    ? `[${node.indexVariable}, ${node.itemVariable}]`
-    : node.itemVariable
-
-  // Generate body using accumulation pattern
-  const bodyCode = generateBodyHtml(node.body, state)
-
-  // Wrap in map expression with block body
-  return `\${${node.iterableSource}.map((${loopVar}) => { ${bodyCode} }).join("")}`
-}
-
-// =============================================================================
-// Render-Time Conditional Generation
-// =============================================================================
-
-/**
- * Generate code for a render-time conditional body (used inside generateBodyHtml).
- *
- * Produces an if/else-if/else chain that accumulates HTML into the _html variable.
- */
-function generateConditionalBody(
-  node: ConditionalNode,
-  state: CodegenState,
-): string {
-  const lines: string[] = []
-
+  // Generate if/else-if/else chain
   for (let i = 0; i < node.branches.length; i++) {
     const branch = node.branches[i]
     const isFirst = i === 0
     const isElse = branch.condition === null
 
     if (isElse) {
-      lines.push(`} else {`)
+      lines.push(`${indent}} else {`)
     } else if (isFirst) {
-      lines.push(`if (${branch.condition?.source}) {`)
+      lines.push(`${indent}if (${branch.condition!.source}) {`)
     } else {
-      lines.push(`} else if (${branch.condition?.source}) {`)
+      lines.push(`${indent}} else if (${branch.condition!.source}) {`)
     }
 
-    lines.push(...emitBodyChildren(branch.body, state, "  "))
+    // Branch body children
+    lines.push(...emitChildren(branch.body, state, indent + "  "))
   }
 
-  lines.push(`}`)
+  lines.push(`${indent}}`)
 
-  return lines.join("; ")
+  // Hydration markers (end, only for reactive conditionals)
+  if (state.hydratable && isReactive) {
+    lines.push(`${indent}_html += \`<!--/kinetic:if-->\``)
+  }
+
+  return lines
 }
 
 // =============================================================================
@@ -525,49 +410,56 @@ function generateConditionalBody(
 // =============================================================================
 
 /**
- * Generate HTML code for a builder node.
+ * Generate HTML accumulation lines for a builder node.
  *
  * This is the main entry point for HTML code generation.
- * Returns a template literal string that produces HTML.
+ * Returns an array of code lines that accumulate HTML into `_html`.
+ *
+ * The lines include:
+ * - `let _html = ""`
+ * - Opening tag as `_html += \`<tag ...>\``
+ * - Children via `emitChildren` (statements, elements, loops, etc.)
+ * - Closing tag as `_html += \`</tag>\``
+ * - `return _html`
  */
 export function generateHTML(
   node: BuilderNode,
   options: HTMLCodegenOptions = {},
 ): string {
   const state = createState(options)
-  const ind = getIndent(state)
 
-  const parts: string[] = []
+  const lines: string[] = []
 
-  // Opening tag
-  parts.push(`<${node.factoryName}`)
+  lines.push(`let _html = ""`)
 
-  // Props as attributes
+  // Opening tag with props
+  const tagParts: string[] = []
+  tagParts.push(`<${node.factoryName}`)
   for (const prop of node.props) {
-    parts.push(generateAttribute(prop))
+    tagParts.push(generateAttribute(prop))
   }
-
   // Event handlers are ignored in SSR
-
-  parts.push(">")
+  tagParts.push(">")
+  lines.push(`_html += \`${tagParts.join("")}\``)
 
   // Children
-  for (const child of node.children) {
-    parts.push(generateChild(child, state))
-  }
+  lines.push(...emitChildren(node.children, state))
 
   // Closing tag (unless void element)
   if (!VOID_ELEMENTS.has(node.factoryName)) {
-    parts.push(`</${node.factoryName}>`)
+    lines.push(`_html += \`</${node.factoryName}>\``)
   }
 
-  return `${ind}\`${parts.join("")}\``
+  lines.push(`return _html`)
+
+  return lines.join("; ")
 }
 
 /**
  * Generate a complete render function for SSR.
  *
  * Returns a function that can be called to produce HTML.
+ * Uses block body with accumulation pattern.
  */
 export function generateRenderFunction(
   node: BuilderNode,
@@ -578,14 +470,11 @@ export function generateRenderFunction(
   const innerState = indented(state)
   const innerInd = getIndent(innerState)
 
-  const html = generateHTML(node, {
-    ...options,
-    indentLevel: (options.indentLevel ?? 0) + 1,
-  })
+  const html = generateHTML(node, options)
 
   const lines: string[] = []
   lines.push(`${ind}() => {`)
-  lines.push(`${innerInd}return ${html.trim()}`)
+  lines.push(`${innerInd}${html.split("; ").join(`\n${innerInd}`)}`)
   lines.push(`${ind}}`)
 
   return lines.join("\n")

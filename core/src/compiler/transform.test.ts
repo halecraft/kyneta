@@ -1067,8 +1067,9 @@ describe("transformSourceInPlace - HTML target", () => {
     const result = transformSourceInPlace(source, { target: "html" })
     const code = result.sourceFile.getFullText()
 
-    // Should produce a .map() call for the list using spread syntax for ref preservation
-    expect(code).toContain("].map(")
+    // Should produce a for...of loop for the list using spread syntax for ref preservation
+    expect(code).toContain("for (const")
+    expect(code).toContain("[...")
     expect(code).toContain("<li>")
     // Should have hydration markers
     expect(code).toContain("kinetic:list")
@@ -1399,8 +1400,8 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
     expect(domResult.code).toContain("listRegion")
     expect(domResult.code).toContain("conditionalRegion")
 
-    // HTML target: template literals with map/ternary (spread syntax for ref preservation)
-    expect(htmlResult.code).toContain("].map(")
+    // HTML target: accumulation-line architecture with for...of loops and if/else blocks
+    expect(htmlResult.code).toContain("for (const")
     expect(htmlResult.code).toContain("<h1>")
     expect(htmlResult.code).toContain("kinetic:list")
     expect(htmlResult.code).toContain("kinetic:if")

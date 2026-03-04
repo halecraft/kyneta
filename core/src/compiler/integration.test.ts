@@ -2065,8 +2065,6 @@ describe("compiler integration - arbitrary statements", () => {
     })
 
     it("should compile multiple statements in list region (HTML)", () => {
-      // HTML codegen only handles statements in body contexts (list regions, conditionals)
-      // Direct builder children in HTML don't go through generateBodyHtml
       const source = `
         import { ListRef } from "@loro-extended/change"
         declare const items: ListRef<string>
@@ -2085,6 +2083,47 @@ describe("compiler integration - arbitrary statements", () => {
       // Should contain the statements in the list body
       expect(resultHtml.code).toContain("const x = 1")
       expect(resultHtml.code).toContain("const y = 2")
+    })
+
+    it("should compile top-level statements in builder (HTML)", () => {
+      const source = `
+        div(() => {
+          const x = 1
+          const y = 2
+          p(String(x + y))
+        })
+      `
+
+      const resultHtml = transformSource(source, { target: "html" })
+
+      // After unification, top-level builder statements are preserved in HTML output
+      expect(resultHtml.code).toContain("const x = 1")
+      expect(resultHtml.code).toContain("const y = 2")
+
+      // Verify order: x before y before element
+      const xIndex = resultHtml.code.indexOf("const x = 1")
+      const yIndex = resultHtml.code.indexOf("const y = 2")
+      const pIndex = resultHtml.code.indexOf("<p>")
+      expect(xIndex).toBeLessThan(yIndex)
+      expect(yIndex).toBeLessThan(pIndex)
+    })
+
+    it("should compile nested element with statements (HTML)", () => {
+      const source = `
+        div(() => {
+          header(() => {
+            const x = 1
+            h1(String(x))
+          })
+        })
+      `
+
+      const resultHtml = transformSource(source, { target: "html" })
+
+      // Statements inside nested elements are preserved
+      expect(resultHtml.code).toContain("const x = 1")
+      expect(resultHtml.code).toContain("<header>")
+      expect(resultHtml.code).toContain("<h1>")
     })
   })
 
@@ -2151,8 +2190,8 @@ describe("compiler integration - arbitrary statements", () => {
 
       const result = transformSource(source, { target: "html" })
 
-      // Should generate a map expression for static loop
-      expect(result.code).toContain("[1, 2, 3].map")
+      // Should generate a for...of loop for static loop (unified accumulation-line architecture)
+      expect(result.code).toContain("for (const x of [1, 2, 3])")
       expect(result.code).toContain("<li>")
     })
 
