@@ -99,6 +99,34 @@ Components:
 - Work with template cloning (serialized as placeholders, instantiated at runtime)
 - Can accept props, a builder callback, both, or neither
 
+## Client & Server Code
+
+Inside builder functions, use labeled blocks to mark code as client-only or server-only:
+
+```typescript
+return div(() => {
+  const count = state(0)
+
+  client: {
+    // Only runs in the browser — stripped from SSR output
+    setInterval(() => count.set(count.get() + 1), 1000)
+  }
+
+  server: {
+    // Only runs during SSR — stripped from client bundle
+    console.log("Rendered at", new Date().toISOString())
+  }
+
+  h1(count.get().toString())
+})
+```
+
+- `client: { ... }` — browser only (stripped during SSR compilation)
+- `server: { ... }` — SSR only (stripped from client bundle)
+- Unlabeled code — runs in both contexts
+
+These are standard TypeScript [labeled statements](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/label) — no custom syntax, no build tool magic. The compiler recognizes `client` and `server` labels inside builder functions and filters the IR tree before code generation.
+
 ## Prototype Status
 
 This is an experimental prototype exploring whether compilation can unlock O(k) UI updates from CRDT deltas.
@@ -119,10 +147,11 @@ This is an experimental prototype exploring whether compilation can unlock O(k) 
 | Batch list operations | ✅ | O(1) DOM ops for contiguous changes |
 | Component model | ✅ | Type-based ComponentFactory detection |
 | Lazy scopes | ✅ | Skip allocation for static list items |
+| Target labels | ✅ | `client:` / `server:` blocks |
 | Vite plugin | 🔴 | Placeholder only |
-| SSR + Hydration | 🔴 | Codegen exists, wiring needed |
+| SSR + Hydration | 🟡 | Codegen + target labels done, hydration wiring needed |
 
-**Test coverage**: 760 tests passing
+**Test coverage**: 804 tests passing
 
 ## How It Works
 

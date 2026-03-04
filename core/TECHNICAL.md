@@ -265,27 +265,124 @@ interface StatementNode {
 - Element factory calls → `ElementNode`
 - `for...of` loops → `LoopNode`
 - `if` statements → `ConditionalNode`
+- `client:` / `server:` labeled blocks → `TargetBlockNode`
 - Block statements → recursively analyzed
 - Return statements → compile-time error
+- Unknown labeled blocks → captured verbatim as `StatementNode`
+
+**Statement preservation works everywhere:**
+- Top-level builder body
+- Nested element children (e.g., `header(() => { const x = 1; h1(x) })`)
+- Loop bodies
+- Conditional branches
+- Inside `client:` / `server:` target blocks
+
+#### `TargetBlockNode`
+A labeled block that targets a specific compilation target.
+
+```typescript
+interface TargetBlockNode {
+  kind: "target-block"
+  target: "dom" | "html"  // Which compilation target this block is for
+  children: ChildNode[]   // Recursively analyzed contents
+}
+```
+
+Used for `client: { ... }` and `server: { ... }` blocks inside builder
+functions. See [Target Labels](#target-labels-client--server-blocks) below
+for the full architecture.
+
+### Target Labels: `client:` / `server:` Blocks
+
+Kinetic uses TypeScript's labeled statement syntax to mark code as client-only
+or server-only inside builder functions.
+
+#### Syntax
+
+- `client: { ... }` — contents compile to DOM target only, stripped from HTML (SSR) output
+- `server: { ... }` — contents compile to HTML target only, stripped from DOM (client) output
+- Unlabeled code — compiles to both targets
+
+```typescript
+div(() => {
+  const count = state(0)
+
+  client: {
+    // Only runs in the browser — stripped from SSR output
+    requestAnimationFrame(() => count.set(count.get() + 1))
+  }
+
+  server: {
+    // Only runs during SSR — stripped from client bundle
+    console.log("Rendered at", new Date().toISOString())
+  }
+
+  h1(count.get().toString())  // both targets
+})
+```
+
+#### IR Representation
+
+The `target` field maps label names to compilation targets:
+- `client` → `"dom"` (the DOM codegen target)
+- `server` → `"html"` (the HTML/SSR codegen target)
+
+Unknown labels (e.g., `myLabel: { ... }`) are **not** recognized as target
+blocks — they are captured verbatim as `StatementNode`.
+
+#### Filter-Before-Codegen Architecture
+
+Target blocks are resolved **before** codegen via a pure filter function:
+
+```typescript
+filterTargetBlocks(node: BuilderNode, target: CompileTarget): BuilderNode
+```
+
+This function recursively walks the IR tree:
+- **Strips** `TargetBlockNode` whose target doesn't match (removes entirely)
+- **Unwraps** `TargetBlockNode` whose target matches (splices children in place)
+
+After filtering, the IR tree contains no `TargetBlockNode` nodes. Codegens,
+`walk.ts`, `template.ts`, `computeSlotKind`, and all other downstream consumers
+never encounter `TargetBlockNode` — they remain unchanged.
+
+This follows the Functional Core / Imperative Shell principle: the filter is a
+pure function that produces a new tree, trivially testable in isolation.
+
+**Dependency collection**: `createBuilder`'s `collectDependencies` recurses into
+target block children regardless of target. Dependencies from both `client:` and
+`server:` blocks are collected — they inform subscription setup even if one
+target's code is stripped later.
+
+#### Scope
+
+Target labels are recognized **only inside builder function bodies** — the same
+scope where the dual-compilation (DOM vs HTML) occurs. File-level `client:` /
+`server:` labels are not recognized by the compiler (they're outside the builder
+analysis scope).
+
+For client-only module imports, use dynamic `import()` inside a `client:` block.
 
 ### Union Type
 
-All child nodes are unified under `ChildNode` (6 members in 3 categories):
+All child nodes are unified under `ChildNode` (7 members in 3 categories):
 
 ```typescript
 type ChildNode =
-  | ElementNode      // Applicative: fixed structure
-  | ContentValue     // Applicative: fixed structure
-  | LoopNode         // Monadic: dynamic structure (binding-time parameterized)
-  | ConditionalNode  // Monadic: dynamic structure (binding-time parameterized)
-  | BindingNode      // Effects: side effects
-  | StatementNode    // Effects: side effects
+  | ElementNode       // Applicative: fixed structure
+  | ContentValue      // Applicative: fixed structure
+  | LoopNode          // Monadic: dynamic structure (binding-time parameterized)
+  | ConditionalNode   // Monadic: dynamic structure (binding-time parameterized)
+  | BindingNode       // Effects: side effects
+  | StatementNode     // Effects: side effects
+  | TargetBlockNode   // Meta: target-conditional wrapper (filtered before codegen)
 ```
 
 The taxonomy reflects the algebraic structure:
 - **Applicative** nodes have fixed DOM structure at compile time
 - **Monadic** nodes have dynamic structure determined by runtime values
 - **Effects** nodes produce side effects without DOM structure
+- **Meta** nodes are structural wrappers resolved before codegen
 
 ## Code Generation
 
@@ -319,49 +416,67 @@ for (const x of [1, 2, 3]) {
 
 ### HTML Codegen (`codegen/html.ts`)
 
-Generates JavaScript that produces HTML strings via template literals.
+Generates JavaScript that produces HTML strings via accumulation into a `_html` variable.
+
+**Unified calling convention:** All codegen functions return `string[]` (code lines).
+There is one generator per IR construct, not two. Statements are lines interleaved with
+`_html +=` lines. This mirrors the DOM codegen architecture.
 
 **Output pattern:**
 ```javascript
-() => `<div><p>Hello</p></div>`
-```
-
-**Block body accumulation pattern:**
-
-For list regions and conditionals, HTML codegen uses a block body with accumulation:
-
-```javascript
-[...items].map((itemRef, _i) => {
-  let _html = "";
-  const item = itemRef.get();     // statement preserved — unwrap ref
-  console.log("before");          // statement preserved
-  _html += `<li>${item}</li>`;    // HTML accumulated
-  console.log("after");           // statement preserved
+() => {
+  let _html = ""
+  _html += `<div class="app">`
+  _html += `<h1>${__escapeHtml(String(title))}</h1>`
+  _html += `</div>`
   return _html
-}).join("")
+}
 ```
 
-Note: HTML codegen uses spread syntax `[...items]` instead of `.toArray()` to
-preserve `PlainValueRef` for value shapes, enabling two-way binding patterns.
+**Statement handling:** Statements are emitted as lines interleaved with `_html +=` lines.
+This works at every level — top-level builder body, nested element children, loop bodies,
+and conditional branches.
 
-This pattern:
-1. Enables statements to execute between HTML generation
-2. Preserves side effect ordering
-3. Works consistently for all body contexts
-
-**Static loop generation:**
 ```javascript
-// Input: for (const x of [1, 2, 3]) { li(x) }
+// Input: div(() => { const x = 1; h1(String(x)) })
 // Output:
-${[1, 2, 3].map((x) => { let _html = ""; _html += `<li>${x}</li>`; return _html }).join("")}
+() => {
+  let _html = ""
+  _html += `<div>`
+  const x = 1
+  _html += `<h1>${__escapeHtml(String(x))}</h1>`
+  _html += `</div>`
+  return _html
+}
 ```
 
-**Static conditional generation:**
+**Loop generation (both reactive and render-time):**
 ```javascript
-// Input: if (condition) { p("yes") } else { p("no") }
-// Output:
-${(() => { if (condition) { let _html = ""; _html += `<p>yes</p>`; return _html } else { let _html = ""; _html += `<p>no</p>`; return _html } })()}
+_html += `<ul>`
+_html += `<!--kinetic:list:0-->`
+for (const itemRef of [...items]) {
+  const item = itemRef.get()
+  _html += `<li>${__escapeHtml(String(item))}</li>`
+}
+_html += `<!--/kinetic:list-->`
+_html += `</ul>`
 ```
+
+Reactive loops include hydration markers; render-time loops omit them.
+Reactive loops use spread syntax `[...items]` to preserve `PlainValueRef` objects.
+
+**Conditional generation (both reactive and render-time):**
+```javascript
+_html += `<!--kinetic:if:0-->`
+if (condition) {
+  _html += `<p>yes</p>`
+} else {
+  _html += `<p>no</p>`
+}
+_html += `<!--/kinetic:if-->`
+```
+
+The code structure is identical for reactive and render-time — only the marker comments differ.
 
 ## Reactive Detection
 
@@ -438,7 +553,7 @@ Non-reactive equivalents:
 
 ## Design Decisions
 
-### Always Block Body in HTML Codegen
+### Unified Accumulation-Line Architecture in HTML Codegen
 
 We always use block body (`() => { ... }`) instead of expression body (`() => x`) in HTML codegen, even when there are no statements. Benefits:
 
