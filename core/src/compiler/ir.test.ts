@@ -1,9 +1,12 @@
 /**
- * Unit tests for IR types and dependency collection.
+ * Unit tests for IR types, dependency collection, and target block filtering.
  *
- * These tests focus on the high-risk `createBuilder` function which
- * recursively collects dependencies from the entire IR tree. Bugs here
- * silently cause stale UI (missing subscriptions).
+ * These tests focus on:
+ * - The high-risk `createBuilder` function which recursively collects
+ *   dependencies from the entire IR tree. Bugs here silently cause
+ *   stale UI (missing subscriptions).
+ * - The `filterTargetBlocks` function which strips/unwraps client:/server:
+ *   blocks before codegen. Bugs here cause wrong code in wrong target.
  */
 
 import { describe, expect, it } from "vitest"
@@ -19,8 +22,10 @@ import {
   createLoop,
   createSpan,
   createStatement,
+  createTargetBlock,
   type Dependency,
   type DeltaKind,
+  filterTargetBlocks,
 } from "./ir.js"
 
 // =============================================================================
@@ -545,5 +550,352 @@ describe("computeHasReactiveItems", () => {
       createElement("br", [], [], [], [], span()),
     ]
     expect(computeHasReactiveItems(body)).toBe(true)
+  })
+})
+
+// =============================================================================
+// createBuilder — Target Block Dependency Collection
+// =============================================================================
+
+describe("createBuilder - target block dependency collection", () => {
+  it("collects dependencies from inside client: target block", () => {
+    const reactiveExpr = createContent(
+      "count.get()",
+      "reactive",
+      [dep("count")],
+      span(),
+    )
+    const targetBlock = createTargetBlock("dom", [reactiveExpr], span())
+    const builder = createBuilder("div", [], [], [targetBlock], span())
+
+    expect(hasDep(builder.allDependencies, "count")).toBe(true)
+    expect(builder.isReactive).toBe(true)
+  })
+
+  it("collects dependencies from inside server: target block", () => {
+    const reactiveExpr = createContent(
+      "doc.title.toString()",
+      "reactive",
+      [dep("doc.title", "text")],
+      span(),
+    )
+    const targetBlock = createTargetBlock("html", [reactiveExpr], span())
+    const builder = createBuilder("div", [], [], [targetBlock], span())
+
+    expect(hasDep(builder.allDependencies, "doc.title")).toBe(true)
+    expect(builder.isReactive).toBe(true)
+  })
+
+  it("collects dependencies from both client: and server: blocks", () => {
+    const clientExpr = createContent(
+      "clientRef.get()",
+      "reactive",
+      [dep("clientRef")],
+      span(),
+    )
+    const serverExpr = createContent(
+      "serverRef.get()",
+      "reactive",
+      [dep("serverRef")],
+      span(),
+    )
+    const clientBlock = createTargetBlock("dom", [clientExpr], span())
+    const serverBlock = createTargetBlock("html", [serverExpr], span())
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [clientBlock, serverBlock],
+      span(),
+    )
+
+    expect(hasDep(builder.allDependencies, "clientRef")).toBe(true)
+    expect(hasDep(builder.allDependencies, "serverRef")).toBe(true)
+  })
+
+  it("collects dependencies from nested elements inside target block", () => {
+    const reactiveP = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [
+        createContent(
+          "doc.message.toString()",
+          "reactive",
+          [dep("doc.message", "text")],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const targetBlock = createTargetBlock("dom", [reactiveP], span())
+    const builder = createBuilder("div", [], [], [targetBlock], span())
+
+    expect(hasDep(builder.allDependencies, "doc.message")).toBe(true)
+  })
+})
+
+// =============================================================================
+// filterTargetBlocks Tests
+// =============================================================================
+
+describe("filterTargetBlocks", () => {
+  it("should strip client: blocks when target is html", () => {
+    const stmt = createStatement('console.log("client")', span())
+    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const h1 = createElement(
+      "h1",
+      [],
+      [],
+      [],
+      [createLiteral("Hello", span())],
+      span(),
+    )
+    const builder = createBuilder("div", [], [], [clientBlock, h1], span())
+
+    const filtered = filterTargetBlocks(builder, "html")
+
+    expect(filtered.children).toHaveLength(1)
+    expect(filtered.children[0].kind).toBe("element")
+  })
+
+  it("should unwrap client: blocks when target is dom", () => {
+    const stmt = createStatement('console.log("client")', span())
+    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const h1 = createElement(
+      "h1",
+      [],
+      [],
+      [],
+      [createLiteral("Hello", span())],
+      span(),
+    )
+    const builder = createBuilder("div", [], [], [clientBlock, h1], span())
+
+    const filtered = filterTargetBlocks(builder, "dom")
+
+    expect(filtered.children).toHaveLength(2)
+    expect(filtered.children[0].kind).toBe("statement")
+    expect((filtered.children[0] as { source: string }).source).toBe(
+      'console.log("client")',
+    )
+    expect(filtered.children[1].kind).toBe("element")
+  })
+
+  it("should strip server: blocks when target is dom", () => {
+    const stmt = createStatement('console.log("server")', span())
+    const serverBlock = createTargetBlock("html", [stmt], span())
+    const h1 = createElement(
+      "h1",
+      [],
+      [],
+      [],
+      [createLiteral("Hello", span())],
+      span(),
+    )
+    const builder = createBuilder("div", [], [], [serverBlock, h1], span())
+
+    const filtered = filterTargetBlocks(builder, "dom")
+
+    expect(filtered.children).toHaveLength(1)
+    expect(filtered.children[0].kind).toBe("element")
+  })
+
+  it("should unwrap server: blocks when target is html", () => {
+    const stmt = createStatement('console.log("server")', span())
+    const serverBlock = createTargetBlock("html", [stmt], span())
+    const h1 = createElement(
+      "h1",
+      [],
+      [],
+      [],
+      [createLiteral("Hello", span())],
+      span(),
+    )
+    const builder = createBuilder("div", [], [], [serverBlock, h1], span())
+
+    const filtered = filterTargetBlocks(builder, "html")
+
+    expect(filtered.children).toHaveLength(2)
+    expect(filtered.children[0].kind).toBe("statement")
+    expect(filtered.children[1].kind).toBe("element")
+  })
+
+  it("should recurse into element children", () => {
+    const stmt = createStatement('console.log("client")', span())
+    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const inner = createElement("section", [], [], [], [clientBlock], span())
+    const builder = createBuilder("div", [], [], [inner], span())
+
+    // HTML target: client: block stripped from inside element
+    const filtered = filterTargetBlocks(builder, "html")
+    const section = filtered.children[0]
+    expect(section.kind).toBe("element")
+    expect((section as { children: unknown[] }).children).toHaveLength(0)
+
+    // DOM target: client: block unwrapped inside element
+    const filteredDom = filterTargetBlocks(builder, "dom")
+    const sectionDom = filteredDom.children[0]
+    expect(sectionDom.kind).toBe("element")
+    expect((sectionDom as { children: unknown[] }).children).toHaveLength(1)
+    expect(
+      ((sectionDom as { children: Array<{ kind: string }> }).children[0]).kind,
+    ).toBe("statement")
+  })
+
+  it("should recurse into loop bodies", () => {
+    const stmt = createStatement('console.log("server")', span())
+    const serverBlock = createTargetBlock("html", [stmt], span())
+    const li = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createLiteral("item", span())],
+      span(),
+    )
+    const loop = createLoop(
+      "items",
+      "render",
+      "item",
+      null,
+      [serverBlock, li],
+      [],
+      span(),
+    )
+    const builder = createBuilder("ul", [], [], [loop], span())
+
+    // DOM target: server: block stripped from loop body
+    const filtered = filterTargetBlocks(builder, "dom")
+    const filteredLoop = filtered.children[0]
+    expect(filteredLoop.kind).toBe("loop")
+    expect((filteredLoop as { body: unknown[] }).body).toHaveLength(1)
+    expect(
+      ((filteredLoop as { body: Array<{ kind: string }> }).body[0]).kind,
+    ).toBe("element")
+
+    // HTML target: server: block unwrapped in loop body
+    const filteredHtml = filterTargetBlocks(builder, "html")
+    const htmlLoop = filteredHtml.children[0]
+    expect((htmlLoop as { body: unknown[] }).body).toHaveLength(2)
+  })
+
+  it("should recurse into conditional branches", () => {
+    const stmt = createStatement('console.log("client")', span())
+    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const p = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("Yes", span())],
+      span(),
+    )
+    const branch = createConditionalBranch(
+      createContent("true", "render", [], span()),
+      [clientBlock, p],
+      span(),
+    )
+    const cond = createConditional([branch], null, span())
+    const builder = createBuilder("div", [], [], [cond], span())
+
+    // HTML target: client: block stripped from conditional branch
+    const filtered = filterTargetBlocks(builder, "html")
+    const filteredCond = filtered.children[0]
+    expect(filteredCond.kind).toBe("conditional")
+    const branches = (filteredCond as { branches: Array<{ body: unknown[] }> })
+      .branches
+    expect(branches[0].body).toHaveLength(1)
+    expect((branches[0].body[0] as { kind: string }).kind).toBe("element")
+
+    // DOM target: client: block unwrapped in conditional branch
+    const filteredDom = filterTargetBlocks(builder, "dom")
+    const domCond = filteredDom.children[0]
+    const domBranches = (
+      domCond as { branches: Array<{ body: unknown[] }> }
+    ).branches
+    expect(domBranches[0].body).toHaveLength(2)
+  })
+
+  it("should handle nested target blocks (target block inside target block)", () => {
+    const innerStmt = createStatement("const x = 1", span())
+    const innerBlock = createTargetBlock("dom", [innerStmt], span())
+    const outerBlock = createTargetBlock("dom", [innerBlock], span())
+    const builder = createBuilder("div", [], [], [outerBlock], span())
+
+    // DOM target: both layers unwrap
+    const filtered = filterTargetBlocks(builder, "dom")
+    expect(filtered.children).toHaveLength(1)
+    expect(filtered.children[0].kind).toBe("statement")
+
+    // HTML target: outer strip removes everything
+    const filteredHtml = filterTargetBlocks(builder, "html")
+    expect(filteredHtml.children).toHaveLength(0)
+  })
+
+  it("should handle deeply nested: target block inside element inside loop", () => {
+    const stmt = createStatement('console.log("deep")', span())
+    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const li = createElement("li", [], [], [], [clientBlock], span())
+    const loop = createLoop(
+      "items",
+      "render",
+      "item",
+      null,
+      [li],
+      [],
+      span(),
+    )
+    const builder = createBuilder("ul", [], [], [loop], span())
+
+    // HTML target: statement stripped from deep inside
+    const filtered = filterTargetBlocks(builder, "html")
+    const filteredLoop = filtered.children[0] as { body: Array<{ children: unknown[] }> }
+    expect(filteredLoop.body[0].children).toHaveLength(0)
+
+    // DOM target: statement preserved deep inside
+    const filteredDom = filterTargetBlocks(builder, "dom")
+    const domLoop = filteredDom.children[0] as { body: Array<{ children: Array<{ kind: string }> }> }
+    expect(domLoop.body[0].children).toHaveLength(1)
+    expect(domLoop.body[0].children[0].kind).toBe("statement")
+  })
+
+  it("should unwrap multiple children from a single target block", () => {
+    const stmt1 = createStatement("const x = 1", span())
+    const stmt2 = createStatement("const y = 2", span())
+    const h1 = createElement(
+      "h1",
+      [],
+      [],
+      [],
+      [createLiteral("Hello", span())],
+      span(),
+    )
+    const clientBlock = createTargetBlock("dom", [stmt1, stmt2, h1], span())
+    const builder = createBuilder("div", [], [], [clientBlock], span())
+
+    const filtered = filterTargetBlocks(builder, "dom")
+
+    // All three children should be spliced in
+    expect(filtered.children).toHaveLength(3)
+    expect(filtered.children[0].kind).toBe("statement")
+    expect(filtered.children[1].kind).toBe("statement")
+    expect(filtered.children[2].kind).toBe("element")
+  })
+
+  it("should not mutate the original builder", () => {
+    const stmt = createStatement('console.log("client")', span())
+    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const builder = createBuilder("div", [], [], [clientBlock], span())
+
+    const filtered = filterTargetBlocks(builder, "html")
+
+    // Original unchanged
+    expect(builder.children).toHaveLength(1)
+    expect(builder.children[0].kind).toBe("target-block")
+
+    // Filtered has it stripped
+    expect(filtered.children).toHaveLength(0)
   })
 })

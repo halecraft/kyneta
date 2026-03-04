@@ -194,13 +194,13 @@ This PR eliminates the dual-calling-convention architecture in `codegen/html.ts`
   - `transform.test.ts`: 2 assertion changes
 - **Task 1.12**: All 776 tests pass across 23 test files: ✅
 
-### PR 2: `client:` / `server:` target labels (feature) 🔴
+### PR 2: `client:` / `server:` target labels (feature) ✅
 
 **Type**: Feature (new abstraction + implementation + tests)
 
 This PR adds the full target-label capability in one coherent slice: IR type → analysis detection → pure filter function → wiring in transform pipeline. These pieces are tightly coupled (the IR type has no purpose without the filter; the filter has no input without analysis) so they belong together. The PR is individually testable at every layer (IR unit tests, analysis unit tests, filter unit tests, integration tests).
 
-- **Task 2.1**: Add `TargetBlockNode` to IR in `ir.ts`: 🔴
+- **Task 2.1**: Add `TargetBlockNode` to IR in `ir.ts`: ✅
 
 ```typescript
 import type { CompileTarget } from "../transform.js"
@@ -214,27 +214,29 @@ interface TargetBlockNode extends IRNodeBase {
 }
 ```
 
-> **Note**: `CompileTarget` already exists in `transform.ts` (line 39) and is re-exported from `compiler/index.ts`. Import it into `ir.ts` rather than duplicating the type. If this creates a circular dependency (unlikely — `ir.ts` has no current imports from `transform.ts`), move the type to `ir.ts` and re-export from `transform.ts` instead.
+> **Note**: `CompileTarget` was moved to `ir.ts` (from `transform.ts`) to avoid a circular dependency, since `ir.ts` had no prior imports. `transform.ts` now re-exports `CompileTarget` from `ir.ts` for backwards compatibility.
 
-- **Task 2.2**: Add `"target-block"` to `IRNodeKind` union and `TargetBlockNode` to `ChildNode` union. 🔴
-- **Task 2.3**: Add `createTargetBlock` factory function and `isTargetBlockNode` type guard in `ir.ts`. 🔴
-- **Task 2.4**: Update `createBuilder`'s `collectDependencies` to recurse into `TargetBlockNode.children`. Dependencies from both `client:` and `server:` blocks should be collected — they inform subscription setup even if one target's code is stripped. 🔴
-- **Task 2.5**: Add `filterTargetBlocks(node: BuilderNode, target: CompileTarget): BuilderNode` as a pure function in `ir.ts`. Recursively walks children, element children, loop bodies, and conditional branches. Strips `TargetBlockNode` nodes with non-matching target. Unwraps (splices in children) `TargetBlockNode` nodes with matching target. Returns a new `BuilderNode` with no `TargetBlockNode` in the tree. 🔴
-- **Task 2.6**: Add unit tests for `filterTargetBlocks` in `ir.test.ts`: 🔴
+- **Task 2.2**: Add `"target-block"` to `IRNodeKind` union and `TargetBlockNode` to `ChildNode` union. ✅
+- **Task 2.3**: Add `createTargetBlock` factory function and `isTargetBlockNode` type guard in `ir.ts`. ✅
+- **Task 2.4**: Update `createBuilder`'s `collectDependencies` to recurse into `TargetBlockNode.children`. Dependencies from both `client:` and `server:` blocks should be collected — they inform subscription setup even if one target's code is stripped. ✅
+- **Task 2.5**: Add `filterTargetBlocks(node: BuilderNode, target: CompileTarget): BuilderNode` as a pure function in `ir.ts`. Recursively walks children, element children, loop bodies, and conditional branches. Strips `TargetBlockNode` nodes with non-matching target. Unwraps (splices in children) `TargetBlockNode` nodes with matching target. Returns a new `BuilderNode` with no `TargetBlockNode` in the tree. ✅
+- **Task 2.6**: Add unit tests for `filterTargetBlocks` in `ir.test.ts`: ✅
   - `client:` block stripped when target is `"html"`
   - `client:` block unwrapped when target is `"dom"`
   - `server:` block stripped when target is `"dom"`
   - `server:` block unwrapped when target is `"html"`
   - Nested target blocks inside loops and conditionals
   - Deeply nested: target block inside element inside loop
-- **Task 2.7**: In `analyzeStatement`, add a case for `SyntaxKind.LabeledStatement`. When the label is `"client"` or `"server"`, extract the body (which must be a `Block`), recursively analyze its statements, and wrap the result in a `TargetBlockNode`. If the label is neither `"client"` nor `"server"`, fall through to the existing `createStatement` capture. 🔴
-- **Task 2.8**: Add unit tests to `analyze.test.ts`: 🔴
+- **Task 2.7**: In `analyzeStatement`, add a case for `SyntaxKind.LabeledStatement`. When the label is `"client"` or `"server"`, extract the body (which must be a `Block`), recursively analyze its statements, and wrap the result in a `TargetBlockNode`. If the label is neither `"client"` nor `"server"`, fall through to the existing `createStatement` capture. ✅
+- **Task 2.8**: Add unit tests to `analyze.test.ts`: ✅
   - `client: { ... }` produces `TargetBlockNode` with `target: "dom"`
   - `server: { ... }` produces `TargetBlockNode` with `target: "html"`
   - Recursive analysis of children inside target block
   - Unknown labels produce `StatementNode`
-- **Task 2.9**: In `transformSourceInPlace` (`transform.ts`), call `filterTargetBlocks` on each analyzed `BuilderNode` before passing to codegen. The `target` ("dom" or "html") is already available as `options.target`. 🔴
-- **Task 2.10**: Add integration tests in `integration.test.ts` — compile same source to both targets, verify `client:` code appears only in DOM output and `server:` code only in HTML output. 🔴
+- **Task 2.9**: In `transformSourceInPlace` (`transform.ts`), call `filterTargetBlocks` on each analyzed `BuilderNode` before passing to codegen. The `target` ("dom" or "html") is already available as `options.target`. ✅
+  - **Deviation from plan**: Also added `filterTargetBlocks` calls in `transformSource` and `transformFile` (the two other codegen entry points). The plan only mentioned `transformSourceInPlace`, but integration tests use `transformSource`.
+- **Task 2.10**: Add integration tests in `integration.test.ts` — compile same source to both targets, verify `client:` code appears only in DOM output and `server:` code only in HTML output. ✅
+- **Task 2.11**: All 804 tests pass across 23 test files (28 new tests, up from 776). ✅
 
 ### PR 3: Apply to kinetic-todo example + documentation 🔴
 

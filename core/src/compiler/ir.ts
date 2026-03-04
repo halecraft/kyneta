@@ -14,6 +14,21 @@
  */
 
 // =============================================================================
+// Compilation Target
+// =============================================================================
+
+/**
+ * Compilation target.
+ *
+ * - "dom": Generate DOM manipulation code (for client)
+ * - "html": Generate HTML string code (for SSR)
+ *
+ * Defined here (rather than in transform.ts) so that IR types can
+ * reference it without creating a circular dependency.
+ */
+export type CompileTarget = "dom" | "html"
+
+// =============================================================================
 // Base Types
 // =============================================================================
 
@@ -42,6 +57,7 @@ export type IRNodeKind =
   | "conditional"
   | "binding"
   | "statement"
+  | "target-block"
 
 /**
  * Base interface for all IR nodes.
@@ -567,6 +583,32 @@ export interface StatementNode extends IRNodeBase {
   source: string
 }
 
+/**
+ * A labeled block that targets a specific compilation target.
+ *
+ * Used for `client: { ... }` and `server: { ... }` blocks inside
+ * builder functions. The filter-before-codegen architecture strips
+ * non-matching blocks and unwraps matching blocks before codegen
+ * ever sees the IR, so codegens remain target-unaware.
+ *
+ * ```typescript
+ * div(() => {
+ *   client: { requestAnimationFrame(loop) }  // DOM only
+ *   server: { console.log("SSR render") }     // HTML only
+ *   h1("Hello")                               // both targets
+ * })
+ * ```
+ */
+export interface TargetBlockNode extends IRNodeBase {
+  kind: "target-block"
+
+  /** Which compilation target this block is for */
+  target: CompileTarget
+
+  /** The analyzed children inside the labeled block */
+  children: ChildNode[]
+}
+
 // =============================================================================
 // Union Types
 // =============================================================================
@@ -581,6 +623,7 @@ export type ChildNode =
   | ConditionalNode
   | BindingNode
   | StatementNode
+  | TargetBlockNode
 
 // =============================================================================
 // Root Types
@@ -676,6 +719,13 @@ export function isBindingNode(node: ChildNode): node is BindingNode {
  */
 export function isStatementNode(node: ChildNode): node is StatementNode {
   return node.kind === "statement"
+}
+
+/**
+ * Check if a node is a target block.
+ */
+export function isTargetBlockNode(node: ChildNode): node is TargetBlockNode {
+  return node.kind === "target-block"
 }
 
 /**
@@ -1254,6 +1304,26 @@ export function createStatement(
 }
 
 /**
+ * Create a target block node.
+ *
+ * @param target - The compilation target this block is for ("dom" for client:, "html" for server:)
+ * @param children - The analyzed children inside the labeled block
+ * @param span - Source location
+ */
+export function createTargetBlock(
+  target: CompileTarget,
+  children: ChildNode[],
+  span: SourceSpan,
+): TargetBlockNode {
+  return {
+    kind: "target-block",
+    target,
+    children,
+    span,
+  }
+}
+
+/**
  * Create a loop node (unified for render-time and reactive loops).
  */
 export function createLoop(
@@ -1367,6 +1437,11 @@ export function createBuilder(
           }
           collectDependencies(branch.body)
         }
+      } else if (node.kind === "target-block") {
+        // Recurse into target block children regardless of target —
+        // dependencies from both client: and server: blocks inform
+        // subscription setup even if one target's code is stripped later.
+        collectDependencies(node.children)
       } else if (node.kind === "binding") {
         // Bindings are tracked separately, not as dependencies
         // The refSource is used for binding generation, not subscription
@@ -1396,5 +1471,100 @@ export function createBuilder(
     allDependencies: Array.from(allDependenciesMap.values()),
     isReactive,
     span,
+  }
+}
+
+// =============================================================================
+// Target Block Filtering
+// =============================================================================
+
+/**
+ * Filter target blocks from an IR tree before codegen.
+ *
+ * This is a pure function that recursively walks the IR tree and:
+ * - **Strips** `TargetBlockNode` nodes whose target doesn't match (removes them entirely)
+ * - **Unwraps** `TargetBlockNode` nodes whose target matches (splices in their children)
+ *
+ * After filtering, the returned `BuilderNode` contains no `TargetBlockNode` nodes
+ * anywhere in the tree. Codegens, walkers, and template extraction never see them.
+ *
+ * @param node - The builder node to filter
+ * @param target - The active compilation target ("dom" or "html")
+ * @returns A new BuilderNode with target blocks resolved
+ */
+export function filterTargetBlocks(
+  node: BuilderNode,
+  target: CompileTarget,
+): BuilderNode {
+  return {
+    ...node,
+    children: filterChildren(node.children, target),
+  }
+}
+
+/**
+ * Recursively filter target blocks from a list of child nodes.
+ */
+function filterChildren(
+  children: ChildNode[],
+  target: CompileTarget,
+): ChildNode[] {
+  const result: ChildNode[] = []
+
+  for (const child of children) {
+    if (child.kind === "target-block") {
+      if (child.target === target) {
+        // Matching target — unwrap: splice in the filtered children
+        result.push(...filterChildren(child.children, target))
+      }
+      // Non-matching target — strip: omit entirely
+    } else {
+      // Recurse into nodes that contain child arrays
+      result.push(filterChildNode(child, target))
+    }
+  }
+
+  return result
+}
+
+/**
+ * Recursively filter target blocks inside a single non-target-block child node.
+ */
+function filterChildNode(
+  node: ChildNode,
+  target: CompileTarget,
+): ChildNode {
+  switch (node.kind) {
+    case "element":
+      return {
+        ...node,
+        children: filterChildren(node.children, target),
+      }
+
+    case "loop":
+      return {
+        ...node,
+        body: filterChildren(node.body, target),
+      }
+
+    case "conditional":
+      return {
+        ...node,
+        branches: node.branches.map(branch => ({
+          ...branch,
+          body: filterChildren(branch.body, target),
+        })),
+      }
+
+    // Leaf nodes — no children to recurse into
+    case "content":
+    case "statement":
+    case "binding":
+      return node
+
+    // target-block is already handled by filterChildren before this function
+    // is called, so this case should never be reached.
+    case "target-block":
+      return node
   }
 }

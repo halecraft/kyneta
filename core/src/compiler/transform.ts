@@ -27,16 +27,16 @@ import {
   generateHTML,
   generateRenderFunction,
 } from "./codegen/html.js"
+import { filterTargetBlocks, type CompileTarget } from "./ir.js"
 import type { BuilderNode, ChildNode } from "./ir.js"
 
 // =============================================================================
 // Types
 // =============================================================================
 
-/**
- * Compilation target.
- */
-export type CompileTarget = "dom" | "html"
+// CompileTarget is defined in ir.ts to avoid circular dependencies.
+// Re-export it here for backwards compatibility.
+export type { CompileTarget } from "./ir.js"
 
 /**
  * Options for transformation.
@@ -476,6 +476,14 @@ export function transformSourceInPlace(
   // Apply replacements using the appropriate codegen target
   // IMPORTANT: Do replacements BEFORE insertions to avoid stale AST references
   const target = options.target ?? "dom"
+
+  // Filter target blocks (client:/server:) before codegen.
+  // This strips non-matching blocks and unwraps matching ones so that
+  // codegens never see TargetBlockNode in the IR tree.
+  for (const r of replacements) {
+    r.ir = filterTargetBlocks(r.ir, target)
+  }
+
   for (const { call, ir: builderIr } of replacements) {
     if (target === "html") {
       const factoryCode = generateRenderFunction(builderIr, {
@@ -627,12 +635,15 @@ export function transformSource(
     }
   }
 
+  // Filter target blocks (client:/server:) before codegen.
+  const filteredIr = ir.map(builder => filterTargetBlocks(builder, target))
+
   // Generate output code
   let code: string
   if (target === "html") {
-    code = generateHTMLOutput(ir, options)
+    code = generateHTMLOutput(filteredIr, options)
   } else {
-    code = generateDOMOutput(ir, options)
+    code = generateDOMOutput(filteredIr, options)
   }
 
   // TODO: Generate source maps if requested
@@ -678,12 +689,15 @@ export function transformFile(
     }
   }
 
+  // Filter target blocks (client:/server:) before codegen.
+  const filteredIr = ir.map(builder => filterTargetBlocks(builder, target))
+
   // Generate output code
   let code: string
   if (target === "html") {
-    code = generateHTMLOutput(ir, options)
+    code = generateHTMLOutput(filteredIr, options)
   } else {
-    code = generateDOMOutput(ir, options)
+    code = generateDOMOutput(filteredIr, options)
   }
 
   // TODO: Generate source maps if requested

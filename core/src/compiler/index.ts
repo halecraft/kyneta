@@ -24,6 +24,7 @@ export type {
   BindingTime,
   BuilderNode,
   ChildNode,
+  CompileTarget,
   ConditionalBranch,
   ConditionalNode,
   ContentNode,
@@ -37,6 +38,7 @@ export type {
   MergeResult,
   SlotKind,
   SourceSpan,
+  TargetBlockNode,
 } from "./ir.js"
 
 export {
@@ -52,6 +54,9 @@ export {
   createLiteral,
   createLoop,
   createSpan,
+  createTargetBlock,
+  // Target block filtering
+  filterTargetBlocks,
   // Type guards
   isBindingNode,
   isConditionalNode,
@@ -60,6 +65,7 @@ export {
   isLiteralContent,
   isLoopNode,
   isReactiveContent,
+  isTargetBlockNode,
   // Tree merge
   mergeConditionalBodies,
   mergeContentValue,
@@ -125,8 +131,6 @@ export {
 export {
   // Testing utilities
   resetProject,
-  // Types
-  type CompileTarget,
   // Import handling
   collectRequiredImports,
   // Functions

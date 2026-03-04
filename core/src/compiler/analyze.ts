@@ -28,6 +28,7 @@ import {
   type ForOfStatement,
   type FunctionExpression,
   type IfStatement,
+  type LabeledStatement,
   Node,
   type ObjectLiteralExpression,
   type PropertyAccessExpression,
@@ -59,6 +60,7 @@ import {
   createLoop,
   createSpan,
   createStatement,
+  createTargetBlock,
 } from "./ir.js"
 
 // =============================================================================
@@ -864,6 +866,40 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
       return [region]
     }
     // If analysis fails, capture as statement
+    return [createStatement(stmt.getText(), span)]
+  }
+
+  // Labeled statement — detect client:/server: target blocks
+  if (stmt.getKind() === SyntaxKind.LabeledStatement) {
+    const labeled = stmt as LabeledStatement
+    const label = labeled.getLabel().getText()
+
+    if (label === "client" || label === "server") {
+      const body = labeled.getStatement()
+      const children: ChildNode[] = []
+
+      if (body.getKind() === SyntaxKind.Block) {
+        const block = body as Block
+        for (const innerStmt of block.getStatements()) {
+          const result = analyzeStatement(innerStmt)
+          if (result) {
+            children.push(...result)
+          }
+        }
+      } else {
+        // Single statement body (e.g., `client: console.log("hi")`)
+        const result = analyzeStatement(body as Statement)
+        if (result) {
+          children.push(...result)
+        }
+      }
+
+      // client: → target "dom", server: → target "html"
+      const target = label === "client" ? "dom" : "html"
+      return [createTargetBlock(target as "dom" | "html", children, span)]
+    }
+
+    // Unknown label — fall through to verbatim statement capture
     return [createStatement(stmt.getText(), span)]
   }
 

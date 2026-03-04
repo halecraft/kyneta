@@ -1915,3 +1915,208 @@ describe("integration: complex builder analysis", () => {
     expect(builder?.children.length).toBeGreaterThanOrEqual(2)
   })
 })
+
+// =============================================================================
+// Target Label Detection Tests
+// =============================================================================
+
+describe("analyzeStatement - target labels", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addLoroTypes(project)
+  })
+
+  it("should produce TargetBlockNode for client: label", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        client: {
+          console.log("browser")
+        }
+        p("hello")
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(2)
+
+    // First child should be a target block targeting "dom"
+    expect(builder?.children[0].kind).toBe("target-block")
+    if (builder?.children[0].kind === "target-block") {
+      expect(builder.children[0].target).toBe("dom")
+      expect(builder.children[0].children.length).toBe(1)
+      expect(builder.children[0].children[0].kind).toBe("statement")
+    }
+
+    // Second child should be the element
+    expect(builder?.children[1].kind).toBe("element")
+  })
+
+  it("should produce TargetBlockNode for server: label", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        server: {
+          console.log("ssr")
+        }
+        p("hello")
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(2)
+
+    // First child should be a target block targeting "html"
+    expect(builder?.children[0].kind).toBe("target-block")
+    if (builder?.children[0].kind === "target-block") {
+      expect(builder.children[0].target).toBe("html")
+      expect(builder.children[0].children.length).toBe(1)
+      expect(builder.children[0].children[0].kind).toBe("statement")
+    }
+
+    // Second child should be the element
+    expect(builder?.children[1].kind).toBe("element")
+  })
+
+  it("should recursively analyze children inside target block", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        client: {
+          const x = 1
+          p(String(x))
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(1)
+    expect(builder?.children[0].kind).toBe("target-block")
+
+    if (builder?.children[0].kind === "target-block") {
+      const block = builder.children[0]
+      expect(block.target).toBe("dom")
+      expect(block.children.length).toBe(2)
+
+      // First child: statement (const x = 1)
+      expect(block.children[0].kind).toBe("statement")
+      if (block.children[0].kind === "statement") {
+        expect(block.children[0].source).toContain("const x = 1")
+      }
+
+      // Second child: element (p)
+      expect(block.children[1].kind).toBe("element")
+    }
+  })
+
+  it("should treat unknown labels as verbatim statements", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        myLabel: {
+          const x = 1
+        }
+        p("hello")
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(2)
+
+    // Unknown label should be captured as a plain statement
+    expect(builder?.children[0].kind).toBe("statement")
+    if (builder?.children[0].kind === "statement") {
+      expect(builder.children[0].source).toContain("myLabel")
+    }
+
+    // Second child should be the element
+    expect(builder?.children[1].kind).toBe("element")
+  })
+
+  it("should handle nested element calls inside target block", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        server: {
+          header(() => {
+            h1("Server Title")
+          })
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(1)
+    expect(builder?.children[0].kind).toBe("target-block")
+
+    if (builder?.children[0].kind === "target-block") {
+      const block = builder.children[0]
+      expect(block.target).toBe("html")
+      // The header() call should be analyzed as a nested element
+      expect(block.children.length).toBe(1)
+      expect(block.children[0].kind).toBe("element")
+    }
+  })
+
+  it("should handle both client: and server: blocks in same builder", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      div(() => {
+        client: {
+          console.log("browser only")
+        }
+        h1("shared")
+        server: {
+          console.log("ssr only")
+        }
+      })
+    `,
+    )
+
+    const calls = findBuilderCalls(sourceFile)
+    const builder = analyzeBuilder(calls[0])
+
+    expect(builder).not.toBeNull()
+    expect(builder?.children.length).toBe(3)
+
+    expect(builder?.children[0].kind).toBe("target-block")
+    if (builder?.children[0].kind === "target-block") {
+      expect(builder.children[0].target).toBe("dom")
+    }
+
+    expect(builder?.children[1].kind).toBe("element")
+
+    expect(builder?.children[2].kind).toBe("target-block")
+    if (builder?.children[2].kind === "target-block") {
+      expect(builder.children[2].target).toBe("html")
+    }
+  })
+})

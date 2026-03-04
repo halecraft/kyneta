@@ -2868,4 +2868,174 @@ describe("compiler integration - text patching", () => {
       expect(textNode.textContent).toBe(oldContent)
     })
   })
+
+  // ===========================================================================
+  // Target Labels (client: / server:)
+  // ===========================================================================
+
+  describe("target labels (client: / server:)", () => {
+    it("should compile client: block to DOM but not HTML", () => {
+      const source = `
+        div(() => {
+          client: {
+            console.log("client-only")
+          }
+          h1("shared")
+        })
+      `
+
+      const resultDom = transformSource(source, { target: "dom" })
+      const resultHtml = transformSource(source, { target: "html" })
+
+      // DOM output should contain the client-only statement
+      expect(resultDom.code).toContain('console.log("client-only")')
+
+      // HTML output should NOT contain the client-only statement
+      expect(resultHtml.code).not.toContain('console.log("client-only")')
+
+      // Both should contain the shared element
+      expect(resultDom.code).toContain("h1")
+      expect(resultHtml.code).toContain("<h1>")
+    })
+
+    it("should compile server: block to HTML but not DOM", () => {
+      const source = `
+        div(() => {
+          server: {
+            console.log("server-only")
+          }
+          h1("shared")
+        })
+      `
+
+      const resultDom = transformSource(source, { target: "dom" })
+      const resultHtml = transformSource(source, { target: "html" })
+
+      // HTML output should contain the server-only statement
+      expect(resultHtml.code).toContain('console.log("server-only")')
+
+      // DOM output should NOT contain the server-only statement
+      expect(resultDom.code).not.toContain('console.log("server-only")')
+
+      // Both should contain the shared element
+      expect(resultDom.code).toContain("h1")
+      expect(resultHtml.code).toContain("<h1>")
+    })
+
+    it("should handle both client: and server: blocks in same builder", () => {
+      const source = `
+        div(() => {
+          client: {
+            console.log("browser")
+          }
+          h1("title")
+          server: {
+            console.log("ssr")
+          }
+        })
+      `
+
+      const resultDom = transformSource(source, { target: "dom" })
+      const resultHtml = transformSource(source, { target: "html" })
+
+      // DOM: has client, no server
+      expect(resultDom.code).toContain('console.log("browser")')
+      expect(resultDom.code).not.toContain('console.log("ssr")')
+
+      // HTML: has server, no client
+      expect(resultHtml.code).toContain('console.log("ssr")')
+      expect(resultHtml.code).not.toContain('console.log("browser")')
+    })
+
+    it("should preserve statements and elements inside target blocks", () => {
+      const source = `
+        div(() => {
+          client: {
+            const x = 1
+            p(String(x))
+          }
+          h1("always")
+        })
+      `
+
+      const resultDom = transformSource(source, { target: "dom" })
+
+      // DOM: client block unwrapped — statement and element both present
+      expect(resultDom.code).toContain("const x = 1")
+      expect(resultDom.code).toContain("createElement(\"p\")")
+
+      const resultHtml = transformSource(source, { target: "html" })
+
+      // HTML: client block stripped — neither statement nor element
+      expect(resultHtml.code).not.toContain("const x = 1")
+      // The <p> from the client block should be gone, but <h1> stays
+      expect(resultHtml.code).toContain("<h1>")
+    })
+
+    it("should handle target blocks inside for loops", () => {
+      const source = `
+        ul(() => {
+          for (const x of [1, 2, 3]) {
+            server: {
+              console.log("rendering item")
+            }
+            li(String(x))
+          }
+        })
+      `
+
+      const resultDom = transformSource(source, { target: "dom" })
+      const resultHtml = transformSource(source, { target: "html" })
+
+      // DOM: server block stripped
+      expect(resultDom.code).not.toContain('console.log("rendering item")')
+
+      // HTML: server block unwrapped
+      expect(resultHtml.code).toContain('console.log("rendering item")')
+
+      // Both have the li
+      expect(resultDom.code).toContain("li")
+      expect(resultHtml.code).toContain("<li>")
+    })
+
+    it("should handle target blocks inside conditionals", () => {
+      const source = `
+        div(() => {
+          if (true) {
+            client: {
+              console.log("client conditional")
+            }
+            p("visible")
+          }
+        })
+      `
+
+      const resultDom = transformSource(source, { target: "dom" })
+      const resultHtml = transformSource(source, { target: "html" })
+
+      // DOM: client block unwrapped inside conditional
+      expect(resultDom.code).toContain('console.log("client conditional")')
+
+      // HTML: client block stripped inside conditional
+      expect(resultHtml.code).not.toContain('console.log("client conditional")')
+    })
+
+    it("should not strip unknown labels", () => {
+      const source = `
+        div(() => {
+          myLabel: {
+            console.log("custom label")
+          }
+          p("hello")
+        })
+      `
+
+      // Unknown labels are captured as verbatim statements in both targets
+      const resultDom = transformSource(source, { target: "dom" })
+      const resultHtml = transformSource(source, { target: "html" })
+
+      expect(resultDom.code).toContain("myLabel")
+      expect(resultHtml.code).toContain("myLabel")
+    })
+  })
 })
