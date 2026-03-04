@@ -1218,6 +1218,17 @@ function generateDOMWithCloning(
   const lines: string[] = []
   const ind = getIndent(state)
 
+  // Emit top-level statements from the builder's children.
+  // Statements don't produce DOM nodes, so they aren't part of the
+  // template HTML. But they may define variables used by dynamic
+  // hole expressions (e.g., `const x = 1` before `p(String(x))`),
+  // so they must appear before the hole setup code.
+  for (const child of node.children) {
+    if (child.kind === "statement") {
+      lines.push(`${ind}${child.source}`)
+    }
+  }
+
   // Extract template from IR
   const template = extractTemplate(node)
 

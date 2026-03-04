@@ -259,10 +259,19 @@ function* walkBuilder(
   }
 
   // Walk children
+  // Use a DOM-positional index (skipping non-DOM-producing nodes like
+  // statements) so that paths match actual DOM child positions in the
+  // cloned template.
+  let domIndex = 0
   for (let i = 0; i < node.children.length; i++) {
-    pathStack.push(i)
-    yield* walkChild(node.children[i], pathStack)
+    const child = node.children[i]
+    if (child.kind === "statement" || child.kind === "target-block") {
+      continue // Statements don't produce DOM nodes — skip
+    }
+    pathStack.push(domIndex)
+    yield* walkChild(child, pathStack)
     pathStack.pop()
+    domIndex++
   }
 
   // Emit closing tag
@@ -339,10 +348,19 @@ function* walkElement(
   }
 
   // Walk children
+  // Use a DOM-positional index (skipping non-DOM-producing nodes like
+  // statements) so that paths match actual DOM child positions in the
+  // cloned template.
+  let domIndex = 0
   for (let i = 0; i < node.children.length; i++) {
-    pathStack.push(i)
-    yield* walkChild(node.children[i], pathStack)
+    const child = node.children[i]
+    if (child.kind === "statement" || child.kind === "target-block") {
+      continue // Statements don't produce DOM nodes — skip
+    }
+    pathStack.push(domIndex)
+    yield* walkChild(child, pathStack)
     pathStack.pop()
+    domIndex++
   }
 
   // Emit closing tag

@@ -33,7 +33,7 @@ import {
   assertMaxMutations,
   createCountingContainer,
 } from "../testing/index.js"
-import { transformSource } from "./transform.js"
+import { transformSource, transformSourceInPlace } from "./transform.js"
 
 // Set up DOM globals for testing
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")
@@ -3036,6 +3036,115 @@ describe("compiler integration - text patching", () => {
 
       expect(resultDom.code).toContain("myLabel")
       expect(resultHtml.code).toContain("myLabel")
+    })
+  })
+
+  // ===========================================================================
+  // Template Cloning — Statements Before Elements (walker path bug)
+  // ===========================================================================
+
+  describe("template cloning with statements before elements", () => {
+    /**
+     * Execute code produced by transformSourceInPlace (template cloning path).
+     *
+     * transformSourceInPlace uses generateElementFactoryWithResult which
+     * always uses template cloning. The generated code includes module-level
+     * template declarations and a scope-taking factory function.
+     */
+    function compileInPlaceAndExecute(source: string): {
+      node: Node
+      scope: Scope
+    } {
+      const result = transformSourceInPlace(source, { target: "dom" })
+      const code = result.sourceFile.getFullText()
+
+      // The generated code has template declarations at the top and
+      // the factory function assigned to a variable. We eval the whole
+      // thing and then call the last assigned factory.
+      // biome-ignore lint/security/noGlobalEval: test utility
+      const fn = new Function(
+        "document",
+        "scope",
+        `${code}\nreturn app(scope)`,
+      )
+      const scope = new Scope()
+      const node = fn(document, scope)
+      return { node, scope }
+    }
+
+    it("should handle statements before reactive elements (template cloning)", () => {
+      // This is the core bug: statements don't produce DOM nodes, but the
+      // walker uses IR array indices as paths. Statement at index 0 makes
+      // the walker think h1 is at index 1 (nextSibling), but in the DOM
+      // h1 is the firstChild.
+      const source = `
+        const app = div(() => {
+          const x = 1
+          h1(String(x))
+        })
+      `
+
+      const result = transformSourceInPlace(source, { target: "dom" })
+      const code = result.sourceFile.getFullText()
+
+      // Should compile without error
+      expect(code).toContain("const x = 1")
+      expect(code).toContain("_tmpl_")
+
+      // Should be executable without "can't access property of null" error
+      const { node, scope } = compileInPlaceAndExecute(source)
+      expect((node as Element).tagName.toLowerCase()).toBe("div")
+      expect((node as Element).querySelector("h1")).not.toBeNull()
+      expect((node as Element).querySelector("h1")?.textContent).toBe("1")
+
+      scope.dispose()
+    })
+
+    it("should handle client: block before elements (template cloning)", () => {
+      // The kinetic-todo crash: client: block unwraps to statements,
+      // shifting all subsequent element paths in the walker.
+      const source = `
+        const app = div(() => {
+          client: {
+            console.log("browser only")
+          }
+          h1("Hello")
+          p("World")
+        })
+      `
+
+      const result = transformSourceInPlace(source, { target: "dom" })
+      const code = result.sourceFile.getFullText()
+
+      expect(code).toContain('console.log("browser only")')
+      expect(code).toContain("_tmpl_")
+
+      const { node, scope } = compileInPlaceAndExecute(source)
+      expect((node as Element).tagName.toLowerCase()).toBe("div")
+      expect((node as Element).querySelector("h1")?.textContent).toBe("Hello")
+      expect((node as Element).querySelector("p")?.textContent).toBe("World")
+
+      scope.dispose()
+    })
+
+    it("should handle multiple statements interleaved with elements (template cloning)", () => {
+      const source = `
+        const app = div(() => {
+          const x = 1
+          h1("First")
+          const y = 2
+          p("Second")
+        })
+      `
+
+      const result = transformSourceInPlace(source, { target: "dom" })
+      const code = result.sourceFile.getFullText()
+
+      const { node, scope } = compileInPlaceAndExecute(source)
+      expect((node as Element).querySelector("h1")?.textContent).toBe("First")
+      expect((node as Element).querySelector("p")?.textContent).toBe("Second")
+
+      scope.dispose()
     })
   })
 })
