@@ -82,6 +82,18 @@ export interface DOMCodegenOptions {
    * @default 0
    */
   indentLevel?: number
+
+  /**
+   * Starting offset for the template counter.
+   *
+   * When multiple builders are compiled in the same file (e.g., a
+   * component definition + its usage), each needs unique template
+   * variable names. The caller passes the running total so each
+   * builder starts where the previous one left off.
+   *
+   * @default 0
+   */
+  templateCounterOffset?: number
 }
 
 // =============================================================================
@@ -116,7 +128,7 @@ function createState(options: DOMCodegenOptions = {}): CodegenState {
     indentLevel: options.indentLevel ?? 0,
     varCounter: 0,
     templateCache: new Map(),
-    templateCounter: 0,
+    templateCounter: options.templateCounterOffset ?? 0,
     templateDeclarations: [],
   }
 }

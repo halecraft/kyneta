@@ -484,6 +484,12 @@ export function transformSourceInPlace(
     r.ir = filterTargetBlocks(r.ir, target)
   }
 
+  // Running template counter shared across all builders in this file.
+  // Each generateElementFactoryWithResult call starts where the previous
+  // one left off, preventing duplicate _tmpl_0 declarations when a file
+  // contains multiple builders (e.g., component definition + usage).
+  let templateCounterOffset = 0
+
   for (const { call, ir: builderIr } of replacements) {
     if (target === "html") {
       const factoryCode = generateRenderFunction(builderIr, {
@@ -492,7 +498,10 @@ export function transformSourceInPlace(
       call.replaceWithText(factoryCode)
     } else {
       // Use template cloning for DOM target
-      const result = generateElementFactoryWithResult(builderIr)
+      const result = generateElementFactoryWithResult(builderIr, {
+        templateCounterOffset,
+      })
+      templateCounterOffset += result.moduleDeclarations.length
       call.replaceWithText(result.code)
       allModuleDeclarations.push(...result.moduleDeclarations)
     }

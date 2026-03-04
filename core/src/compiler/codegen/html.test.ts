@@ -912,3 +912,120 @@ describe("generateHTML - reactive conditionals", () => {
     expect(code).not.toContain("kinetic:if")
   })
 })
+
+// =============================================================================
+// Component SSR Codegen Tests
+// =============================================================================
+
+describe("generateHTML - components", () => {
+  it("should emit function call for component with props", () => {
+    const component = createElement(
+      "Avatar",
+      [
+        { name: "src", value: createLiteral("photo.jpg", span(2, 4, 2, 20)) },
+        {
+          name: "alt",
+          value: createContent("user.name", "render", [], span(2, 22, 2, 35)),
+        },
+      ],
+      [],
+      [],
+      [],
+      span(2, 2, 2, 40),
+      "Avatar",
+    )
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [component],
+      span(1, 0, 3, 1),
+    )
+
+    const code = htmlLines(builder)
+
+    // Should call component factory, not emit HTML tag
+    expect(code).toContain("Avatar(")
+    expect(code).toContain("()")
+    expect(code).toContain("src:")
+    expect(code).toContain("alt:")
+    // Must NOT emit <Avatar> or </Avatar>
+    expect(code).not.toContain("<Avatar")
+    expect(code).not.toContain("</Avatar>")
+  })
+
+  it("should emit function call for prop-less component", () => {
+    const component = createElement(
+      "Spacer",
+      [],
+      [],
+      [],
+      [],
+      span(2, 2, 2, 12),
+      "Spacer",
+    )
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [component],
+      span(1, 0, 3, 1),
+    )
+
+    const code = htmlLines(builder)
+
+    // Should call Spacer()() — factory with no props, then invoke render fn
+    expect(code).toContain("Spacer()()")
+    expect(code).not.toContain("<Spacer")
+  })
+
+  it("should emit component call among sibling HTML elements", () => {
+    const h1 = createElement(
+      "h1",
+      [],
+      [],
+      [],
+      [createLiteral("Title", span(2, 6, 2, 13))],
+      span(2, 4, 2, 15),
+    )
+    const component = createElement(
+      "Separator",
+      [],
+      [],
+      [],
+      [],
+      span(3, 4, 3, 18),
+      "Separator",
+    )
+    const p = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("Body", span(4, 6, 4, 12))],
+      span(4, 4, 4, 14),
+    )
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [h1, component, p],
+      span(1, 0, 5, 1),
+    )
+
+    const code = htmlLines(builder)
+
+    // HTML elements render as tags
+    expect(code).toContain("<h1>")
+    expect(code).toContain("<p>")
+    // Component renders as function call
+    expect(code).toContain("Separator()()")
+    expect(code).not.toContain("<Separator")
+    // Correct ordering: h1 before Separator before p
+    const h1Index = code.indexOf("<h1>")
+    const sepIndex = code.indexOf("Separator")
+    const pIndex = code.indexOf("<p>")
+    expect(h1Index).toBeLessThan(sepIndex)
+    expect(sepIndex).toBeLessThan(pIndex)
+  })
+})

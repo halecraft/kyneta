@@ -251,6 +251,23 @@ function emitElement(
 ): string[] {
   const lines: string[] = []
 
+  // Component: call the factory and concatenate the result.
+  // Components are transparent at the HTML level — their SSR output is
+  // indistinguishable from inline elements. No <ComponentName> tags.
+  if (node.factorySource) {
+    const propsEntries: string[] = []
+    for (const attr of node.attributes) {
+      propsEntries.push(`${attr.name}: ${attr.value.source}`)
+    }
+    // Event handlers are skipped — SSR doesn't wire events
+    const propsArg =
+      propsEntries.length > 0 ? `{ ${propsEntries.join(", ")} }` : ""
+    lines.push(
+      `${indent}_html += ${node.factorySource}(${propsArg})()`,
+    )
+    return lines
+  }
+
   // Opening tag with attributes
   const tagParts: string[] = []
   tagParts.push(`<${node.tag}`)

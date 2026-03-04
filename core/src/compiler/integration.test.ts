@@ -13,6 +13,7 @@
 
 import { createTypedDoc, loro, Shape } from "@loro-extended/change"
 import { JSDOM } from "jsdom"
+import ts from "typescript"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
@@ -33,7 +34,11 @@ import {
   assertMaxMutations,
   createCountingContainer,
 } from "../testing/index.js"
-import { transformSource, transformSourceInPlace } from "./transform.js"
+import {
+  mergeImports,
+  transformSource,
+  transformSourceInPlace,
+} from "./transform.js"
 
 // Set up DOM globals for testing
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")
@@ -3203,5 +3208,339 @@ describe("compiler integration - text patching", () => {
         }
       }
     })
+  })
+})
+
+// =============================================================================
+// Component Compilation Tests
+// =============================================================================
+
+/**
+ * Compile source in-place and return executable JS.
+ *
+ * Functional core: source → executable JS string (pure aside from
+ * ts-morph project state, which is shared and reset between tests).
+ *
+ * Uses transformSourceInPlace to preserve the full source (component
+ * definitions + usage sites), mergeImports to add runtime imports,
+ * ts.transpileModule to strip TypeScript syntax, and a line filter
+ * to remove import statements (eval doesn't support ES imports;
+ * runtime symbols are provided by the caller via `new Function`).
+ */
+function compileInPlace(
+  source: string,
+  target: "dom" | "html" = "dom",
+): string {
+  const result = transformSourceInPlace(source, { target })
+  mergeImports(result.sourceFile, result.requiredImports)
+  const fullTs = result.sourceFile.getFullText()
+
+  // Strip all TypeScript syntax in one pass
+  const { outputText } = ts.transpileModule(fullTs, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ESNext,
+      module: ts.ModuleKind.ESNext,
+    },
+  })
+
+  // Filter out import lines — runtime deps are injected by the caller
+  return outputText
+    .split("\n")
+    .filter(line => !line.trimStart().startsWith("import "))
+    .join("\n")
+}
+
+/**
+ * Wrap source so the last top-level builder call is assigned to a variable.
+ *
+ * transformSourceInPlace replaces builder calls inline. If the builder call
+ * is a bare expression statement (not assigned), the compiled factory ends
+ * up as an anonymous expression. This wrapper assigns it to `__lastBuilder`.
+ */
+function wrapLastBuilder(source: string): string {
+  const lines = source.split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const trimmed = lines[i].trimStart()
+    // Match lines like: `div(() => {`, `section(() => {`, `ul(() => {`
+    if (/^[a-z]\w*\s*\(\s*(\{[^}]*\}\s*,\s*)?\(\)\s*=>\s*\{/.test(trimmed)) {
+      const indent = lines[i].length - trimmed.length
+      lines[i] = " ".repeat(indent) + "const __lastBuilder = " + trimmed
+      return lines.join("\n")
+    }
+  }
+  return source
+}
+
+/**
+ * Runtime dependencies injected into compiled component code via
+ * `new Function` parameters. Keys are the parameter names that
+ * generated code references as bare identifiers.
+ */
+const RUNTIME_DEPS: Record<string, unknown> = {
+  subscribe,
+  subscribeMultiple,
+  subscribeWithValue,
+  listRegion,
+  conditionalRegion,
+  textRegion,
+  Scope,
+  document,
+}
+const RUNTIME_DEP_NAMES = Object.keys(RUNTIME_DEPS)
+const RUNTIME_DEP_VALUES = Object.values(RUNTIME_DEPS)
+
+/**
+ * Compile source in-place and execute the last builder factory.
+ *
+ * Imperative shell: wrapLastBuilder → compileInPlace → new Function → call.
+ *
+ * Uses `new Function(...)` instead of `eval()` to avoid strict-mode
+ * scoping issues where `const`/`var` declarations don't leak out.
+ * The compiled JS is wrapped in a function body that receives runtime
+ * dependencies as parameters and returns the `__lastBuilder` factory.
+ */
+function compileAndExecuteComponent(
+  source: string,
+): { node: Node; scope: Scope } {
+  const wrapped = wrapLastBuilder(source)
+  const js = compileInPlace(wrapped)
+
+  // The wrapLastBuilder helper assigned `const __lastBuilder = section(...)`.
+  // After compilation, __lastBuilder holds `(scope) => { ... }`.
+  // Wrap in a function body and return it.
+  const body = `${js}\nreturn __lastBuilder;`
+  const fn = new Function(...RUNTIME_DEP_NAMES, body)
+  const factory = fn(...RUNTIME_DEP_VALUES) as (scope: Scope) => Node
+
+  const scope = new Scope()
+  const node = factory(scope)
+  return { node, scope }
+}
+
+/**
+ * Preamble that provides ComponentFactory and Element types for ts-morph
+ * type resolution. Included at the top of test source strings.
+ */
+const COMPONENT_PREAMBLE = `
+type Element = () => Node
+type ComponentFactory<P extends Record<string, unknown> = {}> =
+  | ((props: P, builder: () => void) => Element)
+  | ((props: P) => Element)
+  | ((builder: () => void) => Element)
+  | (() => Element)
+`
+
+describe("Component compilation", () => {
+  beforeEach(() => {
+    resetScopeIdCounter()
+    resetSubscriptionIdCounter()
+    activeSubscriptions.clear()
+    setRootScope(null)
+  })
+
+  it("should compile and execute a basic component", () => {
+    const source = `
+      ${COMPONENT_PREAMBLE}
+
+      const Greeting: ComponentFactory<{ text: string }> = (props) => {
+        return div(() => {
+          h1(props.text)
+        })
+      }
+
+      section(() => {
+        Greeting({ text: "Hello from component" })
+      })
+    `
+
+    const { node, scope } = compileAndExecuteComponent(source)
+
+    expect(node).toBeInstanceOf(dom.window.Element)
+    const el = node as HTMLElement
+    expect(el.tagName.toLowerCase()).toBe("section")
+    expect(el.children.length).toBe(1)
+    expect(el.children[0].tagName.toLowerCase()).toBe("div")
+    const innerH1 = el.children[0].children[0]
+    expect(innerH1.tagName.toLowerCase()).toBe("h1")
+    expect(innerH1.textContent).toBe("Hello from component")
+
+    scope.dispose()
+  })
+
+  it("should thread event handler props through to component DOM", () => {
+    const source = `
+      ${COMPONENT_PREAMBLE}
+
+      const ClickButton: ComponentFactory<{ label: string; onClick: (e: MouseEvent) => void }> = (props) => {
+        return button({ onClick: props.onClick }, () => {
+          h1(props.label)
+        })
+      }
+
+      div(() => {
+        ClickButton({ label: "Press me", onClick: handleClick })
+      })
+    `
+
+    // Provide handleClick in eval scope
+    let clicked = false
+    ;(globalThis as any).handleClick = () => { clicked = true }
+
+    const { node, scope } = compileAndExecuteComponent(source)
+
+    const btn = (node as HTMLElement).querySelector("button")
+    expect(btn).not.toBeNull()
+    expect(btn!.textContent).toBe("Press me")
+
+    btn!.click()
+    expect(clicked).toBe(true)
+
+    delete (globalThis as any).handleClick
+    scope.dispose()
+  })
+
+  it("should render multiple components inside a static for loop", () => {
+    const source = `
+      ${COMPONENT_PREAMBLE}
+
+      const Item: ComponentFactory<{ text: string }> = (props) => {
+        return li(() => {
+          span(props.text)
+        })
+      }
+
+      ul(() => {
+        Item({ text: "Alice" })
+        Item({ text: "Bob" })
+        Item({ text: "Carol" })
+      })
+    `
+
+    const { node, scope } = compileAndExecuteComponent(source)
+
+    const el = node as HTMLElement
+    expect(el.tagName.toLowerCase()).toBe("ul")
+    expect(el.children.length).toBe(3)
+    expect(el.children[0].textContent).toBe("Alice")
+    expect(el.children[1].textContent).toBe("Bob")
+    expect(el.children[2].textContent).toBe("Carol")
+
+    scope.dispose()
+  })
+
+  it("should dispose component child scopes when parent is disposed", () => {
+    const source = `
+      ${COMPONENT_PREAMBLE}
+
+      const Child: ComponentFactory = () => {
+        return div(() => {
+          span("child")
+        })
+      }
+
+      section(() => {
+        Child()
+      })
+    `
+
+    const { node, scope } = compileAndExecuteComponent(source)
+
+    // The component creates a child scope via scope.createChild()
+    expect(scope.childCount).toBe(1)
+
+    scope.dispose()
+
+    // After disposing parent, the child scope should also be disposed
+    expect(scope.disposed).toBe(true)
+  })
+
+  it("should compile expression-body arrow components", () => {
+    const source = `
+      ${COMPONENT_PREAMBLE}
+
+      const Tag: ComponentFactory<{ label: string }> = (props) =>
+        div(() => {
+          span(props.label)
+        })
+
+      section(() => {
+        Tag({ label: "expression body" })
+      })
+    `
+
+    const { node, scope } = compileAndExecuteComponent(source)
+
+    const el = node as HTMLElement
+    expect(el.tagName.toLowerCase()).toBe("section")
+    const innerDiv = el.children[0]
+    expect(innerDiv.tagName.toLowerCase()).toBe("div")
+    expect(innerDiv.children[0].tagName.toLowerCase()).toBe("span")
+    expect(innerDiv.children[0].textContent).toBe("expression body")
+
+    scope.dispose()
+  })
+
+  it("should compile component to HTML without emitting component tags (SSR)", () => {
+    const source = `
+      ${COMPONENT_PREAMBLE}
+
+      const Badge: ComponentFactory<{ label: string }> = (props) => {
+        return div(() => {
+          span(props.label)
+        })
+      }
+
+      section(() => {
+        Badge({ label: "info" })
+      })
+    `
+
+    const js = compileInPlace(source, "html")
+
+    // The compiled SSR code should call Badge(props)(), not emit <Badge>
+    expect(js).toContain("Badge(")
+    expect(js).toContain("()")
+    expect(js).not.toContain("<Badge")
+    expect(js).not.toContain("</Badge>")
+    // The component's own body should produce <div> and <span>
+    expect(js).toContain("<div>")
+    expect(js).toContain("<span>")
+  })
+
+  it("should produce correct HTML when SSR render function is executed", () => {
+    const source = `
+      ${COMPONENT_PREAMBLE}
+
+      const Pill: ComponentFactory<{ text: string }> = (props) => {
+        return div(() => {
+          span(props.text)
+        })
+      }
+
+      const __lastRender = section(() => {
+        Pill({ text: "active" })
+      })
+    `
+
+    const js = compileInPlace(source, "html")
+
+    // Use new Function to execute the compiled code and return __lastRender.
+    // The HTML codegen needs __escapeHtml which it defines in the compiled
+    // output, so no runtime deps needed beyond what's in the JS itself.
+    const body = `${js}\nreturn __lastRender;`
+    const fn = new Function(body)
+    const renderFn = fn() as () => string
+    const html = renderFn()
+
+    // Should contain the component's rendered HTML, not component tags
+    expect(html).toContain("<section>")
+    expect(html).toContain("<div>")
+    expect(html).toContain("<span>")
+    expect(html).toContain("active")
+    expect(html).toContain("</span>")
+    expect(html).toContain("</div>")
+    expect(html).toContain("</section>")
+    expect(html).not.toContain("<Pill")
+    expect(html).not.toContain("</Pill>")
   })
 })
