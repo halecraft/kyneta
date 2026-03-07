@@ -27,6 +27,7 @@
  */
 
 import { ScopeDisposedError } from "../errors.js"
+import type { ScopeInterface } from "../types.js"
 
 let scopeIdCounter = 0
 
@@ -51,7 +52,7 @@ export function resetScopeIdCounter(): void {
  * disposes all children. This matches the DOM tree structure and ensures
  * cleanup cascades correctly.
  */
-export class Scope {
+export class Scope implements ScopeInterface {
   /** Unique identifier for this scope */
   readonly id: number
 

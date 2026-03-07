@@ -33,10 +33,18 @@ type AnyTypedRef =
 // =============================================================================
 
 /**
- * An Element is a function that produces a DOM node when called.
+ * An Element is a scope-accepting factory that produces a DOM node.
  * Elements are lazy — they're not rendered until mounted.
+ *
+ * The compiler transforms builder calls like `div(() => { h1("Hello") })`
+ * into `(scope) => { ... return _div0 }`. The `scope` parameter is
+ * load-bearing: reactive subscriptions use it to register cleanup handlers
+ * and manage lifecycle.
+ *
+ * `ScopeInterface` is used (rather than the concrete `Scope` class) to
+ * keep this type file free of runtime imports.
  */
-export type Element = () => Node
+export type Element = (scope: ScopeInterface) => Node
 
 /**
  * Props for HTML elements.

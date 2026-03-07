@@ -70,32 +70,32 @@ This happened because `Element = () => Node` and `mount()` were written as pre-c
 | `mount()` doc example | `const app = div(() => {...}); mount(app, el)` | Same — still works, type just changes |
 | `mount()` tests | Hand-written `() => Node` thunks | Hand-written `(scope) => Node` factories |
 
-## Phase 1: Unify the `Element` Type 🔴
+## Phase 1: Unify the `Element` Type 🟢
 
 Update the canonical type definition and all downstream references.
 
 ### Tasks
 
-1. **Change `Element` type in `types.ts`** 🔴
+1. **Change `Element` type in `types.ts`** 🟢
 
    From: `export type Element = () => Node`
    To: `export type Element = (scope: ScopeInterface) => Node`
 
    Use `ScopeInterface` (already exported from `types.ts`) rather than the concrete `Scope` class to keep the type file free of runtime imports. The `Scope` class structurally conforms to `ScopeInterface` (see Task 5).
 
-2. **Update `ComponentFactory` return type** 🔴
+2. **Update `ComponentFactory` return type** 🟢
 
    No code change needed — `ComponentFactory` already returns `Element`. Changing `Element` cascades automatically. Verify that all four union members still type-check.
 
-3. **Update `ElementFactory` interface in `elements.d.ts`** 🔴
+3. **Update `ElementFactory` interface in `elements.d.ts`** 🟢
 
    No code change needed — `ElementFactory` overloads return `Element`. The import `import type { Element } from "../types.js"` picks up the new definition automatically. Verify the `PropsWithBindings` and `Builder` types don't conflict.
 
-4. **Update `ScopeInterface` import in `types.ts`** 🔴
+4. **Update `ScopeInterface` import in `types.ts`** 🟢
 
    `ScopeInterface` is already defined in `types.ts` at L394. The `Element` type can reference it directly — no circular dependency.
 
-5. **Add `implements ScopeInterface` to the `Scope` class** 🔴
+5. **Add `implements ScopeInterface` to the `Scope` class** 🟢
 
    `Scope` in `runtime/scope.ts` structurally conforms to `ScopeInterface` but doesn't declare it. Add `implements ScopeInterface` to make the contract explicit and catch drift at compile time. This requires importing `ScopeInterface` from `../types.js` in `scope.ts`. One subtlety: `Scope.createChild()` returns `Scope` (covariant with `ScopeInterface.createChild()` returning `ScopeInterface`), so the `implements` clause should type-check without changes to the method signature.
 
