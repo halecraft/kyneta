@@ -7,298 +7,202 @@
  * @packageDocumentation
  */
 
-// Core types
-export type {
-	PeerID,
-	Counter,
-	Lamport,
-	OpId,
-	PathSegment,
-	Path,
-} from "./core/types.js";
-
+// === Kernel (Layer 0) ===
 export {
-	createOpId,
-	opIdEquals,
-	opIdToString,
-	opIdFromString,
-	opIdCompare,
-	pathEquals,
-	pathToString,
-	pathFromString,
-	pathStartsWith,
-	pathParent,
-	pathLast,
-	pathChild,
-	pathCompare,
-} from "./core/types.js";
+  // Types
+  type PeerID,
+  type Counter,
+  type Lamport,
+  type CnId,
+  type VersionVector,
+  type MutableVersionVector,
+  type Value,
+  type Policy,
+  type StructurePayload,
+  type ValuePayload,
+  type RetractPayload,
+  type RulePayload,
+  type AuthorityPayload,
+  type BookmarkPayload,
+  type Capability,
+  type RetractScope,
+  type AuthorityAction,
+  type ConstraintBase,
+  type StructureConstraint,
+  type ValueConstraint,
+  type RetractConstraint,
+  type RuleConstraint,
+  type AuthorityConstraint,
+  type BookmarkConstraint,
+  type Constraint,
+  type ConstraintType,
+  type RealityNode,
+  type Reality,
+  type InsertError,
+  type ValidationError,
+  type Result,
 
-// Assertions
-export type {
-	Assertion,
-	EqAssertion,
-	ExistsAssertion,
-	DeletedAssertion,
-	SeqElementAssertion,
-} from "./core/assertions.js";
+  // Type utilities
+  ok,
+  err,
+  isSafeUint,
 
+  // CnId
+  createCnId,
+  cnIdEquals,
+  cnIdNullableEquals,
+  cnIdCompare,
+  cnIdToString,
+  cnIdFromString,
+  cnIdKey,
+
+  // Lamport clock
+  type LamportClock,
+  createLamportClock,
+  createLamportClockAt,
+  tick,
+  lamportMerge,
+  lamportObserve,
+  lamportCurrent,
+
+  // Version vector
+  type VVCompareResult,
+  createVersionVector,
+  vvFromObject,
+  vvClone,
+  vvGet,
+  vvHasSeen,
+  vvHasSeenCnId,
+  vvExtend,
+  vvExtendCnId,
+  vvCompare,
+  vvIncludes,
+  vvEquals,
+  vvMerge,
+  vvMergeInto,
+  filterByVersion,
+  vvDiff,
+  vvToObject,
+  vvToString,
+  vvPeers,
+  vvIsEmpty,
+  vvTotalOps,
+
+  // Signature (stub)
+  STUB_SIGNATURE,
+  sign,
+  verify,
+  STUB_PRIVATE_KEY,
+  generateKeypair,
+
+  // Store
+  type ConstraintStore,
+  type ConstraintDelta,
+  createStore,
+  insert,
+  insertMany,
+  getConstraint,
+  hasConstraint,
+  constraintCount,
+  allConstraints,
+  constraintsByType,
+  mergeStores,
+  exportDelta,
+  importDelta,
+  getVersionVector,
+  getLamport,
+  getGeneration,
+
+  // Agent
+  type Agent,
+  createAgent,
+  produceRoot,
+  produceMapChild,
+  produceSeqChild,
+} from './kernel/index.js';
+
+// === Datalog Evaluator ===
 export {
-	eq,
-	exists,
-	deleted,
-	seqElement,
-	assertionEquals,
-	assertionToString,
-	isEqAssertion,
-	isExistsAssertion,
-	isDeletedAssertion,
-	isSeqElementAssertion,
-} from "./core/assertions.js";
+  // Types (Datalog-specific; kernel re-exports are above)
+  type CnIdRef,
+  type Term,
+  type ConstTerm,
+  type VarTerm,
+  type WildcardTerm,
+  type Atom,
+  type AggregationFn,
+  type AggregationClause,
+  type GuardOp,
+  type GuardElement,
+  type BodyElement,
+  type AtomElement,
+  type NegationElement,
+  type AggregationElement,
+  type Rule,
+  type FactTuple,
+  type Fact,
+  type Substitution,
+  type StratificationError,
+  type CyclicNegationError,
 
-// Constraints
-export type { Constraint, ConstraintMetadata } from "./core/constraint.js";
+  // Term constructors
+  constTerm,
+  varTerm,
+  wildcard,
+  _,
 
-export {
-	createConstraint,
-	createConstraintWithId,
-	constraintEquals,
-	constraintSameId,
-	constraintKey,
-	constraintToString,
-	constraintCompareLWW,
-	findLWWWinner,
-	partitionByLWW,
-} from "./core/constraint.js";
+  // Atom & rule constructors
+  atom,
+  positiveAtom,
+  negation,
+  aggregation,
+  rule,
+  fact,
 
-// Version Vector
-export type {
-	VersionVector,
-	MutableVersionVector,
-	VVCompareResult,
-} from "./core/version-vector.js";
+  // Guard constructors
+  eq,
+  neq,
+  lt,
+  gt,
+  lte,
+  gte,
 
-export {
-	createVersionVector,
-	vvFromObject,
-	vvClone,
-	vvGet,
-	vvHasSeen,
-	vvSet,
-	vvExtend,
-	vvCompare,
-	vvIncludes,
-	vvEquals,
-	vvMerge,
-	vvMergeInto,
-	vvDiff,
-	vvToObject,
-	vvToString,
-	vvTotalOps,
-	vvPeers,
-	vvIsEmpty,
-} from "./core/version-vector.js";
+  // Data structures
+  Relation,
+  Database,
 
-// Constraint Store
-export type {
-	ConstraintStore,
-	TellResult,
-	ConstraintDelta,
-} from "./store/constraint-store.js";
+  // Value utilities
+  serializeValue,
+  compareValues,
+  valuesEqual,
+  evaluateGuardOp,
 
-export {
-	createConstraintStore,
-	tell,
-	tellMany,
-	ask,
-	askPrefix,
-	getConstraintsForPath,
-	getAllConstraints,
-	getConstraintCount,
-	hasConstraint,
-	getConstraint,
-	getVersionVector,
-	getLamport,
-	getNextLamport,
-	getGeneration,
-	exportDelta,
-	importDelta,
-	mergeStores,
-	iterPaths,
-	iterConstraints,
-	iterByPath,
-} from "./store/constraint-store.js";
+  // Unification
+  EMPTY_SUBSTITUTION,
+  extendSubstitution,
+  resolveTerm,
+  unifyTermWithValue,
+  matchAtomWithTuple,
+  groundAtom,
+  matchAtomAgainstRelation,
+  evaluateGuard,
 
-// Solver
-export type { Solver, SolvedValue } from "./solver/solver.js";
+  // Stratification
+  type DependencyEdge,
+  type DependencyGraph,
+  type Stratum,
+  buildDependencyGraph,
+  computeSCCs,
+  stratify,
+  bodyPredicates,
+  headPredicates,
 
-export {
-	solvedEmpty,
-	solvedFromConstraint,
-	solvedDeleted,
-	filterByAssertionType,
-	hasConflicts,
-	isDeleted,
-	isEmpty,
-} from "./solver/solver.js";
+  // Aggregation
+  evaluateAggregation,
+  evaluateAggregationForSubs,
 
-// Map Solver
-export type { MapSolver, SolvedMap } from "./solver/map-solver.js";
-
-export {
-	createMapSolver,
-	solveMapConstraints,
-	solveMap,
-	solvedMapToObject,
-	solvedMapHasConflicts,
-	solvedMapConflictKeys,
-} from "./solver/map-solver.js";
-
-// List Solver
-export type { ListSolver, SolvedList } from "./solver/list-solver.js";
-
-export {
-	createListSolver,
-	solveListConstraints,
-	solveList,
-	solvedListToArray,
-	solvedListHasConflicts,
-	solvedListGet,
-} from "./solver/list-solver.js";
-
-// Fugue Algorithm
-export type { FugueNode, FugueResult } from "./solver/fugue.js";
-
-export {
-	buildFugueTree,
-	findNode,
-	getActiveIndex,
-	getNodeAtIndex,
-	computeInsertOrigins,
-	getIdAtIndex,
-} from "./solver/fugue.js";
-
-// Views
-export type {
-	View,
-	ViewChangeEvent,
-	ViewChangeCallback,
-	Unsubscribe,
-} from "./views/view.js";
-
-export { createViewChangeEvent, isActualChange } from "./views/view.js";
-
-// Map View
-export type {
-	MapView,
-	MapViewConfig,
-	ReactiveMapView,
-} from "./views/map-view.js";
-
-export { createMapView, createReactiveMapView } from "./views/map-view.js";
-
-// List View
-export type {
-	ListView,
-	ListViewConfig,
-	ReactiveListView,
-} from "./views/list-view.js";
-
-export { createListView, createReactiveListView } from "./views/list-view.js";
-
-// Handles
-export type { Handle } from "./handles/handle.js";
-
-// Map Handle
-export type {
-	MapHandle,
-	MapHandleConfig,
-} from "./handles/map-handle.js";
-
-export { createMapHandle, mergeMapHandles } from "./handles/map-handle.js";
-
-// List Handle
-export type {
-	ListHandle,
-	ListHandleConfig,
-} from "./handles/list-handle.js";
-
-export { createListHandle, mergeListHandles } from "./handles/list-handle.js";
-
-// Text View
-export type {
-	TextView,
-	TextViewConfig,
-	ReactiveTextView,
-} from "./views/text-view.js";
-
-export { createTextView, createReactiveTextView } from "./views/text-view.js";
-
-// Text Handle
-export type {
-	TextHandle,
-	TextHandleConfig,
-} from "./handles/text-handle.js";
-
-export { createTextHandle, mergeTextHandles } from "./handles/text-handle.js";
-
-// Subscription Manager
-export type {
-	ConstraintAddedEvent,
-	StateChangedEvent,
-	ConflictEvent,
-	SubscriptionEvent,
-	ConstraintCallback,
-	StateChangeCallback,
-	ConflictCallback,
-	SubscriptionManager,
-} from "./events/subscription-manager.js";
-
-export {
-	createSubscriptionManager,
-	createConstraintAddedEvent,
-	createStateChangedEvent,
-	createConflictEvent,
-} from "./events/subscription-manager.js";
-
-// Introspection API
-export type {
-	Explanation,
-	ConstraintInfo,
-	ConflictSummary,
-	ConflictReport,
-	IntrospectionAPI,
-	IntrospectionConfig,
-} from "./introspection/explain.js";
-
-export {
-	createIntrospectionAPI,
-	explainSolvedValue,
-} from "./introspection/explain.js";
-
-// Constraint Inspector
-export type {
-	ConstraintJSON,
-	StoreSnapshot,
-	StoreStatistics,
-	ConstraintSummaryLine,
-	ConstraintInspector,
-	InspectorConfig,
-} from "./introspection/inspector.js";
-
-export {
-	createConstraintInspector,
-	dumpStore,
-	summarizeStore,
-	exportStoreJSON,
-} from "./introspection/inspector.js";
-
-// PrismDoc
-export type {
-	DocMapHandle,
-	DocListHandle,
-	DocTextHandle,
-	PrismDoc,
-	PrismDocConfig,
-} from "./doc/prism-doc.js";
-
-export { createPrismDoc, syncDocs } from "./doc/prism-doc.js";
+  // Evaluation
+  evaluate,
+  evaluatePositive,
+  evaluateNaive,
+} from './datalog/index.js';

@@ -1,6 +1,6 @@
 // === Unification Tests ===
-// Tests for variable binding, substitution application, term matching
-// against facts, and built-in predicate evaluation.
+// Tests for variable binding, substitution application, and term matching
+// against facts.
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -20,9 +20,6 @@ import {
   matchAtomWithTuple,
   groundAtom,
   matchAtomAgainstRelation,
-  isBuiltinPredicate,
-  evaluateBuiltin,
-  tryEvaluateBuiltin,
 } from '../../src/datalog/unify.js';
 
 // ---------------------------------------------------------------------------
@@ -431,151 +428,3 @@ describe('matchAtomAgainstRelation', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Built-in predicates
-// ---------------------------------------------------------------------------
-
-describe('isBuiltinPredicate', () => {
-  it('recognizes built-in predicates', () => {
-    expect(isBuiltinPredicate('__eq')).toBe(true);
-    expect(isBuiltinPredicate('__neq')).toBe(true);
-    expect(isBuiltinPredicate('__lt')).toBe(true);
-    expect(isBuiltinPredicate('__gt')).toBe(true);
-    expect(isBuiltinPredicate('__lte')).toBe(true);
-    expect(isBuiltinPredicate('__gte')).toBe(true);
-  });
-
-  it('rejects non-builtin predicates', () => {
-    expect(isBuiltinPredicate('edge')).toBe(false);
-    expect(isBuiltinPredicate('path')).toBe(false);
-    expect(isBuiltinPredicate('eq')).toBe(false);
-  });
-});
-
-describe('evaluateBuiltin', () => {
-  describe('__eq', () => {
-    it('returns true for equal values', () => {
-      expect(evaluateBuiltin('__eq', [42, 42])).toBe(true);
-      expect(evaluateBuiltin('__eq', ['a', 'a'])).toBe(true);
-      expect(evaluateBuiltin('__eq', [null, null])).toBe(true);
-    });
-
-    it('returns false for unequal values', () => {
-      expect(evaluateBuiltin('__eq', [42, 43])).toBe(false);
-    });
-
-    it('number ≠ bigint', () => {
-      expect(evaluateBuiltin('__eq', [3, 3n])).toBe(false);
-    });
-  });
-
-  describe('__neq', () => {
-    it('returns true for different values', () => {
-      expect(evaluateBuiltin('__neq', [42, 43])).toBe(true);
-    });
-
-    it('returns false for equal values', () => {
-      expect(evaluateBuiltin('__neq', [42, 42])).toBe(false);
-    });
-
-    it('number ≠ bigint returns true (they are not equal)', () => {
-      expect(evaluateBuiltin('__neq', [3, 3n])).toBe(true);
-    });
-  });
-
-  describe('__lt', () => {
-    it('compares numbers', () => {
-      expect(evaluateBuiltin('__lt', [1, 2])).toBe(true);
-      expect(evaluateBuiltin('__lt', [2, 1])).toBe(false);
-      expect(evaluateBuiltin('__lt', [1, 1])).toBe(false);
-    });
-
-    it('compares strings', () => {
-      expect(evaluateBuiltin('__lt', ['a', 'b'])).toBe(true);
-      expect(evaluateBuiltin('__lt', ['b', 'a'])).toBe(false);
-    });
-
-    it('compares bigints', () => {
-      expect(evaluateBuiltin('__lt', [1n, 2n])).toBe(true);
-      expect(evaluateBuiltin('__lt', [2n, 1n])).toBe(false);
-    });
-
-    it('returns false for cross-type comparison (number vs bigint)', () => {
-      expect(evaluateBuiltin('__lt', [1, 2n])).toBe(false);
-      expect(evaluateBuiltin('__lt', [1n, 2])).toBe(false);
-    });
-  });
-
-  describe('__gt', () => {
-    it('compares numbers', () => {
-      expect(evaluateBuiltin('__gt', [2, 1])).toBe(true);
-      expect(evaluateBuiltin('__gt', [1, 2])).toBe(false);
-      expect(evaluateBuiltin('__gt', [1, 1])).toBe(false);
-    });
-
-    it('compares strings', () => {
-      expect(evaluateBuiltin('__gt', ['b', 'a'])).toBe(true);
-    });
-  });
-
-  describe('__lte', () => {
-    it('includes equality', () => {
-      expect(evaluateBuiltin('__lte', [1, 1])).toBe(true);
-      expect(evaluateBuiltin('__lte', [1, 2])).toBe(true);
-      expect(evaluateBuiltin('__lte', [2, 1])).toBe(false);
-    });
-  });
-
-  describe('__gte', () => {
-    it('includes equality', () => {
-      expect(evaluateBuiltin('__gte', [1, 1])).toBe(true);
-      expect(evaluateBuiltin('__gte', [2, 1])).toBe(true);
-      expect(evaluateBuiltin('__gte', [1, 2])).toBe(false);
-    });
-  });
-
-  it('returns null for wrong arity', () => {
-    expect(evaluateBuiltin('__eq', [1])).toBeNull();
-    expect(evaluateBuiltin('__eq', [1, 2, 3])).toBeNull();
-  });
-
-  it('returns null for unknown predicate', () => {
-    expect(evaluateBuiltin('unknown', [1, 2])).toBeNull();
-  });
-});
-
-describe('tryEvaluateBuiltin', () => {
-  it('evaluates when variables are bound', () => {
-    const a = atom('__lt', [varTerm('X'), varTerm('Y')]);
-    const sub: Substitution = new Map([['X', 1], ['Y', 2]]);
-    const result = tryEvaluateBuiltin(a, sub);
-    expect(result).not.toBeNull();
-    expect(result).toBe(sub); // same substitution returned
-  });
-
-  it('returns null when built-in fails', () => {
-    const a = atom('__lt', [varTerm('X'), varTerm('Y')]);
-    const sub: Substitution = new Map([['X', 5], ['Y', 2]]);
-    const result = tryEvaluateBuiltin(a, sub);
-    expect(result).toBeNull();
-  });
-
-  it('returns null when variables are unbound', () => {
-    const a = atom('__lt', [varTerm('X'), varTerm('Y')]);
-    const result = tryEvaluateBuiltin(a, EMPTY_SUBSTITUTION);
-    expect(result).toBeNull();
-  });
-
-  it('handles constants in built-in atoms', () => {
-    const a = atom('__gt', [constTerm(10), constTerm(5)]);
-    const result = tryEvaluateBuiltin(a, EMPTY_SUBSTITUTION);
-    expect(result).not.toBeNull();
-  });
-
-  it('handles null-bound variables', () => {
-    const a = atom('__eq', [varTerm('X'), constTerm(null)]);
-    const sub: Substitution = new Map([['X', null]]);
-    const result = tryEvaluateBuiltin(a, sub);
-    expect(result).not.toBeNull();
-  });
-});

@@ -342,7 +342,7 @@ The new constraint types and CnId-based store, replacing the prototype's path-ba
 - Agent: counter and lamport never exceed MAX_SAFE_INTEGER (assert/throw on overflow — this is a programmer error, not an expected condition)
 - Constraint discriminated union: narrowing on `type` correctly narrows `payload` in switch/if
 
-### Phase 2.5: Remove Prototype Code 🔴
+### Phase 2.5: Remove Prototype Code 🟢
 
 The old prototype (`src/core/`, `src/store/`, `src/solver/`, `src/doc/`, `src/handles/`, `src/views/`, `src/events/`, `src/introspection/`, old `src/index.ts`) is completely isolated from the new engine — zero cross-imports in either direction (verified). Its 476 tests exercise the old path-based architecture, not the new CnId-based engine, so they provide no safety net for forward progress. Carrying two parallel type systems (`OpId`/`Assertion` vs. `CnId`/`Constraint`) through Phases 3–5 adds cognitive load and risks accidental imports.
 
@@ -350,13 +350,13 @@ The Fugue algorithm implementation (`src/solver/fugue.ts`) is the one piece wort
 
 #### Tasks
 
-- 2.5.1 Copy `src/solver/fugue.ts` to `reference/fugue-v0.ts` as porting reference for Phase 4 🔴
-- 2.5.2 Delete old source directories: `src/core/`, `src/store/`, `src/solver/`, `src/doc/`, `src/handles/`, `src/views/`, `src/events/`, `src/introspection/` 🔴
-- 2.5.3 Delete old test directories: `tests/core/`, `tests/solver/`, `tests/equivalence/`, `tests/events/`, `tests/handles/`, `tests/views/`, `tests/introspection/`, old `tests/integration.test.ts` 🔴
-- 2.5.4 Replace `src/index.ts` with a minimal re-export of `kernel/index.ts` and `datalog/index.ts` (the new public API surface; will be expanded in Phase 5) 🔴
-- 2.5.5 Remove legacy `__eq`/`__neq`/`__gt`/`__lt`/`__lte`/`__gte` built-in predicate support from `datalog/unify.ts` (`isBuiltinPredicate`, `evaluateBuiltin`, `tryEvaluateBuiltin`, `BUILTIN_PREDICATES`) and the call site in `datalog/evaluate.ts` (`evaluatePositiveAtom`). Also update surviving Datalog tests: delete `tests/datalog/unify.test.ts` `isBuiltinPredicate` and `evaluateBuiltin` describe blocks; delete `tests/datalog/evaluate.test.ts` `legacy __builtin predicates` describe block; rewrite `tests/datalog/stratify.test.ts` LWW pattern test to use `guard` body elements instead of `__neq`/`__gt`/`__eq` atoms (note: guards introduce no dependency edges, so the test's expected stratification may simplify — verify and adjust expectations accordingly) 🔴
-- 2.5.6 Remove `loro-crdt` from `devDependencies` in `package.json` (only used by old equivalence tests being deleted) 🔴
-- 2.5.7 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes (only datalog + kernel tests remain) 🔴
+- 2.5.1 Copy `src/solver/fugue.ts` to `reference/fugue-v0.ts` as porting reference for Phase 4 🟢
+- 2.5.2 Delete old source directories: `src/core/`, `src/store/`, `src/solver/`, `src/doc/`, `src/handles/`, `src/views/`, `src/events/`, `src/introspection/` 🟢
+- 2.5.3 Delete old test directories: `tests/core/`, `tests/solver/`, `tests/equivalence/`, `tests/events/`, `tests/handles/`, `tests/views/`, `tests/introspection/`, old `tests/integration.test.ts` 🟢
+- 2.5.4 Replace `src/index.ts` with a minimal re-export of `kernel/index.ts` and `datalog/index.ts` (the new public API surface; will be expanded in Phase 5) 🟢
+- 2.5.5 Remove legacy `__eq`/`__neq`/`__gt`/`__lt`/`__lte`/`__gte` built-in predicate support from `datalog/unify.ts` (`isBuiltinPredicate`, `evaluateBuiltin`, `tryEvaluateBuiltin`, `BUILTIN_PREDICATES`) and the call site in `datalog/evaluate.ts` (`evaluatePositiveAtom`). Also update surviving Datalog tests: delete `tests/datalog/unify.test.ts` `isBuiltinPredicate` and `evaluateBuiltin` describe blocks; delete `tests/datalog/evaluate.test.ts` `legacy __builtin predicates` describe block; rewrite `tests/datalog/stratify.test.ts` LWW pattern test to use `guard` body elements instead of `__neq`/`__gt`/`__eq` atoms (note: guards introduce no dependency edges, so the test's expected stratification may simplify — verify and adjust expectations accordingly) 🟢
+- 2.5.6 Remove `loro-crdt` from `devDependencies` in `package.json` (only used by old equivalence tests being deleted) 🟢
+- 2.5.7 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes (only datalog + kernel tests remain) 🟢
 
 #### Tests
 

@@ -65,9 +65,6 @@ export {
   groundAtom,
   matchAtomAgainstRelation,
   evaluateGuard,
-  isBuiltinPredicate,
-  evaluateBuiltin,
-  tryEvaluateBuiltin,
 } from './unify.js';
 
 // --- Stratification ---

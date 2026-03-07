@@ -7,10 +7,14 @@ import {
   atom,
   constTerm,
   varTerm,
+  _,
   rule,
   positiveAtom,
   negation,
   aggregation,
+  neq,
+  gt,
+  eq,
 } from '../../src/datalog/types.js';
 import type { Rule, AggregationClause } from '../../src/datalog/types.js';
 import {
@@ -805,52 +809,55 @@ describe('headPredicates', () => {
 // ---------------------------------------------------------------------------
 
 describe('complex stratification', () => {
-  it('handles the LWW pattern from §B.4', () => {
+  it('handles the LWW pattern from §B.4 (using guards)', () => {
     // superseded(CnId, Slot) :-
-    //   active_value(CnId, Slot, _, L1, P1),
-    //   active_value(CnId2, Slot, _, L2, P2),
-    //   __neq(CnId, CnId2),
-    //   __gt(L2, L1).
+    //   active_value(CnId, Slot, _, L1, _),
+    //   active_value(CnId2, Slot, _, L2, _),
+    //   neq(CnId, CnId2),
+    //   gt(L2, L1).
     //
     // superseded(CnId, Slot) :-
     //   active_value(CnId, Slot, _, L1, P1),
     //   active_value(CnId2, Slot, _, L2, P2),
-    //   __neq(CnId, CnId2),
-    //   __eq(L2, L1),
-    //   __gt(P2, P1).
+    //   neq(CnId, CnId2),
+    //   eq(L2, L1),
+    //   gt(P2, P1).
     //
     // winner(Slot, CnId, Value) :-
     //   active_value(CnId, Slot, Value, _, _),
     //   not superseded(CnId, Slot).
     //
-    // superseded is in stratum 0 (positive only, depends on base facts + builtins)
-    // winner is in stratum 1 (negates superseded)
+    // Guards introduce NO dependency edges, so:
+    //   superseded depends only on active_value (positive)
+    //   winner negates superseded → must be in a higher stratum
+    // This is simpler than the old __neq-as-atom encoding, which
+    // would have added spurious edges to nonexistent predicates.
 
     const supersededByLamport: Rule = rule(
       atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
       [
-        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('V1'), varTerm('L1'), varTerm('P1')])),
-        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), varTerm('V2'), varTerm('L2'), varTerm('P2')])),
-        positiveAtom(atom('__neq', [varTerm('CnId'), varTerm('CnId2')])),
-        positiveAtom(atom('__gt', [varTerm('L2'), varTerm('L1')])),
+        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), _])),
+        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), _])),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        gt(varTerm('L2'), varTerm('L1')),
       ],
     );
 
     const supersededByPeer: Rule = rule(
       atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
       [
-        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('V1'), varTerm('L1'), varTerm('P1')])),
-        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), varTerm('V2'), varTerm('L2'), varTerm('P2')])),
-        positiveAtom(atom('__neq', [varTerm('CnId'), varTerm('CnId2')])),
-        positiveAtom(atom('__eq', [varTerm('L2'), varTerm('L1')])),
-        positiveAtom(atom('__gt', [varTerm('P2'), varTerm('P1')])),
+        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), varTerm('P1')])),
+        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), varTerm('P2')])),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        eq(varTerm('L2'), varTerm('L1')),
+        gt(varTerm('P2'), varTerm('P1')),
       ],
     );
 
     const winnerRule: Rule = rule(
       atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
       [
-        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('Value'), varTerm('L'), varTerm('P')])),
+        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('Value'), _, _])),
         negation(atom('superseded', [varTerm('CnId'), varTerm('Slot')])),
       ],
     );
@@ -867,6 +874,15 @@ describe('complex stratification', () => {
     expect(supersededStratum).toBeDefined();
     expect(winnerStratum).toBeDefined();
     expect(winnerStratum!.index).toBeGreaterThan(supersededStratum!.index);
+
+    // Guards produce no dependency graph edges — verify the graph
+    // only has edges for the relational atoms (active_value, superseded)
+    const graph = buildDependencyGraph(rules);
+    const guardPredicates = ['__neq', '__gt', '__eq'];
+    for (const edge of graph.edges) {
+      expect(guardPredicates).not.toContain(edge.to);
+      expect(guardPredicates).not.toContain(edge.from);
+    }
 
     // superseded rules should be in the superseded stratum
     expect(supersededStratum!.rules).toContain(supersededByLamport);

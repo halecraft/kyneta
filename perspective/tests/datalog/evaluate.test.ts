@@ -720,31 +720,6 @@ describe('guard body elements in rules', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Legacy built-in predicates still work (backward compat)
-// ---------------------------------------------------------------------------
-
-describe('legacy __builtin predicates (backward compat)', () => {
-  it('__neq still works', () => {
-    const r: Rule = rule(
-      atom('pair', [varTerm('X'), varTerm('Y')]),
-      [
-        positiveAtom(atom('node', [varTerm('X')])),
-        positiveAtom(atom('node', [varTerm('Y')])),
-        positiveAtom(atom('__neq', [varTerm('X'), varTerm('Y')])),
-      ],
-    );
-
-    const facts: Fact[] = [
-      fact('node', ['a']),
-      fact('node', ['b']),
-    ];
-
-    const db = evaluatePositive([r], facts);
-    expect(db.getRelation('pair').size).toBe(2);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Wildcard term
 // ---------------------------------------------------------------------------
 

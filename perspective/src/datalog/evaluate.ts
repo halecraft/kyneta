@@ -37,8 +37,6 @@ import {
   EMPTY_SUBSTITUTION,
   matchAtomAgainstRelation,
   groundAtom,
-  isBuiltinPredicate,
-  tryEvaluateBuiltin,
   evaluateGuard,
 } from './unify.js';
 import { stratify } from './stratify.js';
@@ -393,18 +391,6 @@ function evaluatePositiveAtom(
   db: Database,
   subs: readonly Substitution[],
 ): Substitution[] {
-  // Handle built-in predicates
-  if (isBuiltinPredicate(a.predicate)) {
-    const results: Substitution[] = [];
-    for (const sub of subs) {
-      const result = tryEvaluateBuiltin(a, sub);
-      if (result !== null) {
-        results.push(result);
-      }
-    }
-    return results;
-  }
-
   const relation = db.getRelation(a.predicate);
   const tuples = relation.tuples();
 
@@ -432,19 +418,6 @@ function evaluateNegation(
   db: Database,
   subs: readonly Substitution[],
 ): Substitution[] {
-  // Handle built-in predicates in negation
-  if (isBuiltinPredicate(a.predicate)) {
-    const results: Substitution[] = [];
-    for (const sub of subs) {
-      const result = tryEvaluateBuiltin(a, sub);
-      if (result === null) {
-        // Built-in did NOT hold — negation succeeds
-        results.push(sub);
-      }
-    }
-    return results;
-  }
-
   const relation = db.getRelation(a.predicate);
   const tuples = relation.tuples();
 
