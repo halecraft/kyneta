@@ -1128,6 +1128,38 @@ const _Avatar0 = Avatar({ src: "photo.jpg" })(scope.createChild())
 
 The component factory is called with props, returning an `Element` (a scope-accepting function), which is immediately called with a child scope. The returned `Node` is then `appendChild`-ed to its parent.
 
+### Builder Components
+
+A **Builder Component** is a function that returns a builder expression. The builder expression _is_ the template — no JSX, no virtual DOM, no separate render function. The compiler handles scope threading transparently, transforming the builder into `(scope) => Node` inside the closure. The call site emits `Factory(props)(scope.createChild())`, but the user never writes or sees the double invocation.
+
+Two idiomatic flavors:
+
+- **Props-based** — receives data via a typed props object. The standard pattern for reusable, self-contained components:
+  ```typescript
+  const TodoItem: (props: { label: string; onRemove: () => void }) => Element = (props) =>
+    li({ class: "todo-item" }, () => {
+      label(props.label)
+      button({ class: "destroy", onClick: props.onRemove }, "×")
+    })
+  ```
+
+- **Closure-based** — captures data from the enclosing scope. Necessary when a component needs `bind()`, since bindings cannot be forwarded through props (the compiler recognizes `bind()` call expressions, not property accesses):
+  ```typescript
+  const TodoHeader: () => Element = () =>
+    header(() => {
+      h1(doc.title.toString())
+      input({ value: bind(doc.newTodoText), ... })
+    })
+  ```
+
+Both compile identically — the compiler doesn't distinguish them. Detection is structural: any function whose return type has call signatures returning `Node` is recognized as a component by `isComponentFactoryType()`.
+
+**Props are not reactive.** They are captured at instantiation time. If a prop value changes, the component must be destroyed and recreated. This happens naturally for list items (the reactive loop handles insert/delete) but would not work for in-place prop updates.
+
+**Calling convention — proven end-to-end.** DOM: `Factory(props)(scope.createChild())`. SSR: `Factory(props)()` (no scope — SSR has no subscriptions to manage). Both paths are covered by integration tests in `integration.test.ts` under "Component compilation".
+
+**Type annotation note.** The `ComponentFactory<P>` type is a 4-member union of function types. TypeScript cannot resolve which union member to invoke at call sites, so components should be annotated with their specific overload (`(props: P) => Element` or `() => Element`). The compiler's type detection works on structural call signatures, not on the `ComponentFactory` name, so the specific overload is fully equivalent.
+
 ### Template Cloning Interaction
 
 Components cannot be serialized into `template.innerHTML` — the browser would create an unknown element like `<Avatar>`, not a component invocation. The walker yields a `componentPlaceholder` event instead of walking component children as HTML:

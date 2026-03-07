@@ -75,11 +75,11 @@ The component pipeline is proven end-to-end (6 integration tests, DOM + SSR), th
    - `cd packages/kinetic && npx vitest run` — all 826 tests pass
    - `cd examples/kinetic-todo && npx tsc --noEmit` — no type errors
 
-## Phase 2: Documentation 🔴
+## Phase 2: Documentation 🟢
 
 ### Tasks
 
-1. **Rewrite `examples/kinetic-todo/README.md`** 🔴
+1. **Rewrite `examples/kinetic-todo/README.md`** 🟢
 
    The README should reflect the app as it actually works today:
 
@@ -91,7 +91,7 @@ The component pipeline is proven end-to-end (6 integration tests, DOM + SSR), th
    - Remove all references to "simulated compiled output", `__subscribeWithValue`, `__listRegion`, manual DOM construction, etc.
    - Remove the "What the Compiler Would Transform" section — the builder pattern _is_ the user's code, not a hypothetical
 
-2. **Update TECHNICAL.md Component Model section** 🔴
+2. **Update TECHNICAL.md Component Model section** 🟢
 
    Add a "Builder Components" subsection after "Codegen Output":
 
@@ -100,7 +100,7 @@ The component pipeline is proven end-to-end (6 integration tests, DOM + SSR), th
    - Props are captured at instantiation time and are not reactive. If a prop value changes, the component must be destroyed and recreated. This happens naturally for list items (insert/delete) but not for in-place updates.
    - The calling convention is proven end-to-end: DOM (`Factory(props)(scope.createChild())`) and SSR (`Factory(props)()`) both work. Cite the integration tests.
 
-3. **Update `app.ts` module-level JSDoc** 🔴
+3. **Update `app.ts` module-level JSDoc** 🟢 (done in Phase 1)
 
    Update the file-level doc comment to mention components as a demonstrated feature. The current comment is accurate but doesn't mention the component patterns.
 
