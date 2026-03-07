@@ -404,6 +404,49 @@ export function mergeImports(
 }
 
 // =============================================================================
+// Shared Analysis Helper
+// =============================================================================
+
+/**
+ * Find and analyze all builder calls in a source file.
+ *
+ * Returns `{ call, ir }` pairs so that callers needing AST references
+ * (e.g., `transformSourceInPlace` for position-based replacement) can
+ * use the `call` directly, while callers that only need IR can map
+ * to `.map(r => r.ir)`.
+ *
+ * @param sourceFile - The parsed source file
+ * @param filename - Filename for error messages
+ * @returns Array of { call, ir } pairs
+ */
+function analyzeAllBuilders(
+  sourceFile: SourceFile,
+  filename: string,
+): Array<{ call: CallExpression; ir: BuilderNode }> {
+  const calls = findBuilderCalls(sourceFile)
+  const results: Array<{ call: CallExpression; ir: BuilderNode }> = []
+
+  for (const call of calls) {
+    try {
+      const builder = analyzeBuilder(call)
+      if (builder) {
+        results.push({ call, ir: builder })
+      }
+    } catch (e) {
+      const line = call.getStartLineNumber()
+      const col = call.getStart() - call.getStartLinePos()
+      throw new CompilerError(
+        KineticErrorCode.COMPILER_TRANSFORM_ERROR,
+        `Failed to analyze builder call: ${e instanceof Error ? e.message : String(e)}`,
+        { file: filename, line, column: col },
+      )
+    }
+  }
+
+  return results
+}
+
+// =============================================================================
 // In-Place Transformation (Imperative Shell)
 // =============================================================================
 
@@ -441,33 +484,19 @@ export function transformSourceInPlace(
     )
   }
 
-  // Find builder calls
-  const calls = findBuilderCalls(sourceFile)
+  // Analyze all builder calls using shared helper
+  const replacements = analyzeAllBuilders(sourceFile, filename)
 
-  // Analyze each call and collect replacements
-  const replacements: Array<{ call: CallExpression; ir: BuilderNode }> = []
-
-  for (const call of calls) {
-    try {
-      const builder = analyzeBuilder(call)
-      if (builder) {
-        replacements.push({ call, ir: builder })
-      }
-    } catch (e) {
-      const line = call.getStartLineNumber()
-      const col = call.getStart() - call.getStartLinePos()
-      throw new CompilerError(
-        KineticErrorCode.COMPILER_TRANSFORM_ERROR,
-        `Failed to analyze builder call: ${e instanceof Error ? e.message : String(e)}`,
-        { file: filename, line, column: col },
-      )
-    }
+  // Apply IR transforms: filter target blocks, dissolve conditionals
+  const target = options.target ?? "dom"
+  for (const r of replacements) {
+    r.ir = filterTargetBlocks(r.ir, target)
+    r.ir = dissolveConditionals(r.ir)
   }
 
-  // Collect IR nodes
+  // Collect IR nodes and required imports AFTER transforms
+  // (so dissolved conditionals don't produce unnecessary conditionalRegion imports)
   const ir = replacements.map(r => r.ir)
-
-  // Collect required imports
   const requiredImports = collectRequiredImports(ir)
 
   // Sort replacements by position descending (process back-to-front)
@@ -477,18 +506,6 @@ export function transformSourceInPlace(
 
   // Collect all module declarations from template cloning
   const allModuleDeclarations: string[] = []
-
-  // Apply replacements using the appropriate codegen target
-  // IMPORTANT: Do replacements BEFORE insertions to avoid stale AST references
-  const target = options.target ?? "dom"
-
-  // Filter target blocks (client:/server:) before codegen.
-  // This strips non-matching blocks and unwraps matching ones so that
-  // codegens never see TargetBlockNode in the IR tree.
-  for (const r of replacements) {
-    r.ir = filterTargetBlocks(r.ir, target)
-    r.ir = dissolveConditionals(r.ir)
-  }
 
   // Running template counter shared across all builders in this file.
   // Each generateElementFactoryWithResult call starts where the previous
@@ -615,9 +632,8 @@ export function transformSource(
   options: TransformOptions = {},
 ): TransformResult {
   const filename = options.filename ?? "input.ts"
-  const target = options.target ?? "dom"
 
-  // Parse the source
+  // Parse the source and delegate to transformFile
   let sourceFile: SourceFile
   try {
     sourceFile = parseSource(source, filename)
@@ -629,51 +645,14 @@ export function transformSource(
     )
   }
 
-  // Find and analyze builder calls
-  const calls = findBuilderCalls(sourceFile)
-  const ir: BuilderNode[] = []
-
-  for (const call of calls) {
-    try {
-      const builder = analyzeBuilder(call)
-      if (builder) {
-        ir.push(builder)
-      }
-    } catch (e) {
-      const line = call.getStartLineNumber()
-      const col = call.getStart() - call.getStartLinePos()
-      throw new CompilerError(
-        KineticErrorCode.COMPILER_TRANSFORM_ERROR,
-        `Failed to analyze builder call: ${e instanceof Error ? e.message : String(e)}`,
-        { file: filename, line, column: col },
-      )
-    }
-  }
-
-  // Filter target blocks (client:/server:) before codegen,
-  // then dissolve structurally identical conditionals into ternaries.
-  const filteredIr = ir
-    .map(builder => filterTargetBlocks(builder, target))
-    .map(dissolveConditionals)
-
-  // Generate output code
-  let code: string
-  if (target === "html") {
-    code = generateHTMLOutput(filteredIr, options)
-  } else {
-    code = generateDOMOutput(filteredIr, options)
-  }
-
-  // TODO: Generate source maps if requested
-  const map = options.sourcemap ? undefined : undefined
-
-  return { code, ir, map }
+  return transformFile(sourceFile, options)
 }
 
 /**
  * Transform a ts-morph SourceFile.
  *
  * Use this when you already have a SourceFile from a ts-morph Project.
+ * Also used internally by `transformSource` after parsing.
  *
  * @param sourceFile - The source file to transform
  * @param options - Transform options
@@ -686,26 +665,8 @@ export function transformFile(
   const filename = options.filename ?? sourceFile.getFilePath()
   const target = options.target ?? "dom"
 
-  // Find and analyze builder calls
-  const calls = findBuilderCalls(sourceFile)
-  const ir: BuilderNode[] = []
-
-  for (const call of calls) {
-    try {
-      const builder = analyzeBuilder(call)
-      if (builder) {
-        ir.push(builder)
-      }
-    } catch (e) {
-      const line = call.getStartLineNumber()
-      const col = call.getStart() - call.getStartLinePos()
-      throw new CompilerError(
-        KineticErrorCode.COMPILER_TRANSFORM_ERROR,
-        `Failed to analyze builder call: ${e instanceof Error ? e.message : String(e)}`,
-        { file: filename, line, column: col },
-      )
-    }
-  }
+  // Analyze all builder calls using shared helper
+  const ir = analyzeAllBuilders(sourceFile, filename).map(r => r.ir)
 
   // Filter target blocks (client:/server:) before codegen,
   // then dissolve structurally identical conditionals into ternaries.
@@ -748,20 +709,13 @@ export function hasBuilderCalls(source: string): boolean {
   try {
     const sourceFile = parseSource(source, "check.ts")
     const calls = findBuilderCalls(sourceFile)
-    const found = calls.length > 0
-
+    return calls.length > 0
+  } catch {
+    return false
+  } finally {
     // Remove the temporary file to prevent duplicate type declarations
     // from interfering with subsequent transformSourceInPlace calls
     // that use the same shared project.
-    const project = getProject()
-    const checkFile = project.getSourceFile("check.ts")
-    if (checkFile) {
-      project.removeSourceFile(checkFile)
-    }
-
-    return found
-  } catch {
-    // Clean up on error too
     try {
       const project = getProject()
       const checkFile = project.getSourceFile("check.ts")
@@ -771,6 +725,5 @@ export function hasBuilderCalls(source: string): boolean {
     } catch {
       // ignore cleanup errors
     }
-    return false
   }
 }

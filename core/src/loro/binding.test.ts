@@ -16,7 +16,10 @@ import {
   isBinding,
 } from "./binding.js"
 import { resetScopeIdCounter, Scope } from "../runtime/scope.js"
-import { resetSubscriptionIdCounter } from "../runtime/subscribe.js"
+import {
+  activeSubscriptions,
+  resetSubscriptionIdCounter,
+} from "../runtime/subscribe.js"
 
 // Set up DOM globals for testing
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>")
@@ -500,5 +503,87 @@ describe("bindNumericValue", () => {
     input.dispatchEvent(new Event("input"))
 
     expect(doc.count.get()).toBe(10)
+  })
+})
+
+// =============================================================================
+// Negative Tests — Non-Reactive Values
+// =============================================================================
+
+describe("binding functions reject non-reactive values", () => {
+  beforeEach(() => {
+    resetSubscriptionIdCounter()
+    resetScopeIdCounter()
+    activeSubscriptions.clear()
+  })
+
+  it("bindTextValue throws for a plain string", () => {
+    const input = document.createElement("input")
+    const scope = new Scope("test")
+
+    expect(() => {
+      bindTextValue(input, "not a ref", scope)
+    }).toThrow()
+
+    scope.dispose()
+  })
+
+  it("bindTextValue throws for a plain object", () => {
+    const input = document.createElement("input")
+    const scope = new Scope("test")
+
+    expect(() => {
+      bindTextValue(input, { value: "hello" }, scope)
+    }).toThrow()
+
+    scope.dispose()
+  })
+
+  it("bindChecked throws for a plain number", () => {
+    const checkbox = document.createElement("input")
+    checkbox.type = "checkbox"
+    const scope = new Scope("test")
+
+    expect(() => {
+      bindChecked(checkbox, 42, scope)
+    }).toThrow()
+
+    scope.dispose()
+  })
+
+  it("bindChecked throws for a plain boolean", () => {
+    const checkbox = document.createElement("input")
+    checkbox.type = "checkbox"
+    const scope = new Scope("test")
+
+    expect(() => {
+      bindChecked(checkbox, true, scope)
+    }).toThrow()
+
+    scope.dispose()
+  })
+
+  it("bindNumericValue throws for a plain number", () => {
+    const input = document.createElement("input")
+    input.type = "number"
+    const scope = new Scope("test")
+
+    expect(() => {
+      bindNumericValue(input, 99, scope)
+    }).toThrow()
+
+    scope.dispose()
+  })
+
+  it("bindNumericValue throws for null", () => {
+    const input = document.createElement("input")
+    input.type = "number"
+    const scope = new Scope("test")
+
+    expect(() => {
+      bindNumericValue(input, null, scope)
+    }).toThrow()
+
+    scope.dispose()
   })
 })

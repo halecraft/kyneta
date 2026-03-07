@@ -6,7 +6,7 @@ Kinetic's rapid prototype development has produced 804 passing tests and a genui
 
 The audit identified issues across three priority tiers. All changes are internal refactors — no public API changes, no new features.
 
-> **Status:** Phases 1, 2, and 3 are complete. Phase 1 extracted shared predicates (PR 1). Phase 2 unified duplicated codegen functions (PR 2). Phase 3 implemented IR-level dissolution (PR 3). See `.plans/kinetic-ir-dissolution.md`. Test count is now 932. Research audit completed — corrections applied to Tasks 4.1, 5.1, 6.4, 6.5; new learnings §4–§8 added.
+> **Status:** Phases 1–5 are complete. Phase 1 extracted shared predicates (PR 1). Phase 2 unified duplicated codegen functions (PR 2). Phase 3 implemented IR-level dissolution (PR 3). Phase 4 improved Loro binding type safety. Phase 5 consolidated transform entry points. See `.plans/kinetic-ir-dissolution.md`. Test count is now 938 (6 new negative binding tests). Research audit completed — corrections applied to Tasks 4.1, 5.1, 6.4, 6.5; new learnings §4–§8 added.
 
 ## Problem Statement
 
@@ -178,9 +178,9 @@ Updated "Tree Merge and Conditional Dissolution", "Template Cloning → Region H
 
 ---
 
-## Phase 4: Improve Loro Binding Type Safety 🔴
+## Phase 4: Improve Loro Binding Type Safety 🟢
 
-### Task 4.1: Replace duck-typing in `bindTextValue` with specific checks 🔴
+### Task 4.1: Replace duck-typing in `bindTextValue` with specific checks 🟢
 
 The current `typeof (loroContainer as LoroText).toString === "function"` is always true for **any** object (every object inherits `toString` from `Object.prototype`). This means the `getValue` closure never reaches the `String(loroContainer)` fallback — non-LoroText containers (LoroList, LoroMap, etc.) would silently get their inherited `toString()` called instead of producing an error. The check is completely inert as a discriminator.
 
@@ -195,7 +195,7 @@ if (typeof (loroContainer as LoroText).insert === "function") {
 
 This correctly discriminates LoroText from other container types. Non-LoroText containers will now fall through to the `String(loroContainer)` path (or a future explicit error), instead of silently mishandling.
 
-### Task 4.2: Replace duck-typing in `bindChecked` and `bindNumericValue` with narrower checks 🔴
+### Task 4.2: Replace duck-typing in `bindChecked` and `bindNumericValue` with narrower checks 🟢
 
 Both `bindChecked` and `bindNumericValue` have an inconsistency: the `getValue` closure uses a loose `.value` property check to detect LoroCounter, but the `handleChange`/`handleInput` handler in the same function uses a stricter `.increment` check. The detection logic should be consistent within each function. Additionally, `.value` is common across many types.
 
@@ -208,11 +208,11 @@ const isCounter = typeof (loroContainer as { increment?: Function }).increment =
 
 Use the `isCounter` flag in both the `getValue` closure and the event handler, eliminating the inconsistency.
 
-### Task 4.3: Add JSDoc warnings about the `unknown` boundary 🔴
+### Task 4.3: Add JSDoc warnings about the `unknown` boundary 🟢
 
 Each binding function's `ref: unknown` parameter is intentional (compiled code passes opaque refs). Add a clear doc comment explaining the boundary: "This function operates at the `unknown` boundary because compiled code passes refs without static type information. Runtime dispatch is used to determine the container type."
 
-### Task 4.4: Tests 🔴
+### Task 4.4: Tests 🟢
 
 The existing `binding.test.ts` and `edit-text.test.ts` cover the happy paths. Add one negative test per binding function verifying that passing a non-Loro value throws a clear error (from the `subscribe` call's reactive validation) rather than silently misbehaving.
 
@@ -223,9 +223,9 @@ The existing `binding.test.ts` and `edit-text.test.ts` cover the happy paths. Ad
 
 ---
 
-## Phase 5: Consolidate Transform Entry Points 🔴
+## Phase 5: Consolidate Transform Entry Points 🟢
 
-### Task 5.1: Extract shared `analyzeFile` helper 🔴
+### Task 5.1: Extract shared `analyzeFile` helper 🟢
 
 `transformSource` and `transformFile` repeat: find calls → iterate → try/catch analyze → collect `BuilderNode[]`. Extract:
 
@@ -238,7 +238,7 @@ function analyzeAllBuilders(
 
 This function encapsulates the find-analyze-error-wrap loop and returns `{ call, ir }` pairs. `transformSourceInPlace` uses the pairs directly (needs `call` for position-based AST replacement). `transformSource`/`transformFile` map to just the IR: `.map(r => r.ir)`.
 
-### Task 5.2: Unify `transformSource` and `transformFile` 🔴
+### Task 5.2: Unify `transformSource` and `transformFile` 🟢
 
 `transformFile` is `transformSource` but skipping the parse step. Make `transformSource` parse and delegate to `transformFile`:
 
@@ -251,11 +251,11 @@ export function transformSource(source: string, options: TransformOptions = {}):
 
 This eliminates the duplicated codegen dispatch logic entirely.
 
-### Task 5.3: Extract shared analysis loop for `transformSourceInPlace` 🔴
+### Task 5.3: Extract shared analysis loop for `transformSourceInPlace` 🟢
 
 Replace the inline analysis loop with a call to `analyzeAllBuilders` (which now returns `{ call, ir }` pairs — see Task 5.1). The replacement-tracking logic (sorting by position, back-to-front replacement) stays in `transformSourceInPlace` since it's unique to the in-place path.
 
-### Task 5.4: Harden `hasBuilderCalls` cleanup with `finally` 🔴
+### Task 5.4: Harden `hasBuilderCalls` cleanup with `finally` 🟢
 
 Replace the nested try-catch cleanup pattern with a single try-finally:
 
@@ -271,13 +271,13 @@ try {
 }
 ```
 
-### Task 5.5: Fix `collectRequiredImports` ordering in `transformSourceInPlace` 🔴
+### Task 5.5: Fix `collectRequiredImports` ordering in `transformSourceInPlace` 🟢
 
 Currently `collectRequiredImports(ir)` is called **before** `filterTargetBlocks` and `dissolveConditionals` in `transformSourceInPlace`. This means it runs on pre-dissolution IR and may add a `conditionalRegion` import for conditionals that will be dissolved away. The import is harmless at runtime (tree-shaking or bundler will remove it), but it's semantically wrong.
 
 Move the `collectRequiredImports` call to **after** the `filterTargetBlocks` + `dissolveConditionals` loop, so it sees the final IR. This is a natural fix during the Task 5.3 refactor.
 
-### Task 5.6: Tests 🔴
+### Task 5.6: Tests 🟢
 
 Existing `transform.test.ts` covers all three entry points. Run the full suite. No new tests needed — this is a pure refactor. Optionally add a test verifying that `collectRequiredImports` on post-dissolution IR omits `conditionalRegion` when all conditionals are dissolvable.
 
@@ -380,7 +380,7 @@ The file structure section in TECHNICAL.md should reflect that `ir.ts` now expor
 
 The 7 plan phases collapse into **5 PRs** ordered by dependency. Phases 1, 4, 5 are independent and can land in any order. Phase 2→3 is a chain (prep refactor → behavior change). Phase 6+7 are a trailing cleanup batch.
 
-> **Status:** PRs 1, 2, and 3 are complete. PRs 4 and 5 remain.
+> **Status:** PRs 1–4 are complete. PR 5 (cleanup + docs) remains.
 
 ### PR 1: `refactor: extract shared codegen predicates into ir.ts` 🟢
 
@@ -431,29 +431,30 @@ The 7 plan phases collapse into **5 PRs** ordered by dependency. Phases 1, 4, 5 
 - **Files:** `ir.ts`, `ir.test.ts`, `transform.ts`, `transform.test.ts`, `codegen/dom.ts`, `codegen/dom.test.ts`, `TECHNICAL.md`
 - **Validates:** 16 new tests + all existing 907 tests pass → 923 total
 
-### PR 4: `fix: Loro binding type safety + transform consolidation` 🔴
+### PR 4: `fix: Loro binding type safety + transform consolidation` 🟢
 
 > Plan Phases 4 + 5 (Tasks 4.1–4.4, 5.1–5.6)
+>
+> **Complete.** 6 new negative binding tests, 938 total passing.
 
 **Type:** Fix + refactor (two independent domains, no cross-dependency)
 
 These are batched because they are both medium-priority internal improvements with no overlap in files touched. Neither is large enough alone to justify a separate review cycle.
 
 **Loro bindings (Phase 4):**
-- Replace always-true `toString` check with `insert`-based LoroText detection (fixes silent mishandling of non-LoroText containers)
-- Narrow LoroCounter detection in both `bindChecked` and `bindNumericValue` to require both `.increment` and `.value`; unify detection between `getValue` and event handler within each function
-- Add JSDoc boundary documentation
-- Add negative tests for non-Loro values
+- Extracted `isLoroText` and `isLoroCounter` discriminator functions (replaces inert `toString` check and inconsistent `.value` checks)
+- Unified detection between `getValue` and event handler in both `bindChecked` and `bindNumericValue` via `counterMode` flag
+- Added JSDoc `unknown` boundary documentation to all three binding functions
+- Added 6 negative tests verifying non-reactive values throw clear errors
 - **Files:** `src/loro/binding.ts`, `src/loro/binding.test.ts`
 
 **Transform consolidation (Phase 5):**
-- Extract `analyzeAllBuilders()` shared helper (returns `{ call, ir }` pairs)
-- Make `transformSource` delegate to `transformFile`
-- Use `analyzeAllBuilders` in `transformSourceInPlace`
-- Replace nested try-catch in `hasBuilderCalls` with try-finally
-- Fix `collectRequiredImports` ordering: call after dissolution, not before
+- Extracted `analyzeAllBuilders()` shared helper (returns `{ call, ir }` pairs)
+- `transformSource` now parses and delegates to `transformFile` (eliminated duplicated codegen dispatch)
+- `transformSourceInPlace` uses `analyzeAllBuilders`; `collectRequiredImports` moved after dissolution
+- Replaced nested try-catch in `hasBuilderCalls` with try-finally
 - **Files:** `src/compiler/transform.ts`
-- **Validates:** all existing transform + binding tests pass
+- **Validates:** all 938 tests pass
 
 ### PR 5: `docs: consolidation cleanup + TECHNICAL.md updates` 🔴
 
@@ -476,11 +477,11 @@ These are batched because they are both medium-priority internal improvements wi
 PR 1 (predicates) ✅ DONE ─────────────────────────┐
 PR 2 (codegen dedup) ✅ DONE ──────────────────────┤
 PR 3 (IR dissolution) ✅ DONE ─────────────────────┤
-PR 4 (bindings + transform) ────────────────────────┤
+PR 4 (bindings + transform) ✅ DONE ───────────────┤
                                                     └─── PR 5 (cleanup + docs)
 ```
 
-PRs 1, 2, and 3 are complete. PR 4 is next. PR 5 waits on all others (docs reference outcomes of prior PRs).
+PRs 1–4 are complete. PR 5 (cleanup + docs) is the final PR.
 
 ---
 
@@ -516,6 +517,7 @@ The plan originally assumed `analyzeAllBuilders` returns `BuilderNode[]`, which 
 | Pre-dissolution (after other work) | 907 |
 | After Phase 3 (dissolution) | 923 |
 | After Phase 1 (predicates) | 932 |
+| After Phase 4 (binding safety) | 938 |
 
 ### §4: `_reportMismatch` is dead code, not misnamed
 

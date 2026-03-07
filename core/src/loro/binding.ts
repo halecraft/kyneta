@@ -71,6 +71,39 @@ export function isBinding(value: unknown): value is Binding<unknown> {
 }
 
 // =============================================================================
+// Container Type Detection
+// =============================================================================
+
+/**
+ * Check if a Loro container is a LoroText.
+ *
+ * Uses the presence of `.insert` (a LoroText-specific method) rather than
+ * `.toString` (which every object inherits from Object.prototype and is
+ * therefore useless as a discriminator).
+ */
+function isLoroText(
+  container: unknown,
+): container is LoroText {
+  return typeof (container as LoroText).insert === "function"
+}
+
+/**
+ * Check if a Loro container is a LoroCounter.
+ *
+ * Requires both `.increment` (the mutation method) and `.value` (the
+ * accessor) to be present with correct types. This is stricter than
+ * checking `.value` alone, which is common across many types.
+ */
+function isLoroCounter(
+  container: unknown,
+): container is { increment: (n: number) => void; value: number } {
+  return (
+    typeof (container as { increment?: unknown }).increment === "function" &&
+    typeof (container as { value?: unknown }).value === "number"
+  )
+}
+
+// =============================================================================
 // Runtime Binding Handlers
 // =============================================================================
 
@@ -81,6 +114,12 @@ export function isBinding(value: unknown): value is Binding<unknown> {
  * 1. Initial value from the ref
  * 2. Subscription to update input when ref changes
  * 3. Input event listener to update ref when user types
+ *
+ * This function operates at the `unknown` boundary because compiled code
+ * passes refs without static type information. Runtime dispatch via
+ * `isLoroText` is used to determine the container type. The `loro()`
+ * unwrapper from `@loro-extended/change` validates the input before we
+ * reach the dispatch logic.
  *
  * @param element - The input element
  * @param ref - The text ref to bind
@@ -95,10 +134,10 @@ export function bindTextValue(
 ): void {
   const loroContainer = loro(ref as Parameters<typeof loro>[0])
 
-  // Get initial value
+  // Get initial value — use LoroText-specific .insert check to discriminate
   const getValue = (): string => {
-    if (typeof (loroContainer as LoroText).toString === "function") {
-      return (loroContainer as LoroText).toString()
+    if (isLoroText(loroContainer)) {
+      return loroContainer.toString()
     }
     // For other types, try to get a string representation
     return String(loroContainer)
@@ -127,16 +166,14 @@ export function bindTextValue(
       | HTMLSelectElement
     const newValue = target.value
 
-    // Update the ref
-    if (typeof (loroContainer as LoroText).delete === "function") {
-      // TextRef - replace all content
-      const textRef = loroContainer as LoroText
-      const currentLength = textRef.toString().length
+    // Update the ref — use the same discriminator as getValue
+    if (isLoroText(loroContainer)) {
+      const currentLength = loroContainer.toString().length
       if (currentLength > 0) {
-        textRef.delete(0, currentLength)
+        loroContainer.delete(0, currentLength)
       }
       if (newValue.length > 0) {
-        textRef.insert(0, newValue)
+        loroContainer.insert(0, newValue)
       }
     }
     // Note: Other ref types would need different handling
@@ -153,6 +190,12 @@ export function bindTextValue(
 /**
  * Attach a checked binding to a checkbox input.
  *
+ * This function operates at the `unknown` boundary because compiled code
+ * passes refs without static type information. Runtime dispatch via
+ * `isLoroCounter` is used to determine the container type. The `loro()`
+ * unwrapper from `@loro-extended/change` validates the input before we
+ * reach the dispatch logic.
+ *
  * @param element - The checkbox input element
  * @param ref - The ref to bind (counter or boolean-like)
  * @param scope - The scope for cleanup
@@ -166,11 +209,13 @@ export function bindChecked(
 ): void {
   const loroContainer = loro(ref as Parameters<typeof loro>[0])
 
+  // Detect container type once, use consistently in both getValue and handler
+  const counterMode = isLoroCounter(loroContainer)
+
   // Get current boolean value
   const getValue = (): boolean => {
-    // LoroCounter has .value property
-    if (typeof (loroContainer as { value?: number }).value === "number") {
-      return (loroContainer as { value: number }).value > 0
+    if (counterMode) {
+      return loroContainer.value > 0
     }
     // TypedRef has .get() method
     if (typeof (loroContainer as { get?: () => unknown }).get === "function") {
@@ -203,21 +248,13 @@ export function bindChecked(
     const target = event.target as HTMLInputElement
     const isChecked = target.checked
 
-    // Update the ref based on its type
-    if (
-      typeof (loroContainer as { increment?: (n: number) => void })
-        .increment === "function"
-    ) {
-      // Counter - set to 1 (true) or 0 (false)
-      const counter = loroContainer as {
-        increment: (n: number) => void
-        value: number
-      }
-      const currentValue = counter.value
+    // Update the ref — uses the same counterMode flag as getValue
+    if (counterMode) {
+      const currentValue = loroContainer.value
       if (isChecked && currentValue === 0) {
-        counter.increment(1)
+        loroContainer.increment(1)
       } else if (!isChecked && currentValue > 0) {
-        counter.increment(-currentValue)
+        loroContainer.increment(-currentValue)
       }
     }
     // Note: Other ref types would need different handling
@@ -234,6 +271,12 @@ export function bindChecked(
 /**
  * Attach a numeric value binding to an input element.
  *
+ * This function operates at the `unknown` boundary because compiled code
+ * passes refs without static type information. Runtime dispatch via
+ * `isLoroCounter` is used to determine the container type. The `loro()`
+ * unwrapper from `@loro-extended/change` validates the input before we
+ * reach the dispatch logic.
+ *
  * @param element - The input element (type="number" or type="range")
  * @param ref - The counter ref to bind
  * @param scope - The scope for cleanup
@@ -247,11 +290,13 @@ export function bindNumericValue(
 ): void {
   const loroContainer = loro(ref as Parameters<typeof loro>[0])
 
+  // Detect container type once, use consistently in both getValue and handler
+  const counterMode = isLoroCounter(loroContainer)
+
   // Get current numeric value
   const getValue = (): number => {
-    // LoroCounter has .value property
-    if (typeof (loroContainer as { value?: number }).value === "number") {
-      return (loroContainer as { value: number }).value
+    if (counterMode) {
+      return loroContainer.value
     }
     // TypedRef has .get() method
     if (typeof (loroContainer as { get?: () => unknown }).get === "function") {
@@ -281,20 +326,12 @@ export function bindNumericValue(
     const target = event.target as HTMLInputElement
     const newValue = parseFloat(target.value) || 0
 
-    // Update the ref based on its type
-    if (
-      typeof (loroContainer as { increment?: (n: number) => void })
-        .increment === "function"
-    ) {
-      // Counter - adjust by difference
-      const counter = loroContainer as {
-        increment: (n: number) => void
-        value: number
-      }
-      const currentValue = counter.value
+    // Update the ref — uses the same counterMode flag as getValue
+    if (counterMode) {
+      const currentValue = loroContainer.value
       const diff = newValue - currentValue
       if (diff !== 0) {
-        counter.increment(diff)
+        loroContainer.increment(diff)
       }
     }
   }
