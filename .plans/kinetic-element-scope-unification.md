@@ -199,11 +199,11 @@ Replace manual scope wiring with `mount()`.
 
    `cd examples/kinetic-todo && npm run dev` — add a todo, remove a todo, confirm identical behavior. View source to confirm SSR output still contains `<li class="todo-item">`, not `<TodoItem>`.
 
-## Phase 4: Update Detection, Tests, and Docs 🔴
+## Phase 4: Update Detection, Tests, and Docs 🟢
 
 ### Tasks
 
-1. **Update `isComponentFactoryType` comments** 🔴
+1. **Update `isComponentFactoryType` comments** 🟢
 
    Three comment locations in `reactive-detection.ts` reference the old `() => Node` shape:
    - JSDoc block (L380-391): `"Returns an Element (a function that returns Node)"` and `"The return type is a function type (Element = () => Node)"`
@@ -212,7 +212,7 @@ Replace manual scope wiring with `mount()`.
 
    Update all three to reference `(scope: ScopeInterface) => Node`. The actual detection logic doesn't change — it already checks that the return type has call signatures returning `Node`, which works for both shapes.
 
-2. **Update `COMPONENT_PREAMBLE` in integration tests** 🔴
+2. **Update `COMPONENT_PREAMBLE` in integration tests** 🟢
 
    Change `type Element = () => Node` to a definition that includes the scope parameter. Since test source strings don't import `Scope` (it's injected via `new Function`), use an inline type:
 
@@ -222,11 +222,11 @@ Replace manual scope wiring with `mount()`.
 
    Using `any` for the scope type in the preamble is pragmatic — the test source doesn't need to type-check scope usage, it just needs ts-morph to resolve `ComponentFactory`'s return type as a function returning `Node`.
 
-3. **Update analyze test inline type definitions** 🔴
+3. **Update analyze test inline type definitions** 🟢
 
    The three `ComponentFactory` detection tests in `analyze.test.ts` define `type Element = () => Node` inline. Update them to match the new definition. Also update the mock component bodies from `return () => document.createElement("div")` to `return (scope: any) => document.createElement("div")`. Update test descriptions (the `it("should recognize...")` strings) — e.g., "should recognize a function that returns () => Node as ComponentFactory" becomes "should recognize a function that returns (scope) => Node as ComponentFactory".
 
-4. **Update TECHNICAL.md** 🔴
+4. **Update TECHNICAL.md** 🟢
 
    - Component Model section: Change "returns an `Element` (which is `() => Node`)" to "returns an `Element` (which is `(scope: Scope) => Node`)"
    - Current Limitations: Remove "SSR not implemented" (it was implemented in the component-demo commit). Add "Bindings through props are architecturally unsupported" (documented in kinetic-component-demo plan)

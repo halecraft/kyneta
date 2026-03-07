@@ -3322,7 +3322,7 @@ function compileAndExecuteComponent(
  * type resolution. Included at the top of test source strings.
  */
 const COMPONENT_PREAMBLE = `
-type Element = () => Node
+type Element = (scope: any) => Node
 type ComponentFactory<P extends Record<string, unknown> = {}> =
   | ((props: P, builder: () => void) => Element)
   | ((props: P) => Element)

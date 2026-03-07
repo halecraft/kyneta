@@ -553,6 +553,12 @@ Non-reactive equivalents:
 
 ## Design Decisions
 
+### Explicit Scope Passing
+
+`Element = (scope: ScopeInterface) => Node` is the universal shape for compiled DOM output. The compiler transforms builder calls like `div(() => { h1("Hello") })` into `(scope) => { ... return _div0 }`, where `scope` is load-bearing: reactive subscriptions use it to register cleanup handlers and manage lifecycle. `mount()` creates a root scope and passes it to the element factory; components receive child scopes via `scope.createChild()`.
+
+SSR render functions have a separate type (`SSRRenderFunction = (ctx: SSRContext) => string`) because server-side rendering doesn't need scope — there are no subscriptions to manage, no cleanup to track. The HTML codegen produces `() => string` (zero parameters). This is a deliberate divergence, not an oversight: the two targets have fundamentally different lifecycle requirements.
+
 ### Unified Accumulation-Line Architecture in HTML Codegen
 
 We always use block body (`() => { ... }`) instead of expression body (`() => x`) in HTML codegen, even when there are no statements. Benefits:
@@ -1080,7 +1086,7 @@ type ComponentFactory<P extends Record<string, unknown> = {}> =
   | (() => Element)
 ```
 
-A component is any function whose type satisfies `ComponentFactory`: it returns an `Element` (which is `() => Node`), and optionally accepts props and/or a builder callback.
+A component is any function whose type satisfies `ComponentFactory`: it returns an `Element` (which is `(scope: Scope) => Node`), and optionally accepts props and/or a builder callback.
 
 ### Two-Tier Detection
 
@@ -1142,7 +1148,7 @@ _holes[0].parentNode.replaceChild(_Avatar0, _holes[0])
 ### Current Limitations
 
 - **Builder callbacks not wired**: The `ComponentFactory` type supports `(props, builder) => Element`, but the compiler does not yet pass children as a builder callback at call sites. Components must manage their own children internally.
-- **SSR not implemented**: HTML codegen does not yet handle `factorySource`. Components are DOM-only for now.
+- **Bindings through props unsupported**: `bind()` values cannot be passed as component props. The `Binding<T>` type is recognized at the element level (e.g., `input({ value: bind(ref) })`), but the component codegen does not unwrap or forward bindings. Components that need two-way binding must accept the raw ref and call `bind()` internally.
 
 ## Conditional Scope Creation
 

@@ -182,16 +182,16 @@ describe("ELEMENT_FACTORIES", () => {
 // =============================================================================
 
 describe("ComponentFactory detection", () => {
-  it("should recognize a function that returns () => Node as ComponentFactory", () => {
+  it("should recognize a function that returns (scope) => Node as ComponentFactory", () => {
     const project = createProject()
     const sourceFile = project.createSourceFile(
       "component.ts",
       `
-      type Element = () => Node
+      type Element = (scope: any) => Node
       type ComponentFactory<P extends Record<string, unknown> = {}> = (props: P) => Element
 
       const MyComponent: ComponentFactory<{ title: string }> = (props) => {
-        return () => document.createElement("div")
+        return (scope: any) => document.createElement("div")
       }
       `,
       { overwrite: true },
@@ -227,11 +227,11 @@ describe("ComponentFactory detection", () => {
     const sourceFile = project.createSourceFile(
       "usage.ts",
       `
-      type Element = () => Node
+      type Element = (scope: any) => Node
       type ComponentFactory<P extends Record<string, unknown> = {}> = (props: P) => Element
 
       const Avatar: ComponentFactory<{ src: string }> = (props) => {
-        return () => document.createElement("img")
+        return (scope: any) => document.createElement("img")
       }
 
       const result = Avatar({ src: "photo.jpg" })
@@ -284,11 +284,11 @@ describe("ComponentFactory detection", () => {
     const sourceFile = project.createSourceFile(
       "builder.ts",
       `
-      type Element = () => Node
+      type Element = (scope: any) => Node
       type ComponentFactory<P extends Record<string, unknown> = {}> = (props: P) => Element
 
       const Card: ComponentFactory<{ title: string }> = (props) => {
-        return () => document.createElement("div")
+        return (scope: any) => document.createElement("div")
       }
 
       const app = Card({ title: "Test" }, () => {

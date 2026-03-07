@@ -380,12 +380,12 @@ export function getDeltaKind(type: Type): DeltaKind {
  * Check if a type is a ComponentFactory.
  *
  * A ComponentFactory is a function type that:
- * - Returns an Element (a function that returns Node)
+ * - Returns an Element (a scope-accepting function that returns Node)
  * - Optionally takes props (an object) as first argument
  * - Optionally takes a Builder (a function) as second argument
  *
  * This detection works by checking if the type has call signatures where:
- * 1. The return type is a function type (Element = () => Node)
+ * 1. The return type is a function type (Element = (scope: ScopeInterface) => Node)
  * 2. Parameters are either empty, props object, builder function, or both
  *
  * @param type - The ts-morph Type to check
@@ -412,11 +412,11 @@ export function isComponentFactoryType(type: Type): boolean {
   }
 
   // Check if any call signature returns an Element-like type
-  // Element = () => Node, which is a function returning Node
+  // Element = (scope: ScopeInterface) => Node, a function returning Node
   for (const sig of callSignatures) {
     const returnType = sig.getReturnType()
 
-    // Element is a function type: () => Node
+    // Element is a function type: (scope: ScopeInterface) => Node
     const returnCallSigs = returnType.getCallSignatures()
     if (returnCallSigs.length > 0) {
       // Check if it returns something Node-like
