@@ -45,13 +45,13 @@ The `beforeinput` DOM event provides the user's actual editing operations (`inpu
 | `Props.onBeforeInput` | Not in type | Added |
 | Diagnostic logging in `bindTextValue` | ~~Present~~ Already removed | ✅ Done |
 
-## Phase 1: `inputTextRegion` — Delta-Aware Input Value Patching 🔴
+## Phase 1: `inputTextRegion` — Delta-Aware Input Value Patching 🟢
 
 The read direction: CRDT deltas applied surgically to `<input>.value` via `setRangeText`.
 
 ### Tasks
 
-1. **Implement `patchInputValue` in `packages/kinetic/src/runtime/text-patch.ts`** 🔴
+1. **Implement `patchInputValue` in `packages/kinetic/src/runtime/text-patch.ts`** 🟢
 
    Add alongside the existing `patchText` function. Reuses the existing `planTextPatch` pure function to convert cursor-based deltas to offset-based ops, then applies them via `setRangeText("preserve")` instead of `insertData`/`deleteData`.
 
@@ -66,7 +66,7 @@ The read direction: CRDT deltas applied surgically to `<input>.value` via `setRa
 
    Translation: `{ kind: "insert", offset, text }` → `input.setRangeText(text, offset, offset, "preserve")`. `{ kind: "delete", offset, count }` → `input.setRangeText("", offset, offset + count, "preserve")`.
 
-2. **Implement `inputTextRegion` in `packages/kinetic/src/runtime/text-patch.ts`** 🔴
+2. **Implement `inputTextRegion` in `packages/kinetic/src/runtime/text-patch.ts`** 🟢
 
    Follows the same pattern as `textRegion`: set initial value, subscribe, dispatch deltas surgically.
 
@@ -82,9 +82,9 @@ The read direction: CRDT deltas applied surgically to `<input>.value` via `setRa
 
    For `delta.type === "text"`, calls `patchInputValue`. For other delta types (fallback), assigns `input.value = ref.get()`.
 
-3. **Export `inputTextRegion` from `packages/kinetic/src/runtime/index.ts`** 🔴
+3. **Export `inputTextRegion` from `packages/kinetic/src/runtime/index.ts`** 🟢
 
-4. **Add tests for `patchInputValue` and `inputTextRegion`** 🔴
+4. **Add tests for `patchInputValue` and `inputTextRegion`** 🟢
 
    In `packages/kinetic/src/runtime/text-patch.test.ts`. Extract the existing `createMockTextRef` helper (currently scoped inside the `textRegion` describe block) to the top level of the test file so both `textRegion` and `inputTextRegion` test suites share it without duplication. Tests:
 

@@ -1,14 +1,19 @@
 /**
  * Text Patching for Surgical DOM Updates
  *
- * This module provides functions for applying text deltas to DOM Text nodes
- * using the surgical `insertData`/`deleteData` APIs instead of full `textContent`
- * replacement.
+ * This module provides functions for applying text deltas to DOM targets
+ * using surgical APIs instead of full replacement.
+ *
+ * Two DOM targets are supported:
+ * - **Text nodes**: `patchText` uses `insertData`/`deleteData`
+ * - **Input elements**: `patchInputValue` uses `setRangeText("preserve")`
  *
  * Follows the Functional Core / Imperative Shell pattern:
  * - `planTextPatch` (pure): converts cursor-based deltas to offset-based ops
  * - `patchText` (imperative): applies ops to a DOM Text node
- * - `textRegion` (imperative): subscribes to a TextRef and applies surgical patches
+ * - `patchInputValue` (imperative): applies ops to an `<input>`/`<textarea>` value
+ * - `textRegion` (imperative): subscribes to a TextRef and patches a Text node
+ * - `inputTextRegion` (imperative): subscribes to a TextRef and patches an input value
  *
  * @packageDocumentation
  */
@@ -126,6 +131,101 @@ export function patchText(textNode: Text, ops: TextDeltaOp[]): void {
       textNode.deleteData(op.offset, op.count)
     }
   }
+}
+
+// =============================================================================
+// Input Value Patching (Imperative Shell)
+// =============================================================================
+
+/**
+ * Apply text delta operations to an `<input>` or `<textarea>` element's value.
+ *
+ * Uses the surgical `setRangeText("preserve")` API for O(k) updates
+ * where k is the size of the change, rather than O(n) full replacement.
+ * The `"preserve"` selectMode automatically adjusts the cursor position:
+ * inserts before the cursor shift it right, deletes before the cursor shift
+ * it left.
+ *
+ * @param input - The input or textarea element to patch
+ * @param ops - Array of text delta operations
+ *
+ * @example
+ * ```typescript
+ * const input = document.createElement("input")
+ * input.value = "Hello"
+ * patchInputValue(input, [{ retain: 5 }, { insert: " World" }])
+ * // input.value === "Hello World"
+ * ```
+ */
+export function patchInputValue(
+  input: HTMLInputElement | HTMLTextAreaElement,
+  ops: TextDeltaOp[],
+): void {
+  const patchOps = planTextPatch(ops)
+
+  for (const op of patchOps) {
+    if (op.kind === "insert") {
+      input.setRangeText(op.text, op.offset, op.offset, "preserve")
+    } else {
+      input.setRangeText("", op.offset, op.offset + op.count, "preserve")
+    }
+  }
+}
+
+// =============================================================================
+// Input Text Region (Subscription-Aware Input Value Updates)
+// =============================================================================
+
+/**
+ * Subscribe to a TextRef and apply surgical text patches to an input element's value.
+ *
+ * This is the `<input>`/`<textarea>` analog of `textRegion`. It follows the
+ * same pattern as all region functions:
+ * 1. Set initial value
+ * 2. Subscribe to changes
+ * 3. Apply surgical patches for text deltas via `setRangeText("preserve")`
+ * 4. Fall back to full replacement for non-text deltas
+ *
+ * The `"preserve"` selectMode on `setRangeText` automatically handles cursor
+ * position adjustment — no manual cursor arithmetic is needed.
+ *
+ * @param input - The input or textarea element to manage
+ * @param ref - The reactive text ref (must have a `get()` method)
+ * @param scope - The scope for subscription cleanup
+ *
+ * @example
+ * Generated code for `input({ value: doc.title.toString() })` where
+ * `doc.title` is a TextRef with deltaKind "text":
+ * ```typescript
+ * const _input0 = document.createElement("input")
+ * inputTextRegion(_input0, doc.title, scope)
+ * ```
+ */
+export function inputTextRegion(
+  input: HTMLInputElement | HTMLTextAreaElement,
+  ref: unknown,
+  scope: Scope,
+): void {
+  // Cast to TextRefLike — the ref must have .get()
+  const typedRef = ref as TextRefLike
+
+  // Set initial value
+  input.value = typedRef.get()
+
+  // Subscribe to changes
+  subscribe(
+    ref,
+    (delta: ReactiveDelta) => {
+      if (delta.type === "text") {
+        // Surgical update — O(k) where k is the edit size
+        patchInputValue(input, delta.ops)
+      } else {
+        // Fallback for non-text deltas (e.g., "replace") — O(n) full replacement
+        input.value = typedRef.get()
+      }
+    },
+    scope,
+  )
 }
 
 // =============================================================================

@@ -44,7 +44,7 @@ export {
 
 export { listRegion, conditionalRegion } from "./regions.js"
 
-export { textRegion } from "./text-patch.js"
+export { textRegion, inputTextRegion } from "./text-patch.js"
 
 // =============================================================================
 // Runtime version
