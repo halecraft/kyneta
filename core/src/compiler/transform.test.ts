@@ -1152,8 +1152,8 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Should generate subscribeWithValue because TextRef is detected as reactive
-    expect(result.code).toContain("subscribeWithValue")
+    // TextRef direct read → textRegion for surgical text patching
+    expect(result.code).toContain("textRegion")
     expect(result.ir[0].children[0].kind).toBe("element")
   })
 
@@ -1218,7 +1218,8 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Both should be detected as reactive
+    // TextRef direct read → textRegion, CounterRef → subscribeWithValue
+    expect(result.code).toContain("textRegion")
     expect(result.code).toContain("subscribeWithValue")
     // Should have reactive children
     expect(result.ir[0].isReactive).toBe(true)
@@ -1262,6 +1263,60 @@ describe("reactive type resolution from @loro-extended/change", () => {
       expect(ulElement.children[0].kind).toBe("loop")
     }
   })
+
+  it("should produce deltaKind 'text' and textRegion for TextRef direct read", () => {
+    const source = `
+      import { TextRef } from "@loro-extended/change"
+      declare const title: TextRef
+      div(() => { h1(title.toString()) })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    // IR should have deltaKind "text" and directReadSource
+    const h1 = result.ir[0].children[0] as any
+    const content = h1.children[0]
+    expect(content.dependencies[0].deltaKind).toBe("text")
+    expect(content.directReadSource).toBe("title")
+
+    // Codegen should emit textRegion, not subscribeWithValue
+    expect(result.code).toContain("textRegion(")
+    expect(result.code).not.toMatch(/subscribeWithValue\(title/)
+  })
+
+  it("should produce deltaKind 'list' for ListRef", () => {
+    const source = `
+      import { ListRef } from "@loro-extended/change"
+      declare const items: ListRef<string>
+      div(() => {
+        for (const item of items) {
+          li(item)
+        }
+      })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    const loop = result.ir[0].children[0] as any
+    expect(loop.kind).toBe("loop")
+    expect(loop.dependencies[0].deltaKind).toBe("list")
+    expect(result.code).toContain("listRegion")
+  })
+
+  it("should produce deltaKind 'replace' for CounterRef", () => {
+    const source = `
+      import { CounterRef } from "@loro-extended/change"
+      declare const count: CounterRef
+      div(() => { p(count.get()) })
+    `
+
+    const result = transformSource(source, { target: "dom" })
+
+    const p = result.ir[0].children[0] as any
+    const content = p.children[0]
+    expect(content.dependencies[0].deltaKind).toBe("replace")
+    expect(result.code).toContain("subscribeWithValue")
+  })
 })
 
 // =============================================================================
@@ -1291,8 +1346,8 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Should detect TextRef on doc.title → subscribeWithValue
-    expect(result.code).toContain("subscribeWithValue")
+    // Should detect TextRef on doc.title → textRegion for surgical patching
+    expect(result.code).toContain("textRegion")
     // Should detect ListRef on doc.todos → listRegion
     expect(result.code).toContain("listRegion")
     // Builder should be reactive

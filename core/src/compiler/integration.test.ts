@@ -1726,7 +1726,9 @@ describe("compiler integration - combined scenarios", () => {
       expect(result.code).toContain("bindChecked")
 
       // Should have reactive text display
-      expect(result.code).toContain("doc.title.toString()")
+      // TextRef direct read → textRegion (surgical patching)
+      expect(result.code).toContain("textRegion")
+      expect(result.code).toContain("doc.title")
       expect(result.code).toContain("doc.count.value.toString()")
     })
 
@@ -1841,8 +1843,9 @@ describe("compiler integration - combined scenarios", () => {
       expect(result.code).toContain('createElement("nav")')
       expect(result.code).toContain('createElement("footer")')
 
-      // Should have reactive content
-      expect(result.code).toContain("doc.name.toString()")
+      // Should have reactive content — TextRef direct read → textRegion
+      expect(result.code).toContain("textRegion")
+      expect(result.code).toContain("doc.name")
     })
   })
 
