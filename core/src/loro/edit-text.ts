@@ -9,10 +9,12 @@
  * The handler calls `e.preventDefault()` for all handled input types, then
  * mutates the TextRef. The synchronous commit fires the `inputTextRegion`
  * subscription, which applies the delta back to the DOM via
- * `setRangeText("preserve")` — preserving cursor position automatically.
+ * `setRangeText("end")` for local edits — advancing the cursor past the
+ * inserted text (or to the deletion point for deletes). Remote edits use
+ * `setRangeText("preserve")` to shift the cursor relative to the edit.
  *
  * **Deliberate divergences from `hooks-core/create-text-hooks/input-handlers.ts`:**
- * - `calculateNewCursor` is NOT duplicated — `setRangeText("preserve")` handles
+ * - `calculateNewCursor` is NOT duplicated — `setRangeText("end")` handles
  *   cursor positioning natively via the `inputTextRegion` subscription
  * - `handleDeleteForward` uses `ref.length` for bounds check instead of
  *   `input.value.length`, because `e.preventDefault()` means the input value

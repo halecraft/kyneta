@@ -140,14 +140,18 @@ export function patchText(textNode: Text, ops: TextDeltaOp[]): void {
 /**
  * Apply text delta operations to an `<input>` or `<textarea>` element's value.
  *
- * Uses the surgical `setRangeText("preserve")` API for O(k) updates
- * where k is the size of the change, rather than O(n) full replacement.
- * The `"preserve"` selectMode automatically adjusts the cursor position:
- * inserts before the cursor shift it right, deletes before the cursor shift
- * it left.
+ * Uses the surgical `setRangeText` API for O(k) updates where k is the
+ * size of the change, rather than O(n) full replacement.
+ *
+ * The `selectMode` parameter controls cursor adjustment:
+ * - `"preserve"` (default) — cursor shifts relative to edits happening
+ *   elsewhere. Correct for **remote** edits.
+ * - `"end"` — cursor moves to the end of the replacement range.
+ *   Correct for **local** edits (typing, undo, redo).
  *
  * @param input - The input or textarea element to patch
  * @param ops - Array of text delta operations
+ * @param selectMode - The `setRangeText` selectMode (default `"preserve"`)
  *
  * @example
  * ```typescript
@@ -160,14 +164,15 @@ export function patchText(textNode: Text, ops: TextDeltaOp[]): void {
 export function patchInputValue(
   input: HTMLInputElement | HTMLTextAreaElement,
   ops: TextDeltaOp[],
+  selectMode: "preserve" | "end" = "preserve",
 ): void {
   const patchOps = planTextPatch(ops)
 
   for (const op of patchOps) {
     if (op.kind === "insert") {
-      input.setRangeText(op.text, op.offset, op.offset, "preserve")
+      input.setRangeText(op.text, op.offset, op.offset, selectMode)
     } else {
-      input.setRangeText("", op.offset, op.offset + op.count, "preserve")
+      input.setRangeText("", op.offset, op.offset + op.count, selectMode)
     }
   }
 }
@@ -183,11 +188,15 @@ export function patchInputValue(
  * same pattern as all region functions:
  * 1. Set initial value
  * 2. Subscribe to changes
- * 3. Apply surgical patches for text deltas via `setRangeText("preserve")`
+ * 3. Apply surgical patches for text deltas via `setRangeText`
  * 4. Fall back to full replacement for non-text deltas
  *
- * The `"preserve"` selectMode on `setRangeText` automatically handles cursor
- * position adjustment — no manual cursor arithmetic is needed.
+ * **Origin-driven selectMode dispatch:** The subscription dispatches
+ * `setRangeText` selectMode based on `delta.origin`:
+ * - `origin === "local"` → `"end"` (cursor advances past inserts, stays at
+ *   delete point). Correct for local typing, undo, and redo.
+ * - anything else (`"import"`, `undefined`) → `"preserve"` (cursor shifts
+ *   relative to remote edits). Correct for remote collaborator edits.
  *
  * @param input - The input or textarea element to manage
  * @param ref - The reactive text ref (must have a `get()` method)
@@ -217,8 +226,12 @@ export function inputTextRegion(
     ref,
     (delta: ReactiveDelta) => {
       if (delta.type === "text") {
+        // Origin-driven selectMode dispatch:
+        // - local edits (typing, undo, redo) → "end" (cursor follows edit)
+        // - remote/unknown edits → "preserve" (cursor stays relative)
+        const mode = delta.origin === "local" ? "end" : "preserve"
         // Surgical update — O(k) where k is the edit size
-        patchInputValue(input, delta.ops)
+        patchInputValue(input, delta.ops, mode)
       } else {
         // Fallback for non-text deltas (e.g., "replace") — O(n) full replacement
         input.value = typedRef.get()

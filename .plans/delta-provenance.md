@@ -102,13 +102,13 @@ The earlier plan noted that `hooks-core` avoids using `event.by === "local"` bec
 | `editText` | No DOM update, no cursor management | **No change needed** — cursor managed by `setRangeText("end")` through the subscription |
 | Unit tests | No round-trip cursor test | Tests for local typing, remote insert, undo cursor behavior |
 
-## Phase 1: Add `origin` to `ReactiveDelta` 🔴
+## Phase 1: Add `origin` to `ReactiveDelta` ✅
 
 Extend the delta vocabulary with provenance metadata.
 
 ### Tasks
 
-1. Add optional `origin` field to each named delta type in `packages/reactive/src/index.ts` 🔴
+1. Add optional `origin` field to each named delta type in `packages/reactive/src/index.ts` ✅
 
    The field is optional so that non-Loro reactive types (e.g., `LocalRef`) don't need to provide it. When absent, consumers treat the delta as origin-unknown and fall back to safe behavior (`"preserve"`).
 
@@ -122,29 +122,29 @@ Extend the delta vocabulary with provenance metadata.
    export type TreeDelta = { type: "tree"; ops: TreeDeltaOp[]; origin?: DeltaOrigin }
    ```
 
-2. Export `DeltaOrigin` from `packages/reactive/src/index.ts` 🔴
+2. Export `DeltaOrigin` from `packages/reactive/src/index.ts` ✅
 
-3. Update `translateEventBatch` in `packages/change/src/reactive-bridge.ts` to forward the `by` field 🔴
+3. Update `translateEventBatch` in `packages/change/src/reactive-bridge.ts` to forward the `by` field ✅
 
    The function currently casts `eventBatch` as `{ events: Array<{ diff: unknown }> }`. Extend the cast to include `by?: string`. Pass it to `translateDiff` which attaches it to the returned delta.
 
-4. Update `translateDiff` to accept and attach an optional origin parameter 🔴
+4. Update `translateDiff` to accept and attach an optional origin parameter ✅
 
    For the `REPLACE_DELTA` singleton optimization: return `origin ? { type: "replace", origin } : REPLACE_DELTA`. This preserves the singleton for the no-origin case (e.g., `LocalRef`) while correctly attaching origin when present.
 
-5. Add tests for origin forwarding in `packages/change/src/reactive-bridge.test.ts` 🔴
+5. Add tests for origin forwarding in `packages/change/src/reactive-bridge.test.ts` ✅
 
    - `translateEventBatch` with `by: "local"` → each delta has `origin: "local"`
    - `translateEventBatch` with `by: "import"` → each delta has `origin: "import"`
    - `translateEventBatch` with no `by` field → each delta has `origin: undefined`
 
-## Phase 2: Origin-Driven SelectMode in `patchInputValue` + `inputTextRegion` 🔴
+## Phase 2: Origin-Driven SelectMode in `patchInputValue` + `inputTextRegion` ✅
 
 The core cursor fix. `patchInputValue` gains a selectMode parameter; `inputTextRegion` dispatches on `delta.origin`.
 
 ### Tasks
 
-1. Update `patchInputValue` in `packages/kinetic/src/runtime/text-patch.ts` to accept an optional `selectMode` parameter 🔴
+1. Update `patchInputValue` in `packages/kinetic/src/runtime/text-patch.ts` to accept an optional `selectMode` parameter ✅
 
    Default to `"preserve"` for backward compatibility. The parameter is passed through to every `setRangeText` call.
 
@@ -156,7 +156,7 @@ The core cursor fix. `patchInputValue` gains a selectMode parameter; `inputTextR
    ): void
    ```
 
-2. Update `inputTextRegion` in `packages/kinetic/src/runtime/text-patch.ts` to dispatch selectMode on `delta.origin` 🔴
+2. Update `inputTextRegion` in `packages/kinetic/src/runtime/text-patch.ts` to dispatch selectMode on `delta.origin` ✅
 
    ```typescript
    subscribe(ref, (delta: ReactiveDelta) => {
