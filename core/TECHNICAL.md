@@ -953,12 +953,15 @@ The full write→read cycle for **tier 1/2** (CRDT-first) is synchronous within 
 The write→read cycle for **tier 3** (browser-native fallback) spans two events:
 1. `beforeinput` → handler returns `false`, one-shot `input` listener attached
 2. Browser performs native word/line deletion, updates `input.value`
-3. `input` event fires → `ref.update(target.value)` → Myers' diff → CRDT ops → `commitIfAuto()`
-4. `inputTextRegion` subscription fires → `patchInputValue` applies ops that match the already-correct DOM (benign no-op)
+3. `input` event fires → listener saves `target.value`, restores `target.value = ref.toString()` (old CRDT state)
+4. `ref.update(savedValue)` → Myers' diff → CRDT ops → `commitIfAuto()`
+5. `inputTextRegion` subscription fires → `patchInputValue` applies delta to old DOM value → produces correct new DOM value
+
+**Why the DOM restore (step 3)?** `ref.update()` triggers `commitIfAuto()`, which fires `inputTextRegion`'s subscription synchronously. The subscription applies a text delta via `patchInputValue` / `setRangeText` — but those ops are relative to the *old* CRDT state. If `input.value` already shows the new state (browser applied it in step 2), the delta double-applies (e.g., a "delete 5 chars at offset 0" op removes characters from the already-correct shorter string). Restoring `input.value` to the old CRDT state before calling `ref.update()` ensures the subscription applies the delta to the correct base.
 
 For remote edits, `translateEventBatch` produces `origin: "import"`, and `inputTextRegion` calls `patchInputValue(input, ops, "preserve")` — correctly shifting the local cursor relative to remote insertions/deletions.
 
-All DOM updates and cursor positioning flow through `inputTextRegion` → `patchInputValue` → `setRangeText`. `editText` never directly modifies `input.value`; its only DOM side-effects are `e.preventDefault()` (tier 1/2) and `addEventListener("input", ..., { once: true })` (tier 3).
+All DOM updates and cursor positioning flow through `inputTextRegion` → `patchInputValue` → `setRangeText`. `editText`'s DOM side-effects are `e.preventDefault()` (tier 1/2), `addEventListener("input", ..., { once: true })` (tier 3), and the transient `target.value` restore in the reconciliation listener (tier 3).
 
 ### Region Algebra
 

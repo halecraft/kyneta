@@ -124,28 +124,38 @@ When the browser handles a word/line deletion natively, the CRDT and DOM are out
 
    This task is empirical verification during implementation, not a code change. If cursor flicker is observed, a guard can be added, but it's likely unnecessary.
 
-## Phase 3: Tests 🔴
+## Phase 3: Tests 🟢
 
 ### Tasks
 
-1. Unit test: `handleDeleteByRange` returns `false` on collapsed cursor with empty `getTargetRanges` 🔴
+1. Unit test: `handleDeleteByRange` returns `false` on collapsed cursor with empty `getTargetRanges` 🟢
 
-2. Unit test: `e.preventDefault()` NOT called when handler returns `false` 🔴
+   Covered by Phase 2 test: "should NOT call preventDefault for deleteWordBackward with empty getTargetRanges and collapsed cursor". The handler returning `false` is verified via the observable behavior (preventDefault not called, CRDT unchanged).
 
-3. Round-trip test: word delete with empty `getTargetRanges` 🔴
+2. Unit test: `e.preventDefault()` NOT called when handler returns `false` 🟢
+
+   Covered by Phase 2 test (same as above).
+
+3. Round-trip test: word delete with empty `getTargetRanges` 🟢
 
    Wire `editText` + `inputTextRegion` on a real Loro `TextRef`. Simulate `beforeinput` with `deleteWordBackward`, empty `getTargetRanges`, collapsed cursor. Then manually simulate what the browser would do: update `input.value` and dispatch an `input` event. Verify:
    - `ref.toString()` reflects the deletion
    - `input.value` is correct
    - `preventDefault` was NOT called on the `beforeinput` event
 
-4. Round-trip test: word delete with valid `getTargetRanges` still uses CRDT-first path 🔴
+   Added round-trip tests for `deleteWordBackward`, `deleteWordForward`, `deleteSoftLineBackward`, and sequential word deletes — all with `inputTextRegion` wired.
+
+   **Discovery:** Round-trip tests revealed that `ref.update(target.value)` triggers `inputTextRegion`'s subscription synchronously, which applies the text delta to `input.value` via `setRangeText`. If the browser has already updated `input.value`, the delta double-applies (e.g., deleting already-deleted characters). Fix: restore `input.value` to old CRDT state (`ref.toString()`) before calling `ref.update(newValue)`, so the subscription applies the delta to the correct base.
+
+4. Round-trip test: word delete with valid `getTargetRanges` still uses CRDT-first path 🟢
 
    Same setup, but `getTargetRanges` returns a valid range. Verify:
    - `ref.toString()` reflects the deletion
    - `preventDefault` WAS called
 
-5. Verify all existing tests pass 🔴
+5. Verify all existing tests pass 🟢
+
+   All 971 tests pass across 24 test files.
 
 ## Transitive Effect Analysis
 
@@ -169,9 +179,11 @@ The `{ once: true }` option on `addEventListener` ensures automatic removal. If 
 
 ### Reconciliation `ref.update()` → subscription fires on already-correct DOM
 
-When `ref.update(target.value)` fires, `commitIfAuto()` triggers the subscription with `origin: "local"`. The subscription calls `patchInputValue(input, ops, "end")`. Since the browser already updated `input.value`, the `setRangeText` calls apply text that's already present. This is harmless — `setRangeText` with identical content at the correct range is a no-op for the value, and `"end"` mode places the cursor at the deletion point (where the browser already put it).
+~~When `ref.update(target.value)` fires, `commitIfAuto()` triggers the subscription with `origin: "local"`. The subscription calls `patchInputValue(input, ops, "end")`. Since the browser already updated `input.value`, the `setRangeText` calls apply text that's already present. This is harmless — `setRangeText` with identical content at the correct range is a no-op for the value, and `"end"` mode places the cursor at the deletion point (where the browser already put it).~~
 
-**Risk: Low.** Verify empirically during implementation.
+**CORRECTION (Phase 3):** The subscription-applied delta is NOT benign when `input.value` has already been updated by the browser. The delta represents old→new CRDT state, and `patchInputValue` applies it surgically via `setRangeText`. If `input.value` already shows the new state, the delta double-applies (e.g., "delete 5 chars at offset 0" removes from the already-correct value). **Fix:** The reconciliation listener restores `input.value` to the old CRDT state (`ref.toString()`) before calling `ref.update(newValue)`. This ensures the subscription applies the delta to the correct base value.
+
+**Risk: Was low, turned out to be a real bug. Fixed and verified with round-trip tests.**
 
 ### `editText` return type unchanged → no downstream API breakage
 
@@ -281,3 +293,5 @@ Add a subsection under "Input Text Region Architecture" documenting the browser-
 2. **The contract pattern — "try to handle, then prevent default only on success" — is more principled than "prevent default unconditionally."** The original `editText` assumed it could always translate any recognized `inputType` into a CRDT operation. For word/line deletions via `getTargetRanges()`, this assumption fails. The boolean return from handlers makes the contract explicit: `true` means "I fulfilled my obligation, suppress the browser," `false` means "I couldn't, let it through." This is the same pattern used for `historyUndo`/`historyRedo` (return early without `preventDefault`) and unknown input types (return early without `preventDefault`) — it just wasn't applied to the partial-failure case within a recognized handler.
 
 3. **`beforeinput` listeners can safely call `preventDefault()` after performing side effects.** The HTML spec guarantees the browser doesn't apply the default action until all listeners complete. This means "handler mutates CRDT → subscription updates DOM → `preventDefault()` suppresses browser action" is a valid sequence. The DOM is correct because the subscription updated it; `preventDefault` just prevents the browser from *also* updating it. No race, no double-mutation.
+
+4. **Reconciliation requires DOM-state restoration before `ref.update()`.** When `ref.update(newValue)` fires, `commitIfAuto()` triggers the `inputTextRegion` subscription synchronously. The subscription applies a text delta via `patchInputValue` / `setRangeText` — but those ops are relative to the *old* CRDT state. If the browser has already updated `input.value` to the new state, the delta double-applies (e.g., a delete-5-chars op removes chars from the already-correct shorter string). The fix: save `target.value`, restore `target.value = ref.toString()` (old CRDT state), then call `ref.update(savedValue)`. The subscription then applies the delta to the correct base. This was flagged as "low risk, verify empirically" in the transitive effect analysis — the round-trip tests caught it.

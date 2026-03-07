@@ -1218,6 +1218,201 @@ describe("editText", () => {
 
         scope.dispose()
       })
+
+      it("word delete with valid getTargetRanges uses CRDT-first path (round-trip)", () => {
+        const doc = createDoc("Hello World")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        // Wire inputTextRegion — sets initial value and subscribes
+        inputTextRegion(input, doc.text, scope)
+        expect(input.value).toBe("Hello World")
+
+        // Place cursor at end
+        input.selectionStart = 11
+        input.selectionEnd = 11
+
+        // Word delete backward with valid getTargetRanges (CRDT-first path)
+        const mockRange = { startOffset: 6, endOffset: 11 }
+        const event = createInputEvent({
+          inputType: "deleteWordBackward",
+          target: input,
+          targetRanges: [mockRange] as unknown as StaticRange[],
+        })
+        handler(event)
+
+        // CRDT-first: preventDefault was called, CRDT updated synchronously
+        expect((event as any).__preventDefaultSpy).toHaveBeenCalledOnce()
+        expect(doc.text.toString()).toBe("Hello ")
+        expect(input.value).toBe("Hello ")
+        // Cursor should be at position 6 (deletion point, via setRangeText("end"))
+        expect(input.selectionStart).toBe(6)
+
+        scope.dispose()
+      })
+
+      it("word delete with empty getTargetRanges falls back to browser-native + reconciliation (round-trip)", () => {
+        const doc = createDoc("Hello World")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        // Wire inputTextRegion — sets initial value and subscribes
+        inputTextRegion(input, doc.text, scope)
+        expect(input.value).toBe("Hello World")
+
+        // Place cursor at end (collapsed)
+        input.selectionStart = 11
+        input.selectionEnd = 11
+
+        // Word delete backward with empty getTargetRanges (fallback path)
+        const event = createInputEvent({
+          inputType: "deleteWordBackward",
+          target: input,
+          targetRanges: [],
+        })
+        handler(event)
+
+        // Fallback: preventDefault was NOT called, CRDT unchanged
+        expect((event as any).__preventDefaultSpy).not.toHaveBeenCalled()
+        expect(doc.text.toString()).toBe("Hello World")
+        // input.value still unchanged — browser hasn't acted yet in test
+        expect(input.value).toBe("Hello World")
+
+        // Simulate what the browser does natively: delete "World" and fire input
+        input.value = "Hello "
+        input.selectionStart = 6
+        input.selectionEnd = 6
+        input.dispatchEvent(new Event("input", { bubbles: true }))
+
+        // After reconciliation, both CRDT and DOM are in sync
+        expect(doc.text.toString()).toBe("Hello ")
+        expect(input.value).toBe("Hello ")
+
+        scope.dispose()
+      })
+
+      it("soft line delete fallback reconciles correctly (round-trip)", () => {
+        const doc = createDoc("Hello World")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, doc.text, scope)
+        expect(input.value).toBe("Hello World")
+
+        input.selectionStart = 11
+        input.selectionEnd = 11
+
+        // Cmd+Delete (deleteSoftLineBackward) with empty getTargetRanges
+        const event = createInputEvent({
+          inputType: "deleteSoftLineBackward",
+          target: input,
+          targetRanges: [],
+        })
+        handler(event)
+
+        expect((event as any).__preventDefaultSpy).not.toHaveBeenCalled()
+        expect(doc.text.toString()).toBe("Hello World")
+
+        // Browser deletes everything from cursor to beginning of line
+        input.value = ""
+        input.selectionStart = 0
+        input.selectionEnd = 0
+        input.dispatchEvent(new Event("input", { bubbles: true }))
+
+        expect(doc.text.toString()).toBe("")
+        expect(input.value).toBe("")
+
+        scope.dispose()
+      })
+
+      it("word delete forward fallback reconciles correctly (round-trip)", () => {
+        const doc = createDoc("Hello World")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, doc.text, scope)
+        expect(input.value).toBe("Hello World")
+
+        input.selectionStart = 0
+        input.selectionEnd = 0
+
+        // Option+Fn+Delete (deleteWordForward) with empty getTargetRanges
+        const event = createInputEvent({
+          inputType: "deleteWordForward",
+          target: input,
+          targetRanges: [],
+        })
+        handler(event)
+
+        expect((event as any).__preventDefaultSpy).not.toHaveBeenCalled()
+
+        // Browser deletes "Hello" forward
+        input.value = " World"
+        input.selectionStart = 0
+        input.selectionEnd = 0
+        input.dispatchEvent(new Event("input", { bubbles: true }))
+
+        expect(doc.text.toString()).toBe(" World")
+        expect(input.value).toBe(" World")
+        expect(input.selectionStart).toBe(0)
+
+        scope.dispose()
+      })
+
+      it("sequential word deletes via fallback reconcile correctly (round-trip)", () => {
+        const doc = createDoc("one two three")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, doc.text, scope)
+        expect(input.value).toBe("one two three")
+
+        // First word delete: cursor at end, delete "three"
+        input.selectionStart = 13
+        input.selectionEnd = 13
+
+        let event = createInputEvent({
+          inputType: "deleteWordBackward",
+          target: input,
+          targetRanges: [],
+        })
+        handler(event)
+
+        expect((event as any).__preventDefaultSpy).not.toHaveBeenCalled()
+
+        input.value = "one two "
+        input.selectionStart = 8
+        input.selectionEnd = 8
+        input.dispatchEvent(new Event("input", { bubbles: true }))
+
+        expect(doc.text.toString()).toBe("one two ")
+        expect(input.value).toBe("one two ")
+
+        // Second word delete: delete "two "
+        event = createInputEvent({
+          inputType: "deleteWordBackward",
+          target: input,
+          targetRanges: [],
+        })
+        handler(event)
+
+        expect((event as any).__preventDefaultSpy).not.toHaveBeenCalled()
+
+        input.value = "one "
+        input.selectionStart = 4
+        input.selectionEnd = 4
+        input.dispatchEvent(new Event("input", { bubbles: true }))
+
+        expect(doc.text.toString()).toBe("one ")
+        expect(input.value).toBe("one ")
+
+        scope.dispose()
+      })
     })
   })
 })

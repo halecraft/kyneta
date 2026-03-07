@@ -303,11 +303,23 @@ export function editText(ref: TextRef): (e: InputEvent) => void {
       // This is the same pattern hooks-core uses for IME composition
       // reconciliation.
       //
+      // **DOM restore before update:** `ref.update()` triggers
+      // `commitIfAuto()`, which fires the `inputTextRegion` subscription
+      // synchronously. The subscription applies the text delta to
+      // `input.value` via `setRangeText`. If `input.value` already
+      // contains the new text (browser applied it), the delta would
+      // double-apply (e.g., deleting already-deleted characters). To
+      // prevent this, we restore `input.value` to the old CRDT state
+      // before calling `ref.update()`. The subscription then applies the
+      // delta to the correct base value, producing the correct result.
+      //
       // { once: true } ensures automatic removal — no listener leak.
       target.addEventListener(
         "input",
         () => {
-          ref.update(target.value)
+          const newValue = target.value
+          target.value = ref.toString()
+          ref.update(newValue)
         },
         { once: true },
       )
