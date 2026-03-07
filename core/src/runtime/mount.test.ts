@@ -30,7 +30,7 @@ describe("mount", () => {
       const container = document.createElement("div")
       document.body.appendChild(container)
 
-      const element = () => {
+      const element = (_scope: any) => {
         const div = document.createElement("div")
         div.textContent = "Hello, World!"
         return div
@@ -51,7 +51,7 @@ describe("mount", () => {
       container.innerHTML = "<p>Old content</p><span>More old</span>"
       document.body.appendChild(container)
 
-      const element = () => {
+      const element = (_scope: any) => {
         const div = document.createElement("div")
         div.textContent = "New content"
         return div
@@ -69,7 +69,7 @@ describe("mount", () => {
       const container = document.createElement("div")
       document.body.appendChild(container)
 
-      const element = () => document.createElement("div")
+      const element = (_scope: any) => document.createElement("div")
 
       const result = mount(element, container)
 
@@ -84,7 +84,7 @@ describe("mount", () => {
 
       expect(rootScope).toBe(null)
 
-      const element = () => document.createElement("div")
+      const element = (_scope: any) => document.createElement("div")
       const result = mount(element, container)
 
       expect(rootScope).not.toBe(null)
@@ -94,12 +94,77 @@ describe("mount", () => {
     })
   })
 
+  describe("scope passing", () => {
+    it("should pass the root scope to the element factory", () => {
+      const container = document.createElement("div")
+      document.body.appendChild(container)
+
+      let receivedScope: any = null
+      const element = (scope: any) => {
+        receivedScope = scope
+        return document.createElement("div")
+      }
+
+      const result = mount(element, container)
+
+      // The factory should have received the root scope
+      expect(receivedScope).not.toBe(null)
+      expect(receivedScope).toBe(rootScope)
+      expect(typeof receivedScope.id).toBe("number")
+
+      result.dispose()
+    })
+
+    it("should dispose scope-registered cleanups when mount disposes", () => {
+      const container = document.createElement("div")
+      document.body.appendChild(container)
+
+      let cleanedUp = false
+      const element = (scope: any) => {
+        scope.onDispose(() => {
+          cleanedUp = true
+        })
+        return document.createElement("div")
+      }
+
+      const result = mount(element, container)
+
+      expect(cleanedUp).toBe(false)
+
+      result.dispose()
+
+      expect(cleanedUp).toBe(true)
+    })
+
+    it("should dispose child scope cleanups when mount disposes", () => {
+      const container = document.createElement("div")
+      document.body.appendChild(container)
+
+      const cleanups: string[] = []
+      const element = (scope: any) => {
+        scope.onDispose(() => cleanups.push("root"))
+        const child = scope.createChild()
+        child.onDispose(() => cleanups.push("child"))
+        return document.createElement("div")
+      }
+
+      const result = mount(element, container)
+
+      expect(cleanups).toEqual([])
+
+      result.dispose()
+
+      // Child disposes first (depth-first), then root
+      expect(cleanups).toEqual(["child", "root"])
+    })
+  })
+
   describe("dispose", () => {
     it("should remove node from container", () => {
       const container = document.createElement("div")
       document.body.appendChild(container)
 
-      const element = () => {
+      const element = (_scope: any) => {
         const div = document.createElement("div")
         div.textContent = "Content"
         return div
@@ -118,7 +183,7 @@ describe("mount", () => {
       const container = document.createElement("div")
       document.body.appendChild(container)
 
-      const element = () => document.createElement("div")
+      const element = (_scope: any) => document.createElement("div")
       const result = mount(element, container)
 
       expect(rootScope).not.toBe(null)
@@ -132,7 +197,7 @@ describe("mount", () => {
       const container = document.createElement("div")
       document.body.appendChild(container)
 
-      const element = () => document.createElement("div")
+      const element = (_scope: any) => document.createElement("div")
       const result = mount(element, container)
 
       result.dispose()
@@ -146,7 +211,7 @@ describe("mount", () => {
 
   describe("error handling", () => {
     it("should throw InvalidMountTargetError for null container", () => {
-      const element = () => document.createElement("div")
+      const element = (_scope: any) => document.createElement("div")
 
       expect(() => mount(element, null as unknown as Element)).toThrow(
         InvalidMountTargetError,
@@ -154,7 +219,7 @@ describe("mount", () => {
     })
 
     it("should throw InvalidMountTargetError for undefined container", () => {
-      const element = () => document.createElement("div")
+      const element = (_scope: any) => document.createElement("div")
 
       expect(() => mount(element, undefined as unknown as Element)).toThrow(
         InvalidMountTargetError,
@@ -162,7 +227,7 @@ describe("mount", () => {
     })
 
     it("should throw InvalidMountTargetError for non-Element", () => {
-      const element = () => document.createElement("div")
+      const element = (_scope: any) => document.createElement("div")
       const textNode = document.createTextNode("text")
 
       expect(() => mount(element, textNode as unknown as Element)).toThrow(
@@ -171,7 +236,7 @@ describe("mount", () => {
     })
 
     it("should include helpful message in error", () => {
-      const element = () => document.createElement("div")
+      const element = (_scope: any) => document.createElement("div")
 
       try {
         mount(element, null as unknown as Element)
@@ -189,7 +254,7 @@ describe("mount", () => {
       container.appendChild(existingNode)
       document.body.appendChild(container)
 
-      const element = () => {
+      const element = (_scope: any) => {
         // This would normally create new content
         const p = document.createElement("p")
         p.textContent = "New content"
@@ -210,7 +275,7 @@ describe("mount", () => {
       const container = document.createElement("div")
       document.body.appendChild(container)
 
-      const element = () => document.createElement("div")
+      const element = (_scope: any) => document.createElement("div")
 
       expect(() => mount(element, container, { hydrate: true })).toThrow(
         InvalidMountTargetError,
@@ -223,7 +288,7 @@ describe("mount", () => {
       const container = document.createElement("div")
       document.body.appendChild(container)
 
-      const element = () => {
+      const element = (_scope: any) => {
         const div = document.createElement("div")
         const h1 = document.createElement("h1")
         h1.textContent = "Title"
@@ -249,7 +314,7 @@ describe("mount", () => {
       const container = document.createElement("div")
       document.body.appendChild(container)
 
-      const element = () => {
+      const element = (_scope: any) => {
         return document.createTextNode("Just text")
       }
 

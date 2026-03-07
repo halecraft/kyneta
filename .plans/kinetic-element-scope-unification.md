@@ -56,19 +56,19 @@ This happened because `Element = () => Node` and `mount()` were written as pre-c
 
 ## The Gap
 
-| Aspect | Current | Target |
-|---|---|---|
-| `Element` type | `() => Node` | `(scope: Scope) => Node` |
-| `ComponentFactory` return | `() => Node` | `(scope: Scope) => Node` |
-| `mount()` | Calls `element()` — ignores scope | Calls `element(rootScope)` |
-| `ElementFactory` return | `Element` = `() => Node` | `Element` = `(scope: Scope) => Node` |
-| Todo app `main.ts` | Manual `Scope` + double cast | `mount(createApp(doc), container)` |
-| `isComponentFactoryType` | Describes `() => Node`, happens to work | Describes `(scope: Scope) => Node`, works by design |
-| `COMPONENT_PREAMBLE` | `type Element = () => Node` | `type Element = (scope: Scope) => Node` |
-| TECHNICAL.md Component Model | "returns `Element` (which is `() => Node`)" | "returns `Element` (which is `(scope: Scope) => Node`)" |
-| TECHNICAL.md Current Limitations | "SSR not implemented" (stale) | Corrected: SSR implemented, binding-through-props unsupported |
-| `mount()` doc example | `const app = div(() => {...}); mount(app, el)` | Same — still works, type just changes |
-| `mount()` tests | Hand-written `() => Node` thunks | Hand-written `(scope) => Node` factories |
+| Aspect | Current | Target | Status |
+|---|---|---|---|
+| `Element` type | `() => Node` | `(scope: Scope) => Node` | 🟢 Phase 1 |
+| `ComponentFactory` return | `() => Node` | `(scope: Scope) => Node` | 🟢 Phase 1 (cascaded) |
+| `mount()` | Calls `element()` — ignores scope | Calls `element(rootScope)` | 🟢 Phase 2 |
+| `ElementFactory` return | `Element` = `() => Node` | `Element` = `(scope: Scope) => Node` | 🟢 Phase 1 (cascaded) |
+| Todo app `main.ts` | Manual `Scope` + double cast | `mount(createApp(doc), container)` | 🔴 Phase 3 |
+| `isComponentFactoryType` | Describes `() => Node`, happens to work | Describes `(scope: Scope) => Node`, works by design | 🔴 Phase 4 |
+| `COMPONENT_PREAMBLE` | `type Element = () => Node` | `type Element = (scope: Scope) => Node` | 🔴 Phase 4 |
+| TECHNICAL.md Component Model | "returns `Element` (which is `() => Node`)" | "returns `Element` (which is `(scope: Scope) => Node`)" | 🔴 Phase 4 |
+| TECHNICAL.md Current Limitations | "SSR not implemented" (stale) | Corrected: SSR implemented, binding-through-props unsupported | 🔴 Phase 4 |
+| `mount()` doc example | `const app = div(() => {...}); mount(app, el)` | Same — still works, type just changes | 🟢 Phase 2 |
+| `mount()` tests | Hand-written `() => Node` thunks | Hand-written `(scope) => Node` factories | 🟢 Phase 2 |
 
 ## Phase 1: Unify the `Element` Type 🟢
 
@@ -99,13 +99,13 @@ Update the canonical type definition and all downstream references.
 
    `Scope` in `runtime/scope.ts` structurally conforms to `ScopeInterface` but doesn't declare it. Add `implements ScopeInterface` to make the contract explicit and catch drift at compile time. This requires importing `ScopeInterface` from `../types.js` in `scope.ts`. One subtlety: `Scope.createChild()` returns `Scope` (covariant with `ScopeInterface.createChild()` returning `ScopeInterface`), so the `implements` clause should type-check without changes to the method signature.
 
-## Phase 2: Fix `mount()` 🔴
+## Phase 2: Fix `mount()` 🟢
 
 Make `mount()` pass the scope it already creates.
 
 ### Tasks
 
-1. **Update `mount()` signature and implementation** 🔴
+1. **Update `mount()` signature and implementation** 🟢
 
    Change parameter type from `() => Node` to `Element` (which is now `(scope: ScopeInterface) => Node`). In the non-hydrate branch, change `node = element()` to `node = element(rootScope)`.
 
@@ -125,13 +125,13 @@ Make `mount()` pass the scope it already creates.
 
    This avoids the collision entirely, keeps the file's existing use of the DOM `Element` global undisturbed, and communicates the contract directly in the signature without requiring readers to look up the `Element` alias.
 
-2. **Update `mount()` tests** 🔴
+2. **Update `mount()` tests** 🟢
 
    Change all 15 hand-written element thunks from `() => Node` to `(_scope) => Node`. The scope parameter can be ignored in tests that don't exercise reactive behavior — `(_scope) => document.createElement("div")` is fine. The hydration test's element thunk also changes shape but continues to be unused (hydration adopts existing DOM).
 
    Add one new test: pass a factory that actually _uses_ the scope (e.g., calls `scope.onDispose(() => { ... })`), then verify that `dispose()` triggers the cleanup. This proves `mount()` actually passes the scope, not just that the signature changed.
 
-3. **Update `mount()` JSDoc and doc example** 🔴
+3. **Update `mount()` JSDoc and doc example** 🟢
 
    The example currently shows:
    ```ts
@@ -161,10 +161,10 @@ Replace manual scope wiring with `mount()`.
    With:
    ```ts
    const app = createApp(doc)
-   const { node, dispose } = mount(app, container)
+   const { node, dispose: disposeMount } = mount(app, container)
    ```
 
-   The hydration path needs consideration — the current code checks `container.firstElementChild` and does `replaceChildren`. `mount()` has a `hydrate` option. For now, use the non-hydrate path (matching current behavior where SSR content is replaced). Full hydration is a Phase 10 concern per existing code comments.
+   **Hydration path:** The current code checks `container.firstElementChild` and does `replaceChildren`. `mount()` in non-hydrate mode does `container.textContent = ""` followed by `appendChild` — same net effect (clear container, insert fresh node). Use the non-hydrate path. Full hydration is a Phase 10 concern per existing code comments.
 
    **App-specific cleanup:** The current `main.ts` defines a `dispose` function that calls both `scope.dispose()` and `repo.reset()`. After switching to `mount()`, the Kinetic lifecycle cleanup comes from `mount()`'s returned `dispose`. The app-specific `repo.reset()` must still be called separately. Compose them:
 
@@ -174,11 +174,28 @@ Replace manual scope wiring with `mount()`.
    Object.assign(window, { doc, repo, dispose })
    ```
 
-2. **Remove unused `Scope` import from `main.ts`** 🔴
+2. **Change import from `Scope` to `mount`** 🔴
 
-   After switching to `mount()`, the direct `Scope` import is no longer needed.
+   The import changes from:
+   ```ts
+   import { Scope } from "@loro-extended/kinetic"
+   ```
+   To:
+   ```ts
+   import { mount } from "@loro-extended/kinetic"
+   ```
 
-3. **Verify the app runs** 🔴
+   `mount` is already re-exported from `index.ts` via `runtime/mount.js`. No new export wiring needed.
+
+3. **Remove the manual container wiring block** 🔴
+
+   Delete the entire `// Mount: if SSR content exists...` block (the `if (container.firstElementChild)` / `else` / `appendChild` block). `mount()` handles container attachment internally.
+
+4. **Simplify the module doc comment** 🔴
+
+   The JSDoc currently describes 5 steps including manual hydration. After the change, step 3/4 collapse into "Mounts the app via `mount()`". Keep it accurate.
+
+5. **Verify the app runs** 🔴
 
    `cd examples/kinetic-todo && npm run dev` — add a todo, remove a todo, confirm identical behavior. View source to confirm SSR output still contains `<li class="todo-item">`, not `<TodoItem>`.
 
@@ -188,7 +205,12 @@ Replace manual scope wiring with `mount()`.
 
 1. **Update `isComponentFactoryType` comments** 🔴
 
-   Change "Element = () => Node, which is a function returning Node" to "Element = (scope) => Node, which is a function accepting a Scope and returning Node." The actual detection logic doesn't change — it already checks that the return type has call signatures returning `Node`, which works for both shapes.
+   Three comment locations in `reactive-detection.ts` reference the old `() => Node` shape:
+   - JSDoc block (L380-391): `"Returns an Element (a function that returns Node)"` and `"The return type is a function type (Element = () => Node)"`
+   - Inline comment at L417: `"Element = () => Node, which is a function returning Node"`
+   - Inline comment at L421: `"Element is a function type: () => Node"`
+
+   Update all three to reference `(scope: ScopeInterface) => Node`. The actual detection logic doesn't change — it already checks that the return type has call signatures returning `Node`, which works for both shapes.
 
 2. **Update `COMPONENT_PREAMBLE` in integration tests** 🔴
 
@@ -212,22 +234,23 @@ Replace manual scope wiring with `mount()`.
    - DOM Codegen section: The output pattern already shows `(scope) => { ... }` — correct
    - Add a note in the Architecture Overview or Design Decisions section explaining that `Element = (scope: Scope) => Node` is the universal shape for both DOM and conceptual purposes, while SSR render functions have their own `SSRRenderFunction` type
 
-5. **Update `mount()` export and README if applicable** 🔴
+5. **Update `mount()` export and README if applicable** 🟢 (verified — no changes needed)
 
-   `mount` is re-exported from `index.ts`. No change needed there. Check if the package README mentions the `Element` type or `mount()` usage.
+   `mount` is re-exported from `index.ts` — no change needed. README does not mention the `Element` type shape (confirmed via grep). The README's `ComponentFactory` example shows usage patterns, not type definitions, so it remains correct.
 
 ## Tests
 
-All changes are to type definitions, one function (`mount`), and documentation. The test changes are:
+Phases 1–2 are complete. The mount test changes are done (826 tests pass). Remaining test changes are in Phase 4.
 
-| Test file | Change | What it validates |
-|---|---|---|
-| `mount.test.ts` | Element thunks become `(scope) => Node` | `mount()` passes scope correctly |
-| `integration.test.ts` `COMPONENT_PREAMBLE` | `Element` type includes scope param | Component type detection still works with new type |
-| `analyze.test.ts` ComponentFactory tests | Inline `Element` type includes scope param | `isComponentFactoryType` detects the updated shape |
-| All existing tests (823+) | Must still pass | No regressions |
+| Test file | Change | Status | What it validates |
+|---|---|---|---|
+| `mount.test.ts` | 15 thunks → `(_scope) => Node` | 🟢 Done (Phase 2) | Signature matches new `Element` type |
+| `mount.test.ts` | 3 new scope-passing tests | 🟢 Done (Phase 2) | `mount()` passes scope, cleanups cascade |
+| `integration.test.ts` `COMPONENT_PREAMBLE` | `Element` type includes scope param | 🔴 Phase 4 | Component type detection still works with new type |
+| `analyze.test.ts` ComponentFactory tests | Inline `Element` type includes scope param | 🔴 Phase 4 | `isComponentFactoryType` detects the updated shape |
+| All existing tests (826) | Must still pass | ✅ Verified | No regressions |
 
-One new test is added to `mount.test.ts` (scope is passed to element factory). No new test files are needed. The existing test suite is comprehensive. The risk is in type-level changes breaking detection, which is covered by the existing `isComponentFactoryType` tests and integration tests.
+No new test files are needed. The risk is in type-level changes breaking detection, which is covered by the existing `isComponentFactoryType` tests and integration tests.
 
 ## Transitive Effect Analysis
 
@@ -347,6 +370,14 @@ A **minor** changeset for `@loro-extended/kinetic`:
 4. **SSR has a parallel type mismatch.** `SSRRenderFunction = (ctx: SSRContext) => string` but the compiled HTML output is `() => string`. The server passes the compiled function to `renderToDocument` which calls `renderFn(ctx)` — JavaScript silently ignores the extra argument. This is the same pattern as the DOM `Element` mismatch (types say one shape, compiler produces another, runtime happens to work because JS is lenient with extra arguments). A future plan should unify SSR types with the compiled output.
 
 5. **There are two divergent `ElementFactory` interfaces.** `types.ts` (L220-225) defines `ElementFactory` with `Props` and 4 overloads. `elements.d.ts` (L55-65) defines a separate `ElementFactory` with `PropsWithBindings` (adds `Binding` support for `value`/`checked`) and 5 overloads (includes a props-only overload). Both return `Element`, so both cascade correctly with this plan's change. But the duplication is a maintenance risk — updates to one don't propagate to the other. This is pre-existing and out of scope, but should be consolidated in a future cleanup.
+
+6. **`new Scope("app")` in the todo app is a silent type bug.** The `Scope` constructor accepts `id?: number`, but `main.ts` passes the string `"app"`. TypeScript would flag this, but the todo app likely has lenient checking or relies on the `as unknown as` cast context. At runtime, `scope.id` becomes the string `"app"` instead of a number — harmless because nothing relies on numeric IDs at runtime, but technically incorrect. This bug disappears naturally when Phase 3 replaces manual scope creation with `mount()`. **Lesson:** Pre-existing test files throughout the codebase (`binding.test.ts`, `hydrate.test.ts`, `subscribe.test.ts`) pass strings like `"test-scope"` to `new Scope()` — these are all the same class of bug. They show up as the only `tsc --noEmit` errors in the package. They work because JavaScript doesn't enforce parameter types, but they'd break if `Scope` ever validates its ID.
+
+7. **The `Child` type transitively changes when `Element` changes.** `Child` is defined as `string | number | boolean | null | undefined | Element | Binding<unknown> | Node`. After changing `Element` from `() => Node` to `(scope: ScopeInterface) => Node`, `Child` now includes scope-accepting factories in its union. This is correct — children that are Elements should accept scope — but it's a transitive effect worth noting in case any code pattern-matches on `Child` union members.
+
+8. **Covariant return types make `implements` clauses safe for subtype-returning methods.** `ScopeInterface.createChild()` returns `ScopeInterface`, but `Scope.createChild()` returns `Scope` (a more specific type). TypeScript allows this because return types are covariant — a method returning a subtype satisfies an interface expecting the supertype. This means adding `implements ScopeInterface` to `Scope` required zero method signature changes. **Mistake to avoid:** Don't widen `Scope.createChild()` to return `ScopeInterface` "for consistency" — the narrower return type is more useful to callers who know they have a concrete `Scope`.
+
+9. **Testing the contract, not just the signature, requires scope-using factories.** Changing `mount()`'s parameter type from `() => Node` to `(scope) => Node` doesn't prove anything by itself — JavaScript doesn't enforce parameter types at runtime. The real proof that `mount()` passes scope is a test where the factory *uses* the scope (e.g., `scope.onDispose(...)`) and the test verifies the side effect fires on `dispose()`. We added three such tests: one confirming the received scope is the rootScope, one confirming `onDispose` callbacks fire, and one confirming child scope cascading. Without these, a regression that reverts `element(rootScope)` back to `element()` would silently pass all other tests.
 
 ## Amendment: Acknowledge parallel SSR type mismatch and `ElementFactory` duplication
 

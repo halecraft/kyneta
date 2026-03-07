@@ -8,13 +8,20 @@
  */
 
 import { InvalidMountTargetError } from "../errors.js"
-import type { MountOptions, MountResult } from "../types.js"
+import type { MountOptions, MountResult, ScopeInterface } from "../types.js"
 import { setRootScope, Scope } from "./scope.js"
 
 /**
  * Mount a Kinetic element to a DOM container.
  *
- * @param element - A function that returns a DOM node (the Kinetic element)
+ * Creates a root scope and passes it to the element factory. All reactive
+ * subscriptions registered via the scope are disposed when the returned
+ * `dispose()` function is called.
+ *
+ * @param element - A scope-accepting factory that returns a DOM node.
+ *   This is the `Element` type (`(scope: ScopeInterface) => Node`), which
+ *   is what the Kinetic compiler produces from builder calls like
+ *   `div(() => { h1("Hello") })`.
  * @param container - The DOM element to mount into
  * @param options - Mount options (e.g., hydration mode)
  * @returns MountResult with the root node and dispose function
@@ -34,7 +41,7 @@ import { setRootScope, Scope } from "./scope.js"
  * ```
  */
 export function mount(
-  element: () => Node,
+  element: (scope: ScopeInterface) => Node,
   container: Element,
   options: MountOptions = {},
 ): MountResult {
@@ -70,8 +77,8 @@ export function mount(
     // Clear existing content
     container.textContent = ""
 
-    // Create the element
-    node = element()
+    // Create the element, passing the root scope
+    node = element(rootScope)
 
     // Append to container
     container.appendChild(node)
