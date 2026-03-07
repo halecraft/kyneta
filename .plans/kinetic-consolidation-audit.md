@@ -6,7 +6,7 @@ Kinetic's rapid prototype development has produced 804 passing tests and a genui
 
 The audit identified issues across three priority tiers. All changes are internal refactors — no public API changes, no new features.
 
-> **Status:** Phase 3 (IR-level conditional dissolution) is complete. See `.plans/kinetic-ir-dissolution.md`. Test count is now 923.
+> **Status:** Phases 1 and 3 are complete. Phase 1 extracted shared predicates (PR 1). Phase 3 implemented IR-level dissolution (PR 3). See `.plans/kinetic-ir-dissolution.md`. Test count is now 932. Research audit completed — corrections applied to Tasks 4.1, 5.1, 6.4, 6.5; new learnings §4–§8 added.
 
 ## Problem Statement
 
@@ -18,7 +18,7 @@ The audit identified issues across three priority tiers. All changes are interna
 6. **Runtime/compile-time slot kind mismatch**: `claimSlot` can produce a slot kind that contradicts the compile-time `SlotKind` hint.
 7. **Near-identical region functions**: `textRegion` and `inputTextRegion` share the same 3-phase pattern with only the DOM target differing.
 8. **HTML escape helper drift**: `generateEscapeHelper()` hard-codes an escape map as a string that can drift from `html-constants.ts`.
-9. **Minor hygiene**: deprecated-but-used `generateBranchBody`, underscore-prefixed `_reportMismatch` that is used, mutable `activeSubscriptions` export.
+9. **Minor hygiene**: deprecated-but-used `generateBranchBody`, dead-code `_reportMismatch` (defined but never called), mutable `activeSubscriptions` export.
 
 ## Success Criteria
 
@@ -28,7 +28,7 @@ The audit identified issues across three priority tiers. All changes are interna
 - Loro binding functions use discriminated dispatch instead of structural duck-typing
 - Transform entry points share a common analysis helper
 - `claimSlot` behavior is documented and consistent with compile-time hints
-- All existing 923 tests continue to pass
+- All existing 932 tests continue to pass
 - TECHNICAL.md updated to reflect architectural corrections
 
 ## Gap
@@ -37,11 +37,11 @@ The gap is between "working prototype with known duplication" and "consolidated 
 
 ---
 
-## Phase 1: Extract Shared Predicates 🔴
+## Phase 1: Extract Shared Predicates 🟢
 
 The highest-risk duplication. These predicates gate codegen dispatch and import collection — if they diverge, the compiler emits wrong imports or wrong subscription code.
 
-### Task 1.1: Extract `isTextRegionContent` predicate into `ir.ts` 🔴
+### Task 1.1: Extract `isTextRegionContent` predicate into `ir.ts` 🟢
 
 Add a pure predicate to `ir.ts` that checks whether a `ContentValue` qualifies for `textRegion` optimization:
 
@@ -55,7 +55,7 @@ Replace usages in:
 - `codegen/dom.ts` → `generateReactiveContentSubscription` (L193–197)
 - `transform.ts` → `collectRequiredImports` content check (L275–278)
 
-### Task 1.2: Extract `isInputTextRegionAttribute` predicate into `ir.ts` 🔴
+### Task 1.2: Extract `isInputTextRegionAttribute` predicate into `ir.ts` 🟢
 
 Add a pure predicate:
 
@@ -70,7 +70,7 @@ Replace usages in:
 - `codegen/dom.ts` → `generateHoleSetup` inline check (L1047–1052)
 - `transform.ts` → `collectRequiredImports` attribute check (L261–265)
 
-### Task 1.3: Tests 🔴
+### Task 1.3: Tests 🟢
 
 Add unit tests in `ir.test.ts`:
 - `isTextRegionContent` returns true for qualifying ContentValue, false for non-text deltaKind, false for missing directReadSource, false for multiple dependencies
@@ -100,8 +100,8 @@ function generateReactiveLoopBody(
 ```
 
 Delete `generateReactiveLoopWithMarker`. Update call sites:
-- `generateChild` (L581) passes `parentVar`
-- `generateHoleSetup` region case (L1122) passes `nodeRef`
+- `generateChild` → `case "loop"` passes `parentVar`
+- `generateHoleSetup` → `case "region"` loop branch passes `nodeRef`
 
 ### Task 2.2: Merge `generateConditional` marker-based path and `generateConditionalWithMarker` 🔴
 
@@ -119,9 +119,13 @@ function generateConditionalRegionCall(
 
 `generateConditional` creates its own marker variable, then delegates to this helper. `generateConditionalWithMarker` delegates directly. The render-time dispatch remains in `generateConditional` as the outer dispatch layer.
 
+### Task 2.2a: Remove `isInputTextRegionCandidate` thin wrapper 🔴
+
+After Phase 1, `isInputTextRegionCandidate` is now a trivial wrapper: `return isInputTextRegionAttribute(attr)`. Its two call sites (`generateAttributeSet`, `generateAttributeSubscription`) should call `isInputTextRegionAttribute` directly. Remove the wrapper function and its JSDoc.
+
 ### Task 2.3: Remove deprecated `generateBranchBody` wrapper 🔴
 
-Replace the two call sites (`generateConditional` L871, `generateConditionalWithMarker` L1231/1237) with direct `generateBodyWithReturn` calls. Remove the deprecated function and its `@deprecated` JSDoc.
+`generateBranchBody` is a trivial wrapper: `return generateBodyWithReturn(body, state)`. Replace the 4 call sites (2 in `generateConditional`, 2 in `generateConditionalWithMarker`) with direct `generateBodyWithReturn` calls. Remove the wrapper function.
 
 ### Task 2.4: Tests 🔴
 
@@ -166,7 +170,7 @@ Updated "Tree Merge and Conditional Dissolution", "Template Cloning → Region H
 
 ### Transitive Effects
 
-- `collectRequiredImports` correctly omits `conditionalRegion` for dissolved conditionals — dissolved nodes are no longer `ConditionalNode` in the IR, so the `child.kind === "conditional"` check never fires for them
+- `collectRequiredImports` correctly omits `conditionalRegion` for dissolved conditionals in `transformSource`/`transformFile` — dissolved nodes are no longer `ConditionalNode` in the IR, so the `child.kind === "conditional"` check never fires for them. **However**, `transformSourceInPlace` calls `collectRequiredImports` before dissolution (see Task 5.5), so it may add an unnecessary `conditionalRegion` import for fully-dissolvable files.
 - `extractTemplate` / `walkIR` see post-dissolution IR — dissolved content appears as regular elements/content, producing correct template HTML without comment markers
 - HTML codegen benefits for free — dissolved conditionals produce ternary interpolations instead of `if` blocks
 - No changes needed in `walk.ts`, `template.ts`, `codegen/html.ts`, or `regions.ts`
@@ -178,7 +182,9 @@ Updated "Tree Merge and Conditional Dissolution", "Template Cloning → Region H
 
 ### Task 4.1: Replace duck-typing in `bindTextValue` with specific checks 🔴
 
-The current `typeof (loroContainer as LoroText).toString === "function"` is always true for any object. Replace with a check for LoroText-specific behavior:
+The current `typeof (loroContainer as LoroText).toString === "function"` is always true for **any** object (every object inherits `toString` from `Object.prototype`). This means the `getValue` closure never reaches the `String(loroContainer)` fallback — non-LoroText containers (LoroList, LoroMap, etc.) would silently get their inherited `toString()` called instead of producing an error. The check is completely inert as a discriminator.
+
+Replace with a check for LoroText-specific behavior:
 
 ```typescript
 if (typeof (loroContainer as LoroText).insert === "function") {
@@ -187,16 +193,20 @@ if (typeof (loroContainer as LoroText).insert === "function") {
 }
 ```
 
-This correctly discriminates LoroText from other container types.
+This correctly discriminates LoroText from other container types. Non-LoroText containers will now fall through to the `String(loroContainer)` path (or a future explicit error), instead of silently mishandling.
 
-### Task 4.2: Replace duck-typing in `bindChecked` with narrower checks 🔴
+### Task 4.2: Replace duck-typing in `bindChecked` and `bindNumericValue` with narrower checks 🔴
 
-The `.value` property check for detecting LoroCounter should additionally verify `.increment` exists, since `.value` is common across many types:
+Both `bindChecked` and `bindNumericValue` have an inconsistency: the `getValue` closure uses a loose `.value` property check to detect LoroCounter, but the `handleChange`/`handleInput` handler in the same function uses a stricter `.increment` check. The detection logic should be consistent within each function. Additionally, `.value` is common across many types.
+
+For both functions, unify the LoroCounter detection to require both `.increment` and `.value`:
 
 ```typescript
 const isCounter = typeof (loroContainer as { increment?: Function }).increment === "function"
   && typeof (loroContainer as { value?: number }).value === "number"
 ```
+
+Use the `isCounter` flag in both the `getValue` closure and the event handler, eliminating the inconsistency.
 
 ### Task 4.3: Add JSDoc warnings about the `unknown` boundary 🔴
 
@@ -217,16 +227,16 @@ The existing `binding.test.ts` and `edit-text.test.ts` cover the happy paths. Ad
 
 ### Task 5.1: Extract shared `analyzeFile` helper 🔴
 
-The three transform functions (`transformSource`, `transformFile`, `transformSourceInPlace`) all repeat: find calls → iterate → try/catch analyze → collect IR. Extract:
+`transformSource` and `transformFile` repeat: find calls → iterate → try/catch analyze → collect `BuilderNode[]`. Extract:
 
 ```typescript
 function analyzeAllBuilders(
   sourceFile: SourceFile,
   filename: string,
-): BuilderNode[]
+): Array<{ call: CallExpression; ir: BuilderNode }>
 ```
 
-This function encapsulates the find-analyze-error-wrap loop. All three transform functions call it.
+This function encapsulates the find-analyze-error-wrap loop and returns `{ call, ir }` pairs. `transformSourceInPlace` uses the pairs directly (needs `call` for position-based AST replacement). `transformSource`/`transformFile` map to just the IR: `.map(r => r.ir)`.
 
 ### Task 5.2: Unify `transformSource` and `transformFile` 🔴
 
@@ -241,9 +251,9 @@ export function transformSource(source: string, options: TransformOptions = {}):
 
 This eliminates the duplicated codegen dispatch logic entirely.
 
-### Task 5.3: Use `analyzeAllBuilders` in `transformSourceInPlace` 🔴
+### Task 5.3: Extract shared analysis loop for `transformSourceInPlace` 🔴
 
-Replace the inline analysis loop with a call to `analyzeAllBuilders`. The replacement-tracking logic (sorting by position, back-to-front replacement) stays in `transformSourceInPlace` since it's unique to the in-place path.
+Replace the inline analysis loop with a call to `analyzeAllBuilders` (which now returns `{ call, ir }` pairs — see Task 5.1). The replacement-tracking logic (sorting by position, back-to-front replacement) stays in `transformSourceInPlace` since it's unique to the in-place path.
 
 ### Task 5.4: Harden `hasBuilderCalls` cleanup with `finally` 🔴
 
@@ -261,9 +271,15 @@ try {
 }
 ```
 
-### Task 5.5: Tests 🔴
+### Task 5.5: Fix `collectRequiredImports` ordering in `transformSourceInPlace` 🔴
 
-Existing `transform.test.ts` covers all three entry points. Run the full suite. No new tests needed — this is a pure refactor.
+Currently `collectRequiredImports(ir)` is called **before** `filterTargetBlocks` and `dissolveConditionals` in `transformSourceInPlace`. This means it runs on pre-dissolution IR and may add a `conditionalRegion` import for conditionals that will be dissolved away. The import is harmless at runtime (tree-shaking or bundler will remove it), but it's semantically wrong.
+
+Move the `collectRequiredImports` call to **after** the `filterTargetBlocks` + `dissolveConditionals` loop, so it sees the final IR. This is a natural fix during the Task 5.3 refactor.
+
+### Task 5.6: Tests 🔴
+
+Existing `transform.test.ts` covers all three entry points. Run the full suite. No new tests needed — this is a pure refactor. Optionally add a test verifying that `collectRequiredImports` on post-dissolution IR omits `conditionalRegion` when all conditionals are dissolvable.
 
 ### Transitive Effects
 
@@ -271,6 +287,7 @@ Existing `transform.test.ts` covers all three entry points. Run the full suite. 
 - `transformSource` is used by tests and CLI → must preserve its `TransformResult` return type
 - `transformFile` is used by tests that already have a `SourceFile` → unchanged signature
 - `hasBuilderCalls` is used by the Vite plugin for quick-skip → unchanged signature and behavior
+- `collectRequiredImports` ordering fix (Task 5.5) may change which imports are emitted for fully-dissolvable files — harmless but verifiable
 
 ---
 
@@ -312,25 +329,33 @@ This is low priority because the current duplication is only two instances and u
 
 Add a comment at the top of `generateEscapeHelper()` cross-referencing `html-constants.ts` and noting that changes to the escape map must be synchronized. Alternatively, generate the function body programmatically from the same `HTML_ESCAPE_MAP` constant — but this adds complexity for minimal benefit at prototype stage.
 
-### Task 6.4: Remove underscore from `_reportMismatch` in `hydrate.ts` 🔴
+### Task 6.4: Remove or wire up `_reportMismatch` in `hydrate.ts` 🔴
 
-The function is used. The underscore prefix is misleading. Rename to `reportMismatch`.
+`_reportMismatch` is **dead code** — it is defined but has zero call sites anywhere in the codebase. The underscore prefix was likely intended to mark it as "not yet wired up" rather than "private."
+
+Options:
+- **(a) Remove it entirely.** It's dead code. If hydration mismatch reporting is needed later, it can be re-added with call sites.
+- **(b) Wire it up.** The `hydrate()`, `hydrateListRegion()`, and `hydrateConditionalRegion()` functions could call it for mismatch cases (e.g., `items.length !== children.length` in `hydrateListRegion`). This would make hydration error reporting functional.
+
+Prefer (a) unless hydration is being actively developed. If kept, rename to `reportMismatch` (drop the underscore).
 
 ### Task 6.5: Make `activeSubscriptions` read-only in the public API 🔴
 
 Export a `getActiveSubscriptions(): ReadonlyMap<...>` function from `subscribe.ts` instead of the raw mutable Map. The `/testing` subpath can still import the mutable version directly for `.clear()` in `beforeEach`.
 
+> **Note:** There are **two** files that re-export `activeSubscriptions`: `src/testing/index.ts` (L32–36) and `src/testing/runtime.ts` (L33–37). Both must be updated to continue exporting the mutable version for test cleanup.
+
 ### Task 6.6: Tests 🔴
 
 - Task 6.2: Existing `text-patch.test.ts` tests cover both functions — run to verify
-- Task 6.4: Rename only — no test changes
+- Task 6.4: Removal of dead code — no test changes (no call sites exist)
 - Task 6.5: Update any test that reads `activeSubscriptions.size` to use the getter (if the mutable import path changes)
 
 ### Transitive Effects
 
 - Task 6.2: `runtime/index.ts` re-exports `textRegion` and `inputTextRegion` → re-exports unchanged
-- Task 6.4: `_reportMismatch` is only called within `hydrate.ts` → no external impact
-- Task 6.5: `testing/runtime.ts` exports `activeSubscriptions` → must continue to export the mutable version for test cleanup
+- Task 6.4: `_reportMismatch` is dead code with no call sites → removal has zero external impact; wiring up would affect hydration behavior
+- Task 6.5: Both `testing/index.ts` and `testing/runtime.ts` export `activeSubscriptions` → both must continue to export the mutable version for test cleanup
 
 ---
 
@@ -355,29 +380,33 @@ The file structure section in TECHNICAL.md should reflect that `ir.ts` now expor
 
 The 7 plan phases collapse into **5 PRs** ordered by dependency. Phases 1, 4, 5 are independent and can land in any order. Phase 2→3 is a chain (prep refactor → behavior change). Phase 6+7 are a trailing cleanup batch.
 
-> **Status:** PR 3 is complete. PR 2 now operates on simpler post-dissolution code (the functions it merges no longer contain dissolution logic). PRs 1, 2, 4, 5 remain.
+> **Status:** PRs 1 and 3 are complete. PR 2 now operates on simpler post-dissolution code (the functions it merges no longer contain dissolution logic) and can also remove the `isInputTextRegionCandidate` thin wrapper left by PR 1. PRs 2, 4, 5 remain.
 
-### PR 1: `refactor: extract shared codegen predicates into ir.ts` 🔴
+### PR 1: `refactor: extract shared codegen predicates into ir.ts` 🟢
 
 > Plan Phase 1 (Tasks 1.1–1.3)
+>
+> **Complete.** 9 new tests, 932 total passing.
 
 **Type:** Mechanical refactor (extract + migrate call sites)
 
 - Add `isTextRegionContent()` and `isInputTextRegionAttribute()` to `ir.ts`
-- Replace 4 inline predicate copies in `codegen/dom.ts` and `transform.ts`
+- Replace 5 inline predicate copies in `codegen/dom.ts` and `transform.ts`
+- `isInputTextRegionCandidate` remains as a thin wrapper (removal deferred to PR 2, Task 2.2a)
 - Add predicate unit tests in `ir.test.ts`
 - **Files:** `ir.ts`, `ir.test.ts`, `codegen/dom.ts`, `transform.ts`
-- **Validates:** all 923 tests pass, no codegen output change
+- **Validates:** all 932 tests pass, no codegen output change
 
 ### PR 2: `refactor: unify duplicated codegen loop/conditional functions` 🔴
 
 > Plan Phase 2 (Tasks 2.1–2.4)
 
-**Type:** Mechanical refactor (merge near-identical functions)
+**Type:** Mechanical refactor (merge near-identical functions + remove thin wrappers)
 
 - Merge `generateReactiveLoop` + `generateReactiveLoopWithMarker` → `generateReactiveLoopBody`
 - Extract `generateConditionalRegionCall` shared helper; `generateConditional` and hole-setup path both delegate to it
-- Remove deprecated `generateBranchBody`, replace with direct `generateBodyWithReturn` calls
+- Remove thin wrapper `isInputTextRegionCandidate` (now just delegates to `isInputTextRegionAttribute` from Phase 1)
+- Remove thin wrapper `generateBranchBody` (now just delegates to `generateBodyWithReturn`)
 - **Files:** `codegen/dom.ts`
 - **Validates:** all existing `dom.test.ts` + `integration.test.ts` pass with identical output
 - **Why separate from PR 3:** This is a zero-behavior-change refactor. PR 3 adds behavior (dissolution). Keeping them separate means PR 2 can be reviewed as "trust the mechanical diff" and reverted independently.
@@ -402,24 +431,25 @@ The 7 plan phases collapse into **5 PRs** ordered by dependency. Phases 1, 4, 5 
 
 ### PR 4: `fix: Loro binding type safety + transform consolidation` 🔴
 
-> Plan Phases 4 + 5 (Tasks 4.1–4.4, 5.1–5.5)
+> Plan Phases 4 + 5 (Tasks 4.1–4.4, 5.1–5.6)
 
 **Type:** Fix + refactor (two independent domains, no cross-dependency)
 
 These are batched because they are both medium-priority internal improvements with no overlap in files touched. Neither is large enough alone to justify a separate review cycle.
 
 **Loro bindings (Phase 4):**
-- Replace always-true `toString` check with `insert`-based LoroText detection
-- Narrow LoroCounter detection to require both `.increment` and `.value`
+- Replace always-true `toString` check with `insert`-based LoroText detection (fixes silent mishandling of non-LoroText containers)
+- Narrow LoroCounter detection in both `bindChecked` and `bindNumericValue` to require both `.increment` and `.value`; unify detection between `getValue` and event handler within each function
 - Add JSDoc boundary documentation
 - Add negative tests for non-Loro values
 - **Files:** `src/loro/binding.ts`, `src/loro/binding.test.ts`
 
 **Transform consolidation (Phase 5):**
-- Extract `analyzeAllBuilders()` shared helper
+- Extract `analyzeAllBuilders()` shared helper (returns `{ call, ir }` pairs)
 - Make `transformSource` delegate to `transformFile`
 - Use `analyzeAllBuilders` in `transformSourceInPlace`
 - Replace nested try-catch in `hasBuilderCalls` with try-finally
+- Fix `collectRequiredImports` ordering: call after dissolution, not before
 - **Files:** `src/compiler/transform.ts`
 - **Validates:** all existing transform + binding tests pass
 
@@ -432,23 +462,23 @@ These are batched because they are both medium-priority internal improvements wi
 - Document `claimSlot` runtime/compile-time slot kind divergence (JSDoc + TECHNICAL.md)
 - Parameterize `textRegion`/`inputTextRegion` via `createDeltaTextRegion` factory (optional — skip if no third variant is planned)
 - Add cross-reference comment in `generateEscapeHelper` → `html-constants.ts`
-- Rename `_reportMismatch` → `reportMismatch` in `hydrate.ts`
-- Export `getActiveSubscriptions(): ReadonlyMap` from `subscribe.ts`; keep mutable version in `/testing`
+- Remove dead-code `_reportMismatch` from `hydrate.ts` (or wire it up if hydration is being actively developed)
+- Export `getActiveSubscriptions(): ReadonlyMap` from `subscribe.ts`; keep mutable version in both `/testing` re-export files (`testing/index.ts`, `testing/runtime.ts`)
 - TECHNICAL.md: shared predicates design decision, file structure update, Loro binding boundary rationale
-- **Files:** `text-patch.ts`, `regions.ts`, `subscribe.ts`, `hydrate.ts`, `codegen/html.ts`, `testing/runtime.ts`, `TECHNICAL.md`
+- **Files:** `text-patch.ts`, `regions.ts`, `subscribe.ts`, `hydrate.ts`, `codegen/html.ts`, `testing/index.ts`, `testing/runtime.ts`, `TECHNICAL.md`
 - **Validates:** all tests pass (some test imports may update for `activeSubscriptions` getter)
 
 ### Dependency Graph
 
 ```
-PR 1 (predicates) ──────────────────────────────────┐
+PR 1 (predicates) ✅ DONE ─────────────────────────┐
 PR 2 (codegen dedup) ───────────────────────────────┤
 PR 3 (IR dissolution) ✅ DONE ─────────────────────┤
 PR 4 (bindings + transform) ────────────────────────┤
                                                     └─── PR 5 (cleanup + docs)
 ```
 
-PRs 1, 2, 4 can all land in parallel. PR 3 is complete. PR 5 waits on all others (docs reference outcomes of prior PRs).
+PRs 1 and 3 are complete. PR 2 and PR 4 can land in parallel. PR 5 waits on all others (docs reference outcomes of prior PRs).
 
 ---
 
@@ -466,14 +496,57 @@ When implementing each phase, include these files in context:
 | 6 | `src/runtime/text-patch.ts`, `src/runtime/regions.ts`, `src/runtime/subscribe.ts`, `src/runtime/hydrate.ts`, `src/compiler/codegen/html.ts`, `src/compiler/html-constants.ts` |
 | 7 | `TECHNICAL.md` |
 
+## Learnings
+
+### §1: Phase 1 leaves thin wrappers that Phase 2 should clean up
+
+After Phase 1 extracted `isInputTextRegionAttribute` into `ir.ts`, the local `isInputTextRegionCandidate` in `codegen/dom.ts` became a trivial wrapper (`return isInputTextRegionAttribute(attr)`). Similarly, `generateBranchBody` was already a trivial wrapper around `generateBodyWithReturn`. Phase 2 should remove both wrappers as part of its "unify codegen functions" scope. Added as Task 2.2a.
+
+### §2: `analyzeAllBuilders` can't serve `transformSourceInPlace` as-is — **resolved in Task 5.1**
+
+The plan originally assumed `analyzeAllBuilders` returns `BuilderNode[]`, which works for `transformSource`/`transformFile`. But `transformSourceInPlace` needs `{ call: CallExpression, ir: BuilderNode }[]` — the `call` reference is required for position-based AST replacement. **Resolution:** Task 5.1 now specifies that `analyzeAllBuilders` returns `{ call, ir }` pairs, with callers that only need IR mapping away the calls via `.map(r => r.ir)`.
+
+### §3: Test count progression
+
+| Milestone | Test count |
+|-----------|-----------|
+| Original audit baseline | 804 |
+| Pre-dissolution (after other work) | 907 |
+| After Phase 3 (dissolution) | 923 |
+| After Phase 1 (predicates) | 932 |
+
+### §4: `_reportMismatch` is dead code, not misnamed
+
+The original audit stated "_reportMismatch is used, the underscore prefix is misleading." Research found that `_reportMismatch` has **zero call sites** in the entire codebase — it is defined but never called. The correct action is removal (or wiring it up into `hydrateListRegion`/`hydrateConditionalRegion` if hydration mismatch reporting is needed). Task 6.4 updated accordingly.
+
+### §5: `bindTextValue`'s `toString` check is completely inert
+
+The `typeof (loroContainer as LoroText).toString === "function"` check was described as "always true" in the original audit, but the consequence is worse than stated: because **every** JavaScript object inherits `toString` from `Object.prototype`, the `getValue` closure in `bindTextValue` can never reach its fallback path. Non-LoroText containers (LoroList, LoroMap) silently get `toString()` called instead of producing an error. Task 4.1 updated to reflect this.
+
+### §6: `bindChecked` and `bindNumericValue` have internal detection inconsistency
+
+Both functions use a loose `.value` check in their `getValue` closure but a stricter `.increment` check in their event handler. The detection strategy should be unified within each function. Task 4.2 expanded to cover `bindNumericValue` as well.
+
+### §7: `collectRequiredImports` runs before dissolution in `transformSourceInPlace`
+
+In `transformSourceInPlace`, `collectRequiredImports(ir)` is called before `filterTargetBlocks` and `dissolveConditionals`. This means it may add a `conditionalRegion` import for conditionals that will be dissolved. The import is harmless at runtime but semantically incorrect. Added as Task 5.5.
+
+### §8: `activeSubscriptions` has two re-export paths in testing
+
+Both `src/testing/index.ts` and `src/testing/runtime.ts` independently re-export `activeSubscriptions` from `../runtime/subscribe.js`. Task 6.5 must update both files if the export changes.
+
+---
+
 ## Alternatives Considered
 
 **Full predicate deduplication via an `ir-predicates.ts` module**: Rejected. The predicates are small and closely tied to IR types — putting them in `ir.ts` alongside the types they inspect is more discoverable than a separate file.
 
-**Generating `__escapeHtml` from the `HTML_ESCAPE_MAP` constant**: Rejected for now. The benefit is marginal at prototype stage and the code generation would be harder to read. A cross-reference comment is sufficient.
+**Generating `__escapeHtml` from the `HTML_ESCAPE_MAP` constant**: Rejected for now. The benefit is marginal at prototype stage and the code generation would be harder to read. A cross-reference comment is sufficient. (Research confirmed the two escape maps are currently identical — no drift yet.)
 
 **Making `claimSlot` fully trust the compile-time hint (skip runtime inspection)**: Rejected. The runtime inspection is a safety net for edge cases where the compile-time analysis is conservative. The current approach is correct — just underdocumented.
 
 **Introducing a `ContainerKind` discriminator on Loro typed refs**: This would be the ideal long-term solution for Task 4, but it requires changes to `@loro-extended/change` and `loro-crdt` — out of scope for this consolidation pass. The improved duck-typing checks are sufficient for now.
 
 **Unifying `textRegion`/`inputTextRegion` now**: Deferred to Task 6.2 as optional. Only two instances exist, and a third variant is not yet planned. The factory function adds indirection for minimal deduplication benefit.
+
+**Moving IR transforms to `src/compiler/transforms/`**: The directory exists but is empty. Currently `dissolveConditionals` and `filterTargetBlocks` live in `ir.ts`. Not worth moving for two transforms, but worth noting if more are added.

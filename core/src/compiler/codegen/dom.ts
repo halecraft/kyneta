@@ -24,7 +24,11 @@ import type {
   StatementNode,
   TemplateHole,
 } from "../ir.js"
-import { computeSlotKind } from "../ir.js"
+import {
+  computeSlotKind,
+  isInputTextRegionAttribute,
+  isTextRegionContent,
+} from "../ir.js"
 import {
   extractTemplate,
   generateTemplateDeclaration,
@@ -191,11 +195,7 @@ function generateReactiveContentSubscription(
   }
 
   // Check for direct TextRef read optimization
-  if (
-    node.directReadSource &&
-    node.dependencies.length === 1 &&
-    node.dependencies[0].deltaKind === "text"
-  ) {
+  if (isTextRegionContent(node)) {
     // Direct read of a TextRef — use textRegion for surgical updates
     lines.push(
       `${ind}textRegion(${textVar}, ${node.directReadSource}, ${state.scopeVar})`,
@@ -299,13 +299,7 @@ function generateAttributeUpdateCode(
  * like `ref.toString()` or `ref.get()`).
  */
 function isInputTextRegionCandidate(attr: AttributeNode): boolean {
-  return (
-    attr.name === "value" &&
-    attr.value.bindingTime === "reactive" &&
-    !!attr.value.directReadSource &&
-    attr.value.dependencies.length === 1 &&
-    attr.value.dependencies[0].deltaKind === "text"
-  )
+  return isInputTextRegionAttribute(attr)
 }
 
 /**
@@ -1032,12 +1026,10 @@ function generateHoleSetup(
 
       // Check for delta-aware inputTextRegion dispatch (same condition
       // as in generateAttributeSubscription, applied to the cloning path)
-      const isInputTextRegion =
-        attrName === "value" &&
-        contentNode.bindingTime === "reactive" &&
-        !!contentNode.directReadSource &&
-        contentNode.dependencies.length === 1 &&
-        contentNode.dependencies[0].deltaKind === "text"
+      const isInputTextRegion = isInputTextRegionAttribute({
+        name: attrName,
+        value: contentNode,
+      })
 
       if (isInputTextRegion) {
         // inputTextRegion handles both initialization and subscription

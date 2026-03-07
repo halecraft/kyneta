@@ -748,6 +748,44 @@ export function isReactiveContent(node: ChildNode): node is ContentValue {
 }
 
 // =============================================================================
+// Codegen Dispatch Predicates
+// =============================================================================
+
+/**
+ * Check if a ContentValue qualifies for the `textRegion` optimization.
+ *
+ * The condition: reactive binding time, a direct read source (e.g.,
+ * `ref.get()` or `ref.toString()`), exactly one dependency, and that
+ * dependency has deltaKind "text".
+ *
+ * This is the single source of truth for the textRegion dispatch decision,
+ * used by both codegen (`generateReactiveContentSubscription`) and import
+ * collection (`collectRequiredImports`).
+ */
+export function isTextRegionContent(node: ContentValue): boolean {
+  return (
+    node.bindingTime === "reactive" &&
+    !!node.directReadSource &&
+    node.dependencies.length === 1 &&
+    node.dependencies[0].deltaKind === "text"
+  )
+}
+
+/**
+ * Check if an attribute qualifies for the `inputTextRegion` optimization.
+ *
+ * The condition: the attribute is named "value" and its value is a
+ * textRegion-qualifying ContentValue (see `isTextRegionContent`).
+ *
+ * This is the single source of truth for the inputTextRegion dispatch
+ * decision, used by codegen (`isInputTextRegionCandidate`,
+ * `generateHoleSetup`) and import collection (`collectRequiredImports`).
+ */
+export function isInputTextRegionAttribute(attr: AttributeNode): boolean {
+  return attr.name === "value" && isTextRegionContent(attr.value)
+}
+
+// =============================================================================
 // Slot Kind Computation
 // =============================================================================
 

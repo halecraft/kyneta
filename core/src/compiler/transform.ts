@@ -27,7 +27,13 @@ import {
   generateHTML,
   generateRenderFunction,
 } from "./codegen/html.js"
-import { dissolveConditionals, filterTargetBlocks, type CompileTarget } from "./ir.js"
+import {
+  dissolveConditionals,
+  filterTargetBlocks,
+  isInputTextRegionAttribute,
+  isTextRegionContent,
+  type CompileTarget,
+} from "./ir.js"
 import type { BuilderNode, ChildNode } from "./ir.js"
 
 // =============================================================================
@@ -257,13 +263,7 @@ export function collectRequiredImports(ir: BuilderNode[]): {
             runtime.add("subscribeMultiple")
           }
           // Check for delta-aware value attribute (enables inputTextRegion)
-          if (
-            attr.name === "value" &&
-            attr.value.bindingTime === "reactive" &&
-            attr.value.directReadSource &&
-            attr.value.dependencies.length === 1 &&
-            attr.value.dependencies[0].deltaKind === "text"
-          ) {
+          if (isInputTextRegionAttribute(attr)) {
             runtime.add("inputTextRegion")
           }
         }
@@ -271,12 +271,7 @@ export function collectRequiredImports(ir: BuilderNode[]): {
         collectFromChildren(child.children)
       } else if (child.kind === "content") {
         // Check for direct TextRef read (enables textRegion optimization)
-        if (
-          child.bindingTime === "reactive" &&
-          child.directReadSource &&
-          child.dependencies.length === 1 &&
-          child.dependencies[0].deltaKind === "text"
-        ) {
+        if (isTextRegionContent(child)) {
           runtime.add("textRegion")
         }
         // Check for multi-dependency content (text nodes)

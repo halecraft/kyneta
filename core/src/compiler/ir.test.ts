@@ -27,6 +27,8 @@ import {
   type DeltaKind,
   dissolveConditionals,
   filterTargetBlocks,
+  isInputTextRegionAttribute,
+  isTextRegionContent,
 } from "./ir.js"
 
 // =============================================================================
@@ -1508,5 +1510,124 @@ describe("dissolveConditionals", () => {
     const branches = (dissolved.children[0] as { branches: Array<{ body: Array<{ kind: string }> }> }).branches
     expect(branches[0].body).toHaveLength(1)
     expect(branches[0].body[0].kind).toBe("content")
+  })
+})
+
+// =============================================================================
+// isTextRegionContent Tests
+// =============================================================================
+
+describe("isTextRegionContent", () => {
+  it("returns true for qualifying ContentValue (reactive, directReadSource, single text dep)", () => {
+    const node = createContent(
+      "doc.title.get()",
+      "reactive",
+      [dep("doc.title", "text")],
+      span(),
+      "doc.title",
+    )
+    expect(isTextRegionContent(node)).toBe(true)
+  })
+
+  it("returns false for non-text deltaKind", () => {
+    const node = createContent(
+      "doc.count.get()",
+      "reactive",
+      [dep("doc.count", "replace")],
+      span(),
+      "doc.count",
+    )
+    expect(isTextRegionContent(node)).toBe(false)
+  })
+
+  it("returns false for missing directReadSource", () => {
+    const node = createContent(
+      "doc.title.get().toUpperCase()",
+      "reactive",
+      [dep("doc.title", "text")],
+      span(),
+    )
+    expect(isTextRegionContent(node)).toBe(false)
+  })
+
+  it("returns false for multiple dependencies", () => {
+    const node = createContent(
+      "doc.title.get() + doc.subtitle.get()",
+      "reactive",
+      [dep("doc.title", "text"), dep("doc.subtitle", "text")],
+      span(),
+    )
+    expect(isTextRegionContent(node)).toBe(false)
+  })
+
+  it("returns false for non-reactive binding time", () => {
+    const node = createContent(
+      '"Hello"',
+      "literal",
+      [],
+      span(),
+    )
+    expect(isTextRegionContent(node)).toBe(false)
+  })
+})
+
+// =============================================================================
+// isInputTextRegionAttribute Tests
+// =============================================================================
+
+describe("isInputTextRegionAttribute", () => {
+  it("returns true for value attribute wrapping a textRegion content", () => {
+    const attr: AttributeNode = {
+      name: "value",
+      value: createContent(
+        "doc.title.toString()",
+        "reactive",
+        [dep("doc.title", "text")],
+        span(),
+        "doc.title",
+      ),
+    }
+    expect(isInputTextRegionAttribute(attr)).toBe(true)
+  })
+
+  it("returns false for non-value attribute even with qualifying content", () => {
+    const attr: AttributeNode = {
+      name: "class",
+      value: createContent(
+        "doc.title.toString()",
+        "reactive",
+        [dep("doc.title", "text")],
+        span(),
+        "doc.title",
+      ),
+    }
+    expect(isInputTextRegionAttribute(attr)).toBe(false)
+  })
+
+  it("returns false for value attribute with non-qualifying content (replace deltaKind)", () => {
+    const attr: AttributeNode = {
+      name: "value",
+      value: createContent(
+        "doc.selected.get()",
+        "reactive",
+        [dep("doc.selected", "replace")],
+        span(),
+        "doc.selected",
+      ),
+    }
+    expect(isInputTextRegionAttribute(attr)).toBe(false)
+  })
+
+  it("returns false for value attribute with non-qualifying content (no directReadSource)", () => {
+    const attr: AttributeNode = {
+      name: "value",
+      value: createContent(
+        "doc.title.toString().toUpperCase()",
+        "reactive",
+        [dep("doc.title", "text")],
+        span(),
+      ),
+    }
+    expect(isInputTextRegionAttribute(attr)).toBe(false)
   })
 })
