@@ -3399,6 +3399,38 @@ describe("Component compilation", () => {
     scope.dispose()
   })
 
+  it("should thread onKeyDown handler prop to input inside component", () => {
+    const source = `
+      ${COMPONENT_PREAMBLE}
+
+      const SearchBox: ComponentFactory<{ onKeyDown: (e: KeyboardEvent) => void }> = (props) => {
+        return div(() => {
+          input({ type: "text", onKeyDown: props.onKeyDown })
+        })
+      }
+
+      section(() => {
+        SearchBox({ onKeyDown: handleKeyDown })
+      })
+    `
+
+    let keyPressed = ""
+    ;(globalThis as any).handleKeyDown = (e: any) => { keyPressed = e.key }
+
+    const { node, scope } = compileAndExecuteComponent(source)
+
+    const inputEl = (node as HTMLElement).querySelector("input")
+    expect(inputEl).not.toBeNull()
+
+    // Simulate keydown event
+    const event = new dom.window.KeyboardEvent("keydown", { key: "Enter" })
+    inputEl!.dispatchEvent(event)
+    expect(keyPressed).toBe("Enter")
+
+    delete (globalThis as any).handleKeyDown
+    scope.dispose()
+  })
+
   it("should render multiple components inside a static for loop", () => {
     const source = `
       ${COMPONENT_PREAMBLE}

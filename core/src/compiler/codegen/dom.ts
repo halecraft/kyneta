@@ -398,8 +398,7 @@ function generateElement(
         propsEntries.push(`${attr.name}: ${attr.value.source}`)
       }
       for (const handler of node.eventHandlers) {
-        const propName = `on${handler.event.charAt(0).toUpperCase()}${handler.event.slice(1)}`
-        propsEntries.push(`${propName}: ${handler.handlerSource}`)
+        propsEntries.push(`${handler.propName}: ${handler.handlerSource}`)
       }
       const propsArg = `{ ${propsEntries.join(", ")} }`
       lines.push(

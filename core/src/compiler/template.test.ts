@@ -217,6 +217,7 @@ describe("extractTemplate", () => {
     it("should record hole for event handler", () => {
       const handler = {
         event: "click",
+        propName: "onClick",
         handlerSource: "() => console.log('clicked')",
         span: makeSpan(),
       }
@@ -236,6 +237,7 @@ describe("extractTemplate", () => {
     it("should store handlerSource on event holes", () => {
       const handler = {
         event: "input",
+        propName: "onInput",
         handlerSource: "(e) => doc.title.insert(0, e.target.value)",
         span: makeSpan(),
       }
@@ -254,6 +256,7 @@ describe("extractTemplate", () => {
     it("should store handlerSource on child element event holes", () => {
       const handler = {
         event: "click",
+        propName: "onClick",
         handlerSource: "handleClick",
         span: makeSpan(),
       }
@@ -615,6 +618,7 @@ describe("utility functions", () => {
       const reactive = makeReactiveContent()
       const handler = {
         event: "click",
+        propName: "onClick",
         handlerSource: "() => {}",
         span: makeSpan(),
       }
@@ -635,6 +639,7 @@ describe("utility functions", () => {
       const reactive2 = { ...makeReactiveContent(), source: "doc.other.get()" }
       const handler = {
         event: "click",
+        propName: "onClick",
         handlerSource: "() => {}",
         span: makeSpan(),
       }

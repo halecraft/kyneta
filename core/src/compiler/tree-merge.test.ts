@@ -297,7 +297,7 @@ describe("mergeNode", () => {
     const a = createElement(
       "button",
       [],
-      [{ event: "click", handlerSource: "() => a()", span: span() }],
+      [{ event: "click", propName: "onClick", handlerSource: "() => a()", span: span() }],
       [],
       [],
       span(),
@@ -305,7 +305,7 @@ describe("mergeNode", () => {
     const b = createElement(
       "button",
       [],
-      [{ event: "click", handlerSource: "() => b()", span: span() }],
+      [{ event: "click", propName: "onClick", handlerSource: "() => b()", span: span() }],
       [],
       [],
       span(),

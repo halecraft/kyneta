@@ -235,6 +235,7 @@ describe("walkIR", () => {
     it("should yield eventHandler events", () => {
       const handler = {
         event: "click",
+        propName: "onClick",
         handlerSource: "() => console.log('clicked')",
         span: makeSpan(),
       }

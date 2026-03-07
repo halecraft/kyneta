@@ -344,8 +344,20 @@ export interface AttributeNode {
  * An event handler on an element.
  */
 export interface EventHandlerNode {
-  /** Event name without "on" prefix (e.g., "click", "input") */
+  /** Event name without "on" prefix, lowercased (e.g., "click", "input") */
   event: string
+
+  /**
+   * Original prop name from the source (e.g., "onKeyDown", "onClick").
+   *
+   * Preserved because the lowercased `event` field loses casing information
+   * needed when reconstructing prop names for component calls. For HTML
+   * elements, `addEventListener(event, ...)` uses the lowercase form. For
+   * components, the codegen emits `{ onKeyDown: handler }` and needs the
+   * original casing — reconstructing from lowercase produces `onKeydown`
+   * (wrong) instead of `onKeyDown` (correct).
+   */
+  propName: string
 
   /** The handler function source */
   handlerSource: string

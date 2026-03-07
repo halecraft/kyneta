@@ -224,6 +224,7 @@ describe("generateDOM", () => {
     it("should generate code for click handler", () => {
       const handler: EventHandlerNode = {
         event: "click",
+        propName: "onClick",
         handlerSource: "() => console.log('clicked')",
         span: span(1, 5, 1, 40),
       }
@@ -244,11 +245,13 @@ describe("generateDOM", () => {
     it("should generate code for multiple event handlers", () => {
       const clickHandler: EventHandlerNode = {
         event: "click",
+        propName: "onClick",
         handlerSource: "handleClick",
         span: span(1, 5, 1, 25),
       }
       const mouseEnterHandler: EventHandlerNode = {
         event: "mouseenter",
+        propName: "onMouseEnter",
         handlerSource: "handleHover",
         span: span(1, 26, 1, 50),
       }
@@ -905,7 +908,7 @@ describe("generateDOM - code validity", () => {
           ),
         },
       ],
-      [{ event: "click", handlerSource: "() => {}", span: span(1, 0, 1, 10) }],
+      [{ event: "click", propName: "onClick", handlerSource: "() => {}", span: span(1, 0, 1, 10) }],
       [loop, conditionalRegion],
       span(1, 0, 10, 1),
     )

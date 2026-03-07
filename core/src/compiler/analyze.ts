@@ -620,6 +620,7 @@ export function analyzeProps(obj: ObjectLiteralExpression): {
         const eventName = name.slice(2).toLowerCase() // onClick -> click
         eventHandlers.push({
           event: eventName,
+          propName: name,
           handlerSource: valueNode.getText(),
           span: getSpan(prop),
         })
