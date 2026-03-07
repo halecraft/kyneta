@@ -142,13 +142,13 @@ Extend attribute codegen to use property-based setters consistently, then add `i
 
    Compile a component with `input({ value: doc.title.toString() })` where `doc.title` is a `TextRef`, verify the generated code calls `inputTextRegion`, and verify that a subsequent `doc.title.insert()` updates `element.value` via surgical patching (mock `setRangeText`). Also added schema-inferred TextRef test (verifying narrow-delta-types fix works end-to-end for value attributes).
 
-## Phase 3: `editText` — Operation-Aware Write Direction 🔴
+## Phase 3: `editText` — Operation-Aware Write Direction 🟢
 
 The write direction: `beforeinput` DOM events translated into CRDT operations on the typed ref.
 
 ### Tasks
 
-1. **Add `onBeforeInput`, `onCompositionStart`, `onCompositionEnd` to `Props` type in `packages/kinetic/src/types.ts`** 🔴
+1. **Add `onBeforeInput`, `onCompositionStart`, `onCompositionEnd` to `Props` type in `packages/kinetic/src/types.ts`** ✅
 
    ```ts
    onBeforeInput?: (e: InputEvent) => void
@@ -158,7 +158,7 @@ The write direction: `beforeinput` DOM events translated into CRDT operations on
 
    The analyzer's `isEventHandlerProp` already matches any `on[A-Z]` prop, and the codegen emits `addEventListener(eventName, handler)` — no analyzer or codegen changes needed.
 
-2. **Implement `editText` in `packages/kinetic/src/loro/edit-text.ts`** 🔴
+2. **Implement `editText` in `packages/kinetic/src/loro/edit-text.ts`** ✅
 
    A plain runtime function that returns a `beforeinput` event handler. No compiler magic — it's just a function the developer calls.
 
@@ -199,11 +199,11 @@ The write direction: `beforeinput` DOM events translated into CRDT operations on
 
    After the CRDT mutation, `commitIfAuto` fires synchronously → the `inputTextRegion` subscription runs → `setRangeText("preserve")` updates the DOM with cursor preservation. The handler does not need to manage the cursor.
 
-3. **Export `editText` from `packages/kinetic/src/loro/index.ts`** 🔴
+3. **Export `editText` from `packages/kinetic/src/loro/index.ts`** ✅
 
-4. **Re-export `editText` from `packages/kinetic/src/index.ts`** 🔴
+4. **Re-export `editText` from `packages/kinetic/src/index.ts`** ✅
 
-5. **Add tests for `editText` in `packages/kinetic/src/loro/edit-text.test.ts`** 🔴
+5. **Add tests for `editText` in `packages/kinetic/src/loro/edit-text.test.ts`** ✅
 
    Use the existing JSDOM + Loro test setup pattern from `binding.test.ts`.
 

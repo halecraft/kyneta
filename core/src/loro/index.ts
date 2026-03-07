@@ -26,3 +26,5 @@ export {
   bind,
   isBinding,
 } from "./binding.js"
+
+export { editText } from "./edit-text.js"

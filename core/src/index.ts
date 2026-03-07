@@ -92,7 +92,7 @@ export {
 
 // bind() is the primary API for two-way bindings in user code.
 // Re-exported here for convenience so users don't need to import from /loro.
-export { bind, isBinding } from "./loro/index.js"
+export { bind, isBinding, editText } from "./loro/index.js"
 
 // =============================================================================
 // Types
