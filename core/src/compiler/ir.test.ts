@@ -25,6 +25,7 @@ import {
   createTargetBlock,
   type Dependency,
   type DeltaKind,
+  dissolveConditionals,
   filterTargetBlocks,
 } from "./ir.js"
 
@@ -897,5 +898,615 @@ describe("filterTargetBlocks", () => {
 
     // Filtered has it stripped
     expect(filtered.children).toHaveLength(0)
+  })
+})
+
+// =============================================================================
+// dissolveConditionals Tests
+// =============================================================================
+
+describe("dissolveConditionals", () => {
+  // ---------------------------------------------------------------------------
+  // Positive cases: dissolution succeeds
+  // ---------------------------------------------------------------------------
+
+  it("should dissolve two-branch conditional with same-tag elements and different literal text", () => {
+    const trueBranch = createConditionalBranch(
+      createContent("count.get() > 0", "reactive", [dep("count")], span()),
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("Yes", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("No", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const cond = createConditional(
+      [trueBranch, falseBranch],
+      dep("count"),
+      span(),
+    )
+    const builder = createBuilder("div", [], [], [cond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    // Conditional should be gone — replaced by the merged element
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("element")
+
+    const element = dissolved.children[0] as { kind: string; tag: string; children: Array<{ kind: string; source: string; bindingTime: string }> }
+    expect(element.tag).toBe("p")
+    expect(element.children).toHaveLength(1)
+
+    // The text child should be a ternary (reactive content)
+    const textChild = element.children[0]
+    expect(textChild.kind).toBe("content")
+    expect(textChild.bindingTime).toBe("reactive")
+    expect(textChild.source).toContain("?")
+    expect(textChild.source).toContain('"Yes"')
+    expect(textChild.source).toContain('"No"')
+  })
+
+  it("should dissolve two-branch conditional with same-tag elements and different literal attributes", () => {
+    const trueAttr = {
+      name: "class",
+      value: createLiteral("active", span()),
+    }
+    const falseAttr = {
+      name: "class",
+      value: createLiteral("inactive", span()),
+    }
+    const trueBranch = createConditionalBranch(
+      createContent("isActive.get()", "reactive", [dep("isActive")], span()),
+      [createElement("div", [trueAttr], [], [], [], span())],
+      span(),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [createElement("div", [falseAttr], [], [], [], span())],
+      span(),
+    )
+    const cond = createConditional(
+      [trueBranch, falseBranch],
+      dep("isActive"),
+      span(),
+    )
+    const builder = createBuilder("section", [], [], [cond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("element")
+
+    const element = dissolved.children[0] as { kind: string; tag: string; attributes: Array<{ name: string; value: { source: string; bindingTime: string } }> }
+    expect(element.tag).toBe("div")
+    expect(element.attributes).toHaveLength(1)
+
+    // Attribute value should be a ternary (reactive)
+    const classAttr = element.attributes[0]
+    expect(classAttr.name).toBe("class")
+    expect(classAttr.value.bindingTime).toBe("reactive")
+    expect(classAttr.value.source).toContain("?")
+    expect(classAttr.value.source).toContain('"active"')
+    expect(classAttr.value.source).toContain('"inactive"')
+  })
+
+  it("should dissolve three-branch (if/else-if/else) into nested ternary", () => {
+    const branch1 = createConditionalBranch(
+      createContent("x.get() === 1", "reactive", [dep("x")], span()),
+      [
+        createElement(
+          "span",
+          [],
+          [],
+          [],
+          [createLiteral("One", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const branch2 = createConditionalBranch(
+      createContent("x.get() === 2", "reactive", [dep("x")], span()),
+      [
+        createElement(
+          "span",
+          [],
+          [],
+          [],
+          [createLiteral("Two", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const elseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "span",
+          [],
+          [],
+          [],
+          [createLiteral("Other", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const cond = createConditional(
+      [branch1, branch2, elseBranch],
+      dep("x"),
+      span(),
+    )
+    const builder = createBuilder("div", [], [], [cond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("element")
+
+    const element = dissolved.children[0] as { kind: string; tag: string; children: Array<{ kind: string; source: string; bindingTime: string }> }
+    expect(element.tag).toBe("span")
+
+    // The text should be a nested ternary
+    const textChild = element.children[0]
+    expect(textChild.kind).toBe("content")
+    expect(textChild.bindingTime).toBe("reactive")
+    expect(textChild.source).toContain('"One"')
+    expect(textChild.source).toContain('"Two"')
+    expect(textChild.source).toContain('"Other"')
+  })
+
+  it("should dissolve conditional nested inside an element", () => {
+    const trueBranch = createConditionalBranch(
+      createContent("flag.get()", "reactive", [dep("flag")], span()),
+      [createLiteral("On", span())],
+      span(),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [createLiteral("Off", span())],
+      span(),
+    )
+    // mergeConditionalBodies merges ContentValue nodes directly
+    // (literal + literal → reactive ternary)
+    const cond = createConditional(
+      [trueBranch, falseBranch],
+      dep("flag"),
+      span(),
+    )
+    const outerDiv = createElement("div", [], [], [], [cond], span())
+    const builder = createBuilder("section", [], [], [outerDiv], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    // The outer div should still be there
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("element")
+    const div = dissolved.children[0] as { kind: string; tag: string; children: Array<{ kind: string }> }
+    expect(div.tag).toBe("div")
+
+    // The conditional inside should be dissolved into content
+    expect(div.children).toHaveLength(1)
+    expect(div.children[0].kind).toBe("content")
+    const content = div.children[0] as { kind: string; source: string; bindingTime: string }
+    expect(content.bindingTime).toBe("reactive")
+    expect(content.source).toContain("?")
+  })
+
+  it("should dissolve conditional nested inside a loop body", () => {
+    const trueBranch = createConditionalBranch(
+      createContent("item.get()", "reactive", [dep("item")], span()),
+      [
+        createElement(
+          "b",
+          [],
+          [],
+          [],
+          [createLiteral("Active", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "b",
+          [],
+          [],
+          [],
+          [createLiteral("Inactive", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const cond = createConditional(
+      [trueBranch, falseBranch],
+      dep("item"),
+      span(),
+    )
+    const loop = createLoop(
+      "items",
+      "reactive",
+      "item",
+      null,
+      [cond],
+      [dep("items")],
+      span(),
+    )
+    const builder = createBuilder("ul", [], [], [loop], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    // Loop should still be there
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("loop")
+    const loopNode = dissolved.children[0] as { kind: string; body: Array<{ kind: string; tag: string }> }
+
+    // The conditional inside the loop should be dissolved into a <b> element
+    expect(loopNode.body).toHaveLength(1)
+    expect(loopNode.body[0].kind).toBe("element")
+    expect(loopNode.body[0].tag).toBe("b")
+  })
+
+  // ---------------------------------------------------------------------------
+  // Negative cases: conditional preserved
+  // ---------------------------------------------------------------------------
+
+  it("should preserve render-time conditional (subscriptionTarget === null)", () => {
+    const branch = createConditionalBranch(
+      createContent("true", "render", [], span()),
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("Always", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const elseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("Never", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    // subscriptionTarget = null → render-time
+    const cond = createConditional([branch, elseBranch], null, span())
+    const builder = createBuilder("div", [], [], [cond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("conditional")
+  })
+
+  it("should preserve conditional with no else branch", () => {
+    const branch = createConditionalBranch(
+      createContent("count.get() > 0", "reactive", [dep("count")], span()),
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("Has items", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    // No else branch — only one branch
+    const cond = createConditional([branch], dep("count"), span())
+    const builder = createBuilder("div", [], [], [cond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("conditional")
+  })
+
+  it("should preserve conditional with different element tags in branches", () => {
+    const trueBranch = createConditionalBranch(
+      createContent("flag.get()", "reactive", [dep("flag")], span()),
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("Paragraph", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "div",
+          [],
+          [],
+          [],
+          [createLiteral("Div", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const cond = createConditional(
+      [trueBranch, falseBranch],
+      dep("flag"),
+      span(),
+    )
+    const builder = createBuilder("section", [], [], [cond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    // Different tags → merge fails → conditional preserved
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("conditional")
+  })
+
+  it("should preserve conditional with different child counts in branches", () => {
+    const trueBranch = createConditionalBranch(
+      createContent("flag.get()", "reactive", [dep("flag")], span()),
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("One", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("A", span())],
+          span(),
+        ),
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("B", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const cond = createConditional(
+      [trueBranch, falseBranch],
+      dep("flag"),
+      span(),
+    )
+    const builder = createBuilder("div", [], [], [cond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    // Different body lengths → merge fails → conditional preserved
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("conditional")
+  })
+
+  // ---------------------------------------------------------------------------
+  // Edge cases
+  // ---------------------------------------------------------------------------
+
+  it("should dissolve one conditional and preserve another in the same builder", () => {
+    // Dissolvable: same tags, different text
+    const dissolvableTrueBranch = createConditionalBranch(
+      createContent("a.get()", "reactive", [dep("a")], span()),
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("Yes", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const dissolvableFalseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("No", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const dissolvableCond = createConditional(
+      [dissolvableTrueBranch, dissolvableFalseBranch],
+      dep("a"),
+      span(),
+    )
+
+    // Non-dissolvable: different tags
+    const nonDissolvableTrueBranch = createConditionalBranch(
+      createContent("b.get()", "reactive", [dep("b")], span()),
+      [
+        createElement(
+          "span",
+          [],
+          [],
+          [],
+          [createLiteral("Span", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const nonDissolvableFalseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "div",
+          [],
+          [],
+          [],
+          [createLiteral("Div", span())],
+          span(),
+        ),
+      ],
+      span(),
+    )
+    const nonDissolvableCond = createConditional(
+      [nonDissolvableTrueBranch, nonDissolvableFalseBranch],
+      dep("b"),
+      span(),
+    )
+
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [dissolvableCond, nonDissolvableCond],
+      span(),
+    )
+
+    const dissolved = dissolveConditionals(builder)
+
+    // First conditional dissolved → element; second preserved → conditional
+    expect(dissolved.children).toHaveLength(2)
+    expect(dissolved.children[0].kind).toBe("element")
+    expect((dissolved.children[0] as { tag: string }).tag).toBe("p")
+    expect(dissolved.children[1].kind).toBe("conditional")
+  })
+
+  it("should not mutate the original builder", () => {
+    const trueBranch = createConditionalBranch(
+      createContent("x.get()", "reactive", [dep("x")], span()),
+      [createLiteral("A", span())],
+      span(),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [createLiteral("B", span())],
+      span(),
+    )
+    const cond = createConditional(
+      [trueBranch, falseBranch],
+      dep("x"),
+      span(),
+    )
+    const builder = createBuilder("div", [], [], [cond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    // Original still has the conditional
+    expect(builder.children).toHaveLength(1)
+    expect(builder.children[0].kind).toBe("conditional")
+
+    // Dissolved has content instead
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("content")
+  })
+
+  it("should handle builder with no conditionals (no-op)", () => {
+    const h1 = createElement(
+      "h1",
+      [],
+      [],
+      [],
+      [createLiteral("Hello", span())],
+      span(),
+    )
+    const builder = createBuilder("div", [], [], [h1], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("element")
+  })
+
+  it("should recurse into non-dissolvable conditional branch bodies", () => {
+    // Inner conditional is dissolvable
+    const innerTrue = createConditionalBranch(
+      createContent("inner.get()", "reactive", [dep("inner")], span()),
+      [createLiteral("X", span())],
+      span(),
+    )
+    const innerFalse = createConditionalBranch(
+      null,
+      [createLiteral("Y", span())],
+      span(),
+    )
+    const innerCond = createConditional(
+      [innerTrue, innerFalse],
+      dep("inner"),
+      span(),
+    )
+
+    // Outer conditional is NOT dissolvable (no else branch)
+    const outerBranch = createConditionalBranch(
+      createContent("outer.get()", "reactive", [dep("outer")], span()),
+      [innerCond],
+      span(),
+    )
+    const outerCond = createConditional([outerBranch], dep("outer"), span())
+    const builder = createBuilder("div", [], [], [outerCond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    // Outer conditional preserved
+    expect(dissolved.children).toHaveLength(1)
+    expect(dissolved.children[0].kind).toBe("conditional")
+
+    // But inner conditional inside the branch body was dissolved
+    const branches = (dissolved.children[0] as { branches: Array<{ body: Array<{ kind: string }> }> }).branches
+    expect(branches[0].body).toHaveLength(1)
+    expect(branches[0].body[0].kind).toBe("content")
   })
 })

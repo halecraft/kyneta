@@ -31,9 +31,9 @@ Dissolution exists as ad-hoc inline logic in two codegen functions (one working,
 
 ---
 
-## Phase 1: Add `dissolveConditionals` IR Transform 🔴
+## Phase 1: Add `dissolveConditionals` IR Transform 🟢
 
-### Task 1.1: Implement `dissolveConditionals` in `ir.ts` 🔴
+### Task 1.1: Implement `dissolveConditionals` in `ir.ts` 🟢
 
 Add a pure recursive IR→IR transform following the exact structural pattern of `filterTargetBlocks`:
 
@@ -58,7 +58,7 @@ function dissolveChildNode(node: ChildNode): ChildNode
 
 Key structural detail: `dissolveChildren` iterates children. When it encounters a `ConditionalNode` eligible for dissolution, it calls `mergeConditionalBodies` and splices the result (which may be 1 or more children) into the output array. For all other nodes, it calls `dissolveChildNode` to recurse into their sub-trees. `dissolveChildNode` handles `element` (recurse into `children`), `loop` (recurse into `body`), and `conditional` (recurse into branch bodies) — exactly as `filterChildNode` does for `filterTargetBlocks`.
 
-### Task 1.2: Unit tests for `dissolveConditionals` in `ir.test.ts` 🔴
+### Task 1.2: Unit tests for `dissolveConditionals` in `ir.test.ts` 🟢
 
 Tests use existing helpers (`createConditional`, `createConditionalBranch`, `createElement`, `createLiteral`, `createContent`, `createBuilder`, `createSpan`, `dep`).
 
@@ -78,7 +78,7 @@ Tests use existing helpers (`createConditional`, `createConditionalBranch`, `cre
 **Edge case:**
 - Mixed: builder with one dissolvable and one non-dissolvable conditional → first dissolved, second preserved
 
-### Task 1.3: Integration test for dissolution on the template cloning path 🔴
+### Task 1.3: Integration test for dissolution on the template cloning path 🟢
 
 Add a test in `dom.test.ts` that calls `generateElementFactoryWithResult` with a dissolvable conditional and verifies:
 - No `conditionalRegion` in generated code

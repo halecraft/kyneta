@@ -20,6 +20,7 @@ import {
   type Dependency,
   type DeltaKind,
   type EventHandlerNode,
+  dissolveConditionals,
 } from "../ir.js"
 import {
   generateDOM,
@@ -1623,5 +1624,151 @@ describe("generateDOM - statements", () => {
     expect(code).toContain("} else {")
     expect(code).toContain("if (condB)")
     expect(code).toContain('createElement("p")')
+  })
+})
+
+// =============================================================================
+// Template Cloning Path - Dissolution Integration Tests
+// =============================================================================
+
+describe("generateElementFactoryWithResult - dissolution on cloning path", () => {
+  it("should produce dissolved output (no conditionalRegion, ternary in template) when IR is pre-dissolved", () => {
+    // Build a dissolvable conditional: if (count > 0) p("Yes") else p("No")
+    const trueBranch = createConditionalBranch(
+      createContent(
+        "count.get() > 0",
+        "reactive",
+        [dep("count")],
+        span(2, 6, 2, 22),
+      ),
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("Yes", span(3, 6, 3, 11))],
+          span(3, 4, 3, 13),
+        ),
+      ],
+      span(2, 4, 4, 3),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("No", span(5, 6, 5, 10))],
+          span(5, 4, 5, 12),
+        ),
+      ],
+      span(4, 4, 6, 3),
+    )
+    const cond = createConditional(
+      [trueBranch, falseBranch],
+      dep("count"),
+      span(2, 2, 6, 3),
+    )
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [cond],
+      span(1, 0, 7, 1),
+    )
+
+    // Apply dissolution at IR level (simulating what the transform pipeline will do)
+    const dissolved = dissolveConditionals(builder)
+
+    // Generate via template cloning path
+    const result = generateElementFactoryWithResult(dissolved)
+
+    // Should NOT contain conditionalRegion (dissolved)
+    expect(result.code).not.toContain("conditionalRegion")
+    expect(result.code).not.toContain("whenTrue")
+    expect(result.code).not.toContain("whenFalse")
+
+    // Template HTML should NOT contain region comment markers
+    for (const decl of result.moduleDeclarations) {
+      expect(decl).not.toContain("kinetic:if")
+    }
+
+    // Should contain ternary expression (the dissolved merge result)
+    expect(result.code).toContain("?")
+    expect(result.code).toContain('"Yes"')
+    expect(result.code).toContain('"No"')
+
+    // Should contain a subscription call for the reactive ternary
+    const hasSubscription =
+      result.code.includes("subscribe(") ||
+      result.code.includes("subscribeWithValue(")
+    expect(hasSubscription).toBe(true)
+  })
+
+  it("should still emit conditionalRegion on cloning path for non-dissolvable conditional", () => {
+    // Non-dissolvable: different tags (p vs div)
+    const trueBranch = createConditionalBranch(
+      createContent(
+        "flag.get()",
+        "reactive",
+        [dep("flag")],
+        span(2, 6, 2, 16),
+      ),
+      [
+        createElement(
+          "p",
+          [],
+          [],
+          [],
+          [createLiteral("Paragraph", span(3, 6, 3, 17))],
+          span(3, 4, 3, 19),
+        ),
+      ],
+      span(2, 4, 4, 3),
+    )
+    const falseBranch = createConditionalBranch(
+      null,
+      [
+        createElement(
+          "div",
+          [],
+          [],
+          [],
+          [createLiteral("Div", span(5, 6, 5, 11))],
+          span(5, 4, 5, 13),
+        ),
+      ],
+      span(4, 4, 6, 3),
+    )
+    const cond = createConditional(
+      [trueBranch, falseBranch],
+      dep("flag"),
+      span(2, 2, 6, 3),
+    )
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [cond],
+      span(1, 0, 7, 1),
+    )
+
+    // Apply dissolution — should be a no-op for this non-dissolvable conditional
+    const dissolved = dissolveConditionals(builder)
+
+    const result = generateElementFactoryWithResult(dissolved)
+
+    // Should still contain conditionalRegion (not dissolved)
+    expect(result.code).toContain("conditionalRegion")
+    expect(result.code).toContain("whenTrue")
+
+    // Template HTML should contain region comment markers
+    const hasMarker = result.moduleDeclarations.some(decl =>
+      decl.includes("kinetic:if"),
+    )
+    expect(hasMarker).toBe(true)
   })
 })
