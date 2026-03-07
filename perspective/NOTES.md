@@ -1,0 +1,5 @@
+- we're currently using a simplified containment check without wildcards for permissions, we should develop this further
+- wait, a bookmark is a constraint? and any peer can add a bookmark? This seems like a vector for abuse.
+- verifySignature is a stub right now
+- are there opportunities for simplification by implementing well-known algorithms? for example reverse toplogical traversal in computeActive
+- are we doing any dumb `await import` statements? or type-only imports inline with code? (Why does claude do this??)

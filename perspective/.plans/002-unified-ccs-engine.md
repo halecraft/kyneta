@@ -255,7 +255,8 @@ Engine
 │   ├── authority.ts         Authority chain replay, capability computation
 │   ├── validity.ts          Valid(S) — signature check + capability check
 │   ├── retraction.ts        Retraction graph, dominance, Active(S)
-│   ├── projection.ts        Active constraints → Datalog ground facts
+│   ├── structure-index.ts   Slot identity, structure grouping (shared by projection + skeleton)
+│   ├── projection.ts        Active constraints → Datalog ground facts (via structure index join)
 │   ├── skeleton.ts          Tree skeleton builder from structure constraints
 │   └── pipeline.ts          Solver pipeline composition root (imports + composes, never implements)
 │
@@ -274,7 +275,11 @@ Engine
 └── index.ts                 Public API
 ```
 
-**`pipeline.ts` is a composition root.** It imports pure functions from `validity.ts`, `retraction.ts`, `projection.ts`, `skeleton.ts`, and the Datalog evaluator, then composes them into `solve(S, V?) → Reality`. It never implements transformation logic itself — every step is a call to a function that lives in its own module.
+**`structure-index.ts` computes slot identity.** The spec (§8.1) says multiple `structure` constraints can share the same `(parent, key)` in a Map — they represent the same logical slot. The structure index groups map children by `(parent, key)`, resolves each value constraint's `target` CnId to its slot identity, and provides the indexes that both `projection.ts` and `skeleton.ts` consume. This is Layer 0 logic (kernel), not Layer 1 (rules) — slot identity is a property of the policy, not something a Datalog rule should be able to retract or redefine.
+
+**`projection.ts` denormalizes constraints into Datalog ground facts.** It consumes the structure index to join value constraints with their target structure constraints, computing the `Slot` column that the LWW rules (§B.4) group by. For Map nodes, Slot = `(parent, key)`. For Seq nodes, Slot = the target CnId (unique by definition). For Root nodes, Slot = `containerId`. The projection is a pre-processing step — the `active_value(CnId, Slot, Value, Lamport, Peer)` relation is a ground input to the Datalog evaluator, not derived by it.
+
+**`pipeline.ts` is a composition root.** It imports pure functions from `validity.ts`, `retraction.ts`, `structure-index.ts`, `projection.ts`, `skeleton.ts`, and the Datalog evaluator, then composes them into `solve(S, V?) → Reality`. It never implements transformation logic itself — every step is a call to a function that lives in its own module.
 
 **`agent.ts` is the imperative shell.** An `Agent` encapsulates the stateful parts of constraint creation: CnId counter, Lamport clock, observed refs (version vector), and private key. It produces immutable `Constraint` values. This is the only place where mutable state lives during normal operation. The store itself is grow-only (append-only set).
 
@@ -362,16 +367,16 @@ The Fugue algorithm implementation (`src/solver/fugue.ts`) is the one piece wort
 
 No new tests. The verification is that surviving datalog tests (222 minus deleted legacy-builtin tests, plus any rewritten stratify tests) and kernel (236) tests still pass, and the project compiles cleanly.
 
-### Phase 3: Authority, Validity, and Retraction 🔴
+### Phase 3: Authority, Validity, and Retraction 🟢
 
 The three filters in the solver pipeline: Valid(S) and Active(Valid(S)).
 
 #### Tasks
 
-- 3.1 Implement `kernel/authority.ts` — authority chain replay: walk authority constraints ≤ V, compute capabilities(P, V); revoke-wins on concurrent grant/revoke; capability attenuation validation 🔴
-- 3.2 Implement `kernel/validity.ts` — Valid(S): for each constraint, check signature (via signature.ts) + check capability at causal moment; return filtered set 🔴
-- 3.3 Implement `kernel/retraction.ts` — build retraction graph (edges from retract → target), enforce target-in-refs rule, enforce no-structure-retraction rule; compute dominance by reverse topological traversal; return Active(S) 🔴
-- 3.4 Enforce retraction depth limit (configurable, default 2) 🔴
+- 3.1 Implement `kernel/authority.ts` — authority chain replay: walk authority constraints ≤ V, compute capabilities(P, V); revoke-wins on concurrent grant/revoke; capability attenuation validation 🟢
+- 3.2 Implement `kernel/validity.ts` — Valid(S): for each constraint, check signature (via signature.ts) + check capability at causal moment; return filtered set 🟢
+- 3.3 Implement `kernel/retraction.ts` — build retraction graph (edges from retract → target), enforce target-in-refs rule, enforce no-structure-retraction rule; compute dominance by reverse topological traversal; return Active(S) 🟢
+- 3.4 Enforce retraction depth limit (configurable, default 2) 🟢
 
 #### Tests
 
@@ -380,27 +385,62 @@ The three filters in the solver pipeline: Valid(S) and Active(Valid(S)).
 - Retraction: retract(value) → value dominated; retract(retract) → undo; depth-2 chain; structure constraints immune to retraction
 - Active(S) determinism: same S → same Active(S) regardless of insertion order
 
+### Phase 3.5: Extract Shared Base Types 🔴
+
+The `base/` module currently holds only `Result<T,E>`, extracted during Phase 2 so that `datalog/` and `kernel/` could share it without depending on each other. Post-Phase-3 review revealed that `CnId`, `Value`, and their supporting identity types (`PeerID`, `Counter`) are in the same situation: both layers define structurally identical but nominally separate copies.
+
+This duplication is a build-order artifact, not a deliberate design choice. Phase 1 built the Datalog evaluator before the kernel existed, so `datalog/types.ts` defined its own lightweight `CnIdRef` and `Value`. Phase 2 then defined `CnId` and `Value` independently in `kernel/types.ts`. The premise was "no cross-dependency between kernel and datalog" — but that premise is already violated: `kernel/types.ts` imports 14 types from `datalog/types.ts` (for `RulePayload`). The actual dependency direction is `kernel → datalog`, which is fine. The reverse (`datalog → kernel`) remains clean.
+
+Extracting the shared identity and value types to `base/` follows the `Result` precedent, eliminates the drift hazard flagged in Learnings (Dual Value Types), and removes the need for the compile-time compatibility assertion hack that was planned for `projection.ts`. It also simplifies Phase 4: `projection.ts` will work with a single `Value` type instead of bridging two structurally-compatible-but-nominally-distinct copies.
+
+#### Tasks
+
+- 3.5.1 Create `base/types.ts` — extract `PeerID`, `Counter`, `Lamport`, `CnId`, `isSafeUint()`, and `Value` as the shared type definitions. These are pure data shapes with no behavioral logic and no dependencies beyond each other. 🔴
+- 3.5.2 Update `datalog/types.ts` — remove `CnIdRef` interface and local `Value` type definition. Import `CnId`, `PeerID`, `Counter`, and `Value` from `base/types.ts`. Re-export them for downstream consumers. Update all internal references (`CnIdRef` → `CnId`). 🔴
+- 3.5.3 Update `kernel/types.ts` — remove local `PeerID`, `Counter`, `Lamport`, `CnId`, `isSafeUint()`, and `Value` definitions. Import them from `base/types.ts`. Re-export them for downstream consumers. 🔴
+- 3.5.4 Update `datalog/types.ts` functions — `serializeValue()`, `compareValues()`, `valuesEqual()`, and `compareSameType()` reference `CnIdRef` in type assertions and casts. Update these to use `CnId`. 🔴
+- 3.5.5 Update `base/result.ts` — no changes needed (it remains independent). 🔴
+- 3.5.6 Update index files — `datalog/index.ts` stops exporting `CnIdRef` (it no longer exists); exports `CnId` from the re-export. `kernel/index.ts` re-exports from `kernel/types.ts` as before (which now delegates to `base/types.ts`). `src/index.ts` removes the `CnIdRef` export from the Datalog section (it's now just `CnId` everywhere). 🔴
+- 3.5.7 Update test files — any test that imports `CnIdRef` directly updates to use `CnId`. Grep for `CnIdRef` across all test files. 🔴
+- 3.5.8 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes, all 532 tests still pass. 🔴
+
+#### Tests
+
+No new tests. This is a pure refactor — the verification is that all existing tests pass and the project compiles cleanly. The test count should remain exactly 532.
+
 ### Phase 4: Skeleton, Pipeline, and Reality 🔴
 
 Wiring the solver pipeline from §7.2 and constructing the reality tree.
 
 #### Tasks
 
-- 4.1 Implement `kernel/projection.ts` — pure function that converts active constraints into Datalog ground facts: `Constraint` with `type: 'value'` → `active_value(CnId, Slot, Value, Lamport, Peer)` fact; `Constraint` with `type: 'structure'` → appropriate structure facts. This is the bridge between kernel types and the Datalog evaluator. Document the column-name→position mapping for each projected relation so that rule authors don't need to count tuple positions. 🔴
-- 4.2 Implement `kernel/skeleton.ts` — build rooted tree from active structure constraints: Root nodes define containers; Map children grouped by (parent, key); Seq children ordered by Fugue interleaving; value resolution via native LWW 🔴
-- 4.3 Port native Fugue solver to `solver/fugue.ts` — adapt from path-based seq_element to CnId-based structure(seq) constraints, using `reference/fugue-v0.ts` as guide 🔴
-- 4.4 Port native LWW solver from prototype to `solver/lww.ts` — adapt from path-based to slot-based value resolution 🔴
-- 4.5 Implement `kernel/pipeline.ts` — composition root only: imports and composes `filterByVersion()`, `computeValid()`, `computeActive()`, `projectToFacts()`, `buildSkeleton()`, `resolveValues()` from their respective modules into `solve(S, V?) → Reality`. Contains no transformation logic of its own. 🔴
-- 4.6 Implement version-parameterized solving: `solve(S, V)` for historical queries (§7.1) 🔴
+- 4.1 Implement `kernel/structure-index.ts` — builds indexes over valid structure constraints that both `projection.ts` and `skeleton.ts` consume. Core responsibilities: (a) `Map<cnIdKey, StructureConstraint>` for O(1) target lookup; (b) **slot identity computation** — for Map children, group structure constraints by `(parent, key)` so that independently-created structures for the same map key are recognized as the same logical slot (§8.1: "Multiple `structure` constraints may exist for the same `(parent, key)`. They represent the same logical slot."); (c) for Seq children, slot = the target's own CnId (unique by definition); (d) for Root, slot = `containerId`. Exports a `StructureIndex` type consumed by downstream modules. This is Layer 0 (kernel) logic — slot identity derives from policy semantics and must not be expressible as a retractable rule. 🔴
+- 4.2 Implement `kernel/projection.ts` — consumes the `StructureIndex` and active value constraints to produce Datalog ground facts. The key operation is a **join**: each `ValueConstraint`'s `target` CnId is resolved through the structure index to obtain slot identity, then emitted as `active_value(CnId, Slot, Content, Lamport, Peer)`. Also emits `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)` for Fugue rules and `constraint_peer(CnId, Peer)` for peer tiebreak. Document the column-name→position mapping for each projected relation so that rule authors don't need to count tuple positions. (Note: the compile-time type-compatibility assertion originally planned here is no longer needed — Phase 3.5 unified `Value` and `CnId` into a single shared definition in `base/types.ts`.) 🔴
+- 4.3 Implement `kernel/skeleton.ts` — build rooted tree from the `StructureIndex`: Root nodes define containers; Map children grouped by (parent, key) via the index's slot grouping; Seq children ordered by Fugue interleaving; value resolution via native LWW 🔴
+- 4.4 Port native Fugue solver to `solver/fugue.ts` — adapt from path-based seq_element to CnId-based structure(seq) constraints, using `reference/fugue-v0.ts` as guide 🔴
+- 4.5 Port native LWW solver from prototype to `solver/lww.ts` — adapt from path-based to slot-based value resolution 🔴
+- 4.6 Implement `kernel/pipeline.ts` — composition root only: imports and composes `filterByVersion()`, `computeValid()`, `computeActive()`, `buildStructureIndex()`, `projectToFacts()`, `buildSkeleton()`, `resolveValues()` from their respective modules into `solve(S, V?) → Reality`. Contains no transformation logic of its own. 🔴
+- 4.7 Implement version-parameterized solving: `solve(S, V)` for historical queries (§7.1) 🔴
+
+**Note on the projection design (from pre-Phase-4 research):** The spec's LWW rule `active_value(CnId, Slot, Value, Lamport, Peer)` treats `Slot` as a pre-computed ground term, not something derived by Datalog. This is deliberate — slot identity is Layer 0 kernel logic (§8 Policies), not Layer 1 rule logic. If the slot join were expressed as a Datalog rule, an agent with `CreateRule` + `Retract` capabilities could retract it and break the reality. The projection pre-computes slot identity outside Datalog so that the LWW and Fugue rules receive ready-to-use ground facts. This also means Phase 1's test doubles (which hardcode `'title'` as a string slot) match the real projection's output shape — the "test-double → real integration" bridge works.
+
+**The Map multi-structure case is the key subtlety.** When Alice creates `structure(map, parent=root@0, key="title")` getting CnId `alice@1` and Bob independently creates `structure(map, parent=root@0, key="title")` getting CnId `bob@1`, then `value(target=alice@1, content="Hello")` and `value(target=bob@1, content="World")` compete for the **same slot**. The projection must emit both with the same `Slot` value. The structure index handles this grouping.
 
 #### Tests
 
-- Projection: active value constraints → Datalog `active_value` facts with correct fields; structure constraints → correct structure facts
+- Structure index: map children with same (parent, key) grouped into same slot; map children with different keys are distinct slots; seq children each have unique slot identity; root slot = containerId
+- Structure index: concurrent map structure creation — two peers independently create structure(map, parent=P, key=K) → same slot
+- Projection: active value constraints → Datalog `active_value` facts with correct Slot derived from structure index
+- Projection: value targeting a map structure → Slot is `(parent, key)`, not the target CnId
+- Projection: two values targeting different structure constraints for the same `(parent, key)` → same Slot in projected facts
+- Projection: value targeting a seq structure → Slot is the target CnId
+- Projection: orphaned value (target not in valid structures) → excluded from projection
+- Projection: structure constraints → `active_structure_seq` and `constraint_peer` facts with correct fields
 - Projection roundtrip: Phase 1 test doubles match the shape of real projected facts (validates the test-double→real bridge)
-- Skeleton: root nodes created from Root structure constraints; map children grouped by (parent, key); seq children ordered correctly
+- Skeleton: root nodes created from Root structure constraints; map children grouped by (parent, key) via structure index; seq children ordered correctly
 - Pipeline: end-to-end from constraints → reality for simple map, simple sequence, nested containers
 - Native solver equivalence: LWW native == LWW Datalog rules (from Phase 1) for same inputs
-- Native solver equivalence: Fugue native == Fugue Datalog rules for same inputs
+- Native solver equivalence: Fugue native == Fugue Datalog rules for same inputs (scoped to simplified subset — full Fugue tree walk is native-only)
 - Version-parameterized: solve(S, V_past) returns historical reality; solve(S, V_current) returns current reality
 - Retraction + pipeline: retracted value excluded from reality; un-retracted value reappears
 
@@ -448,8 +488,9 @@ The new code has a strict dependency DAG:
 
 ```
 base/result.ts          (no deps — shared by datalog and kernel)
-datalog/types.ts        → base/result.ts
-kernel/types.ts         → base/result.ts, datalog/types.ts (re-exports only)
+base/types.ts           (no deps — shared PeerID, Counter, Lamport, CnId, Value, isSafeUint)
+datalog/types.ts        → base/result.ts, base/types.ts
+kernel/types.ts         → base/result.ts, base/types.ts, datalog/types.ts (re-exports only)
 kernel/cnid.ts          → kernel/types.ts
 kernel/lamport.ts       (no deps)
 kernel/version-vector.ts → kernel/types.ts
@@ -459,9 +500,10 @@ kernel/store.ts         → kernel/types.ts, cnid.ts, lamport.ts, version-vector
 kernel/authority.ts     → kernel/types.ts, store.ts, version-vector.ts
 kernel/validity.ts      → kernel/types.ts, store.ts, authority.ts, signature.ts
 kernel/retraction.ts    → kernel/types.ts, validity.ts
-kernel/projection.ts    → kernel/types.ts, datalog/types.ts
-kernel/skeleton.ts      → kernel/types.ts, retraction.ts
-kernel/pipeline.ts      → kernel/types.ts, store.ts, validity.ts, retraction.ts, projection.ts, skeleton.ts, datalog/evaluate.ts
+kernel/structure-index.ts → kernel/types.ts, cnid.ts
+kernel/projection.ts    → kernel/types.ts, base/types.ts, structure-index.ts
+kernel/skeleton.ts      → kernel/types.ts, structure-index.ts
+kernel/pipeline.ts      → kernel/types.ts, store.ts, validity.ts, retraction.ts, structure-index.ts, projection.ts, skeleton.ts, datalog/evaluate.ts
 datalog/unify.ts        → datalog/types.ts
 datalog/stratify.ts     → datalog/types.ts
 datalog/aggregate.ts    → datalog/types.ts
@@ -472,11 +514,11 @@ bootstrap.ts            → kernel/types.ts, store.ts, agent.ts, datalog/types.t
 index.ts                → everything
 ```
 
-A change to `kernel/types.ts` affects nearly everything. Changes to leaf modules (datalog/aggregate.ts, solver/lww.ts) are isolated. `kernel/projection.ts` is the one module that bridges the kernel and Datalog type systems — it depends on both `kernel/types.ts` and `datalog/types.ts`.
+A change to `base/types.ts` affects nearly everything (it defines `CnId`, `Value`, and the identity types used everywhere). A change to `kernel/types.ts` affects all kernel modules and anything downstream. Changes to leaf modules (datalog/aggregate.ts, solver/lww.ts) are isolated. `kernel/projection.ts` depends on both `kernel/types.ts` and `base/types.ts` — but since Phase 3.5 unified `Value` and `CnId` into `base/types.ts`, it no longer bridges two separate type systems. `kernel/structure-index.ts` is a shared dependency of both `projection.ts` and `skeleton.ts` — it computes the slot identity and structure grouping that both modules need.
 
 ### Test Dependency Chain
 
-Tests for Phase N depend on code from Phases 1..N. Phase 1 (Datalog) tests are self-contained. Phase 2 (kernel types/store) tests are self-contained. Phase 3 tests depend on Phase 2 code. Phase 4 tests depend on Phases 1–3. Phase 5 tests depend on all prior phases. This means a type change in Phase 2 may break Phase 3–5 tests transitively.
+Tests for Phase N depend on code from Phases 1..N. Phase 1 (Datalog) tests are self-contained. Phase 2 (kernel types/store) tests are self-contained. Phase 3 tests depend on Phase 2 code. Phase 3.5 is a pure refactor — all existing tests must still pass. Phase 4 tests depend on Phases 1–3.5. Phase 5 tests depend on all prior phases. This means a type change in `base/types.ts` may break all tests transitively.
 
 ### External Dependencies
 
@@ -520,7 +562,8 @@ After Phase 2.5 (prototype removal):
 prism/
 ├── src/
 │   ├── base/
-│   │   └── result.ts           Shared Result<T,E> type
+│   │   ├── result.ts           Shared Result<T,E> type
+│   │   └── types.ts            Shared PeerID, Counter, Lamport, CnId, Value, isSafeUint (Phase 3.5)
 │   ├── kernel/
 │   │   ├── types.ts
 │   │   ├── cnid.ts
@@ -533,6 +576,7 @@ prism/
 │   │   ├── authority.ts         (Phase 3)
 │   │   ├── validity.ts          (Phase 3)
 │   │   ├── retraction.ts        (Phase 3)
+│   │   ├── structure-index.ts   (Phase 4)
 │   │   ├── projection.ts        (Phase 4)
 │   │   ├── skeleton.ts          (Phase 4)
 │   │   └── pipeline.ts          (Phase 4)
@@ -564,6 +608,7 @@ prism/
 │   │   ├── authority.test.ts     (Phase 3)
 │   │   ├── validity.test.ts      (Phase 3)
 │   │   ├── retraction.test.ts    (Phase 3)
+│   │   ├── structure-index.test.ts (Phase 4)
 │   │   ├── projection.test.ts    (Phase 4)
 │   │   ├── skeleton.test.ts      (Phase 4)
 │   │   └── pipeline.test.ts      (Phase 4)
@@ -780,6 +825,36 @@ Phase 2.5 task 2.5.5 originally said "remove legacy built-in predicate support f
 
 The `stratify.test.ts` case is particularly subtle: the old encoding treats `__neq` as a predicate, so the stratifier adds dependency edges to it. With the `guard` body element, no edges are added. The test's expected stratification behavior changes — it doesn't just need a syntax swap, it needs new expectations.
 
-### Dual Value Types Are Structurally Compatible but Nominally Separate
+### Dual Value Types Are Structurally Compatible but Nominally Separate — Resolved in Phase 3.5
 
-`datalog/types.ts` defines `Value` with `{ readonly ref: CnIdRef }` and `kernel/types.ts` independently defines `Value` with `{ readonly ref: CnId }`. These are structurally identical (`CnIdRef` and `CnId` both have `peer: string, counter: number`), so TypeScript's structural typing makes them assignment-compatible. This means Phase 4's `projection.ts` can pass kernel `Value` instances directly into Datalog `Fact` tuples without conversion — which is convenient. However, if either `CnIdRef` or `CnId` is modified independently, the bridge breaks silently (no compile error until the structural shapes diverge). This is an acceptable trade-off given the "no cross-dependency" architecture, but `projection.ts` should include a compile-time compatibility assertion (e.g., a type-level `_assertAssignable` check) to catch drift early.
+`datalog/types.ts` originally defined `Value` with `{ readonly ref: CnIdRef }` and `kernel/types.ts` independently defined `Value` with `{ readonly ref: CnId }`. These were structurally identical (`CnIdRef` and `CnId` both have `peer: string, counter: number`), so TypeScript's structural typing made them assignment-compatible. However, if either was modified independently, the bridge would break silently — no compile error until the structural shapes diverged.
+
+Post-Phase-3 analysis revealed this duplication is a **build-order artifact**, not a deliberate architectural choice. Phase 1 defined `CnIdRef` and `Value` in `datalog/types.ts` because the kernel didn't exist yet. Phase 2 defined `CnId` and `Value` in `kernel/types.ts` independently. The "no cross-dependency" premise that justified the split was already violated by the time Phase 2 completed — `kernel/types.ts` imports 14 Datalog types for `RulePayload`.
+
+**Resolution:** Phase 3.5 extracts `CnId`, `Value`, `PeerID`, `Counter`, `Lamport`, and `isSafeUint` into `base/types.ts`, following the precedent set by `base/result.ts`. Both `datalog/types.ts` and `kernel/types.ts` import from `base/types.ts` instead of defining their own copies. `CnIdRef` is deleted. The compile-time compatibility assertion originally planned for `projection.ts` is no longer needed — there's only one `Value` and one `CnId` now.
+
+### Build-Order Artifacts Should Be Cleaned Up at Phase Boundaries
+
+When phases are implemented sequentially and a later phase introduces a concept that an earlier phase had to approximate (e.g., Phase 1's `CnIdRef` approximating Phase 2's `CnId`), the approximation becomes dead weight once the real thing exists. If left uncleaned, these artifacts accumulate: two nominally-separate types that are "structurally compatible," workarounds like compatibility assertions, and comments explaining why the duplication is "acceptable." The fix is cheap — extract to a shared module — and the right time to do it is the next phase boundary, before downstream code (like `projection.ts`) has to bridge the gap. This is the same lesson as "Legacy Shims Infect Surviving Tests" applied to types rather than test code.
+
+### Slot Identity Is a Kernel Concern, Not a Datalog Concern
+
+Pre-Phase-4 research revealed that the `Slot` column in the spec's `active_value(CnId, Slot, Value, Lamport, Peer)` relation (§B.4) is not a mechanical flattening of a value constraint's `target` field. Slot identity depends on the **policy** of the parent node:
+
+- **Map**: Slot = `(parent, key)`. Multiple `structure` constraints can independently create the same `(parent, key)` — they represent the same logical slot (§8.1). Value constraints targeting *any* of those structure constraints compete for the same slot via LWW.
+- **Seq**: Slot = the target structure's own CnId (unique by definition). No competition between values.
+- **Root**: Slot = `containerId`.
+
+This means `projection.ts` must **join** each value constraint with its target structure constraint to derive the slot identity. Two approaches were considered: (A) compute the join in `projection.ts` as a kernel-side pre-processing step, emitting pre-flattened `active_value` tuples for Datalog; (B) emit raw relations and let Datalog rules perform the join. Approach A is correct because:
+
+1. The spec's LWW rules treat `active_value` as a ground (input) relation, not a derived one.
+2. Slot identity is Layer 0 (kernel policy semantics, §8) — it must not be expressible as a retractable Layer 1 rule, or an agent with `CreateRule` + `Retract` capabilities could break the reality.
+3. The Phase 1 test doubles (which hardcode string slots like `'title'`) already assume pre-computed slots — the projection is the bridge that makes the test-double shape match the real shape.
+
+The shared `structure-index.ts` module was introduced to compute slot groupings once and serve both `projection.ts` (slot identity for value resolution) and `skeleton.ts` (tree construction).
+
+### Agent Refs Use Frontier Compression — Retraction Target-in-Refs Needs Care
+
+The `Agent.currentRefs()` implementation compresses causal predecessors to the version vector frontier: one CnId per peer (the highest counter seen). This is semantically correct — the frontier implies the full causal history — and space-efficient. However, the retraction module's `target-in-refs` check verifies that the retraction's `target` CnId is literally present in the `refs` array. If an agent retracts a constraint at counter 5 but the frontier ref for that peer is at counter 10, the literal CnId `(peer, 5)` won't appear in refs.
+
+This doesn't cause failures today because retraction tests use manually-constructed constraints with explicit refs. But Phase 5 integration tests — where an Agent produces a retraction constraint via `produceRetract()` — will exercise this path. The fix is either: (a) change `computeActive` to interpret refs semantically (any ref `(peer, N)` with `N ≥ target.counter` implies the target was observed), or (b) have `produceRetract()` explicitly add the target CnId to refs alongside the frontier. Option (a) is more principled; option (b) is simpler. Decide in Phase 5.

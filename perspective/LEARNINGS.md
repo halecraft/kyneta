@@ -339,11 +339,79 @@ The spec says `refs` are "constraints this one has observed (causal predecessors
 
 `BookmarkPayload` contains a `version: VersionVector` field. If `VersionVector` were defined in `kernel/version-vector.ts`, then `kernel/types.ts` would need to import from `version-vector.ts`, but `version-vector.ts` also imports types from `kernel/types.ts` — a circular dependency. The solution: define `VersionVector = ReadonlyMap<PeerID, Counter>` as a type alias in `kernel/types.ts` alongside `PeerID` and `Counter`, and keep only the *functions* (create, extend, merge, compare, filter) in `kernel/version-vector.ts`. This pattern — types in a central module, functions in specialized modules — prevents circular imports and is worth establishing as a project convention early.
 
+## Phase 2.5: Prototype Removal
+
+### Stale Counts in Plan Documents Are a Real Hazard
+
+The plan documented "698 old prototype tests." The actual number at removal time was **476** — the discrepancy originated from a test pruning commit (37 tests removed) and the addition of 222 Datalog tests that were incorrectly counted as "original." The commit description for Phase 2 also carried the stale "698" figure. This matters because Phase 2.5's verification step ("only datalog + kernel tests remain") would have been confusing if someone expected 698 tests to disappear and only 476 did. **Audit numeric claims in plan documents whenever you touch the thing they count.** Counts go stale silently.
+
+### Legacy Compatibility Shims Have Tendrils in Tests You Intend to Keep
+
+The plan said "remove legacy `__neq`/`__gt` built-in predicates from `datalog/unify.ts`; audit `datalog/evaluate.ts`." What it missed: the *surviving* Datalog test files also exercised the legacy shim. Specifically:
+- `tests/datalog/unify.test.ts` had `isBuiltinPredicate` and `evaluateBuiltin` describe blocks.
+- `tests/datalog/evaluate.test.ts` had a `legacy __builtin predicates` describe block.
+- `tests/datalog/stratify.test.ts` had an LWW pattern test that used `positiveAtom(atom('__neq', ...))`.
+
+The first two were a straightforward delete. The third was subtle: the old encoding treated `__neq` as a predicate, so the stratifier added dependency edges to it. With the `guard` body element replacement, those edges disappear entirely. The test needed not just a syntax swap but *new expectations* — we added an assertion verifying that guards produce zero dependency graph edges.
+
+**Lesson:** When removing a compatibility shim, grep for it in the entire test suite, not just the modules the plan mentions. Tests are often the last consumers of deprecated APIs.
+
+### Removing Dead Code Immediately After Isolation Is Confirmed Pays Off
+
+The plan originally deferred prototype removal to Phase 6 (the final phase). Research after Phase 2 confirmed zero cross-imports between old and new code. We moved removal to Phase 2.5 — immediately after the new kernel existed. This eliminated 7,264 lines of source and 476 tests in one commit, reducing the project from 26 test files to 10 and making `tsc` noticeably faster. More importantly, it removed the cognitive overhead of two parallel type systems (`OpId`/`Assertion` vs `CnId`/`Constraint`) before Phase 3 introduced authority, validity, and retraction — modules that would have been confusing to implement with two "Constraint" types in scope.
+
+### DevDependencies Used Only by Deleted Tests Should Be Removed in the Same Pass
+
+`loro-crdt` was a devDependency used exclusively by the old `tests/equivalence/` directory. The original plan didn't mention removing it. We added it as an explicit task (2.5.6). Leaving stale devDependencies creates confusion for future contributors who wonder "are we using Loro?" and costs CI time installing packages that nothing imports. Clean up the dependency manifest in the same commit as the code deletion.
+
+## Phase 3: Authority, Validity, and Retraction
+
+### Path-Based Capability Checks Require the Skeleton — Which Doesn't Exist Yet
+
+The spec (§5.2) says a `value` constraint requires `Write(path)` where path matches the target node. But computing the target's path requires the skeleton tree — which is built in Phase 4 *after* validity filtering. This creates a chicken-and-egg problem: you need the skeleton to check validity, but you need validity to build the skeleton.
+
+Our solution: Phase 3 uses a **simplified capability model** where Admin covers everything, and non-Admin capability checks verify the capability *kind* (`write`, `createNode`, `retract`, `createRule`, `authority`) without verifying the *path pattern*. The `requiredCapability()` function returns a wildcard path pattern (`['*']`), and `capabilityCovers()` checks exact path match. Since Admin trivially covers all paths, and the simplified grant path `['*']` matches the simplified required path `['*']`, the system works correctly for the common case (creator has Admin, grants broad capabilities to collaborators).
+
+A future plan should implement real path-based capability resolution once the skeleton exists. The interface is designed for this: `requiredCapability()` is the only function that would need to change — everything else already supports path pattern comparison.
+
+### Revoke-Wins Is Simpler Than LWW for Authority
+
+The spec says concurrent grant and revoke resolve as "revoke-wins." This is simpler than LWW (which would need a peer tiebreak) and more conservative (ambiguity defaults to denial). The implementation collects all authority events for each `(targetPeer, capabilityKey)` pair, finds the maximum lamport, and checks if any event at that maximum lamport is a revoke. If so, revoke. This means a grant at lamport 5 and a revoke at lamport 5 (concurrent) resolves to revoke — even if the grant has a "higher" peer ID. The peer ID is irrelevant for authority resolution, unlike LWW value conflicts.
+
+### The Retraction Depth Limit Is Not About the Retract Constraint's Depth — It's About the Chain Depth to the Original Target
+
+Initial intuition: "depth 2 means you can retract things that are at most 2 levels deep in the tree." Wrong. Depth measures the *retraction chain*:
+- Depth 1: `retract(value)` — simple retraction.
+- Depth 2: `retract(retract(value))` — undo.
+- Depth 3: `retract(retract(retract(value)))` — redo.
+
+With `maxDepth: 2`, the depth-3 retraction (redo) is ignored. This means at depth 2 you get retract + undo, but no redo. The `computeDepth()` function walks the retraction chain: if the target is a non-retract constraint, depth is 1; if the target is itself a retract, depth is `1 + depth(target's target)`.
+
+A subtle consequence: a retraction that *exceeds* the depth limit is still an active constraint in the store — it just has no dominance effect. It doesn't produce a violation; it's silently impotent. This is intentional: the retraction is structurally valid (correct refs, non-structure target), it just exceeds the policy limit.
+
+### Structure Constraint Immunity Simplifies the Retraction Graph
+
+Structure constraints (nodes in the reality tree) can never be retracted. This is a hard rule from the spec (§2.1, §6), and we enforce it by checking the target's type before adding edges to the retraction graph. The consequence: structure constraints don't participate in dominance computation at all. They're always active. This simplifies the retraction graph significantly — only value, retract, rule, authority, and bookmark constraints can be dominated.
+
+Attempted retractions of structure constraints are recorded as *violations* (not errors) — the retract constraint itself remains active, it just has no effect. This is important for auditability: you can see that a peer tried to retract a structure node.
+
+### Target-in-Refs Is a Causal Safety Net, Not a Security Feature
+
+The rule that a retract's target must appear in its `refs` (causal predecessors) prevents a class of bugs where a retraction arrives before the thing it retracts. Without this rule, a peer could retract a constraint it hasn't seen yet — which is causally incoherent. The Agent enforces this by construction (refs are computed from the observed version vector), so in normal operation this rule is always satisfied. It's a defensive check that catches: (1) manually constructed test constraints with wrong refs, (2) malformed constraints from a buggy remote peer, (3) race conditions in sync protocols.
+
+### Memoized Dominance Avoids Exponential Blowup in Deep Chains
+
+The dominance function is recursive: to know if constraint C is dominated, you need to know if each of its retractors is active, which requires computing *their* dominance, and so on. Without memoization, this is exponential in chain depth. The `domCache` map ensures each constraint's dominance is computed exactly once. The `computing` set detects cycles (which shouldn't exist in valid causal data, but defensive programming matters). In practice, with `maxDepth: 2`, the recursion depth is at most 2 — but the memoization makes the general case safe.
+
+### `readonly` Return Types Require Spreading at Convenience Boundaries
+
+`computeValid()` returns `{ readonly valid: readonly Constraint[] }`. The convenience function `filterValid()` wants to return `Constraint[]` (mutable) for caller flexibility. TypeScript won't assign `readonly Constraint[]` to `Constraint[]` — you need `[...result.valid]`. This is a minor annoyance but affects every "convenience wrapper that returns a subset" pattern. We encountered it in both `filterValid()` and `filterActive()`. The alternative — making the core return type mutable — weakens the contract. The spread is the correct trade-off.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.
 
-2. **What is the performance ceiling?** Naive solving is O(n) in constraint count per path query. The Fugue tree rebuild is O(n log n) for n elements. `askPrefix` is O(total constraints). Incremental solving could amortize this, but the design is unexplored.
+2. **What is the performance ceiling?** Naive solving is O(n) in constraint count per path query. The Fugue tree rebuild is O(n log n) for n elements. Incremental solving could amortize this, but the design is unexplored.
 
 3. **Can cross-container constraints be made to work?** E.g., "if key X exists in Map A, then key Y must exist in Map B." This requires a solver that reasons across containers, which the current per-container solver architecture doesn't support.
 
@@ -351,4 +419,8 @@ The spec says `refs` are "constraints this one has observed (causal predecessors
 
 5. **What's the right caching strategy for Fugue trees?** Rebuilding the tree on every solve is expensive for large lists. Incremental updates (adding new nodes, marking deletions) could amortize the cost, but invalidation logic is complex. The store generation counter approach (see Learnings above) is the likely first step.
 
-6. **When should the prototype code be removed?** The plan says Phase 6, but carrying two parallel type systems (old `OpId`/`Assertion`/path-based and new `CnId`/`Constraint`/typed-payload) through Phases 3–5 adds cognitive load. The old code's 698 tests exercise the *old* architecture and don't validate the new one. Removing sooner (e.g., after Phase 4's equivalence tests confirm the new pipeline) could reduce confusion, but eliminates the safety net of a working comparison implementation.
+6. ~~**When should the prototype code be removed?**~~ **Resolved in Phase 2.5.** Removed immediately after Phase 2 confirmed zero cross-imports. The answer: as soon as isolation is verified, not at the end. Carrying dead code through subsequent phases was pure cognitive overhead with no safety benefit.
+
+7. **When should path-based capability checks be implemented?** Phase 3 uses a simplified model (Admin covers all, wildcard paths). Real path-based checks require the skeleton tree (Phase 4) to resolve a constraint's target path. This is a circular dependency: validity → skeleton → validity. The likely solution is a two-pass approach or lazy path resolution during skeleton construction.
+
+8. **Should the `Constraint[]` store cloning strategy be replaced?** `store.insert()` clones the entire constraint `Map` on every insert — O(n) per operation. `insertMany()` mitigates this by cloning once for a batch. For stores with tens of thousands of constraints, this becomes expensive. A persistent data structure (HAMT or similar) would make this O(log n) per insert while preserving immutability semantics.

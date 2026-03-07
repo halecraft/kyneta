@@ -146,3 +146,41 @@ export {
   produceMapChild,
   produceSeqChild,
 } from './agent.js';
+
+// --- Authority (§5.1) ---
+export type { AuthorityState } from './authority.js';
+
+export {
+  capabilityEquals,
+  capabilityKey,
+  capabilityCovers,
+  computeAuthority,
+  hasCapability,
+  getCapabilities,
+  requiredCapability,
+} from './authority.js';
+
+// --- Validity (§5.2–§5.3) ---
+export type {
+  ValidityResult,
+  InvalidConstraint,
+} from './validity.js';
+
+export {
+  computeValid,
+  filterValid,
+} from './validity.js';
+
+// --- Retraction (§6) ---
+export type {
+  RetractionConfig,
+  RetractionResult,
+  RetractionViolation,
+  RetractionViolationReason,
+} from './retraction.js';
+
+export {
+  DEFAULT_RETRACTION_CONFIG,
+  computeActive,
+  filterActive,
+} from './retraction.js';
