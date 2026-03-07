@@ -24,7 +24,7 @@ import type {
   StatementNode,
   TemplateHole,
 } from "../ir.js"
-import { computeSlotKind, mergeConditionalBodies } from "../ir.js"
+import { computeSlotKind } from "../ir.js"
 import {
   extractTemplate,
   generateTemplateDeclaration,
@@ -831,22 +831,10 @@ function generateConditional(
     return generateRenderConditional(node, parentVar, state)
   }
 
-  // Reactive conditional: try dissolution first, fallback to conditionalRegion
+  // Reactive conditional: emit conditionalRegion
+  // (Dissolvable conditionals are already resolved at the IR level by
+  // dissolveConditionals — any ConditionalNode reaching here is non-dissolvable.)
   const elseBranch = node.branches.find(b => b.condition === null)
-  if (elseBranch) {
-    const mergeResult = mergeConditionalBodies(node.branches)
-    if (mergeResult.success) {
-      // Dissolution successful - emit pure Applicative code
-      // No marker, no conditionalRegion call, just direct elements with ternaries
-      for (const child of mergeResult.value) {
-        const childResult = generateChild(child, parentVar, state)
-        lines.push(...childResult.code)
-      }
-      return lines
-    }
-  }
-
-  // Fallback: standard reactive conditional with conditionalRegion
   const markerVar = genVar(state, "marker")
   lines.push(`${ind}const ${markerVar} = document.createComment("kinetic:if")`)
   lines.push(`${ind}${parentVar}.appendChild(${markerVar})`)
@@ -1206,16 +1194,9 @@ function generateConditionalWithMarker(
     return lines
   }
 
-  // Try dissolution first
+  // Dissolvable conditionals are already resolved at the IR level by
+  // dissolveConditionals — any ConditionalNode reaching here is non-dissolvable.
   const elseBranch = node.branches.find(b => b.condition === null)
-  if (elseBranch) {
-    const mergeResult = mergeConditionalBodies(node.branches)
-    if (mergeResult.success) {
-      // Dissolution successful - but we're using template cloning
-      // The merged content is already in the template, just wire subscriptions
-      // This is complex - for now fall back to conditionalRegion
-    }
-  }
 
   const innerState = indented(state)
   const innerInd = getIndent(innerState)

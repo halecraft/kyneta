@@ -136,17 +136,17 @@ Add to existing import from `./ir.js`.
 
 ---
 
-## Phase 3: Remove Inline Dissolution from Codegen 🔴
+## Phase 3: Remove Inline Dissolution from Codegen 🟢
 
-### Task 3.1: Remove dissolution check from `generateConditional` 🔴
+### Task 3.1: Remove dissolution check from `generateConditional` 🟢
 
 In `codegen/dom.ts`, remove lines L834–847 (the `mergeConditionalBodies` attempt and early return). After Phase 2, no `ConditionalNode` reaching `generateConditional` will be dissolvable — they've already been transformed at the IR level. The function's flow becomes: check render-time → emit `conditionalRegion`.
 
-### Task 3.2: Remove dead dissolution attempt from `generateConditionalWithMarker` 🔴
+### Task 3.2: Remove dead dissolution attempt from `generateConditionalWithMarker` 🟢
 
 Remove lines L1210–1218 (the `mergeConditionalBodies` call that succeeds but falls through to `conditionalRegion` anyway). Same reasoning — dissolution is handled before codegen.
 
-### Task 3.3: Remove `mergeConditionalBodies` import from `codegen/dom.ts` 🔴
+### Task 3.3: Remove `mergeConditionalBodies` import from `codegen/dom.ts` 🟢
 
 After removing both call sites, the import of `mergeConditionalBodies` from `../ir.js` in `codegen/dom.ts` is unused. Remove it from line 29, leaving `computeSlotKind` as the sole import from that path.
 

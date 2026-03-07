@@ -972,7 +972,7 @@ describe("generateDOM - conditional regions", () => {
 
   it("should dissolve conditional with identical structure (Level 2)", () => {
     // Conditional with identical structure but different literal content
-    // Should be dissolved into direct element creation with ternary
+    // Dissolution happens at the IR level (dissolveConditionals), before codegen
     const trueBranch = createConditionalBranch(
       createContent(
         "count.get() > 0",
@@ -1019,7 +1019,9 @@ describe("generateDOM - conditional regions", () => {
       span(1, 0, 7, 1),
     )
 
-    const code = generateDOM(builder)
+    // Apply IR-level dissolution before codegen (mirrors transform pipeline)
+    const dissolved = dissolveConditionals(builder)
+    const code = generateDOM(dissolved)
 
     // Should NOT contain conditionalRegion (dissolved)
     expect(code).not.toContain("conditionalRegion")
