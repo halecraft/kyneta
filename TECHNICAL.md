@@ -219,6 +219,10 @@ The callback receives a **delta** describing what changed, not just a void notif
 | `"map"` | `MapDelta` | `RecordRef`, `StructRef`, `DocRef` | Update changed keys only |
 | `"tree"` | `TreeDelta` | `TreeRef` | Structural tree updates |
 
+**Delta Provenance (`origin` field):** Every `ReactiveDelta` member carries an optional `origin?: DeltaOrigin` field (where `DeltaOrigin = "local" | "import"`). This is forwarded from Loro's `LoroEventBatch.by` field by `translateEventBatch` in the reactive bridge. Non-Loro reactive types (e.g., `LocalRef`) omit the field — consumers treat `undefined` as "unknown origin" and fall back to safe defaults. Most consumers ignore `origin`; it currently enables provenance-aware cursor management in `inputTextRegion`. See [packages/change/TECHNICAL.md](./packages/change/TECHNICAL.md) for forwarding details and [packages/kinetic/TECHNICAL.md](./packages/kinetic/TECHNICAL.md) for the input cursor dispatch logic.
+
+**Loro `by` caveat:** Loro's `"local"` fires for both user input and local undo/redo. The bridge forwards this faithfully. Higher-level consumers that need finer distinction (e.g., `editText`) use their own per-element flags.
+
 The generic parameter `D` allows compile-time inference of which delta kind a type emits. The Kinetic compiler's `getDeltaKind()` reads the `type` property from `D` to determine optimization opportunities.
 
 **Critical:** Each typed ref must narrow `D` to its specific delta type via `declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>` (or the appropriate named type). Without this narrowing, `D` defaults to the full `ReactiveDelta` union, and `getDeltaKind()` silently falls back to `"replace"` — disabling all surgical patching optimizations. The `declare` keyword ensures no JavaScript is emitted; the runtime implementation inherited from `TypedRef` handles all container types correctly. See [packages/change/TECHNICAL.md](./packages/change/TECHNICAL.md) for the full ref-to-delta mapping table.

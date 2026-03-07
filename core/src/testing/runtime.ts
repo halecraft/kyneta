@@ -33,6 +33,7 @@ export {
 export {
   activeSubscriptions,
   getActiveSubscriptionCount,
+  getActiveSubscriptions,
   resetSubscriptionIdCounter,
 } from "../runtime/subscribe.js"
 

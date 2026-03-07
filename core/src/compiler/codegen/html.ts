@@ -507,6 +507,12 @@ export function generateRenderFunction(
  * Generate the __escapeHtml helper function.
  *
  * This should be included in the generated module.
+ *
+ * **Sync warning:** The escape map below must stay in sync with
+ * `HTML_ESCAPE_MAP` in `../html-constants.ts`. Both define the same
+ * 5 character→entity mappings (`&`, `<`, `>`, `"`, `'`). If you add
+ * or change an entry here, update `html-constants.ts` as well (and
+ * vice versa).
  */
 export function generateEscapeHelper(): string {
   return `function __escapeHtml(str) {

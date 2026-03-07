@@ -55,10 +55,22 @@ import { subscribe } from "./subscribe.js"
  * The returned Slot guarantees the trackability invariant:
  * all inserted content can be reliably removed via releaseSlot().
  *
+ * **Runtime vs compile-time slot kind:** The compile-time `slotKind` hint
+ * is an optimization that lets the runtime skip inspection. However, the
+ * runtime may produce a slot of a *different* kind than the hint when the
+ * hint is overly conservative. For example, `slotKind: "range"` with a
+ * fragment containing 0 or 1 children will produce a `"single"` slot
+ * (empty placeholder or direct child tracking). This is intentional —
+ * the runtime always produces the **minimal** slot representation, and
+ * the compile-time hint is a fast-path for the common case. The fallback
+ * path (no hint) inspects at runtime and produces identical results.
+ *
  * @param parent - The parent node to insert into
  * @param content - The node to insert (may be a DocumentFragment)
  * @param referenceNode - Insert before this node (or append if null)
- * @param slotKind - Optional compile-time hint for optimization
+ * @param slotKind - Optional compile-time hint for optimization.
+ *   When provided, dispatches directly without runtime inspection.
+ *   May produce a different slot kind than hinted (see above).
  * @returns Slot for reliable removal
  *
  * @internal - Exported for testing

@@ -589,6 +589,12 @@ Non-reactive equivalents:
 
 ## Design Decisions
 
+### Shared Predicate Functions
+
+Codegen dispatch predicates — `isTextRegionContent()` and `isInputTextRegionAttribute()` — live in `ir.ts` as the single source of truth. These predicates gate both codegen dispatch (which runtime function to emit) and import collection (which runtime imports are needed). Having them in one place prevents the subtle divergence that occurs when the same condition is copy-pasted across `codegen/dom.ts` and `transform.ts`.
+
+Both predicates are pure functions of their IR node arguments, with no codegen state dependency. This makes them testable in isolation (`ir.test.ts`) and safe to call from any compilation phase.
+
 ### IR-Level Dissolution
 
 Conditional dissolution is implemented as a pure IR→IR transform (`dissolveConditionals` in `ir.ts`) rather than inline logic in codegen functions. This follows the precedent set by `filterTargetBlocks`, which also transforms the IR before codegen sees it.
@@ -657,13 +663,13 @@ packages/kinetic/src/compiler/
 ├── analyze.test.ts          # Analysis unit tests
 ├── reactive-detection.ts    # Reactive type + ComponentFactory detection
 ├── html-constants.ts        # Shared HTML constants (VOID_ELEMENTS, escapeHtml)
-├── ir.ts                    # IR type definitions and factories
-├── ir.test.ts               # IR unit tests
+├── ir.ts                    # IR types, factories, predicates, and IR→IR transforms
+├── ir.test.ts               # IR unit tests (includes predicate + dissolution tests)
 ├── walk.ts                  # Generator-based IR walker (WalkEvent stream)
 ├── walk.test.ts             # Walker unit tests
 ├── template.ts              # Template extraction + walk planning (NavOp)
 ├── template.test.ts         # Template extraction tests
-├── transform.ts             # Orchestrates analysis + codegen + module resolution
+├── transform.ts             # Orchestrates analysis + codegen + import collection
 ├── transform.test.ts        # Transform tests
 ├── integration.test.ts      # End-to-end compilation tests
 └── codegen/
@@ -744,6 +750,8 @@ import { bindTextValue } from "@loro-extended/kinetic/loro"
 ```
 
 The binding functions use `loro()` to access raw Loro containers for write operations, while still using `subscribe` (via `[REACTIVE]`) for the read/subscribe side.
+
+**The `unknown` boundary:** Binding functions accept `ref: unknown` because compiled code passes refs without static type information. The `loro()` unwrapper validates the input first, then runtime dispatch via `isLoroText()` / `isLoroCounter()` discriminators determines the container type. These discriminators use LoroText-specific methods (`.insert`) and LoroCounter-specific methods (`.increment` + `.value`) rather than universally-inherited methods like `.toString()`, which would be inert as discriminators.
 
 **`editText(ref: TextRef)`** — Returns a `beforeinput` event handler that translates DOM editing operations into typed-ref `insert()` / `delete()` calls with auto-commit. This is the write-direction complement to `inputTextRegion` (the read direction). Unlike `bindTextValue`, it:
 - Uses `beforeinput` (not `input`) to intercept edits before the browser applies them
@@ -878,9 +886,21 @@ Both the createElement path (`generateAttributeSubscription`) and the template c
 1. `generateAttributeSet` **skips** the initial `.value =` (inputTextRegion handles initialization)
 2. `generateAttributeSubscription` emits `inputTextRegion(el, ref, scope)` instead of a naive `subscribe`
 
-**DOM API:** `setRangeText(text, start, end, "preserve")`
+**DOM API:** `setRangeText(text, start, end, selectMode)`
 
-Unlike `textRegion` which uses `insertData`/`deleteData` on Text nodes, input elements have no character-level DOM API. `setRangeText` with `selectMode: "preserve"` provides equivalent surgical editing with automatic cursor preservation — inserts before the cursor shift it right, deletes before the cursor shift it left. This eliminates all manual cursor arithmetic.
+Unlike `textRegion` which uses `insertData`/`deleteData` on Text nodes, input elements have no character-level DOM API. `setRangeText` provides equivalent surgical editing. The `selectMode` parameter controls cursor adjustment:
+
+- `"preserve"` — Attempts to keep the cursor where it was. Correct for **remote** edits (inserts before cursor shift it right, deletes before cursor shift it left). **Incorrect** for local edits at the cursor position — see caveat below.
+- `"end"` — Moves cursor to end of the replacement range.
+
+**`setRangeText("preserve")` cursor caveat:** Per the HTML spec, `"preserve"` adjusts `selectionStart` only when it is *strictly greater than* the replacement range endpoints. When inserting at the cursor position (`start === end === selectionStart`), neither adjustment branch fires — the cursor stays put. This means typing "Hello" character by character produces "olleH" because each character is inserted at position 0 (the cursor never advances). `"preserve"` was designed for edits happening *elsewhere* in the text, not at the cursor.
+
+**Origin-aware dispatch:** To handle this correctly, `inputTextRegion` coordinates with `editText` via a per-element active-edit flag:
+
+- **During `editText` handler** (local typing): `inputTextRegion`'s subscription callback detects the active-edit flag and **skips** `patchInputValue`. The `editText` handler manages the cursor directly via `setSelectionRange` after the CRDT mutation.
+- **Outside `editText`** (remote edits, undo/redo): `inputTextRegion` applies `patchInputValue` with `setRangeText("preserve")` as normal — this correctly shifts the local cursor relative to remote insertions/deletions.
+
+The active-edit detection uses a pluggable predicate (`setActiveEditPredicate`) to preserve the Loro-agnostic runtime boundary. The `editText` module registers its predicate at import time. If no predicate is registered (e.g., read-only input), all edits use `"preserve"` — the safe default.
 
 **Functional Core** (shared with `textRegion`):
 - `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
@@ -910,13 +930,17 @@ function inputTextRegion(
 
 **The `setAttribute` fix:** The `generateAttributeUpdateCode` helper was extracted as the single source of truth for attribute→DOM-API mapping. This fixed a latent bug in the template cloning path where `setAttribute("value", x)` was used instead of `.value =`. After user interaction, `setAttribute` only changes the HTML default attribute — not the live DOM property. The same fix covers `checked`, `disabled`, `class`, `style`, and `data-*` in both the createElement and cloneNode codegen paths.
 
-**Integration with `editText`:** The full write→read cycle is synchronous within one event loop tick:
-1. `beforeinput` → `editText` handler → `ref.insert()` / `ref.delete()`
-2. `commitIfAuto()` fires synchronously
-3. Loro event system → `translateEventBatch` → `ReactiveDelta { type: "text" }`
-4. `inputTextRegion` callback → `patchInputValue` → `setRangeText("preserve")`
+**Integration with `editText`:** The full write→read cycle for local edits is synchronous within one event loop tick:
+1. `beforeinput` → `editText` handler sets active-edit flag on the element
+2. Handler reads `selectionStart`/`selectionEnd`, calls `ref.insert()` / `ref.delete()`
+3. `commitIfAuto()` fires synchronously → Loro event system → `translateEventBatch` → `ReactiveDelta { type: "text", origin: "local" }`
+4. `inputTextRegion` callback sees active-edit flag → **skips** `patchInputValue`
+5. `editText` handler computes new cursor position, calls `setSelectionRange(newCursor, newCursor)`
+6. Handler clears active-edit flag
 
-The user never sees an intermediate state.
+For remote edits, the subscription fires without the active-edit flag, and `patchInputValue` applies `setRangeText("preserve")` — correctly shifting the local cursor.
+
+The user never sees an intermediate state. The active-edit flag is only true during the synchronous handler execution (steps 1–6).
 
 ### Region Algebra
 
@@ -944,6 +968,8 @@ type Slot =
 ```
 
 The `claimSlot()` helper automatically chooses the appropriate strategy. When compile-time `slotKind` is provided, it dispatches directly without runtime inspection. The `releaseSlot()` function handles removal for both cases.
+
+**Runtime vs compile-time slot kind:** The compile-time `slotKind` hint is an optimization, not a contract. The runtime may produce a slot of a *different* kind than the hint when the hint is overly conservative. For example, `slotKind: "range"` with a fragment containing 0 or 1 children will produce a `"single"` slot (empty placeholder or direct child tracking). This is intentional — the runtime always produces the **minimal** slot representation, and the compile-time hint is a fast-path for the common case. The `computeSlotKind()` function in `ir.ts` is deliberately conservative (it doesn't evaluate expressions), so this divergence is expected and safe.
 
 #### Functional Core / Imperative Shell
 
@@ -1350,11 +1376,22 @@ Every delta region has three phases:
 | List | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"list"` | Parent element children |
 | Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition ref | Branch swap |
 
+### Delta Provenance
+
+`ReactiveDelta` carries an optional `origin` field (`"local"` | `"import"` | undefined) forwarded from Loro's `LoroEventBatch.by`. This is a **provenance dimension** of the delta algebra — it describes *who caused the change*, not just *what changed*.
+
+Most region types ignore provenance (Text nodes, lists, conditionals have no ephemeral local state affected by origin). The exception is `inputTextRegion`, where cursor management depends on whether the edit is local or remote. See **Input Text Region Architecture** above.
+
+**Design principle:** Provenance is metadata on the delta, not a separate channel. This keeps the `subscribe` callback signature simple (`(delta: D) => void`) and lets consumers opt in to origin-awareness by reading `delta.origin`. Non-Loro reactive types (e.g., `LocalRef`) omit the field — consumers treat `undefined` as "unknown origin" and fall back to safe defaults.
+
+**Loro `by` field caveat:** Loro's `"local"` origin fires for BOTH user input AND local undo/redo operations. The delta algebra forwards this faithfully without reinterpretation. Higher-level consumers (like `editText` + `inputTextRegion`) use their own flags to distinguish user typing from undo — this is a consumer concern, not an algebra concern.
+
 ### Delta Dispatch Strategy
 
 Each region type handles its matching delta surgically:
 
 - **Text deltas** → `insertData` / `deleteData` on Text nodes (character-level)
+- **Input text deltas** → `patchInputValue` via `setRangeText("preserve")` for remote edits; skipped for local edits (cursor managed by `editText`)
 - **List deltas** → `insertBefore` / `removeChild` on parent (element-level)
 - **Condition changes** → `replaceChild` for branch swapping
 

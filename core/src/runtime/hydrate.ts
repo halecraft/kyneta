@@ -267,32 +267,6 @@ export function elementMatches(
   return true
 }
 
-/**
- * Report a hydration mismatch.
- *
- * @param ctx - Walk context
- * @param message - Mismatch description
- * @param expected - What was expected
- * @param actual - What was found
- */
-function _reportMismatch(
-  ctx: WalkContext,
-  message: string,
-  expected: string,
-  actual: string,
-): void {
-  const error = new HydrationMismatchError(expected, actual, message)
-  ctx.mismatches.push(error)
-
-  if (ctx.options.onMismatch) {
-    ctx.options.onMismatch(error)
-  }
-
-  if (ctx.options.strict) {
-    throw error
-  }
-}
-
 // =============================================================================
 // Hydration Handlers
 // =============================================================================

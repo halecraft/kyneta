@@ -33,12 +33,29 @@ export function resetSubscriptionIdCounter(): void {
 }
 
 /**
- * Active subscriptions map for debugging and testing.
+ * Active subscriptions map.
+ *
+ * **For testing only.** Production code should use
+ * `getActiveSubscriptions()` which returns a read-only view.
+ * Tests need the mutable map for `.clear()` in `beforeEach`.
  */
 export const activeSubscriptions = new Map<
   SubscriptionId,
   { ref: unknown; unsubscribe: () => void }
 >()
+
+/**
+ * Get a read-only view of the active subscriptions map.
+ *
+ * Use this in production code instead of the raw `activeSubscriptions`
+ * map. The returned `ReadonlyMap` prevents accidental mutation.
+ */
+export function getActiveSubscriptions(): ReadonlyMap<
+  SubscriptionId,
+  { ref: unknown; unsubscribe: () => void }
+> {
+  return activeSubscriptions
+}
 
 /**
  * Get the count of active subscriptions.
