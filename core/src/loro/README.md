@@ -1,6 +1,6 @@
-# Loro-Specific Bindings
+# Loro-Specific Extensions
 
-This subpath contains runtime functions that require direct access to Loro containers. These are **Loro-specific extensions** to the core Kinetic runtime.
+This subpath contains runtime functions that require direct access to Loro containers. These are **Loro-specific extensions** to the core Kinetic runtime, including two-way bindings and operation-aware write functions.
 
 ## Why a Separate Subpath?
 
@@ -10,12 +10,12 @@ The core Kinetic runtime (`@loro-extended/kinetic`) is **Loro-agnostic**. It use
 - Loro typed refs from `@loro-extended/change`
 - Custom reactive types
 
-However, **two-way bindings** (`bind:value`, `bind:checked`) require direct Loro container access for mutations. They can't work through the generic `[REACTIVE]` interface because:
+However, **write-direction functions** (two-way bindings, operation-aware text editing) require direct Loro container access for mutations. They can't work through the generic `[REACTIVE]` interface because:
 
 1. **Read path** — Uses `[REACTIVE]` for subscriptions ✅
-2. **Write path** — Needs raw Loro container methods like `textRef.delete()` + `textRef.insert()` ❌
+2. **Write path** — Needs Loro typed ref methods like `textRef.insert()` + `textRef.delete()` ❌
 
-This asymmetry is intentional and explicit. By placing Loro-specific bindings in a separate subpath, we:
+This asymmetry is intentional and explicit. By placing Loro-specific functions in a separate subpath, we:
 
 - Keep the core runtime minimal and portable
 - Make Loro dependencies visible in import statements
@@ -29,11 +29,44 @@ Generated code imports from both paths when bindings are used:
 // Core runtime (Loro-agnostic)
 import { __subscribe, __listRegion } from "@loro-extended/kinetic"
 
-// Loro-specific bindings
+// Loro-specific write functions
 import { __bindTextValue, __bindChecked } from "@loro-extended/kinetic/loro"
 ```
 
+User code imports `editText` from the main package (re-exported from this subpath):
+
+```typescript
+import { editText } from "@loro-extended/kinetic"
+```
+
 ## Exported Functions
+
+### `editText(ref: TextRef)` — **Recommended for text inputs**
+
+Returns a `beforeinput` event handler that translates DOM editing operations into CRDT operations on the TextRef. This is the write-direction complement to `inputTextRegion` (the read direction, generated automatically by the compiler).
+
+```typescript
+input({
+  value: doc.title.toString(),          // compiler → inputTextRegion (read)
+  onBeforeInput: editText(doc.title),   // editText handler (write)
+})
+```
+
+**How it works:**
+1. Intercepts `beforeinput` events and calls `e.preventDefault()`
+2. Reads `selectionStart`/`selectionEnd` from the target element
+3. Dispatches to the appropriate handler based on `e.inputType`:
+   - `insertText`, `insertFromPaste`, `insertFromDrop`, `insertFromComposition` → `ref.insert()`
+   - `deleteContentBackward`, `deleteContentForward`, `deleteByCut` → `ref.delete()`
+   - Word/line deletions → `getTargetRanges()` for browser-computed boundaries
+4. The typed ref's `commitIfAuto()` fires synchronously
+5. The `inputTextRegion` subscription updates the DOM via `setRangeText("preserve")`
+
+**IME handling:** Skips `isComposing === true` events (lets browser manage intermediate composition state). Processes `insertFromComposition` when composition ends.
+
+**History:** Passes through `historyUndo` / `historyRedo` without intercepting.
+
+**vs. `bindTextValue`:** `editText` preserves CRDT character-level merge semantics (individual `insert`/`delete` calls), while `bindTextValue` does full-text replacement (`delete(0, len)` + `insert(0, newValue)`) which destroys merge semantics. `editText` also doesn't manage the cursor — `setRangeText("preserve")` handles that automatically on the read side.
 
 ### `__bindTextValue(element, ref, scope)`
 
@@ -70,9 +103,24 @@ input({ type: "text", value: bind(doc.title) })
 
 Type guard to check if a value is a binding marker.
 
+## Choosing Between `editText` and `bind`
+
+| Concern | `editText` + `value:` | `bind()` |
+|---|---|---|
+| Write mechanism | `beforeinput` → individual `insert`/`delete` | `input` event → full replacement |
+| Read mechanism | `inputTextRegion` → `setRangeText("preserve")` | `subscribe` → `element.value =` |
+| Cursor preservation | ✅ Automatic via `setRangeText` | ❌ Cursor resets on remote update |
+| CRDT merge semantics | ✅ Character-level | ❌ Destroyed (full replacement) |
+| Auto-commit | ✅ Via typed ref API | ❌ Raw container, no commit |
+| IME support | ✅ `isComposing` + `insertFromComposition` | ❌ Not handled |
+| Compiler recognition | Not needed (plain function) | Required (`bind()` call expression) |
+| Use case | Text inputs backed by `TextRef` | Checkboxes, numeric inputs |
+
+**Recommendation:** Use `editText` for all `TextRef`-backed text inputs. Use `bind()` for checkboxes (`bind:checked`) and other non-text bindings.
+
 ## Local State and Bindings
 
-Local state created with `state()` works with the core runtime via `[REACTIVE]`, but **does not participate in two-way bindings**. For local UI state, use event handlers instead:
+Local state created with `state()` works with the core runtime via `[REACTIVE]`, but **does not participate in two-way bindings or `editText`**. For local UI state, use event handlers instead:
 
 ```typescript
 import { state } from "@loro-extended/kinetic"

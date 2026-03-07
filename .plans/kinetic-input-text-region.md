@@ -234,28 +234,28 @@ The write direction: `beforeinput` DOM events translated into CRDT operations on
    - `npx tsc --noEmit` in `examples/kinetic-todo` — type checks pass (after `pnpm --filter @loro-extended/kinetic run build` to update dist)
    - `npx vitest run` in `packages/kinetic` — all 907 tests pass
 
-## Phase 5: Documentation 🔴
+## Phase 5: Documentation 🟢
 
 ### Tasks
 
-1. **Update `packages/kinetic/TECHNICAL.md`** 🔴
+1. **Update `packages/kinetic/TECHNICAL.md`** ✅
 
    - Add "Input Text Region Architecture" subsection under "Text Region Architecture", documenting `inputTextRegion` as the `<input>` analog of `textRegion`, the `patchInputValue` function, the `setRangeText("preserve")` mechanism, and the codegen dispatch condition
    - Update "Loro Bindings Subpath" to document `editText` alongside the existing `bind*` functions
-   - Update "Builder Components" section to remove the note about closure-based components being necessary for `bind()` — `editText` is a plain function that works in any component flavor
-   - Update the "Delta Region Algebra" composability diagram to include `inputTextRegion`
+   - Update "Builder Components" section to replace closure-based component example with props-based `editText` pattern
+   - Update the "Delta Region Algebra" table and composability diagram to include `inputTextRegion`
 
-2. **Update `examples/kinetic-todo/README.md`** 🔴
+2. **Update `examples/kinetic-todo/README.md`** ✅
 
-   Replace the "Two-Way Bindings" bullet and the "Components" section to show the `editText` + reactive `value` pattern instead of `bind()`.
+   Replaced the "Two-Way Bindings" bullet and the "Components" section to show the `editText` + reactive `value` pattern instead of `bind()`.
 
-3. **Update `packages/kinetic/src/loro/README.md`** 🔴
+3. **Update `packages/kinetic/src/loro/README.md`** ✅
 
-   Add `editText(ref)` documentation alongside the existing binding docs.
+   Added `editText(ref)` documentation as the recommended approach for text inputs, added comparison table between `editText` and `bind()`, updated framing from "Bindings" to "Extensions".
 
-4. **Create changeset** 🔴
+4. **Create changeset** ✅
 
-   A minor changeset for `@loro-extended/kinetic` describing the new `inputTextRegion` runtime and `editText` function.
+   Minor changeset for `@loro-extended/kinetic` in `.changeset/input-text-region-edit-text.md`.
 
 ## Tests
 

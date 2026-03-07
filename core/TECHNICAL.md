@@ -720,7 +720,7 @@ The core runtime (`@loro-extended/kinetic/runtime`) has **no imports from `@loro
 
 ### Loro Bindings Subpath
 
-Two-way bindings (`bind:value`, `bind:checked`) require direct Loro container access for mutations. They live in a separate subpath:
+Two-way bindings (`bind:value`, `bind:checked`) and operation-aware write functions live in a separate subpath that requires direct Loro container access:
 
 ```typescript
 // Generated code for components with bindings:
@@ -729,6 +729,16 @@ import { bindTextValue } from "@loro-extended/kinetic/loro"
 ```
 
 The binding functions use `loro()` to access raw Loro containers for write operations, while still using `subscribe` (via `[REACTIVE]`) for the read/subscribe side.
+
+**`editText(ref: TextRef)`** — Returns a `beforeinput` event handler that translates DOM editing operations into typed-ref `insert()` / `delete()` calls with auto-commit. This is the write-direction complement to `inputTextRegion` (the read direction). Unlike `bindTextValue`, it:
+- Uses `beforeinput` (not `input`) to intercept edits before the browser applies them
+- Calls `e.preventDefault()` and lets `inputTextRegion` handle DOM updates via `setRangeText("preserve")`
+- Preserves CRDT character-level merge semantics (no full-text replacement)
+- Auto-commits via the typed ref API (not raw container mutations)
+- Handles IME composition (`isComposing` skip + `insertFromComposition`)
+- Passes through `historyUndo` / `historyRedo` without intercepting
+
+Usage: `input({ value: doc.title.toString(), onBeforeInput: editText(doc.title) })` — two independent, composable props. The read direction (`value:`) and write direction (`onBeforeInput:`) are decoupled; neither requires the other.
 
 ### List Region Architecture
 
@@ -839,6 +849,59 @@ if (directReadSource && deps.length === 1 && deps[0].deltaKind === "text") {
 2. Non-text deltas (e.g., `"replace"` from `LocalRef`) trigger full `textContent` replacement
 3. Multi-dep expressions always use `subscribeMultiple` — delta describes one source, not output
 4. Direct-read detection is structural AST analysis at the expression root
+
+### Input Text Region Architecture
+
+The `inputTextRegion` runtime enables **O(k) surgical value updates** for `<input>` and `<textarea>` elements backed by a `TextRef`. It is the input-element analog of `textRegion` (which targets Text nodes).
+
+**When it applies (codegen dispatch):**
+- Attribute name is `value`
+- Expression is a direct read of a single `TextRef` (`directReadSource` is set)
+- The dependency has `deltaKind: "text"`
+
+Both the createElement path (`generateAttributeSubscription`) and the template cloning path (`generateHoleSetup`) check via `isInputTextRegionCandidate()`. When the condition is met:
+1. `generateAttributeSet` **skips** the initial `.value =` (inputTextRegion handles initialization)
+2. `generateAttributeSubscription` emits `inputTextRegion(el, ref, scope)` instead of a naive `subscribe`
+
+**DOM API:** `setRangeText(text, start, end, "preserve")`
+
+Unlike `textRegion` which uses `insertData`/`deleteData` on Text nodes, input elements have no character-level DOM API. `setRangeText` with `selectMode: "preserve"` provides equivalent surgical editing with automatic cursor preservation — inserts before the cursor shift it right, deletes before the cursor shift it left. This eliminates all manual cursor arithmetic.
+
+**Functional Core** (shared with `textRegion`):
+- `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
+
+**Imperative Shell:**
+- `patchInputValue(input, ops)` — applies patches via `setRangeText("preserve")`
+- `inputTextRegion(input, ref, scope)` — subscription-aware wrapper
+
+```typescript
+function inputTextRegion(
+  input: HTMLInputElement | HTMLTextAreaElement,
+  ref: unknown,
+  scope: Scope,
+): void {
+  const typedRef = ref as TextRefLike
+  input.value = typedRef.get()  // Initial value
+
+  subscribe(ref, (delta: ReactiveDelta) => {
+    if (delta.type === "text") {
+      patchInputValue(input, delta.ops)  // O(k) surgical update
+    } else {
+      input.value = typedRef.get()       // Fallback
+    }
+  }, scope)
+}
+```
+
+**The `setAttribute` fix:** The `generateAttributeUpdateCode` helper was extracted as the single source of truth for attribute→DOM-API mapping. This fixed a latent bug in the template cloning path where `setAttribute("value", x)` was used instead of `.value =`. After user interaction, `setAttribute` only changes the HTML default attribute — not the live DOM property. The same fix covers `checked`, `disabled`, `class`, `style`, and `data-*` in both the createElement and cloneNode codegen paths.
+
+**Integration with `editText`:** The full write→read cycle is synchronous within one event loop tick:
+1. `beforeinput` → `editText` handler → `ref.insert()` / `ref.delete()`
+2. `commitIfAuto()` fires synchronously
+3. Loro event system → `translateEventBatch` → `ReactiveDelta { type: "text" }`
+4. `inputTextRegion` callback → `patchInputValue` → `setRangeText("preserve")`
+
+The user never sees an intermediate state.
 
 ### Region Algebra
 
@@ -1177,12 +1240,12 @@ Two idiomatic flavors:
     })
   ```
 
-- **Closure-based** — captures data from the enclosing scope. Necessary when a component needs `bind()`, since bindings cannot be forwarded through props (the compiler recognizes `bind()` call expressions, not property accesses):
+- **Props-based with `editText`** — text input components can use `editText` as a plain function prop. Unlike `bind()`, `editText` doesn't require compiler recognition and works in any component flavor:
   ```typescript
-  const TodoHeader: () => Element = () =>
+  const TodoHeader: (props: { doc: TodoDoc }) => Element = ({ doc }) =>
     header(() => {
       h1(doc.title.toString())
-      input({ value: bind(doc.newTodoText), ... })
+      input({ value: doc.newTodoText.toString(), onBeforeInput: editText(doc.newTodoText) })
     })
   ```
 
@@ -1253,7 +1316,7 @@ This optimization is most valuable for large static lists — e.g., rendering 10
 
 ## Delta Region Algebra
 
-Text patching, list regions, and conditional regions all follow the same **Functional Core / Imperative Shell** pattern, forming a unified "delta region" algebra.
+Text patching, input text patching, list regions, and conditional regions all follow the same **Functional Core / Imperative Shell** pattern, forming a unified "delta region" algebra.
 
 ### The Pattern
 
@@ -1263,11 +1326,12 @@ Every delta region has three phases:
 2. **Subscribe** — Register for delta notifications
 3. **Delta dispatch** — Apply surgical updates or fall back to full re-render
 
-| Region Type | Planning (Pure) | Execution (Imperative) | Delta Type |
-|-------------|-----------------|------------------------|------------|
-| Text | `planTextPatch(ops)` | `patchText(node, ops)` | `"text"` |
-| List | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"list"` |
-| Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition ref |
+| Region Type | Planning (Pure) | Execution (Imperative) | Delta Type | DOM Target |
+|-------------|-----------------|------------------------|------------|------------|
+| Text | `planTextPatch(ops)` | `patchText(node, ops)` | `"text"` | Text node |
+| Input Text | `planTextPatch(ops)` | `patchInputValue(input, ops)` | `"text"` | `<input>` / `<textarea>` value |
+| List | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"list"` | Parent element children |
+| Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition ref | Branch swap |
 
 ### Delta Dispatch Strategy
 
@@ -1284,18 +1348,22 @@ When a delta type doesn't match the region type (e.g., a "replace" delta arrives
 Delta regions compose naturally:
 
 ```
-┌─ div (template clone) ─────────────────────────┐
-│  ┌─ h1 ─────────────────────────────────────┐   │
-│  │  textRegion(doc.title)  ← text deltas    │   │
-│  └───────────────────────────────────────────┘   │
-│  ┌─ conditionalRegion(doc.showDetails) ──────┐   │
-│  │  ┌─ listRegion(doc.items) ─────────────┐  │   │
-│  │  │  ┌─ li ────────────────────────┐    │  │   │
-│  │  │  │  textRegion(item.text)      │    │  │   │
-│  │  │  └─────────────────────────────┘    │  │   │
-│  │  └─────────────────────────────────────┘  │   │
-│  └────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────┘
+┌─ div (template clone) ─────────────────────────────┐
+│  ┌─ h1 ─────────────────────────────────────────┐   │
+│  │  textRegion(doc.title)  ← text deltas        │   │
+│  └───────────────────────────────────────────────┘   │
+│  ┌─ input ───────────────────────────────────────┐   │
+│  │  inputTextRegion(doc.search) ← text deltas    │   │
+│  │  onBeforeInput: editText(doc.search) → CRDT   │   │
+│  └───────────────────────────────────────────────┘   │
+│  ┌─ conditionalRegion(doc.showDetails) ──────────┐   │
+│  │  ┌─ listRegion(doc.items) ─────────────────┐  │   │
+│  │  │  ┌─ li ────────────────────────────┐    │  │   │
+│  │  │  │  textRegion(item.text)          │    │  │   │
+│  │  │  └─────────────────────────────────┘    │  │   │
+│  │  └─────────────────────────────────────────┘  │   │
+│  └────────────────────────────────────────────────┘   │
+└───────────────────────────────────────────────────────┘
 ```
 
 Each region independently subscribes to its own reactive source. Parent disposal cascades to children via the `Scope` tree. Template cloning provides the static structure; delta regions fill in the dynamic holes.
