@@ -1,8 +1,79 @@
 # Prism Technical Documentation
 
+> **⚠️ Architectural Shift**: This document describes the v0 prototype architecture (Plan 001). Prism is being rewritten to implement the [Unified CCS Engine Specification](./theory/unified-engine.md). See [Plan 002](./.plans/002-unified-ccs-engine.md) for the new architecture. The sections below are retained for historical reference and will be replaced as the new implementation progresses.
+
 ## Overview
 
 Prism implements **Convergent Constraint Systems (CCS)**, a theoretical framework for building collaborative data structures where constraints are the source of truth and state is derived through deterministic solving.
+
+## New Architecture (Unified CCS Engine)
+
+The v0 prototype validated the CCS thesis. The new implementation follows the formal spec (`theory/unified-engine.md`) with two mandatory components:
+
+### Engine = Layer 0 Kernel + Datalog Evaluator
+
+**Layer 0 Kernel** (§B.2): Mechanical algorithms — constraint storage, set union merge, CnId generation, Lamport clocks, ed25519 signatures, authority/validity computation, retraction graph and dominance, version vectors, tree skeleton construction. Given the same store, any two correct implementations produce identical results.
+
+**Datalog Evaluator** (§B.3): Stratified, bottom-up, semi-naive fixed-point evaluation with aggregation. Evaluates rule constraints from the store over facts derived from active constraints. LWW and Fugue are Datalog rules that travel in the store — they are not hardcoded algorithms.
+
+**Native Solvers** (§B.7, optional): Host-language LWW and Fugue implementations as performance optimizations. Must produce identical results to the Datalog rules they replace.
+
+### Key Architectural Differences from v0
+
+| Dimension | v0 Prototype | Unified Engine |
+|-----------|-------------|----------------|
+| Constraint addressing | Path-based (`["profile", "name"]`) | CnId-based (`{peer, counter}` + causal `refs`) |
+| Constraint types | 4 assertions (`eq`, `exists`, `deleted`, `seq_element`) | 6 typed constraints (`structure`, `value`, `retract`, `rule`, `authority`, `bookmark`) |
+| Solver logic | Hardcoded TypeScript (MapSolver, ListSolver) | Datalog rules in the store; native solvers as optional optimization |
+| Deletion | `deleted` assertion at path | `retract` constraint targeting a `value` constraint's CnId |
+| Authority | None | Layer 0 capability model with grant/revoke chains |
+| Time travel | Not supported | `solve(S, V)` for any version vector V — falls out of architecture |
+| Undo/redo | Not supported | Retraction depth (retract-of-retract) |
+| Store indexing | By path (byPath Map) | By CnId (hash map) |
+
+### Solver Pipeline (§7.2)
+
+```
+Constraint Store (S), Version Vector (V)
+    │
+    ▼
+S_V = { c ∈ S | c.id ≤ V }           // filter to causal moment V
+    │
+    ▼
+Valid(S_V)                            // authority filter
+    │
+    ├──→ AllStructure(Valid(S_V))     // all valid structure constraints
+    │         │
+    │         ▼
+    │    Build skeleton               // the tree structure
+    │
+    └──→ Active(Valid(S_V))          // dominance computation
+              │
+              ▼
+         Active values                // filter to value constraints
+              │
+              ▼
+         Resolve (LWW / Fugue)       // apply policies
+              │
+              ▼
+         Reality                      // the shared reality
+```
+
+### Why TypeScript for the Datalog Evaluator
+
+Evaluated Rust WASM crates (ascent, datafrog, crepe) and npm packages (datascript, @datalogui/datalog). All were rejected:
+
+- **Rust proc-macro crates** (ascent, crepe) expand rules at compile time — can't evaluate rules-as-data at runtime
+- **datafrog** has no negation or aggregation
+- **npm packages** impose their own storage models or are abandoned
+- **WASM FFI overhead** (~100-200ns per boundary crossing) is significant for many small facts
+- The spec's native solver optimization (§B.7) means the Datalog evaluator handles only the general case; hot paths (LWW, Fugue) bypass it entirely
+
+A custom TypeScript evaluator is ~800-1200 lines with zero external dependencies and full control over the integration surface.
+
+---
+
+## v0 Prototype Architecture (Historical)
 
 ## Theoretical Foundation
 

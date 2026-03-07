@@ -1,172 +1,73 @@
 # Prism
 
-**Convergent Constraint Systems (CCS) — A constraint-based approach to CRDTs**
+**Unified CCS Engine — A constraint-based collaborative state system**
 
-Prism is an experimental implementation exploring a new way of thinking about collaborative data structures. Instead of replicating state with merge functions, Prism replicates *constraints* and derives state through deterministic solving.
+Prism implements the [Unified CCS Engine Specification](./theory/unified-engine.md), a rigorous architecture for building collaborative realities where independent agents assert **constraints** about what should be true, and a deterministic **solver** constructs shared state from those perspectives.
 
 ## Core Ideas
 
-### Constraints as Truth, State as Derived
+### Constraints, Not Operations
 
-Traditional CRDTs replicate state and define merge functions. Prism flips this:
+An operation says "do this." A constraint says "this should be true." Each agent asserts constraints from its own subjective perspective. The shared reality *emerges* when the solver examines all perspectives and constructs a state that accounts for them.
 
-```typescript
-// Traditional CRDT thinking:
-// "The map has key 'name' with value 'Alice'"
-map.set("name", "Alice");
+### Engine = Kernel + Datalog Evaluator
 
-// Prism thinking:
-// "I assert that 'name' should equal 'Alice'"
-doc.tell({ path: ["name"], assertion: { type: "eq", value: "Alice" } });
+The engine has exactly two mandatory components:
 
-// State is computed by solving all constraints
-const value = doc.ask(["name"]); // Solver determines the answer
-```
+- **Layer 0 Kernel** — Constraint storage, set union merge, CnId generation, Lamport clocks, signatures, authority/validity, retraction/dominance, version vectors. Mechanical algorithms — no inference, no search.
+- **Datalog Evaluator** — Stratified, bottom-up, semi-naive. Evaluates rule constraints from the store over facts derived from active constraints, producing the reality.
+
+Everything else — LWW value resolution, Fugue sequence ordering, custom conflict resolution, schema mappings — is expressed as Datalog rules that travel in the constraint store.
+
+### Six Constraint Types
+
+| Type | Purpose | Retractable? |
+|------|---------|-------------|
+| `structure` | Permanent node in the reality tree | Never |
+| `value` | Content at a node | Yes |
+| `retract` | Asserts a constraint should be dominated | Yes (enables undo) |
+| `rule` | Datalog rule for solver/query evaluation | Yes |
+| `authority` | Capability grant/revoke | Via revocation only |
+| `bookmark` | Named point in causal time | Yes |
 
 ### Trivial Merge, Complex Solving
 
-Merge becomes set union—commutative, associative, idempotent. All the interesting semantics move to the solver:
+Merge is set union — commutative, associative, idempotent. The solver pipeline does the work:
 
-```typescript
-// Merge is just: A ∪ B
-// Convergence comes from deterministic solving, not clever merge functions
+```
+Constraint Store (S) → filter by Version (S_V) → Valid(S_V) → Active(Valid(S_V)) → Build Skeleton → Resolve Values → Reality
 ```
 
-### Schema as Interpretation
+### Time Travel Is Free
 
-The same constraints can be viewed through different schemas:
+The solver is a pure function parameterized by a version vector. `solve(S, V)` computes the reality at any historical moment V. No special mode, no undo stack — just the solver applied to a filtered store.
 
-```typescript
-// V1 view sees: { name: string, age: number }
-// V2 view sees: { fullName: string, birthYear: number }
-// Same underlying constraints, different interpretations
+## Project Status
+
+🚧 **Active Development** — Implementing the Unified CCS Engine spec.
+
+See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the implementation plan.
+
+### Architecture
+
+```
+Engine
+├── kernel/           Layer 0 — Constraint storage, authority, validity,
+│                     retraction/dominance, version vectors, skeleton builder
+├── datalog/          Stratified bottom-up evaluator with negation & aggregation
+├── solver/           Native LWW + Fugue (optional optimization, §B.7)
+└── bootstrap.ts      Reality creation with default solver rules
 ```
 
-### Introspection
+### Previous Prototype
 
-You can always ask "why":
-
-```typescript
-const explanation = doc.explain(["user", "name"]);
-// {
-//   value: "Alice",
-//   determinedBy: { peer: "peer1", lamport: 5, assertion: { type: "eq", value: "Alice" } },
-//   conflicts: [
-//     { peer: "peer2", lamport: 3, assertion: { type: "eq", value: "Bob" } }
-//   ],
-//   resolution: "LWW: higher lamport wins"
-// }
-```
+The `v0` prototype (Plan 001) validated the CCS thesis with 476 tests confirming convergence, Fugue interleaving, LWW resolution, and Loro equivalence. The current implementation is a ground-up rewrite aligned with the formal spec.
 
 ## Installation
 
 ```bash
 bun install
 ```
-
-## Usage
-
-```typescript
-import { createPrismDoc, syncDocs } from "prism";
-
-// Create a document
-const alice = createPrismDoc({ peerId: "alice" });
-
-// Get typed handles — all share the same constraint store
-const profile = alice.getMap("profile");
-const todos = alice.getList<string>("todos");
-const notes = alice.getText("notes");
-
-// Make changes (creates constraints internally)
-profile.set("name", "Alice");
-profile.set("age", 30);
-todos.push("Learn CRDTs");
-notes.append("Hello, world!");
-
-// Read values (solves constraints)
-console.log(profile.get());          // { name: "Alice", age: 30 }
-console.log(todos.get());            // ["Learn CRDTs"]
-console.log(notes.toString());       // "Hello, world!"
-
-// Mutations through any handle are visible to all views
-const profile2 = alice.getMap("profile");
-console.log(profile2.get());         // { name: "Alice", age: 30 }
-
-// Subscribe to changes
-alice.onStateChanged(["profile", "name"], (event) => {
-  console.log("Changed:", event.before, "→", event.after);
-});
-
-// Introspection: why is this value what it is?
-const explanation = alice.introspect().explain(["profile", "name"]);
-console.log(explanation.resolution); // "single constraint from alice"
-
-// Sync with another peer
-const bob = createPrismDoc({ peerId: "bob" });
-bob.getMap("profile").set("name", "Bob");
-
-syncDocs(alice, bob);
-// Both docs converge to the same state
-```
-
-## Project Status
-
-🚧 **Experimental** — This is a research project exploring CCS concepts.
-
-### Implemented (Phases 1-6) ✅
-
-- [x] Core constraint types and store
-- [x] Map container with LWW resolution
-- [x] List container with Fugue-style ordering
-- [x] Text container
-- [x] Reactive views with subscriptions
-- [x] Subscription manager (centralized event coordination)
-- [x] Introspection API (explain why a value is what it is)
-- [x] Constraint inspector (debugging and JSON export)
-- [x] PrismDoc coordinator (unified document interface)
-- [x] Sync via delta export/import and direct merge
-- [x] 476 tests including Loro equivalence and integration tests
-
-### Future Work
-
-- [ ] Constraint compaction
-- [ ] Run-length encoding for Text
-- [ ] Cross-container constraints
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                        PrismDoc                          │
-│  Owns shared ConstraintStore, peer ID, clocks            │
-│  Creates doc-bound handles (getMap, getList, getText)    │
-│  Wires subscriptions, sync (delta/merge), introspection  │
-└───────────────────────────┬──────────────────────────────┘
-                            │
-       ┌────────────────────┼────────────────────┐
-       ▼                    ▼                    ▼
-┌──────────────┐  ┌──────────────────┐  ┌────────────────┐
-│ConstraintStore│  │    Solvers       │  │ Subscription   │
-│ - tell/ask    │  │ - Map (LWW)     │  │ Manager        │
-│ - merge       │  │ - List (Fugue)  │  │ - state CB     │
-│ - delta sync  │  │ - (Text = List) │  │ - conflict CB  │
-│ - generation  │  │                 │  │ - constraint CB│
-└──────────────┘  └──────────────────┘  └────────────────┘
-```
-
-## Theoretical Foundation
-
-Prism maintains all CRDT guarantees:
-
-- **Semilattice**: Constraint sets form a semilattice under union (⊆, ∪)
-- **Convergence**: Same constraints → same solved state (deterministic solver)
-- **Eventual consistency**: Guaranteed by union commutativity
-
-Key terminology from Concurrent Constraint Programming:
-
-- **Tell**: Assert a constraint into the store
-- **Ask**: Query the result of solving constraints
-- **Solve**: Compute state that satisfies all constraints
 
 ## Development
 
@@ -177,21 +78,32 @@ bun run test:run     # Run tests once
 bun run typecheck    # TypeScript type checking
 ```
 
-Key testing patterns:
-- **Loro equivalence tests** compare Prism output against `loro-crdt` for identical interleaving
-- `peerIdToNum()` ensures Loro's numeric peer IDs preserve the same ordering as Prism's string peer IDs
-- Integration tests in `tests/integration.test.ts` cover the full PrismDoc stack
-
 ## Documentation
 
+- [Unified CCS Engine Spec](./theory/unified-engine.md) — The authoritative specification
 - [TECHNICAL.md](./TECHNICAL.md) — Architecture, algorithms, design decisions
-- [LEARNINGS.md](./LEARNINGS.md) — Discoveries, corrections, and open questions from implementation
+- [LEARNINGS.md](./LEARNINGS.md) — Discoveries, corrections, and open questions
+- [Implementation Plan](./.plans/002-unified-ccs-engine.md) — Phased plan with status tracking
+
+## Theoretical Foundation
+
+Prism maintains all CRDT guarantees:
+
+- **Semilattice**: Constraint stores under ∪. Commutative, associative, idempotent.
+- **Convergence**: Same constraints → same reality. Always.
+- **Monotonic growth**: The store only grows (pre-compaction).
+- **Structural permanence**: `structure` constraints are never retracted.
+- **Causal retraction**: You can only retract what you've observed.
+- **Solver independence**: Solvers never see retractions or invalid constraints.
 
 ## Related Work
 
-- [Loro](https://github.com/loro-dev/loro) — High-performance CRDT library (state-based)
-- Concurrent Constraint Programming (Saraswat)
-- Fugue (Weidner et al.) — Sequence CRDT interleaving
+- Concurrent Constraint Programming (Saraswat, 1993)
+- CRDTs (Shapiro et al., 2011)
+- Fugue (Weidner & Kleppmann, 2023)
+- CALM Theorem (Hellerstein, 2010)
+- Dedalus (Alvaro et al., 2011)
+- DBSP (Budiu & McSherry, 2023)
 
 ## License
 

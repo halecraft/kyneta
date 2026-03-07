@@ -12,8 +12,8 @@ A **constraint** is the atomic unit of the system. It is a subjective assertion 
 
 ```
 Constraint {
-  id:      CnId          // (peer: PeerID, counter: u64) — globally unique
-  lamport: u64           // Lamport timestamp
+  id:      CnId          // (peer: PeerID, counter: safe_uint) — globally unique
+  lamport: safe_uint     // Lamport timestamp
   refs:    CnId[]        // constraints this one has observed (causal predecessors)
   type:    ConstraintType // see §2
   payload: Payload       // type-specific assertion
@@ -23,9 +23,13 @@ Constraint {
 
 **CnId** (Constraint Id) uniquely identifies a constraint. It is the pair `(peer, counter)` where `peer` is the asserting agent's public key (or hash thereof) and `counter` is a monotonically increasing local sequence number.
 
+**Structural integer fields** (`counter`, `lamport`, `RulePayload.layer`) use `safe_uint` — a non-negative integer that MUST be representable as an IEEE 754 double-precision float without precision loss. The maximum conforming value is 2^53 − 1 (9,007,199,254,740,991). This constraint exists because JavaScript — a mandatory implementation target — represents all `number` values as f64. A Rust or C++ implementation using `u64` for these fields MUST NOT produce values exceeding this bound. In practice, no single agent will assert 9 quadrillion constraints, and Lamport clocks grow as `max(all_received) + 1`, so this bound is not operationally limiting. Implementations MUST validate this bound at the store insertion boundary and reject constraints with out-of-range structural fields.
+
 **Invariants:**
 - `id` is globally unique (enforced by (peer, counter) pair).
 - `id.peer` is the public key (or hash thereof) of the asserting agent.
+- `id.counter` is a `safe_uint` (≤ 2^53 − 1).
+- `lamport` is a `safe_uint` (≤ 2^53 − 1).
 - `sig` is verifiable against `id.peer`. Constraints with invalid signatures are discarded on receipt.
 - Every CnId in `refs` identifies a constraint that causally precedes this one.
 - Constraints are immutable once asserted.
@@ -171,11 +175,22 @@ A `value` constraint asserts a **Value** as the content of a node. Values are sc
 Value =
   | null                // absence (for Map deletion via LWW)
   | bool                // true / false
-  | f64                 // IEEE 754 double-precision float (all numbers)
+  | int                 // arbitrary-precision signed integer
+  | float               // IEEE 754 double-precision float
   | string              // UTF-8 encoded text
   | bytes               // raw binary (Uint8Array)
   | ref(CnId)           // reference to a structure constraint (for nesting)
 ```
+
+**Why separate `int` and `float`?** A single `f64` type (as in earlier drafts) creates a cross-language interoperability hazard. JavaScript represents all numbers as IEEE 754 f64, which can only exactly represent integers up to 2^53 − 1. A Rust agent storing a 64-bit database row ID as a user value would silently lose precision when a JavaScript agent reads it — and the two agents would compute different realities from the same store, breaking convergence.
+
+The solution: values distinguish integers from floats at the type level.
+
+- **`int`** is an arbitrary-precision signed integer. In JavaScript, this maps to `bigint`. In Rust, this maps to `i64` (or `i128` / BigInt for larger values). On the wire (§15.2), integers are encoded with their full precision — CBOR and MessagePack both natively distinguish integers from floats.
+- **`float`** is IEEE 754 double-precision. In JavaScript, this maps to `number`. In Rust, this maps to `f64`.
+- **Comparison semantics:** `int(3)` and `float(3.0)` are **distinct values**. They do not compare as equal. This avoids a class of subtle bugs where integer identity is lost through float coercion. Solver rules that need to compare across numeric types must do so explicitly.
+
+Note: structural fields on constraints (`counter`, `lamport`, `layer`) are NOT `Value` instances. They are `safe_uint` — non-negative integers guaranteed to fit in f64 (see §1). The `int` type in `Value` has no such restriction and supports the full precision of the host language.
 
 **Why no compound values?** In CCS, all structure is expressed through `structure` constraints. An "object" is a Map-policy node; an "array" is a Seq-policy node. Allowing compound values (nested objects, arrays) inside a single `value` constraint would create structure outside the constraint model — structure that cannot be individually addressed, retracted, or resolved by the solver. The `ref(CnId)` type is the bridge: it lets a value point to a subtree, keeping all structure in the tree.
 

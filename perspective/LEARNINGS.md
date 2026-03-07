@@ -1,5 +1,38 @@
 # Learnings: Convergent Constraint Systems (CCS) and Prism
 
+## Architectural Shift: v0 → Unified CCS Engine
+
+### The Prototype's Value Was Knowledge, Not Code
+
+The v0 prototype (Plan 001, 476 tests) validated the CCS thesis conclusively. But when the Unified CCS Engine Specification was written, it became clear that evolving the prototype incrementally would produce a chimera — half path-based addressing, half CnId-based; half hardcoded solvers, half rules-as-data. A clean rewrite aligned with the formal spec is the correct path. The prototype's lasting contribution is the *understanding* it produced, not the code.
+
+### Rules-as-Data Eliminates Most of the Existing Ecosystem
+
+We evaluated every plausible Datalog implementation in both the npm and Rust/WASM ecosystems. The spec's requirement that solver rules (LWW, Fugue) travel in the constraint store as data — and are evaluated at runtime by new agents joining a reality — eliminates all compile-time/proc-macro approaches (Rust's `ascent`, `crepe`) and all packages that impose their own storage model (DataScript). A custom ~800-1200 line TypeScript evaluator is the right answer: zero external deps, full control, and the spec's native solver optimization (§B.7) means it only handles the general case anyway.
+
+### WASM Datalog Is Premature Optimization
+
+Rust WASM was seriously evaluated. The FFI boundary cost (~100-200ns per crossing) is significant when iterating over many small Datalog tuples. You'd need to batch the entire evaluation on the WASM side, duplicating the constraint store in WASM memory. The spec already provides the performance escape hatch: native TypeScript solvers (§B.7) for LWW and Fugue, which handle 99% of evaluation time. WASM should only be reconsidered if general-case Datalog evaluation (custom rules, schema mappings) becomes a measured bottleneck.
+
+### CnId-Based Addressing Changes Everything
+
+The shift from path-based addressing (`["profile", "name"]`) to CnId-based addressing (`{peer, counter}` with causal `refs`) is not incremental — it changes the fundamental data model. Paths are human-readable but conflate identity with location. CnIds are opaque but uniquely identify each assertion in the causal history. This enables retraction-as-assertion (you retract a specific CnId, not "the value at a path"), authority checking (you verify the asserter of a specific CnId had capability at that causal moment), and time travel (you filter the store to CnIds ≤ a version vector).
+
+### f64-Only Numerics Break Cross-Language Convergence
+
+The original spec used `f64` as the sole numeric type for user values ("all numbers"). This creates a silent convergence hazard. JavaScript's `number` is IEEE 754 f64, which can only exactly represent integers up to 2^53 − 1. A Rust agent storing a 64-bit database row ID (e.g., `2^53 + 1`) as a user value would have it silently truncated to `2^53` by a JavaScript agent — and the two agents would compute *different realities from the same store*. Convergence broken.
+
+The fix splits numeric concerns in two:
+
+- **Structural fields** (counter, lamport, layer): `safe_uint` — plain `number` in JS, constrained to ≤ 2^53 − 1. No single agent will assert 9 quadrillion constraints, so this is not operationally limiting. Enforced at Agent construction and store insertion.
+- **User values**: `int` (maps to `bigint` in JS, `i64`+ in Rust) and `float` (maps to `number` in JS, `f64` in Rust). These are **distinct types** — `int(3)` ≠ `float(3.0)`. This avoids a class of bugs where integer identity is lost through float coercion. Wire formats (CBOR, MessagePack) natively distinguish integers from floats.
+
+The complexity is contained to three modules: `datalog/unify.ts` (term matching must not unify `number` with `bigint`), `datalog/aggregate.ts` (sum/max/min must handle each type; mixed-type aggregation is a type error), and `kernel/projection.ts` (assembles Datalog facts from constraint fields). Everything else passes `Value` through opaquely. This discovery prompted an update to unified-engine.md §3 to replace the single `f64` type with separate `int` and `float`.
+
+### Retraction-as-Assertion Is More Powerful Than Deletion
+
+The prototype used a `deleted` assertion at a path, competing via LWW with non-deleted values. The spec's `retract` constraint targets a specific CnId and creates a dominance relationship in an acyclic retraction graph. This gives: (1) undo via retract-of-retract, (2) causal retraction (you can only retract what you've observed — `target` must be in `refs`), (3) the solver never sees retractions — it operates on `Active(Valid(S))` which has already resolved all dominance. Much cleaner separation of concerns.
+
 ## Facts
 
 ### The Duality Between State-Based and Constraint-Based CRDTs
