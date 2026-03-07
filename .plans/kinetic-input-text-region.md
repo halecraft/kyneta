@@ -217,11 +217,11 @@ The write direction: `beforeinput` DOM events translated into CRDT operations on
 
    Note: JSDOM does not implement `getTargetRanges()` on `InputEvent`. Tests for word/line deletion should mock `getTargetRanges` via `Object.defineProperty`. The primary position source is `selectionStart`/`selectionEnd`, which JSDOM supports.
 
-## Phase 4: Update the Todo App 🔴
+## Phase 4: Update the Todo App 🟢
 
 ### Tasks
 
-1. **Update `examples/kinetic-todo/src/todo-header.ts`** 🔴
+1. **Update `examples/kinetic-todo/src/todo-header.ts`** ✅
 
    Replace `value: bind(doc.newTodoText)` with:
    - `value: doc.newTodoText.toString()` — reactive expression, compiler auto-subscribes via `inputTextRegion`
@@ -229,10 +229,10 @@ The write direction: `beforeinput` DOM events translated into CRDT operations on
 
    Remove the `bind` import. Add `editText` import from `@loro-extended/kinetic`.
 
-2. **Rebuild and verify** 🔴
+2. **Rebuild and verify** ✅
 
-   - `npx tsc --noEmit` in `examples/kinetic-todo` — type checks pass
-   - `npx vitest run` in `packages/kinetic` — all tests pass
+   - `npx tsc --noEmit` in `examples/kinetic-todo` — type checks pass (after `pnpm --filter @loro-extended/kinetic run build` to update dist)
+   - `npx vitest run` in `packages/kinetic` — all 907 tests pass
 
 ## Phase 5: Documentation 🔴
 
