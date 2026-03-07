@@ -12,8 +12,10 @@ import type {
   Atom,
   FactTuple,
   Substitution,
+  GuardOp,
+  GuardElement,
 } from './types.js';
-import { valuesEqual } from './types.js';
+import { valuesEqual, evaluateGuardOp } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Substitution helpers
@@ -46,10 +48,14 @@ export function extendSubstitution(
  * - If the term is a constant, returns the constant value.
  * - If the term is a variable bound in the substitution, returns the bound value.
  * - If the term is an unbound variable, returns `undefined`.
+ * - If the term is a wildcard, returns `undefined` (wildcards never bind).
  */
 export function resolveTerm(term: Term, sub: Substitution): Value | undefined {
   if (term.kind === 'const') {
     return term.value;
+  }
+  if (term.kind === 'wildcard') {
+    return undefined;
   }
   // Variable — look it up
   return sub.get(term.name);
@@ -68,6 +74,7 @@ export function resolveTerm(term: Term, sub: Substitution): Value | undefined {
  * - Constant term: succeeds iff the constant equals the value (structural equality).
  * - Variable term, already bound: succeeds iff the bound value equals the ground value.
  * - Variable term, unbound: succeeds by extending the substitution with the binding.
+ * - Wildcard term: always succeeds without binding anything.
  *
  * IMPORTANT: Uses `valuesEqual` which respects the number/bigint distinction.
  */
@@ -78,6 +85,11 @@ export function unifyTermWithValue(
 ): Substitution | null {
   if (term.kind === 'const') {
     return valuesEqual(term.value, value) ? sub : null;
+  }
+
+  if (term.kind === 'wildcard') {
+    // Wildcard always matches, never binds
+    return sub;
   }
 
   // Variable
@@ -135,8 +147,11 @@ export function matchAtomWithTuple(
 /**
  * Apply a substitution to an atom, producing a ground tuple.
  *
- * All variables in the atom must be bound in the substitution.
- * Returns `null` if any variable is unbound.
+ * All non-wildcard variables in the atom must be bound in the substitution.
+ * Wildcards in head position are a logical error (the head must be fully
+ * ground) — returns `null` if a wildcard is encountered.
+ *
+ * Returns `null` if any variable is unbound or a wildcard is present.
  */
 export function groundAtom(
   a: Atom,
@@ -144,6 +159,10 @@ export function groundAtom(
 ): FactTuple | null {
   const values: Value[] = [];
   for (const term of a.terms) {
+    if (term.kind === 'wildcard') {
+      // Wildcards cannot appear in grounded atoms (head position)
+      return null;
+    }
     const resolved = resolveTerm(term, sub);
     if (resolved === undefined) {
       // Check if the variable is bound to null (undefined means unbound here)
@@ -191,14 +210,73 @@ export function matchAtomAgainstRelation(
 }
 
 // ---------------------------------------------------------------------------
-// Built-in comparison predicates
+// Guard evaluation
 //
-// The spec's LWW rules use comparison operators like `>`, `<`, `=`, `\=`
-// in rule bodies. We support these as built-in predicates that are evaluated
-// directly rather than matched against stored relations.
+// Guards are binary constraints on terms that filter substitutions.
+// They are evaluated by resolving both operands and applying the operator.
 // ---------------------------------------------------------------------------
 
-/** Set of built-in comparison predicates. */
+/**
+ * Evaluate a guard element in the context of a substitution.
+ *
+ * Both operands must be fully resolved (bound variables or constants).
+ * Wildcards in guards are a logical error — returns `null`.
+ *
+ * Returns:
+ * - The original substitution if the guard holds.
+ * - `null` if it doesn't hold or if operands can't be resolved.
+ */
+export function evaluateGuard(
+  guard: GuardElement,
+  sub: Substitution,
+): Substitution | null {
+  const left = resolveGuardTerm(guard.left, sub);
+  if (left === undefined) return null;
+
+  const right = resolveGuardTerm(guard.right, sub);
+  if (right === undefined) return null;
+
+  return evaluateGuardOp(guard.op, left, right) ? sub : null;
+}
+
+/**
+ * Resolve a term for guard evaluation. Unlike `resolveTerm`, this
+ * distinguishes "bound to null" from "unresolvable" more carefully.
+ *
+ * Returns the resolved Value, or `undefined` if unresolvable.
+ */
+function resolveGuardTerm(term: Term, sub: Substitution): Value | undefined {
+  if (term.kind === 'const') {
+    return term.value;
+  }
+  if (term.kind === 'wildcard') {
+    // Wildcards have no value — can't be used in guards
+    return undefined;
+  }
+  // Variable
+  const val = sub.get(term.name);
+  if (val !== undefined) {
+    return val;
+  }
+  // Could be bound to null — check with has
+  if (sub.has(term.name)) {
+    return null;
+  }
+  // Unbound
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy built-in predicates (backward compatibility)
+//
+// The old API encoded guards as magic-string predicates like `__neq`.
+// These are still supported for backward compatibility but the preferred
+// API is the `guard` body element with typed GuardOp.
+//
+// TODO: Remove once all callers migrate to guard body elements.
+// ---------------------------------------------------------------------------
+
+/** Set of built-in comparison predicates (legacy). */
 const BUILTIN_PREDICATES = new Set([
   '__eq',   // =    : term equality
   '__neq',  // \=   : term inequality
@@ -209,14 +287,24 @@ const BUILTIN_PREDICATES = new Set([
 ]);
 
 /**
- * Check if a predicate name is a built-in.
+ * Check if a predicate name is a built-in (legacy).
  */
 export function isBuiltinPredicate(predicate: string): boolean {
   return BUILTIN_PREDICATES.has(predicate);
 }
 
+/** Map legacy predicate names to GuardOp. */
+const BUILTIN_TO_GUARD_OP: ReadonlyMap<string, GuardOp> = new Map([
+  ['__eq', 'eq'],
+  ['__neq', 'neq'],
+  ['__lt', 'lt'],
+  ['__gt', 'gt'],
+  ['__lte', 'lte'],
+  ['__gte', 'gte'],
+]);
+
 /**
- * Evaluate a built-in predicate given resolved argument values.
+ * Evaluate a built-in predicate given resolved argument values (legacy).
  *
  * Built-in predicates are binary: they take exactly 2 arguments.
  * Both arguments must be fully resolved (ground).
@@ -230,110 +318,14 @@ export function evaluateBuiltin(
 ): boolean | null {
   if (args.length !== 2) return null;
 
-  const [a, b] = args as [Value, Value];
+  const op = BUILTIN_TO_GUARD_OP.get(predicate);
+  if (op === undefined) return null;
 
-  switch (predicate) {
-    case '__eq':
-      return valuesEqual(a, b);
-
-    case '__neq':
-      return !valuesEqual(a, b);
-
-    case '__lt':
-      return compareSameType(a, b, (cmp) => cmp < 0);
-
-    case '__gt':
-      return compareSameType(a, b, (cmp) => cmp > 0);
-
-    case '__lte':
-      return compareSameType(a, b, (cmp) => cmp <= 0);
-
-    case '__gte':
-      return compareSameType(a, b, (cmp) => cmp >= 0);
-
-    default:
-      return null;
-  }
+  return evaluateGuardOp(op, args[0]!, args[1]!);
 }
 
 /**
- * Compare two values of the same type using the provided comparator.
- * Returns `false` if the types are incompatible (cannot compare number vs bigint).
- */
-function compareSameType(
-  a: Value,
-  b: Value,
-  pred: (cmp: number) => boolean,
-): boolean {
-  // Handle null
-  if (a === null || b === null) return false;
-
-  const ta = typeof a;
-  const tb = typeof b;
-
-  // number vs number
-  if (ta === 'number' && tb === 'number') {
-    const na = a as number;
-    const nb = b as number;
-    if (Number.isNaN(na) || Number.isNaN(nb)) return false;
-    // Handle -0: treat -0 < +0 for consistent ordering
-    if (Object.is(na, -0) && nb === 0) return pred(-1);
-    if (na === 0 && Object.is(nb, -0)) return pred(1);
-    return pred(na < nb ? -1 : na > nb ? 1 : 0);
-  }
-
-  // bigint vs bigint
-  if (ta === 'bigint' && tb === 'bigint') {
-    const ba = a as bigint;
-    const bb = b as bigint;
-    return pred(ba < bb ? -1 : ba > bb ? 1 : 0);
-  }
-
-  // string vs string
-  if (ta === 'string' && tb === 'string') {
-    const sa = a as string;
-    const sb = b as string;
-    return pred(sa < sb ? -1 : sa > sb ? 1 : 0);
-  }
-
-  // boolean — false < true
-  if (ta === 'boolean' && tb === 'boolean') {
-    const ia = (a as boolean) ? 1 : 0;
-    const ib = (b as boolean) ? 1 : 0;
-    return pred(ia - ib);
-  }
-
-  // Uint8Array — lexicographic
-  if (a instanceof Uint8Array && b instanceof Uint8Array) {
-    const len = Math.min(a.length, b.length);
-    for (let i = 0; i < len; i++) {
-      if (a[i]! !== b[i]!) {
-        return pred(a[i]! < b[i]! ? -1 : 1);
-      }
-    }
-    return pred(a.length - b.length);
-  }
-
-  // ref — compare by (peer, counter)
-  if (
-    ta === 'object' && tb === 'object' &&
-    !(a instanceof Uint8Array) && !(b instanceof Uint8Array) &&
-    a !== null && b !== null
-  ) {
-    const ra = (a as { readonly ref: { peer: string; counter: number } }).ref;
-    const rb = (b as { readonly ref: { peer: string; counter: number } }).ref;
-    if (ra.peer !== rb.peer) {
-      return pred(ra.peer < rb.peer ? -1 : 1);
-    }
-    return pred(ra.counter - rb.counter);
-  }
-
-  // Incompatible types — comparison fails
-  return false;
-}
-
-/**
- * Try to evaluate a built-in predicate in the context of a substitution.
+ * Try to evaluate a built-in predicate in the context of a substitution (legacy).
  * Resolves both arguments, then evaluates.
  *
  * Returns:
@@ -346,6 +338,10 @@ export function tryEvaluateBuiltin(
 ): Substitution | null {
   const resolvedArgs: Value[] = [];
   for (const term of a.terms) {
+    if (term.kind === 'wildcard') {
+      // Wildcards can't be evaluated in builtins
+      return null;
+    }
     const val = resolveTerm(term, sub);
     if (val === undefined) {
       // Variable not yet bound — can't evaluate. Check if it's bound to null.

@@ -9,11 +9,19 @@ import {
   atom,
   constTerm,
   varTerm,
+  wildcard,
+  _,
   rule,
   fact,
   positiveAtom,
   negation,
   aggregation,
+  neq,
+  gt,
+  lt,
+  eq,
+  lte,
+  gte,
   Database,
 } from '../../src/datalog/types.js';
 import type { Rule, Fact, AggregationClause } from '../../src/datalog/types.js';
@@ -535,18 +543,18 @@ describe('stratified negation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Built-in predicates in rules
+// Guard body elements in rules
 // ---------------------------------------------------------------------------
 
-describe('built-in predicates in rules', () => {
-  it('__neq filters self-pairs', () => {
-    // pair(X, Y) :- node(X), node(Y), __neq(X, Y).
+describe('guard body elements in rules', () => {
+  it('neq() filters self-pairs', () => {
+    // pair(X, Y) :- node(X), node(Y), X ≠ Y.
     const r: Rule = rule(
       atom('pair', [varTerm('X'), varTerm('Y')]),
       [
         positiveAtom(atom('node', [varTerm('X')])),
         positiveAtom(atom('node', [varTerm('Y')])),
-        positiveAtom(atom('__neq', [varTerm('X'), varTerm('Y')])),
+        neq(varTerm('X'), varTerm('Y')),
       ],
     );
 
@@ -565,14 +573,14 @@ describe('built-in predicates in rules', () => {
     expect(hasFact(db, 'pair', ['b', 'a'])).toBe(true);
   });
 
-  it('__gt comparison in rule body', () => {
-    // bigger(X, Y) :- num(X), num(Y), __gt(X, Y).
+  it('gt() comparison in rule body', () => {
+    // bigger(X, Y) :- num(X), num(Y), X > Y.
     const r: Rule = rule(
       atom('bigger', [varTerm('X'), varTerm('Y')]),
       [
         positiveAtom(atom('num', [varTerm('X')])),
         positiveAtom(atom('num', [varTerm('Y')])),
-        positiveAtom(atom('__gt', [varTerm('X'), varTerm('Y')])),
+        gt(varTerm('X'), varTerm('Y')),
       ],
     );
 
@@ -591,14 +599,14 @@ describe('built-in predicates in rules', () => {
     expect(db.getRelation('bigger').size).toBe(3);
   });
 
-  it('__lt with string comparison', () => {
-    // ordered(X, Y) :- word(X), word(Y), __lt(X, Y).
+  it('lt() with string comparison', () => {
+    // ordered(X, Y) :- word(X), word(Y), X < Y.
     const r: Rule = rule(
       atom('ordered', [varTerm('X'), varTerm('Y')]),
       [
         positiveAtom(atom('word', [varTerm('X')])),
         positiveAtom(atom('word', [varTerm('Y')])),
-        positiveAtom(atom('__lt', [varTerm('X'), varTerm('Y')])),
+        lt(varTerm('X'), varTerm('Y')),
       ],
     );
 
@@ -615,6 +623,207 @@ describe('built-in predicates in rules', () => {
     expect(hasFact(db, 'ordered', ['banana', 'cherry'])).toBe(true);
     expect(hasFact(db, 'ordered', ['banana', 'apple'])).toBe(false);
     expect(db.getRelation('ordered').size).toBe(3);
+  });
+
+  it('eq() with constant guard', () => {
+    // matched(X) :- data(X, Y), Y == 'target'.
+    const r: Rule = rule(
+      atom('matched', [varTerm('X')]),
+      [
+        positiveAtom(atom('data', [varTerm('X'), varTerm('Y')])),
+        eq(varTerm('Y'), constTerm('target')),
+      ],
+    );
+
+    const facts: Fact[] = [
+      fact('data', ['a', 'target']),
+      fact('data', ['b', 'other']),
+      fact('data', ['c', 'target']),
+    ];
+
+    const db = evaluatePositive([r], facts);
+    expect(db.getRelation('matched').size).toBe(2);
+    expect(hasFact(db, 'matched', ['a'])).toBe(true);
+    expect(hasFact(db, 'matched', ['c'])).toBe(true);
+    expect(hasFact(db, 'matched', ['b'])).toBe(false);
+  });
+
+  it('lte() and gte() inclusive bounds', () => {
+    // in_range(X) :- num(X), X >= 2, X <= 4.
+    const r: Rule = rule(
+      atom('in_range', [varTerm('X')]),
+      [
+        positiveAtom(atom('num', [varTerm('X')])),
+        gte(varTerm('X'), constTerm(2)),
+        lte(varTerm('X'), constTerm(4)),
+      ],
+    );
+
+    const facts: Fact[] = [
+      fact('num', [1]),
+      fact('num', [2]),
+      fact('num', [3]),
+      fact('num', [4]),
+      fact('num', [5]),
+    ];
+
+    const db = evaluatePositive([r], facts);
+    expect(db.getRelation('in_range').size).toBe(3);
+    expect(hasFact(db, 'in_range', [2])).toBe(true);
+    expect(hasFact(db, 'in_range', [3])).toBe(true);
+    expect(hasFact(db, 'in_range', [4])).toBe(true);
+    expect(hasFact(db, 'in_range', [1])).toBe(false);
+    expect(hasFact(db, 'in_range', [5])).toBe(false);
+  });
+
+  it('guards introduce no predicate dependencies in stratification', () => {
+    // The guard on X ≠ Y should not create a dependency edge.
+    // filtered(X) :- source(X), not excluded(X).
+    // pair(X, Y) :- filtered(X), filtered(Y), X ≠ Y.
+    //
+    // If guards were treated as predicates, 'pair' would depend on
+    // a predicate '__neq' which doesn't exist — this would be wrong.
+    const filteredRule: Rule = rule(
+      atom('filtered', [varTerm('X')]),
+      [
+        positiveAtom(atom('source', [varTerm('X')])),
+        negation(atom('excluded', [varTerm('X')])),
+      ],
+    );
+    const pairRule: Rule = rule(
+      atom('pair', [varTerm('X'), varTerm('Y')]),
+      [
+        positiveAtom(atom('filtered', [varTerm('X')])),
+        positiveAtom(atom('filtered', [varTerm('Y')])),
+        neq(varTerm('X'), varTerm('Y')),
+      ],
+    );
+
+    const facts: Fact[] = [
+      fact('source', [1]),
+      fact('source', [2]),
+      fact('source', [3]),
+      fact('excluded', [2]),
+    ];
+
+    const result = evaluate([filteredRule, pairRule], facts);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const db = result.value;
+    expect(hasFact(db, 'filtered', [1])).toBe(true);
+    expect(hasFact(db, 'filtered', [3])).toBe(true);
+    expect(hasFact(db, 'filtered', [2])).toBe(false);
+    // pair: (1,3) and (3,1)
+    expect(db.getRelation('pair').size).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy built-in predicates still work (backward compat)
+// ---------------------------------------------------------------------------
+
+describe('legacy __builtin predicates (backward compat)', () => {
+  it('__neq still works', () => {
+    const r: Rule = rule(
+      atom('pair', [varTerm('X'), varTerm('Y')]),
+      [
+        positiveAtom(atom('node', [varTerm('X')])),
+        positiveAtom(atom('node', [varTerm('Y')])),
+        positiveAtom(atom('__neq', [varTerm('X'), varTerm('Y')])),
+      ],
+    );
+
+    const facts: Fact[] = [
+      fact('node', ['a']),
+      fact('node', ['b']),
+    ];
+
+    const db = evaluatePositive([r], facts);
+    expect(db.getRelation('pair').size).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wildcard term
+// ---------------------------------------------------------------------------
+
+describe('wildcard term', () => {
+  it('wildcard matches any value without binding', () => {
+    // has_any(X) :- pair(X, _).
+    const r: Rule = rule(
+      atom('has_any', [varTerm('X')]),
+      [positiveAtom(atom('pair', [varTerm('X'), _]))],
+    );
+
+    const facts: Fact[] = [
+      fact('pair', ['a', 1]),
+      fact('pair', ['a', 2]),
+      fact('pair', ['b', 3]),
+    ];
+
+    const db = evaluatePositive([r], facts);
+    // 'a' appears twice but deduplicates
+    expect(db.getRelation('has_any').size).toBe(2);
+    expect(hasFact(db, 'has_any', ['a'])).toBe(true);
+    expect(hasFact(db, 'has_any', ['b'])).toBe(true);
+  });
+
+  it('multiple wildcards are independent (do not unify)', () => {
+    // Using varTerm('_X') twice would force both positions to match.
+    // Using wildcard() twice does NOT — each is independent.
+    // exists(X) :- triple(X, _, _).
+    const r: Rule = rule(
+      atom('exists', [varTerm('X')]),
+      [positiveAtom(atom('triple', [varTerm('X'), wildcard(), wildcard()]))],
+    );
+
+    const facts: Fact[] = [
+      fact('triple', ['a', 1, 2]),
+      fact('triple', ['a', 3, 4]),
+      fact('triple', ['b', 5, 5]),  // same value in both wildcard positions — still matches
+    ];
+
+    const db = evaluatePositive([r], facts);
+    expect(db.getRelation('exists').size).toBe(2);
+    expect(hasFact(db, 'exists', ['a'])).toBe(true);
+    expect(hasFact(db, 'exists', ['b'])).toBe(true);
+  });
+
+  it('wildcard in aggregation source skips binding that column', () => {
+    // count_per_group(G, C) :- count<V> over data(G, _, V) group_by [G].
+    const aggClause: AggregationClause = {
+      fn: 'count',
+      groupBy: ['G'],
+      over: 'V',
+      result: 'C',
+      source: atom('data', [varTerm('G'), _, varTerm('V')]),
+    };
+
+    const countRule: Rule = rule(
+      atom('count_per_group', [varTerm('G'), varTerm('C')]),
+      [aggregation(aggClause)],
+    );
+
+    const facts: Fact[] = [
+      fact('data', ['x', 'ignored1', 'a']),
+      fact('data', ['x', 'ignored2', 'b']),
+      fact('data', ['y', 'ignored3', 'c']),
+    ];
+
+    const result = evaluate([countRule], facts);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const db = result.value;
+    expect(hasFact(db, 'count_per_group', ['x', 2])).toBe(true);
+    expect(hasFact(db, 'count_per_group', ['y', 1])).toBe(true);
+  });
+
+  it('_ convenience export is a wildcard', () => {
+    expect(_.kind).toBe('wildcard');
+    // Each call to wildcard() or use of _ is the same shape
+    expect(wildcard().kind).toBe('wildcard');
   });
 });
 
@@ -849,23 +1058,20 @@ describe('number/bigint type distinction', () => {
 });
 
 // ---------------------------------------------------------------------------
-// LWW simulation (full superseded pattern from spec §B.4)
+// LWW simulation using guards (full superseded pattern from spec §B.4)
 // ---------------------------------------------------------------------------
 
-describe('LWW rules from spec §B.4', () => {
+describe('LWW rules from spec §B.4 (using guards)', () => {
   it('concurrent writes resolved by (lamport, peer) ordering', () => {
     // superseded(CnId, Slot) :-
     //   active_value(CnId, Slot, _, L1, P1),
     //   active_value(CnId2, Slot, _, L2, P2),
-    //   __neq(CnId, CnId2),
-    //   __gt(L2, L1).
+    //   CnId ≠ CnId2, L2 > L1.
     //
     // superseded(CnId, Slot) :-
     //   active_value(CnId, Slot, _, L1, P1),
     //   active_value(CnId2, Slot, _, L2, P2),
-    //   __neq(CnId, CnId2),
-    //   __eq(L2, L1),
-    //   __gt(P2, P1).
+    //   CnId ≠ CnId2, L2 == L1, P2 > P1.
     //
     // winner(Slot, CnId, Value) :-
     //   active_value(CnId, Slot, Value, _, _),
@@ -874,28 +1080,28 @@ describe('LWW rules from spec §B.4', () => {
     const supersededByLamport: Rule = rule(
       atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
       [
-        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('V1'), varTerm('L1'), varTerm('P1')])),
-        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), varTerm('V2'), varTerm('L2'), varTerm('P2')])),
-        positiveAtom(atom('__neq', [varTerm('CnId'), varTerm('CnId2')])),
-        positiveAtom(atom('__gt', [varTerm('L2'), varTerm('L1')])),
+        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), varTerm('P1')])),
+        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), varTerm('P2')])),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        gt(varTerm('L2'), varTerm('L1')),
       ],
     );
 
     const supersededByPeer: Rule = rule(
       atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
       [
-        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('V1'), varTerm('L1'), varTerm('P1')])),
-        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), varTerm('V2'), varTerm('L2'), varTerm('P2')])),
-        positiveAtom(atom('__neq', [varTerm('CnId'), varTerm('CnId2')])),
-        positiveAtom(atom('__eq', [varTerm('L2'), varTerm('L1')])),
-        positiveAtom(atom('__gt', [varTerm('P2'), varTerm('P1')])),
+        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), varTerm('P1')])),
+        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), varTerm('P2')])),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        eq(varTerm('L2'), varTerm('L1')),
+        gt(varTerm('P2'), varTerm('P1')),
       ],
     );
 
     const winnerRule: Rule = rule(
       atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
       [
-        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('Value'), varTerm('L'), varTerm('P')])),
+        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('Value'), _, _])),
         negation(atom('superseded', [varTerm('CnId'), varTerm('Slot')])),
       ],
     );
@@ -941,17 +1147,17 @@ describe('LWW rules from spec §B.4', () => {
     const supersededByLamport: Rule = rule(
       atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
       [
-        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('V1'), varTerm('L1'), varTerm('P1')])),
-        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), varTerm('V2'), varTerm('L2'), varTerm('P2')])),
-        positiveAtom(atom('__neq', [varTerm('CnId'), varTerm('CnId2')])),
-        positiveAtom(atom('__gt', [varTerm('L2'), varTerm('L1')])),
+        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), _])),
+        positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), _])),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        gt(varTerm('L2'), varTerm('L1')),
       ],
     );
 
     const winnerRule: Rule = rule(
       atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
       [
-        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('Value'), varTerm('L'), varTerm('P')])),
+        positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('Value'), _, _])),
         negation(atom('superseded', [varTerm('CnId'), varTerm('Slot')])),
       ],
     );

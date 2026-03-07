@@ -70,7 +70,22 @@ export interface VarTerm {
   readonly name: string;
 }
 
-export type Term = ConstTerm | VarTerm;
+/**
+ * Wildcard term — matches any value without binding a variable.
+ *
+ * In traditional Datalog/Prolog, `_` is an anonymous variable: each
+ * occurrence is independent and never constrains other positions.
+ * Using `varTerm('_Foo')` is a trap — if two atoms both use
+ * `varTerm('_Foo')`, they'll unify (same name = same binding).
+ *
+ * `wildcard()` avoids this: it always matches, never binds, and
+ * multiple occurrences are independent.
+ */
+export interface WildcardTerm {
+  readonly kind: 'wildcard';
+}
+
+export type Term = ConstTerm | VarTerm | WildcardTerm;
 
 // Term constructors
 export function constTerm(value: Value): ConstTerm {
@@ -80,6 +95,18 @@ export function constTerm(value: Value): ConstTerm {
 export function varTerm(name: string): VarTerm {
   return { kind: 'var', name };
 }
+
+/** Anonymous wildcard — matches anything, binds nothing. */
+export function wildcard(): WildcardTerm {
+  return { kind: 'wildcard' };
+}
+
+/**
+ * Convenience: `_` is a shorthand for `wildcard()`.
+ *
+ * Usage: `atom('active_value', [_, $Slot, _, $Lamport])`
+ */
+export const _: WildcardTerm = wildcard();
 
 // ---------------------------------------------------------------------------
 // Atoms
@@ -92,6 +119,33 @@ export interface Atom {
 
 export function atom(predicate: string, terms: readonly Term[]): Atom {
   return { predicate, terms };
+}
+
+// ---------------------------------------------------------------------------
+// Guard operators (§B.4 comparisons)
+//
+// Guards are binary constraints on terms — they filter substitutions
+// rather than joining against stored relations. They are a distinct
+// concept from relational atoms and get their own BodyElement kind.
+//
+// Previous approach used magic-string predicates like `__neq` stuffed
+// into `positiveAtom(atom('__neq', [...]))`. This was:
+//   1. Untyped — nothing prevents `atom('__nneq', ...)` (typo compiles)
+//   2. Confusing — guards aren't relations, but were wrapped as atoms
+//   3. Invisible to the dependency graph (guards don't introduce
+//      predicate dependencies, but the old approach added fake edges)
+//
+// The new `guard` body element makes the type system distinguish
+// relational lookups from value constraints.
+// ---------------------------------------------------------------------------
+
+export type GuardOp = 'eq' | 'neq' | 'lt' | 'gt' | 'lte' | 'gte';
+
+export interface GuardElement {
+  readonly kind: 'guard';
+  readonly op: GuardOp;
+  readonly left: Term;
+  readonly right: Term;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,9 +186,16 @@ export interface AggregationElement {
   readonly agg: AggregationClause;
 }
 
-export type BodyElement = AtomElement | NegationElement | AggregationElement;
+export type BodyElement =
+  | AtomElement
+  | NegationElement
+  | AggregationElement
+  | GuardElement;
 
+// ---------------------------------------------------------------------------
 // Body element constructors
+// ---------------------------------------------------------------------------
+
 export function positiveAtom(a: Atom): AtomElement {
   return { kind: 'atom', atom: a };
 }
@@ -145,6 +206,43 @@ export function negation(a: Atom): NegationElement {
 
 export function aggregation(agg: AggregationClause): AggregationElement {
   return { kind: 'aggregation', agg };
+}
+
+// ---------------------------------------------------------------------------
+// Guard constructors
+//
+// These replace the old `positiveAtom(atom('__neq', [varTerm('X'), varTerm('Y')]))`
+// pattern with `neq($X, $Y)` — shorter, type-safe, and semantically honest.
+// ---------------------------------------------------------------------------
+
+/** Guard: left == right (structural equality, respects number/bigint distinction). */
+export function eq(left: Term, right: Term): GuardElement {
+  return { kind: 'guard', op: 'eq', left, right };
+}
+
+/** Guard: left ≠ right. */
+export function neq(left: Term, right: Term): GuardElement {
+  return { kind: 'guard', op: 'neq', left, right };
+}
+
+/** Guard: left < right (same-type ordering). */
+export function lt(left: Term, right: Term): GuardElement {
+  return { kind: 'guard', op: 'lt', left, right };
+}
+
+/** Guard: left > right (same-type ordering). */
+export function gt(left: Term, right: Term): GuardElement {
+  return { kind: 'guard', op: 'gt', left, right };
+}
+
+/** Guard: left ≤ right. */
+export function lte(left: Term, right: Term): GuardElement {
+  return { kind: 'guard', op: 'lte', left, right };
+}
+
+/** Guard: left ≥ right. */
+export function gte(left: Term, right: Term): GuardElement {
+  return { kind: 'guard', op: 'gte', left, right };
 }
 
 // ---------------------------------------------------------------------------
@@ -507,6 +605,113 @@ export function valuesEqual(a: Value, b: Value): boolean {
 
   // Primitives (boolean, bigint, string) — identity comparison
   return a === b;
+}
+
+// ---------------------------------------------------------------------------
+// Guard evaluation
+//
+// Evaluates a guard operator against two resolved Values.
+// Used by the evaluator when processing `guard` body elements.
+// ---------------------------------------------------------------------------
+
+/**
+ * Evaluate a guard operator on two ground values.
+ *
+ * Returns `true` if the guard holds, `false` otherwise.
+ * Cross-type ordering comparisons (e.g. number vs bigint for lt/gt)
+ * return `false` — they are incomparable.
+ */
+export function evaluateGuardOp(op: GuardOp, left: Value, right: Value): boolean {
+  switch (op) {
+    case 'eq':
+      return valuesEqual(left, right);
+    case 'neq':
+      return !valuesEqual(left, right);
+    case 'lt':
+      return compareSameType(left, right, (cmp) => cmp < 0);
+    case 'gt':
+      return compareSameType(left, right, (cmp) => cmp > 0);
+    case 'lte':
+      return compareSameType(left, right, (cmp) => cmp <= 0);
+    case 'gte':
+      return compareSameType(left, right, (cmp) => cmp >= 0);
+  }
+}
+
+/**
+ * Compare two values of the same type using the provided predicate.
+ * Returns `false` if the types are incompatible (cannot compare number vs bigint).
+ */
+function compareSameType(
+  a: Value,
+  b: Value,
+  pred: (cmp: number) => boolean,
+): boolean {
+  // Handle null
+  if (a === null || b === null) return false;
+
+  const ta = typeof a;
+  const tb = typeof b;
+
+  // number vs number
+  if (ta === 'number' && tb === 'number') {
+    const na = a as number;
+    const nb = b as number;
+    if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+    // Handle -0: treat -0 < +0 for consistent ordering
+    if (Object.is(na, -0) && nb === 0) return pred(-1);
+    if (na === 0 && Object.is(nb, -0)) return pred(1);
+    return pred(na < nb ? -1 : na > nb ? 1 : 0);
+  }
+
+  // bigint vs bigint
+  if (ta === 'bigint' && tb === 'bigint') {
+    const ba = a as bigint;
+    const bb = b as bigint;
+    return pred(ba < bb ? -1 : ba > bb ? 1 : 0);
+  }
+
+  // string vs string
+  if (ta === 'string' && tb === 'string') {
+    const sa = a as string;
+    const sb = b as string;
+    return pred(sa < sb ? -1 : sa > sb ? 1 : 0);
+  }
+
+  // boolean — false < true
+  if (ta === 'boolean' && tb === 'boolean') {
+    const ia = (a as boolean) ? 1 : 0;
+    const ib = (b as boolean) ? 1 : 0;
+    return pred(ia - ib);
+  }
+
+  // Uint8Array — lexicographic
+  if (a instanceof Uint8Array && b instanceof Uint8Array) {
+    const len = Math.min(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+      if (a[i]! !== b[i]!) {
+        return pred(a[i]! < b[i]! ? -1 : 1);
+      }
+    }
+    return pred(a.length - b.length);
+  }
+
+  // ref — compare by (peer, counter)
+  if (
+    ta === 'object' && tb === 'object' &&
+    !(a instanceof Uint8Array) && !(b instanceof Uint8Array) &&
+    a !== null && b !== null
+  ) {
+    const ra = (a as { readonly ref: { peer: string; counter: number } }).ref;
+    const rb = (b as { readonly ref: { peer: string; counter: number } }).ref;
+    if (ra.peer !== rb.peer) {
+      return pred(ra.peer < rb.peer ? -1 : 1);
+    }
+    return pred(ra.counter - rb.counter);
+  }
+
+  // Incompatible types — comparison fails
+  return false;
 }
 
 // ---------------------------------------------------------------------------

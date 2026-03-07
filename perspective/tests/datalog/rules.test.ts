@@ -10,11 +10,16 @@ import {
   atom,
   constTerm,
   varTerm,
+  _,
   rule,
   fact,
   positiveAtom,
   negation,
   aggregation,
+  neq,
+  eq,
+  gt,
+  lt,
 } from '../../src/datalog/types.js';
 import type { Rule, Fact, AggregationClause } from '../../src/datalog/types.js';
 import { evaluate } from '../../src/datalog/evaluate.js';
@@ -56,14 +61,15 @@ function hasFact(
 //     not superseded(CnId, Slot).
 //
 // We encode the disjunction (;) as two separate rules for superseded.
+// Guards (neq, gt, eq) replace the old __neq/__gt magic-string predicates.
+// Wildcards (_) replace dummy varTerm('V1') etc. for unused positions.
 // ---------------------------------------------------------------------------
 
 function buildLWWRules(): Rule[] {
   // superseded(CnId, Slot) :-
-  //   active_value(CnId, Slot, V1, L1, P1),
-  //   active_value(CnId2, Slot, V2, L2, P2),
-  //   __neq(CnId, CnId2),
-  //   __gt(L2, L1).
+  //   active_value(CnId, Slot, _, L1, _),
+  //   active_value(CnId2, Slot, _, L2, _),
+  //   CnId ≠ CnId2, L2 > L1.
   const supersededByLamport: Rule = rule(
     atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
     [
@@ -71,31 +77,29 @@ function buildLWWRules(): Rule[] {
         atom('active_value', [
           varTerm('CnId'),
           varTerm('Slot'),
-          varTerm('V1'),
+          _,
           varTerm('L1'),
-          varTerm('P1'),
+          _,
         ]),
       ),
       positiveAtom(
         atom('active_value', [
           varTerm('CnId2'),
           varTerm('Slot'),
-          varTerm('V2'),
+          _,
           varTerm('L2'),
-          varTerm('P2'),
+          _,
         ]),
       ),
-      positiveAtom(atom('__neq', [varTerm('CnId'), varTerm('CnId2')])),
-      positiveAtom(atom('__gt', [varTerm('L2'), varTerm('L1')])),
+      neq(varTerm('CnId'), varTerm('CnId2')),
+      gt(varTerm('L2'), varTerm('L1')),
     ],
   );
 
   // superseded(CnId, Slot) :-
-  //   active_value(CnId, Slot, V1, L1, P1),
-  //   active_value(CnId2, Slot, V2, L2, P2),
-  //   __neq(CnId, CnId2),
-  //   __eq(L2, L1),
-  //   __gt(P2, P1).
+  //   active_value(CnId, Slot, _, L1, P1),
+  //   active_value(CnId2, Slot, _, L2, P2),
+  //   CnId ≠ CnId2, L2 == L1, P2 > P1.
   const supersededByPeer: Rule = rule(
     atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
     [
@@ -103,7 +107,7 @@ function buildLWWRules(): Rule[] {
         atom('active_value', [
           varTerm('CnId'),
           varTerm('Slot'),
-          varTerm('V1'),
+          _,
           varTerm('L1'),
           varTerm('P1'),
         ]),
@@ -112,19 +116,19 @@ function buildLWWRules(): Rule[] {
         atom('active_value', [
           varTerm('CnId2'),
           varTerm('Slot'),
-          varTerm('V2'),
+          _,
           varTerm('L2'),
           varTerm('P2'),
         ]),
       ),
-      positiveAtom(atom('__neq', [varTerm('CnId'), varTerm('CnId2')])),
-      positiveAtom(atom('__eq', [varTerm('L2'), varTerm('L1')])),
-      positiveAtom(atom('__gt', [varTerm('P2'), varTerm('P1')])),
+      neq(varTerm('CnId'), varTerm('CnId2')),
+      eq(varTerm('L2'), varTerm('L1')),
+      gt(varTerm('P2'), varTerm('P1')),
     ],
   );
 
   // winner(Slot, CnId, Value) :-
-  //   active_value(CnId, Slot, Value, L, P),
+  //   active_value(CnId, Slot, Value, _, _),
   //   not superseded(CnId, Slot).
   const winnerRule: Rule = rule(
     atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
@@ -134,8 +138,8 @@ function buildLWWRules(): Rule[] {
           varTerm('CnId'),
           varTerm('Slot'),
           varTerm('Value'),
-          varTerm('L'),
-          varTerm('P'),
+          _,
+          _,
         ]),
       ),
       negation(atom('superseded', [varTerm('CnId'), varTerm('Slot')])),
@@ -422,11 +426,11 @@ describe('LWW via max aggregation (simplified, no peer tiebreak)', () => {
       over: 'Lamport',
       result: 'MaxL',
       source: atom('active_value', [
-        varTerm('_CnId'),
+        _,
         varTerm('Slot'),
-        varTerm('_Value'),
+        _,
         varTerm('Lamport'),
-        varTerm('_Peer'),
+        _,
       ]),
     };
 
@@ -448,7 +452,7 @@ describe('LWW via max aggregation (simplified, no peer tiebreak)', () => {
             varTerm('Slot'),
             varTerm('Value'),
             varTerm('Lamport'),
-            varTerm('Peer'),
+            _,
           ]),
         ),
         positiveAtom(
@@ -560,8 +564,7 @@ describe('Fugue rules (simplified subset)', () => {
   // fugue_before(Parent, A, B) :-
   //   fugue_child(Parent, A, OriginLeft, _, PeerA),
   //   fugue_child(Parent, B, OriginLeft, _, PeerB),
-  //   __neq(A, B),
-  //   __lt(PeerA, PeerB).
+  //   A ≠ B, PeerA < PeerB.
   //
   // (Simplified: when two elements share the same origin_left, the one
   // with the lower peer ID goes first — left subtree.)
@@ -573,7 +576,7 @@ describe('Fugue rules (simplified subset)', () => {
           varTerm('Parent'),
           varTerm('A'),
           varTerm('OriginLeft'),
-          varTerm('ORA'),
+          _,
           varTerm('PeerA'),
         ]),
       ),
@@ -582,12 +585,12 @@ describe('Fugue rules (simplified subset)', () => {
           varTerm('Parent'),
           varTerm('B'),
           varTerm('OriginLeft'),
-          varTerm('ORB'),
+          _,
           varTerm('PeerB'),
         ]),
       ),
-      positiveAtom(atom('__neq', [varTerm('A'), varTerm('B')])),
-      positiveAtom(atom('__lt', [varTerm('PeerA'), varTerm('PeerB')])),
+      neq(varTerm('A'), varTerm('B')),
+      lt(varTerm('PeerA'), varTerm('PeerB')),
     ],
   );
 

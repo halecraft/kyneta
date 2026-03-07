@@ -187,17 +187,21 @@ interface Atom {
 
 type Term =
   | { readonly kind: 'const'; readonly value: Value }
-  | { readonly kind: 'var'; readonly name: string };
+  | { readonly kind: 'var'; readonly name: string }
+  | { readonly kind: 'wildcard' };  // anonymous: matches anything, binds nothing, each occurrence independent
 
 interface Rule {
   readonly head: Atom;
   readonly body: readonly BodyElement[];
 }
 
+type GuardOp = 'eq' | 'neq' | 'lt' | 'gt' | 'lte' | 'gte';
+
 type BodyElement =
   | { readonly kind: 'atom'; readonly atom: Atom }
   | { readonly kind: 'negation'; readonly atom: Atom }
-  | { readonly kind: 'aggregation'; readonly agg: AggregationClause };
+  | { readonly kind: 'aggregation'; readonly agg: AggregationClause }
+  | { readonly kind: 'guard'; readonly op: GuardOp; readonly left: Term; readonly right: Term };
 
 interface AggregationClause {
   readonly fn: 'min' | 'max' | 'count' | 'sum';
@@ -282,16 +286,21 @@ The Datalog evaluator is the single most important new component. Everything els
 
 #### Tasks
 
-- 1.1 Implement `datalog/types.ts` — Atom, Term, Rule, BodyElement, Fact, Relation, Substitution, AggregationClause; `Value` terms include both `number` (f64) and `bigint` (int) 🟢
-- 1.2 Implement `datalog/unify.ts` — variable binding, substitution application, term matching against facts; includes `compareValues(a: Value, b: Value): number` that handles `number` vs `bigint` correctly (`number` and `bigint` are distinct types that never unify with each other) 🟢
+- 1.1 Implement `datalog/types.ts` — Atom, Term (const, var, wildcard), Rule, BodyElement (atom, negation, aggregation, guard), Fact, Relation, Substitution, AggregationClause, GuardOp; `Value` terms include both `number` (f64) and `bigint` (int) 🟢
+- 1.2 Implement `datalog/unify.ts` — variable binding, substitution application, term matching against facts (including wildcard support); includes `compareValues(a: Value, b: Value): number` that handles `number` vs `bigint` correctly (`number` and `bigint` are distinct types that never unify with each other); guard evaluation via `evaluateGuard()` 🟢
 - 1.3 Implement `datalog/evaluate.ts` — bottom-up semi-naive fixed-point evaluation for positive Datalog (no negation yet) 🟢
-- 1.4 Implement `datalog/stratify.ts` — dependency graph construction, SCC detection, stratification validation, stratum ordering; return `Result` with context-rich error on cyclic negation 🟢
+- 1.4 Implement `datalog/stratify.ts` — dependency graph construction, SCC detection, stratification validation, stratum ordering; return `Result` with context-rich error on cyclic negation; guards introduce no dependency edges 🟢
 - 1.5 Extend `datalog/evaluate.ts` — stratified evaluation that processes strata in order, with negation between strata 🟢
 - 1.6 Implement `datalog/aggregate.ts` — min, max, count, sum operators; integrate into evaluator as a special body element; aggregation over `number` and `bigint` values must handle each type correctly (sum of bigints returns bigint, sum of numbers returns number; mixed-type aggregation is a type error) 🟢
 - 1.7 Validate LWW rules from §B.4 produce correct results against hand-computed expected values 🟢
 - 1.8 Validate Fugue rules (simplified subset) produce correct ordering against hand-computed expected values 🟢
 
 **Note on Phase 1 test strategy:** Phase 1 tests use ad-hoc ground facts that *simulate* kernel-domain relations (e.g., `active_value(CnId, Slot, Value, Lamport, Peer)`). These are test doubles — simple tuples — not real kernel types (which don't exist until Phase 2). In Phase 4, equivalence tests verify that the real kernel→Datalog projection (`kernel/projection.ts`) produces facts the evaluator handles identically. This "test double → real integration" bridge is intentional.
+
+**Ergonomic conventions established in Phase 1** (all later phases should follow):
+- **Guards over magic strings.** Comparison constraints use typed `guard` body elements (`neq(X, Y)`) — not magic-string predicates (`positiveAtom(atom('__neq', [...]))`). The old `__eq`/`__neq`/`__gt`/`__lt` built-in predicates still work for backward compatibility but are deprecated. New code must use `eq()`, `neq()`, `lt()`, `gt()`, `lte()`, `gte()`.
+- **Wildcards over dummy variables.** Use `_` (or `wildcard()`) instead of `varTerm('_Unused')` for positions you don't care about. Each wildcard is independent — two wildcards never unify, unlike two variables with the same name.
+- **Positional tuples remain for now.** Facts are flat positional tuples (`['cn1', 'title', 'Hello', 1, 'alice']`). Phase 4's `projection.ts` will give these named structure, but within the Datalog layer, tuples are the correct abstraction.
 
 #### Tests
 
@@ -303,6 +312,8 @@ The Datalog evaluator is the single most important new component. Everything els
 - LWW rules: concurrent writes resolved correctly by (lamport, peer) ordering
 - Empty relation handling: rules over empty facts produce empty results
 - Multiple rules for same head predicate: all rules contribute facts
+- Guards: `neq()`, `gt()`, `lt()`, `eq()`, `lte()`, `gte()` filter substitutions correctly; guards introduce no predicate dependencies in stratification
+- Wildcards: `_` matches any value without binding; multiple wildcards are independent; wildcards work in aggregation sources
 
 ### Phase 2: Kernel Types and Store 🔴
 
@@ -310,7 +321,7 @@ The new constraint types and CnId-based store, replacing the prototype's path-ba
 
 #### Tasks
 
-- 2.1 Implement `kernel/types.ts` — all types from Core Type Definitions section: discriminated union `Constraint`, `Capability` (recursive), `Value` (with `bigint`), `Counter`/`Lamport` (safe-integer branded types), `Result<T,E>`, error types 🔴
+- 2.1 Implement `kernel/types.ts` — all types from Core Type Definitions section: discriminated union `Constraint`, `Capability` (recursive), `Value` (with `bigint`), `Counter`/`Lamport` (safe-integer branded types), `Result<T,E>`, error types; re-export Datalog types (`Rule`, `BodyElement` including `GuardElement`, `Term` including `WildcardTerm`) so that `RulePayload` is properly typed 🔴
 - 2.2 Implement `kernel/cnid.ts` — CnId creation, equality, comparison (peer then counter), string serialization 🔴
 - 2.3 Implement `kernel/lamport.ts` — Lamport clock: local tick, merge on receive 🔴
 - 2.4 Implement `kernel/version-vector.ts` — port and adapt existing version-vector.ts for new CnId scheme 🔴
@@ -355,7 +366,7 @@ Wiring the solver pipeline from §7.2 and constructing the reality tree.
 
 #### Tasks
 
-- 4.1 Implement `kernel/projection.ts` — pure function that converts active constraints into Datalog ground facts: `Constraint` with `type: 'value'` → `active_value(CnId, Slot, Value, Lamport, Peer)` fact; `Constraint` with `type: 'structure'` → appropriate structure facts. This is the bridge between kernel types and the Datalog evaluator. 🔴
+- 4.1 Implement `kernel/projection.ts` — pure function that converts active constraints into Datalog ground facts: `Constraint` with `type: 'value'` → `active_value(CnId, Slot, Value, Lamport, Peer)` fact; `Constraint` with `type: 'structure'` → appropriate structure facts. This is the bridge between kernel types and the Datalog evaluator. Document the column-name→position mapping for each projected relation so that rule authors don't need to count tuple positions. 🔴
 - 4.2 Implement `kernel/skeleton.ts` — build rooted tree from active structure constraints: Root nodes define containers; Map children grouped by (parent, key); Seq children ordered by Fugue interleaving; value resolution via native LWW 🔴
 - 4.3 Port native Fugue solver from prototype to `solver/fugue.ts` — adapt from path-based seq_element to CnId-based structure(seq) constraints 🔴
 - 4.4 Port native LWW solver from prototype to `solver/lww.ts` — adapt from path-based to slot-based value resolution 🔴
@@ -379,7 +390,7 @@ Creating realities, the bootstrap process, and the public API.
 
 #### Tasks
 
-- 5.1 Implement `bootstrap.ts` — reality creation: generate creation constraint with Admin grant to creator; emit default LWW rules as rule constraints; emit default Fugue rules as rule constraints; set compaction policy and retraction depth (§B.8) 🔴
+- 5.1 Implement `bootstrap.ts` — reality creation: generate creation constraint with Admin grant to creator; emit default LWW rules as rule constraints (using `guard` body elements, not legacy `__neq`/`__gt`); emit default Fugue rules as rule constraints (using wildcards for unused positions); set compaction policy and retraction depth (§B.8) 🔴
 - 5.2 Implement `index.ts` — public API: createReality, assertConstraint, solve, sync (delta export/import), introspection stubs 🔴
 - 5.3 Integration test: two agents create constraints, sync via delta, both compute identical reality 🔴
 - 5.4 Integration test: agent retracts a value, syncs, both see retraction reflected in reality 🔴
@@ -401,6 +412,8 @@ Creating realities, the bootstrap process, and the public API.
 - 6.2 Rewrite TECHNICAL.md to document the new architecture, spec alignment, and design decisions 🔴
 - 6.3 Archive or remove old prototype code (src/core/, src/solver/, src/store/, etc.) 🔴
 - 6.4 Update LEARNINGS.md with findings from the new implementation 🔴
+- 6.5 Remove legacy `__eq`/`__neq`/`__gt`/`__lt`/`__lte`/`__gte` built-in predicate support from `unify.ts`; audit for any remaining callers 🔴
+- 6.6 *(Stretch)* Add a convenience DSL for rule construction — e.g. tagged template literal or builder API — so that bootstrap rules and tests don't require deeply nested factory calls. The current `rule(atom('p', [varTerm('X')]), [positiveAtom(atom('q', [varTerm('X'), _]))])` is correct but verbose. A DSL would let this be written as something like `Rule.head('p', $X).when('q', $X, _)` or `datalog\`p(X) :- q(X, _).\``. This is a developer-experience improvement, not a correctness issue, so it's deferred to cleanup. 🔴
 
 ## Transitive Effect Analysis
 
@@ -649,6 +662,34 @@ The codebase uses a two-tier error strategy aligned with the spec:
 
 All expected-failure functions use `Result<T, E>` return types. Error types are discriminated unions with `kind` discriminants and context fields. No `any`. No swallowed exceptions.
 
+## API Ergonomics
+
+Observations from Phase 1 implementation, applied as a refactor before Phase 2.
+
+### Guards Replace Magic-String Predicates
+
+The initial Phase 1 implementation encoded comparison constraints as magic-string predicates: `positiveAtom(atom('__neq', [varTerm('CnId'), varTerm('CnId2')]))`. This was a 1970s-Prolog idiom wearing TypeScript clothes — untyped, invisible to the dependency graph, and confusing (guards aren't relational lookups, but they were dressed up as atoms).
+
+The fix: a dedicated `guard` body element with a typed `GuardOp` discriminant. Now comparisons are `neq(varTerm('CnId'), varTerm('CnId2'))` — shorter, type-safe (the compiler catches typos in operator names), and honest about what they are. Guards introduce no predicate dependency edges in the stratification graph, which was a latent bug in the old encoding (the old approach would have added a spurious edge to a predicate named `__neq` that doesn't exist as a relation).
+
+The old `__eq`/`__neq`/etc. built-in predicates still work via a legacy compatibility shim in `unify.ts`. They should be removed in Phase 6.
+
+### Wildcards Prevent a Class of Accidental-Unification Bugs
+
+Using `varTerm('_Value')` for "I don't care about this position" is a trap. If two body atoms both use `varTerm('_Value')`, they'll unify — silently constraining positions that were meant to be independent. This is exactly the kind of bug that looks correct in a code review.
+
+The fix: `wildcard()` (aliased as `_`) is a proper anonymous term. Each occurrence is independent and never binds. The evaluator matches it against any value without extending the substitution. Using `_` makes intent clear: "this position exists in the schema but I don't need its value."
+
+### Remaining Verbosity (Deferred)
+
+The rule DSL is still verbose: `rule(atom('p', [varTerm('X')]), [positiveAtom(atom('q', [varTerm('X'), _]))])`. This is ~40 characters of ceremony for what Datalog writes as `p(X) :- q(X, _).` The ceremony comes from three sources:
+
+1. **`positiveAtom(atom(...))`** — the common case (positive body atom) requires the most wrapping. A future improvement could make `atom(...)` itself usable in body position.
+2. **`varTerm('X')`** — every variable mention is 12+ characters. A future DSL could use JS proxies or tagged templates to make variables implicit.
+3. **No rule parser** — rules are constructed as data structures, not parsed from text.
+
+These are developer-experience issues, not correctness issues. They're deferred to Phase 6 (task 6.6). The current API is correct, fully typed, and adequate for programmatic rule construction (which is the primary use case for bootstrap and projection).
+
 ## Learnings
 
 ### Discriminated Unions Prevent a Class of Bugs at the Plan Stage
@@ -674,3 +715,17 @@ The fix splits numerics into two concerns:
 2. **User values** — `int` (maps to `bigint` in JS, `i64` in Rust) and `float` (maps to `number` in JS, `f64` in Rust). These are distinct types that do not compare as equal: `int(3)` ≠ `float(3.0)`. This prevents a class of bugs where integer identity is lost through float coercion.
 
 The complexity is contained to three modules: `datalog/unify.ts` (term matching), `datalog/aggregate.ts` (numeric aggregation), and `kernel/projection.ts` (fact assembly). Everything else passes `Value` through opaquely. Wire formats (CBOR, MessagePack) natively distinguish integers from floats, so serialization maps directly.
+
+### Magic Strings Are Bugs Waiting to Happen — Use the Type System
+
+The initial Phase 1 implementation encoded comparison constraints as magic-string predicates stuffed into the relational atom wrapper: `positiveAtom(atom('__neq', [varTerm('CnId'), varTerm('CnId2')]))`. This had three problems: (1) nothing in the type system catches a typo like `'__nneq'` — it silently compiles as a lookup against a nonexistent relation; (2) guards aren't relational lookups, but the code dressed them up as atoms, confusing anyone reading the rule; (3) the dependency graph builder would add a spurious edge to a predicate named `__neq` that doesn't exist as a stored relation. The fix was a dedicated `guard` body element with a typed `GuardOp` discriminant (`'eq' | 'neq' | 'lt' | 'gt' | 'lte' | 'gte'`). Now the compiler catches typos, the stratifier correctly ignores guards (no dependency edges), and the code reads like what it means: `neq(varTerm('CnId'), varTerm('CnId2'))`.
+
+The broader lesson: whenever a domain concept is semantically distinct from existing concepts, give it its own discriminated-union variant rather than encoding it as a special case of something else. The extra 20 lines of type definitions pay for themselves in every file that touches the concept.
+
+### Anonymous Variables Need Language-Level Support, Not Naming Conventions
+
+Using `varTerm('_Value')` for "I don't care about this position" is a correctness trap. If two body atoms both mention `varTerm('_Value')`, they silently unify — constraining positions that were meant to be independent. This looks correct in review because the underscore prefix *suggests* "don't care" without *enforcing* it. The fix was a `wildcard` term kind that the unifier always matches without extending the substitution. Each wildcard occurrence is independent by construction, not by convention.
+
+### Review Your API As If You Were a New Hire
+
+After completing Phase 1, we stepped back and asked "what would a modern TypeScript developer think of this API?" The answer was unflattering: the rule construction DSL was verbose and full of 1970s Prolog idioms. This review — done *between* phases rather than after all phases — was cheap (one refactor pass) and caught issues that would have metastasized across Phases 2–5 if left unchecked. The lesson: schedule ergonomic reviews at phase boundaries, not just at the end.

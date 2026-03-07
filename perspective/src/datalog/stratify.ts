@@ -91,6 +91,11 @@ export function buildDependencyGraph(rules: readonly Rule[]): DependencyGraph {
           addEdge(headPred, element.agg.source.predicate, true);
           break;
         }
+        case 'guard': {
+          // Guards are binary constraints on terms — they don't reference
+          // any predicate and introduce no dependency edges.
+          break;
+        }
       }
     }
   }
@@ -360,6 +365,9 @@ export function bodyPredicates(body: readonly BodyElement[]): Set<string> {
         break;
       case 'aggregation':
         preds.add(elem.agg.source.predicate);
+        break;
+      case 'guard':
+        // Guards reference no predicates.
         break;
     }
   }

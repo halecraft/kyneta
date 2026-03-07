@@ -24,6 +24,7 @@ import type {
   Result,
   StratificationError,
   AggregationClause,
+  GuardElement,
 } from './types.js';
 import {
   ok,
@@ -38,6 +39,7 @@ import {
   groundAtom,
   isBuiltinPredicate,
   tryEvaluateBuiltin,
+  evaluateGuard,
 } from './unify.js';
 import { stratify } from './stratify.js';
 import { evaluateAggregation } from './aggregate.js';
@@ -328,6 +330,9 @@ function evaluateRule(
       case 'aggregation':
         subs = evaluateAggregationElement(element.agg, fullDb, subs);
         break;
+      case 'guard':
+        subs = evaluateGuardElement(element, subs);
+        break;
     }
   }
 
@@ -365,6 +370,9 @@ function evaluateRuleSemiNaive(
         break;
       case 'aggregation':
         subs = evaluateAggregationElement(element.agg, fullDb, subs);
+        break;
+      case 'guard':
+        subs = evaluateGuardElement(element, subs);
         break;
     }
   }
@@ -447,6 +455,24 @@ function evaluateNegation(
     if (matches.length === 0) {
       // No match — negation holds, keep this substitution
       results.push(sub);
+    }
+  }
+  return results;
+}
+
+/**
+ * Evaluate a guard body element: keep only substitutions for which the
+ * guard condition holds.
+ */
+function evaluateGuardElement(
+  guard: GuardElement,
+  subs: readonly Substitution[],
+): Substitution[] {
+  const results: Substitution[] = [];
+  for (const sub of subs) {
+    const result = evaluateGuard(guard, sub);
+    if (result !== null) {
+      results.push(result);
     }
   }
   return results;
