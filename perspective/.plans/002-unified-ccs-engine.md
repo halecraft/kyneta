@@ -558,15 +558,15 @@ Creating realities, the bootstrap process, and the public API.
 - Multi-container: reality with both map and seq containers resolves correctly
 - Constraint auditability: invalid constraints remain in store, queryable but excluded from solving
 
-### Phase 6: Documentation and Cleanup 🔴
+### Phase 6: Documentation and Cleanup 🟢
 
 #### Tasks
 
-- 6.1 Rewrite README.md to reflect new architecture (engine = kernel + Datalog evaluator) 🔴
-- 6.2 Rewrite TECHNICAL.md to document the new architecture, spec alignment, and design decisions 🔴
-- 6.3 Update LEARNINGS.md with findings from the new implementation 🔴
-- 6.4 Remove `reference/fugue-v0.ts` (no longer needed after Phase 4 port) 🔴
-- 6.5 Add a convenience DSL for rule construction — e.g. tagged template literal or builder API — so that bootstrap rules and tests don't require deeply nested factory calls. The current `rule(atom('p', [varTerm('X')]), [positiveAtom(atom('q', [varTerm('X'), _]))])` is correct but verbose. A DSL would let this be written as something like `Rule.head('p', $X).when('q', $X, _)` or `datalog\`p(X) :- q(X, _).\``. This is a developer-experience improvement, not a correctness issue, so it's deferred to cleanup. 🔴
+- 6.1 Rewrite README.md to reflect new architecture (engine = kernel + Datalog evaluator) — added Quick Start with working code example, updated project status table showing all phases complete, replaced architecture diagram with full directory tree, moved theoretical foundation inline, updated test count to 759 🟢
+- 6.2 Rewrite TECHNICAL.md to document the new architecture, spec alignment, and design decisions — removed all v0 prototype sections (Architecture, Core Types, Solvers, Constraint Store, Sync Protocol, Subscriptions, Introspection, v0 Design Decisions), consolidated into a single cohesive document covering: engine architecture, solver pipeline, constraint types, slot identity, projection, default solver rules (LWW + Fugue with rule details), native solvers, authority/validity, retraction/dominance, bootstrap, reality tree, Datalog evaluator, store/sync, module dependency DAG, agent, stratification, design decisions, future work 🟢
+- 6.3 Update LEARNINGS.md with findings from the new implementation — Phase 5 learnings already added (canonical rule definitions, CnId collisions, bootstrap layer semantics, authority prerequisite, agent observe pattern, bidirectional sync). No additional updates needed for Phase 6. 🟢
+- 6.4 Remove `reference/fugue-v0.ts` (no longer needed after Phase 4 port) — deleted file and empty `reference/` directory 🟢
+- 6.5 *(Deferred)* Add a convenience DSL for rule construction. The current factory-call API (`rule(atom('p', [varTerm('X')]), [positiveAtom(atom('q', [varTerm('X'), _]))]))`) is verbose but correct and fully typed. A DSL (`datalog\`p(X) :- q(X, _).\``) would improve ergonomics but is not a correctness issue. Deferred to a future plan. 🟡
 
 *Note: Tasks 6.3 (remove old prototype) and 6.5 (remove legacy builtins) from the original plan were moved to Phase 2.5 and executed immediately after Phase 2.*
 

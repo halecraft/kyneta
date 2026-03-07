@@ -1,14 +1,51 @@
 # Prism
 
-**Unified CCS Engine — A constraint-based collaborative state system**
+**Convergent Constraint Systems — where constraints are truth and state is derived**
 
-Prism implements the [Unified CCS Engine Specification](./theory/unified-engine.md), a rigorous architecture for building collaborative realities where independent agents assert **constraints** about what should be true, and a deterministic **solver** constructs shared state from those perspectives.
+Prism implements the [Unified CCS Engine Specification](./theory/unified-engine.md), an architecture for collaborative realities where independent agents assert **constraints** about what should be true, and a deterministic **solver** constructs shared state from those assertions.
+
+## Quick Start
+
+```typescript
+import {
+  createReality, solve, insert,
+  produceRoot, produceMapChild, produceSeqChild,
+  exportDelta, importDelta, createStore, createAgent,
+  getVersionVector,
+} from 'prism';
+
+// 1. Bootstrap a reality — emits admin grant + default solver rules
+const { store, agent: alice, config } = createReality({ creator: 'alice' });
+
+// 2. Create structure
+const { constraint: rootC, id: rootId } = produceRoot(alice, 'profile', 'map');
+insert(store, rootC);
+alice.observe(rootC);
+
+const { constraint: nameC, id: nameId } = produceMapChild(alice, rootId, 'name');
+insert(store, nameC);
+alice.observe(nameC);
+
+// 3. Assert a value
+const nameVal = alice.produceValue(nameId, 'Alice');
+insert(store, nameVal);
+alice.observe(nameVal);
+
+// 4. Solve — deterministic reality from constraints
+const reality = solve(store, config);
+// reality.root.children.get('profile').children.get('name').value === 'Alice'
+
+// 5. Sync — another agent joins
+const bobStore = createStore();
+importDelta(bobStore, exportDelta(store, getVersionVector(bobStore)));
+// Bob now has the same constraints → same reality
+```
 
 ## Core Ideas
 
 ### Constraints, Not Operations
 
-An operation says "do this." A constraint says "this should be true." Each agent asserts constraints from its own subjective perspective. The shared reality *emerges* when the solver examines all perspectives and constructs a state that accounts for them.
+An operation says "do this." A constraint says "this should be true." Each agent asserts constraints from its own perspective. The shared reality *emerges* when the solver examines all perspectives and derives state that accounts for them.
 
 ### Engine = Kernel + Datalog Evaluator
 
@@ -17,7 +54,7 @@ The engine has exactly two mandatory components:
 - **Layer 0 Kernel** — Constraint storage, set union merge, CnId generation, Lamport clocks, signatures, authority/validity, retraction/dominance, version vectors. Mechanical algorithms — no inference, no search.
 - **Datalog Evaluator** — Stratified, bottom-up, semi-naive. Evaluates rule constraints from the store over facts derived from active constraints, producing the reality.
 
-Everything else — LWW value resolution, Fugue sequence ordering, custom conflict resolution, schema mappings — is expressed as Datalog rules that travel in the constraint store.
+Everything else — LWW value resolution, Fugue sequence ordering, custom conflict resolution — is expressed as **Datalog rules that travel in the constraint store**. Changing the rules changes the reality, not the engine.
 
 ### Six Constraint Types
 
@@ -26,7 +63,7 @@ Everything else — LWW value resolution, Fugue sequence ordering, custom confli
 | `structure` | Permanent node in the reality tree | Never |
 | `value` | Content at a node | Yes |
 | `retract` | Asserts a constraint should be dominated | Yes (enables undo) |
-| `rule` | Datalog rule for solver/query evaluation | Yes |
+| `rule` | Datalog rule for solver evaluation | Yes |
 | `authority` | Capability grant/revoke | Via revocation only |
 | `bookmark` | Named point in causal time | Yes |
 
@@ -35,7 +72,8 @@ Everything else — LWW value resolution, Fugue sequence ordering, custom confli
 Merge is set union — commutative, associative, idempotent. The solver pipeline does the work:
 
 ```
-Constraint Store (S) → filter by Version (S_V) → Valid(S_V) → Active(Valid(S_V)) → Build Skeleton → Resolve Values → Reality
+Store (S) → Version Filter (S_V) → Valid(S_V) → Active(Valid(S_V))
+  → Structure Index → Projection → Datalog Evaluation → Skeleton → Reality
 ```
 
 ### Time Travel Is Free
@@ -44,34 +82,77 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 
 ## Project Status
 
-🚧 **Active Development** — Phases 1–4.6 complete (kernel, Datalog evaluator, solver pipeline, Datalog-driven resolution, pre-bootstrap correctness). Phases 5–6 remaining (bootstrap, documentation).
+**Phases 1–5 complete.** The full Unified CCS Engine is implemented and tested.
 
-See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the implementation plan.
+| Phase | Status | What |
+|-------|--------|------|
+| 1. Datalog Evaluator | ✅ | Stratified bottom-up evaluation with negation, aggregation, guards, wildcards |
+| 2. Kernel Types & Store | ✅ | CnId, Lamport, version vectors, constraint store with O(1) insert |
+| 2.5 Prototype Removal | ✅ | Clean break from v0 codebase |
+| 3. Authority & Retraction | ✅ | Capability model, validity filter, retraction graph with dominance |
+| 3.5 Shared Base Types | ✅ | `CnId`, `Value`, `PeerID` extracted to `base/` |
+| 4. Skeleton & Pipeline | ✅ | Full solver pipeline, structure index, projection, skeleton builder |
+| 4.5 Datalog-Driven Resolution | ✅ | Datalog as primary path; native solvers as §B.7 fast path |
+| 4.6 Pre-Bootstrap Correctness | ✅ | Semantic refs, complete Fugue rules, store O(1), skeleton tests |
+| 5. Bootstrap & Integration | ✅ | `createReality()`, default rules, multi-agent sync, 30 integration tests |
+| 6. Documentation & Cleanup | 🚧 | This phase |
 
-### Architecture
+**759 tests across 21 files, all passing.**
+
+See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the detailed implementation plan.
+
+## Architecture
 
 ```
-Engine
-├── base/             Shared types: CnId, Value, PeerID, Counter, Result<T,E>
-├── kernel/           Layer 0 — Constraint store, authority, validity,
-│   ├── store.ts        retraction/dominance, version vectors
-│   ├── pipeline.ts     Solver composition root: solve(S, V?) → Reality
-│   ├── structure-index.ts  Slot identity + parent→child indexes
-│   ├── projection.ts   Active constraints → Datalog ground facts
-│   ├── resolve.ts      Datalog derived facts → typed resolution result
-│   └── skeleton.ts     Reality tree builder (reads ResolutionResult)
-├── datalog/          Stratified bottom-up evaluator with negation & aggregation
-├── solver/           Native LWW + Fugue (§B.7 fast path, optional)
-└── bootstrap.ts      Reality creation with default solver rules (Phase 5)
+prism/
+├── src/
+│   ├── base/                 Shared types: CnId, Value, PeerID, Result<T,E>
+│   ├── kernel/               Layer 0 — the engine's mandatory kernel
+│   │   ├── types.ts            Six constraint types (discriminated union)
+│   │   ├── store.ts            CnId-keyed set, insert, set union merge
+│   │   ├── agent.ts            Stateful constraint factory (counter, lamport, refs)
+│   │   ├── authority.ts        Capability chain replay
+│   │   ├── validity.ts         Valid(S): signature + capability check
+│   │   ├── retraction.ts       Retraction graph, dominance, Active(S)
+│   │   ├── structure-index.ts  Slot identity, parent→child indexes
+│   │   ├── projection.ts       Active constraints → Datalog ground facts
+│   │   ├── resolve.ts          Datalog derived facts → typed resolution result
+│   │   ├── skeleton.ts         Reality tree builder (reads ResolutionResult)
+│   │   └── pipeline.ts         Composition root: solve(S, V?) → Reality
+│   ├── datalog/              Stratified bottom-up evaluator
+│   │   ├── types.ts            Atoms, terms, rules, facts, relations
+│   │   ├── unify.ts            Variable binding, substitution, guards
+│   │   ├── stratify.ts         Dependency graph, SCC, stratum ordering
+│   │   ├── evaluate.ts         Semi-naive fixed-point evaluation
+│   │   └── aggregate.ts        min, max, count, sum
+│   ├── solver/               Native optimizations (§B.7, optional)
+│   │   ├── lww.ts              Native LWW: max_by(lamport, peer)
+│   │   └── fugue.ts            Native Fugue: tree walk over structure(seq)
+│   ├── bootstrap.ts          Reality creation + default solver rules (§B.8)
+│   └── index.ts              Public API
+├── tests/                    759 tests across 21 files
+│   ├── datalog/              Evaluator, unification, stratification, rules
+│   ├── kernel/               Store, agent, authority, pipeline, skeleton, ...
+│   ├── solver/               LWW and Fugue equivalence (native == Datalog)
+│   └── integration.test.ts   Multi-agent bootstrap, sync, retraction, time travel
+└── theory/
+    └── unified-engine.md     The authoritative specification
 ```
 
-### What Works Today
+## Theoretical Foundation
 
-The full solver pipeline: `Store → Version Filter → Valid(S) → Active(S) → Structure Index → Projection → Resolution → Skeleton → Reality`. Datalog evaluation is the primary resolution path; native solvers activate as an optional fast path when rules match defaults. Complete Fugue Datalog rules (7 rules, 3 predicates) match the native solver for all inputs. Store mutates in place (O(1) insert). Semantic retraction refs support Agent frontier compression. 729 tests pass across 20 files.
+Prism maintains all CRDT guarantees:
 
-### Previous Prototype
+- **Semilattice**: Constraint stores under ∪. Commutative, associative, idempotent.
+- **Convergence**: Same constraints → same reality. Always. (Deterministic solver over identical sets.)
+- **Monotonic growth**: The store only grows (pre-compaction).
+- **Structural permanence**: `structure` constraints are never retracted or compacted.
+- **Causal retraction**: You can only retract what you've observed. The retraction graph is always acyclic.
+- **Solver independence**: Solvers never see retractions or invalid constraints. `Active(Valid(S))` is the interface.
 
-The `v0` prototype (Plan 001) validated the CCS thesis with 476 tests confirming convergence, Fugue interleaving, LWW resolution, and Loro equivalence. The current implementation is a ground-up rewrite aligned with the formal spec.
+### From State-Based to Constraint-Based CRDTs
+
+Traditional CRDTs define a state space S, a merge function ⊔ forming a join-semilattice, and monotonic operations. CCS reframes this: the semilattice moves from states to constraint sets (merge = set union), and a deterministic solver maps constraint sets to state. Merge becomes trivial; complexity moves to the solver.
 
 ## Installation
 
@@ -84,27 +165,16 @@ bun install
 ```bash
 bun install          # Install dependencies
 bun run test         # Run tests in watch mode
-bun run test:run     # Run tests once
+bun run test:run     # Run tests once (759 tests)
 bun run typecheck    # TypeScript type checking
 ```
 
 ## Documentation
 
 - [Unified CCS Engine Spec](./theory/unified-engine.md) — The authoritative specification
-- [TECHNICAL.md](./TECHNICAL.md) — Architecture, algorithms, design decisions
+- [TECHNICAL.md](./TECHNICAL.md) — Architecture, solver pipeline, design decisions
 - [LEARNINGS.md](./LEARNINGS.md) — Discoveries, corrections, and open questions
 - [Implementation Plan](./.plans/002-unified-ccs-engine.md) — Phased plan with status tracking
-
-## Theoretical Foundation
-
-Prism maintains all CRDT guarantees:
-
-- **Semilattice**: Constraint stores under ∪. Commutative, associative, idempotent.
-- **Convergence**: Same constraints → same reality. Always.
-- **Monotonic growth**: The store only grows (pre-compaction).
-- **Structural permanence**: `structure` constraints are never retracted.
-- **Causal retraction**: You can only retract what you've observed.
-- **Solver independence**: Solvers never see retractions or invalid constraints.
 
 ## Related Work
 
@@ -114,6 +184,7 @@ Prism maintains all CRDT guarantees:
 - CALM Theorem (Hellerstein, 2010)
 - Dedalus (Alvaro et al., 2011)
 - DBSP (Budiu & McSherry, 2023)
+- Datalog (Ullman, 1988; Apt, Blair & Walker, 1988)
 
 ## License
 

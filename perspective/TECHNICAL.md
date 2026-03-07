@@ -1,39 +1,28 @@
 # Prism Technical Documentation
 
-> **Note**: The v0 prototype sections (Architecture, Core Types, Solvers, Constraint Store, etc.) below the "New Architecture" section are retained for historical reference. The authoritative architecture is described in [New Architecture](#new-architecture-unified-ccs-engine) and implemented in Phases 1–4.
-
 ## Overview
 
-Prism implements **Convergent Constraint Systems (CCS)**, a theoretical framework for building collaborative data structures where constraints are the source of truth and state is derived through deterministic solving.
+Prism implements **Convergent Constraint Systems (CCS)** — a framework for collaborative state where constraints are the source of truth and state is derived through deterministic solving. The implementation follows the [Unified CCS Engine Specification](./theory/unified-engine.md).
 
-## New Architecture (Unified CCS Engine)
+## Engine Architecture
 
-The v0 prototype validated the CCS thesis. The new implementation follows the formal spec (`theory/unified-engine.md`) with two mandatory components:
-
-### Engine = Layer 0 Kernel + Datalog Evaluator
+The engine has exactly two mandatory components (§B.1):
 
 **Layer 0 Kernel** (§B.2): Mechanical algorithms — constraint storage, set union merge, CnId generation, Lamport clocks, ed25519 signatures, authority/validity computation, retraction graph and dominance, version vectors, tree skeleton construction. Given the same store, any two correct implementations produce identical results.
 
 **Datalog Evaluator** (§B.3): Stratified, bottom-up, semi-naive fixed-point evaluation with aggregation. Evaluates rule constraints from the store over facts derived from active constraints. LWW and Fugue are Datalog rules that travel in the store — they are not hardcoded algorithms.
 
-**Native Solvers** (§B.7, optional): Host-language LWW and Fugue implementations as performance optimizations. Must produce identical results to the Datalog rules they replace.
+**Native Solvers** (§B.7, optional): Host-language LWW and Fugue implementations as performance optimizations. Must produce identical results to the Datalog rules they replace. Activate only when active rules match known default patterns.
 
-### Key Architectural Differences from v0
+### Key Insight: Rules as Data
 
-| Dimension | v0 Prototype | Unified Engine |
-|-----------|-------------|----------------|
-| Constraint addressing | Path-based (`["profile", "name"]`) | CnId-based (`{peer, counter}` + causal `refs`) |
-| Constraint types | 4 assertions (`eq`, `exists`, `deleted`, `seq_element`) | 6 typed constraints (`structure`, `value`, `retract`, `rule`, `authority`, `bookmark`) |
-| Solver logic | Hardcoded TypeScript (MapSolver, ListSolver) | Datalog rules in the store; native solvers as optional optimization |
-| Deletion | `deleted` assertion at path | `retract` constraint targeting a `value` constraint's CnId |
-| Authority | None | Layer 0 capability model with grant/revoke chains |
-| Time travel | Not supported | `solve(S, V)` for any version vector V — falls out of architecture |
-| Undo/redo | Not supported | Retraction depth (retract-of-retract) |
-| Store indexing | By path (byPath Map) | By CnId (hash map) |
+LWW value resolution and Fugue sequence ordering are not part of the engine. They are `rule` constraints asserted at reality creation (bootstrap) that travel in the store like any other constraint. An agent with `CreateRule` + `Retract` capabilities can retract the default rules and assert a custom resolution strategy — the reality changes, but no agent updates its code.
 
-### Solver Pipeline (§7.2) — Implemented in Phases 4–4.6
+---
 
-The pipeline is a composition of pure functions, each in its own module. `pipeline.ts` is the composition root — it contains no transformation logic. **Datalog evaluation is the primary resolution path** (Phase 4.5); native solvers are an optional §B.7 fast path that activates only when the active rules match known default patterns.
+## Solver Pipeline (§7.2)
+
+The pipeline is a composition of pure functions, each in its own module. `pipeline.ts` is the composition root — it contains no transformation logic itself.
 
 ```
 Constraint Store (S), Version Vector (V)
@@ -68,98 +57,275 @@ Valid(S_V) = computeValid(S_V)        // validity.ts — signature + capability 
                      Reality
 ```
 
-**Key insight 1**: The structure index is built from `Valid(S_V)` — all valid structure constraints regardless of dominance (matching §7.2's two-path fork). Structure constraints are immune to retraction, so this is equivalent to building from Active, but the code matches the spec's design.
+**Datalog evaluation is the primary resolution path** (§B.1). Native solvers are an optional §B.7 fast path that activates only when the active rules structurally match known default patterns. When rules are retracted, replaced, or augmented with custom Layer 2+ rules, the pipeline falls back to Datalog evaluation automatically.
 
-**Key insight 2**: The skeleton builder is resolution-agnostic. It receives a `ResolutionResult` (from either Datalog or native solvers) and builds the tree without knowing which path produced it. `resolve.ts` is the symmetric counterpart of `projection.ts`: projection converts kernel types → Datalog facts, resolution converts Datalog facts → kernel types.
+### Pipeline Design Principles
 
-### Slot Identity (§8 — the Map Multi-Structure Case)
+1. **Structure index from Valid, not Active.** The spec's pipeline forks at `Valid(S_V)`: one branch takes all valid structure constraints (immune to retraction), the other takes active constraints for value resolution. The code matches this two-path design.
 
-When two peers independently create `structure(map, parent=P, key=K)`, they get different CnIds but represent the **same logical slot**. The structure index groups them by `(parent, key)` so that value constraints targeting either structure compete via LWW for the same position in the reality.
+2. **The skeleton builder is resolution-agnostic.** It receives a `ResolutionResult` (from either Datalog or native solvers) and builds the tree without knowing which path produced it.
 
-Slot identity by policy:
-- **Map child**: `map:<parentCnIdKey>:<key>` — multiple structures can share a slot
-- **Seq child**: `seq:<ownCnIdKey>` — always unique (CnId identity)
-- **Root**: `root:<containerId>`
+3. **`resolve.ts` is the symmetric counterpart of `projection.ts`.** Projection converts kernel types → Datalog facts. Resolution converts Datalog facts → kernel types. The two modules are the boundary between the kernel and Datalog worlds.
 
-This is Layer 0 kernel logic (not expressible as a retractable rule) because slot identity derives from policy semantics.
+---
 
-### Projection: Constraints → Datalog Facts
+## Constraint Types (§2)
 
-`projection.ts` performs a join between active value constraints and the structure index to emit ground facts with pre-computed slot identity:
+Six kernel-level constraint types, represented as a TypeScript discriminated union on `type`:
+
+| Type | Payload | Retractable? | Purpose |
+|------|---------|-------------|---------|
+| `structure` | `Root { containerId, policy }` / `Map { parent, key }` / `Seq { parent, originLeft, originRight }` | Never | Permanent node in the reality tree |
+| `value` | `{ target: CnId, content: Value }` | Yes | Content at a node |
+| `retract` | `{ target: CnId }` | Yes (enables undo) | Asserts a constraint should be dominated |
+| `rule` | `{ layer, head: Atom, body: BodyElement[] }` | Yes | Datalog rule for solver evaluation |
+| `authority` | `{ targetPeer, action, capability }` | Via revocation | Capability grant/revoke |
+| `bookmark` | `{ name, version: VersionVector }` | Yes | Named point in causal time |
+
+Every constraint carries:
+- `id: CnId` — globally unique `(peer, counter)` pair
+- `lamport: number` — Lamport timestamp for causal ordering
+- `refs: CnId[]` — causal predecessors (frontier-compressed)
+- `sig: Uint8Array` — ed25519 signature (stub: always valid)
+
+### Value Domain (§3)
+
+```typescript
+type Value =
+  | null          // absence (map deletion via LWW)
+  | boolean
+  | number        // IEEE 754 f64
+  | bigint        // arbitrary-precision integer (distinct from number)
+  | string
+  | Uint8Array    // raw binary (logically immutable)
+  | { ref: CnId } // reference to a structure constraint
+```
+
+`number` and `bigint` are distinct types that never unify: `int(3n) ≠ float(3.0)`. This prevents precision-loss bugs across language boundaries (JavaScript f64 vs Rust i64).
+
+---
+
+## Slot Identity (§8)
+
+Slot identity determines how constraints map to positions in the reality tree. It is Layer 0 kernel logic — not expressible as a retractable rule.
+
+| Policy | Slot Identity | Why |
+|--------|--------------|-----|
+| **Map child** | `map:<parentCnIdKey>:<key>` | Context-free identity. Two peers independently creating `structure(map, parent=P, key=K)` get different CnIds but represent the **same logical slot**. |
+| **Seq child** | `seq:<ownCnIdKey>` | Causally-bound identity. Each element's CnId is unique — no two elements compete for the same slot. |
+| **Root** | `root:<containerId>` | Named top-level container. |
+
+The **Map multi-structure case** is the key subtlety. When Alice creates `structure(map, parent=root@0, key="title")` → `alice@1` and Bob independently creates the same → `bob@1`, their value constraints compete for the same slot via LWW. The `structure-index.ts` module groups them by `(parent, key)`, and `projection.ts` emits both values with the same `Slot` column in the `active_value` relation.
+
+---
+
+## Projection: Constraints → Datalog Facts
+
+`projection.ts` performs a join between active value constraints and the structure index, emitting ground facts with pre-computed slot identity:
 
 | Relation | Columns | Purpose |
 |----------|---------|---------|
-| `active_value(CnId, Slot, Content, Lamport, Peer)` | 5 | Value resolution by LWW rules |
-| `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)` | 4 | Fugue ordering rules |
-| `constraint_peer(CnId, Peer)` | 2 | Peer tiebreak in Fugue |
+| `active_value(CnId, Slot, Content, Lamport, Peer)` | 5 | LWW rules group by Slot, pick winner by (Lamport, Peer) |
+| `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)` | 4 | Fugue rules build tree structure |
+| `constraint_peer(CnId, Peer)` | 2 | Peer tiebreak in Fugue sibling ordering |
 
-Values targeting unknown structures (orphaned) are excluded from projection but tracked for diagnostics.
+Values targeting unknown structures (orphaned) are excluded from projection but tracked in `ProjectionResult.orphanedValues` for diagnostics.
 
-### Native Solvers (§B.7) — Optional Fast Path
+---
 
-Native TypeScript implementations of LWW and Fugue that bypass Datalog when the active rules match known default patterns. They **must** produce identical results to the Datalog rules they replace. When rules are retracted, replaced, or augmented with custom Layer 2+ rules, the pipeline falls back to Datalog evaluation automatically (§B.7 constraint #3).
+## Default Solver Rules (§B.4)
 
-**Detection**: `isDefaultRulesOnly()` in `pipeline.ts` performs structural matching on rule head/body shapes (not CnIds or lamport values). It checks for `superseded`/`winner` heads reading from `active_value` (LWW) and `fugue_child`/`fugue_before` heads reading from `active_structure_seq` (Fugue). When both patterns match and no Layer 2+ rules exist, native solvers activate.
+### LWW (3 rules)
 
-**LWW** (`solver/lww.ts`): Groups value entries by slot, picks winner by `(lamport DESC, peer DESC)`. Equivalence verified against the §B.4 Datalog rules in `tests/solver/lww-equivalence.test.ts`.
+```
+superseded(CnId, Slot) :-
+  active_value(CnId, Slot, _, L1, _),
+  active_value(CnId2, Slot, _, L2, _),
+  CnId ≠ CnId2, L2 > L1.
 
-**Fugue** (`solver/fugue.ts`): Tree-based sequence ordering adapted from `reference/fugue-v0.ts` for CnId-based constraints. Builds a tree rooted at `originLeft`, sorts siblings by Fugue interleaving rules (same `originRight` → lower peer first; different `originRight` → further-left goes first), depth-first traversal produces total order. Equivalence verified against the complete Fugue Datalog rules (7 rules, 3 predicates) for all inputs in `tests/solver/fugue-equivalence.test.ts`.
+superseded(CnId, Slot) :-
+  active_value(CnId, Slot, _, L1, P1),
+  active_value(CnId2, Slot, _, L2, P2),
+  CnId ≠ CnId2, L2 == L1, P2 > P1.
 
-### Complete Fugue Datalog Rules (Phase 4.6)
+winner(Slot, CnId, Value) :-
+  active_value(CnId, Slot, Value, _, _),
+  not superseded(CnId, Slot).
+```
 
-The full Fugue tree walk is expressed in Datalog with 7 rules across 3 predicates:
+Higher lamport wins. Peer ID breaks ties (lexicographically greater wins). The `winner` relation picks the sole survivor per slot via stratified negation over `superseded`.
+
+### Fugue (8 rules, 3 predicates)
 
 | Predicate | Rules | Purpose |
 |-----------|-------|---------|
 | `fugue_child` | 1 | Derives tree structure from `active_structure_seq` + `constraint_peer` |
-| `fugue_descendant` | 2 (base + transitive) | Transitive closure of the originLeft tree — needed for negation guard |
-| `fugue_before` | 4 | Parent-before-child, sibling-by-peer, sibling-by-CnId-on-tie, subtree propagation + transitivity |
+| `fugue_descendant` | 2 (base + transitive) | Transitive closure of the originLeft tree |
+| `fugue_before` | 5 | Parent-before-child, sibling-by-peer, sibling-by-CnId-on-tie, subtree propagation, transitivity |
 
-The critical rule is **subtree propagation**: "if A is a child of X, and X is before B, then A is before B" — but only when B is NOT a descendant of X. Without the `not fugue_descendant(P, B, X)` guard, parent-child ordering combined with propagation creates spurious orderings among siblings. Stratified negation handles this cleanly since `fugue_descendant` depends only on `fugue_child` (a base relation) with no cyclic dependency on `fugue_before`.
+The critical rule is **subtree propagation**: "if A is a child of X, and X is before B, then A is before B" — but only when B is NOT a descendant of X. Without the `not fugue_descendant(P, B, X)` guard, parent-child ordering combined with propagation creates spurious orderings among siblings. Stratified negation handles this cleanly: `fugue_descendant` depends only on `fugue_child` (a base relation) — no cyclic dependency with `fugue_before`.
 
-### Semantic Refs and Causal Safety (Phase 4.6)
+### Canonical Source
 
-The retraction module's `target-in-refs` check uses **semantic interpretation**: a ref `(peer, N)` means "I've observed all of peer's constraints 0..N." A retract targeting `(peer, T)` passes if any ref for the same peer has `counter ≥ T`.
+Both rule sets are defined in `src/bootstrap.ts` and exported as `buildDefaultLWWRules()`, `buildDefaultFugueRules()`, and `buildDefaultRules()`. These are the single source of truth — test files import from bootstrap rather than defining their own copies.
 
-This is mathematically sound because CnIds are `(peer, counter)` with strictly monotonic per-peer counters, and causal delivery ensures observing `B@N` implies observing `B@0..B@N-1`. The Agent's frontier-compressed refs (one CnId per peer) are a lossless representation of causal history under these invariants. A retract with no ref for the target's peer, or a ref with `counter < target.counter`, is still rejected as a causal violation.
+---
 
-### Reality Tree Structure
+## Native Solvers (§B.7)
 
-The skeleton builder produces a `Reality` with a synthetic root node (`__reality__@0`, policy `map`) whose children are the top-level containers keyed by `containerId`. Each container node has:
-- `id`: The representative structure constraint's CnId
-- `policy`: `map` or `seq`
-- `children`: Recursively built child nodes
-- `value`: LWW-resolved content (or `undefined` if no active values)
+Native TypeScript implementations that bypass Datalog when the active rules match known default patterns.
 
-For Map parents, children with a null-resolved value and no sub-children are excluded (null = deleted). For Seq parents, elements without an active value (tombstones) are excluded from visible children.
+**Detection**: `isDefaultRulesOnly()` in `pipeline.ts` performs structural matching on rule head/body shapes (not CnIds or lamport values). It checks for `superseded`/`winner` heads reading from `active_value` (LWW) and `fugue_child`/`fugue_before` heads reading from `active_structure_seq` (Fugue). When both patterns match and no Layer 2+ rules exist, native solvers activate.
 
-### Why TypeScript for the Datalog Evaluator
+**LWW** (`solver/lww.ts`): Groups value entries by slot, picks winner by `(lamport DESC, peer DESC)`. O(n) in active value count.
 
-Evaluated Rust WASM crates (ascent, datafrog, crepe) and npm packages (datascript, @datalogui/datalog). All were rejected:
+**Fugue** (`solver/fugue.ts`): Tree-based sequence ordering. Builds a tree where each element is a child of its `originLeft`, sorts siblings by Fugue interleaving rules (same `originRight` → lower peer first), depth-first traversal produces total order. O(n log n).
 
-- **Rust proc-macro crates** (ascent, crepe) expand rules at compile time — can't evaluate rules-as-data at runtime
-- **datafrog** has no negation or aggregation
-- **npm packages** impose their own storage models or are abandoned
-- **WASM FFI overhead** (~100-200ns per boundary crossing) is significant for many small facts
-- The spec's native solver optimization (§B.7) means the Datalog evaluator handles only the general case; hot paths (LWW, Fugue) bypass it entirely
+**Equivalence**: Both native solvers are verified against the Datalog rules for all inputs in `tests/solver/lww-equivalence.test.ts` and `tests/solver/fugue-equivalence.test.ts` (23 Fugue test cases including DFS ordering, nested children, cross-subtree ordering, wide trees, and diamond patterns).
 
-A custom TypeScript evaluator is ~800-1200 lines with zero external dependencies and full control over the integration surface.
+---
 
-### Shared Base Types (`base/`)
+## Authority & Validity (§5)
 
-`CnId`, `Value`, `PeerID`, `Counter`, `Lamport`, and `isSafeUint` live in `base/types.ts` — shared by both `datalog/` and `kernel/`. `Result<T,E>` lives in `base/result.ts`. This avoids the duplicate-type drift hazard that existed when Phase 1 (Datalog) defined `CnIdRef` and Phase 2 (kernel) independently defined `CnId`. Since `kernel/types.ts` already imports from `datalog/types.ts` (for `RulePayload`), the "no cross-dependency" premise that originally justified the duplication doesn't hold.
+### Authority Model
 
-### Authority Gates All Peers
+- The reality creator holds implicit Admin capability.
+- Capabilities propagate via `authority` constraints (grant/revoke).
+- Concurrent grant and revoke → revoke wins (conservative).
+- Capability attenuation: you can only grant capabilities you hold.
+- Authority constraints are immune to retraction (revocation is the dedicated mechanism).
 
-The validity filter (`validity.ts`) checks that every constraint's asserting peer holds the required capability. Only the reality creator has implicit Admin. Other peers need explicit authority grants. This means pipeline tests (and eventually real usage) must include authority constraints granting capabilities to non-creator peers, or their constraints will be silently excluded from the active set.
+### Validity Filter
 
-### Store Mutation Strategy (Phase 4.6)
+`computeValid()` checks every constraint:
+1. **Signature** — verifies against `id.peer` (stub: always valid for now)
+2. **Capability** — asserting peer must hold the required capability at the constraint's causal moment
 
-The constraint store mutates in place. `insert()` returns `Result<void, InsertError>` and mutates the store on success. `insertMany()` likewise. `mergeStores()` returns a new store (both inputs survive). The `generation` counter increments on every mutation and serves as the cache-invalidation signal — callers check the generation, not the store reference.
+Invalid constraints remain in the store for auditability but are excluded from solving. This means multi-agent workflows **must** include authority grants before the second agent creates constraints, or those constraints will be silently filtered.
 
-This replaced the previous immutable-return API (`insert()` returning `Result<ConstraintStore, InsertError>`) which cloned the entire constraint `Map` on every insert — O(n) per operation, O(n²) for n sequential inserts. The generation counter already existed for cache invalidation, making the switch safe.
+---
 
-### Module Dependency DAG
+## Retraction & Dominance (§6)
+
+Retraction is an assertion, not removal. A `retract` constraint targets another constraint's CnId and asserts it should be dominated.
+
+### Rules
+
+- **Target must be in refs** (causal safety) — interpreted semantically: a ref `(peer, N)` means "I've observed all of peer's constraints 0..N." This is compatible with the Agent's frontier-compressed refs.
+- **Structure constraints are immune** — the skeleton only grows.
+- **Authority constraints are immune** — revocation is the dedicated mechanism.
+- **Depth limit** (default 2): retract a value (depth 1), retract-the-retract to undo (depth 2).
+
+### Dominance Computation
+
+Memoized reverse topological traversal:
+- No retractors → active
+- Any active retractor → dominated
+- All retractors themselves dominated → active (un-retraction / undo)
+
+---
+
+## Bootstrap (§B.8)
+
+`createReality()` in `bootstrap.ts` emits the initial constraint set for a new reality:
+
+1. **Admin grant** — `authority` constraint granting Admin to the creator (counter 0)
+2. **LWW rules** — 3 `rule` constraints at Layer 1 (counters 1–3)
+3. **Fugue rules** — 8 `rule` constraints at Layer 1 (counters 4–11)
+
+Total: 12 bootstrap constraints, all from the creator peer.
+
+Bootstrap constructs Layer 1 rule constraints **directly** (not through `Agent.produceRule()`, which enforces `layer >= 2` for user-facing rules). This is architecturally correct: Layers 0–1 are kernel-reserved (§14), and bootstrap is the kernel itself setting up initial state.
+
+The returned `BootstrapResult` includes:
+- A pre-populated `ConstraintStore`
+- A ready-to-use `Agent` (counter and lamport advanced past bootstrap constraints)
+- A `PipelineConfig` with the creator and default retraction depth
+
+---
+
+## Reality Tree (§7.3)
+
+The skeleton builder produces a `Reality` with a synthetic root node (`__reality__@0`, policy `map`) whose children are the top-level containers keyed by `containerId`.
+
+```typescript
+interface RealityNode {
+  id: CnId;               // representative structure constraint's CnId
+  policy: Policy;          // 'map' | 'seq'
+  children: Map<string, RealityNode>;  // key = map key or seq index ("0", "1", ...)
+  value: Value | undefined;            // LWW-resolved content
+}
+```
+
+- **Map children**: Keyed by the user-provided map key string. Null-valued keys with no sub-children are excluded (null = deleted).
+- **Seq children**: Keyed by positional index ("0", "1", "2"). Elements without an active value (tombstones from value retraction) are excluded from visible children but remain in the ordering tree.
+
+---
+
+## Datalog Evaluator
+
+### Implementation
+
+~1000 lines of TypeScript with zero external dependencies across 5 modules:
+
+| Module | Purpose |
+|--------|---------|
+| `types.ts` | Atoms, terms (const, var, wildcard), rules, facts, `Relation`, `Database` |
+| `unify.ts` | Variable binding, substitution, term matching, guard evaluation |
+| `stratify.ts` | Dependency graph, SCC detection, stratum ordering |
+| `evaluate.ts` | Bottom-up semi-naive fixed-point evaluation |
+| `aggregate.ts` | min, max, count, sum over groups |
+
+### Key Features
+
+- **Stratified negation**: `not` in rule bodies, safe via stratum ordering (cyclic negation rejected with error)
+- **Aggregation**: `min`, `max`, `count`, `sum` — required for LWW (`max` by lamport)
+- **Guards**: Typed comparison operators (`eq`, `neq`, `lt`, `gt`, `lte`, `gte`) that filter substitutions without introducing predicate dependencies
+- **Wildcards**: `_` matches any value without binding — each occurrence independent
+- **Semi-naive evaluation**: Processes deltas rather than recomputing from scratch at each iteration
+
+### Why TypeScript, Not WASM
+
+Evaluated Rust WASM crates (ascent, datafrog, crepe) and npm packages (datascript, @datalogui/datalog). Rejected because:
+- Rust proc-macro crates expand rules at compile time — can't evaluate rules-as-data at runtime
+- datafrog has no negation or aggregation
+- WASM FFI overhead (~100-200ns per boundary crossing) is significant for many small facts
+- The native solver optimization (§B.7) means the Datalog evaluator handles only the general case; hot paths bypass it
+
+---
+
+## Store & Sync
+
+### Constraint Store (§4)
+
+A CnId-keyed `Map<string, Constraint>`. Insert is O(1) with idempotent deduplication. The store grows monotonically. Merge is set union — commutative, associative, idempotent.
+
+The `generation` counter increments on every mutation and serves as the cache-invalidation signal. Callers that cache solved results check the generation, not the store reference.
+
+### Delta Sync (§15)
+
+```typescript
+// Export constraints the other peer hasn't seen
+const delta = exportDelta(myStore, theirVersionVector);
+
+// Import received constraints
+importDelta(myStore, delta);  // mutates in place
+```
+
+After bidirectional exchange, both stores contain the same constraints → same reality. No ordering or deduplication guarantees needed from the transport — the semilattice handles both.
+
+### Version-Parameterized Solving (§7.1)
+
+```typescript
+solve(store, config)          // current reality (all constraints)
+solve(store, config, version) // historical reality at version V
+```
+
+Time travel is not a special mode. The solver is a pure function; the same `(S, V)` always produces the same reality.
+
+---
+
+## Module Dependency DAG
 
 ```
 base/result.ts, base/types.ts              (leaves — no deps)
@@ -173,598 +339,107 @@ authority.ts → validity.ts → retraction.ts  (filters)
          ↑
 structure-index.ts → projection.ts          (kernel → Datalog bridge)
                    → resolve.ts             (Datalog → kernel bridge)
-                   → skeleton.ts            (tree builder, reads ResolutionResult)
+                   → skeleton.ts            (tree builder)
          ↑
-pipeline.ts                                 (composition root — imports only, uses solver/)
+pipeline.ts                                 (composition root)
+         ↑
+bootstrap.ts                                (reality creation)
 ```
+
+Dependency direction: `base → datalog → kernel → pipeline → bootstrap`. The Datalog layer has no knowledge of kernel types. The kernel imports from Datalog only for `RulePayload` typing (re-exported via `kernel/types.ts`).
 
 ---
 
-## v0 Prototype Architecture (Historical)
+## Agent (§B.5)
 
-## Theoretical Foundation
+The Agent is the **imperative shell** — the only place where mutable state lives during normal operation:
 
-### From State-Based to Constraint-Based CRDTs
+- **PeerID**: Unique identity
+- **Counter**: Monotonically increasing, allocated per constraint
+- **Lamport clock**: `max(local, max_received) + 1`
+- **Version vector**: Tracks observed constraints (frontier-compressed refs)
+- **Private key**: For signing (stub for now)
 
-Traditional CRDTs define:
-- A state space S
-- A merge function ⊔: S × S → S forming a join-semilattice
-- Operations that are monotonic (inflationary)
+All `produce*` methods return immutable `Constraint` values. The Agent enforces:
+- `layer >= 2` for rule constraints (Layers 0–1 are kernel-reserved)
+- Safe-integer bounds on counter and lamport (`<= 2^53 - 1`)
+- Refs computed **before** VV update (a constraint can't reference itself)
 
-CCS reframes this:
-- A constraint space C (all possible constraints)
-- Merge is set union: A ∪ B (trivially a semilattice on P(C))
-- A deterministic solver: solve: P(C) → S
+**Important**: `agent.observe(constraint)` must be called after inserting a constraint to update the agent's version vector and lamport clock. Missing this call breaks causal chains (refs won't include the previous constraint).
 
-**Key insight**: The semilattice structure moves from states to constraint sets. Merge becomes trivial; complexity moves to the solver.
+---
 
-### Convergence Proof
+## Stratification (§14)
 
-**Theorem**: CCS achieves eventual consistency.
+| Layer | What | Retractable? |
+|-------|------|-------------|
+| **0 — Kernel** | CnId, Lamport, signatures, authority, validity, retraction, skeleton | Hardcoded |
+| **1 — Default Solver Rules** | LWW, Fugue (emitted by bootstrap) | Yes |
+| **2 — Configurable Rules** | Custom resolution, schema mappings, cross-container constraints | Yes |
+| **3+ — User Queries** | Application-specific derived relations, views, aggregations | Yes |
 
-**Proof**:
-1. Let R₁, R₂ be two replicas with constraint sets C₁, C₂
-2. After all constraints are exchanged: C₁ = C₂ = C
-3. Since `solve` is deterministic: solve(C₁) = solve(C₂)
-4. Therefore both replicas derive the same state. ∎
+Layers 0–1 are the engine. Layers 2+ are data in the store.
 
-### Terminology
+---
 
-From Concurrent Constraint Programming (CCP):
+## Design Decisions
 
-| Term | Meaning |
-|------|---------|
-| **Tell** | Assert a constraint into the store |
-| **Ask** | Query if a constraint is entailed |
-| **Solve** | Compute state satisfying all constraints |
-| **Entailment** | A constraint is entailed if it must hold given other constraints |
+### Why CnId-Based Addressing, Not Path-Based?
 
-## Architecture
+The v0 prototype used paths (`["profile", "name"]`). CnId-based addressing (`{peer, counter}` + causal `refs`) enables:
+- Retraction (target a specific constraint, not a path)
+- Authority (capabilities per peer, not per path)
+- Version-parameterized solving (filter by VV, not by timestamp)
+- No path-canonicalization bugs
 
-### Component Overview
+### Why Discriminated Unions for Constraints?
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                           PrismDoc                              │
-│  - Single shared constraint store ownership                    │
-│  - Peer identity and clock management (counter, lamport)       │
-│  - Doc-bound handle creation (getMap, getList, getText)        │
-│  - Sync coordination (exportDelta, importDelta, merge)         │
-│  - Wires SubscriptionManager automatically on mutations        │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │
-       ┌─────────────────────────┼─────────────────────────┐
-       │                         │                         │
-       ▼                         ▼                         ▼
-┌───────────────┐    ┌─────────────────────┐    ┌─────────────────┐
-│ConstraintStore│    │      Solvers        │    │ Subscription    │
-│               │    │                     │    │ Manager         │
-│ - Storage     │    │ - MapSolver (LWW)   │    │                 │
-│ - Indexing    │    │ - ListSolver (Fugue) │    │ - Constraint CB │
-│ - VV tracking │    │ - (Text uses List)  │    │ - State CB      │
-│ - Delta export│    │                     │    │ - Conflict CB   │
-│ - Generation  │    │                     │    │                 │
-└───────────────┘    └─────────────────────┘    └─────────────────┘
-       │                         │                         │
-       └─────────────────────────┴─────────────────────────┘
-                                 │
-       ┌─────────────────────────┼─────────────────────────┐
-       │                         │                         │
-       ▼                         ▼                         ▼
-┌───────────────┐    ┌─────────────────────┐    ┌─────────────────┐
-│  Views        │    │   Introspection     │    │   Inspector     │
-│               │    │                     │    │                 │
-│ - MapView     │    │ - explain(path)     │    │ - exportJSON()  │
-│ - ListView    │    │ - getConflicts()    │    │ - getStatistics │
-│ - TextView    │    │ - formatExplanation │    │ - dump/summarize│
-└───────────────┘    └─────────────────────┘    └─────────────────┘
-```
+A `Constraint` interface with `type: string` and `payload: any` would compile, but nothing prevents a `type: 'retract'` constraint from carrying a `ValuePayload`. The discriminated union (`type` narrows `payload` in switch/if) eliminates this class of bugs at compile time and gives exhaustive switch checking.
 
-Note: There is no separate TextSolver. TextView uses ListSolver directly and
-joins the character values into a string. Text is conceptually `List<char>`.
+### Why Separate Projection and Resolution Modules?
 
-### Data Flow
+The skeleton builder should not depend on Datalog types. `projection.ts` sits at the kernel→Datalog boundary (kernel types → flat fact tuples). `resolve.ts` sits at the Datalog→kernel boundary (derived fact tuples → typed winners/ordering). The skeleton reads only kernel-typed `ResolutionResult`, not `Database` or `Relation`.
 
-1. **Mutation**: User calls `handle.set("key", value)` on a doc-bound handle
-2. **Constraint Generation**: PrismDoc creates constraint with current Lamport clock
-3. **Tell**: Constraint added to the shared ConstraintStore (immutable; returns new store)
-4. **Store Update**: PrismDoc replaces its store reference with the new store
-5. **Notification**: PrismDoc calls SubscriptionManager with new constraints + previous state
-6. **Emit**: Subscribers receive before/after state change and conflict events
-7. **Views**: Fresh views created on demand via `handle.view()` close over the current store
+### Why Not Incremental Evaluation?
 
-The same flow applies to `importDelta` and `merge`: constraints are applied to the
-store, and subscribers are notified with the set of newly-added constraints.
+The spec describes incremental maintenance (§9) and delta propagation. The current implementation re-solves from scratch on every `solve()` call. This is correct but not performant for large realities. Incremental evaluation (DBSP-style) is deferred — correctness first, then performance.
 
-## Core Types
+### Why `number` and `bigint` Are Distinct?
 
-### Identity
+JavaScript's `number` is f64, which can only exactly represent integers up to 2^53 − 1. A Rust agent storing a 64-bit database row ID would lose precision when a JavaScript agent reads it. Splitting numerics into `number` (f64) and `bigint` (arbitrary-precision integer) prevents silent data corruption across language boundaries.
 
-```typescript
-type PeerID = string;      // Human-readable, e.g., "alice", "peer-1"
-type Counter = number;     // Monotonically increasing per-peer
-type Lamport = number;     // Logical clock for ordering
-
-interface OpId {
-  peer: PeerID;
-  counter: Counter;
-}
-```
-
-**Design decision**: PeerID as string (not bigint like Loro) for debugging clarity in this experimental phase.
-
-### Paths
-
-```typescript
-type PathSegment = string | number;
-type Path = PathSegment[];
-
-// Examples:
-// ["users", "alice", "name"]     - Map key access
-// ["todos", 0, "text"]           - List index access (logical, not physical)
-// ["document", "content"]        - Text container
-```
-
-**Design decision**: Array paths (not dot-separated strings) for:
-- Type safety
-- No escaping needed for keys containing dots
-- Natural nesting representation
-
-### Assertions
-
-```typescript
-type Assertion =
-  | { type: 'eq'; value: unknown }      // Path equals value
-  | { type: 'exists' }                   // Path exists (for containers)
-  | { type: 'deleted' }                  // Path is deleted (tombstone)
-  | { type: 'seq_element';              // Sequence element (List/Text via Fugue)
-      value: unknown;                    // The element value (or character for Text)
-      originLeft: OpId | null;           // Element to the left when this was inserted
-      originRight: OpId | null;          // Element to the right when this was inserted
-    };
-```
-
-**Design decision**: The `seq_element` assertion is a compound type that captures all
-information needed for Fugue's interleaving algorithm in a single assertion. An earlier
-design used separate `before`/`after` assertions for ordering, but research into the
-Fugue paper (Weidner & Kleppmann 2023) revealed this is insufficient: Fugue requires
-both `originLeft` AND `originRight` to resolve concurrent insert ordering. The compound
-assertion avoids coordination problems between multiple constraints per element.
-
-**Future extensions**:
-- Type constraints: `{ type: 'hasType'; typeId: string }`
-- Range constraints: `{ type: 'inRange'; min: number; max: number }`
-- Reference constraints: `{ type: 'references'; target: Path }`
-- Rich text marks: `{ type: 'mark'; key: string; value: unknown; start: Anchor; end: Anchor }`
-
-### Constraints
-
-```typescript
-interface Constraint {
-  id: OpId;                 // Unique identifier
-  path: Path;               // What this constrains
-  assertion: Assertion;     // The constraint itself
-  metadata: {
-    peer: PeerID;           // Author
-    lamport: Lamport;       // Logical timestamp
-    wallTime?: number;      // Optional wall clock (debugging only)
-  };
-}
-```
-
-**Design decision**: ID is `OpId` (peer + counter), not content-addressed hash. Rationale:
-- We need version vectors for sync anyway
-- Deduplication based on content semantics is not yet well-understood
-- Peer+counter provides clear provenance
-
-## Solvers
-
-### Solver Interface
-
-```typescript
-interface SolvedValue {
-  value: unknown;                    // The resolved value
-  determinedBy: Constraint;          // Winning constraint
-  conflicts: Constraint[];           // Constraints that lost
-}
-
-interface Solver {
-  solve(constraints: Constraint[], path: Path): SolvedValue | undefined;
-}
-```
-
-### Map Solver (LWW)
-
-**Algorithm**:
-1. Filter constraints for exact path match
-2. Separate into value assertions (`eq`) and deletions (`deleted`)
-3. Find winner: highest Lamport, then highest PeerID as tiebreaker
-4. If winner is `deleted`, return undefined
-5. Otherwise return value with conflict information
-
-**Equivalence**: Matches Loro's MapState LWW semantics exactly.
-
-### List Solver (Fugue-style)
-
-**Constraint representation** (hybrid `seq_element` approach):
-- Each element: `{ path: [listId, "elem", elemIdStr], assertion: { type: 'seq_element', value, originLeft, originRight } }`
-- Deletion: `{ path: [listId, "elem", elemIdStr], assertion: { type: 'deleted' } }`
-
-Each `seq_element` constraint captures all Fugue metadata in a single assertion:
-the element's value, its left origin (the element to the left when inserted), and its
-right origin (the element to the right when inserted). This eliminates the need for
-separate ordering constraints and ensures the solver has all information needed for
-Fugue's interleaving algorithm.
-
-**Why `seq_element` instead of separate `before`/`after` constraints:**
-
-The Fugue paper (Weidner & Kleppmann 2023) and analysis of Loro's implementation
-(`loro-ts/src/fugue/crdt-rope.ts` lines 548-620) revealed that Fugue's interleaving
-requires **both** `originLeft` AND `originRight` for correct ordering. When concurrent
-inserts share the same `originLeft`, Fugue compares their `originRight` positions.
-Separate `after` constraints only capture `originLeft`, which is insufficient for
-Fugue-equivalent interleaving. A compound `seq_element` assertion avoids coordination
-problems between multiple constraints and makes the solver self-contained.
-
-**Algorithm** (Fugue tree-based ordering):
-1. Collect all `seq_element` constraints for the list
-2. Build a Fugue tree: each element is a node; elements with the same `originLeft`
-   are siblings (children of the node identified by `originLeft`)
-3. Order siblings using Fugue's interleaving rules:
-   - Same `originRight`: **lower peer ID goes first** (left)
-   - Different `originRight`: compare `originRight` positions in the current tree
-     ordering — the element whose `originRight` is further left goes first
-   - "Visited set" walk: when a sibling's `originLeft` differs from ours but is a
-     descendant of ours, continue scanning (do not break). This handles transitive
-     origin relationships from nested concurrent inserts.
-4. Depth-first traversal of the tree produces the total order
-5. Filter out elements that have `deleted` constraints
-6. Return ordered array of values
-
-**Peer ID tiebreaker direction:** Fugue uses **lower peer ID goes left**, which is the
-opposite of Map LWW (higher peer ID wins). This is intentional — for text and lists,
-consistent left-to-right ordering of concurrent inserts is more natural. This difference
-is confirmed in `loro-ts/src/fugue/crdt-rope.ts` line 590: "Lower peer ID wins (goes
-first/left). If existing element has HIGHER peer ID than new content, break (insert
-before it)."
-
-**Tombstone preservation:** Deleted elements remain in the Fugue tree because future
-inserts from other peers may reference them as `originLeft` or `originRight`. The solver
-must maintain tombstones in the tree structure but exclude them from the output array.
-
-**Equivalence**: Matches Loro's Fugue interleaving semantics when the same operations
-are applied. The solver is a deterministic function of the constraint set, matching
-Weidner's canonical CRDT semantic model ("pure function of the operation history").
-
-**Reference implementation**: Port interleaving logic from
-`loro-ts/src/fugue/crdt-rope.ts` `findInsertPosition()` (lines 548-620) and
-`calculateOrigins()` (lines 460-530).
-
-### Text (No Separate Solver)
-
-Text has no dedicated solver. `TextView` uses `ListSolver` directly and joins the
-character values into a string. This was a deliberate simplification: the original plan
-called for a `TextSolver` wrapper, but since the only difference is presentation
-(array vs string), the indirection was unnecessary.
-
-**Multi-character inserts**: When a user inserts "Hello" at position 3, five `seq_element`
-constraints are created — one per character. The characters chain left-to-right:
-- First character: `originLeft` = element at position 2, `originRight` = element at position 3
-- Second character: `originLeft` = first character's OpId, `originRight` = element at position 3
-- Third through fifth: continue the chain
-
-This matches how Loro's Fugue tracker handles multi-character inserts: each character gets
-its own ID (consecutive counters from the same peer), and origins chain left-to-right.
-
-**Future optimization**: Run-length encoding — store a span of consecutive characters from
-the same peer as a single constraint with a string value. The solver would handle splitting
-and slicing of spans, similar to `FugueSpan` in `loro-ts/src/fugue/span.ts`.
-
-## Constraint Store
-
-### Storage Strategy
-
-```typescript
-interface ConstraintStore {
-  // Primary storage: all constraints
-  readonly constraints: ReadonlyMap<string, Constraint>;  // opIdString -> constraint
-  
-  // Index: constraints by path (for efficient solving)
-  readonly byPath: ReadonlyMap<string, ReadonlySet<string>>;  // pathKey -> opIdStrings
-  
-  // Version tracking
-  readonly versionVector: VersionVector;  // ReadonlyMap<PeerID, Counter>
-  
-  // Lamport clock
-  readonly lamport: Lamport;
-  
-  // Cache invalidation (monotonically increasing on every mutation)
-  readonly generation: number;
-}
-```
-
-The store is **immutable**: `tell()` and `tellMany()` return a new store. PrismDoc
-manages the mutable store reference internally. `tellMany()` avoids cloning when all
-constraints are duplicates (generation is not bumped).
-
-### Version Vector Operations
-
-**Tracking**: Each constraint updates the version vector:
-```typescript
-vv[constraint.id.peer] = max(vv[constraint.id.peer] ?? 0, constraint.id.counter + 1)
-```
-
-**Delta computation**: For sync, compute constraints where:
-```typescript
-constraint.id.counter >= (theirVV[constraint.id.peer] ?? 0)
-```
-
-### Caching Strategy
-
-Caching is not yet implemented. Views re-solve on every access. The `generation`
-counter on `ConstraintStore` enables correct cache invalidation when caching is added:
-
-```typescript
-let cachedGeneration = getGeneration(store);
-let cachedValue: T | null = null;
-
-function getValue(): T {
-  if (getGeneration(store) !== cachedGeneration) {
-    cachedValue = solve(store);
-    cachedGeneration = getGeneration(store);
-  }
-  return cachedValue!;
-}
-```
-
-An earlier cache used `constraints.size` as invalidation proxy, which was unsound
-(same size doesn't mean same content). The generation counter is correct and cheap.
-
-## Sync Protocol
-
-### Sync Mechanisms
-
-PrismDoc supports three sync approaches:
-
-1. **Delta sync**: `exportDelta(theirVV)` / `importDelta(delta)` — sends only unseen constraints
-2. **Direct merge**: `doc.merge(other)` — set union of two stores
-3. **Bidirectional**: `syncDocs(a, b)` — convenience that exchanges deltas in both directions
-
-```typescript
-// Delta sync
-const delta = alice.exportDelta(bob.getVersionVector());
-bob.importDelta(delta);
-
-// Direct merge
-alice.merge(bob);
-
-// Bidirectional convenience
-syncDocs(alice, bob);
-```
-
-All three approaches fire subscription callbacks on the receiving doc.
-
-### Delta Format
-
-```typescript
-interface ConstraintDelta {
-  constraints: Constraint[];
-  fromVV: VersionVector;  // Sender's VV at time of export
-}
-```
-
-### Convergence Guarantee
-
-Since merge is constraint union and solve is deterministic:
-- Order of delta application doesn't matter
-- Duplicate deltas are idempotent (tellMany skips known constraints)
-- All replicas converge to same state
-- Verified with 3-peer convergence tests and all merge-order permutations
-
-## Subscriptions
-
-Centralized event delivery via `SubscriptionManager`. PrismDoc wires this
-automatically—subscribers are notified on local mutations, imports, and merges.
-
-### Event Types
-
-```typescript
-interface ConstraintAddedEvent {
-  type: "constraint_added";
-  constraints: readonly Constraint[];
-  affectedPaths: readonly Path[];
-  generation: number;
-}
-
-interface StateChangedEvent<T> {
-  type: "state_changed";
-  path: Path;
-  before: T | undefined;
-  after: T | undefined;
-  causingConstraints: readonly Constraint[];
-  solved: SolvedValue<T>;
-}
-
-interface ConflictEvent {
-  type: "conflict_detected" | "conflict_resolved";
-  path: Path;
-  winner: Constraint | undefined;
-  losers: readonly Constraint[];
-  resolution: string;
-}
-```
-
-### Subscription Scopes
-
-- **`onConstraintAdded`**: All constraint additions (store-level)
-- **`onStateChanged(path)`**: State changes at an exact path
-- **`onStateChangedPrefix(prefix)`**: State changes under a path prefix (includes exact match)
-- **`onConflict`**: Conflict detection and resolution events
-
-State change callbacks only fire when the value actually changes (compared via
-`JSON.stringify`). Conflict tracking is stateful per path: `conflict_detected` fires
-when losers first appear, `conflict_resolved` when they disappear.
-
-## Introspection
-
-Accessed via `doc.introspect()` (IntrospectionAPI) and `doc.inspector()` (ConstraintInspector).
-
-### Explain API
-
-```typescript
-interface Explanation<T> {
-  path: Path;
-  value: T | undefined;
-  hasValue: boolean;
-  determinedBy: ConstraintInfo | undefined;  // Winning constraint
-  conflicts: readonly ConstraintInfo[];       // Losing constraints
-  hasConflicts: boolean;
-  resolution: string;                         // Human-readable explanation
-  allConstraints: readonly ConstraintInfo[];  // All constraints at this path
-}
-
-// ConstraintInfo wraps Constraint with display-friendly fields
-interface ConstraintInfo {
-  id: OpId;
-  idString: string;       // e.g. "alice@5"
-  peer: string;
-  lamport: number;
-  assertionType: string;
-  value: unknown;
-  path: Path;
-  pathString: string;
-  constraint: Constraint;  // Original object
-}
-```
-
-Additional methods: `getConstraintsFor(path)`, `getConstraintsUnder(prefix)`,
-`getConflicts()` (store-wide conflict report), `hasConflictsAt(path)`,
-`formatExplanation()`, `formatConflictReport()`.
-
-### Constraint Inspector
-
-Debug utility for visualizing and exporting constraint store state:
-
-```typescript
-inspector.exportSnapshot()    // JSON-serializable StoreSnapshot
-inspector.exportJSON()        // String (pretty or compact)
-inspector.getStatistics()     // Counts by type, peer, path; max constrained path
-inspector.listConstraints()   // All constraints as summary lines
-inspector.listConstraintsAt(path)   // Filter by path
-inspector.listConstraintsFrom(peer) // Filter by peer
-inspector.summarize()         // Human-readable summary string
-inspector.dump()              // Detailed constraint dump string
-```
-
-Convenience functions: `dumpStore(store)`, `summarizeStore(store)`, `exportStoreJSON(store)`.
-
-## Design Decisions Log
-
-### Why not content-addressed constraints?
-
-**Considered**: Hash constraint content for ID, enabling automatic deduplication.
-
-**Decided against** because:
-1. Version vectors already needed for sync
-2. "Same content = same constraint" semantics unclear (is re-asserting the same value intentional?)
-3. Simpler to start with explicit IDs
-
-**May revisit** if deduplication becomes important.
-
-### Why Lamport clocks, not HLC?
-
-**Considered**: Hybrid Logical Clocks for better wall-clock correlation.
-
-**Decided** Lamport is sufficient because:
-1. Wall time only needed for debugging (optional field)
-2. Simpler implementation
-3. HLC adds complexity without clear benefit for our use case
-
-### Why compound `seq_element` instead of separate `before`/`after`?
-
-**Original design**: Separate `after` assertion for ordering (`{ type: 'after', target: leftOrigin }`).
-
-**Revised to compound `seq_element`** after researching the Fugue paper, because:
-1. Fugue requires **both** `originLeft` and `originRight` for interleaving resolution
-2. When concurrent inserts share the same `originLeft`, Fugue compares `originRight`
-   positions — separate `after` constraints only capture `originLeft`
-3. A single compound assertion per element avoids the need to correlate multiple
-   constraints and ensures atomicity
-4. The solver has all information needed for the Fugue algorithm in one place
-5. Matches Fugue's `FugueSpan` structure: `(id, content, originLeft, originRight, status)`
-
-### Why typed views instead of typed constraints?
-
-**Decided**: Constraints are untyped; types are added at the view layer.
-
-**Rationale**: Aligns with CCS philosophy—constraints are primitive assertions, interpretation (including types) is separate. This also enables schema evolution without changing stored constraints.
-
-### Why doc-bound handles instead of standalone handles with shared store?
-
-**Context**: Phases 1-4 used standalone handles (MapHandle, ListHandle, TextHandle) that each
-owned their own store reference, counter, and lamport via closures. Merge required explicit
-`_updateStore()` calls. This was ergonomically painful and error-prone.
-
-**Decided**: PrismDoc creates lightweight "doc-bound handles" (DocMapHandle, DocListHandle,
-DocTextHandle) that delegate all state management to PrismDoc. Handles are thin wrappers
-that generate constraints and call `applyConstraint()` on the doc's shared state.
-
-**Benefits**:
-1. Mutations via any handle are immediately visible through any other handle or view
-2. No `_updateStore()` wiring needed
-3. Subscriptions fire automatically on any mutation
-4. Single source of truth for counter and lamport (no drift between handles)
-
-The standalone handles still exist and are useful for testing in isolation.
+---
 
 ## Future Work
 
-### Constraint Compaction
+### Deferred from the Spec
 
-When can we safely garbage collect constraints?
+- **Real ed25519 signatures** — Phase 2 uses a stub that always returns valid
+- **Incremental evaluation** (§9) — Re-solve from scratch for now
+- **Settled/Working set partitioning** (§11) — Bounds solver cost to recent activity
+- **Compaction** (§12) — Requires settled set; tombstone compaction is especially tricky for sequences due to origin references
+- **Wire format** (§13) — Batching and compact encoding for sync
+- **Full sync protocol** (§15) — Delta sync works; full protocol is future
+- **Query layer** (§16) — Level 1/2 queries over store and reality
+- **Introspection API** (§17) — explain, conflicts, history, whatIf
+- **Bookmark / time-travel UX** (§10) — Snapshots, scrubbing, branching
+- **Path-based capability checks** — Currently uses wildcard paths; real checks require the skeleton (circular dependency, likely two-pass)
 
-**Safe cases**:
-- For LWW Map: Keep only winning constraint per path (if no active conflicts needed)
-- For List: Tombstones can be compacted after all peers have seen them
+### Potential Extensions
 
-**Challenges**:
-- Must ensure all replicas compact identically
-- Introspection may want historical constraints
-- Conflicts become invisible after compaction
+- **Constraint compaction**: Safe garbage collection of dominated/superseded constraints after all peers have observed them
+- **Cross-container constraints**: Referential integrity, computed values spanning multiple containers
+- **Rich text marks**: Bold, italic, etc. as mark constraints with anchor resolution
+- **Convenience DSL**: `datalog\`p(X) :- q(X, _).\`` instead of deeply nested factory calls
 
-### Rich Text Marks
-
-Text styling (bold, italic, etc.) would require:
-- Mark constraints: `{ path: [textId, 'mark', markId], assertion: { type: 'markRange', start: OpId, end: OpId, style: Style } }`
-- Mark anchor resolution in solver
-- Mark expansion semantics (bold-like vs link-like)
-
-### Cross-Container Constraints
-
-Constraints spanning multiple containers:
-- Referential integrity: "If X exists, Y must exist"
-- Computed values: "Z = sum of all elements in list L"
-- Mutual exclusion: "At most one of A, B, C can be true"
-
-### Intention Preservation
-
-Higher-level constraints capturing user intent:
-- "Lowercase this selection" vs "delete + insert lowercase"
-- "Move element" vs "delete + insert"
-- Scoped intentions with violation policies
+---
 
 ## References
 
-1. **Concurrent Constraint Programming**: Saraswat, V. A. (1993). *Concurrent Constraint Programming*. MIT Press.
-
-2. **Fugue**: Weidner, M. & Kleppmann, M. (2023). "The Art of the Fugue: Minimizing Interleaving in Collaborative Text Editing." IEEE TPDS, vol. 36, no. 11. [arXiv:2305.00583](https://arxiv.org/abs/2305.00583). Defines the Fugue and FugueMax algorithms and proves the maximal non-interleaving property. Key reference for the List/Text solver.
-
-3. **CRDT Survey (Semantic Techniques)**: Weidner, M. (2023). "CRDT Survey, Part 2: Semantic Techniques." [Blog post](https://mattweidner.com/2023/09/26/crdt-survey-2.html). Describes CRDTs as "pure function of operation history" — the canonical semantic model that maps directly to Prism's solver approach. Covers list CRDT positions, LWW, unique sets, composition techniques.
-
-4. **CRDT Survey (Algorithmic Techniques)**: Weidner, M. (2024). "CRDT Survey, Part 3: Algorithmic Techniques." [Blog post](https://mattweidner.com/2023/09/26/crdt-survey-3.html). Covers op-based vs state-based CRDTs, vector clocks (dot IDs), optimized state-based unique sets.
-
-5. **CRDTs**: Shapiro, M., et al. (2011). "Conflict-free Replicated Data Types." SSS 2011.
-
-6. **Delta CRDTs**: Almeida, P. S., et al. (2018). "Delta State Replicated Data Types." Journal of Parallel and Distributed Computing.
-
-7. **Peritext**: Litt, S., et al. (2021). "Peritext: A CRDT for Collaborative Rich Text Editing." Relevant for future rich text mark support.
+1. Saraswat, V. A. (1993). *Concurrent Constraint Programming*. MIT Press.
+2. Weidner, M. & Kleppmann, M. (2023). "The Art of the Fugue: Minimizing Interleaving in Collaborative Text Editing." [arXiv:2305.00583](https://arxiv.org/abs/2305.00583).
+3. Shapiro, M., et al. (2011). "Conflict-free Replicated Data Types." SSS 2011.
+4. Hellerstein, J. M. (2010). "The Declarative Imperative: Experiences and Conjectures in Distributed Logic." SIGMOD Record.
+5. Budiu, M. & McSherry, F. (2023). "DBSP: Automatic Incremental View Maintenance."
+6. Ullman, J. D. (1988). *Principles of Database and Knowledge-Base Systems*, Vol 1.
+7. Apt, K., Blair, H., & Walker, A. (1988). "Towards a Theory of Declarative Knowledge."
