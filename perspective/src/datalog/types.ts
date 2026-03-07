@@ -3,20 +3,11 @@
 // All types are immutable (readonly).
 
 // ---------------------------------------------------------------------------
-// Result type — used for expected failures throughout the engine.
+// Result type — re-exported from shared base so kernel and datalog layers
+// don't depend on each other.
 // ---------------------------------------------------------------------------
 
-export type Result<T, E> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: E };
-
-export function ok<T>(value: T): Result<T, never> {
-  return { ok: true, value };
-}
-
-export function err<E>(error: E): Result<never, E> {
-  return { ok: false, error };
-}
+export { type Result, ok, err } from '../base/result.js';
 
 // ---------------------------------------------------------------------------
 // Values (§3)

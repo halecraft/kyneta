@@ -294,6 +294,51 @@ This matches Loro's behavior where each Unicode codepoint is one element.
 
 A `replace(pos, len, text)` operation is semantically "delete range, then insert". However, the order of constraint creation (all deletes first, then all inserts) can affect interleaving with concurrent operations. In testing, we found one edge case where Prism and Loro produced different results for a concurrent replace + insert scenario. This isn't a bug — it's a consequence of `replace` being a compound operation. For equivalence testing, we focused on primitive operations (insert, delete) which have unambiguous semantics.
 
+## Phase 2: Kernel Types and Store
+
+### Refs Must Be Computed Before VV Update — Ordering of Side Effects Matters
+
+When an Agent produces a constraint, it must (1) compute the causal refs (what it has observed), (2) allocate a CnId, (3) tick the Lamport clock, and (4) update its own version vector. The initial implementation did steps 2–4 *before* step 1, meaning the new constraint's own CnId appeared in its own `refs` — a causal impossibility (a constraint cannot observe itself). The fix: capture refs *before* any state mutation. This is a general principle for stateful factories: **snapshot dependent state before mutating it.** The bug was caught by the first test (`expect(c.refs).toEqual([])` for the very first constraint), but it would have been subtle in multi-agent scenarios where refs are non-empty.
+
+### Shared Types Should Live in a Dedicated Base Module, Not in Either Consumer
+
+`Result<T,E>` is needed by both the Datalog evaluator (`datalog/types.ts`) and the kernel (`kernel/types.ts`). The plan's dependency DAG says both have "no deps." Three options: (1) duplicate the 3-line type in both, (2) have one import from the other (creates an unintended dependency), (3) extract to a shared `base/result.ts`. We chose option 3. This seems obvious in hindsight, but the temptation to "just import from datalog" is strong when you're building kernel types and the Datalog layer already has the type defined. The problem: that creates a dependency from kernel→datalog that the architecture explicitly forbids. The shared base module costs one file and pays for itself in clean layering — especially when the old prototype code is eventually deleted, nothing in `kernel/` breaks.
+
+### Safe-Integer Validation Is a Boundary Concern, Not a Type Concern
+
+TypeScript's type system cannot express "a number that is a non-negative safe integer." The plan calls these `Counter` and `Lamport`, but they're both just `number` — the safe-integer invariant is behavioral. We enforce it at exactly two boundaries: `store.insert()` (receipt of external constraints) and `Agent.nextIdAndLamport()` (production of new constraints). Everything in between passes `number` through without checking. This is intentional: pervasive runtime checks would add overhead to every operation for a condition that, in practice, can only occur from a bug or a malicious peer. The boundary-enforcement pattern means the invariant is easy to grep for, easy to test, and impossible to accidentally skip.
+
+The `isSafeUint()` function validates `Number.isSafeInteger(x) && x >= 0`, which catches: negative numbers, floats (1.5), NaN, Infinity, and values > 2^53 − 1. Tests exercise all these cases explicitly, including the boundary values 0 and MAX_SAFE_INTEGER.
+
+### Two Codebases Can Coexist Cleanly If Directory Boundaries Are Respected
+
+Phase 2 creates `src/kernel/` alongside the existing `src/core/`, `src/store/`, `src/solver/`, etc. Both define concepts like "constraint," "version vector," and "peer ID," but with fundamentally different shapes. This works because: (1) the new kernel modules never import from the old code, (2) the old code never imports from the new kernel, (3) the old tests keep running against old code, (4) new tests only exercise new code. The two trees are fully independent. This makes Phase 6 cleanup (delete old code) a safe, mechanical operation — just remove directories and their tests. The cost is carrying dead weight temporarily; the benefit is zero-risk incremental progress.
+
+### Discriminated Union Ergonomics Improve When You Name the Variants
+
+The plan's `Constraint` union is:
+
+```typescript
+type Constraint =
+  | (ConstraintBase & { readonly type: 'structure'; readonly payload: StructurePayload })
+  | (ConstraintBase & { readonly type: 'value'; readonly payload: ValuePayload })
+  | ...
+```
+
+In implementation, we gave each variant a named interface (`StructureConstraint`, `ValueConstraint`, etc.). This has two practical benefits: (1) functions that accept or return only one variant (e.g., `produceStructure() → StructureConstraint`) get precise types instead of the full union, and (2) `constraintsByType(store, 'structure')` can return `StructureConstraint[]` using TypeScript's `Extract<Constraint, { type: T }>`, which narrows correctly because the variants are named. Without named variants, you'd need manual type assertions.
+
+### Store Merge Needs Generation Bump Even When Constraints Don't Change
+
+The store's `generation` counter is used for cache invalidation. Initially, `mergeStores` only bumped generation when new constraints were added. But a merge could change the version vector (peer A has `{alice:3}`, peer B has `{alice:3, bob:1}` — same constraints but different VVs). Any downstream logic that depends on the VV (like `filterByVersion`) would get stale results if generation didn't change. The fix: always bump generation on merge unless the stores are provably identical (same constraints AND same VV AND same lamport). This is why the `cloneStore` helper unconditionally increments generation.
+
+### Agent Refs Are a Version Vector Frontier, Not a Full Causal History
+
+The spec says `refs` are "constraints this one has observed (causal predecessors)." Naively, this could mean *all* observed CnIds — potentially thousands. Instead, the Agent compresses refs to the **frontier**: one CnId per observed peer, representing the highest counter seen from each. This is the minimal set that, combined with the version vector semantics, fully recovers the causal past. It's the same compression that version vectors provide, but expressed as CnId references rather than counters. The frontier approach keeps refs arrays small (one entry per known peer) regardless of how many constraints have been exchanged.
+
+### The `VersionVector` Type Alias Belongs with the Identity Types
+
+`BookmarkPayload` contains a `version: VersionVector` field. If `VersionVector` were defined in `kernel/version-vector.ts`, then `kernel/types.ts` would need to import from `version-vector.ts`, but `version-vector.ts` also imports types from `kernel/types.ts` — a circular dependency. The solution: define `VersionVector = ReadonlyMap<PeerID, Counter>` as a type alias in `kernel/types.ts` alongside `PeerID` and `Counter`, and keep only the *functions* (create, extend, merge, compare, filter) in `kernel/version-vector.ts`. This pattern — types in a central module, functions in specialized modules — prevents circular imports and is worth establishing as a project convention early.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.
@@ -305,3 +350,5 @@ A `replace(pos, len, text)` operation is semantically "delete range, then insert
 4. **How should Text differ from List?** Currently planned as a thin wrapper where values are characters. But run-length encoding (storing "hello" as one constraint instead of five) would dramatically reduce constraint count. The solver would need to handle span splitting.
 
 5. **What's the right caching strategy for Fugue trees?** Rebuilding the tree on every solve is expensive for large lists. Incremental updates (adding new nodes, marking deletions) could amortize the cost, but invalidation logic is complex. The store generation counter approach (see Learnings above) is the likely first step.
+
+6. **When should the prototype code be removed?** The plan says Phase 6, but carrying two parallel type systems (old `OpId`/`Assertion`/path-based and new `CnId`/`Constraint`/typed-payload) through Phases 3–5 adds cognitive load. The old code's 698 tests exercise the *old* architecture and don't validate the new one. Removing sooner (e.g., after Phase 4's equivalence tests confirm the new pipeline) could reduce confusion, but eliminates the safety net of a working comparison implementation.

@@ -315,19 +315,19 @@ The Datalog evaluator is the single most important new component. Everything els
 - Guards: `neq()`, `gt()`, `lt()`, `eq()`, `lte()`, `gte()` filter substitutions correctly; guards introduce no predicate dependencies in stratification
 - Wildcards: `_` matches any value without binding; multiple wildcards are independent; wildcards work in aggregation sources
 
-### Phase 2: Kernel Types and Store 🔴
+### Phase 2: Kernel Types and Store 🟢
 
 The new constraint types and CnId-based store, replacing the prototype's path-based system.
 
 #### Tasks
 
-- 2.1 Implement `kernel/types.ts` — all types from Core Type Definitions section: discriminated union `Constraint`, `Capability` (recursive), `Value` (with `bigint`), `Counter`/`Lamport` (safe-integer branded types), `Result<T,E>`, error types; re-export Datalog types (`Rule`, `BodyElement` including `GuardElement`, `Term` including `WildcardTerm`) so that `RulePayload` is properly typed 🔴
-- 2.2 Implement `kernel/cnid.ts` — CnId creation, equality, comparison (peer then counter), string serialization 🔴
-- 2.3 Implement `kernel/lamport.ts` — Lamport clock: local tick, merge on receive 🔴
-- 2.4 Implement `kernel/version-vector.ts` — port and adapt existing version-vector.ts for new CnId scheme 🔴
-- 2.5 Implement `kernel/signature.ts` — stub implementation (always valid) with real ed25519 interface; real crypto deferred 🔴
-- 2.6 Implement `kernel/store.ts` — CnId-keyed Map, insert (returns `Result<void, InsertError>`, dedup by CnId, validates safe-integer invariant on counter/lamport), set union merge, version vector maintenance 🔴
-- 2.7 Implement `kernel/agent.ts` — Agent: encapsulates CnId counter, Lamport clock, observed version vector, private key; produces immutable `Constraint` values with correct id, lamport, refs, and sig; enforces safe-integer invariant on counter/lamport at construction 🔴
+- 2.1 Implement `kernel/types.ts` — all types from Core Type Definitions section: discriminated union `Constraint`, `Capability` (recursive), `Value` (with `bigint`), `Counter`/`Lamport` (safe-integer branded types), `Result<T,E>`, error types; re-export Datalog types (`Rule`, `BodyElement` including `GuardElement`, `Term` including `WildcardTerm`) so that `RulePayload` is properly typed 🟢
+- 2.2 Implement `kernel/cnid.ts` — CnId creation, equality, comparison (peer then counter), string serialization 🟢
+- 2.3 Implement `kernel/lamport.ts` — Lamport clock: local tick, merge on receive 🟢
+- 2.4 Implement `kernel/version-vector.ts` — port and adapt existing version-vector.ts for new CnId scheme 🟢
+- 2.5 Implement `kernel/signature.ts` — stub implementation (always valid) with real ed25519 interface; real crypto deferred 🟢
+- 2.6 Implement `kernel/store.ts` — CnId-keyed Map, insert (returns `Result<void, InsertError>`, dedup by CnId, validates safe-integer invariant on counter/lamport), set union merge, version vector maintenance 🟢
+- 2.7 Implement `kernel/agent.ts` — Agent: encapsulates CnId counter, Lamport clock, observed version vector, private key; produces immutable `Constraint` values with correct id, lamport, refs, and sig; enforces safe-integer invariant on counter/lamport at construction 🟢
 
 #### Tests
 
@@ -341,6 +341,26 @@ The new constraint types and CnId-based store, replacing the prototype's path-ba
 - Agent: produces constraints with monotonically increasing counters and lamport; refs track observed constraints
 - Agent: counter and lamport never exceed MAX_SAFE_INTEGER (assert/throw on overflow — this is a programmer error, not an expected condition)
 - Constraint discriminated union: narrowing on `type` correctly narrows `payload` in switch/if
+
+### Phase 2.5: Remove Prototype Code 🔴
+
+The old prototype (`src/core/`, `src/store/`, `src/solver/`, `src/doc/`, `src/handles/`, `src/views/`, `src/events/`, `src/introspection/`, old `src/index.ts`) is completely isolated from the new engine — zero cross-imports in either direction (verified). Its 476 tests exercise the old path-based architecture, not the new CnId-based engine, so they provide no safety net for forward progress. Carrying two parallel type systems (`OpId`/`Assertion` vs. `CnId`/`Constraint`) through Phases 3–5 adds cognitive load and risks accidental imports.
+
+The Fugue algorithm implementation (`src/solver/fugue.ts`) is the one piece worth preserving as reference for the Phase 4 native solver port.
+
+#### Tasks
+
+- 2.5.1 Copy `src/solver/fugue.ts` to `reference/fugue-v0.ts` as porting reference for Phase 4 🔴
+- 2.5.2 Delete old source directories: `src/core/`, `src/store/`, `src/solver/`, `src/doc/`, `src/handles/`, `src/views/`, `src/events/`, `src/introspection/` 🔴
+- 2.5.3 Delete old test directories: `tests/core/`, `tests/solver/`, `tests/equivalence/`, `tests/events/`, `tests/handles/`, `tests/views/`, `tests/introspection/`, old `tests/integration.test.ts` 🔴
+- 2.5.4 Replace `src/index.ts` with a minimal re-export of `kernel/index.ts` and `datalog/index.ts` (the new public API surface; will be expanded in Phase 5) 🔴
+- 2.5.5 Remove legacy `__eq`/`__neq`/`__gt`/`__lt`/`__lte`/`__gte` built-in predicate support from `datalog/unify.ts` (`isBuiltinPredicate`, `evaluateBuiltin`, `tryEvaluateBuiltin`, `BUILTIN_PREDICATES`) and the call site in `datalog/evaluate.ts` (`evaluatePositiveAtom`). Also update surviving Datalog tests: delete `tests/datalog/unify.test.ts` `isBuiltinPredicate` and `evaluateBuiltin` describe blocks; delete `tests/datalog/evaluate.test.ts` `legacy __builtin predicates` describe block; rewrite `tests/datalog/stratify.test.ts` LWW pattern test to use `guard` body elements instead of `__neq`/`__gt`/`__eq` atoms (note: guards introduce no dependency edges, so the test's expected stratification may simplify — verify and adjust expectations accordingly) 🔴
+- 2.5.6 Remove `loro-crdt` from `devDependencies` in `package.json` (only used by old equivalence tests being deleted) 🔴
+- 2.5.7 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes (only datalog + kernel tests remain) 🔴
+
+#### Tests
+
+No new tests. The verification is that surviving datalog tests (222 minus deleted legacy-builtin tests, plus any rewritten stratify tests) and kernel (236) tests still pass, and the project compiles cleanly.
 
 ### Phase 3: Authority, Validity, and Retraction 🔴
 
@@ -368,7 +388,7 @@ Wiring the solver pipeline from §7.2 and constructing the reality tree.
 
 - 4.1 Implement `kernel/projection.ts` — pure function that converts active constraints into Datalog ground facts: `Constraint` with `type: 'value'` → `active_value(CnId, Slot, Value, Lamport, Peer)` fact; `Constraint` with `type: 'structure'` → appropriate structure facts. This is the bridge between kernel types and the Datalog evaluator. Document the column-name→position mapping for each projected relation so that rule authors don't need to count tuple positions. 🔴
 - 4.2 Implement `kernel/skeleton.ts` — build rooted tree from active structure constraints: Root nodes define containers; Map children grouped by (parent, key); Seq children ordered by Fugue interleaving; value resolution via native LWW 🔴
-- 4.3 Port native Fugue solver from prototype to `solver/fugue.ts` — adapt from path-based seq_element to CnId-based structure(seq) constraints 🔴
+- 4.3 Port native Fugue solver to `solver/fugue.ts` — adapt from path-based seq_element to CnId-based structure(seq) constraints, using `reference/fugue-v0.ts` as guide 🔴
 - 4.4 Port native LWW solver from prototype to `solver/lww.ts` — adapt from path-based to slot-based value resolution 🔴
 - 4.5 Implement `kernel/pipeline.ts` — composition root only: imports and composes `filterByVersion()`, `computeValid()`, `computeActive()`, `projectToFacts()`, `buildSkeleton()`, `resolveValues()` from their respective modules into `solve(S, V?) → Reality`. Contains no transformation logic of its own. 🔴
 - 4.6 Implement version-parameterized solving: `solve(S, V)` for historical queries (§7.1) 🔴
@@ -410,24 +430,26 @@ Creating realities, the bootstrap process, and the public API.
 
 - 6.1 Rewrite README.md to reflect new architecture (engine = kernel + Datalog evaluator) 🔴
 - 6.2 Rewrite TECHNICAL.md to document the new architecture, spec alignment, and design decisions 🔴
-- 6.3 Archive or remove old prototype code (src/core/, src/solver/, src/store/, etc.) 🔴
-- 6.4 Update LEARNINGS.md with findings from the new implementation 🔴
-- 6.5 Remove legacy `__eq`/`__neq`/`__gt`/`__lt`/`__lte`/`__gte` built-in predicate support from `unify.ts`; audit for any remaining callers 🔴
-- 6.6 *(Stretch)* Add a convenience DSL for rule construction — e.g. tagged template literal or builder API — so that bootstrap rules and tests don't require deeply nested factory calls. The current `rule(atom('p', [varTerm('X')]), [positiveAtom(atom('q', [varTerm('X'), _]))])` is correct but verbose. A DSL would let this be written as something like `Rule.head('p', $X).when('q', $X, _)` or `datalog\`p(X) :- q(X, _).\``. This is a developer-experience improvement, not a correctness issue, so it's deferred to cleanup. 🔴
+- 6.3 Update LEARNINGS.md with findings from the new implementation 🔴
+- 6.4 Remove `reference/fugue-v0.ts` (no longer needed after Phase 4 port) 🔴
+- 6.5 *(Stretch)* Add a convenience DSL for rule construction — e.g. tagged template literal or builder API — so that bootstrap rules and tests don't require deeply nested factory calls. The current `rule(atom('p', [varTerm('X')]), [positiveAtom(atom('q', [varTerm('X'), _]))])` is correct but verbose. A DSL would let this be written as something like `Rule.head('p', $X).when('q', $X, _)` or `datalog\`p(X) :- q(X, _).\``. This is a developer-experience improvement, not a correctness issue, so it's deferred to cleanup. 🔴
+
+*Note: Tasks 6.3 (remove old prototype) and 6.5 (remove legacy builtins) from the original plan were moved to Phase 2.5 and executed immediately after Phase 2.*
 
 ## Transitive Effect Analysis
 
 ### Complete Replacement — No Backwards Compatibility
 
-The entire `src/` directory is being replaced. The old prototype code (constraint.ts, assertions.ts, fugue.ts, map-solver.ts, list-solver.ts, constraint-store.ts, prism-doc.ts, etc.) is removed in Phase 6. There are no transitive dependency concerns because there are no downstream consumers — this is a ground-up rewrite.
+The old prototype code is removed in Phase 2.5 (immediately after Phase 2), not deferred to Phase 6. The old and new code are fully isolated (zero cross-imports verified), so removal is safe as soon as the new kernel exists. The Fugue algorithm is preserved in `reference/fugue-v0.ts` as a porting guide for Phase 4.
 
 ### Internal Dependency Chain (New Code)
 
 The new code has a strict dependency DAG:
 
 ```
-datalog/types.ts        (no deps)
-kernel/types.ts         (no deps)
+base/result.ts          (no deps — shared by datalog and kernel)
+datalog/types.ts        → base/result.ts
+kernel/types.ts         → base/result.ts, datalog/types.ts (re-exports only)
 kernel/cnid.ts          → kernel/types.ts
 kernel/lamport.ts       (no deps)
 kernel/version-vector.ts → kernel/types.ts
@@ -459,6 +481,7 @@ Tests for Phase N depend on code from Phases 1..N. Phase 1 (Datalog) tests are s
 ### External Dependencies
 
 - **ed25519 library**: deferred (stub in Phase 2, real crypto in a future plan). When added, it will affect `kernel/signature.ts` and transitively `kernel/validity.ts`.
+- **loro-crdt**: devDependency used only by old equivalence tests. Removed in Phase 2.5 (task 2.5.6). If future equivalence tests against Loro are needed, re-add at that time.
 - **No other new dependencies**. The Datalog evaluator, kernel, and native solvers are all pure TypeScript with zero external deps.
 
 ## Testing Strategy
@@ -491,9 +514,13 @@ End-to-end tests that exercise the full pipeline:
 
 ## Directory Structure
 
+After Phase 2.5 (prototype removal):
+
 ```
 prism/
 ├── src/
+│   ├── base/
+│   │   └── result.ts           Shared Result<T,E> type
 │   ├── kernel/
 │   │   ├── types.ts
 │   │   ├── cnid.ts
@@ -502,22 +529,24 @@ prism/
 │   │   ├── signature.ts
 │   │   ├── store.ts
 │   │   ├── agent.ts
-│   │   ├── authority.ts
-│   │   ├── validity.ts
-│   │   ├── retraction.ts
-│   │   ├── projection.ts
-│   │   ├── skeleton.ts
-│   │   └── pipeline.ts
+│   │   ├── index.ts
+│   │   ├── authority.ts         (Phase 3)
+│   │   ├── validity.ts          (Phase 3)
+│   │   ├── retraction.ts        (Phase 3)
+│   │   ├── projection.ts        (Phase 4)
+│   │   ├── skeleton.ts          (Phase 4)
+│   │   └── pipeline.ts          (Phase 4)
 │   ├── datalog/
 │   │   ├── types.ts
 │   │   ├── unify.ts
 │   │   ├── stratify.ts
 │   │   ├── evaluate.ts
-│   │   └── aggregate.ts
-│   ├── solver/
+│   │   ├── aggregate.ts
+│   │   └── index.ts
+│   ├── solver/                   (Phase 4)
 │   │   ├── lww.ts
 │   │   └── fugue.ts
-│   ├── bootstrap.ts
+│   ├── bootstrap.ts              (Phase 5)
 │   └── index.ts
 ├── tests/
 │   ├── datalog/
@@ -532,16 +561,18 @@ prism/
 │   │   ├── version-vector.test.ts
 │   │   ├── store.test.ts
 │   │   ├── agent.test.ts
-│   │   ├── authority.test.ts
-│   │   ├── validity.test.ts
-│   │   ├── retraction.test.ts
-│   │   ├── projection.test.ts
-│   │   ├── skeleton.test.ts
-│   │   └── pipeline.test.ts
-│   ├── solver/
+│   │   ├── authority.test.ts     (Phase 3)
+│   │   ├── validity.test.ts      (Phase 3)
+│   │   ├── retraction.test.ts    (Phase 3)
+│   │   ├── projection.test.ts    (Phase 4)
+│   │   ├── skeleton.test.ts      (Phase 4)
+│   │   └── pipeline.test.ts      (Phase 4)
+│   ├── solver/                    (Phase 4)
 │   │   ├── lww-equivalence.test.ts
 │   │   └── fugue-equivalence.test.ts
-│   └── integration.test.ts
+│   └── integration.test.ts       (Phase 5)
+├── reference/
+│   └── fugue-v0.ts              (prototype Fugue, porting guide for Phase 4)
 ├── theory/
 │   ├── unified-engine.md      (the spec — source of truth)
 │   ├── CCS.md
@@ -569,6 +600,7 @@ prism/
 |---|---|
 | Phase 1 (Datalog) | §B.3 (evaluator requirements), §B.4 (LWW/Fugue rules), §14 (stratification) |
 | Phase 2 (Types/Store) | §1 (constraints), §2 (constraint types), §3 (values), §4 (store), §13 (batching) |
+| Phase 2.5 (Remove Prototype) | N/A — housekeeping, no new spec coverage |
 | Phase 3 (Auth/Retract) | §5 (authority & validity), §6 (retraction & dominance) |
 | Phase 4 (Pipeline) | §7 (solver pipeline), §8 (policies), §B.7 (native optimization) |
 | Phase 5 (Bootstrap) | §B.8 (reality bootstrap), §15 (messages & sync), §9 (incremental maintenance) |
@@ -581,9 +613,9 @@ prism/
 
 ### Existing Code to Port
 
-- `src/core/version-vector.ts` — well-tested version vector implementation; adapt for new CnId
-- `src/solver/fugue.ts` — working Fugue interleaving; adapt from path-based to structure-constraint-based
-- `src/core/constraint.ts` — LWW comparison logic; extract and adapt for native LWW solver
+- ~~`src/core/version-vector.ts`~~ — ✅ ported as `kernel/version-vector.ts` in Phase 2
+- `reference/fugue-v0.ts` — working Fugue interleaving; adapt from path-based to CnId-based structure(seq) constraints in Phase 4
+- LWW comparison logic (was in `src/core/constraint.ts`) — the pattern is simple (`max(lamport, peer)`) and documented in the spec §B.4; re-derive from spec rather than porting
 
 ## Alternatives Considered
 
@@ -619,7 +651,7 @@ prism/
 
 ## Changeset
 
-This plan replaces the entire `src/` directory and `tests/` directory. The old code is archived/removed in Phase 6. New files are created in Phases 1–5 as listed in the Directory Structure section.
+This plan replaces the entire `src/` directory and `tests/` directory. The old code is removed in Phase 2.5 (immediately after kernel types and store are established). The Fugue algorithm is preserved in `reference/fugue-v0.ts` as a porting guide. New files are created in Phases 1–5 as listed in the Directory Structure section.
 
 ## Notes
 
@@ -690,6 +722,18 @@ The rule DSL is still verbose: `rule(atom('p', [varTerm('X')]), [positiveAtom(at
 
 These are developer-experience issues, not correctness issues. They're deferred to Phase 6 (task 6.6). The current API is correct, fully typed, and adequate for programmatic rule construction (which is the primary use case for bootstrap and projection).
 
+### Refs Must Be Computed Before VV Update
+
+When implementing the Agent (task 2.7), we discovered that the order of side effects in `nextIdAndLamport()` matters: the agent must snapshot causal refs *before* mutating the version vector with the new constraint's CnId. Otherwise, the constraint's own CnId appears in its own `refs` — a causal impossibility. The fix: capture `currentRefs()` first, then allocate CnId and update VV. General principle for stateful factories: **snapshot dependent state before mutating it.** This bug was caught immediately by the simplest test (`expect(c.refs).toEqual([])` for the first constraint) but would have been subtle in multi-agent scenarios.
+
+### Shared Types Need a Dedicated Base Module
+
+`Result<T,E>` is needed by both `datalog/types.ts` and `kernel/types.ts`. The plan's dependency DAG says both have "no deps." Importing from one into the other creates an unintended architectural dependency. Extracting to `base/result.ts` costs one file and ensures clean layering. This also makes prototype removal (Phase 2.5) safe — nothing in `kernel/` or `datalog/` depends on the old code.
+
+### Named Discriminated Union Variants Improve Ergonomics
+
+Giving each `Constraint` variant a named interface (`StructureConstraint`, `ValueConstraint`, etc.) enables: (1) precise return types on produce functions (`produceStructure() → StructureConstraint`), (2) TypeScript's `Extract<>` utility works correctly in `constraintsByType()`, and (3) tests can declare expected types without `as` casts.
+
 ## Learnings
 
 ### Discriminated Unions Prevent a Class of Bugs at the Plan Stage
@@ -729,3 +773,13 @@ Using `varTerm('_Value')` for "I don't care about this position" is a correctnes
 ### Review Your API As If You Were a New Hire
 
 After completing Phase 1, we stepped back and asked "what would a modern TypeScript developer think of this API?" The answer was unflattering: the rule construction DSL was verbose and full of 1970s Prolog idioms. This review — done *between* phases rather than after all phases — was cheap (one refactor pass) and caught issues that would have metastasized across Phases 2–5 if left unchecked. The lesson: schedule ergonomic reviews at phase boundaries, not just at the end.
+
+### Legacy Shims Infect Surviving Tests — Audit Before Deletion
+
+Phase 2.5 task 2.5.5 originally said "remove legacy built-in predicate support from `datalog/unify.ts`; audit `datalog/evaluate.ts`." Post-Phase-2 research revealed that the legacy `__neq`/`__gt`/`__eq` predicates are also exercised by *surviving* Datalog test files — not just old prototype tests. Specifically: `tests/datalog/unify.test.ts` has `isBuiltinPredicate` and `evaluateBuiltin` describe blocks; `tests/datalog/evaluate.test.ts` has a `legacy __builtin predicates` describe block; and `tests/datalog/stratify.test.ts` has an LWW pattern test that encodes guards as `positiveAtom(atom('__neq', ...))` atoms. Deleting the shim without updating these tests would break the surviving test suite. The task has been expanded to include these test updates.
+
+The `stratify.test.ts` case is particularly subtle: the old encoding treats `__neq` as a predicate, so the stratifier adds dependency edges to it. With the `guard` body element, no edges are added. The test's expected stratification behavior changes — it doesn't just need a syntax swap, it needs new expectations.
+
+### Dual Value Types Are Structurally Compatible but Nominally Separate
+
+`datalog/types.ts` defines `Value` with `{ readonly ref: CnIdRef }` and `kernel/types.ts` independently defines `Value` with `{ readonly ref: CnId }`. These are structurally identical (`CnIdRef` and `CnId` both have `peer: string, counter: number`), so TypeScript's structural typing makes them assignment-compatible. This means Phase 4's `projection.ts` can pass kernel `Value` instances directly into Datalog `Fact` tuples without conversion — which is convenient. However, if either `CnIdRef` or `CnId` is modified independently, the bridge breaks silently (no compile error until the structural shapes diverge). This is an acceptable trade-off given the "no cross-dependency" architecture, but `projection.ts` should include a compile-time compatibility assertion (e.g., a type-level `_assertAssignable` check) to catch drift early.
