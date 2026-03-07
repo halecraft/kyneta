@@ -1249,8 +1249,41 @@ describe("transformSourceInPlace - HTML target", () => {
     expect(code).toContain("count.get() > 0")
     expect(code).toContain("Has items")
     expect(code).toContain("Empty")
-    // Should have hydration markers
-    expect(code).toContain("kinetic:if")
+    // Dissolution produces inline ternary — no hydration markers needed
+    expect(code).toContain('count.get() > 0 ? "Has items" : "Empty"')
+    expect(code).not.toContain("kinetic:if")
+  })
+
+  it("should dissolve conditional on template cloning path (DOM target)", () => {
+    const lines = [
+      'import { CounterRef } from "@loro-extended/change"',
+      "declare const count: CounterRef",
+      "",
+      "const app = div(() => {",
+      "  if (count.get() > 0) {",
+      '    p("Has items")',
+      "  } else {",
+      '    p("Empty")',
+      "  }",
+      "})",
+    ]
+    const source = lines.join("\n")
+
+    const result = transformSourceInPlace(source, { target: "dom" })
+    const code = result.sourceFile.getFullText()
+
+    // Template cloning path should dissolve — no conditionalRegion
+    expect(code).not.toContain("conditionalRegion")
+    expect(code).not.toContain("whenTrue")
+    expect(code).not.toContain("whenFalse")
+
+    // Template HTML should not contain region comment markers
+    expect(code).not.toContain("kinetic:if")
+
+    // Should contain ternary from dissolution
+    expect(code).toContain("?")
+    expect(code).toContain('"Has items"')
+    expect(code).toContain('"Empty"')
   })
 
   it("should produce a render function (not a scope factory)", () => {

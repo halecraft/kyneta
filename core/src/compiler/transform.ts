@@ -27,7 +27,7 @@ import {
   generateHTML,
   generateRenderFunction,
 } from "./codegen/html.js"
-import { filterTargetBlocks, type CompileTarget } from "./ir.js"
+import { dissolveConditionals, filterTargetBlocks, type CompileTarget } from "./ir.js"
 import type { BuilderNode, ChildNode } from "./ir.js"
 
 // =============================================================================
@@ -492,6 +492,7 @@ export function transformSourceInPlace(
   // codegens never see TargetBlockNode in the IR tree.
   for (const r of replacements) {
     r.ir = filterTargetBlocks(r.ir, target)
+    r.ir = dissolveConditionals(r.ir)
   }
 
   // Running template counter shared across all builders in this file.
@@ -654,8 +655,11 @@ export function transformSource(
     }
   }
 
-  // Filter target blocks (client:/server:) before codegen.
-  const filteredIr = ir.map(builder => filterTargetBlocks(builder, target))
+  // Filter target blocks (client:/server:) before codegen,
+  // then dissolve structurally identical conditionals into ternaries.
+  const filteredIr = ir
+    .map(builder => filterTargetBlocks(builder, target))
+    .map(dissolveConditionals)
 
   // Generate output code
   let code: string
@@ -708,8 +712,11 @@ export function transformFile(
     }
   }
 
-  // Filter target blocks (client:/server:) before codegen.
-  const filteredIr = ir.map(builder => filterTargetBlocks(builder, target))
+  // Filter target blocks (client:/server:) before codegen,
+  // then dissolve structurally identical conditionals into ternaries.
+  const filteredIr = ir
+    .map(builder => filterTargetBlocks(builder, target))
+    .map(dissolveConditionals)
 
   // Generate output code
   let code: string

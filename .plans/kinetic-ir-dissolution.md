@@ -96,9 +96,9 @@ This fills a gap: existing dissolution tests only exercise the non-cloning `gene
 
 ---
 
-## Phase 2: Wire Into Transform Pipeline 🔴
+## Phase 2: Wire Into Transform Pipeline 🟢
 
-### Task 2.1: Call `dissolveConditionals` in `transformSourceInPlace` 🔴
+### Task 2.1: Call `dissolveConditionals` in `transformSourceInPlace` 🟢
 
 In `transform.ts`, add `dissolveConditionals` call immediately after `filterTargetBlocks` in the replacement loop:
 
@@ -111,7 +111,7 @@ for (const r of replacements) {
 
 This is the **primary beneficiary** — `transformSourceInPlace` drives the Vite plugin and always uses the template cloning path (`generateElementFactoryWithResult` → `generateDOMWithCloning`).
 
-### Task 2.2: Call `dissolveConditionals` in `transformSource` / `transformFile` 🔴
+### Task 2.2: Call `dissolveConditionals` in `transformSource` / `transformFile` 🟢
 
 In both functions, add dissolution after target block filtering:
 
@@ -123,7 +123,7 @@ const filteredIr = ir
 
 These functions use the non-cloning path (`generateElementFactory` → `generateDOM`), where dissolution already works via inline logic in `generateConditional`. Adding dissolution here makes the inline logic redundant (enabling Phase 3 removal) and ensures both paths see the same IR shape.
 
-### Task 2.3: Import `dissolveConditionals` in `transform.ts` 🔴
+### Task 2.3: Import `dissolveConditionals` in `transform.ts` 🟢
 
 Add to existing import from `./ir.js`.
 
