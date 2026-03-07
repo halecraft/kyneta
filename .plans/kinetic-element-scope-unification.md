@@ -141,13 +141,13 @@ Make `mount()` pass the scope it already creates.
 
    This pattern is still correct — `div(() => {...})` is compiled into `(scope) => Node`, which matches the new `Element` type. Update the comment that says "A function that returns a DOM node" to "A scope-accepting factory that returns a DOM node."
 
-## Phase 3: Update Todo App 🔴
+## Phase 3: Update Todo App 🟢
 
 Replace manual scope wiring with `mount()`.
 
 ### Tasks
 
-1. **Simplify `main.ts`** 🔴
+1. **Simplify `main.ts`** 🟢
 
    Replace:
    ```ts
@@ -174,7 +174,7 @@ Replace manual scope wiring with `mount()`.
    Object.assign(window, { doc, repo, dispose })
    ```
 
-2. **Change import from `Scope` to `mount`** 🔴
+2. **Change import from `Scope` to `mount`** 🟢
 
    The import changes from:
    ```ts
@@ -187,15 +187,15 @@ Replace manual scope wiring with `mount()`.
 
    `mount` is already re-exported from `index.ts` via `runtime/mount.js`. No new export wiring needed.
 
-3. **Remove the manual container wiring block** 🔴
+3. **Remove the manual container wiring block** 🟢
 
    Delete the entire `// Mount: if SSR content exists...` block (the `if (container.firstElementChild)` / `else` / `appendChild` block). `mount()` handles container attachment internally.
 
-4. **Simplify the module doc comment** 🔴
+4. **Simplify the module doc comment** 🟢
 
    The JSDoc currently describes 5 steps including manual hydration. After the change, step 3/4 collapse into "Mounts the app via `mount()`". Keep it accurate.
 
-5. **Verify the app runs** 🔴
+5. **Verify the app runs** 🟢
 
    `cd examples/kinetic-todo && npm run dev` — add a todo, remove a todo, confirm identical behavior. View source to confirm SSR output still contains `<li class="todo-item">`, not `<TodoItem>`.
 
