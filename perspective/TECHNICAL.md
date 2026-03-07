@@ -1,6 +1,6 @@
 # Prism Technical Documentation
 
-> **⚠️ Architectural Shift**: This document describes the v0 prototype architecture (Plan 001). Prism is being rewritten to implement the [Unified CCS Engine Specification](./theory/unified-engine.md). See [Plan 002](./.plans/002-unified-ccs-engine.md) for the new architecture. The sections below are retained for historical reference and will be replaced as the new implementation progresses.
+> **Note**: The v0 prototype sections (Architecture, Core Types, Solvers, Constraint Store, etc.) below the "New Architecture" section are retained for historical reference. The authoritative architecture is described in [New Architecture](#new-architecture-unified-ccs-engine) and implemented in Phases 1–4.
 
 ## Overview
 
@@ -31,33 +31,77 @@ The v0 prototype validated the CCS thesis. The new implementation follows the fo
 | Undo/redo | Not supported | Retraction depth (retract-of-retract) |
 | Store indexing | By path (byPath Map) | By CnId (hash map) |
 
-### Solver Pipeline (§7.2)
+### Solver Pipeline (§7.2) — Implemented in Phase 4
+
+The pipeline is a composition of pure functions, each in its own module. `pipeline.ts` is the composition root — it contains no transformation logic.
 
 ```
 Constraint Store (S), Version Vector (V)
     │
     ▼
-S_V = { c ∈ S | c.id ≤ V }           // filter to causal moment V
+S_V = filterByVersion(S, V)          // version-vector.ts — filter to causal moment V
     │
     ▼
-Valid(S_V)                            // authority filter
+Valid(S_V) = computeValid(S_V)        // validity.ts — signature + capability check
     │
-    ├──→ AllStructure(Valid(S_V))     // all valid structure constraints
+    ▼
+Active(Valid(S_V)) = computeActive()  // retraction.ts — dominance filter
+    │
+    ├──→ buildStructureIndex()        // structure-index.ts — slot identity, parent→child indexes
     │         │
-    │         ▼
-    │    Build skeleton               // the tree structure
-    │
-    └──→ Active(Valid(S_V))          // dominance computation
-              │
-              ▼
-         Active values                // filter to value constraints
-              │
-              ▼
-         Resolve (LWW / Fugue)       // apply policies
-              │
-              ▼
-         Reality                      // the shared reality
+    │         ├──→ projectToFacts()   // projection.ts — active constraints → Datalog ground facts
+    │         │         │
+    │         │         ▼
+    │         │    evaluate(rules, facts)  // datalog/evaluate.ts — optional rule evaluation
+    │         │
+    │         └──→ buildSkeleton()    // skeleton.ts — reality tree with native LWW + Fugue
+    │                    │
+    ▼                    ▼
+                    Reality
 ```
+
+**Key insight**: The structure index is the shared dependency. It computes slot identity once (grouping Map structures by `(parent, key)`) and serves both `projection.ts` (for Datalog fact emission) and `skeleton.ts` (for tree construction). This avoids redundant joins.
+
+### Slot Identity (§8 — the Map Multi-Structure Case)
+
+When two peers independently create `structure(map, parent=P, key=K)`, they get different CnIds but represent the **same logical slot**. The structure index groups them by `(parent, key)` so that value constraints targeting either structure compete via LWW for the same position in the reality.
+
+Slot identity by policy:
+- **Map child**: `map:<parentCnIdKey>:<key>` — multiple structures can share a slot
+- **Seq child**: `seq:<ownCnIdKey>` — always unique (CnId identity)
+- **Root**: `root:<containerId>`
+
+This is Layer 0 kernel logic (not expressible as a retractable rule) because slot identity derives from policy semantics.
+
+### Projection: Constraints → Datalog Facts
+
+`projection.ts` performs a join between active value constraints and the structure index to emit ground facts with pre-computed slot identity:
+
+| Relation | Columns | Purpose |
+|----------|---------|---------|
+| `active_value(CnId, Slot, Content, Lamport, Peer)` | 5 | Value resolution by LWW rules |
+| `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)` | 4 | Fugue ordering rules |
+| `constraint_peer(CnId, Peer)` | 2 | Peer tiebreak in Fugue |
+
+Values targeting unknown structures (orphaned) are excluded from projection but tracked for diagnostics.
+
+### Native Solvers (§B.7)
+
+Native TypeScript implementations of LWW and Fugue that bypass Datalog for performance. They **must** produce identical results to the Datalog rules they replace.
+
+**LWW** (`solver/lww.ts`): Groups value entries by slot, picks winner by `(lamport DESC, peer DESC)`. Equivalence verified against the §B.4 Datalog rules in `tests/solver/lww-equivalence.test.ts`.
+
+**Fugue** (`solver/fugue.ts`): Tree-based sequence ordering adapted from `reference/fugue-v0.ts` for CnId-based constraints. Builds a tree rooted at `originLeft`, sorts siblings by Fugue interleaving rules (same `originRight` → lower peer first; different `originRight` → further-left goes first), depth-first traversal produces total order. Equivalence verified for the simplified sibling-ordering subset in `tests/solver/fugue-equivalence.test.ts`.
+
+### Reality Tree Structure
+
+The skeleton builder produces a `Reality` with a synthetic root node (`__reality__@0`, policy `map`) whose children are the top-level containers keyed by `containerId`. Each container node has:
+- `id`: The representative structure constraint's CnId
+- `policy`: `map` or `seq`
+- `children`: Recursively built child nodes
+- `value`: LWW-resolved content (or `undefined` if no active values)
+
+For Map parents, children with a null-resolved value and no sub-children are excluded (null = deleted). For Seq parents, elements without an active value (tombstones) are excluded from visible children.
 
 ### Why TypeScript for the Datalog Evaluator
 
@@ -70,6 +114,32 @@ Evaluated Rust WASM crates (ascent, datafrog, crepe) and npm packages (datascrip
 - The spec's native solver optimization (§B.7) means the Datalog evaluator handles only the general case; hot paths (LWW, Fugue) bypass it entirely
 
 A custom TypeScript evaluator is ~800-1200 lines with zero external dependencies and full control over the integration surface.
+
+### Shared Base Types (`base/`)
+
+`CnId`, `Value`, `PeerID`, `Counter`, `Lamport`, and `isSafeUint` live in `base/types.ts` — shared by both `datalog/` and `kernel/`. `Result<T,E>` lives in `base/result.ts`. This avoids the duplicate-type drift hazard that existed when Phase 1 (Datalog) defined `CnIdRef` and Phase 2 (kernel) independently defined `CnId`. Since `kernel/types.ts` already imports from `datalog/types.ts` (for `RulePayload`), the "no cross-dependency" premise that originally justified the duplication doesn't hold.
+
+### Authority Gates All Peers
+
+The validity filter (`validity.ts`) checks that every constraint's asserting peer holds the required capability. Only the reality creator has implicit Admin. Other peers need explicit authority grants. This means pipeline tests (and eventually real usage) must include authority constraints granting capabilities to non-creator peers, or their constraints will be silently excluded from the active set.
+
+### Module Dependency DAG
+
+```
+base/result.ts, base/types.ts              (leaves — no deps)
+         ↑
+datalog/types.ts → evaluate.ts             (Datalog layer)
+         ↑
+kernel/types.ts → cnid, lamport, vv,       (kernel identity/store layer)
+  store, agent, signature
+         ↑
+authority.ts → validity.ts → retraction.ts  (filters)
+         ↑
+structure-index.ts → projection.ts          (kernel↔Datalog bridge)
+                   → skeleton.ts            (tree builder, uses solver/)
+         ↑
+pipeline.ts                                 (composition root — imports only)
+```
 
 ---
 

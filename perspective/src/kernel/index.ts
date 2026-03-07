@@ -184,3 +184,49 @@ export {
   computeActive,
   filterActive,
 } from './retraction.js';
+
+// --- Structure Index (§8) ---
+export type {
+  SlotGroup,
+  StructureIndex,
+} from './structure-index.js';
+
+export {
+  slotId,
+  childKey,
+  buildStructureIndex,
+  getStructure,
+  getSlotId,
+  getSlotGroup,
+  getChildren,
+  hasStructure,
+  getChildrenOfSlotGroup,
+} from './structure-index.js';
+
+// --- Projection (§7.2) ---
+export type {
+  ProjectionResult,
+} from './projection.js';
+
+export {
+  ACTIVE_VALUE,
+  ACTIVE_STRUCTURE_SEQ,
+  CONSTRAINT_PEER,
+  projectToFacts,
+} from './projection.js';
+
+// --- Skeleton (§7.3) ---
+export {
+  buildSkeleton,
+} from './skeleton.js';
+
+// --- Pipeline (§7) ---
+export type {
+  PipelineConfig,
+  PipelineResult,
+} from './pipeline.js';
+
+export {
+  solve,
+  solveFull,
+} from './pipeline.js';

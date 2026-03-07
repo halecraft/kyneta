@@ -407,6 +407,58 @@ The dominance function is recursive: to know if constraint C is dominated, you n
 
 `computeValid()` returns `{ readonly valid: readonly Constraint[] }`. The convenience function `filterValid()` wants to return `Constraint[]` (mutable) for caller flexibility. TypeScript won't assign `readonly Constraint[]` to `Constraint[]` — you need `[...result.valid]`. This is a minor annoyance but affects every "convenience wrapper that returns a subset" pattern. We encountered it in both `filterValid()` and `filterActive()`. The alternative — making the core return type mutable — weakens the contract. The spread is the correct trade-off.
 
+## Phase 3.5: Extract Shared Base Types
+
+### Build-Order Artifacts Should Be Cleaned Up at Phase Boundaries
+
+Phase 1 defined `CnIdRef` in `datalog/types.ts` because the kernel didn't exist yet. Phase 2 defined `CnId` in `kernel/types.ts` independently. These were structurally identical (`{ peer: string, counter: number }`) and TypeScript's structural typing made them assignment-compatible — but they were nominally separate types. The plan called for a "compile-time compatibility assertion" hack in the future `projection.ts` to guard against drift.
+
+Post-Phase-3 review revealed the "no cross-dependency" premise that justified the duplication was already violated: `kernel/types.ts` imports 14 types from `datalog/types.ts` for `RulePayload`. The fix was cheap — extract `CnId`, `Value`, `PeerID`, `Counter`, `Lamport`, and `isSafeUint` into `base/types.ts` (following the `base/result.ts` precedent). `CnIdRef` was deleted. Both layers now import from `base/`.
+
+General principle: when a later phase introduces a concept that an earlier phase approximated, clean up the approximation at the next phase boundary — before downstream code makes the drift load-bearing.
+
+### Dual Type Definitions Mask Themselves as "Acceptable Trade-offs"
+
+The Learnings section originally said the dual `Value`/`CnIdRef` types were "an acceptable trade-off given the no-cross-dependency architecture." This framing was wrong — the architecture premise it depended on was already violated. The lesson: when you document a trade-off, also document the premise. When the premise changes, the trade-off must be re-evaluated.
+
+## Phase 4: Skeleton, Pipeline, and Reality
+
+### The Validity Filter Is the First Integration Gate — Test Helpers Must Account For It
+
+The single most time-consuming bug in Phase 4 was that multi-peer pipeline tests failed silently because the validity filter excluded non-creator peers' constraints. The creator has implicit Admin, but everyone else has nothing. Test helpers that construct raw constraints (bypassing Agent) must include explicit `authority` grants for non-creator peers, or their constraints vanish from the active set without error. This was not a bug in the code — it was the authority system working exactly as designed. The fix: a `grantAdmin()` test helper that every multi-peer pipeline test uses.
+
+Broader lesson: when a filter silently excludes data (validity, retraction), your integration tests must supply the inputs that pass the filter. Unit tests that construct data below the filter boundary won't catch this.
+
+### Slot Identity Is a Pre-Computed Join, Not a Datalog Derivation
+
+The spec's `active_value(CnId, Slot, Value, Lamport, Peer)` treats `Slot` as a ground term. Pre-Phase-4 research established that slot identity must be computed outside Datalog (Layer 0 kernel logic, not a retractable rule). Phase 4 confirmed this works: `projection.ts` joins each value constraint with its target structure constraint via the structure index to derive the slot, then emits it as a string in the projected fact. Phase 1's test doubles (which hardcoded `'title'` as a string slot) match the real projection's output shape exactly.
+
+The structure index is the shared dependency that makes this efficient: computed once from active structure constraints, consumed by both `projection.ts` (slot identity for Datalog facts) and `skeleton.ts` (tree construction).
+
+### The Map Multi-Structure Case Is Real and Must Be Tested
+
+When Alice creates `structure(map, parent=root@0, key="title")` and Bob independently creates the same, they get different CnIds but represent the same logical slot. The structure index groups them by `(parent, key)`, and `getChildrenOfSlotGroup()` merges children from all structures in the group. Without this, each peer's sub-keys would be invisible to the other peer's tree branch. The equivalence tests confirmed that native LWW and Datalog LWW agree on the winner even when values target different structure CnIds for the same slot.
+
+### The Skeleton Needs a Synthetic Root
+
+The spec says `Reality { root: Node }` but a reality can have multiple top-level containers (e.g., "profile" and "settings"). The skeleton builder creates a synthetic root (`__reality__@0`, policy `map`) whose children are the containers keyed by `containerId`. This is invisible to users (they navigate by container name) and avoids special-casing the root in tree traversal code.
+
+### Pipeline Is Composition, Not Transformation
+
+`pipeline.ts` is intentionally anemic — it calls `filterByVersion()`, `computeValid()`, `computeActive()`, `buildStructureIndex()`, `projectToFacts()`, `buildSkeleton()` in sequence and returns the result. Every transformation lives in its own module. This makes each stage independently testable and replaceable. The `solveFull()` variant exposes all intermediate stages, which proved essential for debugging the validity-filter issue.
+
+### Native Solvers Are Primary, Datalog Is Validation
+
+The skeleton builder uses native LWW and Fugue directly — it does not consume Datalog-derived facts for value resolution or ordering. Datalog evaluation is optional (`enableDatalogEvaluation` flag in `PipelineConfig`, default true) and currently serves as parallel validation: rules from the store are evaluated against projected facts, but the results don't feed back into the skeleton. This design means the Datalog evaluator can fail (e.g., cyclic negation from a malicious rule) without breaking the reality — the native solvers are the fallback.
+
+### Fugue Equivalence Is Scoped to the Simplified Subset
+
+The Datalog Fugue rules from Phase 1 handle only concurrent inserts at the same `originLeft` (peer tiebreak). The native Fugue solver handles the full algorithm (recursive tree walk, `originRight` disambiguation). Equivalence tests compare the two only for same-`originLeft` siblings — expressed as "before" pairs. For the full algorithm, the native solver is the authority. This scoping was anticipated in the plan and confirmed correct by 12 equivalence tests covering single elements through 6-way concurrent inserts.
+
+### The `childrenOf` Index Keys by Parent CnId, Not Slot
+
+A subtle detail: the structure index's `childrenOf` map keys by the parent structure constraint's CnId key (e.g., `alice@0`), not by the parent's slot identity. This is correct because a child's `parent` field in the constraint payload points to a specific structure CnId, not to a slot. When a Map slot has multiple structure constraints (concurrent creation), `getChildrenOfSlotGroup()` iterates all structure CnIds in the group and merges their children. This ensures that children created under any peer's version of the parent are visible in the merged reality.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.
@@ -421,6 +473,10 @@ The dominance function is recursive: to know if constraint C is dominated, you n
 
 6. ~~**When should the prototype code be removed?**~~ **Resolved in Phase 2.5.** Removed immediately after Phase 2 confirmed zero cross-imports. The answer: as soon as isolation is verified, not at the end. Carrying dead code through subsequent phases was pure cognitive overhead with no safety benefit.
 
-7. **When should path-based capability checks be implemented?** Phase 3 uses a simplified model (Admin covers all, wildcard paths). Real path-based checks require the skeleton tree (Phase 4) to resolve a constraint's target path. This is a circular dependency: validity → skeleton → validity. The likely solution is a two-pass approach or lazy path resolution during skeleton construction.
+7. **When should path-based capability checks be implemented?** Phase 3 uses a simplified model (Admin covers all, wildcard paths). Real path-based checks require the skeleton tree (Phase 4) to resolve a constraint's target path. This is a circular dependency: validity → skeleton → validity. Now that Phase 4 has implemented the skeleton builder, the skeleton *is* available — but it's built *after* validity filtering. The likely solution is a two-pass approach: first pass with simplified checks (current behavior), build skeleton, second pass with path-aware checks. Alternatively, the structure index (which is built from active constraints) could provide enough path information without the full skeleton.
 
 8. **Should the `Constraint[]` store cloning strategy be replaced?** `store.insert()` clones the entire constraint `Map` on every insert — O(n) per operation. `insertMany()` mitigates this by cloning once for a batch. For stores with tens of thousands of constraints, this becomes expensive. A persistent data structure (HAMT or similar) would make this O(log n) per insert while preserving immutability semantics.
+
+9. **Should Datalog-derived facts feed back into the skeleton?** Currently, native solvers (LWW, Fugue) are primary — the skeleton builder uses them directly and ignores Datalog output. Datalog evaluation runs in parallel as validation. For custom user rules (Layer 2+), the skeleton would need to consult derived facts. The design question: should `buildSkeleton()` accept an optional `Database` of derived facts, or should custom rule results be projected back into a form the skeleton already understands (e.g., synthetic value constraints)?
+
+10. **How should the Agent's frontier-compressed refs interact with retraction's target-in-refs check?** The Agent's `currentRefs()` returns one CnId per peer (the frontier). Retraction's `target-in-refs` check looks for the literal target CnId in the `refs` array. If an agent retracts `(peer, 5)` but the frontier ref for that peer is `(peer, 10)`, the literal check fails. Phase 5 integration tests will exercise this path. Options: (a) interpret refs semantically in `computeActive` (any ref ≥ target implies observation), or (b) have `produceRetract()` explicitly add the target CnId alongside the frontier.

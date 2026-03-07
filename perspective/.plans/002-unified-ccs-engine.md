@@ -408,19 +408,21 @@ Extracting the shared identity and value types to `base/` follows the `Result` p
 
 No new tests. This is a pure refactor — the verification is that all existing tests pass and the project compiles cleanly. The test count should remain exactly 532.
 
-### Phase 4: Skeleton, Pipeline, and Reality 🔴
+### Phase 4: Skeleton, Pipeline, and Reality 🟢
 
 Wiring the solver pipeline from §7.2 and constructing the reality tree.
 
 #### Tasks
 
-- 4.1 Implement `kernel/structure-index.ts` — builds indexes over valid structure constraints that both `projection.ts` and `skeleton.ts` consume. Core responsibilities: (a) `Map<cnIdKey, StructureConstraint>` for O(1) target lookup; (b) **slot identity computation** — for Map children, group structure constraints by `(parent, key)` so that independently-created structures for the same map key are recognized as the same logical slot (§8.1: "Multiple `structure` constraints may exist for the same `(parent, key)`. They represent the same logical slot."); (c) for Seq children, slot = the target's own CnId (unique by definition); (d) for Root, slot = `containerId`. Exports a `StructureIndex` type consumed by downstream modules. This is Layer 0 (kernel) logic — slot identity derives from policy semantics and must not be expressible as a retractable rule. 🔴
-- 4.2 Implement `kernel/projection.ts` — consumes the `StructureIndex` and active value constraints to produce Datalog ground facts. The key operation is a **join**: each `ValueConstraint`'s `target` CnId is resolved through the structure index to obtain slot identity, then emitted as `active_value(CnId, Slot, Content, Lamport, Peer)`. Also emits `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)` for Fugue rules and `constraint_peer(CnId, Peer)` for peer tiebreak. Document the column-name→position mapping for each projected relation so that rule authors don't need to count tuple positions. (Note: the compile-time type-compatibility assertion originally planned here is no longer needed — Phase 3.5 unified `Value` and `CnId` into a single shared definition in `base/types.ts`.) 🔴
-- 4.3 Implement `kernel/skeleton.ts` — build rooted tree from the `StructureIndex`: Root nodes define containers; Map children grouped by (parent, key) via the index's slot grouping; Seq children ordered by Fugue interleaving; value resolution via native LWW 🔴
-- 4.4 Port native Fugue solver to `solver/fugue.ts` — adapt from path-based seq_element to CnId-based structure(seq) constraints, using `reference/fugue-v0.ts` as guide 🔴
-- 4.5 Port native LWW solver from prototype to `solver/lww.ts` — adapt from path-based to slot-based value resolution 🔴
-- 4.6 Implement `kernel/pipeline.ts` — composition root only: imports and composes `filterByVersion()`, `computeValid()`, `computeActive()`, `buildStructureIndex()`, `projectToFacts()`, `buildSkeleton()`, `resolveValues()` from their respective modules into `solve(S, V?) → Reality`. Contains no transformation logic of its own. 🔴
-- 4.7 Implement version-parameterized solving: `solve(S, V)` for historical queries (§7.1) 🔴
+- 4.1 Implement `kernel/structure-index.ts` — builds indexes over valid structure constraints that both `projection.ts` and `skeleton.ts` consume. Core responsibilities: (a) `Map<cnIdKey, StructureConstraint>` for O(1) target lookup; (b) **slot identity computation** — for Map children, group structure constraints by `(parent, key)` so that independently-created structures for the same map key are recognized as the same logical slot (§8.1: "Multiple `structure` constraints may exist for the same `(parent, key)`. They represent the same logical slot."); (c) for Seq children, slot = the target's own CnId (unique by definition); (d) for Root, slot = `containerId`. Exports a `StructureIndex` type consumed by downstream modules. This is Layer 0 (kernel) logic — slot identity derives from policy semantics and must not be expressible as a retractable rule. 🟢
+- 4.2 Implement `kernel/projection.ts` — consumes the `StructureIndex` and active value constraints to produce Datalog ground facts. The key operation is a **join**: each `ValueConstraint`'s `target` CnId is resolved through the structure index to obtain slot identity, then emitted as `active_value(CnId, Slot, Content, Lamport, Peer)`. Also emits `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)` for Fugue rules and `constraint_peer(CnId, Peer)` for peer tiebreak. Document the column-name→position mapping for each projected relation so that rule authors don't need to count tuple positions. (Note: the compile-time type-compatibility assertion originally planned here is no longer needed — Phase 3.5 unified `Value` and `CnId` into a single shared definition in `base/types.ts`.) 🟢
+- 4.3 Implement `kernel/skeleton.ts` — build rooted tree from the `StructureIndex`: Root nodes define containers; Map children grouped by (parent, key) via the index's slot grouping; Seq children ordered by Fugue interleaving; value resolution via native LWW 🟢
+- 4.4 Port native Fugue solver to `solver/fugue.ts` — adapt from path-based seq_element to CnId-based structure(seq) constraints, using `reference/fugue-v0.ts` as guide 🟢
+- 4.5 Port native LWW solver from prototype to `solver/lww.ts` — adapt from path-based to slot-based value resolution 🟢
+- 4.6 Implement `kernel/pipeline.ts` — composition root only: imports and composes `filterByVersion()`, `computeValid()`, `computeActive()`, `buildStructureIndex()`, `projectToFacts()`, `buildSkeleton()`, `resolveValues()` from their respective modules into `solve(S, V?) → Reality`. Contains no transformation logic of its own. 🟢
+- 4.7 Implement version-parameterized solving: `solve(S, V)` for historical queries (§7.1) 🟢
+
+*Note: Phase 4 intentionally used native solvers as the sole resolution path — the Datalog evaluator runs but its results are discarded. Phase 4.5 corrects this to match the spec's architecture, where Datalog evaluation IS the resolution and native solvers are an optional fast path.*
 
 **Note on the projection design (from pre-Phase-4 research):** The spec's LWW rule `active_value(CnId, Slot, Value, Lamport, Peer)` treats `Slot` as a pre-computed ground term, not something derived by Datalog. This is deliberate — slot identity is Layer 0 kernel logic (§8 Policies), not Layer 1 rule logic. If the slot join were expressed as a Datalog rule, an agent with `CreateRule` + `Retract` capabilities could retract it and break the reality. The projection pre-computes slot identity outside Datalog so that the LWW and Fugue rules receive ready-to-use ground facts. This also means Phase 1's test doubles (which hardcode `'title'` as a string slot) match the real projection's output shape — the "test-double → real integration" bridge works.
 
@@ -443,6 +445,44 @@ Wiring the solver pipeline from §7.2 and constructing the reality tree.
 - Native solver equivalence: Fugue native == Fugue Datalog rules for same inputs (scoped to simplified subset — full Fugue tree walk is native-only)
 - Version-parameterized: solve(S, V_past) returns historical reality; solve(S, V_current) returns current reality
 - Retraction + pipeline: retracted value excluded from reality; un-retracted value reappears
+
+### Phase 4.5: Datalog-Driven Resolution 🔴
+
+Phase 4's pipeline runs the Datalog evaluator but discards the results — the skeleton is built entirely by native solvers that bypass the rule system. This contradicts the spec's core architecture: "LWW and Fugue are not part of the engine. They are Datalog rules that travel in the constraint store. The engine is Layer 0 (kernel) + a Datalog evaluator. Everything else is data." (§B.1)
+
+The consequence: rules-as-data is inert. An agent that retracts the default LWW rules and asserts a custom resolution strategy would have no effect on the reality — the native LWW solver runs unconditionally. §B.7 constraint #3 says: "If the reality's solver rules are retracted and replaced with custom rules, native solvers must fall back to Datalog evaluation for the replacement rules." There is no fallback mechanism.
+
+Phase 4.5 restructures the pipeline so that Datalog evaluation is the **primary** resolution path, with native solvers as an **optional optimization** that activates only when the active rules match known patterns. This also fixes two spec compliance gaps discovered during post-Phase-4 review.
+
+#### Tasks
+
+- 4.5.1 Implement `kernel/resolve.ts` — a resolution module that reads Datalog-derived facts and produces the data the skeleton builder needs. For LWW: reads the `winner(Slot, CnId, Value)` relation from the evaluated database and produces a `Map<slotId, LWWWinner>`. For Fugue: reads the `fugue_before(Parent, A, B)` relation and produces a total order per parent. This module bridges Datalog output → skeleton input. It does NOT contain resolution logic itself — it reads what Datalog derived. 🔴
+- 4.5.2 Refactor `kernel/skeleton.ts` — the skeleton builder currently calls native `resolveLWWSlot()` and `orderFugueNodes()` directly. Refactor to accept a `ResolutionResult` (from `resolve.ts`) that provides pre-resolved winners and orderings. The skeleton builder becomes policy-agnostic — it reads the resolution result instead of running solvers inline. When a `ResolutionResult` is provided, use it. When absent (legacy/test path), fall back to native solvers. 🔴
+- 4.5.3 Implement native solver detection in `kernel/pipeline.ts` — before evaluating rules via Datalog, inspect the active rule constraints. If they are exactly the known default LWW and Fugue rules (matched by structure, not by CnId), use native solvers as a fast path (§B.7). If the rules have been modified, retracted, or augmented with custom rules, fall back to Datalog evaluation. This is the §B.7 optimization with §B.7 constraint #3 (fallback). 🔴
+- 4.5.4 Wire the Datalog-primary path in `pipeline.ts` — when the native fast path is NOT active: (a) extract rules from active constraints, (b) evaluate against projected facts, (c) pass the evaluated `Database` to `resolve.ts` to extract `winner` and `fugue_before` facts, (d) pass the `ResolutionResult` to the skeleton builder. The Datalog evaluation result is no longer discarded — it feeds directly into reality construction. 🔴
+- 4.5.5 Fix structure index source (§7.2 compliance) — change `pipeline.ts` to build the structure index from `validityResult.valid` (all valid structure constraints) instead of `retractionResult.active`. The spec's pipeline forks at `Valid(S_V)`: one branch takes `AllStructure(Valid(S_V))` for the skeleton, the other takes `Active(Valid(S_V))` for value resolution. Structure constraints are immune to retraction, so this is currently equivalent — but the code should match the spec's two-path design to prevent regressions if the retraction module ever has a bug that incorrectly dominates a structure constraint. 🔴
+- 4.5.6 Fix authority retraction immunity (§2.5 compliance) — add a `targetIsAuthority` case to `RetractionViolationReason` in `retraction.ts` and enforce it in `computeActive()`. The spec says: "`authority` constraints are not retractable via `retract`. Revocation is the dedicated mechanism for removing capabilities." Currently only `structure` constraints are protected. 🔴
+- 4.5.7 Expose resolution metadata in `PipelineResult` — add the `ResolutionResult` and whether the native fast path was used to `PipelineResult` for introspection and testing. 🔴
+- 4.5.8 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes. Existing pipeline tests continue to produce identical realities (the native solvers and Datalog rules are equivalent by the Phase 4 equivalence tests — this phase changes *which path* produces the reality, not the result). 🔴
+
+**Design note on native solver detection (task 4.5.3):** The detection must be structural — comparing the rule's `head` and `body` shapes, not CnIds or lamport values. A bootstrap LWW rule created by Alice and one created by Bob are semantically identical even though they have different CnIds. The detection function should be a pure predicate: `isDefaultLWWRules(rules): boolean`, `isDefaultFugueRules(rules): boolean`. When both return true and no additional Layer 2+ rules exist, the native fast path is safe.
+
+**Design note on the Datalog→skeleton bridge (task 4.5.1):** The `winner(Slot, CnId, Value)` relation is the LWW output. The Datalog evaluator produces this as a `Relation` in its `Database`. `resolve.ts` reads this relation and converts each fact tuple back into typed data (`slotId`, `winnerId`, `content`). This is the inverse of what `projection.ts` does — projection converts kernel types to Datalog facts, resolution converts Datalog facts back to kernel types. The two modules are symmetric.
+
+**Why not just make the skeleton read the Database directly?** Because the skeleton builder should not depend on Datalog types. The dependency direction is `kernel → datalog` for projection (kernel types → Datalog facts), and the reverse path should go through `resolve.ts` as a boundary module. This keeps the skeleton as a pure kernel module that knows about `SlotGroup`, `RealityNode`, and `Value` — not about `Relation` or `Fact`.
+
+#### Tests
+
+- Datalog-primary path: pipeline with LWW rules in store (as `rule` constraints) produces identical reality to native-only path for same inputs
+- Datalog-primary path: pipeline with Fugue rules in store produces identical seq ordering to native-only path
+- Native fast path detection: default LWW + Fugue rules → native path detected; modified rules → Datalog path used
+- Native fast path detection: additional Layer 2 rules alongside defaults → Datalog path used (custom rules might interact)
+- Custom resolution: replace default LWW with a custom rule (e.g., `lowest_lamport_wins`) → reality reflects the custom resolution, not native LWW
+- Custom resolution: retract default LWW rules, assert priority-based rules → reality uses priority resolution
+- Authority retraction immunity: retract targeting an authority constraint → violation, constraint remains active
+- Structure index source: structure index built from valid set, not active set (verify structurally — possibly via spy/mock or by checking that structure constraints with retracted siblings still appear)
+- `PipelineResult` exposes resolution metadata and fast-path flag
+- All existing pipeline tests still pass with identical results
 
 ### Phase 5: Reality Bootstrap and Integration 🔴
 
@@ -502,8 +542,9 @@ kernel/validity.ts      → kernel/types.ts, store.ts, authority.ts, signature.t
 kernel/retraction.ts    → kernel/types.ts, validity.ts
 kernel/structure-index.ts → kernel/types.ts, cnid.ts
 kernel/projection.ts    → kernel/types.ts, base/types.ts, structure-index.ts
-kernel/skeleton.ts      → kernel/types.ts, structure-index.ts
-kernel/pipeline.ts      → kernel/types.ts, store.ts, validity.ts, retraction.ts, structure-index.ts, projection.ts, skeleton.ts, datalog/evaluate.ts
+kernel/resolve.ts       → kernel/types.ts, datalog/types.ts (Datalog Database → typed resolution result)
+kernel/skeleton.ts      → kernel/types.ts, structure-index.ts, resolve.ts (optionally)
+kernel/pipeline.ts      → kernel/types.ts, store.ts, validity.ts, retraction.ts, structure-index.ts, projection.ts, resolve.ts, skeleton.ts, datalog/evaluate.ts, solver/lww.ts, solver/fugue.ts
 datalog/unify.ts        → datalog/types.ts
 datalog/stratify.ts     → datalog/types.ts
 datalog/aggregate.ts    → datalog/types.ts
@@ -518,7 +559,7 @@ A change to `base/types.ts` affects nearly everything (it defines `CnId`, `Value
 
 ### Test Dependency Chain
 
-Tests for Phase N depend on code from Phases 1..N. Phase 1 (Datalog) tests are self-contained. Phase 2 (kernel types/store) tests are self-contained. Phase 3 tests depend on Phase 2 code. Phase 3.5 is a pure refactor — all existing tests must still pass. Phase 4 tests depend on Phases 1–3.5. Phase 5 tests depend on all prior phases. This means a type change in `base/types.ts` may break all tests transitively.
+Tests for Phase N depend on code from Phases 1..N. Phase 1 (Datalog) tests are self-contained. Phase 2 (kernel types/store) tests are self-contained. Phase 3 tests depend on Phase 2 code. Phase 3.5 is a pure refactor — all existing tests must still pass. Phase 4 tests depend on Phases 1–3.5. Phase 4.5 tests depend on Phases 1–4 (and critically, the equivalence tests from Phase 4 validate that the Datalog-primary path produces the same results as the native-only path). Phase 5 tests depend on all prior phases. This means a type change in `base/types.ts` may break all tests transitively.
 
 ### External Dependencies
 
@@ -578,8 +619,9 @@ prism/
 │   │   ├── retraction.ts        (Phase 3)
 │   │   ├── structure-index.ts   (Phase 4)
 │   │   ├── projection.ts        (Phase 4)
-│   │   ├── skeleton.ts          (Phase 4)
-│   │   └── pipeline.ts          (Phase 4)
+│   │   ├── resolve.ts           (Phase 4.5 — Datalog derived facts → typed resolution result)
+│   │   ├── skeleton.ts          (Phase 4, refactored in 4.5)
+│   │   └── pipeline.ts          (Phase 4, refactored in 4.5)
 │   ├── datalog/
 │   │   ├── types.ts
 │   │   ├── unify.ts
@@ -647,7 +689,8 @@ prism/
 | Phase 2 (Types/Store) | §1 (constraints), §2 (constraint types), §3 (values), §4 (store), §13 (batching) |
 | Phase 2.5 (Remove Prototype) | N/A — housekeeping, no new spec coverage |
 | Phase 3 (Auth/Retract) | §5 (authority & validity), §6 (retraction & dominance) |
-| Phase 4 (Pipeline) | §7 (solver pipeline), §8 (policies), §B.7 (native optimization) |
+| Phase 4 (Pipeline) | §7 (solver pipeline), §8 (policies) |
+| Phase 4.5 (Datalog-Driven Resolution) | §B.1 (engine = kernel + Datalog), §B.4 (rules as data), §B.7 (native optimization + fallback), §7.2 (pipeline two-path fork), §2.5 (authority non-retractability) |
 | Phase 5 (Bootstrap) | §B.8 (reality bootstrap), §15 (messages & sync), §9 (incremental maintenance) |
 
 ### Datalog Algorithm References
@@ -858,3 +901,13 @@ The shared `structure-index.ts` module was introduced to compute slot groupings 
 The `Agent.currentRefs()` implementation compresses causal predecessors to the version vector frontier: one CnId per peer (the highest counter seen). This is semantically correct — the frontier implies the full causal history — and space-efficient. However, the retraction module's `target-in-refs` check verifies that the retraction's `target` CnId is literally present in the `refs` array. If an agent retracts a constraint at counter 5 but the frontier ref for that peer is at counter 10, the literal CnId `(peer, 5)` won't appear in refs.
 
 This doesn't cause failures today because retraction tests use manually-constructed constraints with explicit refs. But Phase 5 integration tests — where an Agent produces a retraction constraint via `produceRetract()` — will exercise this path. The fix is either: (a) change `computeActive` to interpret refs semantically (any ref `(peer, N)` with `N ≥ target.counter` implies the target was observed), or (b) have `produceRetract()` explicitly add the target CnId to refs alongside the frontier. Option (a) is more principled; option (b) is simpler. Decide in Phase 5.
+
+### Native Solvers Replaced the Datalog Path Instead of Optimizing It
+
+Phase 4 implemented the pipeline with native LWW and Fugue solvers as the **sole** resolution path. The Datalog evaluator runs (when `enableDatalogEvaluation` is true) but its output is computed and discarded — the skeleton builder calls native `resolveLWWSlot()` and `orderFugueNodes()` directly and never consults Datalog-derived facts. The equivalence tests prove that both paths produce identical results, which masked the architectural problem: the implementation is not "native solvers as optimization" (§B.7) but "native solvers as replacement."
+
+This contradicts the spec's fundamental architecture (§B.1): "LWW and Fugue are not part of the engine. They are Datalog rules that travel in the constraint store." The practical consequence is that rules-as-data is inert — retracting the default LWW rules and asserting custom resolution rules has no effect on the reality, because the native solver runs unconditionally. §B.7 constraint #3 explicitly requires: "If the reality's solver rules are retracted and replaced with custom rules, native solvers must fall back to Datalog evaluation for the replacement rules."
+
+The root cause was a build-order artifact: Phase 4 needed the skeleton builder before bootstrap (Phase 5) could inject rules into the store, so the skeleton was written to use native solvers directly. The intent was to wire Datalog later, but the pipeline was declared complete without the wiring. Phase 4.5 corrects this by making Datalog evaluation the primary resolution path, with native solvers as a detected fast path (§B.7) that activates only when the active rules match known default patterns.
+
+The broader lesson: when a spec says "X is data, not code," verify that the implementation actually reads X from the data path. An optimization that bypasses the data path entirely is not an optimization — it's a parallel implementation that breaks the data path's contract. Equivalence tests can prove the two paths agree but cannot prove the data path is actually wired into the output.
