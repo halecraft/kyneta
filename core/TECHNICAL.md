@@ -755,7 +755,7 @@ The binding functions use `loro()` to access raw Loro containers for write opera
 
 **`editText(ref: TextRef)`** — Returns a `beforeinput` event handler that translates DOM editing operations into typed-ref `insert()` / `delete()` calls with auto-commit. This is the write-direction complement to `inputTextRegion` (the read direction). Unlike `bindTextValue`, it:
 - Uses `beforeinput` (not `input`) to intercept edits before the browser applies them
-- Calls `e.preventDefault()` and lets `inputTextRegion` handle DOM updates via `setRangeText("preserve")`
+- Calls `e.preventDefault()` and lets `inputTextRegion` handle DOM updates via `setRangeText` with origin-driven selectMode (`"end"` for local edits, `"preserve"` for remote)
 - Preserves CRDT character-level merge semantics (no full-text replacement)
 - Auto-commits via the typed ref API (not raw container mutations)
 - Handles IME composition (`isComposing` skip + `insertFromComposition`)

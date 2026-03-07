@@ -187,23 +187,23 @@ The core cursor fix. `patchInputValue` gains a selectMode parameter; `inputTextR
 
 4. Verify existing `patchInputValue`, `textRegion`, `listRegion`, and `conditionalRegion` tests still pass ✅
 
-## Phase 4: Documentation ✅ (partially complete, corrections needed)
+## Phase 4: Documentation ✅
 
 ### Tasks
 
-1. Update `packages/kinetic/TECHNICAL.md` — Input Text Region Architecture section ✅ (needs correction for selectMode dispatch instead of active-edit flag)
+1. Update `packages/kinetic/TECHNICAL.md` — Input Text Region Architecture section ✅
 
-2. Update `packages/kinetic/TECHNICAL.md` — Delta Region Algebra section ✅ (needs minor correction)
+2. Update `packages/kinetic/TECHNICAL.md` — Delta Region Algebra section ✅
 
 3. Update `packages/change/TECHNICAL.md` — Reactive Bridge section ✅
 
 4. Update `TECHNICAL.md` (root) — REACTIVE Callback Signature section ✅
 
-5. Correct Learning #2 in `.plans/kinetic-input-text-region.md` ✅ (needs minor correction for selectMode dispatch)
+5. Correct Learning #2 in `.plans/kinetic-input-text-region.md` ✅
 
-6. Correct TECHNICAL.md files to reflect selectMode dispatch instead of active-edit flag mechanism 🔴
+6. Correct TECHNICAL.md files to reflect selectMode dispatch instead of active-edit flag mechanism ✅
 
-   The documentation updates made in the previous commit describe the now-superseded skip+flag approach. They need to be revised to describe the simpler origin-driven selectMode dispatch.
+   Corrected stale `setRangeText("preserve")` references in `packages/kinetic/TECHNICAL.md` (Loro Bindings Subpath), `examples/kinetic-todo/README.md` (What This Shows + How It Works), and `.changeset/input-text-region-edit-text.md`. Also created `.changeset/delta-provenance.md` for the reactive and change package changes.
 
 ## Tests
 
