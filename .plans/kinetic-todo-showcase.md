@@ -38,74 +38,39 @@ The component pipeline is proven end-to-end (6 integration tests, DOM + SSR), th
 | TECHNICAL.md Component Model | No "Builder Components" pattern, no proven convention note | Both documented | 2 |
 | `app.ts` JSDoc | No component documentation | Components have JSDoc | 1 |
 
-## Phase 1: Extract Components and Clean Up 🔴
+## Phase 1: Extract Components and Clean Up 🟢
 
 ### Tasks
 
-1. **Remove the animation loop from `app.ts`** 🔴
+1. **Remove the animation loop from `app.ts`** 🟢
 
    Delete the `const x = state(0)`, the entire `client: { ... }` block (the `requestAnimationFrame` loop), and the `h2(x.get().toString())` line. Remove the `state` import from `@loro-extended/kinetic` if it becomes unused.
 
-2. **Remove `completedCount` from `TodoSchema`** 🔴
+2. **Remove `completedCount` from `TodoSchema`** 🟢
 
    Delete `completedCount: Shape.counter()` from `schema.ts`. Verify no references exist in `app.ts`, `server.ts`, or `main.ts`.
 
-3. **Define `TodoItem` as a props-based component** 🔴
+3. **Define `TodoItem` as a props-based component** 🟢
 
-   Add above `createApp` in `app.ts`:
+   Defined inside `createApp` with the specific `(props: P) => Element` overload type rather than the `ComponentFactory<P>` union. TypeScript can't resolve which union member to call at call sites (see Learning 5). The compiler's `isComponentFactoryType` detection works on structural call signatures, not on the `ComponentFactory` name, so the specific overload is fully equivalent.
 
-   ```ts
-   import type { ComponentFactory } from "@loro-extended/kinetic"
-   ```
+   Imported `Element` type from `@loro-extended/kinetic` for the annotation. Added JSDoc explaining the props-based pattern and the type annotation rationale.
 
-   Define `TodoItem` inside `createApp` (so it closes over `removeTodo`), or accept `onRemove` as a prop. The props-based approach is more demonstrative of the component model:
+4. **Define `TodoHeader` as a closure-based component** 🟢
 
-   ```ts
-   type TodoItemProps = { label: string; onRemove: () => void }
+   Defined inside `createApp` with `() => Element` type annotation. Closes over `doc`, `addTodo`, and `handleKeyDown`. Added JSDoc explaining the closure pattern and why it's necessary for `bind()`.
 
-   const TodoItem: ComponentFactory<TodoItemProps> = (props) =>
-     li({ class: "todo-item" }, () => {
-       label(props.label)
-       button({ class: "destroy", onClick: props.onRemove }, "×")
-     })
-   ```
-
-   Place this inside `createApp` so it has access to the builder globals via the `/// <reference>` directive. Add JSDoc explaining this is a "Builder Component" — a closure over props that returns a builder expression.
-
-4. **Define `TodoHeader` as a closure-based component** 🔴
-
-   Define inside `createApp` (closes over `doc`, `addTodo`, `handleKeyDown`):
-
-   ```ts
-   const TodoHeader: ComponentFactory = () =>
-     header(() => {
-       h1(doc.title.toString())
-       div({ class: "new-todo-wrapper" }, () => {
-         input({
-           type: "text",
-           class: "new-todo",
-           placeholder: "What needs to be done?",
-           value: bind(doc.newTodoText),
-           onKeyDown: handleKeyDown,
-         })
-         button({ class: "add-btn", onClick: addTodo }, "Add")
-       })
-     })
-   ```
-
-   Add JSDoc explaining this is a closure-component: it captures `doc` and helpers from the enclosing scope rather than receiving them as props. Note that `bind(doc.newTodoText)` works here because the `bind()` call is inside the component's own builder, not forwarded through props.
-
-5. **Replace inline builders with component calls** 🔴
+5. **Replace inline builders with component calls** 🟢
 
    In the main builder inside `createApp`:
    - Replace the `header(() => { ... })` block with `TodoHeader()`
    - Replace the `li({ class: "todo-item" }, () => { ... })` block inside the `for` loop with `TodoItem({ label: item, onRemove: () => removeTodo(item) })`
 
-6. **Rebuild the kinetic package dist** 🔴
+6. **Rebuild the kinetic package dist** 🟢
 
    Run `npx tsup` in `packages/kinetic` so the todo app resolves the `ComponentFactory` type export from the built `dist/`. (The dist is gitignored — this is a local step, not a committed artifact.)
 
-7. **Verify the app type-checks and the kinetic tests pass** 🔴
+7. **Verify the app type-checks and the kinetic tests pass** 🟢
 
    - `cd packages/kinetic && npx vitest run` — all 826 tests pass
    - `cd examples/kinetic-todo && npx tsc --noEmit` — no type errors
@@ -194,3 +159,5 @@ If the animation loop is the only consumer of `state` in `app.ts`, removing it m
 3. **Dead schema fields erode trust in a showcase.** `completedCount: Shape.counter()` sitting unused in a demo implies either the app is incomplete or the developers don't clean up after themselves. Neither message belongs in a showcase. Remove it.
 
 4. **`bind()` works inside closure-components but not through props.** `bind(doc.newTodoText)` is recognized by `isBindCall()` because the compiler sees the literal `bind(...)` call expression. If the binding were passed as a prop, the component would see `props.inputBinding` — a property access, not a `bind()` call — and the compiler would not recognize it. This is why `TodoHeader` uses closure capture: it needs `bind()`, so it closes over `doc` directly. This is an important pattern to document.
+
+5. **`ComponentFactory<P>` union type is not callable at call sites.** `ComponentFactory` is a union of 4 function types (`(props, builder) => Element | (props) => Element | (builder) => Element | () => Element`). When a variable is annotated as this union, TypeScript can't determine which overload to invoke — `TodoHeader()` matches both `(builder) => Element` (expecting an arg) and `() => Element` (expecting nothing), and `TodoItem({...})` is ambiguous between the props and builder overloads. The fix: annotate components with their specific overload (`(props: P) => Element` or `() => Element`). The compiler's `isComponentFactoryType` checks structural call signatures (does the return type have call signatures returning `Node`?), not the `ComponentFactory` name, so the specific overload is fully equivalent for compilation. This is a TypeScript ergonomics issue, not a compiler issue — the `ComponentFactory` type is useful for documentation and conceptual framing, but not as a variable annotation.
