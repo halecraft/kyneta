@@ -171,21 +171,21 @@ The core cursor fix. `patchInputValue` gains a selectMode parameter; `inputTextR
 
    No changes to `editText` are needed. It remains a pure CRDT write function — the subscription's `setRangeText("end")` handles cursor positioning for local edits automatically.
 
-## Phase 3: Tests 🔴
+## Phase 3: Tests ✅
 
 ### Tasks
 
-1. Add round-trip cursor test to `packages/kinetic/src/loro/edit-text.test.ts` 🔴
+1. Add round-trip cursor test to `packages/kinetic/src/loro/edit-text.test.ts` ✅
 
    Simulate typing "Hello" one character at a time through the full `editText` → CRDT → subscription → DOM cycle. After each keystroke, verify both `ref.toString()` and `input.selectionStart`. This is the test that would have caught the original bug. Requires wiring `inputTextRegion` to the same input element, with a real `Scope` and subscription.
 
-2. Add remote edit cursor preservation test to `packages/kinetic/src/runtime/text-patch.test.ts` 🔴
+2. Add remote edit cursor preservation test to `packages/kinetic/src/runtime/text-patch.test.ts` ✅
 
    Wire `inputTextRegion` on an input with cursor at position 5. Simulate a remote text delta (with `origin: "import"` or `origin: undefined`) inserting at position 0. Verify cursor shifted to position 8 (5 + inserted length). Verify `input.value` is correct.
 
-3. Add origin-forwarding tests to `packages/change/src/reactive-bridge.test.ts` (covered in Phase 1 task 5) 🔴
+3. Add origin-forwarding tests to `packages/change/src/reactive-bridge.test.ts` (covered in Phase 1 task 5) ✅
 
-4. Verify existing `patchInputValue`, `textRegion`, `listRegion`, and `conditionalRegion` tests still pass 🔴
+4. Verify existing `patchInputValue`, `textRegion`, `listRegion`, and `conditionalRegion` tests still pass ✅
 
 ## Phase 4: Documentation ✅ (partially complete, corrections needed)
 
@@ -414,6 +414,16 @@ The cursor always goes to the end of the replacement range. For inserts, this is
 4. **Origin-driven selectMode dispatch preserves read/write independence.** `editText` remains a pure CRDT write function (no DOM manipulation, no cursor management). `inputTextRegion` remains the sole reader. The only coordination is through the delta's `origin` field — which flows through the existing subscription channel, not a side channel. This is the principled version of what the original plan tried to achieve with WeakSets and pluggable predicates.
 
 5. **The `REPLACE_DELTA` singleton needs conditional handling.** Both `@loro-extended/reactive` (`LocalRef`) and `@loro-extended/change` (`reactive-bridge.ts`) have pre-allocated `REPLACE_DELTA` singletons. Adding `origin?` to the type is non-breaking, but `translateDiff` must create a new object when `origin` is defined rather than returning the singleton. Pattern: `origin ? { type: "replace", origin } : REPLACE_DELTA`.
+
+6. **Loro's `LoroEventBatch.by` includes `"checkout"` — not just `"local"` and `"import"`.** The plan originally defined `DeltaOrigin = "local" | "import"`, but Loro's type definition is `by: "local" | "import" | "checkout"` (required, not optional). Checkout events represent wholesale state replacement (e.g., time travel) and must be filtered out in `translateEventBatch` rather than forwarded. The rest of the codebase (diff-overlay, functional-helpers, lens) already checks `event.by === "checkout"` and skips/throws. The reactive bridge was the only path that didn't filter checkouts — now it does. `DeltaOrigin` stays as `"local" | "import"` because `"checkout"` never reaches consumers.
+
+7. **Cross-package type changes require rebuilding `dist/` before downstream tests see them.** Each package's `exports` field points to `dist/index.d.ts` and `dist/index.js`, not source. Vitest within a package transforms source directly, but cross-package imports resolve to built output. After adding `origin?` to `ReactiveDelta` in the reactive package and `translateEventBatch` changes in the change package, kinetic's round-trip tests still exhibited the backwards-typing bug until `pnpm -C packages/reactive build` and `pnpm -C packages/change build` were run. **If your tests pass in one package but fail in a downstream consumer, rebuild.** This is a monorepo hazard that's easy to miss when source transforms mask the stale `dist/`.
+
+8. **JSDOM faithfully implements `setRangeText` selectMode per the HTML spec.** This was not assumed during planning — we expected to need a spec-faithful mock. Empirically verified: `setRangeText("end")` advances the cursor past the insertion (5→6 for a 1-char insert); `setRangeText("preserve")` shifts the cursor when the edit is strictly before it (5→6 for insert at 0) but does NOT advance when inserting at the cursor position (cursor stays at 0). This means round-trip tests can use JSDOM's native `setRangeText` directly rather than mocking, producing higher-fidelity cursor tests. The `"preserve" at cursor stays put` behavior is the exact bug case — JSDOM reproduces it faithfully.
+
+9. **The `translateEventBatch` type cast should use `by?: string` (optional), not the Loro-required `by: string`.** Even though Loro's `LoroEventBatch.by` is required, `translateEventBatch` accepts `unknown` as its first parameter to avoid Loro type imports at the reactive boundary. Non-Loro callers (hypothetical future reactive sources) might not have a `by` field at all. The cast `{ by?: string; events: Array<{ diff: unknown }> }` correctly handles both cases: Loro events get forwarded, non-Loro events get `origin: undefined`. The explicit `batch.by === "local" || batch.by === "import"` guard narrows to `DeltaOrigin`, and anything else (including `undefined` or unexpected strings) falls through to `undefined`.
+
+10. **Existing integration tests are implicit contracts on selectMode.** The compiler integration test `should apply surgical updates to input.value via inputTextRegion` captured `setRangeText` calls with their `mode` argument. It expected `"preserve"` for local Loro operations. After origin forwarding, local operations now produce `origin: "local"` → `selectMode: "end"`. This is correct behavior (it's the bug fix working), but it means **existing tests that spy on `setRangeText` mode arguments are effectively testing the cursor management policy**, not just the patching mechanics. When changing selectMode dispatch logic, search for `mode: "preserve"` and `mode: "end"` assertions across the test suite.
 
 ## Changeset
 

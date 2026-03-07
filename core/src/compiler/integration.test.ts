@@ -3004,7 +3004,7 @@ describe("compiler integration - text patching", () => {
         text: " World",
         start: 5,
         end: 5,
-        mode: "preserve",
+        mode: "end",
       })
 
       // Delete " World" — should also use setRangeText
@@ -3018,7 +3018,7 @@ describe("compiler integration - text patching", () => {
         text: "",
         start: 5,
         end: 11,
-        mode: "preserve",
+        mode: "end",
       })
 
       scope.dispose()

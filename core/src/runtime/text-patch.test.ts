@@ -317,6 +317,130 @@ describe("patchInputValue", () => {
 })
 
 // =============================================================================
+// patchInputValue selectMode Tests
+// =============================================================================
+
+describe("patchInputValue with selectMode", () => {
+  it("uses 'preserve' by default (backward compatible)", () => {
+    const input = document.createElement("input") as HTMLInputElement
+    input.value = "Hello"
+
+    const setRangeTextSpy = vi.fn()
+    input.setRangeText = setRangeTextSpy
+
+    patchInputValue(input, [{ retain: 5 }, { insert: " World" }])
+
+    expect(setRangeTextSpy).toHaveBeenCalledWith(" World", 5, 5, "preserve")
+  })
+
+  it("uses 'end' when selectMode is 'end'", () => {
+    const input = document.createElement("input") as HTMLInputElement
+    input.value = "Hello"
+
+    const setRangeTextSpy = vi.fn()
+    input.setRangeText = setRangeTextSpy
+
+    patchInputValue(input, [{ retain: 5 }, { insert: " World" }], "end")
+
+    expect(setRangeTextSpy).toHaveBeenCalledWith(" World", 5, 5, "end")
+  })
+
+  it("passes selectMode through to delete operations too", () => {
+    const input = document.createElement("input") as HTMLInputElement
+    input.value = "Hello World"
+
+    const setRangeTextSpy = vi.fn()
+    input.setRangeText = setRangeTextSpy
+
+    patchInputValue(input, [{ retain: 5 }, { delete: 6 }], "end")
+
+    expect(setRangeTextSpy).toHaveBeenCalledWith("", 5, 11, "end")
+  })
+
+  it("cursor advances past insert with 'end' (JSDOM native)", () => {
+    const input = document.createElement("input") as HTMLInputElement
+    input.value = "Hello"
+    input.selectionStart = 5
+    input.selectionEnd = 5
+
+    // Use JSDOM's native setRangeText (spec-faithful)
+    patchInputValue(input, [{ retain: 5 }, { insert: " World" }], "end")
+
+    expect(input.value).toBe("Hello World")
+    expect(input.selectionStart).toBe(11)
+    expect(input.selectionEnd).toBe(11)
+  })
+
+  it("cursor stays at delete point with 'end' (JSDOM native)", () => {
+    const input = document.createElement("input") as HTMLInputElement
+    input.value = "Hello"
+    input.selectionStart = 3
+    input.selectionEnd = 3
+
+    patchInputValue(input, [{ retain: 2 }, { delete: 1 }], "end")
+
+    expect(input.value).toBe("Helo")
+    expect(input.selectionStart).toBe(2)
+    expect(input.selectionEnd).toBe(2)
+  })
+
+  it("cursor shifts for remote insert before cursor with 'preserve' (JSDOM native)", () => {
+    const input = document.createElement("input") as HTMLInputElement
+    input.value = "Hello"
+    input.selectionStart = 5
+    input.selectionEnd = 5
+
+    patchInputValue(input, [{ insert: "XYZ" }], "preserve")
+
+    expect(input.value).toBe("XYZHello")
+    expect(input.selectionStart).toBe(8)
+    expect(input.selectionEnd).toBe(8)
+  })
+
+  it("cursor unchanged for remote insert after cursor with 'preserve' (JSDOM native)", () => {
+    const input = document.createElement("input") as HTMLInputElement
+    input.value = "Hello"
+    input.selectionStart = 2
+    input.selectionEnd = 2
+
+    patchInputValue(input, [{ retain: 5 }, { insert: " World" }], "preserve")
+
+    expect(input.value).toBe("Hello World")
+    expect(input.selectionStart).toBe(2)
+    expect(input.selectionEnd).toBe(2)
+  })
+
+  it("cursor does NOT advance for local insert at cursor with 'preserve' — the bug case", () => {
+    // This test documents the bug that origin-driven selectMode dispatch fixes.
+    // With "preserve", inserting at the cursor position does NOT advance the cursor.
+    const input = document.createElement("input") as HTMLInputElement
+    input.value = ""
+    input.selectionStart = 0
+    input.selectionEnd = 0
+
+    patchInputValue(input, [{ insert: "H" }], "preserve")
+
+    expect(input.value).toBe("H")
+    // BUG: cursor stays at 0 instead of advancing to 1
+    expect(input.selectionStart).toBe(0)
+  })
+
+  it("cursor advances for local insert at cursor with 'end' — the fix", () => {
+    // This test documents the fix: "end" mode always places cursor at end of replacement.
+    const input = document.createElement("input") as HTMLInputElement
+    input.value = ""
+    input.selectionStart = 0
+    input.selectionEnd = 0
+
+    patchInputValue(input, [{ insert: "H" }], "end")
+
+    expect(input.value).toBe("H")
+    // FIXED: cursor advances to 1
+    expect(input.selectionStart).toBe(1)
+  })
+})
+
+// =============================================================================
 // textRegion Tests
 // =============================================================================
 
@@ -689,6 +813,147 @@ describe("inputTextRegion", () => {
       expect(textarea.value).toBe("Hello\nWorld")
 
       scope.dispose()
+    })
+
+    // ===========================================================================
+    // Remote Edit Cursor Preservation Tests
+    // ===========================================================================
+
+    describe("inputTextRegion remote edits (cursor preservation)", () => {
+      it("remote insert before cursor shifts cursor right", () => {
+        const { ref, emit, setValue } = createMockTextRef("Hello")
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, ref, scope)
+        expect(input.value).toBe("Hello")
+
+        // Place cursor at position 5 (end)
+        input.selectionStart = 5
+        input.selectionEnd = 5
+
+        // Simulate remote insert: "XYZ" at position 0 (origin: "import")
+        setValue("XYZHello")
+        emit({
+          type: "text",
+          ops: [{ insert: "XYZ" }],
+          origin: "import",
+        })
+
+        expect(input.value).toBe("XYZHello")
+        // Cursor should shift right by 3 (length of "XYZ")
+        expect(input.selectionStart).toBe(8)
+        expect(input.selectionEnd).toBe(8)
+
+        scope.dispose()
+      })
+
+      it("remote insert after cursor leaves cursor unchanged", () => {
+        const { ref, emit, setValue } = createMockTextRef("Hello")
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, ref, scope)
+
+        // Place cursor at position 2
+        input.selectionStart = 2
+        input.selectionEnd = 2
+
+        // Simulate remote insert: " World" at position 5 (after cursor)
+        setValue("Hello World")
+        emit({
+          type: "text",
+          ops: [{ retain: 5 }, { insert: " World" }],
+          origin: "import",
+        })
+
+        expect(input.value).toBe("Hello World")
+        // Cursor should stay at position 2
+        expect(input.selectionStart).toBe(2)
+        expect(input.selectionEnd).toBe(2)
+
+        scope.dispose()
+      })
+
+      it("remote delete before cursor shifts cursor left", () => {
+        const { ref, emit, setValue } = createMockTextRef("Hello World")
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, ref, scope)
+
+        // Place cursor at position 8
+        input.selectionStart = 8
+        input.selectionEnd = 8
+
+        // Simulate remote delete: remove "Hel" (positions 0-3)
+        setValue("lo World")
+        emit({
+          type: "text",
+          ops: [{ delete: 3 }],
+          origin: "import",
+        })
+
+        expect(input.value).toBe("lo World")
+        // Cursor should shift left by 3
+        expect(input.selectionStart).toBe(5)
+        expect(input.selectionEnd).toBe(5)
+
+        scope.dispose()
+      })
+
+      it("local edit uses 'end' selectMode (cursor follows edit)", () => {
+        const { ref, emit, setValue } = createMockTextRef("")
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+        input.value = ""
+        input.selectionStart = 0
+        input.selectionEnd = 0
+
+        inputTextRegion(input, ref, scope)
+
+        // Simulate local insert: "H" at position 0 (origin: "local")
+        setValue("H")
+        emit({
+          type: "text",
+          ops: [{ insert: "H" }],
+          origin: "local",
+        })
+
+        expect(input.value).toBe("H")
+        // With "end" selectMode, cursor advances to 1
+        expect(input.selectionStart).toBe(1)
+        expect(input.selectionEnd).toBe(1)
+
+        scope.dispose()
+      })
+
+      it("undefined origin uses 'preserve' selectMode (safe default)", () => {
+        const { ref, emit, setValue } = createMockTextRef("Hello")
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, ref, scope)
+
+        // Place cursor at position 5
+        input.selectionStart = 5
+        input.selectionEnd = 5
+
+        // Simulate edit with no origin (e.g., from a non-Loro reactive source)
+        setValue("XHello")
+        emit({
+          type: "text",
+          ops: [{ insert: "X" }],
+          // origin: undefined — omitted
+        })
+
+        expect(input.value).toBe("XHello")
+        // "preserve" shifts cursor: 5 → 6 (insert before cursor)
+        expect(input.selectionStart).toBe(6)
+        expect(input.selectionEnd).toBe(6)
+
+        scope.dispose()
+      })
     })
   })
 

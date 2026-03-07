@@ -9,7 +9,13 @@
 
 import { createTypedDoc, loro, Shape } from "@loro-extended/change"
 import { JSDOM } from "jsdom"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  activeSubscriptions,
+  resetSubscriptionIdCounter,
+} from "../runtime/subscribe.js"
+import { resetScopeIdCounter, Scope } from "../runtime/scope.js"
+import { inputTextRegion } from "../runtime/text-patch.js"
 import { editText } from "./edit-text.js"
 
 // Set up DOM globals for testing
@@ -778,6 +784,260 @@ describe("editText", () => {
       handler(event)
 
       expect((event as any).__preventDefaultSpy).toHaveBeenCalledOnce()
+    })
+
+    // ===========================================================================
+    // Round-Trip Tests: editText → CRDT → subscription → DOM → cursor
+    // ===========================================================================
+
+    describe("editText + inputTextRegion round-trip", () => {
+      beforeEach(() => {
+        resetScopeIdCounter()
+        resetSubscriptionIdCounter()
+        activeSubscriptions.clear()
+      })
+
+      afterEach(() => {
+        activeSubscriptions.clear()
+      })
+
+      /**
+       * Simulate a keystroke through the full round-trip:
+       * 1. Create InputEvent with the given properties
+       * 2. Call the editText handler (which calls preventDefault, mutates the CRDT,
+       *    and commitIfAuto fires the subscription synchronously)
+       * 3. The inputTextRegion subscription applies the delta via setRangeText
+       * 4. After the handler returns, input.value and input.selectionStart
+       *    reflect the final DOM state
+       */
+      function simulateKeystroke(
+        handler: (e: InputEvent) => void,
+        input: HTMLInputElement,
+        opts: {
+          inputType: string
+          data?: string | null
+          targetRanges?: Array<{ startOffset: number; endOffset: number }>
+        },
+      ): void {
+        const event = createInputEvent({
+          inputType: opts.inputType,
+          data: opts.data ?? null,
+          target: input,
+          targetRanges: opts.targetRanges as unknown as StaticRange[],
+        })
+        handler(event)
+      }
+
+      it("typing 'Hello' produces 'Hello' with cursor at position 5", () => {
+        const doc = createDoc("")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+        input.value = ""
+        input.selectionStart = 0
+        input.selectionEnd = 0
+
+        // Wire inputTextRegion — this subscribes to the TextRef
+        inputTextRegion(input, doc.text, scope)
+
+        // Type "H"
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "H",
+        })
+        expect(doc.text.toString()).toBe("H")
+        expect(input.value).toBe("H")
+        expect(input.selectionStart).toBe(1)
+
+        // Type "e"
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "e",
+        })
+        expect(doc.text.toString()).toBe("He")
+        expect(input.value).toBe("He")
+        expect(input.selectionStart).toBe(2)
+
+        // Type "l"
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "l",
+        })
+        expect(doc.text.toString()).toBe("Hel")
+        expect(input.value).toBe("Hel")
+        expect(input.selectionStart).toBe(3)
+
+        // Type "l"
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "l",
+        })
+        expect(doc.text.toString()).toBe("Hell")
+        expect(input.value).toBe("Hell")
+        expect(input.selectionStart).toBe(4)
+
+        // Type "o"
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "o",
+        })
+        expect(doc.text.toString()).toBe("Hello")
+        expect(input.value).toBe("Hello")
+        expect(input.selectionStart).toBe(5)
+
+        scope.dispose()
+      })
+
+      it("backspace at position 3 in 'Hello' produces 'Helo' with cursor at 2", () => {
+        const doc = createDoc("Hello")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        // Wire inputTextRegion — sets initial value
+        inputTextRegion(input, doc.text, scope)
+        expect(input.value).toBe("Hello")
+
+        // Place cursor at position 3
+        input.selectionStart = 3
+        input.selectionEnd = 3
+
+        // Backspace
+        simulateKeystroke(handler, input, {
+          inputType: "deleteContentBackward",
+        })
+
+        expect(doc.text.toString()).toBe("Helo")
+        expect(input.value).toBe("Helo")
+        expect(input.selectionStart).toBe(2)
+
+        scope.dispose()
+      })
+
+      it("pasting 'World' at position 5 in 'Hello' produces 'HelloWorld' with cursor at 10", () => {
+        const doc = createDoc("Hello")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, doc.text, scope)
+        expect(input.value).toBe("Hello")
+
+        // Place cursor at end
+        input.selectionStart = 5
+        input.selectionEnd = 5
+
+        // Paste "World"
+        simulateKeystroke(handler, input, {
+          inputType: "insertFromPaste",
+          data: "World",
+        })
+
+        expect(doc.text.toString()).toBe("HelloWorld")
+        expect(input.value).toBe("HelloWorld")
+        expect(input.selectionStart).toBe(10)
+
+        scope.dispose()
+      })
+
+      it("delete forward at position 2 in 'Hello' produces 'Helo' with cursor at 2", () => {
+        const doc = createDoc("Hello")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, doc.text, scope)
+
+        input.selectionStart = 2
+        input.selectionEnd = 2
+
+        simulateKeystroke(handler, input, {
+          inputType: "deleteContentForward",
+        })
+
+        expect(doc.text.toString()).toBe("Helo")
+        expect(input.value).toBe("Helo")
+        expect(input.selectionStart).toBe(2)
+
+        scope.dispose()
+      })
+
+      it("replacing selection 'ell' with 'a' in 'Hello' produces 'Hao' with cursor at 2", () => {
+        const doc = createDoc("Hello")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+
+        inputTextRegion(input, doc.text, scope)
+
+        // Select "ell" (positions 1-4)
+        input.selectionStart = 1
+        input.selectionEnd = 4
+
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "a",
+        })
+
+        expect(doc.text.toString()).toBe("Hao")
+        expect(input.value).toBe("Hao")
+        expect(input.selectionStart).toBe(2)
+
+        scope.dispose()
+      })
+
+      it("multiple sequential keystrokes maintain correct cursor throughout", () => {
+        const doc = createDoc("")
+        const handler = editText(doc.text)
+        const scope = new Scope()
+        const input = document.createElement("input") as HTMLInputElement
+        input.value = ""
+        input.selectionStart = 0
+        input.selectionEnd = 0
+
+        inputTextRegion(input, doc.text, scope)
+
+        // Type "abc"
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "a",
+        })
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "b",
+        })
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "c",
+        })
+        expect(input.value).toBe("abc")
+        expect(input.selectionStart).toBe(3)
+
+        // Backspace to remove "c"
+        simulateKeystroke(handler, input, {
+          inputType: "deleteContentBackward",
+        })
+        expect(input.value).toBe("ab")
+        expect(input.selectionStart).toBe(2)
+
+        // Type "xyz"
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "x",
+        })
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "y",
+        })
+        simulateKeystroke(handler, input, {
+          inputType: "insertText",
+          data: "z",
+        })
+        expect(input.value).toBe("abxyz")
+        expect(input.selectionStart).toBe(5)
+
+        scope.dispose()
+      })
     })
   })
 })
