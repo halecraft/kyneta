@@ -778,8 +778,9 @@ export function isTextRegionContent(node: ContentValue): boolean {
  * textRegion-qualifying ContentValue (see `isTextRegionContent`).
  *
  * This is the single source of truth for the inputTextRegion dispatch
- * decision, used by codegen (`isInputTextRegionCandidate`,
- * `generateHoleSetup`) and import collection (`collectRequiredImports`).
+ * decision, used by codegen (`generateAttributeSet`,
+ * `generateAttributeSubscription`, `generateHoleSetup`) and import
+ * collection (`collectRequiredImports`).
  */
 export function isInputTextRegionAttribute(attr: AttributeNode): boolean {
   return attr.name === "value" && isTextRegionContent(attr.value)

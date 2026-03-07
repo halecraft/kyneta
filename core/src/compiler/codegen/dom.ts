@@ -291,18 +291,6 @@ function generateAttributeUpdateCode(
 }
 
 /**
- * Check if a reactive attribute should use inputTextRegion for delta-aware
- * subscription instead of a naive subscribe.
- *
- * The condition is: `value` attribute + single dependency with deltaKind
- * "text" + directReadSource set (i.e., the expression is a direct read
- * like `ref.toString()` or `ref.get()`).
- */
-function isInputTextRegionCandidate(attr: AttributeNode): boolean {
-  return isInputTextRegionAttribute(attr)
-}
-
-/**
  * Generate code to set an attribute.
  */
 function generateAttributeSet(
@@ -311,7 +299,7 @@ function generateAttributeSet(
   state: CodegenState,
 ): string[] {
   // Skip static set when inputTextRegion will handle initialization
-  if (isInputTextRegionCandidate(attr)) {
+  if (isInputTextRegionAttribute(attr)) {
     return []
   }
 
@@ -350,7 +338,7 @@ function generateAttributeSubscription(
   if (deps.length === 0) return []
 
   // Check for delta-aware inputTextRegion dispatch
-  if (isInputTextRegionCandidate(attr)) {
+  if (isInputTextRegionAttribute(attr)) {
     lines.push(
       `${ind}inputTextRegion(${elementVar}, ${attr.value.directReadSource}, ${state.scopeVar})`,
     )
@@ -573,7 +561,7 @@ function generateChild(
 
     case "loop": {
       if (node.iterableBindingTime === "reactive") {
-        lines.push(...generateReactiveLoop(node, parentVar, state))
+        lines.push(...generateReactiveLoopBody(node, parentVar, state))
       } else {
         lines.push(...generateRenderLoop(node, parentVar, state))
       }
@@ -757,10 +745,15 @@ function generateBodyWithFragment(
 
 /**
  * Generate code for a list region.
+ *
+ * Unified generator used by both the `createElement` path (passing a parent
+ * element variable) and the template cloning path (passing a grabbed marker
+ * node reference). The first argument to the emitted `listRegion(...)` call
+ * is `mountVar` in both cases.
  */
-function generateReactiveLoop(
+function generateReactiveLoopBody(
   node: LoopNode,
-  parentVar: string,
+  mountVar: string,
   state: CodegenState,
 ): string[] {
   const lines: string[] = []
@@ -768,7 +761,7 @@ function generateReactiveLoop(
   const innerState = indented(state)
   const innerInd = getIndent(innerState)
 
-  lines.push(`${ind}listRegion(${parentVar}, ${node.iterableSource}, {`)
+  lines.push(`${ind}listRegion(${mountVar}, ${node.iterableSource}, {`)
 
   // Generate create handler
   const params = node.indexVariable
@@ -810,14 +803,11 @@ function generateConditional(
   parentVar: string,
   state: CodegenState,
 ): string[] {
-  const lines: string[] = []
-  const ind = getIndent(state)
-
   // Generate condition function
   const conditionExpr = node.branches[0].condition
   if (!conditionExpr) {
     // No condition - shouldn't happen for valid conditionals
-    return lines
+    return []
   }
 
   // Render-time conditional: emit inline if statement
@@ -825,13 +815,42 @@ function generateConditional(
     return generateRenderConditional(node, parentVar, state)
   }
 
-  // Reactive conditional: emit conditionalRegion
+  // Reactive conditional: create a marker and delegate to the shared helper.
   // (Dissolvable conditionals are already resolved at the IR level by
   // dissolveConditionals — any ConditionalNode reaching here is non-dissolvable.)
-  const elseBranch = node.branches.find(b => b.condition === null)
+  const lines: string[] = []
+  const ind = getIndent(state)
   const markerVar = genVar(state, "marker")
   lines.push(`${ind}const ${markerVar} = document.createComment("kinetic:if")`)
   lines.push(`${ind}${parentVar}.appendChild(${markerVar})`)
+  lines.push(...generateConditionalRegionCall(node, markerVar, state))
+
+  return lines
+}
+
+/**
+ * Emit a `conditionalRegion(...)` call for a reactive conditional.
+ *
+ * This is the shared helper used by both the `createElement` path
+ * (`generateConditional`, which creates its own marker) and the template
+ * cloning path (`generateHoleSetup`, which passes a grabbed marker node).
+ *
+ * Assumes the caller has already validated that the node is reactive
+ * (i.e., `node.subscriptionTarget !== null`) and that a marker variable
+ * is available.
+ */
+function generateConditionalRegionCall(
+  node: ConditionalNode,
+  markerVar: string,
+  state: CodegenState,
+): string[] {
+  const lines: string[] = []
+  const ind = getIndent(state)
+
+  const conditionExpr = node.branches[0].condition
+  if (!conditionExpr) return lines
+
+  const elseBranch = node.branches.find(b => b.condition === null)
 
   const innerState = indented(state)
   const innerInd = getIndent(innerState)
@@ -842,13 +861,13 @@ function generateConditional(
 
   // Generate whenTrue handler
   lines.push(`${innerInd}whenTrue: () => {`)
-  lines.push(...generateBranchBody(node.branches[0].body, indented(innerState)))
+  lines.push(...generateBodyWithReturn(node.branches[0].body, indented(innerState)))
   lines.push(`${innerInd}},`)
 
   // Generate whenFalse handler
   if (elseBranch) {
     lines.push(`${innerInd}whenFalse: () => {`)
-    lines.push(...generateBranchBody(elseBranch.body, indented(innerState)))
+    lines.push(...generateBodyWithReturn(elseBranch.body, indented(innerState)))
     lines.push(`${innerInd}},`)
   }
 
@@ -900,16 +919,6 @@ function generateRenderConditional(
   lines.push(`${ind}}`)
 
   return lines
-}
-
-/**
- * Generate code for a branch body.
- *
- * @deprecated Use generateBodyWithReturn instead. This is kept for API compatibility
- * but delegates to the shared helper.
- */
-function generateBranchBody(body: ChildNode[], state: CodegenState): string[] {
-  return generateBodyWithReturn(body, state)
 }
 
 // =============================================================================
@@ -1100,10 +1109,10 @@ function generateHoleSetup(
 
       if (regionNode.kind === "loop") {
         lines.push(
-          ...generateReactiveLoopWithMarker(regionNode, nodeRef, state),
+          ...generateReactiveLoopBody(regionNode, nodeRef, state),
         )
       } else if (regionNode.kind === "conditional") {
-        lines.push(...generateConditionalWithMarker(regionNode, nodeRef, state))
+        lines.push(...generateConditionalRegionCall(regionNode, nodeRef, state))
       }
       break
     }
@@ -1123,98 +1132,6 @@ function generateHoleSetup(
       break
     }
   }
-
-  return lines
-}
-
-/**
- * Generate code for a reactive loop using an existing marker node.
- */
-function generateReactiveLoopWithMarker(
-  node: LoopNode,
-  markerVar: string,
-  state: CodegenState,
-): string[] {
-  const lines: string[] = []
-  const ind = getIndent(state)
-  const innerState = indented(state)
-  const innerInd = getIndent(innerState)
-
-  lines.push(`${ind}listRegion(${markerVar}, ${node.iterableSource}, {`)
-
-  // Generate create handler
-  const params = node.indexVariable
-    ? `(${node.itemVariable}, ${node.indexVariable})`
-    : `(${node.itemVariable}, _index)`
-
-  lines.push(`${innerInd}create: ${params} => {`)
-
-  // Generate body using shared helper
-  const bodyState = indented(innerState)
-  lines.push(...generateBodyWithReturn(node.body, bodyState))
-
-  lines.push(`${innerInd}},`)
-
-  // Emit slotKind from compile-time analysis
-  lines.push(`${innerInd}slotKind: ${JSON.stringify(node.bodySlotKind)},`)
-
-  // Emit isReactive from compile-time analysis — skips scope allocation for static items
-  lines.push(`${innerInd}isReactive: ${node.hasReactiveItems},`)
-
-  lines.push(`${ind}}, ${state.scopeVar})`)
-
-  return lines
-}
-
-/**
- * Generate code for a conditional using an existing marker node.
- */
-function generateConditionalWithMarker(
-  node: ConditionalNode,
-  markerVar: string,
-  state: CodegenState,
-): string[] {
-  const lines: string[] = []
-  const ind = getIndent(state)
-
-  const conditionExpr = node.branches[0].condition
-  if (!conditionExpr) return lines
-
-  // For render-time conditionals, we can't use markers - fall back not applicable
-  if (node.subscriptionTarget === null) {
-    // This shouldn't happen for template-cloned regions
-    return lines
-  }
-
-  // Dissolvable conditionals are already resolved at the IR level by
-  // dissolveConditionals — any ConditionalNode reaching here is non-dissolvable.
-  const elseBranch = node.branches.find(b => b.condition === null)
-
-  const innerState = indented(state)
-  const innerInd = getIndent(innerState)
-
-  lines.push(
-    `${ind}conditionalRegion(${markerVar}, ${node.subscriptionTarget?.source}, () => ${conditionExpr.source}, {`,
-  )
-
-  // Generate whenTrue handler
-  lines.push(`${innerInd}whenTrue: () => {`)
-  lines.push(...generateBranchBody(node.branches[0].body, indented(innerState)))
-  lines.push(`${innerInd}},`)
-
-  // Generate whenFalse handler
-  if (elseBranch) {
-    lines.push(`${innerInd}whenFalse: () => {`)
-    lines.push(...generateBranchBody(elseBranch.body, indented(innerState)))
-    lines.push(`${innerInd}},`)
-  }
-
-  // Emit slotKind
-  lines.push(
-    `${innerInd}slotKind: ${JSON.stringify(node.branches[0].slotKind)},`,
-  )
-
-  lines.push(`${ind}}, ${state.scopeVar})`)
 
   return lines
 }

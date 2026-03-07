@@ -6,7 +6,7 @@ Kinetic's rapid prototype development has produced 804 passing tests and a genui
 
 The audit identified issues across three priority tiers. All changes are internal refactors — no public API changes, no new features.
 
-> **Status:** Phases 1 and 3 are complete. Phase 1 extracted shared predicates (PR 1). Phase 3 implemented IR-level dissolution (PR 3). See `.plans/kinetic-ir-dissolution.md`. Test count is now 932. Research audit completed — corrections applied to Tasks 4.1, 5.1, 6.4, 6.5; new learnings §4–§8 added.
+> **Status:** Phases 1, 2, and 3 are complete. Phase 1 extracted shared predicates (PR 1). Phase 2 unified duplicated codegen functions (PR 2). Phase 3 implemented IR-level dissolution (PR 3). See `.plans/kinetic-ir-dissolution.md`. Test count is now 932. Research audit completed — corrections applied to Tasks 4.1, 5.1, 6.4, 6.5; new learnings §4–§8 added.
 
 ## Problem Statement
 
@@ -85,9 +85,9 @@ Add unit tests in `ir.test.ts`:
 
 ---
 
-## Phase 2: Unify Duplicated Codegen Functions 🔴
+## Phase 2: Unify Duplicated Codegen Functions 🟢
 
-### Task 2.1: Merge `generateReactiveLoop` and `generateReactiveLoopWithMarker` 🔴
+### Task 2.1: Merge `generateReactiveLoop` and `generateReactiveLoopWithMarker` 🟢
 
 These two functions differ only in the first argument to the emitted `listRegion(...)` call. Merge into a single function:
 
@@ -103,7 +103,7 @@ Delete `generateReactiveLoopWithMarker`. Update call sites:
 - `generateChild` → `case "loop"` passes `parentVar`
 - `generateHoleSetup` → `case "region"` loop branch passes `nodeRef`
 
-### Task 2.2: Merge `generateConditional` marker-based path and `generateConditionalWithMarker` 🔴
+### Task 2.2: Merge `generateConditional` marker-based path and `generateConditionalWithMarker` 🟢
 
 > **Updated after Phase 3:** Inline dissolution has been removed from both functions. They are now even more similar — both emit `conditionalRegion(...)` with the only differences being: (1) `generateConditional` creates its own marker variable and appends it to a parent, while `generateConditionalWithMarker` receives a pre-existing marker; (2) `generateConditional` has a render-time dispatch guard.
 
@@ -119,15 +119,15 @@ function generateConditionalRegionCall(
 
 `generateConditional` creates its own marker variable, then delegates to this helper. `generateConditionalWithMarker` delegates directly. The render-time dispatch remains in `generateConditional` as the outer dispatch layer.
 
-### Task 2.2a: Remove `isInputTextRegionCandidate` thin wrapper 🔴
+### Task 2.2a: Remove `isInputTextRegionCandidate` thin wrapper 🟢
 
 After Phase 1, `isInputTextRegionCandidate` is now a trivial wrapper: `return isInputTextRegionAttribute(attr)`. Its two call sites (`generateAttributeSet`, `generateAttributeSubscription`) should call `isInputTextRegionAttribute` directly. Remove the wrapper function and its JSDoc.
 
-### Task 2.3: Remove deprecated `generateBranchBody` wrapper 🔴
+### Task 2.3: Remove deprecated `generateBranchBody` wrapper 🟢
 
 `generateBranchBody` is a trivial wrapper: `return generateBodyWithReturn(body, state)`. Replace the 4 call sites (2 in `generateConditional`, 2 in `generateConditionalWithMarker`) with direct `generateBodyWithReturn` calls. Remove the wrapper function.
 
-### Task 2.4: Tests 🔴
+### Task 2.4: Tests 🟢
 
 Existing `dom.test.ts` tests cover reactive loops and conditionals extensively. Run the full suite to verify no regressions. No new tests needed — this is a pure refactor with identical output.
 
@@ -380,7 +380,7 @@ The file structure section in TECHNICAL.md should reflect that `ir.ts` now expor
 
 The 7 plan phases collapse into **5 PRs** ordered by dependency. Phases 1, 4, 5 are independent and can land in any order. Phase 2→3 is a chain (prep refactor → behavior change). Phase 6+7 are a trailing cleanup batch.
 
-> **Status:** PRs 1 and 3 are complete. PR 2 now operates on simpler post-dissolution code (the functions it merges no longer contain dissolution logic) and can also remove the `isInputTextRegionCandidate` thin wrapper left by PR 1. PRs 2, 4, 5 remain.
+> **Status:** PRs 1, 2, and 3 are complete. PRs 4 and 5 remain.
 
 ### PR 1: `refactor: extract shared codegen predicates into ir.ts` 🟢
 
@@ -397,20 +397,22 @@ The 7 plan phases collapse into **5 PRs** ordered by dependency. Phases 1, 4, 5 
 - **Files:** `ir.ts`, `ir.test.ts`, `codegen/dom.ts`, `transform.ts`
 - **Validates:** all 932 tests pass, no codegen output change
 
-### PR 2: `refactor: unify duplicated codegen loop/conditional functions` 🔴
+### PR 2: `refactor: unify duplicated codegen loop/conditional functions` 🟢
 
 > Plan Phase 2 (Tasks 2.1–2.4)
+>
+> **Complete.** All 932 tests pass, zero codegen output change.
 
 **Type:** Mechanical refactor (merge near-identical functions + remove thin wrappers)
 
-- Merge `generateReactiveLoop` + `generateReactiveLoopWithMarker` → `generateReactiveLoopBody`
-- Extract `generateConditionalRegionCall` shared helper; `generateConditional` and hole-setup path both delegate to it
-- Remove thin wrapper `isInputTextRegionCandidate` (now just delegates to `isInputTextRegionAttribute` from Phase 1)
-- Remove thin wrapper `generateBranchBody` (now just delegates to `generateBodyWithReturn`)
-- **Files:** `codegen/dom.ts`
-- **Validates:** all existing `dom.test.ts` + `integration.test.ts` pass with identical output
-- **Why separate from PR 3:** This is a zero-behavior-change refactor. PR 3 adds behavior (dissolution). Keeping them separate means PR 2 can be reviewed as "trust the mechanical diff" and reverted independently.
-- **Note:** PR 3 has already landed. The conditional functions no longer contain dissolution logic, making the merge in Task 2.2 cleaner.
+- Merged `generateReactiveLoop` + `generateReactiveLoopWithMarker` → `generateReactiveLoopBody(node, mountVar, state)`
+- Extracted `generateConditionalRegionCall` shared helper; `generateConditional` creates marker + delegates, `generateHoleSetup` delegates directly
+- Removed thin wrapper `isInputTextRegionCandidate` (call sites now use `isInputTextRegionAttribute` directly)
+- Removed thin wrapper `generateBranchBody` (call sites now use `generateBodyWithReturn` directly)
+- Removed `generateConditionalWithMarker` entirely (subsumed by `generateConditionalRegionCall`)
+- Updated stale JSDoc in `ir.ts` referencing removed `isInputTextRegionCandidate`
+- **Files:** `codegen/dom.ts`, `ir.ts`
+- **Validates:** all 932 `dom.test.ts` + `integration.test.ts` pass with identical output
 
 ### PR 3: `feat: IR-level conditional dissolution` 🟢
 
@@ -472,13 +474,13 @@ These are batched because they are both medium-priority internal improvements wi
 
 ```
 PR 1 (predicates) ✅ DONE ─────────────────────────┐
-PR 2 (codegen dedup) ───────────────────────────────┤
+PR 2 (codegen dedup) ✅ DONE ──────────────────────┤
 PR 3 (IR dissolution) ✅ DONE ─────────────────────┤
 PR 4 (bindings + transform) ────────────────────────┤
                                                     └─── PR 5 (cleanup + docs)
 ```
 
-PRs 1 and 3 are complete. PR 2 and PR 4 can land in parallel. PR 5 waits on all others (docs reference outcomes of prior PRs).
+PRs 1, 2, and 3 are complete. PR 4 is next. PR 5 waits on all others (docs reference outcomes of prior PRs).
 
 ---
 
