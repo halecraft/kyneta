@@ -209,9 +209,10 @@ function makeRuleConstraint(
 }
 
 function buildStore(constraints: Constraint[]): ConstraintStore {
-  const result = insertMany(createStore(), constraints);
+  const store = createStore();
+  const result = insertMany(store, constraints);
   if (!result.ok) throw new Error(`insertMany failed: ${JSON.stringify(result.error)}`);
-  return result.value;
+  return store;
 }
 
 function getNode(reality: Reality, ...path: string[]): RealityNode | undefined {

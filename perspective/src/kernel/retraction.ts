@@ -134,8 +134,17 @@ export function computeActive(
     const target = byKey.get(targetKey);
 
     // Rule: target must be in refs (causal safety)
+    //
+    // Semantic interpretation: a ref (peer, N) implies the agent has
+    // observed all of that peer's constraints 0..N (frontier compression).
+    // So target (peer, T) is "in refs" if any ref for the same peer
+    // has counter >= T. This matches how version vectors work throughout
+    // the codebase and is compatible with Agent.currentRefs(), which
+    // compresses causal predecessors to the VV frontier.
+    const targetPeer = retract.payload.target.peer;
+    const targetCounter = retract.payload.target.counter;
     const targetInRefs = retract.refs.some(
-      (ref) => cnIdKey(ref) === targetKey,
+      (ref) => ref.peer === targetPeer && ref.counter >= targetCounter,
     );
     if (!targetInRefs) {
       violations.push({

@@ -1,7 +1,7 @@
 // === Retraction Tests ===
 // Tests for retraction graph construction, dominance computation,
 // Active(S) filtering, depth limits, structure immunity, and
-// target-in-refs enforcement.
+// target-in-refs enforcement (semantic interpretation).
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -9,6 +9,7 @@ import {
   filterActive,
   DEFAULT_RETRACTION_CONFIG,
 } from '../../src/kernel/retraction.js';
+import { createAgent } from '../../src/kernel/agent.js';
 import type {
   RetractionConfig,
   RetractionResult,
@@ -21,6 +22,8 @@ import type {
   RetractConstraint,
   CnId,
   PeerID,
+  StructureConstraint,
+  ValueConstraint,
 } from '../../src/kernel/types.js';
 import { STUB_SIGNATURE } from '../../src/kernel/signature.js';
 
@@ -291,9 +294,9 @@ describe('computeActive', () => {
   // ---------------------------------------------------------------------------
 
   describe('target-in-refs rule', () => {
-    it('retract without target in refs produces a violation', () => {
+    it('retract without any refs produces a violation', () => {
       const v1 = makeValueConstraint('alice', 0, 1, createCnId('alice', 99), 'hello');
-      // r1 targets v1 but does NOT have v1 in refs
+      // r1 targets v1 but has no refs at all
       const r1 = makeRetractConstraint('alice', 1, 2, createCnId('alice', 0), []);
 
       const result = computeActive([v1, r1]);
@@ -303,15 +306,64 @@ describe('computeActive', () => {
       expect(activeIds(result)).toContain('alice@0');
     });
 
-    it('retract with target in refs succeeds', () => {
+    it('retract with no ref for target peer produces a violation', () => {
+      const v1 = makeValueConstraint('alice', 0, 1, createCnId('alice', 99), 'hello');
+      // r1 targets alice@0 but only has refs for bob — no ref for alice's peer
+      const r1 = makeRetractConstraint('bob', 1, 2, createCnId('alice', 0), [
+        createCnId('bob', 0),
+      ]);
+
+      const result = computeActive([v1, r1]);
+      expect(result.violations.length).toBe(1);
+      expect(result.violations[0]!.reason.kind).toBe('targetNotInRefs');
+    });
+
+    it('retract with ref counter < target counter produces a violation', () => {
+      const v1 = makeValueConstraint('alice', 5, 6, createCnId('alice', 99), 'hello');
+      // r1 targets alice@5 but ref is alice@3 — hasn't observed the target yet
+      const r1 = makeRetractConstraint('bob', 0, 7, createCnId('alice', 5), [
+        createCnId('alice', 3),
+      ]);
+
+      const result = computeActive([v1, r1]);
+      expect(result.violations.length).toBe(1);
+      expect(result.violations[0]!.reason.kind).toBe('targetNotInRefs');
+      expect(activeIds(result)).toContain('alice@5');
+    });
+
+    it('retract with exact target in refs succeeds', () => {
       const v1 = makeValueConstraint('alice', 0, 1, createCnId('alice', 99), 'hello');
       const r1 = makeRetractConstraint('alice', 1, 2, createCnId('alice', 0), [
-        createCnId('alice', 0), // target IS in refs
+        createCnId('alice', 0), // exact match: ref counter == target counter
       ]);
 
       const result = computeActive([v1, r1]);
       expect(result.violations.length).toBe(0);
       expect(dominatedIds(result)).toContain('alice@0');
+    });
+
+    it('retract with ref counter == target counter succeeds (semantic: observed)', () => {
+      const v1 = makeValueConstraint('alice', 5, 6, createCnId('alice', 99), 'hello');
+      // ref alice@5 means "I've seen alice's constraints 0..5" — target alice@5 is observed
+      const r1 = makeRetractConstraint('bob', 0, 7, createCnId('alice', 5), [
+        createCnId('alice', 5),
+      ]);
+
+      const result = computeActive([v1, r1]);
+      expect(result.violations.length).toBe(0);
+      expect(dominatedIds(result)).toContain('alice@5');
+    });
+
+    it('retract with ref counter > target counter succeeds (frontier compression)', () => {
+      const v1 = makeValueConstraint('alice', 2, 3, createCnId('alice', 99), 'hello');
+      // ref alice@10 means "I've seen alice's constraints 0..10" — target alice@2 is implied
+      const r1 = makeRetractConstraint('bob', 0, 11, createCnId('alice', 2), [
+        createCnId('alice', 10),
+      ]);
+
+      const result = computeActive([v1, r1]);
+      expect(result.violations.length).toBe(0);
+      expect(dominatedIds(result)).toContain('alice@2');
     });
 
     it('target in refs among other refs is valid', () => {
@@ -325,6 +377,60 @@ describe('computeActive', () => {
       const result = computeActive([v1, r1]);
       expect(result.violations.length).toBe(0);
       expect(dominatedIds(result)).toContain('alice@0');
+    });
+
+    it('frontier-compressed refs: target not on frontier but peer frontier covers it', () => {
+      // Simulates what Agent.produceRetract() produces: the agent has seen
+      // alice@0 through alice@5, but the frontier ref is just alice@5.
+      // Retracting alice@2 should succeed.
+      const v1 = makeValueConstraint('alice', 2, 3, createCnId('alice', 99), 'hello');
+      const r1 = makeRetractConstraint('alice', 6, 7, createCnId('alice', 2), [
+        createCnId('alice', 5),  // frontier: implies 0..5 observed
+        createCnId('bob', 3),    // frontier for bob
+      ]);
+
+      const result = computeActive([v1, r1]);
+      expect(result.violations.length).toBe(0);
+      expect(dominatedIds(result)).toContain('alice@2');
+    });
+
+    it('Agent-produced retraction of non-frontier constraint succeeds', () => {
+      // End-to-end: Agent creates value, creates more constraints, then retracts
+      // the earlier value. The Agent's frontier-compressed refs won't contain
+      // the literal target CnId, but the semantic check should pass.
+      const agent = createAgent('alice');
+
+      // Produce a value constraint (counter 0)
+      const root: StructureConstraint = agent.produceStructure({
+        kind: 'root', containerId: 'test', policy: 'map',
+      });
+      const child: StructureConstraint = agent.produceStructure({
+        kind: 'map', parent: root.id, key: 'name',
+      });
+      const value: ValueConstraint = agent.produceValue(child.id, 'hello');
+
+      // Produce several more constraints to advance the frontier
+      agent.produceValue(child.id, 'world');
+      agent.produceValue(child.id, 'foo');
+
+      // Now retract the original value — Agent's refs will have alice@4 (frontier),
+      // not alice@2 (the target value's counter)
+      const retract = agent.produceRetract(value.id);
+
+      // Verify the literal target CnId is NOT in refs (proving frontier compression)
+      const targetKey = `${value.id.peer}@${value.id.counter}`;
+      const hasLiteralTarget = retract.refs.some(
+        (ref) => `${ref.peer}@${ref.counter}` === targetKey,
+      );
+      // The frontier ref for alice should be > value.id.counter
+      const aliceRef = retract.refs.find((ref) => ref.peer === 'alice');
+      expect(aliceRef).toBeDefined();
+      expect(aliceRef!.counter).toBeGreaterThan(value.id.counter);
+
+      // But the retraction should still succeed with semantic interpretation
+      const result = computeActive([root, child, value, retract]);
+      expect(result.violations.length).toBe(0);
+      expect(dominatedIds(result)).toContain(targetKey);
     });
   });
 

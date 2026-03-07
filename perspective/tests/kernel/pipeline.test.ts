@@ -155,14 +155,20 @@ function grantAdmin(
 }
 
 function buildStore(constraints: Constraint[]): ConstraintStore {
-  const result = insertMany(createStore(), constraints);
+  const store = createStore();
+  const result = insertMany(store, constraints);
   if (!result.ok) throw new Error(`insertMany failed: ${JSON.stringify(result.error)}`);
-  return result.value;
+  return store;
 }
 
 const DEFAULT_CONFIG: PipelineConfig = {
   creator: 'alice',
-  enableDatalogEvaluation: false, // Use native solvers only for pipeline tests
+  enableDatalogEvaluation: true, // Match production default: Datalog is primary
+};
+
+const NATIVE_ONLY_CONFIG: PipelineConfig = {
+  creator: 'alice',
+  enableDatalogEvaluation: false, // Explicit native-only for bypass testing
 };
 
 /** Get all child keys of a reality node. */
@@ -639,12 +645,12 @@ describe('pipeline: agent integration', () => {
     const valueC = agent.produceValue(childId, 'Alice');
     agent.observe(valueC);
 
-    let store = createStore();
-    store = insert(store, rootC).value!;
-    store = insert(store, childC).value!;
-    store = insert(store, valueC).value!;
+    const store = createStore();
+    insert(store, rootC);
+    insert(store, childC);
+    insert(store, valueC);
 
-    const reality = solve(store, { creator: 'alice', enableDatalogEvaluation: false });
+    const reality = solve(store, DEFAULT_CONFIG);
 
     const name = getNode(reality, 'profile', 'name');
     expect(name).toBeDefined();
@@ -675,9 +681,78 @@ describe('pipeline: agent integration', () => {
     const bodyVal = bob.produceValue(bodyId, 'Content here');
 
     const store = buildStore([rootC, grantC, titleC, bodyC, titleVal, bodyVal]);
-    const reality = solve(store, { creator: 'alice', enableDatalogEvaluation: false });
+    const reality = solve(store, DEFAULT_CONFIG);
 
     expect(getNode(reality, 'doc', 'title')!.value).toBe('My Doc');
     expect(getNode(reality, 'doc', 'body')!.value).toBe('Content here');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Native-only bypass (explicit opt-out from Datalog)
+// ---------------------------------------------------------------------------
+
+describe('pipeline: native-only bypass', () => {
+  it('native-only config produces same reality as Datalog-enabled (no rules in store)', () => {
+    const root = makeStructureRoot('alice', 0, 'profile');
+    const child = makeStructureMap('alice', 1, root.id, 'name');
+    const val = makeValue('alice', 2, child.id, 'Alice');
+
+    const store = buildStore([root, child, val]);
+    const realityDatalog = solve(store, DEFAULT_CONFIG);
+    const realityNative = solve(store, NATIVE_ONLY_CONFIG);
+
+    expect(getNode(realityDatalog, 'profile', 'name')!.value).toBe('Alice');
+    expect(getNode(realityNative, 'profile', 'name')!.value).toBe('Alice');
+  });
+
+  it('solveFull with native-only reports nativeFastPath as null', () => {
+    const root = makeStructureRoot('alice', 0, 'doc');
+    const child = makeStructureMap('alice', 1, root.id, 'title');
+    const val = makeValue('alice', 2, child.id, 'Hello');
+
+    const store = buildStore([root, child, val]);
+    const result = solveFull(store, NATIVE_ONLY_CONFIG);
+
+    // enableDatalogEvaluation: false → nativeFastPath is null (bypass mode)
+    expect(result.nativeFastPath).toBe(null);
+  });
+
+  it('solveFull with Datalog enabled and no rules reports nativeFastPath as true', () => {
+    const root = makeStructureRoot('alice', 0, 'doc');
+    const child = makeStructureMap('alice', 1, root.id, 'title');
+    const val = makeValue('alice', 2, child.id, 'Hello');
+
+    const store = buildStore([root, child, val]);
+    const result = solveFull(store, DEFAULT_CONFIG);
+
+    // No rules in store → falls through to native solvers
+    expect(result.nativeFastPath).toBe(true);
+  });
+
+  it('native-only seq ordering matches Datalog-enabled ordering', () => {
+    const root = makeStructureRoot('alice', 0, 'list', 'seq');
+    const grant = grantAdmin('alice', 1, 'bob');
+    const e1 = makeStructureSeq('alice', 2, root.id, null, null);
+    const e2 = makeStructureSeq('bob', 0, root.id, null, null);
+    const v1 = makeValue('alice', 3, e1.id, 'Alice');
+    const v2 = makeValue('bob', 1, e2.id, 'Bob');
+
+    const store = buildStore([root, grant, e1, e2, v1, v2]);
+    const realityDatalog = solve(store, DEFAULT_CONFIG);
+    const realityNative = solve(store, NATIVE_ONLY_CONFIG);
+
+    const listD = getNode(realityDatalog, 'list');
+    const listN = getNode(realityNative, 'list');
+    expect(listD).toBeDefined();
+    expect(listN).toBeDefined();
+    expect(listD!.children.size).toBe(listN!.children.size);
+
+    // Both should produce same ordering
+    for (const [key, nodeD] of listD!.children) {
+      const nodeN = listN!.children.get(key);
+      expect(nodeN).toBeDefined();
+      expect(nodeD.value).toBe(nodeN!.value);
+    }
   });
 });

@@ -212,11 +212,11 @@ The original plan used separate `after` constraints for ordering. Research into 
 
 The solution is a compound `seq_element` assertion that captures all Fugue metadata in one constraint. This matches Fugue's `FugueSpan` structure: `(id, content, originLeft, originRight, status)`.
 
-### Immutable Store Pattern Has Practical Ergonomic Cost (Partially Resolved)
+### Immutable Store Pattern Has Practical Ergonomic Cost ✅ (Resolved in Phase 4.6)
 
-The constraint store is immutable (each `tell` returns a new store). This is clean for functional composition but creates friction in the handle layer, where you need to thread updated stores through. The `MapHandle` and `ListHandle` implementations work around this with internal mutable state (closure-captured `store` variable). 
+The v0 constraint store was immutable (each `tell` returns a new store), which created friction in the handle layer. The unified engine initially continued this pattern: `insert()` returned `Result<ConstraintStore, InsertError>`, cloning the entire `Map` on every insert — O(n) per operation, O(n²) for n sequential inserts.
 
-Originally, `mergeMapHandles`/`mergeListHandles` returned a merged store but did **not** update the target handle, leaving callers with a detached store nobody applied. This was fixed: merge functions now call `target._updateStore(merged)` to mutate the target handle in place.
+**Resolved**: Phase 4.6 switched to mutate-in-place. `insert()` returns `Result<void, InsertError>` and mutates the store directly. The `generation` counter (which already existed for cache invalidation) serves as the change-detection signal. `mergeStores()` still returns a new store (both inputs survive). This eliminated the clone cost and simplified all call sites — no more `store = insert(store, c).value!` threading.
 
 ### Views Are Stateless Snapshots, Not Live Projections
 
@@ -399,6 +399,8 @@ Attempted retractions of structure constraints are recorded as *violations* (not
 
 The rule that a retract's target must appear in its `refs` (causal predecessors) prevents a class of bugs where a retraction arrives before the thing it retracts. Without this rule, a peer could retract a constraint it hasn't seen yet — which is causally incoherent. The Agent enforces this by construction (refs are computed from the observed version vector), so in normal operation this rule is always satisfied. It's a defensive check that catches: (1) manually constructed test constraints with wrong refs, (2) malformed constraints from a buggy remote peer, (3) race conditions in sync protocols.
 
+**Update (Phase 4.6):** The check now uses semantic interpretation rather than literal CnId matching. A ref `(peer, N)` with `N ≥ target.counter` satisfies the check, because the per-peer monotonic counter guarantee means observing `peer@N` implies observing all of `peer@0..peer@N`. This makes the check compatible with the Agent's frontier-compressed refs without requiring any special-casing in the Agent.
+
 ### Memoized Dominance Avoids Exponential Blowup in Deep Chains
 
 The dominance function is recursive: to know if constraint C is dominated, you need to know if each of its retractors is active, which requires computing *their* dominance, and so on. Without memoization, this is exponential in chain depth. The `domCache` map ensures each constraint's dominance is computed exactly once. The `computing` set detects cycles (which shouldn't exist in valid causal data, but defensive programming matters). In practice, with `maxDepth: 2`, the recursion depth is at most 2 — but the memoization makes the general case safe.
@@ -421,7 +423,7 @@ General principle: when a later phase introduces a concept that an earlier phase
 
 The Learnings section originally said the dual `Value`/`CnIdRef` types were "an acceptable trade-off given the no-cross-dependency architecture." This framing was wrong — the architecture premise it depended on was already violated. The lesson: when you document a trade-off, also document the premise. When the premise changes, the trade-off must be re-evaluated.
 
-## Phase 4: Skeleton, Pipeline, and Reality
+## Phase 4–4.6: Skeleton, Pipeline, Reality, and Pre-Bootstrap Correctness
 
 ### The Validity Filter Is the First Integration Gate — Test Helpers Must Account For It
 
@@ -447,13 +449,13 @@ The spec says `Reality { root: Node }` but a reality can have multiple top-level
 
 `pipeline.ts` is intentionally anemic — it calls `filterByVersion()`, `computeValid()`, `computeActive()`, `buildStructureIndex()`, `projectToFacts()`, `buildSkeleton()` in sequence and returns the result. Every transformation lives in its own module. This makes each stage independently testable and replaceable. The `solveFull()` variant exposes all intermediate stages, which proved essential for debugging the validity-filter issue.
 
-### Native Solvers Are Primary, Datalog Is Validation
+### Native Solvers Are Primary, Datalog Is Validation ✅ (Corrected in Phase 4.5)
 
-The skeleton builder uses native LWW and Fugue directly — it does not consume Datalog-derived facts for value resolution or ordering. Datalog evaluation is optional (`enableDatalogEvaluation` flag in `PipelineConfig`, default true) and currently serves as parallel validation: rules from the store are evaluated against projected facts, but the results don't feed back into the skeleton. This design means the Datalog evaluator can fail (e.g., cyclic negation from a malicious rule) without breaking the reality — the native solvers are the fallback.
+**Corrected**: Phase 4.5 restructured the pipeline so Datalog evaluation is the **primary** resolution path. The skeleton builder now receives a `ResolutionResult` (from either Datalog or native solvers) and is resolution-agnostic. `resolve.ts` bridges Datalog output → kernel types (symmetric counterpart of `projection.ts`). Native solvers activate as a §B.7 fast path only when `isDefaultRulesOnly()` detects that active rules structurally match the known LWW + Fugue patterns. Custom or modified rules automatically fall back to Datalog evaluation. The `enableDatalogEvaluation` flag still exists for testing/benchmarking but defaults to `true`.
 
-### Fugue Equivalence Is Scoped to the Simplified Subset
+### Fugue Equivalence Is Scoped to the Simplified Subset ✅ (Resolved in Phase 4.6)
 
-The Datalog Fugue rules from Phase 1 handle only concurrent inserts at the same `originLeft` (peer tiebreak). The native Fugue solver handles the full algorithm (recursive tree walk, `originRight` disambiguation). Equivalence tests compare the two only for same-`originLeft` siblings — expressed as "before" pairs. For the full algorithm, the native solver is the authority. This scoping was anticipated in the plan and confirmed correct by 12 equivalence tests covering single elements through 6-way concurrent inserts.
+**Resolved**: Phase 4.6 implemented complete Fugue Datalog rules (7 rules across 3 predicates: `fugue_child`, `fugue_descendant`, `fugue_before`) that express the full Fugue tree walk. The key was a subtree propagation rule with a `not fugue_descendant(P, B, X)` negation guard — without it, parent-child ordering combined with propagation creates spurious orderings among siblings. Equivalence tests now cover 23 cases including DFS ordering, originLeft chains, nested children, cross-subtree ordering, wide trees, and diamond patterns. The Datalog rules and native solver agree on ALL inputs, not just a simplified subset.
 
 ### The `childrenOf` Index Keys by Parent CnId, Not Slot
 
@@ -475,8 +477,8 @@ A subtle detail: the structure index's `childrenOf` map keys by the parent struc
 
 7. **When should path-based capability checks be implemented?** Phase 3 uses a simplified model (Admin covers all, wildcard paths). Real path-based checks require the skeleton tree (Phase 4) to resolve a constraint's target path. This is a circular dependency: validity → skeleton → validity. Now that Phase 4 has implemented the skeleton builder, the skeleton *is* available — but it's built *after* validity filtering. The likely solution is a two-pass approach: first pass with simplified checks (current behavior), build skeleton, second pass with path-aware checks. Alternatively, the structure index (which is built from active constraints) could provide enough path information without the full skeleton.
 
-8. **Should the `Constraint[]` store cloning strategy be replaced?** `store.insert()` clones the entire constraint `Map` on every insert — O(n) per operation. `insertMany()` mitigates this by cloning once for a batch. For stores with tens of thousands of constraints, this becomes expensive. A persistent data structure (HAMT or similar) would make this O(log n) per insert while preserving immutability semantics.
+8. ~~**Should the `Constraint[]` store cloning strategy be replaced?**~~ **Resolved in Phase 4.6.** Switched to mutate-in-place. `insert()` returns `Result<void, InsertError>` and mutates the store directly. The `generation` counter serves as the cache-invalidation signal. O(1) per insert instead of O(n). No persistent data structure needed — the functional API was unnecessary ceremony.
 
-9. **Should Datalog-derived facts feed back into the skeleton?** Currently, native solvers (LWW, Fugue) are primary — the skeleton builder uses them directly and ignores Datalog output. Datalog evaluation runs in parallel as validation. For custom user rules (Layer 2+), the skeleton would need to consult derived facts. The design question: should `buildSkeleton()` accept an optional `Database` of derived facts, or should custom rule results be projected back into a form the skeleton already understands (e.g., synthetic value constraints)?
+9. ~~**Should Datalog-derived facts feed back into the skeleton?**~~ **Resolved in Phase 4.5.** Yes. The skeleton builder now receives a `ResolutionResult` (from Datalog via `resolve.ts` or from native solvers). It is resolution-agnostic — it reads pre-resolved winners and Fugue ordering without knowing which path produced them. Custom Layer 2+ rules flow through Datalog evaluation → `extractResolution()` → skeleton automatically.
 
-10. **How should the Agent's frontier-compressed refs interact with retraction's target-in-refs check?** The Agent's `currentRefs()` returns one CnId per peer (the frontier). Retraction's `target-in-refs` check looks for the literal target CnId in the `refs` array. If an agent retracts `(peer, 5)` but the frontier ref for that peer is `(peer, 10)`, the literal check fails. Phase 5 integration tests will exercise this path. Options: (a) interpret refs semantically in `computeActive` (any ref ≥ target implies observation), or (b) have `produceRetract()` explicitly add the target CnId alongside the frontier.
+10. ~~**How should the Agent's frontier-compressed refs interact with retraction's target-in-refs check?**~~ **Resolved in Phase 4.6 (option a).** `computeActive()` now interprets refs semantically: a ref `(peer, N)` means "I've observed all of peer's constraints 0..N." A retract targeting `(peer, T)` passes if any ref for the same peer has `counter ≥ T`. This is mathematically sound because per-peer counters are gap-free and monotonically increasing, and causal delivery ensures observing `B@N` implies observing `B@0..B@N-1`. The Agent needs no special-casing.

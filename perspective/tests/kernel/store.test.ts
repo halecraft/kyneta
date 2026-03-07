@@ -85,20 +85,18 @@ function makeRetract(
   };
 }
 
-/** Insert and unwrap the result, asserting success. */
+/** Insert and assert success. Returns the same store (mutated in place). */
 function mustInsert(store: ConstraintStore, c: Constraint): ConstraintStore {
   const result = insert(store, c);
   expect(result.ok).toBe(true);
-  if (!result.ok) throw new Error('unreachable');
-  return result.value;
+  return store;
 }
 
-/** Insert many and unwrap the result, asserting success. */
+/** Insert many and assert success. Returns the same store (mutated in place). */
 function mustInsertMany(store: ConstraintStore, cs: readonly Constraint[]): ConstraintStore {
   const result = insertMany(store, cs);
   expect(result.ok).toBe(true);
-  if (!result.ok) throw new Error('unreachable');
-  return result.value;
+  return store;
 }
 
 describe('Constraint Store', () => {
@@ -121,16 +119,15 @@ describe('Constraint Store', () => {
   // -------------------------------------------------------------------------
 
   describe('insert', () => {
-    it('inserts a constraint and returns updated store', () => {
+    it('inserts a constraint (mutates store in place)', () => {
       const store = createStore();
       const c = makeStructure('alice', 0);
       const result = insert(store, c);
 
       expect(result.ok).toBe(true);
-      if (!result.ok) return;
 
-      expect(constraintCount(result.value)).toBe(1);
-      expect(hasConstraint(result.value, c.id)).toBe(true);
+      expect(constraintCount(store)).toBe(1);
+      expect(hasConstraint(store, c.id)).toBe(true);
     });
 
     it('retrieves inserted constraint by CnId', () => {
@@ -147,25 +144,24 @@ describe('Constraint Store', () => {
 
     it('deduplicates by CnId — same constraint inserted twice', () => {
       const c = makeStructure('alice', 0);
-      let store = mustInsert(createStore(), c);
+      const store = mustInsert(createStore(), c);
       const gen1 = getGeneration(store);
 
-      store = mustInsert(store, c);
+      mustInsert(store, c);
       // Store unchanged — no new generation bump
       expect(constraintCount(store)).toBe(1);
       expect(getGeneration(store)).toBe(gen1);
     });
 
-    it('deduplication returns same store reference', () => {
+    it('deduplication is idempotent — insert returns ok(void)', () => {
       const c = makeStructure('alice', 0);
       const store = mustInsert(createStore(), c);
 
       const result = insert(store, c);
       expect(result.ok).toBe(true);
-      if (!result.ok) return;
 
-      // Should be the exact same object (no clone needed)
-      expect(result.value).toBe(store);
+      // Store unchanged
+      expect(constraintCount(store)).toBe(1);
     });
 
     it('updates version vector on insert', () => {
@@ -173,13 +169,14 @@ describe('Constraint Store', () => {
       const c2 = makeStructure('alice', 1);
       const c3 = makeStructure('bob', 0);
 
-      let store = mustInsert(createStore(), c1);
+      const store = createStore();
+      mustInsert(store, c1);
       expect(vvGet(getVersionVector(store), 'alice')).toBe(1);
 
-      store = mustInsert(store, c2);
+      mustInsert(store, c2);
       expect(vvGet(getVersionVector(store), 'alice')).toBe(2);
 
-      store = mustInsert(store, c3);
+      mustInsert(store, c3);
       expect(vvGet(getVersionVector(store), 'bob')).toBe(1);
       expect(vvGet(getVersionVector(store), 'alice')).toBe(2);
     });
@@ -189,14 +186,15 @@ describe('Constraint Store', () => {
       const c2 = makeStructure('bob', 0, 10);
       const c3 = makeStructure('charlie', 0, 3);
 
-      let store = mustInsert(createStore(), c1);
+      const store = createStore();
+      mustInsert(store, c1);
       expect(getLamport(store)).toBe(5);
 
-      store = mustInsert(store, c2);
+      mustInsert(store, c2);
       expect(getLamport(store)).toBe(10);
 
       // Lamport should not decrease
-      store = mustInsert(store, c3);
+      mustInsert(store, c3);
       expect(getLamport(store)).toBe(10);
     });
 
@@ -204,23 +202,24 @@ describe('Constraint Store', () => {
       const c1 = makeStructure('alice', 0);
       const c2 = makeStructure('alice', 1);
 
-      const store0 = createStore();
-      expect(getGeneration(store0)).toBe(0);
+      const store = createStore();
+      expect(getGeneration(store)).toBe(0);
 
-      const store1 = mustInsert(store0, c1);
-      expect(getGeneration(store1)).toBe(1);
+      mustInsert(store, c1);
+      expect(getGeneration(store)).toBe(1);
 
-      const store2 = mustInsert(store1, c2);
-      expect(getGeneration(store2)).toBe(2);
+      mustInsert(store, c2);
+      expect(getGeneration(store)).toBe(2);
     });
 
-    it('does not mutate the original store', () => {
+    it('mutates the store in place', () => {
       const store = createStore();
       const c = makeStructure('alice', 0);
-      const updated = mustInsert(store, c);
+      insert(store, c);
 
-      expect(constraintCount(store)).toBe(0);
-      expect(constraintCount(updated)).toBe(1);
+      // Store is mutated — constraint is in the same object
+      expect(constraintCount(store)).toBe(1);
+      expect(hasConstraint(store, c.id)).toBe(true);
     });
   });
 
@@ -394,22 +393,22 @@ describe('Constraint Store', () => {
       expect(constraintCount(store)).toBe(3);
     });
 
-    it('returns unchanged store for empty array', () => {
+    it('succeeds for empty array (no mutation)', () => {
       const store = createStore();
+      const gen = getGeneration(store);
       const result = insertMany(store, []);
       expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.value).toBe(store);
+      expect(getGeneration(store)).toBe(gen);
     });
 
-    it('returns unchanged store when all are duplicates', () => {
+    it('no generation bump when all are duplicates', () => {
       const c = makeStructure('alice', 0);
       const store = mustInsert(createStore(), c);
+      const gen = getGeneration(store);
 
       const result = insertMany(store, [c, c]);
       expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.value).toBe(store);
+      expect(getGeneration(store)).toBe(gen);
     });
 
     it('fails fast on first invalid constraint', () => {
@@ -429,12 +428,13 @@ describe('Constraint Store', () => {
 
     it('updates version vector for all inserted constraints', () => {
       const constraints = [
-        makeStructure('alice', 0, 1),
-        makeStructure('alice', 1, 2),
-        makeStructure('bob', 0, 3),
+        makeStructure('alice', 0),
+        makeStructure('alice', 1),
+        makeStructure('bob', 0),
       ];
 
-      const store = mustInsertMany(createStore(), constraints);
+      const store = createStore();
+      mustInsertMany(store, constraints);
       expect(vvGet(getVersionVector(store), 'alice')).toBe(2);
       expect(vvGet(getVersionVector(store), 'bob')).toBe(1);
     });
@@ -443,21 +443,23 @@ describe('Constraint Store', () => {
       const constraints = [
         makeStructure('alice', 0, 3),
         makeStructure('bob', 0, 10),
-        makeStructure('charlie', 0, 7),
+        makeStructure('charlie', 0, 5),
       ];
 
-      const store = mustInsertMany(createStore(), constraints);
+      const store = createStore();
+      mustInsertMany(store, constraints);
       expect(getLamport(store)).toBe(10);
     });
 
     it('increments generation only once', () => {
       const constraints = [
         makeStructure('alice', 0),
-        makeStructure('alice', 1),
         makeStructure('bob', 0),
+        makeStructure('charlie', 0),
       ];
 
-      const store = mustInsertMany(createStore(), constraints);
+      const store = createStore();
+      mustInsertMany(store, constraints);
       expect(getGeneration(store)).toBe(1);
     });
   });
@@ -705,32 +707,31 @@ describe('Constraint Store', () => {
       const result = importDelta(storeB, delta);
 
       expect(result.ok).toBe(true);
-      if (!result.ok) return;
 
-      expect(constraintCount(result.value)).toBe(2);
-      expect(hasConstraint(result.value, c2.id)).toBe(true);
+      // storeB should now have both constraints (mutated in place)
+      expect(constraintCount(storeB)).toBe(2);
+      expect(hasConstraint(storeB, c1.id)).toBe(true);
+      expect(hasConstraint(storeB, c2.id)).toBe(true);
     });
 
     it('two-way sync produces identical stores', () => {
-      const c1 = makeStructure('alice', 0, 1);
-      const c2 = makeStructure('alice', 1, 2);
-      const c3 = makeStructure('bob', 0, 3);
-      const c4 = makeStructure('bob', 1, 4);
+      const c1 = makeStructure('alice', 0);
+      const c2 = makeStructure('alice', 1, 5);
+      const c3 = makeStructure('bob', 0);
+      const c4 = makeStructure('bob', 1, 10);
 
-      let storeA = mustInsertMany(createStore(), [c1, c2]);
-      let storeB = mustInsertMany(createStore(), [c3, c4]);
+      const storeA = mustInsertMany(createStore(), [c1, c2]);
+      const storeB = mustInsertMany(createStore(), [c3, c4]);
 
-      // A → B
+      // A → B (mutates storeB in place)
       const deltaAtoB = exportDelta(storeA, getVersionVector(storeB));
       const resultB = importDelta(storeB, deltaAtoB);
       expect(resultB.ok).toBe(true);
-      if (resultB.ok) storeB = resultB.value;
 
-      // B → A
+      // B → A (mutates storeA in place)
       const deltaBtoA = exportDelta(storeB, getVersionVector(storeA));
       const resultA = importDelta(storeA, deltaBtoA);
       expect(resultA.ok).toBe(true);
-      if (resultA.ok) storeA = resultA.value;
 
       // Both should have all 4 constraints
       expect(constraintCount(storeA)).toBe(4);
@@ -758,34 +759,35 @@ describe('Constraint Store', () => {
     });
 
     it('increments on each single insert of a new constraint', () => {
-      let store = createStore();
-      store = mustInsert(store, makeStructure('alice', 0));
+      const store = createStore();
+      mustInsert(store, makeStructure('alice', 0));
       expect(getGeneration(store)).toBe(1);
 
-      store = mustInsert(store, makeStructure('alice', 1));
+      mustInsert(store, makeStructure('alice', 1));
       expect(getGeneration(store)).toBe(2);
 
-      store = mustInsert(store, makeStructure('bob', 0));
+      mustInsert(store, makeStructure('bob', 0));
       expect(getGeneration(store)).toBe(3);
     });
 
     it('does not increment on duplicate insert', () => {
       const c = makeStructure('alice', 0);
-      let store = mustInsert(createStore(), c);
+      const store = mustInsert(createStore(), c);
       const gen = getGeneration(store);
 
-      store = mustInsert(store, c);
+      mustInsert(store, c);
       expect(getGeneration(store)).toBe(gen);
     });
 
     it('increments once for insertMany', () => {
       const constraints = [
         makeStructure('alice', 0),
-        makeStructure('alice', 1),
         makeStructure('bob', 0),
+        makeStructure('charlie', 0),
       ];
 
-      const store = mustInsertMany(createStore(), constraints);
+      const store = createStore();
+      mustInsertMany(store, constraints);
       expect(getGeneration(store)).toBe(1);
     });
 
@@ -793,9 +795,8 @@ describe('Constraint Store', () => {
       const c = makeStructure('alice', 0);
       const store = mustInsert(createStore(), c);
       const gen = getGeneration(store);
-
-      const store2 = mustInsertMany(store, [c, c, c]);
-      expect(getGeneration(store2)).toBe(gen);
+      mustInsertMany(store, [c, c]);
+      expect(getGeneration(store)).toBe(gen);
     });
   });
 
@@ -961,12 +962,12 @@ describe('Constraint Store', () => {
       const storeB = mustInsert(createStore(), makeStructure('bob', 0));
 
       const merged = mergeStores(storeA, storeB);
-      const store = mustInsert(merged, makeStructure('charlie', 0));
+      mustInsert(merged, makeStructure('charlie', 0));
 
-      expect(constraintCount(store)).toBe(3);
-      expect(hasConstraint(store, createCnId('alice', 0))).toBe(true);
-      expect(hasConstraint(store, createCnId('bob', 0))).toBe(true);
-      expect(hasConstraint(store, createCnId('charlie', 0))).toBe(true);
+      expect(constraintCount(merged)).toBe(3);
+      expect(hasConstraint(merged, createCnId('alice', 0))).toBe(true);
+      expect(hasConstraint(merged, createCnId('bob', 0))).toBe(true);
+      expect(hasConstraint(merged, createCnId('charlie', 0))).toBe(true);
     });
   });
 });

@@ -31,9 +31,9 @@ The v0 prototype validated the CCS thesis. The new implementation follows the fo
 | Undo/redo | Not supported | Retraction depth (retract-of-retract) |
 | Store indexing | By path (byPath Map) | By CnId (hash map) |
 
-### Solver Pipeline (§7.2) — Implemented in Phase 4
+### Solver Pipeline (§7.2) — Implemented in Phases 4–4.6
 
-The pipeline is a composition of pure functions, each in its own module. `pipeline.ts` is the composition root — it contains no transformation logic.
+The pipeline is a composition of pure functions, each in its own module. `pipeline.ts` is the composition root — it contains no transformation logic. **Datalog evaluation is the primary resolution path** (Phase 4.5); native solvers are an optional §B.7 fast path that activates only when the active rules match known default patterns.
 
 ```
 Constraint Store (S), Version Vector (V)
@@ -44,23 +44,33 @@ S_V = filterByVersion(S, V)          // version-vector.ts — filter to causal m
     ▼
 Valid(S_V) = computeValid(S_V)        // validity.ts — signature + capability check
     │
-    ▼
-Active(Valid(S_V)) = computeActive()  // retraction.ts — dominance filter
+    ├──→ AllStructure(Valid(S_V))
+    │         │
+    │         ▼
+    │    buildStructureIndex()         // structure-index.ts — slot identity, parent→child
     │
-    ├──→ buildStructureIndex()        // structure-index.ts — slot identity, parent→child indexes
-    │         │
-    │         ├──→ projectToFacts()   // projection.ts — active constraints → Datalog ground facts
-    │         │         │
-    │         │         ▼
-    │         │    evaluate(rules, facts)  // datalog/evaluate.ts — optional rule evaluation
-    │         │
-    │         └──→ buildSkeleton()    // skeleton.ts — reality tree with native LWW + Fugue
-    │                    │
-    ▼                    ▼
-                    Reality
+    └──→ Active(Valid(S_V))
+              │
+              ├──→ projectToFacts()    // projection.ts — active constraints → Datalog facts
+              │         │
+              │         ▼
+              │    evaluate(rules, facts)  // datalog/evaluate.ts — primary resolution
+              │         │
+              │         ▼
+              │    extractResolution()     // resolve.ts — Datalog facts → typed winners/ordering
+              │
+              └──→ [native fast path]     // §B.7: if rules match defaults, bypass Datalog
+                        │
+                        ▼
+                   buildSkeleton()         // skeleton.ts — reality tree from ResolutionResult
+                        │
+                        ▼
+                     Reality
 ```
 
-**Key insight**: The structure index is the shared dependency. It computes slot identity once (grouping Map structures by `(parent, key)`) and serves both `projection.ts` (for Datalog fact emission) and `skeleton.ts` (for tree construction). This avoids redundant joins.
+**Key insight 1**: The structure index is built from `Valid(S_V)` — all valid structure constraints regardless of dominance (matching §7.2's two-path fork). Structure constraints are immune to retraction, so this is equivalent to building from Active, but the code matches the spec's design.
+
+**Key insight 2**: The skeleton builder is resolution-agnostic. It receives a `ResolutionResult` (from either Datalog or native solvers) and builds the tree without knowing which path produced it. `resolve.ts` is the symmetric counterpart of `projection.ts`: projection converts kernel types → Datalog facts, resolution converts Datalog facts → kernel types.
 
 ### Slot Identity (§8 — the Map Multi-Structure Case)
 
@@ -85,13 +95,33 @@ This is Layer 0 kernel logic (not expressible as a retractable rule) because slo
 
 Values targeting unknown structures (orphaned) are excluded from projection but tracked for diagnostics.
 
-### Native Solvers (§B.7)
+### Native Solvers (§B.7) — Optional Fast Path
 
-Native TypeScript implementations of LWW and Fugue that bypass Datalog for performance. They **must** produce identical results to the Datalog rules they replace.
+Native TypeScript implementations of LWW and Fugue that bypass Datalog when the active rules match known default patterns. They **must** produce identical results to the Datalog rules they replace. When rules are retracted, replaced, or augmented with custom Layer 2+ rules, the pipeline falls back to Datalog evaluation automatically (§B.7 constraint #3).
+
+**Detection**: `isDefaultRulesOnly()` in `pipeline.ts` performs structural matching on rule head/body shapes (not CnIds or lamport values). It checks for `superseded`/`winner` heads reading from `active_value` (LWW) and `fugue_child`/`fugue_before` heads reading from `active_structure_seq` (Fugue). When both patterns match and no Layer 2+ rules exist, native solvers activate.
 
 **LWW** (`solver/lww.ts`): Groups value entries by slot, picks winner by `(lamport DESC, peer DESC)`. Equivalence verified against the §B.4 Datalog rules in `tests/solver/lww-equivalence.test.ts`.
 
-**Fugue** (`solver/fugue.ts`): Tree-based sequence ordering adapted from `reference/fugue-v0.ts` for CnId-based constraints. Builds a tree rooted at `originLeft`, sorts siblings by Fugue interleaving rules (same `originRight` → lower peer first; different `originRight` → further-left goes first), depth-first traversal produces total order. Equivalence verified for the simplified sibling-ordering subset in `tests/solver/fugue-equivalence.test.ts`.
+**Fugue** (`solver/fugue.ts`): Tree-based sequence ordering adapted from `reference/fugue-v0.ts` for CnId-based constraints. Builds a tree rooted at `originLeft`, sorts siblings by Fugue interleaving rules (same `originRight` → lower peer first; different `originRight` → further-left goes first), depth-first traversal produces total order. Equivalence verified against the complete Fugue Datalog rules (7 rules, 3 predicates) for all inputs in `tests/solver/fugue-equivalence.test.ts`.
+
+### Complete Fugue Datalog Rules (Phase 4.6)
+
+The full Fugue tree walk is expressed in Datalog with 7 rules across 3 predicates:
+
+| Predicate | Rules | Purpose |
+|-----------|-------|---------|
+| `fugue_child` | 1 | Derives tree structure from `active_structure_seq` + `constraint_peer` |
+| `fugue_descendant` | 2 (base + transitive) | Transitive closure of the originLeft tree — needed for negation guard |
+| `fugue_before` | 4 | Parent-before-child, sibling-by-peer, sibling-by-CnId-on-tie, subtree propagation + transitivity |
+
+The critical rule is **subtree propagation**: "if A is a child of X, and X is before B, then A is before B" — but only when B is NOT a descendant of X. Without the `not fugue_descendant(P, B, X)` guard, parent-child ordering combined with propagation creates spurious orderings among siblings. Stratified negation handles this cleanly since `fugue_descendant` depends only on `fugue_child` (a base relation) with no cyclic dependency on `fugue_before`.
+
+### Semantic Refs and Causal Safety (Phase 4.6)
+
+The retraction module's `target-in-refs` check uses **semantic interpretation**: a ref `(peer, N)` means "I've observed all of peer's constraints 0..N." A retract targeting `(peer, T)` passes if any ref for the same peer has `counter ≥ T`.
+
+This is mathematically sound because CnIds are `(peer, counter)` with strictly monotonic per-peer counters, and causal delivery ensures observing `B@N` implies observing `B@0..B@N-1`. The Agent's frontier-compressed refs (one CnId per peer) are a lossless representation of causal history under these invariants. A retract with no ref for the target's peer, or a ref with `counter < target.counter`, is still rejected as a causal violation.
 
 ### Reality Tree Structure
 
@@ -123,6 +153,12 @@ A custom TypeScript evaluator is ~800-1200 lines with zero external dependencies
 
 The validity filter (`validity.ts`) checks that every constraint's asserting peer holds the required capability. Only the reality creator has implicit Admin. Other peers need explicit authority grants. This means pipeline tests (and eventually real usage) must include authority constraints granting capabilities to non-creator peers, or their constraints will be silently excluded from the active set.
 
+### Store Mutation Strategy (Phase 4.6)
+
+The constraint store mutates in place. `insert()` returns `Result<void, InsertError>` and mutates the store on success. `insertMany()` likewise. `mergeStores()` returns a new store (both inputs survive). The `generation` counter increments on every mutation and serves as the cache-invalidation signal — callers check the generation, not the store reference.
+
+This replaced the previous immutable-return API (`insert()` returning `Result<ConstraintStore, InsertError>`) which cloned the entire constraint `Map` on every insert — O(n) per operation, O(n²) for n sequential inserts. The generation counter already existed for cache invalidation, making the switch safe.
+
 ### Module Dependency DAG
 
 ```
@@ -135,10 +171,11 @@ kernel/types.ts → cnid, lamport, vv,       (kernel identity/store layer)
          ↑
 authority.ts → validity.ts → retraction.ts  (filters)
          ↑
-structure-index.ts → projection.ts          (kernel↔Datalog bridge)
-                   → skeleton.ts            (tree builder, uses solver/)
+structure-index.ts → projection.ts          (kernel → Datalog bridge)
+                   → resolve.ts             (Datalog → kernel bridge)
+                   → skeleton.ts            (tree builder, reads ResolutionResult)
          ↑
-pipeline.ts                                 (composition root — imports only)
+pipeline.ts                                 (composition root — imports only, uses solver/)
 ```
 
 ---

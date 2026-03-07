@@ -1,11 +1,14 @@
 // === Fugue Equivalence Tests ===
 // Validates that the native Fugue solver produces identical ordering to the
-// simplified Datalog Fugue rules for the same inputs.
+// complete Fugue Datalog rules for ALL inputs.
 //
-// The native solver handles the full Fugue algorithm (recursive tree walk,
-// originRight disambiguation). The Datalog rules are a simplified subset
-// that handles the concurrent-inserts-at-same-originLeft case via peer
-// tiebreak. These tests verify equivalence for that shared subset.
+// The Datalog rules express the full Fugue tree walk:
+//   1. fugue_child — derives tree structure from active_structure_seq + constraint_peer
+//   2. fugue_sibling_before — sibling ordering (same originLeft, lower peer first)
+//   3. fugue_before — full DFS ordering via recursive rules:
+//      - siblings: A before B if A is an earlier sibling
+//      - depth-first: A before B if A is in an earlier subtree
+//      - ancestor: A before all its descendants
 //
 // See unified-engine.md §8.2, §B.4, §B.7.
 
@@ -25,8 +28,10 @@ import type {
 import { evaluate } from '../../src/datalog/evaluate.js';
 import {
   atom,
+  constTerm,
   varTerm,
   positiveAtom,
+  negation,
   rule,
   fact,
   neq,
@@ -57,20 +62,45 @@ function makeSeqStructure(
 }
 
 const PARENT = createCnId('root', 0);
+const PARENT_KEY = cnIdKey(PARENT);
 
-/**
- * Build the simplified Fugue Datalog rules from Phase 1 tests.
- *
- * fugue_child(Parent, CnId, OriginLeft, OriginRight, Peer) :-
- *   active_structure_seq(CnId, Parent, OriginLeft, OriginRight),
- *   constraint_peer(CnId, Peer).
- *
- * fugue_before(Parent, A, B) :-
- *   fugue_child(Parent, A, OriginLeft, _, PeerA),
- *   fugue_child(Parent, B, OriginLeft, _, PeerB),
- *   A ≠ B, PeerA < PeerB.
- */
-function buildFugueRules(): Rule[] {
+// ---------------------------------------------------------------------------
+// Complete Fugue Datalog Rules
+//
+// These rules express the full Fugue tree walk as a Datalog program.
+// The tree is built from originLeft: each element is a child of its
+// originLeft (elements with originLeft=null are children of a virtual root).
+// Siblings (same originLeft) are ordered by peer ID (lower first).
+// The total order is a depth-first traversal of this tree.
+//
+// Rules:
+//   1. fugue_child — derives tree structure from ground facts
+//
+//   2. fugue_descendant(Parent, Desc, Anc) — transitive closure of the
+//      originLeft tree. Desc is a descendant of Anc.
+//
+//   3. fugue_before (parent-child): A is before B if B's originLeft is A
+//      (in DFS, a node is visited before all its children)
+//
+//   4. fugue_before (sibling order): A is before B if they share the same
+//      originLeft and A has lower peer (or lower CnId on peer tie)
+//
+//   5. fugue_before (subtree propagation): if A is a child of X, X is before B,
+//      and B is NOT a descendant of X, then A is before B. This propagates
+//      ordering from a tree-parent to its children across subtree boundaries,
+//      without creating spurious orderings among siblings or within subtrees.
+//
+//   6. fugue_before (transitivity): A before B, B before C → A before C
+//
+// The descendant relation is needed for the subtree propagation guard.
+// Without it, the rule would only check direct children, allowing
+// spurious orderings when B is a grandchild+ of X.
+// ---------------------------------------------------------------------------
+
+function buildCompleteFugueRules(): Rule[] {
+  // Rule 1: fugue_child(Parent, CnId, OriginLeft, OriginRight, Peer) :-
+  //   active_structure_seq(CnId, Parent, OriginLeft, OriginRight),
+  //   constraint_peer(CnId, Peer).
   const fugueChildRule: Rule = rule(
     atom('fugue_child', [
       varTerm('Parent'),
@@ -94,7 +124,65 @@ function buildFugueRules(): Rule[] {
     ],
   );
 
-  const fugueBeforeRule: Rule = rule(
+  // Rule 2a (base — descendant): fugue_descendant(Parent, Child, TreeParent) :-
+  //   fugue_child(Parent, Child, TreeParent, _, _), TreeParent ≠ null.
+  //
+  // Direct child is a descendant.
+  const fugueDescendantBase: Rule = rule(
+    atom('fugue_descendant', [varTerm('Parent'), varTerm('Child'), varTerm('TreeParent')]),
+    [
+      positiveAtom(
+        atom('fugue_child', [varTerm('Parent'), varTerm('Child'), varTerm('TreeParent'), _, _]),
+      ),
+      neq(varTerm('TreeParent'), constTerm(null)),
+    ],
+  );
+
+  // Rule 2b (recursive — descendant): fugue_descendant(Parent, Desc, Anc) :-
+  //   fugue_descendant(Parent, Desc, Mid),
+  //   fugue_descendant(Parent, Mid, Anc).
+  //
+  // Transitive closure: if Desc is a descendant of Mid, and Mid is a
+  // descendant of Anc, then Desc is a descendant of Anc.
+  const fugueDescendantTransitive: Rule = rule(
+    atom('fugue_descendant', [varTerm('Parent'), varTerm('Desc'), varTerm('Anc')]),
+    [
+      positiveAtom(
+        atom('fugue_descendant', [varTerm('Parent'), varTerm('Desc'), varTerm('Mid')]),
+      ),
+      positiveAtom(
+        atom('fugue_descendant', [varTerm('Parent'), varTerm('Mid'), varTerm('Anc')]),
+      ),
+    ],
+  );
+
+  // Rule 3 (base — parent before child):
+  //   fugue_before(Parent, A, B) :-
+  //     fugue_child(Parent, B, A, _, _),
+  //     A ≠ null.
+  //
+  // If B's originLeft is A (and A is not null), then A is B's tree-parent.
+  // In DFS, a node is visited before all its children.
+  // The null guard excludes virtual-root children (originLeft=null) —
+  // they have no real tree-parent; their ordering comes from sibling rules.
+  const fugueBeforeParentChild: Rule = rule(
+    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
+    [
+      positiveAtom(
+        atom('fugue_child', [varTerm('Parent'), varTerm('B'), varTerm('A'), _, _]),
+      ),
+      neq(varTerm('A'), constTerm(null)),
+    ],
+  );
+
+  // Rule 3a (base — sibling order by peer):
+  //   fugue_before(Parent, A, B) :-
+  //     fugue_child(Parent, A, OriginLeft, _, PeerA),
+  //     fugue_child(Parent, B, OriginLeft, _, PeerB),
+  //     A ≠ B, PeerA < PeerB.
+  //
+  // Siblings with the same originLeft: lower peer goes first.
+  const fugueBeforeSiblingByPeer: Rule = rule(
     atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
     [
       positiveAtom(
@@ -120,7 +208,115 @@ function buildFugueRules(): Rule[] {
     ],
   );
 
-  return [fugueChildRule, fugueBeforeRule];
+  // Rule 3b (base — sibling order by CnId key on peer tie):
+  //   fugue_before(Parent, A, B) :-
+  //     fugue_child(Parent, A, OriginLeft, _, Peer),
+  //     fugue_child(Parent, B, OriginLeft, _, Peer),
+  //     A ≠ B, A < B.
+  //
+  // Same peer, same originLeft: lower CnId key goes first (deterministic tiebreak).
+  const fugueBeforeSiblingByCnId: Rule = rule(
+    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
+    [
+      positiveAtom(
+        atom('fugue_child', [
+          varTerm('Parent'),
+          varTerm('A'),
+          varTerm('OriginLeft'),
+          _,
+          varTerm('Peer'),
+        ]),
+      ),
+      positiveAtom(
+        atom('fugue_child', [
+          varTerm('Parent'),
+          varTerm('B'),
+          varTerm('OriginLeft'),
+          _,
+          varTerm('Peer'),
+        ]),
+      ),
+      neq(varTerm('A'), varTerm('B')),
+      lt(varTerm('A'), varTerm('B')),
+    ],
+  );
+
+  // Rule 5 (recursive — subtree propagation):
+  //   fugue_before(Parent, A, B) :-
+  //     fugue_child(Parent, A, X, _, _),
+  //     X ≠ null,
+  //     fugue_before(Parent, X, B),
+  //     A ≠ B,
+  //     not fugue_descendant(Parent, B, X).
+  //
+  // If A is a child of X (A's originLeft is X), and X is before B,
+  // then A is also before B — UNLESS B is a descendant of X (in X's
+  // subtree). Sibling ordering and within-subtree ordering are handled
+  // by other rules; this rule only propagates ordering across subtree
+  // boundaries.
+  //
+  // The negation guard uses fugue_descendant (not just fugue_child) to
+  // correctly handle grandchildren+. Without the descendant check, a
+  // grandchild of X could be spuriously ordered after a sibling of X's
+  // child. For example: X has children A and B (A<B by sibling order),
+  // A has child C. X<B (sibling), so without descendant check the rule
+  // would derive B<C (B is child of X, X<C via transitivity, C is not
+  // a direct child of X). But C is in A's subtree which precedes B.
+  //
+  // Stratified negation is safe here because fugue_descendant depends
+  // only on fugue_child (a base relation) — no cyclic dependency with
+  // fugue_before.
+  const fugueBeforeSubtreeProp: Rule = rule(
+    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
+    [
+      positiveAtom(
+        atom('fugue_child', [varTerm('Parent'), varTerm('A'), varTerm('X'), _, _]),
+      ),
+      neq(varTerm('X'), constTerm(null)),
+      positiveAtom(
+        atom('fugue_before', [varTerm('Parent'), varTerm('X'), varTerm('B')]),
+      ),
+      neq(varTerm('A'), varTerm('B')),
+      negation(
+        atom('fugue_descendant', [varTerm('Parent'), varTerm('B'), varTerm('X')]),
+      ),
+    ],
+  );
+
+  // Rule 6 (recursive — transitivity):
+  //   fugue_before(Parent, A, C) :-
+  //     fugue_before(Parent, A, B),
+  //     fugue_before(Parent, B, C),
+  //     A ≠ C.
+  //
+  // Standard transitive closure. If A is before B and B is before C,
+  // then A is before C. The A ≠ C guard prevents self-pairs.
+  //
+  // Combined with parent-child, sibling order, and subtree propagation,
+  // this derives the complete DFS ordering via fixed-point iteration.
+  const fugueBeforeTransitive: Rule = rule(
+    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('C')]),
+    [
+      positiveAtom(
+        atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
+      ),
+      positiveAtom(
+        atom('fugue_before', [varTerm('Parent'), varTerm('B'), varTerm('C')]),
+      ),
+      neq(varTerm('A'), varTerm('C')),
+    ],
+  );
+
+  return [
+    fugueChildRule,
+    fugueDescendantBase,
+    fugueDescendantTransitive,
+    fugueBeforeParentChild,
+    fugueBeforeSiblingByPeer,
+    fugueBeforeSiblingByCnId,
+    fugueBeforeSubtreeProp,
+    fugueBeforeTransitive,
+  ];
 }
 
 /**
@@ -153,14 +349,14 @@ function constraintsToFugueFacts(
 }
 
 /**
- * Run Datalog Fugue rules and extract the `before` ordering.
- * Returns a set of (A, B) pairs where A should come before B.
+ * Run complete Fugue Datalog rules and extract ALL before-pairs.
+ * Returns a set of "A<B" strings for the given parent.
  */
 function runDatalogFugue(
   constraints: StructureConstraint[],
-  parentKey: string,
+  parentKey: string = PARENT_KEY,
 ): Set<string> {
-  const rules = buildFugueRules();
+  const rules = buildCompleteFugueRules();
   const facts = constraintsToFugueFacts(constraints);
   const result = evaluate(rules, facts);
 
@@ -185,9 +381,7 @@ function runDatalogFugue(
 }
 
 /**
- * Run native Fugue solver and extract the ordering as (A, B) pairs.
- * For each pair of elements where A appears before B in the result,
- * we include the pair.
+ * Run native Fugue solver and return ordered nodes.
  */
 function runNativeFugue(
   constraints: StructureConstraint[],
@@ -197,304 +391,500 @@ function runNativeFugue(
 }
 
 /**
- * Convert a native Fugue ordering into a set of (A, B) "before" pairs
- * that can be compared with Datalog results.
- * Only includes pairs where both elements share the same originLeft
- * (the simplified Fugue rules only reason about siblings).
+ * Convert a native Fugue ordering into the COMPLETE set of (A, B) "before" pairs.
+ * For every pair where A appears before B in the total order, include "A<B".
  */
-function nativeOrderToPairs(ordered: FugueNode[]): Set<string> {
+function nativeOrderToAllPairs(ordered: FugueNode[]): Set<string> {
   const pairs = new Set<string>();
-
   for (let i = 0; i < ordered.length; i++) {
     for (let j = i + 1; j < ordered.length; j++) {
-      const a = ordered[i]!;
-      const b = ordered[j]!;
-
-      // Only compare siblings (same originLeft) — that's what the
-      // simplified Datalog rules handle.
-      const aLeft = a.originLeft !== null ? cnIdKey(a.originLeft) : null;
-      const bLeft = b.originLeft !== null ? cnIdKey(b.originLeft) : null;
-
-      if (aLeft === bLeft) {
-        pairs.add(`${a.idKey}<${b.idKey}`);
-      }
+      pairs.add(`${ordered[i]!.idKey}<${ordered[j]!.idKey}`);
     }
   }
-
   return pairs;
 }
 
+/**
+ * Assert that Datalog and native Fugue produce identical total orderings.
+ * The Datalog pairs should be exactly the transitive closure of the ordering.
+ */
+function assertEquivalence(
+  constraints: StructureConstraint[],
+  parentKey: string = PARENT_KEY,
+): { nativeOrder: FugueNode[]; datalogPairs: Set<string>; nativePairs: Set<string> } {
+  const nativeOrder = runNativeFugue(constraints);
+  const nativePairs = nativeOrderToAllPairs(nativeOrder);
+  const datalogPairs = runDatalogFugue(constraints, parentKey);
+
+  // Every native pair must be in Datalog
+  for (const pair of nativePairs) {
+    if (!datalogPairs.has(pair)) {
+      const nativeNames = nativeOrder.map((n) => n.idKey).join(', ');
+      throw new Error(
+        `Native pair ${pair} not found in Datalog result.\n` +
+        `Native order: [${nativeNames}]\n` +
+        `Datalog pairs: ${JSON.stringify([...datalogPairs])}\n` +
+        `Native pairs: ${JSON.stringify([...nativePairs])}`
+      );
+    }
+  }
+
+  // Every Datalog pair must be in native (no spurious pairs)
+  for (const pair of datalogPairs) {
+    if (!nativePairs.has(pair)) {
+      const nativeNames = nativeOrder.map((n) => n.idKey).join(', ');
+      throw new Error(
+        `Datalog pair ${pair} not found in native result.\n` +
+        `Native order: [${nativeNames}]\n` +
+        `Datalog pairs: ${JSON.stringify([...datalogPairs])}\n` +
+        `Native pairs: ${JSON.stringify([...nativePairs])}`
+      );
+    }
+  }
+
+  expect(datalogPairs.size).toBe(nativePairs.size);
+
+  return { nativeOrder, datalogPairs, nativePairs };
+}
+
 // ---------------------------------------------------------------------------
-// Equivalence Tests
+// Equivalence Tests — Full Algorithm
 // ---------------------------------------------------------------------------
 
-describe('Fugue equivalence: native == Datalog (simplified subset)', () => {
+describe('Fugue equivalence: native == Datalog (complete)', () => {
+  // --- Basic cases ---
+
   it('single element — no ordering constraints', () => {
-    const e1 = makeSeqStructure('alice', 1, PARENT, null, null);
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const { nativeOrder, datalogPairs } = assertEquivalence([e1]);
 
-    const native = runNativeFugue([e1]);
-    expect(native).toHaveLength(1);
-    expect(native[0]!.idKey).toBe(cnIdKey(e1.id));
-
-    // Datalog produces no before() facts for a single element
-    const datalogPairs = runDatalogFugue([e1], cnIdKey(PARENT));
+    expect(nativeOrder.length).toBe(1);
     expect(datalogPairs.size).toBe(0);
   });
 
+  it('empty input — no elements, no pairs', () => {
+    const nativeOrder = runNativeFugue([]);
+    const datalogPairs = runDatalogFugue([]);
+
+    expect(nativeOrder.length).toBe(0);
+    expect(datalogPairs.size).toBe(0);
+  });
+
+  // --- Sibling ordering (same originLeft) ---
+
   it('two concurrent inserts at start — lower peer goes first', () => {
-    const e1 = makeSeqStructure('alice', 1, PARENT, null, null);
-    const e2 = makeSeqStructure('bob', 1, PARENT, null, null);
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('bob', 0, PARENT, null, null);
 
-    const nativeOrder = runNativeFugue([e1, e2]);
-    const nativePairs = nativeOrderToPairs(nativeOrder);
+    const { nativeOrder } = assertEquivalence([e1, e2]);
 
-    const datalogPairs = runDatalogFugue([e1, e2], cnIdKey(PARENT));
-
-    // Both should agree: alice < bob
-    const expected = `${cnIdKey(e1.id)}<${cnIdKey(e2.id)}`;
-    expect(nativePairs.has(expected)).toBe(true);
-    expect(datalogPairs.has(expected)).toBe(true);
-
-    // And not the reverse
-    const reverse = `${cnIdKey(e2.id)}<${cnIdKey(e1.id)}`;
-    expect(nativePairs.has(reverse)).toBe(false);
-    expect(datalogPairs.has(reverse)).toBe(false);
+    // 'alice' < 'bob' → alice first
+    expect(nativeOrder[0]!.peer).toBe('alice');
+    expect(nativeOrder[1]!.peer).toBe('bob');
   });
 
   it('three concurrent inserts at same position — transitive ordering via peer', () => {
-    const e1 = makeSeqStructure('alice', 1, PARENT, null, null);
-    const e2 = makeSeqStructure('bob', 1, PARENT, null, null);
-    const e3 = makeSeqStructure('charlie', 1, PARENT, null, null);
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('bob', 0, PARENT, null, null);
+    const e3 = makeSeqStructure('charlie', 0, PARENT, null, null);
 
-    const nativeOrder = runNativeFugue([e1, e2, e3]);
-    const nativePairs = nativeOrderToPairs(nativeOrder);
+    const { nativeOrder, datalogPairs } = assertEquivalence([e1, e2, e3]);
 
-    const datalogPairs = runDatalogFugue([e1, e2, e3], cnIdKey(PARENT));
+    expect(nativeOrder[0]!.peer).toBe('alice');
+    expect(nativeOrder[1]!.peer).toBe('bob');
+    expect(nativeOrder[2]!.peer).toBe('charlie');
 
-    // Expected order: alice < bob < charlie (lower peer goes first)
-    const ab = `${cnIdKey(e1.id)}<${cnIdKey(e2.id)}`;
-    const bc = `${cnIdKey(e2.id)}<${cnIdKey(e3.id)}`;
-    const ac = `${cnIdKey(e1.id)}<${cnIdKey(e3.id)}`;
-
-    // Both agree on all pairs
-    expect(nativePairs.has(ab)).toBe(true);
-    expect(datalogPairs.has(ab)).toBe(true);
-
-    expect(nativePairs.has(bc)).toBe(true);
-    expect(datalogPairs.has(bc)).toBe(true);
-
-    expect(nativePairs.has(ac)).toBe(true);
-    expect(datalogPairs.has(ac)).toBe(true);
+    // All 3 pairwise orderings should exist
+    const aKey = cnIdKey(e1.id);
+    const bKey = cnIdKey(e2.id);
+    const cKey = cnIdKey(e3.id);
+    expect(datalogPairs.has(`${aKey}<${bKey}`)).toBe(true);
+    expect(datalogPairs.has(`${bKey}<${cKey}`)).toBe(true);
+    expect(datalogPairs.has(`${aKey}<${cKey}`)).toBe(true);
   });
 
-  it('inserts at different positions produce independent orderings', () => {
-    // e1 inserted at start
-    const e1 = makeSeqStructure('alice', 1, PARENT, null, null);
-    // e2 inserted after e1
-    const e2 = makeSeqStructure('bob', 2, PARENT, e1.id, null);
-
-    const nativeOrder = runNativeFugue([e1, e2]);
-    expect(nativeOrder).toHaveLength(2);
-    // e1 should come before e2 (e2's originLeft is e1)
-    expect(nativeOrder[0]!.idKey).toBe(cnIdKey(e1.id));
-    expect(nativeOrder[1]!.idKey).toBe(cnIdKey(e2.id));
-
-    // Datalog should produce no before() pairs because they have
-    // different originLefts (only same-originLeft siblings are compared)
-    const datalogPairs = runDatalogFugue([e1, e2], cnIdKey(PARENT));
-    const pairKey = `${cnIdKey(e1.id)}<${cnIdKey(e2.id)}`;
-    // They have different originLeft so the simplified rules don't relate them
-    expect(datalogPairs.has(pairKey)).toBe(false);
-  });
-
-  it('concurrent inserts after same element — lower peer first', () => {
-    // e1 is the anchor
-    const e1 = makeSeqStructure('alice', 1, PARENT, null, null);
-    // e2 and e3 both insert after e1 (same originLeft = e1)
-    const e2 = makeSeqStructure('bob', 2, PARENT, e1.id, null);
-    const e3 = makeSeqStructure('alice', 2, PARENT, e1.id, null);
-
-    const nativeOrder = runNativeFugue([e1, e2, e3]);
-    const nativePairs = nativeOrderToPairs(nativeOrder);
-
-    const datalogPairs = runDatalogFugue([e1, e2, e3], cnIdKey(PARENT));
-
-    // e2 (bob) and e3 (alice) are siblings (same originLeft=e1)
-    // alice < bob, so e3 should come before e2
-    const expected = `${cnIdKey(e3.id)}<${cnIdKey(e2.id)}`;
-    expect(nativePairs.has(expected)).toBe(true);
-    expect(datalogPairs.has(expected)).toBe(true);
-  });
-
-  it('five concurrent inserts at start — consistent ordering', () => {
-    const peers: PeerID[] = ['dave', 'alice', 'eve', 'bob', 'charlie'];
-    const elements = peers.map((peer, i) =>
-      makeSeqStructure(peer, i + 1, PARENT, null, null),
+  it('five concurrent inserts at start — all peers ordered correctly', () => {
+    const peers: PeerID[] = ['echo', 'delta', 'alpha', 'charlie', 'bravo'];
+    const elements = peers.map((p, i) =>
+      makeSeqStructure(p, 0, PARENT, null, null),
     );
 
-    const nativeOrder = runNativeFugue(elements);
-    const nativePairs = nativeOrderToPairs(nativeOrder);
+    const { nativeOrder } = assertEquivalence(elements);
 
-    const datalogPairs = runDatalogFugue(elements, cnIdKey(PARENT));
-
-    // Expected order by peer: alice, bob, charlie, dave, eve
-    const sorted = [...elements].sort((a, b) =>
-      a.id.peer < b.id.peer ? -1 : a.id.peer > b.id.peer ? 1 : 0,
-    );
-
-    // All native pairs should match Datalog pairs
-    for (const pair of nativePairs) {
-      expect(datalogPairs.has(pair)).toBe(true);
-    }
-    for (const pair of datalogPairs) {
-      expect(nativePairs.has(pair)).toBe(true);
-    }
-
-    // Verify the native order matches the expected alphabetical sort
-    expect(nativeOrder.map((n) => n.peer)).toEqual(
-      sorted.map((e) => e.id.peer),
-    );
+    // Should be alphabetical by peer
+    const sortedPeers = [...peers].sort();
+    expect(nativeOrder.map((n) => n.peer)).toEqual(sortedPeers);
   });
 
-  it('sequential inserts (single peer) preserve insertion order', () => {
-    const e1 = makeSeqStructure('alice', 1, PARENT, null, null);
-    const e2 = makeSeqStructure('alice', 2, PARENT, e1.id, null);
-    const e3 = makeSeqStructure('alice', 3, PARENT, e2.id, null);
+  // --- Sequential inserts (originLeft chains) ---
 
-    const nativeOrder = runNativeFugue([e1, e2, e3]);
-    expect(nativeOrder).toHaveLength(3);
+  it('sequential inserts by single peer preserve order', () => {
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('alice', 2, PARENT, e2.id, null);
+
+    const { nativeOrder } = assertEquivalence([e1, e2, e3]);
+
     expect(nativeOrder[0]!.idKey).toBe(cnIdKey(e1.id));
     expect(nativeOrder[1]!.idKey).toBe(cnIdKey(e2.id));
     expect(nativeOrder[2]!.idKey).toBe(cnIdKey(e3.id));
   });
 
-  it('empty input produces empty output', () => {
-    const nativeOrder = runNativeFugue([]);
-    expect(nativeOrder).toHaveLength(0);
+  it('long sequential chain (5 elements)', () => {
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('alice', 2, PARENT, e2.id, null);
+    const e4 = makeSeqStructure('alice', 3, PARENT, e3.id, null);
+    const e5 = makeSeqStructure('alice', 4, PARENT, e4.id, null);
 
-    const datalogPairs = runDatalogFugue([], cnIdKey(PARENT));
-    expect(datalogPairs.size).toBe(0);
+    const { nativeOrder } = assertEquivalence([e1, e2, e3, e4, e5]);
+
+    for (let i = 0; i < 5; i++) {
+      expect(nativeOrder[i]!.idKey).toBe(cnIdKey(createCnId('alice', i)));
+    }
   });
 
+  // --- Depth-first ordering (originLeft tree structure) ---
+
+  it('child of first element comes between first and second (DFS)', () => {
+    // e1 → e2 (sequential chain)
+    // e3 is a child of e1 (originLeft = e1)
+    // DFS: e1, e3, e2
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('bob', 0, PARENT, e1.id, null);
+    // e2 and e3 are both children of e1. e2 has originLeft=e1, e3 has originLeft=e1.
+    // They are siblings with same originLeft=e1. 'alice' < 'bob' → e2 before e3.
+    // Wait — e2's peer is 'alice' and e3's peer is 'bob'.
+    // So the order among siblings of e1 is: e2 (alice), e3 (bob).
+    // DFS from virtual root: [e1] → visit children of e1: [e2, e3]
+    // DFS of e1's children: e2 first (then e2's children), then e3 (then e3's children).
+    // Result: e1, e2, e3
+
+    const { nativeOrder } = assertEquivalence([e1, e2, e3]);
+
+    expect(nativeOrder[0]!.idKey).toBe(cnIdKey(e1.id));
+    expect(nativeOrder[1]!.idKey).toBe(cnIdKey(e2.id));
+    expect(nativeOrder[2]!.idKey).toBe(cnIdKey(e3.id));
+  });
+
+  it('nested children: grandchild appears in DFS order', () => {
+    // e1 is at the root (originLeft=null)
+    // e2 is child of e1 (originLeft=e1)
+    // e3 is child of e2 (originLeft=e2)
+    // DFS: e1, e2, e3
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('alice', 2, PARENT, e2.id, null);
+
+    const { nativeOrder } = assertEquivalence([e1, e2, e3]);
+
+    expect(nativeOrder[0]!.idKey).toBe(cnIdKey(e1.id));
+    expect(nativeOrder[1]!.idKey).toBe(cnIdKey(e2.id));
+    expect(nativeOrder[2]!.idKey).toBe(cnIdKey(e3.id));
+  });
+
+  it('subtree of earlier sibling precedes later sibling', () => {
+    // Virtual root has two children: e1 (alice) and e4 (bob)
+    // e1 has child e2 (alice), e2 has child e3 (alice)
+    // DFS: e1, e2, e3, e4
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('alice', 2, PARENT, e2.id, null);
+    const e4 = makeSeqStructure('bob', 0, PARENT, null, null);
+
+    const { nativeOrder, datalogPairs } = assertEquivalence([e1, e2, e3, e4]);
+
+    expect(nativeOrder.map((n) => n.idKey)).toEqual([
+      cnIdKey(e1.id),
+      cnIdKey(e2.id),
+      cnIdKey(e3.id),
+      cnIdKey(e4.id),
+    ]);
+
+    // e3 (deep in e1's subtree) should be before e4 (sibling of e1)
+    expect(datalogPairs.has(`${cnIdKey(e3.id)}<${cnIdKey(e4.id)}`)).toBe(true);
+  });
+
+  it('two subtrees: earlier subtree entirely precedes later subtree', () => {
+    // Root children: e1 (alice), e4 (bob)
+    // e1's children: e2 (alice)
+    // e4's children: e5 (bob)
+    // DFS: e1, e2, e4, e5
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e4 = makeSeqStructure('bob', 0, PARENT, null, null);
+    const e5 = makeSeqStructure('bob', 1, PARENT, e4.id, null);
+
+    const { nativeOrder, datalogPairs } = assertEquivalence([e1, e2, e4, e5]);
+
+    expect(nativeOrder.map((n) => n.idKey)).toEqual([
+      cnIdKey(e1.id),
+      cnIdKey(e2.id),
+      cnIdKey(e4.id),
+      cnIdKey(e5.id),
+    ]);
+
+    // Cross-subtree: e2 (in e1's subtree) before e4 and e5
+    expect(datalogPairs.has(`${cnIdKey(e2.id)}<${cnIdKey(e4.id)}`)).toBe(true);
+    expect(datalogPairs.has(`${cnIdKey(e2.id)}<${cnIdKey(e5.id)}`)).toBe(true);
+    // e1 before e5
+    expect(datalogPairs.has(`${cnIdKey(e1.id)}<${cnIdKey(e5.id)}`)).toBe(true);
+  });
+
+  // --- Complex interleaving ---
+
+  it('concurrent inserts after same element — lower peer first among siblings', () => {
+    // e1 is first element (originLeft=null)
+    // e2 (alice) and e3 (bob) both have originLeft=e1
+    // Sibling order: e2 (alice) before e3 (bob)
+    // DFS: e1, e2, e3
+    const e1 = makeSeqStructure('charlie', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 0, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('bob', 0, PARENT, e1.id, null);
+
+    const { nativeOrder } = assertEquivalence([e1, e2, e3]);
+
+    expect(nativeOrder[0]!.idKey).toBe(cnIdKey(e1.id));
+    expect(nativeOrder[1]!.idKey).toBe(cnIdKey(e2.id));
+    expect(nativeOrder[2]!.idKey).toBe(cnIdKey(e3.id));
+  });
+
+  it('mixed concurrent and sequential: some at root, some in subtree', () => {
+    // e1 (alice) at root, e2 (bob) at root (concurrent)
+    // e3 (alice) is child of e1 (sequential after e1)
+    // DFS: e1, e3, e2 (e1's subtree finishes before e2)
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('bob', 0, PARENT, null, null);
+    const e3 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+
+    const { nativeOrder } = assertEquivalence([e1, e2, e3]);
+
+    expect(nativeOrder[0]!.idKey).toBe(cnIdKey(e1.id));
+    expect(nativeOrder[1]!.idKey).toBe(cnIdKey(e3.id));
+    expect(nativeOrder[2]!.idKey).toBe(cnIdKey(e2.id));
+  });
+
+  it('interleaved concurrent inserts at multiple levels', () => {
+    // e1 (alice) at root
+    // e2 (alice) child of e1 (originLeft=e1)
+    // e3 (bob) also at root (concurrent with e1)
+    // e4 (alice) child of e3 (originLeft=e3)
+    // e5 (bob) also child of e3 (originLeft=e3)
+    //
+    // Root siblings: e1 (alice), e3 (bob) → e1 first
+    // e1's children: e2
+    // e3's children: e4 (alice), e5 (bob) → e4 first
+    //
+    // DFS: e1, e2, e3, e4, e5
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('bob', 0, PARENT, null, null);
+    const e4 = makeSeqStructure('alice', 2, PARENT, e3.id, null);
+    const e5 = makeSeqStructure('bob', 1, PARENT, e3.id, null);
+
+    const { nativeOrder, datalogPairs } = assertEquivalence([e1, e2, e3, e4, e5]);
+
+    expect(nativeOrder.map((n) => n.idKey)).toEqual([
+      cnIdKey(e1.id),
+      cnIdKey(e2.id),
+      cnIdKey(e3.id),
+      cnIdKey(e4.id),
+      cnIdKey(e5.id),
+    ]);
+
+    // Cross-subtree ordering
+    const e2Key = cnIdKey(e2.id);
+    const e3Key = cnIdKey(e3.id);
+    expect(datalogPairs.has(`${e2Key}<${e3Key}`)).toBe(true);
+
+    // e4 and e5 are children of e3, ordered among themselves
+    const e4Key = cnIdKey(e4.id);
+    const e5Key = cnIdKey(e5.id);
+    expect(datalogPairs.has(`${e4Key}<${e5Key}`)).toBe(true);
+  });
+
+  it('deep nesting with concurrent siblings at each level', () => {
+    // Level 0 (root children): e1 (alice)
+    // Level 1 (children of e1): e2 (alice), e3 (bob)
+    // Level 2 (children of e2): e4 (alice)
+    // DFS: e1, e2, e4, e3
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('bob', 0, PARENT, e1.id, null);
+    const e4 = makeSeqStructure('alice', 2, PARENT, e2.id, null);
+
+    const { nativeOrder, datalogPairs } = assertEquivalence([e1, e2, e3, e4]);
+
+    expect(nativeOrder.map((n) => n.idKey)).toEqual([
+      cnIdKey(e1.id),
+      cnIdKey(e2.id),
+      cnIdKey(e4.id),
+      cnIdKey(e3.id),
+    ]);
+
+    // e4 (grandchild of e1, child of e2) comes before e3 (child of e1)
+    // because e2's subtree precedes e3
+    expect(datalogPairs.has(`${cnIdKey(e4.id)}<${cnIdKey(e3.id)}`)).toBe(true);
+  });
+
+  // --- Determinism ---
+
   it('deterministic: same inputs produce same order regardless of input ordering', () => {
-    const e1 = makeSeqStructure('charlie', 1, PARENT, null, null);
-    const e2 = makeSeqStructure('alice', 1, PARENT, null, null);
-    const e3 = makeSeqStructure('bob', 1, PARENT, null, null);
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('bob', 0, PARENT, null, null);
+    const e3 = makeSeqStructure('charlie', 0, PARENT, null, null);
 
     const orderings = [
       [e1, e2, e3],
       [e3, e2, e1],
       [e2, e1, e3],
       [e3, e1, e2],
-      [e1, e3, e2],
       [e2, e3, e1],
+      [e1, e3, e2],
     ];
 
-    const results: string[][] = [];
-    for (const order of orderings) {
-      const native = runNativeFugue(order);
-      results.push(native.map((n) => n.peer));
-    }
+    const results = orderings.map((input) => {
+      const native = runNativeFugue(input);
+      return native.map((n) => n.idKey).join(',');
+    });
 
-    // All orderings should produce the same result
-    const first = JSON.stringify(results[0]);
+    const first = results[0];
     for (const result of results) {
-      expect(JSON.stringify(result)).toBe(first);
+      expect(result).toBe(first);
+    }
+  });
+
+  it('deterministic: complex tree input order does not affect result', () => {
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('bob', 0, PARENT, null, null);
+    const e4 = makeSeqStructure('bob', 1, PARENT, e3.id, null);
+
+    const order1 = [e1, e2, e3, e4];
+    const order2 = [e4, e3, e2, e1];
+    const order3 = [e3, e1, e4, e2];
+
+    const r1 = assertEquivalence(order1);
+    const r2 = assertEquivalence(order2);
+    const r3 = assertEquivalence(order3);
+
+    const o1 = r1.nativeOrder.map((n) => n.idKey).join(',');
+    const o2 = r2.nativeOrder.map((n) => n.idKey).join(',');
+    const o3 = r3.nativeOrder.map((n) => n.idKey).join(',');
+
+    expect(o1).toBe(o2);
+    expect(o1).toBe(o3);
+  });
+
+  // --- Edge cases ---
+
+  it('single peer sequential chain matches native exactly', () => {
+    // This is the simplest "real editing" case: one user typing characters in order.
+    const elements: StructureConstraint[] = [];
+    let prev: CnId | null = null;
+    for (let i = 0; i < 8; i++) {
+      const e = makeSeqStructure('alice', i, PARENT, prev, null);
+      elements.push(e);
+      prev = e.id;
     }
 
-    // And the order should be alice, bob, charlie
-    expect(results[0]).toEqual(['alice', 'bob', 'charlie']);
-  });
+    const { nativeOrder } = assertEquivalence(elements);
 
-  it('mixed: some concurrent at start, some sequential after', () => {
-    // e1 and e2 both at start (concurrent)
-    const e1 = makeSeqStructure('bob', 1, PARENT, null, null);
-    const e2 = makeSeqStructure('alice', 1, PARENT, null, null);
-    // e3 is after e1 (sequential)
-    const e3 = makeSeqStructure('charlie', 2, PARENT, e1.id, null);
-
-    const nativeOrder = runNativeFugue([e1, e2, e3]);
-
-    // alice < bob for concurrent siblings at start
-    // e3 comes after e1 (its originLeft)
-    expect(nativeOrder).toHaveLength(3);
-
-    // alice should come first among the root-level siblings
-    expect(nativeOrder[0]!.peer).toBe('alice');
-    // bob next
-    expect(nativeOrder[1]!.peer).toBe('bob');
-    // charlie is e1's child, so it comes right after bob (depth-first)
-    expect(nativeOrder[2]!.peer).toBe('charlie');
-
-    // Verify the sibling ordering matches Datalog for the shared originLeft
-    const nativePairs = nativeOrderToPairs(nativeOrder);
-    const datalogPairs = runDatalogFugue([e1, e2, e3], cnIdKey(PARENT));
-
-    // alice < bob (siblings at originLeft=null)
-    const aliceBob = `${cnIdKey(e2.id)}<${cnIdKey(e1.id)}`;
-    expect(nativePairs.has(aliceBob)).toBe(true);
-    expect(datalogPairs.has(aliceBob)).toBe(true);
-  });
-
-  it('interleaved concurrent inserts at multiple levels', () => {
-    // First element
-    const e1 = makeSeqStructure('alice', 1, PARENT, null, null);
-    // Two concurrent inserts after e1
-    const e2 = makeSeqStructure('bob', 2, PARENT, e1.id, null);
-    const e3 = makeSeqStructure('alice', 2, PARENT, e1.id, null);
-
-    // Two concurrent inserts at start
-    const e4 = makeSeqStructure('charlie', 3, PARENT, null, null);
-    const e5 = makeSeqStructure('dave', 3, PARENT, null, null);
-
-    const allElements = [e1, e2, e3, e4, e5];
-
-    const nativeOrder = runNativeFugue(allElements);
-    const nativePairs = nativeOrderToPairs(nativeOrder);
-    const datalogPairs = runDatalogFugue(allElements, cnIdKey(PARENT));
-
-    // Siblings at originLeft=null: e1, e4, e5
-    // Order by peer: alice(e1) < charlie(e4) < dave(e5)
-    // Check alice < charlie
-    if (nativePairs.has(`${cnIdKey(e1.id)}<${cnIdKey(e4.id)}`)) {
-      expect(datalogPairs.has(`${cnIdKey(e1.id)}<${cnIdKey(e4.id)}`)).toBe(true);
+    for (let i = 0; i < 8; i++) {
+      expect(nativeOrder[i]!.idKey).toBe(cnIdKey(createCnId('alice', i)));
     }
-
-    // Siblings at originLeft=e1: e2(bob), e3(alice)
-    // Order by peer: alice(e3) < bob(e2)
-    const e3BeforeE2 = `${cnIdKey(e3.id)}<${cnIdKey(e2.id)}`;
-    expect(nativePairs.has(e3BeforeE2)).toBe(true);
-    expect(datalogPairs.has(e3BeforeE2)).toBe(true);
-
-    // Siblings at originLeft=null: charlie(e4) < dave(e5)
-    const e4BeforeE5 = `${cnIdKey(e4.id)}<${cnIdKey(e5.id)}`;
-    expect(nativePairs.has(e4BeforeE5)).toBe(true);
-    expect(datalogPairs.has(e4BeforeE5)).toBe(true);
   });
 
-  it('all pairs in Datalog result are also in native result for concurrent siblings', () => {
-    // Stress test: many concurrent inserts at the same position
-    const peers: PeerID[] = ['frank', 'bob', 'eve', 'alice', 'dave', 'charlie'];
-    const elements = peers.map((peer, i) =>
-      makeSeqStructure(peer, i + 1, PARENT, null, null),
+  it('two peers typing sequentially from the same starting point', () => {
+    // Alice types "ab" and Bob types "xy" both starting at the beginning.
+    // Alice: e1(null) → e2(e1)
+    // Bob: e3(null) → e4(e3)
+    // Root siblings: e1 (alice), e3 (bob) → e1 first
+    // DFS: e1, e2, e3, e4
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('bob', 0, PARENT, null, null);
+    const e4 = makeSeqStructure('bob', 1, PARENT, e3.id, null);
+
+    const { nativeOrder } = assertEquivalence([e1, e2, e3, e4]);
+
+    expect(nativeOrder.map((n) => n.idKey)).toEqual([
+      cnIdKey(e1.id),
+      cnIdKey(e2.id),
+      cnIdKey(e3.id),
+      cnIdKey(e4.id),
+    ]);
+  });
+
+  it('insert in the middle: new element between existing elements', () => {
+    // e1 → e2 (alice's sequential chain)
+    // e3 is bob's insert with originLeft=e1 (insert between e1 and e2)
+    // Both e2 and e3 are children of e1. Sibling order: e2 (alice) before e3 (bob).
+    // DFS: e1, e2, e3
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('bob', 0, PARENT, e1.id, null);
+
+    const { nativeOrder } = assertEquivalence([e1, e2, e3]);
+
+    expect(nativeOrder[0]!.idKey).toBe(cnIdKey(e1.id));
+    expect(nativeOrder[1]!.idKey).toBe(cnIdKey(e2.id));
+    expect(nativeOrder[2]!.idKey).toBe(cnIdKey(e3.id));
+  });
+
+  it('all pairs in Datalog equal all pairs in native for concurrent siblings', () => {
+    // Stress test: many concurrent elements at the root
+    const peers: PeerID[] = ['alice', 'bob', 'charlie', 'dave', 'eve'];
+    const elements = peers.map((p, i) =>
+      makeSeqStructure(p, 0, PARENT, null, null),
     );
 
-    const nativeOrder = runNativeFugue(elements);
-    const nativePairs = nativeOrderToPairs(nativeOrder);
-    const datalogPairs = runDatalogFugue(elements, cnIdKey(PARENT));
+    const { nativeOrder, nativePairs, datalogPairs } = assertEquivalence(elements);
 
-    // Every pair in Datalog must also be in native
-    for (const pair of datalogPairs) {
-      expect(nativePairs.has(pair)).toBe(true);
-    }
+    // n*(n-1)/2 pairs for 5 elements = 10
+    expect(nativePairs.size).toBe(10);
+    expect(datalogPairs.size).toBe(10);
+  });
 
-    // Every pair in native (for same-originLeft siblings) must be in Datalog
-    for (const pair of nativePairs) {
-      expect(datalogPairs.has(pair)).toBe(true);
-    }
+  it('wide tree: many children of the same parent', () => {
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
 
-    // Verify we have the expected number of pairs: C(6,2) = 15
-    expect(nativePairs.size).toBe(15);
-    expect(datalogPairs.size).toBe(15);
+    // 5 children of e1 from different peers
+    const children = ['bob', 'charlie', 'dave', 'eve', 'frank'].map((p, i) =>
+      makeSeqStructure(p, 0, PARENT, e1.id, null),
+    );
+
+    const { nativeOrder } = assertEquivalence([e1, ...children]);
+
+    // e1 first, then children sorted by peer
+    expect(nativeOrder[0]!.idKey).toBe(cnIdKey(e1.id));
+    const childPeers = nativeOrder.slice(1).map((n) => n.peer);
+    expect(childPeers).toEqual([...childPeers].sort());
+  });
+
+  it('diamond pattern: two paths converge at same originLeft', () => {
+    // e1 at root, e2 child of e1, e3 child of e1
+    // e4 child of e2, e5 child of e3
+    // Root: [e1]
+    // e1's children: e2 (alice@1), e3 (bob@0) → alice < bob → e2 first
+    // e2's children: e4 (alice@2)
+    // e3's children: e5 (bob@1)
+    // DFS: e1, e2, e4, e3, e5
+    const e1 = makeSeqStructure('alice', 0, PARENT, null, null);
+    const e2 = makeSeqStructure('alice', 1, PARENT, e1.id, null);
+    const e3 = makeSeqStructure('bob', 0, PARENT, e1.id, null);
+    const e4 = makeSeqStructure('alice', 2, PARENT, e2.id, null);
+    const e5 = makeSeqStructure('bob', 1, PARENT, e3.id, null);
+
+    const { nativeOrder } = assertEquivalence([e1, e2, e3, e4, e5]);
+
+    expect(nativeOrder.map((n) => n.idKey)).toEqual([
+      cnIdKey(e1.id),
+      cnIdKey(e2.id),
+      cnIdKey(e4.id),
+      cnIdKey(e3.id),
+      cnIdKey(e5.id),
+    ]);
   });
 });

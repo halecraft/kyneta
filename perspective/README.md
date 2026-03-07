@@ -44,7 +44,7 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 
 ## Project Status
 
-🚧 **Active Development** — Phases 1–4 complete (kernel, Datalog evaluator, solver pipeline). Phases 5–6 remaining (bootstrap, documentation).
+🚧 **Active Development** — Phases 1–4.6 complete (kernel, Datalog evaluator, solver pipeline, Datalog-driven resolution, pre-bootstrap correctness). Phases 5–6 remaining (bootstrap, documentation).
 
 See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the implementation plan.
 
@@ -58,15 +58,16 @@ Engine
 │   ├── pipeline.ts     Solver composition root: solve(S, V?) → Reality
 │   ├── structure-index.ts  Slot identity + parent→child indexes
 │   ├── projection.ts   Active constraints → Datalog ground facts
-│   └── skeleton.ts     Reality tree builder (uses native solvers)
+│   ├── resolve.ts      Datalog derived facts → typed resolution result
+│   └── skeleton.ts     Reality tree builder (reads ResolutionResult)
 ├── datalog/          Stratified bottom-up evaluator with negation & aggregation
-├── solver/           Native LWW + Fugue (optional optimization, §B.7)
+├── solver/           Native LWW + Fugue (§B.7 fast path, optional)
 └── bootstrap.ts      Reality creation with default solver rules (Phase 5)
 ```
 
 ### What Works Today
 
-The full solver pipeline: `Store → Version Filter → Valid(S) → Active(S) → Structure Index → Projection → Skeleton → Reality`. Two agents can create constraints, sync via delta, and both compute identical realities. Version-parameterized solving (`solve(S, V)`) enables time travel. 643 tests pass.
+The full solver pipeline: `Store → Version Filter → Valid(S) → Active(S) → Structure Index → Projection → Resolution → Skeleton → Reality`. Datalog evaluation is the primary resolution path; native solvers activate as an optional fast path when rules match defaults. Complete Fugue Datalog rules (7 rules, 3 predicates) match the native solver for all inputs. Store mutates in place (O(1) insert). Semantic retraction refs support Agent frontier compression. 729 tests pass across 20 files.
 
 ### Previous Prototype
 

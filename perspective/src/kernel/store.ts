@@ -4,6 +4,12 @@
 // The store is a CnId-keyed set of constraints. It grows monotonically.
 // Merge between two stores is set union — commutative, associative, idempotent.
 //
+// Mutation strategy: the store mutates in place. The `generation` counter
+// increments on every mutation, serving as the cache-invalidation signal.
+// Callers that cache solved results check the generation, not the store
+// reference. This avoids the O(n) clone-per-insert cost of the previous
+// immutable-return API.
+//
 // See unified-engine.md §4, §B.2.
 
 import type {
@@ -34,9 +40,13 @@ import {
 /**
  * The ConstraintStore holds all constraints and provides efficient access.
  *
- * Immutable from the outside — all mutation goes through `insert` or
- * `mergeStores`, which return new results / mutate internal state via
- * the mutable handle pattern.
+ * The store mutates in place via `insert`, `insertMany`, and `importDelta`.
+ * The `generation` counter increments on every mutation, serving as the
+ * cache-invalidation signal for downstream consumers (e.g., the solver
+ * pipeline can skip re-solving if the generation hasn't changed).
+ *
+ * External-facing properties are readonly to prevent accidental mutation
+ * outside of the store's own functions.
  */
 export interface ConstraintStore {
   /** All constraints by their CnId key string. */
@@ -58,7 +68,11 @@ export interface ConstraintStore {
 }
 
 /**
- * Mutable constraint store for internal use.
+ * Mutable constraint store — the actual runtime type behind ConstraintStore.
+ *
+ * All ConstraintStore instances are MutableConstraintStore at runtime.
+ * The readonly interface prevents accidental mutation by downstream code;
+ * only this module's functions cast to MutableConstraintStore to mutate.
  */
 interface MutableConstraintStore {
   constraints: Map<string, Constraint>;
@@ -84,148 +98,161 @@ export function createStore(): ConstraintStore {
 }
 
 // ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Cast a ConstraintStore to its mutable internal representation.
+ *
+ * This is safe because all ConstraintStore instances are created by
+ * `createStore()` or `mergeStores()`, both of which produce
+ * MutableConstraintStore values.
+ */
+function asMutable(store: ConstraintStore): MutableConstraintStore {
+  return store as MutableConstraintStore;
+}
+
+/**
+ * Validate a single constraint's structural invariants.
+ *
+ * Returns null if valid, or an InsertError if invalid.
+ */
+function validateConstraint(constraint: Constraint): InsertError | null {
+  if (!isSafeUint(constraint.id.counter)) {
+    return {
+      kind: 'outOfRange',
+      field: 'id.counter',
+      value: constraint.id.counter,
+    };
+  }
+
+  if (!isSafeUint(constraint.lamport)) {
+    return {
+      kind: 'outOfRange',
+      field: 'lamport',
+      value: constraint.lamport,
+    };
+  }
+
+  // Validate signature (stub: always passes)
+  if (!verify(new Uint8Array(0), constraint.sig, new Uint8Array(0))) {
+    return {
+      kind: 'invalidSignature',
+      constraintId: constraint.id,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Apply a single already-validated constraint to a mutable store.
+ *
+ * Returns true if the constraint was new (store was mutated),
+ * false if it was a duplicate (no-op).
+ */
+function applyConstraint(
+  mutable: MutableConstraintStore,
+  constraint: Constraint,
+): boolean {
+  const key = cnIdKey(constraint.id);
+
+  // Deduplication — idempotent
+  if (mutable.constraints.has(key)) {
+    return false;
+  }
+
+  mutable.constraints.set(key, constraint);
+  vvExtend(mutable.versionVector, constraint.id.peer, constraint.id.counter);
+
+  if (constraint.lamport > mutable.lamport) {
+    mutable.lamport = constraint.lamport;
+  }
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Insert
 // ---------------------------------------------------------------------------
 
 /**
- * Insert a constraint into the store.
+ * Insert a constraint into the store (mutates in place).
  *
- * Returns `Result<ConstraintStore, InsertError>`:
- * - On success: the (possibly updated) store.
- * - On failure: an InsertError describing why the constraint was rejected.
+ * Returns `Result<void, InsertError>`:
+ * - On success: the store has been mutated to include the constraint.
+ * - On failure: the store is unchanged; an InsertError describes why.
  *
  * Deduplication: if a constraint with the same CnId already exists,
- * the store is returned unchanged (success, not an error — idempotent).
+ * the store is unchanged (success, not an error — idempotent).
  *
  * Validation performed:
  * 1. counter must be a safe unsigned integer (0 ≤ x ≤ 2^53 − 1).
  * 2. lamport must be a safe unsigned integer.
  * 3. Signature must verify against id.peer (stub: always true).
  *
- * @param store - The current store.
+ * @param store - The store to mutate.
  * @param constraint - The constraint to insert.
- * @returns Result with updated store or InsertError.
+ * @returns Result indicating success or an InsertError.
  */
 export function insert(
   store: ConstraintStore,
   constraint: Constraint,
-): Result<ConstraintStore, InsertError> {
-  // Validate safe-integer invariants
-  if (!isSafeUint(constraint.id.counter)) {
-    return err({
-      kind: 'outOfRange',
-      field: 'id.counter',
-      value: constraint.id.counter,
-    });
+): Result<void, InsertError> {
+  const error = validateConstraint(constraint);
+  if (error !== null) {
+    return err(error);
   }
 
-  if (!isSafeUint(constraint.lamport)) {
-    return err({
-      kind: 'outOfRange',
-      field: 'lamport',
-      value: constraint.lamport,
-    });
+  const mutable = asMutable(store);
+  if (applyConstraint(mutable, constraint)) {
+    mutable.generation += 1;
   }
 
-  // Validate signature (stub: always passes)
-  // In real implementation, we'd serialize (id, lamport, refs, type, payload)
-  // and verify against id.peer as public key.
-  if (!verify(new Uint8Array(0), constraint.sig, new Uint8Array(0))) {
-    return err({
-      kind: 'invalidSignature',
-      constraintId: constraint.id,
-    });
-  }
-
-  // Deduplication — if already present, return unchanged (idempotent)
-  const key = cnIdKey(constraint.id);
-  if (store.constraints.has(key)) {
-    return ok(store);
-  }
-
-  // Clone and mutate
-  const mutable = cloneStore(store);
-  mutable.constraints.set(key, constraint);
-
-  // Update version vector
-  vvExtend(mutable.versionVector, constraint.id.peer, constraint.id.counter);
-
-  // Update Lamport high-water mark
-  if (constraint.lamport > mutable.lamport) {
-    mutable.lamport = constraint.lamport;
-  }
-
-  return ok(mutable as ConstraintStore);
+  return ok(undefined);
 }
 
 /**
- * Insert multiple constraints at once.
+ * Insert multiple constraints at once (mutates in place).
  *
- * More efficient than calling insert() repeatedly — only clones once.
- * Returns the first InsertError encountered, or the updated store.
+ * Validates all constraints before applying any (fail fast).
+ * Returns the first InsertError encountered, or success.
  *
- * @param store - The current store.
+ * @param store - The store to mutate.
  * @param constraints - The constraints to insert.
- * @returns Result with updated store or InsertError.
+ * @returns Result indicating success or an InsertError.
  */
 export function insertMany(
   store: ConstraintStore,
   constraints: readonly Constraint[],
-): Result<ConstraintStore, InsertError> {
+): Result<void, InsertError> {
   if (constraints.length === 0) {
-    return ok(store);
+    return ok(undefined);
   }
 
-  // Validate all constraints first (fail fast)
+  // Validate all constraints first (fail fast — no partial mutation)
   for (const constraint of constraints) {
-    if (!isSafeUint(constraint.id.counter)) {
-      return err({
-        kind: 'outOfRange',
-        field: 'id.counter',
-        value: constraint.id.counter,
-      });
-    }
-    if (!isSafeUint(constraint.lamport)) {
-      return err({
-        kind: 'outOfRange',
-        field: 'lamport',
-        value: constraint.lamport,
-      });
-    }
-    if (!verify(new Uint8Array(0), constraint.sig, new Uint8Array(0))) {
-      return err({
-        kind: 'invalidSignature',
-        constraintId: constraint.id,
-      });
+    const error = validateConstraint(constraint);
+    if (error !== null) {
+      return err(error);
     }
   }
 
-  // Check if any are actually new
-  const newConstraints: Constraint[] = [];
+  // Apply all valid constraints
+  const mutable = asMutable(store);
+  let anyNew = false;
+
   for (const constraint of constraints) {
-    const key = cnIdKey(constraint.id);
-    if (!store.constraints.has(key)) {
-      newConstraints.push(constraint);
+    if (applyConstraint(mutable, constraint)) {
+      anyNew = true;
     }
   }
 
-  if (newConstraints.length === 0) {
-    return ok(store);
+  if (anyNew) {
+    mutable.generation += 1;
   }
 
-  // Clone once and apply all
-  const mutable = cloneStore(store);
-
-  for (const constraint of newConstraints) {
-    const key = cnIdKey(constraint.id);
-    mutable.constraints.set(key, constraint);
-    vvExtend(mutable.versionVector, constraint.id.peer, constraint.id.counter);
-    if (constraint.lamport > mutable.lamport) {
-      mutable.lamport = constraint.lamport;
-    }
-  }
-
-  return ok(mutable as ConstraintStore);
+  return ok(undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,22 +311,25 @@ export function constraintsByType<T extends Constraint['type']>(
 // ---------------------------------------------------------------------------
 
 /**
- * Merge two constraint stores via set union.
+ * Merge two constraint stores via set union, returning a NEW store.
+ *
+ * Neither input store is mutated. The result is a fresh store containing
+ * all constraints from both inputs.
  *
  * Properties:
- * - Commutative: merge(A, B) = merge(B, A)
- * - Associative: merge(merge(A, B), C) = merge(A, merge(B, C))
- * - Idempotent: merge(A, A) = A
+ * - Commutative: merge(A, B) contains same constraints as merge(B, A)
+ * - Associative: merge(merge(A, B), C) contains same as merge(A, merge(B, C))
+ * - Idempotent: merge(A, A) contains same constraints as A
  *
- * @param a - First store.
- * @param b - Second store.
- * @returns Merged store containing all constraints from both.
+ * @param a - First store (not mutated).
+ * @param b - Second store (not mutated).
+ * @returns A new merged store containing all constraints from both.
  */
 export function mergeStores(
   a: ConstraintStore,
   b: ConstraintStore,
 ): ConstraintStore {
-  // Optimize: merge smaller into larger
+  // Optimize: copy larger, then add smaller's unique entries
   const [larger, smaller] =
     a.constraints.size >= b.constraints.size ? [a, b] : [b, a];
 
@@ -313,32 +343,36 @@ export function mergeStores(
   }
 
   if (!hasNew) {
-    // Nothing new — but version vector and lamport might still differ
-    // Return the one with the higher generation to preserve cache invalidation
-    // semantics. Actually, we need to merge VV and lamport regardless.
+    // No new constraints from smaller. Check if VV/lamport differ.
     if (vvEquals(larger.versionVector, smaller.versionVector) &&
         larger.lamport >= smaller.lamport) {
       return larger;
     }
   }
 
-  const mutable = cloneStore(larger);
+  // Build a new store from larger + smaller's unique entries
+  const merged: MutableConstraintStore = {
+    constraints: new Map(larger.constraints),
+    versionVector: vvClone(larger.versionVector),
+    lamport: larger.lamport,
+    generation: larger.generation + 1,
+  };
 
   for (const [key, constraint] of smaller.constraints) {
-    if (!mutable.constraints.has(key)) {
-      mutable.constraints.set(key, constraint);
+    if (!merged.constraints.has(key)) {
+      merged.constraints.set(key, constraint);
     }
   }
 
   // Merge version vectors
-  vvMergeInto(mutable.versionVector, smaller.versionVector);
+  vvMergeInto(merged.versionVector, smaller.versionVector);
 
   // Take max Lamport
-  if (smaller.lamport > mutable.lamport) {
-    mutable.lamport = smaller.lamport;
+  if (smaller.lamport > merged.lamport) {
+    merged.lamport = smaller.lamport;
   }
 
-  return mutable as ConstraintStore;
+  return merged as ConstraintStore;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,16 +423,16 @@ export function exportDelta(
 }
 
 /**
- * Import a delta from another peer.
+ * Import a delta from another peer (mutates store in place).
  *
- * @param store - Our constraint store.
+ * @param store - Our constraint store (mutated on success).
  * @param delta - The delta to import.
- * @returns Result with updated store or InsertError.
+ * @returns Result indicating success or an InsertError.
  */
 export function importDelta(
   store: ConstraintStore,
   delta: ConstraintDelta,
-): Result<ConstraintStore, InsertError> {
+): Result<void, InsertError> {
   return insertMany(store, delta.constraints);
 }
 
@@ -430,18 +464,6 @@ export function getGeneration(store: ConstraintStore): number {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Clone a store with an incremented generation counter.
- */
-function cloneStore(store: ConstraintStore): MutableConstraintStore {
-  return {
-    constraints: new Map(store.constraints),
-    versionVector: vvClone(store.versionVector),
-    lamport: store.lamport,
-    generation: store.generation + 1,
-  };
-}
 
 /**
  * Check equality of two version vectors (used internally by mergeStores).
