@@ -14,6 +14,7 @@ import {
   type PipelineConfig,
   type PipelineResult,
 } from '../../src/kernel/pipeline.js';
+import { buildDefaultRules } from '../../src/bootstrap.js';
 import {
   createStore,
   insert,
@@ -225,93 +226,15 @@ function getNode(reality: Reality, ...path: string[]): RealityNode | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Default LWW Rules (§B.4) — same structure as tests/datalog/rules.test.ts
+// Default Rules — imported from bootstrap.ts (single source of truth)
 // ---------------------------------------------------------------------------
-
-function buildLWWRules(): Rule[] {
-  const supersededByLamport: Rule = rule(
-    atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
-    [
-      positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), _])),
-      positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), _])),
-      neq(varTerm('CnId'), varTerm('CnId2')),
-      gt(varTerm('L2'), varTerm('L1')),
-    ],
-  );
-
-  const supersededByPeer: Rule = rule(
-    atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
-    [
-      positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), varTerm('P1')])),
-      positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), varTerm('P2')])),
-      neq(varTerm('CnId'), varTerm('CnId2')),
-      eq(varTerm('L2'), varTerm('L1')),
-      gt(varTerm('P2'), varTerm('P1')),
-    ],
-  );
-
-  const winnerRule: Rule = rule(
-    atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
-    [
-      positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('Value'), _, _])),
-      negation(atom('superseded', [varTerm('CnId'), varTerm('Slot')])),
-    ],
-  );
-
-  return [supersededByLamport, supersededByPeer, winnerRule];
-}
-
-// ---------------------------------------------------------------------------
-// Default Fugue Rules (simplified, §B.4)
-// ---------------------------------------------------------------------------
-
-function buildFugueRules(): Rule[] {
-  const fugueChildRule: Rule = rule(
-    atom('fugue_child', [
-      varTerm('Parent'),
-      varTerm('CnId'),
-      varTerm('OriginLeft'),
-      varTerm('OriginRight'),
-      varTerm('Peer'),
-    ]),
-    [
-      positiveAtom(atom('active_structure_seq', [
-        varTerm('CnId'),
-        varTerm('Parent'),
-        varTerm('OriginLeft'),
-        varTerm('OriginRight'),
-      ])),
-      positiveAtom(atom('constraint_peer', [varTerm('CnId'), varTerm('Peer')])),
-    ],
-  );
-
-  const fugueBeforeRule: Rule = rule(
-    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
-    [
-      positiveAtom(atom('fugue_child', [
-        varTerm('Parent'), varTerm('A'), varTerm('OriginLeft'), _, varTerm('PeerA'),
-      ])),
-      positiveAtom(atom('fugue_child', [
-        varTerm('Parent'), varTerm('B'), varTerm('OriginLeft'), _, varTerm('PeerB'),
-      ])),
-      neq(varTerm('A'), varTerm('B')),
-      lt(varTerm('PeerA'), varTerm('PeerB')),
-    ],
-  );
-
-  return [fugueChildRule, fugueBeforeRule];
-}
-
-function allDefaultRules(): Rule[] {
-  return [...buildLWWRules(), ...buildFugueRules()];
-}
 
 /**
  * Create rule constraints for the default LWW + Fugue rules at Layer 1,
  * as they would appear after reality bootstrap.
  */
 function defaultRuleConstraints(peer: PeerID, startCounter: number): RuleConstraint[] {
-  const rules = allDefaultRules();
+  const rules = buildDefaultRules();
   return rules.map((r, i) =>
     makeRuleConstraint(peer, startCounter + i, 1, r),
   );
@@ -636,7 +559,7 @@ describe('pipeline: native fast path detection', () => {
       atom('custom_derived', [varTerm('X')]),
       [positiveAtom(atom('active_value', [varTerm('X'), _, _, _, _]))],
     );
-    const customRuleConstraint = makeRuleConstraint('alice', 20, 2, customRule);
+    const customRuleConstraint = makeRuleConstraint('alice', 30, 2, customRule);
 
     const store = buildStore([root, child, val, ...ruleConstraints, customRuleConstraint]);
 

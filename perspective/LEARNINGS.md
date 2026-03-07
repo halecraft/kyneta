@@ -461,6 +461,60 @@ The spec says `Reality { root: Node }` but a reality can have multiple top-level
 
 A subtle detail: the structure index's `childrenOf` map keys by the parent structure constraint's CnId key (e.g., `alice@0`), not by the parent's slot identity. This is correct because a child's `parent` field in the constraint payload points to a specific structure CnId, not to a slot. When a Map slot has multiple structure constraints (concurrent creation), `getChildrenOfSlotGroup()` iterates all structure CnIds in the group and merges their children. This ensures that children created under any peer's version of the parent are visible in the merged reality.
 
+## Phase 5: Reality Bootstrap and Integration
+
+### Canonical Rule Definitions Must Live in Production Code, Not Tests
+
+Before Phase 5, the default LWW and Fugue Datalog rules were defined independently in four test files. Each copy was structurally identical but maintained separately — a classic violation of DRY that went unnoticed because each file "owned" its own rules for its own tests. When the complete Fugue rules were introduced in Phase 4.6 (growing from 2 to 8 rules), only the equivalence test was updated. The resolve test still used the old simplified 2-rule Fugue, silently producing a different rule count.
+
+This caused a real bug during Phase 5: the resolve test's `defaultRuleConstraints()` allocated CnId counters 10–14 for 5 rules, with a custom Layer 2 rule at counter 20. After switching to the 11-rule canonical set, counters became 10–20 — and the custom rule at counter 20 shared a CnId with the last default rule. Store deduplication silently dropped the custom rule, making the native fast-path detection test pass when it should have failed (no Layer 2 rule present → native path activates).
+
+**Lesson**: When multiple test files construct the same domain object (rules, fixtures, configs), extract the canonical version to production code and import it. This is the same principle as Phase 3.5's shared type extraction. Test-local definitions are fine for test-specific variants (e.g., a "lowest-lamport-wins" custom rule), but the defaults should have a single source of truth. `bootstrap.ts` now exports `buildDefaultLWWRules()`, `buildDefaultFugueRules()`, and `buildDefaultRules()` — four test files import from it instead of maintaining parallel copies.
+
+### CnId Counter Collisions Are Silent — Deduplication Masks the Bug
+
+The store's CnId-based deduplication is a correctness feature: inserting the same constraint twice is a no-op. But it also means that if two *different* constraints are accidentally assigned the same `(peer, counter)` pair, the second one is silently discarded. No error, no warning — just a missing constraint.
+
+In practice this manifests as tests that *pass when they should fail*. The custom Layer 2 rule that was supposed to trigger the Datalog path was simply gone from the store. The native fast-path detection test passed because it saw only Layer 1 rules. The reality was correct (the custom rule was irrelevant to the map resolution), so no output assertion caught it either.
+
+**Lesson**: When constructing constraints with manually-assigned counters in tests, leave generous gaps between counter ranges for different "groups" of constraints (e.g., structure at 0–9, default rules at 10–30, custom rules at 50+). Better: use an agent (which auto-increments) instead of manual counter assignment. The integration tests use agents exclusively and never hit this issue.
+
+### Bootstrap Is the Kernel Speaking, Not a User Action — Layer Guards Are Correct
+
+`Agent.produceRule()` enforces `layer >= 2`, which initially appeared to block bootstrap from emitting Layer 1 default rules. Three options were considered: (a) add a bootstrap-only method to Agent, (b) add a `force` parameter to bypass the check, (c) construct rule constraints directly in bootstrap.
+
+Option (c) is correct. The layer guard exists because Layer 0–1 are kernel-reserved (spec §14). User-facing Agents *should not* be able to create Layer 1 rules — that's the whole point of the stratification. Bootstrap is not a user action; it is the kernel itself setting up initial state. Constructing `RuleConstraint` objects directly with `layer: 1` is the right abstraction: bootstrap has kernel-level authority, Agent has user-level authority.
+
+The `RulePayload` type is `{ layer: number; ... }` with no compile-time enforcement of layer bounds. This is intentional — the type system describes the wire format (any layer value is structurally valid), while runtime guards enforce semantic invariants at the appropriate boundary (Agent for users, bootstrap for the kernel).
+
+### Integration Tests Reveal Authority as the Hidden Prerequisite
+
+The first integration test failure was: "Bob's map key doesn't appear in Alice's reality after sync." The constraint was in the store, the structure was valid, the value was correct — but Bob had no capabilities. `computeValid()` filtered out all of Bob's constraints because Alice never granted Bob admin.
+
+This is the authority model working as designed, but it's invisible in unit tests because pipeline tests hand-construct constraints with the creator's peer ID (bypassing validity) or test with `enableDatalogEvaluation: false` (bypassing rules). Integration tests that use realistic multi-agent workflows are the first place where the authority model actually matters.
+
+**Pattern for multi-agent integration tests**: Always grant capabilities *before* the second agent creates constraints. The sequence is: (1) bootstrap reality, (2) creator grants admin/capabilities to other peers, (3) sync the grant to the other peer's store, (4) other peer creates constraints. Missing step 2 or 3 produces constraints that are silently filtered by validity.
+
+### The Agent Must Observe Its Own Constraints for Refs to Work
+
+A subtlety in the Agent API: producing a constraint with `agent.produceValue(...)` returns the constraint but does **not** automatically add it to the agent's version vector. If you don't call `agent.observe(constraint)` after inserting it into the store, the agent's next constraint won't include the previous one in its refs. This means the causal chain is broken — the new constraint doesn't declare that it observed the previous one.
+
+In bootstrap, this is handled by `agent.observeMany(constraints)` after all bootstrap constraints are inserted. In integration tests, the pattern is:
+
+```
+const c = agent.produceValue(targetId, 'hello');
+insert(store, c);
+agent.observe(c);
+```
+
+All three lines are required. Missing the `observe` call doesn't cause an immediate error — it causes downstream causal issues (e.g., retraction's target-in-refs check failing, or version vectors being stale for delta sync).
+
+### Bidirectional Sync Requires Two Rounds When Agents Are Concurrent
+
+The `bidirectionalSync` helper does A→B then B→A in one pass. This works because delta computation is based on version vectors: A exports everything B hasn't seen, then B exports everything A hasn't seen (including B's own new constraints). After one round, both stores contain the union.
+
+But if both agents *continue producing constraints* after sync, a second round is needed. The version vectors captured at sync time reflect the state *before* the sync — they don't include constraints the other peer produced during the sync. In practice, integration tests sync at quiescent points (both agents have finished their writes), so one round suffices. A production system would need continuous sync or a retry loop.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.

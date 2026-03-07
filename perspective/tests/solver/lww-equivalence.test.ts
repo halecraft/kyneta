@@ -22,19 +22,10 @@ import {
   evaluate,
 } from '../../src/datalog/evaluate.js';
 import {
-  atom,
-  varTerm,
-  constTerm,
-  positiveAtom,
-  negation,
-  rule,
   fact,
-  eq,
-  neq,
-  gt,
-  _,
 } from '../../src/datalog/types.js';
-import type { Rule, Fact } from '../../src/datalog/types.js';
+import type { Fact } from '../../src/datalog/types.js';
+import { buildDefaultLWWRules } from '../../src/bootstrap.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -88,55 +79,7 @@ function makeValue(
   };
 }
 
-/**
- * Build the standard LWW Datalog rules from §B.4 (using guards).
- *
- * superseded(CnId, Slot) :-
- *   active_value(CnId, Slot, _, L1, _),
- *   active_value(CnId2, Slot, _, L2, _),
- *   CnId ≠ CnId2, L2 > L1.
- *
- * superseded(CnId, Slot) :-
- *   active_value(CnId, Slot, _, L1, P1),
- *   active_value(CnId2, Slot, _, L2, P2),
- *   CnId ≠ CnId2, L2 == L1, P2 > P1.
- *
- * winner(Slot, CnId, Value) :-
- *   active_value(CnId, Slot, Value, _, _),
- *   not superseded(CnId, Slot).
- */
-function buildLWWRules(): Rule[] {
-  const supersededByLamport: Rule = rule(
-    atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
-    [
-      positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), _])),
-      positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), _])),
-      neq(varTerm('CnId'), varTerm('CnId2')),
-      gt(varTerm('L2'), varTerm('L1')),
-    ],
-  );
 
-  const supersededByPeer: Rule = rule(
-    atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
-    [
-      positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), varTerm('P1')])),
-      positiveAtom(atom('active_value', [varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), varTerm('P2')])),
-      neq(varTerm('CnId'), varTerm('CnId2')),
-      eq(varTerm('L2'), varTerm('L1')),
-      gt(varTerm('P2'), varTerm('P1')),
-    ],
-  );
-
-  const winnerRule: Rule = rule(
-    atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
-    [
-      positiveAtom(atom('active_value', [varTerm('CnId'), varTerm('Slot'), varTerm('Value'), _, _])),
-      negation(atom('superseded', [varTerm('CnId'), varTerm('Slot')])),
-    ],
-  );
-
-  return [supersededByLamport, supersededByPeer, winnerRule];
-}
 
 /**
  * Run the Datalog LWW rules on a set of active_value facts and
@@ -145,7 +88,7 @@ function buildLWWRules(): Rule[] {
 function runDatalogLWW(
   activeValueFacts: Fact[],
 ): Map<string, { winnerId: string; content: Value }> {
-  const rules = buildLWWRules();
+  const rules = buildDefaultLWWRules();
   const result = evaluate(rules, activeValueFacts);
 
   if (!result.ok) {

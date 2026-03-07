@@ -538,17 +538,17 @@ Post-Phase-4.5 research revealed four gaps that must be closed before bootstrap 
 - Pipeline native-only: small test group verifies native bypass still works with `enableDatalogEvaluation: false`
 - All existing tests pass with identical results
 
-### Phase 5: Reality Bootstrap and Integration 🔴
+### Phase 5: Reality Bootstrap and Integration 🟢
 
 Creating realities, the bootstrap process, and the public API.
 
 #### Tasks
 
-- 5.1 Implement `bootstrap.ts` — reality creation: generate creation constraint with Admin grant to creator; emit default LWW rules as rule constraints (using `guard` body elements, not legacy `__neq`/`__gt`); emit default Fugue rules as rule constraints (the complete rules from Phase 4.6.2, using wildcards for unused positions); set compaction policy and retraction depth (§B.8) 🔴
-- 5.2 Implement `index.ts` — public API: createReality, assertConstraint, solve, sync (delta export/import), introspection stubs 🔴
-- 5.3 Integration test: two agents create constraints, sync via delta, both compute identical reality 🔴
-- 5.4 Integration test: agent retracts a value, syncs, both see retraction reflected in reality 🔴
-- 5.5 Integration test: bootstrap a reality, verify default solver rules are in the store and produce correct results 🔴
+- 5.1 Implement `bootstrap.ts` — reality creation: generate creation constraint with Admin grant to creator; emit default LWW rules as rule constraints (using `guard` body elements, not legacy `__neq`/`__gt`); emit default Fugue rules as rule constraints (the complete rules from Phase 4.6.2, using wildcards for unused positions); set compaction policy and retraction depth (§B.8). Canonical rule builders (`buildDefaultLWWRules`, `buildDefaultFugueRules`, `buildDefaultRules`) are exported and serve as the single source of truth — test files that previously duplicated these rules now import from `bootstrap.ts`. Bootstrap constructs Layer 1 rule constraints directly (bypassing `Agent.produceRule()`'s layer ≥ 2 guard, which is correct for user-facing rules but not kernel bootstrap). 🟢
+- 5.2 Implement `index.ts` — public API: `createReality`, `solve`, `solveFull`, `insert`, `exportDelta`, `importDelta`, plus full re-exports of kernel types, authority, validity, retraction, structure index, projection, resolution, skeleton, and Datalog evaluator. No `assertConstraint` wrapper — callers use the Agent directly (the Agent IS the constraint factory per §B.5). Introspection deferred to future plan. 🟢
+- 5.3 Integration test: two agents create constraints, sync via delta, both compute identical reality (includes three-agent pairwise sync, concurrent LWW resolution, concurrent Fugue seq ordering) 🟢
+- 5.4 Integration test: agent retracts a value, syncs, both see retraction reflected in reality (includes undo via retract-of-retract, seq tombstone via value retraction, semantic refs for non-frontier targets) 🟢
+- 5.5 Integration test: bootstrap a reality, verify default solver rules are in the store and produce correct results (includes constraint count, admin grant, LWW rules, Fugue rules, monotonic counters/lamport, agent initialization, pipeline config, empty reality, map resolution, seq ordering) 🟢
 
 #### Tests
 
@@ -566,7 +566,7 @@ Creating realities, the bootstrap process, and the public API.
 - 6.2 Rewrite TECHNICAL.md to document the new architecture, spec alignment, and design decisions 🔴
 - 6.3 Update LEARNINGS.md with findings from the new implementation 🔴
 - 6.4 Remove `reference/fugue-v0.ts` (no longer needed after Phase 4 port) 🔴
-- 6.5 *(Stretch)* Add a convenience DSL for rule construction — e.g. tagged template literal or builder API — so that bootstrap rules and tests don't require deeply nested factory calls. The current `rule(atom('p', [varTerm('X')]), [positiveAtom(atom('q', [varTerm('X'), _]))])` is correct but verbose. A DSL would let this be written as something like `Rule.head('p', $X).when('q', $X, _)` or `datalog\`p(X) :- q(X, _).\``. This is a developer-experience improvement, not a correctness issue, so it's deferred to cleanup. 🔴
+- 6.5 Add a convenience DSL for rule construction — e.g. tagged template literal or builder API — so that bootstrap rules and tests don't require deeply nested factory calls. The current `rule(atom('p', [varTerm('X')]), [positiveAtom(atom('q', [varTerm('X'), _]))])` is correct but verbose. A DSL would let this be written as something like `Rule.head('p', $X).when('q', $X, _)` or `datalog\`p(X) :- q(X, _).\``. This is a developer-experience improvement, not a correctness issue, so it's deferred to cleanup. 🔴
 
 *Note: Tasks 6.3 (remove old prototype) and 6.5 (remove legacy builtins) from the original plan were moved to Phase 2.5 and executed immediately after Phase 2.*
 
@@ -988,3 +988,13 @@ The plan listed `tests/kernel/skeleton.test.ts` as a Phase 4 deliverable (Direct
 ### Test Configs Should Match Production Defaults
 
 All 25 pipeline tests set `enableDatalogEvaluation: false` in their `DEFAULT_CONFIG`, meaning they exercise only the native solver path. The Datalog-primary path — which is the spec's architecture and the production default — is tested only in the Phase 4.5 resolve tests. This means the most important code path (the one users will actually run) has the least integration-level coverage. Phase 4.6 flips the default to `true`, so every pipeline test exercises the real production path. A small focused group tests the native-only bypass explicitly.
+
+### Canonical Rule Definitions Must Live in Production Code, Not Tests
+
+Before Phase 5, the default LWW and Fugue rules were defined independently in four test files (`tests/datalog/rules.test.ts`, `tests/kernel/resolve.test.ts`, `tests/solver/lww-equivalence.test.ts`, `tests/solver/fugue-equivalence.test.ts`). Each copy was structurally identical but maintained separately. When the complete Fugue rules were introduced in Phase 4.6, only the equivalence test was updated — `resolve.test.ts` still used the old simplified 2-rule Fugue. This caused a subtle counter-collision bug during Phase 5 when the rule count changed from 5 to 11 (the custom Layer 2 rule in a fast-path detection test shared a CnId with the last default rule, silently deduplicating it away).
+
+The fix: `bootstrap.ts` exports `buildDefaultLWWRules()`, `buildDefaultFugueRules()`, and `buildDefaultRules()` as the single source of truth. All test files import from bootstrap instead of defining their own copies. This is the same principle as Phase 3.5's shared type extraction — when multiple modules need the same definition, extract it to a shared location rather than maintaining parallel copies.
+
+### Bootstrap Constructs Layer 1 Rules Directly — Agent Layer Guard Is Correct
+
+`Agent.produceRule()` enforces `layer >= 2`, which initially appeared to be a blocker for bootstrap (which needs Layer 1 default rules). But this guard is architecturally correct: Layer 0–1 are kernel-reserved (§14), and user-facing Agents should not be able to create Layer 1 rules. Bootstrap is not a user action — it is the kernel itself setting up initial state. The solution is simple: `bootstrap.ts` constructs `RuleConstraint` objects directly with `layer: 1`, bypassing the Agent entirely. The `RulePayload.layer` type is `number` with no compile-time constraint, so the guard is purely runtime in `Agent.produceRule()`. The comment on `RulePayload` was updated to document both valid ranges: Layer 1 for bootstrap, Layer ≥ 2 for Agent-produced rules.

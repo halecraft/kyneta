@@ -4,8 +4,43 @@
  * A constraint-based approach to CRDTs where constraints are truth
  * and state is derived through deterministic solving.
  *
+ * ## Quick Start
+ *
+ * ```ts
+ * import {
+ *   createReality, solve, insert,
+ *   produceRoot, produceMapChild,
+ * } from 'prism';
+ *
+ * const { store, agent, config } = createReality({ creator: 'alice' });
+ * const root = produceRoot(agent, 'profile', 'map');
+ * insert(store, root.constraint);
+ * // ... add children, values, sync with other agents
+ * const reality = solve(store, config);
+ * ```
+ *
  * @packageDocumentation
  */
+
+// === Bootstrap (§B.8) ===
+export {
+  type BootstrapConfig,
+  type BootstrapResult,
+  createReality,
+  buildDefaultLWWRules,
+  buildDefaultFugueRules,
+  buildDefaultRules,
+  DEFAULT_RETRACTION_DEPTH,
+  BOOTSTRAP_CONSTRAINT_COUNT,
+} from './bootstrap.js';
+
+// === Pipeline (§7) ===
+export {
+  type PipelineConfig,
+  type PipelineResult,
+  solve,
+  solveFull,
+} from './kernel/pipeline.js';
 
 // === Kernel (Layer 0) ===
 export {
@@ -120,6 +155,51 @@ export {
   produceMapChild,
   produceSeqChild,
 
+  // Authority (§5)
+  type AuthorityState,
+  capabilityEquals,
+  capabilityKey,
+  capabilityCovers,
+  computeAuthority,
+  hasCapability,
+  getCapabilities,
+  requiredCapability,
+
+  // Validity (§5)
+  type ValidityResult,
+  type InvalidConstraint,
+  computeValid,
+  filterValid,
+
+  // Retraction (§6)
+  type RetractionConfig,
+  type RetractionResult,
+  type RetractionViolation,
+  type RetractionViolationReason,
+  DEFAULT_RETRACTION_CONFIG,
+  computeActive,
+  filterActive,
+
+  // Structure Index (§8)
+  type SlotGroup,
+  type StructureIndex,
+  slotId,
+  childKey,
+  buildStructureIndex,
+  getStructure,
+  getSlotId,
+  getSlotGroup,
+  getChildren,
+  hasStructure,
+  getChildrenOfSlotGroup,
+
+  // Projection (§7.2)
+  type ProjectionResult,
+  ACTIVE_VALUE,
+  ACTIVE_STRUCTURE_SEQ,
+  CONSTRAINT_PEER,
+  projectToFacts,
+
   // Resolution (§B.4, §B.7 — Datalog→skeleton bridge)
   type ResolvedWinner,
   type FugueBeforePair,
@@ -129,6 +209,9 @@ export {
   extractResolution,
   nativeResolution,
   topologicalOrderFromPairs,
+
+  // Skeleton (§7.3)
+  buildSkeleton,
 } from './kernel/index.js';
 
 // === Datalog Evaluator ===

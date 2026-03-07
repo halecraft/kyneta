@@ -102,7 +102,7 @@ export interface RetractPayload {
  * Retractable.
  */
 export interface RulePayload {
-  readonly layer: number; // must be ≥ 2
+  readonly layer: number; // Layer 1 = default solver rules (bootstrap); Layer ≥ 2 = user rules (Agent)
   readonly head: import('../datalog/types.js').Atom;
   readonly body: readonly import('../datalog/types.js').BodyElement[];
 }
