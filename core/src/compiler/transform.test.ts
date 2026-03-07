@@ -712,6 +712,158 @@ describe("collectRequiredImports", () => {
     expect(runtime.has("textRegion")).toBe(false)
     expect(runtime.has("subscribeMultiple")).toBe(true)
   })
+
+  it("should include inputTextRegion for value attribute with direct TextRef read", () => {
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "element" as const,
+          tag: "input",
+          attributes: [
+            {
+              name: "value",
+              value: {
+                kind: "content" as const,
+                source: "doc.title.toString()",
+                bindingTime: "reactive" as const,
+                dependencies: [dep("doc.title", "text")],
+                span,
+                directReadSource: "doc.title",
+              },
+            },
+          ],
+          eventHandlers: [],
+          bindings: [],
+          children: [],
+          isReactive: true,
+          span,
+        },
+      ],
+      span,
+    )
+    builder.isReactive = true
+
+    const { runtime } = collectRequiredImports([builder])
+
+    expect(runtime.has("inputTextRegion")).toBe(true)
+  })
+
+  it("should NOT include inputTextRegion for value attribute without directReadSource", () => {
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "element" as const,
+          tag: "input",
+          attributes: [
+            {
+              name: "value",
+              value: {
+                kind: "content" as const,
+                source: "doc.title.toString().toUpperCase()",
+                bindingTime: "reactive" as const,
+                dependencies: [dep("doc.title", "text")],
+                span,
+                // no directReadSource
+              },
+            },
+          ],
+          eventHandlers: [],
+          bindings: [],
+          children: [],
+          isReactive: true,
+          span,
+        },
+      ],
+      span,
+    )
+    builder.isReactive = true
+
+    const { runtime } = collectRequiredImports([builder])
+
+    expect(runtime.has("inputTextRegion")).toBe(false)
+  })
+
+  it("should NOT include inputTextRegion for value attribute with non-text deltaKind", () => {
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "element" as const,
+          tag: "input",
+          attributes: [
+            {
+              name: "value",
+              value: {
+                kind: "content" as const,
+                source: "doc.selected.get()",
+                bindingTime: "reactive" as const,
+                dependencies: [dep("doc.selected", "replace")],
+                span,
+                directReadSource: "doc.selected",
+              },
+            },
+          ],
+          eventHandlers: [],
+          bindings: [],
+          children: [],
+          isReactive: true,
+          span,
+        },
+      ],
+      span,
+    )
+    builder.isReactive = true
+
+    const { runtime } = collectRequiredImports([builder])
+
+    expect(runtime.has("inputTextRegion")).toBe(false)
+  })
+
+  it("should NOT include inputTextRegion for non-value attribute even with TextRef", () => {
+    const builder = createBuilder(
+      "div",
+      [],
+      [],
+      [
+        {
+          kind: "element" as const,
+          tag: "div",
+          attributes: [
+            {
+              name: "class",
+              value: {
+                kind: "content" as const,
+                source: "doc.theme.toString()",
+                bindingTime: "reactive" as const,
+                dependencies: [dep("doc.theme", "text")],
+                span,
+                directReadSource: "doc.theme",
+              },
+            },
+          ],
+          eventHandlers: [],
+          bindings: [],
+          children: [],
+          isReactive: true,
+          span,
+        },
+      ],
+      span,
+    )
+    builder.isReactive = true
+
+    const { runtime } = collectRequiredImports([builder])
+
+    expect(runtime.has("inputTextRegion")).toBe(false)
+  })
 })
 
 // =============================================================================

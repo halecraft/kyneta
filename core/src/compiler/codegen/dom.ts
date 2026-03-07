@@ -250,6 +250,65 @@ function generateContent(
 // =============================================================================
 
 /**
+ * Generate the correct DOM update expression for an attribute.
+ *
+ * Maps attribute names to the correct DOM API: property-based setters for
+ * well-known attributes (`value`, `checked`, `disabled`, `class`, `style`,
+ * `data-*`), and `setAttribute` for everything else.
+ *
+ * This is the single source of truth for attribute update expressions,
+ * used by `generateAttributeSet`, `generateAttributeSubscription`, and
+ * `generateHoleSetup` (template cloning path). Having one function
+ * prevents the cloning path from diverging (e.g., using `setAttribute`
+ * where the non-cloning path uses `.value =`).
+ *
+ * @param elementVar - Variable name of the DOM element
+ * @param attrName - Attribute name (e.g., "value", "class", "data-foo")
+ * @param valueExpr - JavaScript expression for the attribute value
+ * @returns A single JavaScript statement string (without trailing semicolon)
+ */
+function generateAttributeUpdateCode(
+  elementVar: string,
+  attrName: string,
+  valueExpr: string,
+): string {
+  if (attrName === "class") {
+    return `${elementVar}.className = ${valueExpr}`
+  } else if (attrName === "style") {
+    return `Object.assign(${elementVar}.style, ${valueExpr})`
+  } else if (attrName === "value") {
+    return `${elementVar}.value = ${valueExpr}`
+  } else if (attrName === "checked") {
+    return `${elementVar}.checked = ${valueExpr}`
+  } else if (attrName === "disabled") {
+    return `${elementVar}.disabled = ${valueExpr}`
+  } else if (attrName.startsWith("data-")) {
+    const dataKey = camelCase(attrName.slice(5))
+    return `${elementVar}.dataset.${dataKey} = ${valueExpr}`
+  } else {
+    return `${elementVar}.setAttribute(${JSON.stringify(attrName)}, ${valueExpr})`
+  }
+}
+
+/**
+ * Check if a reactive attribute should use inputTextRegion for delta-aware
+ * subscription instead of a naive subscribe.
+ *
+ * The condition is: `value` attribute + single dependency with deltaKind
+ * "text" + directReadSource set (i.e., the expression is a direct read
+ * like `ref.toString()` or `ref.get()`).
+ */
+function isInputTextRegionCandidate(attr: AttributeNode): boolean {
+  return (
+    attr.name === "value" &&
+    attr.value.bindingTime === "reactive" &&
+    !!attr.value.directReadSource &&
+    attr.value.dependencies.length === 1 &&
+    attr.value.dependencies[0].deltaKind === "text"
+  )
+}
+
+/**
  * Generate code to set an attribute.
  */
 function generateAttributeSet(
@@ -257,33 +316,22 @@ function generateAttributeSet(
   attr: AttributeNode,
   state: CodegenState,
 ): string[] {
+  // Skip static set when inputTextRegion will handle initialization
+  if (isInputTextRegionCandidate(attr)) {
+    return []
+  }
+
   const lines: string[] = []
   const ind = getIndent(state)
   const content = generateContent(attr.value, state)
 
-  // Special handling for common attributes
-  if (attr.name === "class") {
-    lines.push(`${ind}${elementVar}.className = ${content.code}`)
-  } else if (attr.name === "style" && attr.value.bindingTime !== "literal") {
-    // Style can be object or string
-    lines.push(`${ind}Object.assign(${elementVar}.style, ${content.code})`)
-  } else if (attr.name === "value") {
-    lines.push(`${ind}${elementVar}.value = ${content.code}`)
-  } else if (attr.name === "checked") {
-    lines.push(`${ind}${elementVar}.checked = ${content.code}`)
-  } else if (attr.name === "disabled") {
-    lines.push(`${ind}${elementVar}.disabled = ${content.code}`)
-  } else if (attr.name.startsWith("data-")) {
-    // Data attributes
-    const dataKey = attr.name.slice(5) // Remove "data-"
+  // For literal style, use setAttribute (the value is a plain string)
+  if (attr.name === "style" && attr.value.bindingTime === "literal") {
     lines.push(
-      `${ind}${elementVar}.dataset.${camelCase(dataKey)} = ${content.code}`,
+      `${ind}${elementVar}.setAttribute("style", ${content.code})`,
     )
   } else {
-    // Generic attribute
-    lines.push(
-      `${ind}${elementVar}.setAttribute(${JSON.stringify(attr.name)}, ${content.code})`,
-    )
+    lines.push(`${ind}${generateAttributeUpdateCode(elementVar, attr.name, content.code)}`)
   }
 
   return lines
@@ -307,21 +355,16 @@ function generateAttributeSubscription(
 
   if (deps.length === 0) return []
 
-  // Generate the update code
-  let updateCode: string
-  if (attr.name === "class") {
-    updateCode = `${elementVar}.className = ${attr.value.source}`
-  } else if (attr.name === "style") {
-    updateCode = `Object.assign(${elementVar}.style, ${attr.value.source})`
-  } else if (attr.name === "value") {
-    updateCode = `${elementVar}.value = ${attr.value.source}`
-  } else if (attr.name === "checked") {
-    updateCode = `${elementVar}.checked = ${attr.value.source}`
-  } else if (attr.name === "disabled") {
-    updateCode = `${elementVar}.disabled = ${attr.value.source}`
-  } else {
-    updateCode = `${elementVar}.setAttribute(${JSON.stringify(attr.name)}, ${attr.value.source})`
+  // Check for delta-aware inputTextRegion dispatch
+  if (isInputTextRegionCandidate(attr)) {
+    lines.push(
+      `${ind}inputTextRegion(${elementVar}, ${attr.value.directReadSource}, ${state.scopeVar})`,
+    )
+    return lines
   }
+
+  // Generate the update code using the shared helper
+  const updateCode = generateAttributeUpdateCode(elementVar, attr.name, attr.value.source)
 
   if (deps.length === 1) {
     // Single dependency - use subscribe
@@ -999,43 +1042,36 @@ function generateHoleSetup(
       const attrName = hole.attributeName
       if (!contentNode || !attrName) break
 
-      if (contentNode.bindingTime === "render") {
-        // Render-time - set once
-        if (attrName.startsWith("data-")) {
-          const dataKey = camelCase(attrName.slice(5))
-          lines.push(
-            `${ind}${nodeRef}.dataset.${dataKey} = ${contentNode.source}`,
-          )
-        } else {
-          lines.push(
-            `${ind}${nodeRef}.setAttribute(${JSON.stringify(attrName)}, ${contentNode.source})`,
-          )
-        }
+      // Check for delta-aware inputTextRegion dispatch (same condition
+      // as in generateAttributeSubscription, applied to the cloning path)
+      const isInputTextRegion =
+        attrName === "value" &&
+        contentNode.bindingTime === "reactive" &&
+        !!contentNode.directReadSource &&
+        contentNode.dependencies.length === 1 &&
+        contentNode.dependencies[0].deltaKind === "text"
+
+      if (isInputTextRegion) {
+        // inputTextRegion handles both initialization and subscription
+        lines.push(
+          `${ind}inputTextRegion(${nodeRef}, ${contentNode.directReadSource}, ${state.scopeVar})`,
+        )
+      } else if (contentNode.bindingTime === "render") {
+        // Render-time - set once, using property-based setter
+        lines.push(
+          `${ind}${generateAttributeUpdateCode(nodeRef, attrName, contentNode.source)}`,
+        )
       } else if (contentNode.bindingTime === "reactive") {
         // Reactive - needs subscription
         const deps = contentNode.dependencies
+        const updateCode = generateAttributeUpdateCode(nodeRef, attrName, contentNode.source)
         if (deps.length === 1) {
           const dep = deps[0]
-          let updateCode: string
-          if (attrName.startsWith("data-")) {
-            const dataKey = camelCase(attrName.slice(5))
-            updateCode = `${nodeRef}.dataset.${dataKey} = v`
-          } else {
-            updateCode = `${nodeRef}.setAttribute(${JSON.stringify(attrName)}, v)`
-          }
           lines.push(`${ind}subscribe(${dep.source}, () => {`)
-          lines.push(`${ind}${state.indent}const v = ${contentNode.source}`)
           lines.push(`${ind}${state.indent}${updateCode}`)
           lines.push(`${ind}}, ${state.scopeVar})`)
         } else if (deps.length > 1) {
           const depSources = deps.map(d => d.source).join(", ")
-          let updateCode: string
-          if (attrName.startsWith("data-")) {
-            const dataKey = camelCase(attrName.slice(5))
-            updateCode = `${nodeRef}.dataset.${dataKey} = ${contentNode.source}`
-          } else {
-            updateCode = `${nodeRef}.setAttribute(${JSON.stringify(attrName)}, ${contentNode.source})`
-          }
           // Set initial value
           lines.push(`${ind}${updateCode}`)
           // Subscribe to all deps

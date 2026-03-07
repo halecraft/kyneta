@@ -96,13 +96,13 @@ The read direction: CRDT deltas applied surgically to `<input>.value` via `setRa
    - `inputTextRegion` falls back to full replacement for non-text deltas
    - `inputTextRegion` cleans up subscription on scope dispose
 
-## Phase 2: Compiler — Delta-Aware `value` Attribute Subscription 🔴
+## Phase 2: Compiler — Delta-Aware `value` Attribute Subscription 🟢
 
 Extend attribute codegen to use property-based setters consistently, then add `inputTextRegion` dispatch for direct TextRef reads on `value` attributes.
 
 ### Tasks
 
-1. **Extract `generateAttributeUpdateCode` helper in `packages/kinetic/src/compiler/codegen/dom.ts`** 🔴
+1. **Extract `generateAttributeUpdateCode` helper in `packages/kinetic/src/compiler/codegen/dom.ts`** ✅
 
    The template cloning path (`generateHoleSetup`, `"attribute"` case) uses `setAttribute` for all attributes, while the non-cloning path (`generateAttributeSet`, `generateAttributeSubscription`) correctly uses DOM properties for `value`, `checked`, `disabled`, `class`, and `style`. This is a latent bug: `setAttribute("value", x)` does not update `input.value` after user interaction — it only changes the HTML default attribute.
 
@@ -118,17 +118,17 @@ Extend attribute codegen to use property-based setters consistently, then add `i
 
    Property-based mappings: `value` → `.value =`, `checked` → `.checked =`, `disabled` → `.disabled =`, `class` → `.className =`, `style` → `Object.assign(el.style, expr)`, `data-*` → `.dataset.X =`. Everything else → `setAttribute`. Note: the cloning path currently uses `setAttribute` for **all** of these (including render-time attributes, not just reactive ones), so the fix covers both binding times.
 
-2. **Extend `generateAttributeSubscription` for delta-aware `value` dispatch** 🔴
+2. **Extend `generateAttributeSubscription` for delta-aware `value` dispatch** ✅
 
    When `attr.name === "value"` and `attr.value.directReadSource` is set and `attr.value.dependencies.length === 1` and `attr.value.dependencies[0].deltaKind === "text"`, emit `inputTextRegion(elementVar, directReadSource, scopeVar)` instead of the naive subscription. Apply the same dispatch in `generateHoleSetup`'s `"attribute"` case for cloning.
 
    This parallels the existing `textRegion` dispatch in `generateReactiveContentSubscription`. Both `generateAttributeSet` (non-cloning) and the static-set portion of `generateHoleSetup` (cloning) must skip the initial value set for this attribute, since `inputTextRegion` handles initialization internally.
 
-3. **Add `inputTextRegion` to `collectRequiredImports` in `packages/kinetic/src/compiler/transform.ts`** 🔴
+3. **Add `inputTextRegion` to `collectRequiredImports` in `packages/kinetic/src/compiler/transform.ts`** ✅
 
    When an element has a `value` attribute with `directReadSource` and `deltaKind === "text"`, include `inputTextRegion` in the runtime imports.
 
-4. **Add codegen unit tests in `packages/kinetic/src/compiler/codegen/dom.test.ts`** 🔴
+4. **Add codegen unit tests in `packages/kinetic/src/compiler/codegen/dom.test.ts`** ✅
 
    - `value: doc.ref.toString()` with `deltaKind: "text"` → generates `inputTextRegion`
    - `value: doc.ref.toString()` with `deltaKind: "replace"` → generates naive `subscribe`
@@ -138,9 +138,9 @@ Extend attribute codegen to use property-based setters consistently, then add `i
    - Template cloning path: `style` attribute hole uses `Object.assign(el.style, ...)` (not `setAttribute`)
    - Template cloning path: render-time `value` attribute uses `.value =` (not `setAttribute`)
 
-5. **Add integration test in `packages/kinetic/src/compiler/integration.test.ts`** 🔴
+5. **Add integration test in `packages/kinetic/src/compiler/integration.test.ts`** ✅
 
-   Compile a component with `input({ value: doc.title.toString() })` where `doc.title` is a `TextRef`, verify the generated code calls `inputTextRegion`, and verify that a subsequent `doc.title.insert()` updates `element.value` via surgical patching (mock `setRangeText`).
+   Compile a component with `input({ value: doc.title.toString() })` where `doc.title` is a `TextRef`, verify the generated code calls `inputTextRegion`, and verify that a subsequent `doc.title.insert()` updates `element.value` via surgical patching (mock `setRangeText`). Also added schema-inferred TextRef test (verifying narrow-delta-types fix works end-to-end for value attributes).
 
 ## Phase 3: `editText` — Operation-Aware Write Direction 🔴
 

@@ -38,10 +38,17 @@ This classification enables **binding-time promotion**: when branches diverge on
 
 ### Delta Kind: An Orthogonal Property
 
-For reactive dependencies, the compiler also tracks **delta kind** — what kind of structured change information the source provides:
+For reactive dependencies, the compiler also tracks **delta kind** — what kind of structured change information the source provides. Named delta types are exported from `@loro-extended/reactive`:
 
 ```typescript
 type DeltaKind = "replace" | "text" | "list" | "map" | "tree"
+
+// Named delta types (each is one member of the ReactiveDelta union)
+type ReplaceDelta = { type: "replace" }
+type TextDelta = { type: "text"; ops: TextDeltaOp[] }
+type ListDelta = { type: "list"; ops: ListDeltaOp[] }
+type MapDelta = { type: "map"; ops: MapDeltaOp }
+type TreeDelta = { type: "tree"; ops: TreeDeltaOp[] }
 ```
 
 Delta kind is **orthogonal to binding time**, not a fourth level. All reactive values change at runtime (same *when*), but they differ in *how much structural information* accompanies the notification:
@@ -506,11 +513,38 @@ This approach replaced an earlier `isTypeAssignableTo(candidate, Reactive)` stra
 
 The compiler uses `skipFileDependencyResolution: true` for fast project creation, then manually resolves `@loro-extended/*` packages via `ts.resolveModuleName()` and `project.addSourceFileAtPath()`. This avoids the ~500ms overhead of `tsConfigFilePath` while still enabling full type analysis of external packages.
 
+### Delta Kind Extraction (`getDeltaKind`)
+
+Once a type is confirmed reactive, the compiler extracts its **delta kind** via `getDeltaKind()` in `reactive-detection.ts`. This determines what optimizations codegen can apply:
+
+1. Find the `[REACTIVE]` property on the type
+2. Get the `ReactiveSubscribe<D>` call signature
+3. Extract `D` from the callback parameter `(delta: D) => void`
+4. Read the `type` property from `D`
+5. If it's a single string literal (`"text"`, `"list"`, etc.), return it as the `DeltaKind`
+6. Otherwise fall back to `"replace"`
+
+**Critical requirement:** Step 5 only works when `D` is a **narrowed** single-member type (e.g., `TextDelta`), not the full `ReactiveDelta` union. If `D` defaults to `ReactiveDelta`, the `type` property resolves to `"replace" | "text" | "list" | "map" | "tree"` — a union, not a string literal — and `isStringLiteral()` returns false, causing a silent fallback to `"replace"`.
+
+Each typed ref must therefore declare its specific delta type:
+
+```typescript
+// TextRef narrows D to TextDelta — getDeltaKind returns "text"
+declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>
+
+// Without narrowing, D defaults to ReactiveDelta — getDeltaKind returns "replace"
+readonly [REACTIVE]: ReactiveSubscribe  // ← WRONG: silently breaks delta dispatch
+```
+
+See [packages/change/TECHNICAL.md](../change/TECHNICAL.md) for the full table of ref-to-delta mappings.
+
 ### Caveats
 
 - **`any` is assignable to everything.** Undeclared identifiers are `any` and must be explicitly excluded.
 - **Union types need branch-level checking.** `LocalRef<T> | null` doesn't itself have a `[REACTIVE]` property, but the `LocalRef<T>` branch does.
 - **`links.nameType` is a TypeScript internal.** It has been stable across TS 4.x–6.x and is fundamental to computed property name handling, but layers 2 and 3 serve as fallbacks if it ever changes.
+- **Types are resolved from `dist/`, not source files.** `transformSource` uses `useInMemoryFileSystem: false` and resolves `@loro-extended/change` via `ts.resolveModuleName()`, which follows `package.json` exports to the built `dist/index.d.ts`. After changing type declarations (e.g., adding a `declare readonly [REACTIVE]` override), you must rebuild the upstream packages (`pnpm run build` in `@loro-extended/reactive` and `@loro-extended/change`) before compiler tests will see the changes.
+- **`toContain` on generated code can give false positives.** Generated code includes import statements listing all runtime functions. `expect(code).toContain("subscribeWithValue")` will match the import `import { subscribeWithValue, textRegion } from ...` even when `subscribeWithValue` is never called. Use more specific patterns like `toContain("textRegion(")` or `not.toMatch(/subscribeWithValue\(title/)`.
 
 ### Direct-Read Detection
 

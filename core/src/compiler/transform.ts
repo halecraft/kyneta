@@ -248,13 +248,23 @@ export function collectRequiredImports(ir: BuilderNode[]): {
             loro.add("bindTextValue")
           }
         }
-        // Check for multi-dependency attributes
+        // Check for multi-dependency attributes and inputTextRegion candidates
         for (const attr of child.attributes) {
           if (
             attr.value.bindingTime === "reactive" &&
             attr.value.dependencies.length > 1
           ) {
             runtime.add("subscribeMultiple")
+          }
+          // Check for delta-aware value attribute (enables inputTextRegion)
+          if (
+            attr.name === "value" &&
+            attr.value.bindingTime === "reactive" &&
+            attr.value.directReadSource &&
+            attr.value.dependencies.length === 1 &&
+            attr.value.dependencies[0].deltaKind === "text"
+          ) {
+            runtime.add("inputTextRegion")
           }
         }
         // Recurse into element children

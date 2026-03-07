@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 
 import {
   conditionalRegion,
+  inputTextRegion,
   listRegion,
   subscribe,
   subscribeMultiple,
@@ -2878,6 +2879,177 @@ describe("compiler integration - text patching", () => {
   })
 
   // ===========================================================================
+  // inputTextRegion — delta-aware input value patching
+  // ===========================================================================
+
+  describe("inputTextRegion for value attributes", () => {
+    it("should generate inputTextRegion call for input with explicit TextRef value", () => {
+      const source = `
+        import { TextRef } from "@loro-extended/change"
+
+        declare const title: TextRef
+
+        div(() => {
+          input({ value: title.toString() })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Verify the IR has the right shape
+      const builder = result.ir[0]
+      const inputEl = builder.children.find(
+        (c: any) => c.kind === "element" && c.tag === "input",
+      ) as any
+      expect(inputEl).toBeDefined()
+      const valueAttr = inputEl.attributes.find((a: any) => a.name === "value")
+      expect(valueAttr).toBeDefined()
+      expect(valueAttr.value.bindingTime).toBe("reactive")
+      expect(valueAttr.value.directReadSource).toBe("title")
+      expect(valueAttr.value.dependencies).toHaveLength(1)
+      expect(valueAttr.value.dependencies[0].deltaKind).toBe("text")
+
+      // Generated code should use inputTextRegion
+      expect(result.code).toContain("inputTextRegion")
+      // Should NOT use naive .value = assignment
+      // (inputTextRegion handles both init and subscription)
+      expect(result.code).not.toContain(".value =")
+    })
+
+    it("should generate inputTextRegion for schema-inferred TextRef on value attribute", () => {
+      // This test verifies the narrow-delta-types fix works end-to-end:
+      // createTypedDoc schema inference → TextRef → deltaKind "text" → inputTextRegion
+      const source = `
+        import { createTypedDoc, Shape } from "@loro-extended/change"
+
+        const schema = Shape.doc({ title: Shape.text() })
+        const doc = createTypedDoc(schema)
+
+        div(() => {
+          input({ value: doc.title.toString() })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Schema-inferred TextRef should resolve deltaKind "text"
+      expect(result.code).toContain("inputTextRegion")
+      expect(result.code).not.toContain(".value =")
+    })
+
+    it("should NOT generate inputTextRegion for non-direct TextRef read on value", () => {
+      const source = `
+        import { TextRef } from "@loro-extended/change"
+
+        declare const title: TextRef
+
+        div(() => {
+          input({ value: title.toString().toUpperCase() })
+        })
+      `
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Should NOT use inputTextRegion (not a direct read)
+      expect(result.code).not.toContain("inputTextRegion")
+      // Should use regular subscribe
+      expect(result.code).toContain("subscribe")
+    })
+
+    it("should apply surgical updates to input.value via inputTextRegion", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "Hello")
+      loro(doc).commit()
+
+      const scope = new Scope()
+      const input = document.createElement("input") as HTMLInputElement
+
+      // Mock setRangeText with a functional implementation
+      const setRangeTextCalls: Array<{
+        text: string
+        start: number
+        end: number
+        mode: string
+      }> = []
+      input.setRangeText = (
+        text: string,
+        start: number,
+        end: number,
+        mode?: string,
+      ) => {
+        setRangeTextCalls.push({
+          text,
+          start,
+          end,
+          mode: mode ?? "preserve",
+        })
+        const current = input.value
+        input.value = current.slice(0, start) + text + current.slice(end)
+      }
+
+      // Use inputTextRegion directly (the function that generated code calls)
+      inputTextRegion(input, doc.title, scope)
+      expect(input.value).toBe("Hello")
+
+      // Insert " World" at end — should use setRangeText, not full replacement
+      doc.title.insert(5, " World")
+      loro(doc).commit()
+
+      expect(input.value).toBe("Hello World")
+      expect(setRangeTextCalls.length).toBe(1)
+      expect(setRangeTextCalls[0]).toEqual({
+        text: " World",
+        start: 5,
+        end: 5,
+        mode: "preserve",
+      })
+
+      // Delete " World" — should also use setRangeText
+      setRangeTextCalls.length = 0
+      doc.title.delete(5, 6)
+      loro(doc).commit()
+
+      expect(input.value).toBe("Hello")
+      expect(setRangeTextCalls.length).toBe(1)
+      expect(setRangeTextCalls[0]).toEqual({
+        text: "",
+        start: 5,
+        end: 11,
+        mode: "preserve",
+      })
+
+      scope.dispose()
+    })
+
+    it("should clean up inputTextRegion subscription on scope dispose", () => {
+      const schema = Shape.doc({
+        title: Shape.text(),
+      })
+      const doc = createTypedDoc(schema)
+      doc.title.insert(0, "Hello")
+      loro(doc).commit()
+
+      const scope = new Scope()
+      const input = document.createElement("input") as HTMLInputElement
+
+      inputTextRegion(input, doc.title, scope)
+      expect(getActiveSubscriptionCount()).toBe(1)
+
+      scope.dispose()
+      expect(getActiveSubscriptionCount()).toBe(0)
+
+      // Changes after dispose should not affect the input
+      doc.title.insert(5, " World")
+      loro(doc).commit()
+
+      expect(input.value).toBe("Hello")
+    })
+  })
+
+  // ===========================================================================
   // Target Labels (client: / server:)
   // ===========================================================================
 
@@ -3286,6 +3458,7 @@ const RUNTIME_DEPS: Record<string, unknown> = {
   listRegion,
   conditionalRegion,
   textRegion,
+  inputTextRegion,
   Scope,
   document,
 }

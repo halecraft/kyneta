@@ -21,7 +21,11 @@ import {
   type DeltaKind,
   type EventHandlerNode,
 } from "../ir.js"
-import { generateDOM, generateElementFactory } from "./dom.js"
+import {
+  generateDOM,
+  generateElementFactory,
+  generateElementFactoryWithResult,
+} from "./dom.js"
 
 // =============================================================================
 // Test Helpers
@@ -478,6 +482,323 @@ describe("generateDOM", () => {
       expect(code).toContain("subscribeWithValue")
       expect(code).not.toContain("textRegion")
     })
+  })
+
+  describe("inputTextRegion dispatch for value attributes", () => {
+    it("should generate inputTextRegion for value attr with direct TextRef read", () => {
+      // value: doc.title.toString() where doc.title is a TextRef
+      const valueAttr: AttributeNode = {
+        name: "value",
+        value: createContent(
+          "doc.title.toString()",
+          "reactive",
+          [dep("doc.title", "text")],
+          span(1, 10, 1, 30),
+          "doc.title", // directReadSource
+        ),
+      }
+      const builder = createBuilder(
+        "input",
+        [valueAttr],
+        [],
+        [],
+        span(1, 0, 1, 35),
+      )
+
+      const code = generateDOM(builder)
+
+      // Should use inputTextRegion instead of naive subscribe
+      expect(code).toContain("inputTextRegion")
+      expect(code).toContain("doc.title")
+      expect(code).not.toContain("subscribe(")
+      // Should NOT set initial value (inputTextRegion handles it)
+      expect(code).not.toContain(".value =")
+    })
+
+    it("should generate naive subscribe for value attr with deltaKind replace", () => {
+      const valueAttr: AttributeNode = {
+        name: "value",
+        value: createContent(
+          "doc.selected.get()",
+          "reactive",
+          [dep("doc.selected", "replace")],
+          span(1, 10, 1, 30),
+          "doc.selected", // directReadSource set, but deltaKind is "replace"
+        ),
+      }
+      const builder = createBuilder(
+        "input",
+        [valueAttr],
+        [],
+        [],
+        span(1, 0, 1, 35),
+      )
+
+      const code = generateDOM(builder)
+
+      expect(code).toContain("subscribe(")
+      expect(code).toContain(".value =")
+      expect(code).not.toContain("inputTextRegion")
+    })
+
+    it("should generate naive subscribe for value attr without directReadSource", () => {
+      const valueAttr: AttributeNode = {
+        name: "value",
+        value: createContent(
+          "doc.title.toString().toUpperCase()",
+          "reactive",
+          [dep("doc.title", "text")],
+          span(1, 10, 1, 40),
+          // no directReadSource — this is not a direct read
+        ),
+      }
+      const builder = createBuilder(
+        "input",
+        [valueAttr],
+        [],
+        [],
+        span(1, 0, 1, 45),
+      )
+
+      const code = generateDOM(builder)
+
+      expect(code).toContain("subscribe(")
+      expect(code).toContain(".value =")
+      expect(code).not.toContain("inputTextRegion")
+    })
+
+    it("should NOT use inputTextRegion for non-value attributes even with TextRef", () => {
+      // class: doc.theme.toString() — not a value attribute
+      const classAttr: AttributeNode = {
+        name: "class",
+        value: createContent(
+          "doc.theme.toString()",
+          "reactive",
+          [dep("doc.theme", "text")],
+          span(1, 10, 1, 30),
+          "doc.theme",
+        ),
+      }
+      const builder = createBuilder(
+        "div",
+        [classAttr],
+        [],
+        [],
+        span(1, 0, 1, 35),
+      )
+
+      const code = generateDOM(builder)
+
+      expect(code).toContain("subscribe(")
+      expect(code).toContain(".className =")
+      expect(code).not.toContain("inputTextRegion")
+    })
+  })
+})
+
+// =============================================================================
+// generateElementFactoryWithResult Tests - Template Cloning Attribute Fixes
+// =============================================================================
+
+describe("generateElementFactoryWithResult - template cloning attributes", () => {
+  it("should use .value = for value attribute hole (not setAttribute)", () => {
+    const valueAttr: AttributeNode = {
+      name: "value",
+      value: createContent(
+        "currentText",
+        "render",
+        [],
+        span(1, 15, 1, 26),
+      ),
+    }
+    const builder = createBuilder(
+      "input",
+      [valueAttr],
+      [],
+      [],
+      span(1, 0, 1, 30),
+    )
+
+    const result = generateElementFactoryWithResult(builder)
+
+    expect(result.code).toContain(".value =")
+    expect(result.code).toContain("currentText")
+    expect(result.code).not.toContain("setAttribute")
+  })
+
+  it("should use .checked = for checked attribute hole (not setAttribute)", () => {
+    const checkedAttr: AttributeNode = {
+      name: "checked",
+      value: createContent(
+        "isChecked",
+        "render",
+        [],
+        span(1, 15, 1, 24),
+      ),
+    }
+    const builder = createBuilder(
+      "input",
+      [checkedAttr],
+      [],
+      [],
+      span(1, 0, 1, 30),
+    )
+
+    const result = generateElementFactoryWithResult(builder)
+
+    expect(result.code).toContain(".checked =")
+    expect(result.code).toContain("isChecked")
+    expect(result.code).not.toContain("setAttribute")
+  })
+
+  it("should use Object.assign for style attribute hole (not setAttribute)", () => {
+    const styleAttr: AttributeNode = {
+      name: "style",
+      value: createContent(
+        "{ color: 'red' }",
+        "render",
+        [],
+        span(1, 15, 1, 32),
+      ),
+    }
+    const builder = createBuilder(
+      "div",
+      [styleAttr],
+      [],
+      [],
+      span(1, 0, 1, 35),
+    )
+
+    const result = generateElementFactoryWithResult(builder)
+
+    expect(result.code).toContain("Object.assign")
+    expect(result.code).toContain(".style")
+    expect(result.code).not.toContain("setAttribute")
+  })
+
+  it("should use .value = for render-time value attribute in cloning path", () => {
+    const valueAttr: AttributeNode = {
+      name: "value",
+      value: createContent(
+        "initialValue",
+        "render",
+        [],
+        span(1, 15, 1, 27),
+      ),
+    }
+    const builder = createBuilder(
+      "input",
+      [valueAttr],
+      [],
+      [],
+      span(1, 0, 1, 30),
+    )
+
+    const result = generateElementFactoryWithResult(builder)
+
+    // Render-time value should also use .value = in cloning path
+    expect(result.code).toContain(".value =")
+    expect(result.code).not.toContain("setAttribute")
+  })
+
+  it("should use .className = for reactive class attribute in cloning path", () => {
+    const classAttr: AttributeNode = {
+      name: "class",
+      value: createContent(
+        'isActive ? "on" : "off"',
+        "reactive",
+        [dep("isActive")],
+        span(1, 15, 1, 38),
+      ),
+    }
+    const builder = createBuilder(
+      "div",
+      [classAttr],
+      [],
+      [],
+      span(1, 0, 1, 40),
+    )
+
+    const result = generateElementFactoryWithResult(builder)
+
+    expect(result.code).toContain(".className =")
+    expect(result.code).not.toContain("setAttribute")
+  })
+
+  it("should use .disabled = for reactive disabled attribute in cloning path", () => {
+    const disabledAttr: AttributeNode = {
+      name: "disabled",
+      value: createContent(
+        "isDisabled.get()",
+        "reactive",
+        [dep("isDisabled")],
+        span(1, 15, 1, 31),
+      ),
+    }
+    const builder = createBuilder(
+      "button",
+      [disabledAttr],
+      [],
+      [],
+      span(1, 0, 1, 35),
+    )
+
+    const result = generateElementFactoryWithResult(builder)
+
+    expect(result.code).toContain(".disabled =")
+    expect(result.code).not.toContain("setAttribute")
+  })
+
+  it("should generate inputTextRegion for value attr with TextRef in cloning path", () => {
+    const valueAttr: AttributeNode = {
+      name: "value",
+      value: createContent(
+        "doc.title.toString()",
+        "reactive",
+        [dep("doc.title", "text")],
+        span(1, 15, 1, 35),
+        "doc.title", // directReadSource
+      ),
+    }
+    const builder = createBuilder(
+      "input",
+      [valueAttr],
+      [],
+      [],
+      span(1, 0, 1, 40),
+    )
+
+    const result = generateElementFactoryWithResult(builder)
+
+    expect(result.code).toContain("inputTextRegion")
+    expect(result.code).toContain("doc.title")
+    // Should not have a separate .value = set (inputTextRegion handles init)
+    expect(result.code).not.toContain(".value =")
+    expect(result.code).not.toContain("setAttribute")
+  })
+
+  it("should still use setAttribute for unknown attributes in cloning path", () => {
+    const ariaAttr: AttributeNode = {
+      name: "aria-label",
+      value: createContent(
+        "labelText",
+        "render",
+        [],
+        span(1, 15, 1, 24),
+      ),
+    }
+    const builder = createBuilder(
+      "button",
+      [ariaAttr],
+      [],
+      [],
+      span(1, 0, 1, 30),
+    )
+
+    const result = generateElementFactoryWithResult(builder)
+
+    expect(result.code).toContain("setAttribute")
+    expect(result.code).toContain('"aria-label"')
   })
 })
 

@@ -209,17 +209,19 @@ type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> = (
 ) => () => void
 ```
 
-The callback receives a **delta** describing what changed, not just a void notification. Delta types:
+The callback receives a **delta** describing what changed, not just a void notification. Each member of the `ReactiveDelta` union is exported as a named type from `@loro-extended/reactive`:
 
-| Delta Kind | Emitted By | DOM Optimization |
-|------------|------------|------------------|
-| `"replace"` | `CounterRef`, `LocalRef`, `PlainValueRef` | Re-read entire value |
-| `"text"` | `TextRef` | Character-level patches |
-| `"list"` | `ListRef`, `MovableListRef` | O(k) insert/delete |
-| `"map"` | `RecordRef`, `StructRef` | Update changed keys only |
-| `"tree"` | `TreeRef` | Structural tree updates |
+| Delta Kind | Named Type | Emitted By | DOM Optimization |
+|------------|------------|------------|------------------|
+| `"replace"` | `ReplaceDelta` | `CounterRef`, `LocalRef`, `PlainValueRef` | Re-read entire value |
+| `"text"` | `TextDelta` | `TextRef` | Character-level patches |
+| `"list"` | `ListDelta` | `ListRef`, `MovableListRef` | O(k) insert/delete |
+| `"map"` | `MapDelta` | `RecordRef`, `StructRef`, `DocRef` | Update changed keys only |
+| `"tree"` | `TreeDelta` | `TreeRef` | Structural tree updates |
 
-The generic parameter `D` allows compile-time inference of which delta kind a type emits. The Kinetic compiler uses this to determine optimization opportunities.
+The generic parameter `D` allows compile-time inference of which delta kind a type emits. The Kinetic compiler's `getDeltaKind()` reads the `type` property from `D` to determine optimization opportunities.
+
+**Critical:** Each typed ref must narrow `D` to its specific delta type via `declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>` (or the appropriate named type). Without this narrowing, `D` defaults to the full `ReactiveDelta` union, and `getDeltaKind()` silently falls back to `"replace"` — disabling all surgical patching optimizations. The `declare` keyword ensures no JavaScript is emitted; the runtime implementation inherited from `TypedRef` handles all container types correctly. See [packages/change/TECHNICAL.md](./packages/change/TECHNICAL.md) for the full ref-to-delta mapping table.
 
 **Design Rationale**: TypedDoc and TypedRef are Proxy objects where property names map to schema fields. Symbols provide a clean namespace for library functionality without polluting the user's schema namespace.
 
