@@ -124,7 +124,6 @@ export {
 // === Datalog Evaluator ===
 export {
   // Types (Datalog-specific; kernel re-exports are above)
-  type CnIdRef,
   type Term,
   type ConstTerm,
   type VarTerm,

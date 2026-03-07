@@ -4,7 +4,7 @@
 // --- Types ---
 export type {
   Value,
-  CnIdRef,
+  CnId,
   Term,
   ConstTerm,
   VarTerm,

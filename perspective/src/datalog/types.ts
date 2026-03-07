@@ -10,42 +10,13 @@
 export { type Result, ok, err } from '../base/result.js';
 
 // ---------------------------------------------------------------------------
-// Values (§3)
-//
-// `number` and `bigint` are distinct types with distinct comparison semantics.
-// int(3n) and float(3.0) are NOT equal — this avoids precision-loss bugs
-// across language boundaries. See unified-engine.md §3 for full rationale.
+// Shared identity and value types — re-exported from shared base so kernel
+// and datalog layers use a single definition.
 // ---------------------------------------------------------------------------
 
-/**
- * A CnId reference used within Value. Kept lightweight here — the full
- * CnId interface lives in kernel/types.ts (Phase 2). For Phase 1 we only
- * need structural equality in the Datalog layer.
- */
-export interface CnIdRef {
-  readonly peer: string;
-  readonly counter: number;
-}
+export { type CnId, type PeerID, type Counter, type Value, isSafeUint } from '../base/types.js';
 
-/**
- * The value domain for Datalog terms.
- *
- * - `null`       — absence
- * - `boolean`    — true / false
- * - `number`     — IEEE 754 f64 (floats and safe integers)
- * - `bigint`     — arbitrary-precision integer
- * - `string`     — UTF-8 string
- * - `Uint8Array` — raw binary (logically immutable by convention)
- * - `CnIdRef`    — reference to a structure constraint
- */
-export type Value =
-  | null
-  | boolean
-  | number
-  | bigint
-  | string
-  | Uint8Array
-  | { readonly ref: CnIdRef };
+import type { CnId, Value } from '../base/types.js';
 
 // ---------------------------------------------------------------------------
 // Terms
@@ -540,8 +511,8 @@ export function compareValues(a: Value, b: Value): number {
   }
 
   if (aIsRef && bIsRef) {
-    const ra = (a as { readonly ref: CnIdRef }).ref;
-    const rb = (b as { readonly ref: CnIdRef }).ref;
+    const ra = (a as { readonly ref: CnId }).ref;
+    const rb = (b as { readonly ref: CnId }).ref;
     if (ra.peer < rb.peer) return -1;
     if (ra.peer > rb.peer) return 1;
     return ra.counter - rb.counter;
@@ -589,8 +560,8 @@ export function valuesEqual(a: Value, b: Value): boolean {
 
   // ref comparison
   if (ta === 'object' && tb === 'object' && !(a instanceof Uint8Array) && !(b instanceof Uint8Array)) {
-    const ra = (a as { readonly ref: CnIdRef }).ref;
-    const rb = (b as { readonly ref: CnIdRef }).ref;
+    const ra = (a as { readonly ref: CnId }).ref;
+    const rb = (b as { readonly ref: CnId }).ref;
     return ra.peer === rb.peer && ra.counter === rb.counter;
   }
 
@@ -693,8 +664,8 @@ function compareSameType(
     !(a instanceof Uint8Array) && !(b instanceof Uint8Array) &&
     a !== null && b !== null
   ) {
-    const ra = (a as { readonly ref: { peer: string; counter: number } }).ref;
-    const rb = (b as { readonly ref: { peer: string; counter: number } }).ref;
+    const ra = (a as { readonly ref: CnId }).ref;
+    const rb = (b as { readonly ref: CnId }).ref;
     if (ra.peer !== rb.peer) {
       return pred(ra.peer < rb.peer ? -1 : 1);
     }

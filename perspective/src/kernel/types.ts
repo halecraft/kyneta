@@ -14,6 +14,13 @@
 export { type Result, ok, err } from '../base/result.js';
 
 // ---------------------------------------------------------------------------
+// Shared identity and value types — re-exported from shared base so
+// downstream consumers can import everything from kernel/types.
+// ---------------------------------------------------------------------------
+
+export { type PeerID, type Counter, type Lamport, type CnId, type Value, isSafeUint } from '../base/types.js';
+
+// ---------------------------------------------------------------------------
 // Datalog types — re-exported so RulePayload is properly typed and
 // downstream consumers can import everything from kernel/types.
 // ---------------------------------------------------------------------------
@@ -34,58 +41,7 @@ export type {
   Rule,
 } from '../datalog/types.js';
 
-// ---------------------------------------------------------------------------
-// Identity (§1)
-// ---------------------------------------------------------------------------
-
-/**
- * Peer identifier — public key or hash thereof.
- *
- * In production this is a public key. For testing we use human-readable
- * strings like "alice", "bob".
- */
-export type PeerID = string;
-
-/**
- * Monotonically increasing per-peer operation counter.
- *
- * Must satisfy: `Number.isSafeInteger(x) && x >= 0`.
- * Enforced at Agent construction and store insertion boundaries.
- */
-export type Counter = number;
-
-/**
- * Lamport timestamp for causal ordering.
- *
- * Must satisfy: `Number.isSafeInteger(x) && x >= 0`.
- * Enforced at Agent construction and store insertion boundaries.
- */
-export type Lamport = number;
-
-/**
- * Constraint Id — globally unique identifier for a constraint.
- *
- * The pair (peer, counter) is globally unique because each peer
- * maintains a monotonically increasing counter.
- */
-export interface CnId {
-  readonly peer: PeerID;
-  readonly counter: Counter;
-}
-
-// ---------------------------------------------------------------------------
-// Safe-integer validation
-// ---------------------------------------------------------------------------
-
-/**
- * Check that a number is a safe unsigned integer (0 ≤ x ≤ 2^53 − 1).
- *
- * Structural integer fields (counter, lamport, layer) must pass this check.
- * See unified-engine.md §1 for rationale.
- */
-export function isSafeUint(x: number): boolean {
-  return Number.isSafeInteger(x) && x >= 0;
-}
+import type { PeerID, Counter, Lamport, CnId, Value } from '../base/types.js';
 
 // ---------------------------------------------------------------------------
 // Version Vector (type alias only — functions live in version-vector.ts)
@@ -102,34 +58,6 @@ export type VersionVector = ReadonlyMap<PeerID, Counter>;
  * Mutable version vector for internal use.
  */
 export type MutableVersionVector = Map<PeerID, Counter>;
-
-// ---------------------------------------------------------------------------
-// Values (§3)
-//
-// `number` and `bigint` are distinct types with distinct comparison semantics.
-// int(3n) and float(3.0) are NOT equal — this avoids precision-loss bugs
-// across language boundaries. See unified-engine.md §3 for full rationale.
-// ---------------------------------------------------------------------------
-
-/**
- * The value domain for constraint payloads and Datalog terms.
- *
- * - `null`       — absence (for Map deletion via LWW)
- * - `boolean`    — true / false
- * - `number`     — IEEE 754 f64 (floats and safe integers)
- * - `bigint`     — arbitrary-precision integer
- * - `string`     — UTF-8 string
- * - `Uint8Array` — raw binary (logically immutable by convention)
- * - `{ ref }`    — reference to a structure constraint (for nesting)
- */
-export type Value =
-  | null
-  | boolean
-  | number
-  | bigint
-  | string
-  | Uint8Array
-  | { readonly ref: CnId };
 
 // ---------------------------------------------------------------------------
 // Policies (§8)

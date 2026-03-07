@@ -385,7 +385,7 @@ The three filters in the solver pipeline: Valid(S) and Active(Valid(S)).
 - Retraction: retract(value) → value dominated; retract(retract) → undo; depth-2 chain; structure constraints immune to retraction
 - Active(S) determinism: same S → same Active(S) regardless of insertion order
 
-### Phase 3.5: Extract Shared Base Types 🔴
+### Phase 3.5: Extract Shared Base Types 🟢
 
 The `base/` module currently holds only `Result<T,E>`, extracted during Phase 2 so that `datalog/` and `kernel/` could share it without depending on each other. Post-Phase-3 review revealed that `CnId`, `Value`, and their supporting identity types (`PeerID`, `Counter`) are in the same situation: both layers define structurally identical but nominally separate copies.
 
@@ -395,14 +395,14 @@ Extracting the shared identity and value types to `base/` follows the `Result` p
 
 #### Tasks
 
-- 3.5.1 Create `base/types.ts` — extract `PeerID`, `Counter`, `Lamport`, `CnId`, `isSafeUint()`, and `Value` as the shared type definitions. These are pure data shapes with no behavioral logic and no dependencies beyond each other. 🔴
-- 3.5.2 Update `datalog/types.ts` — remove `CnIdRef` interface and local `Value` type definition. Import `CnId`, `PeerID`, `Counter`, and `Value` from `base/types.ts`. Re-export them for downstream consumers. Update all internal references (`CnIdRef` → `CnId`). 🔴
-- 3.5.3 Update `kernel/types.ts` — remove local `PeerID`, `Counter`, `Lamport`, `CnId`, `isSafeUint()`, and `Value` definitions. Import them from `base/types.ts`. Re-export them for downstream consumers. 🔴
-- 3.5.4 Update `datalog/types.ts` functions — `serializeValue()`, `compareValues()`, `valuesEqual()`, and `compareSameType()` reference `CnIdRef` in type assertions and casts. Update these to use `CnId`. 🔴
-- 3.5.5 Update `base/result.ts` — no changes needed (it remains independent). 🔴
-- 3.5.6 Update index files — `datalog/index.ts` stops exporting `CnIdRef` (it no longer exists); exports `CnId` from the re-export. `kernel/index.ts` re-exports from `kernel/types.ts` as before (which now delegates to `base/types.ts`). `src/index.ts` removes the `CnIdRef` export from the Datalog section (it's now just `CnId` everywhere). 🔴
-- 3.5.7 Update test files — any test that imports `CnIdRef` directly updates to use `CnId`. Grep for `CnIdRef` across all test files. 🔴
-- 3.5.8 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes, all 532 tests still pass. 🔴
+- 3.5.1 Create `base/types.ts` — extract `PeerID`, `Counter`, `Lamport`, `CnId`, `isSafeUint()`, and `Value` as the shared type definitions. These are pure data shapes with no behavioral logic and no dependencies beyond each other. 🟢
+- 3.5.2 Update `datalog/types.ts` — remove `CnIdRef` interface and local `Value` type definition. Import `CnId`, `PeerID`, `Counter`, and `Value` from `base/types.ts`. Re-export them for downstream consumers. Update all internal references (`CnIdRef` → `CnId`). 🟢
+- 3.5.3 Update `kernel/types.ts` — remove local `PeerID`, `Counter`, `Lamport`, `CnId`, `isSafeUint()`, and `Value` definitions. Import them from `base/types.ts`. Re-export them for downstream consumers. 🟢
+- 3.5.4 Update `datalog/types.ts` functions — `serializeValue()`, `compareValues()`, `valuesEqual()`, and `compareSameType()` reference `CnIdRef` in type assertions and casts. Update these to use `CnId`. 🟢
+- 3.5.5 Update `base/result.ts` — no changes needed (it remains independent). 🟢
+- 3.5.6 Update index files — `datalog/index.ts` stops exporting `CnIdRef` (it no longer exists); exports `CnId` from the re-export. `kernel/index.ts` re-exports from `kernel/types.ts` as before (which now delegates to `base/types.ts`). `src/index.ts` removes the `CnIdRef` export from the Datalog section (it's now just `CnId` everywhere). 🟢
+- 3.5.7 Update test files — any test that imports `CnIdRef` directly updates to use `CnId`. Grep for `CnIdRef` across all test files. (No tests imported `CnIdRef` — no changes needed.) 🟢
+- 3.5.8 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes, all 532 tests still pass. 🟢
 
 #### Tests
 
