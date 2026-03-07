@@ -446,7 +446,7 @@ Wiring the solver pipeline from §7.2 and constructing the reality tree.
 - Version-parameterized: solve(S, V_past) returns historical reality; solve(S, V_current) returns current reality
 - Retraction + pipeline: retracted value excluded from reality; un-retracted value reappears
 
-### Phase 4.5: Datalog-Driven Resolution 🔴
+### Phase 4.5: Datalog-Driven Resolution 🟢
 
 Phase 4's pipeline runs the Datalog evaluator but discards the results — the skeleton is built entirely by native solvers that bypass the rule system. This contradicts the spec's core architecture: "LWW and Fugue are not part of the engine. They are Datalog rules that travel in the constraint store. The engine is Layer 0 (kernel) + a Datalog evaluator. Everything else is data." (§B.1)
 
@@ -456,14 +456,14 @@ Phase 4.5 restructures the pipeline so that Datalog evaluation is the **primary*
 
 #### Tasks
 
-- 4.5.1 Implement `kernel/resolve.ts` — a resolution module that reads Datalog-derived facts and produces the data the skeleton builder needs. For LWW: reads the `winner(Slot, CnId, Value)` relation from the evaluated database and produces a `Map<slotId, LWWWinner>`. For Fugue: reads the `fugue_before(Parent, A, B)` relation and produces a total order per parent. This module bridges Datalog output → skeleton input. It does NOT contain resolution logic itself — it reads what Datalog derived. 🔴
-- 4.5.2 Refactor `kernel/skeleton.ts` — the skeleton builder currently calls native `resolveLWWSlot()` and `orderFugueNodes()` directly. Refactor to accept a `ResolutionResult` (from `resolve.ts`) that provides pre-resolved winners and orderings. The skeleton builder becomes policy-agnostic — it reads the resolution result instead of running solvers inline. When a `ResolutionResult` is provided, use it. When absent (legacy/test path), fall back to native solvers. 🔴
-- 4.5.3 Implement native solver detection in `kernel/pipeline.ts` — before evaluating rules via Datalog, inspect the active rule constraints. If they are exactly the known default LWW and Fugue rules (matched by structure, not by CnId), use native solvers as a fast path (§B.7). If the rules have been modified, retracted, or augmented with custom rules, fall back to Datalog evaluation. This is the §B.7 optimization with §B.7 constraint #3 (fallback). 🔴
-- 4.5.4 Wire the Datalog-primary path in `pipeline.ts` — when the native fast path is NOT active: (a) extract rules from active constraints, (b) evaluate against projected facts, (c) pass the evaluated `Database` to `resolve.ts` to extract `winner` and `fugue_before` facts, (d) pass the `ResolutionResult` to the skeleton builder. The Datalog evaluation result is no longer discarded — it feeds directly into reality construction. 🔴
-- 4.5.5 Fix structure index source (§7.2 compliance) — change `pipeline.ts` to build the structure index from `validityResult.valid` (all valid structure constraints) instead of `retractionResult.active`. The spec's pipeline forks at `Valid(S_V)`: one branch takes `AllStructure(Valid(S_V))` for the skeleton, the other takes `Active(Valid(S_V))` for value resolution. Structure constraints are immune to retraction, so this is currently equivalent — but the code should match the spec's two-path design to prevent regressions if the retraction module ever has a bug that incorrectly dominates a structure constraint. 🔴
-- 4.5.6 Fix authority retraction immunity (§2.5 compliance) — add a `targetIsAuthority` case to `RetractionViolationReason` in `retraction.ts` and enforce it in `computeActive()`. The spec says: "`authority` constraints are not retractable via `retract`. Revocation is the dedicated mechanism for removing capabilities." Currently only `structure` constraints are protected. 🔴
-- 4.5.7 Expose resolution metadata in `PipelineResult` — add the `ResolutionResult` and whether the native fast path was used to `PipelineResult` for introspection and testing. 🔴
-- 4.5.8 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes. Existing pipeline tests continue to produce identical realities (the native solvers and Datalog rules are equivalent by the Phase 4 equivalence tests — this phase changes *which path* produces the reality, not the result). 🔴
+- 4.5.1 Implement `kernel/resolve.ts` — a resolution module that reads Datalog-derived facts and produces the data the skeleton builder needs. For LWW: reads the `winner(Slot, CnId, Value)` relation from the evaluated database and produces a `Map<slotId, LWWWinner>`. For Fugue: reads the `fugue_before(Parent, A, B)` relation and produces a total order per parent. This module bridges Datalog output → skeleton input. It does NOT contain resolution logic itself — it reads what Datalog derived. 🟢
+- 4.5.2 Refactor `kernel/skeleton.ts` — the skeleton builder currently calls native `resolveLWWSlot()` and `orderFugueNodes()` directly. Refactor to accept a `ResolutionResult` (from `resolve.ts`) that provides pre-resolved winners and orderings. The skeleton builder becomes policy-agnostic — it reads the resolution result instead of running solvers inline. When a `ResolutionResult` is provided, use it. When absent (legacy/test path), fall back to native solvers. 🟢
+- 4.5.3 Implement native solver detection in `kernel/pipeline.ts` — before evaluating rules via Datalog, inspect the active rule constraints. If they are exactly the known default LWW and Fugue rules (matched by structure, not by CnId), use native solvers as a fast path (§B.7). If the rules have been modified, retracted, or augmented with custom rules, fall back to Datalog evaluation. This is the §B.7 optimization with §B.7 constraint #3 (fallback). 🟢
+- 4.5.4 Wire the Datalog-primary path in `pipeline.ts` — when the native fast path is NOT active: (a) extract rules from active constraints, (b) evaluate against projected facts, (c) pass the evaluated `Database` to `resolve.ts` to extract `winner` and `fugue_before` facts, (d) pass the `ResolutionResult` to the skeleton builder. The Datalog evaluation result is no longer discarded — it feeds directly into reality construction. 🟢
+- 4.5.5 Fix structure index source (§7.2 compliance) — change `pipeline.ts` to build the structure index from `validityResult.valid` (all valid structure constraints) instead of `retractionResult.active`. The spec's pipeline forks at `Valid(S_V)`: one branch takes `AllStructure(Valid(S_V))` for the skeleton, the other takes `Active(Valid(S_V))` for value resolution. Structure constraints are immune to retraction, so this is currently equivalent — but the code should match the spec's two-path design to prevent regressions if the retraction module ever has a bug that incorrectly dominates a structure constraint. 🟢
+- 4.5.6 Fix authority retraction immunity (§2.5 compliance) — add a `targetIsAuthority` case to `RetractionViolationReason` in `retraction.ts` and enforce it in `computeActive()`. The spec says: "`authority` constraints are not retractable via `retract`. Revocation is the dedicated mechanism for removing capabilities." Currently only `structure` constraints are protected. 🟢
+- 4.5.7 Expose resolution metadata in `PipelineResult` — add the `ResolutionResult` and whether the native fast path was used to `PipelineResult` for introspection and testing. 🟢
+- 4.5.8 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes. Existing pipeline tests continue to produce identical realities (the native solvers and Datalog rules are equivalent by the Phase 4 equivalence tests — this phase changes *which path* produces the reality, not the result). 🟢
 
 **Design note on native solver detection (task 4.5.3):** The detection must be structural — comparing the rule's `head` and `body` shapes, not CnIds or lamport values. A bootstrap LWW rule created by Alice and one created by Bob are semantically identical even though they have different CnIds. The detection function should be a pure predicate: `isDefaultLWWRules(rules): boolean`, `isDefaultFugueRules(rules): boolean`. When both return true and no additional Layer 2+ rules exist, the native fast path is safe.
 
@@ -484,13 +484,67 @@ Phase 4.5 restructures the pipeline so that Datalog evaluation is the **primary*
 - `PipelineResult` exposes resolution metadata and fast-path flag
 - All existing pipeline tests still pass with identical results
 
+### Phase 4.6: Pre-Bootstrap Correctness 🔴
+
+Post-Phase-4.5 research revealed four gaps that must be closed before bootstrap can emit correct default rules and integration tests can exercise realistic Agent workflows. Each is a correctness issue, not a feature — leaving any unfixed would mean Phase 5 builds on a broken foundation.
+
+#### Motivation
+
+1. **Retraction target-in-refs is broken for Agent-produced constraints.** The Agent compresses causal refs to the version-vector frontier (one CnId per peer — the highest counter). But `computeActive()` checks the *literal* presence of the target CnId in the `refs` array. An agent retracting a non-frontier constraint (e.g., counter 5 when the frontier is counter 10) will have the retraction silently rejected as a `targetNotInRefs` violation. Every existing retraction test passes only because it hand-constructs refs arrays with the exact target CnId. Phase 5 task 5.4 (retraction sync integration test) would fail immediately.
+
+2. **The Fugue Datalog rules are incomplete.** The current "default" Fugue rules handle only one case: two siblings sharing the same `originLeft` are ordered by peer ID. The native solver handles the full algorithm (recursive tree walk, `originRight` disambiguation, depth-first traversal). The equivalence tests are explicitly scoped to the "shared subset." If bootstrap emits these simplified rules, the core Datalog path produces wrong results for non-trivial sequences — and the native fast-path optimization papers over the problem. This is the exact anti-pattern Phase 4.5 fixed for the pipeline wiring: "we've proven the optimization matches the core, but the core is incomplete." Success Criterion #4 says Fugue Datalog must match native for *all* inputs, not just a subset.
+
+3. **`store.insert()` clones the entire constraint Map on every single insert.** `new Map(store.constraints)` is O(n). For a bootstrap that emits ~10 constraints sequentially, this means 10 full map copies. For any realistic store with thousands of constraints, single inserts are prohibitively expensive. This is not a premature optimization concern — it's an O(n²) algorithm where O(n) is trivially achievable by switching to mutate-in-place.
+
+4. **`skeleton.test.ts` was listed as a Phase 4 deliverable but never created.** The skeleton builder has subtle logic (slot group merging, seq tombstone detection, map null-deletion, ResolutionResult vs. native fallback) that is only tested indirectly through `pipeline.test.ts`. A pipeline failure doesn't localize the bug. Edge cases like deeply nested maps, mixed map-in-seq, and seq-in-seq have no focused coverage.
+
+5. **Pipeline tests default to `enableDatalogEvaluation: false`.** All 25 pipeline tests run through the native path exclusively. The resolve tests (Phase 4.5) test the Datalog path separately, and equivalence tests prove the two paths agree — but the pipeline tests themselves never exercise the Datalog primary path. For Phase 5 and beyond, the default should be `enableDatalogEvaluation: true`, matching the spec's architecture. A small number of tests should explicitly test native-only mode.
+
+#### Tasks
+
+- 4.6.1 Fix retraction `target-in-refs` to use semantic interpretation — change `computeActive()` in `retraction.ts` to interpret a ref `(peer, N)` as "I've observed all of peer's constraints 0..N" rather than requiring the literal target CnId to appear. Specifically: a retract constraint's target `(peer, T)` is considered "in refs" if any ref `(peer, N)` exists with `N ≥ T`. This matches how version vectors work everywhere else in the system and doesn't require the Agent to special-case retraction. Update the existing `target-in-refs` tests and add a new test: Agent produces a value, produces several more constraints, then retracts the earlier value — the retraction succeeds despite the target not being on the frontier. 🔴
+- 4.6.2 Implement complete Fugue Datalog rules — express the full Fugue tree walk in Datalog with recursive rules. The simplified rules only handle the same-`originLeft` peer-tiebreak case. The complete rules must handle: (a) tree construction from `originLeft` chains (an element is a child of its `originLeft`); (b) `originRight` disambiguation when siblings have different right neighbors; (c) transitive ordering via recursive `fugue_before`. Datalog's fixed-point evaluation supports recursion natively — this is exactly what it's for. The result may be 5–8 rules instead of 2, and slower than native (quadratic vs. O(n log n)), but it must be *correct* for all inputs. The native fast path (§B.7) still activates for the default pattern, so performance is not affected in the common case. 🔴
+- 4.6.3 Update Fugue equivalence tests — expand `tests/solver/fugue-equivalence.test.ts` to cover the full algorithm, not just the "shared subset." Add tests for: non-trivial `originLeft` chains (elements whose `originLeft` is not the start), `originRight` disambiguation, three-way concurrent inserts at different positions, and interleaved insert sequences. The existing "simplified subset" comment should be removed — the Datalog rules and native solver must now agree on *all* inputs. 🔴
+- 4.6.4 Fix `store.insert()` to mutate in place — change `ConstraintStore` to use internal mutation with a generation counter for cache invalidation instead of cloning the entire Map on every insert. `insert()` returns `Result<void, InsertError>` (mutates on success) rather than `Result<ConstraintStore, InsertError>` (returns a new store). The `generation` counter already exists for this purpose. `insertMany()` and `mergeStores()` similarly mutate in place. Update all call sites (store tests, pipeline, agent tests) to reflect the new mutation semantics. 🔴
+- 4.6.5 Add `tests/kernel/skeleton.test.ts` — focused tests for the skeleton builder with hand-constructed `StructureIndex` and `ResolutionResult` inputs. Cover: map children with null values (deletion exclusion), seq tombstone detection, slot group merging (multiple peers creating same map key), mixed nesting (map-in-seq, seq-in-map, seq-in-seq), the `ResolutionResult` path vs. native fallback path, and empty containers. 🔴
+- 4.6.6 Flip pipeline tests to `enableDatalogEvaluation: true` — change the `DEFAULT_CONFIG` in `pipeline.test.ts` to enable Datalog evaluation (matching the spec's architecture where Datalog is primary). Add a small focused test group that explicitly sets `enableDatalogEvaluation: false` to verify the native-only bypass still works. All existing pipeline tests must produce identical results with Datalog enabled. 🔴
+- 4.6.7 Verify: `npx tsc --noEmit` clean, `npx vitest run` passes. Existing tests produce identical realities. The native fast-path detection in `pipeline.ts` must still recognize the new (complete) Fugue rules as default patterns — update `hasDefaultFugueRules()` if the additional rules introduce new head predicates. 🔴
+
+**Design note on semantic refs (task 4.6.1):** The spec (§6) says: "A `retract` constraint's `refs` must contain its `target`." The Agent's frontier compression is a compact representation of the full causal history — `(peer, 10)` in refs logically implies all of `(peer, 0)` through `(peer, 9)` were observed. The semantic interpretation preserves the spec's causal safety guarantee (you can only retract what you've observed) while being compatible with the Agent's representation. A retract with no ref for the target's peer, or a ref with `N < target.counter`, is still a violation.
+
+**Design note on complete Fugue rules (task 4.6.2):** The core insight is that Fugue's tree structure is expressible as a recursive Datalog relation. The `originLeft` field defines a parent-child relationship: each element is a child of its `originLeft` (elements with `originLeft = null` are children of a virtual root). Sibling ordering uses `originRight` and peer ID for disambiguation. A depth-first traversal of this tree produces the total order. In Datalog, this becomes: (a) `fugue_child` derives the tree structure (existing rule — keep as-is); (b) `fugue_sibling_order` determines ordering among siblings of the same `originLeft` using `originRight` position and peer tiebreak; (c) `fugue_before` is derived recursively — A is before B if A's subtree entirely precedes B's subtree in the depth-first walk. The recursion converges because the tree is finite and acyclic (guaranteed by causal structure). The native fast-path detector already checks for `fugue_child` and `fugue_before` head predicates, so the additional intermediate predicates won't break detection — but `hasDefaultFugueRules()` should also check for the new predicates to avoid false negatives.
+
+**Design note on store mutation (task 4.6.4):** The current `insert()` returning `Result<ConstraintStore, InsertError>` suggests a functional API where the caller gets a new store on success. But this is O(n) per insert without persistent data structures. The simpler fix is to acknowledge that the store is a mutable container (like a `Map` or `Set`) and mutate in place. The `generation` counter already serves as the change-detection signal — callers that cache solved results check the generation, not the store reference. `mergeStores` becomes a mutating `importFrom` or stays as a function that returns a new store (since both inputs survive). The key constraint: `insert()` must still be idempotent (inserting the same constraint twice is a no-op).
+
+#### Tests
+
+- Semantic refs: Agent produces value, then several more constraints, then retracts value — retraction succeeds with frontier-compressed refs
+- Semantic refs: retract with no ref for target's peer → still a violation (causal safety preserved)
+- Semantic refs: retract with ref `(peer, N)` where `N < target.counter` → violation
+- Semantic refs: retract with ref `(peer, N)` where `N == target.counter` → succeeds (implies target observed)
+- Semantic refs: retract with ref `(peer, N)` where `N > target.counter` → succeeds (frontier implies all prior)
+- Complete Fugue Datalog: non-trivial `originLeft` chains produce correct ordering (matches native)
+- Complete Fugue Datalog: `originRight` disambiguation produces correct ordering (matches native)
+- Complete Fugue Datalog: complex interleaved concurrent inserts match native ordering
+- Complete Fugue Datalog: single element, empty sequence edge cases
+- Store mutation: `insert()` mutates in place, returns `Result<void, InsertError>`
+- Store mutation: `insert()` idempotency preserved — inserting same constraint twice is a no-op
+- Store mutation: `insertMany()` mutates in place
+- Store mutation: generation counter increments on each mutation
+- Store mutation: all existing store tests adapted and passing
+- Skeleton focused: map null-deletion, seq tombstone, slot group merge, mixed nesting, empty containers
+- Skeleton focused: ResolutionResult path vs. native fallback produce same tree for same inputs
+- Pipeline with Datalog: all existing pipeline tests pass with `enableDatalogEvaluation: true`
+- Pipeline native-only: small test group verifies native bypass still works with `enableDatalogEvaluation: false`
+- All existing tests pass with identical results
+
 ### Phase 5: Reality Bootstrap and Integration 🔴
 
 Creating realities, the bootstrap process, and the public API.
 
 #### Tasks
 
-- 5.1 Implement `bootstrap.ts` — reality creation: generate creation constraint with Admin grant to creator; emit default LWW rules as rule constraints (using `guard` body elements, not legacy `__neq`/`__gt`); emit default Fugue rules as rule constraints (using wildcards for unused positions); set compaction policy and retraction depth (§B.8) 🔴
+- 5.1 Implement `bootstrap.ts` — reality creation: generate creation constraint with Admin grant to creator; emit default LWW rules as rule constraints (using `guard` body elements, not legacy `__neq`/`__gt`); emit default Fugue rules as rule constraints (the complete rules from Phase 4.6.2, using wildcards for unused positions); set compaction policy and retraction depth (§B.8) 🔴
 - 5.2 Implement `index.ts` — public API: createReality, assertConstraint, solve, sync (delta export/import), introspection stubs 🔴
 - 5.3 Integration test: two agents create constraints, sync via delta, both compute identical reality 🔴
 - 5.4 Integration test: agent retracts a value, syncs, both see retraction reflected in reality 🔴
@@ -652,7 +706,7 @@ prism/
 │   │   ├── retraction.test.ts    (Phase 3)
 │   │   ├── structure-index.test.ts (Phase 4)
 │   │   ├── projection.test.ts    (Phase 4)
-│   │   ├── skeleton.test.ts      (Phase 4)
+│   │   ├── skeleton.test.ts      (Phase 4.6)
 │   │   └── pipeline.test.ts      (Phase 4)
 │   ├── solver/                    (Phase 4)
 │   │   ├── lww-equivalence.test.ts
@@ -691,6 +745,7 @@ prism/
 | Phase 3 (Auth/Retract) | §5 (authority & validity), §6 (retraction & dominance) |
 | Phase 4 (Pipeline) | §7 (solver pipeline), §8 (policies) |
 | Phase 4.5 (Datalog-Driven Resolution) | §B.1 (engine = kernel + Datalog), §B.4 (rules as data), §B.7 (native optimization + fallback), §7.2 (pipeline two-path fork), §2.5 (authority non-retractability) |
+| Phase 4.6 (Pre-Bootstrap Correctness) | §6 (retraction causal safety — semantic refs), §B.4 (complete Fugue rules), §B.7 (native equivalence for full algorithm), §4 (store performance) |
 | Phase 5 (Bootstrap) | §B.8 (reality bootstrap), §15 (messages & sync), §9 (incremental maintenance) |
 
 ### Datalog Algorithm References
@@ -755,7 +810,7 @@ The following spec features are intentionally deferred:
 - **Query layer** (§16) — Level 1 and Level 2 queries over store/reality
 - **Full introspection API** (§17) — explain, conflicts, history, whatIf, etc.
 - **Bookmark / time-travel UX** (§10) — snapshots, scrubbing, branching
-- **Full Fugue as Datalog** — the complete recursive Fugue tree walk in Datalog is complex; Phase 1 validates a simplified subset, Phase 4 uses the native solver as the primary implementation
+- **Full Fugue as Datalog** — ~~deferred~~ **moved to Phase 4.6** (task 4.6.2). The complete Fugue tree walk must be expressed in Datalog before bootstrap can emit correct default rules. The simplified subset validated in Phase 1 is insufficient — it only handles same-`originLeft` peer tiebreak, not the full recursive tree walk with `originRight` disambiguation.
 
 ### Signature Stub Strategy
 
@@ -900,7 +955,7 @@ The shared `structure-index.ts` module was introduced to compute slot groupings 
 
 The `Agent.currentRefs()` implementation compresses causal predecessors to the version vector frontier: one CnId per peer (the highest counter seen). This is semantically correct — the frontier implies the full causal history — and space-efficient. However, the retraction module's `target-in-refs` check verifies that the retraction's `target` CnId is literally present in the `refs` array. If an agent retracts a constraint at counter 5 but the frontier ref for that peer is at counter 10, the literal CnId `(peer, 5)` won't appear in refs.
 
-This doesn't cause failures today because retraction tests use manually-constructed constraints with explicit refs. But Phase 5 integration tests — where an Agent produces a retraction constraint via `produceRetract()` — will exercise this path. The fix is either: (a) change `computeActive` to interpret refs semantically (any ref `(peer, N)` with `N ≥ target.counter` implies the target was observed), or (b) have `produceRetract()` explicitly add the target CnId to refs alongside the frontier. Option (a) is more principled; option (b) is simpler. Decide in Phase 5.
+This doesn't cause failures today because retraction tests use manually-constructed constraints with explicit refs. But Phase 5 integration tests — where an Agent produces a retraction constraint via `produceRetract()` — will exercise this path. The fix is either: (a) change `computeActive` to interpret refs semantically (any ref `(peer, N)` with `N ≥ target.counter` implies the target was observed), or (b) have `produceRetract()` explicitly add the target CnId to refs alongside the frontier. Option (a) is more principled; option (b) is simpler. **Decision: Option (a), implemented in Phase 4.6 task 4.6.1.** Semantic interpretation matches how version vectors work throughout the codebase and doesn't require special-casing in the Agent.
 
 ### Native Solvers Replaced the Datalog Path Instead of Optimizing It
 
@@ -911,3 +966,25 @@ This contradicts the spec's fundamental architecture (§B.1): "LWW and Fugue are
 The root cause was a build-order artifact: Phase 4 needed the skeleton builder before bootstrap (Phase 5) could inject rules into the store, so the skeleton was written to use native solvers directly. The intent was to wire Datalog later, but the pipeline was declared complete without the wiring. Phase 4.5 corrects this by making Datalog evaluation the primary resolution path, with native solvers as a detected fast path (§B.7) that activates only when the active rules match known default patterns.
 
 The broader lesson: when a spec says "X is data, not code," verify that the implementation actually reads X from the data path. An optimization that bypasses the data path entirely is not an optimization — it's a parallel implementation that breaks the data path's contract. Equivalence tests can prove the two paths agree but cannot prove the data path is actually wired into the output.
+
+### Proving the Optimization Is Not Proving the Core
+
+Phase 4.5 fixed the pipeline wiring so Datalog is primary and native solvers are a fast path. But post-Phase-4.5 research revealed the same structural problem one layer down: the Fugue *Datalog rules themselves* are a simplified subset (same-`originLeft` peer tiebreak only), while the native solver implements the full algorithm. The equivalence tests explicitly scope themselves to the "shared subset" and pass. This is the same anti-pattern in a different guise — the test proves that the optimization agrees with the core, but the core is incomplete.
+
+The consequence is concrete: if bootstrap emits these simplified rules as the "default Fugue solver," the system's primary Datalog path produces wrong results for non-trivial sequence interleaving. The native fast path papers over the problem because it activates for default rules. But an agent that retracts the default rules and asserts *no* replacement falls back to Datalog with *no* Fugue rules at all — sequences become unordered. An agent that writes custom Fugue rules would need to independently discover the full algorithm, because the defaults don't demonstrate it.
+
+Success Criterion #4 ("Fugue ordering expressed as Datalog rules produces identical results to the native Fugue solver") cannot be satisfied by subset equivalence. Phase 4.6 closes this gap by implementing complete Fugue rules and expanding equivalence tests to cover the full algorithm.
+
+### Immutable API + Mutable Internals = Hidden O(n²)
+
+The `ConstraintStore` was designed with an immutable external API (`insert()` returns a new store) backed by a clone-on-write internal strategy (`new Map(store.constraints)` on every mutation). This is a common functional-programming pattern, but without persistent data structures (structural sharing), it's O(n) per insert — and O(n²) for n sequential inserts. The `insertMany()` function mitigates this for batch operations (clone once, insert all), but the single-insert path is the one callers naturally reach for.
+
+The `generation` counter already exists for cache invalidation, which means callers don't rely on reference identity to detect changes. This makes the switch to mutate-in-place safe: the store is logically a mutable container (like `Map` or `Set`), and the generation counter is the change-detection signal. The functional return-a-new-store API was unnecessary ceremony that imposed a real performance cost.
+
+### Missing Test Files Are Technical Debt, Not Deferred Work
+
+The plan listed `tests/kernel/skeleton.test.ts` as a Phase 4 deliverable (Directory Structure section). It was never created. The skeleton builder's behavior is tested indirectly through `pipeline.test.ts`, which is adequate for the happy path but doesn't localize bugs or cover edge cases (deeply nested maps, mixed map-in-seq, seq-in-seq, slot group merging across multiple peers). When a pipeline test fails, the developer must binary-search across 7 pipeline stages to find the bug. A focused skeleton test with hand-constructed inputs narrows the search to one module. Phase 4.6 adds it retroactively.
+
+### Test Configs Should Match Production Defaults
+
+All 25 pipeline tests set `enableDatalogEvaluation: false` in their `DEFAULT_CONFIG`, meaning they exercise only the native solver path. The Datalog-primary path — which is the spec's architecture and the production default — is tested only in the Phase 4.5 resolve tests. This means the most important code path (the one users will actually run) has the least integration-level coverage. Phase 4.6 flips the default to `true`, so every pipeline test exercises the real production path. A small focused group tests the native-only bypass explicitly.

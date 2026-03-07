@@ -84,6 +84,7 @@ export interface RetractionViolation {
 export type RetractionViolationReason =
   | { readonly kind: 'targetNotInRefs'; readonly target: CnId }
   | { readonly kind: 'targetIsStructure'; readonly target: CnId }
+  | { readonly kind: 'targetIsAuthority'; readonly target: CnId }
   | { readonly kind: 'depthExceeded'; readonly depth: number; readonly maxDepth: number };
 
 // ---------------------------------------------------------------------------
@@ -149,6 +150,18 @@ export function computeActive(
       violations.push({
         retractConstraint: retract,
         reason: { kind: 'targetIsStructure', target: retract.payload.target },
+      });
+      continue;
+    }
+
+    // Rule: authority constraints are immune to retraction (§2.5)
+    // Revocation is the dedicated mechanism for removing capabilities.
+    // Using retraction to remove authority constraints would circumvent
+    // the authority model.
+    if (target !== undefined && target.type === 'authority') {
+      violations.push({
+        retractConstraint: retract,
+        reason: { kind: 'targetIsAuthority', target: retract.payload.target },
       });
       continue;
     }

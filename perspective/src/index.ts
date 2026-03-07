@@ -119,6 +119,16 @@ export {
   produceRoot,
   produceMapChild,
   produceSeqChild,
+
+  // Resolution (§B.4, §B.7 — Datalog→skeleton bridge)
+  type ResolvedWinner,
+  type FugueBeforePair,
+  type ResolutionResult,
+  extractWinners,
+  extractFugueOrdering,
+  extractResolution,
+  nativeResolution,
+  topologicalOrderFromPairs,
 } from './kernel/index.js';
 
 // === Datalog Evaluator ===

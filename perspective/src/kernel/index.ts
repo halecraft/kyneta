@@ -215,6 +215,21 @@ export {
   projectToFacts,
 } from './projection.js';
 
+// --- Resolution (§B.4, §B.7 — Datalog→skeleton bridge) ---
+export type {
+  ResolvedWinner,
+  FugueBeforePair,
+  ResolutionResult,
+} from './resolve.js';
+
+export {
+  extractWinners,
+  extractFugueOrdering,
+  extractResolution,
+  nativeResolution,
+  topologicalOrderFromPairs,
+} from './resolve.js';
+
 // --- Skeleton (§7.3) ---
 export {
   buildSkeleton,

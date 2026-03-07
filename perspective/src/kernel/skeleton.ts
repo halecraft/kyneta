@@ -1,6 +1,7 @@
 // === Skeleton Builder ===
-// Builds the reality tree from the StructureIndex, using Fugue ordering
-// for sequence children and native LWW for value resolution.
+// Builds the reality tree from the StructureIndex, using either
+// Datalog-derived resolution results or native solvers for value
+// resolution and sequence ordering.
 //
 // The skeleton is the structural backbone of the reality — a rooted tree
 // where each node has an identity (CnId), a policy, children, and a
@@ -10,9 +11,16 @@
 //    containers (one per root structure constraint).
 // 2. Recursively builds child nodes using the structure index.
 // 3. For Map parents, children are grouped by (parent, key) via slot groups.
-// 4. For Seq parents, children are ordered by the Fugue algorithm.
-// 5. Values are resolved by native LWW across all active value constraints
+// 4. For Seq parents, children are ordered by Fugue interleaving.
+// 5. Values are resolved by LWW across all active value constraints
 //    targeting any structure in a slot group.
+//
+// Resolution source (Phase 4.5):
+// When a ResolutionResult is provided, the skeleton reads pre-resolved
+// winners and Fugue ordering from it — the Datalog evaluator (or native
+// solvers packaged as a ResolutionResult) has already done the work.
+// When no ResolutionResult is provided, the skeleton falls back to
+// calling native solvers directly (legacy/test path).
 //
 // See unified-engine.md §7.2, §7.3, §8.
 
@@ -32,6 +40,8 @@ import { orderFugueNodes, buildFugueNodes } from '../solver/fugue.js';
 import type { LWWEntry } from '../solver/lww.js';
 import { resolveLWWSlot } from '../solver/lww.js';
 import type { StructureConstraint } from './types.js';
+import type { ResolutionResult } from './resolve.js';
+import { topologicalOrderFromPairs } from './resolve.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -41,30 +51,39 @@ import type { StructureConstraint } from './types.js';
  * Build a Reality tree from the structure index and active constraints.
  *
  * This is the main entry point for skeleton construction. It:
- * 1. Builds a value index (slot → LWWEntry[]) for fast resolution.
+ * 1. Builds a value index (slot → LWWEntry[]) for fast resolution
+ *    (used when no ResolutionResult or as fallback).
  * 2. Creates the synthetic root node.
  * 3. Recursively builds each container and its children.
  *
- * @param structureIndex - Precomputed structure index from active constraints.
+ * @param structureIndex - Precomputed structure index from valid/active constraints.
  * @param activeConstraints - All active constraints (we filter to values internally).
+ * @param resolution - Optional pre-computed resolution from Datalog or native solvers.
+ *                     When provided, the skeleton reads winners/ordering from it.
+ *                     When absent, falls back to native solvers.
  * @returns The complete Reality tree.
  */
 export function buildSkeleton(
   structureIndex: StructureIndex,
   activeConstraints: Iterable<Constraint>,
+  resolution?: ResolutionResult,
 ): Reality {
   // Step 1: Build value index — maps slotId → LWWEntry[] for resolution.
+  // Always built: used as fallback when resolution doesn't cover a slot,
+  // and needed for seq tombstone detection.
   const valueIndex = buildValueIndex(activeConstraints, structureIndex);
+
+  const ctx: BuildContext = {
+    structureIndex,
+    valueIndex,
+    resolution: resolution ?? null,
+  };
 
   // Step 2: Build child nodes for each root container.
   const rootChildren = new Map<string, RealityNode>();
 
   for (const [containerId, rootGroup] of structureIndex.roots) {
-    const node = buildNodeFromSlotGroup(
-      rootGroup,
-      structureIndex,
-      valueIndex,
-    );
+    const node = buildNodeFromSlotGroup(rootGroup, ctx);
     rootChildren.set(containerId, node);
   }
 
@@ -78,6 +97,20 @@ export function buildSkeleton(
   };
 
   return { root: syntheticRoot };
+}
+
+// ---------------------------------------------------------------------------
+// Build Context
+// ---------------------------------------------------------------------------
+
+/**
+ * Internal context threaded through all build functions.
+ * Avoids passing many arguments through every recursive call.
+ */
+interface BuildContext {
+  readonly structureIndex: StructureIndex;
+  readonly valueIndex: ValueIndex;
+  readonly resolution: ResolutionResult | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,29 +166,85 @@ function buildValueIndex(
 }
 
 // ---------------------------------------------------------------------------
+// Value Resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the value for a slot, using the ResolutionResult if available,
+ * otherwise falling back to native LWW.
+ *
+ * @returns The resolved value, or undefined if no value exists for the slot.
+ */
+function resolveSlotValue(
+  slotId: string,
+  ctx: BuildContext,
+): Value | undefined {
+  // Try ResolutionResult first.
+  if (ctx.resolution !== null) {
+    const winner = ctx.resolution.winners.get(slotId);
+    if (winner !== undefined) {
+      return winner.content;
+    }
+    // No winner in Datalog result for this slot — the slot has no
+    // active value (or the rules didn't derive a winner). Return undefined.
+    // But we also check the value index to see if there are entries —
+    // if there are entries but no Datalog winner, it means the rules
+    // decided no one wins (shouldn't happen with standard LWW rules,
+    // but could happen with custom rules).
+    const entries = ctx.valueIndex.get(slotId);
+    if (entries === undefined || entries.length === 0) {
+      return undefined;
+    }
+    // Entries exist but no Datalog winner — return undefined.
+    // The rules did not derive a winner for this slot.
+    return undefined;
+  }
+
+  // Fallback: native LWW.
+  const entries = ctx.valueIndex.get(slotId);
+  if (entries === undefined || entries.length === 0) {
+    return undefined;
+  }
+  const winner = resolveLWWSlot(entries);
+  return winner !== undefined ? winner.content : undefined;
+}
+
+/**
+ * Check if a slot has any active value entries at all.
+ * Used for seq tombstone detection — a seq element without any
+ * value entries is a tombstone regardless of resolution strategy.
+ */
+function slotHasValues(slotId: string, ctx: BuildContext): boolean {
+  // If we have a resolution result, check if there's a winner.
+  if (ctx.resolution !== null) {
+    return ctx.resolution.winners.has(slotId);
+  }
+  // Fallback: check the value index.
+  const entries = ctx.valueIndex.get(slotId);
+  return entries !== undefined && entries.length > 0;
+}
+
+// ---------------------------------------------------------------------------
 // Node Construction
 // ---------------------------------------------------------------------------
 
 /**
  * Build a RealityNode from a SlotGroup.
  *
- * Resolves the value via LWW and recursively builds children.
+ * Resolves the value and recursively builds children.
  */
 function buildNodeFromSlotGroup(
   group: SlotGroup,
-  structureIndex: StructureIndex,
-  valueIndex: ValueIndex,
+  ctx: BuildContext,
 ): RealityNode {
   // Use the first structure constraint as the representative for identity.
   const representative = group.structures[0]!;
 
-  // Resolve value via LWW across all value constraints for this slot.
-  const valueEntries = valueIndex.get(group.slotId);
-  const winner = valueEntries !== undefined ? resolveLWWSlot(valueEntries) : undefined;
-  const resolvedValue: Value | undefined = winner !== undefined ? winner.content : undefined;
+  // Resolve value for this slot.
+  const resolvedValue = resolveSlotValue(group.slotId, ctx);
 
   // Build children based on the parent's policy.
-  const children = buildChildren(group, structureIndex, valueIndex);
+  const children = buildChildren(group, ctx);
 
   return {
     id: representative.id,
@@ -180,13 +269,12 @@ function buildNodeFromSlotGroup(
  */
 function buildChildren(
   parentGroup: SlotGroup,
-  structureIndex: StructureIndex,
-  valueIndex: ValueIndex,
+  ctx: BuildContext,
 ): ReadonlyMap<string, RealityNode> {
   // Collect all child slot groups across all structure constraints in
   // the parent slot group. For Map slots where multiple peers independently
   // created the same (parent, key), we merge their children.
-  const childSlotGroups = getChildrenOfSlotGroup(structureIndex, parentGroup);
+  const childSlotGroups = getChildrenOfSlotGroup(ctx.structureIndex, parentGroup);
 
   if (childSlotGroups.size === 0) {
     return EMPTY_CHILDREN;
@@ -199,9 +287,9 @@ function buildChildren(
   const childKind = firstChild.structures[0]!.payload.kind;
 
   if (childKind === 'seq') {
-    return buildSeqChildren(childSlotGroups, structureIndex, valueIndex);
+    return buildSeqChildren(childSlotGroups, ctx);
   } else {
-    return buildMapChildren(childSlotGroups, structureIndex, valueIndex);
+    return buildMapChildren(childSlotGroups, ctx);
   }
 }
 
@@ -222,13 +310,12 @@ const EMPTY_CHILDREN: ReadonlyMap<string, RealityNode> = new Map();
  */
 function buildMapChildren(
   childSlotGroups: ReadonlyMap<string, SlotGroup>,
-  structureIndex: StructureIndex,
-  valueIndex: ValueIndex,
+  ctx: BuildContext,
 ): ReadonlyMap<string, RealityNode> {
   const children = new Map<string, RealityNode>();
 
   for (const group of childSlotGroups.values()) {
-    const node = buildNodeFromSlotGroup(group, structureIndex, valueIndex);
+    const node = buildNodeFromSlotGroup(group, ctx);
 
     // For Map children, null value means "deleted" — exclude from reality.
     if (node.value === null && node.children.size === 0) {
@@ -248,7 +335,8 @@ function buildMapChildren(
 /**
  * Build children for a Seq parent.
  *
- * Collects all seq structure constraints, orders them using Fugue,
+ * Collects all seq structure constraints, orders them using either
+ * Datalog-derived `fugue_before` pairs or the native Fugue solver,
  * then builds a RealityNode for each. Children are keyed by their
  * positional index ("0", "1", "2", ...).
  *
@@ -258,10 +346,9 @@ function buildMapChildren(
  */
 function buildSeqChildren(
   childSlotGroups: ReadonlyMap<string, SlotGroup>,
-  structureIndex: StructureIndex,
-  valueIndex: ValueIndex,
+  ctx: BuildContext,
 ): ReadonlyMap<string, RealityNode> {
-  // Collect all seq structure constraints for Fugue ordering.
+  // Collect all seq structure constraints for ordering.
   const seqConstraints: StructureConstraint[] = [];
   const groupByIdKey = new Map<string, SlotGroup>();
 
@@ -272,30 +359,42 @@ function buildSeqChildren(
     }
   }
 
-  // Order using Fugue.
-  const fugueNodes = buildFugueNodes(seqConstraints);
-  const ordered = orderFugueNodes(fugueNodes);
+  if (seqConstraints.length === 0) {
+    return EMPTY_CHILDREN;
+  }
+
+  // Determine the ordered sequence of element CnId keys.
+  const orderedKeys = orderSeqElements(seqConstraints, ctx);
 
   // Build RealityNodes in order.
   const children = new Map<string, RealityNode>();
   let index = 0;
 
-  for (const fugueNode of ordered) {
-    const group = groupByIdKey.get(fugueNode.idKey);
+  for (const idKey of orderedKeys) {
+    const group = groupByIdKey.get(idKey);
     if (group === undefined) continue;
 
     // Check if this element has an active value.
-    const valueEntries = valueIndex.get(group.slotId);
-    const winner = valueEntries !== undefined ? resolveLWWSlot(valueEntries) : undefined;
+    if (!slotHasValues(group.slotId, ctx)) {
+      // Seq elements without a value are tombstones — exclude from visible children.
+      continue;
+    }
 
-    // Seq elements without a value are tombstones — exclude from visible children.
-    if (winner === undefined) continue;
+    const resolvedValue = resolveSlotValue(group.slotId, ctx);
+    if (resolvedValue === undefined) {
+      // No resolved value (tombstone) — exclude.
+      continue;
+    }
+
+    // Find the structure constraint for this element to get the CnId.
+    const sc = seqConstraints.find((s) => cnIdKey(s.id) === idKey);
+    const elementId = sc !== undefined ? sc.id : group.structures[0]!.id;
 
     const childNode: RealityNode = {
-      id: fugueNode.id,
+      id: elementId,
       policy: 'seq',
-      children: buildChildren(group, structureIndex, valueIndex),
-      value: winner.content,
+      children: buildChildren(group, ctx),
+      value: resolvedValue,
     };
 
     children.set(String(index), childNode);
@@ -303,4 +402,50 @@ function buildSeqChildren(
   }
 
   return children;
+}
+
+/**
+ * Order seq elements using either Datalog-derived fugue_before pairs
+ * or the native Fugue solver.
+ *
+ * @returns Ordered array of CnId key strings.
+ */
+function orderSeqElements(
+  seqConstraints: readonly StructureConstraint[],
+  ctx: BuildContext,
+): string[] {
+  // If we have a resolution result with Fugue pairs, use topological sort.
+  if (ctx.resolution !== null) {
+    // Collect all element keys.
+    const allElementKeys = seqConstraints.map((sc) => cnIdKey(sc.id));
+
+    // Find the parent — all seq constraints in this group share the same parent.
+    const firstPayload = seqConstraints[0]!.payload;
+    if (firstPayload.kind !== 'seq') {
+      // Should not happen — we've already filtered to seq.
+      return allElementKeys;
+    }
+    const parentKey = cnIdKey(firstPayload.parent);
+
+    // Get the before-pairs for this parent.
+    const pairs = ctx.resolution.fuguePairs.get(parentKey);
+
+    if (pairs !== undefined && pairs.length > 0) {
+      return topologicalOrderFromPairs(pairs, allElementKeys);
+    }
+
+    // No pairs for this parent — might be a single element or no
+    // Datalog Fugue rules. Fall through to native solver.
+    if (allElementKeys.length <= 1) {
+      return allElementKeys;
+    }
+
+    // Fall back to native for this parent (Datalog rules might not
+    // have derived ordering for this specific parent).
+  }
+
+  // Fallback: native Fugue solver.
+  const fugueNodes = buildFugueNodes(seqConstraints);
+  const ordered = orderFugueNodes(fugueNodes);
+  return ordered.map((n) => n.idKey);
 }
