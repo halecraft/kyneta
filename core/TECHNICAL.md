@@ -895,19 +895,19 @@ Unlike `textRegion` which uses `insertData`/`deleteData` on Text nodes, input el
 
 **`setRangeText("preserve")` cursor caveat:** Per the HTML spec, `"preserve"` adjusts `selectionStart` only when it is *strictly greater than* the replacement range endpoints. When inserting at the cursor position (`start === end === selectionStart`), neither adjustment branch fires — the cursor stays put. This means typing "Hello" character by character produces "olleH" because each character is inserted at position 0 (the cursor never advances). `"preserve"` was designed for edits happening *elsewhere* in the text, not at the cursor.
 
-**Origin-aware dispatch:** To handle this correctly, `inputTextRegion` coordinates with `editText` via a per-element active-edit flag:
+**Origin-driven selectMode dispatch:** `inputTextRegion` dispatches selectMode based on `delta.origin`:
 
-- **During `editText` handler** (local typing): `inputTextRegion`'s subscription callback detects the active-edit flag and **skips** `patchInputValue`. The `editText` handler manages the cursor directly via `setSelectionRange` after the CRDT mutation.
-- **Outside `editText`** (remote edits, undo/redo): `inputTextRegion` applies `patchInputValue` with `setRangeText("preserve")` as normal — this correctly shifts the local cursor relative to remote insertions/deletions.
+- **`origin === "local"`** → `setRangeText(..., "end")` — cursor advances past inserts, stays at delete point. Correct for local typing, undo, and redo.
+- **anything else** (`"import"`, `undefined`) → `setRangeText(..., "preserve")` — cursor shifts relative to remote edits. Correct for remote collaborator edits.
 
-The active-edit detection uses a pluggable predicate (`setActiveEditPredicate`) to preserve the Loro-agnostic runtime boundary. The `editText` module registers its predicate at import time. If no predicate is registered (e.g., read-only input), all edits use `"preserve"` — the safe default.
+No active-edit flags, cursor arithmetic, or cross-module coordination needed. The `origin` field (from `@loro-extended/reactive`, forwarded by the reactive bridge from Loro's `LoroEventBatch.by`) is the sole discriminant. `editText` requires no changes — it remains a pure CRDT write function.
 
 **Functional Core** (shared with `textRegion`):
 - `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
 
 **Imperative Shell:**
-- `patchInputValue(input, ops)` — applies patches via `setRangeText("preserve")`
-- `inputTextRegion(input, ref, scope)` — subscription-aware wrapper
+- `patchInputValue(input, ops, selectMode?)` — applies patches via `setRangeText(selectMode)` (default `"preserve"`)
+- `inputTextRegion(input, ref, scope)` — subscription-aware wrapper, dispatches selectMode on `delta.origin`
 
 ```typescript
 function inputTextRegion(
@@ -920,7 +920,8 @@ function inputTextRegion(
 
   subscribe(ref, (delta: ReactiveDelta) => {
     if (delta.type === "text") {
-      patchInputValue(input, delta.ops)  // O(k) surgical update
+      const mode = delta.origin === "local" ? "end" : "preserve"
+      patchInputValue(input, delta.ops, mode)  // O(k) surgical update
     } else {
       input.value = typedRef.get()       // Fallback
     }
@@ -931,16 +932,15 @@ function inputTextRegion(
 **The `setAttribute` fix:** The `generateAttributeUpdateCode` helper was extracted as the single source of truth for attribute→DOM-API mapping. This fixed a latent bug in the template cloning path where `setAttribute("value", x)` was used instead of `.value =`. After user interaction, `setAttribute` only changes the HTML default attribute — not the live DOM property. The same fix covers `checked`, `disabled`, `class`, `style`, and `data-*` in both the createElement and cloneNode codegen paths.
 
 **Integration with `editText`:** The full write→read cycle for local edits is synchronous within one event loop tick:
-1. `beforeinput` → `editText` handler sets active-edit flag on the element
-2. Handler reads `selectionStart`/`selectionEnd`, calls `ref.insert()` / `ref.delete()`
+1. `beforeinput` → `editText` handler calls `e.preventDefault()`, reads `selectionStart`/`selectionEnd`
+2. Handler calls `ref.insert()` / `ref.delete()` on the typed ref
 3. `commitIfAuto()` fires synchronously → Loro event system → `translateEventBatch` → `ReactiveDelta { type: "text", origin: "local" }`
-4. `inputTextRegion` callback sees active-edit flag → **skips** `patchInputValue`
-5. `editText` handler computes new cursor position, calls `setSelectionRange(newCursor, newCursor)`
-6. Handler clears active-edit flag
+4. `inputTextRegion` callback receives delta with `origin: "local"` → calls `patchInputValue(input, ops, "end")`
+5. `setRangeText(..., "end")` updates `input.value` and places cursor at end of replacement range
 
-For remote edits, the subscription fires without the active-edit flag, and `patchInputValue` applies `setRangeText("preserve")` — correctly shifting the local cursor.
+For remote edits, `translateEventBatch` produces `origin: "import"`, and `inputTextRegion` calls `patchInputValue(input, ops, "preserve")` — correctly shifting the local cursor relative to remote insertions/deletions.
 
-The user never sees an intermediate state. The active-edit flag is only true during the synchronous handler execution (steps 1–6).
+`editText` is a pure CRDT write function — it never touches the DOM beyond `e.preventDefault()`. All DOM updates and cursor positioning flow through `inputTextRegion` → `patchInputValue` → `setRangeText`.
 
 ### Region Algebra
 
@@ -1384,14 +1384,14 @@ Most region types ignore provenance (Text nodes, lists, conditionals have no eph
 
 **Design principle:** Provenance is metadata on the delta, not a separate channel. This keeps the `subscribe` callback signature simple (`(delta: D) => void`) and lets consumers opt in to origin-awareness by reading `delta.origin`. Non-Loro reactive types (e.g., `LocalRef`) omit the field — consumers treat `undefined` as "unknown origin" and fall back to safe defaults.
 
-**Loro `by` field caveat:** Loro's `"local"` origin fires for BOTH user input AND local undo/redo operations. The delta algebra forwards this faithfully without reinterpretation. Higher-level consumers (like `editText` + `inputTextRegion`) use their own flags to distinguish user typing from undo — this is a consumer concern, not an algebra concern.
+**Loro `by` field mapping:** Loro's `"local"` origin fires for both user input and local undo/redo operations. The delta algebra forwards this faithfully. For `inputTextRegion`, this is correct — both user typing and local undo/redo want `"end"` selectMode (cursor follows the edit). Remote edits want `"preserve"` selectMode (cursor stays put relative to surrounding text).
 
 ### Delta Dispatch Strategy
 
 Each region type handles its matching delta surgically:
 
 - **Text deltas** → `insertData` / `deleteData` on Text nodes (character-level)
-- **Input text deltas** → `patchInputValue` via `setRangeText("preserve")` for remote edits; skipped for local edits (cursor managed by `editText`)
+- **Input text deltas** → `patchInputValue` via `setRangeText` with origin-driven selectMode: `"end"` for local edits (cursor follows edit), `"preserve"` for remote edits (cursor preserves position)
 - **List deltas** → `insertBefore` / `removeChild` on parent (element-level)
 - **Condition changes** → `replaceChild` for branch swapping
 

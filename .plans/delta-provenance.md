@@ -32,28 +32,44 @@ This is only true when the insertion range is **strictly before** the cursor (`s
 
 The last case is exactly what happens during local typing — the insertion point IS the cursor position. `"preserve"` was designed for edits happening *elsewhere* in the text, not at the cursor.
 
-### The Missing Concept
+### The Fix: Origin-Driven SelectMode Dispatch
 
-The correct behavior depends on the edit's **origin**:
+The `setRangeText` API has two selectModes that are complementary:
 
-- **Local edit** (user typed at the cursor): cursor must advance past inserted text. `setRangeText("end")` or explicit `setSelectionRange` is needed.
-- **Remote edit** (collaborator typed elsewhere): cursor should shift if edit is before it, stay if after. `setRangeText("preserve")` is correct.
-- **Undo/redo**: Functionally like a remote edit — the delta comes from history, not the user's current cursor position.
+- `"preserve"` — correct for **remote** edits (shifts cursor when edit is before it, leaves it when after)
+- `"end"` — correct for **local** edits (places cursor at end of replacement range)
 
-The `ReactiveDelta` type has no concept of origin. Loro provides this information via the `by` field on `LoroEventBatch` (`"local"` or `"import"`), but `translateEventBatch` strips it. The information exists at the source and is discarded at the bridge layer.
+Verification of `"end"` for all local operation types:
 
-### Loro's `by` Field Is Insufficient
+| Operation | setRangeText call | Cursor result | Correct? |
+|-----------|-------------------|---------------|----------|
+| Insert "H" at pos 0 | `("H", 0, 0, "end")` | cursor → 1 (0 + 1) | ✅ |
+| Insert "e" at pos 1 | `("e", 1, 1, "end")` | cursor → 2 (1 + 1) | ✅ |
+| Backspace at pos 3 in "Hello" | `("", 2, 3, "end")` | cursor → 2 (2 + 0) | ✅ |
+| Delete forward at pos 2 in "Hello" | `("", 2, 3, "end")` | cursor → 2 (2 + 0) | ✅ |
+| Replace "llo" (2–5) with "y" | delete `("", 2, 5, "end")` then insert `("y", 2, 2, "end")` | cursor → 3 | ✅ |
+| Paste "World" at pos 5 | `("World", 5, 5, "end")` | cursor → 10 | ✅ |
 
-A critical subtlety discovered in `hooks-core`: Loro's `by: "local"` fires for BOTH user input AND undo/redo operations. The `hooks-core` implementation explicitly documents this:
+Verification of `"end"` for **local undo/redo** (Loro undo fires with `by: "local"`):
 
-```
-// We use isLocalChangeRef instead of event.by === "local" because:
-// - isLocalChangeRef is only true during our beforeinput handler
-// - event.by === "local" is true for BOTH user input AND undo/redo operations
-// - We need to update the textarea for undo/redo, so we can't filter on event.by
-```
+| Operation | Cursor result with `"end"` | UX |
+|-----------|---------------------------|-----|
+| Undo insertion (delta has delete) | Cursor goes to deletion point | ✅ User sees where text was removed |
+| Undo deletion (delta has insert) | Cursor goes to end of re-inserted text | ✅ User sees where text was restored |
 
-Therefore, the provenance we add to `ReactiveDelta` should forward Loro's raw `by` value faithfully. The semantic distinction between "user input" and "undo triggered locally" is a higher-level concern that consumers (like `editText` + `inputTextRegion`) handle with their own flag, not something the delta algebra should opine on.
+Verification of `"preserve"` for **remote** edits:
+
+| Remote edit | Local cursor at 5 | Cursor result with `"preserve"` | Correct? |
+|-------------|--------------------|---------------------------------|----------|
+| Insert "XYZ" at pos 0 | `selectionStart (5) > end (0)` → `+3` | cursor → 8 | ✅ |
+| Insert "XYZ" at pos 7 | `selectionStart (5) > end (7)`? No → no change | cursor → 5 | ✅ |
+| Delete at pos 0–3 | `selectionStart (5) > end (3)` → `-3` | cursor → 2 | ✅ |
+
+Both selectModes handle their respective cases correctly. The only information needed to choose between them is the delta's **origin** — which Loro already provides.
+
+### Loro's `by` Field Is Sufficient
+
+The earlier plan noted that `hooks-core` avoids using `event.by === "local"` because it conflates user input with undo/redo. However, that concern was specific to `hooks-core`'s approach of *skipping* the subscription for local edits (which would incorrectly skip undo). Our approach is different: we *always* apply the delta — we just choose a different `selectMode`. Both user input and local undo/redo want `"end"` selectMode (teleport cursor to the edit site), so `origin === "local"` is the correct discriminant.
 
 ## Problem Statement
 
@@ -67,8 +83,9 @@ Therefore, the provenance we add to `ReactiveDelta` should forward Loro's raw `b
 
 - `ReactiveDelta` carries an optional `origin` field (`"local"` | `"import"` | undefined)
 - `translateEventBatch` forwards the `by` field from `LoroEventBatch` as `origin`
-- `inputTextRegion` uses `origin` to choose the correct `setRangeText` selectMode
-- `editText` sets a local flag so `inputTextRegion` can distinguish "user is typing" from "local undo/redo"
+- `patchInputValue` accepts an optional `selectMode` parameter (default `"preserve"`)
+- `inputTextRegion` passes `"end"` when `delta.origin === "local"`, `"preserve"` otherwise
+- `editText` requires no changes — it remains a pure CRDT write function
 - Typing "Hello" into the kinetic-todo input field produces "Hello" with cursor at position 5
 - Remote edits to a text input preserve the local user's cursor position
 - All existing text patching, list region, and conditional region tests continue to pass
@@ -80,9 +97,9 @@ Therefore, the provenance we add to `ReactiveDelta` should forward Loro's raw `b
 |--------|---------|--------|
 | `ReactiveDelta` | No origin information | Optional `origin: "local" \| "import"` field |
 | `translateEventBatch` | Strips `by` field | Forwards `by` as `origin` on each delta |
-| `inputTextRegion` | Always uses `"preserve"` selectMode | Uses `"preserve"` normally; skips patching during active `editText` handler |
-| `editText` | No DOM update, no cursor management | Sets a per-element flag during handler; manages cursor after CRDT mutation |
-| `patchInputValue` | Single selectMode `"preserve"` | Accepts optional selectMode parameter |
+| `patchInputValue` | Hardcoded `"preserve"` selectMode | Accepts optional `selectMode` parameter (default `"preserve"`) |
+| `inputTextRegion` | Always passes `"preserve"` | Dispatches on `delta.origin`: `"end"` for local, `"preserve"` otherwise |
+| `editText` | No DOM update, no cursor management | **No change needed** — cursor managed by `setRangeText("end")` through the subscription |
 | Unit tests | No round-trip cursor test | Tests for local typing, remote insert, undo cursor behavior |
 
 ## Phase 1: Add `origin` to `ReactiveDelta` 🔴
@@ -93,7 +110,7 @@ Extend the delta vocabulary with provenance metadata.
 
 1. Add optional `origin` field to each named delta type in `packages/reactive/src/index.ts` 🔴
 
-   The field is optional so that non-Loro reactive types (e.g., `LocalRef`) don't need to provide it. When absent, consumers treat the delta as origin-unknown and fall back to safe behavior (full replacement or `"preserve"`).
+   The field is optional so that non-Loro reactive types (e.g., `LocalRef`) don't need to provide it. When absent, consumers treat the delta as origin-unknown and fall back to safe behavior (`"preserve"`).
 
    ```typescript
    export type DeltaOrigin = "local" | "import"
@@ -113,57 +130,46 @@ Extend the delta vocabulary with provenance metadata.
 
 4. Update `translateDiff` to accept and attach an optional origin parameter 🔴
 
+   For the `REPLACE_DELTA` singleton optimization: return `origin ? { type: "replace", origin } : REPLACE_DELTA`. This preserves the singleton for the no-origin case (e.g., `LocalRef`) while correctly attaching origin when present.
+
 5. Add tests for origin forwarding in `packages/change/src/reactive-bridge.test.ts` 🔴
 
    - `translateEventBatch` with `by: "local"` → each delta has `origin: "local"`
    - `translateEventBatch` with `by: "import"` → each delta has `origin: "import"`
    - `translateEventBatch` with no `by` field → each delta has `origin: undefined`
 
-## Phase 2: Fix `inputTextRegion` + `editText` Round-Trip 🔴
+## Phase 2: Origin-Driven SelectMode in `patchInputValue` + `inputTextRegion` 🔴
 
-The core cursor fix. Two coordinated changes make `inputTextRegion` origin-aware and give `editText` explicit cursor management.
+The core cursor fix. `patchInputValue` gains a selectMode parameter; `inputTextRegion` dispatches on `delta.origin`.
 
 ### Tasks
 
-1. Add a per-element "active edit" flag mechanism to `editText` in `packages/kinetic/src/loro/edit-text.ts` 🔴
+1. Update `patchInputValue` in `packages/kinetic/src/runtime/text-patch.ts` to accept an optional `selectMode` parameter 🔴
 
-   Use a module-scoped `WeakSet<Element>` to track which elements are currently inside an `editText` handler. The handler adds the element before calling the CRDT mutation and removes it in a `finally` block. This is analogous to `hooks-core`'s `isLocalChangeRef`, but scoped per-element rather than per-hook instance.
-
-   ```typescript
-   const activeEditElements = new WeakSet<Element>()
-
-   export function isActiveEdit(el: Element): boolean {
-     return activeEditElements.has(el)
-   }
-   ```
-
-2. Update `editText` to manage cursor position after the synchronous CRDT mutation chain 🔴
-
-   After the handler completes (which triggers `commitIfAuto` → subscription → `patchInputValue` synchronously), call `setSelectionRange(newCursor, newCursor)`. Import and adapt `calculateNewCursor` logic inline (it's ~10 lines — a local helper, not an import from `hooks-core`).
-
-3. Update `inputTextRegion` in `packages/kinetic/src/runtime/text-patch.ts` to skip patching when the element is in an active edit 🔴
-
-   Inside the subscription callback, check `isActiveEdit(input)`. If true, skip the `patchInputValue` call — `editText` handles the DOM update and cursor. If false (remote edit or undo), apply the patch with `"preserve"` selectMode as before. This avoids the need for `patchInputValue` to be selectMode-aware: local edits skip it entirely, remote edits use `"preserve"`.
-
-   This introduces a runtime import from `../loro/edit-text.js` into `text-patch.ts`. To preserve the Loro-agnostic core runtime principle, import only the `isActiveEdit` predicate (which references no Loro types) and make it optional via a setter pattern (see task 4).
-
-4. Preserve Loro-agnostic core runtime boundary 🔴
-
-   `text-patch.ts` is in the Loro-agnostic `runtime/` directory. Rather than importing from `loro/edit-text.ts`, expose a pluggable predicate:
+   Default to `"preserve"` for backward compatibility. The parameter is passed through to every `setRangeText` call.
 
    ```typescript
-   let isActiveEditFn: ((el: Element) => boolean) | null = null
-
-   export function setActiveEditPredicate(fn: (el: Element) => boolean): void {
-     isActiveEditFn = fn
-   }
+   export function patchInputValue(
+     input: HTMLInputElement | HTMLTextAreaElement,
+     ops: TextDeltaOp[],
+     selectMode: "preserve" | "end" = "preserve",
+   ): void
    ```
 
-   The `editText` module calls `setActiveEditPredicate(isActiveEdit)` at import time. `inputTextRegion` checks `isActiveEditFn?.(input)`. If no predicate is registered (pure runtime without Loro bindings), all edits use `"preserve"` — the safe default.
+2. Update `inputTextRegion` in `packages/kinetic/src/runtime/text-patch.ts` to dispatch selectMode on `delta.origin` 🔴
 
-5. Export `setActiveEditPredicate` from the runtime index and `isActiveEdit`/registration from the loro index 🔴
+   ```typescript
+   subscribe(ref, (delta: ReactiveDelta) => {
+     if (delta.type === "text") {
+       const mode = delta.origin === "local" ? "end" : "preserve"
+       patchInputValue(input, delta.ops, mode)
+     } else {
+       input.value = typedRef.get()
+     }
+   }, scope)
+   ```
 
-6. Wire up the registration in `packages/kinetic/src/loro/edit-text.ts` — call `setActiveEditPredicate` at module top level 🔴
+   No changes to `editText` are needed. It remains a pure CRDT write function — the subscription's `setRangeText("end")` handles cursor positioning for local edits automatically.
 
 ## Phase 3: Tests 🔴
 
@@ -175,35 +181,29 @@ The core cursor fix. Two coordinated changes make `inputTextRegion` origin-aware
 
 2. Add remote edit cursor preservation test to `packages/kinetic/src/runtime/text-patch.test.ts` 🔴
 
-   Wire `inputTextRegion` on an input with cursor at position 5. Simulate a remote text delta inserting at position 0. Verify cursor shifted to position 8 (5 + inserted length). Verify `input.value` is correct.
+   Wire `inputTextRegion` on an input with cursor at position 5. Simulate a remote text delta (with `origin: "import"` or `origin: undefined`) inserting at position 0. Verify cursor shifted to position 8 (5 + inserted length). Verify `input.value` is correct.
 
 3. Add origin-forwarding tests to `packages/change/src/reactive-bridge.test.ts` (covered in Phase 1 task 5) 🔴
 
 4. Verify existing `patchInputValue`, `textRegion`, `listRegion`, and `conditionalRegion` tests still pass 🔴
 
-## Phase 4: Documentation 🔴
+## Phase 4: Documentation ✅ (partially complete, corrections needed)
 
 ### Tasks
 
-1. Update `packages/kinetic/TECHNICAL.md` — Input Text Region Architecture section 🔴
+1. Update `packages/kinetic/TECHNICAL.md` — Input Text Region Architecture section ✅ (needs correction for selectMode dispatch instead of active-edit flag)
 
-   Correct the `setRangeText("preserve")` description. Document the origin-aware dispatch: active-edit elements skip patching, remote edits use `"preserve"`. Document the `setActiveEditPredicate` pluggability pattern.
+2. Update `packages/kinetic/TECHNICAL.md` — Delta Region Algebra section ✅ (needs minor correction)
 
-2. Update `packages/kinetic/TECHNICAL.md` — Delta Region Algebra section 🔴
+3. Update `packages/change/TECHNICAL.md` — Reactive Bridge section ✅
 
-   Add provenance as a dimension of the algebra. Update the pattern table to show that `inputTextRegion` has origin-dependent behavior.
+4. Update `TECHNICAL.md` (root) — REACTIVE Callback Signature section ✅
 
-3. Update `packages/change/TECHNICAL.md` — Reactive Bridge section 🔴
+5. Correct Learning #2 in `.plans/kinetic-input-text-region.md` ✅ (needs minor correction for selectMode dispatch)
 
-   Document that `translateEventBatch` now forwards the `by` field as `origin`. Update the "Key Design Decisions" list.
+6. Correct TECHNICAL.md files to reflect selectMode dispatch instead of active-edit flag mechanism 🔴
 
-4. Update `TECHNICAL.md` (root) — REACTIVE Callback Signature section 🔴
-
-   Document the `origin` field on `ReactiveDelta`. Note that it's optional and Loro-specific.
-
-5. Correct Learning #2 in `.plans/kinetic-input-text-region.md` 🔴
-
-   Add a correction note explaining the `setRangeText("preserve")` limitation and the origin-aware fix.
+   The documentation updates made in the previous commit describe the now-superseded skip+flag approach. They need to be revised to describe the simpler origin-driven selectMode dispatch.
 
 ## Tests
 
@@ -224,9 +224,18 @@ describe("translateDiff with origin", () => {
 })
 ```
 
-### Phase 2: Cursor round-trip
+### Phase 2: Cursor behavior
 
 ```
+describe("patchInputValue with selectMode", () => {
+  it("uses 'preserve' by default (backward compatible)")
+  it("uses 'end' when selectMode is 'end'")
+  it("cursor advances past insert with 'end'")
+  it("cursor stays at delete point with 'end'")
+  it("cursor shifts for remote insert before cursor with 'preserve'")
+  it("cursor unchanged for remote insert after cursor with 'preserve'")
+})
+
 describe("editText + inputTextRegion round-trip", () => {
   it("typing 'Hello' produces 'Hello' with cursor at position 5")
   it("backspace at position 3 in 'Hello' produces 'Helo' with cursor at 2")
@@ -238,18 +247,11 @@ describe("inputTextRegion remote edits", () => {
   it("remote insert after cursor leaves cursor unchanged")
   it("remote delete before cursor shifts cursor left")
 })
-
-describe("isActiveEdit flag", () => {
-  it("is true during editText handler execution")
-  it("is false after handler completes")
-  it("is false during remote subscription callback")
-  it("is scoped per-element via WeakSet")
-})
 ```
 
 ### Phase 3: Regression
 
-All existing tests in `text-patch.test.ts`, `edit-text.test.ts`, `integration.test.ts`, `reactive-bridge.test.ts` must continue to pass unmodified (with the exception of tests that now need to account for `origin` in their delta assertions — these are updated in Phase 1).
+All existing tests in `text-patch.test.ts`, `edit-text.test.ts`, `integration.test.ts`, `reactive-bridge.test.ts` must continue to pass. The `patchInputValue` default parameter (`"preserve"`) ensures backward compatibility.
 
 ## Transitive Effect Analysis
 
@@ -271,27 +273,33 @@ The function signature doesn't change. The callback still receives `ReactiveDelt
 
 **Risk: None.** Both functions are in the same module.
 
+### `REPLACE_DELTA` singleton → conditional allocation
+
+The pre-allocated `REPLACE_DELTA` singleton (`{ type: "replace" }`) in `reactive-bridge.ts` cannot carry `origin`. When `origin` is defined, `translateDiff` returns a new object `{ type: "replace", origin }` instead of the singleton. When `origin` is undefined, the singleton is still used. This is a minor allocation increase for counter diffs with origin — negligible in practice.
+
+**Risk: None.**
+
+### `patchInputValue` signature change → default parameter preserves compatibility
+
+The new `selectMode` parameter defaults to `"preserve"`. All existing callers (including direct calls in tests) are unaffected — they get the same behavior as before.
+
+**Risk: None.**
+
 ### `inputTextRegion` behavior change → all input/textarea with TextRef value
 
-The subscription callback now skips `patchInputValue` when `isActiveEditFn?.(input)` returns true. This means:
+The subscription callback now dispatches selectMode based on `delta.origin`:
+- `origin === "local"` → `"end"` (cursor follows edit)
+- anything else → `"preserve"` (cursor preserves position)
 
-- **With `editText` wired**: local edits are handled by `editText` (cursor management + DOM update), remote edits by `inputTextRegion`. Correct.
-- **Without `editText` (read-only display input)**: `isActiveEditFn` is never registered or always returns false. All edits use `"preserve"`. Same behavior as before. Correct.
-- **With `editText` but remote-only changes**: `isActiveEditFn` returns false for remote. `"preserve"` is used. Correct.
+For inputs without `editText` (read-only display), all changes come from remote or programmatic mutations — `origin` is either `"import"` or `undefined`, both of which use `"preserve"`. Same behavior as before.
 
-**Risk: Low.** The flag is only true during the synchronous `editText` handler, which is a very narrow window.
+**Risk: Low.** The dispatch is a pure function of the delta — no side channels, no mutable state.
 
-### `editText` now manages cursor → behavioral change for kinetic-todo
+### `editText` — no changes needed
 
-The handler now calls `setSelectionRange` after the CRDT mutation. This is the fix. No breaking change — previously the cursor was wrong (always 0).
+The handler remains a pure CRDT write function. It calls `e.preventDefault()`, mutates the ref, and returns. The subscription chain handles all DOM updates and cursor positioning via `setRangeText("end")`.
 
-**Risk: Low.** This is the desired fix.
-
-### `setActiveEditPredicate` registration pattern → module initialization order
-
-The `editText` module registers the predicate at import time. If `inputTextRegion` runs before `editText` is imported, the predicate is null and `isActiveEditFn?.(input)` returns undefined (falsy) — all edits use `"preserve"`. This is the safe default. Once `editText` is imported (which happens when the user's component code imports it), the predicate is set.
-
-**Risk: Low.** The worst case is reverting to the current (broken) behavior if `editText` isn't imported — and if it isn't imported, there's no `beforeinput` handler, so the input is read-only and `"preserve"` is correct.
+**Risk: None.**
 
 ### `@loro-extended/reactive` package version bump
 
@@ -311,23 +319,25 @@ Adding `DeltaOrigin` and the `origin` field to all delta types is a minor/patch 
 
 These regions don't interact with cursor state. The `origin` field is ignored.
 
+### Loro-agnostic runtime boundary — preserved
+
+The `inputTextRegion` function reads `delta.origin`, which is typed as `DeltaOrigin` from `@loro-extended/reactive`. This is not a Loro type — `reactive` is the Loro-agnostic foundation package. No imports from `@loro-extended/change` or Loro are introduced into `text-patch.ts`.
+
 ## Alternatives Considered
 
-### Alternative: `patchInputValue` accepts a `selectMode` parameter
+### Alternative: Skip subscription during local edits + active-edit flag
 
-Instead of skipping the patch for local edits, pass `"end"` as selectMode for local and `"preserve"` for remote. Rejected because `"end"` places the cursor at the end of the *replacement range*, which is wrong for delete operations (cursor should stay at the deletion point, not jump to end). Also, multiple patch ops in a single delta would each set the cursor — only the final position matters. Explicit `setSelectionRange` after all ops is simpler and correct.
+The original version of this plan proposed a `WeakSet<Element>`-based active-edit flag in `editText`, a pluggable `setActiveEditPredicate` to preserve the Loro-agnostic runtime boundary, and explicit cursor management via `setSelectionRange` in `editText`. During local edits, `inputTextRegion` would skip `patchInputValue` entirely.
 
-### Alternative: Use Loro's `by` field directly for local/remote distinction in `inputTextRegion`
+Rejected because it is unnecessarily complex — 6 tasks, module-level mutable state, a registration pattern, and duplication of `calculateNewCursor` from `hooks-core`. The origin-driven selectMode dispatch achieves the same result with 2 tasks, no mutable state, no cursor arithmetic, and no cross-module coordination. The key insight: `setRangeText("end")` is correct for all local operations (insert, delete, replace, undo, redo), so dispatching on `delta.origin` alone is sufficient.
 
-Check `delta.origin === "local"` to skip patching. Rejected because Loro's `"local"` includes undo/redo operations, which SHOULD update the input value and cursor. The `hooks-core` codebase explicitly documents this pitfall. A per-element flag set only during the `editText` handler is more precise.
+### Alternative: Post-correct cursor without changing selectMode (Response 3 from research)
+
+Keep `inputTextRegion` unchanged, let it apply `setRangeText("preserve")`, then have `editText` override the cursor with `setSelectionRange` after the synchronous chain. Rejected because `editText` would need cursor arithmetic (`calculateNewCursor`), creating code duplication with `hooks-core`. Also less principled — it applies the wrong selectMode then immediately corrects the result, rather than applying the right selectMode in the first place.
 
 ### Alternative: `editText` handles DOM update directly, no subscription for local edits (Response 2 from research)
 
 Have `editText` do `input.value = ref.toString()` + `setSelectionRange` after the CRDT mutation, and use an `isLocalChange` flag to suppress the subscription. Rejected because it means the read direction (`inputTextRegion`) and write direction (`editText`) are no longer independent — `editText` must replicate the DOM update logic. Also, `input.value = ...` is O(n) full replacement, losing the surgical benefit of `setRangeText`.
-
-### Alternative: Post-correct cursor without skipping subscription (Response 3 from research)
-
-Keep `inputTextRegion` unchanged, let it apply `setRangeText("preserve")`, then have `editText` override the cursor with `setSelectionRange` after the synchronous chain. This works because the chain is synchronous. Rejected because it does redundant work — `patchInputValue` runs and sets the wrong cursor, then `editText` immediately overrides it. More importantly, it's "accidentally correct" — it relies on synchronous execution rather than a principled design. If Loro ever batches or defers subscription callbacks, it breaks silently.
 
 ### Alternative: Add provenance to `ReactiveSubscribe` callback signature instead of delta
 
@@ -342,34 +352,29 @@ Change the callback from `(delta: D) => void` to `(delta: D, origin?: DeltaOrigi
 - `packages/change/src/reactive-bridge.test.ts` — existing batch translation tests (extend)
 - `packages/kinetic/src/runtime/text-patch.ts` — `inputTextRegion`, `patchInputValue` (modify)
 - `packages/kinetic/src/runtime/text-patch.test.ts` — existing input value patching tests (extend)
-- `packages/kinetic/src/loro/edit-text.ts` — `editText` handler (modify)
-- `packages/kinetic/src/loro/edit-text.test.ts` — existing editText tests (extend)
+- `packages/kinetic/src/loro/edit-text.ts` — `editText` handler (no change, but understand the flow)
+- `packages/kinetic/src/loro/edit-text.test.ts` — existing editText tests (extend with round-trip tests)
 - `packages/kinetic/src/runtime/subscribe.ts` — `subscribe` function (no change, but understand callback flow)
-- `packages/kinetic/src/runtime/index.ts` — runtime exports (add `setActiveEditPredicate`)
-- `packages/kinetic/src/loro/index.ts` — loro binding exports (add `isActiveEdit`)
 - `packages/hooks-core/src/create-text-hooks/index.ts` L370-395 — `isLocalChangeRef` pattern and commentary on Loro's `by` field (reference, do not modify)
-- `packages/hooks-core/src/create-text-hooks/input-handlers.ts` L146-160 — `calculateNewCursor` logic (reference for cursor math, do not import)
-- `packages/hooks-core/src/create-text-hooks/cursor-utils.ts` — `adjustCursorFromDelta` (reference for remote cursor adjustment, do not import)
 
 ### Files to Modify
 
 - `packages/reactive/src/index.ts` — add `DeltaOrigin`, add `origin?` to all named delta types
 - `packages/change/src/reactive-bridge.ts` — forward `by` → `origin` in `translateEventBatch`/`translateDiff`
 - `packages/change/src/reactive-bridge.test.ts` — add origin forwarding tests
-- `packages/kinetic/src/runtime/text-patch.ts` — add `setActiveEditPredicate`, update `inputTextRegion`
-- `packages/kinetic/src/runtime/text-patch.test.ts` — add remote edit cursor tests
-- `packages/kinetic/src/runtime/index.ts` — export `setActiveEditPredicate`
-- `packages/kinetic/src/loro/edit-text.ts` — add `activeEditElements` WeakSet, cursor management, registration
+- `packages/kinetic/src/runtime/text-patch.ts` — add `selectMode` param to `patchInputValue`, update `inputTextRegion`
+- `packages/kinetic/src/runtime/text-patch.test.ts` — add selectMode and remote edit cursor tests
 - `packages/kinetic/src/loro/edit-text.test.ts` — add round-trip cursor tests
-- `packages/kinetic/src/loro/index.ts` — export `isActiveEdit`
-- `packages/kinetic/TECHNICAL.md` — correct Input Text Region and Delta Region Algebra sections
-- `packages/change/TECHNICAL.md` — document origin forwarding in Reactive Bridge section
-- `TECHNICAL.md` (root) — document `origin` field in REACTIVE Callback Signature section
+- `packages/kinetic/TECHNICAL.md` — correct to describe selectMode dispatch (not active-edit flag)
+- `packages/change/TECHNICAL.md` — already updated, verify accuracy
+- `TECHNICAL.md` (root) — already updated, verify accuracy
+- `.plans/kinetic-input-text-region.md` — correct Learning #2 to describe selectMode dispatch
 
 ### Key HTML Spec Reference
 
-`setRangeText(replacement, start, end, "preserve")` cursor adjustment rules:
+`setRangeText(replacement, start, end, selectMode)` cursor adjustment rules:
 
+**`"preserve"` mode:**
 ```
 let oldLength = end - start
 let newLength = replacement.length
@@ -379,7 +384,7 @@ let newEnd = start + newLength
 // selectionStart adjustment:
 if selectionStart > end:     selectionStart += delta
 elif selectionStart > start: selectionStart = start     // SNAP, not shift
-// else: NO CHANGE (this is the bug case)
+// else: NO CHANGE (this is the bug case for local edits)
 
 // selectionEnd adjustment:
 if selectionEnd > end:       selectionEnd += delta
@@ -387,19 +392,28 @@ elif selectionEnd > start:   selectionEnd = newEnd       // SNAP to newEnd
 // else: NO CHANGE
 ```
 
-When inserting at the cursor position (`start === end === selectionStart`), neither condition fires for `selectionStart`. The cursor stays put.
+When inserting at the cursor position (`start === end === selectionStart`), neither condition fires for `selectionStart`. The cursor stays put. This is why `"preserve"` is wrong for local edits.
 
-### `calculateNewCursor` Logic (from hooks-core, adapt inline)
-
+**`"end"` mode:**
 ```
-if inputType starts with "delete":
-  if start !== end: newCursor = start          // deleted a selection
-  else:             newCursor = max(0, start-1) // deleted one char backward
-else:
-  newCursor = start + (data?.length ?? 1)       // inserted text
-
-return min(newCursor, maxLength)
+let newEnd = start + replacement.length
+selectionStart = newEnd
+selectionEnd = newEnd
 ```
+
+The cursor always goes to the end of the replacement range. For inserts, this is past the inserted text. For deletes (`replacement = ""`), this is the deletion point (`start + 0 = start`). Both are correct for local edits.
+
+## Learnings
+
+1. **`setRangeText`'s two selectModes are complementary, not competitive.** `"preserve"` handles the "edit happened elsewhere" case (remote edits). `"end"` handles the "edit happened here" case (local edits). Together they cover all cursor scenarios without any manual cursor arithmetic. The original plan assumed `"preserve"` was universal — it's not. But the fix doesn't require abandoning `setRangeText`; it requires using the right mode for each origin.
+
+2. **`"end"` is correct for local undo/redo, not just typing.** When undoing an insertion (delta contains delete), `"end"` places the cursor at the deletion point. When undoing a deletion (delta contains insert), `"end"` places the cursor at the end of the re-inserted text. Both are the expected UX for undo — the user should see where the change happened. This means `origin === "local"` (which Loro emits for both typing and undo) is the correct discriminant for choosing `"end"`.
+
+3. **The `hooks-core` concern about `event.by === "local"` doesn't apply here.** `hooks-core` avoids `event.by` because it uses the flag to *skip* the subscription entirely — which would incorrectly skip undo. Our approach *always* applies the delta — it just chooses a different selectMode. The "local includes undo" fact is a feature, not a bug, because `"end"` is correct for both.
+
+4. **Origin-driven selectMode dispatch preserves read/write independence.** `editText` remains a pure CRDT write function (no DOM manipulation, no cursor management). `inputTextRegion` remains the sole reader. The only coordination is through the delta's `origin` field — which flows through the existing subscription channel, not a side channel. This is the principled version of what the original plan tried to achieve with WeakSets and pluggable predicates.
+
+5. **The `REPLACE_DELTA` singleton needs conditional handling.** Both `@loro-extended/reactive` (`LocalRef`) and `@loro-extended/change` (`reactive-bridge.ts`) have pre-allocated `REPLACE_DELTA` singletons. Adding `origin?` to the type is non-breaking, but `translateDiff` must create a new object when `origin` is defined rather than returning the singleton. Pattern: `origin ? { type: "replace", origin } : REPLACE_DELTA`.
 
 ## Changeset
 
@@ -412,7 +426,6 @@ return min(newCursor, maxLength)
 
 @loro-extended/kinetic:
 - Fix backwards text insertion in `<input>` elements
-- `editText` now manages cursor position after CRDT mutations
-- `inputTextRegion` skips patching during active `editText` handler (local edits)
-- Add `setActiveEditPredicate` for Loro-agnostic active-edit detection
+- `patchInputValue` accepts optional `selectMode` parameter (default "preserve")
+- `inputTextRegion` dispatches selectMode based on `delta.origin`
 ```
