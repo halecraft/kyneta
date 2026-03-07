@@ -160,6 +160,8 @@ __subscribeWithValue(doc.count, () => doc.count.get() > 0 ? "Yes" : "No", (v) =>
 
 **N-branch support:** For `if/else-if/else` chains, nested ternaries are synthesized: `a ? X : (b ? Y : Z)`
 
+**IR-level transform:** Dissolution runs as a pure IR→IR transform (`dissolveConditionals`) in the same pipeline slot as `filterTargetBlocks` — after analysis, before codegen. This means the walker, template extraction, and all codegen paths (both template cloning and `createElement`) never see dissolvable conditionals. They see regular elements and content nodes with ternary reactive values. This eliminates the need for dissolution logic in codegen functions and ensures both the template cloning path and the non-cloning path produce identical dissolved output.
+
 ### Optimization Levels
 
 1. **Direct-return optimization**: Single-element bodies return element directly (no fragment)
@@ -586,6 +588,19 @@ Non-reactive equivalents:
 - Render-time conditionals: `ConditionalNode` with `subscriptionTarget: null`
 
 ## Design Decisions
+
+### IR-Level Dissolution
+
+Conditional dissolution is implemented as a pure IR→IR transform (`dissolveConditionals` in `ir.ts`) rather than inline logic in codegen functions. This follows the precedent set by `filterTargetBlocks`, which also transforms the IR before codegen sees it.
+
+The key correctness argument: the walker (`walk.ts`) and template extraction (`template.ts`) consume post-dissolution IR. Dissolvable conditionals are replaced by their merged children (elements/content with ternary values) before any downstream consumer runs. This means:
+
+- The walker never emits `regionPlaceholder` events for dissolved conditionals
+- Template extraction never generates `<!--kinetic:if:N-->` comment markers for them
+- The walk plan's child-index assumptions are never violated by dissolution
+- Codegen (both `generateConditional` and `generateConditionalWithMarker`) only sees non-dissolvable `ConditionalNode` instances
+
+The alternative — dissolution inside codegen — worked for the non-cloning path (`generateConditional`) but was abandoned on the template cloning path (`generateConditionalWithMarker`) because the template HTML and walk plan had already been computed with region markers in place. Moving dissolution upstream eliminates this problem entirely.
 
 ### Explicit Scope Passing
 
@@ -1066,13 +1081,15 @@ _tmpl_0.innerHTML = "<div><span></span><p></p></div>"
 
 ### Region Handling
 
-Regions (loops/conditionals) become comment placeholder holes in the template:
+Regions (loops and non-dissolvable conditionals) become comment placeholder holes in the template:
 
 ```html
 <ul><!--kinetic:list:1--><!--/kinetic:list--></ul>
 ```
 
 The walker grabs the opening comment node, which is passed to `listRegion()` or `conditionalRegion()` as the mount point. This format matches SSR hydration markers, ensuring template-cloned and SSR-rendered DOM are structurally identical.
+
+**Dissolvable conditionals** (structurally identical branches) are resolved at the IR level by `dissolveConditionals` before template extraction runs. Their content appears as inline elements and text in the template — no comment markers, no `conditionalRegion` at runtime. Only non-dissolvable conditionals (different tags, different child counts, no else branch) produce region comment markers.
 
 ### Template Deduplication
 

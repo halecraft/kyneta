@@ -6,6 +6,8 @@ Kinetic's rapid prototype development has produced 804 passing tests and a genui
 
 The audit identified issues across three priority tiers. All changes are internal refactors — no public API changes, no new features.
 
+> **Status:** Phase 3 (IR-level conditional dissolution) is complete. See `.plans/kinetic-ir-dissolution.md`. Test count is now 923.
+
 ## Problem Statement
 
 1. **Predicate duplication**: The "is this an inputTextRegion candidate?" check appears 4 times across 3 files with subtle variant differences. A similar "is this a textRegion content node?" check appears twice. These will diverge.
@@ -26,7 +28,7 @@ The audit identified issues across three priority tiers. All changes are interna
 - Loro binding functions use discriminated dispatch instead of structural duck-typing
 - Transform entry points share a common analysis helper
 - `claimSlot` behavior is documented and consistent with compile-time hints
-- All existing 804 tests continue to pass
+- All existing 923 tests continue to pass
 - TECHNICAL.md updated to reflect architectural corrections
 
 ## Gap
@@ -103,6 +105,8 @@ Delete `generateReactiveLoopWithMarker`. Update call sites:
 
 ### Task 2.2: Merge `generateConditional` marker-based path and `generateConditionalWithMarker` 🔴
 
+> **Updated after Phase 3:** Inline dissolution has been removed from both functions. They are now even more similar — both emit `conditionalRegion(...)` with the only differences being: (1) `generateConditional` creates its own marker variable and appends it to a parent, while `generateConditionalWithMarker` receives a pre-existing marker; (2) `generateConditional` has a render-time dispatch guard.
+
 Extract the shared `conditionalRegion(...)` emission into a helper:
 
 ```typescript
@@ -113,7 +117,7 @@ function generateConditionalRegionCall(
 ): string[]
 ```
 
-`generateConditional` creates its own marker variable, then delegates to this helper. `generateConditionalWithMarker` delegates directly. The dissolution attempt and render-time dispatch remain in `generateConditional` as the outer dispatch layer.
+`generateConditional` creates its own marker variable, then delegates to this helper. `generateConditionalWithMarker` delegates directly. The render-time dispatch remains in `generateConditional` as the outer dispatch layer.
 
 ### Task 2.3: Remove deprecated `generateBranchBody` wrapper 🔴
 
@@ -132,31 +136,33 @@ Existing `dom.test.ts` tests cover reactive loops and conditionals extensively. 
 
 ---
 
-## Phase 3: IR-Level Conditional Dissolution 🔴
+## Phase 3: IR-Level Conditional Dissolution 🟢
 
 > **Sub-plan:** See `.plans/kinetic-ir-dissolution.md` for full details.
+>
+> **Complete.** All 4 phases of the sub-plan are done (dissolveConditionals transform, pipeline wiring, codegen cleanup, documentation). 923 tests passing.
 
 Dissolution is moved from inline codegen logic to a pure IR→IR transform (`dissolveConditionals`), following the `filterTargetBlocks` precedent. This replaces the original Phase 3 approach (DOM surgery in `generateHoleSetup`) which had correctness risks around walk-plan child-index assumptions.
 
-### Task 3.1: Add `dissolveConditionals` IR transform in `ir.ts` 🔴
+### Task 3.1: Add `dissolveConditionals` IR transform in `ir.ts` 🟢
 
 Pure recursive transform: walks the IR tree, attempts `mergeConditionalBodies` on eligible `ConditionalNode`s (reactive + has else branch), splices merged `ChildNode[]` in place of dissolved conditionals. Non-dissolvable conditionals are left unchanged. Follows the exact structural pattern of `filterTargetBlocks` / `filterChildren` / `filterChildNode`.
 
-### Task 3.2: Wire into transform pipeline in `transform.ts` 🔴
+### Task 3.2: Wire into transform pipeline in `transform.ts` 🟢
 
 Call `dissolveConditionals` immediately after `filterTargetBlocks` in all three transform entry points (`transformSourceInPlace`, `transformSource`, `transformFile`).
 
-### Task 3.3: Remove inline dissolution from `codegen/dom.ts` 🔴
+### Task 3.3: Remove inline dissolution from `codegen/dom.ts` 🟢
 
-Remove the `mergeConditionalBodies` attempt in `generateConditional` (L834–846) and the dead dissolution attempt in `generateConditionalWithMarker` (L1210–1218). Remove the now-unused `mergeConditionalBodies` import from `codegen/dom.ts`.
+Remove the `mergeConditionalBodies` attempt in `generateConditional` and the dead dissolution attempt in `generateConditionalWithMarker`. Remove the now-unused `mergeConditionalBodies` import from `codegen/dom.ts`.
 
-### Task 3.4: Tests 🔴
+### Task 3.4: Tests 🟢
 
-Unit tests for `dissolveConditionals` in `ir.test.ts`: positive cases (2-branch, 3-branch, nested), negative cases (render-time, no else, different tags), edge case (mixed dissolvable + non-dissolvable). All existing 907 tests pass.
+Unit tests for `dissolveConditionals` in `ir.test.ts`: positive cases (2-branch, 3-branch, nested), negative cases (render-time, no else, different tags), edge case (mixed dissolvable + non-dissolvable). Integration tests for the template cloning path. All 923 tests pass (16 new).
 
-### Task 3.5: Update TECHNICAL.md 🔴
+### Task 3.5: Update TECHNICAL.md 🟢
 
-Update "Tree Merge and Conditional Dissolution", "Template Cloning → Region Handling", and add "IR-Level Dissolution" design decision.
+Updated "Tree Merge and Conditional Dissolution", "Template Cloning → Region Handling", and added "IR-Level Dissolution" design decision.
 
 ### Transitive Effects
 
@@ -164,6 +170,7 @@ Update "Tree Merge and Conditional Dissolution", "Template Cloning → Region Ha
 - `extractTemplate` / `walkIR` see post-dissolution IR — dissolved content appears as regular elements/content, producing correct template HTML without comment markers
 - HTML codegen benefits for free — dissolved conditionals produce ternary interpolations instead of `if` blocks
 - No changes needed in `walk.ts`, `template.ts`, `codegen/html.ts`, or `regions.ts`
+- Phase 2's Task 2.2 is now simpler — inline dissolution is already gone from both conditional codegen functions
 
 ---
 
@@ -333,8 +340,9 @@ Export a `getActiveSubscriptions(): ReadonlyMap<...>` function from `subscribe.t
 
 Sections to update:
 - **"Region Algebra → The Trackability Invariant"**: Add note about runtime slot kind potentially differing from compile-time hint (Task 6.1)
-- **"Template Cloning Architecture → Region Handling"**: Document that conditional dissolution now works on the template cloning path (Task 3.3)
+- ~~**"Template Cloning Architecture → Region Handling"**: Document that conditional dissolution now works on the template cloning path (Task 3.3)~~ — **Done in Phase 3**
 - **"Design Decisions"**: Add a new subsection "Shared Predicate Functions" explaining that codegen dispatch predicates (`isTextRegionContent`, `isInputTextRegionAttribute`) live in `ir.ts` as the single source of truth
+- ~~**"Design Decisions" → "IR-Level Dissolution"**: Explain the IR transform design choice~~ — **Done in Phase 3**
 - **"Runtime Dependencies → Loro Bindings Subpath"**: Note the runtime dispatch strategy for binding functions and the `unknown` boundary rationale
 
 ### Task 7.2: Update file structure section 🔴
@@ -347,6 +355,8 @@ The file structure section in TECHNICAL.md should reflect that `ir.ts` now expor
 
 The 7 plan phases collapse into **5 PRs** ordered by dependency. Phases 1, 4, 5 are independent and can land in any order. Phase 2→3 is a chain (prep refactor → behavior change). Phase 6+7 are a trailing cleanup batch.
 
+> **Status:** PR 3 is complete. PR 2 now operates on simpler post-dissolution code (the functions it merges no longer contain dissolution logic). PRs 1, 2, 4, 5 remain.
+
 ### PR 1: `refactor: extract shared codegen predicates into ir.ts` 🔴
 
 > Plan Phase 1 (Tasks 1.1–1.3)
@@ -357,7 +367,7 @@ The 7 plan phases collapse into **5 PRs** ordered by dependency. Phases 1, 4, 5 
 - Replace 4 inline predicate copies in `codegen/dom.ts` and `transform.ts`
 - Add predicate unit tests in `ir.test.ts`
 - **Files:** `ir.ts`, `ir.test.ts`, `codegen/dom.ts`, `transform.ts`
-- **Validates:** all 907 tests pass, no codegen output change
+- **Validates:** all 923 tests pass, no codegen output change
 
 ### PR 2: `refactor: unify duplicated codegen loop/conditional functions` 🔴
 
@@ -371,21 +381,24 @@ The 7 plan phases collapse into **5 PRs** ordered by dependency. Phases 1, 4, 5 
 - **Files:** `codegen/dom.ts`
 - **Validates:** all existing `dom.test.ts` + `integration.test.ts` pass with identical output
 - **Why separate from PR 3:** This is a zero-behavior-change refactor. PR 3 adds behavior (dissolution). Keeping them separate means PR 2 can be reviewed as "trust the mechanical diff" and reverted independently.
+- **Note:** PR 3 has already landed. The conditional functions no longer contain dissolution logic, making the merge in Task 2.2 cleaner.
 
-### PR 3: `feat: IR-level conditional dissolution` 🔴
+### PR 3: `feat: IR-level conditional dissolution` 🟢
 
 > Plan Phase 3 (Tasks 3.1–3.5). Sub-plan: `.plans/kinetic-ir-dissolution.md`
+>
+> **Complete.** Implemented as 4 commits: IR transform, pipeline wiring, codegen cleanup, documentation. 923 tests passing (16 new).
 
 **Type:** Behavior change (performance optimization) + code removal
 
-- **Order-independent** with PR 2 — touches different lines in `codegen/dom.ts` (PR 2 merges functions, PR 3 removes dissolution logic from within them)
+- **Order-independent** with PR 2 — touches different lines in `codegen/dom.ts` (PR 2 merges functions, PR 3 removes dissolution logic from within them). PR 3 landed first; PR 2 now operates on simpler post-dissolution code.
 - Add `dissolveConditionals` IR→IR transform in `ir.ts` (follows `filterTargetBlocks` precedent)
 - Wire into transform pipeline after `filterTargetBlocks` in `transform.ts`
 - Remove inline dissolution from `generateConditional` and dead dissolution from `generateConditionalWithMarker` in `codegen/dom.ts`
-- Add `dissolveConditionals` unit tests in `ir.test.ts`
+- Add `dissolveConditionals` unit tests in `ir.test.ts` + integration tests in `dom.test.ts` + pipeline test in `transform.test.ts`
 - Update TECHNICAL.md
-- **Files:** `ir.ts`, `ir.test.ts`, `transform.ts`, `codegen/dom.ts`, `TECHNICAL.md`
-- **Validates:** new tests + all existing 907 tests pass
+- **Files:** `ir.ts`, `ir.test.ts`, `transform.ts`, `transform.test.ts`, `codegen/dom.ts`, `codegen/dom.test.ts`, `TECHNICAL.md`
+- **Validates:** 16 new tests + all existing 907 tests pass → 923 total
 
 ### PR 4: `fix: Loro binding type safety + transform consolidation` 🔴
 
@@ -430,12 +443,12 @@ These are batched because they are both medium-priority internal improvements wi
 ```
 PR 1 (predicates) ──────────────────────────────────┐
 PR 2 (codegen dedup) ───────────────────────────────┤
-PR 3 (IR dissolution) ──────────────────────────────┤
+PR 3 (IR dissolution) ✅ DONE ─────────────────────┤
 PR 4 (bindings + transform) ────────────────────────┤
                                                     └─── PR 5 (cleanup + docs)
 ```
 
-PRs 1, 2, 3, 4 can all land in parallel (PR 3 is now order-independent with PR 2). PR 5 waits on all others (docs reference outcomes of prior PRs).
+PRs 1, 2, 4 can all land in parallel. PR 3 is complete. PR 5 waits on all others (docs reference outcomes of prior PRs).
 
 ---
 

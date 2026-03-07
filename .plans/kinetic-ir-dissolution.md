@@ -158,17 +158,17 @@ After removing both call sites, the import of `mergeConditionalBodies` from `../
 
 ---
 
-## Phase 4: Documentation 🔴
+## Phase 4: Documentation 🟢
 
-### Task 4.1: Update TECHNICAL.md "Tree Merge and Conditional Dissolution" section 🔴
+### Task 4.1: Update TECHNICAL.md "Tree Merge and Conditional Dissolution" section 🟢
 
 Add a paragraph explaining that dissolution is now an IR-level transform (`dissolveConditionals`) that runs in the same pipeline slot as `filterTargetBlocks`. Note that this makes dissolution work identically on both the template cloning and non-cloning paths.
 
-### Task 4.2: Update TECHNICAL.md "Template Cloning Architecture → Region Handling" section 🔴
+### Task 4.2: Update TECHNICAL.md "Template Cloning Architecture → Region Handling" section 🟢
 
 Remove or revise any implication that all conditionals produce region comment markers. Note that dissolvable conditionals are dissolved before template extraction, so their content appears as inline elements/text in the template — no comment markers, no `conditionalRegion` at runtime.
 
-### Task 4.3: Update TECHNICAL.md "Design Decisions" section 🔴
+### Task 4.3: Update TECHNICAL.md "Design Decisions" section 🟢
 
 Add a subsection "IR-Level Dissolution" explaining the design choice: dissolution as an IR transform (like `filterTargetBlocks`) rather than inline codegen logic. Reference the precedent and the correctness argument (walker/template-extraction never see dissolvable conditionals).
 
