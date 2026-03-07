@@ -786,6 +786,186 @@ describe("editText", () => {
       expect((event as any).__preventDefaultSpy).toHaveBeenCalledOnce()
     })
 
+    it("should call preventDefault for deleteWordBackward with valid getTargetRanges", () => {
+      const doc = createDoc("Hello World")
+      const handler = editText(doc.text)
+      const input = createInput("Hello World", 11)
+
+      const mockRange = { startOffset: 6, endOffset: 11 } as StaticRange
+      const event = createInputEvent({
+        inputType: "deleteWordBackward",
+        target: input,
+        targetRanges: [mockRange],
+      })
+
+      handler(event)
+
+      expect((event as any).__preventDefaultSpy).toHaveBeenCalledOnce()
+      expect(doc.text.toString()).toBe("Hello ")
+    })
+
+    it("should NOT call preventDefault for deleteWordBackward with empty getTargetRanges and collapsed cursor", () => {
+      const doc = createDoc("Hello World")
+      const handler = editText(doc.text)
+      const input = createInput("Hello World", 11) // collapsed cursor at end
+
+      const event = createInputEvent({
+        inputType: "deleteWordBackward",
+        target: input,
+        targetRanges: [], // empty — common for <input> elements
+      })
+
+      handler(event)
+
+      // Handler could not compute deletion boundaries — browser should handle it
+      expect((event as any).__preventDefaultSpy).not.toHaveBeenCalled()
+      // CRDT unchanged — browser hasn't acted yet (no input event dispatched)
+      expect(doc.text.toString()).toBe("Hello World")
+    })
+
+    it("should call preventDefault for deleteWordBackward with empty getTargetRanges but non-collapsed selection", () => {
+      const doc = createDoc("Hello World")
+      const handler = editText(doc.text)
+      const input = createInput("Hello World", 6, 11) // "World" selected
+
+      const event = createInputEvent({
+        inputType: "deleteWordBackward",
+        target: input,
+        targetRanges: [],
+      })
+
+      handler(event)
+
+      // Selection fallback handled it — preventDefault should be called
+      expect((event as any).__preventDefaultSpy).toHaveBeenCalledOnce()
+      expect(doc.text.toString()).toBe("Hello ")
+    })
+
+    it("should reconcile CRDT via one-shot input event when handler returns false", () => {
+      const doc = createDoc("Hello World")
+      const handler = editText(doc.text)
+      const input = createInput("Hello World", 11) // collapsed cursor at end
+
+      const event = createInputEvent({
+        inputType: "deleteWordBackward",
+        target: input,
+        targetRanges: [],
+      })
+
+      handler(event)
+
+      // preventDefault not called — browser will handle it
+      expect((event as any).__preventDefaultSpy).not.toHaveBeenCalled()
+      // CRDT still has original text
+      expect(doc.text.toString()).toBe("Hello World")
+
+      // Simulate what the browser does: update the input value, then fire input event
+      input.value = "Hello "
+      input.selectionStart = 6
+      input.selectionEnd = 6
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+
+      // After reconciliation, CRDT should match the DOM
+      expect(doc.text.toString()).toBe("Hello ")
+    })
+
+    it("should not add input listener when handler returns true", () => {
+      const doc = createDoc("Hello World")
+      const handler = editText(doc.text)
+      const input = createInput("Hello World", 11)
+
+      const addEventListenerSpy = vi.spyOn(input, "addEventListener")
+
+      const mockRange = { startOffset: 6, endOffset: 11 } as StaticRange
+      const event = createInputEvent({
+        inputType: "deleteWordBackward",
+        target: input,
+        targetRanges: [mockRange],
+      })
+
+      handler(event)
+
+      // Handler succeeded — no reconciliation listener needed
+      expect(addEventListenerSpy).not.toHaveBeenCalled()
+      expect(doc.text.toString()).toBe("Hello ")
+
+      addEventListenerSpy.mockRestore()
+    })
+
+    it("should add one-shot input listener when handler returns false", () => {
+      const doc = createDoc("Hello World")
+      const handler = editText(doc.text)
+      const input = createInput("Hello World", 11)
+
+      const addEventListenerSpy = vi.spyOn(input, "addEventListener")
+
+      const event = createInputEvent({
+        inputType: "deleteWordBackward",
+        target: input,
+        targetRanges: [],
+      })
+
+      handler(event)
+
+      // One-shot listener should be wired
+      expect(addEventListenerSpy).toHaveBeenCalledOnce()
+      expect(addEventListenerSpy).toHaveBeenCalledWith(
+        "input",
+        expect.any(Function),
+        { once: true },
+      )
+
+      addEventListenerSpy.mockRestore()
+    })
+
+    it("should reconcile for deleteSoftLineBackward with empty getTargetRanges", () => {
+      const doc = createDoc("Hello World")
+      const handler = editText(doc.text)
+      const input = createInput("Hello World", 11) // cursor at end
+
+      const event = createInputEvent({
+        inputType: "deleteSoftLineBackward",
+        target: input,
+        targetRanges: [],
+      })
+
+      handler(event)
+
+      expect((event as any).__preventDefaultSpy).not.toHaveBeenCalled()
+
+      // Simulate browser deleting the entire soft line
+      input.value = ""
+      input.selectionStart = 0
+      input.selectionEnd = 0
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+
+      expect(doc.text.toString()).toBe("")
+    })
+
+    it("should reconcile for deleteWordForward with empty getTargetRanges", () => {
+      const doc = createDoc("Hello World")
+      const handler = editText(doc.text)
+      const input = createInput("Hello World", 0) // cursor at beginning
+
+      const event = createInputEvent({
+        inputType: "deleteWordForward",
+        target: input,
+        targetRanges: [],
+      })
+
+      handler(event)
+
+      expect((event as any).__preventDefaultSpy).not.toHaveBeenCalled()
+
+      // Simulate browser deleting "Hello" forward
+      input.value = " World"
+      input.selectionStart = 0
+      input.selectionEnd = 0
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+
+      expect(doc.text.toString()).toBe(" World")
+    })
+
     // ===========================================================================
     // Round-Trip Tests: editText → CRDT → subscription → DOM → cursor
     // ===========================================================================

@@ -755,8 +755,10 @@ The binding functions use `loro()` to access raw Loro containers for write opera
 
 **`editText(ref: TextRef)`** — Returns a `beforeinput` event handler that translates DOM editing operations into typed-ref `insert()` / `delete()` calls with auto-commit. This is the write-direction complement to `inputTextRegion` (the read direction). Unlike `bindTextValue`, it:
 - Uses `beforeinput` (not `input`) to intercept edits before the browser applies them
-- Calls `e.preventDefault()` and lets `inputTextRegion` handle DOM updates via `setRangeText` with origin-driven selectMode (`"end"` for local edits, `"preserve"` for remote)
-- Preserves CRDT character-level merge semantics (no full-text replacement)
+- Uses a "try to handle, then prevent default on success" pattern — each `InputHandler` returns `boolean` to signal whether it performed the CRDT mutation
+- Calls `e.preventDefault()` only when the handler returns `true`; lets the browser handle natively when `false`
+- For word/line deletions where `getTargetRanges()` returns empty (common for `<input>` elements), wires a one-shot `input` event listener that reconciles the CRDT via `ref.update(target.value)` (Loro's Myers' diff)
+- Preserves CRDT character-level merge semantics (no full-text replacement on the happy path)
 - Auto-commits via the typed ref API (not raw container mutations)
 - Handles IME composition (`isComposing` skip + `insertFromComposition`)
 - Passes through `historyUndo` / `historyRedo` without intercepting
@@ -900,7 +902,7 @@ Unlike `textRegion` which uses `insertData`/`deleteData` on Text nodes, input el
 - **`origin === "local"`** → `setRangeText(..., "end")` — cursor advances past inserts, stays at delete point. Correct for local typing, undo, and redo.
 - **anything else** (`"import"`, `undefined`) → `setRangeText(..., "preserve")` — cursor shifts relative to remote edits. Correct for remote collaborator edits.
 
-No active-edit flags, cursor arithmetic, or cross-module coordination needed. The `origin` field (from `@loro-extended/reactive`, forwarded by the reactive bridge from Loro's `LoroEventBatch.by`) is the sole discriminant. `editText` requires no changes — it remains a pure CRDT write function.
+No active-edit flags, cursor arithmetic, or cross-module coordination needed. The `origin` field (from `@loro-extended/reactive`, forwarded by the reactive bridge from Loro's `LoroEventBatch.by`) is the sole discriminant.
 
 **Functional Core** (shared with `textRegion`):
 - `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
@@ -931,16 +933,32 @@ function inputTextRegion(
 
 **The `setAttribute` fix:** The `generateAttributeUpdateCode` helper was extracted as the single source of truth for attribute→DOM-API mapping. This fixed a latent bug in the template cloning path where `setAttribute("value", x)` was used instead of `.value =`. After user interaction, `setAttribute` only changes the HTML default attribute — not the live DOM property. The same fix covers `checked`, `disabled`, `class`, `style`, and `data-*` in both the createElement and cloneNode codegen paths.
 
-**Integration with `editText`:** The full write→read cycle for local edits is synchronous within one event loop tick:
-1. `beforeinput` → `editText` handler calls `e.preventDefault()`, reads `selectionStart`/`selectionEnd`
-2. Handler calls `ref.insert()` / `ref.delete()` on the typed ref
-3. `commitIfAuto()` fires synchronously → Loro event system → `translateEventBatch` → `ReactiveDelta { type: "text", origin: "local" }`
-4. `inputTextRegion` callback receives delta with `origin: "local"` → calls `patchInputValue(input, ops, "end")`
-5. `setRangeText(..., "end")` updates `input.value` and places cursor at end of replacement range
+**Integration with `editText` — three-tier strategy:**
+
+`editText` uses a tiered approach to translate DOM editing operations into CRDT mutations:
+
+1. **CRDT-first** (character insert/delete, selection delete, line breaks) — handler computes the mutation from `selectionStart`/`selectionEnd` and `e.data`, calls `ref.insert()`/`ref.delete()`, returns `true`. Caller calls `e.preventDefault()`. The synchronous `commitIfAuto()` fires `inputTextRegion`'s subscription, which applies the delta via `setRangeText("end")`.
+
+2. **`getTargetRanges()`** (word/line deletions) — browser provides deletion boundaries as `StaticRange` objects. Handler reads `startOffset`/`endOffset`, calls `ref.delete()`, returns `true`. Same `preventDefault` + subscription path as tier 1.
+
+3. **Browser-native + reconciliation** (fallback when `getTargetRanges()` returns empty and cursor is collapsed — common for `<input>` elements) — handler returns `false`. `preventDefault` is NOT called. A one-shot `input` event listener reconciles the CRDT after the browser performs the native deletion: `ref.update(target.value)` uses Loro's Myers' diff to compute minimal character-level CRDT operations from old→new. The subsequent `commitIfAuto()` fires `inputTextRegion`'s subscription; since the browser already updated `input.value`, the `setRangeText` calls are logically benign (applying identical text).
+
+The full write→read cycle for **tier 1/2** (CRDT-first) is synchronous within one event loop tick:
+1. `beforeinput` → handler reads `selectionStart`/`selectionEnd`, mutates CRDT, returns `true`
+2. `commitIfAuto()` fires synchronously → Loro event system → `translateEventBatch` → `ReactiveDelta { type: "text", origin: "local" }`
+3. `inputTextRegion` callback receives delta with `origin: "local"` → calls `patchInputValue(input, ops, "end")`
+4. `setRangeText(..., "end")` updates `input.value` and places cursor at end of replacement range
+5. Caller calls `e.preventDefault()` — browser's default action is suppressed
+
+The write→read cycle for **tier 3** (browser-native fallback) spans two events:
+1. `beforeinput` → handler returns `false`, one-shot `input` listener attached
+2. Browser performs native word/line deletion, updates `input.value`
+3. `input` event fires → `ref.update(target.value)` → Myers' diff → CRDT ops → `commitIfAuto()`
+4. `inputTextRegion` subscription fires → `patchInputValue` applies ops that match the already-correct DOM (benign no-op)
 
 For remote edits, `translateEventBatch` produces `origin: "import"`, and `inputTextRegion` calls `patchInputValue(input, ops, "preserve")` — correctly shifting the local cursor relative to remote insertions/deletions.
 
-`editText` is a pure CRDT write function — it never touches the DOM beyond `e.preventDefault()`. All DOM updates and cursor positioning flow through `inputTextRegion` → `patchInputValue` → `setRangeText`.
+All DOM updates and cursor positioning flow through `inputTextRegion` → `patchInputValue` → `setRangeText`. `editText` never directly modifies `input.value`; its only DOM side-effects are `e.preventDefault()` (tier 1/2) and `addEventListener("input", ..., { once: true })` (tier 3).
 
 ### Region Algebra
 

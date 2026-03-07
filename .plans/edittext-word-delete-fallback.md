@@ -45,13 +45,13 @@ The `hooks-core` React implementation has the identical bug.
 | `handleDeleteByRange` return value | `void` (no signal) | Returns whether it handled the deletion (boolean) |
 | `editText` return type | `(e: InputEvent) => void` | Unchanged — reconciliation listener is wired internally |
 
-## Phase 1: Refactor `editText` to Conditionally Prevent Default 🔴
+## Phase 1: Refactor `editText` to Conditionally Prevent Default 🟢
 
 The core architectural change: move `e.preventDefault()` from the top-level dispatch into the conditional path, so that handlers that *cannot* fulfill their contract can signal a passthrough.
 
 ### Tasks
 
-1. Change handler return type from `void` to `boolean` 🔴
+1. Change handler return type from `void` to `boolean` 🟢
 
    `InputHandler` becomes `(ctx: InputContext) => boolean`. Return `true` if the handler performed the CRDT mutation (caller should `preventDefault`), `false` if it could not (caller should let the browser handle it).
 
@@ -61,7 +61,7 @@ The core architectural change: move `e.preventDefault()` from the top-level disp
    type InputHandler = (ctx: InputContext) => boolean
    ```
 
-2. Update `handleDeleteByRange` to return `false` on fallthrough 🔴
+2. Update `handleDeleteByRange` to return `false` on fallthrough 🟢
 
    When `getTargetRanges()` returns empty and the selection is collapsed, return `false` instead of silently doing nothing. The three branches become:
 
@@ -69,7 +69,7 @@ The core architectural change: move `e.preventDefault()` from the top-level disp
    - `getTargetRanges()` empty, selection non-collapsed → delete selection → return `true`
    - `getTargetRanges()` empty, selection collapsed → return `false`
 
-3. Move `e.preventDefault()` after the handler call, conditioned on its return value 🔴
+3. Move `e.preventDefault()` after the handler call, conditioned on its return value 🟢
 
    ```typescript
    const handled = handler({ ref, start, end, data: e.data, event: e })
@@ -82,17 +82,17 @@ The core architectural change: move `e.preventDefault()` from the top-level disp
 
    This ordering is safe: during `beforeinput`, the browser has not yet applied the default action. The spec guarantees that the browser waits for all listeners to complete before checking `defaultPrevented`. So calling `e.preventDefault()` after the CRDT mutation (and the synchronous subscription chain) is correct — the browser's own mutation is still suppressed.
 
-4. Update existing tests to verify `preventDefault` is called conditionally 🔴
+4. Update existing tests to verify `preventDefault` is called conditionally 🟢
 
    The existing `preventDefault` tests verify it's called for `insertText`, `deleteContentBackward`, `deleteContentForward`. Add a test that verifies `preventDefault` is NOT called when `deleteWordBackward` has no target ranges and a collapsed cursor.
 
-## Phase 2: Add `input` Event Reconciliation 🔴
+## Phase 2: Add `input` Event Reconciliation 🟢
 
 When the browser handles a word/line deletion natively, the CRDT and DOM are out of sync. The reconciliation path uses the `input` event (which fires after the browser has applied the change) to sync the CRDT from the DOM state.
 
 ### Tasks
 
-1. Wire reconciliation into `editText` via a one-shot `input` event listener 🔴
+1. Wire reconciliation into `editText` via a one-shot `input` event listener 🟢
 
    When a handler returns `false` (passthrough), attach a one-shot `input` event listener to `e.target` that reconciles the CRDT. The reconciliation is a single call:
 
@@ -118,7 +118,7 @@ When the browser handles a word/line deletion natively, the CRDT and DOM are out
 
    The `{ once: true }` option ensures the listener is automatically removed after firing, preventing leaks. Rapid-fire word deletes (user holds Option+Delete) are safe because each `beforeinput` → browser-action → `input` cycle completes synchronously before the next `beforeinput` fires.
 
-2. Verify subscription-triggered `setRangeText` is benign during reconciliation 🔴
+2. Verify subscription-triggered `setRangeText` is benign during reconciliation 🟢
 
    When `ref.update()` calls `commitIfAuto()`, the `inputTextRegion` subscription fires with `origin: "local"` and calls `patchInputValue(input, ops, "end")`. Since the browser already updated `input.value`, the `setRangeText` call applies text that's already present — a logical no-op. The `"end"` selectMode places the cursor at the deletion point, which should match where the browser already placed it.
 
