@@ -11,12 +11,12 @@
 //
 // The version filter (F^Δ) is identity — not a separate module.
 //
-// Plan 006 Phase 4 replaces the batch evaluator call + diffResolution shim
-// with the IncrementalEvaluation stage, which delegates to native incremental
-// solvers (LWW + Fugue) when default rules are active, and falls back to
-// batch Datalog when custom rules are present.
+// Plan 006 Phase 4 replaced the batch evaluator call + diffResolution shim
+// with the IncrementalEvaluation stage. Phase 6 replaced the batch Datalog
+// fallback with the incremental Datalog evaluator — all paths are now
+// incremental. No batch evaluator calls remain in this pipeline.
 //
-// See .plans/006-incremental-datalog-evaluator.md § Phase 4.
+// See .plans/006-incremental-datalog-evaluator.md § Phase 4, Phase 6.
 // See theory/incremental.md §2–§6, §9.7.
 
 import type {
@@ -172,11 +172,10 @@ export function createIncrementalPipeline(
     const { deltaResolved, deltaFuguePairs } = evaluation.step(
       factsDelta,
       ruleDeltas,
-      // Lazy getters — only called when batch fallback or strategy
-      // switching is needed (custom rules present).
+      // Lazy getters — only called on strategy switches (bootstrapping
+      // the new strategy from accumulated facts).
       () => projection.current(),
       () => retraction.current(),
-      () => structureIndex.current(),
     );
 
     // Step 6: K^Δ — Skeleton (three-input)

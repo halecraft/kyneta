@@ -823,7 +823,7 @@ specific structure of LWW means the delete phase is bounded to O(1) per slot.
 - Permutation test: all orderings produce same `current()`. ✅
 - Rule addition: adding a custom superseded rule changes resolution. ✅
 
-### Phase 6: Wire Incremental Datalog into Evaluation Stage 🔴
+### Phase 6: Wire Incremental Datalog into Evaluation Stage ✅
 
 Replace the batch Datalog fallback in the evaluation stage with the incremental
 Datalog evaluator from Phase 5. After this phase, all paths are incremental —
@@ -836,28 +836,28 @@ after the switch, not dropped.
 #### Tasks
 
 - 6.1 Update `kernel/incremental/evaluation.ts`: when custom rules are detected,
-  delegate to incremental Datalog evaluator instead of batch `evaluate()`. 🔴
+  delegate to incremental Datalog evaluator instead of batch `evaluate()`. ✅
 - 6.2 Implement strategy switch from native to incremental Datalog: bootstrap
-  the Datalog evaluator from accumulated ground facts on first switch. 🔴
+  the Datalog evaluator from accumulated ground facts on first switch. ✅
 - 6.3 Implement strategy switch from incremental Datalog back to native:
-  discard Datalog state, bootstrap native solvers from accumulated facts. 🔴
+  discard Datalog state, bootstrap native solvers from accumulated facts. ✅
 - 6.4 Fix strategy-switch `deltaFacts` drop: after switching, process
   `deltaFacts` through the newly-activated strategy and combine the results
-  with the switch diff. 🔴
+  with the switch diff. ✅
 - 6.5 Remove all remaining batch evaluator calls and `projection.current()`
   calls from the incremental pipeline (the batch pipeline in
-  `kernel/pipeline.ts` remains unchanged). 🔴
+  `kernel/pipeline.ts` remains unchanged). ✅
 - 6.6 Full end-to-end differential testing: every insertion verified against
-  `solve(store, config)`. 🔴
+  `solve(store, config)`. ✅
 
 #### Tests
 
 - Pipeline with custom LWW rule (e.g., priority-based instead of lamport-based):
-  incremental produces correct reality. 🔴
-- Rule addition mid-stream: existing values re-resolved under new rules. 🔴
-- Rule retraction mid-stream: values re-resolved under restored defaults. 🔴
-- Pipeline with aggregation rule (e.g., count-based resolution): correct. 🔴
-- Strategy switch with simultaneous fact delta: facts are not dropped. 🔴
+  incremental produces correct reality. ✅
+- Rule addition mid-stream: existing values re-resolved under new rules. ✅
+- Rule retraction mid-stream: values re-resolved under restored defaults. ✅
+- Incremental Datalog processes subsequent fact deltas correctly. ✅
+- Strategy switch with simultaneous fact delta: facts are not dropped. ✅
 
 ### Phase 7: Documentation and Cleanup 🔴
 

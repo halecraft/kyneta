@@ -1,12 +1,15 @@
 // === Incremental Evaluation Stage Tests ===
-// Tests for the evaluation stage wrapper (Plan 006, Phase 4).
+// Tests for the evaluation stage wrapper (Plan 006, Phase 4 + Phase 6).
 //
 // Covers:
 // - Pure fact router: correctly splits mixed ZSet<Fact> by predicate
 // - Rule delta extraction from active-set delta
 // - Native path produces correct resolution deltas
 // - Strategy switching: native → datalog on custom rule, datalog → native on retraction
-// - Batch Datalog fallback produces correct results
+// - Incremental Datalog path produces correct results (Phase 6)
+// - Strategy switch with simultaneous deltaFacts: facts are not dropped (Phase 6)
+// - Custom LWW rule: reversed lamport comparison (Phase 6)
+// - Rule addition/retraction mid-stream (Phase 6)
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -319,7 +322,6 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [],
         () => [],
-        () => buildStructureIndex([]),
       );
 
       expect(zsetSize(deltaResolved)).toBe(1);
@@ -342,7 +344,6 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [],
         () => [],
-        () => buildStructureIndex([]),
       );
 
       const { deltaResolved } = evaluation.step(
@@ -350,7 +351,6 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [],
         () => [],
-        () => buildStructureIndex([]),
       );
 
       expect(zsetSize(deltaResolved)).toBe(1);
@@ -366,7 +366,6 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [],
         () => [],
-        () => buildStructureIndex([]),
       );
       expect(zsetIsEmpty(deltaResolved)).toBe(true);
       expect(zsetIsEmpty(deltaFuguePairs)).toBe(true);
@@ -381,7 +380,6 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [],
         () => [],
-        () => buildStructureIndex([]),
       );
 
       const result = evaluation.current();
@@ -408,7 +406,6 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [],
         () => [],
-        () => buildStructureIndex([]),
       );
 
       // First element alone — no pairs
@@ -426,7 +423,6 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [],
         () => [],
-        () => buildStructureIndex([]),
       );
 
       // Should have one pair
@@ -469,7 +465,6 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [],
         () => [],
-        () => buildStructureIndex([]),
       );
 
       // Now add a custom rule — create all needed default + custom rules
@@ -500,7 +495,6 @@ describe('IncrementalEvaluation', () => {
         ruleDelta,
         () => accFacts,
         () => allActiveConstraints,
-        () => buildStructureIndex([]),
       );
 
       // After strategy switch, the result should still have a winner
@@ -530,7 +524,6 @@ describe('IncrementalEvaluation', () => {
         zsetSingleton(cnIdKey(customRuleConstraint.id), customSupersededRule, 1),
         () => [],
         () => allWithCustom,
-        () => buildStructureIndex([]),
       );
 
       // Now retract the custom rule — should switch back to native
@@ -541,7 +534,6 @@ describe('IncrementalEvaluation', () => {
         zsetSingleton(cnIdKey(customRuleConstraint.id), customSupersededRule, -1),
         () => [],
         () => allDefaultOnly,
-        () => buildStructureIndex([]),
       );
 
       // Verify we can insert a value fact and get a native-path delta
@@ -551,7 +543,6 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [f],
         () => allDefaultOnly,
-        () => buildStructureIndex([]),
       );
 
       expect(zsetSize(deltaResolved)).toBe(1);
@@ -569,13 +560,355 @@ describe('IncrementalEvaluation', () => {
         zsetEmpty(),
         () => [],
         () => [],
-        () => buildStructureIndex([]),
       );
 
       expect(evaluation.current().winners.size).toBe(1);
 
       evaluation.reset();
       expect(evaluation.current().winners.size).toBe(0);
+    });
+  });
+
+  describe('incremental Datalog path (Phase 6)', () => {
+    // Build a complete "reversed LWW" rule set: lower lamport wins.
+    // This REPLACES the default superseded rules rather than adding
+    // alongside them (adding alongside would cause both values to be
+    // superseded by different rules, so nobody wins).
+    //
+    // Rules:
+    //   superseded(CnId, Slot) :- active_value(CnId, Slot, _, L1, _),
+    //     active_value(CnId2, Slot, _, L2, _), CnId ≠ CnId2, L1 > L2.
+    //   superseded(CnId, Slot) :- active_value(CnId, Slot, _, L1, P1),
+    //     active_value(CnId2, Slot, _, L2, P2), CnId ≠ CnId2, L1 == L2, P1 > P2.
+    //   winner(Slot, CnId, Value) :- active_value(CnId, Slot, Value, _, _),
+    //     not superseded(CnId, Slot).
+    const reversedSupersededByLamport = makeRule(
+      atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
+      [
+        positiveAtom(atom('active_value', [
+          varTerm('CnId'), varTerm('Slot'), varTerm('_V1'), varTerm('L1'), varTerm('_P1'),
+        ])),
+        positiveAtom(atom('active_value', [
+          varTerm('CnId2'), varTerm('Slot'), varTerm('_V2'), varTerm('L2'), varTerm('_P2'),
+        ])),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        gt(varTerm('L1'), varTerm('L2')),  // REVERSED: higher lamport gets superseded
+      ],
+    );
+    const reversedSupersededByPeer = makeRule(
+      atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
+      [
+        positiveAtom(atom('active_value', [
+          varTerm('CnId'), varTerm('Slot'), varTerm('_V1'), varTerm('L1'), varTerm('P1'),
+        ])),
+        positiveAtom(atom('active_value', [
+          varTerm('CnId2'), varTerm('Slot'), varTerm('_V2'), varTerm('L2'), varTerm('P2'),
+        ])),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        eq(varTerm('L1'), varTerm('L2')),
+        gt(varTerm('P1'), varTerm('P2')),  // REVERSED peer tiebreak too
+      ],
+    );
+    // The winner rule is identical to the default.
+    const winnerRule = makeRule(
+      atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
+      [
+        positiveAtom(atom('active_value', [
+          varTerm('CnId'), varTerm('Slot'), varTerm('Value'), varTerm('_L'), varTerm('_P'),
+        ])),
+        negation(atom('superseded', [varTerm('CnId'), varTerm('Slot')])),
+      ],
+    );
+    const reversedLWWRules = [reversedSupersededByLamport, reversedSupersededByPeer, winnerRule];
+
+    /**
+     * Build a set of active constraints that uses reversed LWW rules
+     * (all at Layer 2) alongside the default Fugue rules (at Layer 1).
+     * The default LWW rules are NOT included.
+     */
+    function buildReversedRuleConstraints(): {
+      ruleConstraints: RuleConstraint[];
+      activeConstraints: Constraint[];
+      /** The Layer 2 rule constraints (for building rule deltas). */
+      customRuleConstraints: RuleConstraint[];
+      /** The Layer 1 default constraints (LWW + Fugue). */
+      defaultRuleConstraints: RuleConstraint[];
+    } {
+      const defaultLWW = buildDefaultLWWRules();
+      const defaultFugue = buildDefaultFugueRules();
+      const allDefaults = [...defaultLWW, ...defaultFugue];
+      const defaultRuleConstraints: RuleConstraint[] = allDefaults.map((r, i) =>
+        makeRuleConstraint('alice', 100 + i, 1, r),
+      );
+      const customRuleConstraints: RuleConstraint[] = reversedLWWRules.map((r, i) =>
+        makeRuleConstraint('alice', 200 + i, 2, r),
+      );
+      // Active constraints: default Fugue (Layer 1) + reversed LWW (Layer 2).
+      // Default LWW rules are dominated/retracted (not present).
+      const fugueOnlyDefaults = defaultRuleConstraints.filter((rc) => {
+        const pred = rc.payload.head.predicate;
+        return pred !== 'superseded' && pred !== 'winner';
+      });
+      const ruleConstraints = [...fugueOnlyDefaults, ...customRuleConstraints];
+      return {
+        ruleConstraints,
+        activeConstraints: ruleConstraints as Constraint[],
+        customRuleConstraints,
+        defaultRuleConstraints,
+      };
+    }
+
+    it('incremental Datalog produces correct winners for custom rules', () => {
+      const evaluation = createIncrementalEvaluation();
+
+      const { activeConstraints, customRuleConstraints } = buildReversedRuleConstraints();
+
+      // Switch to datalog by adding the custom rules.
+      let ruleDelta = zsetEmpty<Rule>();
+      for (const rc of customRuleConstraints) {
+        const r: Rule = { head: rc.payload.head, body: rc.payload.body };
+        ruleDelta = zsetAdd(ruleDelta, zsetSingleton(cnIdKey(rc.id), r, 1));
+      }
+      evaluation.step(
+        zsetEmpty(),
+        ruleDelta,
+        () => [],
+        () => activeConstraints,
+      );
+
+      // Insert two competing values: lamport 10 and lamport 20.
+      // With reversed rule, lamport 10 should win.
+      const f1 = makeActiveValueFact('alice', 3, slotId, 'LowLamport', 10);
+      const f2 = makeActiveValueFact('bob', 1, slotId, 'HighLamport', 20);
+
+      evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('alice', 3)), f1, 1),
+        zsetEmpty(),
+        () => [f1],
+        () => activeConstraints,
+      );
+
+      evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('bob', 1)), f2, 1),
+        zsetEmpty(),
+        () => [f1, f2],
+        () => activeConstraints,
+      );
+
+      // With reversed rules, the lower lamport (10) should win.
+      const current = evaluation.current();
+      expect(current.winners.size).toBe(1);
+      expect(current.winners.get(slotId)!.content).toBe('LowLamport');
+    });
+
+    it('rule addition mid-stream: values re-resolved under new rules', () => {
+      const evaluation = createIncrementalEvaluation();
+
+      // Start on native path with default rules.
+      const allDefaultRules = [...buildDefaultLWWRules(), ...buildDefaultFugueRules()];
+      const defaultRuleConstraints: RuleConstraint[] = allDefaultRules.map((r, i) =>
+        makeRuleConstraint('alice', 100 + i, 1, r),
+      );
+
+      // Insert two values via native path. Default: higher lamport wins.
+      const f1 = makeActiveValueFact('alice', 3, slotId, 'LowLamport', 10);
+      const f2 = makeActiveValueFact('bob', 1, slotId, 'HighLamport', 20);
+
+      evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('alice', 3)), f1, 1),
+        zsetEmpty(),
+        () => [f1],
+        () => [...defaultRuleConstraints],
+      );
+
+      evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('bob', 1)), f2, 1),
+        zsetEmpty(),
+        () => [f1, f2],
+        () => [...defaultRuleConstraints],
+      );
+
+      // Native: higher lamport wins → HighLamport.
+      expect(evaluation.current().winners.get(slotId)!.content).toBe('HighLamport');
+
+      // Switch to reversed LWW: retract default LWW rules, add reversed.
+      // The active constraints after the switch are Fugue defaults + reversed LWW.
+      const { activeConstraints, customRuleConstraints } = buildReversedRuleConstraints();
+
+      // Build rule delta: +1 for each reversed rule.
+      let ruleDelta = zsetEmpty<Rule>();
+      for (const rc of customRuleConstraints) {
+        const r: Rule = { head: rc.payload.head, body: rc.payload.body };
+        ruleDelta = zsetAdd(ruleDelta, zsetSingleton(cnIdKey(rc.id), r, 1));
+      }
+
+      const { deltaResolved } = evaluation.step(
+        zsetEmpty(),
+        ruleDelta,
+        () => [f1, f2],
+        () => activeConstraints,
+      );
+
+      // After rule addition, winner should flip to LowLamport.
+      const current = evaluation.current();
+      expect(current.winners.size).toBe(1);
+      expect(current.winners.get(slotId)!.content).toBe('LowLamport');
+
+      // Delta should reflect the change.
+      expect(zsetIsEmpty(deltaResolved)).toBe(false);
+    });
+
+    it('rule retraction mid-stream: values re-resolved under restored defaults', () => {
+      const evaluation = createIncrementalEvaluation();
+
+      const { activeConstraints: reversedActive, customRuleConstraints } =
+        buildReversedRuleConstraints();
+
+      // Switch to Datalog with reversed rules.
+      let addRuleDelta = zsetEmpty<Rule>();
+      for (const rc of customRuleConstraints) {
+        const r: Rule = { head: rc.payload.head, body: rc.payload.body };
+        addRuleDelta = zsetAdd(addRuleDelta, zsetSingleton(cnIdKey(rc.id), r, 1));
+      }
+      evaluation.step(
+        zsetEmpty(),
+        addRuleDelta,
+        () => [],
+        () => reversedActive,
+      );
+
+      // Insert two values through the Datalog path.
+      const f1 = makeActiveValueFact('alice', 3, slotId, 'LowLamport', 10);
+      const f2 = makeActiveValueFact('bob', 1, slotId, 'HighLamport', 20);
+
+      evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('alice', 3)), f1, 1),
+        zsetEmpty(),
+        () => [f1],
+        () => reversedActive,
+      );
+
+      evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('bob', 1)), f2, 1),
+        zsetEmpty(),
+        () => [f1, f2],
+        () => reversedActive,
+      );
+
+      // Under reversed rules: LowLamport wins.
+      expect(evaluation.current().winners.get(slotId)!.content).toBe('LowLamport');
+
+      // Retract custom rules → switch back to native (defaults).
+      const allDefaultRules = [...buildDefaultLWWRules(), ...buildDefaultFugueRules()];
+      const defaultRuleConstraints: RuleConstraint[] = allDefaultRules.map((r, i) =>
+        makeRuleConstraint('alice', 100 + i, 1, r),
+      );
+      const defaultActive: Constraint[] = [...defaultRuleConstraints];
+
+      // Build retraction delta: −1 for each reversed rule.
+      let retractRuleDelta = zsetEmpty<Rule>();
+      for (const rc of customRuleConstraints) {
+        const r: Rule = { head: rc.payload.head, body: rc.payload.body };
+        retractRuleDelta = zsetAdd(retractRuleDelta, zsetSingleton(cnIdKey(rc.id), r, -1));
+      }
+
+      evaluation.step(
+        zsetEmpty(),
+        retractRuleDelta,
+        () => [f1, f2],
+        () => defaultActive,
+      );
+
+      // Under default rules: HighLamport wins (higher lamport = winner).
+      const current = evaluation.current();
+      expect(current.winners.size).toBe(1);
+      expect(current.winners.get(slotId)!.content).toBe('HighLamport');
+    });
+
+    it('strategy switch with simultaneous deltaFacts: facts are not dropped', () => {
+      const evaluation = createIncrementalEvaluation();
+
+      const { activeConstraints, customRuleConstraints } = buildReversedRuleConstraints();
+
+      // Build rule delta for the switch.
+      let ruleDelta = zsetEmpty<Rule>();
+      for (const rc of customRuleConstraints) {
+        const r: Rule = { head: rc.payload.head, body: rc.payload.body };
+        ruleDelta = zsetAdd(ruleDelta, zsetSingleton(cnIdKey(rc.id), r, 1));
+      }
+
+      // Send a value fact AND a rule delta in the SAME step.
+      // The rule triggers native→datalog switch. The value fact must
+      // not be dropped — it should be processed through the newly-active
+      // Datalog strategy.
+      const f = makeActiveValueFact('alice', 3, slotId, 'Hello', 10);
+
+      const { deltaResolved } = evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('alice', 3)), f, 1),
+        ruleDelta,
+        () => [f],  // accumulated facts includes the new fact
+        () => activeConstraints,
+      );
+
+      // The value should have been processed — there should be a winner.
+      const current = evaluation.current();
+      expect(current.winners.size).toBe(1);
+      expect(current.winners.get(slotId)!.content).toBe('Hello');
+    });
+
+    it('incremental Datalog processes subsequent fact deltas without batch calls', () => {
+      const evaluation = createIncrementalEvaluation();
+
+      const { activeConstraints, customRuleConstraints } = buildReversedRuleConstraints();
+
+      // Switch to Datalog.
+      let ruleDelta = zsetEmpty<Rule>();
+      for (const rc of customRuleConstraints) {
+        const r: Rule = { head: rc.payload.head, body: rc.payload.body };
+        ruleDelta = zsetAdd(ruleDelta, zsetSingleton(cnIdKey(rc.id), r, 1));
+      }
+      evaluation.step(
+        zsetEmpty(),
+        ruleDelta,
+        () => [],
+        () => activeConstraints,
+      );
+
+      // Insert values one at a time through incremental Datalog.
+      const f1 = makeActiveValueFact('alice', 3, slotId, 'First', 10);
+      const r1 = evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('alice', 3)), f1, 1),
+        zsetEmpty(),
+        () => [f1],
+        () => activeConstraints,
+      );
+
+      expect(zsetSize(r1.deltaResolved)).toBe(1);
+      expect(evaluation.current().winners.get(slotId)!.content).toBe('First');
+
+      // Insert a second value (higher lamport, but reversed rule: lower wins).
+      const f2 = makeActiveValueFact('bob', 1, slotId, 'Second', 20);
+      evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('bob', 1)), f2, 1),
+        zsetEmpty(),
+        () => [f1, f2],
+        () => activeConstraints,
+      );
+
+      // First should still be the winner under reversed rules.
+      expect(evaluation.current().winners.get(slotId)!.content).toBe('First');
+
+      // Insert a third value (even lower lamport → new winner under reversed rules).
+      const f3 = makeActiveValueFact('charlie', 1, slotId, 'Third', 5);
+      evaluation.step(
+        zsetSingleton('v|' + cnIdKey(createCnId('charlie', 1)), f3, 1),
+        zsetEmpty(),
+        () => [f1, f2, f3],
+        () => activeConstraints,
+      );
+
+      // Third should win (lamport 5 < 10 < 20 → Third wins under reversed).
+      expect(evaluation.current().winners.get(slotId)!.content).toBe('Third');
     });
   });
 });

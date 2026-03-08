@@ -638,6 +638,58 @@ This means the evaluation stage's interface is wider than a simple `step(delta) 
 
 **Lesson**: Not every pipeline stage fits the same interface shape. Composition-root-level wrappers that select between strategies need more context than leaf operators. Lazy getters are the right pattern — they make the O(|S|) cost visible and avoidable.
 
+### `Relation` Storage Must Be a Single `Map`, Not Parallel Array + Set
+
+The original `Relation` stored tuples in two parallel structures: `_tuples: FactTuple[]` (for ordered iteration) and `_serialized: Set<string>` (for O(1) dedup). Adding `remove()` to this design creates multiple correctness hazards: `size` returns `_tuples.length` (overcounts after removal), `isEmpty()` checks `_tuples.length` (wrong), `clone()`/`union()`/`difference()` iterate `_tuples` (includes stale entries), and `add()` after `remove()` pushes a duplicate into `_tuples` because the serialized key was deleted but the old tuple entry remains.
+
+A lazy `_dirty` flag approach (filter `_tuples` on next `tuples()` call) patches some hazards but not add-after-remove. The correct fix: replace both with a single `Map<string, FactTuple>`. All operations are O(1) and correct by construction. JavaScript `Map` preserves insertion order, so iteration order is preserved. The only observable change is `tuples()` returning a fresh array on each call (previously returned a reference to the internal array), which is actually safer.
+
+**Lesson**: When a data structure uses parallel collections for the same data (one for indexing, one for iteration), adding mutation operations (delete) breaks their implicit synchronization invariant. A single collection that serves both purposes is strictly better.
+
+### DRed for Negation Strata: Wipe-and-Recompute Beats Provenance Tracking
+
+The textbook DRed (Delete and Rederive) algorithm tracks which derived facts depend on which input facts, so that when an input is retracted, only the directly-affected derivations are deleted and then selectively rederived. Implementing full provenance tracking for our Datalog evaluator would be complex — the batch evaluator has no provenance infrastructure.
+
+The practical approach: for negation strata, delete ALL derived facts for the stratum's head predicates, then re-evaluate the stratum from scratch against the updated lower-stratum facts. This is sound because: (1) the snapshot-and-diff at the outer level captures the net delta correctly regardless of how we compute it, (2) negation strata are bounded by the number of slots/parents, not the number of constraints, and (3) the stratum's rules are few (6 for the default rules).
+
+The same DRed wipe-and-recompute is also used for monotone strata when the input delta contains retractions (weight −1). Monotone semi-naive assumes inputs only grow — it cannot discover that a derived fact lost its last supporting input. Rather than implementing provenance for monotone strata too, we simply fall back to DRed when any retraction is present.
+
+**Lesson**: When the re-evaluation cost is bounded by something smaller than the total state (e.g., number of slots rather than number of constraints), wipe-and-recompute is simpler and fast enough. Save provenance tracking for when the stratum is genuinely large.
+
+### `zsetMap` with Shared Output Keys Causes Silent Weight Cancellation
+
+When converting derived-fact deltas (`ZSet<Fact>`) to resolution deltas (`ZSet<ResolvedWinner>`), a winner change produces two entries: `−1` for the old winner fact and `+1` for the new winner fact. Both are different facts (different CnId, different content) but map to the same `slotId` key when converted to `ResolvedWinner`.
+
+A naive `zsetMap(winnerDelta, w => w.slotId, factToWinner)` sums the weights on the shared key: `+1 + (−1) = 0`. The entry is pruned. The skeleton sees nothing. The winner change is silently lost.
+
+The fix: group by `slotId` and apply replacement semantics manually — if both `+1` and `−1` exist for the same slot, emit only `+1` with the new winner (matching the skeleton's expectation and the native LWW solver's delta contract from Plan 005).
+
+**Lesson**: `zsetMap` is safe when the key function is injective (different inputs → different keys). When multiple inputs can map to the same output key, weights are summed, which may not match the domain semantics. Always check whether the re-keying function can collide.
+
+### Strategy Switches Must Not Drop the Current Step's `deltaFacts`
+
+In the Phase 4 evaluation stage, when a rule change triggered a strategy switch (native → Datalog or vice versa), the `step()` function returned immediately with the switch diff — the `deltaFacts` from the same step were silently dropped. This was safe in practice because the pipeline processes one constraint at a time (a rule constraint and a data constraint can't arrive in the same `processConstraint()` call), but it was architecturally wrong.
+
+Phase 6 fixes this: after switching strategy, `deltaFacts` are processed through the newly-activated strategy, and the results are combined with the switch diff via `zsetAdd`. This makes the evaluation stage correct even if the pipeline ever processes multiple constraints per step.
+
+**Lesson**: When a function has two responsibilities (strategy switching AND fact processing), ensure both are performed even when the rare path (switching) triggers. The common path working correctly can mask the rare path dropping data.
+
+### The Incremental Evaluator's Accumulated `Database` IS the Batch Evaluator's Parameter Type
+
+The most important design decision in Phase 5: the incremental evaluator's accumulated state is a plain `Database` — the exact same class the batch evaluator uses. The batch evaluator's per-rule functions (`evaluateRule`, `evaluateRuleSemiNaive`, etc.) take `Database` parameters and call `db.getRelation(pred).tuples()`. The incremental evaluator passes its accumulated `Database` directly as `fullDb`. No adapters, no wrappers, no type conversion.
+
+This meant adding `export` to 8 private functions in `evaluate.ts` was sufficient — no refactoring of their signatures, no bridging layer. The only new method needed was `Database.removeFact()` for the DRed delete phase. The batch evaluator never calls it, so existing behavior is unaffected.
+
+**Lesson**: When building an incremental version of a batch algorithm, use the batch implementation's native data types as your accumulated state. This lets you reuse the batch code's inner functions directly. If you find yourself writing conversion functions between your incremental state type and the batch functions' parameter types, you've chosen the wrong internal representation.
+
+### Custom Rule Tests Need Complete Rule Replacement, Not Rule Addition
+
+When testing custom LWW rules (e.g., reversed lamport comparison), adding a custom `superseded` rule alongside the default `superseded` rules doesn't work — it causes BOTH values in a conflict to be marked as superseded via different rules, so nobody wins. The test must present a complete replacement rule set: remove the default `superseded` rules and provide only the custom one, plus the unchanged `winner` rule.
+
+This mirrors how rules-as-data works in production: a Layer 2 rule that overrides resolution must retract the Layer 1 defaults it replaces. The evaluation stage's `selectResolutionStrategy` correctly detects Layer 2+ rules and switches to Datalog, but the Datalog evaluator faithfully evaluates ALL active rules — it has no concept of "override."
+
+**Lesson**: Datalog rules are additive. Adding a new rule doesn't suppress existing rules — it adds more derivations. To change behavior, you must retract the old rules and add the new ones. Test fixtures must reflect this.
+
 ### Removing `diffResolution` From the Pipeline Makes It Strictly Simpler
 
 The Plan 005 pipeline's `processConstraint` had a fork: compute batch resolution, diff against cached, pass deltas to skeleton. After Phase 4, `processConstraint` is a linear DAG traversal: validity → fan-out (index, retraction) → projection → evaluation → skeleton. No branching, no cached state, no diffing shim. The evaluation stage encapsulates all strategy complexity internally.
@@ -650,7 +702,7 @@ The pipeline composition root went from ~180 LOC (with `processConstraint` conta
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.
 
-2. ~~**What is the performance ceiling?**~~ **Partially resolved in Plan 005.** The incremental kernel pipeline reduces per-insertion cost from O(|S|) to O(|Δ|) for all stages except the Datalog evaluator (which remains batch until Plan 006). The native fast path (LWW comparison + Fugue tree walk) is already fast for the default case. The remaining bottleneck is the batch evaluator, which Plan 006 addresses.
+2. ~~**What is the performance ceiling?**~~ **Resolved in Plan 006.** The incremental pipeline is now O(|Δ|) end-to-end for the common case (default rules via native solvers) and for the custom-rules case (via the incremental Datalog evaluator). The DRed wipe-and-recompute for negation strata is bounded by the number of slots/parents per step, not the total constraint count.
 
 3. **Can cross-container constraints be made to work?** E.g., "if key X exists in Map A, then key Y must exist in Map B." This requires a solver that reasons across containers, which the current per-container solver architecture doesn't support.
 

@@ -1,23 +1,26 @@
 // === Incremental Evaluation Stage ===
 // Strategy wrapper that delegates to either native incremental solvers
-// (LWW + Fugue) or the batch Datalog evaluator, based on active rules.
+// (LWW + Fugue) or the incremental Datalog evaluator, based on active rules.
 //
 // This stage sits between projection and skeleton in the incremental DAG:
 //
 //   P^Δ (projection) → Δ_facts → E^Δ (this stage) → { Δ_resolved, Δ_fuguePairs } → K^Δ (skeleton)
 //
 // The native path (Phase 2–3) handles default LWW/Fugue rules in O(|Δ|).
-// The batch Datalog fallback (Phase 4) handles custom rules but is O(|S|).
-// Phase 7 replaces the batch fallback with the incremental Datalog evaluator.
+// The incremental Datalog path (Phase 5–6) handles custom rules incrementally.
 //
 // Strategy switching occurs when rule constraints are added or retracted.
 // On switch, the new strategy is bootstrapped from accumulated facts and
 // a diff is emitted against the old strategy's accumulated resolution.
+// The current step's deltaFacts are then processed through the newly-active
+// strategy and combined with the switch diff.
 //
 // See Plan 006 §Architecture, §Functional Core / Imperative Shell.
+// See Plan 006 Phase 6: Wire Incremental Datalog into Evaluation Stage.
 // See theory/incremental.md §9.7 (native solver fast path).
 
 import type { Fact, Rule } from '../../datalog/types.js';
+import { factKey } from '../../datalog/types.js';
 import type {
   Constraint,
   RuleConstraint,
@@ -36,10 +39,6 @@ import {
   selectResolutionStrategy,
   type ResolutionStrategy,
 } from '../rule-detection.js';
-import { buildNativeResolution } from '../native-resolution.js';
-import type { StructureIndex } from '../structure-index.js';
-import { evaluate } from '../../datalog/evaluate.js';
-import { extractResolution } from '../resolve.js';
 import { cnIdKey } from '../cnid.js';
 import {
   createIncrementalLWW,
@@ -49,6 +48,10 @@ import {
   createIncrementalFugue,
   type IncrementalFugue,
 } from '../../solver/incremental-fugue.js';
+import {
+  createIncrementalDatalogEvaluator,
+  type IncrementalDatalogEvaluator,
+} from '../../datalog/incremental-evaluate.js';
 import type { ZSet } from '../../base/zset.js';
 import {
   zsetEmpty,
@@ -137,7 +140,7 @@ export function extractRuleDeltasFromActive(
 /**
  * The incremental evaluation stage.
  *
- * Wraps native incremental solvers and the batch Datalog evaluator
+ * Wraps native incremental solvers and the incremental Datalog evaluator
  * behind a unified interface. Receives fact and rule deltas, produces
  * resolution deltas for the skeleton.
  *
@@ -153,12 +156,10 @@ export interface IncrementalEvaluation {
    * @param deltaFacts - Z-set delta from the projection stage.
    * @param deltaRules - Changed rules (weight +1 = added, −1 = retracted).
    *                     Empty on most insertions.
-   * @param getAccumulatedFacts - Lazy getter for full accumulated facts
-   *   (only called when batch Datalog fallback is needed).
-   * @param getActiveConstraints - Lazy getter for full active constraint set
-   *   (only called when strategy switching or batch fallback is needed).
-   * @param getStructureIndex - Lazy getter for full structure index
-   *   (only called when batch native resolution is needed).
+   * @param getAccumulatedFacts - Lazy getter for full accumulated facts.
+   *   Only called on strategy switches (bootstrapping the new strategy).
+   * @param getActiveConstraints - Lazy getter for full active constraint set.
+   *   Only called on rule changes (for strategy detection).
    * @returns Resolution deltas for the skeleton stage.
    */
   step(
@@ -166,7 +167,6 @@ export interface IncrementalEvaluation {
     deltaRules: ZSet<Rule>,
     getAccumulatedFacts: () => Fact[],
     getActiveConstraints: () => readonly Constraint[],
-    getStructureIndex: () => StructureIndex,
   ): {
     deltaResolved: ZSet<ResolvedWinner>;
     deltaFuguePairs: ZSet<FugueBeforePair>;
@@ -180,14 +180,15 @@ export interface IncrementalEvaluation {
 }
 
 // ---------------------------------------------------------------------------
-// Resolution diffing (for strategy switches and batch fallback)
+// Resolution diffing (for strategy switches)
 // ---------------------------------------------------------------------------
 
 /**
  * Diff two ResolutionResults to produce Z-set deltas.
  *
- * Used when switching strategies or when the batch Datalog fallback
- * produces a full result that needs to be compared against the previous.
+ * Used when switching strategies — the old strategy's accumulated
+ * resolution is compared against the new strategy's resolution to
+ * produce the minimal delta for the skeleton.
  *
  * Winner key = slotId. Changed winners emit only +1 (not −1 then +1)
  * because both entries share the same Z-set key and would annihilate.
@@ -269,6 +270,38 @@ function diffResolution(
 }
 
 // ---------------------------------------------------------------------------
+// Helper: build a ResolutionResult from incremental Datalog output
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert the incremental Datalog evaluator's `currentResolution()`
+ * into a full `ResolutionResult` for the `current()` method and
+ * strategy-switch diffing.
+ */
+function datalogCurrentResolution(
+  datalog: IncrementalDatalogEvaluator,
+): ResolutionResult {
+  const res = datalog.currentResolution();
+  return {
+    winners: res.winners,
+    fuguePairs: res.fuguePairs,
+    fromDatalog: true,
+  };
+}
+
+/**
+ * Convert a Fact[] array into a ZSet<Fact> with all weights +1.
+ * Used for bootstrapping a strategy from accumulated facts.
+ */
+function factsToZSet(facts: readonly Fact[]): ZSet<Fact> {
+  let zs = zsetEmpty<Fact>();
+  for (const f of facts) {
+    zs = zsetAdd(zs, zsetSingleton(factKey(f), f, 1));
+  }
+  return zs;
+}
+
+// ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
 
@@ -283,9 +316,9 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
   let lww: IncrementalLWW = createIncrementalLWW();
   let fugue: IncrementalFugue = createIncrementalFugue();
 
-  // Cached resolution for the batch Datalog fallback path.
-  // Only used when strategy === 'datalog'.
-  let cachedBatchResolution: ResolutionResult | null = null;
+  // Incremental Datalog evaluator — lazily created on first switch
+  // to 'datalog' strategy. Holds its own accumulated Database.
+  let datalog: IncrementalDatalogEvaluator | null = null;
 
   // Accumulated rules for strategy detection on rule changes.
   let accumulatedRules: Rule[] = [];
@@ -315,105 +348,89 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
   }
 
   /**
-   * Run the batch Datalog fallback: evaluate all rules over all accumulated
-   * facts, diff against cached resolution.
-   *
-   * This is O(|S|) — the same cost as the pre-Phase 4 pipeline. It's
-   * encapsulated here so the pipeline composition root doesn't need to
-   * know about it. Phase 7 replaces this with the incremental Datalog
-   * evaluator.
+   * Run the incremental Datalog path: delegate to the evaluator.
    */
-  function stepBatchDatalog(
-    getAccumulatedFacts: () => Fact[],
-    getActiveConstraints: () => readonly Constraint[],
-    getStructureIndex: () => StructureIndex,
+  function stepDatalog(
+    deltaFacts: ZSet<Fact>,
+    deltaRules: ZSet<Rule>,
   ): {
     deltaResolved: ZSet<ResolvedWinner>;
     deltaFuguePairs: ZSet<FugueBeforePair>;
   } {
-    const activeConstraints = getActiveConstraints();
-    const accFacts = getAccumulatedFacts();
-    const rules = extractRules(activeConstraints);
-
-    let newResolution: ResolutionResult;
-
-    const evalResult = evaluate(rules, accFacts);
-    if (evalResult.ok) {
-      newResolution = extractResolution(evalResult.value);
-    } else {
-      // Datalog evaluation failed (e.g., cyclic negation).
-      // Fall back to native solvers as graceful degradation.
-      newResolution = buildNativeResolution(
-        activeConstraints,
-        getStructureIndex(),
-      );
+    if (datalog === null) {
+      // Should not happen — datalog is created on switch.
+      return { deltaResolved: zsetEmpty(), deltaFuguePairs: zsetEmpty() };
     }
 
-    const delta = diffResolution(cachedBatchResolution, newResolution);
-    cachedBatchResolution = newResolution;
-    return delta;
+    const result = datalog.step(deltaFacts, deltaRules);
+    return {
+      deltaResolved: result.deltaResolved,
+      deltaFuguePairs: result.deltaFuguePairs,
+    };
   }
 
   /**
-   * Switch from native to batch Datalog.
-   * Bootstrap the batch path from accumulated facts, diff against
-   * the native path's accumulated resolution.
+   * Switch from native to incremental Datalog.
+   *
+   * Creates a new IncrementalDatalogEvaluator, bootstraps it from
+   * accumulated ground facts, and diffs against the native path's
+   * accumulated resolution.
+   *
+   * Returns only the switch diff — the caller is responsible for
+   * processing deltaFacts through the new strategy afterward.
    */
   function switchToDatalog(
     getAccumulatedFacts: () => Fact[],
     getActiveConstraints: () => readonly Constraint[],
-    getStructureIndex: () => StructureIndex,
   ): {
     deltaResolved: ZSet<ResolvedWinner>;
     deltaFuguePairs: ZSet<FugueBeforePair>;
   } {
     const oldResolution = nativeCurrentResolution();
 
-    // Run batch Datalog from scratch
-    const activeConstraints = getActiveConstraints();
-    const accFacts = getAccumulatedFacts();
-    const rules = extractRules(activeConstraints);
+    // Create the incremental Datalog evaluator with current rules.
+    const rules = extractRules(getActiveConstraints());
+    datalog = createIncrementalDatalogEvaluator(rules);
 
-    let newResolution: ResolutionResult;
-    const evalResult = evaluate(rules, accFacts);
-    if (evalResult.ok) {
-      newResolution = extractResolution(evalResult.value);
-    } else {
-      newResolution = buildNativeResolution(
-        activeConstraints,
-        getStructureIndex(),
-      );
+    // Bootstrap from accumulated ground facts.
+    const accFacts = getAccumulatedFacts();
+    if (accFacts.length > 0) {
+      datalog.step(factsToZSet(accFacts), zsetEmpty());
     }
 
-    cachedBatchResolution = newResolution;
     strategy = 'datalog';
 
+    const newResolution = datalogCurrentResolution(datalog);
     return diffResolution(oldResolution, newResolution);
   }
 
   /**
-   * Switch from batch Datalog back to native.
-   * Bootstrap native solvers from accumulated facts, diff against
-   * the Datalog path's accumulated resolution.
+   * Switch from incremental Datalog back to native.
+   *
+   * Rebuilds native solvers from accumulated ground facts, diffs
+   * against the Datalog evaluator's accumulated resolution.
+   *
+   * Returns only the switch diff — the caller is responsible for
+   * processing deltaFacts through the new strategy afterward.
    */
   function switchToNative(
     getAccumulatedFacts: () => Fact[],
-    getActiveConstraints: () => readonly Constraint[],
-    getStructureIndex: () => StructureIndex,
   ): {
     deltaResolved: ZSet<ResolvedWinner>;
     deltaFuguePairs: ZSet<FugueBeforePair>;
   } {
-    const oldResolution = cachedBatchResolution;
+    const oldResolution = datalog !== null
+      ? datalogCurrentResolution(datalog)
+      : nativeResolution(new Map(), new Map());
 
     // Rebuild native solvers from accumulated facts
     lww = createIncrementalLWW();
     fugue = createIncrementalFugue();
 
-    // Feed all accumulated facts through the native solvers
+    // Feed all accumulated facts through the native solvers.
     const accFacts = getAccumulatedFacts();
     for (const f of accFacts) {
-      const key = f.predicate + '|' + (f.values[0] as string);
+      const key = factKey(f);
       const singleton = zsetSingleton(key, f, 1);
       if (f.predicate === 'active_value') {
         lww.step(singleton);
@@ -425,7 +442,8 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
       }
     }
 
-    cachedBatchResolution = null;
+    // Discard Datalog state.
+    datalog = null;
     strategy = 'native';
 
     const newResolution = nativeCurrentResolution();
@@ -439,16 +457,15 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
     deltaRules: ZSet<Rule>,
     getAccumulatedFacts: () => Fact[],
     getActiveConstraints: () => readonly Constraint[],
-    getStructureIndex: () => StructureIndex,
   ): {
     deltaResolved: ZSet<ResolvedWinner>;
     deltaFuguePairs: ZSet<FugueBeforePair>;
   } {
     // --- Handle rule changes ---
     if (!zsetIsEmpty(deltaRules)) {
-      // Update accumulated rules
+      // Update accumulated rules.
       // Rather than tracking incremental adds/removes, just rebuild
-      // from active constraints — rules are rare (typically ~11 default)
+      // from active constraints — rules are rare (typically ~11 default).
       accumulatedRules = extractRules(getActiveConstraints());
 
       const newStrategy = selectResolutionStrategy(
@@ -458,20 +475,55 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
       );
 
       if (newStrategy !== strategy) {
-        // Strategy switch needed
+        // Strategy switch needed.
+        let switchDelta: {
+          deltaResolved: ZSet<ResolvedWinner>;
+          deltaFuguePairs: ZSet<FugueBeforePair>;
+        };
+
         if (newStrategy === 'datalog') {
-          return switchToDatalog(
+          switchDelta = switchToDatalog(
             getAccumulatedFacts,
             getActiveConstraints,
-            getStructureIndex,
           );
         } else {
-          return switchToNative(
-            getAccumulatedFacts,
-            getActiveConstraints,
-            getStructureIndex,
-          );
+          switchDelta = switchToNative(getAccumulatedFacts);
         }
+
+        // Fix: process deltaFacts through the newly-activated strategy
+        // AFTER the switch, then combine with the switch diff.
+        // Previously, deltaFacts were dropped on strategy switch.
+        if (!zsetIsEmpty(deltaFacts)) {
+          let factDelta: {
+            deltaResolved: ZSet<ResolvedWinner>;
+            deltaFuguePairs: ZSet<FugueBeforePair>;
+          };
+
+          if (strategy === 'native') {
+            factDelta = stepNative(deltaFacts);
+          } else {
+            factDelta = stepDatalog(deltaFacts, zsetEmpty());
+          }
+
+          return {
+            deltaResolved: zsetAdd(switchDelta.deltaResolved, factDelta.deltaResolved),
+            deltaFuguePairs: zsetAdd(switchDelta.deltaFuguePairs, factDelta.deltaFuguePairs),
+          };
+        }
+
+        return switchDelta;
+      }
+
+      // Strategy didn't change, but rules changed — if we're on the
+      // Datalog path, forward the rule delta to the evaluator.
+      if (strategy === 'datalog' && datalog !== null) {
+        // Rules changed but strategy stays 'datalog'. Process both
+        // deltaFacts and deltaRules through the evaluator together.
+        const result = datalog.step(deltaFacts, deltaRules);
+        return {
+          deltaResolved: result.deltaResolved,
+          deltaFuguePairs: result.deltaFuguePairs,
+        };
       }
     }
 
@@ -486,20 +538,18 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
     if (strategy === 'native') {
       return stepNative(deltaFacts);
     } else {
-      return stepBatchDatalog(
-        getAccumulatedFacts,
-        getActiveConstraints,
-        getStructureIndex,
-      );
+      return stepDatalog(deltaFacts, deltaRules);
     }
   }
 
   function current(): ResolutionResult {
     if (strategy === 'native') {
       return nativeCurrentResolution();
+    } else if (datalog !== null) {
+      return datalogCurrentResolution(datalog);
     } else {
-      // Return cached batch resolution, or empty if never computed
-      return cachedBatchResolution ?? nativeResolution(new Map(), new Map());
+      // No strategy active — return empty.
+      return nativeResolution(new Map(), new Map());
     }
   }
 
@@ -507,7 +557,7 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
     strategy = 'native';
     lww = createIncrementalLWW();
     fugue = createIncrementalFugue();
-    cachedBatchResolution = null;
+    datalog = null;
     accumulatedRules = [];
   }
 
