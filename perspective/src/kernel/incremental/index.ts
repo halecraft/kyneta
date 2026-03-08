@@ -32,3 +32,7 @@ export { createIncrementalProjection } from './projection.js';
 // --- Incremental Validity (Phase 6) ---
 export type { IncrementalValidity } from './validity.js';
 export { createIncrementalValidity } from './validity.js';
+
+// --- Incremental Skeleton (Phase 7) ---
+export type { IncrementalSkeleton } from './skeleton.js';
+export { createIncrementalSkeleton } from './skeleton.js';

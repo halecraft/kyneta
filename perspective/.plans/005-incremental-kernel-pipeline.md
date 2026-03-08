@@ -540,7 +540,7 @@ O(all-constraints) scanning.
 - Differential: accumulated valid set equals `computeValid(allConstraints, creator)`. ✅
 - 55 tests in `tests/kernel/incremental/validity.test.ts`. Also added bookmark validation, rule constraint validation, deduplication, removal handling (including authority removal triggering re-check), transitive authority cascade, mixed constraint type deltas, partial capability grants, and 3 exhaustive all-permutation differential tests (up to 120 permutations for 5-constraint mixed scenarios). 1015 total tests passing (960 + 55).
 
-### Phase 7: Incremental Skeleton and Reality Deltas 🔴
+### Phase 7: Incremental Skeleton and Reality Deltas ✅
 
 The skeleton builder maintains a mutable reality tree and applies deltas from the
 resolution stage and structure index stage. It emits `RealityDelta` describing
@@ -584,25 +584,26 @@ pipeline eliminates.
 
 #### Tasks
 
-- 7.1 Create `kernel/incremental/skeleton.ts` maintaining a mutable `Reality` tree. 🔴
-- 7.2 `step(Δ_resolved: ZSet<ResolvedWinner>, Δ_fuguePairs: ZSet<FugueBeforePair>, Δ_index: StructureIndexDelta)`: process resolution deltas (new/changed winners, new/removed fugue pairs) and structure deltas (new/updated slot groups). Mutate the tree and emit `NodeDelta` entries. 🔴
-- 7.3 New map structure → create child node in parent's children map. Emit `childAdded`. If the parent node does not yet exist in the tree (child arrived before parent), defer — the child will be attached when the parent is created (task 7.3a). 🔴
-- 7.3a When creating a new node (root or child), check the accumulated structure index (`childrenOf`) for pre-existing children of this node. Recursively attach them and emit `childAdded` for each. This handles the out-of-order case where children arrived before their parent. 🔴
-- 7.4 New seq structure → create child node, insert at Fugue-ordered position. Emit `childAdded` (or `childrenReordered` if position changes affect existing children). 🔴
-- 7.5 Changed winner → update node's value field. Emit `valueChanged`. 🔴
-- 7.6 Removed winner (retraction) → for map, value becomes undefined/null; for seq, element becomes tombstone and is removed from visible children. Emit `valueChanged` or `childRemoved`. 🔴
-- 7.7 `current()`: return the accumulated `Reality`. 🔴
+- 7.1 Create `kernel/incremental/skeleton.ts` maintaining a mutable `Reality` tree. ✅
+- 7.2 `step(Δ_resolved: ZSet<ResolvedWinner>, Δ_fuguePairs: ZSet<FugueBeforePair>, Δ_index: StructureIndexDelta)`: process resolution deltas (new/changed winners, new/removed fugue pairs) and structure deltas (new/updated slot groups). Mutate the tree and emit `NodeDelta` entries. ✅
+- 7.3 New map structure → create child node in parent's children map. Emit `childAdded`. If the parent node does not yet exist in the tree (child arrived before parent), defer — the child will be attached when the parent is created (task 7.3a). ✅
+- 7.3a When creating a new node (root or child), check the accumulated structure index (`childrenOf`) for pre-existing children of this node. Recursively attach them and emit `childAdded` for each. This handles the out-of-order case where children arrived before their parent. ✅
+- 7.4 New seq structure → create child node, insert at Fugue-ordered position. Emit `childAdded` (or `childrenReordered` if position changes affect existing children). ✅
+- 7.5 Changed winner → update node's value field. Emit `valueChanged`. ✅
+- 7.6 Removed winner (retraction) → for map, value becomes undefined/null; for seq, element becomes tombstone and is removed from visible children. Emit `valueChanged` or `childRemoved`. ✅
+- 7.7 `current()`: return the accumulated `Reality`. ✅
 
 #### Tests
 
-- New map container + value: `childAdded` + `valueChanged`. 🔴
-- LWW winner change: `valueChanged` with old and new values. 🔴
-- Value retraction on map node: `valueChanged` to undefined (or `childRemoved` if no children). 🔴
-- Value retraction on seq node: `childRemoved` (tombstone). 🔴
-- New seq element: `childAdded` at correct position. 🔴
-- **Out-of-order: child before parent.** Insert a map child structure before its parent root structure. When the root arrives, both the root and its pre-existing child appear in the reality. Matches batch. 🔴
-- **Out-of-order: grandchild before parent.** Insert grandchild, then child, then root. All three levels appear correctly in the reality once the root arrives. 🔴
-- Differential: `current()` equals `solve(store, config)`. 🔴
+- New map container + value: `childAdded` + `valueChanged`. ✅
+- LWW winner change: `valueChanged` with old and new values. ✅
+- Value retraction on map node: `valueChanged` to undefined (or `childRemoved` if no children). ✅
+- Value retraction on seq node: `childRemoved` (tombstone). ✅
+- New seq element: `childAdded` at correct position. ✅
+- **Out-of-order: child before parent.** Insert a map child structure before its parent root structure. When the root arrives, both the root and its pre-existing child appear in the reality. Matches batch. ✅
+- **Out-of-order: grandchild before parent.** Insert grandchild, then child, then root. All three levels appear correctly in the reality once the root arrives. ✅
+- Differential: `current()` equals `solve(store, config)`. ✅
+- 39 tests in `tests/kernel/incremental/skeleton.test.ts`. Also added map child visibility (invisible without value, restored after retraction), multi-peer same map slot, winner-before-structure out-of-order, seq reordering with new pairs, seq value update independence, seq tombstone via retraction, three-element transitive ordering, nested map differential, mixed map+seq complex scenario, incremental multi-step building, NodeDelta path correctness, reset/reuse, and deduplication. 1054 total tests passing (1015 + 39).
 
 ### Phase 8: Pipeline Composition and Differential Testing 🔴
 

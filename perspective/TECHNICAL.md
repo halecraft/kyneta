@@ -325,7 +325,7 @@ Time travel is not a special mode. The solver is a pure function; the same `(S, 
 
 ---
 
-## Incremental Pipeline (Plan 005, in progress)
+## Incremental Pipeline (Plan 005, Phases 1–7 of 9 complete)
 
 The batch `solve()` is O(|S|) per insertion. The incremental pipeline reduces the kernel stages to O(|Δ|) by maintaining persistent state across insertions and propagating Z-set deltas through a DAG of operators.
 
@@ -358,22 +358,49 @@ The structure index is append-only (structure constraints are permanent, never r
   E (BATCH evaluator)         ← Plan 006 replaces with E^Δ
         │
         ▼
+  DIFF (prev vs new ResolutionResult → Δ_resolved, Δ_fuguePairs)
+        │
+        ▼
   K^Δ (skeleton)              → RealityDelta
 ```
 
 Each stage follows three conventions: `step(...deltas)` processes input and returns output delta; `current()` returns the full materialized output; `reset()` clears state. The correctness invariant is `current() == Q_batch(accumulated inputs)`.
 
-### Operator Stages (implemented)
+### Operator Stages (all kernel stages implemented)
 
 | Stage | Module | Input(s) | Output | Key design |
 |-------|--------|----------|--------|------------|
+| Validity | `incremental/validity.ts` | `ZSet<Constraint>` | `ZSet<Constraint>` | Cached `AuthorityState` with full replay on authority changes; per-peer constraint index for targeted re-checking; holds invalid constraints for out-of-order grant arrival |
 | Retraction | `incremental/retraction.ts` | `ZSet<Constraint>` | `ZSet<Constraint>` | Persistent retraction graph; two-pass delta processing (non-retracts first); deferred immunity checks for out-of-order arrival |
 | Structure Index | `incremental/structure-index.ts` | `ZSet<Constraint>` | `StructureIndexDelta` | Mutable `SlotGroup` builders; append-only; dedup by CnId |
 | Projection | `incremental/projection.ts` | `ZSet<Constraint>` × `StructureIndexDelta` | `ZSet<Fact>` | Orphan set (dual-indexed by target key and own key); resolves when target structure arrives |
+| Skeleton | `incremental/skeleton.ts` | `ZSet<ResolvedWinner>` × `ZSet<FugueBeforePair>` × `StructureIndexDelta` | `RealityDelta` | Mutable tree with path tracking; deferred child attachment for out-of-order; seq ordering via accumulated fugue pairs + topological sort |
 
 ### Out-of-Order Arrival
 
 CCS stores have no causal delivery guarantees. A retract can arrive before its target; a value before its target structure; a constraint before its enabling authority grant. Every stage that processes a constraint referencing another handles both orderings via standing instructions: when the referrer arrives first, record its effect; when the referent arrives, check for standing instructions. The differential test oracle (`solve(store, config)`) catches all order-dependent bugs mechanically.
+
+| Stage | Referrer | Referent | Standing instruction |
+|-------|----------|----------|---------------------|
+| Validity | non-authority constraint | authority grant | Hold in invalid set; re-check on grant arrival via per-peer index |
+| Retraction | retract constraint | target constraint | Record edge in graph; cascade when target arrives |
+| Projection | value constraint | target structure | Hold in orphan set (dual-indexed); project when structure arrives |
+| Skeleton | child structure | parent structure | `nodeBySlot` stores node; `attachDeferredChildren` connects when parent created |
+| Skeleton | winner | structure (slot) | `accWinners` stores winner; applied when structure node created |
+
+### Validity: Authority Cascade via Full Replay
+
+Authority constraints are rare (single-digit count per reality) but their effects cascade transitively — revoking Admin from peer A invalidates grants A made to peer B. Rather than tracking a dependency DAG, the validity stage replays `computeAuthority()` over all accumulated authority constraints when any authority constraint arrives, then diffs the old vs. new `AuthorityState` to find affected peers. A per-peer constraint index (`Map<PeerID, Set<CnIdKey>>`) enables O(constraints-by-peer) re-checking rather than scanning all constraints.
+
+### Skeleton: Mutable Tree with NodeDelta Emission
+
+The skeleton is the most complex incremental stage. It maintains a mutable reality tree (`MutableNode` type with `nodeBySlot` and `parentBySlot` indexes), processes three input streams, and emits `NodeDelta` entries. Map children are only visible in the parent's `children` map when they have a value or their own children — gaining or losing a value transitions between `childAdded` and `childRemoved`. Seq children are ordered by accumulated `fugue_before` pairs via `topologicalOrderFromPairs`; retracted seq elements become tombstones (structurally present for ordering, invisible to consumers).
+
+During Plan 005, the pipeline composition root diffs the previous `ResolutionResult` against the new one to produce `ZSet<ResolvedWinner>` and `ZSet<FugueBeforePair>` for the skeleton. Plan 006 eliminates this shim — the incremental evaluator produces resolution deltas directly.
+
+### Known Issue: Retraction Multi-Removal Bug
+
+The retraction `step()` removal loop has an early `return` after the first active removal (weight −1 of an active constraint). If a validity delta contains multiple removals of active constraints simultaneously (e.g., authority revocation invalidating several peers' constraints at once), only the first is processed. Documented as task 8.1a — safe during isolated stage testing but must be fixed before pipeline composition in Phase 8.
 
 ---
 
@@ -401,7 +428,9 @@ kernel/incremental/                           (incremental pipeline — Plan 005
   types.ts → retraction.ts                    (depends on kernel/ + base/zset)
            → structure-index.ts
            → projection.ts
-           → pipeline.ts (future)             (incremental composition root)
+           → validity.ts                      (depends on kernel/authority)
+           → skeleton.ts                      (depends on kernel/resolve, structure-index)
+           → pipeline.ts (Phase 8)            (incremental composition root)
   index.ts                                    (barrel export)
 ```
 
@@ -474,8 +503,8 @@ JavaScript's `number` is f64, which can only exactly represent integers up to 2^
 ### Deferred from the Spec
 
 - **Real ed25519 signatures** — Phase 2 uses a stub that always returns valid
-- **Incremental kernel pipeline** (§9) — In progress (Plan 005). Retraction, structure index, and projection stages are incremental. Validity, skeleton, and pipeline composition remain.
-- **Incremental Datalog evaluator** (§9) — Plan 006. The batch evaluator is the remaining O(|S|) bottleneck after Plan 005.
+- **Incremental kernel pipeline** (§9) — In progress (Plan 005). All kernel stages (validity, retraction, structure index, projection, skeleton) are incremental. Pipeline composition (Phase 8) and documentation cleanup (Phase 9) remain.
+- **Incremental Datalog evaluator** (§9) — Plan 006. The batch evaluator is the remaining O(|S|) bottleneck after Plan 005. When the native fast path is active (default LWW/Fugue rules, no custom rules), the batch evaluator is bypassed entirely, making Plan 005 sufficient for real-time performance on typical workloads.
 - **Settled/Working set partitioning** (§11) — Bounds solver cost to recent activity
 - **Compaction** (§12) — Requires settled set; tombstone compaction is especially tricky for sequences due to origin references
 - **Wire format** (§13) — Batching and compact encoding for sync
