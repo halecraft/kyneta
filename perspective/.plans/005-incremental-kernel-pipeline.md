@@ -131,10 +131,13 @@ Each element type has a single canonical key function:
 | Element type | Key function | Defined in |
 |---|---|---|
 | `Constraint` | `cnIdKey(c.id)` | `kernel/cnid.ts` (exists) |
-| `SlotGroup` | `group.slotId` | `kernel/structure-index.ts` (exists) |
 | `Fact` | `factKey(f)` | `datalog/types.ts` (move from `evaluate.ts` — Phase 5) |
 | `ResolvedWinner` | `winner.slotId` | `kernel/resolve.ts` (exists) |
 | `FugueBeforePair` | `` `${p.parentKey}|${p.a}|${p.b}` `` | inline (trivial) |
+
+Note: `SlotGroup` is **not** in this table. The structure index output uses a
+dedicated `StructureIndexDelta` type, not `ZSet<SlotGroup>`. See Phase 4 and
+Learnings § Z-Sets Are the Wrong Abstraction for Monotone Stages.
 
 `factKey()` already exists as a private function in `datalog/evaluate.ts`
 (L521–527) — a deterministic serialization of `predicate + terms` using
@@ -173,10 +176,38 @@ Stage arities:
 |-------|--------|---------------|
 | Version filter | 1 | `step(Δ_store: ZSet<Constraint>): ZSet<Constraint>` |
 | Validity | 1 | `step(Δ_filtered: ZSet<Constraint>): ZSet<Constraint>` |
-| Structure index | 1 | `step(Δ_valid: ZSet<Constraint>): ZSet<SlotGroup>` |
+| Structure index | 1 | `step(Δ_valid: ZSet<Constraint>): StructureIndexDelta` |
 | Retraction | 1 | `step(Δ_valid: ZSet<Constraint>): ZSet<Constraint>` |
-| Projection | 2 | `step(Δ_active: ZSet<Constraint>, Δ_index: ZSet<SlotGroup>): ZSet<Fact>` |
-| Skeleton | 3 | `step(Δ_resolved: ZSet<ResolvedWinner>, Δ_fuguePairs: ZSet<FugueBeforePair>, Δ_index: ZSet<SlotGroup>): RealityDelta` |
+| Projection | 2 | `step(Δ_active: ZSet<Constraint>, Δ_index: StructureIndexDelta): ZSet<Fact>` |
+| Skeleton | 3 | `step(Δ_resolved: ZSet<ResolvedWinner>, Δ_fuguePairs: ZSet<FugueBeforePair>, Δ_index: StructureIndexDelta): RealityDelta` |
+
+### Structure Index Delta
+
+```typescript
+// kernel/incremental/types.ts
+
+/**
+ * Output of the incremental structure index stage.
+ *
+ * Structure is monotone (append-only, never retracted), so this is NOT a
+ * Z-set. A Z-set would be wrong here: SlotGroups have stable identity
+ * (slotId) but mutable contents (structures array grows when a second peer
+ * creates the same map child). Emitting {old: −1, new: +1} for the same
+ * slotId key would annihilate to zero under zsetAdd, and emitting only +1
+ * would inflate weights on accumulation. Neither is correct.
+ *
+ * Instead, this is a plain map of slot groups that were created or modified
+ * in this step. Consumers treat each entry as "latest state for this slotId"
+ * (upsert semantics). This is the correct model: the structure index is a
+ * monotone operator on a semilattice, not a group operator on Z-sets.
+ */
+interface StructureIndexDelta {
+  /** Slot groups that were created or modified in this step, keyed by slotId. */
+  readonly updates: ReadonlyMap<string, SlotGroup>;
+  /** True if nothing changed. */
+  readonly isEmpty: boolean;
+}
+```
 
 ### Reality Delta
 
@@ -359,6 +390,13 @@ over the full constraint set is the most expensive batch operation in stores wit
 retractions. The incremental version maintains the retraction graph as persistent
 state and cascades only from the new constraint.
 
+**Known issue (to fix in Phase 8):** The `step()` removal loop (weight −1
+processing) has an early return after the first active removal. If a delta
+contains multiple removals of active constraints, only the first is processed.
+This is safe during Phases 4–7 (unit tests use single-constraint deltas) but
+must be fixed before pipeline composition, where authority revocation can
+produce multi-removal validity deltas. See task 8.1a.
+
 #### Tasks
 
 - 3.1 Create `kernel/incremental/retraction.ts` as a concrete module exporting `step(Δ_valid: ZSet<Constraint>): ZSet<Constraint>`, `current(): Constraint[]`, and `reset(): void`. Internal state (retraction graph, dominance cache, depth cache, accumulated active/dominated sets) is private. ✅
@@ -388,10 +426,15 @@ Structure constraints are permanent (never retracted). The structure index is
 append-only: each new structure constraint either creates a new SlotGroup or
 joins an existing one (map child with same parent+key from another peer).
 
+The structure index output is a `StructureIndexDelta`, not a `ZSet<SlotGroup>`.
+See Core Type Definitions § Structure Index Delta and Learnings § Z-Sets Are the
+Wrong Abstraction for Monotone Stages.
+
 #### Tasks
 
-- 4.1 Create `kernel/incremental/structure-index.ts` as a concrete module exporting `step(Δ_valid: ZSet<Constraint>): ZSet<SlotGroup>`, `current(): StructureIndex`, and `reset(): void`. Internal state is the mutable `StructureIndex` (private). 🔴
-- 4.2 `step(Δ_valid)`: filter to structure constraints; for each, compute slot identity and either create or update SlotGroup. Emit the new/modified SlotGroup as a Z-set delta (always +1 — structure only grows). Update `byId`, `slotGroups`, `structureToSlot`, `roots`, `childrenOf` indexes in place. 🔴
+- 4.1 Create `kernel/incremental/structure-index.ts` as a concrete module exporting `step(Δ_valid: ZSet<Constraint>): StructureIndexDelta`, `current(): StructureIndex`, and `reset(): void`. Internal state is the mutable `StructureIndex` (private). 🔴
+- 4.1a Add `StructureIndexDelta` type and `structureIndexDeltaEmpty()` constructor to `kernel/incremental/types.ts`. 🔴
+- 4.2 `step(Δ_valid)`: filter to structure constraints; for each, compute slot identity and either create or update SlotGroup. Emit the new/modified SlotGroup in a `StructureIndexDelta` (keyed by slotId, upsert semantics). Update `byId`, `slotGroups`, `structureToSlot`, `roots`, `childrenOf` indexes in place. 🔴
 - 4.3 `current()`: return the current accumulated `StructureIndex`. 🔴
 
 #### Tests
@@ -411,9 +454,9 @@ target structure arrives, and the cross-term.
 
 #### Tasks
 
-- 5.1 Create `kernel/incremental/projection.ts` as a concrete two-input module exporting `step(Δ_active: ZSet<Constraint>, Δ_index: ZSet<SlotGroup>): ZSet<Fact>`, `current(): Fact[]`, and `reset(): void`. 🔴
+- 5.1 Create `kernel/incremental/projection.ts` as a concrete two-input module exporting `step(Δ_active: ZSet<Constraint>, Δ_index: StructureIndexDelta): ZSet<Fact>`, `current(): Fact[]`, and `reset(): void`. 🔴
 - 5.1a Move `factKey(f: Fact): string` from `datalog/evaluate.ts` (where it already exists as a private function, L521–527) to `datalog/types.ts` and export it. No new logic — just relocate and make public. See Core Type Definitions § Z-Set Key Conventions. 🔴
-- 5.2 Maintain an orphaned set: value constraints whose target is not yet in the structure index. When `Δ_index` arrives, check orphans against new structures and emit previously-orphaned facts. 🔴
+- 5.2 Maintain an orphaned set: value constraints whose target is not yet in the structure index. When `Δ_index` arrives, iterate `Δ_index.updates` and check orphans against new/updated slot groups — any orphaned value whose target is now in a group's `structureKeys` can be projected. 🔴
 - 5.3 For `{c: +1}` in `Δ_active` where c is a value: look up target in accumulated index → emit `active_value` fact with weight +1. If target not found, add to orphan set. 🔴
 - 5.4 For `{c: −1}` in `Δ_active` where c is a value: emit `active_value` fact with weight −1. Remove from orphan set if present. 🔴
 - 5.5 For `{c: +1}` in `Δ_active` where c is a seq structure: emit `active_structure_seq` and `constraint_peer` facts with weight +1. 🔴
@@ -505,15 +548,15 @@ hasn't arrived yet, the skeleton must handle the child-before-parent case: when
 a parent structure arrives, check `childrenOf` for pre-existing children and
 attach them (see Architecture § Out-of-Order Arrival Invariant).
 
-#### Design Note: Skeleton Accepts Z-Set Deltas, Pipeline Produces Them
+#### Design Note: Skeleton Accepts Typed Deltas, Pipeline Produces Them
 
-The skeleton's `step` signature accepts true Z-set deltas:
-`Δ_resolved: ZSet<ResolvedWinner>`, `Δ_fuguePairs: ZSet<FugueBeforePair>`,
-and `Δ_index: ZSet<SlotGroup>`. The skeleton never calls native solvers and
-never understands the Fugue algorithm — it receives ordering information as
-before-pairs and applies them to the mutable tree. This keeps the Datalog
-implementation of Fugue as the canonical resolution path, with the native
-solver as a pipeline-level optimization only.
+The skeleton's `step` signature accepts Z-set deltas for resolution data
+(`Δ_resolved: ZSet<ResolvedWinner>`, `Δ_fuguePairs: ZSet<FugueBeforePair>`)
+and a `StructureIndexDelta` for structural changes (`Δ_index`). The skeleton
+never calls native solvers and never understands the Fugue algorithm — it
+receives ordering information as before-pairs and applies them to the mutable
+tree. This keeps the Datalog implementation of Fugue as the canonical
+resolution path, with the native solver as a pipeline-level optimization only.
 
 **During Plan 005** (batch evaluation), the pipeline composition root
 (`pipeline.ts`) is responsible for producing these Z-set deltas. It does this
@@ -539,7 +582,7 @@ pipeline eliminates.
 #### Tasks
 
 - 7.1 Create `kernel/incremental/skeleton.ts` maintaining a mutable `Reality` tree. 🔴
-- 7.2 `step(Δ_resolved: ZSet<ResolvedWinner>, Δ_fuguePairs: ZSet<FugueBeforePair>, Δ_index: ZSet<SlotGroup>)`: process resolution deltas (new/changed winners, new/removed fugue pairs) and structure deltas (new nodes). Mutate the tree and emit `NodeDelta` entries. 🔴
+- 7.2 `step(Δ_resolved: ZSet<ResolvedWinner>, Δ_fuguePairs: ZSet<FugueBeforePair>, Δ_index: StructureIndexDelta)`: process resolution deltas (new/changed winners, new/removed fugue pairs) and structure deltas (new/updated slot groups). Mutate the tree and emit `NodeDelta` entries. 🔴
 - 7.3 New map structure → create child node in parent's children map. Emit `childAdded`. If the parent node does not yet exist in the tree (child arrived before parent), defer — the child will be attached when the parent is created (task 7.3a). 🔴
 - 7.3a When creating a new node (root or child), check the accumulated structure index (`childrenOf`) for pre-existing children of this node. Recursively attach them and emit `childAdded` for each. This handles the out-of-order case where children arrived before their parent. 🔴
 - 7.4 New seq structure → create child node, insert at Fugue-ordered position. Emit `childAdded` (or `childrenReordered` if position changes affect existing children). 🔴
@@ -566,7 +609,9 @@ run comprehensive differential tests.
 #### Tasks
 
 - 8.1 Create `kernel/incremental/pipeline.ts` implementing `IncrementalPipeline`. Wire the DAG: `insert(c)` → store.insert → F^Δ → C^Δ → fan-out(X^Δ, A^Δ) → P^Δ → batch E → diff previous ResolutionResult → Δ_resolved + Δ_fuguePairs → K^Δ → RealityDelta. The pipeline maintains the cached previous `ResolutionResult` and diffs against the new one to produce Z-set deltas for the skeleton (see Phase 7 Design Note). This diffing shim is removed by Plan 006 when the incremental evaluator produces deltas directly. 🔴
+- 8.1a Fix incremental retraction `step()` removal loop: refactor to collect all removal deltas across the full loop before returning, rather than early-returning after the first active removal. Add tests for multi-removal deltas (e.g., authority revocation invalidating multiple previously-active constraints simultaneously). 🔴
 - 8.2 `createIncrementalPipeline(config)`: create all stages, wire them, return the pipeline. 🔴
+- 8.2a Deduplication guard: before calling `store.insert()`, check `hasConstraint(store, constraint.id)`. If the constraint already exists, return an empty `RealityDelta` without feeding anything through the DAG. The public `insert()` API returns `ok(undefined)` for both new and duplicate inserts, so the pipeline cannot rely on it to detect no-ops. 🔴
 - 8.3 `createIncrementalPipelineFromBootstrap(result)`: create pipeline pre-populated with bootstrap constraints. Each bootstrap constraint is fed through `insert()` to build up accumulated state. 🔴
 - 8.4 `recompute()`: call batch `solve(store, config)` and return the result. For differential testing. 🔴
 - 8.5 `insertMany()`: process constraints sequentially through `insert()`, accumulate deltas, return combined delta. 🔴
@@ -635,7 +680,7 @@ batch pipeline can be called against the same store at any time for verification
 
 New exports are added to `src/index.ts`:
 - `IncrementalPipeline`, `createIncrementalPipeline`, `createIncrementalPipelineFromBootstrap`
-- `RealityDelta`, `NodeDelta`
+- `RealityDelta`, `NodeDelta`, `StructureIndexDelta`
 - `ZSet`, `ZSetEntry`, and Z-set algebra functions
 - `factKey` (from `datalog/types.ts`)
 
@@ -806,6 +851,44 @@ trivially incremental: maintain a map of `(targetPeer, capabilityKey) → { maxL
 compare the new authority constraint's Lamport to the existing max, and update if
 higher (or equal and revoke). The design-intensive part is not the authority state
 update — it's the re-checking of affected peer's constraints when capabilities change.
+
+### Z-Sets Are the Wrong Abstraction for Monotone Stages
+
+The structure index is append-only: structure constraints are permanent, never
+retracted, and slot groups only grow (a second peer creating the same map child
+joins the existing group). The initial plan used `ZSet<SlotGroup>` for the
+structure index output. This is wrong for a subtle reason.
+
+A `SlotGroup` has stable identity (`slotId`) but mutable contents (its
+`structures` array grows). When a second structure joins a group, the correct
+representation is "here is the updated group for this slotId." But Z-sets
+represent this poorly:
+
+- **Option: `{oldGroup: −1, newGroup: +1}`** — both entries share the same
+  `slotId` key, so `zsetAdd` sums the weights to 0 and prunes the entry.
+  The group vanishes.
+- **Option: `{updatedGroup: +1}` only** — accumulating with `zsetAdd` produces
+  weight +2, then +3, etc. `zsetNegate` produces meaningless negative weights.
+  Any code that trusts the Z-set contract silently corrupts.
+
+The root cause: Z-sets model **set membership** (element present or absent)
+within an abelian group. They are the right abstraction when elements can be
+both inserted and retracted — validity, retraction, projection, and resolution
+all genuinely use both polarities. The structure index is a **monotone operator
+on a semilattice**, not a group operator on Z-sets. Its output only grows.
+
+The fix: give the structure index its own output type (`StructureIndexDelta`)
+with explicit upsert semantics. Downstream consumers (projection, skeleton)
+maintain their own `Map<slotId, SlotGroup>` and upsert on each update. No
+Z-set algebra is involved in the structure channel. This is honest — the type
+tells the truth about the semantics, and no future reader will write
+`zsetAdd(accumulated, structureDelta)` and get silently wrong results.
+
+In DBSP terms: not every operator in a circuit must communicate via Z-sets.
+A circuit can mix group-valued streams (Z-sets) and semilattice-valued streams
+(monotone updates) as long as each operator's contract is clear. The structure
+index is the one stage in our pipeline where the semilattice model fits and the
+group model doesn't.
 
 ## Changeset
 
