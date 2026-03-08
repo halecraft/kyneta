@@ -515,17 +515,65 @@ The `bidirectionalSync` helper does A→B then B→A in one pass. This works bec
 
 But if both agents *continue producing constraints* after sync, a second round is needed. The version vectors captured at sync time reflect the state *before* the sync — they don't include constraints the other peer produced during the sync. In practice, integration tests sync at quiescent points (both agents have finished their writes), so one round suffices. A production system would need continuous sync or a retry loop.
 
+## Plan 005: Incremental Kernel Pipeline
+
+### Authority Revocation Cascades Transitively — A Flat Accumulator Is Wrong
+
+A naive incremental authority state — maintaining a flat `Map<(peer, capability), granted|revoked>` — misses transitive cascades. If peer A holds `Authority(Write)` and grants Write to peer B, then A's authority is revoked, B's Write capability must also disappear. The batch `computeAuthority` handles this implicitly by replaying all authority constraints from scratch. A flat accumulator only sees "A lost Authority(Write)" and doesn't know to also invalidate B's Write.
+
+The correct incremental approach is: on any authority constraint arrival, recompute the full `AuthorityState` via `computeAuthority` over all accumulated authority constraints, then diff against the previous state. This is O(authority constraints), which is negligible because authority constraints are rare (typically single-digit count per reality). The diff catches all transitive cascades. A more sophisticated dependency DAG approach produces identical correctness but adds significant complexity for no practical gain.
+
+### Private Functions in Existing Modules Are Often Exactly What You Need
+
+During planning, we identified `factKey(f: Fact): string` as "new code needed" for the incremental projection stage. Research revealed it already exists as a private function in `datalog/evaluate.ts` — a deterministic serialization of `predicate + terms` using `serializeValue` joined by `|`. The implementation task is just relocation and export, not new logic.
+
+**Lesson**: Before specifying "new function X" in a plan, grep the codebase for private functions doing the same thing. Batch implementations often contain exactly the utility functions that incremental implementations need — they're just not exported because the batch code only uses them internally.
+
+### The Skeleton Should Not Know About Fugue — Design for the Next Plan's World
+
+A key design tension: the skeleton builder needs Fugue-ordered children for seq containers, and during Plan 005 the evaluator is batch (producing a full `ResolutionResult`, not deltas). Two approaches: (a) the skeleton maintains its own Fugue tree and re-orders on each step, or (b) the skeleton accepts Z-set deltas of `ResolvedWinner` and `FugueBeforePair` and the pipeline produces those deltas.
+
+Option (b) is correct. It keeps Datalog as the canonical resolution path, with native solvers as a pipeline-level optimization only. The skeleton never calls native solvers and never understands the Fugue algorithm. During Plan 005, the pipeline composition root diffs the previous `ResolutionResult` against the new one to produce Z-set deltas — a temporary shim that Plan 006 eliminates when the incremental evaluator produces deltas directly. The diff cost is O(|winners| + |fuguePairs|) per insertion, which is noise next to the batch evaluator's O(|allFacts|).
+
+**Lesson**: When building infrastructure that will be consumed by a later plan, design the interface for the later plan's world. A temporary shim at the current plan's composition root is cheaper than redesigning the stage interface later.
+
+### Affected-Set Expansion Must Walk Both Directions in the Retraction Graph
+
+The incremental retraction stage recomputes dominance only for "affected" constraints — those whose status might have changed due to a new insertion. The initial intuition is to walk downward: a new retract affects its target, and if the target is itself a retract, its target too. But this misses cases.
+
+Consider: constraint V is dominated by retract R₁. A new retract R₂ arrives targeting R₁ (an undo). Walking downward from R₂ finds R₁ (correct) but not V. Yet V's status changes — R₁ is now dominated, so V becomes active. The fix: expand the affected set by walking *both* directions — downward (retract → target) and upward (target → its retractors). In practice this means: for each affected key, add its retraction targets AND all constraints that retract it. The expansion is bounded by `maxDepth` (default 2), so it's typically 2–3 constraints.
+
+### Deferred Immunity Checks Are a Distinct Out-of-Order Pattern
+
+The plan's out-of-order arrival invariant describes the general pattern: "when the referrer arrives first, record its effect as a standing instruction; when the referent arrives, apply standing instructions." For retraction, we discovered a second pattern: *deferred validation*.
+
+When a retract arrives before its target, we can validate `target-in-refs` (because refs are self-contained) but we *cannot* validate structure/authority immunity (because we don't yet know the target's type). The retract's graph edge is recorded as a standing instruction. When the target arrives and turns out to be a structure or authority constraint, we must retroactively invalidate the edge — remove it from the graph, record a violation, and recompute affected dominance.
+
+This is not the same as "standing instruction applied on referent arrival." It's "standing instruction *revoked* on referent arrival because the referent turns out to be immune." Any stage that validates properties of a referenced constraint must handle this deferred-validation pattern when the referenced constraint hasn't arrived yet.
+
+### Two-Pass Delta Processing Solves Intra-Delta Ordering Without Sorting
+
+When a multi-element Z-set delta contains both a retract R and its target V (e.g., from authority re-validation emitting multiple newly-valid constraints), processing order matters: R must find V in the index to create the graph edge. Rather than topologically sorting the delta (which would require understanding the retraction graph structure within the delta), a simpler approach works: process all non-retracts first (pass 1), then all retracts (pass 2). This ensures targets are indexed before edges are created, without any sorting or dependency analysis.
+
+This generalizes: any stage processing a multi-element delta where some elements reference others should process non-referencing elements first. The two-pass pattern is O(n) and avoids the complexity of topological sorting within deltas.
+
+### The Batch Oracle Makes Permutation Testing Trivial
+
+The most powerful test pattern for incremental stages: take N constraints, compute the batch result once, then verify that the incremental stage produces the same `current()` for all N! permutations of insertion order. For the retraction stage with 3 constraints (value + retract + undo), this means 6 permutations — each creating a fresh stage, inserting in that order, and comparing against the single batch result. This mechanically catches every out-of-order bug.
+
+The cost is manageable because N is small for unit tests (3–5 constraints), and the batch oracle (`computeActive`) is a pure function that's already tested independently. The test doesn't need to know *what* the correct answer is — it just asserts incremental == batch.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.
 
-2. **What is the performance ceiling?** Naive solving is O(n) in constraint count per path query. The Fugue tree rebuild is O(n log n) for n elements. Incremental solving could amortize this, but the design is unexplored.
+2. ~~**What is the performance ceiling?**~~ **Partially resolved in Plan 005.** The incremental kernel pipeline reduces per-insertion cost from O(|S|) to O(|Δ|) for all stages except the Datalog evaluator (which remains batch until Plan 006). The native fast path (LWW comparison + Fugue tree walk) is already fast for the default case. The remaining bottleneck is the batch evaluator, which Plan 006 addresses.
 
 3. **Can cross-container constraints be made to work?** E.g., "if key X exists in Map A, then key Y must exist in Map B." This requires a solver that reasons across containers, which the current per-container solver architecture doesn't support.
 
 4. **How should Text differ from List?** Currently planned as a thin wrapper where values are characters. But run-length encoding (storing "hello" as one constraint instead of five) would dramatically reduce constraint count. The solver would need to handle span splitting.
 
-5. **What's the right caching strategy for Fugue trees?** Rebuilding the tree on every solve is expensive for large lists. Incremental updates (adding new nodes, marking deletions) could amortize the cost, but invalidation logic is complex. The store generation counter approach (see Learnings above) is the likely first step.
+5. ~~**What's the right caching strategy for Fugue trees?**~~ **Resolved in Plan 005 design.** The incremental skeleton receives Fugue ordering as Z-set deltas of `FugueBeforePair` — it doesn't maintain or rebuild Fugue trees. During Plan 005, the pipeline diffs batch resolution results to produce these deltas. During Plan 006, the incremental evaluator produces them directly. The skeleton applies deltas to its mutable reality tree without understanding the Fugue algorithm.
 
 6. ~~**When should the prototype code be removed?**~~ **Resolved in Phase 2.5.** Removed immediately after Phase 2 confirmed zero cross-imports. The answer: as soon as isolation is verified, not at the end. Carrying dead code through subsequent phases was pure cognitive overhead with no safety benefit.
 

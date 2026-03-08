@@ -352,7 +352,7 @@ orderings because the batch pipeline sees the full store simultaneously.
 - `NodeDelta` discriminated union exhaustiveness check. ✅
 - 16 tests in `tests/kernel/incremental/types.test.ts`. Also added `NodeDeltaKind` type alias. 836 total tests passing (820 + 16).
 
-### Phase 3: Incremental Retraction 🔴
+### Phase 3: Incremental Retraction ✅
 
 The retraction stage is the highest-impact kernel stage — the dominance cascade
 over the full constraint set is the most expensive batch operation in stores with
@@ -361,25 +361,26 @@ state and cascades only from the new constraint.
 
 #### Tasks
 
-- 3.1 Create `kernel/incremental/retraction.ts` as a concrete module exporting `step(Δ_valid: ZSet<Constraint>): ZSet<Constraint>`, `current(): Constraint[]`, and `reset(): void`. Internal state (retraction graph, dominance cache, depth cache, accumulated active/dominated sets) is private. 🔴
-- 3.2 `step(Δ_valid)`: for each new valid constraint c in the delta: 🔴
+- 3.1 Create `kernel/incremental/retraction.ts` as a concrete module exporting `step(Δ_valid: ZSet<Constraint>): ZSet<Constraint>`, `current(): Constraint[]`, and `reset(): void`. Internal state (retraction graph, dominance cache, depth cache, accumulated active/dominated sets) is private. ✅
+- 3.2 `step(Δ_valid)`: for each new valid constraint c in the delta: ✅
   - **If c is not a retract:** Check the accumulated retraction graph for active retractors targeting c. If none exist, c is active — emit `{c: +1}`. If an active retractor exists, c is immediately dominated — emit nothing in Δ_active (c enters the dominated set directly). This handles the out-of-order case where a retract arrived before its target (see Architecture § Out-of-Order Arrival Invariant).
   - **If c is a retract:** Validate structural rules (target-in-refs, no-structure, no-authority). Add edge to graph. If c's target is already in the accumulated set, cascade dominance and emit Z-set delta of all status changes. If c's target has not arrived yet, the edge is recorded as a standing instruction — it will take effect when the target arrives.
-- 3.3 Handle the case where a retract constraint itself enters as part of a multi-element Z-set delta (e.g., from authority re-validation emitting multiple newly-valid constraints including a retract). Process all non-retracts first (adding them to the accumulated set), then process retracts (so that edges can find their targets within the same delta). 🔴
-- 3.4 `current()`: return the current accumulated active constraint set. 🔴
+- 3.3 Handle the case where a retract constraint itself enters as part of a multi-element Z-set delta (e.g., from authority re-validation emitting multiple newly-valid constraints including a retract). Process all non-retracts first (adding them to the accumulated set), then process retracts (so that edges can find their targets within the same delta). ✅
+- 3.4 `current()`: return the current accumulated active constraint set. ✅
 
 #### Tests
 
-- Single non-retract insertion: emits `{c: +1}` in active delta. 🔴
-- Retract a value: target becomes dominated (`{target: −1}`), retract itself active (`{retract: +1}`). 🔴
-- Undo (retract-the-retract): original target re-activates (`{target: +1}`). 🔴
-- Depth limit: retract at depth > maxDepth is ignored. 🔴
-- Structure immunity: retract targeting structure → violation, no graph change. 🔴
-- Authority immunity: retract targeting authority → violation. 🔴
-- **Out-of-order: retract before target.** Insert retract R (targeting V) first, then insert V. Verify V is dominated immediately upon arrival, matching batch `computeActive([R, V])`. 🔴
-- **Out-of-order: undo before retract.** Insert undo U (targeting R), then insert retract R (targeting V), then insert V. Verify R is dominated (U dominates it), V is active (R's edge exists but R is dominated so V is not affected). Matches batch. 🔴
-- **Out-of-order: retract before target in multi-element delta.** Authority re-validation emits `{R: +1, V: +1}` in a single delta where R targets V. Verify V is dominated in the output. 🔴
-- Differential: accumulated active set after N insertions equals `computeActive(allValid)`. 🔴
+- Single non-retract insertion: emits `{c: +1}` in active delta. ✅
+- Retract a value: target becomes dominated (`{target: −1}`), retract itself active (`{retract: +1}`). ✅
+- Undo (retract-the-retract): original target re-activates (`{target: +1}`). ✅
+- Depth limit: retract at depth > maxDepth is ignored. ✅
+- Structure immunity: retract targeting structure → violation, no graph change. ✅
+- Authority immunity: retract targeting authority → violation. ✅
+- **Out-of-order: retract before target.** Insert retract R (targeting V) first, then insert V. Verify V is dominated immediately upon arrival, matching batch `computeActive([R, V])`. ✅
+- **Out-of-order: undo before retract.** Insert undo U (targeting R), then insert retract R (targeting V), then insert V. Verify R is dominated (U dominates it), V is active (R's edge exists but R is dominated so V is not affected). Matches batch. ✅
+- **Out-of-order: retract before target in multi-element delta.** Authority re-validation emits `{R: +1, V: +1}` in a single delta where R targets V. Verify V is dominated in the output. ✅
+- Differential: accumulated active set after N insertions equals `computeActive(allValid)`. ✅
+- 45 tests in `tests/kernel/incremental/retraction.test.ts`. Also added `violations()` accessor, deferred immunity checks (retract before immune target), removal (weight −1) handling, and exhaustive all-permutation differential tests. 881 total tests passing (836 + 45).
 
 ### Phase 4: Incremental Structure Index 🔴
 

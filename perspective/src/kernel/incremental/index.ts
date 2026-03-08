@@ -13,3 +13,7 @@ export {
   realityDeltaEmpty,
   realityDeltaFrom,
 } from './types.js';
+
+// --- Incremental Retraction (Phase 3) ---
+export type { IncrementalRetraction } from './retraction.js';
+export { createIncrementalRetraction } from './retraction.js';
