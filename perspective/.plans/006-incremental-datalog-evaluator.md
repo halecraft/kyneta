@@ -493,7 +493,7 @@ This parser (`parseLWWFact`) should live in `kernel/resolve.ts` alongside
 - Value retraction when it was NOT the winner: empty delta. ✅
 - Permutation test: all orderings of 3 values produce same `current()`. ✅
 
-### Phase 3: Native Incremental Fugue 🔴
+### Phase 3: Native Incremental Fugue ✅
 
 Implement per-parent Fugue tree maintenance that receives `active_structure_seq`
 and `constraint_peer` fact deltas and emits `ZSet<FugueBeforePair>` deltas.
@@ -525,26 +525,26 @@ immune to retraction. The step function can assert this invariant.
 - 3.1 Add `parseSeqStructureFact(f: Fact) → { cnIdKey, parentKey, originLeft, originRight }`
   to `kernel/resolve.ts`. Parses an `active_structure_seq` fact tuple using
   `ACTIVE_STRUCTURE_SEQ` column positions. Reused by incremental Datalog
-  resolution extraction (Phase 6). 🔴
-- 3.2 Create `solver/incremental-fugue.ts` implementing `IncrementalFugue`. 🔴
-- 3.3 Maintain per-parent `FugueNode[]` and accumulated pair set. 🔴
+  resolution extraction (Phase 6). ✅
+- 3.2 Create `solver/incremental-fugue.ts` implementing `IncrementalFugue`. ✅
+- 3.3 Maintain per-parent `FugueNode[]` and accumulated pair set. ✅
 - 3.4 On new seq structure fact: recompute ordering for affected parent only
   using `orderFugueNodes`, compute pairs via `allPairsFromOrdered` (from
   Phase 1), diff against accumulated pairs via `diffFuguePairs` (from Phase 1),
-  emit delta. 🔴
+  emit delta. ✅
 - 3.5 Handle `constraint_peer` facts: correlate with pending structure facts
   (a structure fact and its peer fact may arrive in either order within a
-  single delta). 🔴
+  single delta). ✅
 
 #### Tests
 
 - Incremental Fugue produces same pairs as batch `buildNativeFuguePairs` for
-  arbitrary insertion sequences (differential test). 🔴
-- Single element insertion: emits no pairs (only one element). 🔴
-- Second element: emits one `(a, b)` pair. 🔴
-- Third element at different positions: correct pair deltas. 🔴
-- Permutation test: all orderings produce same `current()`. 🔴
-- Multi-parent: changes to one parent don't affect another. 🔴
+  arbitrary insertion sequences (differential test). ✅
+- Single element insertion: emits no pairs (only one element). ✅
+- Second element: emits one `(a, b)` pair. ✅
+- Third element at different positions: correct pair deltas. ✅
+- Permutation test: all orderings produce same `current()`. ✅
+- Multi-parent: changes to one parent don't affect another. ✅
 
 ### Phase 4: Evaluation Stage Wrapper and Pipeline Rewiring 🔴
 

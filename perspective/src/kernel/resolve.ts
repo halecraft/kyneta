@@ -18,7 +18,7 @@
 import type { Value, CnId } from './types.js';
 import { cnIdFromString, cnIdKey } from './cnid.js';
 import type { Database, Fact } from '../datalog/types.js';
-import { ACTIVE_VALUE } from './projection.js';
+import { ACTIVE_VALUE, ACTIVE_STRUCTURE_SEQ } from './projection.js';
 import type { LWWEntry } from '../solver/lww.js';
 
 // ---------------------------------------------------------------------------
@@ -160,6 +160,44 @@ export function parseLWWFact(f: Fact): LWWEntry {
     content,
     lamport,
     peer,
+  };
+}
+
+/**
+ * Parsed result of an `active_structure_seq` fact.
+ *
+ * Contains the same information as a seq `StructureConstraint.payload`
+ * but extracted from a flat fact tuple with string CnId keys.
+ */
+export interface ParsedSeqStructureFact {
+  /** CnId key string of the seq structure constraint. */
+  readonly cnIdKey: string;
+  /** CnId key string of the parent container. */
+  readonly parentKey: string;
+  /** CnId key string of the origin-left element, or null. */
+  readonly originLeft: string | null;
+  /** CnId key string of the origin-right element, or null. */
+  readonly originRight: string | null;
+}
+
+/**
+ * Parse an `active_structure_seq` fact into a typed structure.
+ *
+ * Fact schema: `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)`
+ * Column positions from `ACTIVE_STRUCTURE_SEQ` in `kernel/projection.ts`.
+ *
+ * This is the inverse of `projectStructure` in `projection.ts`.
+ *
+ * @param f - A fact with predicate `active_structure_seq`.
+ * @returns The parsed structure fields.
+ */
+export function parseSeqStructureFact(f: Fact): ParsedSeqStructureFact {
+  const values = f.values;
+  return {
+    cnIdKey: values[ACTIVE_STRUCTURE_SEQ.CNID] as string,
+    parentKey: values[ACTIVE_STRUCTURE_SEQ.PARENT] as string,
+    originLeft: (values[ACTIVE_STRUCTURE_SEQ.ORIGIN_LEFT] as string | null),
+    originRight: (values[ACTIVE_STRUCTURE_SEQ.ORIGIN_RIGHT] as string | null),
   };
 }
 

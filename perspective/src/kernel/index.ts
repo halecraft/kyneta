@@ -231,6 +231,8 @@ export {
   fuguePairKey,
   allPairsFromOrdered,
   parseLWWFact,
+  type ParsedSeqStructureFact,
+  parseSeqStructureFact,
 } from './resolve.js';
 
 // --- Rule Detection (§B.7) ---
