@@ -132,13 +132,14 @@ Each element type has a single canonical key function:
 |---|---|---|
 | `Constraint` | `cnIdKey(c.id)` | `kernel/cnid.ts` (exists) |
 | `SlotGroup` | `group.slotId` | `kernel/structure-index.ts` (exists) |
-| `Fact` | `factKey(f)` | `datalog/types.ts` (new — Phase 5) |
+| `Fact` | `factKey(f)` | `datalog/types.ts` (move from `evaluate.ts` — Phase 5) |
 | `ResolvedWinner` | `winner.slotId` | `kernel/resolve.ts` (exists) |
 | `FugueBeforePair` | `` `${p.parentKey}|${p.a}|${p.b}` `` | inline (trivial) |
 
-The only new code needed is `factKey()`: a deterministic serialization of
-`predicate + terms` for Datalog facts. Added in Phase 5 (Projection) since
-that is where `ZSet<Fact>` first appears.
+`factKey()` already exists as a private function in `datalog/evaluate.ts`
+(L521–527) — a deterministic serialization of `predicate + terms` using
+`serializeValue` joined by `|`. Phase 5 only needs to **move it to
+`datalog/types.ts` and export it**; no new logic required.
 
 ### Operator Conventions (No Shared Interface)
 
@@ -175,7 +176,7 @@ Stage arities:
 | Structure index | 1 | `step(Δ_valid: ZSet<Constraint>): ZSet<SlotGroup>` |
 | Retraction | 1 | `step(Δ_valid: ZSet<Constraint>): ZSet<Constraint>` |
 | Projection | 2 | `step(Δ_active: ZSet<Constraint>, Δ_index: ZSet<SlotGroup>): ZSet<Fact>` |
-| Skeleton | 3 | `step(Δ_resolved, Δ_fuguePairs, Δ_index): RealityDelta` |
+| Skeleton | 3 | `step(Δ_resolved: ZSet<ResolvedWinner>, Δ_fuguePairs: ZSet<FugueBeforePair>, Δ_index: ZSet<SlotGroup>): RealityDelta` |
 
 ### Reality Delta
 
@@ -260,7 +261,13 @@ pipeline.
         E (BATCH — evaluate(rules, allFacts))  ← Plan 006 replaces with E^Δ
               │
               ▼
-        R^Δ (resolution extraction)
+        R (resolution extraction — full ResolutionResult)
+              │
+              ▼
+        DIFF (compare against cached previous ResolutionResult
+              │  → Δ_resolved: ZSet<ResolvedWinner>
+              │  → Δ_fuguePairs: ZSet<FugueBeforePair>)
+              │  ← Plan 006 eliminates this shim; R^Δ produces deltas directly
               │
               ▼
         K^Δ (skeleton — apply resolution + index deltas to mutable tree)
@@ -331,18 +338,19 @@ orderings because the batch pipeline sees the full store simultaneously.
 - `zsetMap` transforms elements while re-keying. ✅
 - 61 tests in `tests/base/zset.test.ts`. 820 total tests passing (759 existing + 61 new).
 
-### Phase 2: Incremental Types and Infrastructure 🔴
+### Phase 2: Incremental Types and Infrastructure ✅
 
 #### Tasks
 
-- 2.1 Create `kernel/incremental/types.ts` with `NodeDelta`, `RealityDelta` types (no shared `IncrementalStage` interface — each stage is a concrete module; see Core Type Definitions § Operator Conventions). 🔴
-- 2.2 Create `realityDeltaEmpty()` and `realityDeltaFrom(changes)` constructors. 🔴
-- 2.3 Create `kernel/incremental/` directory and barrel export (`kernel/incremental/index.ts`). 🔴
+- 2.1 Create `kernel/incremental/types.ts` with `NodeDelta`, `RealityDelta` types (no shared `IncrementalStage` interface — each stage is a concrete module; see Core Type Definitions § Operator Conventions). ✅
+- 2.2 Create `realityDeltaEmpty()` and `realityDeltaFrom(changes)` constructors. ✅
+- 2.3 Create `kernel/incremental/` directory and barrel export (`kernel/incremental/index.ts`). ✅
 
 #### Tests
 
-- `RealityDelta` construction: empty delta has `isEmpty: true`. 🔴
-- `NodeDelta` discriminated union exhaustiveness check. 🔴
+- `RealityDelta` construction: empty delta has `isEmpty: true`. ✅
+- `NodeDelta` discriminated union exhaustiveness check. ✅
+- 16 tests in `tests/kernel/incremental/types.test.ts`. Also added `NodeDeltaKind` type alias. 836 total tests passing (820 + 16).
 
 ### Phase 3: Incremental Retraction 🔴
 
@@ -403,7 +411,7 @@ target structure arrives, and the cross-term.
 #### Tasks
 
 - 5.1 Create `kernel/incremental/projection.ts` as a concrete two-input module exporting `step(Δ_active: ZSet<Constraint>, Δ_index: ZSet<SlotGroup>): ZSet<Fact>`, `current(): Fact[]`, and `reset(): void`. 🔴
-- 5.1a Add `factKey(f: Fact): string` to `datalog/types.ts` — deterministic serialization of `predicate + terms` for use as Z-set map key. See Core Type Definitions § Z-Set Key Conventions. 🔴
+- 5.1a Move `factKey(f: Fact): string` from `datalog/evaluate.ts` (where it already exists as a private function, L521–527) to `datalog/types.ts` and export it. No new logic — just relocate and make public. See Core Type Definitions § Z-Set Key Conventions. 🔴
 - 5.2 Maintain an orphaned set: value constraints whose target is not yet in the structure index. When `Δ_index` arrives, check orphans against new structures and emit previously-orphaned facts. 🔴
 - 5.3 For `{c: +1}` in `Δ_active` where c is a value: look up target in accumulated index → emit `active_value` fact with weight +1. If target not found, add to orphan set. 🔴
 - 5.4 For `{c: −1}` in `Δ_active` where c is a value: emit `active_value` fact with weight −1. Remove from orphan set if present. 🔴
@@ -426,12 +434,53 @@ Validity checking is O(1) for non-authority constraints but requires re-evaluati
 affected peers when an authority constraint arrives. The current `computeAuthority`
 replays from scratch. This phase replaces it with a persistent authority state.
 
+#### Design Note: Authority Cascade via Full Replay
+
+A revoke of peer A's `Authority(Write)` capability doesn't just affect A — it
+invalidates any grants A made to other peers using that authority. The batch
+`computeAuthority` handles this implicitly by replaying all authority constraints
+from scratch. A naive incremental update (maintaining a flat `(peer, capability)`
+accumulator) would miss these transitive cascades.
+
+**Chosen approach: full authority replay on authority changes (option a).** When
+an authority constraint arrives, recompute the full `AuthorityState` by calling
+`computeAuthority` over all accumulated authority constraints. Diff the new state
+against the previous state to find peers whose effective capabilities changed.
+For each affected peer, re-check their constraints and emit validity deltas.
+
+This is correct because:
+- Authority constraints are rare (typically single-digit count per reality).
+  Replaying them is O(authority constraints), which is negligible compared to
+  O(all constraints) for the full pipeline.
+- The diff catches all transitive cascades — if A granted Write to B, and A's
+  Authority(Write) is revoked, the replayed state won't include B's Write
+  capability, and the diff will surface B as an affected peer.
+- Time-travel uses the batch pipeline (§ Architecture), so this doesn't affect
+  version-parameterized queries.
+
+**Alternative considered: authority dependency DAG (option b).** Track which
+authority constraint authorized which other authority constraint, and cascade
+revocations through the DAG. Rejected because: (a) the implementation complexity
+is significant (transitive closure over grant chains, correct handling of
+concurrent grant/revoke at each level); (b) authority constraints are so rare
+that full replay is effectively O(1) in practice; (c) both options produce
+identical correctness at every plan horizon including Plan 007 (settled/working),
+where the frozen partition captures settled authority state and only working-set
+authority constraints are replayed.
+
+**Required supporting data structure: per-peer constraint index.** Task 6.1
+lists this as internal state. Concretely: `Map<PeerID, Set<string>>` mapping
+each peer to the CnId keys of all constraints they've authored (both valid and
+invalid). Updated on every `step()` call. Consulted when an authority change
+affects a peer — enables O(constraints-by-peer) re-checking rather than
+O(all-constraints) scanning.
+
 #### Tasks
 
 - 6.1 Create `kernel/incremental/validity.ts` as a concrete module exporting `step(Δ_filtered: ZSet<Constraint>): ZSet<Constraint>`, `current(): Constraint[]`, and `reset(): void`. Internal state (persistent `AuthorityState`, per-peer constraint index, accumulated valid/invalid sets) is private. 🔴
-- 6.2 Incremental authority update: when a new authority constraint arrives, update the persistent `AuthorityState` in place. Revoke-wins: a new grant adds a capability, a new revoke removes one. The update path must handle the causal ordering of concurrent grant/revoke correctly — the key insight is that authority constraints are processed in insertion order (which respects causality because refs are validated), so the persistent state can be maintained as an append-only replay with memoized results. 🔴
+- 6.2 Authority state update: when a new authority constraint arrives, add it to the accumulated authority constraint list, then recompute the full `AuthorityState` via `computeAuthority(allAccumulatedAuthorityConstraints, creator)`. Diff the new state against the cached previous state to identify peers whose effective capabilities changed. This full-replay approach correctly handles transitive cascades (see Design Note above). 🔴
 - 6.3 For non-authority Δc: check signature + capability against accumulated state → emit `{c: +1}` in Δ_valid or record as invalid. O(1). 🔴
-- 6.4 For authority Δc: update authority state, then re-check all constraints by the target peer. For each constraint whose validity status changed, emit `{c': +1}` (newly valid) or `{c': −1}` (newly invalid) in Δ_valid. 🔴
+- 6.4 For authority Δc: recompute authority state (task 6.2), diff against previous state to find all peers whose capabilities changed (not just the target peer — transitive cascades may affect peers granted capabilities by the target). For each affected peer, use the per-peer constraint index to re-check their constraints. For each constraint whose validity status changed, emit `{c': +1}` (newly valid) or `{c': −1}` (newly invalid) in Δ_valid. 🔴
 - 6.5 `current()`: return the accumulated valid constraint set. 🔴
 
 #### Tests
@@ -455,10 +504,41 @@ hasn't arrived yet, the skeleton must handle the child-before-parent case: when
 a parent structure arrives, check `childrenOf` for pre-existing children and
 attach them (see Architecture § Out-of-Order Arrival Invariant).
 
+#### Design Note: Skeleton Accepts Z-Set Deltas, Pipeline Produces Them
+
+The skeleton's `step` signature accepts true Z-set deltas:
+`Δ_resolved: ZSet<ResolvedWinner>`, `Δ_fuguePairs: ZSet<FugueBeforePair>`,
+and `Δ_index: ZSet<SlotGroup>`. The skeleton never calls native solvers and
+never understands the Fugue algorithm — it receives ordering information as
+before-pairs and applies them to the mutable tree. This keeps the Datalog
+implementation of Fugue as the canonical resolution path, with the native
+solver as a pipeline-level optimization only.
+
+**During Plan 005** (batch evaluation), the pipeline composition root
+(`pipeline.ts`) is responsible for producing these Z-set deltas. It does this
+by maintaining a cached previous `ResolutionResult` and diffing against the new
+one after each batch evaluation. Winner changes become `{old: −1, new: +1}` in
+`Δ_resolved`; pair changes become entries in `Δ_fuguePairs`. This diffing logic
+lives in the pipeline composition root, not in the skeleton.
+
+**During Plan 006** (incremental evaluation), the incremental evaluator produces
+`Δ_derived` directly. The resolution extraction stage (R^Δ, which is linear)
+converts this into `Δ_resolved` and `Δ_fuguePairs` naturally — no diffing
+needed. The skeleton's interface doesn't change; only the pipeline's wiring
+upstream of it changes.
+
+**Cost during Plan 005:** The diff is O(|winners| + |fuguePairs|) per insertion.
+Since the batch evaluator is already O(|allFacts|), this is noise. It disappears
+entirely in Plan 006.
+
+This design means the skeleton is built for the Plan 006 world from day one.
+Plan 005's pipeline has a temporary shim (resolution diffing) that the Plan 006
+pipeline eliminates.
+
 #### Tasks
 
 - 7.1 Create `kernel/incremental/skeleton.ts` maintaining a mutable `Reality` tree. 🔴
-- 7.2 `applyResolutionDelta(Δ_resolved, Δ_index, Δ_active)`: process resolution changes (new/changed winners, new/removed fugue pairs), structure changes (new nodes), and active-set changes (tombstoned seq elements). Mutate the tree and emit `NodeDelta` entries. 🔴
+- 7.2 `step(Δ_resolved: ZSet<ResolvedWinner>, Δ_fuguePairs: ZSet<FugueBeforePair>, Δ_index: ZSet<SlotGroup>)`: process resolution deltas (new/changed winners, new/removed fugue pairs) and structure deltas (new nodes). Mutate the tree and emit `NodeDelta` entries. 🔴
 - 7.3 New map structure → create child node in parent's children map. Emit `childAdded`. If the parent node does not yet exist in the tree (child arrived before parent), defer — the child will be attached when the parent is created (task 7.3a). 🔴
 - 7.3a When creating a new node (root or child), check the accumulated structure index (`childrenOf`) for pre-existing children of this node. Recursively attach them and emit `childAdded` for each. This handles the out-of-order case where children arrived before their parent. 🔴
 - 7.4 New seq structure → create child node, insert at Fugue-ordered position. Emit `childAdded` (or `childrenReordered` if position changes affect existing children). 🔴
@@ -484,7 +564,7 @@ run comprehensive differential tests.
 
 #### Tasks
 
-- 8.1 Create `kernel/incremental/pipeline.ts` implementing `IncrementalPipeline`. Wire the DAG: `insert(c)` → store.insert → F^Δ → C^Δ → fan-out(X^Δ, A^Δ) → P^Δ → batch E → R^Δ → K^Δ → RealityDelta. 🔴
+- 8.1 Create `kernel/incremental/pipeline.ts` implementing `IncrementalPipeline`. Wire the DAG: `insert(c)` → store.insert → F^Δ → C^Δ → fan-out(X^Δ, A^Δ) → P^Δ → batch E → diff previous ResolutionResult → Δ_resolved + Δ_fuguePairs → K^Δ → RealityDelta. The pipeline maintains the cached previous `ResolutionResult` and diffs against the new one to produce Z-set deltas for the skeleton (see Phase 7 Design Note). This diffing shim is removed by Plan 006 when the incremental evaluator produces deltas directly. 🔴
 - 8.2 `createIncrementalPipeline(config)`: create all stages, wire them, return the pipeline. 🔴
 - 8.3 `createIncrementalPipelineFromBootstrap(result)`: create pipeline pre-populated with bootstrap constraints. Each bootstrap constraint is fed through `insert()` to build up accumulated state. 🔴
 - 8.4 `recompute()`: call batch `solve(store, config)` and return the result. For differential testing. 🔴
@@ -648,7 +728,7 @@ tests/
 
 - `kernel/pipeline.ts` — the batch pipeline composition; understand the DAG topology
 - `kernel/retraction.ts` — batch `computeActive()`; the incremental version mirrors its logic
-- `kernel/validity.ts` + `kernel/authority.ts` — batch validity; the persistent authority structure replaces `computeAuthority()`
+- `kernel/validity.ts` + `kernel/authority.ts` — batch validity; the incremental version reuses `computeAuthority()` via full replay on authority changes (see Phase 6 Design Note)
 - `kernel/structure-index.ts` — batch `buildStructureIndex()`; the incremental version is append-only
 - `kernel/projection.ts` — batch `projectToFacts()`; the incremental version adds the orphan set
 - `kernel/skeleton.ts` — batch `buildSkeleton()`; the incremental version mutates in place
