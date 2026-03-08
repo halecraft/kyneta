@@ -122,21 +122,29 @@ export function resolveReactiveImports(
 // =============================================================================
 
 /**
- * Check whether a single compiler symbol represents the `[REACTIVE]` property.
+ * Check whether a single compiler symbol represents a well-known symbol property.
  *
  * Uses a three-layer strategy, from most to least robust:
  *
  * 1. **Symbol.for() tracing** — If the symbol's value declaration has an
- *    initializer, verify it's `Symbol.for("kinetic:reactive")`.
+ *    initializer, verify it's `Symbol.for(symbolForKey)`.
  * 2. **Symbol declaration name** — The `unique symbol` type's backing
- *    variable has `escapedName === "REACTIVE"`.
+ *    variable has `escapedName === declarationName`.
  * 3. **Property escaped name** — The property's own mangled name starts
- *    with `__@REACTIVE@`.
+ *    with `mangledPrefix`.
  *
  * @param compilerSymbol - The compiler symbol to inspect
- * @returns true if this property is keyed by the REACTIVE symbol
+ * @param symbolForKey - The string key passed to Symbol.for() (e.g., "kinetic:reactive")
+ * @param declarationName - The variable name of the symbol declaration (e.g., "REACTIVE")
+ * @param mangledPrefix - The mangled property name prefix (e.g., "__@REACTIVE@")
+ * @returns true if this property is keyed by the specified well-known symbol
  */
-function isReactiveSymbolProperty(compilerSymbol: ts.Symbol): boolean {
+function isWellKnownSymbolProperty(
+  compilerSymbol: ts.Symbol,
+  symbolForKey: string,
+  declarationName: string,
+  mangledPrefix: string,
+): boolean {
   // Access the symbol's internal links to get the nameType.
   // For computed property names like [REACTIVE], TypeScript stores the
   // type of the key expression (the unique symbol type) as `nameType`.
@@ -151,7 +159,7 @@ function isReactiveSymbolProperty(compilerSymbol: ts.Symbol): boolean {
     if ((nameType.flags & ts.TypeFlags.UniqueESSymbol) !== 0) {
       const nameSymbol = nameType.symbol
 
-      // Layer 1: Trace to Symbol.for("kinetic:reactive") initializer.
+      // Layer 1: Trace to Symbol.for() initializer.
       // Available when the symbol is defined in a .ts source file.
       if (nameSymbol?.valueDeclaration) {
         const valueDecl = nameSymbol.valueDeclaration
@@ -163,7 +171,7 @@ function isReactiveSymbolProperty(compilerSymbol: ts.Symbol): boolean {
             init.expression.name.text === "for" &&
             init.arguments.length > 0 &&
             ts.isStringLiteral(init.arguments[0]) &&
-            init.arguments[0].text === "kinetic:reactive"
+            init.arguments[0].text === symbolForKey
           ) {
             return true
           }
@@ -177,7 +185,7 @@ function isReactiveSymbolProperty(compilerSymbol: ts.Symbol): boolean {
       // not the mangled property name.
       if (nameSymbol) {
         const symName = nameSymbol.escapedName as string
-        if (symName === "REACTIVE") {
+        if (symName === declarationName) {
           return true
         }
       }
@@ -188,11 +196,37 @@ function isReactiveSymbolProperty(compilerSymbol: ts.Symbol): boolean {
   // TypeScript encodes unique-symbol-keyed properties as __@NAME@<id>
   // in the property's own escapedName.
   const escapedName = compilerSymbol.escapedName as string
-  if (escapedName.startsWith("__@REACTIVE@")) {
+  if (escapedName.startsWith(mangledPrefix)) {
     return true
   }
 
   return false
+}
+
+/**
+ * Check whether a compiler symbol represents the `[REACTIVE]` property.
+ * Delegates to `isWellKnownSymbolProperty` with REACTIVE-specific parameters.
+ */
+function isReactiveSymbolProperty(compilerSymbol: ts.Symbol): boolean {
+  return isWellKnownSymbolProperty(
+    compilerSymbol,
+    "kinetic:reactive",
+    "REACTIVE",
+    "__@REACTIVE@",
+  )
+}
+
+/**
+ * Check whether a compiler symbol represents the `[SNAPSHOT]` property.
+ * Delegates to `isWellKnownSymbolProperty` with SNAPSHOT-specific parameters.
+ */
+function isSnapshotSymbolProperty(compilerSymbol: ts.Symbol): boolean {
+  return isWellKnownSymbolProperty(
+    compilerSymbol,
+    "kinetic:snapshot",
+    "SNAPSHOT",
+    "__@SNAPSHOT@",
+  )
 }
 
 /**
@@ -247,6 +281,98 @@ export function isReactiveType(type: Type): boolean {
   }
 
   return false
+}
+
+/**
+ * Check if a type is snapshotable.
+ *
+ * A type is snapshotable if it has a property keyed by the `[SNAPSHOT]` unique
+ * symbol from `@loro-extended/reactive`. This indicates the type can have its
+ * current state read uniformly via the `[SNAPSHOT]` protocol.
+ *
+ * Follows the same pattern as `isReactiveType`: excludes `any`/`unknown`,
+ * handles union types, and uses property-level detection.
+ *
+ * @param type - The ts-morph Type to check
+ * @returns true if the type implements Snapshotable
+ */
+export function isSnapshotableType(type: Type): boolean {
+  // Exclude `any` and `unknown` — they match everything but are not snapshotable.
+  const typeText = type.getText()
+  if (typeText === "any" || typeText === "unknown") {
+    return false
+  }
+
+  // Handle union types: snapshotable if any branch is snapshotable.
+  if (type.isUnion()) {
+    return type.getUnionTypes().some(t => isSnapshotableType(t))
+  }
+
+  // Check the type's properties for one keyed by the SNAPSHOT symbol.
+  const properties = type.compilerType.getProperties()
+  for (const prop of properties) {
+    if (isSnapshotSymbolProperty(prop)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+/**
+ * Get the snapshot return type for a snapshotable type.
+ *
+ * Extracts the return type `S` from the `[SNAPSHOT]` property's call signature.
+ * The property has type `SnapshotFn<S>` which is `(self: unknown) => S`.
+ *
+ * @param type - The ts-morph Type to inspect (must be snapshotable)
+ * @returns The snapshot return type as text (e.g., "string", "number"), or undefined
+ */
+export function getSnapshotType(type: Type): string | undefined {
+  // Handle union types: use the first snapshotable branch
+  if (type.isUnion()) {
+    for (const t of type.getUnionTypes()) {
+      if (isSnapshotableType(t)) {
+        return getSnapshotType(t)
+      }
+    }
+    return undefined
+  }
+
+  // Find the [SNAPSHOT] property
+  const properties = type.compilerType.getProperties()
+  let snapshotProperty: ts.Symbol | undefined
+
+  for (const prop of properties) {
+    if (isSnapshotSymbolProperty(prop)) {
+      snapshotProperty = prop
+      break
+    }
+  }
+
+  if (!snapshotProperty) {
+    return undefined
+  }
+
+  try {
+    const checker = (type.compilerType as { checker?: ts.TypeChecker }).checker
+    if (!checker) {
+      return undefined
+    }
+
+    const propType = checker.getTypeOfSymbol(snapshotProperty)
+    const callSignatures = propType.getCallSignatures()
+
+    if (callSignatures.length === 0) {
+      return undefined
+    }
+
+    // The return type of (self: unknown) => S is S
+    const returnType = callSignatures[0].getReturnType()
+    return checker.typeToString(returnType)
+  } catch {
+    return undefined
+  }
 }
 
 /**

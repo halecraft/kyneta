@@ -1647,3 +1647,105 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
     expect(htmlResult.code).toContain("kinetic:if")
   })
 })
+
+// =============================================================================
+// Phase 4: Bare Reactive Ref in Content Position Tests
+// =============================================================================
+
+describe("bare reactive ref in content position", () => {
+  it("compiles bare TextRef to textRegion", () => {
+    const source = `
+      import { TextRef } from "@loro-extended/change"
+      declare const doc: { title: TextRef }
+      div(() => {
+        p(doc.title)
+      })
+    `
+    const result = transformSource(source, { target: "dom" })
+    expect(result.code).toContain("textRegion(")
+    expect(result.code).toContain("doc.title")
+  })
+
+  it("compiles bare CounterRef to subscribeWithValue with .get()", () => {
+    const source = `
+      import { CounterRef } from "@loro-extended/change"
+      declare const doc: { count: CounterRef }
+      div(() => {
+        span(doc.count)
+      })
+    `
+    const result = transformSource(source, { target: "dom" })
+    expect(result.code).toContain("subscribeWithValue(")
+    expect(result.code).toContain("doc.count.get()")
+  })
+
+  it("still supports explicit .get() call", () => {
+    const source = `
+      import { TextRef } from "@loro-extended/change"
+      declare const doc: { title: TextRef }
+      div(() => {
+        p(doc.title.get())
+      })
+    `
+    const result = transformSource(source, { target: "dom" })
+    expect(result.code).toContain("textRegion(")
+  })
+
+  it("still supports explicit .toString() call", () => {
+    const source = `
+      import { TextRef } from "@loro-extended/change"
+      declare const doc: { title: TextRef }
+      div(() => {
+        p(doc.title.toString())
+      })
+    `
+    const result = transformSource(source, { target: "dom" })
+    expect(result.code).toContain("textRegion(")
+  })
+
+  it("bare ref inside expression is not an implicit read", () => {
+    const source = `
+      import { TextRef } from "@loro-extended/change"
+      declare const doc: { first: TextRef, last: TextRef }
+      div(() => {
+        p(doc.first.get() + " " + doc.last.get())
+      })
+    `
+    const result = transformSource(source, { target: "dom" })
+    expect(result.code).toContain("subscribeMultiple(")
+    expect(result.code).not.toContain("textRegion(")
+  })
+})
+
+// =============================================================================
+// Phase 4: extractDependencies fix — schema-inferred bare ref
+// =============================================================================
+
+describe("extractDependencies fix for reactive-typed property access (transform)", () => {
+  it("captures doc.title as dependency when doc is TypedDoc (not reactive) but doc.title is TextRef", () => {
+    const source = `
+      import { createTypedDoc, Shape } from "@loro-extended/change"
+      const doc = createTypedDoc(Shape.doc({ title: Shape.text() }))
+      div(() => { p(doc.title) })
+    `
+    const result = transformSource(source, { target: "dom" })
+    const p = result.ir[0].children[0] as any
+    const content = p.children[0]
+    expect(content.dependencies).toHaveLength(1)
+    expect(content.dependencies[0].source).toBe("doc.title")
+    expect(content.dependencies[0].deltaKind).toBe("text")
+    // Should emit textRegion since it's a bare TextRef (implicit read)
+    expect(result.code).toContain("textRegion(")
+  })
+
+  it("bare CounterRef from createTypedDoc uses subscribeWithValue with .get()", () => {
+    const source = `
+      import { createTypedDoc, Shape } from "@loro-extended/change"
+      const doc = createTypedDoc(Shape.doc({ count: Shape.counter() }))
+      div(() => { span(doc.count) })
+    `
+    const result = transformSource(source, { target: "dom" })
+    expect(result.code).toContain("subscribeWithValue(")
+    expect(result.code).toContain("doc.count.get()")
+  })
+})

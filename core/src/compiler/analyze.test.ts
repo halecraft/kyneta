@@ -13,6 +13,7 @@ import {
   analyzeExpression,
   analyzeProps,
   detectDirectRead,
+  detectImplicitRead,
   ELEMENT_FACTORIES,
   expressionIsReactive,
   extractDependencies,
@@ -20,7 +21,9 @@ import {
   isReactiveType,
 } from "./analyze.js"
 import {
+  getSnapshotType,
   isComponentFactoryType,
+  isSnapshotableType,
   resolveReactiveImports,
 } from "./reactive-detection.js"
 import type { ContentValue } from "./ir.js"
@@ -63,6 +66,11 @@ function addBaseReactiveTypes(project: Project) {
     "reactive-base.d.ts",
     `
     export const REACTIVE: unique symbol
+    export const SNAPSHOT: unique symbol
+    export type SnapshotFn<S> = (self: unknown) => S
+    export interface Snapshotable<S> {
+      readonly [SNAPSHOT]: SnapshotFn<S>
+    }
     export type ReactiveDelta =
       | { type: "replace" }
       | { type: "text"; ops: unknown[] }
@@ -71,7 +79,8 @@ function addBaseReactiveTypes(project: Project) {
       | { type: "tree"; ops: unknown[] }
     export type DeltaKind = ReactiveDelta["type"]
     export type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> = (self: unknown, callback: (delta: D) => void) => () => void
-    export interface Reactive<D extends ReactiveDelta = ReactiveDelta> {
+    export interface Reactive<S = unknown, D extends ReactiveDelta = ReactiveDelta> extends Snapshotable<S> {
+      readonly [SNAPSHOT]: SnapshotFn<S>
       readonly [REACTIVE]: ReactiveSubscribe<D>
     }
   `,
@@ -88,14 +97,15 @@ function addLoroTypes(project: Project) {
   project.createSourceFile(
     "loro-types.d.ts",
     `
-    import { REACTIVE, ReactiveSubscribe, Reactive, ReactiveDelta } from "./reactive-base"
+    import { REACTIVE, SNAPSHOT, SnapshotFn, ReactiveSubscribe, Reactive, ReactiveDelta } from "./reactive-base"
 
     type TextDelta = { type: "text"; ops: unknown[] }
     type ListDelta = { type: "list"; ops: unknown[] }
     type MapDelta = { type: "map"; ops: { keys: string[] } }
     type ReplaceDelta = { type: "replace" }
 
-    export interface TextRef extends Reactive<TextDelta> {
+    export interface TextRef extends Reactive<string, TextDelta> {
+      readonly [SNAPSHOT]: SnapshotFn<string>
       readonly [REACTIVE]: ReactiveSubscribe<TextDelta>
       insert(pos: number, text: string): void
       delete(pos: number, len: number): void
@@ -103,13 +113,15 @@ function addLoroTypes(project: Project) {
       get(): string
     }
 
-    export interface CounterRef extends Reactive<ReplaceDelta> {
+    export interface CounterRef extends Reactive<number, ReplaceDelta> {
+      readonly [SNAPSHOT]: SnapshotFn<number>
       readonly [REACTIVE]: ReactiveSubscribe<ReplaceDelta>
       get(): number
       increment(n: number): void
     }
 
-    export interface ListRef<T> extends Reactive<ListDelta> {
+    export interface ListRef<T> extends Reactive<ListRef<T>, ListDelta> {
+      readonly [SNAPSHOT]: SnapshotFn<ListRef<T>>
       readonly [REACTIVE]: ReactiveSubscribe<ListDelta>
       push(item: T): void
       insert(index: number, item: T): void
@@ -119,7 +131,8 @@ function addLoroTypes(project: Project) {
       length: number
     }
 
-    export interface StructRef<T> extends Reactive<MapDelta> {
+    export interface StructRef<T> extends Reactive<StructRef<T>, MapDelta> {
+      readonly [SNAPSHOT]: SnapshotFn<StructRef<T>>
       readonly [REACTIVE]: ReactiveSubscribe<MapDelta>
       get<K extends keyof T>(key: K): T[K]
     }
@@ -137,9 +150,10 @@ function addReactiveTypes(project: Project) {
   project.createSourceFile(
     "reactive-types.d.ts",
     `
-    import { REACTIVE, ReactiveSubscribe, Reactive, ReactiveDelta } from "./reactive-base"
-    export { REACTIVE, ReactiveSubscribe, Reactive, ReactiveDelta }
-    export class LocalRef<T> implements Reactive<{ type: "replace" }> {
+    import { REACTIVE, SNAPSHOT, SnapshotFn, ReactiveSubscribe, Reactive, ReactiveDelta } from "./reactive-base"
+    export { REACTIVE, SNAPSHOT, SnapshotFn, ReactiveSubscribe, Reactive, ReactiveDelta }
+    export class LocalRef<T> implements Reactive<T, { type: "replace" }> {
+      readonly [SNAPSHOT]: SnapshotFn<T>
       readonly [REACTIVE]: ReactiveSubscribe<{ type: "replace" }>
       constructor(initial: T)
       get(): T
@@ -2185,5 +2199,436 @@ describe("analyzeStatement - target labels", () => {
     if (builder?.children[2].kind === "target-block") {
       expect(builder.children[2].target).toBe("html")
     }
+  })
+})
+
+// =============================================================================
+// Phase 4: SNAPSHOT Protocol Compiler Tests
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// isSnapshotableType Tests
+// -----------------------------------------------------------------------------
+
+describe("isSnapshotableType", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addLoroTypes(project)
+  })
+
+  it("detects TextRef as snapshotable", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("title")!
+    expect(isSnapshotableType(varDecl.getType())).toBe(true)
+  })
+
+  it("detects CounterRef as snapshotable", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const count: CounterRef
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("count")!
+    expect(isSnapshotableType(varDecl.getType())).toBe(true)
+  })
+
+  it("detects ListRef as snapshotable", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { ListRef } from "./loro-types"
+      declare const items: ListRef<string>
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("items")!
+    expect(isSnapshotableType(varDecl.getType())).toBe(true)
+  })
+
+  it("rejects plain object types", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      declare const obj: { name: string }
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("obj")!
+    expect(isSnapshotableType(varDecl.getType())).toBe(false)
+  })
+
+  it("rejects any and unknown", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      declare const a: any
+      declare const u: unknown
+    `,
+    )
+
+    expect(isSnapshotableType(sourceFile.getVariableDeclaration("a")!.getType())).toBe(false)
+    expect(isSnapshotableType(sourceFile.getVariableDeclaration("u")!.getType())).toBe(false)
+  })
+
+  it("handles union types (snapshotable if any branch is)", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const maybeRef: TextRef | null
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("maybeRef")!
+    expect(isSnapshotableType(varDecl.getType())).toBe(true)
+  })
+})
+
+// -----------------------------------------------------------------------------
+// getSnapshotType Tests
+// -----------------------------------------------------------------------------
+
+describe("getSnapshotType", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addLoroTypes(project)
+  })
+
+  it("returns 'string' for TextRef", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("title")!
+    expect(getSnapshotType(varDecl.getType())).toBe("string")
+  })
+
+  it("returns 'number' for CounterRef", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const count: CounterRef
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("count")!
+    expect(getSnapshotType(varDecl.getType())).toBe("number")
+  })
+
+  it("returns undefined for non-snapshotable types", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      declare const obj: { name: string }
+    `,
+    )
+
+    const varDecl = sourceFile.getVariableDeclaration("obj")!
+    expect(getSnapshotType(varDecl.getType())).toBeUndefined()
+  })
+})
+
+// -----------------------------------------------------------------------------
+// detectImplicitRead Tests
+// -----------------------------------------------------------------------------
+
+describe("detectImplicitRead", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addLoroTypes(project)
+  })
+
+  it("detects bare TextRef as implicit read", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const doc: { title: TextRef }
+      doc.title
+    `,
+    )
+
+    // Get the expression statement's expression (doc.title)
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+
+    const result = detectImplicitRead(expr as any)
+    expect(result).toBe("doc.title")
+  })
+
+  it("rejects non-reactive expressions", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      declare const someString: string
+      someString
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+
+    const result = detectImplicitRead(expr as any)
+    expect(result).toBeUndefined()
+  })
+
+  it("rejects call expressions (those go through detectDirectRead)", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const doc: { title: TextRef }
+      doc.title.get()
+    `,
+    )
+
+    // The call expression: doc.title.get()
+    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
+    expect(callExpr).toBeDefined()
+
+    const result = detectImplicitRead(callExpr)
+    expect(result).toBeUndefined()
+  })
+
+  it("detects bare CounterRef as implicit read", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const count: CounterRef
+      count
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+
+    const result = detectImplicitRead(expr as any)
+    expect(result).toBe("count")
+  })
+})
+
+// -----------------------------------------------------------------------------
+// analyzeExpression with implicit read Tests
+// -----------------------------------------------------------------------------
+
+describe("analyzeExpression with implicit read (bare ref)", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addLoroTypes(project)
+  })
+
+  it("bare TextRef produces reactive content with synthesized .get() source", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      title
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+
+    const result = analyzeExpression(expr as any) as ContentValue
+    expect(result.kind).toBe("content")
+    expect(result.bindingTime).toBe("reactive")
+    // Source is synthesized with .get()
+    expect(result.source).toBe("title.get()")
+    // directReadSource is the bare ref
+    expect(result.directReadSource).toBe("title")
+  })
+
+  it("bare CounterRef produces reactive content with synthesized .get() source", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const count: CounterRef
+      count
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+
+    const result = analyzeExpression(expr as any) as ContentValue
+    expect(result.kind).toBe("content")
+    expect(result.bindingTime).toBe("reactive")
+    expect(result.source).toBe("count.get()")
+    expect(result.directReadSource).toBe("count")
+  })
+
+  it("explicit .get() still works as before (backward compatible)", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      title.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
+    expect(callExpr).toBeDefined()
+
+    const result = analyzeExpression(callExpr) as ContentValue
+    expect(result.kind).toBe("content")
+    expect(result.bindingTime).toBe("reactive")
+    expect(result.directReadSource).toBe("title")
+  })
+
+  it("explicit .toString() still works as before", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      title.toString()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
+    expect(callExpr).toBeDefined()
+
+    const result = analyzeExpression(callExpr) as ContentValue
+    expect(result.kind).toBe("content")
+    expect(result.bindingTime).toBe("reactive")
+    expect(result.directReadSource).toBe("title")
+  })
+
+  it("bare ref with property access synthesizes .get()", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const doc: { title: TextRef }
+      doc.title
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+
+    const result = analyzeExpression(expr as any) as ContentValue
+    expect(result.kind).toBe("content")
+    expect(result.bindingTime).toBe("reactive")
+    expect(result.source).toBe("doc.title.get()")
+    expect(result.directReadSource).toBe("doc.title")
+  })
+})
+
+// -----------------------------------------------------------------------------
+// extractDependencies fix for reactive-typed property access
+// -----------------------------------------------------------------------------
+
+describe("extractDependencies fix for reactive-typed property access", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addLoroTypes(project)
+  })
+
+  it("captures doc.title as dependency when doc is not reactive but doc.title is TextRef", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const doc: { title: TextRef }
+      doc.title
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+
+    const deps = extractDependencies(expr as any)
+    expect(deps).toHaveLength(1)
+    expect(deps[0].source).toBe("doc.title")
+    expect(deps[0].deltaKind).toBe("text")
+  })
+
+  it("captures doc.title from doc.title.get() (existing behavior preserved)", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const doc: { title: TextRef }
+      doc.title.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
+    expect(callExpr).toBeDefined()
+
+    const deps = extractDependencies(callExpr)
+    expect(deps).toHaveLength(1)
+    expect(deps[0].source).toBe("doc.title")
+    expect(deps[0].deltaKind).toBe("text")
+  })
+
+  it("captures CounterRef dependency from bare property access", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { CounterRef } from "./loro-types"
+      declare const doc: { count: CounterRef }
+      doc.count
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+
+    const deps = extractDependencies(expr as any)
+    expect(deps).toHaveLength(1)
+    expect(deps[0].source).toBe("doc.count")
+    expect(deps[0].deltaKind).toBe("replace")
+  })
+
+  it("deduplicates when property access result already captured by object check", () => {
+    // When the object IS reactive and the result IS reactive,
+    // we should only get one dependency (deduplication via depsMap)
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef } from "./loro-types"
+      declare const title: TextRef
+      title.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
+    expect(callExpr).toBeDefined()
+
+    const deps = extractDependencies(callExpr)
+    // Should be exactly 1 dep for "title", not duplicated
+    expect(deps).toHaveLength(1)
+    expect(deps[0].source).toBe("title")
   })
 })

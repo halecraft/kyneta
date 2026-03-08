@@ -17,6 +17,7 @@ import {
   getDeltaKind,
   isComponentFactoryType,
   isReactiveType,
+  isSnapshotableType,
 } from "./reactive-detection.js"
 import {
   type ArrayBindingPattern,
@@ -403,6 +404,16 @@ export function extractDependencies(expr: Expression): Dependency[] {
       if (isReactiveType(objType)) {
         addDep(objExpr.getText(), objType)
       }
+
+      // Also check if the *result* of the property access is reactive.
+      // This captures cases like `doc.title` where `doc` (TypedDoc) is not
+      // reactive but `doc.title` (TextRef) is. Without this, the dependency
+      // would be missed entirely. The depsMap deduplication ensures no
+      // double-capture when the expression is already captured above.
+      const resultType = propAccess.getType()
+      if (isReactiveType(resultType)) {
+        addDep(propAccess.getText(), resultType)
+      }
     }
 
     // Call expression on a reactive type
@@ -511,6 +522,50 @@ export function detectDirectRead(expr: Expression): string | undefined {
 }
 
 // =============================================================================
+// Implicit-Read Detection
+// =============================================================================
+
+/**
+ * Detect if an expression is a bare reactive ref (implicit read).
+ *
+ * A bare reactive ref is when the expression itself IS a reactive ref,
+ * not a method call on one. For example, `doc.title` in content position
+ * where `doc.title` is a `TextRef`. This is distinct from `doc.title.get()`
+ * which is a direct read (handled by `detectDirectRead`).
+ *
+ * Returns the expression's source text if:
+ * 1. The expression is NOT a CallExpression (those go through detectDirectRead)
+ * 2. The expression's type is reactive (has [REACTIVE])
+ * 3. The expression's type is snapshotable (has [SNAPSHOT])
+ *
+ * Returns undefined otherwise.
+ *
+ * @example
+ * detectImplicitRead(parse("doc.title"))     // → "doc.title" (TextRef is reactive + snapshotable)
+ * detectImplicitRead(parse("doc.title.get()")) // → undefined (CallExpression)
+ * detectImplicitRead(parse("someString"))      // → undefined (not reactive)
+ */
+export function detectImplicitRead(expr: Expression): string | undefined {
+  // 1. Must NOT be a CallExpression — those are handled by detectDirectRead
+  if (expr.getKind() === SyntaxKind.CallExpression) {
+    return undefined
+  }
+
+  // 2. Expression's type must be reactive
+  const type = expr.getType()
+  if (!isReactiveType(type)) {
+    return undefined
+  }
+
+  // 3. Expression's type must be snapshotable
+  if (!isSnapshotableType(type)) {
+    return undefined
+  }
+
+  return expr.getText()
+}
+
+// =============================================================================
 // Expression Analysis
 // =============================================================================
 
@@ -540,7 +595,22 @@ export function analyzeExpression(expr: Expression): ContentNode {
     const deps = extractDependencies(expr)
     // Check for direct read (enables surgical text patching)
     const directReadSource = detectDirectRead(expr)
-    return createContent(source, "reactive", deps, span, directReadSource)
+    if (directReadSource) {
+      return createContent(source, "reactive", deps, span, directReadSource)
+    }
+
+    // Check for implicit read — bare reactive ref in content position
+    // e.g., `doc.title` (a TextRef) without `.get()` or `.toString()`
+    const implicitReadSource = detectImplicitRead(expr)
+    if (implicitReadSource) {
+      // Synthesize `.get()` in the IR source so generated code produces a
+      // value, not a ref object. The directReadSource is the bare ref itself,
+      // which textRegion/inputTextRegion use to subscribe and call [SNAPSHOT].
+      const synthesizedSource = `${implicitReadSource}.get()`
+      return createContent(synthesizedSource, "reactive", deps, span, implicitReadSource)
+    }
+
+    return createContent(source, "reactive", deps, span)
   }
 
   // Render-time expression

@@ -489,27 +489,62 @@ The code structure is identical for reactive and render-time — only the marker
 
 ## Reactive Detection
 
-The compiler detects reactive types by checking whether a candidate type has a property keyed by the `[REACTIVE]` unique symbol from `@loro-extended/reactive`:
+The compiler detects reactive types by checking whether a candidate type has properties keyed by the `[REACTIVE]` and/or `[SNAPSHOT]` unique symbols from `@loro-extended/reactive`:
 
 ```typescript
 // @loro-extended/reactive
 export const REACTIVE = Symbol.for("kinetic:reactive")
+export const SNAPSHOT = Symbol.for("kinetic:snapshot")
+export type SnapshotFn<S> = (self: unknown) => S
 export type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> =
   (self: unknown, callback: (delta: D) => void) => () => void
-export interface Reactive<D extends ReactiveDelta = ReactiveDelta> {
+export interface Reactive<S = unknown, D extends ReactiveDelta = ReplaceDelta>
+  extends Snapshotable<S> {
+  readonly [SNAPSHOT]: SnapshotFn<S>
   readonly [REACTIVE]: ReactiveSubscribe<D>
 }
 ```
 
-Detection is implemented in `reactive-detection.ts` using a three-layer property-level strategy:
+### Parameterized Symbol Detection (`isWellKnownSymbolProperty`)
 
-1. **Symbol.for() tracing** — When the symbol's declaration has an initializer (source files), walk the AST to verify it's `Symbol.for("kinetic:reactive")`. This is the most robust check.
-2. **Symbol declaration name** — In `.d.ts` files the initializer is erased, but the `unique symbol` type still carries a reference back to the variable that declared it. Check that variable's `escapedName` is `"REACTIVE"`.
-3. **Property escaped name** — As a last-resort fallback, check the property's own mangled name starts with `__@REACTIVE@`.
+Detection is implemented in `reactive-detection.ts` using a **parameterized** three-layer strategy. The core function `isWellKnownSymbolProperty(compilerSymbol, symbolForKey, declarationName, mangledPrefix)` accepts:
+
+| Parameter | REACTIVE | SNAPSHOT |
+|-----------|----------|----------|
+| `symbolForKey` | `"kinetic:reactive"` | `"kinetic:snapshot"` |
+| `declarationName` | `"REACTIVE"` | `"SNAPSHOT"` |
+| `mangledPrefix` | `"__@REACTIVE@"` | `"__@SNAPSHOT@"` |
+
+The three layers, from most to least robust:
+
+1. **Symbol.for() tracing** — When the symbol's declaration has an initializer (source files), walk the AST to verify it's `Symbol.for(symbolForKey)`. This is the most robust check.
+2. **Symbol declaration name** — In `.d.ts` files the initializer is erased, but the `unique symbol` type still carries a reference back to the variable that declared it. Check that variable's `escapedName` matches `declarationName`.
+3. **Property escaped name** — As a last-resort fallback, check the property's own mangled name starts with `mangledPrefix`.
+
+All three layers are necessary for both symbols. Layer 1 works in source `.ts` files, layer 2 in `.d.ts` (built packages), and layer 3 handles edge cases where the type system loses the symbol reference chain. The mock `.d.ts` files in `analyze.test.ts` exercise layer 2 specifically.
+
+Two one-line delegates wrap the parameterized function:
+- `isReactiveSymbolProperty(sym)` → `isWellKnownSymbolProperty(sym, "kinetic:reactive", "REACTIVE", "__@REACTIVE@")`
+- `isSnapshotSymbolProperty(sym)` → `isWellKnownSymbolProperty(sym, "kinetic:snapshot", "SNAPSHOT", "__@SNAPSHOT@")`
 
 Additionally: exclude `any`/`unknown`, check union branches individually.
 
 This approach replaced an earlier `isTypeAssignableTo(candidate, Reactive)` strategy. That broke when `Reactive` gained a generic parameter `<D>` — TypeScript's `getType()` on a generic interface returns a type with an unresolved type parameter, which fails assignability checks. The property-level approach is immune to changes in the `Reactive` interface's generic signature.
+
+### Type Detection Functions
+
+| Function | Checks For | Used By |
+|----------|-----------|---------|
+| `isReactiveType(type)` | `[REACTIVE]` property | `expressionIsReactive`, `extractDependencies`, `detectDirectRead` |
+| `isSnapshotableType(type)` | `[SNAPSHOT]` property | `detectImplicitRead` |
+| `getSnapshotType(type)` | Return type `S` of `[SNAPSHOT]` call signature | Future use (e.g., type-aware codegen) |
+| `getDeltaKind(type)` | Delta kind `D` from `[REACTIVE]` call signature | Codegen optimization dispatch |
+
+`isSnapshotableType` follows the same pattern as `isReactiveType`: excludes `any`/`unknown`, handles union types, and uses property-level detection via `isSnapshotSymbolProperty`.
+
+`getSnapshotType` extracts the return type `S` from `[SNAPSHOT]`'s call signature via the TypeChecker. For `TextRef` it returns `"string"`, for `CounterRef` it returns `"number"`. Returns `undefined` for non-snapshotable types.
+
+**Why `isReactiveType` and `isSnapshotableType` are separate:** The compiler's `isReactiveType` only checks for `[REACTIVE]` — it was written before `[SNAPSHOT]` existed and has not been tightened. `detectImplicitRead` checks `isSnapshotableType` separately as a correctness guard: it ensures the compiler only synthesizes `.get()` for types that genuinely have a snapshot protocol. If a future type had `[REACTIVE]` without `[SNAPSHOT]` (e.g., a write-only channel), `detectImplicitRead` would correctly reject it. Each detection function checks exactly what it needs.
 
 ### Module Resolution
 
@@ -573,6 +608,48 @@ For text patching optimization, the compiler detects when an expression is a "di
 | `title.get(0)` | ❌ No | Has arguments |
 
 When detected, the IR's `ContentValue.directReadSource` is set to the receiver's source text (e.g., `"doc.title"`), enabling codegen to emit `textRegion` instead of `subscribeWithValue`.
+
+### Implicit-Read Detection (Bare Reactive Refs)
+
+`detectImplicitRead` handles the complementary case: a bare reactive ref in content position *without* `.get()` or `.toString()`. For example, `p(doc.title)` where `doc.title` is a `TextRef`.
+
+**Detection algorithm** (implemented in `detectImplicitRead`):
+1. Expression must NOT be a `CallExpression` (those go through `detectDirectRead`)
+2. Expression's type must be reactive (`isReactiveType`)
+3. Expression's type must be snapshotable (`isSnapshotableType`)
+
+**`analyzeExpression` calls both detectors sequentially:**
+```
+detectDirectRead(expr) ?? detectImplicitRead(expr)
+```
+
+When `detectImplicitRead` matches, `analyzeExpression` **synthesizes** `.get()` in the IR:
+- IR `source`: `"doc.title.get()"` — synthesized, so generated code produces a value
+- IR `directReadSource`: `"doc.title"` — the bare ref, passed to `textRegion`
+
+**Why `.get()` and not `[SNAPSHOT]()`:** The `textRegion` path doesn't use `source` — it passes `directReadSource` directly, and `textRegion` calls `[SNAPSHOT]` internally. For the `subscribeWithValue` fallback path, codegen emits `() => source` where `source` must be valid JavaScript. `"doc.title.get()"` works because `.get()` exists on every scalar ref. `"doc.title[SNAPSHOT](doc.title)"` would require importing `SNAPSHOT` from `@loro-extended/reactive` in the generated code — a new import from a different package for no benefit.
+
+**Examples:**
+| Expression | Implicit Read? | Reason |
+|------------|----------------|--------|
+| `doc.title` (TextRef) | ✅ Yes | Reactive + snapshotable, not a call |
+| `count` (CounterRef) | ✅ Yes | Reactive + snapshotable, not a call |
+| `doc.title.get()` | ❌ No | CallExpression → `detectDirectRead` handles it |
+| `someString` | ❌ No | Not reactive |
+| `doc.title + " suffix"` | ❌ No | Root is BinaryExpression (reactive, but not a bare ref) |
+
+**Why `detectDirectRead` and `detectImplicitRead` are separate:** They answer structurally different questions. `detectDirectRead` is structural AST analysis (root is a `CallExpression`). `detectImplicitRead` is type-level analysis (expression *is* the ref). Combining them would violate single-responsibility. They never overlap — `detectImplicitRead` rejects `CallExpression` as its first check.
+
+### Dependency Extraction (`extractDependencies`)
+
+The `extractDependencies` visitor walks the expression AST and captures reactive dependencies. It has four cases:
+
+1. **PropertyAccess on reactive object** — `doc.title.get()` → captures `doc.title` (the object is `TextRef`)
+2. **PropertyAccess whose result type is reactive** — `doc.title` where `doc` is `TypedDoc` (not reactive) but `doc.title` is `TextRef` (reactive) → captures `doc.title`
+3. **Call on reactive object** — captures the callee's receiver
+4. **Identifier that is reactive** — captures itself (skips identifiers that are property names in a PropertyAccess)
+
+Case 2 was added in Phase 4 to fix a pre-existing bug: when `doc` is not reactive but `doc.title` is, none of the other cases fired. The `depsMap` deduplication (keyed by source text) prevents double-capture when both the object and result are reactive.
 
 ### Binding-Time Classification
 
@@ -679,7 +756,12 @@ packages/kinetic/src/compiler/
     └── html.test.ts         # HTML codegen tests
 ```
 
+### Child Type
+
+The `Child` type union in `types.ts` accepts `Reactive<any, any>`, enabling bare reactive refs in content position (e.g., `p(doc.title)` where `doc.title` is a `TextRef`). This is safe because the Kinetic compiler intercepts the call and synthesizes `.get()` in the IR before codegen — the raw ref never reaches `textContent`. The `Child` type exists only for TypeScript's authoring-time benefit.
+
 ### Cross-Package Dependencies
+
 
 ```
 @loro-extended/reactive       # REACTIVE symbol, Reactive interface, LocalRef
@@ -689,6 +771,9 @@ packages/kinetic/src/compiler/
 ```
 
 ## Runtime Dependencies
+
+> **`[SNAPSHOT]` Protocol in the Runtime:** Both `textRegion` and `inputTextRegion` read initial state via `ref[SNAPSHOT](ref)` (cast to `Snapshotable<string>`), not ad-hoc interface casts. The `subscribe()` function gates on `isReactive()`, which requires both `[REACTIVE]` and `[SNAPSHOT]` at runtime. `listRegion` is the exception — it uses `ListRefLike<T>` because the functional-core planning functions need `{ length, get(i) }`, and replacing the cast with `[SNAPSHOT]` would return `self` then still need a cast.
+
 
 Generated code imports runtime functions from `@loro-extended/kinetic/runtime`:
 
@@ -816,9 +901,9 @@ for (const itemRef of doc.items) {
 The `textRegion` runtime enables **O(k) surgical text updates** for direct `TextRef` reads, where k is the edit size rather than the full string length.
 
 **When it applies:**
-- Expression is exactly `ref.get()` or `ref.toString()` on a single `TextRef`
+- Expression is a direct read (`ref.get()` / `ref.toString()`) or a bare reactive ref (`ref` alone) on a single `TextRef`
 - The dependency has `deltaKind: "text"`
-- The expression is a "direct read" — not transformed (e.g., `.toUpperCase()`) or combined with other deps
+- The expression is a "direct read" or "implicit read" — not transformed (e.g., `.toUpperCase()`) or combined with other deps
 
 **Functional Core** (pure, testable):
 - `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
@@ -827,12 +912,14 @@ The `textRegion` runtime enables **O(k) surgical text updates** for direct `Text
 - `patchText(textNode, ops)` — applies patches via `insertData`/`deleteData`
 - `textRegion(textNode, ref, scope)` — subscription-aware wrapper
 
-The `textRegion` function follows the same pattern as `listRegion`:
+The `textRegion` function reads initial state via the `[SNAPSHOT]` protocol:
 
 ```typescript
 function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
-  const typedRef = ref as TextRefLike
-  textNode.textContent = typedRef.get()  // Initial value
+  const snapshotable = ref as Snapshotable<string>
+  const readValue = () => snapshotable[SNAPSHOT](ref)
+
+  textNode.textContent = readValue()  // Initial value via [SNAPSHOT]
 
   subscribe(ref, (delta: ReactiveDelta) => {
     if (delta.type === "text") {
@@ -840,7 +927,7 @@ function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
       patchText(textNode, delta.ops)
     } else {
       // Fallback for non-text deltas
-      textNode.textContent = typedRef.get()
+      textNode.textContent = readValue()
     }
   }, scope)
 }
@@ -858,7 +945,7 @@ The "cursor doesn't advance on delete" is critical — subsequent ops apply at t
 ```typescript
 // In generateReactiveContentSubscription:
 if (directReadSource && deps.length === 1 && deps[0].deltaKind === "text") {
-  // Direct TextRef read — surgical patching
+  // Direct or implicit TextRef read — surgical patching
   emit: textRegion(textVar, directReadSource, scopeVar)
 } else if (deps.length === 1) {
   // Single dep, non-direct — full replacement
@@ -870,10 +957,11 @@ if (directReadSource && deps.length === 1 && deps[0].deltaKind === "text") {
 ```
 
 **Key design decisions:**
-1. `TextRefLike` interface keeps runtime Loro-agnostic (mirrors `ListRefLike`)
-2. Non-text deltas (e.g., `"replace"` from `LocalRef`) trigger full `textContent` replacement
+1. `[SNAPSHOT]` protocol keeps runtime Loro-agnostic — `textRegion` casts to `Snapshotable<string>` and calls `ref[SNAPSHOT](ref)` instead of ad-hoc interface casts. (`ListRefLike<T>` remains for `listRegion` because the planning functions need `{ length, get(i) }` — replacing the cast with `[SNAPSHOT]` would return `self` then still need a cast.)
+2. Non-text deltas (e.g., `"replace"` from `LocalRef`) trigger full `textContent` replacement via `[SNAPSHOT]`
 3. Multi-dep expressions always use `subscribeMultiple` — delta describes one source, not output
-4. Direct-read detection is structural AST analysis at the expression root
+4. Direct-read and implicit-read detection are complementary AST/type analyses at the expression root
+5. Bare refs (`p(doc.title)`) produce the same codegen as explicit reads (`p(doc.title.get())`) — the compiler synthesizes `.get()` in the IR source, but `textRegion` reads initial state via `[SNAPSHOT]` internally
 
 ### Input Text Region Architecture
 
@@ -881,7 +969,7 @@ The `inputTextRegion` runtime enables **O(k) surgical value updates** for `<inpu
 
 **When it applies (codegen dispatch):**
 - Attribute name is `value`
-- Expression is a direct read of a single `TextRef` (`directReadSource` is set)
+- Expression is a direct or implicit read of a single `TextRef` (`directReadSource` is set)
 - The dependency has `deltaKind: "text"`
 
 Both the createElement path (`generateAttributeSubscription`) and the template cloning path (`generateHoleSetup`) check via `isInputTextRegionCandidate()`. When the condition is met:
@@ -917,15 +1005,17 @@ function inputTextRegion(
   ref: unknown,
   scope: Scope,
 ): void {
-  const typedRef = ref as TextRefLike
-  input.value = typedRef.get()  // Initial value
+  const snapshotable = ref as Snapshotable<string>
+  const readValue = () => snapshotable[SNAPSHOT](ref)
+
+  input.value = readValue()  // Initial value via [SNAPSHOT]
 
   subscribe(ref, (delta: ReactiveDelta) => {
     if (delta.type === "text") {
       const mode = delta.origin === "local" ? "end" : "preserve"
       patchInputValue(input, delta.ops, mode)  // O(k) surgical update
     } else {
-      input.value = typedRef.get()       // Fallback
+      input.value = readValue()       // Fallback via [SNAPSHOT]
     }
   }, scope)
 }

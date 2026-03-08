@@ -194,22 +194,54 @@ The library uses well-known symbols to provide clean separation between differen
 | `INTERNAL_SYMBOL` | (internal) | Private implementation details |
 | `LORO_SYMBOL` | `loro()` | Access native Loro types directly |
 | `EXT_SYMBOL` | `ext()` | Access loro-extended-specific features |
-| `REACTIVE` | `isReactive()` | Reactive subscribe function (from `@loro-extended/reactive`) |
+| `REACTIVE` | `isReactive()` | Reactive subscribe function — the "delta" half of the Moore machine |
+| `SNAPSHOT` | `isSnapshotable()` | Snapshot read function — the "state" half of the Moore machine |
 
-> **`REACTIVE`** is defined in `@loro-extended/reactive` (not in `@loro-extended/change`) to ensure TypeScript type identity across packages. Both `change` and `kinetic` import the same symbol. Uses `Symbol.for("kinetic:reactive")` for runtime identity. See [packages/kinetic/TECHNICAL.md](./packages/kinetic/TECHNICAL.md) for compiler detection details.
+> **`REACTIVE`** and **`SNAPSHOT`** are both defined in `@loro-extended/reactive` (not in `@loro-extended/change`) to ensure TypeScript type identity across packages. Both `change` and `kinetic` import the same symbols. They use `Symbol.for("kinetic:reactive")` and `Symbol.for("kinetic:snapshot")` respectively for runtime identity. Together they form the complete **Moore machine protocol**: `[SNAPSHOT]` reads current state, `[REACTIVE]` subscribes to future deltas. See [packages/kinetic/TECHNICAL.md](./packages/kinetic/TECHNICAL.md) for compiler detection details.
 
-#### REACTIVE Callback Signature
+#### The Reactive Interface: `Reactive<S, D>`
 
-The `[REACTIVE]` property has type `ReactiveSubscribe<D>`:
+The unified `Reactive<S, D>` interface encodes both halves of the Moore machine:
 
 ```typescript
-type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> = (
+export const SNAPSHOT = Symbol.for("kinetic:snapshot")
+export const REACTIVE = Symbol.for("kinetic:reactive")
+
+export type SnapshotFn<S> = (self: unknown) => S
+export type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> = (
   self: unknown,
   callback: (delta: D) => void,
 ) => () => void
+
+export interface Reactive<S = unknown, D extends ReactiveDelta = ReplaceDelta>
+  extends Snapshotable<S> {
+  readonly [SNAPSHOT]: SnapshotFn<S>
+  readonly [REACTIVE]: ReactiveSubscribe<D>
+}
 ```
 
-The callback receives a **delta** describing what changed, not just a void notification. Each member of the `ReactiveDelta` union is exported as a named type from `@loro-extended/reactive`:
+- `S` is the **snapshot type** — what you read via `ref[SNAPSHOT](ref)` (e.g., `string` for `TextRef`, `number` for `CounterRef`, `self` for collection types)
+- `D` is the **delta type** — what arrives via `ref[REACTIVE](ref, callback)` (e.g., `TextDelta`, `ReplaceDelta`)
+
+The relationship between `S` and `D` is declared by the implementor, not derivable from either alone. The `self` parameter on both functions follows the same pattern — it allows the function to be defined once on a prototype and work for all instances without per-instance closure allocation.
+
+**Snapshot implementations by ref type:**
+
+| Ref Type | Snapshot `S` | `[SNAPSHOT]` Returns | Delta `D` |
+|----------|-------------|---------------------|-----------|
+| `TextRef` | `string` | `.toString()` value | `TextDelta` |
+| `CounterRef` | `number` | `.get()` value | `ReplaceDelta` |
+| `PlainValueRef<T>` | `T` | `.get()` value | `ReplaceDelta` |
+| `LocalRef<T>` | `T` | `.get()` value | `ReplaceDelta` |
+| `ListRef`, `MovableListRef` | `self` (identity) | The ref itself | `ListDelta` |
+| `RecordRef` | `self` (identity) | The ref itself | `MapDelta` |
+| `StructRef` | `self` (identity) | The ref itself | `MapDelta` |
+| `TreeRef` | `self` (identity) | The ref itself | `TreeDelta` |
+| `DocRef` | `self` (identity) | The ref itself | `MapDelta` |
+
+Scalar types (text, counter, plain value) override `[SNAPSHOT]` to return their unwrapped value. Collection types inherit the base `TypedRef` identity snapshot (`(self) => self`) because the ref *is* the state surface — consumers read items from the ref itself.
+
+**Delta types and DOM optimizations:**
 
 | Delta Kind | Named Type | Emitted By | DOM Optimization |
 |------------|------------|------------|------------------|
@@ -226,6 +258,14 @@ The callback receives a **delta** describing what changed, not just a void notif
 The generic parameter `D` allows compile-time inference of which delta kind a type emits. The Kinetic compiler's `getDeltaKind()` reads the `type` property from `D` to determine optimization opportunities.
 
 **Critical:** Each typed ref must narrow `D` to its specific delta type via `declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>` (or the appropriate named type). Without this narrowing, `D` defaults to the full `ReactiveDelta` union, and `getDeltaKind()` silently falls back to `"replace"` — disabling all surgical patching optimizations. The `declare` keyword ensures no JavaScript is emitted; the runtime implementation inherited from `TypedRef` handles all container types correctly. See [packages/change/TECHNICAL.md](./packages/change/TECHNICAL.md) for the full ref-to-delta mapping table.
+
+**`declare` vs concrete property for symbol overrides:** Use `declare` when the parent class provides the runtime value and the subclass just narrows the type (e.g., `declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>`). Use a concrete property when the subclass provides *both* a new runtime value *and* a narrowed type (e.g., `readonly [SNAPSHOT]: SnapshotFn<string> = (self) => ...`). The property initializer runs after `super()`, shadowing the parent's value. Never use both `declare` and a concrete definition on the same property.
+
+**`Reactive` default `D` is `ReplaceDelta`, not `ReactiveDelta`:** Writing `implements Reactive` (no type arguments) expands to `Reactive<unknown, ReplaceDelta>`. This is correct for leaf types but wrong for a base class like `TypedRef` that must accept all delta kinds — use `implements Reactive<unknown, ReactiveDelta>` with the explicit wider union.
+
+**Runtime type guards:** `isReactive(value)` requires *both* `[REACTIVE]` and `[SNAPSHOT]` as functions on the value. `isSnapshotable(value)` requires only `[SNAPSHOT]`. The tightened `isReactive` was deferred until all first-party types had `[SNAPSHOT]` (Phase 2) to avoid breaking the runtime's `subscribe()` function, which gates on `isReactive()`.
+
+**`StructRef` proxy trap requirement:** `StructRef` is the only typed ref with explicit symbol interception in its Proxy. Both the `get` and `has` traps must handle `SNAPSHOT` (in addition to `REACTIVE`). The `has` trap is critical — `isSnapshotable()` uses the `in` operator, which invokes `has`, not `get`. Other proxied types (`TypedDoc`, `RecordRef`) use `Reflect.has` fallthrough and don't need explicit symbol handling.
 
 **Design Rationale**: TypedDoc and TypedRef are Proxy objects where property names map to schema fields. Symbols provide a clean namespace for library functionality without polluting the user's schema namespace.
 

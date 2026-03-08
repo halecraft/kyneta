@@ -33,6 +33,11 @@ import type { Binding, Builder, Child, Element, Props } from "../types.js"
 /**
  * Props that may contain Binding values.
  * Extends Props to allow bind() in value/checked properties.
+ *
+ * **Known limitation:** Reactive attribute values (e.g., `{ class: doc.className }`
+ * where `doc.className` is `PlainValueRef<string>`) are not yet supported.
+ * Attribute values must be plain strings, functions, or Binding values.
+ * Reactive attribute support is a future consideration.
  */
 type PropsWithBindings = Omit<Props, "value" | "checked"> & {
   value?: string | (() => string) | Binding<unknown>

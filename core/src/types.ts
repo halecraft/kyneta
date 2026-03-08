@@ -15,6 +15,7 @@ import type {
   TextRef,
   TreeRef,
 } from "@loro-extended/change"
+import type { Reactive } from "@loro-extended/reactive"
 
 /**
  * Union of all typed ref types that can be used with bind().
@@ -114,6 +115,7 @@ export type Child =
   | Element
   | Binding<unknown>
   | Node
+  | Reactive<any, any>
 
 // =============================================================================
 // Binding Types
