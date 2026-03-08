@@ -124,10 +124,10 @@ The key insight for this phase: the writable interpreter uses **annotations** to
 
 - Task: Demonstrate **portable refs** — extract a writable scalar ref from the tree, pass it to a standalone function, call `.get()` and `.set()`. The ref carries its context (parent path, write function) and works correctly outside the tree. 🟢
 
-### Phase 5: Composition combinators 🔴
+### Phase 5: Composition combinators 🟢
 
-- Task: Create `packages/schema/src/combinators.ts` — `enrich(base, decorator)` that wraps an interpreter, running the base and then applying the decorator to each result. `product(f, g)` that pairs two interpreters. `overlay(primary, fallback)` as an interpreter combinator (distinct from `Zero.overlay` which operates on values). 🔴
-- Task: Demonstrate `enrich(writableInterpreter, withFeed)` producing results that satisfy `Feedable<S, A>` — using the writable interpreter from Phase 4 and a `withFeed` decorator that attaches `[FEED]` via `getOrCreateFeed`. 🔴
+- Task: Create `packages/schema/src/combinators.ts` — `enrich(base, decorator)` that wraps an interpreter, running the base and then applying the decorator to each result. `product(f, g)` that pairs two interpreters. `overlay(primary, fallback)` as an interpreter combinator (distinct from `Zero.overlay` which operates on values). 🟢
+- Task: Demonstrate `enrich(writableInterpreter, withFeed)` producing results that satisfy `Feedable<S, A>` — using the writable interpreter from Phase 4 and a `withFeed` decorator that attaches `[FEED]` via `getOrCreateFeed`. 🟢
 
 ### Phase 6: Tests 🔴
 

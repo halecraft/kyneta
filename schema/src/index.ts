@@ -93,3 +93,7 @@ export type {
   CounterRef,
   SequenceRef,
 } from "./interpreters/writable.js"
+
+// Interpreter composition combinators
+export { enrich, product, overlay, firstDefined } from "./combinators.js"
+export type { Decorator, MergeFn } from "./combinators.js"
