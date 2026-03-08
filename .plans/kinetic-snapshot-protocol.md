@@ -181,17 +181,17 @@ The `isSnapshotable` guard is available from Phase 1 for checking `[SNAPSHOT]` i
 
 ## Phases and Tasks
 
-### Phase 1: `SNAPSHOT` symbol, `Reactive<S, D>`, and `LocalRef` in `@loro-extended/reactive` 🔴
+### Phase 1: `SNAPSHOT` symbol, `Reactive<S, D>`, and `LocalRef` in `@loro-extended/reactive` ✅
 
 Introduce the `SNAPSHOT` symbol, `SnapshotFn<S>` type, `Snapshotable<S>` interface, `isSnapshotable` type guard, update `Reactive` to `Reactive<S, D>`, and implement on `LocalRef`. `isReactive` is **not** tightened in this phase (see Phase 2 Task 2.8).
 
-- **Task 1.1**: Add `SNAPSHOT` symbol, `SnapshotFn<S>`, and `Snapshotable<S>` to `packages/reactive/src/index.ts` 🔴
-- **Task 1.2**: Add `isSnapshotable` type guard 🔴
-- **Task 1.3**: Update `Reactive` interface from `Reactive<D>` to `Reactive<S, D>` extending `Snapshotable<S>` 🔴
-- **Task 1.4**: Implement `[SNAPSHOT]` on `LocalRef<T>` — `readonly [SNAPSHOT]: SnapshotFn<T> = (self) => (self as LocalRef<T>).get()` 🔴
-- **Task 1.5**: Update `LocalRef<T>` from `implements Reactive<ReplaceDelta>` to `implements Reactive<T, ReplaceDelta>` 🔴
-- **Task 1.6**: Add unit tests for `SNAPSHOT` symbol, `isSnapshotable`, `LocalRef[SNAPSHOT]` 🔴
-- **Task 1.7**: Verify `@loro-extended/reactive` builds and all tests pass 🔴
+- **Task 1.1**: Add `SNAPSHOT` symbol, `SnapshotFn<S>`, and `Snapshotable<S>` to `packages/reactive/src/index.ts` ✅
+- **Task 1.2**: Add `isSnapshotable` type guard ✅
+- **Task 1.3**: Update `Reactive` interface from `Reactive<D>` to `Reactive<S, D>` extending `Snapshotable<S>` ✅
+- **Task 1.4**: Implement `[SNAPSHOT]` on `LocalRef<T>` — `readonly [SNAPSHOT]: SnapshotFn<T> = (self) => (self as LocalRef<T>).get()` ✅
+- **Task 1.5**: Update `LocalRef<T>` from `implements Reactive<ReplaceDelta>` to `implements Reactive<T, ReplaceDelta>` ✅
+- **Task 1.6**: Add unit tests for `SNAPSHOT` symbol, `isSnapshotable`, `LocalRef[SNAPSHOT]` ✅
+- **Task 1.7**: Verify `@loro-extended/reactive` builds and all tests pass ✅
 
 ### Phase 2: `[SNAPSHOT]` on scalar `@loro-extended/change` typed refs 🔴
 
