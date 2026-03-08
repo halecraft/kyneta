@@ -11,6 +11,7 @@ import {
   type ScalarKind,
   type SchemaNode,
   type Writable,
+  type Plain,
   type ScalarPlain,
   type ScalarRef,
   type TextRef,
@@ -412,6 +413,205 @@ describe("type-level: Writable<S> end-to-end realistic schema", () => {
     // Record (dynamic keys)
     expectTypeOf<Doc["metadata"]>().toEqualTypeOf<{
       readonly [key: string]: ScalarRef<unknown>
+    }>()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Plain<S> — the type-level catamorphism for plain JS types
+// ---------------------------------------------------------------------------
+
+describe("type-level: Plain<S> for leaf annotations", () => {
+  it("Plain<text()> = string", () => {
+    type Result = Plain<ReturnType<typeof Schema.text>>
+    expectTypeOf<Result>().toEqualTypeOf<string>()
+  })
+
+  it("Plain<counter()> = number", () => {
+    type Result = Plain<ReturnType<typeof Schema.counter>>
+    expectTypeOf<Result>().toEqualTypeOf<number>()
+  })
+})
+
+describe("type-level: Plain<S> for scalars", () => {
+  it("Plain<plain.string()> = string", () => {
+    type Result = Plain<ReturnType<typeof Schema.plain.string>>
+    expectTypeOf<Result>().toEqualTypeOf<string>()
+  })
+
+  it("Plain<plain.number()> = number", () => {
+    type Result = Plain<ReturnType<typeof Schema.plain.number>>
+    expectTypeOf<Result>().toEqualTypeOf<number>()
+  })
+
+  it("Plain<plain.boolean()> = boolean", () => {
+    type Result = Plain<ReturnType<typeof Schema.plain.boolean>>
+    expectTypeOf<Result>().toEqualTypeOf<boolean>()
+  })
+
+  it("Plain<plain.null()> = null", () => {
+    type Result = Plain<ReturnType<typeof Schema.plain.null>>
+    expectTypeOf<Result>().toEqualTypeOf<null>()
+  })
+
+  it("Plain<plain.undefined()> = undefined", () => {
+    type Result = Plain<ReturnType<typeof Schema.plain.undefined>>
+    expectTypeOf<Result>().toEqualTypeOf<undefined>()
+  })
+
+  it("Plain<plain.bytes()> = Uint8Array", () => {
+    type Result = Plain<ReturnType<typeof Schema.plain.bytes>>
+    expectTypeOf<Result>().toEqualTypeOf<Uint8Array>()
+  })
+
+  it("Plain<plain.any()> = unknown", () => {
+    type Result = Plain<ReturnType<typeof Schema.plain.any>>
+    expectTypeOf<Result>().toEqualTypeOf<unknown>()
+  })
+})
+
+describe("type-level: Plain<S> for products and structs", () => {
+  it("Plain<struct({...})> has typed fields", () => {
+    const s = Schema.struct({
+      name: Schema.plain.string(),
+      active: Schema.plain.boolean(),
+    })
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{
+      name: string
+      active: boolean
+    }>()
+  })
+
+  it("Plain<struct with text and counter> maps annotations to primitives", () => {
+    const s = Schema.struct({
+      title: Schema.text(),
+      count: Schema.counter(),
+    })
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{
+      title: string
+      count: number
+    }>()
+  })
+})
+
+describe("type-level: Plain<S> for sequences", () => {
+  it("Plain<list(plain.string())> = string[]", () => {
+    const s = Schema.list(Schema.plain.string())
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<string[]>()
+  })
+
+  it("Plain<list(struct({...}))> has typed item objects", () => {
+    const s = Schema.list(
+      Schema.struct({
+        name: Schema.plain.string(),
+        body: Schema.text(),
+      }),
+    )
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<
+      { name: string; body: string }[]
+    >()
+  })
+})
+
+describe("type-level: Plain<S> for maps", () => {
+  it("Plain<record(plain.number())> = { [key: string]: number }", () => {
+    const s = Schema.record(Schema.plain.number())
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{ [key: string]: number }>()
+  })
+
+  it("Plain<record(plain.any())> = { [key: string]: unknown }", () => {
+    const s = Schema.record(Schema.plain.any())
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{ [key: string]: unknown }>()
+  })
+})
+
+describe("type-level: Plain<S> for movable list", () => {
+  it("Plain<movableList(plain.string())> = string[]", () => {
+    const s = Schema.movableList(Schema.plain.string())
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<string[]>()
+  })
+
+  it("Plain<movableList(struct({...}))> = typed object[]", () => {
+    const s = Schema.movableList(
+      Schema.struct({
+        id: Schema.plain.number(),
+        label: Schema.plain.string(),
+      }),
+    )
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<
+      { id: number; label: string }[]
+    >()
+  })
+})
+
+describe("type-level: Plain<S> for doc (annotated + product)", () => {
+  it("Plain<doc({...})> unwraps the annotation and maps the inner product", () => {
+    const s = Schema.doc({
+      title: Schema.text(),
+      count: Schema.counter(),
+      settings: Schema.struct({
+        darkMode: Schema.plain.boolean(),
+        fontSize: Schema.plain.number(),
+      }),
+    })
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{
+      title: string
+      count: number
+      settings: {
+        darkMode: boolean
+        fontSize: number
+      }
+    }>()
+  })
+})
+
+describe("type-level: Plain<S> end-to-end realistic schema", () => {
+  it("a full chat doc schema produces fully typed plain object", () => {
+    const chatDoc = Schema.doc({
+      title: Schema.text(),
+      count: Schema.counter(),
+      messages: Schema.list(
+        Schema.struct({
+          author: Schema.plain.string(),
+          body: Schema.text(),
+        }),
+      ),
+      settings: Schema.struct({
+        darkMode: Schema.plain.boolean(),
+        fontSize: Schema.plain.number(),
+      }),
+      metadata: Schema.record(Schema.plain.any()),
+    })
+
+    type Doc = Plain<typeof chatDoc>
+
+    // Top-level fields are correctly typed
+    expectTypeOf<Doc["title"]>().toEqualTypeOf<string>()
+    expectTypeOf<Doc["count"]>().toEqualTypeOf<number>()
+
+    // Nested sequence of structs → typed object array
+    expectTypeOf<Doc["messages"]>().toEqualTypeOf<
+      { author: string; body: string }[]
+    >()
+
+    // Nested struct → typed object
+    expectTypeOf<Doc["settings"]>().toEqualTypeOf<{
+      darkMode: boolean
+      fontSize: number
+    }>()
+
+    // Record (dynamic keys)
+    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<{
+      [key: string]: unknown
     }>()
   })
 })

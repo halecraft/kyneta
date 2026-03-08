@@ -5,6 +5,7 @@
 
 // Schema — unified recursive grammar
 export { Schema, structuralKind, isAnnotated, unwrapAnnotation } from "./schema.js"
+export { describe } from "./describe.js"
 export type {
   // The recursive union
   Schema as SchemaNode,
@@ -93,6 +94,7 @@ export type {
   CounterRef,
   SequenceRef,
   Writable,
+  Plain,
   ScalarPlain,
 } from "./interpreters/writable.js"
 

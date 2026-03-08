@@ -258,7 +258,7 @@ export interface SequenceRef<T = unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Writable<S> — type-level interpretation from schema type to ref type
+// Type-level interpretations — schema type → TypeScript type
 // ---------------------------------------------------------------------------
 
 /**
@@ -272,6 +272,84 @@ export type ScalarPlain<K extends ScalarKind> =
   : K extends "undefined" ? undefined
   : K extends "bytes" ? Uint8Array
   : K extends "any" ? unknown
+  : unknown
+
+// ---------------------------------------------------------------------------
+// Plain<S> — type-level interpretation from schema type to plain JS type
+// ---------------------------------------------------------------------------
+
+/**
+ * Computes the plain JavaScript/JSON type for a given schema type.
+ *
+ * This is the type-level counterpart to `Writable<S>`: where `Writable`
+ * maps schema nodes to ref types (TextRef, CounterRef, etc.), `Plain`
+ * maps them to bare JavaScript values (string, number, arrays, objects).
+ *
+ * Use `Plain<S>` for `toJSON()` return types, serialization boundaries,
+ * snapshot types, and anywhere you need the "just data" shape of a schema.
+ *
+ * ```ts
+ * const s = Schema.doc({
+ *   title: Schema.text(),
+ *   count: Schema.counter(),
+ *   items: Schema.list(Schema.struct({
+ *     name: Schema.plain.string(),
+ *     done: Schema.plain.boolean(),
+ *   })),
+ *   settings: Schema.struct({
+ *     darkMode: Schema.plain.boolean(),
+ *   }),
+ *   metadata: Schema.record(Schema.plain.any()),
+ * })
+ *
+ * type Doc = Plain<typeof s>
+ * // = {
+ * //     title: string
+ * //     count: number
+ * //     items: { name: string; done: boolean }[]
+ * //     settings: { darkMode: boolean }
+ * //     metadata: { [key: string]: unknown }
+ * //   }
+ * ```
+ */
+export type Plain<S extends Schema> =
+  // --- Annotated: dispatch on tag ---
+  S extends AnnotatedSchema<infer Tag, infer Inner>
+    ? Tag extends "text" ? string
+    : Tag extends "counter" ? number
+    : Tag extends "doc"
+      ? Inner extends ProductSchema<infer F>
+        ? { [K in keyof F]: Plain<F[K]> }
+        : unknown
+    : Tag extends "movable"
+      ? Inner extends SequenceSchema<infer I>
+        ? Plain<I>[]
+        : unknown
+    : Tag extends "tree"
+      ? Inner extends Schema
+        ? Plain<Inner>
+        : unknown
+    // Unknown annotation with inner — delegate
+    : Inner extends Schema
+      ? Plain<Inner>
+      : unknown
+  // --- Scalar ---
+  : S extends ScalarSchema<infer K>
+    ? ScalarPlain<K>
+  // --- Product ---
+  : S extends ProductSchema<infer F>
+    ? { [K in keyof F]: Plain<F[K]> }
+  // --- Sequence ---
+  : S extends SequenceSchema<infer I>
+    ? Plain<I>[]
+  // --- Map ---
+  : S extends MapSchema<infer I>
+    ? { [key: string]: Plain<I> }
+  // --- Sum ---
+  : S extends PositionalSumSchema<infer V>
+    ? Plain<V[number]>
+  : S extends DiscriminatedSumSchema<infer D, infer M>
+    ? { [K in keyof M]: Plain<M[K]> & { [_ in D]: K } }[keyof M]
   : unknown
 
 /**
