@@ -74,9 +74,9 @@ The theory document contains numerous design decisions that have not been valida
 
 ## Phases
 
-### Phase 1: Unified schema grammar and core types 🔴
+### Phase 1: Unified schema grammar and core types 🟢
 
-- Task: Create `packages/schema/src/schema.ts` — a single recursive `Schema` type with structural constructors: 🔴
+- Task: Create `packages/schema/src/schema.ts` — a single recursive `Schema` type with structural constructors: 🟢
   - `scalar(kind)` — leaf values: `"string"`, `"number"`, `"boolean"`, `"null"`, `"bytes"`, etc. `ScalarKind` is a simple string union (not a separate recursive grammar)
   - `product(fields)` — fixed-key record: `{ [key: string]: Schema }`
   - `sequence(item)` — ordered collection of `Schema`
@@ -84,10 +84,10 @@ The theory document contains numerous design decisions that have not been valida
   - `sum(variants)` — tagged union of `Schema[]` (or discriminated variant map)
   - `annotated(tag, inner?)` — semantic enrichment. The `tag` is a string; `inner` is an optional `Schema` that the annotation wraps. Annotations are how backends attach meaning: `annotated("text")` means collaborative text, `annotated("counter")` means counter semantics, `annotated("movable", sequence(item))` means move-capable sequence, `annotated("tree", product(nodeFields))` means hierarchical tree
   - The annotation set is **open** — backends define their own tags
-- Task: Create a developer-facing constructor API in the same file — `Schema.text()`, `Schema.counter()`, `Schema.list(item)`, `Schema.struct(fields)`, `Schema.doc(fields)`, `Schema.record(item)`, `Schema.movableList(item)`, `Schema.tree(nodeData)`, `Schema.plain.string()`, `Schema.plain.number()`, etc. These are **sugar** that produce annotated schema nodes. The API enforces Loro-compatible composition via TypeScript's type system, but the underlying representation is the unified grammar. 🔴
-- Task: Create `packages/schema/src/action.ts` — `ActionBase` interface (`{ readonly type: string }`), concrete action types for **structural kinds** (`TextAction` for annotated-text, `SequenceAction<T>` for sequences, `MapAction` for products/maps, `ReplaceAction<T>` for scalars), action op types using retain/insert/delete encoding. Note: action types are **interpretation-level** — the schema says "sequence," the backend picks the action vocabulary. Built-in actions cover the common cases. 🔴
-- Task: Create `packages/schema/src/feed.ts` — `FEED` symbol, `Feed<S, A>` interface, `Feedable<S, A>` interface, `getOrCreateFeed` WeakMap helper, `isFeedable` type guard 🔴
-- Task: Create `packages/schema/src/index.ts` barrel export 🔴
+- Task: Create a developer-facing constructor API in the same file — `Schema.text()`, `Schema.counter()`, `Schema.list(item)`, `Schema.struct(fields)`, `Schema.doc(fields)`, `Schema.record(item)`, `Schema.movableList(item)`, `Schema.tree(nodeData)`, `Schema.plain.string()`, `Schema.plain.number()`, etc. These are **sugar** that produce annotated schema nodes. The API enforces Loro-compatible composition via TypeScript's type system, but the underlying representation is the unified grammar. 🟢
+- Task: Create `packages/schema/src/action.ts` — `ActionBase` interface (`{ readonly type: string }`), concrete action types for **structural kinds** (`TextAction` for annotated-text, `SequenceAction<T>` for sequences, `MapAction` for products/maps, `ReplaceAction<T>` for scalars), action op types using retain/insert/delete encoding. Note: action types are **interpretation-level** — the schema says "sequence," the backend picks the action vocabulary. Built-in actions cover the common cases. 🟢
+- Task: Create `packages/schema/src/feed.ts` — `FEED` symbol, `Feed<S, A>` interface, `Feedable<S, A>` interface, `getOrCreateFeed` WeakMap helper, `isFeedable` type guard 🟢
+- Task: Create `packages/schema/src/index.ts` barrel export 🟢
 
 ### Phase 2: step and Zero 🔴
 
