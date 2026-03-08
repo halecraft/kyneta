@@ -28,3 +28,7 @@ export { createIncrementalStructureIndex } from './structure-index.js';
 // --- Incremental Projection (Phase 5) ---
 export type { IncrementalProjection } from './projection.js';
 export { createIncrementalProjection } from './projection.js';
+
+// --- Incremental Validity (Phase 6) ---
+export type { IncrementalValidity } from './validity.js';
+export { createIncrementalValidity } from './validity.js';

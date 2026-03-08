@@ -474,7 +474,7 @@ target structure arrives, and the cross-term.
 - Differential: accumulated facts equal `projectToFacts(allActive, index)`. ✅
 - 36 tests in `tests/kernel/incremental/projection.test.ts`. Also added orphan retraction before structure arrives, concurrent map child orphan resolution, value+structure in same step, seq origin references, map/root exclusion from seq facts, non-projected types (retract, authority), duplicate handling, and 4 exhaustive all-permutation differential tests (up to 120 permutations for 5-constraint mixed map+seq). 960 total tests passing (924 + 36).
 
-### Phase 6: Incremental Validity 🔴
+### Phase 6: Incremental Validity ✅
 
 Validity checking is O(1) for non-authority constraints but requires re-evaluating
 affected peers when an authority constraint arrives. The current `computeAuthority`
@@ -523,21 +523,22 @@ O(all-constraints) scanning.
 
 #### Tasks
 
-- 6.1 Create `kernel/incremental/validity.ts` as a concrete module exporting `step(Δ_filtered: ZSet<Constraint>): ZSet<Constraint>`, `current(): Constraint[]`, and `reset(): void`. Internal state (persistent `AuthorityState`, per-peer constraint index, accumulated valid/invalid sets) is private. 🔴
-- 6.2 Authority state update: when a new authority constraint arrives, add it to the accumulated authority constraint list, then recompute the full `AuthorityState` via `computeAuthority(allAccumulatedAuthorityConstraints, creator)`. Diff the new state against the cached previous state to identify peers whose effective capabilities changed. This full-replay approach correctly handles transitive cascades (see Design Note above). 🔴
-- 6.3 For non-authority Δc: check signature + capability against accumulated state → emit `{c: +1}` in Δ_valid or record as invalid. O(1). 🔴
-- 6.4 For authority Δc: recompute authority state (task 6.2), diff against previous state to find all peers whose capabilities changed (not just the target peer — transitive cascades may affect peers granted capabilities by the target). For each affected peer, use the per-peer constraint index to re-check their constraints. For each constraint whose validity status changed, emit `{c': +1}` (newly valid) or `{c': −1}` (newly invalid) in Δ_valid. 🔴
-- 6.5 `current()`: return the accumulated valid constraint set. 🔴
+- 6.1 Create `kernel/incremental/validity.ts` as a concrete module exporting `step(Δ_filtered: ZSet<Constraint>): ZSet<Constraint>`, `current(): Constraint[]`, and `reset(): void`. Internal state (persistent `AuthorityState`, per-peer constraint index, accumulated valid/invalid sets) is private. ✅
+- 6.2 Authority state update: when a new authority constraint arrives, add it to the accumulated authority constraint list, then recompute the full `AuthorityState` via `computeAuthority(allAccumulatedAuthorityConstraints, creator)`. Diff the new state against the cached previous state to identify peers whose effective capabilities changed. This full-replay approach correctly handles transitive cascades (see Design Note above). ✅
+- 6.3 For non-authority Δc: check signature + capability against accumulated state → emit `{c: +1}` in Δ_valid or record as invalid. O(1). ✅
+- 6.4 For authority Δc: recompute authority state (task 6.2), diff against previous state to find all peers whose capabilities changed (not just the target peer — transitive cascades may affect peers granted capabilities by the target). For each affected peer, use the per-peer constraint index to re-check their constraints. For each constraint whose validity status changed, emit `{c': +1}` (newly valid) or `{c': −1}` (newly invalid) in Δ_valid. ✅
+- 6.5 `current()`: return the accumulated valid constraint set. ✅
 
 #### Tests
 
-- Non-authority constraint from authorized peer: emits `{c: +1}`. 🔴
-- Non-authority constraint from unauthorized peer: recorded as invalid, nothing in Δ_valid. 🔴
-- Authority grant enables previously-invalid constraints: emits `{c': +1}` for each. 🔴
-- Authority revoke disables previously-valid constraints: emits `{c': −1}` for each. 🔴
-- Concurrent grant+revoke (revoke wins): capability is removed. 🔴
-- Creator's constraints always valid (implicit Admin). 🔴
-- Differential: accumulated valid set equals `computeValid(allConstraints, creator)`. 🔴
+- Non-authority constraint from authorized peer: emits `{c: +1}`. ✅
+- Non-authority constraint from unauthorized peer: recorded as invalid, nothing in Δ_valid. ✅
+- Authority grant enables previously-invalid constraints: emits `{c': +1}` for each. ✅
+- Authority revoke disables previously-valid constraints: emits `{c': −1}` for each. ✅
+- Concurrent grant+revoke (revoke wins): capability is removed. ✅
+- Creator's constraints always valid (implicit Admin). ✅
+- Differential: accumulated valid set equals `computeValid(allConstraints, creator)`. ✅
+- 55 tests in `tests/kernel/incremental/validity.test.ts`. Also added bookmark validation, rule constraint validation, deduplication, removal handling (including authority removal triggering re-check), transitive authority cascade, mixed constraint type deltas, partial capability grants, and 3 exhaustive all-permutation differential tests (up to 120 permutations for 5-constraint mixed scenarios). 1015 total tests passing (960 + 55).
 
 ### Phase 7: Incremental Skeleton and Reality Deltas 🔴
 
