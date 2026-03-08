@@ -9,8 +9,10 @@
 import { createTypedDoc, loro, Shape } from "@loro-extended/change"
 import {
   REACTIVE,
+  SNAPSHOT,
   type ReactiveDelta,
   type ReactiveSubscribe,
+  type SnapshotFn,
   type TextDeltaOp,
 } from "@loro-extended/reactive"
 import { JSDOM } from "jsdom"
@@ -28,7 +30,6 @@ import {
   planTextPatch,
   textRegion,
   type TextPatchOp,
-  type TextRefLike,
 } from "./text-patch.js"
 
 // Set up DOM globals for testing
@@ -50,7 +51,7 @@ global.HTMLTextAreaElement = dom.window.HTMLTextAreaElement
  * test suites can share it without duplication.
  */
 function createMockTextRef(initialValue: string): {
-  ref: TextRefLike & { [REACTIVE]: ReactiveSubscribe }
+  ref: { [SNAPSHOT]: SnapshotFn<string>; [REACTIVE]: ReactiveSubscribe }
   emit: (delta: ReactiveDelta) => void
   setValue: (value: string) => void
 } {
@@ -59,6 +60,7 @@ function createMockTextRef(initialValue: string): {
 
   const ref = {
     get: () => currentValue,
+    [SNAPSHOT]: ((_self: unknown) => currentValue) as SnapshotFn<string>,
     [REACTIVE]: ((_self: unknown, cb: (delta: ReactiveDelta) => void) => {
       callback = cb
       return () => {

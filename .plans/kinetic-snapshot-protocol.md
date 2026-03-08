@@ -208,15 +208,15 @@ Add `[SNAPSHOT]` to scalar typed refs that appear in content position. Update `R
 - **Task 2.9**: Rebuild both packages. All `@loro-extended/reactive` tests pass (79). All `@loro-extended/change` tests pass (1012, up from 983). All `@loro-extended/kinetic` tests pass (971). Zero type errors in reactive and change packages. ✅
 - **Task 2.10**: Add tests for `[SNAPSHOT]` on `TextRef`, `CounterRef`, `PlainValueRef`, all collection types (identity snapshot), `StructRef` proxy interception, and tightened `isReactive` across all ref types including `LocalRef`. ✅
 
-### Phase 3: Runtime uses `[SNAPSHOT]` instead of ad-hoc interfaces 🔴
+### Phase 3: Runtime uses `[SNAPSHOT]` instead of ad-hoc interfaces ✅
 
 Replace `TextRefLike` ad-hoc casts with protocol-level `[SNAPSHOT]` access in the Kinetic runtime. `listRegion` is **out of scope** — its `ListRefLike<T>` cast is idiomatic for the functional-core planning functions and does not benefit from `[SNAPSHOT]`.
 
-- **Task 3.1**: Update `textRegion` — replace `(ref as TextRefLike).get()` with `(ref as Snapshotable<string>)[SNAPSHOT](ref)`. Remove `TextRefLike` interface. 🔴
-- **Task 3.2**: Update `inputTextRegion` — same replacement pattern. Both `textRegion` and `inputTextRegion` share the same `TextRefLike` import; removing it in 3.1 covers both. 🔴
-- **Task 3.3**: Verify `subscribeWithValue` — the `getValue` parameter is already a closure. No changes expected. 🔴
-- **Task 3.4**: Verify `conditionalRegion` — `getCondition` is already a closure. No changes expected. 🔴
-- **Task 3.5**: Run all runtime tests (mount, regions, text-patch, subscribe, hydrate, scope) 🔴
+- **Task 3.1**: Update `textRegion` — replace `(ref as TextRefLike).get()` with `(ref as Snapshotable<string>)[SNAPSHOT](ref)`. Remove `TextRefLike` interface. Also required rebuilding `@loro-extended/reactive` and `@loro-extended/change` dist so the tightened `isReactive` is picked up by the kinetic runtime at test time. ✅
+- **Task 3.2**: Update `inputTextRegion` — same replacement pattern. Both `textRegion` and `inputTextRegion` shared the same `TextRefLike` cast; both now use `Snapshotable<string>` + `[SNAPSHOT]`. ✅
+- **Task 3.3**: Verify `subscribeWithValue` — the `getValue` parameter is already a closure. No changes needed. ✅
+- **Task 3.4**: Verify `conditionalRegion` — `getCondition` is already a closure. No changes needed. ✅
+- **Task 3.5**: Run all runtime tests. All 971 kinetic tests pass. Also fixed a mock in `subscribe.test.ts` that lacked `[SNAPSHOT]` (custom reactive type mock now includes both symbols). ✅
 
 ### Phase 4: Compiler detects `[SNAPSHOT]`, supports bare-ref content, and widens `Child` type 🔴
 

@@ -2,8 +2,10 @@ import { createTypedDoc, loro, Shape } from "@loro-extended/change"
 import {
   LocalRef,
   REACTIVE,
+  SNAPSHOT,
   type ReactiveDelta,
   type ReactiveSubscribe,
+  type SnapshotFn,
 } from "@loro-extended/reactive"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { resetScopeIdCounter, Scope } from "./scope.js"
@@ -450,6 +452,7 @@ describe("subscribe", () => {
       // Create a minimal custom reactive type
       const listeners = new Set<(delta: ReactiveDelta) => void>()
       const customReactive = {
+        [SNAPSHOT]: ((_self: unknown) => null) as SnapshotFn<null>,
         [REACTIVE]: ((
           self: unknown,
           callback: (delta: ReactiveDelta) => void,

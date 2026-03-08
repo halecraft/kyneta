@@ -18,7 +18,12 @@
  * @packageDocumentation
  */
 
-import type { ReactiveDelta, TextDeltaOp } from "@loro-extended/reactive"
+import {
+  SNAPSHOT,
+  type ReactiveDelta,
+  type Snapshotable,
+  type TextDeltaOp,
+} from "@loro-extended/reactive"
 import type { Scope } from "./scope.js"
 import { subscribe } from "./subscribe.js"
 
@@ -36,18 +41,7 @@ export type TextPatchOp =
   | { kind: "insert"; offset: number; text: string }
   | { kind: "delete"; offset: number; count: number }
 
-/**
- * Minimal interface for text refs used by textRegion.
- *
- * This allows the runtime to remain Loro-agnostic — any type with
- * a `get()` method returning a string works (TextRef, custom text reactives, etc.).
- *
- * @internal
- */
-export interface TextRefLike {
-  /** Get the current text value */
-  get(): string
-}
+
 
 // =============================================================================
 // Functional Core (Pure)
@@ -215,11 +209,12 @@ export function inputTextRegion(
   ref: unknown,
   scope: Scope,
 ): void {
-  // Cast to TextRefLike — the ref must have .get()
-  const typedRef = ref as TextRefLike
+  // Read initial state via [SNAPSHOT] protocol
+  const snapshotable = ref as Snapshotable<string>
+  const readValue = () => snapshotable[SNAPSHOT](ref)
 
   // Set initial value
-  input.value = typedRef.get()
+  input.value = readValue()
 
   // Subscribe to changes
   subscribe(
@@ -234,7 +229,7 @@ export function inputTextRegion(
         patchInputValue(input, delta.ops, mode)
       } else {
         // Fallback for non-text deltas (e.g., "replace") — O(n) full replacement
-        input.value = typedRef.get()
+        input.value = readValue()
       }
     },
     scope,
@@ -267,11 +262,12 @@ export function inputTextRegion(
  * ```
  */
 export function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
-  // Cast to TextRefLike — the ref must have .get()
-  const typedRef = ref as TextRefLike
+  // Read initial state via [SNAPSHOT] protocol
+  const snapshotable = ref as Snapshotable<string>
+  const readValue = () => snapshotable[SNAPSHOT](ref)
 
   // Set initial value
-  textNode.textContent = typedRef.get()
+  textNode.textContent = readValue()
 
   // Subscribe to changes
   subscribe(
@@ -282,7 +278,7 @@ export function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
         patchText(textNode, delta.ops)
       } else {
         // Fallback for non-text deltas (e.g., "replace") — O(n) full replacement
-        textNode.textContent = typedRef.get()
+        textNode.textContent = readValue()
       }
     },
     scope,
