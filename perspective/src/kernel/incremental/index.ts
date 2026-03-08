@@ -3,6 +3,7 @@
 
 // --- Types ---
 export type {
+  StructureIndexDelta,
   NodeDelta,
   NodeDeltaKind,
   RealityDelta,
@@ -10,6 +11,8 @@ export type {
 
 // --- Constructors ---
 export {
+  structureIndexDeltaEmpty,
+  structureIndexDeltaFrom,
   realityDeltaEmpty,
   realityDeltaFrom,
 } from './types.js';
@@ -17,3 +20,7 @@ export {
 // --- Incremental Retraction (Phase 3) ---
 export type { IncrementalRetraction } from './retraction.js';
 export { createIncrementalRetraction } from './retraction.js';
+
+// --- Incremental Structure Index (Phase 4) ---
+export type { IncrementalStructureIndex } from './structure-index.js';
+export { createIncrementalStructureIndex } from './structure-index.js';

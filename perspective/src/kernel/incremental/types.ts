@@ -2,6 +2,7 @@
 // Shared types for the incremental kernel pipeline.
 //
 // This module defines the output types of the incremental pipeline:
+// - StructureIndexDelta: monotone output of the structure index stage
 // - NodeDelta: a single change to the reality tree
 // - RealityDelta: a collection of changes from a single insertion
 //
@@ -16,6 +17,68 @@
 // See .plans/005-incremental-kernel-pipeline.md § Operator Conventions.
 
 import type { Value, RealityNode } from '../types.js';
+import type { SlotGroup } from '../structure-index.js';
+
+// ---------------------------------------------------------------------------
+// Structure Index Delta
+// ---------------------------------------------------------------------------
+
+/**
+ * Output of the incremental structure index stage.
+ *
+ * Structure is monotone (append-only, never retracted), so this is NOT a
+ * Z-set. A Z-set would be wrong here: SlotGroups have stable identity
+ * (slotId) but mutable contents (the structures array grows when a second
+ * peer creates the same map child). Emitting {old: −1, new: +1} for the
+ * same slotId key would annihilate to zero under zsetAdd, and emitting
+ * only +1 would inflate weights on accumulation. Neither is correct.
+ *
+ * Instead, this is a plain map of slot groups that were created or modified
+ * in this step. Consumers treat each entry as "latest state for this slotId"
+ * (upsert semantics). This is the correct model: the structure index is a
+ * monotone operator on a semilattice, not a group operator on Z-sets.
+ *
+ * See .plans/005-incremental-kernel-pipeline.md § Structure Index Delta.
+ * See .plans/005-incremental-kernel-pipeline.md § Learnings: Z-Sets Are the
+ * Wrong Abstraction for Monotone Stages.
+ */
+export interface StructureIndexDelta {
+  /** Slot groups that were created or modified in this step, keyed by slotId. */
+  readonly updates: ReadonlyMap<string, SlotGroup>;
+  /** True if nothing changed. */
+  readonly isEmpty: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Structure Index Delta Constructors
+// ---------------------------------------------------------------------------
+
+/** The shared empty structure index delta (safe because it's readonly). */
+const EMPTY_STRUCTURE_INDEX_DELTA: StructureIndexDelta = {
+  updates: new Map(),
+  isEmpty: true,
+};
+
+/**
+ * Create an empty StructureIndexDelta (no changes).
+ *
+ * Returns a shared singleton — safe because the type is readonly.
+ */
+export function structureIndexDeltaEmpty(): StructureIndexDelta {
+  return EMPTY_STRUCTURE_INDEX_DELTA;
+}
+
+/**
+ * Create a StructureIndexDelta from a map of updated slot groups.
+ *
+ * If the map is empty, returns the shared empty delta.
+ */
+export function structureIndexDeltaFrom(
+  updates: ReadonlyMap<string, SlotGroup>,
+): StructureIndexDelta {
+  if (updates.size === 0) return EMPTY_STRUCTURE_INDEX_DELTA;
+  return { updates, isEmpty: false };
+}
 
 // ---------------------------------------------------------------------------
 // Node Delta

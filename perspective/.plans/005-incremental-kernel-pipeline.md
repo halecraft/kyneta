@@ -420,7 +420,7 @@ produce multi-removal validity deltas. See task 8.1a.
 - Differential: accumulated active set after N insertions equals `computeActive(allValid)`. ✅
 - 45 tests in `tests/kernel/incremental/retraction.test.ts`. Also added `violations()` accessor, deferred immunity checks (retract before immune target), removal (weight −1) handling, and exhaustive all-permutation differential tests. 881 total tests passing (836 + 45).
 
-### Phase 4: Incremental Structure Index 🔴
+### Phase 4: Incremental Structure Index ✅
 
 Structure constraints are permanent (never retracted). The structure index is
 append-only: each new structure constraint either creates a new SlotGroup or
@@ -432,18 +432,19 @@ Wrong Abstraction for Monotone Stages.
 
 #### Tasks
 
-- 4.1 Create `kernel/incremental/structure-index.ts` as a concrete module exporting `step(Δ_valid: ZSet<Constraint>): StructureIndexDelta`, `current(): StructureIndex`, and `reset(): void`. Internal state is the mutable `StructureIndex` (private). 🔴
-- 4.1a Add `StructureIndexDelta` type and `structureIndexDeltaEmpty()` constructor to `kernel/incremental/types.ts`. 🔴
-- 4.2 `step(Δ_valid)`: filter to structure constraints; for each, compute slot identity and either create or update SlotGroup. Emit the new/modified SlotGroup in a `StructureIndexDelta` (keyed by slotId, upsert semantics). Update `byId`, `slotGroups`, `structureToSlot`, `roots`, `childrenOf` indexes in place. 🔴
-- 4.3 `current()`: return the current accumulated `StructureIndex`. 🔴
+- 4.1 Create `kernel/incremental/structure-index.ts` as a concrete module exporting `step(Δ_valid: ZSet<Constraint>): StructureIndexDelta`, `current(): StructureIndex`, and `reset(): void`. Internal state is the mutable `StructureIndex` (private). ✅
+- 4.1a Add `StructureIndexDelta` type and `structureIndexDeltaEmpty()` constructor to `kernel/incremental/types.ts`. ✅ (Also added `structureIndexDeltaFrom()` constructor.)
+- 4.2 `step(Δ_valid)`: filter to structure constraints; for each, compute slot identity and either create or update SlotGroup. Emit the new/modified SlotGroup in a `StructureIndexDelta` (keyed by slotId, upsert semantics). Update `byId`, `slotGroups`, `structureToSlot`, `roots`, `childrenOf` indexes in place. ✅
+- 4.3 `current()`: return the current accumulated `StructureIndex`. ✅
 
 #### Tests
 
-- New root structure: creates SlotGroup, appears in `roots`. 🔴
-- New map child: creates SlotGroup, appears in `childrenOf` for parent. 🔴
-- Duplicate map child (same parent+key, different peer): joins existing SlotGroup. 🔴
-- New seq child: creates unique SlotGroup (CnId-keyed). 🔴
-- Differential: accumulated index equals `buildStructureIndex(allValid)`. 🔴
+- New root structure: creates SlotGroup, appears in `roots`. ✅
+- New map child: creates SlotGroup, appears in `childrenOf` for parent. ✅
+- Duplicate map child (same parent+key, different peer): joins existing SlotGroup. ✅
+- New seq child: creates unique SlotGroup (CnId-keyed). ✅
+- Differential: accumulated index equals `buildStructureIndex(allValid)`. ✅
+- 43 tests in `tests/kernel/incremental/structure-index.test.ts`. Also added child-before-parent ordering, non-structure/weight−1 filtering, duplicate dedup, delta correctness (only new/modified groups), reset/reuse, and 6 exhaustive all-permutation differential tests (including 4-constraint mixed map+seq). 924 total tests passing (881 + 43).
 
 ### Phase 5: Incremental Projection 🔴
 
