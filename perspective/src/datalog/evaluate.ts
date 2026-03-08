@@ -31,7 +31,7 @@ import {
   err,
   Database,
   Relation,
-  serializeValue,
+  factKey,
 } from './types.js';
 import {
   EMPTY_SUBSTITUTION,
@@ -515,13 +515,3 @@ function getPositiveAtomIndices(body: readonly BodyElement[]): number[] {
   return indices;
 }
 
-/**
- * Produce a string key for a fact, for deduplication.
- */
-function factKey(f: Fact): string {
-  const parts: string[] = [f.predicate];
-  for (const v of f.values) {
-    parts.push(serializeValue(v));
-  }
-  return parts.join('|');
-}

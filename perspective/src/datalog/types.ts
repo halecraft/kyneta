@@ -441,6 +441,24 @@ function serializeTuple(tuple: FactTuple): string {
   return parts.join('|');
 }
 
+/**
+ * Produce a deterministic string key for a fact, for deduplication
+ * and Z-set keying.
+ *
+ * The key is `predicate|serialized(v0)|serialized(v1)|...`.
+ * Two facts with the same predicate and values produce the same key.
+ *
+ * Moved from `evaluate.ts` (where it was private) to support
+ * incremental projection's Z-set keying (Plan 005, Phase 5).
+ */
+export function factKey(f: Fact): string {
+  const parts: string[] = [f.predicate];
+  for (const v of f.values) {
+    parts.push(serializeValue(v));
+  }
+  return parts.join('|');
+}
+
 // ---------------------------------------------------------------------------
 // Value comparison (used by aggregation and rule evaluation)
 // ---------------------------------------------------------------------------

@@ -24,3 +24,7 @@ export { createIncrementalRetraction } from './retraction.js';
 // --- Incremental Structure Index (Phase 4) ---
 export type { IncrementalStructureIndex } from './structure-index.js';
 export { createIncrementalStructureIndex } from './structure-index.js';
+
+// --- Incremental Projection (Phase 5) ---
+export type { IncrementalProjection } from './projection.js';
+export { createIncrementalProjection } from './projection.js';

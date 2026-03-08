@@ -325,28 +325,87 @@ Time travel is not a special mode. The solver is a pure function; the same `(S, 
 
 ---
 
+## Incremental Pipeline (Plan 005, in progress)
+
+The batch `solve()` is O(|S|) per insertion. The incremental pipeline reduces the kernel stages to O(|Δ|) by maintaining persistent state across insertions and propagating Z-set deltas through a DAG of operators.
+
+### Z-Sets
+
+A Z-set over a universe U is a function `w: U → Z` with finite support. Elements with weight +1 are present; weight −1 are retracted; weight 0 are pruned. Addition is pointwise, negation flips weights. This forms an abelian group — the algebraic foundation for DBSP incremental view maintenance.
+
+Implementation: `base/zset.ts`. `ZSet<T> = ReadonlyMap<string, ZSetEntry<T>>`, keyed by caller-provided string identity. Core algebra: `zsetAdd`, `zsetNegate`, `zsetSingleton`, `zsetEmpty`.
+
+### Not Everything Is a Z-Set
+
+The structure index is append-only (structure constraints are permanent, never retracted). Its output uses `StructureIndexDelta` — a plain map of new/modified `SlotGroup`s with upsert semantics — rather than `ZSet<SlotGroup>`. The reason: a `SlotGroup` has stable identity (`slotId`) but mutable contents (its `structures` array grows when a second peer creates the same map child). Emitting `{old: −1, new: +1}` for the same key would annihilate to zero under `zsetAdd`; emitting only `+1` would inflate weights on accumulation. Neither is correct. The structure index is a monotone operator on a semilattice, not a group operator on Z-sets.
+
+### Incremental DAG
+
+```
+Δc ──→ store.insert
+  │
+  ▼
+  C^Δ (validity)              → ZSet<Constraint>
+  │
+  ├──→ X^Δ (structure index)  → StructureIndexDelta
+  │
+  └──→ A^Δ (retraction)       → ZSet<Constraint>
+        │
+        ▼
+  P^Δ (projection)            → ZSet<Fact>
+        │
+        ▼
+  E (BATCH evaluator)         ← Plan 006 replaces with E^Δ
+        │
+        ▼
+  K^Δ (skeleton)              → RealityDelta
+```
+
+Each stage follows three conventions: `step(...deltas)` processes input and returns output delta; `current()` returns the full materialized output; `reset()` clears state. The correctness invariant is `current() == Q_batch(accumulated inputs)`.
+
+### Operator Stages (implemented)
+
+| Stage | Module | Input(s) | Output | Key design |
+|-------|--------|----------|--------|------------|
+| Retraction | `incremental/retraction.ts` | `ZSet<Constraint>` | `ZSet<Constraint>` | Persistent retraction graph; two-pass delta processing (non-retracts first); deferred immunity checks for out-of-order arrival |
+| Structure Index | `incremental/structure-index.ts` | `ZSet<Constraint>` | `StructureIndexDelta` | Mutable `SlotGroup` builders; append-only; dedup by CnId |
+| Projection | `incremental/projection.ts` | `ZSet<Constraint>` × `StructureIndexDelta` | `ZSet<Fact>` | Orphan set (dual-indexed by target key and own key); resolves when target structure arrives |
+
+### Out-of-Order Arrival
+
+CCS stores have no causal delivery guarantees. A retract can arrive before its target; a value before its target structure; a constraint before its enabling authority grant. Every stage that processes a constraint referencing another handles both orderings via standing instructions: when the referrer arrives first, record its effect; when the referent arrives, check for standing instructions. The differential test oracle (`solve(store, config)`) catches all order-dependent bugs mechanically.
+
+---
+
 ## Module Dependency DAG
 
 ```
-base/result.ts, base/types.ts              (leaves — no deps)
+base/result.ts, base/types.ts, base/zset.ts  (leaves — no deps)
          ↑
-datalog/types.ts → evaluate.ts             (Datalog layer)
+datalog/types.ts → evaluate.ts               (Datalog layer)
          ↑
-kernel/types.ts → cnid, lamport, vv,       (kernel identity/store layer)
+kernel/types.ts → cnid, lamport, vv,         (kernel identity/store layer)
   store, agent, signature
          ↑
-authority.ts → validity.ts → retraction.ts  (filters)
+authority.ts → validity.ts → retraction.ts    (filters)
          ↑
-structure-index.ts → projection.ts          (kernel → Datalog bridge)
-                   → resolve.ts             (Datalog → kernel bridge)
-                   → skeleton.ts            (tree builder)
+structure-index.ts → projection.ts            (kernel → Datalog bridge)
+                   → resolve.ts               (Datalog → kernel bridge)
+                   → skeleton.ts              (tree builder)
          ↑
-pipeline.ts                                 (composition root)
+pipeline.ts                                   (batch composition root)
          ↑
-bootstrap.ts                                (reality creation)
+bootstrap.ts                                  (reality creation)
+
+kernel/incremental/                           (incremental pipeline — Plan 005)
+  types.ts → retraction.ts                    (depends on kernel/ + base/zset)
+           → structure-index.ts
+           → projection.ts
+           → pipeline.ts (future)             (incremental composition root)
+  index.ts                                    (barrel export)
 ```
 
-Dependency direction: `base → datalog → kernel → pipeline → bootstrap`. The Datalog layer has no knowledge of kernel types. The kernel imports from Datalog only for `RulePayload` typing (re-exported via `kernel/types.ts`).
+Dependency direction: `base → datalog → kernel → pipeline → bootstrap`. The incremental modules import from existing kernel modules but do not modify them. The batch pipeline has no knowledge of the incremental modules.
 
 ---
 
@@ -400,9 +459,9 @@ A `Constraint` interface with `type: string` and `payload: any` would compile, b
 
 The skeleton builder should not depend on Datalog types. `projection.ts` sits at the kernel→Datalog boundary (kernel types → flat fact tuples). `resolve.ts` sits at the Datalog→kernel boundary (derived fact tuples → typed winners/ordering). The skeleton reads only kernel-typed `ResolutionResult`, not `Database` or `Relation`.
 
-### Why Not Incremental Evaluation?
+### Incremental Pipeline: Why a Parallel Code Path?
 
-The spec describes incremental maintenance (§9) and delta propagation. The current implementation re-solves from scratch on every `solve()` call. This is correct but not performant for large realities. Incremental evaluation (DBSP-style) is deferred — correctness first, then performance.
+The batch `solve()` pipeline is preserved unchanged as the correctness oracle. The incremental pipeline (`kernel/incremental/`) is a separate, parallel code path that maintains persistent state and propagates Z-set deltas. This avoids mixing pure batch functions with inherently stateful incremental operators, and lets differential tests compare `incrementalPipeline.current()` against `solve(store, config)` after every insertion. The batch pipeline is never modified — only consumed as a library by the incremental stages.
 
 ### Why `number` and `bigint` Are Distinct?
 
@@ -415,7 +474,8 @@ JavaScript's `number` is f64, which can only exactly represent integers up to 2^
 ### Deferred from the Spec
 
 - **Real ed25519 signatures** — Phase 2 uses a stub that always returns valid
-- **Incremental evaluation** (§9) — Re-solve from scratch for now
+- **Incremental kernel pipeline** (§9) — In progress (Plan 005). Retraction, structure index, and projection stages are incremental. Validity, skeleton, and pipeline composition remain.
+- **Incremental Datalog evaluator** (§9) — Plan 006. The batch evaluator is the remaining O(|S|) bottleneck after Plan 005.
 - **Settled/Working set partitioning** (§11) — Bounds solver cost to recent activity
 - **Compaction** (§12) — Requires settled set; tombstone compaction is especially tricky for sequences due to origin references
 - **Wire format** (§13) — Batching and compact encoding for sync

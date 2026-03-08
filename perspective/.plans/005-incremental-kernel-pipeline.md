@@ -446,7 +446,7 @@ Wrong Abstraction for Monotone Stages.
 - Differential: accumulated index equals `buildStructureIndex(allValid)`. ✅
 - 43 tests in `tests/kernel/incremental/structure-index.test.ts`. Also added child-before-parent ordering, non-structure/weight−1 filtering, duplicate dedup, delta correctness (only new/modified groups), reset/reuse, and 6 exhaustive all-permutation differential tests (including 4-constraint mixed map+seq). 924 total tests passing (881 + 43).
 
-### Phase 5: Incremental Projection 🔴
+### Phase 5: Incremental Projection ✅
 
 Projection is a bilinear join between the active set and the structure index.
 The incremental version handles three cases: new active constraints projected
@@ -455,23 +455,24 @@ target structure arrives, and the cross-term.
 
 #### Tasks
 
-- 5.1 Create `kernel/incremental/projection.ts` as a concrete two-input module exporting `step(Δ_active: ZSet<Constraint>, Δ_index: StructureIndexDelta): ZSet<Fact>`, `current(): Fact[]`, and `reset(): void`. 🔴
-- 5.1a Move `factKey(f: Fact): string` from `datalog/evaluate.ts` (where it already exists as a private function, L521–527) to `datalog/types.ts` and export it. No new logic — just relocate and make public. See Core Type Definitions § Z-Set Key Conventions. 🔴
-- 5.2 Maintain an orphaned set: value constraints whose target is not yet in the structure index. When `Δ_index` arrives, iterate `Δ_index.updates` and check orphans against new/updated slot groups — any orphaned value whose target is now in a group's `structureKeys` can be projected. 🔴
-- 5.3 For `{c: +1}` in `Δ_active` where c is a value: look up target in accumulated index → emit `active_value` fact with weight +1. If target not found, add to orphan set. 🔴
-- 5.4 For `{c: −1}` in `Δ_active` where c is a value: emit `active_value` fact with weight −1. Remove from orphan set if present. 🔴
-- 5.5 For `{c: +1}` in `Δ_active` where c is a seq structure: emit `active_structure_seq` and `constraint_peer` facts with weight +1. 🔴
-- 5.6 For `{c: −1}` in `Δ_active` where c is a seq structure: emit same facts with weight −1. (Seq structures are permanent, so this is defensive only.) 🔴
-- 5.7 Accumulate the full set of projected facts (for passing to the batch evaluator during this plan). 🔴
+- 5.1 Create `kernel/incremental/projection.ts` as a concrete two-input module exporting `step(Δ_active: ZSet<Constraint>, Δ_index: StructureIndexDelta): ZSet<Fact>`, `current(): Fact[]`, and `reset(): void`. ✅ (Takes `getIndex: () => StructureIndex` callback for accumulated slot lookups.)
+- 5.1a Move `factKey(f: Fact): string` from `datalog/evaluate.ts` (where it already exists as a private function, L521–527) to `datalog/types.ts` and export it. No new logic — just relocate and make public. See Core Type Definitions § Z-Set Key Conventions. ✅ (Also updated `evaluate.ts` to import it back, and exported from `datalog/index.ts`.)
+- 5.2 Maintain an orphaned set: value constraints whose target is not yet in the structure index. When `Δ_index` arrives, iterate `Δ_index.updates` and check orphans against new/updated slot groups — any orphaned value whose target is now in a group's `structureKeys` can be projected. ✅ (Orphan set dual-indexed: by target CnId key for resolution and by own CnId key for O(1) removal on retraction.)
+- 5.3 For `{c: +1}` in `Δ_active` where c is a value: look up target in accumulated index → emit `active_value` fact with weight +1. If target not found, add to orphan set. ✅
+- 5.4 For `{c: −1}` in `Δ_active` where c is a value: emit `active_value` fact with weight −1. Remove from orphan set if present. ✅
+- 5.5 For `{c: +1}` in `Δ_active` where c is a seq structure: emit `active_structure_seq` and `constraint_peer` facts with weight +1. ✅
+- 5.6 For `{c: −1}` in `Δ_active` where c is a seq structure: emit same facts with weight −1. (Seq structures are permanent, so this is defensive only.) ✅
+- 5.7 Accumulate the full set of projected facts (for passing to the batch evaluator during this plan). ✅
 
 #### Tests
 
-- New value constraint with existing target: emits `active_value` fact. 🔴
-- Value constraint with missing target: added to orphan set, no fact emitted. 🔴
-- Structure arrives after orphaned value: orphan re-projected, fact emitted. 🔴
-- Retracted value (weight −1): anti-fact emitted. 🔴
-- New seq structure: emits `active_structure_seq` + `constraint_peer`. 🔴
-- Differential: accumulated facts equal `projectToFacts(allActive, index)`. 🔴
+- New value constraint with existing target: emits `active_value` fact. ✅
+- Value constraint with missing target: added to orphan set, no fact emitted. ✅
+- Structure arrives after orphaned value: orphan re-projected, fact emitted. ✅
+- Retracted value (weight −1): anti-fact emitted. ✅
+- New seq structure: emits `active_structure_seq` + `constraint_peer`. ✅
+- Differential: accumulated facts equal `projectToFacts(allActive, index)`. ✅
+- 36 tests in `tests/kernel/incremental/projection.test.ts`. Also added orphan retraction before structure arrives, concurrent map child orphan resolution, value+structure in same step, seq origin references, map/root exclusion from seq facts, non-projected types (retract, authority), duplicate handling, and 4 exhaustive all-permutation differential tests (up to 120 permutations for 5-constraint mixed map+seq). 960 total tests passing (924 + 36).
 
 ### Phase 6: Incremental Validity 🔴
 

@@ -82,7 +82,7 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 
 ## Project Status
 
-**Phases 1–5 complete.** The full Unified CCS Engine is implemented and tested.
+**Phases 1–5 complete.** The full Unified CCS Engine is implemented and tested. **Plan 005 (Incremental Kernel Pipeline) is in progress** — kernel stages are being incrementalized one by one while preserving the batch pipeline as a correctness oracle.
 
 | Phase | Status | What |
 |-------|--------|------|
@@ -95,18 +95,21 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 | 4.5 Datalog-Driven Resolution | ✅ | Datalog as primary path; native solvers as §B.7 fast path |
 | 4.6 Pre-Bootstrap Correctness | ✅ | Semantic refs, complete Fugue rules, store O(1), skeleton tests |
 | 5. Bootstrap & Integration | ✅ | `createReality()`, default rules, multi-agent sync, 30 integration tests |
-| 6. Documentation & Cleanup | 🚧 | This phase |
+| **Plan 005: Incremental Kernel** | 🚧 | Z-set algebra, incremental retraction/structure-index/projection (Phases 1–5 of 9) |
 
-**759 tests across 21 files, all passing.**
+**960 tests across 26 files, all passing.**
 
-See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the detailed implementation plan.
+See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the batch engine plan and [.plans/005-incremental-kernel-pipeline.md](./.plans/005-incremental-kernel-pipeline.md) for the incremental pipeline plan.
 
 ## Architecture
 
 ```
 prism/
 ├── src/
-│   ├── base/                 Shared types: CnId, Value, PeerID, Result<T,E>
+│   ├── base/                 Shared types and algebra
+│   │   ├── types.ts            CnId, Value, PeerID
+│   │   ├── result.ts           Result<T, E>
+│   │   └── zset.ts             Z-set type and algebra (DBSP foundation)
 │   ├── kernel/               Layer 0 — the engine's mandatory kernel
 │   │   ├── types.ts            Six constraint types (discriminated union)
 │   │   ├── store.ts            CnId-keyed set, insert, set union merge
@@ -118,9 +121,15 @@ prism/
 │   │   ├── projection.ts       Active constraints → Datalog ground facts
 │   │   ├── resolve.ts          Datalog derived facts → typed resolution result
 │   │   ├── skeleton.ts         Reality tree builder (reads ResolutionResult)
-│   │   └── pipeline.ts         Composition root: solve(S, V?) → Reality
+│   │   ├── pipeline.ts         Batch composition root: solve(S, V?) → Reality
+│   │   └── incremental/        Incremental pipeline (Plan 005)
+│   │       ├── types.ts          StructureIndexDelta, NodeDelta, RealityDelta
+│   │       ├── retraction.ts     Persistent retraction graph, dominance cascade
+│   │       ├── structure-index.ts  Append-only slot group accumulator
+│   │       ├── projection.ts     Bilinear join with orphan resolution
+│   │       └── index.ts          Barrel export
 │   ├── datalog/              Stratified bottom-up evaluator
-│   │   ├── types.ts            Atoms, terms, rules, facts, relations
+│   │   ├── types.ts            Atoms, terms, rules, facts, relations, factKey
 │   │   ├── unify.ts            Variable binding, substitution, guards
 │   │   ├── stratify.ts         Dependency graph, SCC, stratum ordering
 │   │   ├── evaluate.ts         Semi-naive fixed-point evaluation
@@ -130,9 +139,11 @@ prism/
 │   │   └── fugue.ts            Native Fugue: tree walk over structure(seq)
 │   ├── bootstrap.ts          Reality creation + default solver rules (§B.8)
 │   └── index.ts              Public API
-├── tests/                    759 tests across 21 files
+├── tests/                    960 tests across 26 files
+│   ├── base/                 Z-set algebra
 │   ├── datalog/              Evaluator, unification, stratification, rules
 │   ├── kernel/               Store, agent, authority, pipeline, skeleton, ...
+│   │   └── incremental/        Incremental retraction, structure-index, projection
 │   ├── solver/               LWW and Fugue equivalence (native == Datalog)
 │   └── integration.test.ts   Multi-agent bootstrap, sync, retraction, time travel
 └── theory/
@@ -165,16 +176,18 @@ bun install
 ```bash
 bun install          # Install dependencies
 bun run test         # Run tests in watch mode
-bun run test:run     # Run tests once (759 tests)
+bun run test:run     # Run tests once (960 tests)
 bun run typecheck    # TypeScript type checking
 ```
 
 ## Documentation
 
 - [Unified CCS Engine Spec](./theory/unified-engine.md) — The authoritative specification
+- [Incremental Theory](./theory/incremental.md) — DBSP foundation for incremental evaluation
 - [TECHNICAL.md](./TECHNICAL.md) — Architecture, solver pipeline, design decisions
 - [LEARNINGS.md](./LEARNINGS.md) — Discoveries, corrections, and open questions
-- [Implementation Plan](./.plans/002-unified-ccs-engine.md) — Phased plan with status tracking
+- [Batch Engine Plan](./.plans/002-unified-ccs-engine.md) — Phased plan with status tracking
+- [Incremental Pipeline Plan](./.plans/005-incremental-kernel-pipeline.md) — Plan 005: kernel stage incrementalization
 
 ## Related Work
 

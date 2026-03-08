@@ -50,6 +50,7 @@ export {
   Relation,
   Database,
   serializeValue,
+  factKey,
   compareValues,
   valuesEqual,
   evaluateGuardOp,
