@@ -193,20 +193,20 @@ Introduce the `SNAPSHOT` symbol, `SnapshotFn<S>` type, `Snapshotable<S>` interfa
 - **Task 1.6**: Add unit tests for `SNAPSHOT` symbol, `isSnapshotable`, `LocalRef[SNAPSHOT]` ✅
 - **Task 1.7**: Verify `@loro-extended/reactive` builds and all tests pass ✅
 
-### Phase 2: `[SNAPSHOT]` on scalar `@loro-extended/change` typed refs 🔴
+### Phase 2: `[SNAPSHOT]` on scalar `@loro-extended/change` typed refs ✅
 
 Add `[SNAPSHOT]` to scalar typed refs that appear in content position. Update `Reactive` type parameters on all typed refs to the `<S, D>` form. Tighten `isReactive` to require both symbols (now safe because all refs have `[SNAPSHOT]`).
 
-- **Task 2.1**: Add `[SNAPSHOT]` default implementation to `TypedRef` base class — `(self) => self` (identity fallback for collection types that inherit but don't override) 🔴
-- **Task 2.2**: Override `[SNAPSHOT]` on `TextRef` — `(self) => (self as TextRef).toString()` returning `string`. Add `declare readonly [SNAPSHOT]: SnapshotFn<string>` narrowing. 🔴
-- **Task 2.3**: Override `[SNAPSHOT]` on `CounterRef` — `(self) => (self as CounterRef).get()` returning `number`. Add `declare readonly [SNAPSHOT]: SnapshotFn<number>` narrowing. 🔴
-- **Task 2.4**: Update `TypedRef` base from `implements Reactive` to `implements Reactive<unknown>` (defaults are sufficient). Update each leaf class's `declare` or `implements` to include `S`: `TextRef` → `Reactive<string, TextDelta>`, `CounterRef` → `Reactive<number, ReplaceDelta>`, `ListRefBase` → `Reactive<ListRefBase<any, any>, ListDelta>`, `DocRef` → `Reactive<DocRef<any>, MapDelta>`, `RecordRef` → `Reactive<RecordRef<any>, MapDelta>`, `TreeRef` → `Reactive<TreeRef<any>, TreeDelta>`. 🔴
-- **Task 2.5**: Add `[SNAPSHOT]` to `PlainValueRef<T>` interface in `plain-value-ref/types.ts` — `readonly [SNAPSHOT]: SnapshotFn<T>` 🔴
-- **Task 2.6**: Implement `[SNAPSHOT]` in `buildBasePlainValueRef` factory — `(self) => getValue()` 🔴
-- **Task 2.7**: Update `StructRef`'s Proxy `get` and `has` traps in `struct-ref.ts` to handle `SNAPSHOT` (same pattern as the existing `REACTIVE` interception). `StructRef` is the only typed ref whose Proxy explicitly intercepts symbol access — `RecordRef`'s proxy uses `Reflect.get` fallthrough which inherits `[SNAPSHOT]` from the class automatically. 🔴
-- **Task 2.8**: Tighten `isReactive` in `packages/reactive/src/index.ts` to require both `[REACTIVE]` and `[SNAPSHOT]`. Now safe because all first-party types (`LocalRef`, all typed refs, `PlainValueRef`) implement both symbols. 🔴
-- **Task 2.9**: Rebuild both packages. Verify all `@loro-extended/change` tests pass (968+ tests). 🔴
-- **Task 2.10**: Add tests for `[SNAPSHOT]` on `TextRef`, `CounterRef`, `PlainValueRef` 🔴
+- **Task 2.1**: Add `[SNAPSHOT]` default implementation to `TypedRef` base class — `(self) => self` (identity fallback for collection types that inherit but don't override) ✅
+- **Task 2.2**: Override `[SNAPSHOT]` on `TextRef` — `readonly [SNAPSHOT]: SnapshotFn<string> = (self) => (self as TextRef).toString()`. No `declare` needed — the concrete property definition provides both the narrowed type and the runtime value (see Learnings §"`declare` vs concrete property for symbol overrides"). ✅
+- **Task 2.3**: Override `[SNAPSHOT]` on `CounterRef` — `readonly [SNAPSHOT]: SnapshotFn<number> = (self) => (self as CounterRef).get()`. Same pattern as TextRef. ✅
+- **Task 2.4**: Update `TypedRef` base from `implements Reactive` to `implements Reactive<unknown, ReactiveDelta>`. **Note:** `Reactive<unknown>` (using the `D` default) would expand to `Reactive<unknown, ReplaceDelta>`, which is too narrow — the base class `[REACTIVE]` must accept any `ReactiveDelta` since subclasses emit text, list, map, tree deltas. Also added `[REACTIVE]` and `[SNAPSHOT]` to `TreeRefInterface` in `shape.ts` to fix a pre-existing type error where TreeRef was not indexable by `[REACTIVE]`. ✅
+- **Task 2.5**: Add `[SNAPSHOT]` to `PlainValueRef<T>` interface in `plain-value-ref/types.ts` — `readonly [SNAPSHOT]: SnapshotFn<T>` ✅
+- **Task 2.6**: Implement `[SNAPSHOT]` in `buildBasePlainValueRef` factory — `(self) => getValue()` ✅
+- **Task 2.7**: Update `StructRef`'s Proxy `get` and `has` traps in `struct-ref.ts` to handle `SNAPSHOT` (same pattern as the existing `REACTIVE` interception). Added `[SNAPSHOT]: SnapshotFn<unknown>` to the `StructRef` type alias. ✅
+- **Task 2.8**: Tighten `isReactive` in `packages/reactive/src/index.ts` to require both `[REACTIVE]` and `[SNAPSHOT]`. Now safe because all first-party types (`LocalRef`, all typed refs, `PlainValueRef`) implement both symbols. Updated existing `isReactive` tests to include `[SNAPSHOT]`. ✅
+- **Task 2.9**: Rebuild both packages. All `@loro-extended/reactive` tests pass (79). All `@loro-extended/change` tests pass (1012, up from 983). All `@loro-extended/kinetic` tests pass (971). Zero type errors in reactive and change packages. ✅
+- **Task 2.10**: Add tests for `[SNAPSHOT]` on `TextRef`, `CounterRef`, `PlainValueRef`, all collection types (identity snapshot), `StructRef` proxy interception, and tightened `isReactive` across all ref types including `LocalRef`. ✅
 
 ### Phase 3: Runtime uses `[SNAPSHOT]` instead of ad-hoc interfaces 🔴
 
@@ -232,12 +232,12 @@ The compiler gains the ability to detect `[SNAPSHOT]`, extract the snapshot retu
 - **Task 4.8**: Add compiler test: `doc.title.get()` still works as before (backward compatible) 🔴
 - **Task 4.9**: Add compiler test: bare ref inside a larger expression (e.g., `doc.title + " suffix"`) correctly falls back to `subscribeWithValue` (not treated as implicit read) 🔴
 - **Task 4.10**: Add compiler test: `p(doc.title)` where `doc = createTypedDoc(...)` (TypedDoc, not reactive) produces correct dependency `{ source: "doc.title", deltaKind: "text" }` and emits `textRegion` 🔴
-- **Task 4.11**: Update test mocks in `analyze.test.ts` — `Reactive<TextDelta>` → `Reactive<string, TextDelta>`, etc. 🔴
+- **Task 4.11**: Update test mocks in `analyze.test.ts`. The mock `reactive-base.d.ts` defines its own `Reactive<D>` (one-parameter form) and does NOT import from `@loro-extended/reactive`. Three changes needed: (a) Add `SNAPSHOT` symbol export to `reactive-base.d.ts`. (b) Update `Reactive` interface from `Reactive<D>` to `Reactive<S = unknown, D = ReactiveDelta>` with both `[SNAPSHOT]: (self: unknown) => S` and `[REACTIVE]: ReactiveSubscribe<D>`. (c) Update mock ref interfaces in `loro-types.d.ts`: `TextRef extends Reactive<string, TextDelta>`, `CounterRef extends Reactive<number, ReplaceDelta>`, `ListRef<T> extends Reactive<ListRef<T>, ListDelta>`, `StructRef<T> extends Reactive<StructRef<T>, MapDelta>`, and add `[SNAPSHOT]` properties to each. Without `[SNAPSHOT]` on the mocks, `isSnapshotableType` returns false and `detectImplicitRead` won't fire for bare-ref tests. 🔴
 - **Task 4.12**: Add `Reactive<any, any>` to the `Child` type union in `packages/kinetic/src/types.ts` 🔴
 - **Task 4.13**: Update `PropsWithBindings` in `elements.d.ts` — reactive attribute values (e.g., `{ class: doc.className }` where `doc.className` is `PlainValueRef<string>`) are a future consideration, not addressed in this plan. Document this as a known limitation. 🔴
 - **Task 4.14**: Add type-level test: verify `p(doc.title)` compiles without TypeScript errors when `doc.title` is `TextRef` (which implements `Reactive<string, TextDelta>`) 🔴
 - **Task 4.15**: Verify that `p("literal string")` and `p(42)` still compile (no regressions in `Child` type) 🔴
-- **Task 4.16**: Verify full Kinetic compiler test suite passes (800+ tests) 🔴
+- **Task 4.16**: Verify full Kinetic compiler test suite passes (971 tests at current baseline) 🔴
 
 ### Phase 5: Documentation 🔴
 
@@ -249,14 +249,16 @@ The compiler gains the ability to detect `[SNAPSHOT]`, extract the snapshot retu
 
 ### Phase 6: `DocRef[REACTIVE]` fix, `TypedDoc` type exposure, and dependency subsumption 🔴
 
-Fix the latent bug where `DocRef[REACTIVE]` throws at runtime, expose `[REACTIVE]` on the `TypedDoc` type so the compiler can see it, and add a dependency subsumption rule so that child dependencies don't degrade to parent dependencies.
+Fix the latent bug where `DocRef[REACTIVE]` throws at runtime, expose both `[REACTIVE]` and `[SNAPSHOT]` on the `TypedDoc` type so the compiler can see them, and add a dependency subsumption rule so that child dependencies don't degrade to parent dependencies.
 
-**Background:** `DocRef` inherits `[REACTIVE]` from `TypedRef`, but the base class implementation calls `ref[INTERNAL_SYMBOL].getContainer()` — and `DocRef`'s container getter is `() => { throw new Error("can't get container on DocRef") }`. So `doc[REACTIVE](doc, callback)` throws. At runtime `REACTIVE in doc` is `true` (via `Reflect.get` passthrough in the `TypedDoc` Proxy), but calling it is a latent crash. The `TypedDoc<Shape>` type alias also omits `[REACTIVE]`, so the compiler can't detect docs as reactive. Both are bugs.
+**Background:** `DocRef` inherits `[REACTIVE]` from `TypedRef`, but the base class implementation calls `ref[INTERNAL_SYMBOL].getContainer()` — and `DocRef`'s container getter is `() => { throw new Error("can't get container on DocRef") }`. So `doc[REACTIVE](doc, callback)` throws. At runtime `REACTIVE in doc` is `true` (via `Reflect.get` passthrough in the `TypedDoc` Proxy), but calling it is a latent crash. The `TypedDoc<Shape>` type alias also omits `[REACTIVE]` and `[SNAPSHOT]`, so the compiler can't detect docs as reactive or snapshotable. Both are bugs.
+
+**Note on `isReactive(doc)` at runtime:** After Phase 2, `isReactive(doc)` returns `true` at runtime because the TypedDoc Proxy's `has` trap falls through via `Reflect.has` to the underlying `DocRef`, which now has both `[REACTIVE]` and `[SNAPSHOT]` from the `TypedRef` base class. But _calling_ `doc[REACTIVE](doc, cb)` still throws because the inherited `[REACTIVE]` calls `getContainer()`. Phase 6 Task 6.1 fixes the throw.
 
 A document is a Moore machine: `Reactive<TypedDoc<Shape>, MapDelta>`. The snapshot is the ref surface itself (identity, like `ListRef`), and deltas describe which root keys changed. The consumer uses the delta to know which children to re-observe. This is consistent with how all collection types work.
 
 - **Task 6.1**: Override `[REACTIVE]` on `DocRef` to subscribe to `LoroDoc` directly (via `this[INTERNAL_SYMBOL].getDoc().subscribe(...)`) instead of calling `getContainer()`. Translate events using `translateEventBatch`. Extract changed root keys from event paths to produce `MapDelta`. 🔴
-- **Task 6.2**: Add `[REACTIVE]: ReactiveSubscribe<MapDelta>` to the `TypedDoc<Shape>` type alias in `typed-doc.ts`. This makes the compiler aware that docs are reactive. 🔴
+- **Task 6.2**: Add both `[REACTIVE]: ReactiveSubscribe<MapDelta>` and `[SNAPSHOT]: SnapshotFn<unknown>` to the `TypedDoc<Shape>` type alias in `typed-doc.ts`. This makes the compiler aware that docs are both reactive and snapshotable. Without `[SNAPSHOT]`, `isSnapshotableType` (Phase 4) would not detect `TypedDoc`, and `detectImplicitRead` would not fire for bare doc refs. 🔴
 - **Task 6.3**: Add dependency subsumption to `extractDependencies` in `analyze.ts`: after collecting all dependencies, filter out any dependency whose source is a strict prefix of another dependency's source (i.e., `"doc"` is subsumed by `"doc.title"`). This ensures that `doc.title.toString()` where `doc` is a reactive `TypedDoc` produces only `{ source: "doc.title", deltaKind: "text" }`, not an additional `{ source: "doc", deltaKind: "map" }` that would break the `isTextRegionContent` length-1 check. 🔴
 - **Task 6.4**: Add tests: `doc[REACTIVE](doc, callback)` succeeds and delivers `MapDelta` when child containers change. Verify `isReactive(doc)` returns `true` at both runtime and compiler type levels. 🔴
 - **Task 6.5**: Add compiler test: `p(doc.title.toString())` where `doc: TypedDoc` (now reactive) still produces `textRegion` (dependency subsumption keeps `doc.title` with deltaKind `"text"`, drops `doc` with deltaKind `"map"`). 🔴
@@ -648,19 +650,18 @@ Instead of a separate `S` parameter, derive `S` from `D`: `TextDelta → string`
 - `packages/reactive/src/index.ts` — `SNAPSHOT`, `SnapshotFn`, `Snapshotable`, `isSnapshotable`, `Reactive<S,D>`, `LocalRef[SNAPSHOT]` (note: `isReactive` NOT tightened here)
 - `packages/reactive/src/index.test.ts` — new tests
 
-**Phase 2:**
-- `packages/change/src/typed-refs/base.ts` — `[SNAPSHOT]` on `TypedRef`, `Reactive<S,D>` type params
-- `packages/change/src/typed-refs/text-ref.ts` — `[SNAPSHOT]` override, `Reactive<string, TextDelta>`
-- `packages/change/src/typed-refs/counter-ref.ts` — `[SNAPSHOT]` override, `Reactive<number, ReplaceDelta>`
-- `packages/change/src/typed-refs/list-ref-base.ts` — `Reactive` type param update only
-- `packages/change/src/typed-refs/doc-ref.ts` — `Reactive` type param update only
-- `packages/change/src/typed-refs/record-ref.ts` — `Reactive` type param update only
-- `packages/change/src/typed-refs/struct-ref.ts` — `Reactive` type param update only; Proxy `get` and `has` traps updated to handle `SNAPSHOT` symbol (same pattern as existing `REACTIVE` interception)
-- `packages/change/src/typed-refs/tree-ref.ts` — `Reactive` type param update only
-- `packages/change/src/plain-value-ref/types.ts` — `[SNAPSHOT]` on interface
-- `packages/change/src/plain-value-ref/factory.ts` — `[SNAPSHOT]` implementation
-- `packages/reactive/src/index.ts` — tighten `isReactive` to require both symbols (Task 2.8)
-- `packages/change/src/typed-refs/reactive.test.ts` — new tests
+**Phase 2:** (✅ completed)
+- `packages/change/src/typed-refs/base.ts` — `[SNAPSHOT]` default on `TypedRef`, `implements Reactive<unknown, ReactiveDelta>`, `[REACTIVE]` type narrowed to `ReactiveSubscribe<ReactiveDelta>`
+- `packages/change/src/typed-refs/text-ref.ts` — `[SNAPSHOT]` override returning `string`
+- `packages/change/src/typed-refs/counter-ref.ts` — `[SNAPSHOT]` override returning `number`
+- `packages/change/src/typed-refs/struct-ref.ts` — Proxy `get` and `has` traps updated to handle `SNAPSHOT` symbol; `[SNAPSHOT]: SnapshotFn<unknown>` added to `StructRef` type alias
+- `packages/change/src/shape.ts` — `[REACTIVE]` and `[SNAPSHOT]` added to `TreeRefInterface` (fixes pre-existing type error)
+- `packages/change/src/plain-value-ref/types.ts` — `[SNAPSHOT]: SnapshotFn<T>` added to `PlainValueRef<T>` interface
+- `packages/change/src/plain-value-ref/factory.ts` — `[SNAPSHOT]` implementation via closure-captured `getValue()`
+- `packages/reactive/src/index.ts` — `isReactive` tightened to require both `[REACTIVE]` and `[SNAPSHOT]`
+- `packages/reactive/src/index.test.ts` — existing `isReactive` tests updated; new tightened-guard tests added
+- `packages/change/src/typed-refs/reactive.test.ts` — 29 new tests covering `[SNAPSHOT]` on every ref type
+- **Not modified** (no changes needed): `list-ref-base.ts`, `doc-ref.ts`, `record-ref.ts`, `tree-ref.ts` — these inherit `[SNAPSHOT]` from `TypedRef` base class and their `declare readonly [REACTIVE]` narrowing was already correct
 
 **Phase 3:**
 - `packages/kinetic/src/runtime/text-patch.ts` — `textRegion`, `inputTextRegion`
@@ -681,8 +682,8 @@ Instead of a separate `S` parameter, derive `S` from `D`: `TextDelta → string`
 
 **Phase 6:**
 - `packages/change/src/typed-refs/doc-ref.ts` — override `[REACTIVE]` to subscribe to `LoroDoc`
-- `packages/change/src/typed-refs/doc-ref-internals.ts` — may need accessor for `LoroDoc` if not already exposed
-- `packages/change/src/typed-doc.ts` — add `[REACTIVE]: ReactiveSubscribe<MapDelta>` to `TypedDoc` type alias
+- `packages/change/src/typed-refs/doc-ref-internals.ts` — may need accessor for `LoroDoc` if not already exposed (note: `getDoc()` is already available via `BaseRefInternals`)
+- `packages/change/src/typed-doc.ts` — add both `[REACTIVE]: ReactiveSubscribe<MapDelta>` and `[SNAPSHOT]: SnapshotFn<unknown>` to `TypedDoc` type alias
 - `packages/kinetic/src/compiler/analyze.ts` — dependency subsumption rule in `extractDependencies`
 - `packages/kinetic/src/compiler/analyze.test.ts` — subsumption tests
 - `packages/kinetic/src/compiler/transform.test.ts` — end-to-end test with `TypedDoc` as reactive
@@ -776,6 +777,36 @@ The fix is a subsumption rule: after collecting all dependencies, filter out any
 
 `PlainValueRef`'s `[REACTIVE]` implementation in `buildBasePlainValueRef` subscribes to the raw Loro container and emits a hardcoded `{ type: "replace" }` without `origin`. Unlike `TypedRef`'s base implementation (which calls `translateEventBatch` to propagate `origin`), `PlainValueRef` never has `origin: "local"` or `origin: "import"`. This means `inputTextRegion`-like origin-driven dispatch would not work correctly for `PlainValueRef`-bound inputs. This is not a blocker for this plan but is noted for future reference.
 
+### `Reactive` default `D` is `ReplaceDelta`, not `ReactiveDelta`
+
+The `Reactive<S, D>` interface defaults are `S = unknown, D = ReplaceDelta`. Writing `implements Reactive` (no type arguments) expands to `implements Reactive<unknown, ReplaceDelta>`, which constrains `[REACTIVE]` to `ReactiveSubscribe<ReplaceDelta>`. For `TypedRef`, this is wrong — subclasses emit text, list, map, and tree deltas through the inherited `[REACTIVE]`. The correct base type is `implements Reactive<unknown, ReactiveDelta>`, using the full union. The default `ReplaceDelta` is intentional for _leaf_ types (it means "I don't specify what I emit" = conservative fallback), but a _base class_ that must accept all delta kinds needs the explicit wider type.
+
+### `declare` vs concrete property for symbol overrides
+
+The `declare` keyword on a class property tells TypeScript "this property will have this type at runtime, but don't emit any code for it." It's used when the parent class provides the runtime value and the subclass just wants to narrow the type (e.g., `declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>` on `TextRef` narrows the base `ReactiveSubscribe<ReactiveDelta>`).
+
+When a subclass needs to provide **both** a new runtime value **and** a narrowed type, a concrete property definition suffices: `readonly [SNAPSHOT]: SnapshotFn<string> = (self) => ...`. TypeScript infers the type from the initializer, and the property initializer runs after `super()` in the constructor, shadowing the parent's value. Using both `declare` and a concrete definition on the same property would be a conflict — the `declare` is unnecessary and should be omitted.
+
+### `TreeRefInterface` required `[REACTIVE]` and `[SNAPSHOT]`
+
+`TreeRefInterface` in `shape.ts` is the type-level contract used by `TreeContainerShape`. The `TreeRef` _class_ had `[REACTIVE]` via `TypedRef`, but `TreeRefInterface` only declared `[LORO_SYMBOL]`. This meant `TreeRefInterface`-typed values (e.g., `doc.tree` resolved through the shape system) could not be indexed by `[REACTIVE]` or `[SNAPSHOT]` — producing a `TS7053` error. This was a pre-existing bug, fixed in Phase 2 by adding both symbols to the interface. Any similar interface-level contracts for typed refs should declare both protocol symbols.
+
+### Test mocks define their own `Reactive` interface — must be updated for two-parameter form
+
+The compiler test suite in `analyze.test.ts` creates a mock `reactive-base.d.ts` file with its own `Reactive<D>` interface (one parameter). This mock does NOT import from `@loro-extended/reactive` — it's a self-contained type stub used by the ts-morph Project. After Phase 1 changed the real `Reactive` to `Reactive<S, D>`, the mock's one-parameter form still works for `isReactiveType` (which does property-level scanning for `[REACTIVE]`, not structural assignability checks). However, Phase 4 introduces `isSnapshotableType` which scans for `[SNAPSHOT]`. If the mock types lack `[SNAPSHOT]`, `detectImplicitRead` won't fire for bare-ref tests. Task 4.11 must update the mock to: (a) export `SNAPSHOT`, (b) add `[SNAPSHOT]` to the mock `Reactive` interface, (c) add `[SNAPSHOT]` to each mock ref interface.
+
+### Proxy `has` trap must intercept protocol symbols
+
+Adding a protocol symbol to a Proxy's `get` trap is not sufficient — the `has` trap must also handle it. `isReactive()` and `isSnapshotable()` use the `in` operator (`SNAPSHOT in value`), which invokes the `has` trap, not `get`. If `has` doesn't return `true` for `SNAPSHOT`, the type guard fails even though `get` would return the correct function. This applies specifically to `StructRef`'s Proxy (the only typed ref with explicit symbol interception); other proxied types use `Reflect.has` fallthrough.
+
+### `isReactive(doc)` is true at runtime after Phase 2, but calling `[REACTIVE]` still throws
+
+After Phase 2, the TypedDoc Proxy's `has` trap falls through via `Reflect.has` to the underlying `DocRef`, which now has both `[REACTIVE]` and `[SNAPSHOT]` from `TypedRef`. So `isReactive(doc)` returns `true`. However, calling `doc[REACTIVE](doc, cb)` still throws because the _inherited_ `[REACTIVE]` implementation calls `getContainer()`, which is `() => { throw ... }` for `DocRef`. This is a "type says yes, value says no" inconsistency — a latent bug that Phase 6 Task 6.1 fixes by overriding `[REACTIVE]` on `DocRef`.
+
+### `TypedDoc` type must expose `[SNAPSHOT]` alongside `[REACTIVE]`
+
+The original plan's Phase 6 Task 6.2 only mentioned adding `[REACTIVE]` to the `TypedDoc<Shape>` type alias. But after Phase 2 tightened `isReactive` to require both symbols, and Phase 4 introduces `isSnapshotableType` for compiler detection, the `TypedDoc` type must also expose `[SNAPSHOT]`. Without it, `isSnapshotableType(typedDocType)` would return false, and `detectImplicitRead` would not fire for bare doc refs. Task 6.2 has been updated to include both symbols.
+
 ## Changeset
 
 ```
@@ -803,8 +834,9 @@ The fix is a subsumption rule: after collecting all dependencies, filter out any
 - All typed refs updated to `Reactive<S, D>` type parameters
 - Collection types (`ListRef`, `StructRef`, etc.) inherit base `[SNAPSHOT]` (identity) but no narrowed override
 - `StructRef` Proxy traps updated to handle `SNAPSHOT` symbol
+- `TreeRefInterface` now declares `[REACTIVE]` and `[SNAPSHOT]` (fixes pre-existing type error)
 - `DocRef[REACTIVE]` fixed: overridden to subscribe to `LoroDoc` directly instead of calling `getContainer()` (which threw)
-- `TypedDoc<Shape>` type now exposes `[REACTIVE]: ReactiveSubscribe<MapDelta>`
+- `TypedDoc<Shape>` type now exposes `[REACTIVE]: ReactiveSubscribe<MapDelta>` and `[SNAPSHOT]: SnapshotFn<unknown>`
 
 **@loro-extended/kinetic:**
 - Runtime `textRegion`/`inputTextRegion` use `[SNAPSHOT]` protocol instead of ad-hoc `TextRefLike` cast
