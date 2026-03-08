@@ -24,10 +24,8 @@
 
 import type {
   Constraint,
-  RuleConstraint,
   Reality,
   PeerID,
-  StructureConstraint,
 } from '../types.js';
 import type { PipelineConfig } from '../pipeline.js';
 import { solve } from '../pipeline.js';
@@ -42,15 +40,19 @@ import { cnIdKey } from '../cnid.js';
 import type { StructureIndex } from '../structure-index.js';
 import {
   extractResolution,
-  nativeResolution,
   type ResolvedWinner,
   type FugueBeforePair,
   type ResolutionResult,
 } from '../resolve.js';
+import {
+  extractRules,
+  selectResolutionStrategy,
+} from '../rule-detection.js';
+import {
+  buildNativeResolution,
+  diffFuguePairs,
+} from '../native-resolution.js';
 import { evaluate } from '../../datalog/evaluate.js';
-import type { Rule, Fact } from '../../datalog/types.js';
-import { resolveLWW } from '../../solver/lww.js';
-import { buildFugueNodes, orderFugueNodes } from '../../solver/fugue.js';
 import { DEFAULT_RETRACTION_CONFIG } from '../retraction.js';
 
 import type { ZSet } from '../../base/zset.js';
@@ -118,13 +120,11 @@ export interface IncrementalPipeline {
  * Winner changes:
  *   - New winner (in new, not in old): +1
  *   - Removed winner (in old, not in new): −1
- *   - Changed winner (in both, different content or CnId): old −1, new +1
+ *   - Changed winner (in both, different content or CnId): emit only +1
+ *     (keyed by slotId — opposing weights would annihilate; see Plan 005 Learnings)
  *   - Unchanged winner: no delta
  *
- * Fugue pair changes:
- *   - New pair: +1
- *   - Removed pair: −1
- *   - Unchanged pair: no delta
+ * Fugue pair changes: delegated to `diffFuguePairs` from native-resolution.ts.
  */
 function diffResolution(
   oldRes: ResolutionResult | null,
@@ -134,7 +134,6 @@ function diffResolution(
   deltaFuguePairs: ZSet<FugueBeforePair>;
 } {
   let deltaResolved = zsetEmpty<ResolvedWinner>();
-  let deltaFuguePairs = zsetEmpty<FugueBeforePair>();
 
   const oldWinners = oldRes?.winners ?? new Map<string, ResolvedWinner>();
   const newWinners = newRes.winners;
@@ -158,9 +157,6 @@ function diffResolution(
       // We cannot emit {old: −1, new: +1} because both entries share
       // the same Z-set key (slotId), so zsetAdd would annihilate them
       // to weight 0 and the skeleton would never see the change.
-      // The skeleton's applyWinnerChange handles replacement correctly
-      // when it sees a +1 entry: it updates the node's value from old
-      // to new.
       deltaResolved = zsetAdd(
         deltaResolved,
         zsetSingleton(slotId, newWinner, 1),
@@ -179,214 +175,13 @@ function diffResolution(
     }
   }
 
-  // --- Fugue pairs ---
-
-  const oldPairs = oldRes?.fuguePairs ?? new Map<string, readonly FugueBeforePair[]>();
-  const newPairs = newRes.fuguePairs;
-
-  // Build sets of pair keys for efficient diffing
-  function pairKey(p: FugueBeforePair): string {
-    return `${p.parentKey}|${p.a}|${p.b}`;
-  }
-
-  const oldPairKeys = new Map<string, FugueBeforePair>();
-  for (const pairs of oldPairs.values()) {
-    for (const p of pairs) {
-      oldPairKeys.set(pairKey(p), p);
-    }
-  }
-
-  const newPairKeys = new Map<string, FugueBeforePair>();
-  for (const pairs of newPairs.values()) {
-    for (const p of pairs) {
-      newPairKeys.set(pairKey(p), p);
-    }
-  }
-
-  // New pairs
-  for (const [key, p] of newPairKeys) {
-    if (!oldPairKeys.has(key)) {
-      deltaFuguePairs = zsetAdd(
-        deltaFuguePairs,
-        zsetSingleton(key, p, 1),
-      );
-    }
-  }
-
-  // Removed pairs
-  for (const [key, p] of oldPairKeys) {
-    if (!newPairKeys.has(key)) {
-      deltaFuguePairs = zsetAdd(
-        deltaFuguePairs,
-        zsetSingleton(key, p, -1),
-      );
-    }
-  }
+  // --- Fugue pairs (delegated to shared utility) ---
+  const deltaFuguePairs = diffFuguePairs(
+    oldRes?.fuguePairs ?? null,
+    newRes.fuguePairs,
+  );
 
   return { deltaResolved, deltaFuguePairs };
-}
-
-// ---------------------------------------------------------------------------
-// Resolution helpers (duplicated from batch pipeline — needed here to
-// avoid exporting internal functions)
-// ---------------------------------------------------------------------------
-
-/**
- * Extract Datalog rules from active constraints.
- * Mirrors the batch pipeline's extractRules().
- */
-function extractRules(activeConstraints: readonly Constraint[]): Rule[] {
-  const ruleConstraints: RuleConstraint[] = [];
-
-  for (const c of activeConstraints) {
-    if (c.type === 'rule') {
-      ruleConstraints.push(c);
-    }
-  }
-
-  ruleConstraints.sort((a, b) => a.payload.layer - b.payload.layer);
-
-  return ruleConstraints.map((rc) => ({
-    head: rc.payload.head,
-    body: rc.payload.body,
-  }));
-}
-
-/**
- * Check if rules match the known default patterns (native fast path).
- * Mirrors the batch pipeline's isDefaultRulesOnly().
- */
-function isDefaultRulesOnly(
-  rules: readonly Rule[],
-  activeConstraints: readonly Constraint[],
-): boolean {
-  for (const c of activeConstraints) {
-    if (c.type === 'rule' && c.payload.layer >= 2) {
-      return false;
-    }
-  }
-  return hasDefaultLWWRules(rules) && hasDefaultFugueRules(rules);
-}
-
-function hasDefaultLWWRules(rules: readonly Rule[]): boolean {
-  let hasSuperseded = false;
-  let hasWinner = false;
-
-  for (const r of rules) {
-    if (r.head.predicate === 'superseded') {
-      const hasActiveValue = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'active_value',
-      );
-      if (hasActiveValue) hasSuperseded = true;
-    }
-    if (r.head.predicate === 'winner') {
-      const hasActiveValue = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'active_value',
-      );
-      const negatesSuperseded = r.body.some(
-        (b) => b.kind === 'negation' && b.atom.predicate === 'superseded',
-      );
-      if (hasActiveValue && negatesSuperseded) hasWinner = true;
-    }
-  }
-
-  return hasSuperseded && hasWinner;
-}
-
-function hasDefaultFugueRules(rules: readonly Rule[]): boolean {
-  let hasFugueChild = false;
-  let hasFugueBefore = false;
-
-  for (const r of rules) {
-    if (r.head.predicate === 'fugue_child') {
-      const hasSeqStructure = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'active_structure_seq',
-      );
-      if (hasSeqStructure) hasFugueChild = true;
-    }
-    if (r.head.predicate === 'fugue_before') {
-      const hasFugueChildBody = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'fugue_child',
-      );
-      if (hasFugueChildBody) hasFugueBefore = true;
-    }
-  }
-
-  return hasFugueChild && hasFugueBefore;
-}
-
-/**
- * Build a ResolutionResult using native LWW and Fugue solvers.
- * Mirrors the batch pipeline's buildNativeResolution().
- */
-function buildNativeResolution(
-  activeConstraints: readonly Constraint[],
-  structureIndex: StructureIndex,
-): ResolutionResult {
-  const valueConstraints = activeConstraints.filter(
-    (c): c is import('../types.js').ValueConstraint => c.type === 'value',
-  );
-  const lwwResult = resolveLWW(valueConstraints, structureIndex);
-
-  const winners = new Map<string, ResolvedWinner>();
-  for (const [sid, winner] of lwwResult.winners) {
-    winners.set(sid, {
-      slotId: sid,
-      winnerCnIdKey: cnIdKey(winner.winnerId),
-      content: winner.content,
-    });
-  }
-
-  const fuguePairs = buildNativeFuguePairs(activeConstraints, structureIndex);
-  return nativeResolution(winners, fuguePairs);
-}
-
-/**
- * Build Fugue ordering pairs from native solver output.
- * Mirrors the batch pipeline's buildNativeFuguePairs().
- */
-function buildNativeFuguePairs(
-  activeConstraints: readonly Constraint[],
-  structureIndex: StructureIndex,
-): ReadonlyMap<string, FugueBeforePair[]> {
-  const pairs = new Map<string, FugueBeforePair[]>();
-
-  const seqByParent = new Map<string, StructureConstraint[]>();
-  for (const c of activeConstraints) {
-    if (c.type !== 'structure') continue;
-    if (c.payload.kind !== 'seq') continue;
-    const parentKey = cnIdKey(c.payload.parent);
-    let group = seqByParent.get(parentKey);
-    if (group === undefined) {
-      group = [];
-      seqByParent.set(parentKey, group);
-    }
-    group.push(c);
-  }
-
-  for (const [parentKey, constraints] of seqByParent) {
-    const nodes = buildFugueNodes(constraints);
-    const ordered = orderFugueNodes(nodes);
-
-    if (ordered.length <= 1) continue;
-
-    const parentPairs: FugueBeforePair[] = [];
-    for (let i = 0; i < ordered.length; i++) {
-      for (let j = i + 1; j < ordered.length; j++) {
-        parentPairs.push({
-          parentKey,
-          a: ordered[i]!.idKey,
-          b: ordered[j]!.idKey,
-        });
-      }
-    }
-
-    if (parentPairs.length > 0) {
-      pairs.set(parentKey, parentPairs);
-    }
-  }
-
-  return pairs;
 }
 
 // ---------------------------------------------------------------------------
@@ -472,24 +267,21 @@ export function createIncrementalPipeline(
     const accIndex = structureIndex.current();
     const accFacts = projection.current();
 
+    const rules = extractRules(activeConstraints);
+    const strategy = selectResolutionStrategy(enableDatalog, rules, activeConstraints);
+
     let resolutionResult: ResolutionResult;
 
-    if (!enableDatalog) {
+    if (strategy === 'native') {
       resolutionResult = buildNativeResolution(activeConstraints, accIndex);
     } else {
-      const rules = extractRules(activeConstraints);
-
-      if (rules.length === 0) {
-        resolutionResult = buildNativeResolution(activeConstraints, accIndex);
-      } else if (isDefaultRulesOnly(rules, activeConstraints)) {
-        resolutionResult = buildNativeResolution(activeConstraints, accIndex);
+      const evalResult = evaluate(rules, accFacts);
+      if (evalResult.ok) {
+        resolutionResult = extractResolution(evalResult.value);
       } else {
-        const evalResult = evaluate(rules, accFacts);
-        if (evalResult.ok) {
-          resolutionResult = extractResolution(evalResult.value);
-        } else {
-          resolutionResult = buildNativeResolution(activeConstraints, accIndex);
-        }
+        // Datalog evaluation failed (e.g., cyclic negation).
+        // Fall back to native solvers as graceful degradation.
+        resolutionResult = buildNativeResolution(activeConstraints, accIndex);
       }
     }
 

@@ -563,6 +563,57 @@ The most powerful test pattern for incremental stages: take N constraints, compu
 
 The cost is manageable because N is small for unit tests (3–5 constraints), and the batch oracle (`computeActive`) is a pure function that's already tested independently. The test doesn't need to know *what* the correct answer is — it just asserts incremental == batch.
 
+## Plan 006: Incremental Datalog Evaluator
+
+### The Actual Stratification Is Simpler Than Hand Analysis Suggests
+
+Reading the 11 default rules individually, one might expect 4–5 strata: `fugue_child` → `fugue_descendant` → `superseded` → `fugue_before`/`winner`. Running the actual stratifier (`stratify(buildDefaultRules())`) produces **two strata**:
+
+- Stratum 0: `active_value`, `superseded`, `active_structure_seq`, `constraint_peer`, `fugue_child`, `fugue_descendant` (5 rules, all positive)
+- Stratum 1: `winner`, `fugue_before` (6 rules, both use negation)
+
+Tarjan's SCC algorithm collapses all purely-positive predicates into stratum 0 regardless of their inter-dependencies, and puts everything that negates a stratum-0 predicate into stratum 1. This makes the affected-stratum computation trivial for the incremental evaluator — any ground-fact change affects stratum 0, and any stratum-0 output change propagates to stratum 1.
+
+**Lesson**: Always verify stratifier output empirically. The algorithm produces a more collapsed layout than manual reasoning suggests because it only creates stratum boundaries at negation edges, not at positive dependency edges.
+
+### The Theory's Claim That Fugue Rules Are All Positive Is Wrong
+
+theory/incremental.md §9.5 states: "Our Fugue rules (`fugue_child`, `fugue_descendant`, `fugue_before`) are all positive." This is incorrect. Rule 5 (`fugueBeforeSubtreeProp`) uses `not fugue_descendant(Parent, B, X)` — the subtree propagation guard. The `fugue_before` predicate lands in a negation stratum (stratum 1), not a monotone one.
+
+The practical impact is nil for the common case because the native fast path handles default Fugue rules without Datalog. But for the incremental Datalog evaluator, this means `fugue_before` requires the DRed (delete-and-rederive) pattern, not simple monotone delta propagation.
+
+**Lesson**: Check negation usage in actual rule definitions, not just the theory's characterization of them. A single `not` in one rule out of eight changes the entire stratum's incrementalization strategy.
+
+### `ZSet<Fact>` Is the Right Unification Point — Don't Invent `WeightedRelation`
+
+The initial Plan 006 design proposed a separate `WeightedRelation` type (`Map<string, { tuple: FactTuple, weight: number }>` keyed by `serializeTuple`) for the incremental Datalog evaluator's internal state. This overlaps almost entirely with `ZSet<Fact>`, which is already `ReadonlyMap<string, { element: Fact, weight: number }>` keyed by `factKey`. Both are weighted sets of facts. The only differences were per-predicate scoping (solved by `Map<string, ZSet<Fact>>`) and storing `FactTuple` vs `Fact` (trivial wrapping).
+
+The `wrToZSet` and `wrFromZSet` conversion functions were a code smell — converting between isomorphic types at every stage boundary. Unifying on `ZSet<Fact>` eliminated ~100 LOC of duplicate algebra, removed two conversion functions, avoided exporting the private `serializeTuple`, and made the entire pipeline speak one type language from projection through evaluation to skeleton.
+
+The one concern — semi-naive iteration needing `readonly FactTuple[]` arrays — is solved by a private `CachedRelation` wrapper inside the evaluator that lazily materializes tuples from positive-weight Z-set entries. This is an implementation detail, not a type-level concern.
+
+**Lesson**: When two components exchange a type and one proposes a different internal type with bidirectional conversion, question whether the internal type is justified. Conversion functions between isomorphic types are a code smell.
+
+### Semi-Naive Read/Write Separation Dictates Caching Strategy
+
+Within one semi-naive pass, the accumulated database (`fullDb`) is read-only — queried many times via `tuples()`, never written. The delta (`currentDelta`) is also read-only. Only `nextDelta` is written to, and it's never read until the next iteration. This means lazy caching (build the tuples array on first access, invalidate on mutation) is optimal — the cache is built once per Z-set version and hit N times during iteration. Eagerly maintaining a parallel array on every `zsetAdd` would waste work because `nextDelta` gets many additions but its tuples are never read until it becomes `currentDelta`.
+
+**Lesson**: The caching strategy for a data structure depends on the access pattern (read/write interleaving), not the data structure's API surface.
+
+### Duplicated Code Cascades — Extract Canonical Functions Before They Triple
+
+Phase 1 discovered six functions duplicated byte-for-byte between `kernel/pipeline.ts` and `kernel/incremental/pipeline.ts`: `extractRules`, `isDefaultRulesOnly`, `hasDefaultLWWRules`, `hasDefaultFugueRules`, `buildNativeResolution`, `buildNativeFuguePairs`. Additionally, the "ordered nodes → all-pairs" nested loop inside `buildNativeFuguePairs` would have been reimplemented a third time in incremental Fugue, and the `pairKey` closure inside `diffResolution` would have been reimplemented in both incremental Fugue and incremental Datalog resolution extraction.
+
+The fix: place canonical functions in the right modules (key functions in `resolve.ts`, detection in `rule-detection.ts`, native building in `native-resolution.ts`) before building consumers. ~500 LOC of duplication eliminated, and later phases (2–7) compose these functions rather than reinventing them.
+
+**Lesson**: When planning an extraction refactor, look not just at the obvious duplicates but at inline patterns (local closures, nested loops) that will be needed by future consumers. Extract them at the same time — the marginal cost is low and the prevented duplication is multiplicative.
+
+### The Resolution Strategy Decision Tree Is a Pure Function
+
+The `if (!enableDatalog) → native; else if (rules.length === 0) → native; else if (isDefaultRulesOnly) → native; else → datalog` chain appeared identically in both pipeline composition roots and would have been needed a third time by the evaluation stage. Extracting it as `selectResolutionStrategy(enableDatalog, rules, active) → 'native' | 'datalog'` makes the strategy choice independently testable and composes cleanly with the evaluation stage's strategy-switching logic.
+
+**Lesson**: Multi-branch decision trees that appear in composition roots (imperative shells) are often pure functions in disguise. Extracting them improves testability and prevents drift between copies.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.

@@ -237,7 +237,7 @@ export {
   CONSTRAINT_PEER,
   projectToFacts,
 
-  // Resolution (§B.4, §B.7 — Datalog→skeleton bridge)
+  // Resolution (§B.4, §B.7 — Datalog→kernel bridge)
   type ResolvedWinner,
   type FugueBeforePair,
   type ResolutionResult,
@@ -246,6 +246,21 @@ export {
   extractResolution,
   nativeResolution,
   topologicalOrderFromPairs,
+  fuguePairKey,
+  allPairsFromOrdered,
+
+  // Rule Detection (§B.7)
+  type ResolutionStrategy,
+  extractRules,
+  isDefaultRulesOnly,
+  hasDefaultLWWRules,
+  hasDefaultFugueRules,
+  selectResolutionStrategy,
+
+  // Native Resolution (§B.7)
+  buildNativeResolution,
+  buildNativeFuguePairs,
+  diffFuguePairs,
 
   // Skeleton (§7.3)
   buildSkeleton,

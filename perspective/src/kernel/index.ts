@@ -215,7 +215,7 @@ export {
   projectToFacts,
 } from './projection.js';
 
-// --- Resolution (§B.4, §B.7 — Datalog→skeleton bridge) ---
+// --- Resolution (§B.4, §B.7 — Datalog→kernel bridge) ---
 export type {
   ResolvedWinner,
   FugueBeforePair,
@@ -228,7 +228,27 @@ export {
   extractResolution,
   nativeResolution,
   topologicalOrderFromPairs,
+  fuguePairKey,
+  allPairsFromOrdered,
 } from './resolve.js';
+
+// --- Rule Detection (§B.7) ---
+export type { ResolutionStrategy } from './rule-detection.js';
+
+export {
+  extractRules,
+  isDefaultRulesOnly,
+  hasDefaultLWWRules,
+  hasDefaultFugueRules,
+  selectResolutionStrategy,
+} from './rule-detection.js';
+
+// --- Native Resolution (§B.7) ---
+export {
+  buildNativeResolution,
+  buildNativeFuguePairs,
+  diffFuguePairs,
+} from './native-resolution.js';
 
 // --- Skeleton (§7.3) ---
 export {

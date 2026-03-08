@@ -48,6 +48,53 @@ export interface FugueBeforePair {
   readonly b: string;
 }
 
+// ---------------------------------------------------------------------------
+// Canonical Key & Utility Functions for FugueBeforePair
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical string key for a `FugueBeforePair`, following the Z-set key
+ * convention (alongside `cnIdKey` for constraints, `factKey` for facts,
+ * `slotId` for winners).
+ *
+ * Two pairs with the same parent, a, and b produce the same key.
+ * Used for Z-set keying in incremental Fugue pair diffing and resolution
+ * extraction.
+ */
+export function fuguePairKey(p: FugueBeforePair): string {
+  return `${p.parentKey}|${p.a}|${p.b}`;
+}
+
+/**
+ * Generate all (A, B) before-pairs from an ordered list of element keys.
+ *
+ * Given elements in total order [e0, e1, e2, ...], produces pairs
+ * (e0, e1), (e0, e2), (e1, e2), ... — every (i, j) where i < j.
+ * This matches the Datalog `fugue_before(Parent, A, B)` relation shape.
+ *
+ * @param parentKey - The parent container's CnId key string.
+ * @param ordered - Elements in Fugue total order. Only `idKey` is read.
+ * @returns Array of FugueBeforePair. Empty if fewer than 2 elements.
+ */
+export function allPairsFromOrdered(
+  parentKey: string,
+  ordered: readonly { readonly idKey: string }[],
+): FugueBeforePair[] {
+  if (ordered.length <= 1) return [];
+
+  const pairs: FugueBeforePair[] = [];
+  for (let i = 0; i < ordered.length; i++) {
+    for (let j = i + 1; j < ordered.length; j++) {
+      pairs.push({
+        parentKey,
+        a: ordered[i]!.idKey,
+        b: ordered[j]!.idKey,
+      });
+    }
+  }
+  return pairs;
+}
+
 /**
  * The complete resolution result extracted from Datalog evaluation.
  *

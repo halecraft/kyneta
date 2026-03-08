@@ -398,7 +398,7 @@ native) before tackling the harder problem.
 
 ## Phases and Tasks
 
-### Phase 1: Shared Utilities Extraction 🔴
+### Phase 1: Shared Utilities Extraction ✅
 
 Extract duplicated code from `kernel/pipeline.ts` and
 `kernel/incremental/pipeline.ts` into shared modules. Both files contain
@@ -422,24 +422,24 @@ multiple consumers in later phases:
   `isDefaultRulesOnly`, `hasDefaultLWWRules`, `hasDefaultFugueRules`,
   `selectResolutionStrategy(enableDatalog, rules, activeConstraints) → 'native' | 'datalog'`
   (the pure strategy selector — currently an identical if/else chain in both
-  pipeline files). 🔴
+  pipeline files). ✅
 - 1.2 Add `fuguePairKey(p: FugueBeforePair) → string` to `kernel/resolve.ts`,
   following the Z-set key convention (alongside `cnIdKey` for constraints,
-  `factKey` for facts, `slotId` for winners). 🔴
+  `factKey` for facts, `slotId` for winners). ✅
 - 1.3 Add `allPairsFromOrdered(parentKey: string, ordered: readonly FugueNode[]) → FugueBeforePair[]`
   to `kernel/resolve.ts`. This is the "ordered nodes → all-pairs" nested loop
   that is currently duplicated in both `buildNativeFuguePairs` copies and will be
-  needed by incremental Fugue. 🔴
+  needed by incremental Fugue. ✅
 - 1.4 Create `kernel/native-resolution.ts` with `buildNativeResolution` and
-  `buildNativeFuguePairs` (refactored to use `allPairsFromOrdered`). 🔴
+  `buildNativeFuguePairs` (refactored to use `allPairsFromOrdered`). ✅
 - 1.5 Extract `diffFuguePairs(oldPairs, newPairs) → ZSet<FugueBeforePair>` from
   the Fugue pair section of `diffResolution` into `kernel/native-resolution.ts`,
-  refactored to use `fuguePairKey`. Reused by incremental Fugue in Phase 3. 🔴
+  refactored to use `fuguePairKey`. Reused by incremental Fugue in Phase 3. ✅
 - 1.6 Update `kernel/pipeline.ts` to import from the shared modules instead of
-  defining its own copies. 🔴
+  defining its own copies. ✅
 - 1.7 Update `kernel/incremental/pipeline.ts` to import from the shared modules
-  instead of defining its own copies. 🔴
-- 1.8 Verify all 1098 existing tests still pass. 🔴
+  instead of defining its own copies. ✅
+- 1.8 Verify all 1098 existing tests still pass. ✅
 
 #### Tests
 

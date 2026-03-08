@@ -22,7 +22,6 @@ import type {
   PeerID,
   VersionVector,
   Reality,
-  RuleConstraint,
 } from './types.js';
 import type { ConstraintStore } from './store.js';
 import { allConstraints } from './store.js';
@@ -38,19 +37,16 @@ import { buildStructureIndex, type StructureIndex } from './structure-index.js';
 import { projectToFacts, type ProjectionResult } from './projection.js';
 import {
   extractResolution,
-  nativeResolution,
   type ResolutionResult,
-  type ResolvedWinner,
-  type FugueBeforePair,
 } from './resolve.js';
 import { buildSkeleton } from './skeleton.js';
 import { evaluate } from '../datalog/evaluate.js';
-import type { Rule, Fact } from '../datalog/types.js';
-import { Database } from '../datalog/types.js';
-import { resolveLWW } from '../solver/lww.js';
-import { cnIdKey } from './cnid.js';
-import { buildFugueNodes, orderFugueNodes } from '../solver/fugue.js';
-import type { StructureConstraint } from './types.js';
+import type { Rule } from '../datalog/types.js';
+import {
+  extractRules,
+  selectResolutionStrategy,
+} from './rule-detection.js';
+import { buildNativeResolution } from './native-resolution.js';
 
 // ---------------------------------------------------------------------------
 // Pipeline Configuration
@@ -198,35 +194,23 @@ export function solveFull(
   let resolutionResult: ResolutionResult;
   let nativeFastPath: boolean | null;
 
-  if (!enableDatalog) {
-    // Datalog disabled — use native solvers directly (testing/benchmark).
-    resolutionResult = buildNativeResolution(retractionResult.active, structureIndex);
-    nativeFastPath = null;
-  } else {
-    const rules = extractRules(retractionResult.active);
+  const rules = extractRules(retractionResult.active);
+  const strategy = selectResolutionStrategy(enableDatalog, rules, retractionResult.active);
 
-    if (rules.length === 0) {
-      // No rules in the store — use native solvers.
-      // This is the case before bootstrap (Phase 5) injects rules.
-      resolutionResult = buildNativeResolution(retractionResult.active, structureIndex);
-      nativeFastPath = true;
-    } else if (isDefaultRulesOnly(rules, retractionResult.active)) {
-      // Rules match the known default LWW + Fugue patterns and no
-      // custom Layer 2+ rules exist — native fast path (§B.7).
-      resolutionResult = buildNativeResolution(retractionResult.active, structureIndex);
-      nativeFastPath = true;
+  if (strategy === 'native') {
+    resolutionResult = buildNativeResolution(retractionResult.active, structureIndex);
+    nativeFastPath = enableDatalog ? true : null;
+  } else {
+    // Custom or modified rules — use Datalog evaluation (primary path).
+    const evalResult = evaluate(rules, projectionResult.facts);
+    if (evalResult.ok) {
+      resolutionResult = extractResolution(evalResult.value);
     } else {
-      // Custom or modified rules — use Datalog evaluation (primary path).
-      const evalResult = evaluate(rules, projectionResult.facts);
-      if (evalResult.ok) {
-        resolutionResult = extractResolution(evalResult.value);
-      } else {
-        // Datalog evaluation failed (e.g., cyclic negation).
-        // Fall back to native solvers as graceful degradation.
-        resolutionResult = buildNativeResolution(retractionResult.active, structureIndex);
-      }
-      nativeFastPath = false;
+      // Datalog evaluation failed (e.g., cyclic negation).
+      // Fall back to native solvers as graceful degradation.
+      resolutionResult = buildNativeResolution(retractionResult.active, structureIndex);
     }
+    nativeFastPath = false;
   }
 
   // Step 7: Skeleton — build the reality tree from resolution result.
@@ -244,240 +228,3 @@ export function solveFull(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Rule Extraction
-// ---------------------------------------------------------------------------
-
-/**
- * Extract Datalog rules from active rule constraints.
- *
- * Rule constraints carry their rules as data (head + body). This function
- * extracts them into the format the Datalog evaluator expects.
- *
- * Rules are sorted by layer to ensure deterministic evaluation order.
- */
-function extractRules(activeConstraints: readonly Constraint[]): Rule[] {
-  const ruleConstraints: RuleConstraint[] = [];
-
-  for (const c of activeConstraints) {
-    if (c.type === 'rule') {
-      ruleConstraints.push(c);
-    }
-  }
-
-  // Sort by layer (lower layers first) for predictable evaluation.
-  ruleConstraints.sort((a, b) => a.payload.layer - b.payload.layer);
-
-  return ruleConstraints.map((rc) => ({
-    head: rc.payload.head,
-    body: rc.payload.body,
-  }));
-}
-
-// ---------------------------------------------------------------------------
-// Native Solver Fast Path (§B.7)
-// ---------------------------------------------------------------------------
-
-/**
- * Build a ResolutionResult using native LWW and Fugue solvers.
- *
- * This produces the same data structure as the Datalog path but uses
- * host-language implementations directly.
- */
-function buildNativeResolution(
-  activeConstraints: readonly Constraint[],
-  structureIndex: StructureIndex,
-): ResolutionResult {
-  // Native LWW: resolve all value constraints.
-  const valueConstraints = activeConstraints.filter(
-    (c): c is import('./types.js').ValueConstraint => c.type === 'value',
-  );
-  const lwwResult = resolveLWW(valueConstraints, structureIndex);
-
-  const winners = new Map<string, ResolvedWinner>();
-  for (const [slotId, winner] of lwwResult.winners) {
-    winners.set(slotId, {
-      slotId,
-      winnerCnIdKey: cnIdKey(winner.winnerId),
-      content: winner.content,
-    });
-  }
-
-  // Native Fugue: compute ordering for all seq parents.
-  const fuguePairs = buildNativeFuguePairs(activeConstraints, structureIndex);
-
-  return nativeResolution(winners, fuguePairs);
-}
-
-/**
- * Build Fugue ordering pairs from native solver output.
- *
- * For each seq parent, runs the native Fugue solver and converts the
- * total order into (A, B) before-pairs that match the Datalog
- * `fugue_before(Parent, A, B)` relation shape.
- */
-function buildNativeFuguePairs(
-  activeConstraints: readonly Constraint[],
-  structureIndex: StructureIndex,
-): ReadonlyMap<string, FugueBeforePair[]> {
-  const pairs = new Map<string, FugueBeforePair[]>();
-
-  // Group seq constraints by parent.
-  const seqByParent = new Map<string, StructureConstraint[]>();
-
-  for (const c of activeConstraints) {
-    if (c.type !== 'structure') continue;
-    if (c.payload.kind !== 'seq') continue;
-    const parentKey = cnIdKey(c.payload.parent);
-    let group = seqByParent.get(parentKey);
-    if (group === undefined) {
-      group = [];
-      seqByParent.set(parentKey, group);
-    }
-    group.push(c);
-  }
-
-  // For each parent, compute native Fugue ordering and emit before-pairs.
-  for (const [parentKey, constraints] of seqByParent) {
-    const nodes = buildFugueNodes(constraints);
-    const ordered = orderFugueNodes(nodes);
-
-    if (ordered.length <= 1) continue;
-
-    const parentPairs: FugueBeforePair[] = [];
-    for (let i = 0; i < ordered.length; i++) {
-      for (let j = i + 1; j < ordered.length; j++) {
-        parentPairs.push({
-          parentKey,
-          a: ordered[i]!.idKey,
-          b: ordered[j]!.idKey,
-        });
-      }
-    }
-
-    if (parentPairs.length > 0) {
-      pairs.set(parentKey, parentPairs);
-    }
-  }
-
-  return pairs;
-}
-
-// ---------------------------------------------------------------------------
-// Default Rule Detection (§B.7)
-//
-// The native fast path is safe ONLY when:
-//   1. The active rules are exactly the known default LWW + Fugue rules.
-//   2. No additional Layer 2+ rules exist that could interact.
-//
-// Detection is STRUCTURAL — we compare rule head/body shapes, not CnIds
-// or timestamps. A bootstrap LWW rule from Alice is semantically identical
-// to one from Bob.
-// ---------------------------------------------------------------------------
-
-/**
- * Check whether the active rules are exactly the defaults (LWW + Fugue)
- * with no additional custom rules.
- *
- * @param rules - The extracted Datalog rules from active rule constraints.
- * @param activeConstraints - All active constraints (to check for Layer 2+ rules).
- * @returns true if native fast path is safe, false if Datalog should be used.
- */
-function isDefaultRulesOnly(
-  rules: readonly Rule[],
-  activeConstraints: readonly Constraint[],
-): boolean {
-  // Check if any rule constraints are at Layer 2+.
-  // The presence of Layer 2+ rules means custom/configurable rules exist,
-  // which might interact with the defaults — use Datalog to be safe.
-  for (const c of activeConstraints) {
-    if (c.type === 'rule' && c.payload.layer >= 2) {
-      return false;
-    }
-  }
-
-  // Check if the rules structurally match the default LWW + Fugue patterns.
-  return hasDefaultLWWRules(rules) && hasDefaultFugueRules(rules);
-}
-
-/**
- * Check if the rules contain the default LWW pattern.
- *
- * Default LWW consists of 3 rules:
- *   - superseded(CnId, Slot) :- ... L2 > L1 ...
- *   - superseded(CnId, Slot) :- ... L2 == L1, P2 > P1 ...
- *   - winner(Slot, CnId, Value) :- active_value(...), not superseded(...)
- *
- * We detect by looking for:
- *   - A head predicate 'superseded' (at least one rule)
- *   - A head predicate 'winner' with a negation of 'superseded' in body
- */
-function hasDefaultLWWRules(rules: readonly Rule[]): boolean {
-  let hasSuperseded = false;
-  let hasWinner = false;
-
-  for (const r of rules) {
-    if (r.head.predicate === 'superseded') {
-      // Check that it reads from 'active_value'.
-      const hasActiveValue = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'active_value',
-      );
-      if (hasActiveValue) {
-        hasSuperseded = true;
-      }
-    }
-
-    if (r.head.predicate === 'winner') {
-      // Check that it reads from 'active_value' and negates 'superseded'.
-      const hasActiveValue = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'active_value',
-      );
-      const negatesSuperseded = r.body.some(
-        (b) => b.kind === 'negation' && b.atom.predicate === 'superseded',
-      );
-      if (hasActiveValue && negatesSuperseded) {
-        hasWinner = true;
-      }
-    }
-  }
-
-  return hasSuperseded && hasWinner;
-}
-
-/**
- * Check if the rules contain the default Fugue pattern.
- *
- * Default Fugue consists of 2 rules:
- *   - fugue_child(Parent, CnId, ...) :- active_structure_seq(...), constraint_peer(...)
- *   - fugue_before(Parent, A, B) :- fugue_child(...), fugue_child(...), A ≠ B, PeerA < PeerB
- *
- * We detect by looking for:
- *   - A head predicate 'fugue_child' reading from 'active_structure_seq'
- *   - A head predicate 'fugue_before' reading from 'fugue_child'
- */
-function hasDefaultFugueRules(rules: readonly Rule[]): boolean {
-  let hasFugueChild = false;
-  let hasFugueBefore = false;
-
-  for (const r of rules) {
-    if (r.head.predicate === 'fugue_child') {
-      const hasSeqStructure = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'active_structure_seq',
-      );
-      if (hasSeqStructure) {
-        hasFugueChild = true;
-      }
-    }
-
-    if (r.head.predicate === 'fugue_before') {
-      const hasFugueChildBody = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'fugue_child',
-      );
-      if (hasFugueChildBody) {
-        hasFugueBefore = true;
-      }
-    }
-  }
-
-  return hasFugueChild && hasFugueBefore;
-}
