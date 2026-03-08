@@ -42,6 +42,43 @@ export {
   solveFull,
 } from './kernel/pipeline.js';
 
+// === Incremental Pipeline (Plan 005) ===
+export {
+  type IncrementalPipeline,
+  createIncrementalPipeline,
+  createIncrementalPipelineFromBootstrap,
+  type StructureIndexDelta,
+  type NodeDelta,
+  type NodeDeltaKind,
+  type RealityDelta,
+  structureIndexDeltaEmpty,
+  structureIndexDeltaFrom,
+  realityDeltaEmpty,
+  realityDeltaFrom,
+} from './kernel/incremental/index.js';
+
+// === Z-Set Algebra (DBSP) ===
+export {
+  type ZSet,
+  type ZSetEntry,
+  zsetEmpty,
+  zsetSingleton,
+  zsetFromEntries,
+  zsetAdd,
+  zsetNegate,
+  zsetIsEmpty,
+  zsetSize,
+  zsetGet,
+  zsetHas,
+  zsetPositive,
+  zsetNegative,
+  zsetForEach,
+  zsetMap,
+  zsetFilter,
+  zsetElements,
+  zsetKeys,
+} from './base/zset.js';
+
 // === Kernel (Layer 0) ===
 export {
   // Types

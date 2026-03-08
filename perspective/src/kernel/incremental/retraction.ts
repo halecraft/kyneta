@@ -40,6 +40,7 @@ import { DEFAULT_RETRACTION_CONFIG } from '../retraction.js';
 import type { ZSet } from '../../base/zset.js';
 import {
   zsetEmpty,
+  zsetIsEmpty,
   zsetSingleton,
   zsetAdd,
   zsetForEach,
@@ -535,6 +536,12 @@ export function createIncrementalRetraction(
     }
 
     // Pass 3: Process removals (weight −1).
+    // Collect removal deltas for all active removals, then recompute
+    // affected keys once at the end. Previous code had a bug where
+    // the first active removal triggered an early return, silently
+    // dropping subsequent removals in the same delta.
+    let removalDelta = zsetEmpty<Constraint>();
+
     for (const c of removals) {
       const key = cnIdKey(c.id);
       if (!allByKey.has(key)) continue; // not present
@@ -553,26 +560,22 @@ export function createIncrementalRetraction(
       const oldStatus = domStatus.get(key);
       domStatus.delete(key);
       if (oldStatus === 'active') {
-        // Will be handled by recomputeAffected... but the constraint
-        // is gone from allByKey now, so we need to emit the delta
-        // manually here.
-        // Actually, recomputeAffected skips constraints not in allByKey,
-        // so we must handle this removal explicitly.
-        affectedKeys.delete(key); // don't recompute — it's gone
-
-        // Build removal delta
-        let removalDelta = zsetSingleton(key, c, -1);
-
-        // Recompute anything affected by this removal
-        const otherDelta = recomputeAffected(affectedKeys);
-        return zsetAdd(removalDelta, otherDelta);
+        // The constraint is gone from allByKey, so recomputeAffected
+        // can't handle it. Emit the −1 delta directly and remove
+        // from the recompute set.
+        affectedKeys.delete(key);
+        removalDelta = zsetAdd(removalDelta, zsetSingleton(key, c, -1));
       }
     }
 
     // Recompute dominance for all affected constraints
-    if (affectedKeys.size === 0) return zsetEmpty();
+    if (affectedKeys.size === 0 && zsetIsEmpty(removalDelta)) return zsetEmpty();
 
-    return recomputeAffected(affectedKeys);
+    const recomputeDelta = affectedKeys.size > 0
+      ? recomputeAffected(affectedKeys)
+      : zsetEmpty<Constraint>();
+
+    return zsetAdd(removalDelta, recomputeDelta);
   }
 
   function current(): Constraint[] {

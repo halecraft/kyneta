@@ -36,3 +36,10 @@ export { createIncrementalValidity } from './validity.js';
 // --- Incremental Skeleton (Phase 7) ---
 export type { IncrementalSkeleton } from './skeleton.js';
 export { createIncrementalSkeleton } from './skeleton.js';
+
+// --- Incremental Pipeline (Phase 8) ---
+export type { IncrementalPipeline } from './pipeline.js';
+export {
+  createIncrementalPipeline,
+  createIncrementalPipelineFromBootstrap,
+} from './pipeline.js';

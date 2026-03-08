@@ -268,18 +268,18 @@ export function createIncrementalSkeleton(
         node.value = winner.content;
       }
 
-      // For map children: only add to parent if has value or children.
-      // null value means "deleted" — exclude from reality.
-      if (node.value !== null || node.children.size > 0) {
-        if (node.value !== undefined || node.children.size > 0) {
-          parentNode.children.set(childKeyStr, node);
-          changes.push({
-            kind: 'childAdded',
-            path: parentPath,
-            key: childKeyStr,
-            child: snapshot(node),
-          });
-        }
+      // For map children: only exclude when value is null AND no children.
+      // This matches batch buildMapChildren which does:
+      //   if (node.value === null && node.children.size === 0) continue;
+      // A node with value === undefined (no value set yet) is still visible.
+      if (!(node.value === null && node.children.size === 0)) {
+        parentNode.children.set(childKeyStr, node);
+        changes.push({
+          kind: 'childAdded',
+          path: parentPath,
+          key: childKeyStr,
+          child: snapshot(node),
+        });
       }
 
       // Check for deferred children
@@ -588,9 +588,11 @@ export function createIncrementalSkeleton(
         if (parentNode !== undefined && group !== undefined) {
           const childKeyStr = group.childKey;
           const isInParent = parentNode.children.has(childKeyStr);
+          // Match batch buildMapChildren: only exclude when
+          // value === null AND no children. value === undefined
+          // (no value set yet) is still visible.
           const shouldBeInParent =
-            (newValue !== null && newValue !== undefined) ||
-            node.children.size > 0;
+            !(newValue === null && node.children.size === 0);
 
           if (isInParent && !shouldBeInParent) {
             // Remove from parent.

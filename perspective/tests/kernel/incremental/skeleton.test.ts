@@ -401,23 +401,25 @@ describe('IncrementalSkeleton', () => {
       const child = makeMapChild('alice', 1, root.id, 'name');
       const sid = slotId(child);
 
-      // Structure first, no value — child is invisible (not in parent)
+      // Structure first, no value — child IS visible with undefined value
+      // (matches batch buildMapChildren which only excludes null + no children).
       stepFull([], [], [root, child]);
-      expect(getNode(skeleton.current(), 'profile', 'name')).toBeUndefined();
+      const nameNode = getNode(skeleton.current(), 'profile', 'name');
+      expect(nameNode).toBeDefined();
+      expect(nameNode!.value).toBeUndefined();
 
-      // Value arrives later — child becomes visible via childAdded
+      // Value arrives later — child's value is updated via valueChanged
       const winner = makeWinner(sid, cnIdKey(child.id), 'Bob');
       const rd = stepFull([winner], [], []);
 
-      // When a previously-invisible map child gains a value, the correct
-      // delta is childAdded (the node transitions from absent to present
-      // in the parent's children map), not valueChanged.
-      const ca = findDelta(rd, 'childAdded');
-      expect(ca).toBeDefined();
-      if (ca?.kind === 'childAdded') {
-        expect(ca.path).toEqual(['profile']);
-        expect(ca.key).toBe('name');
-        expect(ca.child.value).toBe('Bob');
+      // The node was already in the parent's children map (visible with
+      // undefined value), so the delta is valueChanged, not childAdded.
+      const vc = findDelta(rd, 'valueChanged');
+      expect(vc).toBeDefined();
+      if (vc?.kind === 'valueChanged') {
+        expect(vc.path).toEqual(['profile', 'name']);
+        expect(vc.oldValue).toBeUndefined();
+        expect(vc.newValue).toBe('Bob');
       }
 
       expect(nodeValue(skeleton.current(), 'profile', 'name')).toBe('Bob');
@@ -508,16 +510,21 @@ describe('IncrementalSkeleton', () => {
         structureIndexDeltaEmpty(),
       );
 
-      // Map child with no value and no children is removed from parent
-      const childRemoved = findDelta(rd, 'childRemoved');
-      expect(childRemoved).toBeDefined();
-      if (childRemoved?.kind === 'childRemoved') {
-        expect(childRemoved.path).toEqual(['profile']);
-        expect(childRemoved.key).toBe('name');
+      // Map child with undefined value (no winner) is still visible
+      // (matches batch: only null + no children = excluded).
+      // The delta is valueChanged (Alice → undefined).
+      const vc = findDelta(rd, 'valueChanged');
+      expect(vc).toBeDefined();
+      if (vc?.kind === 'valueChanged') {
+        expect(vc.path).toEqual(['profile', 'name']);
+        expect(vc.oldValue).toBe('Alice');
+        expect(vc.newValue).toBeUndefined();
       }
 
-      // Node should not be in the reality tree
-      expect(getNode(skeleton.current(), 'profile', 'name')).toBeUndefined();
+      // Node IS still in the reality tree (value undefined, not null)
+      const nameNode = getNode(skeleton.current(), 'profile', 'name');
+      expect(nameNode).toBeDefined();
+      expect(nameNode!.value).toBeUndefined();
     });
 
     it('removing winner on map node with children keeps node but changes value', () => {
@@ -841,26 +848,42 @@ describe('IncrementalSkeleton', () => {
   // -----------------------------------------------------------------------
 
   describe('map child visibility', () => {
-    it('map child without value is not in parent children (structure-only)', () => {
+    it('map child without value is visible with undefined value (matches batch)', () => {
       const { stepFull, skeleton } = createScaffold();
       const root = makeRoot('alice', 0, 'profile');
       const child = makeMapChild('alice', 1, root.id, 'name');
 
-      // Structure only, no value
+      // Structure only, no value — child IS visible with undefined value
+      // (matches batch buildMapChildren: only null + no children = excluded)
       stepFull([], [], [root, child]);
 
-      // Child should not be visible (no value, no children)
+      const nameNode = getNode(skeleton.current(), 'profile', 'name');
+      expect(nameNode).toBeDefined();
+      expect(nameNode!.value).toBeUndefined();
+    });
+
+    it('map child with null value and no children is excluded (matches batch)', () => {
+      const { stepFull, skeleton } = createScaffold();
+      const root = makeRoot('alice', 0, 'profile');
+      const child = makeMapChild('alice', 1, root.id, 'name');
+      const sid = slotId(child);
+
+      // Set value to null (LWW deletion)
+      const w = makeWinner(sid, cnIdKey(child.id), null);
+      stepFull([w], [], [root, child]);
+
+      // null value + no children = excluded from reality
       expect(getNode(skeleton.current(), 'profile', 'name')).toBeUndefined();
     });
 
-    it('map child with value added to parent, then value retracted removes it', () => {
+    it('map child with value, then value retracted — node stays with undefined value', () => {
       const { stepFull, skeleton } = createScaffold();
       const root = makeRoot('alice', 0, 'profile');
       const child = makeMapChild('alice', 1, root.id, 'name');
       const sid = slotId(child);
 
       stepFull([], [], [root, child]);
-      expect(getNode(skeleton.current(), 'profile', 'name')).toBeUndefined();
+      expect(getNode(skeleton.current(), 'profile', 'name')).toBeDefined();
 
       // Add value
       const w = makeWinner(sid, cnIdKey(child.id), 'Alice');
@@ -868,16 +891,18 @@ describe('IncrementalSkeleton', () => {
       expect(getNode(skeleton.current(), 'profile', 'name')).toBeDefined();
       expect(nodeValue(skeleton.current(), 'profile', 'name')).toBe('Alice');
 
-      // Retract value
+      // Retract value — node stays visible with undefined value
       skeleton.step(
         winnerZset([w], -1),
         zsetEmpty(),
         structureIndexDeltaEmpty(),
       );
-      expect(getNode(skeleton.current(), 'profile', 'name')).toBeUndefined();
+      const nameNode = getNode(skeleton.current(), 'profile', 'name');
+      expect(nameNode).toBeDefined();
+      expect(nameNode!.value).toBeUndefined();
     });
 
-    it('value restored after retraction re-adds child', () => {
+    it('value restored after retraction updates value via valueChanged', () => {
       const { stepFull, skeleton } = createScaffold();
       const root = makeRoot('alice', 0, 'profile');
       const child = makeMapChild('alice', 1, root.id, 'name');
@@ -889,17 +914,22 @@ describe('IncrementalSkeleton', () => {
       stepFull([w1], [], []);
       expect(nodeValue(skeleton.current(), 'profile', 'name')).toBe('Alice');
 
-      // Retract
+      // Retract — node stays visible with undefined value
       skeleton.step(winnerZset([w1], -1), zsetEmpty(), structureIndexDeltaEmpty());
-      expect(getNode(skeleton.current(), 'profile', 'name')).toBeUndefined();
+      expect(getNode(skeleton.current(), 'profile', 'name')).toBeDefined();
+      expect(getNode(skeleton.current(), 'profile', 'name')!.value).toBeUndefined();
 
-      // Restore with new winner
+      // Restore with new winner — valueChanged (undefined → Bob)
       const w2 = makeWinner(sid, 'bob:0', 'Bob');
       const rd = stepFull([w2], [], []);
 
-      // Should have childAdded
-      const childAdded = findDelta(rd, 'childAdded');
-      expect(childAdded).toBeDefined();
+      // Should have valueChanged (node was already visible)
+      const vc = findDelta(rd, 'valueChanged');
+      expect(vc).toBeDefined();
+      if (vc?.kind === 'valueChanged') {
+        expect(vc.oldValue).toBeUndefined();
+        expect(vc.newValue).toBe('Bob');
+      }
 
       expect(nodeValue(skeleton.current(), 'profile', 'name')).toBe('Bob');
     });
@@ -1273,6 +1303,11 @@ describe('IncrementalSkeleton', () => {
       const w = makeWinner(sid, cnIdKey(child.id), 'Alice');
 
       stepFull([], [], [root]);
+      // When structure + winner arrive in the same step, the skeleton
+      // processes structures first (Phase 1), then winners (Phase 2).
+      // The childAdded delta is emitted with value undefined (structure
+      // creates the node before the winner is applied). A separate
+      // valueChanged delta sets the value.
       const rd = stepFull([w], [], [child]);
 
       const childAdded = findDelta(rd, 'childAdded');
@@ -1280,7 +1315,17 @@ describe('IncrementalSkeleton', () => {
       if (childAdded?.kind === 'childAdded') {
         expect(childAdded.path).toEqual(['profile']);
         expect(childAdded.key).toBe('name');
-        expect(childAdded.child.value).toBe('Alice');
+        // Node created with undefined value (winner applied after)
+        expect(childAdded.child.value).toBeUndefined();
+      }
+
+      // The winner is applied as a separate valueChanged delta
+      const vc = findDelta(rd, 'valueChanged');
+      expect(vc).toBeDefined();
+      if (vc?.kind === 'valueChanged') {
+        expect(vc.path).toEqual(['profile', 'name']);
+        expect(vc.oldValue).toBeUndefined();
+        expect(vc.newValue).toBe('Alice');
       }
     });
 
@@ -1305,7 +1350,30 @@ describe('IncrementalSkeleton', () => {
       }
     });
 
-    it('childRemoved has correct path and key', () => {
+    it('childRemoved has correct path and key (null value)', () => {
+      const { stepFull, skeleton } = createScaffold();
+      const root = makeRoot('alice', 0, 'profile');
+      const child = makeMapChild('alice', 1, root.id, 'name');
+      const sid = slotId(child);
+
+      // Set value to a string, then change to null (LWW delete).
+      // null + no children = excluded from parent → childRemoved.
+      const w1 = makeWinner(sid, cnIdKey(child.id), 'Alice');
+      stepFull([w1], [], [root, child]);
+
+      // Change winner to null
+      const wNull = makeWinner(sid, 'bob:0', null);
+      const rd = stepFull([wNull], [], []);
+
+      const cr = findDelta(rd, 'childRemoved');
+      expect(cr).toBeDefined();
+      if (cr?.kind === 'childRemoved') {
+        expect(cr.path).toEqual(['profile']);
+        expect(cr.key).toBe('name');
+      }
+    });
+
+    it('valueChanged has correct path for winner retraction (value → undefined)', () => {
       const { stepFull, skeleton } = createScaffold();
       const root = makeRoot('alice', 0, 'profile');
       const child = makeMapChild('alice', 1, root.id, 'name');
@@ -1314,17 +1382,20 @@ describe('IncrementalSkeleton', () => {
 
       stepFull([w], [], [root, child]);
 
+      // Retract winner: value goes from 'Alice' to undefined.
+      // Node stays visible (undefined ≠ null), so delta is valueChanged.
       const rd = skeleton.step(
         winnerZset([w], -1),
         zsetEmpty(),
         structureIndexDeltaEmpty(),
       );
 
-      const cr = findDelta(rd, 'childRemoved');
-      expect(cr).toBeDefined();
-      if (cr?.kind === 'childRemoved') {
-        expect(cr.path).toEqual(['profile']);
-        expect(cr.key).toBe('name');
+      const vc = findDelta(rd, 'valueChanged');
+      expect(vc).toBeDefined();
+      if (vc?.kind === 'valueChanged') {
+        expect(vc.path).toEqual(['profile', 'name']);
+        expect(vc.oldValue).toBe('Alice');
+        expect(vc.newValue).toBeUndefined();
       }
     });
   });

@@ -325,7 +325,7 @@ Time travel is not a special mode. The solver is a pure function; the same `(S, 
 
 ---
 
-## Incremental Pipeline (Plan 005, Phases 1–7 of 9 complete)
+## Incremental Pipeline (Plan 005, Phases 1–8 of 9 complete)
 
 The batch `solve()` is O(|S|) per insertion. The incremental pipeline reduces the kernel stages to O(|Δ|) by maintaining persistent state across insertions and propagating Z-set deltas through a DAG of operators.
 
@@ -342,7 +342,7 @@ The structure index is append-only (structure constraints are permanent, never r
 ### Incremental DAG
 
 ```
-Δc ──→ store.insert
+Δc ──→ dedup guard (hasConstraint?) ──→ store.insert
   │
   ▼
   C^Δ (validity)              → ZSet<Constraint>
@@ -365,6 +365,22 @@ The structure index is append-only (structure constraints are permanent, never r
 ```
 
 Each stage follows three conventions: `step(...deltas)` processes input and returns output delta; `current()` returns the full materialized output; `reset()` clears state. The correctness invariant is `current() == Q_batch(accumulated inputs)`.
+
+### Pipeline Composition (`incremental/pipeline.ts`)
+
+The `IncrementalPipeline` interface is the public entry point: `insert(c)` accepts a constraint and returns a `RealityDelta`. Internally it wires all stages into the DAG above, adds a deduplication guard (`hasConstraint` before `store.insert`), and manages the resolution diffing shim.
+
+`createIncrementalPipelineFromBootstrap(result)` creates a pipeline pre-populated with bootstrap state by replaying all bootstrap constraints through `insert()`.
+
+The batch evaluator is called on the full accumulated state every insertion — O(|S|) until Plan 006. When the native fast path is active (default LWW/Fugue rules, no custom Layer 2+ rules), native solvers replace Datalog evaluation with much smaller constant factors.
+
+### Resolution Diffing Shim
+
+The skeleton accepts typed Z-set deltas (`ZSet<ResolvedWinner>`, `ZSet<FugueBeforePair>`), but the batch evaluator produces a complete `ResolutionResult`. The pipeline bridges this by caching the previous `ResolutionResult` and diffing against the new one after each evaluation.
+
+**Key hazard — Z-set key collision on changed winners:** The naive diff emits `{old: −1, new: +1}` for a changed winner (same slot, different content). Both entries share the same Z-set key (slotId), so `zsetAdd` annihilates them to weight 0. The skeleton never sees the change. The fix: for changed winners, emit only `+1`. The skeleton's `applyWinnerChange` handles replacement when it sees a `+1` for an existing slot. Removed winners (slot no longer has a winner) use `−1` correctly since there's no opposing entry. This hazard applies generally: when Z-set entries with different semantic content share the same string key, opposing weights cancel even though the *content* changed.
+
+Plan 006 eliminates this shim entirely — the incremental evaluator produces resolution deltas directly.
 
 ### Operator Stages (all kernel stages implemented)
 
@@ -394,13 +410,9 @@ Authority constraints are rare (single-digit count per reality) but their effect
 
 ### Skeleton: Mutable Tree with NodeDelta Emission
 
-The skeleton is the most complex incremental stage. It maintains a mutable reality tree (`MutableNode` type with `nodeBySlot` and `parentBySlot` indexes), processes three input streams, and emits `NodeDelta` entries. Map children are only visible in the parent's `children` map when they have a value or their own children — gaining or losing a value transitions between `childAdded` and `childRemoved`. Seq children are ordered by accumulated `fugue_before` pairs via `topologicalOrderFromPairs`; retracted seq elements become tombstones (structurally present for ordering, invisible to consumers).
+The skeleton is the most complex incremental stage. It maintains a mutable reality tree (`MutableNode` type with `nodeBySlot` and `parentBySlot` indexes), processes three input streams, and emits `NodeDelta` entries. Seq children are ordered by accumulated `fugue_before` pairs via `topologicalOrderFromPairs`; retracted seq elements become tombstones (structurally present for ordering, invisible to consumers).
 
-During Plan 005, the pipeline composition root diffs the previous `ResolutionResult` against the new one to produce `ZSet<ResolvedWinner>` and `ZSet<FugueBeforePair>` for the skeleton. Plan 006 eliminates this shim — the incremental evaluator produces resolution deltas directly.
-
-### Known Issue: Retraction Multi-Removal Bug
-
-The retraction `step()` removal loop has an early `return` after the first active removal (weight −1 of an active constraint). If a validity delta contains multiple removals of active constraints simultaneously (e.g., authority revocation invalidating several peers' constraints at once), only the first is processed. Documented as task 8.1a — safe during isolated stage testing but must be fixed before pipeline composition in Phase 8.
+**Map child visibility rule (must match batch exactly):** A map child node is visible in the parent's `children` map unless `value === null && children.size === 0`. This means nodes with `value === undefined` (structure exists but no value constraint resolved yet) *are* visible — `undefined` means "no value yet," while `null` is the LWW deletion sentinel. Retracting a winner sets the value to `undefined`, so the node stays visible and emits `valueChanged`; only an explicit `null` LWW winner triggers `childRemoved`. This matches the batch `buildMapChildren` exclusion rule: `if (node.value === null && node.children.size === 0) continue`.
 
 ---
 
@@ -430,7 +442,9 @@ kernel/incremental/                           (incremental pipeline — Plan 005
            → projection.ts
            → validity.ts                      (depends on kernel/authority)
            → skeleton.ts                      (depends on kernel/resolve, structure-index)
-           → pipeline.ts (Phase 8)            (incremental composition root)
+           → pipeline.ts                      (incremental composition root — depends on
+                                                all above + kernel/store, kernel/pipeline,
+                                                datalog/evaluate, solver/lww, solver/fugue)
   index.ts                                    (barrel export)
 ```
 
@@ -503,7 +517,7 @@ JavaScript's `number` is f64, which can only exactly represent integers up to 2^
 ### Deferred from the Spec
 
 - **Real ed25519 signatures** — Phase 2 uses a stub that always returns valid
-- **Incremental kernel pipeline** (§9) — In progress (Plan 005). All kernel stages (validity, retraction, structure index, projection, skeleton) are incremental. Pipeline composition (Phase 8) and documentation cleanup (Phase 9) remain.
+- **Incremental kernel pipeline** (§9) — Plan 005 Phases 1–8 complete. All kernel stages are incremental, pipeline composition is wired, 42 differential tests verify equivalence with batch. Documentation cleanup (Phase 9) remains.
 - **Incremental Datalog evaluator** (§9) — Plan 006. The batch evaluator is the remaining O(|S|) bottleneck after Plan 005. When the native fast path is active (default LWW/Fugue rules, no custom rules), the batch evaluator is bypassed entirely, making Plan 005 sufficient for real-time performance on typical workloads.
 - **Settled/Working set partitioning** (§11) — Bounds solver cost to recent activity
 - **Compaction** (§12) — Requires settled set; tombstone compaction is especially tricky for sequences due to origin references

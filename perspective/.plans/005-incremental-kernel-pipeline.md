@@ -605,32 +605,32 @@ pipeline eliminates.
 - Differential: `current()` equals `solve(store, config)`. ✅
 - 39 tests in `tests/kernel/incremental/skeleton.test.ts`. Also added map child visibility (invisible without value, restored after retraction), multi-peer same map slot, winner-before-structure out-of-order, seq reordering with new pairs, seq value update independence, seq tombstone via retraction, three-element transitive ordering, nested map differential, mixed map+seq complex scenario, incremental multi-step building, NodeDelta path correctness, reset/reuse, and deduplication. 1054 total tests passing (1015 + 39).
 
-### Phase 8: Pipeline Composition and Differential Testing 🔴
+### Phase 8: Pipeline Composition and Differential Testing ✅
 
 Wire all stages into the DAG, expose the `IncrementalPipeline` interface, and
 run comprehensive differential tests.
 
 #### Tasks
 
-- 8.1 Create `kernel/incremental/pipeline.ts` implementing `IncrementalPipeline`. Wire the DAG: `insert(c)` → store.insert → F^Δ → C^Δ → fan-out(X^Δ, A^Δ) → P^Δ → batch E → diff previous ResolutionResult → Δ_resolved + Δ_fuguePairs → K^Δ → RealityDelta. The pipeline maintains the cached previous `ResolutionResult` and diffs against the new one to produce Z-set deltas for the skeleton (see Phase 7 Design Note). This diffing shim is removed by Plan 006 when the incremental evaluator produces deltas directly. 🔴
-- 8.1a Fix incremental retraction `step()` removal loop: refactor to collect all removal deltas across the full loop before returning, rather than early-returning after the first active removal. Add tests for multi-removal deltas (e.g., authority revocation invalidating multiple previously-active constraints simultaneously). 🔴
-- 8.2 `createIncrementalPipeline(config)`: create all stages, wire them, return the pipeline. 🔴
-- 8.2a Deduplication guard: before calling `store.insert()`, check `hasConstraint(store, constraint.id)`. If the constraint already exists, return an empty `RealityDelta` without feeding anything through the DAG. The public `insert()` API returns `ok(undefined)` for both new and duplicate inserts, so the pipeline cannot rely on it to detect no-ops. 🔴
-- 8.3 `createIncrementalPipelineFromBootstrap(result)`: create pipeline pre-populated with bootstrap constraints. Each bootstrap constraint is fed through `insert()` to build up accumulated state. 🔴
-- 8.4 `recompute()`: call batch `solve(store, config)` and return the result. For differential testing. 🔴
-- 8.5 `insertMany()`: process constraints sequentially through `insert()`, accumulate deltas, return combined delta. 🔴
-- 8.6 Export `IncrementalPipeline` and construction functions from `kernel/incremental/index.ts` and from `src/index.ts`. 🔴
+- 8.1 Create `kernel/incremental/pipeline.ts` implementing `IncrementalPipeline`. Wire the DAG: `insert(c)` → store.insert → F^Δ → C^Δ → fan-out(X^Δ, A^Δ) → P^Δ → batch E → diff previous ResolutionResult → Δ_resolved + Δ_fuguePairs → K^Δ → RealityDelta. The pipeline maintains the cached previous `ResolutionResult` and diffs against the new one to produce Z-set deltas for the skeleton (see Phase 7 Design Note). This diffing shim is removed by Plan 006 when the incremental evaluator produces deltas directly. ✅
+- 8.1a Fix incremental retraction `step()` removal loop: refactor to collect all removal deltas across the full loop before returning, rather than early-returning after the first active removal. Add tests for multi-removal deltas (e.g., authority revocation invalidating multiple previously-active constraints simultaneously). ✅
+- 8.2 `createIncrementalPipeline(config)`: create all stages, wire them, return the pipeline. ✅
+- 8.2a Deduplication guard: before calling `store.insert()`, check `hasConstraint(store, constraint.id)`. If the constraint already exists, return an empty `RealityDelta` without feeding anything through the DAG. The public `insert()` API returns `ok(undefined)` for both new and duplicate inserts, so the pipeline cannot rely on it to detect no-ops. ✅
+- 8.3 `createIncrementalPipelineFromBootstrap(result)`: create pipeline pre-populated with bootstrap constraints. Each bootstrap constraint is fed through `insert()` to build up accumulated state. ✅
+- 8.4 `recompute()`: call batch `solve(store, config)` and return the result. For differential testing. ✅
+- 8.5 `insertMany()`: process constraints sequentially through `insert()`, accumulate deltas, return combined delta. ✅
+- 8.6 Export `IncrementalPipeline` and construction functions from `kernel/incremental/index.ts` and from `src/index.ts`. ✅
 
 #### Tests
 
-- **Differential equivalence**: replay every existing integration test scenario through both `IncrementalPipeline` and batch `solve()`. After each insertion, verify `pipeline.current()` deeply equals `solve(store, config)`. This is the core correctness test. 🔴
-- **Multi-agent sync**: two incremental pipelines, bidirectional delta exchange, both converge to same reality. 🔴
-- **Retraction cascade**: insert value, retract it, undo retraction — verify reality deltas at each step and final state matches batch. 🔴
-- **Authority change cascade**: grant capability to peer, peer's queued constraints become valid, reality updates. 🔴
-- **Orphaned value resolution**: value constraint arrives before its target structure — structure arrives later, value appears in reality. 🔴
-- **Out-of-order sync**: construct a scenario where sync delivers constraints in non-causal order (retract before target, child before parent, value before structure, constraint before enabling grant). Verify incremental pipeline produces same reality as batch after all constraints are inserted. 🔴
-- **Bootstrap warm-start**: `createIncrementalPipelineFromBootstrap()` produces the same initial reality as batch `solve()` on the bootstrap store. 🔴
-- **Empty delta**: inserting a duplicate constraint produces an empty `RealityDelta`. 🔴
+- **Differential equivalence**: replay every existing integration test scenario through both `IncrementalPipeline` and batch `solve()`. After each insertion, verify `pipeline.current()` deeply equals `solve(store, config)`. This is the core correctness test. ✅
+- **Multi-agent sync**: two incremental pipelines, bidirectional delta exchange, both converge to same reality. ✅
+- **Retraction cascade**: insert value, retract it, undo retraction — verify reality deltas at each step and final state matches batch. ✅
+- **Authority change cascade**: grant capability to peer, peer's queued constraints become valid, reality updates. ✅
+- **Orphaned value resolution**: value constraint arrives before its target structure — structure arrives later, value appears in reality. ✅
+- **Out-of-order sync**: construct a scenario where sync delivers constraints in non-causal order (retract before target, child before parent, value before structure, constraint before enabling grant). Verify incremental pipeline produces same reality as batch after all constraints are inserted. ✅
+- **Bootstrap warm-start**: `createIncrementalPipelineFromBootstrap()` produces the same initial reality as batch `solve()` on the bootstrap store. ✅
+- **Empty delta**: inserting a duplicate constraint produces an empty `RealityDelta`. ✅
 
 ### Phase 9: Documentation and Cleanup 🔴
 
@@ -894,6 +894,46 @@ A circuit can mix group-valued streams (Z-sets) and semilattice-valued streams
 index is the one stage in our pipeline where the semilattice model fits and the
 group model doesn't.
 
+### Resolution Diffing Must Not Emit Opposing Weights on the Same Key
+
+The resolution diffing shim compares old and new `ResolutionResult` objects to
+produce Z-set deltas for the skeleton. The naive approach for a **changed**
+winner (same slot, different content) is to emit `{old: −1, new: +1}`. But both
+entries share the same Z-set key (slotId), so `zsetAdd` sums the weights to 0
+and prunes the entry. The skeleton never sees the change.
+
+The fix: for changed winners, emit only `{new: +1}`. The skeleton's
+`applyWinnerChange` already handles replacement — when it sees a `+1` entry for
+a slot that already has a winner, it replaces the old value with the new one.
+Removed winners (slot had a winner, now doesn't) still use `−1` correctly
+because there's no opposing `+1` to collide with.
+
+This is a general hazard with Z-set-keyed diffs: when two semantically different
+values share the same key (because the key represents an identity like slotId,
+not the full element), opposing weights annihilate even though the *content*
+changed. The workaround is to treat changed entries as upserts (`+1` only)
+rather than delete-then-insert (`−1` then `+1` at the same key).
+
+### Incremental Skeleton Map Child Visibility Must Match Batch Exactly
+
+The batch `buildMapChildren` includes a map child node in the parent's children
+map when `!(node.value === null && node.children.size === 0)`. This means a node
+with `value === undefined` (no value set yet, just the structure) **is visible**.
+Only `null` value with no children causes exclusion — `null` is the LWW
+"deletion" sentinel, while `undefined` means "no value constraint has been
+resolved for this slot yet."
+
+The initial incremental skeleton implementation used a stricter visibility check
+that also excluded `undefined` value nodes. This caused divergence from the batch
+pipeline: after inserting a map child structure (but before any value constraint
+for it), the batch showed the node while the incremental didn't.
+
+The fix aligns both conditions: `!(value === null && children.size === 0)`. This
+also changes the delta semantics for winner retraction on map nodes — retracting
+a winner sets the value to `undefined` (not `null`), so the node stays visible
+and emits `valueChanged` (old → undefined) rather than `childRemoved`. The node
+is only removed from the parent when the LWW winner is explicitly `null`.
+
 ## Changeset
 
 - **New files:** `base/zset.ts`, `kernel/incremental/types.ts`,
@@ -908,7 +948,10 @@ group model doesn't.
   `tests/kernel/incremental/validity.test.ts`,
   `tests/kernel/incremental/skeleton.test.ts`,
   `tests/kernel/incremental/pipeline.test.ts`
-- **Modified files:** `src/index.ts` (new exports), `TECHNICAL.md`, `README.md`,
-  `LEARNINGS.md`, `.plans/004-incremental-roadmap.md`
+- **Modified files:** `src/index.ts` (new exports), `kernel/incremental/retraction.ts`
+  (multi-removal bug fix), `kernel/incremental/skeleton.ts` (map child visibility
+  fix to match batch), `TECHNICAL.md`, `README.md`, `LEARNINGS.md`,
+  `.plans/004-incremental-roadmap.md`
 - **No files deleted.**
-- **No existing files modified in ways that affect behavior.**
+- **No existing files modified in ways that affect behavior** (skeleton visibility
+  fix aligns incremental with batch — no externally observable change).

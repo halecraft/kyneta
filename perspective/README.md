@@ -82,7 +82,7 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 
 ## Project Status
 
-**Phases 1–5 complete.** The full Unified CCS Engine is implemented and tested. **Plan 005 (Incremental Kernel Pipeline) is in progress** — all kernel stages are incrementalized, pipeline composition (Phase 8) and documentation (Phase 9) remain.
+**Phases 1–5 complete.** The full Unified CCS Engine is implemented and tested. **Plan 005 (Incremental Kernel Pipeline) Phases 1–8 complete** — all kernel stages are incrementalized and wired into a pipeline with 42 differential equivalence tests. Documentation cleanup (Phase 9) remains.
 
 | Phase | Status | What |
 |-------|--------|------|
@@ -95,9 +95,9 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 | 4.5 Datalog-Driven Resolution | ✅ | Datalog as primary path; native solvers as §B.7 fast path |
 | 4.6 Pre-Bootstrap Correctness | ✅ | Semantic refs, complete Fugue rules, store O(1), skeleton tests |
 | 5. Bootstrap & Integration | ✅ | `createReality()`, default rules, multi-agent sync, 30 integration tests |
-| **Plan 005: Incremental Kernel** | 🚧 | Z-set algebra, incremental validity/retraction/structure-index/projection/skeleton (Phases 1–7 of 9) |
+| **Plan 005: Incremental Kernel** | 🚧 | Z-set algebra, incremental stages, pipeline composition with differential testing (Phases 1–8 of 9; Phase 9 = docs) |
 
-**1054 tests across 28 files, all passing.**
+**1098 tests across 29 files, all passing.**
 
 See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the batch engine plan and [.plans/005-incremental-kernel-pipeline.md](./.plans/005-incremental-kernel-pipeline.md) for the incremental pipeline plan.
 
@@ -129,6 +129,7 @@ prism/
 │   │       ├── structure-index.ts  Append-only slot group accumulator
 │   │       ├── projection.ts     Bilinear join with orphan resolution
 │   │       ├── skeleton.ts       Mutable tree with NodeDelta emission
+│   │       ├── pipeline.ts       Incremental composition root (DAG wiring)
 │   │       └── index.ts          Barrel export
 │   ├── datalog/              Stratified bottom-up evaluator
 │   │   ├── types.ts            Atoms, terms, rules, facts, relations, factKey
@@ -141,11 +142,11 @@ prism/
 │   │   └── fugue.ts            Native Fugue: tree walk over structure(seq)
 │   ├── bootstrap.ts          Reality creation + default solver rules (§B.8)
 │   └── index.ts              Public API
-├── tests/                    1054 tests across 28 files
+├── tests/                    1098 tests across 29 files
 │   ├── base/                 Z-set algebra
 │   ├── datalog/              Evaluator, unification, stratification, rules
 │   ├── kernel/               Store, agent, authority, pipeline, skeleton, ...
-│   │   └── incremental/        Incremental validity, retraction, structure-index, projection, skeleton
+│   │   └── incremental/        Incremental validity, retraction, structure-index, projection, skeleton, pipeline (differential)
 │   ├── solver/               LWW and Fugue equivalence (native == Datalog)
 │   └── integration.test.ts   Multi-agent bootstrap, sync, retraction, time travel
 └── theory/
@@ -178,7 +179,7 @@ bun install
 ```bash
 bun install          # Install dependencies
 bun run test         # Run tests in watch mode
-bun run test:run     # Run tests once (1054 tests)
+bun run test:run     # Run tests once (1098 tests)
 bun run typecheck    # TypeScript type checking
 ```
 
