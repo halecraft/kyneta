@@ -16,8 +16,10 @@
 // See unified-engine.md §7.2, §B.4, §B.7.
 
 import type { Value, CnId } from './types.js';
-import { cnIdFromString } from './cnid.js';
-import type { Database } from '../datalog/types.js';
+import { cnIdFromString, cnIdKey } from './cnid.js';
+import type { Database, Fact } from '../datalog/types.js';
+import { ACTIVE_VALUE } from './projection.js';
+import type { LWWEntry } from '../solver/lww.js';
 
 // ---------------------------------------------------------------------------
 // Resolution Result
@@ -122,6 +124,43 @@ export interface ResolutionResult {
    * (true) or from native solvers (false).
    */
   readonly fromDatalog: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Fact Tuple Parsers
+//
+// These parse ground fact tuples (from projection) back into typed kernel
+// structures. They are the inverse of the projection functions in
+// projection.ts and are used by both the incremental native solvers and
+// the incremental Datalog evaluator's resolution extraction.
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse an `active_value` fact into an `LWWEntry`.
+ *
+ * Fact schema: `active_value(CnId, Slot, Content, Lamport, Peer)`
+ * Column positions from `ACTIVE_VALUE` in `kernel/projection.ts`.
+ *
+ * This is the inverse of `projectValue` in `projection.ts`.
+ *
+ * @param f - A fact with predicate `active_value`.
+ * @returns The parsed LWWEntry.
+ */
+export function parseLWWFact(f: Fact): LWWEntry {
+  const values = f.values;
+  const cnIdKeyStr = values[ACTIVE_VALUE.CNID] as string;
+  const slotId = values[ACTIVE_VALUE.SLOT] as string;
+  const content = values[ACTIVE_VALUE.CONTENT] as Value;
+  const lamport = values[ACTIVE_VALUE.LAMPORT] as number;
+  const peer = values[ACTIVE_VALUE.PEER] as string;
+
+  return {
+    id: cnIdFromString(cnIdKeyStr),
+    slotId,
+    content,
+    lamport,
+    peer,
+  };
 }
 
 // ---------------------------------------------------------------------------

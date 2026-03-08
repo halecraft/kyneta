@@ -445,7 +445,7 @@ multiple consumers in later phases:
 
 No new tests — this is a pure refactor. Existing tests are the verification.
 
-### Phase 2: Native Incremental LWW 🔴
+### Phase 2: Native Incremental LWW ✅
 
 Implement per-slot winner tracking that receives `active_value` fact deltas and
 emits `ZSet<ResolvedWinner>` deltas. This is the O(1) fast path for LWW
@@ -474,24 +474,24 @@ This parser (`parseLWWFact`) should live in `kernel/resolve.ts` alongside
 #### Tasks
 
 - 2.1 Add `parseLWWFact(f: Fact) → LWWEntry` to `kernel/resolve.ts`. Parses an
-  `active_value` fact tuple using `ACTIVE_VALUE` column positions. 🔴
-- 2.2 Create `solver/incremental-lww.ts` implementing `IncrementalLWW`. 🔴
-- 2.3 Add slot-level entry tracking with O(1) winner comparison on insertion. 🔴
+  `active_value` fact tuple using `ACTIVE_VALUE` column positions. ✅
+- 2.2 Create `solver/incremental-lww.ts` implementing `IncrementalLWW`. ✅
+- 2.3 Add slot-level entry tracking with O(1) winner comparison on insertion. ✅
 - 2.4 Handle fact retraction (weight −1): remove entry, recompute winner if
-  needed. 🔴
+  needed. ✅
 - 2.5 Emit `ZSet<ResolvedWinner>` deltas following the skeleton's +1-only
-  contract for changed winners (see Plan 005 Learnings: Resolution Diffing). 🔴
+  contract for changed winners (see Plan 005 Learnings: Resolution Diffing). ✅
 
 #### Tests
 
 - Incremental LWW produces same winners as batch `resolveLWW` for arbitrary
-  insertion sequences (differential test). 🔴
-- Single value insertion: winner delta is `{slot: +1}`. 🔴
-- Superseding value: winner delta is `{slot: +1}` (replacement, not −1 then +1). 🔴
+  insertion sequences (differential test). ✅
+- Single value insertion: winner delta is `{slot: +1}`. ✅
+- Superseding value: winner delta is `{slot: +1}` (replacement, not −1 then +1). ✅
 - Value retraction when it was the winner: delta is either `{slot: +1}` (new
-  winner) or `{slot: −1}` (no winner left). 🔴
-- Value retraction when it was NOT the winner: empty delta. 🔴
-- Permutation test: all orderings of 3 values produce same `current()`. 🔴
+  winner) or `{slot: −1}` (no winner left). ✅
+- Value retraction when it was NOT the winner: empty delta. ✅
+- Permutation test: all orderings of 3 values produce same `current()`. ✅
 
 ### Phase 3: Native Incremental Fugue 🔴
 

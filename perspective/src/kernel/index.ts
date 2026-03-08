@@ -230,6 +230,7 @@ export {
   topologicalOrderFromPairs,
   fuguePairKey,
   allPairsFromOrdered,
+  parseLWWFact,
 } from './resolve.js';
 
 // --- Rule Detection (§B.7) ---
