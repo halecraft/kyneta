@@ -70,3 +70,11 @@ export {
 
 // Zero — default values separated from the schema
 export { Zero, scalarDefault } from "./zero.js"
+
+// interpret — the generic catamorphism over the schema functor
+export { interpret, createInterpreter } from "./interpret.js"
+export type { Interpreter, Path, PathSegment, SumVariants } from "./interpret.js"
+
+// Built-in interpreters
+export { plainInterpreter } from "./interpreters/plain.js"
+export { zeroInterpreter } from "./interpreters/zero.js"
