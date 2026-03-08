@@ -111,6 +111,8 @@ metadata: Shape.plain.struct({ author: Shape.plain.string() })
 
 Both support dot traversal at the type level now (via StructRef properties and DeepPlainValueRef respectively), but the CRDT semantics are very different.
 
+> **Future direction:** The `@loro-extended/schema` spike (see `packages/schema/TECHNICAL.md`) demonstrates that the container/value distinction is a Loro-specific backend property, not a schema-structural one. A unified recursive grammar with five structural constructors (scalar, product, sequence, map, sum) plus an open annotation mechanism can represent both layers without duplication. The container/value boundary becomes an interpretation concern.
+
 ### Implementation Status (as of this writing)
 
 **Source code: Complete** — All core changes implemented, zero source-level type errors.

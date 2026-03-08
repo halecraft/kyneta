@@ -100,7 +100,7 @@ The theory document contains numerous design decisions that have not been valida
 - Task: Create `packages/schema/src/interpreters/plain.ts` — a `plainInterpreter` that takes a plain JS object as context and reads values at each path. Demonstrates `interpret(schema, plainInterpreter, plainObject)` producing the typed result. Annotations are transparent — the plain interpreter reads the same way regardless of annotation. 🟢
 - Task: Create `packages/schema/src/interpreters/zero.ts` — a `zeroInterpreter` that ignores context and produces the structural zero. Show that `interpret(schema, zeroInterpreter, undefined)` equals `Zero.structural(schema)`. 🟢
 
-### Phase 4: Writable interpreter and Proxy investigation 🔴
+### Phase 4: Writable interpreter and Proxy investigation 🟢
 
 This phase validates the most architecturally significant question: can the writable interpreter — the thing that becomes `TypedDoc` / `TypedRef` / `PlainRef` in production — be expressed through the generic `interpret()` walker?
 
@@ -108,7 +108,7 @@ The writable interpreter does NOT target Loro. It targets a **plain JS object st
 
 The key insight for this phase: the writable interpreter uses **annotations** to decide behavior at each node. A bare `scalar("string")` gets a simple `.get()/.set()` ref. An `annotated("text")` scalar gets `.insert()`, `.delete()`, `.toString()`. An `annotated("counter")` scalar gets `.increment()`, `.decrement()`. The structural recursion (products, sequences, maps) is uniform regardless of annotation — only the leaves and annotation-specific behavior differ.
 
-- Task: Create `packages/schema/src/interpreters/writable.ts` — a writable interpreter that produces ref-like objects at each schema node. The context must accumulate as the walker descends: 🔴
+- Task: Create `packages/schema/src/interpreters/writable.ts` — a writable interpreter that produces ref-like objects at each schema node. The context must accumulate as the walker descends: 🟢
   - **Product nodes**: return an object where schema keys are defined via `Object.defineProperty` with lazy getters (no Proxy). Each getter forces the thunk for that child on first access, caches the result, and returns it on subsequent accesses. The `[FEED]` symbol is attached for namespace isolation.
   - **Annotated "text" nodes**: return an object with `.toString()`, `.insert(index, content)`, `.delete(index, length)`, `.update(content)`. Mutation methods construct a `TextAction` and dispatch it to the context's executor.
   - **Annotated "counter" nodes**: return an object with `.get()`, `.increment(n)`, `.decrement(n)`. Mutation methods construct actions and dispatch.
@@ -116,13 +116,13 @@ The key insight for this phase: the writable interpreter uses **annotations** to
   - **Sequence nodes**: return an object with `.get(index)`, `.push(value)`, `.insert(index, value)`, `.delete(index, count)`, `.length`, and `[Symbol.iterator]`. Mutation methods construct `SequenceAction` and dispatch. `.get(index)` returns a child ref (writable sub-interpretation of the sequence's item schema).
   - **Map nodes**: return a Proxy wrapping a base object. This is the one case where Proxy is necessary — map keys are not known from the schema. The Proxy intercepts string property access and delegates to the interpreter for child ref creation. Contrast with product (no Proxy needed).
 
-- Task: Define the **context accumulation** protocol — `Ctx` carries a `read(path)` function, a `write(path, action)` function (the executor), and an `autoCommit` flag. At each product level, the interpreter derives a child context that narrows the read/write path. At scalar nodes, `write` dispatches a `MapAction` to the parent's path. 🔴
+- Task: Define the **context accumulation** protocol — `Ctx` carries a `read(path)` function, a `write(path, action)` function (the executor), and an `autoCommit` flag. At each product level, the interpreter derives a child context that narrows the read/write path. At scalar nodes, `write` dispatches a `MapAction` to the parent's path. 🟢
 
-- Task: Define the **action dispatch** protocol — writable ref methods construct actions and call `ctx.write(path, action)`. The executor in the context applies the action to the backing store (the plain JS object). In auto-commit mode, the executor also fires feed subscribers. In batched mode, actions accumulate and are flushed at the end. 🔴
+- Task: Define the **action dispatch** protocol — writable ref methods construct actions and call `ctx.write(path, action)`. The executor in the context applies the action to the backing store (the plain JS object). In auto-commit mode, the executor also fires feed subscribers. In batched mode, actions accumulate and are flushed at the end. 🟢
 
-- Task: Demonstrate **namespace isolation** — the writable product result has string keys for schema properties and symbol keys for `[FEED]`. `Object.keys()` returns only schema keys. `[FEED]` is not enumerable. The map Proxy also maintains this: string keys for data, symbols for protocol. 🔴
+- Task: Demonstrate **namespace isolation** — the writable product result has string keys for schema properties and symbol keys for `[FEED]`. `Object.keys()` returns only schema keys. `[FEED]` is not enumerable. The map Proxy also maintains this: string keys for data, symbols for protocol. 🟢
 
-- Task: Demonstrate **portable refs** — extract a writable scalar ref from the tree, pass it to a standalone function, call `.get()` and `.set()`. The ref carries its context (parent path, write function) and works correctly outside the tree. 🔴
+- Task: Demonstrate **portable refs** — extract a writable scalar ref from the tree, pass it to a standalone function, call `.get()` and `.set()`. The ref carries its context (parent path, write function) and works correctly outside the tree. 🟢
 
 ### Phase 5: Composition combinators 🔴
 
@@ -131,7 +131,7 @@ The key insight for this phase: the writable interpreter uses **annotations** to
 
 ### Phase 6: Tests 🔴
 
-All tests live in `packages/schema/src/__tests__/`. They prove the primitives work and compose correctly.
+All tests live in next to the files they test. They prove the primitives work and compose correctly.
 
 - Task: `schema.test.ts` — the unified grammar: `Schema.text()` produces an annotated scalar, `Schema.struct({...})` produces a product, `Schema.list(Schema.text())` produces a sequence containing an annotated scalar, `Schema.plain.string()` produces a bare scalar. Verify structural kind is recoverable. Verify annotations are accessible. Verify that the developer-facing API composes correctly (nested products, sequences of products, maps of annotated nodes, etc.). 🔴
 - Task: `feed.test.ts` — WeakMap caching (referential identity across accesses), `isFeedable` type guard, feed with static head, feed with mutable head (getter reflects changes), subscribe + unsubscribe lifecycle 🔴
