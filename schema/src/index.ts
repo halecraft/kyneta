@@ -96,6 +96,13 @@ export type {
   ScalarPlain,
 } from "./interpreters/writable.js"
 
+// Store utilities (shared by writable and feed layers)
+export { readByPath, toStorePath } from "./interpreters/writable.js"
+
+// Feed decorator — observation layer via enrich(writableInterpreter, withFeed)
+export { withFeed, createFeedableContext, feedableFlush } from "./interpreters/with-feed.js"
+export type { FeedableContext } from "./interpreters/with-feed.js"
+
 // Interpreter composition combinators
 export { enrich, product, overlay, firstDefined } from "./combinators.js"
 export type { Decorator, MergeFn } from "./combinators.js"

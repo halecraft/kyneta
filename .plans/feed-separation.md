@@ -95,11 +95,11 @@ However, the Map Proxy does need a `defineProperty` trap that forwards symbol de
 
 ## Phases
 
-### Phase 1: Extract feed infrastructure and create `withFeed` decorator 🔴
+### Phase 1: Extract feed infrastructure and create `withFeed` decorator 🟢
 
-- Task: Export `readByPath` and `toStorePath` from `writable.ts` (they're currently module-private). 🔴
+- Task: Export `readByPath` and `toStorePath` from `writable.ts` (they're currently module-private). 🟢
 
-- Task: Create `packages/schema/src/interpreters/with-feed.ts` containing: 🔴
+- Task: Create `packages/schema/src/interpreters/with-feed.ts` containing: 🟢
   - The subscription infrastructure moved from writable.ts: `pathKey`, `subscribeToPath`, `notifySubscribers`
   - A `FeedableContext` interface extending `WritableContext` with `{ subscribers: Map<string, Set<...>> }`
   - `createFeedableContext(writableCtx)` — wraps `dispatch` to apply + notify, wraps `flush` similarly, creates the subscriber map
@@ -107,7 +107,7 @@ However, the Map Proxy does need a `defineProperty` trap that forwards symbol de
   - `attachFeed(target, feed)` helper (moved from writable.ts) — uses `Object.defineProperty` for non-enumerable symbol attachment
   - The `withFeed` decorator: attaches `[FEED]` non-enumerably to object results via `Object.defineProperty`, returns `{}` so `enrich`'s `Object.assign` is a no-op. For primitives, returns empty (no-op).
 
-- Task: Remove from `packages/schema/src/interpreters/writable.ts`: 🔴
+- Task: Remove from `packages/schema/src/interpreters/writable.ts`: 🟢
   - All imports from `feed.ts` (`FEED`, `Feed`)
   - `subscribeToPath`, `notifySubscribers`, `pathKey`, `createFeedForPath`, `attachFeed`
   - All `attachFeed(...)` calls in `product`, `sequence`, `map`, `createTextRef`, `createCounterRef`
@@ -115,21 +115,21 @@ However, the Map Proxy does need a `defineProperty` trap that forwards symbol de
   - The `notifySubscribers` call from `dispatch` in `createWritableContext`
   - The `notifySubscribers` call from `flush`
 
-- Task: Verify the Map Proxy works with `Object.defineProperty`-based FEED attachment. Add a `defineProperty` trap to the Map Proxy if needed to forward symbol definitions to the target. 🔴
+- Task: Verify the Map Proxy works with `Object.defineProperty`-based FEED attachment. Add a `defineProperty` trap to the Map Proxy if needed to forward symbol definitions to the target. 🟢
 
-- Task: Update `packages/schema/src/index.ts` barrel to export `withFeed`, `FeedableContext`, `createFeedableContext`, `readByPath`, `toStorePath`. 🔴
+- Task: Update `packages/schema/src/index.ts` barrel to export `withFeed`, `FeedableContext`, `createFeedableContext`, `readByPath`, `toStorePath`. 🟢
 
-### Phase 2: Update tests 🔴
+### Phase 2: Update tests 🟢
 
-- Task: In `writable.test.ts`, remove all feed-related code: 🔴
+- Task: In `writable.test.ts`, remove all feed-related code: 🟢
   - The entire "feed subscription" describe block (head, head-reflects-mutation, subscribe-lifecycle tests)
   - All `isFeedable` assertions (isFeedable for products, text, counter)
   - The namespace isolation tests that assert `FEED_SYM in doc` and check the FEED descriptor
   - All `FEED` / `isFeedable` imports
 
-- Task: In `writable.test.ts`, the `createChatDoc` fixture should use the bare `writableInterpreter`. All remaining tests should work without feeds. 🔴
+- Task: In `writable.test.ts`, the `createChatDoc` fixture should use the bare `writableInterpreter`. All remaining tests should work without feeds. 🟢
 
-- Task: Create `packages/schema/src/__tests__/with-feed.test.ts` with: 🔴
+- Task: Create `packages/schema/src/__tests__/with-feed.test.ts` with: 🟢
   - A `createFeedableChatDoc` fixture using `enrich(writableInterpreter, withFeed)` + `createFeedableContext`
   - Feed subscription lifecycle (subscribe, receive action on mutation, unsubscribe stops delivery)
   - `isFeedable` returns true for products, text refs, counter refs, sequences, maps

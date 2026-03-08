@@ -5,13 +5,18 @@
 //
 // 1. Context accumulation — store path derived from catamorphism's Path
 // 2. Product nodes — Object.defineProperty lazy getters (no Proxy)
-// 3. Namespace isolation — string keys for schema, symbols for protocol
+// 3. Namespace isolation — string keys for schema, no symbol protocol
 // 4. Annotated nodes — text gets .insert/.delete, counter gets .increment
 // 5. Scalar nodes — .get()/.set() with upward reference to parent
 // 6. Sequence nodes — .get(i)/.push()/.insert()/.delete()/.length
 // 7. Map nodes — Proxy for dynamic keys
 // 8. Action dispatch — auto-commit vs batched mode
 // 9. Portable refs — refs carry their context as closures
+//
+// Feed attachment ([FEED] symbol) is NOT part of this interpreter.
+// It is an orthogonal observation concern provided by the `withFeed`
+// decorator via `enrich(writableInterpreter, withFeed)`.
+// See `with-feed.ts` and theory §5.4 (capability decomposition).
 
 import type { Interpreter, Path, PathSegment, SumVariants } from "../interpret.js"
 import type {
@@ -34,8 +39,6 @@ import {
   replaceAction,
   incrementAction,
 } from "../action.js"
-import { FEED } from "../feed.js"
-import type { Feed } from "../feed.js"
 import { step } from "../step.js"
 
 // ---------------------------------------------------------------------------
@@ -56,50 +59,17 @@ export type Store = Record<string, unknown>
  * Converts the catamorphism's typed Path into a flat string[] for store
  * access. Index segments become their string representation.
  */
-function toStorePath(path: Path): readonly string[] {
+export function toStorePath(path: Path): readonly string[] {
   return path.map((seg) =>
     seg.type === "key" ? seg.key : String(seg.index),
   )
 }
 
 // ---------------------------------------------------------------------------
-// WritableContext — shared state flowing through the tree
-// ---------------------------------------------------------------------------
-
-/**
- * The context shared across the entire interpreted tree. Unlike the
- * catamorphism's `path` parameter (which narrows automatically), the
- * context carries resources that are the *same* at every level:
- *
- * - `store` — the root mutable store object
- * - `dispatch` — sends an action to the store (applies via step, notifies)
- * - `autoCommit` — if true, each mutation dispatches immediately;
- *   if false, actions accumulate in `pending` until flushed
- * - `pending` — accumulated actions in batched mode (shared by reference)
- * - `subscribers` — per-path subscriber sets (shared by reference)
- *
- * The "where am I" information comes from the catamorphism's `path`
- * parameter, not from the context. This means the context doesn't need
- * to be re-derived at each level — it's the same object throughout.
- */
-export interface WritableContext {
-  readonly store: Store
-  readonly dispatch: (storePath: readonly string[], action: ActionBase) => void
-  readonly autoCommit: boolean
-  readonly pending: PendingAction[]
-  readonly subscribers: Map<string, Set<(action: ActionBase) => void>>
-}
-
-export interface PendingAction {
-  readonly path: readonly string[]
-  readonly action: ActionBase
-}
-
-// ---------------------------------------------------------------------------
 // Store helpers — read/write by path
 // ---------------------------------------------------------------------------
 
-function readByPath(store: Store, path: readonly string[]): unknown {
+export function readByPath(store: Store, path: readonly string[]): unknown {
   let current: unknown = store
   for (const key of path) {
     if (current === null || current === undefined) return undefined
@@ -108,7 +78,7 @@ function readByPath(store: Store, path: readonly string[]): unknown {
   return current
 }
 
-function writeByPath(
+export function writeByPath(
   store: Store,
   path: readonly string[],
   value: unknown,
@@ -129,7 +99,7 @@ function writeByPath(
   current[path[path.length - 1]!] = value
 }
 
-function applyActionToStore(
+export function applyActionToStore(
   store: Store,
   path: readonly string[],
   action: ActionBase,
@@ -158,6 +128,41 @@ function applyActionToStore(
 }
 
 // ---------------------------------------------------------------------------
+// WritableContext — shared state flowing through the tree
+// ---------------------------------------------------------------------------
+
+/**
+ * The context shared across the entire interpreted tree. Unlike the
+ * catamorphism's `path` parameter (which narrows automatically), the
+ * context carries resources that are the *same* at every level:
+ *
+ * - `store` — the root mutable store object
+ * - `dispatch` — sends an action to the store (applies via step)
+ * - `autoCommit` — if true, each mutation dispatches immediately;
+ *   if false, actions accumulate in `pending` until flushed
+ * - `pending` — accumulated actions in batched mode (shared by reference)
+ *
+ * The "where am I" information comes from the catamorphism's `path`
+ * parameter, not from the context. This means the context doesn't need
+ * to be re-derived at each level — it's the same object throughout.
+ *
+ * **No observation infrastructure here.** Subscriber notification is
+ * provided by the feed layer (`createFeedableContext`) which wraps
+ * `dispatch` to add notification after each action is applied.
+ */
+export interface WritableContext {
+  readonly store: Store
+  readonly dispatch: (storePath: readonly string[], action: ActionBase) => void
+  readonly autoCommit: boolean
+  readonly pending: PendingAction[]
+}
+
+export interface PendingAction {
+  readonly path: readonly string[]
+  readonly action: ActionBase
+}
+
+// ---------------------------------------------------------------------------
 // createWritableContext — factory for the root context
 // ---------------------------------------------------------------------------
 
@@ -167,6 +172,9 @@ export interface WritableOptions {
 
 /**
  * Creates a root WritableContext for a given store.
+ *
+ * Dispatch only applies actions to the store — no subscriber
+ * notification. For observation, wrap with `createFeedableContext`.
  *
  * ```ts
  * const store = { title: "", count: 0, items: [] }
@@ -180,7 +188,6 @@ export function createWritableContext(
 ): WritableContext {
   const autoCommit = options.autoCommit ?? true
   const pending: PendingAction[] = []
-  const subscribers = new Map<string, Set<(action: ActionBase) => void>>()
 
   const dispatch = (
     storePath: readonly string[],
@@ -188,7 +195,6 @@ export function createWritableContext(
   ): void => {
     if (autoCommit) {
       applyActionToStore(store, storePath, action)
-      notifySubscribers(subscribers, storePath, action)
     } else {
       pending.push({ path: storePath, action })
     }
@@ -199,99 +205,23 @@ export function createWritableContext(
     dispatch,
     autoCommit,
     pending,
-    subscribers,
   }
 }
 
 /**
  * Flushes all pending actions in a batched context.
+ * Applies each action to the store but does NOT notify subscribers.
+ * For notification, use the feedable context's flush wrapper.
+ *
  * Returns the list of actions that were flushed.
  */
 export function flush(ctx: WritableContext): PendingAction[] {
   const flushed = [...ctx.pending]
   for (const { path, action } of flushed) {
     applyActionToStore(ctx.store, path, action)
-    notifySubscribers(ctx.subscribers, path, action)
   }
   ctx.pending.length = 0
   return flushed
-}
-
-// ---------------------------------------------------------------------------
-// Subscriber notification
-// ---------------------------------------------------------------------------
-
-function pathKey(path: readonly string[]): string {
-  return path.join("\0")
-}
-
-function notifySubscribers(
-  subscribers: Map<string, Set<(action: ActionBase) => void>>,
-  path: readonly string[],
-  action: ActionBase,
-): void {
-  const key = pathKey(path)
-  const subs = subscribers.get(key)
-  if (subs) {
-    for (const cb of subs) {
-      cb(action)
-    }
-  }
-}
-
-function subscribeToPath(
-  ctx: WritableContext,
-  storePath: readonly string[],
-  callback: (action: ActionBase) => void,
-): () => void {
-  const key = pathKey(storePath)
-  let subs = ctx.subscribers.get(key)
-  if (!subs) {
-    subs = new Set()
-    ctx.subscribers.set(key, subs)
-  }
-  subs.add(callback)
-  return () => {
-    subs!.delete(callback)
-    if (subs!.size === 0) {
-      ctx.subscribers.delete(key)
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Feed creation helper
-// ---------------------------------------------------------------------------
-
-function createFeedForPath(
-  ctx: WritableContext,
-  storePath: readonly string[],
-  readHead: () => unknown,
-): Feed<unknown, ActionBase> {
-  return {
-    get head() {
-      return readHead()
-    },
-    subscribe(callback: (action: ActionBase) => void): () => void {
-      return subscribeToPath(ctx, storePath, callback)
-    },
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Attach [FEED] non-enumerably to any object
-// ---------------------------------------------------------------------------
-
-function attachFeed(
-  target: object,
-  feed: Feed<unknown, ActionBase>,
-): void {
-  Object.defineProperty(target, FEED, {
-    value: feed,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  })
 }
 
 // ---------------------------------------------------------------------------
@@ -454,11 +384,6 @@ function createTextRef(
     },
   }
 
-  attachFeed(
-    ref,
-    createFeedForPath(ctx, storePath, () => ref.toString()),
-  )
-
   return ref
 }
 
@@ -480,11 +405,6 @@ function createCounterRef(
       ctx.dispatch(storePath, incrementAction(-n))
     },
   }
-
-  attachFeed(
-    ref,
-    createFeedForPath(ctx, storePath, () => ref.get()),
-  )
 
   return ref
 }
@@ -520,19 +440,16 @@ function createScalarRef(
 
 /**
  * A writable interpreter that produces ref-like objects backed by a
- * plain JS object store. Demonstrates:
+ * plain JS object store. Produces the **mutation surface** only.
+ *
+ * For observation (feeds), use `enrich(writableInterpreter, withFeed)`
+ * with a `FeedableContext`.
  *
  * - Context accumulation (store path derived from catamorphism's Path)
  * - Object.defineProperty for products (no Proxy)
  * - Proxy for maps (dynamic keys)
- * - Namespace isolation (FEED is symbol-keyed, non-enumerable)
  * - Action dispatch with auto-commit and batched modes
  * - Portable refs (carry context as closures)
- *
- * The store path is computed from the catamorphism's `path` parameter,
- * so the `WritableContext` is the *same object* at every tree level.
- * No context re-derivation needed — the catamorphism handles the
- * structural descent.
  *
  * ```ts
  * const store = { title: "", count: 0, items: [] }
@@ -557,7 +474,6 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
 
   // --- Product ---------------------------------------------------------------
   // Fixed keys → Object.defineProperty with lazy getters. No Proxy.
-  // [FEED] symbol attached non-enumerably for namespace isolation.
 
   product(
     ctx: WritableContext,
@@ -566,7 +482,6 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
     fields: Readonly<Record<string, () => unknown>>,
   ): unknown {
     const result: Record<string | symbol, unknown> = {}
-    const storePath = toStorePath(path)
 
     // Define lazy getters for each schema field — cache on first access
     for (const [key, thunk] of Object.entries(fields)) {
@@ -585,14 +500,6 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
         configurable: true,
       })
     }
-
-    // Attach [FEED] non-enumerably for namespace isolation
-    attachFeed(
-      result,
-      createFeedForPath(ctx, storePath, () =>
-        readByPath(ctx.store, storePath),
-      ),
-    )
 
     return result
   },
@@ -675,19 +582,13 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
       },
     }
 
-    attachFeed(
-      ref,
-      createFeedForPath(ctx, storePath, () =>
-        readByPath(ctx.store, storePath),
-      ),
-    )
-
     return ref
   },
 
   // --- Map -------------------------------------------------------------------
   // Dynamic keys → Proxy. The one case where Proxy is necessary.
-  // String keys map to child refs; symbols (FEED) go to the base object.
+  // String keys map to child refs; symbols are forwarded to the target
+  // (allowing decorators to attach protocol via Object.defineProperty).
 
   map(
     ctx: WritableContext,
@@ -698,21 +599,15 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
     const storePath = toStorePath(path)
     const childCache = new Map<string, unknown>()
 
-    // Base object holds symbol-keyed protocol
-    const base: Record<string | symbol, unknown> = {}
+    // Target object — symbol-keyed protocol will be attached here
+    // by decorators (e.g. withFeed) via Object.defineProperty.
+    const target: Record<string | symbol, unknown> = {}
 
-    attachFeed(
-      base,
-      createFeedForPath(ctx, storePath, () =>
-        readByPath(ctx.store, storePath),
-      ),
-    )
-
-    return new Proxy(base, {
+    return new Proxy(target, {
       get(_target, prop, _receiver) {
-        // Symbol access → base object (protocol)
+        // Symbol access → target object (protocol attached by decorators)
         if (typeof prop === "symbol") {
-          return base[prop]
+          return target[prop]
         }
 
         // String access → child ref (data)
@@ -723,9 +618,9 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
       },
 
       has(_target, prop) {
-        // Symbol access → check base (protocol)
+        // Symbol access → check target (protocol)
         if (typeof prop === "symbol") {
-          return prop in base
+          return prop in target
         }
         // String access → check store data
         const obj = readByPath(ctx.store, storePath)
@@ -736,9 +631,8 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
       },
 
       ownKeys(_target) {
-        // Must include non-configurable symbol keys from the base
-        // (the Proxy invariant requires this).
-        const symbolKeys = Object.getOwnPropertySymbols(base)
+        // Include symbol keys from target (protocol attached by decorators)
+        const symbolKeys = Object.getOwnPropertySymbols(target)
         const obj = readByPath(ctx.store, storePath)
         if (obj !== null && obj !== undefined && typeof obj === "object") {
           return [...Object.keys(obj as Record<string, unknown>), ...symbolKeys]
@@ -748,7 +642,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
 
       getOwnPropertyDescriptor(_target, prop) {
         if (typeof prop === "symbol") {
-          return Object.getOwnPropertyDescriptor(base, prop)
+          return Object.getOwnPropertyDescriptor(target, prop)
         }
         const obj = readByPath(ctx.store, storePath)
         if (obj !== null && obj !== undefined && typeof obj === "object") {
@@ -765,6 +659,15 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
           }
         }
         return undefined
+      },
+
+      // Allow symbol definitions from decorators (e.g. withFeed attaching [FEED])
+      defineProperty(_target, prop, descriptor) {
+        if (typeof prop === "symbol") {
+          Object.defineProperty(target, prop, descriptor)
+          return true
+        }
+        return false
       },
 
       set(_target, prop, value) {

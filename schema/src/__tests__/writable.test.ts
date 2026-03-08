@@ -5,8 +5,6 @@ import {
   writableInterpreter,
   createWritableContext,
   flush,
-  FEED,
-  isFeedable,
 } from "../index.js"
 import type {
   WritableContext,
@@ -88,14 +86,6 @@ describe("writable: namespace isolation", () => {
     const { doc } = createChatDoc()
     const keys = Object.keys(doc)
     expect(keys).toEqual(["title", "count", "messages", "settings", "metadata"])
-  })
-
-  it("[FEED] is present on products but not enumerable", () => {
-    const { doc } = createChatDoc()
-    const FEED_SYM = Symbol.for("kinetic:feed")
-    expect(FEED_SYM in doc).toBe(true)
-    const descriptor = Object.getOwnPropertyDescriptor(doc, FEED_SYM)
-    expect(descriptor?.enumerable).toBe(false)
   })
 
   it("schema property names are accessible via 'in' operator", () => {
@@ -293,11 +283,6 @@ describe("writable: map via Proxy", () => {
     expect("nonexistent" in doc.metadata).toBe(false)
   })
 
-  it("[FEED] is accessible via symbol on map proxy", () => {
-    const { doc } = createChatDoc()
-    const FEED_SYM = Symbol.for("kinetic:feed")
-    expect(FEED_SYM in doc.metadata).toBe(true)
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -345,70 +330,7 @@ describe("writable: batched mode", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// Feed subscription
-// ---------------------------------------------------------------------------
 
-describe("writable: feed subscription", () => {
-  it("text ref [FEED].head returns the current value", () => {
-    const { doc } = createChatDoc()
-    const FEED_SYM = Symbol.for("kinetic:feed")
-    const feed = (
-      doc.title as unknown as Record<
-        symbol,
-        { head: string; subscribe: (cb: (a: unknown) => void) => () => void }
-      >
-    )[FEED_SYM]
-    expect(feed.head).toBe("Hello")
-  })
-
-  it("text ref [FEED].head reflects mutations", () => {
-    const { doc } = createChatDoc()
-    const FEED_SYM = Symbol.for("kinetic:feed")
-    const feed = (doc.title as unknown as Record<symbol, { head: string }>)[
-      FEED_SYM
-    ]
-
-    doc.title.update("Changed")
-    expect(feed.head).toBe("Changed")
-  })
-
-  it("subscribe receives actions, unsubscribe stops delivery", () => {
-    const { doc } = createChatDoc()
-    const FEED_SYM = Symbol.for("kinetic:feed")
-    const feed = (
-      doc.title as unknown as Record<
-        symbol,
-        { subscribe: (cb: (a: unknown) => void) => () => void }
-      >
-    )[FEED_SYM]
-
-    const received: unknown[] = []
-    const unsub = feed.subscribe((action: unknown) => received.push(action))
-
-    doc.title.insert(0, "X")
-    expect(received.length).toBe(1)
-
-    unsub()
-    doc.title.insert(0, "Y")
-    expect(received.length).toBe(1) // no new action after unsub
-  })
-
-  it("isFeedable returns true for products", () => {
-    const { doc } = createChatDoc()
-    expect(isFeedable(doc)).toBe(true)
-  })
-
-  it("isFeedable returns true for text refs", () => {
-    const { doc } = createChatDoc()
-    expect(isFeedable(doc.title)).toBe(true)
-  })
-
-  it("isFeedable returns true for counter refs", () => {
-    const { doc } = createChatDoc()
-    expect(isFeedable(doc.count)).toBe(true)
-  })
-})
 
 // ---------------------------------------------------------------------------
 // Annotation-driven behavior
