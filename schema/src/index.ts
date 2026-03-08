@@ -57,3 +57,16 @@ export {
 // Feed — the unified reactive protocol
 export { FEED, getOrCreateFeed, isFeedable, staticFeed } from "./feed.js"
 export type { Feed, Feedable } from "./feed.js"
+
+// step — pure state transitions: (State, Action) → State
+export {
+  step,
+  stepText,
+  stepSequence,
+  stepMap,
+  stepReplace,
+  stepIncrement,
+} from "./step.js"
+
+// Zero — default values separated from the schema
+export { Zero, scalarDefault } from "./zero.js"

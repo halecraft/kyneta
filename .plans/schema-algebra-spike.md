@@ -89,10 +89,10 @@ The theory document contains numerous design decisions that have not been valida
 - Task: Create `packages/schema/src/feed.ts` — `FEED` symbol, `Feed<S, A>` interface, `Feedable<S, A>` interface, `getOrCreateFeed` WeakMap helper, `isFeedable` type guard 🟢
 - Task: Create `packages/schema/src/index.ts` barrel export 🟢
 
-### Phase 2: step and Zero 🔴
+### Phase 2: step and Zero 🟢
 
-- Task: Create `packages/schema/src/step.ts` — pure `step` functions per action type: `stepText(state, action)`, `stepSequence(state, action)`, `stepMap(state, action)`, `stepReplace(state, action)`. Also a top-level `step(state, action)` that dispatches on the action's `type` discriminant (not on the schema — step is action-driven, schema-agnostic). 🔴
-- Task: Create `packages/schema/src/zero.ts` — `Zero.structural(schema)` that derives defaults by walking the unified schema grammar: scalar→`typeDefault(kind)`, product→recurse fields, sequence→`[]`, map→`{}`, sum→first variant's zero, annotated→delegate to inner or use annotation-specific default (e.g. annotated("text")→`""`). `Zero.for(schema, value)` as a type-checked identity. `Zero.partial(schema, partialValue)`. `Zero.overlay(primary, fallback, schema)` — deep structural merge aware of structural kinds. 🔴
+- Task: Create `packages/schema/src/step.ts` — pure `step` functions per action type: `stepText(state, action)`, `stepSequence(state, action)`, `stepMap(state, action)`, `stepReplace(state, action)`. Also a top-level `step(state, action)` that dispatches on the action's `type` discriminant (not on the schema — step is action-driven, schema-agnostic). 🟢
+- Task: Create `packages/schema/src/zero.ts` — `Zero.structural(schema)` that derives defaults by walking the unified schema grammar: scalar→`typeDefault(kind)`, product→recurse fields, sequence→`[]`, map→`{}`, sum→first variant's zero, annotated→delegate to inner or use annotation-specific default (e.g. annotated("text")→`""`). `Zero.for(schema, value)` as a type-checked identity. `Zero.partial(schema, partialValue)`. `Zero.overlay(primary, fallback, schema)` — deep structural merge aware of structural kinds. 🟢
 
 ### Phase 3: interpret and read-only interpreters 🔴
 
