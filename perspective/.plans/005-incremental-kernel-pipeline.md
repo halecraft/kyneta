@@ -314,21 +314,22 @@ orderings because the batch pipeline sees the full store simultaneously.
 
 ## Phases and Tasks
 
-### Phase 1: Z-Set Foundation 🔴
+### Phase 1: Z-Set Foundation ✅
 
 #### Tasks
 
-- 1.1 Create `base/zset.ts` with `ZSet<T>` type and algebraic operations (`zsetEmpty`, `zsetSingleton`, `zsetAdd`, `zsetNegate`, `zsetFromEntries`). 🔴
-- 1.2 Add query utilities (`zsetIsEmpty`, `zsetSize`, `zsetGet`, `zsetPositive`, `zsetNegative`). 🔴
-- 1.3 Add mapping/iteration utilities (`zsetForEach`, `zsetMap`, `zsetFilter`). 🔴
-- 1.4 Export from `base/` barrel. 🔴
+- 1.1 Create `base/zset.ts` with `ZSet<T>` type and algebraic operations (`zsetEmpty`, `zsetSingleton`, `zsetAdd`, `zsetNegate`, `zsetFromEntries`). ✅
+- 1.2 Add query utilities (`zsetIsEmpty`, `zsetSize`, `zsetGet`, `zsetPositive`, `zsetNegative`). ✅
+- 1.3 Add mapping/iteration utilities (`zsetForEach`, `zsetMap`, `zsetFilter`). ✅
+- 1.4 Export from `base/` barrel. ✅ (No barrel — follows existing `base/` convention of direct imports. Added `zsetElements`, `zsetKeys` convenience functions beyond plan.)
 
 #### Tests
 
-- Z-set algebra: `add` is commutative, associative; `add(a, negate(a)) = empty`; zero-weight entries pruned. 🔴
-- Singleton fast path: `zsetSingleton` creates a single-entry map. 🔴
-- `zsetPositive` / `zsetNegative` partition correctly. 🔴
-- `zsetMap` transforms elements while re-keying. 🔴
+- Z-set algebra: `add` is commutative, associative; `add(a, negate(a)) = empty`; zero-weight entries pruned. ✅
+- Singleton fast path: `zsetSingleton` creates a single-entry map. ✅
+- `zsetPositive` / `zsetNegative` partition correctly. ✅
+- `zsetMap` transforms elements while re-keying. ✅
+- 61 tests in `tests/base/zset.test.ts`. 820 total tests passing (759 existing + 61 new).
 
 ### Phase 2: Incremental Types and Infrastructure 🔴
 
