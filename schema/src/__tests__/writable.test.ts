@@ -8,7 +8,14 @@ import {
   FEED,
   isFeedable,
 } from "../index.js"
-import type { WritableContext, TextRef, CounterRef, ScalarRef, SequenceRef } from "../index.js"
+import type {
+  WritableContext,
+  TextRef,
+  CounterRef,
+  ScalarRef,
+  SequenceRef,
+  Writable,
+} from "../index.js"
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -40,7 +47,9 @@ function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(chatDocSchema, writableInterpreter, ctx) as any
+  const doc = interpret(chatDocSchema, writableInterpreter, ctx) as Writable<
+    typeof chatDocSchema
+  >
   return { store, ctx, doc }
 }
 
@@ -110,7 +119,7 @@ describe("writable: namespace isolation", () => {
 describe("writable: scalar upward reference", () => {
   it(".set() writes to the backing store at the correct path", () => {
     const { doc, store } = createChatDoc()
-    const darkModeRef = doc.settings.darkMode as ScalarRef<boolean>
+    const darkModeRef = doc.settings.darkMode
 
     expect(darkModeRef.get()).toBe(false)
     darkModeRef.set(true)
@@ -119,7 +128,7 @@ describe("writable: scalar upward reference", () => {
 
   it(".get() reads live from the backing store", () => {
     const { doc, store } = createChatDoc()
-    const fontSizeRef = doc.settings.fontSize as ScalarRef<number>
+    const fontSizeRef = doc.settings.fontSize
 
     expect(fontSizeRef.get()).toBe(14)
     // Mutate store directly
@@ -135,10 +144,10 @@ describe("writable: scalar upward reference", () => {
 describe("writable: portable refs", () => {
   it("extracted scalar ref works outside the tree", () => {
     const { doc, store } = createChatDoc()
-    const fontRef = doc.settings.fontSize as ScalarRef<number>
+    const fontRef = doc.settings.fontSize
 
     // Pass to a standalone function
-    function bump(ref: ScalarRef<number>) {
+    function bump(ref: { get(): number; set(value: number): void }) {
       ref.set(ref.get() + 2)
     }
 
@@ -150,7 +159,7 @@ describe("writable: portable refs", () => {
 
   it("extracted text ref works outside the tree", () => {
     const { doc, store } = createChatDoc()
-    const titleRef = doc.title as TextRef
+    const titleRef = doc.title
 
     function appendBang(ref: TextRef) {
       const len = ref.get().length
@@ -169,29 +178,29 @@ describe("writable: portable refs", () => {
 describe("writable: text ref", () => {
   it(".get() returns the current string", () => {
     const { doc } = createChatDoc()
-    expect((doc.title as TextRef).get()).toBe("Hello")
+    expect(doc.title.get()).toBe("Hello")
   })
 
   it(".toString() returns the current string", () => {
     const { doc } = createChatDoc()
-    expect((doc.title as TextRef).toString()).toBe("Hello")
+    expect(doc.title.toString()).toBe("Hello")
   })
 
   it(".insert() applies a text action to the store", () => {
     const { doc, store } = createChatDoc()
-    ;(doc.title as TextRef).insert(5, " World")
+    doc.title.insert(5, " World")
     expect(store.title).toBe("Hello World")
   })
 
   it(".delete() removes characters from the store", () => {
     const { doc, store } = createChatDoc()
-    ;(doc.title as TextRef).delete(0, 3)
+    doc.title.delete(0, 3)
     expect(store.title).toBe("lo")
   })
 
   it(".update() replaces the entire string", () => {
     const { doc, store } = createChatDoc()
-    ;(doc.title as TextRef).update("New Title")
+    doc.title.update("New Title")
     expect(store.title).toBe("New Title")
   })
 })
@@ -203,24 +212,24 @@ describe("writable: text ref", () => {
 describe("writable: counter ref", () => {
   it(".get() returns the current value", () => {
     const { doc } = createChatDoc()
-    expect((doc.count as CounterRef).get()).toBe(0)
+    expect(doc.count.get()).toBe(0)
   })
 
   it(".increment() adds to the value", () => {
     const { doc, store } = createChatDoc()
-    ;(doc.count as CounterRef).increment(5)
+    doc.count.increment(5)
     expect(store.count).toBe(5)
   })
 
   it(".decrement() subtracts from the value", () => {
     const { doc, store } = createChatDoc({ count: 10 })
-    ;(doc.count as CounterRef).decrement(3)
+    doc.count.decrement(3)
     expect(store.count).toBe(7)
   })
 
   it(".increment() with no arg defaults to 1", () => {
     const { doc, store } = createChatDoc()
-    ;(doc.count as CounterRef).increment()
+    doc.count.increment()
     expect(store.count).toBe(1)
   })
 })
@@ -232,19 +241,19 @@ describe("writable: counter ref", () => {
 describe("writable: sequence ref", () => {
   it(".length reflects the store array length", () => {
     const { doc } = createChatDoc()
-    expect((doc.messages as SequenceRef).length).toBe(1)
+    expect(doc.messages.length).toBe(1)
   })
 
   it(".get(i) returns a child ref for the item at index i", () => {
     const { doc } = createChatDoc()
-    const msg0 = (doc.messages as SequenceRef).get(0) as any
+    const msg0 = doc.messages.get(0)
     expect(msg0.author.get()).toBe("Alice")
     expect(msg0.body.get()).toBe("Hi")
   })
 
   it(".push() appends items and updates the store", () => {
     const { doc, store } = createChatDoc()
-    ;(doc.messages as SequenceRef).push({ author: "Bob", body: "Hey" })
+    doc.messages.push({ author: "Bob", body: "Hey" })
     expect((store.messages as any[]).length).toBe(2)
     expect((store.messages as any[])[1]).toEqual({ author: "Bob", body: "Hey" })
   })
@@ -256,7 +265,7 @@ describe("writable: sequence ref", () => {
         { author: "Bob", body: "Hey" },
       ],
     })
-    ;(doc.messages as SequenceRef).delete(0)
+    doc.messages.delete(0)
     expect((store.messages as any[]).length).toBe(1)
     expect((store.messages as any[])[0].author).toBe("Bob")
   })
@@ -269,7 +278,7 @@ describe("writable: sequence ref", () => {
 describe("writable: map via Proxy", () => {
   it("dynamic string key access returns a child ref", () => {
     const { doc } = createChatDoc()
-    const versionRef = (doc.metadata as any).version as ScalarRef
+    const versionRef = doc.metadata.version
     expect(versionRef.get()).toBe(1)
   })
 
@@ -303,10 +312,12 @@ describe("writable: batched mode", () => {
       y: Schema.plain.number(),
     })
     const ctx = createWritableContext(store, { autoCommit: false })
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as Writable<
+      typeof schema
+    >
 
-    ;(doc.x as ScalarRef<number>).set(10)
-    ;(doc.y as ScalarRef<number>).set(20)
+    doc.x.set(10)
+    doc.y.set(20)
 
     // Not yet applied
     expect(store.x).toBe(0)
@@ -325,9 +336,11 @@ describe("writable: batched mode", () => {
     const store = { x: 0 }
     const schema = Schema.doc({ x: Schema.plain.number() })
     const ctx = createWritableContext(store, { autoCommit: true })
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as Writable<
+      typeof schema
+    >
 
-    ;(doc.x as ScalarRef<number>).set(42)
+    doc.x.set(42)
     expect(store.x).toBe(42)
   })
 })
@@ -340,32 +353,44 @@ describe("writable: feed subscription", () => {
   it("text ref [FEED].head returns the current value", () => {
     const { doc } = createChatDoc()
     const FEED_SYM = Symbol.for("kinetic:feed")
-    const feed = (doc.title as any)[FEED_SYM]
+    const feed = (
+      doc.title as unknown as Record<
+        symbol,
+        { head: string; subscribe: (cb: (a: unknown) => void) => () => void }
+      >
+    )[FEED_SYM]
     expect(feed.head).toBe("Hello")
   })
 
   it("text ref [FEED].head reflects mutations", () => {
     const { doc } = createChatDoc()
     const FEED_SYM = Symbol.for("kinetic:feed")
-    const feed = (doc.title as any)[FEED_SYM]
+    const feed = (doc.title as unknown as Record<symbol, { head: string }>)[
+      FEED_SYM
+    ]
 
-    ;(doc.title as TextRef).update("Changed")
+    doc.title.update("Changed")
     expect(feed.head).toBe("Changed")
   })
 
   it("subscribe receives actions, unsubscribe stops delivery", () => {
     const { doc } = createChatDoc()
     const FEED_SYM = Symbol.for("kinetic:feed")
-    const feed = (doc.title as any)[FEED_SYM]
+    const feed = (
+      doc.title as unknown as Record<
+        symbol,
+        { subscribe: (cb: (a: unknown) => void) => () => void }
+      >
+    )[FEED_SYM]
 
     const received: unknown[] = []
     const unsub = feed.subscribe((action: unknown) => received.push(action))
 
-    ;(doc.title as TextRef).insert(0, "X")
+    doc.title.insert(0, "X")
     expect(received.length).toBe(1)
 
     unsub()
-    ;(doc.title as TextRef).insert(0, "Y")
+    doc.title.insert(0, "Y")
     expect(received.length).toBe(1) // no new action after unsub
   })
 
@@ -392,29 +417,30 @@ describe("writable: feed subscription", () => {
 describe("writable: annotation-driven behavior", () => {
   it("Schema.text() writable has .insert() and .delete()", () => {
     const { doc } = createChatDoc()
-    const title = doc.title as TextRef
-    expect(typeof title.insert).toBe("function")
-    expect(typeof title.delete).toBe("function")
-    expect(typeof title.update).toBe("function")
-    expect(typeof title.get).toBe("function")
+    expect(typeof doc.title.insert).toBe("function")
+    expect(typeof doc.title.delete).toBe("function")
+    expect(typeof doc.title.update).toBe("function")
+    expect(typeof doc.title.get).toBe("function")
   })
 
   it("Schema.plain.string() writable has .get() and .set() only", () => {
     const { doc } = createChatDoc()
-    const author = (doc.messages as SequenceRef).get(0) as any
-    const authorRef = author.author as ScalarRef<string>
-    expect(typeof authorRef.get).toBe("function")
-    expect(typeof authorRef.set).toBe("function")
+    const msg = doc.messages.get(0)
+    expect(typeof msg.author.get).toBe("function")
+    expect(typeof msg.author.set).toBe("function")
     // Should NOT have text-specific methods
-    expect((authorRef as any).insert).toBeUndefined()
-    expect((authorRef as any).delete).toBeUndefined()
+    expect(
+      (msg.author as unknown as Record<string, unknown>).insert,
+    ).toBeUndefined()
+    expect(
+      (msg.author as unknown as Record<string, unknown>).delete,
+    ).toBeUndefined()
   })
 
   it("Schema.counter() writable has .increment() and .decrement()", () => {
     const { doc } = createChatDoc()
-    const count = doc.count as CounterRef
-    expect(typeof count.increment).toBe("function")
-    expect(typeof count.decrement).toBe("function")
-    expect(typeof count.get).toBe("function")
+    expect(typeof doc.count.increment).toBe("function")
+    expect(typeof doc.count.decrement).toBe("function")
+    expect(typeof doc.count.get).toBe("function")
   })
 })

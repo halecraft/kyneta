@@ -15,12 +15,16 @@
 
 import type { Interpreter, Path, PathSegment, SumVariants } from "../interpret.js"
 import type {
+  Schema,
+  ScalarKind,
   ScalarSchema,
   ProductSchema,
   SequenceSchema,
   MapSchema,
   SumSchema,
   AnnotatedSchema,
+  PositionalSumSchema,
+  DiscriminatedSumSchema,
 } from "../schema.js"
 import type { ActionBase } from "../action.js"
 import {
@@ -322,6 +326,83 @@ export interface SequenceRef<T = unknown> {
   [Symbol.iterator](): Iterator<T>
   toArray(): unknown[]
 }
+
+// ---------------------------------------------------------------------------
+// Writable<S> — type-level interpretation from schema type to ref type
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps a ScalarKind literal to the corresponding TypeScript plain type.
+ */
+export type ScalarPlain<K extends ScalarKind> =
+  K extends "string" ? string
+  : K extends "number" ? number
+  : K extends "boolean" ? boolean
+  : K extends "null" ? null
+  : K extends "undefined" ? undefined
+  : K extends "bytes" ? Uint8Array
+  : K extends "any" ? unknown
+  : unknown
+
+/**
+ * Computes the writable ref type for a given schema type.
+ *
+ * This is the type-level catamorphism: it recursively maps schema nodes
+ * to their corresponding ref types, so that `interpret(schema, writableInterpreter, ctx)`
+ * produces a fully typed result without any casts.
+ *
+ * ```ts
+ * const s = Schema.doc({
+ *   title: Schema.text(),
+ *   count: Schema.counter(),
+ *   settings: Schema.struct({
+ *     darkMode: Schema.plain.boolean(),
+ *   }),
+ * })
+ *
+ * type Doc = Writable<typeof s>
+ * // = { title: TextRef; count: CounterRef; settings: { darkMode: ScalarRef<boolean> } }
+ * ```
+ */
+export type Writable<S extends Schema> =
+  // --- Annotated: dispatch on tag ---
+  S extends AnnotatedSchema<infer Tag, infer Inner>
+    ? Tag extends "text" ? TextRef
+    : Tag extends "counter" ? CounterRef
+    : Tag extends "doc"
+      ? Inner extends ProductSchema<infer F>
+        ? { readonly [K in keyof F]: Writable<F[K]> }
+        : unknown
+    : Tag extends "movable"
+      ? Inner extends SequenceSchema<infer I>
+        ? SequenceRef<Writable<I>>
+        : unknown
+    : Tag extends "tree"
+      ? Inner extends Schema
+        ? Writable<Inner>
+        : unknown
+    // Unknown annotation with inner — delegate
+    : Inner extends Schema
+      ? Writable<Inner>
+      : unknown
+  // --- Scalar ---
+  : S extends ScalarSchema<infer K>
+    ? ScalarRef<ScalarPlain<K>>
+  // --- Product ---
+  : S extends ProductSchema<infer F>
+    ? { readonly [K in keyof F]: Writable<F[K]> }
+  // --- Sequence ---
+  : S extends SequenceSchema<infer I>
+    ? SequenceRef<Writable<I>>
+  // --- Map ---
+  : S extends MapSchema<infer I>
+    ? { readonly [key: string]: Writable<I> }
+  // --- Sum ---
+  : S extends PositionalSumSchema
+    ? unknown
+  : S extends DiscriminatedSumSchema
+    ? unknown
+  : unknown
 
 // ---------------------------------------------------------------------------
 // Specialized ref factories

@@ -56,30 +56,30 @@ export type Schema =
 
 // --- Scalar ------------------------------------------------------------------
 
-export interface ScalarSchema {
+export interface ScalarSchema<K extends ScalarKind = ScalarKind> {
   readonly _kind: "scalar"
-  readonly scalarKind: ScalarKind
+  readonly scalarKind: K
 }
 
 // --- Product -----------------------------------------------------------------
 
-export interface ProductSchema {
+export interface ProductSchema<F extends Record<string, Schema> = Record<string, Schema>> {
   readonly _kind: "product"
-  readonly fields: Readonly<Record<string, Schema>>
+  readonly fields: Readonly<F>
 }
 
 // --- Sequence ----------------------------------------------------------------
 
-export interface SequenceSchema {
+export interface SequenceSchema<I extends Schema = Schema> {
   readonly _kind: "sequence"
-  readonly item: Schema
+  readonly item: I
 }
 
 // --- Map ---------------------------------------------------------------------
 
-export interface MapSchema {
+export interface MapSchema<I extends Schema = Schema> {
   readonly _kind: "map"
-  readonly item: Schema
+  readonly item: I
 }
 
 // --- Sum ---------------------------------------------------------------------
@@ -96,16 +96,19 @@ export interface MapSchema {
  */
 export type SumSchema = PositionalSumSchema | DiscriminatedSumSchema
 
-export interface PositionalSumSchema {
+export interface PositionalSumSchema<V extends readonly Schema[] = readonly Schema[]> {
   readonly _kind: "sum"
-  readonly variants: readonly Schema[]
+  readonly variants: V
   readonly discriminant?: undefined
 }
 
-export interface DiscriminatedSumSchema {
+export interface DiscriminatedSumSchema<
+  D extends string = string,
+  M extends Record<string, Schema> = Record<string, Schema>,
+> {
   readonly _kind: "sum"
-  readonly discriminant: string
-  readonly variantMap: Readonly<Record<string, Schema>>
+  readonly discriminant: D
+  readonly variantMap: Readonly<M>
   readonly variants?: undefined
 }
 
@@ -127,10 +130,13 @@ export interface DiscriminatedSumSchema {
  * - `"timestamp"` — Firestore timestamp
  * - `"richtext"` — rich text with marks
  */
-export interface AnnotatedSchema {
+export interface AnnotatedSchema<
+  T extends string = string,
+  S extends Schema | undefined = Schema | undefined,
+> {
   readonly _kind: "annotated"
-  readonly tag: string
-  readonly schema?: Schema
+  readonly tag: T
+  readonly schema?: S
   readonly meta?: Readonly<Record<string, unknown>>
 }
 
@@ -138,44 +144,47 @@ export interface AnnotatedSchema {
 // Structural constructors (low-level, grammar-native)
 // ---------------------------------------------------------------------------
 
-function scalar(scalarKind: ScalarKind): ScalarSchema {
+function scalar<K extends ScalarKind>(scalarKind: K): ScalarSchema<K> {
   return { _kind: "scalar", scalarKind }
 }
 
-function product(fields: Record<string, Schema>): ProductSchema {
+function product<F extends Record<string, Schema>>(fields: F): ProductSchema<F> {
   return { _kind: "product", fields }
 }
 
-function sequence(item: Schema): SequenceSchema {
+function sequence<I extends Schema>(item: I): SequenceSchema<I> {
   return { _kind: "sequence", item }
 }
 
-function map(item: Schema): MapSchema {
+function map<I extends Schema>(item: I): MapSchema<I> {
   return { _kind: "map", item }
 }
 
-function sum(variants: Schema[]): PositionalSumSchema {
+function sum<V extends Schema[]>(variants: [...V]): PositionalSumSchema<V> {
   return { _kind: "sum", variants }
 }
 
-function discriminatedSum(
-  discriminant: string,
-  variantMap: Record<string, Schema>,
-): DiscriminatedSumSchema {
+function discriminatedSum<
+  D extends string,
+  M extends Record<string, Schema>,
+>(
+  discriminant: D,
+  variantMap: M,
+): DiscriminatedSumSchema<D, M> {
   return { _kind: "sum", discriminant, variantMap }
 }
 
-function annotated(
-  tag: string,
-  schema?: Schema,
+function annotated<T extends string, S extends Schema | undefined = undefined>(
+  tag: T,
+  schema?: S,
   meta?: Record<string, unknown>,
-): AnnotatedSchema {
+): AnnotatedSchema<T, S> {
   return {
     _kind: "annotated",
     tag,
     ...(schema !== undefined && { schema }),
     ...(meta !== undefined && { meta }),
-  }
+  } as AnnotatedSchema<T, S>
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +200,7 @@ function annotated(
  * The annotation implies scalar string semantics for reads,
  * but the backend provides collaborative editing (insert, delete, marks).
  */
-function text(): AnnotatedSchema {
+function text(): AnnotatedSchema<"text", undefined> {
   return annotated("text")
 }
 
@@ -201,14 +210,14 @@ function text(): AnnotatedSchema {
  * The annotation implies scalar number semantics for reads,
  * but the backend provides increment/decrement.
  */
-function counter(): AnnotatedSchema {
+function counter(): AnnotatedSchema<"counter", undefined> {
   return annotated("counter")
 }
 
 /**
  * Ordered list. Produces `sequence(item)`.
  */
-function list(item: Schema): SequenceSchema {
+function list<I extends Schema>(item: I): SequenceSchema<I> {
   return sequence(item)
 }
 
@@ -216,21 +225,21 @@ function list(item: Schema): SequenceSchema {
  * Movable list (CRDT with move semantics).
  * Produces `annotated("movable", sequence(item))`.
  */
-function movableList(item: Schema): AnnotatedSchema {
+function movableList<I extends Schema>(item: I): AnnotatedSchema<"movable", SequenceSchema<I>> {
   return annotated("movable", sequence(item))
 }
 
 /**
  * Fixed-key struct. Produces `product(fields)`.
  */
-function struct(fields: Record<string, Schema>): ProductSchema {
+function struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F> {
   return product(fields)
 }
 
 /**
  * Dynamic-key record. Produces `map(item)`.
  */
-function record(item: Schema): MapSchema {
+function record<I extends Schema>(item: I): MapSchema<I> {
   return map(item)
 }
 
@@ -240,7 +249,7 @@ function record(item: Schema): MapSchema {
  *
  * The `nodeData` schema describes the shape of each tree node's data.
  */
-function tree(nodeData: Schema): AnnotatedSchema {
+function tree<S extends Schema>(nodeData: S): AnnotatedSchema<"tree", S> {
   return annotated("tree", nodeData)
 }
 
@@ -251,7 +260,7 @@ function tree(nodeData: Schema): AnnotatedSchema {
  * this is the root entry point (analogous to TypedDoc in the current
  * codebase).
  */
-function doc(fields: Record<string, Schema>): AnnotatedSchema {
+function doc<F extends Record<string, Schema>>(fields: F): AnnotatedSchema<"doc", ProductSchema<F>> {
   return annotated("doc", product(fields))
 }
 
@@ -264,65 +273,65 @@ function doc(fields: Record<string, Schema>): AnnotatedSchema {
 
 const plain = {
   /** Scalar string. */
-  string(): ScalarSchema {
+  string(): ScalarSchema<"string"> {
     return scalar("string")
   },
 
   /** Scalar number. */
-  number(): ScalarSchema {
+  number(): ScalarSchema<"number"> {
     return scalar("number")
   },
 
   /** Scalar boolean. */
-  boolean(): ScalarSchema {
+  boolean(): ScalarSchema<"boolean"> {
     return scalar("boolean")
   },
 
   /** Scalar null. */
-  null(): ScalarSchema {
+  null(): ScalarSchema<"null"> {
     return scalar("null")
   },
 
   /** Scalar undefined. */
-  undefined(): ScalarSchema {
+  undefined(): ScalarSchema<"undefined"> {
     return scalar("undefined")
   },
 
   /** Binary data. */
-  bytes(): ScalarSchema {
+  bytes(): ScalarSchema<"bytes"> {
     return scalar("bytes")
   },
 
   /** Opaque value — any type. */
-  any(): ScalarSchema {
+  any(): ScalarSchema<"any"> {
     return scalar("any")
   },
 
   /** Fixed-key plain struct (product with no annotation). */
-  struct(fields: Record<string, Schema>): ProductSchema {
+  struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F> {
     return product(fields)
   },
 
   /** Dynamic-key plain record (map with no annotation). */
-  record(item: Schema): MapSchema {
+  record<I extends Schema>(item: I): MapSchema<I> {
     return map(item)
   },
 
   /** Plain array (sequence with no annotation). */
-  array(item: Schema): SequenceSchema {
+  array<I extends Schema>(item: I): SequenceSchema<I> {
     return sequence(item)
   },
 
   /** Union of schemas. */
-  union(...variants: Schema[]): PositionalSumSchema {
+  union<V extends Schema[]>(...variants: [...V]): PositionalSumSchema<V> {
     return sum(variants)
   },
 
   /** Discriminated union — variants keyed by discriminant value. */
-  discriminatedUnion(
-    discriminant: string,
-    variantMap: Record<string, Schema>,
-  ): DiscriminatedSumSchema {
+  discriminatedUnion<D extends string, M extends Record<string, Schema>>(
+    discriminant: D,
+    variantMap: M,
+  ): DiscriminatedSumSchema<D, M> {
     return discriminatedSum(discriminant, variantMap)
   },
 } as const

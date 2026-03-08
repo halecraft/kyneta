@@ -92,6 +92,8 @@ export type {
   TextRef,
   CounterRef,
   SequenceRef,
+  Writable,
+  ScalarPlain,
 } from "./interpreters/writable.js"
 
 // Interpreter composition combinators
