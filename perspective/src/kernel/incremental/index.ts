@@ -37,6 +37,14 @@ export { createIncrementalValidity } from './validity.js';
 export type { IncrementalSkeleton } from './skeleton.js';
 export { createIncrementalSkeleton } from './skeleton.js';
 
+// --- Incremental Evaluation (Plan 006, Phase 4) ---
+export type { IncrementalEvaluation } from './evaluation.js';
+export {
+  createIncrementalEvaluation,
+  routeFactsByPredicate,
+  extractRuleDeltasFromActive,
+} from './evaluation.js';
+
 // --- Incremental Pipeline (Phase 8) ---
 export type { IncrementalPipeline } from './pipeline.js';
 export {

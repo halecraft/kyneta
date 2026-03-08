@@ -1,26 +1,23 @@
 // === Incremental Pipeline Composition Root ===
-// Wires all incremental stages into the DAG described in Plan 005 §Architecture:
+// Wires all incremental stages into the DAG:
 //
 //   insert(c) → store.insert → C^Δ (validity) → fan-out:
 //     → X^Δ (structure index)
 //     → A^Δ (retraction)
 //       → P^Δ (projection, two-input: Δ_active × Δ_index)
-//         → E (BATCH evaluate)
-//           → DIFF (resolution diffing shim)
-//             → K^Δ (skeleton, three-input: Δ_resolved × Δ_fuguePairs × Δ_index)
-//               → RealityDelta
+//         → E^Δ (evaluation, two-input: Δ_facts × Δ_rules)
+//           → K^Δ (skeleton, three-input: Δ_resolved × Δ_fuguePairs × Δ_index)
+//             → RealityDelta
 //
 // The version filter (F^Δ) is identity — not a separate module.
-// The batch evaluator is the bottleneck: O(|S|) per insertion. Plan 006
-// replaces it with an incremental evaluator.
 //
-// The resolution diffing shim compares the new ResolutionResult against
-// the cached previous one, producing Z-set deltas for the skeleton.
-// Plan 006 eliminates this shim when the incremental evaluator produces
-// deltas directly.
+// Plan 006 Phase 4 replaces the batch evaluator call + diffResolution shim
+// with the IncrementalEvaluation stage, which delegates to native incremental
+// solvers (LWW + Fugue) when default rules are active, and falls back to
+// batch Datalog when custom rules are present.
 //
-// See .plans/005-incremental-kernel-pipeline.md § Phase 8.
-// See theory/incremental.md §2–§6.
+// See .plans/006-incremental-datalog-evaluator.md § Phase 4.
+// See theory/incremental.md §2–§6, §9.7.
 
 import type {
   Constraint,
@@ -37,29 +34,12 @@ import {
   allConstraints,
 } from '../store.js';
 import { cnIdKey } from '../cnid.js';
-import type { StructureIndex } from '../structure-index.js';
-import {
-  extractResolution,
-  type ResolvedWinner,
-  type FugueBeforePair,
-  type ResolutionResult,
-} from '../resolve.js';
-import {
-  extractRules,
-  selectResolutionStrategy,
-} from '../rule-detection.js';
-import {
-  buildNativeResolution,
-  diffFuguePairs,
-} from '../native-resolution.js';
-import { evaluate } from '../../datalog/evaluate.js';
 import { DEFAULT_RETRACTION_CONFIG } from '../retraction.js';
 
 import type { ZSet } from '../../base/zset.js';
 import {
   zsetEmpty,
   zsetSingleton,
-  zsetAdd,
   zsetIsEmpty,
 } from '../../base/zset.js';
 
@@ -72,6 +52,10 @@ import { createIncrementalStructureIndex } from './structure-index.js';
 import { createIncrementalRetraction } from './retraction.js';
 import { createIncrementalProjection } from './projection.js';
 import { createIncrementalSkeleton } from './skeleton.js';
+import {
+  createIncrementalEvaluation,
+  extractRuleDeltasFromActive,
+} from './evaluation.js';
 
 import type { BootstrapResult } from '../../bootstrap.js';
 
@@ -108,83 +92,6 @@ export interface IncrementalPipeline {
 }
 
 // ---------------------------------------------------------------------------
-// Resolution Diffing
-// ---------------------------------------------------------------------------
-
-/**
- * Diff two ResolutionResults to produce Z-set deltas for the skeleton.
- *
- * This is a temporary shim for Plan 005. Plan 006 eliminates it when
- * the incremental evaluator produces deltas directly.
- *
- * Winner changes:
- *   - New winner (in new, not in old): +1
- *   - Removed winner (in old, not in new): −1
- *   - Changed winner (in both, different content or CnId): emit only +1
- *     (keyed by slotId — opposing weights would annihilate; see Plan 005 Learnings)
- *   - Unchanged winner: no delta
- *
- * Fugue pair changes: delegated to `diffFuguePairs` from native-resolution.ts.
- */
-function diffResolution(
-  oldRes: ResolutionResult | null,
-  newRes: ResolutionResult,
-): {
-  deltaResolved: ZSet<ResolvedWinner>;
-  deltaFuguePairs: ZSet<FugueBeforePair>;
-} {
-  let deltaResolved = zsetEmpty<ResolvedWinner>();
-
-  const oldWinners = oldRes?.winners ?? new Map<string, ResolvedWinner>();
-  const newWinners = newRes.winners;
-
-  // --- Winners ---
-
-  // Check new/changed winners
-  for (const [slotId, newWinner] of newWinners) {
-    const oldWinner = oldWinners.get(slotId);
-    if (oldWinner === undefined) {
-      // New winner
-      deltaResolved = zsetAdd(
-        deltaResolved,
-        zsetSingleton(slotId, newWinner, 1),
-      );
-    } else if (
-      oldWinner.winnerCnIdKey !== newWinner.winnerCnIdKey ||
-      oldWinner.content !== newWinner.content
-    ) {
-      // Changed winner — emit only the new winner at +1.
-      // We cannot emit {old: −1, new: +1} because both entries share
-      // the same Z-set key (slotId), so zsetAdd would annihilate them
-      // to weight 0 and the skeleton would never see the change.
-      deltaResolved = zsetAdd(
-        deltaResolved,
-        zsetSingleton(slotId, newWinner, 1),
-      );
-    }
-    // Unchanged — no delta
-  }
-
-  // Check removed winners
-  for (const [slotId, oldWinner] of oldWinners) {
-    if (!newWinners.has(slotId)) {
-      deltaResolved = zsetAdd(
-        deltaResolved,
-        zsetSingleton(slotId, oldWinner, -1),
-      );
-    }
-  }
-
-  // --- Fugue pairs (delegated to shared utility) ---
-  const deltaFuguePairs = diffFuguePairs(
-    oldRes?.fuguePairs ?? null,
-    newRes.fuguePairs,
-  );
-
-  return { deltaResolved, deltaFuguePairs };
-}
-
-// ---------------------------------------------------------------------------
 // Pipeline Construction
 // ---------------------------------------------------------------------------
 
@@ -205,7 +112,6 @@ export function createIncrementalPipeline(
 ): IncrementalPipeline {
   const store = existingStore ?? createStore();
   const retractionConfig = config.retractionConfig ?? DEFAULT_RETRACTION_CONFIG;
-  const enableDatalog = config.enableDatalogEvaluation ?? true;
 
   // --- Create all incremental stages ---
 
@@ -218,10 +124,7 @@ export function createIncrementalPipeline(
   const skeleton = createIncrementalSkeleton(
     () => structureIndex.current(),
   );
-
-  // --- Cached resolution state (for diffing shim) ---
-
-  let cachedResolution: ResolutionResult | null = null;
+  const evaluation = createIncrementalEvaluation();
 
   // --- DAG wiring ---
 
@@ -261,40 +164,22 @@ export function createIncrementalPipeline(
     // Step 4: P^Δ — Projection (two-input: Δ_active × Δ_index)
     const factsDelta = projection.step(activeDelta, indexDelta);
 
-    // Step 5: E — Batch evaluation
-    // Get the full accumulated state from stages.
-    const activeConstraints = retraction.current();
-    const accIndex = structureIndex.current();
-    const accFacts = projection.current();
+    // Step 5: E^Δ — Evaluation (two-input: Δ_facts × Δ_rules)
+    // Extract rule deltas from the active-set delta (rule constraints
+    // that became active or dominated).
+    const ruleDeltas = extractRuleDeltasFromActive(activeDelta);
 
-    const rules = extractRules(activeConstraints);
-    const strategy = selectResolutionStrategy(enableDatalog, rules, activeConstraints);
-
-    let resolutionResult: ResolutionResult;
-
-    if (strategy === 'native') {
-      resolutionResult = buildNativeResolution(activeConstraints, accIndex);
-    } else {
-      const evalResult = evaluate(rules, accFacts);
-      if (evalResult.ok) {
-        resolutionResult = extractResolution(evalResult.value);
-      } else {
-        // Datalog evaluation failed (e.g., cyclic negation).
-        // Fall back to native solvers as graceful degradation.
-        resolutionResult = buildNativeResolution(activeConstraints, accIndex);
-      }
-    }
-
-    // Step 6: DIFF — Compare against cached resolution
-    const { deltaResolved, deltaFuguePairs } = diffResolution(
-      cachedResolution,
-      resolutionResult,
+    const { deltaResolved, deltaFuguePairs } = evaluation.step(
+      factsDelta,
+      ruleDeltas,
+      // Lazy getters — only called when batch fallback or strategy
+      // switching is needed (custom rules present).
+      () => projection.current(),
+      () => retraction.current(),
+      () => structureIndex.current(),
     );
 
-    // Update cached resolution
-    cachedResolution = resolutionResult;
-
-    // Step 7: K^Δ — Skeleton (three-input)
+    // Step 6: K^Δ — Skeleton (three-input)
     const realityDelta = skeleton.step(
       deltaResolved,
       deltaFuguePairs,

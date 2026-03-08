@@ -124,62 +124,109 @@ deltas natively.
 
 ## Core Type Definitions
 
-### WeightedDatabase (Per-Predicate Z-Sets)
+### Accumulated State: Persistent `Database`
 
-The incremental Datalog evaluator's accumulated state is `Map<string, ZSet<Fact>>`
-— one Z-set per predicate. This reuses the existing Z-set algebra entirely.
-No new weighted-relation type is needed.
+The incremental Datalog evaluator maintains a persistent `Database` per stratum
+across outer time steps. This is the same `Database` class the batch evaluator
+uses — `Relation` with `tuples()`, `addFact()`, `hasFact()`, `mergeFrom()`.
 
-```typescript
-// Used inline — not a separate module. Type alias for clarity.
-type WeightedDatabase = Map<string, ZSet<Fact>>;
+The inner semi-naive loop mutates `db` between iterations (`db.mergeFrom(delta)`),
+which is exactly how `evaluatePositiveStratum` works in the batch evaluator.
+The key insight: `db` is only mutated *between* inner iterations, never *during*
+one — so it's safe to read many times per iteration.
 
-// Utility functions (in datalog/incremental-evaluate.ts, not exported)
-function wdbGetTuples(wdb: WeightedDatabase, predicate: string): readonly FactTuple[];
-function wdbApplyDelta(wdb: WeightedDatabase, delta: ZSet<Fact>): void;
-function wdbHasFact(wdb: WeightedDatabase, f: Fact): boolean;
-```
+For the DRed delete phase (negation strata), the evaluator needs `removeFact`.
+This is a new method on `Relation` / `Database` — the only modification to the
+existing Datalog types.
 
-### CachedRelation (Semi-Naive Performance)
-
-The batch evaluator's rule-eval functions (`evaluateRule`, `evaluateRuleSemiNaive`,
-`evaluatePositiveAtom`, `evaluateNegation`) ultimately call
-`matchAtomAgainstRelation(atom, tuples, sub)` which takes `readonly FactTuple[]`.
-During semi-naive iteration, the accumulated state (`fullDb`) is read many times
-but never mutated — mutations go to `nextDelta` which is only read in the next
-iteration.
-
-A lazily-cached tuples array avoids rebuilding on every access:
+Z-sets are the *boundary* type (input from projection, output to skeleton). The
+evaluator converts at the boundary:
+- **Input**: `applyFactDelta(db, delta: ZSet<Fact>)` — adds for +1, removes for −1.
+- **Output**: `diffDatabases(oldDb, newDb) → ZSet<Fact>` — facts in new but not
+  old get +1, facts in old but not new get −1.
 
 ```typescript
-// Private to datalog/incremental-evaluate.ts — not exported.
-interface CachedRelation {
-  readonly predicate: string;
-  zset: ZSet<Fact>;                    // authoritative state
-  _cachedTuples: FactTuple[] | null;   // invalidated on mutation
+// Added to datalog/types.ts — Relation gains remove, Database gains removeFact
+class Relation {
+  // ... existing add(), has(), tuples() ...
+  remove(tuple: FactTuple): boolean;  // NEW — O(1) via Map delete
 }
 
-function crTuples(cr: CachedRelation): readonly FactTuple[] {
-  if (cr._cachedTuples === null) {
-    cr._cachedTuples = [];
-    for (const entry of cr.zset.values()) {
-      if (entry.weight > 0) cr._cachedTuples.push(entry.element.values);
-    }
+class Database {
+  // ... existing addFact(), hasFact(), getRelation() ...
+  removeFact(f: Fact): boolean;  // NEW — delegates to Relation.remove()
+}
+
+// Bridge utilities in datalog/incremental-evaluate.ts
+function applyFactDelta(db: Database, delta: ZSet<Fact>): void;
+function diffDatabases(oldDb: Database, newDb: Database): ZSet<Fact>;
+```
+
+### Relation Internal Storage — `Map<string, FactTuple>`
+
+`Relation` currently stores tuples in `_tuples: FactTuple[]` (for ordered
+iteration) and `_serialized: Set<string>` (for O(1) dedup). Adding `remove()`
+to this design creates multiple correctness hazards: `size` returns
+`_tuples.length` (overcounts after removal), `isEmpty()` checks `_tuples.length`
+(wrong after removal), `clone()` / `union()` / `difference()` iterate `_tuples`
+(includes stale entries), and `add()` after `remove()` pushes a duplicate entry
+into `_tuples`.
+
+A lazy `_dirty` flag approach (filter `_tuples` on next `tuples()` call) patches
+some of these but not all — `add()` after `remove()` still creates duplicates.
+
+The correct fix: replace both `_tuples` and `_serialized` with a single
+`Map<string, FactTuple>`. All operations become O(1) and correct by construction:
+
+```typescript
+class Relation {
+  private readonly _map: Map<string, FactTuple> = new Map();
+
+  get size(): number { return this._map.size; }
+
+  tuples(): readonly FactTuple[] { return [...this._map.values()]; }
+
+  add(tuple: FactTuple): boolean {
+    const key = serializeTuple(tuple);
+    if (this._map.has(key)) return false;
+    this._map.set(key, tuple);
+    return true;
   }
-  return cr._cachedTuples;
-}
 
-function crApply(cr: CachedRelation, delta: ZSet<Fact>): void {
-  if (delta.size === 0) return;
-  cr.zset = zsetAdd(cr.zset, delta);
-  cr._cachedTuples = null;  // invalidate
+  has(tuple: FactTuple): boolean {
+    return this._map.has(serializeTuple(tuple));
+  }
+
+  remove(tuple: FactTuple): boolean {     // NEW
+    return this._map.delete(serializeTuple(tuple));
+  }
 }
 ```
 
-This is correct because:
-- During semi-naive, `fullDb`'s relations are stable → cache built once, hit N times.
-- `currentDelta` is fresh each iteration → cache built once, hit N times.
-- `nextDelta` is write-only within an iteration → no cache needed.
+**Behavioral change:** `tuples()` returns a fresh array on each call instead of
+a reference to an internal array. This is actually safer — callers can't
+accidentally mutate internal state. JavaScript `Map` preserves insertion order,
+so iteration order is the same as the current array-based approach.
+
+The batch evaluator never calls `remove()`, so its behavior is unaffected. The
+only observable difference is `tuples()` returning a fresh array, which is
+compatible with all existing usage (the return type is `readonly FactTuple[]` —
+callers should not be holding references across mutations).
+
+### Bridge Utilities
+
+```typescript
+// In datalog/incremental-evaluate.ts — private to the evaluator
+
+/** Apply a ZSet<Fact> delta to a Database: +1 → addFact, −1 → removeFact. */
+function applyFactDelta(db: Database, delta: ZSet<Fact>): void;
+
+/** Diff two Databases to produce a ZSet<Fact> delta. */
+function diffDatabases(oldDb: Database, newDb: Database): ZSet<Fact>;
+
+/** Split a mixed ZSet<Fact> into per-predicate ZSets. */
+function groupByPredicate(zs: ZSet<Fact>): Map<string, ZSet<Fact>>;
+```
 
 ### Incremental Evaluation Stage
 
@@ -546,7 +593,7 @@ immune to retraction. The step function can assert this invariant.
 - Permutation test: all orderings produce same `current()`. ✅
 - Multi-parent: changes to one parent don't affect another. ✅
 
-### Phase 4: Evaluation Stage Wrapper and Pipeline Rewiring 🔴
+### Phase 4: Evaluation Stage Wrapper and Pipeline Rewiring ✅
 
 Create the `IncrementalEvaluation` stage that wraps native solvers (and later,
 incremental Datalog), wire it into the pipeline, and eliminate the batch
@@ -595,125 +642,106 @@ passed to the evaluation stage, which decides whether to switch strategy.
 #### Tasks
 
 - 4.1 Create `kernel/incremental/evaluation.ts` implementing
-  `IncrementalEvaluation`. 🔴
+  `IncrementalEvaluation`. ✅
 - 4.2 Implement the pure fact router: split `ZSet<Fact>` by predicate into LWW
   input (`active_value`) and Fugue input (`active_structure_seq`,
-  `constraint_peer`). Independently testable. 🔴
+  `constraint_peer`). Independently testable. ✅
 - 4.3 Implement native-path delegation: route split fact deltas to
-  `IncrementalLWW` and `IncrementalFugue`. 🔴
+  `IncrementalLWW` and `IncrementalFugue`. ✅
 - 4.4 Implement batch-Datalog fallback for custom rules (call `evaluate()` on
   full accumulated facts, then diff — same as current behavior but encapsulated
-  within the evaluation stage). 🔴
+  within the evaluation stage). ✅
 - 4.5 Implement strategy detection: check `isDefaultRulesOnly` on rule changes,
-  switch between native and Datalog paths. 🔴
+  switch between native and Datalog paths. ✅
 - 4.6 Implement strategy switching: on switch, compute resolution from the new
   strategy over accumulated facts, diff against old strategy's accumulated
-  resolution, emit delta. 🔴
+  resolution, emit delta. ✅
 - 4.7 Rewire `kernel/incremental/pipeline.ts`: remove `cachedResolution`,
   `diffResolution`, batch evaluator call. Wire evaluation stage into the
-  DAG. 🔴
-- 4.8 Pass rule deltas from retraction output to evaluation stage. 🔴
+  DAG. ✅
+- 4.8 Pass rule deltas from retraction output to evaluation stage. ✅
 
 #### Tests
 
-- All 42 existing differential pipeline tests pass with the rewired pipeline. 🔴
-- Native path produces identical results to old batch+diff path. 🔴
-- Pure fact router: correctly splits mixed `ZSet<Fact>` by predicate. 🔴
+- All 42 existing differential pipeline tests pass with the rewired pipeline. ✅
+- Native path produces identical results to old batch+diff path. ✅
+- Pure fact router: correctly splits mixed `ZSet<Fact>` by predicate. ✅
 - Pipeline with custom Layer 2 rule falls back to batch Datalog, produces
-  correct reality. 🔴
+  correct reality. ✅
 - Rule addition: default rules → custom rule added → Datalog path activates,
-  correct reality. 🔴
+  correct reality. ✅
 - Rule retraction: custom rule retracted → native path reactivates, correct
-  reality. 🔴
+  reality. ✅
 
-### Phase 5: Z-Set Utilities for Datalog 🔴
-
-Add utility functions over `ZSet<Fact>` that the incremental Datalog evaluator
-needs. No new type — the evaluator uses `Map<string, ZSet<Fact>>` (a
-`WeightedDatabase`) for its accumulated state, reusing the existing Z-set
-algebra directly.
-
-#### Design
-
-The incremental evaluator needs a small set of operations that compose existing
-Z-set primitives with Datalog-specific concerns:
-
-- **Per-predicate grouping**: split a mixed `ZSet<Fact>` into per-predicate
-  Z-sets (for applying deltas to the right relation).
-- **Positive-weight tuple extraction**: get `readonly FactTuple[]` from a
-  `ZSet<Fact>` (for feeding to `matchAtomAgainstRelation`).
-- **Fact membership check**: `zsetHas` with `factKey` as key.
-- **`distinct` operator**: clamp negative weights to zero, cap positive weights
-  at 1 (DBSP §1.2). Needed after recursive semi-naive steps.
-
-These are utility functions in `datalog/incremental-evaluate.ts`, not a public
-module. The `CachedRelation` wrapper (see Core Type Definitions) is also defined
-here — private to the evaluator, providing lazy tuples-array caching for
-semi-naive performance.
-
-#### Tasks
-
-- 5.1 Implement `groupByPredicate(zs: ZSet<Fact>) → Map<string, ZSet<Fact>>`
-  — splits a mixed fact Z-set into per-predicate Z-sets. 🔴
-- 5.2 Implement `positiveTuples(zs: ZSet<Fact>) → readonly FactTuple[]` —
-  extracts tuples from positive-weight entries. 🔴
-- 5.3 Implement `zsetDistinct(zs: ZSet<Fact>) → ZSet<Fact>` — clamps weights
-  (negative → 0, positive → 1). 🔴
-- 5.4 Implement the `CachedRelation` interface and `crTuples` / `crApply`
-  functions for lazy tuple caching during semi-naive iteration. 🔴
-
-#### Tests
-
-- `groupByPredicate` correctly splits mixed facts. 🔴
-- `positiveTuples` returns only weight > 0 entries. 🔴
-- `zsetDistinct` clamps correctly: negative removed, positive capped at 1. 🔴
-- `CachedRelation`: tuples cache is built on first access, invalidated on
-  `crApply`, rebuilt on next access. 🔴
-
-### Phase 6: Incremental Datalog Evaluator 🔴
+### Phase 5: Incremental Datalog Evaluator 🔴
 
 Implement the cross-time incremental Datalog evaluator. This is the core of
 Plan 006 — the component that makes custom rules, user queries, and
-cross-container constraints incremental.
+cross-container constraints incremental. This phase also includes the
+`Relation.remove` / `Database.removeFact` additions and bridge utilities
+(previously Phase 5, merged here since they're only used by this evaluator).
 
 #### Design
 
+**Accumulated state: persistent `Database` per stratum.** The evaluator
+maintains a `Database` that persists across outer time steps. This is the same
+`Database` class the batch evaluator uses — the inner semi-naive loop operates
+on it directly via `evaluateRule`, `evaluateRuleSemiNaive`, `db.mergeFrom()`,
+etc. No type conversion, no adapters.
+
 The evaluator maintains:
-- **Accumulated ground facts**: `Map<string, CachedRelation>` — per-predicate
-  Z-sets with lazy tuple caching.
-- **Accumulated derived facts**: `Map<string, CachedRelation>` — per stratum
-  per predicate.
+- **Accumulated `Database`**: contains all ground + derived facts that are
+  currently true. Persists across steps. Mutated by the inner semi-naive loop
+  (via `mergeFrom`) and by `applyFactDelta` for cross-time input deltas.
+- **Snapshot of derived facts**: a `Database` clone taken before each step,
+  used to diff against the post-step state to produce the output delta.
 - **The current stratification** (recomputed when rules change).
+
+**Two nested loops (DBSP §4–5):**
+
+**Outer loop** (cross-time): At each time step t, the evaluator receives
+`Δ_input[t]` — a Z-set of changed ground facts from projection.
+
+**Inner loop** (intra-time): Within one time step, semi-naive iteration runs
+to a fixed point. This is exactly the batch evaluator's `evaluatePositiveStratum`
+/ `evaluateStratumWithNegation` — mutating `db` between iterations.
 
 On `step(deltaFacts)`:
 
-1. Apply `deltaFacts` to accumulated ground facts (via `crApply` per predicate).
-2. Determine affected strata: a predicate that changed affects every stratum
+1. Apply `deltaFacts` to the accumulated `Database` via `applyFactDelta`:
+   `+1` entries → `db.addFact(f)`, `−1` entries → `db.removeFact(f)`.
+2. Take a snapshot of derived-fact predicates (for diffing after step).
+3. Determine affected strata: a predicate that changed affects every stratum
    whose rules reference that predicate (directly or transitively). With only
    two strata for default rules, this is trivial — any ground-fact change
    affects stratum 0, and any stratum-0 output change affects stratum 1.
-3. For each affected stratum, bottom-up:
+4. For each affected stratum, bottom-up:
 
    **Monotone strata** (no negation, no aggregation):
-   - Use the delta as the initial delta for semi-naive iteration.
-   - Run semi-naive: for each rule, for each positive body atom index, evaluate
-     the rule with that atom matched against the delta (via `crTuples`), others
-     against full accumulated relations (via `crTuples` — cache hit).
-   - New derivations have weight +1 (monotone — can't retract).
-   - Merge new derivations into accumulated derived facts (via `crApply`).
+   - Build a delta `Database` containing only the new input facts (weight +1).
+   - Run semi-naive from this delta against the full accumulated `Database`.
+     This reuses `evaluateRuleSemiNaive` directly — the accumulated `Database`
+     IS the `db` parameter, and the delta `Database` IS the `currentDelta`.
+   - New derivations are merged into the accumulated `Database` (via
+     `mergeFrom`, as the batch evaluator does).
+   - No facts are ever removed (monotone — inputs only grow).
 
    **Negation/aggregation strata** (DRed pattern):
-   - **Delete phase**: For each retracted input fact (weight −1 in delta),
-     identify derived facts that depended on it. Tentatively retract them
-     (weight −1). For negation: if a new fact now satisfies a previously-failed
-     `not P(...)`, the derivations that relied on that negation are invalidated.
-   - **Rederive phase**: Run semi-naive from the combined delta (new +1 facts
-     and tentatively retracted −1 facts). Some tentatively retracted facts may
-     be rederived via alternative derivation paths.
-   - Net delta: the +1 and −1 entries that survived after rederivation.
+   - **Delete phase**: For each removed input fact (weight −1 in delta),
+     identify derived facts that may have lost support. Remove them from
+     the accumulated `Database` via `removeFact`. Also: if a new fact now
+     satisfies a previously-failed `not P(...)`, the derivations that relied
+     on that negation are invalidated — remove them too.
+   - **Rederive phase**: Run semi-naive from the combined delta (new facts +
+     tentatively removed facts as initial delta) against the updated
+     accumulated `Database`. Some removed facts may be rederived via
+     alternative derivation paths and are re-added.
+   - Net delta: the `+1` and `−1` entries that survived.
 
-4. If a lower stratum's output changed, propagate the delta upward.
-5. Output the net `Δ_derived`.
+5. If a lower stratum's output changed, propagate the delta upward.
+6. Diff the post-step `Database` against the pre-step snapshot to produce
+   `Δ_derived` as a `ZSet<Fact>`.
+7. Output `Δ_derived`.
 
 **Reusing batch evaluator internals:** The rule-eval functions (`evaluateRule`,
 `evaluateRuleSemiNaive`, `evaluatePositiveAtom`, `evaluateNegation`,
@@ -721,13 +749,12 @@ On `step(deltaFacts)`:
 private in `datalog/evaluate.ts`. They take `Database` parameters, and
 `evaluatePositiveAtom` calls `db.getRelation(pred).tuples()`.
 
-The incremental evaluator bridges this by building a lightweight `Database`
-adapter from its `CachedRelation` state — presenting only positive-weight tuples
-as `Relation.tuples()`. Since the accumulated state is stable during semi-naive
-(mutations go to `nextDelta`), this adapter is built once per semi-naive pass.
-Alternatively, the internal functions could be extracted into a
-`datalog/rule-eval.ts` module that takes a tuple-lookup function instead of
-`Database`. The simpler adapter approach is preferred initially.
+Since the incremental evaluator's accumulated state IS a `Database`, these
+functions are called directly with no bridging layer. The accumulated `Database`
+is the `fullDb` parameter. The step's input delta (converted to a `Database`
+via `addFact` for `+1` entries) is the `currentDelta` parameter. The semi-naive
+loop mutates `db` between iterations via `mergeFrom` — exactly as the batch
+evaluator does. No type conversion, no caching, no adapters.
 
 **Simplification for our default rules:** The DRed pattern is general-purpose,
 but our LWW rules have a specific structure: `superseded` is monotone (only
@@ -738,28 +765,36 @@ specific structure of LWW means the delete phase is bounded to O(1) per slot.
 
 #### Tasks
 
-- 6.1 Create `datalog/incremental-evaluate.ts` with the core evaluator. 🔴
-- 6.2 Export the batch evaluator's rule-eval helpers from `datalog/evaluate.ts`
+- 5.1 Refactor `Relation` internal storage from `FactTuple[]` + `Set<string>`
+  to `Map<string, FactTuple>`. Add `Relation.remove(tuple): boolean`. All
+  operations remain O(1). `tuples()` returns `[...map.values()]`. 🔴
+- 5.2 Add `Database.removeFact(f): boolean` to `datalog/types.ts`. Delegates
+  to `Relation.remove`. 🔴
+- 5.3 Export the batch evaluator's rule-eval helpers from `datalog/evaluate.ts`
   (or extract into `datalog/rule-eval.ts`): `evaluateRule`,
   `evaluateRuleSemiNaive`, `evaluatePositiveAtom`, `evaluateNegation`,
   `evaluateGuardElement`, `evaluateAggregationElement`, `groundHead`,
   `getPositiveAtomIndices`. 🔴
-- 6.3 Implement accumulated state management: ground facts and derived facts
-  per stratum, using `CachedRelation` (per-predicate Z-sets with lazy tuple
-  caching). 🔴
-- 6.4 Implement the `Database` adapter: build a read-only `Database` from
-  `CachedRelation` state (positive-weight tuples only) for passing to the
-  batch evaluator's rule-eval functions. 🔴
-- 6.5 Implement cross-time semi-naive for monotone strata: receive delta,
-  run semi-naive from delta, merge new derivations. 🔴
-- 6.6 Implement DRed for negation strata: delete phase (identify invalidated
-  derivations from input retractions and newly-satisfied negations), rederive
-  phase (semi-naive from combined delta). 🔴
-- 6.7 Implement stratum dependency tracking: when stratum 0's output changes,
+- 5.4 Implement `applyFactDelta(db, delta: ZSet<Fact>)` — adds for +1,
+  removes for −1. 🔴
+- 5.5 Implement `diffDatabases(oldDb, newDb) → ZSet<Fact>` — facts in new
+  but not old get +1, facts in old but not new get −1. 🔴
+- 5.6 Implement `groupByPredicate(zs: ZSet<Fact>) → Map<string, ZSet<Fact>>`
+  — splits a mixed fact Z-set into per-predicate Z-sets. 🔴
+- 5.7 Create `datalog/incremental-evaluate.ts` with the core evaluator. 🔴
+- 5.8 Implement accumulated state management: persistent `Database` across
+  steps, with snapshot-and-diff for output delta production. 🔴
+- 5.9 Implement cross-time semi-naive for monotone strata: apply input delta
+  to accumulated `Database`, run semi-naive from delta `Database`, merge new
+  derivations. 🔴
+- 5.10 Implement DRed for negation strata: delete phase (remove invalidated
+  derivations via `removeFact`), rederive phase (semi-naive from combined
+  delta). 🔴
+- 5.11 Implement stratum dependency tracking: when stratum 0's output changes,
   propagate to stratum 1. 🔴
-- 6.8 Implement rule change handling: on `deltaRules`, restratify and
+- 5.12 Implement rule change handling: on `deltaRules`, restratify and
   recompute affected strata from accumulated ground facts. 🔴
-- 6.9 Add incremental resolution extraction: convert `Δ_derived` (containing
+- 5.13 Add incremental resolution extraction: convert `Δ_derived` (containing
   `winner` and `fugue_before` fact deltas) directly to
   `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>` via `zsetMap` on the
   per-predicate Z-sets. Reuse `parseLWWFact` (Phase 2) for winner facts and
@@ -767,6 +802,12 @@ specific structure of LWW means the delete phase is bounded to O(1) per slot.
 
 #### Tests
 
+- `Relation.remove` deletes tuple, `tuples()` excludes it. 🔴
+- `Relation.remove` on non-existent tuple returns false. 🔴
+- `Database.removeFact` removes fact, `hasFact` returns false. 🔴
+- `applyFactDelta` correctly applies +1 and −1 entries. 🔴
+- `diffDatabases` produces correct Z-set delta. 🔴
+- `groupByPredicate` correctly splits mixed facts. 🔴
 - Monotone stratum: new `active_structure_seq` fact produces correct
   `fugue_child` derivation. 🔴
 - Monotone transitive closure: new `fugue_child` produces correct
@@ -783,24 +824,31 @@ specific structure of LWW means the delete phase is bounded to O(1) per slot.
 - Permutation test: all orderings produce same `current()`. 🔴
 - Rule addition: adding a custom superseded rule changes resolution. 🔴
 
-### Phase 7: Wire Incremental Datalog into Evaluation Stage 🔴
+### Phase 6: Wire Incremental Datalog into Evaluation Stage 🔴
 
 Replace the batch Datalog fallback in the evaluation stage with the incremental
-Datalog evaluator from Phase 6. After this phase, all paths are incremental —
+Datalog evaluator from Phase 5. After this phase, all paths are incremental —
 no batch evaluator calls remain in the incremental pipeline.
+
+Also fix a correctness issue in the evaluation stage: when a strategy switch
+occurs, `deltaFacts` must be processed through the newly-activated strategy
+after the switch, not dropped.
 
 #### Tasks
 
-- 7.1 Update `kernel/incremental/evaluation.ts`: when custom rules are detected,
+- 6.1 Update `kernel/incremental/evaluation.ts`: when custom rules are detected,
   delegate to incremental Datalog evaluator instead of batch `evaluate()`. 🔴
-- 7.2 Implement strategy switch from native to incremental Datalog: bootstrap
+- 6.2 Implement strategy switch from native to incremental Datalog: bootstrap
   the Datalog evaluator from accumulated ground facts on first switch. 🔴
-- 7.3 Implement strategy switch from incremental Datalog back to native:
+- 6.3 Implement strategy switch from incremental Datalog back to native:
   discard Datalog state, bootstrap native solvers from accumulated facts. 🔴
-- 7.4 Remove all remaining batch evaluator calls and `projection.current()`
+- 6.4 Fix strategy-switch `deltaFacts` drop: after switching, process
+  `deltaFacts` through the newly-activated strategy and combine the results
+  with the switch diff. 🔴
+- 6.5 Remove all remaining batch evaluator calls and `projection.current()`
   calls from the incremental pipeline (the batch pipeline in
   `kernel/pipeline.ts` remains unchanged). 🔴
-- 7.5 Full end-to-end differential testing: every insertion verified against
+- 6.6 Full end-to-end differential testing: every insertion verified against
   `solve(store, config)`. 🔴
 
 #### Tests
@@ -810,26 +858,44 @@ no batch evaluator calls remain in the incremental pipeline.
 - Rule addition mid-stream: existing values re-resolved under new rules. 🔴
 - Rule retraction mid-stream: values re-resolved under restored defaults. 🔴
 - Pipeline with aggregation rule (e.g., count-based resolution): correct. 🔴
+- Strategy switch with simultaneous fact delta: facts are not dropped. 🔴
 
-### Phase 8: Documentation and Cleanup 🔴
+### Phase 7: Documentation and Cleanup 🔴
 
 #### Tasks
 
-- 8.1 Update TECHNICAL.md: document the incremental evaluation stage, native
-  incremental solvers, strategy switching, `ZSet<Fact>` as the unified type for
-  weighted Datalog relations. Correct the "Incremental Pipeline" section to
-  reflect Plan 006 changes. Note that `ResolutionResult` is no longer the
-  inter-stage type between evaluation and skeleton — `ZSet<ResolvedWinner>` +
-  `ZSet<FugueBeforePair>` are. `ResolutionResult` remains as a materialization
-  convenience for `current()`, `PipelineResult`, and strategy switching. 🔴
-- 8.2 Update theory/incremental.md §9.5: correct the claim that Fugue rules are
+- 7.1 Update TECHNICAL.md: document the incremental evaluation stage, native
+  incremental solvers, strategy switching, persistent `Database` as the
+  evaluator's internal state (Z-sets at boundaries only). Document
+  `Relation.remove` / `Database.removeFact` additions. Correct the "Incremental
+  Pipeline" section to reflect Plan 006 changes. Note that `ResolutionResult` is
+  no longer the inter-stage type between evaluation and skeleton —
+  `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>` are. `ResolutionResult`
+  remains as a materialization convenience for `current()`, `PipelineResult`, and
+  strategy switching. 🔴
+- 7.2 Update theory/incremental.md §9.5: correct the claim that Fugue rules are
   all positive (rule 5 uses negation). Note the actual two-stratum layout. 🔴
-- 8.3 Update `.plans/004-incremental-roadmap.md`: mark Plan 005 complete, mark
+- 7.3 Update `.plans/004-incremental-roadmap.md`: mark Plan 005 complete, mark
   Plan 006 complete. 🔴
-- 8.4 Add LEARNINGS.md entries for discoveries during implementation. 🔴
-- 8.5 Complete Plan 005 Phase 9 (documentation cleanup) if still pending. 🔴
+- 7.4 Add LEARNINGS.md entries for discoveries during implementation. 🔴
+- 7.5 Complete Plan 005 Phase 9 (documentation cleanup) if still pending. 🔴
 
 ## Transitive Effect Analysis
+
+### `Relation.remove` / `Database.removeFact` — Backwards Compatibility
+
+Adding `remove()` to `Relation` and `removeFact()` to `Database` is a pure
+addition — no existing method changes behavior. The batch evaluator never calls
+these methods; they exist solely for the incremental evaluator's DRed delete
+phase.
+
+The internal storage change from `FactTuple[]` + `Set<string>` to
+`Map<string, FactTuple>` is a pure refactor — all existing methods (`add`,
+`has`, `size`, `isEmpty`, `tuples`, `clone`, `union`, `difference`) have
+identical semantics. The only observable difference is `tuples()` returning a
+fresh array on each call (previously returned a reference to the internal array).
+This is compatible with all existing usage since the return type is
+`readonly FactTuple[]`.
 
 ### The Batch Pipeline Is Preserved — No Backwards Compatibility Risk
 
@@ -861,12 +927,13 @@ skeleton is not modified.
 ```
 base/zset.ts                              (existing — unchanged, reused everywhere)
      ↑
-datalog/types.ts                          (existing — factKey, Fact, serializeValue)
+datalog/types.ts                          (existing — gains Relation.remove, Database.removeFact)
 datalog/evaluate.ts                       (existing — exports rule-eval helpers)
      ↑
-datalog/incremental-evaluate.ts           (NEW — CachedRelation, Database adapter,
-                                           cross-time semi-naive, DRed. Depends on
-                                           datalog/types, datalog/evaluate, datalog/stratify,
+datalog/incremental-evaluate.ts           (NEW — applyFactDelta, diffDatabases,
+                                           groupByPredicate, cross-time semi-naive,
+                                           DRed. Depends on datalog/types,
+                                           datalog/evaluate, datalog/stratify,
                                            datalog/unify, base/zset)
      ↑
 solver/incremental-lww.ts                 (NEW — depends on base/zset, kernel/resolve types,
@@ -897,9 +964,10 @@ New exports added to `src/index.ts`:
 - `fuguePairKey`, `allPairsFromOrdered`, `parseLWWFact`, `parseSeqStructureFact`
   (canonical utilities in `kernel/resolve.ts`)
 
-No new public type for weighted relations — `ZSet<Fact>` is the type.
+No new public type for weighted relations — `ZSet<Fact>` is the boundary type,
+`Database` is the internal state type.
 
-Existing exports unchanged.
+Existing exports unchanged (except `Relation` and `Database` gain new methods).
 
 ### Re-use of Batch Evaluator Internals
 
@@ -907,15 +975,17 @@ The incremental Datalog evaluator reuses the batch evaluator's per-rule
 evaluation logic (`evaluateRule`, `evaluateRuleSemiNaive`,
 `evaluatePositiveAtom`, `evaluateNegation`, `evaluateGuardElement`,
 `evaluateAggregationElement`, `groundHead`). These are currently private
-functions in `datalog/evaluate.ts`. Phase 6 exports them (or extracts them
+functions in `datalog/evaluate.ts`. Phase 5 exports them (or extracts them
 into a shared `datalog/rule-eval.ts` module). The batch evaluator's
 `evaluate()`, `evaluatePositive()`, and `evaluateNaive()` public functions
 remain unchanged.
 
-The bridge between the incremental evaluator's `ZSet<Fact>` state and the batch
-evaluator's `Database`-typed parameters is a lightweight adapter that presents
-positive-weight tuples as a `Database`. This adapter is internal to the
-incremental evaluator — not a public type.
+The incremental evaluator's accumulated state IS a `Database` — the same type
+the batch evaluator's rule-eval functions expect. No bridging, no adapters, no
+type conversion. The accumulated `Database` is passed directly as the `fullDb`
+parameter to `evaluateRuleSemiNaive`. The only new operation is `removeFact`
+(used in the DRed delete phase), which is a pure addition to `Database` that
+doesn't affect the batch evaluator.
 
 ## Testing Strategy
 
@@ -955,12 +1025,12 @@ src/
   base/
     zset.ts                          (existing — unchanged)
   datalog/
-    types.ts                         (existing — unchanged)
-    evaluate.ts                      (existing — exports rule-eval helpers in Phase 6)
+    types.ts                         (existing — gains Relation.remove, Database.removeFact)
+    evaluate.ts                      (existing — exports rule-eval helpers in Phase 5)
     stratify.ts                      (existing — unchanged)
     unify.ts                         (existing — unchanged)
     aggregate.ts                     (existing — unchanged)
-    incremental-evaluate.ts          (NEW — Phase 5 utilities + Phase 6 evaluator)
+    incremental-evaluate.ts          (NEW — Phase 5)
   solver/
     lww.ts                           (existing — unchanged)
     fugue.ts                         (existing — unchanged)
@@ -978,16 +1048,19 @@ src/
       types.ts                       (existing — unchanged)
       ...                            (other incremental stages — unchanged)
 
+```
+
 tests/
   datalog/
-    incremental-evaluate.test.ts     (NEW — Phase 5 + 6)
+    incremental-evaluate.test.ts     (NEW — Phase 5)
+    types.test.ts                    (existing — gains Relation.remove, Database.removeFact tests)
   solver/
     incremental-lww.test.ts          (NEW — Phase 2)
     incremental-fugue.test.ts        (NEW — Phase 3)
   kernel/
     incremental/
       evaluation.test.ts             (NEW — Phase 4)
-      pipeline.test.ts               (existing — gains new tests in Phase 4, 7)
+      pipeline.test.ts               (existing — gains new tests in Phase 4, 6)
 ```
 
 ## Resources for Implementation
@@ -1058,35 +1131,37 @@ We use DRed for negation strata and simple delta propagation for monotone strata
 This is equivalent to the Z-set semiring approach for our rule patterns but
 avoids the implementation complexity of true provenance tracking.
 
-### Separate `WeightedRelation` Type Instead of `ZSet<Fact>`
+### `Map<string, ZSet<Fact>>` as Internal State Instead of Persistent `Database`
 
-We initially planned a dedicated `WeightedRelation` type:
-`Map<string, { tuple: FactTuple, weight: number }>` keyed by `serializeTuple`.
-This was rejected because it significantly overlaps with `ZSet<Fact>`, which is
-already `ReadonlyMap<string, { element: Fact, weight: number }>` keyed by
-`factKey`. Both are weighted sets of facts. The only differences were
-per-predicate scoping (solved by `Map<string, ZSet<Fact>>`) and storing
-`FactTuple` vs `Fact` (a trivial wrapping difference). Unifying on `ZSet<Fact>`:
-- Eliminates ~100 LOC of duplicate algebra (`wrAdd`/`wrNegate` = `zsetAdd`/`zsetNegate`)
-- Removes conversion functions (`wrToZSet`, `wrFromZSet`)
-- Avoids exporting the private `serializeTuple` function
-- Makes the entire pipeline speak one type language: Z-sets from projection
-  through evaluation to skeleton
+We initially planned the evaluator's accumulated state as `Map<string, ZSet<Fact>>`
+(per-predicate Z-sets) with a `CachedRelation` wrapper for semi-naive tuple
+access. This was rejected because:
 
-The `CachedRelation` wrapper (lazy tuple-array cache for semi-naive performance)
-is an internal implementation detail of the incremental evaluator, not a public
-type.
+1. The batch evaluator's semi-naive loop **mutates** `db` between iterations
+   (`db.mergeFrom(nextDelta)`). A `ZSet<Fact>` state would require rebuilding a
+   `Database` on every outer step to feed to the semi-naive loop — O(|S|) per
+   step, exactly the cost we're trying to eliminate.
+2. `CachedRelation` duplicates `Relation`'s responsibility — both cache a
+   `FactTuple[]` array for `tuples()`.
+3. `databaseFromWeighted` (building a `Database` from Z-sets) is pure overhead.
+   If the internal state IS a `Database`, no conversion is needed.
 
-### Modify `Relation` Class Instead of New Type
+The correct architecture: Z-sets at the boundaries (input from projection,
+output to skeleton), persistent `Database` internally. The only new requirement
+is `Relation.remove()` / `Database.removeFact()` for the DRed delete phase —
+a pure addition with zero impact on the batch evaluator.
 
-The existing `Relation` could be extended with an optional weight field. Rejected
-because:
+### Modify `Relation` Class to Add Weights Instead of `removeFact`
+
+Instead of adding `removeFact`, we considered adding integer weights to
+`Relation` (making it Z-set-like internally). Rejected because:
 1. The batch evaluator depends on `Relation`'s set semantics (boolean add/has).
    Adding weights would change the contract for all consumers.
-2. `ZSet<Fact>` has fundamentally different algebra (pointwise addition with
-   cancellation) vs `Relation` (set union with deduplication).
-3. Keeping both representations makes the distinction explicit — batch code uses
-   `Database`/`Relation`, incremental code uses `ZSet<Fact>`. No confusion.
+2. `Relation` and `ZSet<Fact>` serve different roles: `Relation` is the
+   semi-naive working state (mutated between iterations), `ZSet<Fact>` is the
+   inter-stage delta type (immutable, algebraic).
+3. `removeFact` is a minimal addition — one new method, no changed semantics.
+   Weights would be a fundamental redesign of the class.
 
 ### Skip Incremental Datalog, Only Implement Native Fast Path
 
@@ -1100,6 +1175,62 @@ The native fast path is built first for pragmatic reasons, but the incremental
 Datalog evaluator is essential infrastructure.
 
 ## Learnings
+
+### The Evaluator's Internal State Should Be `Database`, Not `ZSet<Fact>`
+
+The initial plan unified everything on `ZSet<Fact>` — projection, evaluation
+internal state, skeleton input. This was wrong for the evaluator's *internal*
+state. The batch semi-naive loop (`evaluatePositiveStratum`) mutates `db` between
+iterations: `db.mergeFrom(nextDelta)`. If the accumulated state is
+`Map<string, ZSet<Fact>>`, every outer step must rebuild a `Database` to feed to
+the semi-naive loop — O(|S|), the exact cost we're eliminating.
+
+The correct separation: `ZSet<Fact>` at **boundaries** (projection → evaluation
+input, evaluation output → skeleton), `Database` **internally** (the semi-naive
+loop's working state). The only modification to `Database` is adding
+`removeFact()` for the DRed delete phase. This is a pure addition — the batch
+evaluator never calls it, so existing behavior is completely unaffected.
+
+**Lesson**: Type unification between components is valuable at *interfaces* but
+harmful when forced on *internals*. A stage's internal state should use whatever
+representation its core algorithm needs. Convert at the boundary, not inside the
+inner loop.
+
+### Strategy Switch Must Not Drop `deltaFacts`
+
+The evaluation stage's `step()` function has a code path where a rule change
+triggers a strategy switch and returns the switch diff immediately — without
+processing `deltaFacts` through the new strategy. If a constraint insertion
+produces both a rule delta AND a fact delta in the same step, the fact delta is
+silently lost.
+
+In practice this is unlikely (rule constraints don't produce fact deltas), but
+the code is *structurally* incorrect — it ignores an input parameter on one code
+path. The fix: after a strategy switch, process `deltaFacts` through the newly-
+activated strategy and combine the results with the switch diff.
+
+**Lesson**: When a function has multiple code paths, verify that every path
+consumes every input parameter. An input parameter that's ignored on one path
+is either dead code or a bug.
+
+### A `_dirty` Flag on Array-Backed Storage Creates Hidden Hazards
+
+When adding `remove()` to a class that stores data in both an array (`_tuples`)
+and a set (`_serialized`), the naive approach is: delete from the set, mark a
+`_dirty` flag, rebuild the array lazily on next `tuples()`. This creates multiple
+correctness hazards: `size` returns `_tuples.length` (overcounts), `isEmpty()`
+checks `_tuples.length` (wrong), `clone()` iterates `_tuples` (includes stale
+entries), and `add()` after `remove()` pushes a duplicate into `_tuples` because
+the set allows it but the array still has the old entry.
+
+The correct fix: replace the dual storage with a single `Map<string, FactTuple>`.
+`remove()` is `Map.delete()` — O(1), and every other operation (`size`, `has`,
+`add`, `tuples`, `clone`) reads from the same source of truth. Correct by
+construction, no lazy invalidation, no stale entries.
+
+**Lesson**: When adding mutation to a data structure that has redundant internal
+representations (array + set), don't patch with flags — unify the storage so
+there's one source of truth.
 
 ### Canonical Key/Parse/Pair Functions Prevent Duplication Cascade
 
@@ -1201,7 +1332,10 @@ interleaving before choosing between lazy invalidation and eager maintenance.
   `tests/kernel/incremental/evaluation.test.ts`
 - **Modified files:** `kernel/pipeline.ts` (import from shared modules),
   `kernel/incremental/pipeline.ts` (rewired composition root),
+  `kernel/incremental/evaluation.ts` (Phase 6: wire incremental Datalog,
+  fix deltaFacts drop),
   `kernel/resolve.ts` (gains canonical utility functions),
+  `datalog/types.ts` (gains `Relation.remove`, `Database.removeFact`),
   `datalog/evaluate.ts` (export rule-eval helpers),
   `src/index.ts` (new exports), `TECHNICAL.md`, `LEARNINGS.md`,
   `theory/incremental.md` (§9.5 correction),

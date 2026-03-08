@@ -614,6 +614,38 @@ The `if (!enableDatalog) → native; else if (rules.length === 0) → native; el
 
 **Lesson**: Multi-branch decision trees that appear in composition roots (imperative shells) are often pure functions in disguise. Extracting them improves testability and prevents drift between copies.
 
+### Fact Tuple Parsers Are the Inverse of Projection — Put Them in `resolve.ts`
+
+The incremental LWW solver receives `ZSet<Fact>` (not `ValueConstraint[]`). It needs to parse `active_value(CnId, Slot, Content, Lamport, Peer)` fact tuples back into `LWWEntry` objects — the exact inverse of what `projectValue` does in `projection.ts`. Similarly, the incremental Fugue solver needs to parse `active_structure_seq` fact tuples.
+
+These parsers (`parseLWWFact`, `parseSeqStructureFact`) belong in `kernel/resolve.ts` — the existing Datalog→kernel bridge module — not in the solver files. This is because: (1) they'll be reused by the incremental Datalog evaluator's resolution extraction in Phase 6, (2) `resolve.ts` already has `extractWinners` which does the same parsing from Datalog `Database` tuples, and (3) the column positions are defined in `kernel/projection.ts` which `resolve.ts` already imports.
+
+**Lesson**: When building the inverse of a function (unpacking what another function packed), put it in the module that already handles that direction of the bridge. Don't scatter parsers across consumer modules.
+
+### Structure/Peer Fact Correlation Requires the Same Out-of-Order Pattern
+
+The incremental Fugue solver receives two facts per seq element: `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)` and `constraint_peer(CnId, Peer)`. These can arrive in either order within a single Z-set delta. The Fugue solver cannot build a `FugueNode` until it has both.
+
+This is the same "standing instruction" pattern from Plan 005's out-of-order analysis: when the structure fact arrives first, it waits in `pendingStructures`; when the peer fact arrives, it checks `pendingStructures` and completes the node (or vice versa). The pattern is lightweight here because both facts always arrive in the same `step()` call (projection emits them together), but the solver must handle the case where they're processed in either order within that call.
+
+**Lesson**: Any stage that joins two fact streams by a shared key needs the pending-map correlation pattern, even if the facts "usually" arrive together. The Z-set iteration order is not guaranteed.
+
+### The Evaluation Stage Is a Strategy Wrapper, Not a Stage
+
+The `IncrementalEvaluation` stage has a different shape than the kernel stages (validity, retraction, projection, skeleton). Those stages maintain accumulated state and process deltas against it — they're genuine DBSP operators. The evaluation stage is a **strategy wrapper**: it delegates to either native incremental solvers or the batch Datalog evaluator based on rule detection. Its `step()` signature takes lazy getters for accumulated facts/constraints/index that are only called when the batch fallback or strategy switching is needed.
+
+This means the evaluation stage's interface is wider than a simple `step(delta) → delta` — it takes `(deltaFacts, deltaRules, getFacts, getConstraints, getIndex)`. The lazy getters are essential: on the native path (the >99% common case), `projection.current()` and `retraction.current()` are never called, preserving the O(|Δ|) cost. Only when custom rules trigger the batch Datalog fallback do these O(|S|) materializations occur.
+
+**Lesson**: Not every pipeline stage fits the same interface shape. Composition-root-level wrappers that select between strategies need more context than leaf operators. Lazy getters are the right pattern — they make the O(|S|) cost visible and avoidable.
+
+### Removing `diffResolution` From the Pipeline Makes It Strictly Simpler
+
+The Plan 005 pipeline's `processConstraint` had a fork: compute batch resolution, diff against cached, pass deltas to skeleton. After Phase 4, `processConstraint` is a linear DAG traversal: validity → fan-out (index, retraction) → projection → evaluation → skeleton. No branching, no cached state, no diffing shim. The evaluation stage encapsulates all strategy complexity internally.
+
+The pipeline composition root went from ~180 LOC (with `processConstraint` containing the resolution strategy tree, `diffResolution`, and `cachedResolution`) to ~70 LOC. The `diffResolution` function and its Z-set key collision hazard documentation moved inside the evaluation stage where they belong — the pipeline doesn't need to know about resolution diffing.
+
+**Lesson**: When a composition root contains both DAG wiring and domain logic (resolution strategy, diffing), the domain logic should be pushed into a stage. The composition root should be pure wiring — connecting stages, routing deltas, nothing else.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.
