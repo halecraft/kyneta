@@ -454,7 +454,32 @@ export function extractDependencies(expr: Expression): Dependency[] {
 
   visit(expr)
 
-  return Array.from(depsMap.values())
+  const deps = Array.from(depsMap.values())
+
+  // Dependency subsumption: when a child dependency exists (e.g., "doc.title"),
+  // remove any parent dependency whose source is a strict prefix (e.g., "doc").
+  // This prevents a reactive TypedDoc from adding a redundant "doc" (map) dep
+  // alongside "doc.title" (text), which would break the isTextRegionContent
+  // length-1 check and degrade from textRegion to subscribeMultiple.
+  if (deps.length > 1) {
+    const sources = new Set(deps.map(d => d.source))
+    return deps.filter(dep => {
+      for (const other of sources) {
+        // Check if `dep.source` is a strict prefix of `other` at a dot boundary.
+        // "doc" is subsumed by "doc.title", but "d" is NOT subsumed by "doc".
+        if (
+          other !== dep.source &&
+          other.startsWith(dep.source) &&
+          other[dep.source.length] === "."
+        ) {
+          return false // This dep is subsumed by a more specific child dep
+        }
+      }
+      return true
+    })
+  }
+
+  return deps
 }
 
 // =============================================================================

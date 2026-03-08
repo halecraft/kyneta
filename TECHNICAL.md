@@ -259,7 +259,7 @@ The generic parameter `D` allows compile-time inference of which delta kind a ty
 
 **Critical:** Each typed ref must narrow `D` to its specific delta type via `declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>` (or the appropriate named type). Without this narrowing, `D` defaults to the full `ReactiveDelta` union, and `getDeltaKind()` silently falls back to `"replace"` — disabling all surgical patching optimizations. The `declare` keyword ensures no JavaScript is emitted; the runtime implementation inherited from `TypedRef` handles all container types correctly. See [packages/change/TECHNICAL.md](./packages/change/TECHNICAL.md) for the full ref-to-delta mapping table.
 
-**`declare` vs concrete property for symbol overrides:** Use `declare` when the parent class provides the runtime value and the subclass just narrows the type (e.g., `declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>`). Use a concrete property when the subclass provides *both* a new runtime value *and* a narrowed type (e.g., `readonly [SNAPSHOT]: SnapshotFn<string> = (self) => ...`). The property initializer runs after `super()`, shadowing the parent's value. Never use both `declare` and a concrete definition on the same property.
+**`declare` vs concrete property for symbol overrides:** Use `declare` when the parent class provides the runtime value and the subclass just narrows the type (e.g., `declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>`). Use a concrete property when the subclass provides *both* a new runtime value *and* a narrowed type (e.g., `readonly [SNAPSHOT]: SnapshotFn<string> = (self) => ...`). The property initializer runs after `super()`, shadowing the parent's value. Never use both `declare` and a concrete definition on the same property. **`DocRef` is a special case:** it uses a concrete `[REACTIVE]` property override because the inherited base class implementation calls `getContainer()`, which throws for docs (a `LoroDoc` is not a container). The override subscribes to `LoroDoc.subscribe()` directly and translates events via `translateDocEventBatch`, which collects changed root keys from event paths and emits a single `MapDelta`.
 
 **`Reactive` default `D` is `ReplaceDelta`, not `ReactiveDelta`:** Writing `implements Reactive` (no type arguments) expands to `Reactive<unknown, ReplaceDelta>`. This is correct for leaf types but wrong for a base class like `TypedRef` that must accept all delta kinds — use `implements Reactive<unknown, ReactiveDelta>` with the explicit wider union.
 
@@ -273,10 +273,12 @@ The generic parameter `D` allows compile-time inference of which delta kind a ty
 
 Both TypedDocs and TypedRefs have `LORO_SYMBOL` (for `loro()` access), but they must be distinguished for different handling in hooks and utilities:
 
-| Type | Has `LORO_SYMBOL` | Has `docShape` in `EXT_SYMBOL` |
-|------|-------------------|-------------------------------|
-| TypedDoc | ✅ | ✅ |
-| TypedRef | ✅ | ❌ |
+| Type | Has `LORO_SYMBOL` | Has `docShape` in `EXT_SYMBOL` | Has `[REACTIVE]` | Has `[SNAPSHOT]` |
+|------|-------------------|-------------------------------|-------------------|-------------------|
+| TypedDoc | ✅ | ✅ | ✅ | ✅ |
+| TypedRef | ✅ | ❌ | ✅ | ✅ |
+
+The `TypedDoc<Shape>` type alias exposes both `[REACTIVE]: ReactiveSubscribe<MapDelta>` and `[SNAPSHOT]: SnapshotFn<unknown>`, making documents visible to the Kinetic compiler as reactive and snapshotable types. At runtime, the TypedDoc proxy delegates these symbols via `Reflect.get`/`Reflect.has` to the underlying `DocRef`, which provides the concrete implementations. The `[REACTIVE]` override on `DocRef` subscribes to `LoroDoc.subscribe()` and uses `translateDocEventBatch` to emit `MapDelta` with the root keys that changed — see the `declare` vs concrete property note above.
 
 **Correct check for TypedDoc**:
 ```typescript

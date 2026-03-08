@@ -136,6 +136,12 @@ function addLoroTypes(project: Project) {
       readonly [REACTIVE]: ReactiveSubscribe<MapDelta>
       get<K extends keyof T>(key: K): T[K]
     }
+
+    export type TypedDoc<Shape> = Shape & {
+      readonly [SNAPSHOT]: SnapshotFn<unknown>
+      readonly [REACTIVE]: ReactiveSubscribe<MapDelta>
+      toJSON(): unknown
+    }
   `,
     { overwrite: true },
   )
@@ -2630,5 +2636,110 @@ describe("extractDependencies fix for reactive-typed property access", () => {
     // Should be exactly 1 dep for "title", not duplicated
     expect(deps).toHaveLength(1)
     expect(deps[0].source).toBe("title")
+  })
+})
+
+// -----------------------------------------------------------------------------
+// Dependency subsumption — child deps make parent deps redundant
+// -----------------------------------------------------------------------------
+
+describe("dependency subsumption", () => {
+  let project: Project
+
+  beforeEach(() => {
+    project = createProject()
+    addLoroTypes(project)
+  })
+
+  it("doc.title.toString() with reactive TypedDoc produces only doc.title dep (subsumes doc)", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef, TypedDoc } from "./loro-types"
+      declare const doc: TypedDoc<{ title: TextRef }>
+      doc.title.toString()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
+    expect(callExpr).toBeDefined()
+
+    const deps = extractDependencies(callExpr)
+    // Subsumption: "doc" (map) is dropped because "doc.title" (text) is more specific
+    expect(deps).toHaveLength(1)
+    expect(deps[0].source).toBe("doc.title")
+    expect(deps[0].deltaKind).toBe("text")
+  })
+
+  it("doc.title.get() with reactive TypedDoc produces only doc.title dep", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef, TypedDoc } from "./loro-types"
+      declare const doc: TypedDoc<{ title: TextRef }>
+      doc.title.get()
+    `,
+    )
+
+    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
+    expect(callExpr).toBeDefined()
+
+    const deps = extractDependencies(callExpr)
+    expect(deps).toHaveLength(1)
+    expect(deps[0].source).toBe("doc.title")
+    expect(deps[0].deltaKind).toBe("text")
+  })
+
+  it("does not subsume unrelated deps", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { REACTIVE, SNAPSHOT, SnapshotFn, ReactiveSubscribe, Reactive } from "./reactive-base"
+      declare const a: Reactive<number, { type: "replace" }>
+      declare const b: Reactive<number, { type: "replace" }>
+      a.toString() + b.toString()
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+
+    const deps = extractDependencies(expr as any)
+    // "a" and "b" are not prefixes of each other — both should remain
+    expect(deps).toHaveLength(2)
+  })
+
+  it("isReactiveType detects TypedDoc as reactive", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef, TypedDoc } from "./loro-types"
+      declare const doc: TypedDoc<{ title: TextRef }>
+      doc
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+    const type = (expr as any).getType()
+
+    expect(isReactiveType(type)).toBe(true)
+  })
+
+  it("isSnapshotableType detects TypedDoc as snapshotable", () => {
+    const sourceFile = createSourceFile(
+      project,
+      `
+      import { TextRef, TypedDoc } from "./loro-types"
+      declare const doc: TypedDoc<{ title: TextRef }>
+      doc
+    `,
+    )
+
+    const exprStmt = sourceFile.getStatements().at(-1)!
+    const expr = exprStmt.getChildAtIndex(0)
+    const type = (expr as any).getType()
+
+    expect(isSnapshotableType(type)).toBe(true)
   })
 })

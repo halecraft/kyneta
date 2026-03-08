@@ -247,7 +247,7 @@ The compiler gains the ability to detect `[SNAPSHOT]`, extract the snapshot retu
 - **Task 5.4**: Update `packages/kinetic/README.md` — hero example uses bare-ref syntax (`h1(doc.title)`), new "Bare Reactive Refs" section showing all three equivalent forms, updated test count (1000), updated feature table. ✅
 - **Task 5.5**: Create changeset at `.changeset/snapshot-protocol.md` covering all three packages (minor bumps). Covers Phases 1–5 only; Phase 6 items (DocRef fix, dependency subsumption) deferred to a separate changeset. ✅
 
-### Phase 6: `DocRef[REACTIVE]` fix, `TypedDoc` type exposure, and dependency subsumption 🔴
+### Phase 6: `DocRef[REACTIVE]` fix, `TypedDoc` type exposure, and dependency subsumption ✅
 
 Fix the latent bug where `DocRef[REACTIVE]` throws at runtime, expose both `[REACTIVE]` and `[SNAPSHOT]` on the `TypedDoc` type so the compiler can see them, and add a dependency subsumption rule so that child dependencies don't degrade to parent dependencies.
 
@@ -257,12 +257,12 @@ Fix the latent bug where `DocRef[REACTIVE]` throws at runtime, expose both `[REA
 
 A document is a Moore machine: `Reactive<TypedDoc<Shape>, MapDelta>`. The snapshot is the ref surface itself (identity, like `ListRef`), and deltas describe which root keys changed. The consumer uses the delta to know which children to re-observe. This is consistent with how all collection types work.
 
-- **Task 6.1**: Override `[REACTIVE]` on `DocRef` to subscribe to `LoroDoc` directly (via `this[INTERNAL_SYMBOL].getDoc().subscribe(...)`) instead of calling `getContainer()`. Translate events using `translateEventBatch`. Extract changed root keys from event paths to produce `MapDelta`. 🔴
-- **Task 6.2**: Add both `[REACTIVE]: ReactiveSubscribe<MapDelta>` and `[SNAPSHOT]: SnapshotFn<unknown>` to the `TypedDoc<Shape>` type alias in `typed-doc.ts`. This makes the compiler aware that docs are both reactive and snapshotable. Without `[SNAPSHOT]`, `isSnapshotableType` (Phase 4) would not detect `TypedDoc`, and `detectImplicitRead` would not fire for bare doc refs. 🔴
-- **Task 6.3**: Add dependency subsumption to `extractDependencies` in `analyze.ts`: after collecting all dependencies, filter out any dependency whose source is a strict prefix of another dependency's source (i.e., `"doc"` is subsumed by `"doc.title"`). This ensures that `doc.title.toString()` where `doc` is a reactive `TypedDoc` produces only `{ source: "doc.title", deltaKind: "text" }`, not an additional `{ source: "doc", deltaKind: "map" }` that would break the `isTextRegionContent` length-1 check. 🔴
-- **Task 6.4**: Add tests: `doc[REACTIVE](doc, callback)` succeeds and delivers `MapDelta` when child containers change. Verify `isReactive(doc)` returns `true` at both runtime and compiler type levels. 🔴
-- **Task 6.5**: Add compiler test: `p(doc.title.toString())` where `doc: TypedDoc` (now reactive) still produces `textRegion` (dependency subsumption keeps `doc.title` with deltaKind `"text"`, drops `doc` with deltaKind `"map"`). 🔴
-- **Task 6.6**: Verify full test suites pass across all three packages. 🔴
+- **Task 6.1**: Override `[REACTIVE]` on `DocRef` to subscribe to `LoroDoc` directly (via `this[INTERNAL_SYMBOL].getDoc().subscribe(...)`) instead of calling `getContainer()`. Translate events using `translateDocEventBatch`. Extract changed root keys from event paths to produce `MapDelta`. ✅
+- **Task 6.2**: Add both `[REACTIVE]: ReactiveSubscribe<MapDelta>` and `[SNAPSHOT]: SnapshotFn<unknown>` to the `TypedDoc<Shape>` type alias in `typed-doc.ts`. This makes the compiler aware that docs are both reactive and snapshotable. Without `[SNAPSHOT]`, `isSnapshotableType` (Phase 4) would not detect `TypedDoc`, and `detectImplicitRead` would not fire for bare doc refs. ✅
+- **Task 6.3**: Add dependency subsumption to `extractDependencies` in `analyze.ts`: after collecting all dependencies, filter out any dependency whose source is a strict prefix of another dependency's source (i.e., `"doc"` is subsumed by `"doc.title"`). This ensures that `doc.title.toString()` where `doc` is a reactive `TypedDoc` produces only `{ source: "doc.title", deltaKind: "text" }`, not an additional `{ source: "doc", deltaKind: "map" }` that would break the `isTextRegionContent` length-1 check. ✅
+- **Task 6.4**: Add tests: `doc[REACTIVE](doc, callback)` succeeds and delivers `MapDelta` when child containers change. Verify `isReactive(doc)` returns `true` at both runtime and compiler type levels. ✅
+- **Task 6.5**: Add compiler test: `p(doc.title.toString())` where `doc: TypedDoc` (now reactive) still produces `textRegion` (dependency subsumption keeps `doc.title` with deltaKind `"text"`, drops `doc` with deltaKind `"map"`). ✅
+- **Task 6.6**: Verify full test suites pass across all three packages. ✅
 
 ## Tests
 
@@ -828,6 +828,18 @@ Without all three, detection would fail in specific build/consumption patterns. 
 ### `detectImplicitRead` checks `isSnapshotableType` separately from `isReactiveType` — this matters for forward compatibility
 
 `detectImplicitRead` requires *both* `isReactiveType` (has `[REACTIVE]`) and `isSnapshotableType` (has `[SNAPSHOT]`). Today this is redundant — `isReactive()` at runtime already requires both symbols, so any type with `[REACTIVE]` also has `[SNAPSHOT]`. But the compiler's `isReactiveType` only checks for `[REACTIVE]` (it was written before `[SNAPSHOT]` existed). The explicit `isSnapshotableType` check in `detectImplicitRead` is a correctness guard: it ensures the compiler only synthesizes `.get()` for types that genuinely have a snapshot protocol. If a future type had `[REACTIVE]` but not `[SNAPSHOT]` (e.g., a write-only channel), `detectImplicitRead` would correctly reject it. This forward-compatible separation also means `isReactiveType` in the compiler does *not* need to be tightened to match the runtime's `isReactive` — each detection function checks exactly what it needs.
+
+### `DocRef[REACTIVE]` override must be a class property, not `declare`
+
+`TextRef` and `CounterRef` use `declare readonly [REACTIVE]` to narrow the delta type without providing a new implementation — they rely on the inherited `TypedRef` base class `[REACTIVE]` which calls `getContainer().subscribe()`. `DocRef` cannot do this because `DocRefInternals.getContainer()` throws (`"can't get container on DocRef"`). The fix is a concrete class property `readonly [REACTIVE]: ReactiveSubscribe<MapDelta> = (self, callback) => { ... }` that shadows the base class property. This follows the same pattern as `[SNAPSHOT]` overrides on scalar refs (TextRef, CounterRef). The property uses `self` (not `this`) to access `[INTERNAL_SYMBOL]`, matching the `self`-based protocol convention.
+
+### `translateDocEventBatch` is distinct from `translateEventBatch`
+
+Container-level subscriptions produce one event per diff on *that* container, so `translateEventBatch` translates each `LoroEvent.diff` individually. Doc-level subscriptions produce events from *all* child containers in a batch. The consumer doesn't need per-diff granularity — it needs to know *which root keys changed*. `translateDocEventBatch` collects unique root keys from `event.path[0]` across all events and emits a single `MapDelta { type: "map", ops: { keys: [...] } }`. This is consistent with how `StructRef` and `RecordRef` emit `MapDelta` for key-level changes.
+
+### Dependency subsumption uses dot-boundary prefix matching
+
+The subsumption rule in `extractDependencies` filters out any dependency whose source is a strict prefix of another dependency's source at a dot boundary. `"doc"` is subsumed by `"doc.title"` (because `"doc.title"["doc".length] === "."`), but `"d"` is NOT subsumed by `"doc"` (next char is `"o"`, not `"."`). This prevents a reactive `TypedDoc` from adding a redundant `"doc"` (map deltaKind) dependency alongside `"doc.title"` (text deltaKind), which would break `isTextRegionContent`'s `dependencies.length === 1` check and degrade from `textRegion` (surgical DOM patching) to `subscribeMultiple` (full replacement).
 
 ### The `Child` type widening is safe because the compiler, not TypeScript, resolves content
 

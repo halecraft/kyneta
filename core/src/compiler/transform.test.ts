@@ -1749,3 +1749,55 @@ describe("extractDependencies fix for reactive-typed property access (transform)
     expect(result.code).toContain("doc.count.get()")
   })
 })
+
+// =============================================================================
+// Phase 6: Dependency subsumption — child deps make parent deps redundant
+// =============================================================================
+
+describe("dependency subsumption", () => {
+  it("doc.title.toString() with reactive TypedDoc produces textRegion (not subscribeMultiple)", () => {
+    // After Phase 6: TypedDoc exposes [REACTIVE], so `doc` is reactive.
+    // Without subsumption, extractDependencies captures both:
+    //   { source: "doc", deltaKind: "map" }
+    //   { source: "doc.title", deltaKind: "text" }
+    // That gives dependencies.length === 2, breaking isTextRegionContent.
+    // Subsumption drops "doc" because "doc.title" is more specific.
+    const source = `
+      import { createTypedDoc, Shape } from "@loro-extended/change"
+      const schema = Shape.doc({ title: Shape.text() })
+      const doc = createTypedDoc(schema)
+      div(() => { h1(doc.title.toString()) })
+    `
+    const result = transformSource(source, { target: "dom" })
+    expect(result.code).toContain("textRegion")
+    expect(result.code).not.toContain("subscribeMultiple")
+  })
+
+  it("doc.title bare ref with reactive TypedDoc produces textRegion", () => {
+    const source = `
+      import { createTypedDoc, Shape } from "@loro-extended/change"
+      const doc = createTypedDoc(Shape.doc({ title: Shape.text() }))
+      div(() => { p(doc.title) })
+    `
+    const result = transformSource(source, { target: "dom" })
+    const p = result.ir[0].children[0] as any
+    const content = p.children[0]
+    // Subsumption ensures only doc.title dep remains (not doc)
+    expect(content.dependencies).toHaveLength(1)
+    expect(content.dependencies[0].source).toBe("doc.title")
+    expect(content.dependencies[0].deltaKind).toBe("text")
+    expect(result.code).toContain("textRegion(")
+  })
+
+  it("does not subsume unrelated deps", () => {
+    // "a" and "b" are not prefixes of each other — both should remain
+    const source = `
+      import { LocalRef } from "@loro-extended/reactive"
+      declare const a: LocalRef<number>
+      declare const b: LocalRef<number>
+      div(() => { span(a.get() + b.get()) })
+    `
+    const result = transformSource(source, { target: "dom" })
+    expect(result.code).toContain("subscribeMultiple(")
+  })
+})

@@ -651,6 +651,8 @@ The `extractDependencies` visitor walks the expression AST and captures reactive
 
 Case 2 was added in Phase 4 to fix a pre-existing bug: when `doc` is not reactive but `doc.title` is, none of the other cases fired. The `depsMap` deduplication (keyed by source text) prevents double-capture when both the object and result are reactive.
 
+**Dependency subsumption:** After collecting all dependencies, `extractDependencies` applies a subsumption rule: any dependency whose source is a strict prefix of another dependency's source (at a dot boundary) is removed. For example, if both `"doc"` (deltaKind `"map"`) and `"doc.title"` (deltaKind `"text"`) are captured, `"doc"` is dropped because `"doc.title"` is more specific. The dot-boundary check ensures `"d"` is NOT subsumed by `"doc"` — the character after the prefix must be `"."`. This rule became necessary when `TypedDoc` was made reactive (exposing `[REACTIVE]` on the type): without it, `doc.title.toString()` would produce two dependencies, breaking the `isTextRegionContent` check (`dependencies.length === 1 && deltaKind === "text"`) and degrading from `textRegion` (surgical DOM patching) to `subscribeMultiple` (full replacement).
+
 ### Binding-Time Classification
 
 When a reactive type is detected:
