@@ -19,7 +19,7 @@ Loro CRDTs already know exactly what changed — they provide deltas like "inser
 ```typescript
 // What you write (natural TypeScript)
 div(() => {
-  h1("My App")
+  h1(doc.title)              // Bare reactive ref — no .get() needed
   
   if (doc.items.length === 0) {
     p("No items yet")
@@ -31,10 +31,24 @@ div(() => {
 })
 
 // What happens at runtime:
+// - Edit title → O(k) character-level DOM patch (not full replacement)
 // - Insert 1 item → 1 DOM insert (not 1000 re-renders)
 // - Delete item at index 5 → 1 DOM remove
 // - No diffing, no reconciliation
 ```
+
+### Bare Reactive Refs
+
+Kinetic supports passing reactive refs directly as children — no `.get()` or `.toString()` required:
+
+```typescript
+// All three produce identical compiled output:
+p(doc.title)              // ← Preferred: bare ref
+p(doc.title.get())        // Also works: explicit .get()
+p(doc.title.toString())   // Also works: explicit .toString()
+```
+
+The compiler detects that `doc.title` is a `TextRef` (reactive + snapshotable), synthesizes the `.get()` call internally, and routes it to `textRegion` for O(k) surgical text patching. For non-text refs like `CounterRef`, the compiler synthesizes `.get()` and uses `subscribeWithValue` for full-replacement updates.
 
 ## Server-Side Rendering
 
@@ -139,7 +153,7 @@ This is an experimental prototype exploring whether compilation can unlock O(k) 
 | Runtime primitives | ✅ | Scope, subscriptions, regions |
 | Compiler infrastructure | ✅ | IR, analysis, codegen |
 | Static compilation | ✅ | Elements, attributes, text |
-| Reactive expressions | ✅ | Type-based ref detection |
+| Reactive expressions | ✅ | Type-based ref detection, bare-ref support |
 | List transform | ✅ | O(k) verified with tests |
 | Conditional transform | ✅ | if/else-if/else chains |
 | Input binding | ✅ | text, checkbox, numeric |
@@ -151,7 +165,7 @@ This is an experimental prototype exploring whether compilation can unlock O(k) 
 | Vite plugin | 🔴 | Placeholder only |
 | SSR + Hydration | 🟡 | Codegen + target labels done, hydration wiring needed |
 
-**Test coverage**: 804 tests passing
+**Test coverage**: 1000 tests passing
 
 ## How It Works
 

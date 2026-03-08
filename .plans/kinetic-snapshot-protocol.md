@@ -239,13 +239,13 @@ The compiler gains the ability to detect `[SNAPSHOT]`, extract the snapshot retu
 - **Task 4.15**: Existing tests verify `p("literal string")` and `p(42)` still compile (no regressions). ✅
 - **Task 4.16**: Full Kinetic test suite passes: 1000 tests (up from 971). Reactive: 79. Change: 1012. Zero type errors. ✅
 
-### Phase 5: Documentation 🔴
+### Phase 5: Documentation ✅
 
-- **Task 5.1**: Update `packages/reactive/README.md` — document `SNAPSHOT` symbol, `Snapshotable<S>` interface, updated `Reactive<S, D>` interface, `isSnapshotable` guard, Moore machine framing 🔴
-- **Task 5.2**: Update `packages/kinetic/TECHNICAL.md` — update Reactive Detection section to cover `isWellKnownSymbolProperty` refactor and `[SNAPSHOT]` detection, update Direct-Read Detection to document `detectImplicitRead` for bare-ref handling, update Runtime Dependencies to show `[SNAPSHOT]` usage in `textRegion`/`inputTextRegion` 🔴
-- **Task 5.3**: Update `packages/change/TECHNICAL.md` — update Reactive Bridge section to document `[SNAPSHOT]` implementations on scalar ref types, update the ref-to-delta mapping table to include snapshot types and `S` column 🔴
-- **Task 5.4**: Update `packages/kinetic/README.md` — update usage examples to show bare-ref syntax (`p(doc.title)` instead of `p(doc.title.toString())`) 🔴
-- **Task 5.5**: Create changeset 🔴
+- **Task 5.1**: Update `packages/reactive/README.md` — major rewrite: Moore machine framing with `[SNAPSHOT]` + `[REACTIVE]` protocol, `Snapshotable<S>` interface, updated `Reactive<S, D>` two-parameter interface, `isSnapshotable` guard, snapshot-by-ref-type table, updated `LocalRef<T>` and `DerivedRef<T>` examples, "Why Two Symbols?" design rationale. ✅
+- **Task 5.2**: Update `packages/kinetic/TECHNICAL.md` — parameterized `isWellKnownSymbolProperty` table, type detection functions table, implicit-read detection section with examples, `extractDependencies` four-case documentation, `[SNAPSHOT]` protocol in runtime deps, updated `textRegion`/`inputTextRegion` code samples, `Child` type section. Done in Phase 4 retro. ✅
+- **Task 5.3**: Update `packages/change/TECHNICAL.md` — `SNAPSHOT` in symbol table, `declare` vs concrete property guidance, snapshot `S` and `[SNAPSHOT]` Returns columns in ref-to-delta mapping table, updated symbol documentation for both symbols. Done in Phase 4 retro. ✅
+- **Task 5.4**: Update `packages/kinetic/README.md` — hero example uses bare-ref syntax (`h1(doc.title)`), new "Bare Reactive Refs" section showing all three equivalent forms, updated test count (1000), updated feature table. ✅
+- **Task 5.5**: Create changeset at `.changeset/snapshot-protocol.md` covering all three packages (minor bumps). Covers Phases 1–5 only; Phase 6 items (DocRef fix, dependency subsumption) deferred to a separate changeset. ✅
 
 ### Phase 6: `DocRef[REACTIVE]` fix, `TypedDoc` type exposure, and dependency subsumption 🔴
 
