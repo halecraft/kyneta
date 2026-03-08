@@ -306,7 +306,7 @@ function evaluateStratumWithNegation(
  *                 (could be delta for semi-naive).
  * @returns        Derived facts from this rule.
  */
-function evaluateRule(
+export function evaluateRule(
   rule: Rule,
   fullDb: Database,
   matchDb: Database,
@@ -343,7 +343,7 @@ function evaluateRule(
  * (at `deltaIdx`) matches against the delta, while all other positive
  * atoms match against the full database.
  */
-function evaluateRuleSemiNaive(
+export function evaluateRuleSemiNaive(
   rule: Rule,
   fullDb: Database,
   delta: Database,
@@ -386,7 +386,7 @@ function evaluateRuleSemiNaive(
  * Evaluate a positive atom: for each current substitution, match the atom
  * against all tuples in the database and collect extended substitutions.
  */
-function evaluatePositiveAtom(
+export function evaluatePositiveAtom(
   a: Atom,
   db: Database,
   subs: readonly Substitution[],
@@ -413,7 +413,7 @@ function evaluatePositiveAtom(
  * We check each substitution against the full database — if ANY tuple
  * matches, the substitution is removed.
  */
-function evaluateNegation(
+export function evaluateNegation(
   a: Atom,
   db: Database,
   subs: readonly Substitution[],
@@ -437,7 +437,7 @@ function evaluateNegation(
  * Evaluate a guard body element: keep only substitutions for which the
  * guard condition holds.
  */
-function evaluateGuardElement(
+export function evaluateGuardElement(
   guard: GuardElement,
   subs: readonly Substitution[],
 ): Substitution[] {
@@ -454,7 +454,7 @@ function evaluateGuardElement(
 /**
  * Evaluate an aggregation body element.
  */
-function evaluateAggregationElement(
+export function evaluateAggregationElement(
   agg: AggregationClause,
   db: Database,
   subs: readonly Substitution[],
@@ -477,7 +477,7 @@ function evaluateAggregationElement(
  * Ground the head atom with each substitution, producing facts.
  * Substitutions that leave variables unbound are silently dropped.
  */
-function groundHead(head: Atom, subs: readonly Substitution[]): Fact[] {
+export function groundHead(head: Atom, subs: readonly Substitution[]): Fact[] {
   const facts: Fact[] = [];
   const seen = new Set<string>();
 
@@ -505,7 +505,7 @@ function groundHead(head: Atom, subs: readonly Substitution[]): Fact[] {
 /**
  * Get indices of positive atom body elements (for semi-naive evaluation).
  */
-function getPositiveAtomIndices(body: readonly BodyElement[]): number[] {
+export function getPositiveAtomIndices(body: readonly BodyElement[]): number[] {
   const indices: number[] = [];
   for (let i = 0; i < body.length; i++) {
     if (body[i]!.kind === 'atom') {

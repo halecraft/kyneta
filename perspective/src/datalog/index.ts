@@ -94,4 +94,22 @@ export {
   evaluate,
   evaluatePositive,
   evaluateNaive,
+  evaluateRule,
+  evaluateRuleSemiNaive,
+  evaluatePositiveAtom,
+  evaluateNegation,
+  evaluateGuardElement,
+  evaluateAggregationElement,
+  groundHead,
+  getPositiveAtomIndices,
 } from './evaluate.js';
+
+// --- Incremental Evaluation (Plan 006, Phase 5) ---
+export type { IncrementalDatalogEvaluator } from './incremental-evaluate.js';
+
+export {
+  createIncrementalDatalogEvaluator,
+  applyFactDelta,
+  diffDatabases,
+  groupByPredicate,
+} from './incremental-evaluate.js';

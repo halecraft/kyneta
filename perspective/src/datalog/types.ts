@@ -258,45 +258,59 @@ export type Substitution = ReadonlyMap<string, Value>;
 // ---------------------------------------------------------------------------
 // Relation — a set of tuples for a single predicate.
 //
-// Internally stored as a Set of serialized tuples for O(1) dedup, with the
-// actual tuple arrays stored alongside.
+// Internally stored as a Map<string, FactTuple> keyed by serialized tuple.
+// All operations are O(1). JavaScript Map preserves insertion order, so
+// iteration order matches the original array-based approach.
+//
+// The `remove()` method is used by the incremental Datalog evaluator's
+// DRed delete phase (Plan 006, Phase 5). The batch evaluator never calls
+// `remove()`.
 // ---------------------------------------------------------------------------
 
 export class Relation {
-  private readonly _tuples: FactTuple[] = [];
-  private readonly _serialized: Set<string> = new Set();
+  private readonly _map: Map<string, FactTuple> = new Map();
 
   get size(): number {
-    return this._tuples.length;
+    return this._map.size;
   }
 
   /** All tuples in insertion order. */
   tuples(): readonly FactTuple[] {
-    return this._tuples;
+    return [...this._map.values()];
   }
 
   /** Returns true if the tuple was newly added, false if it was a duplicate. */
   add(tuple: FactTuple): boolean {
     const key = serializeTuple(tuple);
-    if (this._serialized.has(key)) {
+    if (this._map.has(key)) {
       return false;
     }
-    this._serialized.add(key);
-    this._tuples.push(tuple);
+    this._map.set(key, tuple);
     return true;
   }
 
   has(tuple: FactTuple): boolean {
-    return this._serialized.has(serializeTuple(tuple));
+    return this._map.has(serializeTuple(tuple));
+  }
+
+  /**
+   * Remove a tuple from the relation.
+   * Returns true if the tuple was present and removed, false if not found.
+   *
+   * Used by the incremental Datalog evaluator's DRed delete phase.
+   * The batch evaluator never calls this method.
+   */
+  remove(tuple: FactTuple): boolean {
+    return this._map.delete(serializeTuple(tuple));
   }
 
   /** Create a new Relation containing all tuples from both this and other. */
   union(other: Relation): Relation {
     const result = new Relation();
-    for (const t of this._tuples) {
+    for (const t of this._map.values()) {
       result.add(t);
     }
-    for (const t of other._tuples) {
+    for (const t of other._map.values()) {
       result.add(t);
     }
     return result;
@@ -305,7 +319,7 @@ export class Relation {
   /** Create a new Relation containing only tuples in this but not in other. */
   difference(other: Relation): Relation {
     const result = new Relation();
-    for (const t of this._tuples) {
+    for (const t of this._map.values()) {
       if (!other.has(t)) {
         result.add(t);
       }
@@ -314,12 +328,12 @@ export class Relation {
   }
 
   isEmpty(): boolean {
-    return this._tuples.length === 0;
+    return this._map.size === 0;
   }
 
   clone(): Relation {
     const result = new Relation();
-    for (const t of this._tuples) {
+    for (const t of this._map.values()) {
       result.add(t);
     }
     return result;
@@ -356,6 +370,19 @@ export class Database {
   /** Insert a fact into the database. Returns true if the fact was new. */
   addFact(f: Fact): boolean {
     return this.relation(f.predicate).add(f.values);
+  }
+
+  /**
+   * Remove a fact from the database. Returns true if the fact was present
+   * and removed, false if not found.
+   *
+   * Used by the incremental Datalog evaluator's DRed delete phase.
+   * The batch evaluator never calls this method.
+   */
+  removeFact(f: Fact): boolean {
+    const rel = this._relations.get(f.predicate);
+    if (rel === undefined) return false;
+    return rel.remove(f.values);
   }
 
   /** Insert all facts from another database. Returns the number of new facts added. */

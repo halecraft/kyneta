@@ -673,7 +673,7 @@ passed to the evaluation stage, which decides whether to switch strategy.
 - Rule retraction: custom rule retracted → native path reactivates, correct
   reality. ✅
 
-### Phase 5: Incremental Datalog Evaluator 🔴
+### Phase 5: Incremental Datalog Evaluator ✅
 
 Implement the cross-time incremental Datalog evaluator. This is the core of
 Plan 006 — the component that makes custom rules, user queries, and
@@ -767,62 +767,61 @@ specific structure of LWW means the delete phase is bounded to O(1) per slot.
 
 - 5.1 Refactor `Relation` internal storage from `FactTuple[]` + `Set<string>`
   to `Map<string, FactTuple>`. Add `Relation.remove(tuple): boolean`. All
-  operations remain O(1). `tuples()` returns `[...map.values()]`. 🔴
+  operations remain O(1). `tuples()` returns `[...map.values()]`. ✅
 - 5.2 Add `Database.removeFact(f): boolean` to `datalog/types.ts`. Delegates
-  to `Relation.remove`. 🔴
-- 5.3 Export the batch evaluator's rule-eval helpers from `datalog/evaluate.ts`
-  (or extract into `datalog/rule-eval.ts`): `evaluateRule`,
-  `evaluateRuleSemiNaive`, `evaluatePositiveAtom`, `evaluateNegation`,
-  `evaluateGuardElement`, `evaluateAggregationElement`, `groundHead`,
-  `getPositiveAtomIndices`. 🔴
+  to `Relation.remove`. ✅
+- 5.3 Export the batch evaluator's rule-eval helpers from `datalog/evaluate.ts`:
+  `evaluateRule`, `evaluateRuleSemiNaive`, `evaluatePositiveAtom`,
+  `evaluateNegation`, `evaluateGuardElement`, `evaluateAggregationElement`,
+  `groundHead`, `getPositiveAtomIndices`. ✅
 - 5.4 Implement `applyFactDelta(db, delta: ZSet<Fact>)` — adds for +1,
-  removes for −1. 🔴
+  removes for −1. ✅
 - 5.5 Implement `diffDatabases(oldDb, newDb) → ZSet<Fact>` — facts in new
-  but not old get +1, facts in old but not new get −1. 🔴
+  but not old get +1, facts in old but not new get −1. ✅
 - 5.6 Implement `groupByPredicate(zs: ZSet<Fact>) → Map<string, ZSet<Fact>>`
-  — splits a mixed fact Z-set into per-predicate Z-sets. 🔴
-- 5.7 Create `datalog/incremental-evaluate.ts` with the core evaluator. 🔴
+  — splits a mixed fact Z-set into per-predicate Z-sets. ✅
+- 5.7 Create `datalog/incremental-evaluate.ts` with the core evaluator. ✅
 - 5.8 Implement accumulated state management: persistent `Database` across
-  steps, with snapshot-and-diff for output delta production. 🔴
+  steps, with snapshot-and-diff for output delta production. ✅
 - 5.9 Implement cross-time semi-naive for monotone strata: apply input delta
   to accumulated `Database`, run semi-naive from delta `Database`, merge new
-  derivations. 🔴
+  derivations. ✅
 - 5.10 Implement DRed for negation strata: delete phase (remove invalidated
   derivations via `removeFact`), rederive phase (semi-naive from combined
-  delta). 🔴
+  delta). Also used for monotone strata when retractions are present. ✅
 - 5.11 Implement stratum dependency tracking: when stratum 0's output changes,
-  propagate to stratum 1. 🔴
+  propagate to stratum 1. ✅
 - 5.12 Implement rule change handling: on `deltaRules`, restratify and
-  recompute affected strata from accumulated ground facts. 🔴
+  recompute affected strata from accumulated ground facts. ✅
 - 5.13 Add incremental resolution extraction: convert `Δ_derived` (containing
   `winner` and `fugue_before` fact deltas) directly to
-  `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>` via `zsetMap` on the
-  per-predicate Z-sets. Reuse `parseLWWFact` (Phase 2) for winner facts and
-  `fuguePairKey` (Phase 1) for pair keying. 🔴
+  `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>` with winner replacement
+  semantics (emit only +1 for changed winners to avoid Z-set key
+  cancellation). Reuse `fuguePairKey` (Phase 1) for pair keying. ✅
 
 #### Tests
 
-- `Relation.remove` deletes tuple, `tuples()` excludes it. 🔴
-- `Relation.remove` on non-existent tuple returns false. 🔴
-- `Database.removeFact` removes fact, `hasFact` returns false. 🔴
-- `applyFactDelta` correctly applies +1 and −1 entries. 🔴
-- `diffDatabases` produces correct Z-set delta. 🔴
-- `groupByPredicate` correctly splits mixed facts. 🔴
+- `Relation.remove` deletes tuple, `tuples()` excludes it. ✅
+- `Relation.remove` on non-existent tuple returns false. ✅
+- `Database.removeFact` removes fact, `hasFact` returns false. ✅
+- `applyFactDelta` correctly applies +1 and −1 entries. ✅
+- `diffDatabases` produces correct Z-set delta. ✅
+- `groupByPredicate` correctly splits mixed facts. ✅
 - Monotone stratum: new `active_structure_seq` fact produces correct
-  `fugue_child` derivation. 🔴
+  `fugue_child` derivation. ✅
 - Monotone transitive closure: new `fugue_child` produces correct
-  `fugue_descendant` chain. 🔴
+  `fugue_descendant` chain. ✅
 - Negation stratum (LWW): new `active_value` that supersedes current winner
-  produces `{old winner: −1, new winner: +1}` delta. 🔴
+  produces `{old winner: −1, new winner: +1}` delta. ✅
 - Negation stratum (LWW): new `active_value` that does NOT supersede produces
-  empty winner delta. 🔴
+  empty winner delta. ✅
 - Negation stratum (Fugue): new element with subtree propagation guard
-  produces correct `fugue_before` deltas. 🔴
-- Fact retraction: retracted `active_value` causes winner recomputation. 🔴
+  produces correct `fugue_before` deltas. ✅
+- Fact retraction: retracted `active_value` causes winner recomputation. ✅
 - Three-way equivalence: incremental Datalog ≡ batch Datalog ≡ native solver
-  for all default-rule test cases. 🔴
-- Permutation test: all orderings produce same `current()`. 🔴
-- Rule addition: adding a custom superseded rule changes resolution. 🔴
+  for all default-rule test cases. ✅
+- Permutation test: all orderings produce same `current()`. ✅
+- Rule addition: adding a custom superseded rule changes resolution. ✅
 
 ### Phase 6: Wire Incremental Datalog into Evaluation Stage 🔴
 
