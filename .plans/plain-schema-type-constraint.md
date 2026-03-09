@@ -44,18 +44,32 @@ This violates Loro's invariant and is a regression from the guarantees `@loro-ex
 
 There is no `PlainSchema` type. The `plain` sub-namespace methods all use `Schema` (aliased as `SchemaType`) as their generic constraint. TypeScript happily accepts any `Schema` node — including `AnnotatedSchema<"text">` — wherever `Schema` is expected.
 
+## Key Design Insight
+
+The `Plain*Schema` interfaces are needed **only for the recursive type definition** of `PlainSchema`. The constructor **return types stay as the original** `ProductSchema<F>`, `SequenceSchema<I>`, etc. — only the **parameter constraints** narrow to `PlainSchema`.
+
+This works because of structural subtyping: `ProductSchema<{ x: ScalarSchema<"string"> }>` is structurally assignable to `PlainProductSchema` (since `ScalarSchema` ∈ `PlainSchema`), while `ProductSchema<{ x: AnnotatedSchema<"text"> }>` is not (since `AnnotatedSchema` ∉ `PlainSchema`). The original return types remain compatible with `Plain<S>`, `Writable<S>`, `interpret()`, `describe()`, `validate()`, and `Zero.structural()` — no downstream changes required.
+
+Verified empirically with standalone TypeScript compilation (see previous session).
+
 ## Phases
 
-### Phase 1: Define `PlainSchema` type 🔴
+### Phase 1: Define `PlainSchema` type and narrow constructors ✅
 
-Define a recursive type alias in `schema.ts` that represents the subset of `Schema` containing no `AnnotatedSchema` nodes. This type lives in the grammar layer because it is a *structural* subset of the grammar — it says "these constructors, recursively, with no annotations." It does not mention Loro.
+Define a recursive type alias in `schema.ts` that represents the subset of `Schema` containing no `AnnotatedSchema` nodes. Then narrow the `LoroSchema.plain` constructor parameter types in `loro-schema.ts`.
 
 **Tasks:**
 
-- Define `PlainSchema` as a recursive union in `schema.ts` excluding `AnnotatedSchema` 🔴
-- Export `PlainSchema` from `schema.ts` and `index.ts` 🔴
+- Define `PlainSchema` and supporting `Plain*Schema` interfaces in `schema.ts` ✅
+- Export `PlainSchema` and supporting interfaces from `schema.ts` and `index.ts` ✅
+- Import new types in `loro-schema.ts` ✅
+- Narrow `plain.struct`, `plain.record`, `plain.array`, `plain.union`, `plain.discriminatedUnion` parameter constraints to `PlainSchema` ✅
+- Keep return types as the original `ProductSchema<F>`, `SequenceSchema<I>`, `MapSchema<I>`, etc. ✅
+- Scalar constructors need no change — `ScalarSchema` is already a `PlainSchema` ✅
+- Remove the "follow-up concern" comment from `loro-schema.ts` L82–88 ✅
+- Update the `plain` sub-namespace JSDoc ✅
 
-The type:
+The types to add in `schema.ts`:
 
 ```ts
 export type PlainSchema =
@@ -102,55 +116,35 @@ export interface PlainDiscriminatedSumSchema<
 }
 ```
 
-Key design decision: these are **structurally identical** to `ProductSchema`, `SequenceSchema`, etc., but with the recursive position constrained to `PlainSchema` instead of `Schema`. This means `ProductSchema<{ x: ScalarSchema<"string"> }>` is assignable to `PlainProductSchema` because `ScalarSchema` is in the `PlainSchema` union. But `ProductSchema<{ x: AnnotatedSchema<"text"> }>` is not, because `AnnotatedSchema` is excluded.
+The constructor signature changes in `loro-schema.ts` (parameter types only — return types unchanged):
 
-### Phase 2: Narrow `LoroSchema.plain` constructor signatures 🔴
+```ts
+// Before:
+struct<F extends Record<string, SchemaType>>(fields: F): ProductSchema<F>
 
-Change the `plain` sub-namespace in `loro-schema.ts` to accept `PlainSchema` instead of `Schema` in recursive positions.
+// After:
+struct<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F>
+```
 
-**Tasks:**
+### Phase 2: Fix example and add type-level tests ✅
 
-- Import the new `Plain*Schema` interfaces in `loro-schema.ts` 🔴
-- Update `plain.struct` signature: `<F extends Record<string, PlainSchema>>(fields: F): PlainProductSchema<F>` 🔴
-- Update `plain.record` signature: `<I extends PlainSchema>(item: I): PlainMapSchema<I>` 🔴
-- Update `plain.array` signature: `<I extends PlainSchema>(item: I): PlainSequenceSchema<I>` 🔴
-- Update `plain.union` signature: `<V extends PlainSchema[]>(...variants: [...V]): PlainPositionalSumSchema<V>` 🔴
-- Update `plain.discriminatedUnion` signature: `<D extends string, M extends Record<string, PlainSchema>>(...)` 🔴
-- Scalar constructors (`plain.string`, `plain.number`, etc.) need no change — `ScalarSchema` is already a `PlainSchema` 🔴
-
-### Phase 3: Fix the example 🔴
-
-The example at `example/main.ts` L213–220 has `text: LoroSchema.text()` inside `LoroSchema.plain.struct()`. This will now fail to compile, which is correct. Remove that field from the plain struct.
+The example at `example/main.ts` L213–220 has `text: LoroSchema.text()` inside `LoroSchema.plain.struct()`. This will now fail to compile, which is correct. Fix it and add tests proving the constraint.
 
 **Tasks:**
 
-- Remove the `text: LoroSchema.text()` field from the tasks item schema in `example/main.ts` 🔴
-- Verify the example compiles and runs 🔴
+- Remove the `text: LoroSchema.text()` field from the tasks item schema in `example/main.ts` ✅
+- Verify the example compiles ✅
+- Add type-level tests to `types.test.ts` verifying the constraint ✅
 
-### Phase 4: Type-level tests 🔴
-
-Add tests to `types.test.ts` that verify the constraint using `expectTypeOf`. These tests verify compile-time behavior, not runtime behavior.
-
-**Tasks:**
-
-- Test: `PlainSchema` accepts `ScalarSchema`, `ProductSchema<{x: ScalarSchema}>`, `SequenceSchema<ScalarSchema>`, etc. 🔴
-- Test: `PlainSchema` rejects `AnnotatedSchema<"text">`, `AnnotatedSchema<"counter">`, `AnnotatedSchema<"movable", SequenceSchema>` 🔴
-- Test: `PlainSchema` rejects `ProductSchema<{ x: AnnotatedSchema<"text"> }>` (annotation nested inside product) 🔴
-- Test: `LoroSchema.plain.struct({ x: LoroSchema.plain.string() })` compiles (positive) 🔴
-- Test: `LoroSchema.plain.struct({ x: LoroSchema.text() })` does not compile (negative — use `// @ts-expect-error` or `expectTypeOf(...).not.toMatchTypeOf(...)`) 🔴
-- Test: `PlainProductSchema` is assignable to `Schema` (plain schemas are still schemas) 🔴
-
-### Phase 5: Documentation 🔴
+### Phase 3: Documentation ✅
 
 **Tasks:**
 
-- Update TECHNICAL.md "Composition Constraints Are Backend-Specific" section to describe `PlainSchema` and how it works 🔴
-- Update the `LoroSchema.plain` JSDoc in `loro-schema.ts` to reference the type constraint 🔴
-- Remove the "follow-up concern" comment from `loro-schema.ts` L82–88 🔴
+- Update TECHNICAL.md "Composition Constraints Are Backend-Specific" section to describe how `PlainSchema` enforces the constraint ✅
 
 ## Tests
 
-All tests are type-level (compile-time), added to `src/__tests__/types.test.ts`. Use `expectTypeOf` from vitest.
+All new tests are type-level (compile-time), added to `src/__tests__/types.test.ts`. Use `expectTypeOf` from vitest.
 
 **Positive cases (should compile):**
 
@@ -159,50 +153,71 @@ All tests are type-level (compile-time), added to `src/__tests__/types.test.ts`.
 - `PlainSequenceSchema<ScalarSchema<"string">>` extends `PlainSchema`
 - Nested: `PlainProductSchema<{ items: PlainSequenceSchema<ScalarSchema> }>` extends `PlainSchema`
 - `PlainProductSchema` extends `Schema` (subtype relationship preserved)
-- Return type of `LoroSchema.plain.struct({ x: ... })` extends `PlainSchema`
+- Return type of `LoroSchema.plain.struct({ x: LoroSchema.plain.string() })` extends `Schema`
+- `Schema.nullable(Schema.string())` result extends `PlainSchema` (sums of plain are plain)
+- `LoroSchema.plain.struct({ bio: Schema.nullable(Schema.string()) })` compiles (nullable inside plain struct)
 
 **Negative cases (should NOT compile):**
 
 - `AnnotatedSchema<"text">` does NOT extend `PlainSchema`
 - `ProductSchema<{ x: AnnotatedSchema<"text"> }>` does NOT extend `PlainProductSchema`
 - `AnnotatedSchema<"doc", ProductSchema>` does NOT extend `PlainSchema`
+- `LoroSchema.plain.struct({ x: LoroSchema.text() })` fails to compile (via `@ts-expect-error`)
+- `LoroSchema.plain.array(LoroSchema.counter())` fails to compile
+- `Schema.nullable(LoroSchema.text())` result does NOT extend `PlainSchema` (annotation inside sum)
 
 ## Transitive Effect Analysis
 
 ### `schema.ts` → all interpreters
 
-`PlainSchema` is a new export. It does not change the existing `Schema` type. All interpreters (`plainInterpreter`, `writableInterpreter`, `validateInterpreter`, `withChangefeed`) accept `Schema` in their signatures, which remains unchanged. `PlainSchema extends Schema` structurally (every `PlainSchema` value is also a `Schema` value), so passing a `PlainSchema` to `interpret()` works without casts.
+`PlainSchema` is a new export. It does not change the existing `Schema` type. All interpreters accept `Schema`, which remains unchanged. Every `PlainSchema` value is also a `Schema` value (structural subtype), so passing plain schemas to `interpret()` works without casts.
 
 ### `loro-schema.ts` → `example/main.ts`
 
-The example has an invalid schema that currently compiles. After the change, it will fail to compile. This is a breaking change to the example, fixed in Phase 3.
+The example has an invalid schema that currently compiles. After the change, it will fail to compile. Fixed in Phase 2.
 
 ### `loro-schema.ts` → consumers of `LoroSchema.plain.*` return types
 
-The return types of `plain.struct`, `plain.array`, `plain.record` change from `ProductSchema<F>` to `PlainProductSchema<F>`, etc. Since `PlainProductSchema<F>` has identical runtime shape to `ProductSchema<F>` (same `_kind`, same `fields`), and since `PlainProductSchema extends ProductSchema` structurally, this is backward compatible for:
-- `interpret()` — accepts `Schema`, which `PlainProductSchema` satisfies
-- `describe()` — accepts `Schema`
-- `Zero.structural()` — accepts `Schema`
-- `validate()` — accepts `Schema`
-- `Plain<S>` type — matches on `_kind: "product"`, which `PlainProductSchema` has
-- `Writable<S>` type — same
+Return types are **unchanged** — still `ProductSchema<F>`, `SequenceSchema<I>`, `MapSchema<I>`, etc. This means:
 
-The key question: does `Plain<PlainProductSchema<F>>` resolve the same as `Plain<ProductSchema<F>>`? Yes — `Plain<S>` checks `S extends ProductSchema<infer F>`, and `PlainProductSchema<F>` satisfies this because it has `_kind: "product"` and `fields: F`. Same for `Writable<S>`.
+- `interpret()` — accepts `Schema`, which these satisfy ✓
+- `describe()` — accepts `Schema` ✓
+- `Zero.structural()` — accepts `Schema` ✓
+- `validate()` — accepts `Schema` ✓
+- `Plain<S>` — matches on `S extends ProductSchema<infer F>`, which `ProductSchema<F>` trivially satisfies ✓
+- `Writable<S>` — same ✓
 
-### No runtime changes
+No downstream type changes. No runtime changes. The `plain.*` constructor functions continue to call `Schema.*` internally — only parameter type annotations narrow.
 
-`PlainSchema` is type-only. No runtime code changes. The `plain.*` constructor functions continue to call the same `Schema.*` constructors internally — only the return type annotations narrow.
+### No new unused code / no deprecations
+
+This change is purely additive (new types) plus a constraint tightening on existing signatures. No code is deprecated, removed, or made unused.
 
 ## Resources for Implementation Context
 
 - `packages/schema/src/schema.ts` — `Schema` type, all structural interfaces, constructors
-- `packages/schema/src/loro-schema.ts` — `LoroSchema` namespace, `plain` sub-namespace (the target of this change)
-- `packages/schema/src/interpreters/writable.ts` — `Plain<S>` and `Writable<S>` conditional types (must remain compatible)
+- `packages/schema/src/loro-schema.ts` — `LoroSchema` namespace, `plain` sub-namespace (target)
+- `packages/schema/src/interpreters/writable.ts` — `Plain<S>` and `Writable<S>` conditional types (must remain compatible — verified, no changes needed)
 - `packages/schema/src/index.ts` — barrel exports (new types must be exported)
 - `packages/schema/src/__tests__/types.test.ts` — existing type-level tests (add new tests here)
 - `packages/schema/example/main.ts` — L213–220, the invalid schema to fix
 - `packages/schema/TECHNICAL.md` — documentation to update
-- `packages/change/src/shape.ts` — L908 (`Shape.plain.struct<T extends Record<string, ValueShape>>`) — reference implementation of the same constraint in the old system
+- `packages/change/src/shape.ts` — L908 (`Shape.plain.struct<T extends Record<string, ValueShape>>`) — reference implementation in the old system
+
+## PR Stack
+
+### PR 1: `(packages/schema) feat: PlainSchema type constraint for LoroSchema.plain namespace`
+
+**Type:** Feature (new abstraction + constraint tightening)
+
+Contains all three phases — this change is small enough (type definitions + signature narrowing + example fix + tests + docs) to be a single reviewable unit. The phases are not independently shippable: defining `PlainSchema` without narrowing the constructors is dead code, and narrowing the constructors without fixing the example breaks the build.
+
+**Commits:**
+
+1. **feat: define PlainSchema type and narrow LoroSchema.plain constructors** — `schema.ts` (new types), `loro-schema.ts` (narrowed signatures + updated JSDoc), `index.ts` (exports)
+2. **fix: remove CRDT annotation from plain struct in example** — `example/main.ts`
+3. **test: type-level tests for PlainSchema constraint** — `types.test.ts`
+4. **docs: document PlainSchema composition constraint in TECHNICAL.md** — `TECHNICAL.md`
 
 ## Alternatives Considered
 
@@ -221,6 +236,15 @@ Use `Exclude<Schema, AnnotatedSchema>` as the constraint. Rejected because:
 
 - This is shallow — it prevents `AnnotatedSchema` at the top level but not nested inside a `ProductSchema` or `SequenceSchema`
 - The whole point is recursive exclusion: `plain.struct({ items: Schema.list(LoroSchema.text()) })` must also fail
+
+### Return `Plain*Schema` types from constructors
+
+Have `plain.struct` return `PlainProductSchema<F>` instead of `ProductSchema<F>`. Rejected because:
+
+- `Plain<S>` and `Writable<S>` match on `S extends ProductSchema<infer F>` — introducing a new nominal-looking interface risks inference breakage
+- The `Plain*Schema` interfaces are structurally identical to the originals, so the return type narrowing provides no additional safety
+- Keeping return types as the originals means zero downstream type changes — `interpret()`, `describe()`, `validate()`, `Zero.structural()` all work unchanged
+- The `Plain*Schema` types serve their purpose purely as parameter constraints; leaking them into the API surface adds cognitive overhead
 
 ### Keep it as a naming convention (status quo)
 

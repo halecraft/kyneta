@@ -160,6 +160,87 @@ export interface AnnotatedSchema<
 }
 
 // ---------------------------------------------------------------------------
+// PlainSchema — the annotation-free subset of Schema
+// ---------------------------------------------------------------------------
+
+/**
+ * The subset of the schema grammar that contains no annotations.
+ *
+ * `PlainSchema` is the recursive type used by `LoroSchema.plain.*`
+ * constructors to enforce Loro's well-formedness rule: CRDT containers
+ * (text, counter, movable list, tree) — which are all represented as
+ * `AnnotatedSchema` — cannot appear inside plain value blobs.
+ *
+ * This type lives in the grammar layer (not in `LoroSchema`) because it
+ * is a *structural* subset — "schema without annotations" — with no
+ * backend-specific knowledge. Other backends with their own annotation
+ * tags can reuse the same constraint.
+ *
+ * Every `PlainSchema` value is also a `Schema` value (structural subtype),
+ * so plain schemas work with `interpret()`, `describe()`, `validate()`,
+ * `Zero.structural()`, `Plain<S>`, and `Writable<S>` without casts.
+ */
+export type PlainSchema =
+  | ScalarSchema
+  | PlainProductSchema
+  | PlainSequenceSchema
+  | PlainMapSchema
+  | PlainPositionalSumSchema
+  | PlainDiscriminatedSumSchema
+
+/**
+ * Product (fixed-key record) constrained to plain children.
+ * Structurally identical to `ProductSchema` but with the recursive
+ * position narrowed to `PlainSchema`.
+ */
+export interface PlainProductSchema<
+  F extends Record<string, PlainSchema> = Record<string, PlainSchema>,
+> {
+  readonly _kind: "product"
+  readonly fields: Readonly<F>
+}
+
+/**
+ * Sequence (ordered collection) constrained to plain children.
+ */
+export interface PlainSequenceSchema<I extends PlainSchema = PlainSchema> {
+  readonly _kind: "sequence"
+  readonly item: I
+}
+
+/**
+ * Map (dynamic-key collection) constrained to plain children.
+ */
+export interface PlainMapSchema<I extends PlainSchema = PlainSchema> {
+  readonly _kind: "map"
+  readonly item: I
+}
+
+/**
+ * Positional sum constrained to plain variants.
+ */
+export interface PlainPositionalSumSchema<
+  V extends readonly PlainSchema[] = readonly PlainSchema[],
+> {
+  readonly _kind: "sum"
+  readonly variants: V
+  readonly discriminant?: undefined
+}
+
+/**
+ * Discriminated sum constrained to plain variants.
+ */
+export interface PlainDiscriminatedSumSchema<
+  D extends string = string,
+  M extends Record<string, PlainSchema> = Record<string, PlainSchema>,
+> {
+  readonly _kind: "sum"
+  readonly discriminant: D
+  readonly variantMap: Readonly<M>
+  readonly variants?: undefined
+}
+
+// ---------------------------------------------------------------------------
 // Structural constructors (low-level, grammar-native)
 // ---------------------------------------------------------------------------
 

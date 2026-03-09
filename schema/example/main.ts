@@ -212,7 +212,6 @@ const ProjectSchema = LoroSchema.doc({
 
   tasks: Schema.list(
     LoroSchema.plain.struct({
-      text: LoroSchema.text(),
       title: LoroSchema.plain.string(),
       done: LoroSchema.plain.boolean(),
       priority: LoroSchema.plain.number(1, 2, 3),

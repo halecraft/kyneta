@@ -362,10 +362,10 @@ testDescribe("describe: LoroSchema annotations", () => {
     })
 
     it("inlines movable-list inside a labeled field", () => {
-      const s = LoroSchema.plain.struct({
-        a: Schema.list(LoroSchema.plain.number()),
-        b: Schema.record(LoroSchema.plain.boolean()),
-        c: LoroSchema.movableList(LoroSchema.plain.string()),
+      const s = Schema.struct({
+        a: Schema.list(Schema.number()),
+        b: Schema.record(Schema.boolean()),
+        c: LoroSchema.movableList(Schema.string()),
       })
       expect(describe(s)).toBe(
         [
@@ -420,13 +420,13 @@ testDescribe("describe: LoroSchema annotations", () => {
     it("describes deeply nested containers", () => {
       const s = LoroSchema.doc({
         channels: Schema.list(
-          LoroSchema.plain.struct({
+          Schema.struct({
             name: LoroSchema.text(),
             messages: Schema.list(
-              LoroSchema.plain.struct({
-                author: LoroSchema.plain.string(),
+              Schema.struct({
+                author: Schema.string(),
                 body: LoroSchema.text(),
-                reactions: Schema.record(LoroSchema.plain.number()),
+                reactions: Schema.record(Schema.number()),
               }),
             ),
           }),

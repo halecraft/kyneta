@@ -18,6 +18,12 @@ import {
   type TextRef,
   type CounterRef,
   type SequenceRef,
+  type PlainSchema,
+  type PlainProductSchema,
+  type PlainSequenceSchema,
+  type PlainMapSchema,
+  type PlainPositionalSumSchema,
+  type PlainDiscriminatedSumSchema,
 } from "../index.js"
 
 // ---------------------------------------------------------------------------
@@ -580,7 +586,7 @@ describe("type-level: Writable<S> for Loro leaf annotations", () => {
   })
 
   it("Writable<struct with text and counter> maps annotations", () => {
-    const s = LoroSchema.plain.struct({
+    const s = Schema.struct({
       title: LoroSchema.text(),
       count: LoroSchema.counter(),
     })
@@ -598,8 +604,8 @@ describe("type-level: Writable<S> end-to-end Loro schema", () => {
       title: LoroSchema.text(),
       count: LoroSchema.counter(),
       messages: Schema.list(
-        LoroSchema.plain.struct({
-          author: LoroSchema.plain.string(),
+        Schema.struct({
+          author: Schema.string(),
           body: LoroSchema.text(),
         }),
       ),
@@ -672,8 +678,8 @@ describe("type-level: Plain<S> end-to-end Loro schema", () => {
       title: LoroSchema.text(),
       count: LoroSchema.counter(),
       messages: Schema.list(
-        LoroSchema.plain.struct({
-          author: LoroSchema.plain.string(),
+        Schema.struct({
+          author: Schema.string(),
           body: LoroSchema.text(),
         }),
       ),
@@ -792,5 +798,157 @@ describe("type-level: ScalarSchema constraint type parameter", () => {
     const s = Schema.scalar("string")
     expectTypeOf(s.scalarKind).toEqualTypeOf<"string">()
     expectTypeOf(s._kind).toEqualTypeOf<"scalar">()
+  })
+})
+
+// ===========================================================================
+// PlainSchema constraint tests
+// ===========================================================================
+
+describe("type-level: PlainSchema accepts annotation-free schemas", () => {
+  it("ScalarSchema extends PlainSchema", () => {
+    expectTypeOf<ScalarSchema<"string">>().toMatchTypeOf<PlainSchema>()
+    expectTypeOf<ScalarSchema<"number">>().toMatchTypeOf<PlainSchema>()
+    expectTypeOf<ScalarSchema<"boolean">>().toMatchTypeOf<PlainSchema>()
+  })
+
+  it("PlainProductSchema extends PlainSchema", () => {
+    expectTypeOf<PlainProductSchema<{ x: ScalarSchema<"string"> }>>().toMatchTypeOf<PlainSchema>()
+  })
+
+  it("PlainSequenceSchema extends PlainSchema", () => {
+    expectTypeOf<PlainSequenceSchema<ScalarSchema<"string">>>().toMatchTypeOf<PlainSchema>()
+  })
+
+  it("PlainMapSchema extends PlainSchema", () => {
+    expectTypeOf<PlainMapSchema<ScalarSchema<"number">>>().toMatchTypeOf<PlainSchema>()
+  })
+
+  it("nested plain product of sequence of scalars extends PlainSchema", () => {
+    type Nested = PlainProductSchema<{
+      items: PlainSequenceSchema<ScalarSchema<"string">>
+    }>
+    expectTypeOf<Nested>().toMatchTypeOf<PlainSchema>()
+  })
+
+  it("PlainPositionalSumSchema extends PlainSchema", () => {
+    type NullableString = PlainPositionalSumSchema<[ScalarSchema<"null">, ScalarSchema<"string">]>
+    expectTypeOf<NullableString>().toMatchTypeOf<PlainSchema>()
+  })
+
+  it("PlainDiscriminatedSumSchema extends PlainSchema", () => {
+    type Disc = PlainDiscriminatedSumSchema<"type", {
+      a: PlainProductSchema<{ x: ScalarSchema<"string"> }>
+    }>
+    expectTypeOf<Disc>().toMatchTypeOf<PlainSchema>()
+  })
+})
+
+describe("type-level: PlainSchema is a subtype of Schema", () => {
+  it("PlainProductSchema extends Schema", () => {
+    expectTypeOf<PlainProductSchema<{ x: ScalarSchema<"string"> }>>().toMatchTypeOf<SchemaNode>()
+  })
+
+  it("PlainSequenceSchema extends Schema", () => {
+    expectTypeOf<PlainSequenceSchema<ScalarSchema<"string">>>().toMatchTypeOf<SchemaNode>()
+  })
+
+  it("PlainMapSchema extends Schema", () => {
+    expectTypeOf<PlainMapSchema<ScalarSchema<"number">>>().toMatchTypeOf<SchemaNode>()
+  })
+})
+
+describe("type-level: PlainSchema rejects annotated schemas", () => {
+  it("AnnotatedSchema<'text'> does NOT extend PlainSchema", () => {
+    expectTypeOf<AnnotatedSchema<"text">>().not.toMatchTypeOf<PlainSchema>()
+  })
+
+  it("AnnotatedSchema<'counter'> does NOT extend PlainSchema", () => {
+    expectTypeOf<AnnotatedSchema<"counter">>().not.toMatchTypeOf<PlainSchema>()
+  })
+
+  it("AnnotatedSchema<'movable', SequenceSchema> does NOT extend PlainSchema", () => {
+    expectTypeOf<AnnotatedSchema<"movable", SequenceSchema<ScalarSchema<"string">>>>().not.toMatchTypeOf<PlainSchema>()
+  })
+
+  it("AnnotatedSchema<'doc', ProductSchema> does NOT extend PlainSchema", () => {
+    expectTypeOf<AnnotatedSchema<"doc", ProductSchema>>().not.toMatchTypeOf<PlainSchema>()
+  })
+
+  it("ProductSchema containing AnnotatedSchema does NOT extend PlainProductSchema", () => {
+    type Bad = ProductSchema<{ x: AnnotatedSchema<"text"> }>
+    expectTypeOf<Bad>().not.toMatchTypeOf<PlainProductSchema>()
+  })
+})
+
+describe("type-level: LoroSchema.plain.* constructors enforce PlainSchema constraint", () => {
+  it("plain.struct accepts plain scalars", () => {
+    const s = LoroSchema.plain.struct({
+      name: LoroSchema.plain.string(),
+      count: LoroSchema.plain.number(),
+      active: LoroSchema.plain.boolean(),
+    })
+    // Return type is ProductSchema (not PlainProductSchema) — works with Plain<S>
+    expectTypeOf(s).toMatchTypeOf<ProductSchema>()
+    expectTypeOf(s).toMatchTypeOf<SchemaNode>()
+  })
+
+  it("plain.struct accepts nested plain struct", () => {
+    const inner = LoroSchema.plain.struct({ x: LoroSchema.plain.string() })
+    const outer = LoroSchema.plain.struct({ nested: inner })
+    expectTypeOf(outer).toMatchTypeOf<ProductSchema>()
+  })
+
+  it("plain.struct accepts plain array inside", () => {
+    const arr = LoroSchema.plain.array(LoroSchema.plain.string())
+    const s = LoroSchema.plain.struct({ items: arr })
+    expectTypeOf(s).toMatchTypeOf<ProductSchema>()
+  })
+
+  it("plain.struct accepts nullable plain scalar", () => {
+    const nullable = Schema.nullable(Schema.string())
+    const s = LoroSchema.plain.struct({ bio: nullable })
+    expectTypeOf(s).toMatchTypeOf<ProductSchema>()
+  })
+
+  it("plain.struct rejects LoroSchema.text()", () => {
+    // @ts-expect-error — CRDT annotation inside plain struct
+    LoroSchema.plain.struct({ title: LoroSchema.text() })
+  })
+
+  it("plain.struct rejects LoroSchema.counter()", () => {
+    // @ts-expect-error — CRDT annotation inside plain struct
+    LoroSchema.plain.struct({ count: LoroSchema.counter() })
+  })
+
+  it("plain.array rejects LoroSchema.text()", () => {
+    // @ts-expect-error — CRDT annotation as plain array item
+    LoroSchema.plain.array(LoroSchema.text())
+  })
+
+  it("plain.record rejects LoroSchema.counter()", () => {
+    // @ts-expect-error — CRDT annotation as plain record item
+    LoroSchema.plain.record(LoroSchema.counter())
+  })
+
+  it("plain.struct rejects nullable wrapping a CRDT annotation", () => {
+    const nullableText = Schema.nullable(LoroSchema.text())
+    // @ts-expect-error — annotation nested inside sum inside plain struct
+    LoroSchema.plain.struct({ bio: nullableText })
+  })
+
+  it("Plain<S> and Writable<S> still work for plain.struct results", () => {
+    const s = LoroSchema.plain.struct({
+      name: LoroSchema.plain.string(),
+      active: LoroSchema.plain.boolean(),
+    })
+    type P = Plain<typeof s>
+    expectTypeOf<P>().toEqualTypeOf<{ name: string; active: boolean }>()
+
+    type W = Writable<typeof s>
+    expectTypeOf<W>().toEqualTypeOf<{
+      readonly name: ScalarRef<string>
+      readonly active: ScalarRef<boolean>
+    }>()
   })
 })

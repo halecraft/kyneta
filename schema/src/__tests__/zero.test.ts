@@ -295,8 +295,8 @@ describe("Zero.structural: LoroSchema annotations", () => {
       title: LoroSchema.text(),
       count: LoroSchema.counter(),
       messages: Schema.list(
-        LoroSchema.plain.struct({
-          author: LoroSchema.plain.string(),
+        Schema.struct({
+          author: Schema.string(),
           body: LoroSchema.text(),
         }),
       ),

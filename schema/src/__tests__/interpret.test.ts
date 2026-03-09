@@ -381,8 +381,8 @@ describe("interpret: LoroSchema plain round-trip with annotations", () => {
       title: LoroSchema.text(),
       count: LoroSchema.counter(),
       messages: LoroSchema.movableList(
-        LoroSchema.plain.struct({
-          author: LoroSchema.plain.string(),
+        Schema.struct({
+          author: Schema.string(),
           body: LoroSchema.text(),
         }),
       ),

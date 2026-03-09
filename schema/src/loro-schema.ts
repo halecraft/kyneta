@@ -28,6 +28,7 @@ import {
   type MapSchema,
   type PositionalSumSchema,
   type DiscriminatedSumSchema,
+  type PlainSchema,
 } from "./schema.js"
 
 import type { Schema as SchemaType } from "./schema.js"
@@ -82,10 +83,14 @@ function tree<S extends SchemaType>(
 // Plain sub-namespace — composition-constrained constructors
 // ---------------------------------------------------------------------------
 // These are the constructors Loro developers use for "value blobs" —
-// plain data stored inside CRDT containers. The type-level narrowing
-// that prevents nesting CRDT containers inside plain values is a
-// follow-up concern for when the Loro adapter integrates. For now,
-// they are functionally identical to the base Schema constructors.
+// plain data stored inside CRDT containers. The parameter types are
+// constrained to `PlainSchema` (the annotation-free subset of Schema),
+// which prevents nesting CRDT containers (text, counter, movable list,
+// tree) inside plain values at compile time.
+//
+// Return types remain as the original Schema interfaces (ProductSchema,
+// SequenceSchema, etc.) so that downstream consumers — interpret(),
+// Plain<S>, Writable<S>, describe(), validate() — work unchanged.
 
 const plain = {
   /** Scalar string. With options, produces a constrained scalar. */
@@ -129,34 +134,39 @@ const plain = {
     return Schema.any()
   },
 
-  /** Fixed-key plain struct (product with no annotation). */
-  struct<F extends Record<string, SchemaType>>(
+  /** Fixed-key plain struct (product with no annotation).
+   *  Fields are constrained to `PlainSchema` — no CRDT annotations allowed. */
+  struct<F extends Record<string, PlainSchema>>(
     fields: F,
   ): ProductSchema<F> {
     return Schema.struct(fields)
   },
 
-  /** Dynamic-key plain record (map with no annotation). */
-  record<I extends SchemaType>(item: I): MapSchema<I> {
+  /** Dynamic-key plain record (map with no annotation).
+   *  Item schema is constrained to `PlainSchema`. */
+  record<I extends PlainSchema>(item: I): MapSchema<I> {
     return Schema.record(item)
   },
 
-  /** Plain array (sequence with no annotation). */
-  array<I extends SchemaType>(item: I): SequenceSchema<I> {
+  /** Plain array (sequence with no annotation).
+   *  Item schema is constrained to `PlainSchema`. */
+  array<I extends PlainSchema>(item: I): SequenceSchema<I> {
     return Schema.list(item)
   },
 
-  /** Union of schemas. */
-  union<V extends SchemaType[]>(
+  /** Union of plain schemas.
+   *  Variants are constrained to `PlainSchema`. */
+  union<V extends PlainSchema[]>(
     ...variants: [...V]
   ): PositionalSumSchema<V> {
     return Schema.sum(variants)
   },
 
-  /** Discriminated union — variants keyed by discriminant value. */
+  /** Discriminated union of plain schemas.
+   *  Variants are constrained to `PlainSchema`. */
   discriminatedUnion<
     D extends string,
-    M extends Record<string, SchemaType>,
+    M extends Record<string, PlainSchema>,
   >(
     discriminant: D,
     variantMap: M,

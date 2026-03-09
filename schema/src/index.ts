@@ -26,6 +26,13 @@ export type {
   PositionalSumSchema,
   DiscriminatedSumSchema,
   AnnotatedSchema,
+  // Plain subset (no annotations) — used by LoroSchema.plain.* constraints
+  PlainSchema,
+  PlainProductSchema,
+  PlainSequenceSchema,
+  PlainMapSchema,
+  PlainPositionalSumSchema,
+  PlainDiscriminatedSumSchema,
   // Scalar kinds
   ScalarKind,
   ScalarPlain,
