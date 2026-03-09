@@ -1,158 +1,136 @@
 import { describe, expect, it } from "vitest"
-import { Schema, Zero } from "../index.js"
+import { Schema, LoroSchema, Zero } from "../index.js"
 
-describe("Zero.structural", () => {
-  describe("scalars", () => {
-    it("string → empty string", () => {
-      expect(Zero.structural(Schema.scalar("string"))).toBe("")
-    })
+// ===========================================================================
+// Base grammar tests — Schema only, no Loro annotations
+// ===========================================================================
 
-    it("number → 0", () => {
-      expect(Zero.structural(Schema.scalar("number"))).toBe(0)
-    })
-
-    it("boolean → false", () => {
-      expect(Zero.structural(Schema.scalar("boolean"))).toBe(false)
-    })
-
-    it("null → null", () => {
-      expect(Zero.structural(Schema.scalar("null"))).toBe(null)
-    })
-
-    it("undefined → undefined", () => {
-      expect(Zero.structural(Schema.scalar("undefined"))).toBe(undefined)
-    })
-
-    it("bytes → empty Uint8Array", () => {
-      const result = Zero.structural(Schema.scalar("bytes"))
-      expect(result).toBeInstanceOf(Uint8Array)
-      expect((result as Uint8Array).length).toBe(0)
-    })
-
-    it("any → undefined", () => {
-      expect(Zero.structural(Schema.scalar("any"))).toBe(undefined)
-    })
+describe("Zero.structural: scalars", () => {
+  it("string → empty string", () => {
+    expect(Zero.structural(Schema.scalar("string"))).toBe("")
   })
 
-  describe("structural kinds", () => {
-    it("product → object with recursed field defaults", () => {
-      expect(
-        Zero.structural(
-          Schema.product({
-            name: Schema.scalar("string"),
-            age: Schema.scalar("number"),
-            active: Schema.scalar("boolean"),
-          }),
-        ),
-      ).toEqual({ name: "", age: 0, active: false })
-    })
-
-    it("sequence → empty array", () => {
-      expect(Zero.structural(Schema.sequence(Schema.scalar("string")))).toEqual(
-        [],
-      )
-    })
-
-    it("map → empty object", () => {
-      expect(Zero.structural(Schema.map(Schema.scalar("number")))).toEqual({})
-    })
-
-    it("positional sum → first variant's zero", () => {
-      expect(
-        Zero.structural(
-          Schema.sum([Schema.scalar("string"), Schema.scalar("number")]),
-        ),
-      ).toBe("")
-    })
-
-    it("positional sum with empty variants → undefined", () => {
-      expect(Zero.structural(Schema.sum([]))).toBe(undefined)
-    })
-
-    it("discriminated sum → first variant with discriminant key injected", () => {
-      expect(
-        Zero.structural(
-          Schema.discriminatedSum("type", {
-            text: Schema.product({ content: Schema.scalar("string") }),
-            image: Schema.product({ url: Schema.scalar("string") }),
-          }),
-        ),
-      ).toEqual({ content: "", type: "text" })
-    })
+  it("number → 0", () => {
+    expect(Zero.structural(Schema.scalar("number"))).toBe(0)
   })
 
-  describe("annotations", () => {
-    it("text → empty string", () => {
-      expect(Zero.structural(Schema.text())).toBe("")
-    })
-
-    it("counter → 0", () => {
-      expect(Zero.structural(Schema.counter())).toBe(0)
-    })
-
-    it("doc delegates to inner product", () => {
-      expect(
-        Zero.structural(
-          Schema.doc({
-            title: Schema.text(),
-            count: Schema.counter(),
-          }),
-        ),
-      ).toEqual({ title: "", count: 0 })
-    })
-
-    it("movableList delegates to inner sequence → empty array", () => {
-      expect(
-        Zero.structural(Schema.movableList(Schema.string())),
-      ).toEqual([])
-    })
-
-    it("unknown annotation without inner → undefined", () => {
-      expect(Zero.structural(Schema.annotated("custom-thing"))).toBe(undefined)
-    })
-
-    it("unknown annotation with inner → delegates to inner", () => {
-      expect(
-        Zero.structural(Schema.annotated("custom", Schema.scalar("number"))),
-      ).toBe(0)
-    })
+  it("boolean → false", () => {
+    expect(Zero.structural(Schema.scalar("boolean"))).toBe(false)
   })
 
-  describe("nested schemas", () => {
-    it("produces correct defaults for a realistic document schema", () => {
-      const chatDoc = Schema.doc({
-        title: Schema.text(),
-        count: Schema.counter(),
-        messages: Schema.list(
-          Schema.struct({
-            author: Schema.string(),
-            body: Schema.text(),
-          }),
-        ),
-        settings: Schema.struct({
-          darkMode: Schema.boolean(),
-          fontSize: Schema.number(),
+  it("null → null", () => {
+    expect(Zero.structural(Schema.scalar("null"))).toBe(null)
+  })
+
+  it("undefined → undefined", () => {
+    expect(Zero.structural(Schema.scalar("undefined"))).toBe(undefined)
+  })
+
+  it("bytes → empty Uint8Array", () => {
+    const result = Zero.structural(Schema.scalar("bytes"))
+    expect(result).toBeInstanceOf(Uint8Array)
+    expect((result as Uint8Array).length).toBe(0)
+  })
+
+  it("any → undefined", () => {
+    expect(Zero.structural(Schema.scalar("any"))).toBe(undefined)
+  })
+})
+
+describe("Zero.structural: structural kinds", () => {
+  it("product → object with recursed field defaults", () => {
+    expect(
+      Zero.structural(
+        Schema.product({
+          name: Schema.scalar("string"),
+          age: Schema.scalar("number"),
+          active: Schema.scalar("boolean"),
         }),
-        tags: Schema.list(Schema.string()),
-        metadata: Schema.record(Schema.any()),
-      })
+      ),
+    ).toEqual({ name: "", age: 0, active: false })
+  })
 
-      expect(Zero.structural(chatDoc)).toEqual({
-        title: "",
-        count: 0,
-        messages: [],
-        settings: { darkMode: false, fontSize: 0 },
-        tags: [],
-        metadata: {},
-      })
+  it("sequence → empty array", () => {
+    expect(Zero.structural(Schema.sequence(Schema.scalar("string")))).toEqual(
+      [],
+    )
+  })
+
+  it("map → empty object", () => {
+    expect(Zero.structural(Schema.map(Schema.scalar("number")))).toEqual({})
+  })
+
+  it("positional sum → first variant's zero", () => {
+    expect(
+      Zero.structural(
+        Schema.sum([Schema.scalar("string"), Schema.scalar("number")]),
+      ),
+    ).toBe("")
+  })
+
+  it("positional sum with empty variants → undefined", () => {
+    expect(Zero.structural(Schema.sum([]))).toBe(undefined)
+  })
+
+  it("discriminated sum → first variant with discriminant key injected", () => {
+    expect(
+      Zero.structural(
+        Schema.discriminatedSum("type", {
+          text: Schema.product({ content: Schema.scalar("string") }),
+          image: Schema.product({ url: Schema.scalar("string") }),
+        }),
+      ),
+    ).toEqual({ content: "", type: "text" })
+  })
+})
+
+describe("Zero.structural: generic annotations", () => {
+  it("unknown annotation without inner → undefined", () => {
+    expect(Zero.structural(Schema.annotated("custom-thing"))).toBe(undefined)
+  })
+
+  it("unknown annotation with inner → delegates to inner", () => {
+    expect(
+      Zero.structural(Schema.annotated("custom", Schema.scalar("number"))),
+    ).toBe(0)
+  })
+})
+
+describe("Zero.structural: doc (structural root)", () => {
+  it("doc with scalar fields", () => {
+    expect(
+      Zero.structural(
+        Schema.doc({
+          name: Schema.string(),
+          count: Schema.number(),
+          active: Schema.boolean(),
+        }),
+      ),
+    ).toEqual({ name: "", count: 0, active: false })
+  })
+
+  it("doc with nested struct, list, record", () => {
+    const schema = Schema.doc({
+      settings: Schema.struct({
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
+      }),
+      tags: Schema.list(Schema.string()),
+      metadata: Schema.record(Schema.any()),
+    })
+
+    expect(Zero.structural(schema)).toEqual({
+      settings: { darkMode: false, fontSize: 0 },
+      tags: [],
+      metadata: {},
     })
   })
 })
 
-describe("Zero.overlay", () => {
+describe("Zero.overlay: base grammar", () => {
   const docSchema = Schema.doc({
-    title: Schema.text(),
-    count: Schema.counter(),
+    title: Schema.string(),
+    count: Schema.number(),
     settings: Schema.struct({
       darkMode: Schema.boolean(),
       fontSize: Schema.number(),
@@ -173,7 +151,7 @@ describe("Zero.overlay", () => {
   it("primary wins at scalar leaves", () => {
     const primary = { title: "Custom" }
     const fallback = { title: "" }
-    const schema = Schema.doc({ title: Schema.text() })
+    const schema = Schema.doc({ title: Schema.string() })
     const result = Zero.overlay(primary, fallback, schema) as Record<
       string,
       unknown
@@ -246,5 +224,64 @@ describe("Zero.for and Zero.partial", () => {
     const schema = Schema.doc({ x: Schema.number() })
     const value = { x: 42 }
     expect(Zero.partial(schema, value)).toBe(value)
+  })
+})
+
+// ===========================================================================
+// LoroSchema tests — Loro-specific annotation defaults
+// ===========================================================================
+
+describe("Zero.structural: LoroSchema annotations", () => {
+  it("text → empty string", () => {
+    expect(Zero.structural(LoroSchema.text())).toBe("")
+  })
+
+  it("counter → 0", () => {
+    expect(Zero.structural(LoroSchema.counter())).toBe(0)
+  })
+
+  it("movableList → empty array", () => {
+    expect(
+      Zero.structural(LoroSchema.movableList(LoroSchema.plain.string())),
+    ).toEqual([])
+  })
+
+  it("doc with Loro annotations delegates correctly", () => {
+    expect(
+      Zero.structural(
+        LoroSchema.doc({
+          title: LoroSchema.text(),
+          count: LoroSchema.counter(),
+        }),
+      ),
+    ).toEqual({ title: "", count: 0 })
+  })
+
+  it("realistic Loro document schema", () => {
+    const chatDoc = LoroSchema.doc({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+      messages: Schema.list(
+        LoroSchema.plain.struct({
+          author: LoroSchema.plain.string(),
+          body: LoroSchema.text(),
+        }),
+      ),
+      settings: LoroSchema.plain.struct({
+        darkMode: LoroSchema.plain.boolean(),
+        fontSize: LoroSchema.plain.number(),
+      }),
+      tags: Schema.list(LoroSchema.plain.string()),
+      metadata: Schema.record(LoroSchema.plain.any()),
+    })
+
+    expect(Zero.structural(chatDoc)).toEqual({
+      title: "",
+      count: 0,
+      messages: [],
+      settings: { darkMode: false, fontSize: 0 },
+      tags: [],
+      metadata: {},
+    })
   })
 })

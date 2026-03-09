@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import {
   Schema,
+  LoroSchema,
   Zero,
   interpret,
   createInterpreter,
@@ -12,10 +13,14 @@ import {
 } from "../index.js"
 import type { Interpreter, Path } from "../index.js"
 
+// ===========================================================================
+// Base grammar tests — Schema only, no Loro annotations
+// ===========================================================================
+
 describe("interpret: catamorphism laziness", () => {
   const docSchema = Schema.doc({
-    title: Schema.text(),
-    count: Schema.counter(),
+    title: Schema.string(),
+    count: Schema.number(),
     settings: Schema.struct({
       darkMode: Schema.boolean(),
       fontSize: Schema.number(),
@@ -64,8 +69,8 @@ describe("interpret: catamorphism laziness", () => {
 describe("interpret: zero equivalence", () => {
   it("zeroInterpreter produces the same result as Zero.structural for a flat doc", () => {
     const schema = Schema.doc({
-      title: Schema.text(),
-      count: Schema.counter(),
+      title: Schema.string(),
+      count: Schema.number(),
       items: Schema.list(Schema.string()),
     })
 
@@ -114,8 +119,8 @@ describe("interpret: zero equivalence", () => {
 describe("interpret: plain round-trip", () => {
   it("reads a flat document correctly", () => {
     const schema = Schema.doc({
-      title: Schema.text(),
-      count: Schema.counter(),
+      title: Schema.string(),
+      count: Schema.number(),
     })
 
     const store = { title: "Hello", count: 42 }
@@ -125,12 +130,12 @@ describe("interpret: plain round-trip", () => {
 
   it("reads a nested document with all structural kinds", () => {
     const schema = Schema.doc({
-      title: Schema.text(),
-      count: Schema.counter(),
+      title: Schema.string(),
+      count: Schema.number(),
       messages: Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: Schema.text(),
+          body: Schema.string(),
           likes: Schema.number(),
         }),
       ),
@@ -160,8 +165,8 @@ describe("interpret: plain round-trip", () => {
 
   it("handles missing data gracefully (returns undefined for missing leaves)", () => {
     const schema = Schema.doc({
-      title: Schema.text(),
-      count: Schema.counter(),
+      title: Schema.string(),
+      count: Schema.number(),
     })
 
     // Sparse store — count is missing
@@ -173,18 +178,6 @@ describe("interpret: plain round-trip", () => {
 })
 
 describe("interpret: schema constructors produce correct grammar nodes", () => {
-  it("Schema.text() produces annotated with tag 'text'", () => {
-    const s = Schema.text()
-    expect(s._kind).toBe("annotated")
-    expect(s.tag).toBe("text")
-  })
-
-  it("Schema.counter() produces annotated with tag 'counter'", () => {
-    const s = Schema.counter()
-    expect(s._kind).toBe("annotated")
-    expect(s.tag).toBe("counter")
-  })
-
   it("Schema.struct() produces a product", () => {
     const s = Schema.struct({ x: Schema.number() })
     expect(s._kind).toBe("product")
@@ -201,23 +194,32 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
   })
 
   it("Schema.doc() produces annotated('doc', product(...))", () => {
-    const s = Schema.doc({ title: Schema.text() })
+    const s = Schema.doc({ title: Schema.string() })
     expect(s._kind).toBe("annotated")
     expect(s.tag).toBe("doc")
     expect(s.schema?._kind).toBe("product")
-  })
-
-  it("Schema.movableList() produces annotated('movable', sequence(...))", () => {
-    const s = Schema.movableList(Schema.string())
-    expect(s._kind).toBe("annotated")
-    expect(s.tag).toBe("movable")
-    expect(s.schema?._kind).toBe("sequence")
   })
 
   it("Schema.string() produces a bare scalar", () => {
     const s = Schema.string()
     expect(s._kind).toBe("scalar")
     expect(s.scalarKind).toBe("string")
+  })
+
+  it("Schema.nullable() produces a positional sum with null first", () => {
+    const s = Schema.nullable(Schema.string())
+    expect(s._kind).toBe("sum")
+    expect(s.variants).toHaveLength(2)
+    expect(s.variants[0]._kind).toBe("scalar")
+    expect((s.variants[0] as any).scalarKind).toBe("null")
+    expect(s.variants[1]._kind).toBe("scalar")
+    expect((s.variants[1] as any).scalarKind).toBe("string")
+  })
+
+  it("Schema.annotated() produces annotated with custom tag", () => {
+    const s = Schema.annotated("custom")
+    expect(s._kind).toBe("annotated")
+    expect(s.tag).toBe("custom")
   })
 })
 
@@ -242,7 +244,7 @@ describe("interpret: enrich combinator", () => {
 
     const enriched = enrich(zeroInterpreter, withFeed)
     const schema = Schema.doc({
-      title: Schema.text(),
+      title: Schema.string(),
       settings: Schema.struct({
         darkMode: Schema.boolean(),
       }),
@@ -255,7 +257,7 @@ describe("interpret: enrich combinator", () => {
   it("enrich preserves product-level results (enrich is for object-producing interpreters)", () => {
     // enrich is designed for interpreters that produce objects (like
     // writableInterpreter), not for interpreters that produce primitives
-    // (like zeroInterpreter which returns "" for text). Verify at the
+    // (like zeroInterpreter which returns "" for string). Verify at the
     // product level where it works correctly.
     const FEED_SYM = Symbol.for("kinetic:feed")
     const withMarker = (result: unknown, _ctx: unknown, _path: Path) => {
@@ -318,7 +320,7 @@ describe("interpret: path accumulation", () => {
     }
 
     const schema = Schema.doc({
-      title: Schema.text(),
+      title: Schema.string(),
       settings: Schema.struct({
         darkMode: Schema.boolean(),
       }),
@@ -332,8 +334,8 @@ describe("interpret: path accumulation", () => {
     // Inner product at [] (annotation doesn't advance path)
     expect(paths[1]).toEqual({ kind: "product", path: [] })
 
-    // title: annotated("text") at [key:"title"]
-    const titlePath = paths.find((p) => p.kind === "annotated:text")
+    // title: scalar at [key:"title"]
+    const titlePath = paths.find((p) => p.kind === "scalar:string")
     expect(titlePath?.path).toEqual([{ type: "key", key: "title" }])
 
     // settings: product at [key:"settings"]
@@ -348,5 +350,78 @@ describe("interpret: path accumulation", () => {
       { type: "key", key: "settings" },
       { type: "key", key: "darkMode" },
     ])
+  })
+})
+
+// ===========================================================================
+// LoroSchema tests — Loro-specific annotation constructors
+// ===========================================================================
+
+describe("interpret: LoroSchema constructors produce correct grammar nodes", () => {
+  it("LoroSchema.text() produces annotated with tag 'text'", () => {
+    const s = LoroSchema.text()
+    expect(s._kind).toBe("annotated")
+    expect(s.tag).toBe("text")
+  })
+
+  it("LoroSchema.counter() produces annotated with tag 'counter'", () => {
+    const s = LoroSchema.counter()
+    expect(s._kind).toBe("annotated")
+    expect(s.tag).toBe("counter")
+  })
+
+  it("LoroSchema.movableList() produces annotated('movable', sequence(...))", () => {
+    const s = LoroSchema.movableList(Schema.string())
+    expect(s._kind).toBe("annotated")
+    expect(s.tag).toBe("movable")
+    expect(s.schema?._kind).toBe("sequence")
+  })
+
+  it("LoroSchema.tree() produces annotated('tree', product(...))", () => {
+    const s = LoroSchema.tree(Schema.struct({ label: Schema.string() }))
+    expect(s._kind).toBe("annotated")
+    expect(s.tag).toBe("tree")
+    expect(s.schema?._kind).toBe("product")
+  })
+})
+
+describe("interpret: LoroSchema zero equivalence for annotations", () => {
+  it("zeroInterpreter handles text annotation (empty string)", () => {
+    const schema = LoroSchema.doc({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+    })
+
+    const viaZero = Zero.structural(schema)
+    const viaInterp = interpret(schema, zeroInterpreter, undefined)
+    expect(viaInterp).toEqual(viaZero)
+    expect(viaZero).toEqual({ title: "", count: 0 })
+  })
+})
+
+describe("interpret: LoroSchema plain round-trip with annotations", () => {
+  it("reads a document with Loro annotations correctly", () => {
+    const schema = LoroSchema.doc({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+      messages: LoroSchema.movableList(
+        LoroSchema.plain.struct({
+          author: LoroSchema.plain.string(),
+          body: LoroSchema.text(),
+        }),
+      ),
+    })
+
+    const store = {
+      title: "My Chat",
+      count: 42,
+      messages: [
+        { author: "Alice", body: "Hello!" },
+        { author: "Bob", body: "Hi there" },
+      ],
+    }
+
+    const result = interpret(schema, plainInterpreter, store)
+    expect(result).toEqual(store)
   })
 })

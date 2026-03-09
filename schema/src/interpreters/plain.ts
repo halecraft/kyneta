@@ -51,8 +51,8 @@ function readPath(store: unknown, path: Path): unknown {
  * ```ts
  * const store = { title: "Hello", count: 42, tags: ["a", "b"] }
  * const schema = Schema.doc({
- *   title: Schema.text(),
- *   count: Schema.counter(),
+ *   title: Schema.string(),
+ *   count: Schema.number(),
  *   tags: Schema.list(Schema.string()),
  * })
  * const result = interpret(schema, plainInterpreter, store)
@@ -61,7 +61,7 @@ function readPath(store: unknown, path: Path): unknown {
  *
  * ### Annotations are transparent
  *
- * `Schema.text()` and `Schema.string()` both read a string from
+ * `LoroSchema.text()` and `Schema.string()` both read a string from
  * the store. The plain interpreter doesn't distinguish between annotated
  * and unannotated nodes — it reads from the same path regardless.
  */

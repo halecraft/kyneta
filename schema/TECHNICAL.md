@@ -20,11 +20,11 @@ SchemaF<A> =
   | Annotated(tag, A?)              — semantic enrichment (text, counter, movable, tree, doc)
 ```
 
-Annotations attach backend semantics without changing the recursive structure. `Schema.text()` is `annotated("text")`. `Schema.counter()` is `annotated("counter")`. `Schema.movableList(item)` is `annotated("movable", sequence(item))`. The annotation set is open — third-party backends define their own tags.
+Annotations attach backend semantics without changing the recursive structure. `LoroSchema.text()` is `annotated("text")`. `LoroSchema.counter()` is `annotated("counter")`. `LoroSchema.movableList(item)` is `annotated("movable", sequence(item))`. The annotation set is open — third-party backends define their own tags.
 
 ### Composition Constraints Are Backend-Specific
 
-Even with a unified grammar, Loro imposes validity rules (e.g. you can't nest a CRDT container inside a plain value blob). These are **well-formedness rules** — context-sensitive constraints layered on the context-free grammar. The solution: the internal `Schema` type is unconstrained; the developer-facing constructor API (`Schema.text()`, `Schema.struct()`, etc.) uses TypeScript's type system to enforce backend-specific constraints at build time.
+Even with a unified grammar, Loro imposes validity rules (e.g. you can't nest a CRDT container inside a plain value blob). These are **well-formedness rules** — context-sensitive constraints layered on the context-free grammar. The solution: the internal `Schema` type is unconstrained; the developer-facing constructor API (`LoroSchema.text()`, `LoroSchema.plain.struct()`, etc.) uses TypeScript's type system to enforce backend-specific constraints at build time.
 
 ### Annotations Unify Leaf CRDTs and Structural Modifiers
 
@@ -45,7 +45,7 @@ One recursive `Schema` type discriminated by `_kind`:
 | `sum` | `Schema.sum([a, b])` | Positional or discriminated union |
 | `annotated` | `Schema.annotated("text")` | Open tag + optional inner schema + optional metadata |
 
-Developer-facing sugar (`Schema.text()`, `Schema.struct()`, `Schema.doc()`, `Schema.string()`, etc.) produces nodes in this grammar.
+Developer-facing sugar (`Schema.struct()`, `Schema.doc()`, `Schema.string()`, etc.) produces nodes in this grammar. Loro-specific annotation constructors (`LoroSchema.text()`, `LoroSchema.counter()`, `LoroSchema.movableList()`, `LoroSchema.tree()`) live in the `LoroSchema` namespace (`src/loro-schema.ts`).
 
 ### Actions (`src/action.ts`)
 

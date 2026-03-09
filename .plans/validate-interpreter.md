@@ -43,11 +43,13 @@ Additionally, the `change` package supports value-domain constraints on scalars 
 
 ## Gap
 
-- `Schema.plain` sub-namespace exists with duplicate constructors and is the only home for scalars.
+- ~~`Schema.plain` sub-namespace exists with duplicate constructors and is the only home for scalars.~~ ✅ Phase 1
+- ~~`Schema.nullable`, `Schema.union`, `Schema.discriminatedUnion` are absent from the top level.~~ ✅ Phase 1
+- ~~Loro-specific annotations (`text`, `counter`, `movableList`, `tree`) leak into the backend-agnostic `Schema` namespace.~~ ✅ Phase 1b
+- Two redundant path representations: the catamorphism's typed `Path` (discriminated `PathSegment[]`) and the writable layer's flat `string[]`. The writable layer converts at every interpreter case boundary via `toStorePath()`, discarding the key-vs-index distinction. The `readPath` utility in `plain.ts` is module-private and duplicated in spirit by `readByPath` in `writable.ts`.
 - `ScalarSchema` has no `constraint` field.
 - `ScalarPlain<K>` ignores any value-domain narrowing.
 - `Plain<S>` and `Writable<S>` don't account for constrained scalars.
-- `Schema.nullable`, `Schema.union`, `Schema.discriminatedUnion` are absent from the top level.
 - No validate interpreter, `SchemaValidationError`, or `validate()` / `tryValidate()` function exists.
 - `describe()` has no awareness of scalar constraints or nullable sugar.
 - `Zero.structural` doesn't account for constrained scalars.
@@ -97,6 +99,26 @@ Schema
 - Task: Update barrel exports in `index.ts` — remove any `plain`-related references. 🟢
 - Task: Verify all 228 existing tests pass after migration. 🟢
 
+### Phase 1c: Unify path representation 🔴
+
+Eliminate the redundant `string[]` path representation. Make the catamorphism's typed `Path` the single canonical path format across all interpreters and infrastructure.
+
+**Motivation:** Two path representations exist — the catamorphism's `Path` (array of `{ type: "key", key }` | `{ type: "index", index }` segments) and the writable layer's flat `string[]`. The writable layer converts via `toStorePath()` at every interpreter case boundary, losing the key-vs-index distinction. This distinction matters for human-readable error paths (`tasks[0].author` vs `tasks.0.author`) and is needed by the validate interpreter. Rather than extracting yet another `readPath` utility for Phase 3, unify now so all interpreters share one path type and one read function.
+
+- Task: Change `readByPath(store: Store, path: readonly string[])` in `writable.ts` to accept `Path` instead of `string[]`. The loop body changes from indexing by `key` to branching on `seg.type` — identical to the private `readPath` in `plain.ts`. 🔴
+- Task: Change `writeByPath(store: Store, path: readonly string[], value: unknown)` to accept `Path`. Same mechanical change. 🔴
+- Task: Change `applyActionToStore` to accept `Path` for its path parameter. 🔴
+- Task: Change `WritableContext.dispatch` signature from `(storePath: readonly string[], action: ActionBase) => void` to `(path: Path, action: ActionBase) => void`. 🔴
+- Task: Change `PendingAction.path` from `readonly string[]` to `Path`. 🔴
+- Task: Update `createWritableContext` — the `dispatch` closure and `pending` array use `Path`. 🔴
+- Task: Update all call sites in `writableInterpreter` — remove `toStorePath(path)` calls. Each case already receives `path: Path` from the catamorphism; pass it directly to `readByPath`, `writeByPath`, `ctx.dispatch`, and ref constructors. 🔴
+- Task: Update `createTextRef`, `createCounterRef`, `createScalarRef` to accept `Path` instead of `readonly string[]`. 🔴
+- Task: Update `with-feed.ts` — `pathKey`, `subscribeToPath`, `notifySubscribers`, `createFeedForPath`, `feedableFlush`, and the `withFeed` decorator all switch from `string[]` to `Path`. The `pathKey` function becomes `path.map(seg => seg.type === "key" ? seg.key : String(seg.index)).join("\0")`. 🔴
+- Task: Delete `toStorePath()` from `writable.ts` and remove its export from `index.ts`. 🔴
+- Task: Delete the private `readPath` from `plain.ts` — replace its call sites with the now-`Path`-compatible `readByPath` imported from `writable.ts`. 🔴
+- Task: Export `readByPath` from `index.ts` (already exported, just verify signature updated). 🔴
+- Task: Verify all 238 tests pass. No behavioral change — this is a pure representation unification. 🔴
+
 ### Phase 2: Scalar value-domain constraints 🔴
 
 Add an optional `constraint` field to `ScalarSchema` that carries both the type-level narrowing and the runtime values for validation.
@@ -135,8 +157,8 @@ This avoids building two separate interpreters or bolting a "collecting mode" on
   - `sum` (discriminated): read the value at path. Check it's an object. Read the discriminant key. Check it's a string and exists in the variant map. Validate through the matching variant via `byKey`.
   - `annotated`: leaf annotations (`text` → check string, `counter` → check number). Structural annotations (`doc`, `movable`, `tree` → delegate to inner).
 - Task: Create `SchemaValidationError` class in `validate.ts`. Fields: `path: string`, `expected: string`, `actual: unknown`. Path formatted as dot-separated with bracket notation for indices (e.g. `messages[0].author`). 🔴
-- Task: Create `formatPath(path: Path): string` helper that converts the catamorphism's `Path` segments to the human-readable string for error reporting. Empty path → `"root"`. 🔴
-- Task: Create `readPath(store: unknown, path: Path): unknown` helper (or import from `plain.ts` — currently it's a module-private function; either extract to a shared utility or duplicate). 🔴
+- Task: Create `formatPath(path: Path): string` helper that converts `Path` segments to the human-readable string for error reporting. Empty path → `"root"`. This is trivial because `Path` preserves the key-vs-index distinction (thanks to Phase 1c). 🔴
+- Task: Use `readByPath` from `writable.ts` (already `Path`-compatible after Phase 1c) — no new utility needed. 🔴
 - Task: Create public `validate<S extends Schema>(schema: S, value: unknown): Plain<S>`. Creates a `ValidateContext`, calls `interpret(schema, validateInterpreter, ctx)`, checks `ctx.errors.length > 0`, throws the first error if so, otherwise casts and returns the result. 🔴
 - Task: Create public `tryValidate<S extends Schema>(schema: S, value: unknown): { ok: true; value: Plain<S> } | { ok: false; errors: SchemaValidationError[] }`. Creates a `ValidateContext`, calls `interpret(schema, validateInterpreter, ctx)`, returns the appropriate discriminant based on `ctx.errors`. 🔴
 - Task: Update barrel exports in `index.ts`. 🔴
@@ -170,7 +192,8 @@ This avoids building two separate interpreters or bolting a "collecting mode" on
 
 Tests are distributed across Phases 1-3. Key risk areas:
 
-- **Namespace flattening migration volume (Phase 1).** ~90+ occurrences of `Schema.plain.*` across tests, example, and source. The migration is mechanical (find-and-replace) and low-risk, but thoroughness is required. The `Schema.plain.array(...)` → `Schema.list(...)` rename is the only non-trivial mapping (only 3 call sites).
+- **Namespace flattening migration volume (Phase 1).** ~90+ occurrences of `Schema.plain.*` across tests, example, and source. ✅ Complete.
+- **Path unification is behaviorally invisible (Phase 1c).** The `string[]` → `Path` change is a pure representation swap. All existing tests must pass without modification. The risk is mechanical (many call sites in `writable.ts` and `with-feed.ts`) but not semantic — the JS object access patterns are identical since `obj[String(index)]` and `obj[index]` produce the same result. No new tests needed; existing writable and feed tests provide coverage.
 - **Backward compatibility of `ScalarSchema<K, V>` (Phase 2).** The second type parameter must default cleanly so that all existing `ScalarSchema<"string">` usages continue to work. Every existing test must pass without modification after this change.
 - **`Plain<S>` recursion depth (Phase 2).** Adding a second type parameter to the scalar case adds one more conditional branch. Verify no "excessively deep" errors on the realistic end-to-end schema in the types test.
 - **Positional sum validation with error rollback (Phase 3).** The collecting interpreter tries each variant, rolling back errors via `errors.length = mark`. Must verify that (a) successful variant produces zero spurious errors, (b) all-fail produces exactly one "expected one of union variants" error (not N variant-level errors), (c) nullable sums produce nullable-aware error messages.
@@ -183,16 +206,16 @@ This work is contained within `packages/schema`, which has **no dependents and n
 
 Within `packages/schema`, the Phase 1 namespace flattening touches every file that references `Schema.plain.*`:
 
-1. `schema.ts` — remove `plain` object, add top-level constructors. All other source files import from `schema.ts` but reference the `Schema` types (not the `plain` namespace), so they are unaffected at the type level.
+1. `schema.ts` — remove `plain` object, add top-level constructors. ✅ Phase 1
 2. `describe.ts` — no changes needed in Phase 1 (walks `_kind`, not constructors). Phase 2 adds constraint and nullable rendering.
-3. `interpret.ts`, `combinators.ts`, `interpreters/*.ts` — no changes needed (receive `ScalarSchema` generically).
+3. `interpret.ts`, `combinators.ts` — no changes needed (receive `ScalarSchema` generically).
 4. `zero.ts` — must read `constraint` from `ScalarSchema` in Phase 2.
 5. `interpreters/zero.ts` — must read `constraint` in Phase 2.
-6. `interpreters/writable.ts` — `Plain<S>` and `Writable<S>` types must account for constrained scalars in Phase 2. Runtime behavior unchanged (writable doesn't validate).
-7. `interpreters/plain.ts` — no changes (reads values regardless of constraint). Note: `readPath` is currently module-private here; Phase 3 may need to extract it to a shared utility or duplicate it in `validate.ts`.
-8. `interpreters/with-feed.ts` — no changes needed (decorator, doesn't inspect schema nodes directly).
-9. `index.ts` — update exports in Phase 1 (remove `plain` references) and Phase 3 (add validate exports).
-10. All test files — mechanical `Schema.plain.*` → `Schema.*` migration in Phase 1.
+6. `interpreters/writable.ts` — Phase 1c: path representation change (`string[]` → `Path` throughout, delete `toStorePath`). Phase 2: `Plain<S>` and `Writable<S>` types must account for constrained scalars. Runtime behavior unchanged (writable doesn't validate).
+7. `interpreters/plain.ts` — Phase 1c: delete private `readPath`, import shared `readByPath` from `writable.ts`. No other changes (reads values regardless of constraint).
+8. `interpreters/with-feed.ts` — Phase 1c: all path infrastructure (`pathKey`, `subscribeToPath`, `notifySubscribers`, `feedableFlush`) switches from `string[]` to `Path`. No other changes.
+9. `index.ts` — update exports in Phase 1 (remove `plain` references), Phase 1c (remove `toStorePath`), and Phase 3 (add validate exports).
+10. All test files — mechanical `Schema.plain.*` → `Schema.*` migration in Phase 1. ✅
 11. `example/main.ts` — migration in Phase 1, new features in Phase 4.
 
 The `writableInterpreter` receives `ScalarSchema` in its `scalar` case but only reads `scalarKind`. The `constraint` field is ignored by the writable interpreter (validation is not a mutation concern). Same for `plainInterpreter`. Only `zeroInterpreter`, `validateInterpreter`, and `describe` need awareness of `constraint`.
@@ -201,13 +224,14 @@ The `writableInterpreter` receives `ScalarSchema` in its `scalar` case but only 
 
 | Resource | Path | Relevance |
 |---|---|---|
-| Schema grammar | `packages/schema/src/schema.ts` | The file being restructured — `ScalarSchema`, `Schema` namespace, `plain` sub-namespace |
-| Interpreter interface | `packages/schema/src/interpret.ts` | `Interpreter<Ctx, A>`, `Path`/`PathSegment` for error paths |
-| Plain interpreter | `packages/schema/src/interpreters/plain.ts` | Pattern to follow — `Ctx` is root value, reads by path. Contains `readPath` (module-private) |
+| Schema grammar | `packages/schema/src/schema.ts` | `ScalarSchema`, `Schema` namespace (restructured in Phase 1) |
+| Interpreter interface | `packages/schema/src/interpret.ts` | `Interpreter<Ctx, A>`, `Path`/`PathSegment` — the canonical path type |
+| LoroSchema namespace | `packages/schema/src/loro-schema.ts` | Loro-specific constructors + `plain` sub-namespace (created in Phase 1b) |
+| Plain interpreter | `packages/schema/src/interpreters/plain.ts` | Pattern to follow — `Ctx` is root value, reads by path. Contains module-private `readPath` (to be deleted in Phase 1c) |
 | Zero interpreter | `packages/schema/src/interpreters/zero.ts` | Must update for constrained scalar defaults |
 | Zero module | `packages/schema/src/zero.ts` | `scalarDefault` and `structural` must account for constraints |
-| Writable types | `packages/schema/src/interpreters/writable.ts` | `ScalarPlain`, `Plain<S>`, `Writable<S>` to update |
-| Feed decorator | `packages/schema/src/interpreters/with-feed.ts` | No changes needed; listed for completeness |
+| Writable interpreter + types | `packages/schema/src/interpreters/writable.ts` | `ScalarPlain`, `Plain<S>`, `Writable<S>`, `readByPath`, `writeByPath`, `toStorePath`, `WritableContext.dispatch`, `PendingAction` — Phase 1c path unification + Phase 2 type updates |
+| Feed decorator | `packages/schema/src/interpreters/with-feed.ts` | Phase 1c: path infra (`pathKey`, `subscribeToPath`, etc.) switches from `string[]` to `Path` |
 | Describe | `packages/schema/src/describe.ts` | Must render constraints and nullable sugar |
 | Barrel exports | `packages/schema/src/index.ts` | Add/remove exports |
 | Change validation | `packages/change/src/validation.ts` | Reference implementation — the 230-line walker this replaces |
@@ -217,10 +241,10 @@ The `writableInterpreter` receives `ScalarSchema` in its `scalar` case but only 
 | Change string test | `packages/change/src/string-literal.test.ts` | Validation test cases for string literal constraints |
 | Existing type tests | `packages/schema/src/__tests__/types.test.ts` | Pattern for `expectTypeOf` type-level tests |
 | Existing zero tests | `packages/schema/src/__tests__/zero.test.ts` | Pattern for zero/default tests |
-| Existing describe tests | `packages/schema/src/__tests__/describe.test.ts` | ~35 occurrences to migrate `Schema.plain.*` calls |
-| Existing interpret tests | `packages/schema/src/__tests__/interpret.test.ts` | ~12 occurrences to migrate `Schema.plain.*` calls |
-| Existing writable tests | `packages/schema/src/__tests__/writable.test.ts` | ~6 occurrences to migrate `Schema.plain.*` calls |
-| Example | `packages/schema/example/main.ts` | Migrate and add validation section |
+| Existing describe tests | `packages/schema/src/__tests__/describe.test.ts` | LoroSchema annotation rendering tests |
+| Existing interpret tests | `packages/schema/src/__tests__/interpret.test.ts` | Catamorphism + LoroSchema constructor tests |
+| Existing writable tests | `packages/schema/src/__tests__/writable.test.ts` | Writable ref tests (path-sensitive, affected by Phase 1c) |
+| Example | `packages/schema/example/main.ts` | Uses `LoroSchema.plain.*` — add validation section in Phase 4 |
 | TECHNICAL.md | `packages/schema/TECHNICAL.md` | Update with new architecture |
 
 ## Alternatives Considered
@@ -254,6 +278,18 @@ We considered keeping some form of the `plain` namespace to enforce Loro's "no c
 - `TECHNICAL.md`: Document flattened namespace with rationale, add validate interpreter to interpreters table, document scalar constraints, document `nullable`/`union`/`discriminatedUnion`, document `SchemaValidationError`, document the collecting-interpreter architecture, note that backend composition constraints belong in adapter layers.
 - `example/README.md`: Add validation section description.
 - No top-level README.md changes needed (no public-facing API changes outside the package).
+
+## Learnings
+
+1. **The `change` package only constrains strings, not numbers or booleans.** `StringValueShape` has `options?: T[]`; `NumberValueShape` and `BooleanValueShape` do not. Phase 2 generalizes constraints to all three scalar kinds. There is no reference test corpus for number/boolean constraints — tests must be written from scratch.
+
+2. **The catamorphism's `sum` case passes `schema: SumSchema` directly.** The validate interpreter needs the variant count for positional sums (to try each `byIndex(i)`). This is available via `(schema as PositionalSumSchema).variants.length` — no changes to the `interpret()` walker needed.
+
+3. **Annotated leaf validation (`text`, `counter`) must read the value directly.** For leaf annotations, `inner` is `undefined` (no inner schema). The validate interpreter's `annotated` case must call `readByPath(ctx.root, path)` and check the type itself, same pattern as `plainInterpreter`. This is why Phase 1c's path unification matters — the validate interpreter needs `readByPath` to accept `Path`, which Phase 1c delivers.
+
+4. **The `change` package's union validation uses try/catch for variant probing.** The schema package's collecting interpreter with `errors.length = mark` rollback avoids exception overhead and is cleaner. This confirms the plan's architecture is a genuine improvement.
+
+5. **`toStorePath()` is exported from `index.ts` but has no external consumers.** The schema package has no dependents. Removing it in Phase 1c is safe.
 
 ## Changeset
 
@@ -333,16 +369,16 @@ LoroSchema
 
 ### Tasks
 
-- Task: Create `src/loro-schema.ts` containing the `LoroSchema` namespace object. It spreads `Schema` and adds `text`, `counter`, `movableList`, `tree`. 🔴
-- Task: Move `text()`, `counter()`, `movableList()`, `tree()` functions out of `schema.ts` into `loro-schema.ts`. Remove them from the `Schema` namespace object. The functions themselves are unchanged. 🔴
-- Task: Create the `LoroSchema.plain` sub-namespace with composition-constrained constructors. For now these are identical to the base constructors (the type-level narrowing that prevents CRDT nesting is a follow-up concern for when the Loro adapter integrates). 🔴
-- Task: Add `LoroSchema.doc()` that delegates to `Schema.doc()` — for symmetry so Loro users only need one import. 🔴
-- Task: Export `LoroSchema` from `index.ts`. 🔴
-- Task: Migrate tests and example to use `LoroSchema` where Loro-specific annotations are used. Tests that exercise the base grammar (e.g. `Schema.scalar(...)`, `Schema.struct(...)`) stay on `Schema`. Tests that use `text`, `counter`, `movableList`, `tree` move to `LoroSchema`. 🔴
-- Task: Update `describe.ts` — no changes needed (dispatches on tag strings, not constructor origin). 🔴
-- Task: Update `Plain<S>` and `Writable<S>` — no changes needed (dispatch on `AnnotatedSchema<"text">` etc., which is the same regardless of constructor origin). 🔴
-- Task: Update JSDoc and `TECHNICAL.md` to document the two-namespace design. 🔴
-- Task: Verify all 228 existing tests pass after migration. 🔴
+- Task: Create `src/loro-schema.ts` containing the `LoroSchema` namespace object. It spreads `Schema` and adds `text`, `counter`, `movableList`, `tree`. 🟢
+- Task: Move `text()`, `counter()`, `movableList()`, `tree()` functions out of `schema.ts` into `loro-schema.ts`. Remove them from the `Schema` namespace object. The functions themselves are unchanged. 🟢
+- Task: Create the `LoroSchema.plain` sub-namespace with composition-constrained constructors. For now these are identical to the base constructors (the type-level narrowing that prevents CRDT nesting is a follow-up concern for when the Loro adapter integrates). 🟢
+- Task: Add `LoroSchema.doc()` that delegates to `Schema.doc()` — for symmetry so Loro users only need one import. 🟢
+- Task: Export `LoroSchema` from `index.ts`. 🟢
+- Task: Migrate tests and example to use `LoroSchema` where Loro-specific annotations are used. Tests that exercise the base grammar (e.g. `Schema.scalar(...)`, `Schema.struct(...)`) stay on `Schema`. Tests that use `text`, `counter`, `movableList`, `tree` move to `LoroSchema`. 🟢
+- Task: Update `describe.ts` — no changes needed (dispatches on tag strings, not constructor origin). 🟢
+- Task: Update `Plain<S>` and `Writable<S>` — no changes needed (dispatch on `AnnotatedSchema<"text">` etc., which is the same regardless of constructor origin). 🟢
+- Task: Update JSDoc and `TECHNICAL.md` to document the two-namespace design. 🟢
+- Task: Verify all 238 tests pass after migration (228 original + 10 new from layered LoroSchema tests). 🟢
 
 ### Migration impact
 

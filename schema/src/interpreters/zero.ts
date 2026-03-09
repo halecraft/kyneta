@@ -49,8 +49,8 @@ function annotationDefault(tag: string): { value: unknown } | undefined {
  * import { Zero } from "../zero.js"
  *
  * const schema = Schema.doc({
- *   title: Schema.text(),
- *   count: Schema.counter(),
+ *   title: Schema.string(),
+ *   count: Schema.number(),
  *   items: Schema.list(Schema.string()),
  * })
  *

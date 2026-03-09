@@ -1,6 +1,7 @@
 import { describe, expectTypeOf, it } from "vitest"
 import {
   Schema,
+  LoroSchema,
   type ScalarSchema,
   type ProductSchema,
   type SequenceSchema,
@@ -57,29 +58,9 @@ describe("type-level: scalar kind literal preservation", () => {
 })
 
 describe("type-level: annotation tag literal preservation", () => {
-  it("Schema.text() → tag is literal 'text', not string", () => {
-    const s = Schema.text()
-    expectTypeOf(s.tag).toEqualTypeOf<"text">()
-  })
-
-  it("Schema.counter() → tag is literal 'counter'", () => {
-    const s = Schema.counter()
-    expectTypeOf(s.tag).toEqualTypeOf<"counter">()
-  })
-
   it("Schema.doc() → tag is literal 'doc'", () => {
-    const s = Schema.doc({ title: Schema.text() })
+    const s = Schema.doc({ title: Schema.string() })
     expectTypeOf(s.tag).toEqualTypeOf<"doc">()
-  })
-
-  it("Schema.movableList() → tag is literal 'movable'", () => {
-    const s = Schema.movableList(Schema.string())
-    expectTypeOf(s.tag).toEqualTypeOf<"movable">()
-  })
-
-  it("Schema.tree() → tag is literal 'tree'", () => {
-    const s = Schema.tree(Schema.struct({ label: Schema.string() }))
-    expectTypeOf(s.tag).toEqualTypeOf<"tree">()
   })
 
   it("Schema.annotated('custom') → tag is literal 'custom'", () => {
@@ -112,14 +93,14 @@ describe("type-level: product field key and type preservation", () => {
 
   it("Schema.struct fields preserve specific schema subtypes", () => {
     const s = Schema.struct({
-      title: Schema.text(),
-      count: Schema.counter(),
+      title: Schema.string(),
+      count: Schema.number(),
       tags: Schema.list(Schema.string()),
     })
 
     // Each field should be its specific schema subtype
-    expectTypeOf(s.fields.title._kind).toEqualTypeOf<"annotated">()
-    expectTypeOf(s.fields.count._kind).toEqualTypeOf<"annotated">()
+    expectTypeOf(s.fields.title._kind).toEqualTypeOf<"scalar">()
+    expectTypeOf(s.fields.count._kind).toEqualTypeOf<"scalar">()
     expectTypeOf(s.fields.tags._kind).toEqualTypeOf<"sequence">()
   })
 
@@ -134,7 +115,7 @@ describe("type-level: product field key and type preservation", () => {
 
   it("Schema.doc inner product preserves field types through annotation", () => {
     const s = Schema.doc({
-      title: Schema.text(),
+      title: Schema.string(),
       items: Schema.list(Schema.string()),
     })
 
@@ -197,12 +178,12 @@ describe("type-level: sum variant preservation", () => {
 describe("type-level: nested composition preserves types end-to-end", () => {
   it("a full doc schema preserves types through multiple levels of nesting", () => {
     const s = Schema.doc({
-      title: Schema.text(),
-      count: Schema.counter(),
+      title: Schema.string(),
+      count: Schema.number(),
       messages: Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: Schema.text(),
+          body: Schema.string(),
         }),
       ),
       settings: Schema.struct({
@@ -218,9 +199,9 @@ describe("type-level: nested composition preserves types end-to-end", () => {
     // Inner product's fields should be typed
     const inner = s.schema!
     if (inner._kind === "product") {
-      // title is annotated("text")
+      // title is scalar("string")
       const title = inner.fields.title
-      expectTypeOf(title._kind).toEqualTypeOf<"annotated">()
+      expectTypeOf(title._kind).toEqualTypeOf<"scalar">()
 
       // messages is a sequence
       const messages = inner.fields.messages
@@ -271,17 +252,7 @@ describe("type-level: ScalarPlain maps scalar kinds to TS types", () => {
   })
 })
 
-describe("type-level: Writable<S> for leaf annotations", () => {
-  it("Writable<text()> = TextRef", () => {
-    type Result = Writable<ReturnType<typeof Schema.text>>
-    expectTypeOf<Result>().toEqualTypeOf<TextRef>()
-  })
 
-  it("Writable<counter()> = CounterRef", () => {
-    type Result = Writable<ReturnType<typeof Schema.counter>>
-    expectTypeOf<Result>().toEqualTypeOf<CounterRef>()
-  })
-})
 
 describe("type-level: Writable<S> for scalars", () => {
   it("Writable<string()> = ScalarRef<string>", () => {
@@ -312,18 +283,6 @@ describe("type-level: Writable<S> for products and structs", () => {
       readonly active: ScalarRef<boolean>
     }>()
   })
-
-  it("Writable<struct with text and counter> maps annotations", () => {
-    const s = Schema.struct({
-      title: Schema.text(),
-      count: Schema.counter(),
-    })
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{
-      readonly title: TextRef
-      readonly count: CounterRef
-    }>()
-  })
 })
 
 describe("type-level: Writable<S> for sequences", () => {
@@ -337,14 +296,14 @@ describe("type-level: Writable<S> for sequences", () => {
     const s = Schema.list(
       Schema.struct({
         name: Schema.string(),
-        body: Schema.text(),
+        active: Schema.boolean(),
       }),
     )
     type Result = Writable<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<
       SequenceRef<{
         readonly name: ScalarRef<string>
-        readonly body: TextRef
+        readonly active: ScalarRef<boolean>
       }>
     >()
   })
@@ -353,8 +312,7 @@ describe("type-level: Writable<S> for sequences", () => {
 describe("type-level: Writable<S> for doc (annotated + product)", () => {
   it("Writable<doc({...})> unwraps the annotation and maps the inner product", () => {
     const s = Schema.doc({
-      title: Schema.text(),
-      count: Schema.counter(),
+      title: Schema.string(),
       settings: Schema.struct({
         darkMode: Schema.boolean(),
         fontSize: Schema.number(),
@@ -362,8 +320,7 @@ describe("type-level: Writable<S> for doc (annotated + product)", () => {
     })
     type Result = Writable<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<{
-      readonly title: TextRef
-      readonly count: CounterRef
+      readonly title: ScalarRef<string>
       readonly settings: {
         readonly darkMode: ScalarRef<boolean>
         readonly fontSize: ScalarRef<number>
@@ -372,15 +329,15 @@ describe("type-level: Writable<S> for doc (annotated + product)", () => {
   })
 })
 
-describe("type-level: Writable<S> end-to-end realistic schema", () => {
-  it("a full chat doc schema produces fully typed refs", () => {
-    const chatDoc = Schema.doc({
-      title: Schema.text(),
-      count: Schema.counter(),
+describe("type-level: Writable<S> end-to-end structural schema", () => {
+  it("a pure structural doc schema produces fully typed refs", () => {
+    const docSchema = Schema.doc({
+      title: Schema.string(),
+      count: Schema.number(),
       messages: Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: Schema.text(),
+          body: Schema.string(),
         }),
       ),
       settings: Schema.struct({
@@ -390,17 +347,17 @@ describe("type-level: Writable<S> end-to-end realistic schema", () => {
       metadata: Schema.record(Schema.any()),
     })
 
-    type Doc = Writable<typeof chatDoc>
+    type Doc = Writable<typeof docSchema>
 
     // Top-level fields are correctly typed
-    expectTypeOf<Doc["title"]>().toEqualTypeOf<TextRef>()
-    expectTypeOf<Doc["count"]>().toEqualTypeOf<CounterRef>()
+    expectTypeOf<Doc["title"]>().toEqualTypeOf<ScalarRef<string>>()
+    expectTypeOf<Doc["count"]>().toEqualTypeOf<ScalarRef<number>>()
 
     // Nested sequence of structs
     expectTypeOf<Doc["messages"]>().toEqualTypeOf<
       SequenceRef<{
         readonly author: ScalarRef<string>
-        readonly body: TextRef
+        readonly body: ScalarRef<string>
       }>
     >()
 
@@ -421,17 +378,7 @@ describe("type-level: Writable<S> end-to-end realistic schema", () => {
 // Plain<S> — the type-level catamorphism for plain JS types
 // ---------------------------------------------------------------------------
 
-describe("type-level: Plain<S> for leaf annotations", () => {
-  it("Plain<text()> = string", () => {
-    type Result = Plain<ReturnType<typeof Schema.text>>
-    expectTypeOf<Result>().toEqualTypeOf<string>()
-  })
 
-  it("Plain<counter()> = number", () => {
-    type Result = Plain<ReturnType<typeof Schema.counter>>
-    expectTypeOf<Result>().toEqualTypeOf<number>()
-  })
-})
 
 describe("type-level: Plain<S> for scalars", () => {
   it("Plain<string()> = string", () => {
@@ -483,10 +430,10 @@ describe("type-level: Plain<S> for products and structs", () => {
     }>()
   })
 
-  it("Plain<struct with text and counter> maps annotations to primitives", () => {
+  it("Plain<struct with scalars> maps to plain types", () => {
     const s = Schema.struct({
-      title: Schema.text(),
-      count: Schema.counter(),
+      title: Schema.string(),
+      count: Schema.number(),
     })
     type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<{
@@ -497,7 +444,7 @@ describe("type-level: Plain<S> for products and structs", () => {
 })
 
 describe("type-level: Plain<S> for sequences", () => {
-  it("Plain<list(plain.string())> = string[]", () => {
+  it("Plain<list(string())> = string[]", () => {
     const s = Schema.list(Schema.string())
     type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<string[]>()
@@ -507,7 +454,7 @@ describe("type-level: Plain<S> for sequences", () => {
     const s = Schema.list(
       Schema.struct({
         name: Schema.string(),
-        body: Schema.text(),
+        body: Schema.string(),
       }),
     )
     type Result = Plain<typeof s>
@@ -531,32 +478,11 @@ describe("type-level: Plain<S> for maps", () => {
   })
 })
 
-describe("type-level: Plain<S> for movable list", () => {
-  it("Plain<movableList(plain.string())> = string[]", () => {
-    const s = Schema.movableList(Schema.string())
-    type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<string[]>()
-  })
-
-  it("Plain<movableList(struct({...}))> = typed object[]", () => {
-    const s = Schema.movableList(
-      Schema.struct({
-        id: Schema.number(),
-        label: Schema.string(),
-      }),
-    )
-    type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<
-      { id: number; label: string }[]
-    >()
-  })
-})
-
 describe("type-level: Plain<S> for doc (annotated + product)", () => {
   it("Plain<doc({...})> unwraps the annotation and maps the inner product", () => {
     const s = Schema.doc({
-      title: Schema.text(),
-      count: Schema.counter(),
+      title: Schema.string(),
+      count: Schema.number(),
       settings: Schema.struct({
         darkMode: Schema.boolean(),
         fontSize: Schema.number(),
@@ -574,15 +500,15 @@ describe("type-level: Plain<S> for doc (annotated + product)", () => {
   })
 })
 
-describe("type-level: Plain<S> end-to-end realistic schema", () => {
-  it("a full chat doc schema produces fully typed plain object", () => {
-    const chatDoc = Schema.doc({
-      title: Schema.text(),
-      count: Schema.counter(),
+describe("type-level: Plain<S> end-to-end structural schema", () => {
+  it("a pure structural doc schema produces fully typed plain object", () => {
+    const docSchema = Schema.doc({
+      title: Schema.string(),
+      count: Schema.number(),
       messages: Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: Schema.text(),
+          body: Schema.string(),
         }),
       ),
       settings: Schema.struct({
@@ -592,7 +518,7 @@ describe("type-level: Plain<S> end-to-end realistic schema", () => {
       metadata: Schema.record(Schema.any()),
     })
 
-    type Doc = Plain<typeof chatDoc>
+    type Doc = Plain<typeof docSchema>
 
     // Top-level fields are correctly typed
     expectTypeOf<Doc["title"]>().toEqualTypeOf<string>()
@@ -610,6 +536,168 @@ describe("type-level: Plain<S> end-to-end realistic schema", () => {
     }>()
 
     // Record (dynamic keys)
+    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<{
+      [key: string]: unknown
+    }>()
+  })
+})
+
+// ===========================================================================
+// LoroSchema tests — Loro-specific annotation types
+// ===========================================================================
+
+describe("type-level: LoroSchema annotation tag literal preservation", () => {
+  it("LoroSchema.text() → tag is literal 'text'", () => {
+    const s = LoroSchema.text()
+    expectTypeOf(s.tag).toEqualTypeOf<"text">()
+  })
+
+  it("LoroSchema.counter() → tag is literal 'counter'", () => {
+    const s = LoroSchema.counter()
+    expectTypeOf(s.tag).toEqualTypeOf<"counter">()
+  })
+
+  it("LoroSchema.movableList() → tag is literal 'movable'", () => {
+    const s = LoroSchema.movableList(LoroSchema.plain.string())
+    expectTypeOf(s.tag).toEqualTypeOf<"movable">()
+  })
+
+  it("LoroSchema.tree() → tag is literal 'tree'", () => {
+    const s = LoroSchema.tree(LoroSchema.plain.struct({ label: LoroSchema.plain.string() }))
+    expectTypeOf(s.tag).toEqualTypeOf<"tree">()
+  })
+})
+
+describe("type-level: Writable<S> for Loro leaf annotations", () => {
+  it("Writable<text()> = TextRef", () => {
+    type Result = Writable<ReturnType<typeof LoroSchema.text>>
+    expectTypeOf<Result>().toEqualTypeOf<TextRef>()
+  })
+
+  it("Writable<counter()> = CounterRef", () => {
+    type Result = Writable<ReturnType<typeof LoroSchema.counter>>
+    expectTypeOf<Result>().toEqualTypeOf<CounterRef>()
+  })
+
+  it("Writable<struct with text and counter> maps annotations", () => {
+    const s = LoroSchema.plain.struct({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+    })
+    type Result = Writable<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{
+      readonly title: TextRef
+      readonly count: CounterRef
+    }>()
+  })
+})
+
+describe("type-level: Writable<S> end-to-end Loro schema", () => {
+  it("a Loro doc schema produces fully typed refs", () => {
+    const loroDoc = LoroSchema.doc({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+      messages: Schema.list(
+        LoroSchema.plain.struct({
+          author: LoroSchema.plain.string(),
+          body: LoroSchema.text(),
+        }),
+      ),
+      settings: LoroSchema.plain.struct({
+        darkMode: LoroSchema.plain.boolean(),
+        fontSize: LoroSchema.plain.number(),
+      }),
+      metadata: Schema.record(LoroSchema.plain.any()),
+    })
+
+    type Doc = Writable<typeof loroDoc>
+
+    expectTypeOf<Doc["title"]>().toEqualTypeOf<TextRef>()
+    expectTypeOf<Doc["count"]>().toEqualTypeOf<CounterRef>()
+
+    expectTypeOf<Doc["messages"]>().toEqualTypeOf<
+      SequenceRef<{
+        readonly author: ScalarRef<string>
+        readonly body: TextRef
+      }>
+    >()
+
+    expectTypeOf<Doc["settings"]>().toEqualTypeOf<{
+      readonly darkMode: ScalarRef<boolean>
+      readonly fontSize: ScalarRef<number>
+    }>()
+
+    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<{
+      readonly [key: string]: ScalarRef<unknown>
+    }>()
+  })
+})
+
+describe("type-level: Plain<S> for Loro leaf annotations", () => {
+  it("Plain<text()> = string", () => {
+    type Result = Plain<ReturnType<typeof LoroSchema.text>>
+    expectTypeOf<Result>().toEqualTypeOf<string>()
+  })
+
+  it("Plain<counter()> = number", () => {
+    type Result = Plain<ReturnType<typeof LoroSchema.counter>>
+    expectTypeOf<Result>().toEqualTypeOf<number>()
+  })
+})
+
+describe("type-level: Plain<S> for Loro movable list", () => {
+  it("Plain<movableList(string())> = string[]", () => {
+    const s = LoroSchema.movableList(LoroSchema.plain.string())
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<string[]>()
+  })
+
+  it("Plain<movableList(struct({...}))> = typed object[]", () => {
+    const s = LoroSchema.movableList(
+      LoroSchema.plain.struct({
+        id: LoroSchema.plain.number(),
+        label: LoroSchema.plain.string(),
+      }),
+    )
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<
+      { id: number; label: string }[]
+    >()
+  })
+})
+
+describe("type-level: Plain<S> end-to-end Loro schema", () => {
+  it("a Loro doc schema produces fully typed plain object", () => {
+    const loroDoc = LoroSchema.doc({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+      messages: Schema.list(
+        LoroSchema.plain.struct({
+          author: LoroSchema.plain.string(),
+          body: LoroSchema.text(),
+        }),
+      ),
+      settings: LoroSchema.plain.struct({
+        darkMode: LoroSchema.plain.boolean(),
+        fontSize: LoroSchema.plain.number(),
+      }),
+      metadata: Schema.record(LoroSchema.plain.any()),
+    })
+
+    type Doc = Plain<typeof loroDoc>
+
+    expectTypeOf<Doc["title"]>().toEqualTypeOf<string>()
+    expectTypeOf<Doc["count"]>().toEqualTypeOf<number>()
+
+    expectTypeOf<Doc["messages"]>().toEqualTypeOf<
+      { author: string; body: string }[]
+    >()
+
+    expectTypeOf<Doc["settings"]>().toEqualTypeOf<{
+      darkMode: boolean
+      fontSize: number
+    }>()
+
     expectTypeOf<Doc["metadata"]>().toEqualTypeOf<{
       [key: string]: unknown
     }>()

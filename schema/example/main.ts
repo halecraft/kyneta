@@ -13,6 +13,7 @@
 
 import {
   Schema,
+  LoroSchema,
   Zero,
   describe,
   interpret,
@@ -199,26 +200,26 @@ const log = (msg: string) => {
 
 section(1, "Define a Schema")
 
-const ProjectSchema = Schema.doc({
-  name: Schema.text(),
-  description: Schema.text(),
-  stars: Schema.counter(),
+const ProjectSchema = LoroSchema.doc({
+  name: LoroSchema.text(),
+  description: LoroSchema.text(),
+  stars: LoroSchema.counter(),
 
   tasks: Schema.list(
-    Schema.struct({
-      title: Schema.string(),
-      done: Schema.boolean(),
-      priority: Schema.number(),
+    LoroSchema.plain.struct({
+      title: LoroSchema.plain.string(),
+      done: LoroSchema.plain.boolean(),
+      priority: LoroSchema.plain.number(),
     }),
   ),
 
-  settings: Schema.struct({
-    visibility: Schema.string(),
-    maxTasks: Schema.number(),
-    archived: Schema.boolean(),
+  settings: LoroSchema.plain.struct({
+    visibility: LoroSchema.plain.string(),
+    maxTasks: LoroSchema.plain.number(),
+    archived: LoroSchema.plain.boolean(),
   }),
 
-  labels: Schema.record(Schema.string()),
+  labels: Schema.record(LoroSchema.plain.string()),
 })
 
 log(describe(ProjectSchema))

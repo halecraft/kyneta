@@ -1,7 +1,11 @@
 import { describe as testDescribe, expect, it } from "vitest"
-import { Schema, describe } from "../index.js"
+import { Schema, LoroSchema, describe } from "../index.js"
 
-testDescribe("describe", () => {
+// ===========================================================================
+// Base grammar tests — Schema only, no Loro annotations
+// ===========================================================================
+
+testDescribe("describe: base grammar", () => {
   testDescribe("scalars", () => {
     it("describes a bare scalar", () => {
       expect(describe(Schema.scalar("string"))).toBe("string")
@@ -21,20 +25,6 @@ testDescribe("describe", () => {
 
     it("describes bytes()", () => {
       expect(describe(Schema.bytes())).toBe("bytes")
-    })
-  })
-
-  testDescribe("leaf annotations", () => {
-    it("describes text", () => {
-      expect(describe(Schema.text())).toBe("text")
-    })
-
-    it("describes counter", () => {
-      expect(describe(Schema.counter())).toBe("counter")
-    })
-
-    it("describes unknown leaf annotation", () => {
-      expect(describe(Schema.annotated("timestamp"))).toBe("timestamp")
     })
   })
 
@@ -83,10 +73,6 @@ testDescribe("describe", () => {
   testDescribe("sequences", () => {
     it("describes list with inline scalar item", () => {
       expect(describe(Schema.list(Schema.string()))).toBe("list<string>")
-    })
-
-    it("describes list with inline annotation item", () => {
-      expect(describe(Schema.list(Schema.text()))).toBe("list<text>")
     })
 
     it("describes list with complex item on indented lines", () => {
@@ -202,55 +188,79 @@ testDescribe("describe", () => {
     })
   })
 
-  testDescribe("annotated with inner schema", () => {
-    it("describes doc with fields", () => {
+  testDescribe("doc (structural root)", () => {
+    it("describes doc with scalar fields", () => {
       const s = Schema.doc({
-        title: Schema.text(),
-        count: Schema.counter(),
+        name: Schema.string(),
+        count: Schema.number(),
       })
       expect(describe(s)).toBe(
         [
           "doc",
-          "  title: text",
-          "  count: counter",
-        ].join("\n"),
-      )
-    })
-
-    it("describes movable list with inline item", () => {
-      expect(describe(Schema.movableList(Schema.string()))).toBe(
-        "movable-list<string>",
-      )
-    })
-
-    it("describes movable list with complex item", () => {
-      const s = Schema.movableList(
-        Schema.struct({
-          name: Schema.string(),
-        }),
-      )
-      expect(describe(s)).toBe(
-        [
-          "movable-list",
           "  name: string",
+          "  count: number",
         ].join("\n"),
       )
     })
 
-    it("describes tree with node data", () => {
-      const s = Schema.tree(
-        Schema.struct({
-          label: Schema.string(),
-          weight: Schema.number(),
+    it("describes doc with nested struct and list", () => {
+      const s = Schema.doc({
+        tasks: Schema.list(
+          Schema.struct({
+            title: Schema.string(),
+            done: Schema.boolean(),
+            priority: Schema.number(),
+          }),
+        ),
+        settings: Schema.struct({
+          visibility: Schema.string(),
+          maxTasks: Schema.number(),
+          archived: Schema.boolean(),
         }),
-      )
+        labels: Schema.record(Schema.string()),
+      })
+
       expect(describe(s)).toBe(
         [
-          "tree",
-          "  label: string",
-          "  weight: number",
+          "doc",
+          "  tasks: list",
+          "    title: string",
+          "    done: boolean",
+          "    priority: number",
+          "  settings:",
+          "    visibility: string",
+          "    maxTasks: number",
+          "    archived: boolean",
+          "  labels: record<string>",
         ].join("\n"),
       )
+    })
+
+    it("describes doc with discriminated union field", () => {
+      const s = Schema.doc({
+        content: Schema.discriminatedUnion("type", {
+          text: Schema.struct({ body: Schema.string() }),
+          image: Schema.struct({ url: Schema.string(), width: Schema.number() }),
+        }),
+      })
+
+      expect(describe(s)).toBe(
+        [
+          "doc",
+          "  content: union(type)",
+          "    text:",
+          "      body: string",
+          "    image:",
+          "      url: string",
+          "      width: number",
+        ].join("\n"),
+      )
+    })
+  })
+
+  testDescribe("generic annotations", () => {
+    it("describes unknown leaf annotation", () => {
+      expect(describe(Schema.annotated("timestamp"))).toBe("timestamp")
     })
 
     it("describes generic annotation with inline inner", () => {
@@ -276,25 +286,116 @@ testDescribe("describe", () => {
     })
   })
 
+  testDescribe("inline rendering", () => {
+    it("does not inline products", () => {
+      const s = Schema.struct({
+        nested: Schema.struct({ x: Schema.number() }),
+      })
+      expect(describe(s)).toBe(
+        [
+          "nested:",
+          "  x: number",
+        ].join("\n"),
+      )
+    })
+  })
+})
+
+// ===========================================================================
+// LoroSchema tests — Loro-specific annotation rendering
+// ===========================================================================
+
+testDescribe("describe: LoroSchema annotations", () => {
+  testDescribe("leaf annotations", () => {
+    it("describes text", () => {
+      expect(describe(LoroSchema.text())).toBe("text")
+    })
+
+    it("describes counter", () => {
+      expect(describe(LoroSchema.counter())).toBe("counter")
+    })
+  })
+
+  testDescribe("movable list", () => {
+    it("describes movable list with inline item", () => {
+      expect(describe(LoroSchema.movableList(LoroSchema.plain.string()))).toBe(
+        "movable-list<string>",
+      )
+    })
+
+    it("describes movable list with complex item", () => {
+      const s = LoroSchema.movableList(
+        LoroSchema.plain.struct({
+          name: LoroSchema.plain.string(),
+        }),
+      )
+      expect(describe(s)).toBe(
+        [
+          "movable-list",
+          "  name: string",
+        ].join("\n"),
+      )
+    })
+  })
+
+  testDescribe("tree", () => {
+    it("describes tree with node data", () => {
+      const s = LoroSchema.tree(
+        LoroSchema.plain.struct({
+          label: LoroSchema.plain.string(),
+          weight: LoroSchema.plain.number(),
+        }),
+      )
+      expect(describe(s)).toBe(
+        [
+          "tree",
+          "  label: string",
+          "  weight: number",
+        ].join("\n"),
+      )
+    })
+  })
+
+  testDescribe("list with annotation item", () => {
+    it("describes list with inline annotation item", () => {
+      expect(describe(Schema.list(LoroSchema.text()))).toBe("list<text>")
+    })
+
+    it("inlines movable-list inside a labeled field", () => {
+      const s = LoroSchema.plain.struct({
+        a: Schema.list(LoroSchema.plain.number()),
+        b: Schema.record(LoroSchema.plain.boolean()),
+        c: LoroSchema.movableList(LoroSchema.plain.string()),
+      })
+      expect(describe(s)).toBe(
+        [
+          "a: list<number>",
+          "b: record<boolean>",
+          "c: movable-list<string>",
+        ].join("\n"),
+      )
+    })
+  })
+
   testDescribe("realistic nested schemas", () => {
-    it("describes a full project schema", () => {
-      const s = Schema.doc({
-        name: Schema.text(),
-        description: Schema.text(),
-        stars: Schema.counter(),
+    it("describes a full Loro project schema", () => {
+      const s = LoroSchema.doc({
+        name: LoroSchema.text(),
+        description: LoroSchema.text(),
+        stars: LoroSchema.counter(),
         tasks: Schema.list(
-          Schema.struct({
-            title: Schema.string(),
-            done: Schema.boolean(),
-            priority: Schema.number(),
+          LoroSchema.plain.struct({
+            title: LoroSchema.plain.string(),
+            done: LoroSchema.plain.boolean(),
+            priority: LoroSchema.plain.number(),
           }),
         ),
-        settings: Schema.struct({
-          visibility: Schema.string(),
-          maxTasks: Schema.number(),
-          archived: Schema.boolean(),
+        settings: LoroSchema.plain.struct({
+          visibility: LoroSchema.plain.string(),
+          maxTasks: LoroSchema.plain.number(),
+          archived: LoroSchema.plain.boolean(),
         }),
-        labels: Schema.record(Schema.string()),
+        labels: Schema.record(LoroSchema.plain.string()),
       })
 
       expect(describe(s)).toBe(
@@ -317,15 +418,15 @@ testDescribe("describe", () => {
     })
 
     it("describes deeply nested containers", () => {
-      const s = Schema.doc({
+      const s = LoroSchema.doc({
         channels: Schema.list(
-          Schema.struct({
-            name: Schema.text(),
+          LoroSchema.plain.struct({
+            name: LoroSchema.text(),
             messages: Schema.list(
-              Schema.struct({
-                author: Schema.string(),
-                body: Schema.text(),
-                reactions: Schema.record(Schema.number()),
+              LoroSchema.plain.struct({
+                author: LoroSchema.plain.string(),
+                body: LoroSchema.text(),
+                reactions: Schema.record(LoroSchema.plain.number()),
               }),
             ),
           }),
@@ -346,16 +447,16 @@ testDescribe("describe", () => {
     })
 
     it("describes schema with movable list and tree", () => {
-      const s = Schema.doc({
-        tasks: Schema.movableList(
-          Schema.struct({
-            title: Schema.string(),
+      const s = LoroSchema.doc({
+        tasks: LoroSchema.movableList(
+          LoroSchema.plain.struct({
+            title: LoroSchema.plain.string(),
           }),
         ),
-        hierarchy: Schema.tree(
-          Schema.struct({
-            label: Schema.string(),
-            color: Schema.string(),
+        hierarchy: LoroSchema.tree(
+          LoroSchema.plain.struct({
+            label: LoroSchema.plain.string(),
+            color: LoroSchema.plain.string(),
           }),
         ),
       })
@@ -368,57 +469,6 @@ testDescribe("describe", () => {
           "  hierarchy: tree",
           "    label: string",
           "    color: string",
-        ].join("\n"),
-      )
-    })
-
-    it("describes schema with discriminated union field", () => {
-      const s = Schema.doc({
-        content: Schema.discriminatedUnion("type", {
-          text: Schema.struct({ body: Schema.string() }),
-          image: Schema.struct({ url: Schema.string(), width: Schema.number() }),
-        }),
-      })
-
-      expect(describe(s)).toBe(
-        [
-          "doc",
-          "  content: union(type)",
-          "    text:",
-          "      body: string",
-          "    image:",
-          "      url: string",
-          "      width: number",
-        ].join("\n"),
-      )
-    })
-  })
-
-  testDescribe("inline rendering", () => {
-    it("inlines simple items in list inside a labeled field", () => {
-      const s = Schema.struct({
-        a: Schema.list(Schema.number()),
-        b: Schema.record(Schema.boolean()),
-        c: Schema.movableList(Schema.string()),
-      })
-      expect(describe(s)).toBe(
-        [
-          "a: list<number>",
-          "b: record<boolean>",
-          "c: movable-list<string>",
-        ].join("\n"),
-      )
-    })
-
-    it("does not inline products", () => {
-      const s = Schema.struct({
-        nested: Schema.struct({ x: Schema.number() }),
-      })
-      // Should be multi-line, not inlined
-      expect(describe(s)).toBe(
-        [
-          "nested:",
-          "  x: number",
         ].join("\n"),
       )
     })

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   Schema,
+  LoroSchema,
   interpret,
   enrich,
   writableInterpreter,
@@ -17,20 +18,20 @@ import type { Writable, TextRef, CounterRef } from "../index.js"
 // Shared fixture
 // ---------------------------------------------------------------------------
 
-const chatDocSchema = Schema.doc({
-  title: Schema.text(),
-  count: Schema.counter(),
+const chatDocSchema = LoroSchema.doc({
+  title: LoroSchema.text(),
+  count: LoroSchema.counter(),
   messages: Schema.list(
-    Schema.struct({
-      author: Schema.string(),
-      body: Schema.text(),
+    LoroSchema.plain.struct({
+      author: LoroSchema.plain.string(),
+      body: LoroSchema.text(),
     }),
   ),
-  settings: Schema.struct({
-    darkMode: Schema.boolean(),
-    fontSize: Schema.number(),
+  settings: LoroSchema.plain.struct({
+    darkMode: LoroSchema.plain.boolean(),
+    fontSize: LoroSchema.plain.number(),
   }),
-  metadata: Schema.record(Schema.any()),
+  metadata: Schema.record(LoroSchema.plain.any()),
 })
 
 function createFeedableChatDoc(storeOverrides: Record<string, unknown> = {}) {
@@ -233,9 +234,9 @@ describe("withFeed: writable surface preserved", () => {
 describe("withFeed: batched mode", () => {
   it("feedableFlush applies pending actions AND notifies subscribers", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
-      x: Schema.number(),
-      y: Schema.number(),
+    const schema = LoroSchema.doc({
+      x: LoroSchema.plain.number(),
+      y: LoroSchema.plain.number(),
     })
     const wCtx = createWritableContext(store, { autoCommit: false })
     const fCtx = createFeedableContext(wCtx)

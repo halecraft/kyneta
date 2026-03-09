@@ -3,8 +3,10 @@
 // This barrel re-exports the three core modules that make up the
 // schema interpreter algebra spike.
 
-// Schema — unified recursive grammar
+// Schema — unified recursive grammar (backend-agnostic)
 export { Schema, structuralKind, isAnnotated, unwrapAnnotation } from "./schema.js"
+// LoroSchema — Loro-specific annotations + composition constraints
+export { LoroSchema } from "./loro-schema.js"
 export { describe } from "./describe.js"
 export type {
   // The recursive union

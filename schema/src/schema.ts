@@ -2,13 +2,12 @@
 //
 // The grammar has five structural constructors (scalar, product, sequence,
 // map, sum) plus an open annotation mechanism. Annotations attach backend
-// semantics (collaborative text, counter, movable list, tree) without
-// changing the recursive structure.
+// semantics without changing the recursive structure.
 //
-// The container/value distinction from Loro's runtime is NOT part of this
-// grammar — it's an interpretation concern. The developer-facing
-// constructor API (Schema.text(), Schema.struct(), etc.) is sugar that
-// produces annotated nodes in the unified grammar.
+// This grammar is backend-agnostic. Backend-specific annotation
+// constructors (e.g. LoroSchema.text(), LoroSchema.counter()) live in
+// loro-schema.ts. The developer-facing Schema namespace provides only
+// structural constructors and the open `annotated()` mechanism.
 
 // ---------------------------------------------------------------------------
 // Scalar kinds — leaf values (not a separate recursive grammar)
@@ -188,45 +187,17 @@ function annotated<T extends string, S extends Schema | undefined = undefined>(
 }
 
 // ---------------------------------------------------------------------------
-// Developer-facing sugar — Loro-flavored constructors
+// Developer-facing sugar — structural constructors
 // ---------------------------------------------------------------------------
-// These produce annotated nodes in the unified grammar but present the
-// familiar Schema.text(), Schema.struct(), etc. API. The underlying
-// representation is always the five structural kinds + annotated.
-
-/**
- * Collaborative text (CRDT). Produces `annotated("text")`.
- *
- * The annotation implies scalar string semantics for reads,
- * but the backend provides collaborative editing (insert, delete, marks).
- */
-function text(): AnnotatedSchema<"text", undefined> {
-  return annotated("text")
-}
-
-/**
- * Counter (CRDT). Produces `annotated("counter")`.
- *
- * The annotation implies scalar number semantics for reads,
- * but the backend provides increment/decrement.
- */
-function counter(): AnnotatedSchema<"counter", undefined> {
-  return annotated("counter")
-}
+// These produce structural nodes in the unified grammar. Backend-specific
+// annotation constructors (text, counter, movableList, tree) live in
+// LoroSchema (src/loro-schema.ts).
 
 /**
  * Ordered list. Produces `sequence(item)`.
  */
 function list<I extends Schema>(item: I): SequenceSchema<I> {
   return sequence(item)
-}
-
-/**
- * Movable list (CRDT with move semantics).
- * Produces `annotated("movable", sequence(item))`.
- */
-function movableList<I extends Schema>(item: I): AnnotatedSchema<"movable", SequenceSchema<I>> {
-  return annotated("movable", sequence(item))
 }
 
 /**
@@ -241,16 +212,6 @@ function struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F> {
  */
 function record<I extends Schema>(item: I): MapSchema<I> {
   return map(item)
-}
-
-/**
- * Hierarchical tree with typed node data (CRDT).
- * Produces `annotated("tree", nodeData)`.
- *
- * The `nodeData` schema describes the shape of each tree node's data.
- */
-function tree<S extends Schema>(nodeData: S): AnnotatedSchema<"tree", S> {
-  return annotated("tree", nodeData)
 }
 
 /**
@@ -357,8 +318,6 @@ function nullable<S extends Schema>(inner: S): PositionalSumSchema<[ScalarSchema
  *
  * ```ts
  * const myDoc = Schema.doc({
- *   title: Schema.text(),
- *   count: Schema.counter(),
  *   tags: Schema.list(Schema.string()),
  *   metadata: Schema.struct({
  *     author: Schema.string(),
@@ -375,13 +334,15 @@ function nullable<S extends Schema>(inner: S): PositionalSumSchema<[ScalarSchema
  * `Schema.struct`, `Schema.list`, `Schema.record`,
  * `Schema.union`, `Schema.discriminatedUnion`, `Schema.nullable`
  *
- * **Annotated (backend semantics):**
- * `Schema.text`, `Schema.counter`, `Schema.movableList`,
- * `Schema.tree`, `Schema.doc`
+ * **Root:**
+ * `Schema.doc`
  *
  * **Low-level (grammar-native, power users):**
  * `Schema.scalar`, `Schema.product`, `Schema.sequence`, `Schema.map`,
  * `Schema.sum`, `Schema.discriminatedSum`, `Schema.annotated`
+ *
+ * Backend-specific annotation constructors (text, counter, movableList,
+ * tree) live in `LoroSchema`. See `src/loro-schema.ts`.
  */
 export const Schema = {
   // Low-level structural constructors
@@ -410,11 +371,7 @@ export const Schema = {
   discriminatedUnion,
   nullable,
 
-  // Annotated (backend semantics)
-  text,
-  counter,
-  movableList,
-  tree,
+  // Root
   doc,
 } as const
 

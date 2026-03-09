@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import {
   Schema,
+  LoroSchema,
   interpret,
   writableInterpreter,
   createWritableContext,
@@ -15,19 +16,15 @@ import type {
   Writable,
 } from "../index.js"
 
+// ===========================================================================
+// Base grammar tests — Schema only, no Loro annotations
+// ===========================================================================
+
 // ---------------------------------------------------------------------------
-// Shared fixtures
+// Shared fixture: pure structural schema (no Loro annotations)
 // ---------------------------------------------------------------------------
 
-const chatDocSchema = Schema.doc({
-  title: Schema.text(),
-  count: Schema.counter(),
-  messages: Schema.list(
-    Schema.struct({
-      author: Schema.string(),
-      body: Schema.text(),
-    }),
-  ),
+const structuralDocSchema = Schema.doc({
   settings: Schema.struct({
     darkMode: Schema.boolean(),
     fontSize: Schema.number(),
@@ -35,18 +32,15 @@ const chatDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
+function createStructuralDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = {
-    title: "Hello",
-    count: 0,
-    messages: [{ author: "Alice", body: "Hi" }],
     settings: { darkMode: false, fontSize: 14 },
     metadata: { version: 1 },
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(chatDocSchema, writableInterpreter, ctx) as Writable<
-    typeof chatDocSchema
+  const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as Writable<
+    typeof structuralDocSchema
   >
   return { store, ctx, doc }
 }
@@ -57,23 +51,25 @@ function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
 
 describe("writable: product lazy getters", () => {
   it("returns the same ref on repeated access (referential identity)", () => {
-    const { doc } = createChatDoc()
-    const first = doc.title
-    const second = doc.title
-    expect(first).toBe(second)
+    const { doc } = createStructuralDoc()
+    const a = doc.settings
+    const b = doc.settings
+    expect(a).toBe(b)
   })
 
   it("accessing one field does NOT force siblings", () => {
-    // We can't directly observe non-forcing, but we can verify that
-    // the settings ref and title ref are independent objects created
-    // at different times — accessing title doesn't create settings.
-    const { doc } = createChatDoc()
-    const title = doc.title
-    expect(title).toBeDefined()
-    // Access settings now — it should be independently created
+    const store = {
+      settings: { darkMode: true, fontSize: 16 },
+      metadata: { version: 1 },
+    }
+    const ctx = createWritableContext(store)
+    const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as Writable<
+      typeof structuralDocSchema
+    >
+
+    // Access settings — metadata should not be forced
     const settings = doc.settings
-    expect(settings).toBeDefined()
-    expect(settings).not.toBe(title)
+    expect(settings.darkMode.get()).toBe(true)
   })
 })
 
@@ -83,47 +79,40 @@ describe("writable: product lazy getters", () => {
 
 describe("writable: namespace isolation", () => {
   it("Object.keys returns only schema property names for products", () => {
-    const { doc } = createChatDoc()
+    const { doc } = createStructuralDoc()
     const keys = Object.keys(doc)
-    expect(keys).toEqual(["title", "count", "messages", "settings", "metadata"])
+    expect(keys).toEqual(["settings", "metadata"])
   })
 
   it("schema property names are accessible via 'in' operator", () => {
-    const { doc } = createChatDoc()
-    expect("title" in doc).toBe(true)
+    const { doc } = createStructuralDoc()
     expect("settings" in doc).toBe(true)
+    expect("metadata" in doc).toBe(true)
   })
 
   it("non-schema string keys are not own properties", () => {
-    const { doc } = createChatDoc()
-    expect(Object.hasOwn(doc, "toJSON")).toBe(false)
+    const { doc } = createStructuralDoc()
+    expect(Object.hasOwn(doc, "toString")).toBe(false)
     expect(Object.hasOwn(doc, "constructor")).toBe(false)
     expect(Object.hasOwn(doc, "nonexistent")).toBe(false)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Scalar ref upward write
+// Scalar upward reference
 // ---------------------------------------------------------------------------
 
 describe("writable: scalar upward reference", () => {
   it(".set() writes to the backing store at the correct path", () => {
-    const { doc, store } = createChatDoc()
-    const darkModeRef = doc.settings.darkMode
-
-    expect(darkModeRef.get()).toBe(false)
-    darkModeRef.set(true)
+    const { store, doc } = createStructuralDoc()
+    doc.settings.darkMode.set(true)
     expect(store.settings.darkMode).toBe(true)
   })
 
   it(".get() reads live from the backing store", () => {
-    const { doc, store } = createChatDoc()
-    const fontSizeRef = doc.settings.fontSize
-
-    expect(fontSizeRef.get()).toBe(14)
-    // Mutate store directly
-    ;(store.settings as any).fontSize = 20
-    expect(fontSizeRef.get()).toBe(20)
+    const { store, doc } = createStructuralDoc()
+    ;(store.settings as Record<string, unknown>).fontSize = 20
+    expect(doc.settings.fontSize.get()).toBe(20)
   })
 })
 
@@ -133,156 +122,35 @@ describe("writable: scalar upward reference", () => {
 
 describe("writable: portable refs", () => {
   it("extracted scalar ref works outside the tree", () => {
-    const { doc, store } = createChatDoc()
-    const fontRef = doc.settings.fontSize
-
-    // Pass to a standalone function
-    function bump(ref: { get(): number; set(value: number): void }) {
-      ref.set(ref.get() + 2)
-    }
-
-    expect(fontRef.get()).toBe(14)
-    bump(fontRef)
-    expect(fontRef.get()).toBe(16)
-    expect((store.settings as any).fontSize).toBe(16)
-  })
-
-  it("extracted text ref works outside the tree", () => {
-    const { doc, store } = createChatDoc()
-    const titleRef = doc.title
-
-    function appendBang(ref: TextRef) {
-      const len = ref.get().length
-      ref.insert(len, "!")
-    }
-
-    appendBang(titleRef)
-    expect(store.title).toBe("Hello!")
+    const { doc } = createStructuralDoc()
+    const ref = doc.settings.fontSize
+    // ref works independently
+    ref.set(24)
+    expect(ref.get()).toBe(24)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Text ref
-// ---------------------------------------------------------------------------
-
-describe("writable: text ref", () => {
-  it(".get() returns the current string", () => {
-    const { doc } = createChatDoc()
-    expect(doc.title.get()).toBe("Hello")
-  })
-
-  it(".toString() returns the current string", () => {
-    const { doc } = createChatDoc()
-    expect(doc.title.toString()).toBe("Hello")
-  })
-
-  it(".insert() applies a text action to the store", () => {
-    const { doc, store } = createChatDoc()
-    doc.title.insert(5, " World")
-    expect(store.title).toBe("Hello World")
-  })
-
-  it(".delete() removes characters from the store", () => {
-    const { doc, store } = createChatDoc()
-    doc.title.delete(0, 3)
-    expect(store.title).toBe("lo")
-  })
-
-  it(".update() replaces the entire string", () => {
-    const { doc, store } = createChatDoc()
-    doc.title.update("New Title")
-    expect(store.title).toBe("New Title")
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Counter ref
-// ---------------------------------------------------------------------------
-
-describe("writable: counter ref", () => {
-  it(".get() returns the current value", () => {
-    const { doc } = createChatDoc()
-    expect(doc.count.get()).toBe(0)
-  })
-
-  it(".increment() adds to the value", () => {
-    const { doc, store } = createChatDoc()
-    doc.count.increment(5)
-    expect(store.count).toBe(5)
-  })
-
-  it(".decrement() subtracts from the value", () => {
-    const { doc, store } = createChatDoc({ count: 10 })
-    doc.count.decrement(3)
-    expect(store.count).toBe(7)
-  })
-
-  it(".increment() with no arg defaults to 1", () => {
-    const { doc, store } = createChatDoc()
-    doc.count.increment()
-    expect(store.count).toBe(1)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Sequence ref
-// ---------------------------------------------------------------------------
-
-describe("writable: sequence ref", () => {
-  it(".length reflects the store array length", () => {
-    const { doc } = createChatDoc()
-    expect(doc.messages.length).toBe(1)
-  })
-
-  it(".get(i) returns a child ref for the item at index i", () => {
-    const { doc } = createChatDoc()
-    const msg0 = doc.messages.get(0)
-    expect(msg0.author.get()).toBe("Alice")
-    expect(msg0.body.get()).toBe("Hi")
-  })
-
-  it(".push() appends items and updates the store", () => {
-    const { doc, store } = createChatDoc()
-    doc.messages.push({ author: "Bob", body: "Hey" })
-    expect((store.messages as any[]).length).toBe(2)
-    expect((store.messages as any[])[1]).toEqual({ author: "Bob", body: "Hey" })
-  })
-
-  it(".delete() removes items from the store", () => {
-    const { doc, store } = createChatDoc({
-      messages: [
-        { author: "Alice", body: "Hi" },
-        { author: "Bob", body: "Hey" },
-      ],
-    })
-    doc.messages.delete(0)
-    expect((store.messages as any[]).length).toBe(1)
-    expect((store.messages as any[])[0].author).toBe("Bob")
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Map (Proxy)
+// Map via Proxy
 // ---------------------------------------------------------------------------
 
 describe("writable: map via Proxy", () => {
   it("dynamic string key access returns a child ref", () => {
-    const { doc } = createChatDoc()
+    const { doc } = createStructuralDoc()
     const versionRef = doc.metadata.version
     expect(versionRef.get()).toBe(1)
   })
 
   it("Object.keys returns the store's dynamic keys", () => {
-    const { doc } = createChatDoc()
+    const { doc } = createStructuralDoc()
     expect(Object.keys(doc.metadata)).toEqual(["version"])
   })
 
   it("'in' operator checks store keys", () => {
-    const { doc } = createChatDoc()
+    const { doc } = createStructuralDoc()
     expect("version" in doc.metadata).toBe(true)
     expect("nonexistent" in doc.metadata).toBe(false)
   })
-
 })
 
 // ---------------------------------------------------------------------------
@@ -330,23 +198,153 @@ describe("writable: batched mode", () => {
   })
 })
 
-
+// ===========================================================================
+// LoroSchema tests — Loro-specific annotation-driven behavior
+// ===========================================================================
 
 // ---------------------------------------------------------------------------
-// Annotation-driven behavior
+// Shared fixture: Loro document schema (with annotations)
+// ---------------------------------------------------------------------------
+
+const loroDocSchema = LoroSchema.doc({
+  title: LoroSchema.text(),
+  count: LoroSchema.counter(),
+  messages: Schema.list(
+    LoroSchema.plain.struct({
+      author: LoroSchema.plain.string(),
+      body: LoroSchema.text(),
+    }),
+  ),
+  settings: LoroSchema.plain.struct({
+    darkMode: LoroSchema.plain.boolean(),
+    fontSize: LoroSchema.plain.number(),
+  }),
+  metadata: Schema.record(LoroSchema.plain.any()),
+})
+
+function createLoroDoc(storeOverrides: Record<string, unknown> = {}) {
+  const store = {
+    title: "Hello",
+    count: 0,
+    messages: [{ author: "Alice", body: "Hi" }],
+    settings: { darkMode: false, fontSize: 14 },
+    metadata: { version: 1 },
+    ...storeOverrides,
+  }
+  const ctx = createWritableContext(store)
+  const doc = interpret(loroDocSchema, writableInterpreter, ctx) as Writable<
+    typeof loroDocSchema
+  >
+  return { store, ctx, doc }
+}
+
+// ---------------------------------------------------------------------------
+// Text ref (Loro-specific)
+// ---------------------------------------------------------------------------
+
+describe("writable: text ref", () => {
+  it(".get() returns the current string", () => {
+    const { doc } = createLoroDoc()
+    expect(doc.title.get()).toBe("Hello")
+  })
+
+  it(".toString() returns the current string", () => {
+    const { doc } = createLoroDoc()
+    expect(doc.title.toString()).toBe("Hello")
+  })
+
+  it(".insert() applies a text action to the store", () => {
+    const { store, doc } = createLoroDoc()
+    doc.title.insert(5, " World")
+    expect(store.title).toBe("Hello World")
+  })
+
+  it(".delete() removes characters from the store", () => {
+    const { store, doc } = createLoroDoc()
+    doc.title.delete(0, 2)
+    expect(store.title).toBe("llo")
+  })
+
+  it(".update() replaces the entire string", () => {
+    const { store, doc } = createLoroDoc()
+    doc.title.update("New Title")
+    expect(store.title).toBe("New Title")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Counter ref (Loro-specific)
+// ---------------------------------------------------------------------------
+
+describe("writable: counter ref", () => {
+  it(".get() returns the current value", () => {
+    const { doc } = createLoroDoc()
+    expect(doc.count.get()).toBe(0)
+  })
+
+  it(".increment() adds to the value", () => {
+    const { store, doc } = createLoroDoc()
+    doc.count.increment(5)
+    expect(store.count).toBe(5)
+  })
+
+  it(".decrement() subtracts from the value", () => {
+    const { store, doc } = createLoroDoc()
+    doc.count.decrement(3)
+    expect(store.count).toBe(-3)
+  })
+
+  it(".increment() with no arg defaults to 1", () => {
+    const { store, doc } = createLoroDoc()
+    doc.count.increment()
+    expect(store.count).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sequence ref (using Loro fixture for list-of-structs)
+// ---------------------------------------------------------------------------
+
+describe("writable: sequence ref", () => {
+  it(".length reflects the store array length", () => {
+    const { doc } = createLoroDoc()
+    expect(doc.messages.length).toBe(1)
+  })
+
+  it(".get(i) returns a child ref for the item at index i", () => {
+    const { doc } = createLoroDoc()
+    const msg = doc.messages.get(0)
+    expect(msg.author.get()).toBe("Alice")
+  })
+
+  it(".push() appends items and updates the store", () => {
+    const { store, doc } = createLoroDoc()
+    doc.messages.push({ author: "Bob", body: "Hey" })
+    expect((store.messages as unknown[]).length).toBe(2)
+  })
+
+  it(".delete() removes items from the store", () => {
+    const { store, doc } = createLoroDoc()
+    doc.messages.delete(0)
+    expect((store.messages as unknown[]).length).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Annotation-driven behavior — API shape depends on annotation tag
 // ---------------------------------------------------------------------------
 
 describe("writable: annotation-driven behavior", () => {
-  it("Schema.text() writable has .insert() and .delete()", () => {
-    const { doc } = createChatDoc()
+  it("LoroSchema.text() writable has .insert() and .delete()", () => {
+    const { doc } = createLoroDoc()
     expect(typeof doc.title.insert).toBe("function")
     expect(typeof doc.title.delete).toBe("function")
     expect(typeof doc.title.update).toBe("function")
     expect(typeof doc.title.get).toBe("function")
   })
 
-  it("Schema.string() writable has .get() and .set() only", () => {
-    const { doc } = createChatDoc()
+  it("LoroSchema.plain.string() writable has .get() and .set() only", () => {
+    const { doc } = createLoroDoc()
     const msg = doc.messages.get(0)
     expect(typeof msg.author.get).toBe("function")
     expect(typeof msg.author.set).toBe("function")
@@ -359,10 +357,23 @@ describe("writable: annotation-driven behavior", () => {
     ).toBeUndefined()
   })
 
-  it("Schema.counter() writable has .increment() and .decrement()", () => {
-    const { doc } = createChatDoc()
+  it("LoroSchema.counter() writable has .increment() and .decrement()", () => {
+    const { doc } = createLoroDoc()
     expect(typeof doc.count.increment).toBe("function")
     expect(typeof doc.count.decrement).toBe("function")
     expect(typeof doc.count.get).toBe("function")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Portable refs (Loro-specific: TextRef works outside the tree)
+// ---------------------------------------------------------------------------
+
+describe("writable: portable refs (Loro)", () => {
+  it("extracted text ref works outside the tree", () => {
+    const { doc } = createLoroDoc()
+    const ref = doc.title
+    ref.insert(ref.get().length, " World")
+    expect(ref.get()).toBe("Hello World")
   })
 })

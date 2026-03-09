@@ -290,8 +290,8 @@ export type ScalarPlain<K extends ScalarKind> =
  *
  * ```ts
  * const s = Schema.doc({
- *   title: Schema.text(),
- *   count: Schema.counter(),
+ *   title: Schema.string(),
+ *   count: Schema.number(),
  *   items: Schema.list(Schema.struct({
  *     name: Schema.string(),
  *     done: Schema.boolean(),
@@ -361,15 +361,15 @@ export type Plain<S extends Schema> =
  *
  * ```ts
  * const s = Schema.doc({
- *   title: Schema.text(),
- *   count: Schema.counter(),
+ *   title: Schema.string(),
+ *   count: Schema.number(),
  *   settings: Schema.struct({
  *     darkMode: Schema.boolean(),
  *   }),
  * })
  *
  * type Doc = Writable<typeof s>
- * // = { title: TextRef; count: CounterRef; settings: { darkMode: ScalarRef<boolean> } }
+ * // = { title: ScalarRef<string>; count: ScalarRef<number>; settings: { darkMode: ScalarRef<boolean> } }
  * ```
  */
 export type Writable<S extends Schema> =
