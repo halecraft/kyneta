@@ -103,6 +103,16 @@ export type {
 // Store utilities (shared by writable, plain, and feed layers)
 export { readByPath } from "./interpreters/writable.js"
 
+// Validate interpreter — schema-driven validation with collecting errors
+export {
+  validateInterpreter,
+  validate,
+  tryValidate,
+  SchemaValidationError,
+  formatPath,
+} from "./interpreters/validate.js"
+export type { ValidateContext } from "./interpreters/validate.js"
+
 // Feed decorator — observation layer via enrich(writableInterpreter, withFeed)
 export { withFeed, createFeedableContext, feedableFlush } from "./interpreters/with-feed.js"
 export type { FeedableContext } from "./interpreters/with-feed.js"

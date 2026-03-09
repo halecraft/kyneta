@@ -50,7 +50,7 @@ Additionally, the `change` package supports value-domain constraints on scalars 
 - ~~`ScalarSchema` has no `constraint` field.~~ ✅ Phase 2
 - ~~`ScalarPlain<K>` ignores any value-domain narrowing.~~ ✅ Phase 2
 - ~~`Plain<S>` and `Writable<S>` don't account for constrained scalars.~~ ✅ Phase 2
-- No validate interpreter, `SchemaValidationError`, or `validate()` / `tryValidate()` function exists.
+- ~~No validate interpreter, `SchemaValidationError`, or `validate()` / `tryValidate()` function exists.~~ ✅ Phase 3
 - ~~`describe()` has no awareness of scalar constraints or nullable sugar.~~ ✅ Phase 2
 - ~~`Zero.structural` doesn't account for constrained scalars.~~ ✅ Phase 2
 - The example `main.ts` has no validation section.
@@ -131,7 +131,7 @@ Add an optional `constraint` field to `ScalarSchema` that carries both the type-
 - Task: Update `describe()` to render constrained scalars, e.g. `string("public" | "private")` instead of just `string`. Update nullable rendering: when a positional sum's first variant is `scalar("null")` and it has exactly two variants, render as `nullable<inner>` instead of `union`. Both `walk()` and `inlineOrNull()` updated. 🟢
 - Task: Tests — 38 new tests (276 total). Type-level tests for `Plain<S>` and `Writable<S>` with constrained scalars (13 tests), runtime tests for `Zero.structural` with constrained scalars (6 tests), constructor tests for constrained scalars (5 tests), `describe()` with constrained scalars and nullable sugar (14 tests). All 238 existing tests pass unchanged. 🟢
 
-### Phase 3: Validate interpreter 🔴
+### Phase 3: Validate interpreter 🟢
 
 Implement the validate interpreter and the public `validate()` / `tryValidate()` functions.
 
@@ -148,7 +148,7 @@ This avoids building two separate interpreters or bolting a "collecting mode" on
 
 **Positional sum rollback:** When trying variant `i`, snapshot `const mark = errors.length` before the attempt. If the variant fails, reset `errors.length = mark` to discard that variant's errors before trying the next. If all variants fail, push a single "expected one of union variants" error. For nullable sums specifically (two variants where the first is `scalar("null")`), the error message should mention nullable semantics.
 
-- Task: Create `src/interpreters/validate.ts` containing `validateInterpreter: Interpreter<ValidateContext, unknown>` and `ValidateContext` type. 🔴
+- Task: Create `src/interpreters/validate.ts` containing `validateInterpreter: Interpreter<ValidateContext, unknown>` and `ValidateContext` type. 🟢
   - `scalar`: read the value at path. Check `typeof` matches kind. If `constraint` is present, check value is in the constraint array. On mismatch, push `SchemaValidationError` and return `undefined`.
   - `product`: read the value at path. Check it's a non-null, non-array object. If not, push error and return `undefined`. Otherwise, force each field thunk (which validates the field's value). Collect into result object.
   - `sequence`: read the value at path. Check it's an array. If not, push error and return `undefined`. Validate each item via the item closure.
@@ -156,13 +156,13 @@ This avoids building two separate interpreters or bolting a "collecting mode" on
   - `sum` (positional): read the value at path. Try each variant via `byIndex` with error rollback. Return the first that produces no new errors. If all fail, push "expected one of union variants" error.
   - `sum` (discriminated): read the value at path. Check it's an object. Read the discriminant key. Check it's a string and exists in the variant map. Validate through the matching variant via `byKey`.
   - `annotated`: leaf annotations (`text` → check string, `counter` → check number). Structural annotations (`doc`, `movable`, `tree` → delegate to inner).
-- Task: Create `SchemaValidationError` class in `validate.ts`. Fields: `path: string`, `expected: string`, `actual: unknown`. Path formatted as dot-separated with bracket notation for indices (e.g. `messages[0].author`). 🔴
-- Task: Create `formatPath(path: Path): string` helper that converts `Path` segments to the human-readable string for error reporting. Empty path → `"root"`. This is trivial because `Path` preserves the key-vs-index distinction (thanks to Phase 1c). 🔴
-- Task: Use `readByPath` from `writable.ts` (already `Path`-compatible after Phase 1c) — no new utility needed. 🔴
-- Task: Create public `validate<S extends Schema>(schema: S, value: unknown): Plain<S>`. Creates a `ValidateContext`, calls `interpret(schema, validateInterpreter, ctx)`, checks `ctx.errors.length > 0`, throws the first error if so, otherwise casts and returns the result. 🔴
-- Task: Create public `tryValidate<S extends Schema>(schema: S, value: unknown): { ok: true; value: Plain<S> } | { ok: false; errors: SchemaValidationError[] }`. Creates a `ValidateContext`, calls `interpret(schema, validateInterpreter, ctx)`, returns the appropriate discriminant based on `ctx.errors`. 🔴
-- Task: Update barrel exports in `index.ts`. 🔴
-- Task: Tests in `src/__tests__/validate.test.ts`: 🔴
+- Task: Create `SchemaValidationError` class in `validate.ts`. Fields: `path: string`, `expected: string`, `actual: unknown`. Path formatted as dot-separated with bracket notation for indices (e.g. `messages[0].author`). 🟢
+- Task: Create `formatPath(path: Path): string` helper that converts `Path` segments to the human-readable string for error reporting. Empty path → `"root"`. This is trivial because `Path` preserves the key-vs-index distinction (thanks to Phase 1c). 🟢
+- Task: Use `readByPath` from `writable.ts` (already `Path`-compatible after Phase 1c) — no new utility needed. 🟢
+- Task: Create public `validate<S extends Schema>(schema: S, value: unknown): Plain<S>`. Creates a `ValidateContext`, calls `interpret(schema, validateInterpreter, ctx)`, checks `ctx.errors.length > 0`, throws the first error if so, otherwise casts and returns the result. 🟢
+- Task: Create public `tryValidate<S extends Schema>(schema: S, value: unknown): { ok: true; value: Plain<S> } | { ok: false; errors: SchemaValidationError[] }`. Creates a `ValidateContext`, calls `interpret(schema, validateInterpreter, ctx)`, returns the appropriate discriminant based on `ctx.errors`. 🟢
+- Task: Update barrel exports in `index.ts`. 🟢
+- Task: Tests in `src/__tests__/validate.test.ts`: 🟢
   - Scalar validation: string/number/boolean/null/undefined/bytes/any — valid and invalid.
   - Constrained scalar: string with options — valid option, invalid option, error message includes allowed values.
   - Product: valid object, non-object value, missing field, extra fields (should pass — schemas don't forbid extra keys).
