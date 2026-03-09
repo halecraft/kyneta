@@ -4,7 +4,9 @@ This document partitions the incremental evaluation effort into a sequence
 of implementation plans.  Each plan is a self-contained body of work with
 its own theory, deliverables, and test strategy.  The plans build on each
 other — each one's output is the next one's input — but each delivers
-standalone value.
+standalone value.  Plan 006.1 is a refinement inserted between 006 and 007
+that elevates the Datalog evaluator from ad-hoc DRed to principled Z-set
+weight propagation.
 
 **Theoretical foundation:** [theory/incremental.md](../theory/incremental.md)
 **Spec sections covered:** §9, §11, §12, §16, §17
@@ -15,27 +17,28 @@ standalone value.
 ## The Four Plans
 
 ```
-Plan 005                    Plan 006                   Plan 007               Plan 008
-─────────────────────────   ────────────────────────   ──────────────────     ──────────────────
-Incremental Kernel          Incremental Datalog        Settled / Working /    Query &
-Pipeline                    Evaluator                  Compaction             Introspection
+Plan 005                    Plan 006                  006.1                  Plan 007               Plan 008
+─────────────────────────   ────────────────────────  ─────────────────────  ──────────────────     ──────────────────
+Incremental Kernel          Incremental Datalog       Unified Weighted       Settled / Working /    Query &
+Pipeline                    Evaluator                 Evaluator              Compaction             Introspection
 
-Z-set type + utilities      Z-set-weighted relations   Stability frontier     Level 1 queries
-Incremental retraction      Monotone strata (Fugue)    Settled slot detect.   Level 2 queries
-Incremental projection      Stratified neg. (LWW)      Per-stage freezing     Incremental queries
-Incremental validity        Provenance tracking         Frontier advancement   Introspection API
-Incremental skeleton        Cross-time semi-naive      Compaction policy      explain / conflicts
-Reality deltas              Native fast path as         Safe compaction        history / whatIf
-Batch pipeline preserved     stage interface            Snapshot caching       diff / branch
-                            Rule addition/retraction                          Bookmark UX
+Z-set type + utilities      Monotone strata (Fugue)   Weighted Relation      Stability frontier     Level 1 queries
+Incremental retraction      Stratified neg. (LWW)     Weighted semi-naive    Settled slot detect.   Level 2 queries
+Incremental projection      DRed for negation         distinct operator      Per-stage freezing     Incremental queries
+Incremental validity        Native fast path           Unified eval. entry   Frontier advancement   Introspection API
+Incremental skeleton        Rule addition/retraction   Eliminate DRed        Compaction policy      explain / conflicts
+Reality deltas              Strategy switching         Eliminate snap-diff    Safe compaction        history / whatIf
+Batch pipeline preserved    Evaluation stage wrapper   Dead code removal     Snapshot caching       diff / branch
+                                                                                                    Bookmark UX
 ```
 
 ---
 
-## Plan 005: Incremental Kernel Pipeline
+## Plan 005: Incremental Kernel Pipeline ✅
 
 **Spec:** §9.1–9.4, §9.6
 **Theory:** incremental.md §2–§5 (DAG circuit), §6 (correctness)
+**Status:** Complete. All 9 phases done. 1143 tests at completion.
 
 ### Goal
 
@@ -97,12 +100,12 @@ than O(|S|) — without touching the Datalog evaluator.
 
 ### Datalog handling during this plan
 
-The Datalog evaluator and native solvers remain batch.  The incremental
-pipeline calls the batch evaluator on every insertion, using the
-accumulated projected facts.  This is correct but not yet efficient for
-the evaluation stage — the kernel stages around it are incremental,
-and the evaluation stage is the remaining O(|S|) bottleneck that
-Plan 006 eliminates.
+The Datalog evaluator and native solvers remained batch during Plan 005.
+The incremental pipeline called the batch evaluator on every insertion.
+This was correct but not yet efficient for the evaluation stage — the
+kernel stages around it were incremental, and the evaluation stage was
+the remaining O(|S|) bottleneck.  Plan 006 eliminated this bottleneck
+with native incremental solvers and an incremental Datalog evaluator.
 
 ### Key risk
 
@@ -113,10 +116,11 @@ early and may need to iterate on the design.
 
 ---
 
-## Plan 006: Incremental Datalog Evaluator
+## Plan 006: Incremental Datalog Evaluator ✅
 
 **Spec:** §9.5, §9.6, §B.3, §B.4, §B.7, §14 (Layers 1–3)
 **Theory:** incremental.md §9 (all subsections)
+**Status:** Complete. All 7 phases done. 1198 tests at completion.
 
 ### Goal
 
@@ -186,6 +190,68 @@ implement monotone strata first (item 2) — this covers Fugue rules and
 validates the cross-time semi-naive pattern — before tackling negation.
 The native fast path (item 6) serves as a correctness oracle: its
 output must match the incremental Datalog output for default rules.
+
+---
+
+## Plan 006.1: Unified Weighted Datalog Evaluator
+
+**Spec:** §B.3 (evaluator requirements), §B.4 (default rules), §B.7 (native optimization)
+**Theory:** incremental.md §9.4 (provenance requirement), DBSP §3.2 (Z-set joins), §4–5 (nested streams)
+**Status:** Not started.
+**Full plan:** [006.1-unified-weighted-evaluator.md](./006.1-unified-weighted-evaluator.md)
+
+### Goal
+
+Unify the batch and incremental Datalog evaluators into a single
+weighted evaluator. Replace DRed (wipe-and-recompute) and
+snapshot-and-diff with Z-set weight propagation through the
+semi-naive loop, making the Datalog path truly O(|Δ|) for all
+strata — monotone and negation alike.
+
+### Scope
+
+1. **Weighted `Relation` and `Database`** — each fact carries an
+   integer weight. `addWeighted(tuple, weight)` sums weights.
+   `distinct()` clamps to 0/1. `tuples()` returns weight > 0
+   (backward compatible with all existing consumers).
+
+2. **Weighted substitutions and rule evaluation** — `WeightedSub`
+   threads weights through joins (multiply), negation (filter),
+   and guards (filter). `groundHead` sums weights for duplicate
+   derivations.
+
+3. **Unified evaluator** — one `createEvaluator(rules)` entry
+   point. `step(delta)` is the general incremental case.
+   `evaluate(rules, facts)` is a convenience wrapper that creates
+   a fresh evaluator and steps with all facts as +1.  No DRed, no
+   snapshot-and-diff, no `fullRecompute`.
+
+4. **Pipeline rewiring** — the evaluation stage and batch pipeline
+   both use the unified evaluator. Dead code removed.
+
+### What this plan does NOT include
+
+- Changes to the native LWW/Fugue solvers (unchanged).
+- Changes to the evaluation stage's strategy switching logic
+  (unchanged — it delegates to either native or the evaluator).
+- Settled/working partitioning (Plan 007).
+- Query layer (Plan 008).
+
+### Key insight
+
+DRed was chosen in Plan 006 because the batch evaluator had no weight
+infrastructure and the bounded-cost argument held for default rules.
+Plan 006.1 observes that Z-set weights with `distinct` are the
+principled DBSP approach — the same algebra used everywhere else in
+the pipeline — and that unifying the evaluators is the right moment
+to add weights.  The `distinct` operator (clamp to 0/1 after each
+semi-naive iteration) prevents weight explosion from transitive
+closure, making weights safe for the `fugue_descendant` rules.
+
+### Dependencies
+
+- Plan 006 (complete — provides the incremental evaluation stage,
+  native solvers, strategy switching, and the code to be unified).
 
 ---
 
@@ -331,6 +397,14 @@ conflict resolution UIs, and audit trails.
 - Plan 007 (snapshots and frontier — enables efficient historical
   queries and time travel UX).
 
+### Prep work (from Plan 006 review)
+
+- ~~**Fix `evaluateMonotoneStratumIncremental` to use its `_inputDelta`
+  parameter.**~~ **Resolved by Plan 006.1.** The unified weighted
+  evaluator seeds semi-naive from the input delta for all strata,
+  making the `_inputDelta` fix a natural consequence of the design
+  rather than a targeted patch.
+
 ### Key risk
 
 The scope is large.  The introspection functions are individually
@@ -348,11 +422,13 @@ by application developers: `explain`, `conflicts`, `history`, and
  │
  ├──→ 006 Incremental Datalog Evaluator
  │     │
- │     ├──→ 007 Settled / Working / Compaction
- │     │     │
- │     │     └──→ 008 Query & Introspection
- │     │
- │     └──→ 008 Query & Introspection
+ │     └──→ 006.1 Unified Weighted Evaluator
+ │            │
+ │            ├──→ 007 Settled / Working / Compaction
+ │            │     │
+ │            │     └──→ 008 Query & Introspection
+ │            │
+ │            └──→ 008 Query & Introspection
  │
  └──→ 007 Settled / Working / Compaction
 ```
@@ -360,14 +436,21 @@ by application developers: `explain`, `conflicts`, `history`, and
 Plans 005 and 006 are strictly sequential — 006 builds on 005's stage
 interface and Z-set types.
 
-Plan 007 depends on both 005 and 006 (it partitions their accumulated
-state), but could begin design work (stability frontier, compaction
-rules) in parallel with 006.
+Plan 006.1 depends on 006 (it refines the evaluator 006 built).  It
+should be completed before Plan 007, because weighted relations make
+per-stratum settling well-defined (a stratum's derived facts have
+stable weights once inputs are settled), and before Plan 008, because
+the query layer will exercise the Datalog path with potentially large
+derived relations where DRed's O(|stratum|) cost is unacceptable.
 
-Plan 008 depends on 005 (reality deltas) and benefits from 006
-(incremental Datalog for query rules) and 007 (snapshots for time
+Plan 007 depends on 005, 006, and 006.1 (it partitions their
+accumulated state), but could begin design work (stability frontier,
+compaction rules) in parallel with 006.1.
+
+Plan 008 depends on 005 (reality deltas) and benefits from 006.1
+(truly O(|Δ|) Datalog for query rules) and 007 (snapshots for time
 travel), but basic introspection functions (explain, conflicts,
-history) could start after 005.
+history) could start after 006.1.
 
 ---
 

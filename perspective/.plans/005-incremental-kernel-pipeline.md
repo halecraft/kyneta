@@ -632,14 +632,16 @@ run comprehensive differential tests.
 - **Bootstrap warm-start**: `createIncrementalPipelineFromBootstrap()` produces the same initial reality as batch `solve()` on the bootstrap store. ✅
 - **Empty delta**: inserting a duplicate constraint produces an empty `RealityDelta`. ✅
 
-### Phase 9: Documentation and Cleanup 🔴
+### Phase 9: Documentation and Cleanup ✅
+
+Completed as part of Plan 006 Phase 7 (documentation for both plans done together).
 
 #### Tasks
 
-- 9.1 Update TECHNICAL.md: add "Incremental Pipeline" section documenting the DAG architecture, Z-set algebra, stage interface, reality deltas, and the relationship to the batch pipeline. Remove or update the "Why Not Incremental Evaluation?" design decision. 🔴
-- 9.2 Update README.md: update project status table to show Plan 005 complete, mention incremental pipeline capability in Quick Start or Core Ideas. 🔴
-- 9.3 Update `.plans/004-incremental-roadmap.md` to mark Plan 005 as complete. 🔴
-- 9.4 Add LEARNINGS.md entries for discoveries during implementation. 🔴
+- 9.1 Update TECHNICAL.md: add "Incremental Pipeline" section documenting the DAG architecture, Z-set algebra, stage interface, reality deltas, and the relationship to the batch pipeline. Remove or update the "Why Not Incremental Evaluation?" design decision. ✅
+- 9.2 Update README.md: update project status table to show Plan 005 complete, mention incremental pipeline capability in Quick Start or Core Ideas. ✅
+- 9.3 Update `.plans/004-incremental-roadmap.md` to mark Plan 005 as complete. ✅
+- 9.4 Add LEARNINGS.md entries for discoveries during implementation. ✅
 
 ## Transitive Effect Analysis
 

@@ -82,7 +82,7 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 
 ## Project Status
 
-**Phases 1–5 complete.** The full Unified CCS Engine is implemented and tested. **Plan 005 (Incremental Kernel Pipeline) Phases 1–8 complete** — all kernel stages are incrementalized and wired into a pipeline with 42 differential equivalence tests. Documentation cleanup (Phase 9) remains.
+**Phases 1–5 complete. Plan 005 complete. Plan 006 complete.** The full Unified CCS Engine is implemented and tested. The incremental pipeline is O(|Δ|) end-to-end — native incremental solvers for default rules, incremental Datalog evaluator with DRed for custom rules, strategy switching between paths.
 
 | Phase | Status | What |
 |-------|--------|------|
@@ -95,11 +95,12 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 | 4.5 Datalog-Driven Resolution | ✅ | Datalog as primary path; native solvers as §B.7 fast path |
 | 4.6 Pre-Bootstrap Correctness | ✅ | Semantic refs, complete Fugue rules, store O(1), skeleton tests |
 | 5. Bootstrap & Integration | ✅ | `createReality()`, default rules, multi-agent sync, 30 integration tests |
-| **Plan 005: Incremental Kernel** | 🚧 | Z-set algebra, incremental stages, pipeline composition with differential testing (Phases 1–8 of 9; Phase 9 = docs) |
+| **Plan 005: Incremental Kernel** | ✅ | Z-set algebra, incremental kernel stages, pipeline composition, 42 differential tests |
+| **Plan 006: Incremental Datalog** | ✅ | Native incremental LWW/Fugue, incremental Datalog evaluator, evaluation stage, strategy switching |
 
-**1098 tests across 29 files, all passing.**
+**1198 tests across 33 files, all passing.**
 
-See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the batch engine plan and [.plans/005-incremental-kernel-pipeline.md](./.plans/005-incremental-kernel-pipeline.md) for the incremental pipeline plan.
+See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the batch engine plan, [.plans/005-incremental-kernel-pipeline.md](./.plans/005-incremental-kernel-pipeline.md) for the incremental kernel plan, and [.plans/006-incremental-datalog-evaluator.md](./.plans/006-incremental-datalog-evaluator.md) for the incremental Datalog plan.
 
 ## Architecture
 
@@ -122,32 +123,38 @@ prism/
 │   │   ├── resolve.ts          Datalog derived facts → typed resolution result
 │   │   ├── skeleton.ts         Reality tree builder (reads ResolutionResult)
 │   │   ├── pipeline.ts         Batch composition root: solve(S, V?) → Reality
-│   │   └── incremental/        Incremental pipeline (Plan 005)
+│   │   ├── rule-detection.ts   Shared strategy selection (Plan 006)
+│   │   ├── native-resolution.ts  Shared native resolution (Plan 006)
+│   │   └── incremental/        Incremental pipeline (Plan 005 + 006)
 │   │       ├── types.ts          StructureIndexDelta, NodeDelta, RealityDelta
 │   │       ├── validity.ts       Authority replay + per-peer re-check
 │   │       ├── retraction.ts     Persistent retraction graph, dominance cascade
 │   │       ├── structure-index.ts  Append-only slot group accumulator
 │   │       ├── projection.ts     Bilinear join with orphan resolution
+│   │       ├── evaluation.ts     Strategy wrapper: native or incremental Datalog
 │   │       ├── skeleton.ts       Mutable tree with NodeDelta emission
 │   │       ├── pipeline.ts       Incremental composition root (DAG wiring)
 │   │       └── index.ts          Barrel export
 │   ├── datalog/              Stratified bottom-up evaluator
-│   │   ├── types.ts            Atoms, terms, rules, facts, relations, factKey
+│   │   ├── types.ts            Atoms, terms, rules, facts, Relation (Map-backed), Database
 │   │   ├── unify.ts            Variable binding, substitution, guards
 │   │   ├── stratify.ts         Dependency graph, SCC, stratum ordering
-│   │   ├── evaluate.ts         Semi-naive fixed-point evaluation
+│   │   ├── evaluate.ts         Batch semi-naive fixed-point evaluation
+│   │   ├── incremental-evaluate.ts  Cross-time incremental evaluator with DRed (Plan 006)
 │   │   └── aggregate.ts        min, max, count, sum
-│   ├── solver/               Native optimizations (§B.7, optional)
-│   │   ├── lww.ts              Native LWW: max_by(lamport, peer)
-│   │   └── fugue.ts            Native Fugue: tree walk over structure(seq)
+│   ├── solver/               Native optimizations (§B.7)
+│   │   ├── lww.ts              Batch LWW: max_by(lamport, peer)
+│   │   ├── fugue.ts            Batch Fugue: tree walk over structure(seq)
+│   │   ├── incremental-lww.ts  Per-slot O(1) winner tracking (Plan 006)
+│   │   └── incremental-fugue.ts  Per-parent Fugue tree maintenance (Plan 006)
 │   ├── bootstrap.ts          Reality creation + default solver rules (§B.8)
 │   └── index.ts              Public API
-├── tests/                    1098 tests across 29 files
+├── tests/                    1198 tests across 33 files
 │   ├── base/                 Z-set algebra
-│   ├── datalog/              Evaluator, unification, stratification, rules
+│   ├── datalog/              Evaluator, unification, stratification, rules, incremental evaluator
 │   ├── kernel/               Store, agent, authority, pipeline, skeleton, ...
-│   │   └── incremental/        Incremental validity, retraction, structure-index, projection, skeleton, pipeline (differential)
-│   ├── solver/               LWW and Fugue equivalence (native == Datalog)
+│   │   └── incremental/        Incremental stages, evaluation, pipeline (differential)
+│   ├── solver/               LWW/Fugue equivalence + incremental solver tests
 │   └── integration.test.ts   Multi-agent bootstrap, sync, retraction, time travel
 └── theory/
     └── unified-engine.md     The authoritative specification
@@ -191,6 +198,7 @@ bun run typecheck    # TypeScript type checking
 - [LEARNINGS.md](./LEARNINGS.md) — Discoveries, corrections, and open questions
 - [Batch Engine Plan](./.plans/002-unified-ccs-engine.md) — Phased plan with status tracking
 - [Incremental Pipeline Plan](./.plans/005-incremental-kernel-pipeline.md) — Plan 005: kernel stage incrementalization
+- [Incremental Datalog Plan](./.plans/006-incremental-datalog-evaluator.md) — Plan 006: incremental evaluation
 
 ## Related Work
 

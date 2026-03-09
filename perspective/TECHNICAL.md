@@ -175,13 +175,17 @@ Both rule sets are defined in `src/bootstrap.ts` and exported as `buildDefaultLW
 
 Native TypeScript implementations that bypass Datalog when the active rules match known default patterns.
 
-**Detection**: `isDefaultRulesOnly()` in `pipeline.ts` performs structural matching on rule head/body shapes (not CnIds or lamport values). It checks for `superseded`/`winner` heads reading from `active_value` (LWW) and `fugue_child`/`fugue_before` heads reading from `active_structure_seq` (Fugue). When both patterns match and no Layer 2+ rules exist, native solvers activate.
+**Detection**: `isDefaultRulesOnly()` in `kernel/rule-detection.ts` performs structural matching on rule head/body shapes (not CnIds or lamport values). It checks for `superseded`/`winner` heads reading from `active_value` (LWW) and `fugue_child`/`fugue_before` heads reading from `active_structure_seq` (Fugue). When both patterns match and no Layer 2+ rules exist, native solvers activate. `selectResolutionStrategy()` encapsulates the full decision tree as a pure function.
 
-**LWW** (`solver/lww.ts`): Groups value entries by slot, picks winner by `(lamport DESC, peer DESC)`. O(n) in active value count.
+**Batch LWW** (`solver/lww.ts`): Groups value entries by slot, picks winner by `(lamport DESC, peer DESC)`. O(n) in active value count.
 
-**Fugue** (`solver/fugue.ts`): Tree-based sequence ordering. Builds a tree where each element is a child of its `originLeft`, sorts siblings by Fugue interleaving rules (same `originRight` → lower peer first), depth-first traversal produces total order. O(n log n).
+**Batch Fugue** (`solver/fugue.ts`): Tree-based sequence ordering. Builds a tree where each element is a child of its `originLeft`, sorts siblings by Fugue interleaving rules (same `originRight` → lower peer first), depth-first traversal produces total order. O(n log n).
 
-**Equivalence**: Both native solvers are verified against the Datalog rules for all inputs in `tests/solver/lww-equivalence.test.ts` and `tests/solver/fugue-equivalence.test.ts` (23 Fugue test cases including DFS ordering, nested children, cross-subtree ordering, wide trees, and diamond patterns).
+**Incremental LWW** (`solver/incremental-lww.ts`): Per-slot winner tracking. Maintains `Map<slotId, { entries, winner }>`. On insertion, O(1) comparison against current winner. On retraction, O(entries) recomputation for the affected slot only. Emits `ZSet<ResolvedWinner>` deltas.
+
+**Incremental Fugue** (`solver/incremental-fugue.ts`): Per-parent tree maintenance. Correlates `active_structure_seq` and `constraint_peer` facts (may arrive in either order), then recomputes Fugue ordering for the affected parent only using `orderFugueNodes`. Emits `ZSet<FugueBeforePair>` deltas.
+
+**Equivalence**: Batch native solvers are verified against the Datalog rules in `tests/solver/lww-equivalence.test.ts` and `tests/solver/fugue-equivalence.test.ts` (23 Fugue test cases). Incremental native solvers are verified against batch natives via permutation and differential tests.
 
 ---
 
@@ -264,7 +268,7 @@ interface RealityNode {
 
 ## Datalog Evaluator
 
-### Implementation
+### Batch Implementation
 
 ~1000 lines of TypeScript with zero external dependencies across 5 modules:
 
@@ -275,6 +279,24 @@ interface RealityNode {
 | `stratify.ts` | Dependency graph, SCC detection, stratum ordering |
 | `evaluate.ts` | Bottom-up semi-naive fixed-point evaluation |
 | `aggregate.ts` | min, max, count, sum over groups |
+
+`Relation` is backed by `Map<string, FactTuple>` — a single collection serving both O(1) dedup (`has`/`add`) and ordered iteration (`tuples()`). The `remove()` method (used only by the incremental evaluator's DRed phase) is O(1) via `Map.delete`. `Database` delegates to `Relation` per predicate, adding `removeFact()` for the same purpose. The batch evaluator never calls `remove` or `removeFact`.
+
+### Incremental Implementation
+
+`datalog/incremental-evaluate.ts` (~870 LOC) implements cross-time incremental Datalog evaluation following DBSP §4–5. It maintains a persistent `Database` across outer time steps — the same `Database` class the batch evaluator uses. The batch evaluator's per-rule functions (`evaluateRule`, `evaluateRuleSemiNaive`, etc.) are called directly with no adapters.
+
+**Two nested loops:**
+- **Outer (cross-time):** Each constraint insertion is one time step. Between steps, the accumulated `Database` persists.
+- **Inner (intra-time):** Within one step, semi-naive fixed-point iteration runs from the input delta.
+
+**Monotone strata** (no negation): Initial pass evaluates all rules against the full db, then semi-naive iterates from the initial delta. New derivations are merged into the accumulated db. No facts are ever removed.
+
+**Negation/aggregation strata** (DRed): Delete all derived facts for the stratum, then re-evaluate to a fixed point. This wipe-and-recompute approach is simpler than provenance tracking and efficient because negation strata are bounded by the number of slots/parents, not the total constraint count. Also used for monotone strata when the input delta contains retractions (weight −1).
+
+**Resolution extraction:** Converts `ZSet<Fact>` of `winner`/`fugue_before` deltas to `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>`. Handles the winner replacement problem: when a winner changes, +1 and −1 entries for the same slotId would cancel under `zsetMap`. Instead, groups by slotId and applies replacement semantics (emit only +1 for changed winners).
+
+**Rule changes:** On `deltaRules`, restratifies and recomputes all derived facts from accumulated ground facts.
 
 ### Key Features
 
@@ -325,9 +347,9 @@ Time travel is not a special mode. The solver is a pure function; the same `(S, 
 
 ---
 
-## Incremental Pipeline (Plan 005, Phases 1–8 of 9 complete)
+## Incremental Pipeline (Plan 005 complete, Plan 006 complete)
 
-The batch `solve()` is O(|S|) per insertion. The incremental pipeline reduces the kernel stages to O(|Δ|) by maintaining persistent state across insertions and propagating Z-set deltas through a DAG of operators.
+The batch `solve()` is O(|S|) per insertion. The incremental pipeline is O(|Δ|) end-to-end — all stages including evaluation are incremental. For the common case (default LWW/Fugue rules), native incremental solvers handle resolution in O(1) per slot. For custom rules, the incremental Datalog evaluator handles resolution with DRed bounded by slot/parent count per step.
 
 ### Z-Sets
 
@@ -355,11 +377,8 @@ The structure index is append-only (structure constraints are permanent, never r
   P^Δ (projection)            → ZSet<Fact>
         │
         ▼
-  E (BATCH evaluator)         ← Plan 006 replaces with E^Δ
-        │
-        ▼
-  DIFF (prev vs new ResolutionResult → Δ_resolved, Δ_fuguePairs)
-        │
+  E^Δ (evaluation)            → ZSet<ResolvedWinner> + ZSet<FugueBeforePair>
+        │                        (native LWW/Fugue or incremental Datalog)
         ▼
   K^Δ (skeleton)              → RealityDelta
 ```
@@ -368,21 +387,28 @@ Each stage follows three conventions: `step(...deltas)` processes input and retu
 
 ### Pipeline Composition (`incremental/pipeline.ts`)
 
-The `IncrementalPipeline` interface is the public entry point: `insert(c)` accepts a constraint and returns a `RealityDelta`. Internally it wires all stages into the DAG above, adds a deduplication guard (`hasConstraint` before `store.insert`), and manages the resolution diffing shim.
+The `IncrementalPipeline` interface is the public entry point: `insert(c)` accepts a constraint and returns a `RealityDelta`. Internally it wires all stages into the DAG above and adds a deduplication guard (`hasConstraint` before `store.insert`).
 
 `createIncrementalPipelineFromBootstrap(result)` creates a pipeline pre-populated with bootstrap state by replaying all bootstrap constraints through `insert()`.
 
-The batch evaluator is called on the full accumulated state every insertion — O(|S|) until Plan 006. When the native fast path is active (default LWW/Fugue rules, no custom Layer 2+ rules), native solvers replace Datalog evaluation with much smaller constant factors.
+The pipeline composition root is pure wiring — ~70 LOC connecting stages and routing deltas. All strategy complexity (native vs Datalog, rule detection, diffing) is encapsulated inside the evaluation stage.
 
-### Resolution Diffing Shim
+### Evaluation Stage (`incremental/evaluation.ts`)
 
-The skeleton accepts typed Z-set deltas (`ZSet<ResolvedWinner>`, `ZSet<FugueBeforePair>`), but the batch evaluator produces a complete `ResolutionResult`. The pipeline bridges this by caching the previous `ResolutionResult` and diffing against the new one after each evaluation.
+The evaluation stage is a **strategy wrapper**, not a simple DBSP operator. It delegates to either native incremental solvers (LWW + Fugue) or the incremental Datalog evaluator based on active rules. Its `step()` takes `(deltaFacts, deltaRules, getAccumulatedFacts, getActiveConstraints)` — the lazy getters are only called on strategy switches (bootstrapping the new strategy from accumulated facts).
 
-**Key hazard — Z-set key collision on changed winners:** The naive diff emits `{old: −1, new: +1}` for a changed winner (same slot, different content). Both entries share the same Z-set key (slotId), so `zsetAdd` annihilates them to weight 0. The skeleton never sees the change. The fix: for changed winners, emit only `+1`. The skeleton's `applyWinnerChange` handles replacement when it sees a `+1` for an existing slot. Removed winners (slot no longer has a winner) use `−1` correctly since there's no opposing entry. This hazard applies generally: when Z-set entries with different semantic content share the same string key, opposing weights cancel even though the *content* changed.
+**Strategy switching:** When a `rule` constraint is added or retracted, the stage re-checks `selectResolutionStrategy`. If the strategy changes:
+1. The new strategy is bootstrapped from accumulated ground facts.
+2. A diff between old and new strategy's resolution is emitted.
+3. `deltaFacts` from the same step are processed through the newly-active strategy and combined with the switch diff.
 
-Plan 006 eliminates this shim entirely — the incremental evaluator produces resolution deltas directly.
+**Native path** (>99% common case): Routes facts by predicate to `IncrementalLWW` and `IncrementalFugue`. No calls to `projection.current()` or `retraction.current()` — fully O(|Δ|).
 
-### Operator Stages (all kernel stages implemented)
+**Datalog path** (custom rules): Delegates to `IncrementalDatalogEvaluator`. Also O(|Δ|) per step, with DRed bounded by slot/parent count for negation strata.
+
+`ResolutionResult` is no longer the inter-stage type between evaluation and skeleton — `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>` are. `ResolutionResult` remains as a materialization convenience for `current()` and strategy-switch diffing.
+
+### Operator Stages
 
 | Stage | Module | Input(s) | Output | Key design |
 |-------|--------|----------|--------|------------|
@@ -390,6 +416,7 @@ Plan 006 eliminates this shim entirely — the incremental evaluator produces re
 | Retraction | `incremental/retraction.ts` | `ZSet<Constraint>` | `ZSet<Constraint>` | Persistent retraction graph; two-pass delta processing (non-retracts first); deferred immunity checks for out-of-order arrival |
 | Structure Index | `incremental/structure-index.ts` | `ZSet<Constraint>` | `StructureIndexDelta` | Mutable `SlotGroup` builders; append-only; dedup by CnId |
 | Projection | `incremental/projection.ts` | `ZSet<Constraint>` × `StructureIndexDelta` | `ZSet<Fact>` | Orphan set (dual-indexed by target key and own key); resolves when target structure arrives |
+| Evaluation | `incremental/evaluation.ts` | `ZSet<Fact>` × `ZSet<Rule>` | `ZSet<ResolvedWinner>` × `ZSet<FugueBeforePair>` | Strategy wrapper: native incremental solvers or incremental Datalog; lazy getters for strategy-switch bootstrapping |
 | Skeleton | `incremental/skeleton.ts` | `ZSet<ResolvedWinner>` × `ZSet<FugueBeforePair>` × `StructureIndexDelta` | `RealityDelta` | Mutable tree with path tracking; deferred child attachment for out-of-order; seq ordering via accumulated fugue pairs + topological sort |
 
 ### Out-of-Order Arrival
@@ -421,7 +448,8 @@ The skeleton is the most complex incremental stage. It maintains a mutable reali
 ```
 base/result.ts, base/types.ts, base/zset.ts  (leaves — no deps)
          ↑
-datalog/types.ts → evaluate.ts               (Datalog layer)
+datalog/types.ts → evaluate.ts               (Datalog layer — batch)
+               → incremental-evaluate.ts      (Datalog layer — incremental, Plan 006)
          ↑
 kernel/types.ts → cnid, lamport, vv,         (kernel identity/store layer)
   store, agent, signature
@@ -432,23 +460,33 @@ structure-index.ts → projection.ts            (kernel → Datalog bridge)
                    → resolve.ts               (Datalog → kernel bridge)
                    → skeleton.ts              (tree builder)
          ↑
+rule-detection.ts                             (shared strategy selection, Plan 006)
+native-resolution.ts                          (shared native resolution, Plan 006)
+         ↑
 pipeline.ts                                   (batch composition root)
          ↑
 bootstrap.ts                                  (reality creation)
 
-kernel/incremental/                           (incremental pipeline — Plan 005)
+solver/
+  lww.ts, fugue.ts                            (batch native solvers)
+  incremental-lww.ts                          (incremental LWW, Plan 006)
+  incremental-fugue.ts                        (incremental Fugue, Plan 006)
+
+kernel/incremental/                           (incremental pipeline)
   types.ts → retraction.ts                    (depends on kernel/ + base/zset)
            → structure-index.ts
            → projection.ts
            → validity.ts                      (depends on kernel/authority)
+           → evaluation.ts                    (depends on solver/incremental-*,
+                                                datalog/incremental-evaluate,
+                                                kernel/rule-detection)
            → skeleton.ts                      (depends on kernel/resolve, structure-index)
            → pipeline.ts                      (incremental composition root — depends on
-                                                all above + kernel/store, kernel/pipeline,
-                                                datalog/evaluate, solver/lww, solver/fugue)
+                                                all above + kernel/store, kernel/pipeline)
   index.ts                                    (barrel export)
 ```
 
-Dependency direction: `base → datalog → kernel → pipeline → bootstrap`. The incremental modules import from existing kernel modules but do not modify them. The batch pipeline has no knowledge of the incremental modules.
+Dependency direction: `base → datalog → solver → kernel → pipeline → bootstrap`. The incremental modules import from existing kernel modules but do not modify them. The batch pipeline has no knowledge of the incremental modules. No batch evaluator calls remain in the incremental pipeline — all paths are incremental.
 
 ---
 
@@ -517,8 +555,8 @@ JavaScript's `number` is f64, which can only exactly represent integers up to 2^
 ### Deferred from the Spec
 
 - **Real ed25519 signatures** — Phase 2 uses a stub that always returns valid
-- **Incremental kernel pipeline** (§9) — Plan 005 Phases 1–8 complete. All kernel stages are incremental, pipeline composition is wired, 42 differential tests verify equivalence with batch. Documentation cleanup (Phase 9) remains.
-- **Incremental Datalog evaluator** (§9) — Plan 006. The batch evaluator is the remaining O(|S|) bottleneck after Plan 005. When the native fast path is active (default LWW/Fugue rules, no custom rules), the batch evaluator is bypassed entirely, making Plan 005 sufficient for real-time performance on typical workloads.
+- ~~**Incremental kernel pipeline**~~ (§9) — **Plan 005 complete.** All kernel stages are incremental, pipeline composition wired, 42 differential tests verify equivalence with batch.
+- ~~**Incremental Datalog evaluator**~~ (§9) — **Plan 006 complete.** Native incremental LWW/Fugue solvers for default rules (O(|Δ|)), incremental Datalog evaluator with DRed for custom rules, strategy switching between native and Datalog paths. The full pipeline is O(|Δ|) end-to-end. 1198 tests pass.
 - **Settled/Working set partitioning** (§11) — Bounds solver cost to recent activity
 - **Compaction** (§12) — Requires settled set; tombstone compaction is especially tricky for sequences due to origin references
 - **Wire format** (§13) — Batching and compact encoding for sync

@@ -859,7 +859,7 @@ after the switch, not dropped.
 - Incremental Datalog processes subsequent fact deltas correctly. ✅
 - Strategy switch with simultaneous fact delta: facts are not dropped. ✅
 
-### Phase 7: Documentation and Cleanup 🔴
+### Phase 7: Documentation and Cleanup ✅
 
 #### Tasks
 
@@ -871,13 +871,13 @@ after the switch, not dropped.
   no longer the inter-stage type between evaluation and skeleton —
   `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>` are. `ResolutionResult`
   remains as a materialization convenience for `current()`, `PipelineResult`, and
-  strategy switching. 🔴
+  strategy switching. ✅
 - 7.2 Update theory/incremental.md §9.5: correct the claim that Fugue rules are
-  all positive (rule 5 uses negation). Note the actual two-stratum layout. 🔴
+  all positive (rule 5 uses negation). Note the actual two-stratum layout. ✅
 - 7.3 Update `.plans/004-incremental-roadmap.md`: mark Plan 005 complete, mark
-  Plan 006 complete. 🔴
-- 7.4 Add LEARNINGS.md entries for discoveries during implementation. 🔴
-- 7.5 Complete Plan 005 Phase 9 (documentation cleanup) if still pending. 🔴
+  Plan 006 complete. ✅
+- 7.4 Add LEARNINGS.md entries for discoveries during implementation. ✅
+- 7.5 Complete Plan 005 Phase 9 (documentation cleanup) if still pending. ✅
 
 ## Transitive Effect Analysis
 

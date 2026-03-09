@@ -1027,19 +1027,38 @@ input → more output, never less.  The Z-set weights are always ≥ 0,
 so the `distinct` operator is a no-op and provenance tracking is
 unnecessary.
 
-Our Fugue rules (`fugue_child`, `fugue_descendant`, `fugue_before`)
-are all positive.  Their incremental evaluation is efficient:
+**Correction:** The Fugue rules are NOT all positive.  Rule 5
+(`fugueBeforeSubtreeProp`) uses `not fugue_descendant(Parent, B, X)` —
+the subtree propagation guard.  Running the actual stratifier
+(`stratify(buildDefaultRules())`) produces **two strata**, not the
+four or five that hand analysis might suggest:
+
+- **Stratum 0** (positive): `active_value`, `superseded`,
+  `active_structure_seq`, `constraint_peer`, `fugue_child`,
+  `fugue_descendant` — 5 rules, all purely positive.
+- **Stratum 1** (negation): `winner`, `fugue_before` — 6 rules.
+  `winner` negates `superseded`; `fugue_before` negates
+  `fugue_descendant`.
+
+This means `fugue_before` requires the DRed (delete-and-rederive)
+pattern, not simple monotone delta propagation.  However, the native
+fast path bypasses Datalog entirely for default Fugue rules, so the
+practical impact on the common case is nil.
+
+The `fugue_child` and `fugue_descendant` predicates ARE purely positive
+(stratum 0).  Their incremental evaluation is efficient:
 
 A new `active_structure_seq` fact produces:
 - New `fugue_child` facts (one per new element).  O(1).
 - New `fugue_descendant` facts (transitive closure extension).  O(depth).
-- New `fugue_before` facts (ordering relative to siblings).
-  O(siblings), but typically O(1) for append.
 
-This is also the stratum structure that Layer 2 custom rules are
-most likely to use — positive join-based rules over active constraints.
-Such rules inherit monotone incremental evaluation without provenance
-tracking.
+`fugue_before` facts are derived in stratum 1 (negation) and require
+DRed when evaluated via Datalog.  The native Fugue solver handles this
+more efficiently by recomputing ordering for the affected parent only.
+
+Positive join-based rules over active constraints (the stratum
+structure most likely for Layer 2 custom rules) inherit monotone
+incremental evaluation without provenance tracking.
 
 ### 9.6 Stratified Negation Strata (LWW Rules)
 
