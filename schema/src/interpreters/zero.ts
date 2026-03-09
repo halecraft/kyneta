@@ -65,6 +65,9 @@ function annotationDefault(tag: string): { value: unknown } | undefined {
  */
 export const zeroInterpreter: Interpreter<void, unknown> = {
   scalar(_ctx: void, _path: Path, schema: ScalarSchema): unknown {
+    if (schema.constraint !== undefined && schema.constraint.length > 0) {
+      return schema.constraint[0]
+    }
     return scalarDefault(schema.scalarKind)
   },
 

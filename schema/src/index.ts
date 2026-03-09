@@ -22,6 +22,7 @@ export type {
   AnnotatedSchema,
   // Scalar kinds
   ScalarKind,
+  ScalarPlain,
 } from "./schema.js"
 
 // Action types — the universal currency of change
@@ -97,7 +98,6 @@ export type {
   SequenceRef,
   Writable,
   Plain,
-  ScalarPlain,
 } from "./interpreters/writable.js"
 
 // Store utilities (shared by writable, plain, and feed layers)

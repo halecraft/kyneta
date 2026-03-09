@@ -221,6 +221,39 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
     expect(s._kind).toBe("annotated")
     expect(s.tag).toBe("custom")
   })
+
+  it("Schema.string('a', 'b') produces a constrained scalar", () => {
+    const s = Schema.string("a", "b")
+    expect(s._kind).toBe("scalar")
+    expect(s.scalarKind).toBe("string")
+    expect(s.constraint).toEqual(["a", "b"])
+  })
+
+  it("Schema.string() produces a scalar with no constraint field", () => {
+    const s = Schema.string()
+    expect(s._kind).toBe("scalar")
+    expect(s.scalarKind).toBe("string")
+    expect(s.constraint).toBeUndefined()
+  })
+
+  it("Schema.number(1, 2, 3) produces a constrained number scalar", () => {
+    const s = Schema.number(1, 2, 3)
+    expect(s._kind).toBe("scalar")
+    expect(s.scalarKind).toBe("number")
+    expect(s.constraint).toEqual([1, 2, 3])
+  })
+
+  it("Schema.boolean(true) produces a constrained boolean scalar", () => {
+    const s = Schema.boolean(true)
+    expect(s._kind).toBe("scalar")
+    expect(s.scalarKind).toBe("boolean")
+    expect(s.constraint).toEqual([true])
+  })
+
+  it("Schema.scalar('string') has no constraint (low-level)", () => {
+    const s = Schema.scalar("string")
+    expect(s.constraint).toBeUndefined()
+  })
 })
 
 describe("interpret: enrich combinator", () => {

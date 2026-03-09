@@ -37,6 +37,39 @@ describe("Zero.structural: scalars", () => {
   })
 })
 
+describe("Zero.structural: constrained scalars", () => {
+  it("constrained string → first option", () => {
+    expect(Zero.structural(Schema.string("public", "private"))).toBe("public")
+  })
+
+  it("constrained number → first option", () => {
+    expect(Zero.structural(Schema.number(1, 2, 3))).toBe(1)
+  })
+
+  it("constrained boolean → first option", () => {
+    expect(Zero.structural(Schema.boolean(true))).toBe(true)
+  })
+
+  it("unconstrained string still defaults to empty string", () => {
+    expect(Zero.structural(Schema.string())).toBe("")
+  })
+
+  it("constrained scalar inside a struct uses constraint[0]", () => {
+    const schema = Schema.struct({
+      visibility: Schema.string("public", "private"),
+      count: Schema.number(),
+    })
+    expect(Zero.structural(schema)).toEqual({
+      visibility: "public",
+      count: 0,
+    })
+  })
+
+  it("LoroSchema.plain constrained string → first option", () => {
+    expect(Zero.structural(LoroSchema.plain.string("a", "b"))).toBe("a")
+  })
+})
+
 describe("Zero.structural: structural kinds", () => {
   it("product → object with recursed field defaults", () => {
     expect(

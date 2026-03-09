@@ -23,6 +23,7 @@ import type {
   Schema,
   ScalarKind,
   ScalarSchema,
+  ScalarPlain,
   ProductSchema,
   SequenceSchema,
   MapSchema,
@@ -231,50 +232,41 @@ export function flush(ctx: WritableContext): PendingAction[] {
 // ---------------------------------------------------------------------------
 
 export interface ScalarRef<T = unknown> {
-  get(): T
-  set(value: T): void
+  get: () => T
+  set: (value: T) => void
 }
 
 export interface TextRef {
-  toString(): string
-  get(): string
-  insert(index: number, content: string): void
-  delete(index: number, length: number): void
-  update(content: string): void
+  toString: () => string
+  get: () => string
+  insert: (index: number, content: string) => void
+  delete: (index: number, length: number) => void
+  update: (content: string) => void
 }
 
 export interface CounterRef {
-  get(): number
-  increment(n?: number): void
-  decrement(n?: number): void
+  get: () => number
+  increment: (n?: number) => void
+  decrement: (n?: number) => void
 }
 
 export interface SequenceRef<T = unknown> {
-  get(index: number): T
-  push(...items: unknown[]): void
-  insert(index: number, ...items: unknown[]): void
-  delete(index: number, count?: number): void
+  get: (index: number) => T
+  push: (...items: unknown[]) => void
+  insert: (index: number, ...items: unknown[]) => void
+  delete: (index: number, count?: number) => void
   readonly length: number
   [Symbol.iterator](): Iterator<T>
-  toArray(): unknown[]
+  toArray: () => unknown[]
 }
 
 // ---------------------------------------------------------------------------
 // Type-level interpretations — schema type → TypeScript type
 // ---------------------------------------------------------------------------
 
-/**
- * Maps a ScalarKind literal to the corresponding TypeScript plain type.
- */
-export type ScalarPlain<K extends ScalarKind> =
-  K extends "string" ? string
-  : K extends "number" ? number
-  : K extends "boolean" ? boolean
-  : K extends "null" ? null
-  : K extends "undefined" ? undefined
-  : K extends "bytes" ? Uint8Array
-  : K extends "any" ? unknown
-  : unknown
+// ScalarPlain is re-exported from schema.ts (the canonical definition).
+// It maps ScalarKind literals to their corresponding TypeScript types.
+export type { ScalarPlain } from "../schema.js"
 
 // ---------------------------------------------------------------------------
 // Plain<S> — type-level interpretation from schema type to plain JS type
@@ -336,8 +328,8 @@ export type Plain<S extends Schema> =
       ? Plain<Inner>
       : unknown
   // --- Scalar ---
-  : S extends ScalarSchema<infer K>
-    ? ScalarPlain<K>
+  : S extends ScalarSchema<infer _K, infer V>
+    ? V
   // --- Product ---
   : S extends ProductSchema<infer F>
     ? { [K in keyof F]: Plain<F[K]> }
@@ -396,8 +388,8 @@ export type Writable<S extends Schema> =
       ? Writable<Inner>
       : unknown
   // --- Scalar ---
-  : S extends ScalarSchema<infer K>
-    ? ScalarRef<ScalarPlain<K>>
+  : S extends ScalarSchema<infer _K, infer V>
+    ? ScalarRef<V>
   // --- Product ---
   : S extends ProductSchema<infer F>
     ? { readonly [K in keyof F]: Writable<F[K]> }

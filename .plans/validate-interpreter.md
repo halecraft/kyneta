@@ -47,12 +47,12 @@ Additionally, the `change` package supports value-domain constraints on scalars 
 - ~~`Schema.nullable`, `Schema.union`, `Schema.discriminatedUnion` are absent from the top level.~~ ✅ Phase 1
 - ~~Loro-specific annotations (`text`, `counter`, `movableList`, `tree`) leak into the backend-agnostic `Schema` namespace.~~ ✅ Phase 1b
 - ~~Two redundant path representations: the catamorphism's typed `Path` (discriminated `PathSegment[]`) and the writable layer's flat `string[]`. The writable layer converts at every interpreter case boundary via `toStorePath()`, discarding the key-vs-index distinction. The `readPath` utility in `plain.ts` is module-private and duplicated in spirit by `readByPath` in `writable.ts`.~~ ✅ Phase 1c
-- `ScalarSchema` has no `constraint` field.
-- `ScalarPlain<K>` ignores any value-domain narrowing.
-- `Plain<S>` and `Writable<S>` don't account for constrained scalars.
+- ~~`ScalarSchema` has no `constraint` field.~~ ✅ Phase 2
+- ~~`ScalarPlain<K>` ignores any value-domain narrowing.~~ ✅ Phase 2
+- ~~`Plain<S>` and `Writable<S>` don't account for constrained scalars.~~ ✅ Phase 2
 - No validate interpreter, `SchemaValidationError`, or `validate()` / `tryValidate()` function exists.
-- `describe()` has no awareness of scalar constraints or nullable sugar.
-- `Zero.structural` doesn't account for constrained scalars.
+- ~~`describe()` has no awareness of scalar constraints or nullable sugar.~~ ✅ Phase 2
+- ~~`Zero.structural` doesn't account for constrained scalars.~~ ✅ Phase 2
 - The example `main.ts` has no validation section.
 
 ## Phases
@@ -119,17 +119,17 @@ Eliminate the redundant `string[]` path representation. Make the catamorphism's 
 - Task: Export `readByPath` from `index.ts` (already exported, just verify signature updated). 🟢
 - Task: Verify all 238 tests pass. No behavioral change — this is a pure representation unification. 🟢
 
-### Phase 2: Scalar value-domain constraints 🔴
+### Phase 2: Scalar value-domain constraints 🟢
 
 Add an optional `constraint` field to `ScalarSchema` that carries both the type-level narrowing and the runtime values for validation.
 
-- Task: Extend `ScalarSchema<K, V>` with an optional second type parameter `V` that defaults to `ScalarPlain<K>` and an optional `constraint?: readonly V[]` field. When present, `constraint` lists the allowed values. When absent, any value matching the kind is accepted. 🔴
-- Task: Update `Plain<S>` — when resolving a scalar, use `V` (the second type parameter) instead of `ScalarPlain<K>`. Since `V` defaults to `ScalarPlain<K>`, unconstrained scalars are unchanged. 🔴
-- Task: Update `Writable<S>` — when resolving a scalar, produce `ScalarRef<V>` instead of `ScalarRef<ScalarPlain<K>>`. 🔴
-- Task: Update `Schema.string()` to accept optional type parameter and variadic options: `string<V extends string = string>(...options: V[])`. When options are provided, produces `ScalarSchema<"string", V>` with `constraint: options`. When no options, produces `ScalarSchema<"string">` (no constraint field). Same pattern for `Schema.number()` and `Schema.boolean()`. The low-level `Schema.scalar(kind)` also gains an optional constraint parameter. 🔴
-- Task: Update `Zero.structural` and `zeroInterpreter` — when a scalar has a non-empty `constraint`, use `constraint[0]` as the default instead of the generic kind default. 🔴
-- Task: Update `describe()` to render constrained scalars, e.g. `string("public" | "private")` instead of just `string`. Update nullable rendering: when a positional sum's first variant is `scalar("null")` and it has exactly two variants, render as `nullable<inner>` instead of `union`. 🔴
-- Task: Tests — type-level tests for `Plain<S>` and `Writable<S>` with constrained scalars, runtime tests for `Zero.structural` with constrained scalars, `describe()` with constrained scalars and nullable. Verify all existing tests still pass (the second type parameter defaults must be fully backward-compatible). 🔴
+- Task: Extend `ScalarSchema<K, V>` with an optional second type parameter `V` that defaults to `ScalarPlain<K>` and an optional `constraint?: readonly V[]` field. When present, `constraint` lists the allowed values. When absent, any value matching the kind is accepted. Moved `ScalarPlain` from `writable.ts` to `schema.ts` (canonical home, since `ScalarSchema` references it as a default). Re-exported from `writable.ts` and `index.ts`. 🟢
+- Task: Update `Plain<S>` — when resolving a scalar, infer `V` (the second type parameter) directly instead of `ScalarPlain<K>`. Since `V` defaults to `ScalarPlain<K>`, unconstrained scalars are unchanged. 🟢
+- Task: Update `Writable<S>` — when resolving a scalar, produce `ScalarRef<V>` instead of `ScalarRef<ScalarPlain<K>>`. 🟢
+- Task: Update `Schema.string()` to accept optional type parameter and variadic options: `string<V extends string = string>(...options: V[])`. When options are provided, produces `ScalarSchema<"string", V>` with `constraint: options`. When no options, produces `ScalarSchema<"string">` (no constraint field). Same pattern for `Schema.number()` and `Schema.boolean()`. The low-level `Schema.scalar(kind)` also gains an optional constraint parameter via overloads. Updated `LoroSchema.plain.string/number/boolean` to pass through type parameters and options. 🟢
+- Task: Update `Zero.structural` and `zeroInterpreter` — when a scalar has a non-empty `constraint`, use `constraint[0]` as the default instead of the generic kind default. 🟢
+- Task: Update `describe()` to render constrained scalars, e.g. `string("public" | "private")` instead of just `string`. Update nullable rendering: when a positional sum's first variant is `scalar("null")` and it has exactly two variants, render as `nullable<inner>` instead of `union`. Both `walk()` and `inlineOrNull()` updated. 🟢
+- Task: Tests — 38 new tests (276 total). Type-level tests for `Plain<S>` and `Writable<S>` with constrained scalars (13 tests), runtime tests for `Zero.structural` with constrained scalars (6 tests), constructor tests for constrained scalars (5 tests), `describe()` with constrained scalars and nullable sugar (14 tests). All 238 existing tests pass unchanged. 🟢
 
 ### Phase 3: Validate interpreter 🔴
 

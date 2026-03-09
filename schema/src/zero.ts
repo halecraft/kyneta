@@ -12,6 +12,7 @@
 import type {
   Schema,
   ScalarKind,
+  ScalarSchema,
   AnnotatedSchema,
   ProductSchema,
   SequenceSchema,
@@ -94,8 +95,13 @@ function annotationDefault(tag: string): { value: unknown } | undefined {
  */
 function structural(schema: Schema): unknown {
   switch (schema._kind) {
-    case "scalar":
+    case "scalar": {
+      const s = schema as ScalarSchema
+      if (s.constraint !== undefined && s.constraint.length > 0) {
+        return s.constraint[0]
+      }
       return scalarDefault(schema.scalarKind)
+    }
 
     case "product": {
       const result: Record<string, unknown> = {}

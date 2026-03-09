@@ -55,10 +55,30 @@ export type Schema =
 
 // --- Scalar ------------------------------------------------------------------
 
-export interface ScalarSchema<K extends ScalarKind = ScalarKind> {
+export interface ScalarSchema<
+  K extends ScalarKind = ScalarKind,
+  V extends ScalarPlain<K> = ScalarPlain<K>,
+> {
   readonly _kind: "scalar"
   readonly scalarKind: K
+  readonly constraint?: readonly V[]
 }
+
+/**
+ * Maps a ScalarKind literal to the corresponding TypeScript plain type.
+ *
+ * Used as the default for the `V` type parameter on `ScalarSchema` and
+ * by interpreters that need the "widest" type for a scalar kind.
+ */
+export type ScalarPlain<K extends ScalarKind> =
+  K extends "string" ? string
+  : K extends "number" ? number
+  : K extends "boolean" ? boolean
+  : K extends "null" ? null
+  : K extends "undefined" ? undefined
+  : K extends "bytes" ? Uint8Array
+  : K extends "any" ? unknown
+  : never
 
 // --- Product -----------------------------------------------------------------
 
@@ -143,8 +163,19 @@ export interface AnnotatedSchema<
 // Structural constructors (low-level, grammar-native)
 // ---------------------------------------------------------------------------
 
-function scalar<K extends ScalarKind>(scalarKind: K): ScalarSchema<K> {
-  return { _kind: "scalar", scalarKind }
+function scalar<K extends ScalarKind>(scalarKind: K): ScalarSchema<K>
+function scalar<K extends ScalarKind, V extends ScalarPlain<K>>(
+  scalarKind: K,
+  constraint: readonly V[],
+): ScalarSchema<K, V>
+function scalar<K extends ScalarKind, V extends ScalarPlain<K>>(
+  scalarKind: K,
+  constraint?: readonly V[],
+): ScalarSchema<K, V> {
+  if (constraint !== undefined && constraint.length > 0) {
+    return { _kind: "scalar", scalarKind, constraint } as ScalarSchema<K, V>
+  }
+  return { _kind: "scalar", scalarKind } as ScalarSchema<K, V>
 }
 
 function product<F extends Record<string, Schema>>(fields: F): ProductSchema<F> {
@@ -229,19 +260,52 @@ function doc<F extends Record<string, Schema>>(fields: F): AnnotatedSchema<"doc"
 // Scalar constructors (leaf values)
 // ---------------------------------------------------------------------------
 
-/** Scalar string. Produces `scalar("string")`. */
-function string_(): ScalarSchema<"string"> {
-  return scalar("string")
+/**
+ * Scalar string. Produces `scalar("string")`.
+ *
+ * With options, produces a constrained scalar that narrows the type:
+ * ```ts
+ * Schema.string("public", "private") // ScalarSchema<"string", "public" | "private">
+ * ```
+ */
+function string_<V extends string = string>(
+  ...options: V[]
+): ScalarSchema<"string", V> {
+  return options.length > 0
+    ? scalar("string", options)
+    : scalar("string") as ScalarSchema<"string", V>
 }
 
-/** Scalar number. Produces `scalar("number")`. */
-function number_(): ScalarSchema<"number"> {
-  return scalar("number")
+/**
+ * Scalar number. Produces `scalar("number")`.
+ *
+ * With options, produces a constrained scalar that narrows the type:
+ * ```ts
+ * Schema.number(1, 2, 3) // ScalarSchema<"number", 1 | 2 | 3>
+ * ```
+ */
+function number_<V extends number = number>(
+  ...options: V[]
+): ScalarSchema<"number", V> {
+  return options.length > 0
+    ? scalar("number", options)
+    : scalar("number") as ScalarSchema<"number", V>
 }
 
-/** Scalar boolean. Produces `scalar("boolean")`. */
-function boolean_(): ScalarSchema<"boolean"> {
-  return scalar("boolean")
+/**
+ * Scalar boolean. Produces `scalar("boolean")`.
+ *
+ * With options, produces a constrained scalar that narrows the type:
+ * ```ts
+ * Schema.boolean(true) // ScalarSchema<"boolean", true>
+ * ```
+ */
+function boolean_<V extends boolean = boolean>(
+  ...options: V[]
+): ScalarSchema<"boolean", V> {
+  return options.length > 0
+    ? scalar("boolean", options)
+    : scalar("boolean") as ScalarSchema<"boolean", V>
 }
 
 /** Scalar null. Produces `scalar("null")`. */

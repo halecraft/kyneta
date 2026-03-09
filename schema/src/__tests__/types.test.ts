@@ -703,3 +703,94 @@ describe("type-level: Plain<S> end-to-end Loro schema", () => {
     }>()
   })
 })
+
+// ===========================================================================
+// Constrained scalar tests — Phase 2
+// ===========================================================================
+
+describe("type-level: Plain<S> for constrained scalars", () => {
+  it("Plain<string('a', 'b')> = 'a' | 'b'", () => {
+    const s = Schema.string("a", "b")
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<"a" | "b">()
+  })
+
+  it("Plain<number(1, 2, 3)> = 1 | 2 | 3", () => {
+    const s = Schema.number(1, 2, 3)
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<1 | 2 | 3>()
+  })
+
+  it("Plain<boolean(true)> = true", () => {
+    const s = Schema.boolean(true)
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<true>()
+  })
+
+  it("unconstrained string() still produces string", () => {
+    const s = Schema.string()
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<string>()
+  })
+
+  it("unconstrained number() still produces number", () => {
+    const s = Schema.number()
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<number>()
+  })
+
+  it("unconstrained boolean() still produces boolean", () => {
+    const s = Schema.boolean()
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<boolean>()
+  })
+
+  it("constrained scalar in a struct narrows the field type", () => {
+    const s = Schema.struct({
+      visibility: Schema.string("public", "private"),
+      count: Schema.number(),
+    })
+    type Result = Plain<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{
+      visibility: "public" | "private"
+      count: number
+    }>()
+  })
+})
+
+describe("type-level: Writable<S> for constrained scalars", () => {
+  it("Writable<string('a', 'b')> = ScalarRef<'a' | 'b'>", () => {
+    const s = Schema.string("a", "b")
+    type Result = Writable<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<ScalarRef<"a" | "b">>()
+  })
+
+  it("Writable<number(1, 2)> = ScalarRef<1 | 2>", () => {
+    const s = Schema.number(1, 2)
+    type Result = Writable<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<ScalarRef<1 | 2>>()
+  })
+
+  it("unconstrained Writable<string()> = ScalarRef<string> (unchanged)", () => {
+    type Result = Writable<ReturnType<typeof Schema.string>>
+    expectTypeOf<Result>().toEqualTypeOf<ScalarRef<string>>()
+  })
+})
+
+describe("type-level: ScalarSchema constraint type parameter", () => {
+  it("Schema.string('x', 'y') has constraint field typed as readonly ('x' | 'y')[]", () => {
+    const s = Schema.string("x", "y")
+    expectTypeOf(s.constraint).toEqualTypeOf<readonly ("x" | "y")[] | undefined>()
+  })
+
+  it("Schema.string() has no constraint at runtime", () => {
+    const s = Schema.string()
+    expectTypeOf(s.constraint).toEqualTypeOf<readonly string[] | undefined>()
+  })
+
+  it("Schema.scalar('string') produces ScalarSchema<'string'> (backward compat)", () => {
+    const s = Schema.scalar("string")
+    expectTypeOf(s.scalarKind).toEqualTypeOf<"string">()
+    expectTypeOf(s._kind).toEqualTypeOf<"scalar">()
+  })
+})

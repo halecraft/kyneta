@@ -473,4 +473,130 @@ testDescribe("describe: LoroSchema annotations", () => {
       )
     })
   })
+
+  testDescribe("constrained scalars", () => {
+    it("describes a constrained string", () => {
+      expect(describe(Schema.string("public", "private"))).toBe(
+        'string("public" | "private")',
+      )
+    })
+
+    it("describes a constrained number", () => {
+      expect(describe(Schema.number(1, 2, 3))).toBe(
+        "number(1 | 2 | 3)",
+      )
+    })
+
+    it("describes a constrained boolean", () => {
+      expect(describe(Schema.boolean(true))).toBe(
+        "boolean(true)",
+      )
+    })
+
+    it("unconstrained scalar renders without parens", () => {
+      expect(describe(Schema.string())).toBe("string")
+    })
+
+    it("constrained scalar inline in list", () => {
+      expect(describe(Schema.list(Schema.string("a", "b")))).toBe(
+        'list<string("a" | "b")>',
+      )
+    })
+
+    it("constrained scalar as struct field", () => {
+      const s = Schema.struct({
+        visibility: Schema.string("public", "private"),
+        count: Schema.number(),
+      })
+      expect(describe(s)).toBe(
+        [
+          'visibility: string("public" | "private")',
+          "count: number",
+        ].join("\n"),
+      )
+    })
+  })
+
+  testDescribe("nullable sugar", () => {
+    it("renders nullable<string> for sum([null, string])", () => {
+      expect(describe(Schema.nullable(Schema.string()))).toBe(
+        "nullable<string>",
+      )
+    })
+
+    it("renders nullable<number> for sum([null, number])", () => {
+      expect(describe(Schema.nullable(Schema.number()))).toBe(
+        "nullable<number>",
+      )
+    })
+
+    it("renders nullable with complex inner as indented children", () => {
+      const s = Schema.nullable(
+        Schema.struct({
+          name: Schema.string(),
+          age: Schema.number(),
+        }),
+      )
+      expect(describe(s)).toBe(
+        [
+          "nullable",
+          "  name: string",
+          "  age: number",
+        ].join("\n"),
+      )
+    })
+
+    it("renders nullable<text> for annotated inner", () => {
+      expect(describe(Schema.nullable(LoroSchema.text()))).toBe(
+        "nullable<text>",
+      )
+    })
+
+    it("non-nullable union with 3 variants renders as union", () => {
+      const s = Schema.union(
+        Schema.null(),
+        Schema.string(),
+        Schema.number(),
+      )
+      expect(describe(s)).toBe(
+        [
+          "union",
+          "  0: null",
+          "  1: string",
+          "  2: number",
+        ].join("\n"),
+      )
+    })
+
+    it("non-nullable 2-variant union (no null first) renders as union", () => {
+      const s = Schema.union(Schema.string(), Schema.number())
+      expect(describe(s)).toBe(
+        [
+          "union",
+          "  0: string",
+          "  1: number",
+        ].join("\n"),
+      )
+    })
+
+    it("nullable with constrained inner", () => {
+      expect(
+        describe(Schema.nullable(Schema.string("a", "b"))),
+      ).toBe('nullable<string("a" | "b")>')
+    })
+
+    it("nullable field in doc", () => {
+      const s = Schema.doc({
+        name: Schema.string(),
+        bio: Schema.nullable(Schema.string()),
+      })
+      expect(describe(s)).toBe(
+        [
+          "doc",
+          "  name: string",
+          "  bio: nullable<string>",
+        ].join("\n"),
+      )
+    })
+  })
 })

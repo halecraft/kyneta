@@ -209,15 +209,17 @@ const ProjectSchema = LoroSchema.doc({
     LoroSchema.plain.struct({
       title: LoroSchema.plain.string(),
       done: LoroSchema.plain.boolean(),
-      priority: LoroSchema.plain.number(),
+      priority: LoroSchema.plain.number(1, 2, 3),
     }),
   ),
 
   settings: LoroSchema.plain.struct({
-    visibility: LoroSchema.plain.string(),
+    visibility: LoroSchema.plain.string("public", "private"),
     maxTasks: LoroSchema.plain.number(),
     archived: LoroSchema.plain.boolean(),
   }),
+
+  bio: Schema.nullable(LoroSchema.plain.string()),
 
   labels: Schema.record(LoroSchema.plain.string()),
 })
@@ -384,7 +386,7 @@ log("")
 
 // A function that knows nothing about our document
 function resetSettings(
-  visibility: ScalarRef<string>,
+  visibility: ScalarRef<"public" | "private">,
   maxTasks: ScalarRef<number>,
   archived: ScalarRef<boolean>,
 ) {

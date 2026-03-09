@@ -24,6 +24,7 @@
 
 import type {
   Schema,
+  ScalarSchema,
   AnnotatedSchema,
   DiscriminatedSumSchema,
   PositionalSumSchema,
@@ -89,7 +90,13 @@ function walk(
   switch (schema._kind) {
     // --- Scalar: leaf value --------------------------------------------------
     case "scalar": {
-      lines.push(`${prefix}${lbl}${schema.scalarKind}`)
+      const s = schema as ScalarSchema
+      if (s.constraint !== undefined && s.constraint.length > 0) {
+        const vals = s.constraint.map((v) => JSON.stringify(v)).join(" | ")
+        lines.push(`${prefix}${lbl}${schema.scalarKind}(${vals})`)
+      } else {
+        lines.push(`${prefix}${lbl}${schema.scalarKind}`)
+      }
       return
     }
 
@@ -153,9 +160,26 @@ function walk(
       } else {
         // Positional sum
         const pos = schema as PositionalSumSchema
-        lines.push(`${prefix}${lbl}union`)
-        for (let i = 0; i < pos.variants.length; i++) {
-          walk(pos.variants[i]!, lines, depth + 1, `${i}`)
+
+        // Nullable sugar: sum([scalar("null"), X]) → nullable<X>
+        if (
+          pos.variants.length === 2 &&
+          pos.variants[0]!._kind === "scalar" &&
+          (pos.variants[0] as ScalarSchema).scalarKind === "null"
+        ) {
+          const inner = pos.variants[1]!
+          const innerDesc = inlineOrNull(inner)
+          if (innerDesc !== null) {
+            lines.push(`${prefix}${lbl}nullable<${innerDesc}>`)
+          } else {
+            lines.push(`${prefix}${lbl}nullable`)
+            walkChildren(inner, lines, depth + 1)
+          }
+        } else {
+          lines.push(`${prefix}${lbl}union`)
+          for (let i = 0; i < pos.variants.length; i++) {
+            walk(pos.variants[i]!, lines, depth + 1, `${i}`)
+          }
         }
       }
       return
@@ -223,8 +247,14 @@ function walk(
  */
 function inlineOrNull(schema: Schema): string | null {
   switch (schema._kind) {
-    case "scalar":
+    case "scalar": {
+      const s = schema as ScalarSchema
+      if (s.constraint !== undefined && s.constraint.length > 0) {
+        const vals = s.constraint.map((v) => JSON.stringify(v)).join(" | ")
+        return `${schema.scalarKind}(${vals})`
+      }
       return schema.scalarKind
+    }
 
     case "annotated":
       // Leaf annotations like text, counter

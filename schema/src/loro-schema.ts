@@ -88,19 +88,25 @@ function tree<S extends SchemaType>(
 // they are functionally identical to the base Schema constructors.
 
 const plain = {
-  /** Scalar string. */
-  string(): ScalarSchema<"string"> {
-    return Schema.string()
+  /** Scalar string. With options, produces a constrained scalar. */
+  string<V extends string = string>(
+    ...options: V[]
+  ): ScalarSchema<"string", V> {
+    return Schema.string(...options)
   },
 
-  /** Scalar number. */
-  number(): ScalarSchema<"number"> {
-    return Schema.number()
+  /** Scalar number. With options, produces a constrained scalar. */
+  number<V extends number = number>(
+    ...options: V[]
+  ): ScalarSchema<"number", V> {
+    return Schema.number(...options)
   },
 
-  /** Scalar boolean. */
-  boolean(): ScalarSchema<"boolean"> {
-    return Schema.boolean()
+  /** Scalar boolean. With options, produces a constrained scalar. */
+  boolean<V extends boolean = boolean>(
+    ...options: V[]
+  ): ScalarSchema<"boolean", V> {
+    return Schema.boolean(...options)
   },
 
   /** Scalar null. */
