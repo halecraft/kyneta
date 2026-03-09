@@ -193,11 +193,11 @@ All tests go in the existing `src/__tests__/with-changefeed.test.ts` file, exten
 - Task: Test — deep subscriber does NOT fire for sibling paths. Deep subscribe to `["settings"]`, mutate `doc.title`. Verify no callback. ✅
 - Task: Test — existing exact-path subscription tests still pass (regression). No changes to existing tests needed — they exercise `Changefeed.subscribe` which delegates to `subscribeToPath` → `subscribeToMap`, and notification still works through `notifyAll`. Run full suite to confirm. ✅
 
-## Phase 3: Documentation 🔴
+## Phase 3: Documentation ✅
 
-- Task: Update `TECHNICAL.md` — add a "Deep Subscriptions" subsection after the Changefeed subsection. Document: (a) the two-layer design — `Changefeed` is the node-level protocol (Moore machine, unchanged), `subscribeDeep` is context-level observation infrastructure; (b) `DeepEvent` envelope with relative origin semantics; (c) `notifyAll` as the single notification engine; (d) the ancestor walk algorithm; (e) that `subscribeDeep` is purely additive — no existing behavior changes. 🔴
-- Task: Update `example/main.ts` — add a section demonstrating `subscribeDeep` on the doc root, showing that mutations to title, stars, and settings all fire the deep subscriber with correct origin paths. Use `formatPath` from the validate interpreter for human-readable output. 🔴
-- Task: Update `example/README.md` — add deep subscription to the section list. 🔴
+- Task: Update `TECHNICAL.md` — add a "Deep Subscriptions" subsection after the Changefeed subsection. Document: (a) the two-layer design — `Changefeed` is the node-level protocol (Moore machine, unchanged), `subscribeDeep` is context-level observation infrastructure; (b) `DeepEvent` envelope with relative origin semantics; (c) `notifyAll` as the single notification engine; (d) the ancestor walk algorithm; (e) that `subscribeDeep` is purely additive — no existing behavior changes. ✅
+- Task: Update `example/main.ts` — add a section demonstrating `subscribeDeep` on the doc root, showing that mutations to title, stars, and settings all fire the deep subscriber with correct origin paths. Use `formatPath` from the validate interpreter for human-readable output. ✅
+- Task: Update `example/README.md` — add deep subscription to the section list. ✅
 
 ## Tests
 

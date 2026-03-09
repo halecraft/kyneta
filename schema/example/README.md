@@ -35,7 +35,8 @@ Uses the facade exactly like an application developer would:
 8. **Portable Refs** — Extract refs, pass to standalone generic functions
 9. **Referential Identity & Namespace Isolation** — `doc.name === doc.name`, `Object.keys(doc)` returns only schema keys
 10. **Validation** — `validate(ProjectSchema, snapshot)` narrows to `Plain<typeof ProjectSchema>`, `tryValidate()` collects multiple errors with human-readable paths, `validate()` throws `SchemaValidationError` on first error
-11. **Final Snapshot** — `doc.toJSON()` returns the full plain object
+11. **Deep Subscriptions** — `subscribeDeep(cfCtx, [], cb)` notifies for changes anywhere in the subtree, with relative `origin` paths and change types
+12. **Final Snapshot** — `doc.toJSON()` returns the full plain object
 
 ## The Point
 

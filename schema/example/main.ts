@@ -24,11 +24,13 @@ import {
   withChangefeed,
   createChangefeedContext,
   changefeedFlush,
+  subscribeDeep,
   CHANGEFEED,
   hasChangefeed,
   validate,
   tryValidate,
   SchemaValidationError,
+  formatPath,
 } from "../src/index.js"
 
 import type {
@@ -520,9 +522,40 @@ function describeValue(v: unknown): string {
   return String(v)
 }
 
-// ─── 11. Final snapshot ─────────────────────────────────────────────────
+// ─── 11. Deep subscriptions ─────────────────────────────────────────────
 
-section(11, "Final Snapshot")
+section(11, "Deep Subscriptions (subscribeDeep)")
+
+log("subscribeDeep notifies for changes anywhere in a subtree.")
+log("The Changefeed coalgebra is unchanged — subscribeDeep is")
+log("context-level infrastructure in the observation layer.")
+log("")
+
+const { cfCtx } = getInternals(doc as object)
+const deepEvents: { origin: string; type: string }[] = []
+const deepUnsub = subscribeDeep(cfCtx, [], (event) => {
+  deepEvents.push({
+    origin: formatPath(event.origin),
+    type: event.change.type,
+  })
+})
+
+doc.name.update("Deep Test")
+doc.stars.increment(1)
+doc.settings.maxTasks.set(999)
+
+log(`After 3 mutations (name, stars, settings):`)
+log(`  ${deepEvents.length} deep events received:`)
+for (const e of deepEvents) {
+  log(`    origin: ${e.origin}, type: ${e.type}`)
+}
+
+deepUnsub()
+doc.name.update("Schema Algebra v3 [released]") // restore, not observed
+
+// ─── 12. Final snapshot ─────────────────────────────────────────────────
+
+section(12, "Final Snapshot")
 
 log("doc.toJSON() →")
 log(

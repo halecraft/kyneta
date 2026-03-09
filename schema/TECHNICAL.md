@@ -152,6 +152,42 @@ Changes are an open protocol (`ChangeBase` with string `type` discriminant). Thi
 
 A changefeed is a coalgebra: `{ current: S, subscribe(cb: (change: C) => void): () => void }`. One symbol (`CHANGEFEED = Symbol.for("kinetic:changefeed")`) replaces the previous two-symbol `SNAPSHOT` + `REACTIVE` design. WeakMap-based caching preserves referential identity (`ref[CHANGEFEED] === ref[CHANGEFEED]`).
 
+### Deep Subscriptions (`subscribeDeep` in `src/interpreters/with-changefeed.ts`)
+
+The `Changefeed` interface provides **exact-path** subscription: a callback on `doc.title[CHANGEFEED].subscribe(cb)` fires only for changes dispatched at path `["title"]`. This is the node-level reactive protocol — a pure Moore machine, unchanged.
+
+**`subscribeDeep`** is **context-level** observation infrastructure that adds subtree subscription without touching the `Changefeed` coalgebra. It lives in `with-changefeed.ts` alongside the other observation infrastructure (`createChangefeedContext`, `changefeedFlush`, `withChangefeed`).
+
+```ts
+function subscribeDeep(
+  ctx: ChangefeedContext,
+  path: Path,
+  callback: (event: DeepEvent) => void,
+): () => void
+```
+
+The callback receives a `DeepEvent`:
+
+```ts
+interface DeepEvent {
+  readonly origin: Path    // relative path from subscriber to dispatch point
+  readonly change: ChangeBase
+}
+```
+
+**Relative origin:** If you subscribe at `["settings"]` and a change dispatches at `["settings", "darkMode"]`, `origin` is `[{type:"key", key:"darkMode"}]`. If the change dispatches at `["settings"]` itself, `origin` is `[]`. A deep subscriber is a strict superset of an exact subscriber — it sees everything an exact subscriber sees, plus descendants.
+
+**`notifyAll` — the single notification engine.** When a change dispatches at path `P`:
+
+1. **Exact subscribers:** look up `pathKey(P)` in `ctx.subscribers`, invoke matches with the change.
+2. **Deep subscribers:** walk `i` from `P.length` down to `0`, compute `pathKey(P.slice(0, i))`, look up in `ctx.deepSubscribers`, invoke matches with `{ origin: P.slice(i), change }`.
+
+This replaces the previous `notifySubscribers` function. Both `createChangefeedContext`'s dispatch wrapper and `changefeedFlush` call `notifyAll` — one function to reason about all dispatch notification.
+
+**Performance:** O(depth) per dispatch for the ancestor walk, where depth is typically 3–5. Zero overhead when no deep subscribers are registered (the map lookups return `undefined`).
+
+**Additive:** `subscribeDeep` is purely additive. The `Changefeed` interface, `HasChangefeed`, `CHANGEFEED` symbol, exact-path `subscribe`, and all ref types are unchanged.
+
 ### Step (`src/step.ts`)
 
 Pure state transitions: `(State, Change) → State`. Dispatches on the change's `type` discriminant, not on the schema — step is change-driven and schema-agnostic. Enables optimistic UI, time travel, testing without a CRDT runtime, and read-your-writes in batch mode.
