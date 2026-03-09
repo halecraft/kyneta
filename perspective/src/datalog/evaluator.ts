@@ -171,17 +171,23 @@ const MAX_ITERATIONS = 100_000;
  * that mutates `db` as a side effect of convergence and returns the
  * output delta.
  *
- * When the input contains only insertions (+1):
- * - **Positive strata**: weighted semi-naive seeded from inputDelta.
- * - **Negation strata**: naive iteration.
+ * **Positive strata** (no negation/aggregation):
+ * - Insertions only: weighted semi-naive seeded from inputDelta.
+ * - Retractions present: wipe-and-recompute.
  *
- * When the input contains retractions (−1):
- * - Both stratum types use **wipe-and-recompute**: delete all derived
- *   facts for this stratum, then re-evaluate from scratch. The dirty
- *   map captures the pre-wipe weights, so delta extraction correctly
- *   produces −1 for retracted facts and +1 for newly derived facts.
- *   This replaces the old DRed approach but uses the dirty map instead
- *   of snapshot-and-diff.
+ * **Negation/aggregation strata**: always wipe-and-recompute. Even
+ * when the input contains only insertions (+1), new positive facts in
+ * lower strata can invalidate previously-derived negation facts. For
+ * example, if `unreachable(c) :- node(c), not reachable(c)` was
+ * derived and then `reachable(c)` becomes true via a new edge,
+ * `unreachable(c)` must be retracted. Naive iteration can only add
+ * facts, not remove them, so wipe-and-recompute is required for
+ * correctness.
+ *
+ * The dirty map captures pre-wipe weights, so delta extraction
+ * correctly produces −1 for retracted facts and +1 for newly derived
+ * facts. This replaces the old DRed approach but uses the dirty map
+ * instead of snapshot-and-diff.
  *
  * @param rules        Rules for this stratum.
  * @param db           The accumulated database (mutated in place).
@@ -199,17 +205,19 @@ export function evaluateStratumFromDelta(
 ): Database {
   const dirty: DirtyMap = new Map();
 
-  if (inputHasRetractions) {
-    // Retractions present — wipe and recompute for correctness.
-    // This handles both positive and negation strata uniformly.
+  if (hasNegOrAgg) {
+    // Negation/aggregation strata always wipe-and-recompute.
+    // New positive facts can invalidate negation-derived facts,
+    // so naive iteration (which only adds) is insufficient.
     return wipeAndRecompute(rules, db, dirty, hasNegOrAgg);
   }
 
-  if (hasNegOrAgg) {
-    return evaluateNegationStratum(rules, db, dirty);
-  } else {
-    return evaluatePositiveStratum(rules, db, inputDelta, dirty);
+  if (inputHasRetractions) {
+    // Positive stratum with retractions — wipe and recompute.
+    return wipeAndRecompute(rules, db, dirty, hasNegOrAgg);
   }
+
+  return evaluatePositiveStratum(rules, db, inputDelta, dirty);
 }
 
 /**
@@ -352,21 +360,34 @@ function evaluatePositiveStratum(
 
   let currentDelta: Database;
 
-  if (inputDelta.size === 0) {
-    // No input delta — nothing to derive.
-    return extractDelta(db, dirty);
-  }
-
   // Seed: evaluate rules semi-naively against inputDelta.
+  // Also handle rules with empty bodies (no positive atoms) — these
+  // derive facts unconditionally and are missed by semi-naive iteration
+  // which only iterates over positive atom indices.
   currentDelta = new Database();
+
   for (const rule of rules) {
     const positiveAtomIndices = getPositiveAtomIndices(rule.body);
-    for (const deltaIdx of positiveAtomIndices) {
-      const derived = evaluateRuleSemiNaive(rule, db, inputDelta, deltaIdx);
+    if (positiveAtomIndices.length === 0) {
+      // Rule with no positive atoms (empty body or only negation/guards).
+      // Evaluate against full db — these fire unconditionally.
+      const derived = evaluateRule(rule, db, db);
       for (const wf of derived) {
         applyDerivedFact(wf, db, dirty, currentDelta);
       }
+    } else if (inputDelta.size > 0) {
+      for (const deltaIdx of positiveAtomIndices) {
+        const derived = evaluateRuleSemiNaive(rule, db, inputDelta, deltaIdx);
+        for (const wf of derived) {
+          applyDerivedFact(wf, db, dirty, currentDelta);
+        }
+      }
     }
+  }
+
+  if (inputDelta.size === 0 && currentDelta.size === 0) {
+    // No input delta and no unconditional derivations — nothing to do.
+    return extractDelta(db, dirty);
   }
 
   applyDistinct(db, dirty);
@@ -803,6 +824,11 @@ export function createEvaluator(
   /** Accumulated ground facts for rule-change replay. */
   let accumulatedGroundFacts: Map<string, Fact> = new Map();
 
+  /** Whether step() has ever been called. Used by batch wrappers to
+   *  ensure strata are evaluated even with zero ground facts (rules
+   *  with empty bodies must still fire on first invocation). */
+  let hasBeenStepped = false;
+
   // Initialize stratification.
   restratify();
 
@@ -985,7 +1011,50 @@ export function createEvaluator(
 
     // --- No rule change — incremental evaluation ---
 
-    if (zsetIsEmpty(deltaFacts)) return emptyResult;
+    if (zsetIsEmpty(deltaFacts)) {
+      if (hasBeenStepped) return emptyResult;
+      // First invocation with no facts — still need to evaluate strata
+      // for rules with empty bodies (e.g., axiom(42) :- .).
+      hasBeenStepped = true;
+      if (strata.length === 0) return emptyResult;
+
+      // Evaluate all strata with empty input delta.
+      const outputDelta = new Database();
+      for (const stratum of strata) {
+        if (stratum.rules.length === 0) continue;
+        const hasNegOrAgg = stratumHasNegationOrAggregation(stratum);
+        const stratumDelta = evaluateStratumFromDelta(
+          stratum.rules, db, new Database(), hasNegOrAgg, false,
+        );
+        for (const pred of stratumDelta.predicates()) {
+          for (const { tuple, weight } of stratumDelta.getRelation(pred).allWeightedTuples()) {
+            outputDelta.addWeightedFact({ predicate: pred, values: tuple }, weight);
+          }
+        }
+      }
+
+      let outputHasEntries = false;
+      for (const pred of outputDelta.predicates()) {
+        if (outputDelta.getRelation(pred).allEntryCount > 0) {
+          outputHasEntries = true;
+          break;
+        }
+      }
+      if (!outputHasEntries) return emptyResult;
+
+      const deltaResolved = winnerFactsToResolution(outputDelta);
+      const deltaFuguePairs = fuguePairFactsToResolution(outputDelta);
+      let deltaDerived = zsetEmpty<Fact>();
+      for (const pred of outputDelta.predicates()) {
+        for (const { tuple, weight } of outputDelta.getRelation(pred).allWeightedTuples()) {
+          const f: Fact = { predicate: pred, values: tuple };
+          deltaDerived = zsetAdd(deltaDerived, zsetSingleton(factKey(f), f, weight > 0 ? 1 : -1));
+        }
+      }
+      return { deltaResolved, deltaFuguePairs, deltaDerived };
+    }
+
+    hasBeenStepped = true;
 
     // 1. Track ground facts and apply weighted delta to accumulated db.
     const changedPreds = new Set<string>();
@@ -1139,6 +1208,7 @@ export function createEvaluator(
     predToStrata = new Map();
     allDerivedPreds = new Set();
     accumulatedGroundFacts = new Map();
+    hasBeenStepped = false;
   }
 
   return { step, currentDatabase, currentResolution, reset };

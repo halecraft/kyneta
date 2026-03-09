@@ -89,12 +89,10 @@ export {
   evaluateAggregationForSubs,
 } from './aggregate.js';
 
-// --- Evaluation ---
+// --- Evaluation Core (rule-level functions) ---
 export type { WeightedFact } from './evaluate.js';
 
 export {
-  evaluate,
-  evaluatePositive,
   evaluateNaive,
   evaluateRule,
   evaluateRuleSemiNaive,
@@ -106,22 +104,12 @@ export {
   getPositiveAtomIndices,
 } from './evaluate.js';
 
-// --- Incremental Evaluation (Plan 006, Phase 5) ---
-export type { IncrementalDatalogEvaluator } from './incremental-evaluate.js';
-
-export {
-  createIncrementalDatalogEvaluator,
-  applyFactDelta,
-  diffDatabases,
-  groupByPredicate,
-} from './incremental-evaluate.js';
-
-// --- Unified Evaluator (Plan 006.1, Phase 2) ---
+// --- Unified Evaluator (Plan 006.1) ---
 export type { Evaluator, EvaluatorStepResult } from './evaluator.js';
 
 export {
   createEvaluator,
-  evaluateUnified,
-  evaluatePositiveUnified,
+  evaluateUnified as evaluate,
+  evaluatePositiveUnified as evaluatePositive,
   evaluateStratumFromDelta,
 } from './evaluator.js';

@@ -18,7 +18,7 @@ import {
   lt,
 } from '../../src/datalog/types.js';
 import type { Rule, Fact, AggregationClause } from '../../src/datalog/types.js';
-import { evaluate } from '../../src/datalog/evaluate.js';
+import { evaluateUnified as evaluate } from '../../src/datalog/evaluator.js';
 import { buildDefaultLWWRules } from '../../src/bootstrap.js';
 
 // ---------------------------------------------------------------------------

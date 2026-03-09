@@ -17,7 +17,7 @@ import {
 import type { Rule, Fact, AggregationClause, Substitution, Value } from '../../src/datalog/types.js';
 import { EMPTY_SUBSTITUTION, extendSubstitution } from '../../src/datalog/unify.js';
 import { evaluateAggregation, evaluateAggregationForSubs } from '../../src/datalog/aggregate.js';
-import { evaluate } from '../../src/datalog/evaluate.js';
+import { evaluateUnified as evaluate } from '../../src/datalog/evaluator.js';
 
 // ---------------------------------------------------------------------------
 // Helper: build a Database from facts

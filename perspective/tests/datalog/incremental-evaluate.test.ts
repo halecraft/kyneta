@@ -1,11 +1,10 @@
-// === Incremental Datalog Evaluator Tests ===
-// Tests for Plan 006, Phase 5:
-//   - Relation.remove / Database.removeFact (Tasks 5.1–5.2)
-//   - Bridge utilities: applyFactDelta, diffDatabases, groupByPredicate (Tasks 5.4–5.6)
-//   - Incremental Datalog evaluator: monotone strata, negation strata (DRed),
-//     stratum dependency, rule changes, resolution extraction (Tasks 5.7–5.13)
-//   - Three-way equivalence: incremental Datalog ≡ batch Datalog ≡ native solver
-//   - Permutation tests
+// === Weighted Relation/Database & Unified Evaluator Tests ===
+// Originally from Plan 006 Phase 5; migrated to unified evaluator in Plan 006.1.
+//   - Relation.remove / Database.removeFact
+//   - Unified evaluator (createEvaluator): LWW resolution, transitive closure,
+//     Fugue rules, rule changes, negation strata, retraction, permutation
+//   - Weighted Relation/Database: addWeighted, getWeight, weight roundtrips
+//   - Weight propagation: positive atom join, negation filter, groundHead sums
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -31,18 +30,15 @@ import {
   extendSubstitution,
 } from '../../src/datalog/unify.js';
 import {
-  evaluate,
-  evaluatePositive,
   evaluatePositiveAtom,
   evaluateNegation,
   groundHead,
 } from '../../src/datalog/evaluate.js';
 import {
-  applyFactDelta,
-  diffDatabases,
-  groupByPredicate,
-  createIncrementalDatalogEvaluator,
-} from '../../src/datalog/incremental-evaluate.js';
+  evaluateUnified as evaluate,
+  evaluatePositiveUnified as evaluatePositive,
+  createEvaluator,
+} from '../../src/datalog/evaluator.js';
 import {
   buildDefaultLWWRules,
   buildDefaultFugueRules,
@@ -298,170 +294,10 @@ describe('Database.removeFact', () => {
 });
 
 // ---------------------------------------------------------------------------
-// applyFactDelta
+// Unified Evaluator (migrated from IncrementalDatalogEvaluator)
 // ---------------------------------------------------------------------------
 
-describe('applyFactDelta', () => {
-  it('adds facts with weight +1', () => {
-    const db = new Database();
-    const f1 = fact('p', ['a']);
-    const f2 = fact('q', ['b']);
-
-    const delta = factsToZSet([f1, f2]);
-    applyFactDelta(db, delta);
-
-    expect(db.hasFact(f1)).toBe(true);
-    expect(db.hasFact(f2)).toBe(true);
-    expect(db.size).toBe(2);
-  });
-
-  it('removes facts with weight −1', () => {
-    const db = new Database();
-    const f1 = fact('p', ['a']);
-    db.addFact(f1);
-
-    const delta = factsToWeightedZSet([[f1, -1]]);
-    applyFactDelta(db, delta);
-
-    expect(db.hasFact(f1)).toBe(false);
-    expect(db.size).toBe(0);
-  });
-
-  it('handles mixed +1 and −1 entries', () => {
-    const db = new Database();
-    const f1 = fact('p', ['a']);
-    const f2 = fact('p', ['b']);
-    db.addFact(f1);
-
-    const delta = factsToWeightedZSet([[f1, -1], [f2, 1]]);
-    applyFactDelta(db, delta);
-
-    expect(db.hasFact(f1)).toBe(false);
-    expect(db.hasFact(f2)).toBe(true);
-    expect(db.size).toBe(1);
-  });
-
-  it('ignores weight 0 (handled by Z-set construction)', () => {
-    const db = new Database();
-    const delta = zsetEmpty<Fact>();
-    applyFactDelta(db, delta);
-    expect(db.size).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// diffDatabases
-// ---------------------------------------------------------------------------
-
-describe('diffDatabases', () => {
-  it('produces +1 for facts in new but not old', () => {
-    const oldDb = new Database();
-    const newDb = new Database();
-    newDb.addFact(fact('p', ['a']));
-
-    const delta = diffDatabases(oldDb, newDb);
-    expect(zsetSize(delta)).toBe(1);
-
-    const entry = [...delta.values()][0]!;
-    expect(entry.weight).toBe(1);
-    expect(entry.element.predicate).toBe('p');
-  });
-
-  it('produces −1 for facts in old but not new', () => {
-    const oldDb = new Database();
-    oldDb.addFact(fact('p', ['a']));
-    const newDb = new Database();
-
-    const delta = diffDatabases(oldDb, newDb);
-    expect(zsetSize(delta)).toBe(1);
-
-    const entry = [...delta.values()][0]!;
-    expect(entry.weight).toBe(-1);
-    expect(entry.element.predicate).toBe('p');
-  });
-
-  it('produces empty for identical databases', () => {
-    const db1 = new Database();
-    db1.addFact(fact('p', ['a']));
-    const db2 = new Database();
-    db2.addFact(fact('p', ['a']));
-
-    const delta = diffDatabases(db1, db2);
-    expect(zsetIsEmpty(delta)).toBe(true);
-  });
-
-  it('handles multiple predicates', () => {
-    const oldDb = new Database();
-    oldDb.addFact(fact('p', ['a']));
-    oldDb.addFact(fact('q', ['b']));
-
-    const newDb = new Database();
-    newDb.addFact(fact('q', ['b']));
-    newDb.addFact(fact('r', ['c']));
-
-    const delta = diffDatabases(oldDb, newDb);
-
-    // p:a removed (−1), r:c added (+1), q:b unchanged
-    expect(zsetSize(delta)).toBe(2);
-
-    const entries = [...delta.values()];
-    const removed = entries.find((e) => e.weight < 0)!;
-    const added = entries.find((e) => e.weight > 0)!;
-    expect(removed.element.predicate).toBe('p');
-    expect(added.element.predicate).toBe('r');
-  });
-
-  it('produces empty for two empty databases', () => {
-    const delta = diffDatabases(new Database(), new Database());
-    expect(zsetIsEmpty(delta)).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// groupByPredicate
-// ---------------------------------------------------------------------------
-
-describe('groupByPredicate', () => {
-  it('splits mixed facts by predicate', () => {
-    const f1 = fact('p', ['a']);
-    const f2 = fact('q', ['b']);
-    const f3 = fact('p', ['c']);
-
-    const zs = factsToZSet([f1, f2, f3]);
-    const groups = groupByPredicate(zs);
-
-    expect(groups.size).toBe(2);
-    expect(zsetSize(groups.get('p')!)).toBe(2);
-    expect(zsetSize(groups.get('q')!)).toBe(1);
-  });
-
-  it('returns empty map for empty Z-set', () => {
-    const groups = groupByPredicate(zsetEmpty());
-    expect(groups.size).toBe(0);
-  });
-
-  it('preserves weights', () => {
-    const f1 = fact('p', ['a']);
-    const f2 = fact('p', ['b']);
-    const zs = factsToWeightedZSet([[f1, 1], [f2, -1]]);
-    const groups = groupByPredicate(zs);
-
-    const pGroup = groups.get('p')!;
-    expect(zsetSize(pGroup)).toBe(2);
-
-    const entries = [...pGroup.values()];
-    const pos = entries.find((e) => e.weight > 0)!;
-    const neg = entries.find((e) => e.weight < 0)!;
-    expect(pos.element.values[0]).toBe('a');
-    expect(neg.element.values[0]).toBe('b');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Incremental Datalog Evaluator: LWW rules (monotone + negation strata)
-// ---------------------------------------------------------------------------
-
-describe('IncrementalDatalogEvaluator', () => {
+describe('Unified Evaluator (migrated from IncrementalDatalogEvaluator)', () => {
   describe('LWW resolution with default rules', () => {
     const lwwRules = buildDefaultLWWRules();
 
@@ -470,7 +306,7 @@ describe('IncrementalDatalogEvaluator', () => {
     const slotId = 'slot:title';
 
     it('single active_value produces a winner', () => {
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
 
       const f = makeActiveValueFact('alice', 1, slotId, 'Hello', 10);
       const delta = factsToZSet([f]);
@@ -487,7 +323,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('superseding value produces old winner −1, new winner +1', () => {
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
 
       // Insert first value (lamport 10).
       const f1 = makeActiveValueFact('alice', 1, slotId, 'Hello', 10);
@@ -519,7 +355,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('non-superseding value produces no winner change', () => {
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
 
       // Insert the winner first (lamport 20).
       const f1 = makeActiveValueFact('bob', 1, slotId, 'World', 20);
@@ -536,7 +372,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('value retraction causes winner recomputation', () => {
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
 
       // Insert two values.
       const f1 = makeActiveValueFact('alice', 1, slotId, 'Hello', 10);
@@ -557,7 +393,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('retraction of sole value removes winner', () => {
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
 
       const f1 = makeActiveValueFact('alice', 1, slotId, 'Hello', 10);
       evaluator.step(factsToZSet([f1]), zsetEmpty());
@@ -570,7 +406,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('multiple slots are tracked independently', () => {
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
 
       const f1 = makeActiveValueFact('alice', 1, 'slot:title', 'Title', 10);
       const f2 = makeActiveValueFact('alice', 2, 'slot:body', 'Body', 10);
@@ -584,7 +420,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('peer tiebreak: higher peer wins on lamport tie', () => {
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
 
       // Both lamport 20, charlie > bob lexicographically.
       const f1 = makeActiveValueFact('bob', 1, slotId, 'Bob', 20);
@@ -602,7 +438,7 @@ describe('IncrementalDatalogEvaluator', () => {
     const slotId = 'slot:title';
 
     it('matches batch Datalog for sequential insertions', () => {
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
 
       const facts = [
         makeActiveValueFact('alice', 1, slotId, 'Hello', 10),
@@ -639,7 +475,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('matches batch for two values in the same step', () => {
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
 
       const facts = [
         makeActiveValueFact('alice', 1, slotId, 'Hello', 10),
@@ -682,7 +518,7 @@ describe('IncrementalDatalogEvaluator', () => {
       const expectedContent = batchWinnerTuple[2];
 
       for (const perm of permutations(facts)) {
-        const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+        const evaluator = createEvaluator(lwwRules);
         for (const f of perm) {
           evaluator.step(factsToZSet([f]), zsetEmpty());
         }
@@ -711,7 +547,7 @@ describe('IncrementalDatalogEvaluator', () => {
         ),
       ];
 
-      const evaluator = createIncrementalDatalogEvaluator(rules);
+      const evaluator = createEvaluator(rules);
 
       // Add edge(a, b).
       evaluator.step(factsToZSet([fact('edge', ['a', 'b'])]), zsetEmpty());
@@ -754,7 +590,7 @@ describe('IncrementalDatalogEvaluator', () => {
       ];
 
       // Incremental.
-      const evaluator = createIncrementalDatalogEvaluator(rules);
+      const evaluator = createEvaluator(rules);
       for (const e of edges) {
         evaluator.step(factsToZSet([e]), zsetEmpty());
       }
@@ -780,7 +616,7 @@ describe('IncrementalDatalogEvaluator', () => {
     const allRules = buildDefaultRules();
 
     it('structure facts produce fugue_child derivation', () => {
-      const evaluator = createIncrementalDatalogEvaluator(allRules);
+      const evaluator = createEvaluator(allRules);
 
       const parentKey = cnIdKey(createCnId('alice', 0));
       const childKey = cnIdKey(createCnId('alice', 1));
@@ -802,7 +638,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('two children produce fugue_before pairs', () => {
-      const evaluator = createIncrementalDatalogEvaluator(allRules);
+      const evaluator = createEvaluator(allRules);
 
       const parentKey = cnIdKey(createCnId('alice', 0));
       const child1Key = cnIdKey(createCnId('alice', 1));
@@ -837,7 +673,7 @@ describe('IncrementalDatalogEvaluator', () => {
   describe('rule changes', () => {
     it('adding a custom superseded rule changes resolution', () => {
       const lwwRules = buildDefaultLWWRules();
-      const evaluator = createIncrementalDatalogEvaluator(lwwRules);
+      const evaluator = createEvaluator(lwwRules);
       const slotId = 'slot:title';
 
       // Insert two competing values.
@@ -889,7 +725,7 @@ describe('IncrementalDatalogEvaluator', () => {
 
   describe('empty inputs', () => {
     it('empty delta produces empty result', () => {
-      const evaluator = createIncrementalDatalogEvaluator(buildDefaultLWWRules());
+      const evaluator = createEvaluator(buildDefaultLWWRules());
       const result = evaluator.step(zsetEmpty(), zsetEmpty());
 
       expect(zsetIsEmpty(result.deltaResolved)).toBe(true);
@@ -898,7 +734,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('evaluator with no rules produces no derived facts', () => {
-      const evaluator = createIncrementalDatalogEvaluator([]);
+      const evaluator = createEvaluator([]);
 
       const f = makeActiveValueFact('alice', 1, 'slot:title', 'Hello', 10);
       const result = evaluator.step(factsToZSet([f]), zsetEmpty());
@@ -910,7 +746,7 @@ describe('IncrementalDatalogEvaluator', () => {
 
   describe('reset', () => {
     it('clears all state', () => {
-      const evaluator = createIncrementalDatalogEvaluator(buildDefaultLWWRules());
+      const evaluator = createEvaluator(buildDefaultLWWRules());
 
       const f = makeActiveValueFact('alice', 1, 'slot:title', 'Hello', 10);
       evaluator.step(factsToZSet([f]), zsetEmpty());
@@ -949,7 +785,7 @@ describe('IncrementalDatalogEvaluator', () => {
         ),
       ];
 
-      const evaluator = createIncrementalDatalogEvaluator(rules);
+      const evaluator = createEvaluator(rules);
 
       // Set up: nodes a, b, c. Start at a. Edge a→b.
       const initialFacts = [
@@ -1010,7 +846,7 @@ describe('IncrementalDatalogEvaluator', () => {
       ];
 
       // Incremental: feed one at a time.
-      const evaluator = createIncrementalDatalogEvaluator(rules);
+      const evaluator = createEvaluator(rules);
       for (const f of allFacts) {
         evaluator.step(factsToZSet([f]), zsetEmpty());
       }
@@ -1040,7 +876,7 @@ describe('IncrementalDatalogEvaluator', () => {
 
   describe('resolution extraction from derived facts', () => {
     it('deltaDerived contains winner facts with correct structure', () => {
-      const evaluator = createIncrementalDatalogEvaluator(buildDefaultLWWRules());
+      const evaluator = createEvaluator(buildDefaultLWWRules());
       const slotId = 'slot:title';
 
       const f = makeActiveValueFact('alice', 1, slotId, 'Hello', 10);
@@ -1061,7 +897,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('deltaResolved and deltaDerived are consistent', () => {
-      const evaluator = createIncrementalDatalogEvaluator(buildDefaultLWWRules());
+      const evaluator = createEvaluator(buildDefaultLWWRules());
 
       const f = makeActiveValueFact('alice', 1, 'slot:title', 'Hello', 10);
       const result = evaluator.step(factsToZSet([f]), zsetEmpty());
@@ -1075,7 +911,7 @@ describe('IncrementalDatalogEvaluator', () => {
 
   describe('accumulated database consistency', () => {
     it('currentDatabase contains both ground and derived facts', () => {
-      const evaluator = createIncrementalDatalogEvaluator(buildDefaultLWWRules());
+      const evaluator = createEvaluator(buildDefaultLWWRules());
 
       const f = makeActiveValueFact('alice', 1, 'slot:title', 'Hello', 10);
       evaluator.step(factsToZSet([f]), zsetEmpty());
@@ -1090,7 +926,7 @@ describe('IncrementalDatalogEvaluator', () => {
     });
 
     it('after retraction, ground fact is removed from database', () => {
-      const evaluator = createIncrementalDatalogEvaluator(buildDefaultLWWRules());
+      const evaluator = createEvaluator(buildDefaultLWWRules());
 
       const f = makeActiveValueFact('alice', 1, 'slot:title', 'Hello', 10);
       evaluator.step(factsToZSet([f]), zsetEmpty());
@@ -1104,7 +940,7 @@ describe('IncrementalDatalogEvaluator', () => {
   describe('batch equivalence with full default rules', () => {
     it('LWW + Fugue together match batch evaluation', () => {
       const allRules = buildDefaultRules();
-      const evaluator = createIncrementalDatalogEvaluator(allRules);
+      const evaluator = createEvaluator(allRules);
 
       const parentKey = cnIdKey(createCnId('alice', 0));
       const child1Key = cnIdKey(createCnId('alice', 1));

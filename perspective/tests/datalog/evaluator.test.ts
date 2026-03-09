@@ -35,13 +35,11 @@ import {
 } from '../../src/datalog/types.js';
 import type { Fact, Rule, Value } from '../../src/datalog/types.js';
 import {
-  evaluate,
-  evaluatePositive,
-} from '../../src/datalog/evaluate.js';
-import {
   createEvaluator,
   evaluateUnified,
+  evaluateUnified as evaluate,
   evaluatePositiveUnified,
+  evaluatePositiveUnified as evaluatePositive,
   evaluateStratumFromDelta,
 } from '../../src/datalog/evaluator.js';
 import type { Evaluator, EvaluatorStepResult } from '../../src/datalog/evaluator.js';

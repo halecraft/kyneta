@@ -264,7 +264,6 @@ export {
   // Native Resolution (§B.7)
   buildNativeResolution,
   buildNativeFuguePairs,
-  diffFuguePairs,
 
   // Skeleton (§7.3)
   buildSkeleton,

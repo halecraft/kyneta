@@ -1,11 +1,6 @@
-// === Datalog Evaluator ===
-// Implements bottom-up semi-naive fixed-point evaluation for positive Datalog,
-// extended with stratified negation and aggregation support.
-//
-// The evaluator processes rules in strata (computed by stratify.ts). Within
-// each stratum, it uses semi-naive evaluation to efficiently compute the
-// fixed point: only new facts (deltas) from the previous iteration are used
-// to derive new facts, avoiding redundant work.
+// === Datalog Evaluation Core ===
+// Per-rule evaluation functions used by both the unified evaluator
+// (evaluator.ts) and the naive test utility below.
 //
 // Weight semantics (Plan 006.1):
 // - Substitutions carry weights through evaluation.
@@ -17,29 +12,26 @@
 // - In batch mode, all input weights are 1, so all derived weights are 1.
 //   The weight infrastructure is invisible to batch consumers.
 //
+// Stratum-level evaluation and the public `evaluate()`/`evaluatePositive()`
+// entry points live in `evaluator.ts` (the unified weighted evaluator).
+// This module provides only the rule-level building blocks and
+// `evaluateNaive()` (a test utility for correctness oracle comparisons).
+//
 // References:
 // - unified-engine.md §B.3 (evaluator requirements)
 // - Ullman, "Principles of Database and Knowledge-Base Systems" Vol 1, Ch 3
 // - DBSP (Budiu & McSherry, 2023) §3.2 (Z-set joins)
-//
-// Correctness criterion (§B.3): Two evaluators are compatible iff, for any
-// set of Datalog rules and ground facts, they compute the same minimal model.
 
 import type {
   Rule,
   BodyElement,
   Atom,
-  FactTuple,
   Substitution,
   Fact,
-  Result,
-  StratificationError,
   AggregationClause,
   GuardElement,
 } from './types.js';
 import {
-  ok,
-  err,
   Database,
   Relation,
   factKey,
@@ -51,7 +43,6 @@ import {
   groundAtom,
   evaluateGuard,
 } from './unify.js';
-import { stratify } from './stratify.js';
 import { evaluateAggregation } from './aggregate.js';
 
 // ---------------------------------------------------------------------------
@@ -71,93 +62,8 @@ export interface WeightedFact {
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Test utility
 // ---------------------------------------------------------------------------
-
-/**
- * Evaluate a Datalog program (rules + ground facts) and return the
- * complete minimal model.
- *
- * This is the main entry point for the Datalog evaluator.
- *
- * @param rules  The Datalog rules to evaluate.
- * @param facts  Ground facts (base relations).
- * @returns      The complete database (ground facts + all derived facts),
- *               or a StratificationError if rules have cyclic negation.
- */
-export function evaluate(
-  rules: readonly Rule[],
-  facts: readonly Fact[],
-): Result<Database, StratificationError> {
-  // Build initial database from ground facts
-  const db = new Database();
-  for (const f of facts) {
-    db.addFact(f);
-  }
-
-  if (rules.length === 0) {
-    return ok(db);
-  }
-
-  // Stratify rules
-  const stratResult = stratify(rules);
-  if (!stratResult.ok) {
-    return err(stratResult.error);
-  }
-
-  const strata = stratResult.value;
-
-  // Evaluate each stratum in order
-  for (const stratum of strata) {
-    if (stratum.rules.length === 0) {
-      continue;
-    }
-
-    // Check if this stratum has any negation or aggregation
-    const hasNegationOrAgg = stratum.rules.some((r) =>
-      r.body.some((b) => b.kind === 'negation' || b.kind === 'aggregation'),
-    );
-
-    if (hasNegationOrAgg) {
-      // Strata with negation/aggregation: use semi-naive for positive
-      // rules within the stratum, with negation/aggregation evaluated
-      // against the fully computed lower strata.
-      evaluateStratumWithNegation(stratum.rules, db);
-    } else {
-      // Pure positive stratum: standard semi-naive
-      evaluatePositiveStratum(stratum.rules, db);
-    }
-  }
-
-  return ok(db);
-}
-
-/**
- * Evaluate a positive Datalog program (no negation, no aggregation)
- * using semi-naive evaluation.
- *
- * This is a simpler entry point for programs known to be positive.
- * It skips stratification entirely.
- *
- * @param rules  Positive Datalog rules (no negation/aggregation in bodies).
- * @param facts  Ground facts.
- * @returns      The complete database.
- */
-export function evaluatePositive(
-  rules: readonly Rule[],
-  facts: readonly Fact[],
-): Database {
-  const db = new Database();
-  for (const f of facts) {
-    db.addFact(f);
-  }
-
-  if (rules.length > 0) {
-    evaluatePositiveStratum(rules, db);
-  }
-
-  return db;
-}
 
 /**
  * Evaluate rules naively (recompute everything each iteration until fixed point).
@@ -197,128 +103,6 @@ export function evaluateNaive(
   }
 
   return db;
-}
-
-// ---------------------------------------------------------------------------
-// Semi-naive evaluation for a positive stratum
-// ---------------------------------------------------------------------------
-
-/**
- * Semi-naive evaluation within a single positive stratum.
- *
- * The key insight: in each iteration, at least one body atom must match
- * against a *new* fact (from the delta). This avoids rederiving facts
- * that were already derived in previous iterations.
- *
- * Algorithm:
- *   delta[0] = facts derived in first pass
- *   repeat:
- *     new_facts = empty
- *     for each rule:
- *       for each body atom position i:
- *         evaluate rule with atom i matching against delta, others against full db
- *     delta = new_facts that aren't already in db
- *     db = db ∪ delta
- *   until delta is empty
- */
-function evaluatePositiveStratum(
-  rules: readonly Rule[],
-  db: Database,
-): void {
-  // Initial pass: evaluate all rules against the full database
-  const delta = new Database();
-  for (const rule of rules) {
-    const derived = evaluateRule(rule, db, db);
-    for (const wf of derived) {
-      if (wf.weight > 0 && !db.hasFact(wf.fact)) {
-        delta.addFact(wf.fact);
-      }
-    }
-  }
-
-  // Merge initial delta into db
-  db.mergeFrom(delta);
-
-  if (delta.size === 0) {
-    return;
-  }
-
-  // Iterate with semi-naive
-  let currentDelta = delta;
-
-  // Safety bound to prevent infinite loops (shouldn't happen in correct Datalog)
-  const MAX_ITERATIONS = 100_000;
-  let iterations = 0;
-
-  while (currentDelta.size > 0 && iterations < MAX_ITERATIONS) {
-    iterations++;
-    const nextDelta = new Database();
-
-    for (const rule of rules) {
-      // Semi-naive: for each positive body atom, try matching it against
-      // the delta while matching other atoms against the full db.
-      const positiveAtomIndices = getPositiveAtomIndices(rule.body);
-
-      for (const deltaIdx of positiveAtomIndices) {
-        const derived = evaluateRuleSemiNaive(rule, db, currentDelta, deltaIdx);
-        for (const wf of derived) {
-          if (wf.weight > 0 && !db.hasFact(wf.fact)) {
-            nextDelta.addFact(wf.fact);
-          }
-        }
-      }
-    }
-
-    // Merge new delta into db
-    db.mergeFrom(nextDelta);
-    currentDelta = nextDelta;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Evaluation for strata with negation/aggregation
-// ---------------------------------------------------------------------------
-
-/**
- * Evaluate a stratum that may contain negation or aggregation.
- *
- * Negation and aggregation are evaluated against the *current* database
- * (which includes all fully computed lower strata). Within the stratum,
- * positive atoms are evaluated using semi-naive iteration.
- *
- * The approach:
- * 1. Run semi-naive iteration for the positive fragment of the rules.
- * 2. In each iteration, negation/aggregation body elements are evaluated
- *    against the current full database.
- * 3. Repeat until fixed point.
- */
-function evaluateStratumWithNegation(
-  rules: readonly Rule[],
-  db: Database,
-): void {
-  // For strata with negation, we still iterate to a fixed point,
-  // but negation and aggregation are checked against the full db.
-  // This is sound because negated predicates are in lower strata
-  // (already fully computed) or are in the same stratum but only
-  // through positive edges (no cyclic negation).
-
-  let changed = true;
-  let iterations = 0;
-  const MAX_ITERATIONS = 100_000;
-
-  while (changed && iterations < MAX_ITERATIONS) {
-    changed = false;
-    iterations++;
-
-    for (const rule of rules) {
-      const derived = evaluateRule(rule, db, db);
-      for (const wf of derived) {
-        if (wf.weight > 0 && db.addFact(wf.fact)) {
-          changed = true;
-        }
-      }
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------

@@ -16,19 +16,13 @@ import type { StructureIndex } from './structure-index.js';
 import {
   nativeResolution,
   allPairsFromOrdered,
-  fuguePairKey,
   type ResolvedWinner,
   type FugueBeforePair,
   type ResolutionResult,
 } from './resolve.js';
 import { resolveLWW } from '../solver/lww.js';
 import { buildFugueNodes, orderFugueNodes } from '../solver/fugue.js';
-import type { ZSet } from '../base/zset.js';
-import {
-  zsetEmpty,
-  zsetSingleton,
-  zsetAdd,
-} from '../base/zset.js';
+
 
 // ---------------------------------------------------------------------------
 // Native Resolution
@@ -117,64 +111,4 @@ export function buildNativeFuguePairs(
   }
 
   return pairs;
-}
-
-// ---------------------------------------------------------------------------
-// Fugue Pair Diffing
-// ---------------------------------------------------------------------------
-
-/**
- * Flatten a grouped pair map into a flat keyed map for efficient diffing.
- */
-function flattenPairs(
-  grouped: ReadonlyMap<string, readonly FugueBeforePair[]>,
-): Map<string, FugueBeforePair> {
-  const flat = new Map<string, FugueBeforePair>();
-  for (const pairs of grouped.values()) {
-    for (const p of pairs) {
-      flat.set(fuguePairKey(p), p);
-    }
-  }
-  return flat;
-}
-
-/**
- * Diff two sets of Fugue ordering pairs, producing a Z-set delta.
- *
- * Pairs present in `newPairs` but not `oldPairs` get weight +1.
- * Pairs present in `oldPairs` but not `newPairs` get weight −1.
- * Unchanged pairs produce no delta.
- *
- * Uses `fuguePairKey` from `resolve.ts` as the canonical Z-set key.
- *
- * @param oldPairs - Previous pair set (null treated as empty).
- * @param newPairs - Current pair set.
- * @returns Z-set delta of FugueBeforePair changes.
- */
-export function diffFuguePairs(
-  oldPairs: ReadonlyMap<string, readonly FugueBeforePair[]> | null,
-  newPairs: ReadonlyMap<string, readonly FugueBeforePair[]>,
-): ZSet<FugueBeforePair> {
-  const oldFlat = oldPairs !== null
-    ? flattenPairs(oldPairs)
-    : new Map<string, FugueBeforePair>();
-  const newFlat = flattenPairs(newPairs);
-
-  let delta = zsetEmpty<FugueBeforePair>();
-
-  // New pairs (in new but not old)
-  for (const [key, p] of newFlat) {
-    if (!oldFlat.has(key)) {
-      delta = zsetAdd(delta, zsetSingleton(key, p, 1));
-    }
-  }
-
-  // Removed pairs (in old but not new)
-  for (const [key, p] of oldFlat) {
-    if (!newFlat.has(key)) {
-      delta = zsetAdd(delta, zsetSingleton(key, p, -1));
-    }
-  }
-
-  return delta;
 }

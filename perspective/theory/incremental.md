@@ -973,9 +973,7 @@ Step 3a above — "compute which previously derived facts are invalidated"
 — requires **provenance tracking**: knowing which ground facts
 contributed to each derivation.
 
-The current evaluator has no provenance tracking.  `Database` uses
-`Relation` backed by `Set<string>` — facts are present or absent, with
-no record of how they were derived or which input facts support them.
+**Status: Implemented in Plan 006.1** via Z-set weights with `distinct`.
 
 DBSP's approach uses Z-set multiplicities: a derived fact's weight
 encodes how many independent derivation paths lead to it.  When an
@@ -983,33 +981,44 @@ input fact is removed (weight −1), the weight of every derivation that
 used it decrements.  If the weight reaches 0, the derived fact is
 retracted.
 
-Implementing this requires:
+The implementation delivers:
 
-1. **Z-set-aware relations**: `Relation` must track integer weights
-   per fact, not just presence/absence.  Addition and negation of
-   relations become Z-set operations.
+1. **Z-set-aware relations**: `Relation` tracks integer weights per
+   fact via `Map<string, { tuple, weight }>`.  `addWeighted(tuple, w)`
+   sums weights; zero-weight entries are pruned eagerly.  `tuples()`
+   returns weight > 0 entries (backward-compatible).
 
-2. **Weighted semi-naive evaluation**: when evaluating a rule body,
-   the weight of a derived fact is the product of the weights of the
-   matching input facts (following the provenance semiring model of
-   Green et al., 2007).
+2. **Weighted semi-naive evaluation**: `Substitution` carries a
+   `weight` field through evaluation.  Positive atom join multiplies
+   weights (`sub.weight × tuple.weight`, the provenance semiring
+   product of Green et al., 2007).  Negation and guards are boolean
+   filters (weight preserved on pass).  Aggregation resets weight to 1
+   (group-by boundary).  `groundHead` sums weights for duplicate facts
+   (Z-set addition).
 
-3. **Delta-aware negation**: when a new `superseded(CnId, Slot)` fact
-   arrives with weight +1, the evaluator must find all `winner` facts
-   that depended on the *absence* of that `superseded` fact (via `not
-   superseded(CnId, Slot)`) and retract them (weight −1).  This is
-   the DRed (Delete and Rederive) pattern, which DBSP subsumes via
-   Z-set arithmetic.
+3. **`distinct` after each iteration**: A dirty map
+   (`Map<string, { fact, preWeight }>`) tracks facts modified during
+   stratum evaluation.  After each semi-naive iteration, weights are
+   clamped to 0/1 on dirty entries only — O(|modified|) per iteration,
+   not O(|relation|).  This prevents weight explosion from transitive
+   closure and preserves the binary present/absent signal for negation.
 
-4. **Per-stratum accumulated state**: each stratum maintains its
-   accumulated derived relations across `step()` calls, so that deltas
-   from one step can be computed relative to the previous step's output.
+4. **Per-stratum accumulated state**: The unified evaluator
+   (`createEvaluator`) maintains an accumulated `Database` across
+   `step()` calls.  Delta extraction compares each dirty entry's
+   `preWeight` (captured on first touch, never overwritten) to the
+   current weight after convergence — zero-crossings become the output
+   delta.  No snapshot-and-diff needed.
 
-This is the most complex implementation task in the incremental effort.
-It effectively extends the Datalog evaluator from a batch engine to an
-incremental stream processor.  The payoff is that *any* rule — default,
-custom, or user query — automatically benefits from incremental
-evaluation.
+**Current limitation — negation strata:** True incremental retraction
+propagation through negation (where a retracted positive fact produces
+new derivations from `not`) is not yet implemented.  Negation and
+aggregation strata always use wipe-and-recompute: delete all derived
+facts, re-evaluate from scratch, and extract the delta via the dirty
+map.  This is correct and bounded by slot/parent count per step, but
+is O(|stratum|) rather than O(|Δ|).  Positive strata with only
+insertions use true weighted semi-naive (O(|Δ|×|DB|)).  This is a
+future optimization opportunity.
 
 ### 9.5 Monotone Strata (Fugue Rules)
 

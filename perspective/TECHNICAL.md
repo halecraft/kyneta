@@ -270,16 +270,15 @@ interface RealityNode {
 
 ### Modules
 
-~2500 lines of TypeScript with zero external dependencies across 7 modules:
+~2200 lines of TypeScript with zero external dependencies across 6 modules:
 
 | Module | Purpose |
 |--------|---------|
 | `types.ts` | Atoms, terms (const, var, wildcard), rules, facts, weighted `Relation`, `Database` |
 | `unify.ts` | Variable binding, substitution (`{ bindings, weight }`), term matching, guard evaluation |
 | `stratify.ts` | Dependency graph, SCC detection, stratum ordering |
-| `evaluate.ts` | Per-rule evaluation core: `evaluateRule`, `evaluateRuleSemiNaive`, `groundHead`, body element dispatch |
-| `evaluator.ts` | Unified evaluator: `createEvaluator`, `evaluateStratumFromDelta`, dirty-map infrastructure, batch wrappers |
-| `incremental-evaluate.ts` | Legacy incremental evaluator (Plan 006; superseded by `evaluator.ts` in Plan 006.1, pending removal in Phase 3–4) |
+| `evaluate.ts` | Per-rule evaluation core: `evaluateRule`, `evaluateRuleSemiNaive`, `groundHead`, body element dispatch; `evaluateNaive` test utility |
+| `evaluator.ts` | Unified evaluator: `createEvaluator`, `evaluateStratumFromDelta`, dirty-map infrastructure, batch wrappers (`evaluate`, `evaluatePositive`) |
 | `aggregate.ts` | min, max, count, sum over groups |
 
 ### Weighted Relations and Substitutions (Plan 006.1)
@@ -290,9 +289,9 @@ interface RealityNode {
 
 ### Unified Evaluator (Plan 006.1)
 
-`datalog/evaluator.ts` (~1100 LOC) replaces four duplicated semi-naive loops (batch `evaluatePositiveStratum`/`evaluateStratumWithNegation`, incremental `evaluateMonotoneStratumIncremental`/`evaluateStratumDRed`, plus `fullRecompute`) with a single implementation.
+`datalog/evaluator.ts` (~1250 LOC) replaces four duplicated semi-naive loops (batch `evaluatePositiveStratum`/`evaluateStratumWithNegation`, incremental `evaluateMonotoneStratumIncremental`/`evaluateStratumDRed`, plus `fullRecompute`) with a single implementation. The old `incremental-evaluate.ts` and the stratum-level functions in `evaluate.ts` have been deleted (Plan 006.1, Phase 4).
 
-**Functional core — `evaluateStratumFromDelta`:** Given rules, a mutable database, and an input delta, run weighted semi-naive to convergence and return the output delta. Positive strata use semi-naive seeded from the input delta (the `_inputDelta` fix: O(|Δ|×|DB|) instead of the old O(|DB|²)). Negation strata use naive iteration. When retractions are present, both types use wipe-and-recompute with dirty-map delta extraction.
+**Functional core — `evaluateStratumFromDelta`:** Given rules, a mutable database, and an input delta, run weighted semi-naive to convergence and return the output delta. Positive strata use semi-naive seeded from the input delta (the `_inputDelta` fix: O(|Δ|×|DB|) instead of the old O(|DB|²)). Negation/aggregation strata always use wipe-and-recompute — even insertion-only deltas can invalidate negation-derived facts when lower strata produce new positive facts (e.g., `not reachable(X)` becomes false when `reachable(X)` is newly derived). Positive strata with retractions also use wipe-and-recompute, since semi-naive alone cannot handle lost support from retracted input facts.
 
 **Dirty map — dual-purpose infrastructure:** A single `Map<string, { fact, preWeight }>` keyed by `factKey` serves two roles:
 1. **Scoped `distinct`:** After each iteration, clamp only dirty entries (weight > 1 → 1, weight < 0 → 0). O(|modified|) per iteration, not O(|relation|).
@@ -300,7 +299,7 @@ interface RealityNode {
 
 **Imperative shell — `createEvaluator`:** Holds accumulated `Database`, rules, strata, and ground facts. `step(deltaFacts, deltaRules)` applies the delta, evaluates affected strata bottom-up, propagates stratum output deltas upward, and extracts resolution. The retraction flag propagates through strata: if stratum 0 produces −1 deltas, stratum 1 wipes-and-recomputes.
 
-**Batch as degenerate case:** `evaluateUnified(rules, facts)` creates a fresh evaluator, feeds all facts as +1 in a single step, and returns the database. The old batch `evaluate()` in `evaluate.ts` is preserved as the correctness oracle for three-way testing (old batch vs. new single-step vs. new multi-step).
+**Batch as degenerate case:** `evaluate(rules, facts)` (aliased from `evaluateUnified`) creates a fresh evaluator, feeds all facts as +1 in a single step, and returns the database. `evaluateNaive()` in `evaluate.ts` serves as the independent correctness oracle for cross-checking semi-naive evaluation.
 
 **Resolution extraction:** `winnerFactsToResolution` and `fuguePairFactsToResolution` read directly from the delta `Database` using `allWeightedTuples()`. No `ZSet<Fact>` intermediate or `groupByPredicate` splitting step needed — `Database` already groups facts by predicate. The winner replacement semantics (group by slotId, emit only +1 for changed winners) are preserved.
 
@@ -356,7 +355,7 @@ Time travel is not a special mode. The solver is a pure function; the same `(S, 
 
 ---
 
-## Incremental Pipeline (Plan 005 complete, Plan 006 complete, Plan 006.1 in progress)
+## Incremental Pipeline (Plan 005 complete, Plan 006 complete, Plan 006.1 complete)
 
 The batch `solve()` is O(|S|) per insertion. The incremental pipeline is O(|Δ|) end-to-end — all stages including evaluation are incremental. For the common case (default LWW/Fugue rules), native incremental solvers handle resolution in O(1) per slot. For custom rules, the unified evaluator handles resolution with dirty-map delta extraction. Wipe-and-recompute is used when retractions are present, bounded by slot/parent count per step; the dirty map eliminates the old pre-step snapshot clone and post-step full-database diff.
 
@@ -404,7 +403,7 @@ The pipeline composition root is pure wiring — ~70 LOC connecting stages and r
 
 ### Evaluation Stage (`incremental/evaluation.ts`)
 
-The evaluation stage is a **strategy wrapper**, not a simple DBSP operator. It delegates to either native incremental solvers (LWW + Fugue) or the Datalog evaluator based on active rules. Its `step()` takes `(deltaFacts, deltaRules, getAccumulatedFacts, getActiveConstraints)` — the lazy getters are only called on strategy switches (bootstrapping the new strategy from accumulated facts). Plan 006.1 Phase 3 will rewire this to use `createEvaluator` from the unified `evaluator.ts` instead of the legacy `createIncrementalDatalogEvaluator`.
+The evaluation stage is a **strategy wrapper**, not a simple DBSP operator. It delegates to either native incremental solvers (LWW + Fugue) or the unified weighted Datalog evaluator (`createEvaluator` from `evaluator.ts`) based on active rules. Its `step()` takes `(deltaFacts, deltaRules, getAccumulatedFacts, getActiveConstraints)` — the lazy getters are only called on strategy switches (bootstrapping the new strategy from accumulated facts).
 
 **Strategy switching:** When a `rule` constraint is added or retracted, the stage re-checks `selectResolutionStrategy`. If the strategy changes:
 1. The new strategy is bootstrapped from accumulated ground facts.
@@ -413,7 +412,7 @@ The evaluation stage is a **strategy wrapper**, not a simple DBSP operator. It d
 
 **Native path** (>99% common case): Routes facts by predicate to `IncrementalLWW` and `IncrementalFugue`. No calls to `projection.current()` or `retraction.current()` — fully O(|Δ|).
 
-**Datalog path** (custom rules): Delegates to `IncrementalDatalogEvaluator`. Also O(|Δ|) per step, with DRed bounded by slot/parent count for negation strata.
+**Datalog path** (custom rules): Delegates to the unified `Evaluator` from `evaluator.ts`. Also O(|Δ|) per step for positive strata; negation strata use wipe-and-recompute bounded by slot/parent count.
 
 `ResolutionResult` is no longer the inter-stage type between evaluation and skeleton — `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>` are. `ResolutionResult` remains as a materialization convenience for `current()` and strategy-switch diffing.
 
@@ -457,8 +456,8 @@ The skeleton is the most complex incremental stage. It maintains a mutable reali
 ```
 base/result.ts, base/types.ts, base/zset.ts  (leaves — no deps)
          ↑
-datalog/types.ts → evaluate.ts               (Datalog layer — batch)
-               → incremental-evaluate.ts      (Datalog layer — incremental, Plan 006)
+datalog/types.ts → evaluate.ts               (Datalog layer — rule-level core)
+               → evaluator.ts                 (Datalog layer — unified evaluator, Plan 006.1)
          ↑
 kernel/types.ts → cnid, lamport, vv,         (kernel identity/store layer)
   store, agent, signature
@@ -487,7 +486,7 @@ kernel/incremental/                           (incremental pipeline)
            → projection.ts
            → validity.ts                      (depends on kernel/authority)
            → evaluation.ts                    (depends on solver/incremental-*,
-                                                datalog/incremental-evaluate,
+                                                datalog/evaluator,
                                                 kernel/rule-detection)
            → skeleton.ts                      (depends on kernel/resolve, structure-index)
            → pipeline.ts                      (incremental composition root — depends on
@@ -565,8 +564,8 @@ JavaScript's `number` is f64, which can only exactly represent integers up to 2^
 
 - **Real ed25519 signatures** — Phase 2 uses a stub that always returns valid
 - ~~**Incremental kernel pipeline**~~ (§9) — **Plan 005 complete.** All kernel stages are incremental, pipeline composition wired, 42 differential tests verify equivalence with batch.
-- ~~**Incremental Datalog evaluator**~~ (§9) — **Plan 006 complete.** Native incremental LWW/Fugue solvers for default rules (O(|Δ|)), incremental Datalog evaluator with DRed for custom rules, strategy switching between native and Datalog paths. The full pipeline is O(|Δ|) end-to-end.
-- **Unified weighted evaluator** (Plan 006.1) — **Phase 1–2 complete, Phases 3–4 in progress.** Weighted `Relation`/`Substitution`, dirty-map `distinct` + delta extraction, unified `createEvaluator`. Remaining: wire into pipeline (Phase 3), delete legacy `incremental-evaluate.ts` and dead code (Phase 4). True weighted retraction propagation through negation (avoiding wipe-and-recompute) is a future optimization.
+- ~~**Incremental Datalog evaluator**~~ (§9) — **Plan 006 complete.** Native incremental LWW/Fugue solvers for default rules (O(|Δ|)), incremental Datalog evaluator for custom rules, strategy switching between native and Datalog paths. The full pipeline is O(|Δ|) end-to-end.
+- ~~**Unified weighted evaluator**~~ (Plan 006.1) — **Complete.** Weighted `Relation`/`Substitution`, dirty-map `distinct` + delta extraction, unified `createEvaluator` replacing four duplicated semi-naive loops. Legacy `incremental-evaluate.ts` deleted, dead code removed. True weighted retraction propagation through negation strata (avoiding wipe-and-recompute) is a future optimization.
 - **Settled/Working set partitioning** (§11) — Bounds solver cost to recent activity
 - **Compaction** (§12) — Requires settled set; tombstone compaction is especially tricky for sequences due to origin references
 - **Wire format** (§13) — Batching and compact encoding for sync

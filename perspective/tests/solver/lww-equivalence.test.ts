@@ -19,8 +19,8 @@ import type {
   Value,
 } from '../../src/kernel/types.js';
 import {
-  evaluate,
-} from '../../src/datalog/evaluate.js';
+  evaluateUnified as evaluate,
+} from '../../src/datalog/evaluator.js';
 import {
   fact,
 } from '../../src/datalog/types.js';

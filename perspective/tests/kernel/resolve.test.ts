@@ -44,7 +44,7 @@ import {
   type FugueBeforePair,
 } from '../../src/kernel/resolve.js';
 import { buildStructureIndex } from '../../src/kernel/structure-index.js';
-import { evaluate } from '../../src/datalog/evaluate.js';
+import { evaluateUnified as evaluate } from '../../src/datalog/evaluator.js';
 import {
   atom,
   constTerm,

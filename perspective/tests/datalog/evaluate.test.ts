@@ -26,10 +26,12 @@ import {
 } from '../../src/datalog/types.js';
 import type { Rule, Fact, AggregationClause } from '../../src/datalog/types.js';
 import {
-  evaluate,
-  evaluatePositive,
   evaluateNaive,
 } from '../../src/datalog/evaluate.js';
+import {
+  evaluateUnified as evaluate,
+  evaluatePositiveUnified as evaluatePositive,
+} from '../../src/datalog/evaluator.js';
 
 // ---------------------------------------------------------------------------
 // Helper to collect all tuples for a predicate from a Database

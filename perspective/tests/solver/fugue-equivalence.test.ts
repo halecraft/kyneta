@@ -25,7 +25,7 @@ import type {
   CnId,
   PeerID,
 } from '../../src/kernel/types.js';
-import { evaluate } from '../../src/datalog/evaluate.js';
+import { evaluateUnified as evaluate } from '../../src/datalog/evaluator.js';
 import {
   fact,
 } from '../../src/datalog/types.js';

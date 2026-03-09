@@ -250,7 +250,6 @@ export {
 export {
   buildNativeResolution,
   buildNativeFuguePairs,
-  diffFuguePairs,
 } from './native-resolution.js';
 
 // --- Skeleton (§7.3) ---
