@@ -48,20 +48,20 @@ However, an engineering review reveals several internal structural issues, redun
 
 ## Phases
 
-### Phase 1: Extract shared utilities 🔴
+### Phase 1: Extract shared utilities ✅
 
 #### Extract `store.ts`
 
-- Task: Create `src/store.ts` containing `Store` type, `segKey`, `readByPath`, `writeByPath`, `applyChangeToStore` — moved verbatim from `writable.ts` L53–127. The only imports `store.ts` needs from outside itself are `Path` from `interpret.ts`, `ChangeBase` from `change.ts`, and `step` from `step.ts`. 🔴
-- Task: Update `writable.ts` to import `Store`, `readByPath`, `writeByPath`, `applyChangeToStore` from `../store.js` and remove the local definitions. Keep re-exporting `readByPath` for backward compat of any downstream code. 🔴
-- Task: Update `plain.ts` to import `readByPath` from `../store.js` instead of `./writable.js`. 🔴
-- Task: Update `validate.ts` to import `readByPath` from `../store.js` instead of `./writable.js`. 🔴
-- Task: Update `with-changefeed.ts` to import `readByPath`, `applyChangeToStore`, `Store` from `../store.js` instead of `./writable.js`. The type-only imports (`WritableContext`, `PendingChange`) remain from `./writable.js`. 🔴
-- Task: Update `index.ts` barrel to export `readByPath` from `./store.js` instead of `./interpreters/writable.js`. Also export `Store`, `writeByPath`, `applyChangeToStore` from `./store.js` for completeness. 🔴
+- Task: Create `src/store.ts` containing `Store` type, `segKey`, `readByPath`, `writeByPath`, `applyChangeToStore` — moved verbatim from `writable.ts` L53–127. The only imports `store.ts` needs from outside itself are `Path` from `interpret.ts`, `ChangeBase` from `change.ts`, and `step` from `step.ts`. ✅
+- Task: Update `writable.ts` to import `Store`, `readByPath`, `writeByPath`, `applyChangeToStore` from `../store.js` and remove the local definitions. Keep re-exporting `readByPath` for backward compat of any downstream code. ✅
+- Task: Update `plain.ts` to import `readByPath` from `../store.js` instead of `./writable.js`. ✅
+- Task: Update `validate.ts` to import `readByPath` from `../store.js` instead of `./writable.js`. ✅
+- Task: Update `with-changefeed.ts` to import `readByPath`, `applyChangeToStore`, `Store` from `../store.js` instead of `./writable.js`. The type-only imports (`WritableContext`, `PendingChange`) remain from `./writable.js`. ✅
+- Task: Update `index.ts` barrel to export `readByPath` from `./store.js` instead of `./interpreters/writable.js`. Also export `Store`, `writeByPath`, `applyChangeToStore` from `./store.js` for completeness. ✅
 
 #### Add `isNonNullObject` guard
 
-- Task: Add to `store.ts` a type-narrowing utility: 🔴
+- Task: Add to `store.ts` a type-narrowing utility: ✅
 
   ```ts
   function isNonNullObject(value: unknown): value is Record<string, unknown>
@@ -69,23 +69,23 @@ However, an engineering review reveals several internal structural issues, redun
 
   Returns `true` when `value` is non-null, non-undefined, and `typeof value === "object"`. Does NOT exclude arrays — callers that need "plain object" semantics add `&& !Array.isArray(value)` themselves (this keeps the guard maximally reusable, since the writable/plain/changefeed call sites don't care about arrays).
 
-- Task: Replace all ~12 inline `obj !== null && obj !== undefined && typeof obj === "object"` / `obj === null || obj === undefined || typeof obj !== "object"` sites in `writable.ts`, `plain.ts`, `validate.ts`, `with-changefeed.ts`, `combinators.ts`, and `zero.ts`. 🔴
-- Task: Export `isNonNullObject` from `index.ts`. 🔴
+- Task: Replace all ~12 inline `obj !== null && obj !== undefined && typeof obj === "object"` / `obj === null || obj === undefined || typeof obj !== "object"` sites in `writable.ts`, `plain.ts`, `validate.ts`, `with-changefeed.ts`, `combinators.ts`, and `zero.ts`. ✅
+- Task: Export `isNonNullObject` from `index.ts`. ✅
 
 #### Extract `isNullableSum` to `schema.ts`
 
-- Task: Move `isNullableSum` from `validate.ts` to `schema.ts`, exported alongside `isAnnotated` and `unwrapAnnotation`. Signature: 🔴
+- Task: Move `isNullableSum` from `validate.ts` to `schema.ts`, exported alongside `isAnnotated` and `unwrapAnnotation`. Signature: ✅
 
   ```ts
   function isNullableSum(schema: PositionalSumSchema): boolean
   ```
 
-- Task: Update `validate.ts` to import `isNullableSum` from `../schema.js`. 🔴
-- Task: Update `describe.ts` to use the imported `isNullableSum` instead of its inline check (L166–169). 🔴
+- Task: Update `validate.ts` to import `isNullableSum` from `../schema.js`. ✅
+- Task: Update `describe.ts` to use the imported `isNullableSum` instead of its inline check (L166–169). ✅
 
 #### Run regression
 
-- Task: Run full test suite — all 397 tests must pass with no modifications. 🔴
+- Task: Run full test suite — all 397 tests pass with no modifications. ✅
 
 ### Phase 2: Delete zero interpreter 🔴
 

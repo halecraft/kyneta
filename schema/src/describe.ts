@@ -22,12 +22,13 @@
 //       archived: boolean
 //     labels: record<string>
 
-import type {
-  Schema,
-  ScalarSchema,
-  AnnotatedSchema,
-  DiscriminatedSumSchema,
-  PositionalSumSchema,
+import {
+  isNullableSum,
+  type Schema,
+  type ScalarSchema,
+  type AnnotatedSchema,
+  type DiscriminatedSumSchema,
+  type PositionalSumSchema,
 } from "./schema.js"
 
 // ---------------------------------------------------------------------------
@@ -162,11 +163,7 @@ function walk(
         const pos = schema as PositionalSumSchema
 
         // Nullable sugar: sum([scalar("null"), X]) → nullable<X>
-        if (
-          pos.variants.length === 2 &&
-          pos.variants[0]!._kind === "scalar" &&
-          (pos.variants[0] as ScalarSchema).scalarKind === "null"
-        ) {
+        if (isNullableSum(pos)) {
           const inner = pos.variants[1]!
           const innerDesc = inlineOrNull(inner)
           if (innerDesc !== null) {

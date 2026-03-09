@@ -466,6 +466,20 @@ export function isAnnotated(schema: Schema): schema is AnnotatedSchema {
 }
 
 /**
+ * Returns `true` if the schema is the nullable sugar pattern:
+ * a positional sum with exactly 2 variants where the first is `scalar("null")`.
+ *
+ * This is the pattern produced by `Schema.nullable(inner)`.
+ */
+export function isNullableSum(schema: PositionalSumSchema): boolean {
+  return (
+    schema.variants.length === 2 &&
+    schema.variants[0]!._kind === "scalar" &&
+    (schema.variants[0] as ScalarSchema).scalarKind === "null"
+  )
+}
+
+/**
  * If the schema is annotated, returns the inner schema (if any).
  * Otherwise returns the schema itself.
  *

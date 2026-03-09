@@ -15,7 +15,8 @@ import type {
   SumSchema,
   AnnotatedSchema,
 } from "../schema.js"
-import { readByPath } from "./writable.js"
+import { readByPath } from "../store.js"
+import { isNonNullObject } from "../guards.js"
 
 // ---------------------------------------------------------------------------
 // Plain interpreter
@@ -86,11 +87,11 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
   ): unknown {
     // Read the object at this path and interpret each key
     const obj = readByPath(ctx, path)
-    if (obj === null || obj === undefined || typeof obj !== "object") {
+    if (!isNonNullObject(obj)) {
       return {}
     }
     const result: Record<string, unknown> = {}
-    for (const key of Object.keys(obj as Record<string, unknown>)) {
+    for (const key of Object.keys(obj)) {
       result[key] = item(key)
     }
     return result
@@ -106,8 +107,8 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     // and interpret through the matching variant.
     if (schema.discriminant !== undefined && variants.byKey) {
       const value = readByPath(ctx, path)
-      if (value !== null && value !== undefined && typeof value === "object") {
-        const discValue = (value as Record<string, unknown>)[schema.discriminant]
+      if (isNonNullObject(value)) {
+        const discValue = value[schema.discriminant]
         if (typeof discValue === "string") {
           return variants.byKey(discValue)
         }

@@ -21,6 +21,7 @@ import type {
   SumSchema,
   AnnotatedSchema,
 } from "./schema.js"
+import { isNonNullObject } from "./guards.js"
 
 // ---------------------------------------------------------------------------
 // enrich — decorate each result with additional protocol
@@ -71,11 +72,7 @@ export function enrich<Ctx, A, P>(
 ): Interpreter<Ctx, A & P> {
   function decorate(result: A, ctx: Ctx, path: Path): A & P {
     const protocol = decorator(result, ctx, path)
-    if (
-      result !== null &&
-      result !== undefined &&
-      typeof result === "object"
-    ) {
+    if (isNonNullObject(result)) {
       return Object.assign(result as object, protocol as object) as A & P
     }
     // For primitive results, wrap in an object that carries both

@@ -20,6 +20,7 @@ import type {
   PositionalSumSchema,
   DiscriminatedSumSchema,
 } from "./schema.js"
+import { isNonNullObject } from "./guards.js"
 
 // ---------------------------------------------------------------------------
 // Scalar defaults
@@ -129,12 +130,8 @@ function structural(schema: Schema): unknown {
         const [firstKey, firstVariant] = entries[0]!
         const inner = structural(firstVariant)
         // If the variant produces an object, add the discriminant key
-        if (
-          inner !== null &&
-          inner !== undefined &&
-          typeof inner === "object"
-        ) {
-          return { ...(inner as Record<string, unknown>), [schema.discriminant]: firstKey }
+        if (isNonNullObject(inner)) {
+          return { ...inner, [schema.discriminant]: firstKey }
         }
         return inner
       }

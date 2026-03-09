@@ -15,8 +15,9 @@ import type { Decorator } from "../combinators.js"
 import { CHANGEFEED } from "../changefeed.js"
 import type { Changefeed } from "../changefeed.js"
 import type { Path } from "../interpret.js"
-import type { WritableContext, PendingChange, Store } from "./writable.js"
-import { readByPath, applyChangeToStore } from "./writable.js"
+import type { WritableContext, PendingChange } from "./writable.js"
+import { type Store, readByPath, applyChangeToStore } from "../store.js"
+import { isNonNullObject } from "../guards.js"
 
 // ---------------------------------------------------------------------------
 // Deep event — the envelope for deep subscription callbacks
@@ -312,7 +313,7 @@ export const withChangefeed: Decorator<ChangefeedContext, unknown, {}> = (
   ctx: ChangefeedContext,
   path: Path,
 ): {} => {
-  if (result === null || result === undefined || typeof result !== "object") {
+  if (!isNonNullObject(result)) {
     // Can't attach symbol properties to primitives — no-op
     return {}
   }

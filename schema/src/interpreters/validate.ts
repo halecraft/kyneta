@@ -12,19 +12,21 @@
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { interpret } from "../interpret.js"
-import type {
-  Schema,
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
-  AnnotatedSchema,
-  PositionalSumSchema,
-  DiscriminatedSumSchema,
+import {
+  isNullableSum,
+  type Schema,
+  type ScalarSchema,
+  type ProductSchema,
+  type SequenceSchema,
+  type MapSchema,
+  type SumSchema,
+  type AnnotatedSchema,
+  type PositionalSumSchema,
+  type DiscriminatedSumSchema,
 } from "../schema.js"
 import type { Plain } from "./writable.js"
-import { readByPath } from "./writable.js"
+import { readByPath } from "../store.js"
+import { isNonNullObject } from "../guards.js"
 
 // ---------------------------------------------------------------------------
 // Path formatting
@@ -146,22 +148,6 @@ function scalarExpected(kind: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Nullable detection helper
-// ---------------------------------------------------------------------------
-
-/**
- * Returns true if a positional sum is the nullable sugar pattern:
- * exactly 2 variants where the first is scalar("null").
- */
-function isNullableSum(schema: PositionalSumSchema): boolean {
-  return (
-    schema.variants.length === 2 &&
-    schema.variants[0]!._kind === "scalar" &&
-    (schema.variants[0] as ScalarSchema).scalarKind === "null"
-  )
-}
-
-// ---------------------------------------------------------------------------
 // Validate interpreter
 // ---------------------------------------------------------------------------
 
@@ -226,12 +212,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
   ): unknown {
     const value = readByPath(ctx.root, path)
 
-    if (
-      value === null ||
-      value === undefined ||
-      typeof value !== "object" ||
-      Array.isArray(value)
-    ) {
+    if (!isNonNullObject(value) || Array.isArray(value)) {
       ctx.errors.push(
         new SchemaValidationError(formatPath(path), "object", value),
       )
@@ -273,12 +254,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
   ): unknown {
     const value = readByPath(ctx.root, path)
 
-    if (
-      value === null ||
-      value === undefined ||
-      typeof value !== "object" ||
-      Array.isArray(value)
-    ) {
+    if (!isNonNullObject(value) || Array.isArray(value)) {
       ctx.errors.push(
         new SchemaValidationError(formatPath(path), "object", value),
       )
@@ -304,19 +280,14 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
       const value = readByPath(ctx.root, path)
 
       // Must be an object
-      if (
-        value === null ||
-        value === undefined ||
-        typeof value !== "object" ||
-        Array.isArray(value)
-      ) {
+      if (!isNonNullObject(value) || Array.isArray(value)) {
         ctx.errors.push(
           new SchemaValidationError(formatPath(path), "object", value),
         )
         return undefined
       }
 
-      const obj = value as Record<string, unknown>
+      const obj = value
       const discValue = obj[schema.discriminant]
 
       // Discriminant must be a string

@@ -40,91 +40,15 @@ import {
   replaceChange,
   incrementChange,
 } from "../change.js"
-import { step } from "../step.js"
+import {
+  type Store,
+  readByPath,
+  applyChangeToStore,
+} from "../store.js"
+import { isNonNullObject } from "../guards.js"
 
-// ---------------------------------------------------------------------------
-// Store — a mutable nested plain JS object
-// ---------------------------------------------------------------------------
-
-/**
- * A plain JS object used as the backing store. The writable interpreter
- * reads from and writes to this object, proving no CRDT runtime is needed.
- */
-export type Store = Record<string, unknown>
-
-// ---------------------------------------------------------------------------
-// Store helpers — read/write by Path
-// ---------------------------------------------------------------------------
-
-/**
- * Resolves a segment key for JS object access.
- * Key segments use the key directly; index segments use the numeric index
- * (which JS coerces to a string for object/array access).
- */
-function segKey(seg: Path[number]): string | number {
-  return seg.type === "key" ? seg.key : seg.index
-}
-
-/**
- * Reads a value from a nested plain object by following a Path.
- */
-export function readByPath(store: unknown, path: Path): unknown {
-  let current: unknown = store
-  for (const seg of path) {
-    if (current === null || current === undefined) return undefined
-    current = (current as Record<string | number, unknown>)[segKey(seg)]
-  }
-  return current
-}
-
-/**
- * Writes a value into a nested plain object at the given Path.
- * Creates intermediate objects as needed.
- */
-export function writeByPath(store: Store, path: Path, value: unknown): void {
-  if (path.length === 0) return
-  let current: Record<string | number, unknown> = store
-  for (let i = 0; i < path.length - 1; i++) {
-    const k = segKey(path[i]!)
-    if (
-      current[k] === null ||
-      current[k] === undefined ||
-      typeof current[k] !== "object"
-    ) {
-      current[k] = {}
-    }
-    current = current[k] as Record<string | number, unknown>
-  }
-  current[segKey(path[path.length - 1]!)] = value
-}
-
-export function applyChangeToStore(
-  store: Store,
-  path: Path,
-  change: ChangeBase,
-): void {
-  if (path.length === 0) {
-    // Root-level change — apply step to the store itself and merge back
-    const next = step(store as Record<string, unknown>, change)
-    if (next !== null && next !== undefined && typeof next === "object") {
-      // Merge result keys into the store (preserving the store reference)
-      const nextObj = next as Record<string, unknown>
-      for (const key of Object.keys(nextObj)) {
-        store[key] = nextObj[key]
-      }
-      // Remove keys that were deleted
-      for (const key of Object.keys(store)) {
-        if (!(key in nextObj)) {
-          delete store[key]
-        }
-      }
-    }
-    return
-  }
-  const current = readByPath(store, path)
-  const next = step(current, change)
-  writeByPath(store, path, next)
-}
+// Re-export store utilities for backward compatibility
+export { type Store, readByPath, writeByPath, applyChangeToStore } from "../store.js"
 
 // ---------------------------------------------------------------------------
 // WritableContext — shared state flowing through the tree
@@ -684,8 +608,8 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
         }
         // String access → check store data
         const obj = readByPath(ctx.store, path)
-        if (obj !== null && obj !== undefined && typeof obj === "object") {
-          return prop in (obj as Record<string, unknown>)
+        if (isNonNullObject(obj)) {
+          return prop in obj
         }
         return false
       },
@@ -694,8 +618,8 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
         // Include symbol keys from target (protocol attached by decorators)
         const symbolKeys = Object.getOwnPropertySymbols(target)
         const obj = readByPath(ctx.store, path)
-        if (obj !== null && obj !== undefined && typeof obj === "object") {
-          return [...Object.keys(obj as Record<string, unknown>), ...symbolKeys]
+        if (isNonNullObject(obj)) {
+          return [...Object.keys(obj), ...symbolKeys]
         }
         return [...symbolKeys]
       },
@@ -705,8 +629,8 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
           return Object.getOwnPropertyDescriptor(target, prop)
         }
         const obj = readByPath(ctx.store, path)
-        if (obj !== null && obj !== undefined && typeof obj === "object") {
-          if (prop in (obj as Record<string, unknown>)) {
+        if (isNonNullObject(obj)) {
+          if (prop in obj) {
             if (!childCache.has(String(prop))) {
               childCache.set(String(prop), item(String(prop)))
             }
