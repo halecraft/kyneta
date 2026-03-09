@@ -186,29 +186,38 @@ describe('compareValues', () => {
 
 describe('substitution helpers', () => {
   it('EMPTY_SUBSTITUTION has no bindings', () => {
-    expect(EMPTY_SUBSTITUTION.size).toBe(0);
+    expect(EMPTY_SUBSTITUTION.bindings.size).toBe(0);
+    expect(EMPTY_SUBSTITUTION.weight).toBe(1);
   });
 
   it('extendSubstitution adds a binding without mutating original', () => {
     const s1 = EMPTY_SUBSTITUTION;
     const s2 = extendSubstitution(s1, 'X', 42);
-    expect(s1.size).toBe(0);
-    expect(s2.size).toBe(1);
-    expect(s2.get('X')).toBe(42);
+    expect(s1.bindings.size).toBe(0);
+    expect(s2.bindings.size).toBe(1);
+    expect(s2.bindings.get('X')).toBe(42);
+    expect(s2.weight).toBe(1);
   });
 
   it('extendSubstitution can bind to null', () => {
     const s = extendSubstitution(EMPTY_SUBSTITUTION, 'X', null);
-    expect(s.has('X')).toBe(true);
-    expect(s.get('X')).toBe(null);
+    expect(s.bindings.has('X')).toBe(true);
+    expect(s.bindings.get('X')).toBe(null);
   });
 
   it('extendSubstitution can chain bindings', () => {
     const s1 = extendSubstitution(EMPTY_SUBSTITUTION, 'X', 1);
     const s2 = extendSubstitution(s1, 'Y', 2);
-    expect(s2.size).toBe(2);
-    expect(s2.get('X')).toBe(1);
-    expect(s2.get('Y')).toBe(2);
+    expect(s2.bindings.size).toBe(2);
+    expect(s2.bindings.get('X')).toBe(1);
+    expect(s2.bindings.get('Y')).toBe(2);
+  });
+
+  it('extendSubstitution preserves weight', () => {
+    const s1: Substitution = { bindings: new Map(), weight: 3 };
+    const s2 = extendSubstitution(s1, 'X', 42);
+    expect(s2.weight).toBe(3);
+    expect(s2.bindings.get('X')).toBe(42);
   });
 });
 
@@ -261,7 +270,7 @@ describe('unifyTermWithValue', () => {
   it('unbound variable unifies by binding', () => {
     const result = unifyTermWithValue(varTerm('X'), 42, EMPTY_SUBSTITUTION);
     expect(result).not.toBeNull();
-    expect(result!.get('X')).toBe(42);
+    expect(result!.bindings.get('X')).toBe(42);
   });
 
   it('bound variable unifies if value matches', () => {
@@ -279,8 +288,8 @@ describe('unifyTermWithValue', () => {
   it('variable can be bound to null', () => {
     const result = unifyTermWithValue(varTerm('X'), null, EMPTY_SUBSTITUTION);
     expect(result).not.toBeNull();
-    expect(result!.has('X')).toBe(true);
-    expect(result!.get('X')).toBe(null);
+    expect(result!.bindings.has('X')).toBe(true);
+    expect(result!.bindings.get('X')).toBe(null);
   });
 
   it('Uint8Array unifies by content', () => {
@@ -319,8 +328,8 @@ describe('matchAtomWithTuple', () => {
     const a = atom('edge', [varTerm('X'), varTerm('Y')]);
     const result = matchAtomWithTuple(a, ['a', 'b'], EMPTY_SUBSTITUTION);
     expect(result).not.toBeNull();
-    expect(result!.get('X')).toBe('a');
-    expect(result!.get('Y')).toBe('b');
+    expect(result!.bindings.get('X')).toBe('a');
+    expect(result!.bindings.get('Y')).toBe('b');
   });
 
   it('enforces consistent variable bindings', () => {
@@ -335,7 +344,7 @@ describe('matchAtomWithTuple', () => {
     const a = atom('edge', [varTerm('X'), varTerm('Y')]);
     const result = matchAtomWithTuple(a, ['a', 'b'], sub);
     expect(result).not.toBeNull();
-    expect(result!.get('Y')).toBe('b');
+    expect(result!.bindings.get('Y')).toBe('b');
   });
 
   it('fails if existing substitution conflicts', () => {
@@ -365,7 +374,10 @@ describe('groundAtom', () => {
 
   it('grounds an atom using substitution', () => {
     const a = atom('edge', [varTerm('X'), varTerm('Y')]);
-    const sub = new Map<string, Value>([['X', 'a'], ['Y', 'b']]);
+    const sub: Substitution = {
+      bindings: new Map<string, Value>([['X', 'a'], ['Y', 'b']]),
+      weight: 1,
+    };
     const result = groundAtom(a, sub);
     expect(result).toEqual(['a', 'b']);
   });
@@ -399,8 +411,8 @@ describe('matchAtomAgainstRelation', () => {
     ];
     const results = matchAtomAgainstRelation(a, tuples, EMPTY_SUBSTITUTION);
     expect(results).toHaveLength(2); // only the 'a' rows
-    expect(results[0]!.get('Y')).toBe('b');
-    expect(results[1]!.get('Y')).toBe('c');
+    expect(results[0]!.bindings.get('Y')).toBe('b');
+    expect(results[1]!.bindings.get('Y')).toBe('c');
   });
 
   it('returns empty for no matches', () => {

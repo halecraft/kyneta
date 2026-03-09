@@ -251,9 +251,9 @@ function evaluateMonotoneStratumIncremental(
   const initialDelta = new Database();
   for (const rule of stratum.rules) {
     const derived = evaluateRule(rule, db, db);
-    for (const f of derived) {
-      if (!db.hasFact(f)) {
-        initialDelta.addFact(f);
+    for (const wf of derived) {
+      if (wf.weight > 0 && !db.hasFact(wf.fact)) {
+        initialDelta.addFact(wf.fact);
       }
     }
   }
@@ -282,9 +282,9 @@ function evaluateMonotoneStratumIncremental(
 
       for (const deltaIdx of positiveAtomIndices) {
         const derived = evaluateRuleSemiNaive(rule, db, currentDelta, deltaIdx);
-        for (const fact of derived) {
-          if (!db.hasFact(fact)) {
-            nextDelta.addFact(fact);
+        for (const wf of derived) {
+          if (wf.weight > 0 && !db.hasFact(wf.fact)) {
+            nextDelta.addFact(wf.fact);
           }
         }
       }
@@ -360,10 +360,10 @@ function evaluateStratumDRed(
 
       for (const rule of stratum.rules) {
         const derived = evaluateRule(rule, db, db);
-        for (const fact of derived) {
-          if (db.addFact(fact)) {
+        for (const wf of derived) {
+          if (wf.weight > 0 && db.addFact(wf.fact)) {
             changed = true;
-            changedPreds.add(fact.predicate);
+            changedPreds.add(wf.fact.predicate);
           }
         }
       }
@@ -374,9 +374,9 @@ function evaluateStratumDRed(
     const delta = new Database();
     for (const rule of stratum.rules) {
       const derived = evaluateRule(rule, db, db);
-      for (const f of derived) {
-        if (!db.hasFact(f)) {
-          delta.addFact(f);
+      for (const wf of derived) {
+        if (wf.weight > 0 && !db.hasFact(wf.fact)) {
+          delta.addFact(wf.fact);
         }
       }
     }
@@ -401,9 +401,9 @@ function evaluateStratumDRed(
         const positiveAtomIndices = getPositiveAtomIndices(rule.body);
         for (const deltaIdx of positiveAtomIndices) {
           const derived = evaluateRuleSemiNaive(rule, db, currentDelta, deltaIdx);
-          for (const fact of derived) {
-            if (!db.hasFact(fact)) {
-              nextDelta.addFact(fact);
+          for (const wf of derived) {
+            if (wf.weight > 0 && !db.hasFact(wf.fact)) {
+              nextDelta.addFact(wf.fact);
             }
           }
         }
@@ -656,8 +656,8 @@ export function createIncrementalDatalogEvaluator(
 
           for (const rule of stratum.rules) {
             const derived = evaluateRule(rule, db, db);
-            for (const fact of derived) {
-              if (db.addFact(fact)) {
+            for (const wf of derived) {
+              if (wf.weight > 0 && db.addFact(wf.fact)) {
                 changed = true;
               }
             }
@@ -669,9 +669,9 @@ export function createIncrementalDatalogEvaluator(
         const delta = new Database();
         for (const rule of stratum.rules) {
           const derived = evaluateRule(rule, db, db);
-          for (const fact of derived) {
-            if (!db.hasFact(fact)) {
-              delta.addFact(fact);
+          for (const wf of derived) {
+            if (wf.weight > 0 && !db.hasFact(wf.fact)) {
+              delta.addFact(wf.fact);
             }
           }
         }
@@ -694,9 +694,9 @@ export function createIncrementalDatalogEvaluator(
                 const derived = evaluateRuleSemiNaive(
                   rule, db, currentDelta, deltaIdx,
                 );
-                for (const fact of derived) {
-                  if (!db.hasFact(fact)) {
-                    nextDelta.addFact(fact);
+                for (const wf of derived) {
+                  if (wf.weight > 0 && !db.hasFact(wf.fact)) {
+                    nextDelta.addFact(wf.fact);
                   }
                 }
               }

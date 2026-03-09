@@ -5,6 +5,11 @@
 //
 // Key invariant from §3: `number` and `bigint` are distinct types that
 // NEVER unify with each other. int(3n) ≠ float(3.0).
+//
+// Substitution is an enriched struct `{ bindings, weight }` (Plan 006.1).
+// Functions in this module operate on `sub.bindings` for variable lookup
+// and pass `sub.weight` through unchanged. Weight multiplication happens
+// at a higher level (evaluatePositiveAtom), not here.
 
 import type {
   Value,
@@ -21,21 +26,22 @@ import { valuesEqual, evaluateGuardOp } from './types.js';
 // Substitution helpers
 // ---------------------------------------------------------------------------
 
-/** The empty substitution — no variables bound. */
-export const EMPTY_SUBSTITUTION: Substitution = new Map();
+/** The empty substitution — no variables bound, weight 1. */
+export const EMPTY_SUBSTITUTION: Substitution = { bindings: new Map(), weight: 1 };
 
 /**
  * Extend a substitution with a new binding.
  * Returns a new Substitution (the original is not mutated).
+ * Weight is preserved from the input substitution.
  */
 export function extendSubstitution(
   sub: Substitution,
   varName: string,
   value: Value,
 ): Substitution {
-  const next = new Map(sub);
+  const next = new Map(sub.bindings);
   next.set(varName, value);
-  return next;
+  return { bindings: next, weight: sub.weight };
 }
 
 // ---------------------------------------------------------------------------
@@ -58,7 +64,7 @@ export function resolveTerm(term: Term, sub: Substitution): Value | undefined {
     return undefined;
   }
   // Variable — look it up
-  return sub.get(term.name);
+  return sub.bindings.get(term.name);
 }
 
 // ---------------------------------------------------------------------------
@@ -93,7 +99,7 @@ export function unifyTermWithValue(
   }
 
   // Variable
-  const bound = sub.get(term.name);
+  const bound = sub.bindings.get(term.name);
   if (bound !== undefined) {
     // Already bound — check consistency
     return valuesEqual(bound, value) ? sub : null;
@@ -103,7 +109,7 @@ export function unifyTermWithValue(
   // Special case: if the value is `null`, we need to handle the fact that
   // Map.get returns undefined for missing keys. We use `has` to distinguish
   // "bound to null" from "unbound".
-  if (sub.has(term.name)) {
+  if (sub.bindings.has(term.name)) {
     // Bound to null — check consistency
     return value === null ? sub : null;
   }
@@ -120,6 +126,9 @@ export function unifyTermWithValue(
  *
  * The atom and tuple must have the same arity. Returns the extended
  * substitution on success, or `null` on failure.
+ *
+ * Weight is preserved through matching — this is a structural operation
+ * that doesn't affect provenance weight.
  */
 export function matchAtomWithTuple(
   a: Atom,
@@ -166,11 +175,11 @@ export function groundAtom(
     const resolved = resolveTerm(term, sub);
     if (resolved === undefined) {
       // Check if the variable is bound to null (undefined means unbound here)
-      if (term.kind === 'var' && sub.has(term.name)) {
-        // The variable is bound to null (since sub.get returned undefined
-        // but sub.has returned true is impossible — Map stores null as a value
+      if (term.kind === 'var' && sub.bindings.has(term.name)) {
+        // The variable is bound to null (since sub.bindings.get returned undefined
+        // but sub.bindings.has returned true is impossible — Map stores null as a value
         // and get returns null, not undefined). Actually, if the value IS null,
-        // sub.get returns null which is not undefined, so this branch should
+        // sub.bindings.get returns null which is not undefined, so this branch should
         // not be reachable for null-bound vars. This is a safety fallback.
         values.push(null);
       } else {
@@ -192,7 +201,9 @@ export function groundAtom(
  * tuple in a relation, extending the given base substitution.
  *
  * This is the core "join" operation: for each tuple that matches, we get
- * an extended substitution.
+ * an extended substitution. Weight is preserved through matching — weight
+ * multiplication (for Z-set join semantics) is handled by the caller
+ * (evaluatePositiveAtom).
  */
 export function matchAtomAgainstRelation(
   a: Atom,
@@ -214,6 +225,7 @@ export function matchAtomAgainstRelation(
 //
 // Guards are binary constraints on terms that filter substitutions.
 // They are evaluated by resolving both operands and applying the operator.
+// Weight is preserved on pass, substitution is dropped on fail.
 // ---------------------------------------------------------------------------
 
 /**
@@ -223,7 +235,7 @@ export function matchAtomAgainstRelation(
  * Wildcards in guards are a logical error — returns `null`.
  *
  * Returns:
- * - The original substitution if the guard holds.
+ * - The original substitution if the guard holds (weight preserved).
  * - `null` if it doesn't hold or if operands can't be resolved.
  */
 export function evaluateGuard(
@@ -254,15 +266,14 @@ function resolveGuardTerm(term: Term, sub: Substitution): Value | undefined {
     return undefined;
   }
   // Variable
-  const val = sub.get(term.name);
+  const val = sub.bindings.get(term.name);
   if (val !== undefined) {
     return val;
   }
   // Could be bound to null — check with has
-  if (sub.has(term.name)) {
+  if (sub.bindings.has(term.name)) {
     return null;
   }
   // Unbound
   return undefined;
 }
-

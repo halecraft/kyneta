@@ -63,12 +63,12 @@ describe('evaluateAggregation', () => {
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(2);
 
-      const groupA = results.find((s) => s.get('Group') === 'a');
-      const groupB = results.find((s) => s.get('Group') === 'b');
+      const groupA = results.find((s) => s.bindings.get('Group') === 'a');
+      const groupB = results.find((s) => s.bindings.get('Group') === 'b');
       expect(groupA).toBeDefined();
       expect(groupB).toBeDefined();
-      expect(groupA!.get('Count')).toBe(3);
-      expect(groupB!.get('Count')).toBe(2);
+      expect(groupA!.bindings.get('Count')).toBe(3);
+      expect(groupB!.bindings.get('Count')).toBe(2);
     });
 
     it('count always returns a number', () => {
@@ -87,7 +87,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      const c = results[0]!.get('C');
+      const c = results[0]!.bindings.get('C');
       expect(typeof c).toBe('number');
       expect(c).toBe(2);
     });
@@ -107,7 +107,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('C')).toBe(1);
+      expect(results[0]!.bindings.get('C')).toBe(1);
     });
 
     it('count with no matching tuples returns no groups', () => {
@@ -142,7 +142,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('C')).toBe(3);
+      expect(results[0]!.bindings.get('C')).toBe(3);
     });
   });
 
@@ -167,10 +167,10 @@ describe('evaluateAggregation', () => {
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(2);
 
-      const food = results.find((s) => s.get('Category') === 'food');
-      const transport = results.find((s) => s.get('Category') === 'transport');
-      expect(food!.get('Total')).toBe(60);
-      expect(transport!.get('Total')).toBe(75);
+      const food = results.find((s) => s.bindings.get('Category') === 'food');
+      const transport = results.find((s) => s.bindings.get('Category') === 'transport');
+      expect(food!.bindings.get('Total')).toBe(60);
+      expect(transport!.bindings.get('Total')).toBe(75);
     });
 
     it('sum of numbers returns number', () => {
@@ -189,7 +189,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      const s = results[0]!.get('S');
+      const s = results[0]!.bindings.get('S');
       expect(typeof s).toBe('number');
       expect(s).toBe(4);
     });
@@ -211,7 +211,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      const s = results[0]!.get('S');
+      const s = results[0]!.bindings.get('S');
       expect(typeof s).toBe('bigint');
       expect(s).toBe(600n);
     });
@@ -285,7 +285,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('S')).toBe(-8);
+      expect(results[0]!.bindings.get('S')).toBe(-8);
     });
   });
 
@@ -310,10 +310,10 @@ describe('evaluateAggregation', () => {
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(2);
 
-      const title = results.find((s) => s.get('Slot') === 'title');
-      const body = results.find((s) => s.get('Slot') === 'body');
-      expect(title!.get('MaxL')).toBe(5);
-      expect(body!.get('MaxL')).toBe(8);
+      const title = results.find((s) => s.bindings.get('Slot') === 'title');
+      const body = results.find((s) => s.bindings.get('Slot') === 'body');
+      expect(title!.bindings.get('MaxL')).toBe(5);
+      expect(body!.bindings.get('MaxL')).toBe(8);
     });
 
     it('selects maximum bigint per group', () => {
@@ -333,7 +333,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('M')).toBe(999n);
+      expect(results[0]!.bindings.get('M')).toBe(999n);
     });
 
     it('selects maximum string per group', () => {
@@ -353,7 +353,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('M')).toBe('cherry');
+      expect(results[0]!.bindings.get('M')).toBe('cherry');
     });
 
     it('max with mixed number/bigint is a type error', () => {
@@ -389,7 +389,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('M')).toBe(42);
+      expect(results[0]!.bindings.get('M')).toBe(42);
     });
 
     it('max with no matching tuples returns no groups', () => {
@@ -424,7 +424,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('M')).toBe(-5);
+      expect(results[0]!.bindings.get('M')).toBe(-5);
     });
   });
 
@@ -449,10 +449,10 @@ describe('evaluateAggregation', () => {
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(2);
 
-      const x = results.find((s) => s.get('Group') === 'x');
-      const y = results.find((s) => s.get('Group') === 'y');
-      expect(x!.get('MinVal')).toBe(10);
-      expect(y!.get('MinVal')).toBe(5);
+      const x = results.find((s) => s.bindings.get('Group') === 'x');
+      const y = results.find((s) => s.bindings.get('Group') === 'y');
+      expect(x!.bindings.get('MinVal')).toBe(10);
+      expect(y!.bindings.get('MinVal')).toBe(5);
     });
 
     it('selects minimum bigint per group', () => {
@@ -472,7 +472,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('M')).toBe(50n);
+      expect(results[0]!.bindings.get('M')).toBe(50n);
     });
 
     it('selects minimum string per group', () => {
@@ -492,7 +492,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('M')).toBe('apple');
+      expect(results[0]!.bindings.get('M')).toBe('apple');
     });
 
     it('min with mixed number/bigint is a type error', () => {
@@ -528,7 +528,7 @@ describe('evaluateAggregation', () => {
 
       const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
       expect(results.length).toBe(1);
-      expect(results[0]!.get('M')).toBe(77);
+      expect(results[0]!.bindings.get('M')).toBe(77);
     });
   });
 });
@@ -584,8 +584,8 @@ describe('evaluateAggregationForSubs', () => {
 
     const results = evaluateAggregationForSubs(agg, db, [sub]);
     expect(results.length).toBe(1);
-    expect(results[0]!.get('G')).toBe('a');
-    expect(results[0]!.get('S')).toBe(30);
+    expect(results[0]!.bindings.get('G')).toBe('a');
+    expect(results[0]!.bindings.get('S')).toBe(30);
   });
 
   it('returns empty for empty substitution list', () => {
@@ -630,12 +630,12 @@ describe('multiple groupBy variables', () => {
     const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
     expect(results.length).toBe(3);
 
-    const xp = results.find((s) => s.get('A') === 'x' && s.get('B') === 'p');
-    const xq = results.find((s) => s.get('A') === 'x' && s.get('B') === 'q');
-    const yp = results.find((s) => s.get('A') === 'y' && s.get('B') === 'p');
-    expect(xp!.get('S')).toBe(3);
-    expect(xq!.get('S')).toBe(10);
-    expect(yp!.get('S')).toBe(100);
+    const xp = results.find((s) => s.bindings.get('A') === 'x' && s.bindings.get('B') === 'p');
+    const xq = results.find((s) => s.bindings.get('A') === 'x' && s.bindings.get('B') === 'q');
+    const yp = results.find((s) => s.bindings.get('A') === 'y' && s.bindings.get('B') === 'p');
+    expect(xp!.bindings.get('S')).toBe(3);
+    expect(xq!.bindings.get('S')).toBe(10);
+    expect(yp!.bindings.get('S')).toBe(100);
   });
 
   it('groups by zero variables (global aggregate)', () => {
@@ -658,7 +658,7 @@ describe('multiple groupBy variables', () => {
     const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
     // Single group (no groupBy variables → one global group)
     expect(results.length).toBe(1);
-    expect(results[0]!.get('C')).toBe(5);
+    expect(results[0]!.bindings.get('C')).toBe(5);
   });
 });
 
@@ -917,7 +917,7 @@ describe('aggregation edge cases', () => {
 
     const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
     expect(results.length).toBe(1);
-    expect(results[0]!.get('S')).toBe(30);
+    expect(results[0]!.bindings.get('S')).toBe(30);
   });
 
   it('aggregation with duplicate over values counts each occurrence', () => {
@@ -939,7 +939,7 @@ describe('aggregation edge cases', () => {
     const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
     expect(results.length).toBe(1);
     // Only 2 unique tuples match, not 3
-    expect(results[0]!.get('C')).toBe(2);
+    expect(results[0]!.bindings.get('C')).toBe(2);
   });
 
   it('sum aggregation with all zeros', () => {
@@ -959,10 +959,10 @@ describe('aggregation edge cases', () => {
     const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
     // Each group has sum 0, but note ('x', 0) is group x and ('y', 0) is group y
     expect(results.length).toBe(2);
-    const x = results.find((s) => s.get('G') === 'x');
-    const y = results.find((s) => s.get('G') === 'y');
-    expect(x!.get('S')).toBe(0);
-    expect(y!.get('S')).toBe(0);
+    const x = results.find((s) => s.bindings.get('G') === 'x');
+    const y = results.find((s) => s.bindings.get('G') === 'y');
+    expect(x!.bindings.get('S')).toBe(0);
+    expect(y!.bindings.get('S')).toBe(0);
   });
 
   it('max over booleans (false < true)', () => {
@@ -981,7 +981,7 @@ describe('aggregation edge cases', () => {
 
     const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
     expect(results.length).toBe(1);
-    expect(results[0]!.get('M')).toBe(true);
+    expect(results[0]!.bindings.get('M')).toBe(true);
   });
 
   it('min over booleans (false < true)', () => {
@@ -1000,7 +1000,7 @@ describe('aggregation edge cases', () => {
 
     const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
     expect(results.length).toBe(1);
-    expect(results[0]!.get('M')).toBe(false);
+    expect(results[0]!.bindings.get('M')).toBe(false);
   });
 
   it('sum of bigint zero values', () => {
@@ -1019,7 +1019,7 @@ describe('aggregation edge cases', () => {
 
     const results = evaluateAggregation(agg, db, EMPTY_SUBSTITUTION);
     expect(results.length).toBe(1);
-    const s = results[0]!.get('S');
+    const s = results[0]!.bindings.get('S');
     expect(typeof s).toBe('bigint');
     expect(s).toBe(0n);
   });
@@ -1045,7 +1045,7 @@ describe('aggregation edge cases', () => {
 
     // Each group should have count 2
     for (const r of results) {
-      expect(r.get('C')).toBe(2);
+      expect(r.bindings.get('C')).toBe(2);
     }
   });
 });

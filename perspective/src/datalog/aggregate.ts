@@ -12,6 +12,12 @@
 //   and bigint) is a type error and returns null for that group.
 // - min/max respect the same type separation.
 // - count always returns a number (it counts tuples, not values).
+//
+// Weight semantics (Plan 006.1):
+// - Aggregation is a group-by boundary that resets provenance.
+// - Output substitutions always have weight = 1 regardless of input weights.
+// - Only tuples with weight > 0 participate (enforced by tuples() returning
+//   weight > 0 entries from the weighted Relation).
 
 import type {
   Value,
@@ -45,8 +51,8 @@ function groupKey(
 ): string | null {
   const parts: string[] = [];
   for (const varName of groupBy) {
-    const val = sub.get(varName);
-    if (val === undefined && !sub.has(varName)) {
+    const val = sub.bindings.get(varName);
+    if (val === undefined && !sub.bindings.has(varName)) {
       // Unbound grouping variable — can't form a group
       return null;
     }
@@ -65,7 +71,7 @@ function groupValues(
 ): Value[] {
   const values: Value[] = [];
   for (const varName of groupBy) {
-    const val = sub.get(varName);
+    const val = sub.bindings.get(varName);
     values.push(val === undefined ? null : val);
   }
   return values;
@@ -97,6 +103,9 @@ interface AggregationGroup {
  * Then for each group, compute the aggregate and produce a substitution
  * binding the groupBy variables and the result variable.
  *
+ * Output substitutions have weight = 1 (aggregation is a group-by
+ * boundary that resets provenance).
+ *
  * @param agg       The aggregation clause to evaluate.
  * @param db        The current database of facts.
  * @param baseSub   An existing substitution to extend (from prior body elements).
@@ -123,8 +132,8 @@ export function evaluateAggregation(
     if (key === null) continue;
 
     // Extract the `over` variable value
-    const overVal = matched.get(agg.over);
-    if (overVal === undefined && !matched.has(agg.over)) {
+    const overVal = matched.bindings.get(agg.over);
+    if (overVal === undefined && !matched.bindings.has(agg.over)) {
       // The `over` variable is unbound — skip this tuple
       continue;
     }
@@ -153,13 +162,14 @@ export function evaluateAggregation(
       continue;
     }
 
-    // Build substitution: baseSub + groupBy bindings + result binding
-    const sub = new Map(baseSub);
+    // Build substitution: baseSub bindings + groupBy bindings + result binding.
+    // Output weight = 1 (aggregation is a group-by boundary).
+    const sub = new Map(baseSub.bindings);
     for (let i = 0; i < agg.groupBy.length; i++) {
       sub.set(agg.groupBy[i]!, group.groupVals[i]!);
     }
     sub.set(agg.result, aggResult);
-    results.push(sub);
+    results.push({ bindings: sub, weight: 1 });
   }
 
   return results;
@@ -285,6 +295,8 @@ function computeMax(values: readonly Value[]): Value | undefined {
  * body element. It takes the current set of substitutions (from prior
  * body elements) and for each one, evaluates the aggregation, producing
  * new substitutions with the result variable bound.
+ *
+ * Output substitutions have weight = 1 (aggregation resets provenance).
  *
  * @param agg     The aggregation clause.
  * @param db      The current database.

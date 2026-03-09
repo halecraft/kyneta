@@ -250,91 +250,193 @@ export function fact(predicate: string, values: FactTuple): Fact {
 // Substitution
 //
 // A mapping from variable names to ground values, produced during
-// unification / pattern matching.
+// unification / pattern matching. Enriched with a weight field for
+// Z-set arithmetic in the weighted Datalog evaluator (Plan 006.1).
+//
+// Weight semantics:
+// - Positive atom join: weight = sub.weight × tuple.weight (provenance product)
+// - Negation/guard: weight preserved on pass, substitution dropped on fail
+// - Aggregation: output weight = 1 (group-by boundary resets provenance)
+// - groundHead: duplicate facts sum weights (Z-set addition)
 // ---------------------------------------------------------------------------
 
-export type Substitution = ReadonlyMap<string, Value>;
+export interface Substitution {
+  readonly bindings: ReadonlyMap<string, Value>;
+  readonly weight: number;
+}
 
 // ---------------------------------------------------------------------------
-// Relation — a set of tuples for a single predicate.
+// Relation — a weighted set of tuples for a single predicate.
 //
-// Internally stored as a Map<string, FactTuple> keyed by serialized tuple.
-// All operations are O(1). JavaScript Map preserves insertion order, so
-// iteration order matches the original array-based approach.
+// Internally stored as a Map<string, { tuple, weight }> keyed by serialized
+// tuple. Each entry carries an integer weight (Z-set semantics from DBSP).
+// Weight > 0 means "present", weight ≤ 0 means "absent" (pruned or pending
+// retraction). Zero-weight entries are pruned eagerly.
 //
-// The `remove()` method is used by the incremental Datalog evaluator's
-// DRed delete phase (Plan 006, Phase 5). The batch evaluator never calls
-// `remove()`.
+// Backward compatibility: `add(tuple)` is sugar for `addWeighted(tuple, 1)`.
+// `has(tuple)` checks weight > 0. `tuples()` returns weight > 0 tuples.
+// Consumers that don't inspect weights see identical behavior to the old
+// boolean-presence Relation.
+//
+// See Plan 006.1, Phase 1 (tasks 1.1–1.9).
 // ---------------------------------------------------------------------------
 
 export class Relation {
-  private readonly _map: Map<string, FactTuple> = new Map();
+  private readonly _map: Map<string, { tuple: FactTuple; weight: number }> = new Map();
 
+  /** Count of tuples with weight > 0. */
   get size(): number {
-    return this._map.size;
+    let count = 0;
+    for (const entry of this._map.values()) {
+      if (entry.weight > 0) count++;
+    }
+    return count;
   }
 
-  /** All tuples in insertion order. */
+  /** All tuples with weight > 0, in insertion order. */
   tuples(): readonly FactTuple[] {
-    return [...this._map.values()];
-  }
-
-  /** Returns true if the tuple was newly added, false if it was a duplicate. */
-  add(tuple: FactTuple): boolean {
-    const key = serializeTuple(tuple);
-    if (this._map.has(key)) {
-      return false;
-    }
-    this._map.set(key, tuple);
-    return true;
-  }
-
-  has(tuple: FactTuple): boolean {
-    return this._map.has(serializeTuple(tuple));
-  }
-
-  /**
-   * Remove a tuple from the relation.
-   * Returns true if the tuple was present and removed, false if not found.
-   *
-   * Used by the incremental Datalog evaluator's DRed delete phase.
-   * The batch evaluator never calls this method.
-   */
-  remove(tuple: FactTuple): boolean {
-    return this._map.delete(serializeTuple(tuple));
-  }
-
-  /** Create a new Relation containing all tuples from both this and other. */
-  union(other: Relation): Relation {
-    const result = new Relation();
-    for (const t of this._map.values()) {
-      result.add(t);
-    }
-    for (const t of other._map.values()) {
-      result.add(t);
-    }
-    return result;
-  }
-
-  /** Create a new Relation containing only tuples in this but not in other. */
-  difference(other: Relation): Relation {
-    const result = new Relation();
-    for (const t of this._map.values()) {
-      if (!other.has(t)) {
-        result.add(t);
+    const result: FactTuple[] = [];
+    for (const entry of this._map.values()) {
+      if (entry.weight > 0) {
+        result.push(entry.tuple);
       }
     }
     return result;
   }
 
-  isEmpty(): boolean {
-    return this._map.size === 0;
+  /** All entries with weight > 0 as { tuple, weight } pairs. */
+  weightedTuples(): readonly { readonly tuple: FactTuple; readonly weight: number }[] {
+    const result: { tuple: FactTuple; weight: number }[] = [];
+    for (const entry of this._map.values()) {
+      if (entry.weight > 0) {
+        result.push({ tuple: entry.tuple, weight: entry.weight });
+      }
+    }
+    return result;
   }
 
+  /**
+   * Add a tuple with weight 1. Returns true if the tuple became newly
+   * present (weight went from ≤0 to >0).
+   *
+   * Sugar for `addWeighted(tuple, 1)` with a boolean return.
+   */
+  add(tuple: FactTuple): boolean {
+    const key = serializeTuple(tuple);
+    const existing = this._map.get(key);
+    if (existing !== undefined) {
+      const oldWeight = existing.weight;
+      const newWeight = oldWeight + 1;
+      if (newWeight === 0) {
+        this._map.delete(key);
+        return false;
+      }
+      existing.weight = newWeight;
+      return oldWeight <= 0 && newWeight > 0;
+    }
+    this._map.set(key, { tuple, weight: 1 });
+    return true;
+  }
+
+  /** Check if a tuple is present (weight > 0). */
+  has(tuple: FactTuple): boolean {
+    const entry = this._map.get(serializeTuple(tuple));
+    return entry !== undefined && entry.weight > 0;
+  }
+
+  /**
+   * Add a weighted delta to a tuple. Weights are summed. Zero-weight
+   * entries are pruned. Returns the new weight.
+   */
+  addWeighted(tuple: FactTuple, weight: number): number {
+    if (weight === 0) {
+      const entry = this._map.get(serializeTuple(tuple));
+      return entry !== undefined ? entry.weight : 0;
+    }
+    const key = serializeTuple(tuple);
+    const existing = this._map.get(key);
+    if (existing !== undefined) {
+      const newWeight = existing.weight + weight;
+      if (newWeight === 0) {
+        this._map.delete(key);
+        return 0;
+      }
+      existing.weight = newWeight;
+      return newWeight;
+    }
+    this._map.set(key, { tuple, weight });
+    return weight;
+  }
+
+  /** Get the weight of a tuple. Returns 0 if absent. */
+  getWeight(tuple: FactTuple): number {
+    const entry = this._map.get(serializeTuple(tuple));
+    return entry !== undefined ? entry.weight : 0;
+  }
+
+  /**
+   * Remove a tuple from the relation (zero its weight).
+   * Returns true if the tuple was present (weight > 0) and is now absent.
+   */
+  remove(tuple: FactTuple): boolean {
+    const key = serializeTuple(tuple);
+    const existing = this._map.get(key);
+    if (existing === undefined) return false;
+    if (existing.weight <= 0) {
+      // Already absent — prune and report no change.
+      this._map.delete(key);
+      return false;
+    }
+    // Was present — remove by deleting the entry entirely.
+    this._map.delete(key);
+    return true;
+  }
+
+  /** Create a new Relation containing all weight > 0 tuples from both. */
+  union(other: Relation): Relation {
+    const result = new Relation();
+    for (const entry of this._map.values()) {
+      if (entry.weight > 0) {
+        result._map.set(serializeTuple(entry.tuple), { tuple: entry.tuple, weight: entry.weight });
+      }
+    }
+    for (const entry of other._map.values()) {
+      if (entry.weight > 0) {
+        const key = serializeTuple(entry.tuple);
+        const existing = result._map.get(key);
+        if (existing === undefined) {
+          result._map.set(key, { tuple: entry.tuple, weight: entry.weight });
+        }
+        // If already present from `this`, keep it (union = set union for weight > 0).
+      }
+    }
+    return result;
+  }
+
+  /** Create a new Relation containing weight > 0 tuples in this but not in other. */
+  difference(other: Relation): Relation {
+    const result = new Relation();
+    for (const entry of this._map.values()) {
+      if (entry.weight > 0 && !other.has(entry.tuple)) {
+        result._map.set(serializeTuple(entry.tuple), { tuple: entry.tuple, weight: entry.weight });
+      }
+    }
+    return result;
+  }
+
+  /** True if no tuples have weight > 0. */
+  isEmpty(): boolean {
+    for (const entry of this._map.values()) {
+      if (entry.weight > 0) return false;
+    }
+    return true;
+  }
+
+  /** Deep clone — copies all entries (including weight ≤ 0 entries). */
   clone(): Relation {
     const result = new Relation();
-    for (const t of this._map.values()) {
-      result.add(t);
+    for (const [key, entry] of this._map) {
+      result._map.set(key, { tuple: entry.tuple, weight: entry.weight });
     }
     return result;
   }
@@ -373,11 +475,16 @@ export class Database {
   }
 
   /**
-   * Remove a fact from the database. Returns true if the fact was present
-   * and removed, false if not found.
-   *
-   * Used by the incremental Datalog evaluator's DRed delete phase.
-   * The batch evaluator never calls this method.
+   * Add a weighted fact delta. Weights are summed in the underlying
+   * relation. Returns the new weight.
+   */
+  addWeightedFact(f: Fact, weight: number): number {
+    return this.relation(f.predicate).addWeighted(f.values, weight);
+  }
+
+  /**
+   * Remove a fact from the database (zero its weight).
+   * Returns true if the fact was present and is now absent.
    */
   removeFact(f: Fact): boolean {
     const rel = this._relations.get(f.predicate);
@@ -385,7 +492,11 @@ export class Database {
     return rel.remove(f.values);
   }
 
-  /** Insert all facts from another database. Returns the number of new facts added. */
+  /**
+   * Merge all facts from another database. For weight > 0 tuples in
+   * `other`, adds them with weight 1 (backward-compatible set union).
+   * Returns the number of newly-present facts.
+   */
   mergeFrom(other: Database): number {
     let count = 0;
     for (const pred of other.predicates()) {
@@ -403,15 +514,16 @@ export class Database {
   clone(): Database {
     const result = new Database();
     for (const pred of this.predicates()) {
-      const rel = result.relation(pred);
-      for (const tuple of this.getRelation(pred).tuples()) {
-        rel.add(tuple);
+      const srcRel = this.getRelation(pred);
+      const dstRel = result.relation(pred);
+      for (const tuple of srcRel.tuples()) {
+        dstRel.add(tuple);
       }
     }
     return result;
   }
 
-  /** Total number of facts across all relations. */
+  /** Total number of facts with weight > 0 across all relations. */
   get size(): number {
     let total = 0;
     for (const rel of this._relations.values()) {
@@ -420,7 +532,7 @@ export class Database {
     return total;
   }
 
-  /** Check if a fact exists in the database. */
+  /** Check if a fact exists (weight > 0) in the database. */
   hasFact(f: Fact): boolean {
     return this.getRelation(f.predicate).has(f.values);
   }

@@ -7,9 +7,20 @@
 // fixed point: only new facts (deltas) from the previous iteration are used
 // to derive new facts, avoiding redundant work.
 //
+// Weight semantics (Plan 006.1):
+// - Substitutions carry weights through evaluation.
+// - Positive atom join: weight = sub.weight × tuple.weight (provenance product).
+// - Negation/guard: weight preserved on pass, substitution dropped on fail.
+// - Aggregation: output weight = 1 (group-by boundary resets provenance).
+// - groundHead: duplicate facts sum weights (Z-set addition).
+// - evaluateRule returns WeightedFact[] with summed weights per fact.
+// - In batch mode, all input weights are 1, so all derived weights are 1.
+//   The weight infrastructure is invisible to batch consumers.
+//
 // References:
 // - unified-engine.md §B.3 (evaluator requirements)
 // - Ullman, "Principles of Database and Knowledge-Base Systems" Vol 1, Ch 3
+// - DBSP (Budiu & McSherry, 2023) §3.2 (Z-set joins)
 //
 // Correctness criterion (§B.3): Two evaluators are compatible iff, for any
 // set of Datalog rules and ground facts, they compute the same minimal model.
@@ -35,12 +46,29 @@ import {
 } from './types.js';
 import {
   EMPTY_SUBSTITUTION,
+  matchAtomWithTuple,
   matchAtomAgainstRelation,
   groundAtom,
   evaluateGuard,
 } from './unify.js';
 import { stratify } from './stratify.js';
 import { evaluateAggregation } from './aggregate.js';
+
+// ---------------------------------------------------------------------------
+// Weighted Fact type
+// ---------------------------------------------------------------------------
+
+/**
+ * A fact with an associated Z-set weight.
+ *
+ * In batch evaluation, all weights are 1. In incremental evaluation,
+ * weights encode provenance multiplicity: +1 for derived, −1 for
+ * retracted, and sums for multiple derivation paths.
+ */
+export interface WeightedFact {
+  readonly fact: Fact;
+  readonly weight: number;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -160,8 +188,8 @@ export function evaluateNaive(
     changed = false;
     for (const rule of rules) {
       const derived = evaluateRule(rule, db, db);
-      for (const fact of derived) {
-        if (db.addFact(fact)) {
+      for (const wf of derived) {
+        if (wf.weight > 0 && db.addFact(wf.fact)) {
           changed = true;
         }
       }
@@ -201,9 +229,9 @@ function evaluatePositiveStratum(
   const delta = new Database();
   for (const rule of rules) {
     const derived = evaluateRule(rule, db, db);
-    for (const fact of derived) {
-      if (!db.hasFact(fact)) {
-        delta.addFact(fact);
+    for (const wf of derived) {
+      if (wf.weight > 0 && !db.hasFact(wf.fact)) {
+        delta.addFact(wf.fact);
       }
     }
   }
@@ -233,9 +261,9 @@ function evaluatePositiveStratum(
 
       for (const deltaIdx of positiveAtomIndices) {
         const derived = evaluateRuleSemiNaive(rule, db, currentDelta, deltaIdx);
-        for (const fact of derived) {
-          if (!db.hasFact(fact)) {
-            nextDelta.addFact(fact);
+        for (const wf of derived) {
+          if (wf.weight > 0 && !db.hasFact(wf.fact)) {
+            nextDelta.addFact(wf.fact);
           }
         }
       }
@@ -284,8 +312,8 @@ function evaluateStratumWithNegation(
 
     for (const rule of rules) {
       const derived = evaluateRule(rule, db, db);
-      for (const fact of derived) {
-        if (db.addFact(fact)) {
+      for (const wf of derived) {
+        if (wf.weight > 0 && db.addFact(wf.fact)) {
           changed = true;
         }
       }
@@ -298,20 +326,24 @@ function evaluateStratumWithNegation(
 // ---------------------------------------------------------------------------
 
 /**
- * Evaluate a single rule against the database, producing derived facts.
+ * Evaluate a single rule against the database, producing weighted derived facts.
+ *
+ * Substitutions carry weights through body element evaluation. The head
+ * is grounded with each surviving substitution, producing weighted facts.
+ * Duplicate facts (same predicate + values) have their weights summed.
  *
  * @param rule     The rule to evaluate.
  * @param fullDb   The full database (for general matching and negation).
  * @param matchDb  The database to match positive atoms against
  *                 (could be delta for semi-naive).
- * @returns        Derived facts from this rule.
+ * @returns        Weighted derived facts from this rule.
  */
 export function evaluateRule(
   rule: Rule,
   fullDb: Database,
   matchDb: Database,
-): Fact[] {
-  // Start with a single empty substitution
+): WeightedFact[] {
+  // Start with a single empty substitution (weight 1)
   let subs: Substitution[] = [EMPTY_SUBSTITUTION];
 
   // Process each body element, extending substitutions
@@ -342,13 +374,15 @@ export function evaluateRule(
  * Evaluate a single rule in semi-naive mode: one specific body atom
  * (at `deltaIdx`) matches against the delta, while all other positive
  * atoms match against the full database.
+ *
+ * Returns weighted derived facts with duplicate-summing.
  */
 export function evaluateRuleSemiNaive(
   rule: Rule,
   fullDb: Database,
   delta: Database,
   deltaIdx: number,
-): Fact[] {
+): WeightedFact[] {
   let subs: Substitution[] = [EMPTY_SUBSTITUTION];
 
   for (let i = 0; i < rule.body.length; i++) {
@@ -385,6 +419,16 @@ export function evaluateRuleSemiNaive(
 /**
  * Evaluate a positive atom: for each current substitution, match the atom
  * against all tuples in the database and collect extended substitutions.
+ *
+ * Weight multiplication (provenance semiring product): the extended
+ * substitution's weight is `sub.weight × tuple.weight`. This is the
+ * core of Z-set join semantics. In batch evaluation where all weights
+ * are 1, this is a no-op multiplication.
+ *
+ * We iterate tuples directly (rather than delegating to
+ * matchAtomAgainstRelation) so that we have access to each tuple for
+ * weight lookup. This avoids re-grounding the atom — which would fail
+ * for atoms containing wildcards.
  */
 export function evaluatePositiveAtom(
   a: Atom,
@@ -392,13 +436,21 @@ export function evaluatePositiveAtom(
   subs: readonly Substitution[],
 ): Substitution[] {
   const relation = db.getRelation(a.predicate);
-  const tuples = relation.tuples();
+  const entries = relation.weightedTuples();
 
   const results: Substitution[] = [];
   for (const sub of subs) {
-    const extended = matchAtomAgainstRelation(a, tuples, sub);
-    for (const s of extended) {
-      results.push(s);
+    for (const { tuple, weight: tupleWeight } of entries) {
+      const extended = matchAtomWithTuple(a, tuple, sub);
+      if (extended === null) continue;
+
+      if (tupleWeight === 1) {
+        // Common case (batch evaluation) — no multiplication needed.
+        results.push(extended);
+      } else {
+        // Weight multiplication: sub.weight × tuple.weight (provenance product).
+        results.push({ bindings: extended.bindings, weight: extended.weight * tupleWeight });
+      }
     }
   }
   return results;
@@ -411,7 +463,8 @@ export function evaluatePositiveAtom(
  * Negation-as-failure with safety: all variables in the negated atom
  * that are not grouping variables must already be bound in the substitution.
  * We check each substitution against the full database — if ANY tuple
- * matches, the substitution is removed.
+ * matches (weight > 0, which is what tuples() returns), the substitution
+ * is removed. Weight is preserved on pass.
  */
 export function evaluateNegation(
   a: Atom,
@@ -426,7 +479,7 @@ export function evaluateNegation(
     // Check if any tuple matches
     const matches = matchAtomAgainstRelation(a, tuples, sub);
     if (matches.length === 0) {
-      // No match — negation holds, keep this substitution
+      // No match — negation holds, keep this substitution (weight preserved)
       results.push(sub);
     }
   }
@@ -435,7 +488,7 @@ export function evaluateNegation(
 
 /**
  * Evaluate a guard body element: keep only substitutions for which the
- * guard condition holds.
+ * guard condition holds. Weight is preserved on pass.
  */
 export function evaluateGuardElement(
   guard: GuardElement,
@@ -453,6 +506,8 @@ export function evaluateGuardElement(
 
 /**
  * Evaluate an aggregation body element.
+ * Aggregation output substitutions have weight = 1 (group-by boundary
+ * that resets provenance).
  */
 export function evaluateAggregationElement(
   agg: AggregationClause,
@@ -474,28 +529,39 @@ export function evaluateAggregationElement(
 // ---------------------------------------------------------------------------
 
 /**
- * Ground the head atom with each substitution, producing facts.
+ * Ground the head atom with each substitution, producing weighted facts.
  * Substitutions that leave variables unbound are silently dropped.
+ *
+ * Duplicate facts (same predicate + values) have their weights summed
+ * (Z-set addition). In batch evaluation where all weights are 1, the
+ * deduplication behavior is preserved (first occurrence wins, weight
+ * stays 1 since duplicates sum to the same value).
  */
-export function groundHead(head: Atom, subs: readonly Substitution[]): Fact[] {
-  const facts: Fact[] = [];
-  const seen = new Set<string>();
+export function groundHead(head: Atom, subs: readonly Substitution[]): WeightedFact[] {
+  const weightMap = new Map<string, { fact: Fact; weight: number }>();
 
   for (const sub of subs) {
     const tuple = groundAtom(head, sub);
     if (tuple === null) continue;
 
     const fact: Fact = { predicate: head.predicate, values: tuple };
-
-    // Deduplicate within this rule evaluation
     const key = factKey(fact);
-    if (!seen.has(key)) {
-      seen.add(key);
-      facts.push(fact);
+
+    const existing = weightMap.get(key);
+    if (existing !== undefined) {
+      existing.weight += sub.weight;
+    } else {
+      weightMap.set(key, { fact, weight: sub.weight });
     }
   }
 
-  return facts;
+  const results: WeightedFact[] = [];
+  for (const entry of weightMap.values()) {
+    if (entry.weight !== 0) {
+      results.push({ fact: entry.fact, weight: entry.weight });
+    }
+  }
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -514,4 +580,3 @@ export function getPositiveAtomIndices(body: readonly BodyElement[]): number[] {
   }
   return indices;
 }
-

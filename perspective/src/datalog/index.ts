@@ -90,6 +90,8 @@ export {
 } from './aggregate.js';
 
 // --- Evaluation ---
+export type { WeightedFact } from './evaluate.js';
+
 export {
   evaluate,
   evaluatePositive,
