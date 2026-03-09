@@ -7,6 +7,13 @@
 //   developer experience: the same ergonomics as @loro-extended/change,
 //   but running on a plain JS object store with zero CRDT runtime.
 //
+//   The architecture decomposes into three orthogonal building blocks:
+//     1. readableInterpreter  — callable function-shaped refs (the host)
+//     2. withMutation(base)   — adds .set(), .insert(), .increment(), etc.
+//     3. withChangefeed       — adds [CHANGEFEED] observation protocol
+//
+//   Compose them: enrich(withMutation(readableInterpreter), withChangefeed)
+//
 //   Run with:  npx tsx example/main.ts   (from packages/schema/)
 //
 // ═══════════════════════════════════════════════════════════════════════════
@@ -18,7 +25,8 @@ import {
   describe,
   interpret,
   plainInterpreter,
-  writableInterpreter,
+  readableInterpreter,
+  withMutation,
   createWritableContext,
   enrich,
   withChangefeed,
@@ -35,7 +43,10 @@ import {
 
 import type {
   Writable,
+  Readable,
+  ReadableSequenceRef,
   Plain,
+  RefContext,
   WritableContext,
   ChangefeedContext,
   ChangeBase,
@@ -73,8 +84,8 @@ type DocInternals = {
   cfCtx: ChangefeedContext
 }
 
-function getInternals(doc: object): DocInternals {
-  return (doc as any)[DOC_INTERNALS]
+function getInternals(doc: unknown): DocInternals {
+  return (doc as Record<symbol, DocInternals>)[DOC_INTERNALS]
 }
 
 /**
@@ -89,8 +100,9 @@ function createDoc<F extends Record<string, SchemaNode>>(
   schema: AnnotatedSchema<"doc", ProductSchema<F>>,
   seed?: Record<string, unknown>,
 ): {
-  readonly [K in keyof F]: Writable<F[K]>
+  readonly [K in keyof F]: Readable<F[K]> & Writable<F[K]>
 } & {
+  (): { [K in keyof F]: Plain<F[K]> }
   toJSON(): { [K in keyof F]: Plain<F[K]> }
 } {
   // Derive defaults, overlay seed if provided
@@ -103,7 +115,7 @@ function createDoc<F extends Record<string, SchemaNode>>(
   // Wire up writable + feed in one shot
   const wCtx = createWritableContext(store)
   const cfCtx = createChangefeedContext(wCtx)
-  const enriched = enrich(writableInterpreter, withChangefeed)
+  const enriched = enrich(withMutation(readableInterpreter), withChangefeed)
   const surface = interpret(schema, enriched, cfCtx) as object
 
   // Attach toJSON via the plain interpreter
@@ -139,12 +151,12 @@ function createDoc<F extends Record<string, SchemaNode>>(
  * Returns the doc for chaining.
  */
 function change<D extends object>(doc: D, fn: (draft: D) => void): D {
-  const { schema, store } = getInternals(doc as object)
+  const { schema, store } = getInternals(doc)
 
   // Create a batched context sharing the same store
   const batchWCtx = createWritableContext(store, { autoCommit: false })
   const batchCfCtx = createChangefeedContext(batchWCtx)
-  const enriched = enrich(writableInterpreter, withChangefeed)
+  const enriched = enrich(withMutation(readableInterpreter), withChangefeed)
   const draft = interpret(schema, enriched, batchCfCtx) as D
 
   // Execute the user's mutations (nothing hits the store yet)
@@ -152,7 +164,7 @@ function change<D extends object>(doc: D, fn: (draft: D) => void): D {
 
   // Flush: apply all actions to the store atomically.
   // The original doc's refs read live from the shared store,
-  // so .get() etc. immediately reflect the new values.
+  // so ref() etc. immediately reflect the new values.
   changefeedFlush(batchCfCtx)
 
   return doc
@@ -176,7 +188,7 @@ function subscribe(
       "subscribe() requires a changefeed ref (created via createDoc)",
     )
   }
-  return (ref as any)[CHANGEFEED].subscribe(callback)
+  return ref[CHANGEFEED].subscribe(callback)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -254,27 +266,27 @@ log(
 
 section(3, "Direct Mutations (auto-commit)")
 
-doc.name.insert(doc.name.get().length, " v2")
+doc.name.insert(doc.name().length, " v2")
 log(`doc.name.insert(end, " v2")`)
-log(`doc.name.get() → "${doc.name.get()}"`)
+log(`doc.name() → "${doc.name()}"`)
 
 doc.description.update("A unified recursive grammar for document structure")
 log(`doc.description.update("A unified recursive grammar...")`)
 
 doc.stars.increment(42)
 log(`doc.stars.increment(42)`)
-log(`doc.stars.get() → ${doc.stars.get()}`)
+log(`doc.stars() → ${doc.stars()}`)
 
 doc.stars.decrement(2)
-log(`doc.stars.decrement(2) → ${doc.stars.get()}`)
+log(`doc.stars.decrement(2) → ${doc.stars()}`)
 
 doc.settings.visibility.set("private")
 log(
-  `doc.settings.visibility.set("private") → "${doc.settings.visibility.get()}"`,
+  `doc.settings.visibility.set("private") → "${doc.settings.visibility()}"`,
 )
 
 doc.settings.maxTasks.set(50)
-log(`doc.settings.maxTasks.set(50) → ${doc.settings.maxTasks.get()}`)
+log(`doc.settings.maxTasks.set(50) → ${doc.settings.maxTasks()}`)
 
 log("")
 log(`doc.toJSON() →`)
@@ -295,15 +307,15 @@ doc.tasks.push({ title: "Write the facade", done: false, priority: 2 })
 log(`doc.tasks.push(...)  ×3`)
 log(`doc.tasks.length → ${doc.tasks.length}`)
 
-const task = doc.tasks.get(0)
-log(`doc.tasks.get(0).title.get() → "${task.title.get()}"`)
-log(`doc.tasks.get(0).done.get()  → ${task.done.get()}`)
+const task = doc.tasks.at(0)
+log(`doc.tasks.at(0).title() → "${task.title()}"`)
+log(`doc.tasks.at(0).done()  → ${task.done()}`)
 
 log("")
 log("Iterating:")
 for (const item of doc.tasks) {
   log(
-    `  [${item.done.get() ? "✓" : " "}] ${item.title.get()} (priority: ${item.priority.get()})`,
+    `  [${item.done() ? "✓" : " "}] ${item.title()} (priority: ${item.priority()})`,
   )
 }
 
@@ -314,10 +326,14 @@ log(`doc.tasks.delete(1) → length is now ${doc.tasks.length}`)
 
 section(5, "Working with Records (dynamic keys)")
 
-// Records use Proxy — any string key returns a typed ref
-;(doc.labels as any).bug = "red" // set via proxy
-;(doc.labels as any).feature = "blue"
-;(doc.labels as any).docs = "green"
+// Records use Proxy — any string key returns a typed ref.
+// TypeScript's `readonly` index signature prevents direct assignment,
+// but at runtime the Proxy's set trap dispatches a MapChange.
+// We narrow the cast to `Record<string, string>` (not `any`).
+const labels = doc.labels as unknown as Record<string, string>
+labels.bug = "red"
+labels.feature = "blue"
+labels.docs = "green"
 log(`doc.labels.bug = "red"`)
 log(`doc.labels.feature = "blue"`)
 log(`doc.labels.docs = "green"`)
@@ -328,13 +344,13 @@ log(
 )
 log(`"bug" in doc.labels → ${"bug" in doc.labels}`)
 log(`"missing" in doc.labels → ${"missing" in doc.labels}`)
-log(`doc.labels.bug.get() → "${(doc.labels as any).bug.get()}"`)
+log(`doc.labels.bug() → "${doc.labels.bug()}"`)
 
 // ─── 6. Batched mutations with change() ─────────────────────────────────
 
 section(6, "Batched Mutations with change()")
 
-log(`Before: stars = ${doc.stars.get()}, name = "${doc.name.get()}"`)
+log(`Before: stars = ${doc.stars()}, name = "${doc.name()}"`)
 
 change(doc, d => {
   d.name.update("Schema Algebra v3")
@@ -350,8 +366,8 @@ log(`  d.settings.archived.set(true)`)
 log(`  d.tasks.push({ title: "Ship it!", ... })`)
 log(`})`)
 log("")
-log(`After: stars = ${doc.stars.get()}, name = "${doc.name.get()}"`)
-log(`doc.settings.archived.get() → ${doc.settings.archived.get()}`)
+log(`After: stars = ${doc.stars()}, name = "${doc.name()}"`)
+log(`doc.settings.archived() → ${doc.settings.archived()}`)
 log(`doc.tasks.length → ${doc.tasks.length}`)
 
 // ─── 7. Subscribing to changes ──────────────────────────────────────────
@@ -368,9 +384,9 @@ log("")
 
 doc.name.insert(0, "✨ ")
 log(`doc.name.insert(0, "✨ ")`)
-doc.name.insert(doc.name.get().length, " ✨")
+doc.name.insert(doc.name().length, " ✨")
 log(`doc.name.insert(end, " ✨")`)
-log(`→ "${doc.name.get()}"`)
+log(`→ "${doc.name()}"`)
 log(
   `→ ${actions.length} actions received, types: [${actions.map(a => `"${a.type}"`).join(", ")}]`,
 )
@@ -401,7 +417,7 @@ function resetSettings(
 }
 
 log(
-  `Before: visibility="${doc.settings.visibility.get()}", maxTasks=${doc.settings.maxTasks.get()}, archived=${doc.settings.archived.get()}`,
+  `Before: visibility="${doc.settings.visibility()}", maxTasks=${doc.settings.maxTasks()}, archived=${doc.settings.archived()}`,
 )
 resetSettings(
   doc.settings.visibility,
@@ -412,28 +428,29 @@ log(
   `resetSettings(doc.settings.visibility, doc.settings.maxTasks, doc.settings.archived)`,
 )
 log(
-  `After:  visibility="${doc.settings.visibility.get()}", maxTasks=${doc.settings.maxTasks.get()}, archived=${doc.settings.archived.get()}`,
+  `After:  visibility="${doc.settings.visibility()}", maxTasks=${doc.settings.maxTasks()}, archived=${doc.settings.archived()}`,
 )
 
 log("")
 
-// A generic "append tag" function for any TextRef
-function tag(ref: TextRef, label: string) {
-  ref.insert(ref.get().length, ` [${label}]`)
+// A generic "append tag" function — typed with Readable & Writable
+// The intersection captures both "callable read" and "mutation methods".
+function tag(ref: (() => string) & TextRef, label: string) {
+  ref.insert(ref().length, ` [${label}]`)
 }
 
 tag(doc.name, "released")
-log(`tag(doc.name, "released") → "${doc.name.get()}"`)
+log(`tag(doc.name, "released") → "${doc.name()}"`)
 
-// A generic counter helper
-function ensureMinimum(ref: CounterRef, min: number) {
-  const current = ref.get()
+// A generic counter helper — typed with Readable & Writable
+function ensureMinimum(ref: (() => number) & CounterRef, min: number) {
+  const current = ref()
   if (current < min) ref.increment(min - current)
 }
 
-log(`doc.stars.get() → ${doc.stars.get()}`)
+log(`doc.stars() → ${doc.stars()}`)
 ensureMinimum(doc.stars, 200)
-log(`ensureMinimum(doc.stars, 200) → ${doc.stars.get()}`)
+log(`ensureMinimum(doc.stars, 200) → ${doc.stars()}`)
 
 // ─── 9. Referential identity & namespace isolation ──────────────────────
 
@@ -531,7 +548,7 @@ log("The Changefeed coalgebra is unchanged — subscribeDeep is")
 log("context-level infrastructure in the observation layer.")
 log("")
 
-const { cfCtx } = getInternals(doc as object)
+const { cfCtx } = getInternals(doc)
 const deepEvents: { origin: string; type: string }[] = []
 const deepUnsub = subscribeDeep(cfCtx, [], (event) => {
   deepEvents.push({
@@ -555,7 +572,71 @@ doc.name.update("Schema Algebra v3 [released]") // restore, not observed
 
 // ─── 12. Final snapshot ─────────────────────────────────────────────────
 
-section(12, "Final Snapshot")
+// ─── 12. Read-only documents ────────────────────────────────────────────
+
+section(12, "Read-Only Documents")
+
+log("readableInterpreter alone produces a callable, navigable document")
+log("with no mutation methods and no dispatch context.")
+log("")
+
+{
+  const roStore = { ...doc.toJSON() }
+  const roCtx: RefContext = { store: roStore }
+  const roDoc = interpret(ProjectSchema, readableInterpreter, roCtx) as Readable<
+    typeof ProjectSchema
+  >
+
+  log(`const roDoc = interpret(schema, readableInterpreter, { store })`)
+  log(`roDoc.name() → "${roDoc.name()}"`)
+  log(`roDoc.stars() → ${roDoc.stars()}`)
+  log(`roDoc.settings.visibility() → "${roDoc.settings.visibility()}"`)
+  log(`roDoc.tasks.at(0).title() → "${roDoc.tasks.at(0).title()}"`)
+  log(`roDoc.tasks.length → ${roDoc.tasks.length}`)
+  log(`typeof roDoc.name → "${typeof roDoc.name}" (function-shaped ref)`)
+  log("")
+  log(`// No mutation methods:`)
+  log(`"set" in roDoc.stars → ${"set" in roDoc.stars}`)
+  log(`"insert" in roDoc.name → ${"insert" in roDoc.name}`)
+  log(`"increment" in roDoc.stars → ${"increment" in roDoc.stars}`)
+}
+
+// ─── 13. Template literal coercion via toPrimitive ──────────────────────
+
+section(13, "Template Literal Coercion (toPrimitive)")
+
+log("Leaf refs support [Symbol.toPrimitive] — no ref() call needed")
+log("in template literals or coercion contexts.")
+log("")
+
+log(`\`Project: \${doc.name}\` → "Project: ${doc.name}"`)
+log(`\`Stars: \${doc.stars}\` → "Stars: ${doc.stars}"`)
+log(`\`Desc: \${doc.description}\` → "Desc: ${doc.description}"`)
+log("")
+log(`// Hint-aware coercion:`)
+log(`+doc.stars → ${+doc.stars}  (number hint)`)
+log(`String(doc.name) → "${String(doc.name)}"  (string hint)`)
+log(`doc.stars[Symbol.toPrimitive]("number") → ${doc.stars[Symbol.toPrimitive]("number")}`)
+log(`doc.stars[Symbol.toPrimitive]("string") → "${doc.stars[Symbol.toPrimitive]("string")}"`)
+
+// ─── 14. The composition algebra ────────────────────────────────────────
+
+section(14, "The Composition Algebra")
+
+log("Three orthogonal building blocks, independently useful:")
+log("")
+log("  readableInterpreter              → read-only callable refs")
+log("  withMutation(readableInterpreter) → read + mutation")
+log("  enrich(..., withChangefeed)       → read + mutation + observation")
+log("")
+log("Each level adds only the context it needs:")
+log("  RefContext      { store }")
+log("  WritableContext { store, dispatch, autoCommit, pending }")
+log("  ChangefeedContext { ... + subscribers, deepSubscribers }")
+
+// ─── 15. Final Snapshot ─────────────────────────────────────────────────
+
+section(15, "Final Snapshot")
 
 log("doc.toJSON() →")
 log(
@@ -572,6 +653,10 @@ console.log("═".repeat(68))
 console.log()
 log("This entire app ran on plain JS objects.")
 log("No CRDT runtime. No Loro. No network. No dependencies.")
+log("")
+log("Reading is the foundational capability (readableInterpreter).")
+log("Mutation composes on top (withMutation).")
+log("Observation composes on top of that (withChangefeed).")
 log("")
 log("The same schema, the same developer experience,")
 log("can target any backend via different interpreters.")

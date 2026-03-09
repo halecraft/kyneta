@@ -114,7 +114,7 @@ Sequence and map refs attach `[INVALIDATE]` for child cache management. Map Prox
 - Add `Readable<S>` recursive type alongside `Plain<S>` ✅
 - Add tests for read-only document (see Tests section) ✅
 
-### Phase 3: `withMutation` — interpreter transformer 🔴
+### Phase 3: `withMutation` — interpreter transformer ✅
 
 Create an interpreter transformer `withMutation(base)` that takes an `Interpreter<RefContext, A>` and returns an `Interpreter<WritableContext, A>`. This adds mutation methods at the cases that need them, delegating to the base for everything structural.
 
@@ -124,44 +124,44 @@ This is an **interpreter-level combinator** (like `enrich`, `product`, `overlay`
 
 **Tasks:**
 
-- Implement `withMutation` in `src/interpreters/writable.ts` (or new file in `src/combinators/`) 🔴
-- `scalar` case: call `base.scalar(...)`, attach `.set()` 🔴
-- `product` case: pass through (`return base.product(...)`) 🔴
-- `sequence` case: call `base.sequence(...)`, attach `.push()`, `.insert()`, `.delete()` with `[INVALIDATE]` calls 🔴
-- `map` case: call `base.map(...)`, fill `[SET_HANDLER]` and `[DELETE_HANDLER]` via `Object.defineProperty` through the Proxy, with `[INVALIDATE]` calls 🔴
-- `sum` case: pass through 🔴
-- `annotated` case: dispatch on `schema.tag` — `"text"` gets `.insert()`, `.delete()`, `.update()`; `"counter"` gets `.increment()`, `.decrement()`; delegating tags pass through 🔴
-- Remove `.get()` from `ScalarRef`, `TextRef`, `CounterRef` interfaces 🔴
-- Remove `.toString()` from `TextRef` interface (reading is via callable `()` and `toPrimitive`; `String(ref)` works via `toPrimitive`) 🔴
-- Remove `.toArray()` from `SequenceRef` interface (unused outside definition) 🔴
-- Rename `.get(i)` to `.at(i)` on `SequenceRef` interface 🔴
-- Update `Writable<S>` type to reflect mutation-only interfaces 🔴
-- Export `withMutation` from `index.ts` 🔴
-- Remove `writableInterpreter` export (no backward compat needed) 🔴
-- Add tests for mutation layer (see Tests section) 🔴
+- Implement `withMutation` in `src/interpreters/writable.ts` (or new file in `src/combinators/`) ✅
+- `scalar` case: call `base.scalar(...)`, attach `.set()` ✅
+- `product` case: pass through (`return base.product(...)`) ✅
+- `sequence` case: call `base.sequence(...)`, attach `.push()`, `.insert()`, `.delete()` with `[INVALIDATE]` calls ✅
+- `map` case: call `base.map(...)`, fill `[SET_HANDLER]` and `[DELETE_HANDLER]` via `Object.defineProperty` through the Proxy, with `[INVALIDATE]` calls ✅
+- `sum` case: pass through ✅
+- `annotated` case: dispatch on `schema.tag` — `"text"` gets `.insert()`, `.delete()`, `.update()`; `"counter"` gets `.increment()`, `.decrement()`; delegating tags pass through ✅
+- Remove `.get()` from `ScalarRef`, `TextRef`, `CounterRef` interfaces ✅
+- Remove `.toString()` from `TextRef` interface (reading is via callable `()` and `toPrimitive`; `String(ref)` works via `toPrimitive`) ✅
+- Remove `.toArray()` from `SequenceRef` interface (unused outside definition) ✅
+- Rename `.get(i)` to `.at(i)` on `SequenceRef` interface ✅
+- Update `Writable<S>` type to reflect mutation-only interfaces ✅
+- Export `withMutation` from `index.ts` ✅
+- Remove `writableInterpreter` export (no backward compat needed) ✅
+- Add tests for mutation layer (see Tests section) ✅
 
-### Phase 4: Migrate tests and example 🔴
+### Phase 4: Migrate tests and example ✅
 
 Update all call sites to the new architecture. Tests that were using `writableInterpreter` directly switch to `withMutation(readableInterpreter)` (or `readableInterpreter` alone for read-only tests).
 
 **Tasks:**
 
-- Migrate `writable.test.ts`: all `.get()` → `ref()`, all `.get(i)` → `.at(i)`, interpreter construction uses `withMutation(readableInterpreter)` 🔴
-- Migrate `with-changefeed.test.ts`: composition becomes `enrich(withMutation(readableInterpreter), withChangefeed)` 🔴
-- Migrate `example/main.ts`: all `.get()` → `ref()`, all `.get(i)` → `.at(i)`, `createDoc` and `change` use new composition 🔴
-- Migrate `types.test.ts`: update `Writable<S>` assertions (no `.get()`), add `Readable<S>` type tests 🔴
-- Verify all 447+ tests pass 🔴
+- Migrate `writable.test.ts`: all `.get()` → `ref()`, all `.get(i)` → `.at(i)`, interpreter construction uses `withMutation(readableInterpreter)` ✅
+- Migrate `with-changefeed.test.ts`: composition becomes `enrich(withMutation(readableInterpreter), withChangefeed)` ✅
+- Migrate `example/main.ts`: all `.get()` → `ref()`, all `.get(i)` → `.at(i)`, `createDoc` and `change` use new composition ✅
+- Migrate `types.test.ts`: update `Writable<S>` assertions (no `.get()`), add `Readable<S>` type tests ✅
+- Verify all 503 tests pass ✅
 
-### Phase 5: Documentation 🔴
+### Phase 5: Documentation ✅
 
 **Tasks:**
 
-- Update TECHNICAL.md §"Interpreters" table: add `readableInterpreter` row, update `writableInterpreter` → `withMutation(readableInterpreter)` 🔴
-- Update TECHNICAL.md §"Writable Interpreter": describe the decomposition into readable host + mutation transformer 🔴
-- Update TECHNICAL.md §"Type-Level Interpretation": add `Readable<S>` alongside `Plain<S>` and `Writable<S>` 🔴
-- Update TECHNICAL.md §"Verified Properties": add readable-specific properties (callable refs, `toPrimitive`, `Object.keys` on function hosts, read-only documents) 🔴
-- Update TECHNICAL.md §"File Map": add `readable.ts`, update `writable.ts` description 🔴
-- Document the composition algebra: `readableInterpreter` = reading, `withMutation` = mutation, `withChangefeed` = observation 🔴
+- Update TECHNICAL.md §"Interpreters" table: add `readableInterpreter` row, update `writableInterpreter` → `withMutation(readableInterpreter)` ✅
+- Update TECHNICAL.md §"Writable Interpreter": describe the decomposition into readable host + mutation transformer ✅
+- Update TECHNICAL.md §"Type-Level Interpretation": add `Readable<S>` alongside `Plain<S>` and `Writable<S>` ✅
+- Update TECHNICAL.md §"Verified Properties": add readable-specific properties (callable refs, `toPrimitive`, `Object.keys` on function hosts, read-only documents) ✅
+- Update TECHNICAL.md §"File Map": add `readable.ts`, update `writable.ts` description ✅
+- Document the composition algebra: `readableInterpreter` = reading, `withMutation` = mutation, `withChangefeed` = observation ✅
 
 ## Tests
 
@@ -314,23 +314,19 @@ These modules don't reference ref types or produce refs.
 
 Already landed. Adds `isPropertyHost` to `guards.ts`, switches `enrich` + `withChangefeed` to use it, widens `hasChangefeed` for functions.
 
-### PR 2: `(packages/schema) feat: readableInterpreter — callable function-shaped refs`
+### PR 2: `(packages/schema) feat: readableInterpreter — callable function-shaped refs` ✅
 
 **Type:** Feature
 
 Adds `readableInterpreter` in a new `src/interpreters/readable.ts`. Introduces `RefContext` interface. Every ref is a callable function: `ref()` returns the current plain value. `[Symbol.toPrimitive]` on leaf refs. `[INVALIDATE]`, `[SET_HANDLER]`, `[DELETE_HANDLER]` composability symbols. `Readable<S>` type. No breaking changes — `writableInterpreter` still exists alongside.
 
-### PR 3: `(packages/schema) feat: withMutation transformer, decompose writableInterpreter`
+### PR 3: `(packages/schema) feat: withMutation transformer, decompose writableInterpreter` ✅
 
 **Type:** Feature (breaking — pre-1.0)
 
-Adds `withMutation(base)` interpreter transformer. Removes `writableInterpreter` (replaced by `withMutation(readableInterpreter)`). Drops `.get()` from all ref interfaces. Renames `.get(i)` to `.at(i)`. Drops `.toString()` from `TextRef`. Drops `.toArray()` from `SequenceRef`. Updates `Writable<S>` type. Migrates all tests and example.
+Adds `withMutation(base)` interpreter transformer. Removes `writableInterpreter` (replaced by `withMutation(readableInterpreter)`). Drops `.get()` from all ref interfaces. Renames `.get(i)` to `.at(i)`. Drops `.toString()` from `TextRef`. Drops `.toArray()` from `SequenceRef`. Updates `Writable<S>` type. Migrates all tests, example, and TECHNICAL.md.
 
-### PR 4: `(packages/schema) docs: readable interpreter architecture`
-
-**Type:** Documentation
-
-Updates TECHNICAL.md with the three-building-block composition algebra, new interpreter table, `Readable<S>` type documentation, updated verified properties.
+Note: The original plan proposed a separate PR 4 for documentation. In practice, TECHNICAL.md updates were folded into PRs 2 and 3.
 
 ## Alternatives Considered
 

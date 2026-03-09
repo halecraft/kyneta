@@ -56,7 +56,7 @@ export type Decorator<Ctx, A, P> = (
  *     [CHANGEFEED]: getOrCreateChangefeed(result as object, () => createChangefeed(ctx, path)),
  *   })
  *
- * const enriched = enrich(writableInterpreter, withChangefeed)
+ * const enriched = enrich(withMutation(readableInterpreter), withChangefeed)
  * const doc = interpret(schema, enriched, ctx)
  * // doc.title has both writable methods AND [CHANGEFEED]
  * ```

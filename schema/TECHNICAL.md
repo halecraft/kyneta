@@ -240,16 +240,31 @@ This single walker replaces the 10+ parallel `switch (shape._type)` dispatch sit
 
 ### Interpreters (`src/interpreters/`)
 
-Three built-in interpreters plus a decorator:
+Three orthogonal building blocks compose to produce the full developer-facing ref tree:
+
+| Building block | Kind | Context | Purpose |
+|---|---|---|---|
+| `readableInterpreter` | Interpreter | `RefContext` | Callable function-shaped refs — the foundational read surface |
+| `withMutation(base)` | Interpreter transformer | `RefContext → WritableContext` | Adds mutation methods (`.set()`, `.insert()`, `.increment()`, etc.) |
+| `withChangefeed` | Decorator (via `enrich`) | `ChangefeedContext` | Adds `[CHANGEFEED]` observation protocol |
+
+Plus two standalone interpreters:
 
 | Interpreter | Context | Result | Purpose |
 |---|---|---|---|
-| `plainInterpreter` | Plain JS object (store) | `unknown` | Read values at each path — equivalent to `toJSON()` / `value()` |
-| `writableInterpreter` | `WritableContext` | Ref-like objects | Mutation methods, namespace isolation, portable refs |
+| `plainInterpreter` | Plain JS object (store) | `unknown` | Eager deep snapshot — equivalent to `toJSON()` / `value()` |
 | `validateInterpreter` | `ValidateContext` | `unknown` | Validate plain values against schema, collect errors |
-| `withChangefeed` (decorator) | `ChangefeedContext` | Enriched refs | Adds `[CHANGEFEED]` subscription to writable refs |
 
-Note: an earlier version of the spike included a `zeroInterpreter` that proved `Zero.structural(schema)` is expressible as `interpret(schema, zeroInterpreter, undefined)`. This equivalence is mathematically interesting (documented in the theory) but the runtime artifact was redundant — `Zero.structural` is simpler and canonical. The zero interpreter was removed.
+**Composition:** `enrich(withMutation(readableInterpreter), withChangefeed)`
+
+Each concern is independently useful:
+- **Read-only document:** `interpret(schema, readableInterpreter, { store })` — callable refs, no mutation, no dispatch context needed.
+- **Read + write:** `interpret(schema, withMutation(readableInterpreter), writableCtx)` — callable refs with mutation methods.
+- **Full stack:** `interpret(schema, enrich(withMutation(readableInterpreter), withChangefeed), cfCtx)` — callable refs + mutation + observation.
+
+**Context hierarchy:** `RefContext { store }` → `WritableContext { dispatch, autoCommit, pending }` → `ChangefeedContext { subscribers, deepSubscribers }`. Each layer adds only what it needs.
+
+Note: an earlier version of the spike included a monolithic `writableInterpreter` that fused reading and writing. This was decomposed into `readableInterpreter` + `withMutation` when we recognized that reading is the foundational capability — mutation depends on reading (e.g. `update()` reads current text length), but reading does not depend on mutation. An even earlier version included a `zeroInterpreter` that was also removed as redundant.
 
 ### Validate Interpreter (`src/interpreters/validate.ts`)
 
@@ -280,44 +295,57 @@ The interpreter always collects errors into a mutable `SchemaValidationError[]` 
 
 **Positional sum rollback:** When trying variant `i`, snapshot `const mark = errors.length`. If the variant pushes new errors (`errors.length > mark`), reset `errors.length = mark` to discard them before trying the next variant. If all variants fail, push a single summary error. For nullable sums (detected by the same pattern as `describe()`), the error message is `"nullable<inner>"` rather than generic.
 
-### Writable Interpreter (`src/interpreters/writable.ts`)
+### Readable Interpreter (`src/interpreters/readable.ts`)
 
-The most architecturally significant piece. Validates that writable refs can be expressed through the generic `interpret()` walker backed by a plain JS object store (no CRDT runtime).
+The foundational building block. Every ref is an **arrow function**: `ref()` returns the current plain value at that path via `readByPath(ctx.store, path)`. This is a live read — the value reflects the current store state at call time.
 
-**Context design.** `WritableContext` is the *same object* at every tree level — it carries the store, dispatch function, and subscriber map. The "where am I" information comes from the catamorphism's `path` parameter, which narrows automatically as the walker descends. No context re-derivation is needed.
+**Product nodes** use `Object.defineProperty` with lazy getters on the function. Each getter forces its thunk on first access, caches the result, and returns the cached value on subsequent accesses. `Object.keys(fn)` returns only schema field names (arrow functions' built-in `name` and `length` are non-enumerable and can be shadowed by `configurable: true` getters).
 
-**Product nodes** use `Object.defineProperty` with lazy getters (no Proxy). Each getter forces its thunk on first access, caches the result, and returns the cached value on subsequent accesses. `[CHANGEFEED]` is attached as a non-enumerable symbol property — `Object.keys()` returns only schema keys.
+**Map nodes** use `Proxy` with an **arrow function target**. This gives `typeof proxy === "function"` and enables an `apply` trap on the same Proxy — no second Proxy needed. String keys route to child refs via a cache; symbol keys route to the target (for protocol like `[CHANGEFEED]`, `[INVALIDATE]`). Arrow functions are used as Proxy targets (not `function(){}`) because they have only `length` and `name` as own keys — avoiding `arguments`/`caller`/`prototype` invariant violations.
 
-**Map nodes** use `Proxy` — the one case where Proxy is necessary because keys are not known from the schema. The Proxy intercepts string property access for data and delegates symbol access to the base object for protocol.
+**Sequence nodes** are callable functions with `.at(i)` for child navigation, `.length` getter, and `[Symbol.iterator]` generator.
 
-**Scalar nodes** demonstrate the "upward reference" pattern: `.set(value)` dispatches a `MapChange` to the *parent* path. The scalar carries no container of its own — it reaches its parent through the accumulated context captured in closures.
+**Annotated nodes** dispatch on tag: `"text"` produces a callable ref with text-specific `[Symbol.toPrimitive]` (always returns string); `"counter"` produces a callable ref with hint-aware `[Symbol.toPrimitive]` (number for `"default"`/`"number"`, string for `"string"`); `"doc"`/`"movable"`/`"tree"` delegate to `inner()`. Unannotated scalars get a generic hint-aware `[Symbol.toPrimitive]`.
 
-**Annotated nodes** dispatch on tag: `"text"` produces a `TextRef` with `.insert()/.delete()/.update()`, `"counter"` produces a `CounterRef` with `.increment()/.decrement()`, `"doc"/"movable"/"tree"` delegate to the inner schema.
+**Sum nodes** dispatch based on runtime store state (discriminated sums read the discriminant, nullable sums check for null/undefined, general positional sums fall back to first variant).
+
+**Composability hooks:** The readable interpreter exposes well-known symbols for inter-layer communication:
+- `[INVALIDATE](key?)` on sequence/map refs — mutation layer calls this to clear child caches after writes.
+- `[SET_HANDLER]` / `[DELETE_HANDLER]` on map Proxy targets — mutation layer fills these so that `proxy.key = value` and `delete proxy.key` dispatch changes. Without a handler installed, writes are rejected (read-only by default).
+
+### Mutation Layer (`withMutation` in `src/interpreters/writable.ts`)
+
+An interpreter transformer: `withMutation(base)` takes `Interpreter<RefContext, A>` and returns `Interpreter<WritableContext, A>`. It delegates to the base for structural cases (product, sum) and adds mutation methods at leaf/collection cases:
+
+- **Scalar:** `.set(value)` — dispatches `MapChange` to parent (upward reference pattern).
+- **Text:** `.insert(index, content)`, `.delete(index, length)`, `.update(content)` — dispatches `TextChange`. Note: `update()` reads the current text via `ref()` (the callable read from the base) to compute the delete length.
+- **Counter:** `.increment(n?)`, `.decrement(n?)` — dispatches `IncrementChange`.
+- **Sequence:** `.push(...items)`, `.insert(index, ...items)`, `.delete(index, count?)` — dispatches `SequenceChange`. Calls `[INVALIDATE]()` to clear the full child cache after each mutation.
+- **Map:** fills `[SET_HANDLER]` and `[DELETE_HANDLER]` via `Object.defineProperty` through the Proxy. Each handler dispatches `MapChange` and calls `[INVALIDATE](key)` for per-key cache invalidation.
 
 **Change dispatch** supports auto-commit (immediate apply + notify) and batched mode (accumulate in `pending`, apply on `flush()`).
 
-**Sum nodes** dispatch based on runtime store state:
-- **Discriminated sums:** read the discriminant key from the store value and dispatch to the matching variant via `variants.byKey()`. Falls back to the first variant if the value is missing, not an object, or the discriminant is unrecognized.
-- **Nullable sums** (positional, 2 variants, first is `scalar("null")`): check whether the store value is `null`/`undefined` and dispatch to the null variant (index 0) or the inner variant (index 1) accordingly.
-- **General positional sums:** no runtime discriminator is available without backend-specific type information, so the first variant is used as a fallback.
+**Why `withMutation` is not a `Decorator`:** The `Decorator<Ctx, A, P>` type receives `(result, ctx, path)` but no schema information. Mutation is tag-dependent (text gets `.insert()`, counter gets `.increment()`), so it needs `schema.tag` in the `annotated` case. This makes it an interpreter transformer (wraps the full 6-case interpreter) rather than a decorator.
 
-### Type-Level Interpretation: `Plain<S>` and `Writable<S>`
+### Type-Level Interpretation: `Plain<S>`, `Readable<S>`, and `Writable<S>`
 
-Two recursive conditional types map schema types to their corresponding value types:
+Three recursive conditional types map schema types to their corresponding value types:
 
 **`Plain<S>`** — the plain JavaScript/JSON type. `Plain<ScalarSchema<"string", "a" | "b">>` = `"a" | "b"`. `Plain<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ x: number }`. Used for `toJSON()` return types, validation result types, and serialization boundaries.
 
-**`Writable<S>`** — the ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>`. `Writable<AnnotatedSchema<"text">>` = `TextRef`. Used to type the result of `interpret(schema, writableInterpreter, ctx)`.
+**`Readable<S>`** — the callable ref type. `Readable<ScalarSchema<"number">>` = `(() => number) & { [Symbol.toPrimitive]: ... }`. `Readable<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `(() => { x: number }) & { readonly x: Readable<ScalarSchema<"number">> }`. Used to type the result of `interpret(schema, readableInterpreter, ctx)`.
 
-Both types account for constrained scalars: when `ScalarSchema<K, V>` has a narrowed `V`, `Plain` yields `V` (not `ScalarPlain<K>`) and `Writable` yields `ScalarRef<V>`.
+**`Writable<S>`** — the mutation-only ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>` (just `.set()`). `Writable<AnnotatedSchema<"text">>` = `TextRef` (just `.insert()`, `.delete()`, `.update()`). Consumer code that composes both uses `Readable<S> & Writable<S>`.
+
+All three types account for constrained scalars: when `ScalarSchema<K, V>` has a narrowed `V`, `Plain` yields `V`, `Readable` yields `(() => V) & { toPrimitive }`, and `Writable` yields `ScalarRef<V>`.
 
 ## Verified Properties
 
-The spike validates these properties via 398 tests:
+The spike validates these properties via 503 tests:
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: `doc.title === doc.title` — lazy getters cache on first access.
-3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names. `CHANGEFEED in doc` is true. `CHANGEFEED` is non-enumerable.
+3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names (even on function-shaped refs). `CHANGEFEED in doc` is true. `CHANGEFEED` is non-enumerable.
 4. **Portable refs**: `const ref = doc.settings.fontSize; bump(ref)` — works outside the tree because context is captured in closures.
 5. **Plain round-trip**: `interpret(schema, plainInterpreter, store)` produces the identical object tree.
 6. **Changefeed subscription**: `doc.title[CHANGEFEED].subscribe(cb)` receives changes; unsubscribe stops notifications.
@@ -327,8 +355,14 @@ The spike validates these properties via 398 tests:
 10. **Validation collects all errors**: `tryValidate` on a value with N type mismatches returns N errors (no short-circuit).
 11. **Positional sum rollback**: failed variant errors are discarded; successful variant produces zero spurious errors.
 12. **Type narrowing**: `validate(schema, value)` return type is `Plain<typeof schema>` — verified via `expectTypeOf`.
-13. **Discriminated sum dispatch**: writable interpreter reads the discriminant from the store and produces the correct variant's ref.
-14. **Nullable dispatch**: writable interpreter checks for `null`/`undefined` and dispatches to the correct positional variant.
+13. **Discriminated sum dispatch**: readable interpreter reads the discriminant from the store and produces the correct variant's callable ref.
+14. **Nullable dispatch**: readable interpreter checks for `null`/`undefined` and dispatches to the correct positional variant.
+15. **Callable refs**: every ref produced by `readableInterpreter` is `typeof "function"` and returns its current plain value when called.
+16. **`toPrimitive` coercion**: `` `Stars: ${doc.count}` `` works via `[Symbol.toPrimitive]`; counter is hint-aware (number for default, string for string hint).
+17. **Read-only documents**: `interpret(schema, readableInterpreter, { store })` produces a fully navigable, callable document with no mutation methods.
+18. **Cache invalidation**: `[INVALIDATE]()` clears full cache; `[INVALIDATE](key)` clears single entry. Verified on both sequence and map refs.
+19. **Single Proxy for maps**: map refs use one Proxy with a function target — no Proxy-on-Proxy. `apply` trap handles callability.
+20. **Capability composition**: `enrich(withMutation(readableInterpreter), withChangefeed)` produces refs with all three capabilities.
 
 ## File Map
 
@@ -346,17 +380,20 @@ packages/schema/
 │   ├── describe.ts              # Human-readable schema tree view
 │   ├── interpret.ts             # Interpreter interface + catamorphism + Path types
 │   ├── combinators.ts           # enrich, product, overlay, firstDefined
-│   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject)
+│   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
 │   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore
 │   ├── interpreters/
-│   │   ├── plain.ts             # Read from plain JS object
-│   │   ├── writable.ts          # Ref-like objects + Plain<S> + Writable<S>
+│   │   ├── readable.ts          # Callable function-shaped refs + Readable<S> + composability symbols
+│   │   ├── writable.ts          # withMutation transformer + mutation-only ref interfaces + Plain<S> + Writable<S>
+│   │   ├── plain.ts             # Read from plain JS object (eager deep snapshot)
 │   │   ├── with-changefeed.ts   # Changefeed decorator (observation layer)
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate
 │   ├── __tests__/
 │   │   ├── types.test.ts        # Type-level tests (expectTypeOf)
 │   │   ├── interpret.test.ts    # Catamorphism, constructors, LoroSchema
-│   │   ├── writable.test.ts     # Writable refs, actions, portable refs
+│   │   ├── readable.test.ts     # Read-only callable refs, toPrimitive, navigation, hooks
+│   │   ├── writable.test.ts     # Mutation + read integration via withMutation(readableInterpreter)
+│   │   ├── guards.test.ts       # isPropertyHost, isNonNullObject, hasChangefeed
 │   │   ├── with-changefeed.test.ts # Changefeed subscription, batched mode
 │   │   ├── zero.test.ts         # Zero.structural, Zero.overlay
 │   │   ├── describe.test.ts     # Schema tree view rendering

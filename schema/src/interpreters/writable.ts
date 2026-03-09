@@ -1,22 +1,18 @@
-// Writable interpreter — produces ref-like objects at each schema node.
+// Writable interpreter layer — mutation methods composed onto readable refs.
 //
-// This interpreter targets a **plain JS object store** as the backend,
-// proving the architecture is backend-independent. It validates:
+// This module provides:
+// 1. Context types: RefContext (read-only), WritableContext (read + write)
+// 2. Mutation-only ref interfaces: ScalarRef, TextRef, CounterRef, SequenceRef
+// 3. withMutation(base) — interpreter transformer that adds mutation methods
+// 4. Plain<S> and Writable<S> type-level interpretations
 //
-// 1. Context accumulation — store path derived from catamorphism's Path
-// 2. Product nodes — Object.defineProperty lazy getters (no Proxy)
-// 3. Namespace isolation — string keys for schema, no symbol protocol
-// 4. Annotated nodes — text gets .insert/.delete, counter gets .increment
-// 5. Scalar nodes — .get()/.set() with upward reference to parent
-// 6. Sequence nodes — .get(i)/.push()/.insert()/.delete()/.length
-// 7. Map nodes — Proxy for dynamic keys
-// 8. Change dispatch — auto-commit vs batched mode
-// 9. Portable refs — refs carry their context as closures
+// The readable interpreter (`readableInterpreter`) owns reading + structural
+// navigation. This module owns mutation. Observation is owned by
+// `withChangefeed`. The three compose:
 //
-// Changefeed attachment ([CHANGEFEED] symbol) is NOT part of this interpreter.
-// It is an orthogonal observation concern provided by the `withChangefeed`
-// decorator via `enrich(writableInterpreter, withChangefeed)`.
-// See `with-changefeed.ts` and theory §5.4 (capability decomposition).
+//   enrich(withMutation(readableInterpreter), withChangefeed)
+//
+// See theory §5.4 (capability decomposition) and readable-interpreter.md.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import {
@@ -46,7 +42,11 @@ import {
   readByPath,
   applyChangeToStore,
 } from "../store.js"
-import { isNonNullObject } from "../guards.js"
+import {
+  INVALIDATE,
+  SET_HANDLER,
+  DELETE_HANDLER,
+} from "./readable.js"
 
 // Re-export store utilities for backward compatibility
 export { type Store, readByPath, writeByPath, applyChangeToStore } from "../store.js"
@@ -121,7 +121,7 @@ export interface WritableOptions {
  * ```ts
  * const store = { title: "", count: 0, items: [] }
  * const ctx = createWritableContext(store)
- * const doc = interpret(schema, writableInterpreter, ctx)
+ * const doc = interpret(schema, withMutation(readableInterpreter), ctx)
  * ```
  */
 export function createWritableContext(
@@ -164,36 +164,33 @@ export function flush(ctx: WritableContext): PendingChange[] {
 }
 
 // ---------------------------------------------------------------------------
-// Ref types — the objects produced by the writable interpreter
+// Ref types — mutation-only interfaces
 // ---------------------------------------------------------------------------
+// These describe only the mutation surface. Reading is provided by the
+// readable interpreter (callable `ref()` + `[Symbol.toPrimitive]`).
 
 export interface ScalarRef<T = unknown> {
-  get: () => T
   set: (value: T) => void
 }
 
 export interface TextRef {
-  toString: () => string
-  get: () => string
   insert: (index: number, content: string) => void
   delete: (index: number, length: number) => void
   update: (content: string) => void
 }
 
 export interface CounterRef {
-  get: () => number
   increment: (n?: number) => void
   decrement: (n?: number) => void
 }
 
 export interface SequenceRef<T = unknown> {
-  get: (index: number) => T
+  at: (index: number) => T
   push: (...items: unknown[]) => void
   insert: (index: number, ...items: unknown[]) => void
   delete: (index: number, count?: number) => void
   readonly length: number
   [Symbol.iterator](): Iterator<T>
-  toArray: () => unknown[]
 }
 
 // ---------------------------------------------------------------------------
@@ -285,11 +282,12 @@ export type Plain<S extends Schema> =
                 : unknown
 
 /**
- * Computes the writable ref type for a given schema type.
+ * Computes the mutation-only ref type for a given schema type.
  *
- * This is the type-level catamorphism: it recursively maps schema nodes
- * to their corresponding ref types, so that `interpret(schema, writableInterpreter, ctx)`
- * produces a fully typed result without any casts.
+ * This maps schema nodes to their mutation interfaces. Reading is
+ * provided by the `Readable<S>` type (from the readable interpreter).
+ * At runtime, `withMutation(readableInterpreter)` produces refs that
+ * satisfy both `Readable<S>` and `Writable<S>`.
  *
  * ```ts
  * const s = Schema.doc({
@@ -301,7 +299,8 @@ export type Plain<S extends Schema> =
  * })
  *
  * type Doc = Writable<typeof s>
- * // = { title: ScalarRef<string>; count: ScalarRef<number>; settings: { darkMode: ScalarRef<boolean> } }
+ * // Leaf nodes: ScalarRef<string> (just .set()), etc.
+ * // Products: { readonly title: ..., readonly count: ..., ... }
  * ```
  */
 export type Writable<S extends Schema> =
@@ -347,198 +346,102 @@ export type Writable<S extends Schema> =
                 : unknown
 
 // ---------------------------------------------------------------------------
-// Specialized ref factories
-// ---------------------------------------------------------------------------
-
-function createTextRef(ctx: WritableContext, path: Path): TextRef {
-  const ref: TextRef = {
-    toString(): string {
-      const v = readByPath(ctx.store, path)
-      return typeof v === "string" ? v : String(v ?? "")
-    },
-
-    get(): string {
-      return ref.toString()
-    },
-
-    insert(index: number, content: string): void {
-      ctx.dispatch(
-        path,
-        textChange([
-          ...(index > 0 ? [{ retain: index }] : []),
-          { insert: content },
-        ]),
-      )
-    },
-
-    delete(index: number, length: number): void {
-      ctx.dispatch(
-        path,
-        textChange([
-          ...(index > 0 ? [{ retain: index }] : []),
-          { delete: length },
-        ]),
-      )
-    },
-
-    update(content: string): void {
-      const current = ref.toString()
-      ctx.dispatch(
-        path,
-        textChange([
-          ...(current.length > 0 ? [{ delete: current.length }] : []),
-          { insert: content },
-        ]),
-      )
-    },
-  }
-
-  return ref
-}
-
-function createCounterRef(ctx: WritableContext, path: Path): CounterRef {
-  const ref: CounterRef = {
-    get(): number {
-      const v = readByPath(ctx.store, path)
-      return typeof v === "number" ? v : 0
-    },
-
-    increment(n: number = 1): void {
-      ctx.dispatch(path, incrementChange(n))
-    },
-
-    decrement(n: number = 1): void {
-      ctx.dispatch(path, incrementChange(-n))
-    },
-  }
-
-  return ref
-}
-
-function createScalarRef(ctx: WritableContext, path: Path): ScalarRef {
-  const parentPath = path.slice(0, -1)
-  const lastSeg = path[path.length - 1]
-  const key =
-    lastSeg !== undefined
-      ? lastSeg.type === "key"
-        ? lastSeg.key
-        : String(lastSeg.index)
-      : undefined
-
-  const ref: ScalarRef = {
-    get(): unknown {
-      return readByPath(ctx.store, path)
-    },
-    set(value: unknown): void {
-      if (key !== undefined) {
-        // Upward reference: dispatch MapChange to parent
-        ctx.dispatch(parentPath, mapChange({ [key]: value }))
-      } else {
-        // Root scalar — use replace
-        ctx.dispatch(path, replaceChange(value))
-      }
-    },
-  }
-
-  return ref
-}
-
-// ---------------------------------------------------------------------------
-// Writable interpreter
+// withMutation — interpreter transformer
 // ---------------------------------------------------------------------------
 
 /**
- * A writable interpreter that produces ref-like objects backed by a
- * plain JS object store. Produces the **mutation surface** only.
+ * An interpreter transformer that adds mutation methods to any
+ * ref-producing interpreter. Takes an `Interpreter<RefContext, A>` and
+ * returns an `Interpreter<WritableContext, A>`.
  *
- * For observation (changefeeds), use `enrich(writableInterpreter, withChangefeed)`
- * with a `ChangefeedContext`.
+ * The base interpreter's cases receive a `WritableContext` (which extends
+ * `RefContext`), so they work unchanged. `withMutation` adds mutation
+ * methods at leaf and collection cases, and passes through for purely
+ * structural cases (product, sum).
  *
- * - Context accumulation (store path derived from catamorphism's Path)
- * - Object.defineProperty for products (no Proxy)
- * - Proxy for maps (dynamic keys)
- * - Change dispatch with auto-commit and batched modes
- * - Portable refs (carry context as closures)
+ * **Cache invalidation:** After dispatching mutation changes,
+ * `withMutation` calls `result[INVALIDATE](key?)` on the base's
+ * sequence/map refs to keep child caches consistent.
  *
  * ```ts
- * const store = { title: "", count: 0, items: [] }
+ * const interp = withMutation(readableInterpreter)
  * const ctx = createWritableContext(store)
- * const doc = interpret(schema, writableInterpreter, ctx)
- * doc.title.insert(0, "Hello")   // store.title === "Hello"
- * doc.count.increment(5)         // store.count === 5
+ * const doc = interpret(schema, interp, ctx)
+ * doc.title.insert(0, "Hello")   // mutation via withMutation
+ * doc.title()                    // "Hello" via readableInterpreter
  * ```
  */
-export const writableInterpreter: Interpreter<WritableContext, unknown> = {
-  // --- Scalar ----------------------------------------------------------------
-  // Bare scalars (unannotated) get .get()/.set(). This is the "upward
-  // reference" case — the scalar dispatches a MapChange to its parent.
+export function withMutation(
+  base: Interpreter<RefContext, unknown>,
+): Interpreter<WritableContext, unknown> {
+  return {
+    // --- Scalar ---------------------------------------------------------------
+    // Add .set() to the base scalar ref.
 
-  scalar(ctx: WritableContext, path: Path, _schema: ScalarSchema): ScalarRef {
-    return createScalarRef(ctx, path)
-  },
+    scalar(
+      ctx: WritableContext,
+      path: Path,
+      schema: ScalarSchema,
+    ): unknown {
+      const result = base.scalar(ctx, path, schema) as any
 
-  // --- Product ---------------------------------------------------------------
-  // Fixed keys → Object.defineProperty with lazy getters. No Proxy.
+      const parentPath = path.slice(0, -1)
+      const lastSeg = path[path.length - 1]
+      const key =
+        lastSeg !== undefined
+          ? lastSeg.type === "key"
+            ? lastSeg.key
+            : String(lastSeg.index)
+          : undefined
 
-  product(
-    ctx: WritableContext,
-    path: Path,
-    _schema: ProductSchema,
-    fields: Readonly<Record<string, () => unknown>>,
-  ): unknown {
-    const result: Record<string | symbol, unknown> = {}
-
-    // Define lazy getters for each schema field — cache on first access
-    for (const [key, thunk] of Object.entries(fields)) {
-      let cached: unknown = undefined
-      let resolved = false
-
-      Object.defineProperty(result, key, {
-        get() {
-          if (!resolved) {
-            cached = thunk()
-            resolved = true
-          }
-          return cached
-        },
-        enumerable: true,
-        configurable: true,
-      })
-    }
-
-    return result
-  },
-
-  // --- Sequence --------------------------------------------------------------
-  // .get(i) returns a child ref. .push/.insert/.delete dispatch changes.
-
-  sequence(
-    ctx: WritableContext,
-    path: Path,
-    _schema: SequenceSchema,
-    item: (index: number) => unknown,
-  ): SequenceRef {
-    const childCache = new Map<number, unknown>()
-
-    const ref: SequenceRef = {
-      get(index: number): unknown {
-        if (!childCache.has(index)) {
-          childCache.set(index, item(index))
+      result.set = (value: unknown): void => {
+        if (key !== undefined) {
+          // Upward reference: dispatch MapChange to parent
+          ctx.dispatch(parentPath, mapChange({ [key]: value }))
+        } else {
+          // Root scalar — use replace
+          ctx.dispatch(path, replaceChange(value))
         }
-        return childCache.get(index)
-      },
+      }
 
-      push(...items: unknown[]): void {
+      return result
+    },
+
+    // --- Product --------------------------------------------------------------
+    // Pure structural — pass through. Products have no mutation methods.
+
+    product(
+      ctx: WritableContext,
+      path: Path,
+      schema: ProductSchema,
+      fields: Readonly<Record<string, () => unknown>>,
+    ): unknown {
+      return base.product(ctx, path, schema, fields)
+    },
+
+    // --- Sequence -------------------------------------------------------------
+    // Add .push(), .insert(), .delete() to the base sequence ref.
+    // Call [INVALIDATE] after each mutation to keep caches consistent.
+
+    sequence(
+      ctx: WritableContext,
+      path: Path,
+      schema: SequenceSchema,
+      item: (index: number) => unknown,
+    ): unknown {
+      const result = base.sequence(ctx, path, schema, item) as any
+
+      result.push = (...items: unknown[]): void => {
         const arr = readByPath(ctx.store, path)
         const length = Array.isArray(arr) ? arr.length : 0
         ctx.dispatch(
           path,
           sequenceChange([{ retain: length }, { insert: items }]),
         )
-        childCache.clear()
-      },
+        result[INVALIDATE]()
+      }
 
-      insert(index: number, ...items: unknown[]): void {
+      result.insert = (index: number, ...items: unknown[]): void => {
         ctx.dispatch(
           path,
           sequenceChange([
@@ -546,10 +449,10 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
             { insert: items },
           ]),
         )
-        childCache.clear()
-      },
+        result[INVALIDATE]()
+      }
 
-      delete(index: number, count: number = 1): void {
+      result.delete = (index: number, count: number = 1): void => {
         ctx.dispatch(
           path,
           sequenceChange([
@@ -557,231 +460,143 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
             { delete: count },
           ]),
         )
-        childCache.clear()
-      },
+        result[INVALIDATE]()
+      }
 
-      get length(): number {
-        const arr = readByPath(ctx.store, path)
-        return Array.isArray(arr) ? arr.length : 0
-      },
+      return result
+    },
 
-      [Symbol.iterator](): Iterator<unknown> {
-        const arr = readByPath(ctx.store, path)
-        const items = Array.isArray(arr) ? arr : []
-        let i = 0
-        return {
-          next(): IteratorResult<unknown> {
-            if (i < items.length) {
-              return { value: ref.get(i++), done: false }
-            }
-            return { value: undefined, done: true }
-          },
-        }
-      },
+    // --- Map ------------------------------------------------------------------
+    // Fill [SET_HANDLER] and [DELETE_HANDLER] on the base map Proxy so that
+    // `proxy.key = value` and `delete proxy.key` dispatch changes.
 
-      toArray(): unknown[] {
-        const arr = readByPath(ctx.store, path)
-        if (!Array.isArray(arr)) return []
-        return arr.map((_item, i) => ref.get(i))
-      },
-    }
+    map(
+      ctx: WritableContext,
+      path: Path,
+      schema: MapSchema,
+      item: (key: string) => unknown,
+    ): unknown {
+      const result = base.map(ctx, path, schema, item)
 
-    return ref
-  },
-
-  // --- Map -------------------------------------------------------------------
-  // Dynamic keys → Proxy. The one case where Proxy is necessary.
-  // String keys map to child refs; symbols are forwarded to the target
-  // (allowing decorators to attach protocol via Object.defineProperty).
-
-  map(
-    ctx: WritableContext,
-    path: Path,
-    _schema: MapSchema,
-    item: (key: string) => unknown,
-  ): unknown {
-    const childCache = new Map<string, unknown>()
-
-    // Target object — symbol-keyed protocol will be attached here
-    // by decorators (e.g. withChangefeed) via Object.defineProperty.
-    const target: Record<string | symbol, unknown> = {}
-
-    return new Proxy(target, {
-      get(_target, prop, _receiver) {
-        // Symbol access → target object (protocol attached by decorators)
-        if (typeof prop === "symbol") {
-          return target[prop]
-        }
-
-        // String access → child ref (data)
-        if (!childCache.has(prop)) {
-          childCache.set(prop, item(prop))
-        }
-        return childCache.get(prop)
-      },
-
-      has(_target, prop) {
-        // Symbol access → check target (protocol)
-        if (typeof prop === "symbol") {
-          return prop in target
-        }
-        // String access → check store data
-        const obj = readByPath(ctx.store, path)
-        if (isNonNullObject(obj)) {
-          return prop in obj
-        }
-        return false
-      },
-
-      ownKeys(_target) {
-        // Include symbol keys from target (protocol attached by decorators)
-        const symbolKeys = Object.getOwnPropertySymbols(target)
-        const obj = readByPath(ctx.store, path)
-        if (isNonNullObject(obj)) {
-          return [...Object.keys(obj), ...symbolKeys]
-        }
-        return [...symbolKeys]
-      },
-
-      getOwnPropertyDescriptor(_target, prop) {
-        if (typeof prop === "symbol") {
-          return Object.getOwnPropertyDescriptor(target, prop)
-        }
-        const obj = readByPath(ctx.store, path)
-        if (isNonNullObject(obj)) {
-          if (prop in obj) {
-            if (!childCache.has(String(prop))) {
-              childCache.set(String(prop), item(String(prop)))
-            }
-            return {
-              configurable: true,
-              enumerable: true,
-              writable: true,
-              value: childCache.get(String(prop)),
-            }
-          }
-        }
-        return undefined
-      },
-
-      // Allow symbol definitions from decorators (e.g. withChangefeed attaching [CHANGEFEED])
-      defineProperty(_target, prop, descriptor) {
-        if (typeof prop === "symbol") {
-          Object.defineProperty(target, prop, descriptor)
+      // Fill mutation handlers via defineProperty (goes through the Proxy's
+      // defineProperty trap, which forwards symbol keys to the target).
+      Object.defineProperty(result, SET_HANDLER, {
+        value: (prop: string, value: unknown): boolean => {
+          ctx.dispatch(path, mapChange({ [prop]: value }))
+          ;(result as any)[INVALIDATE](prop)
           return true
+        },
+        configurable: true,
+      })
+
+      Object.defineProperty(result, DELETE_HANDLER, {
+        value: (prop: string): boolean => {
+          ctx.dispatch(path, mapChange(undefined, [prop]))
+          ;(result as any)[INVALIDATE](prop)
+          return true
+        },
+        configurable: true,
+      })
+
+      return result
+    },
+
+    // --- Sum ------------------------------------------------------------------
+    // Pure structural dispatch — pass through.
+
+    sum(
+      ctx: WritableContext,
+      path: Path,
+      schema: SumSchema,
+      variants: SumVariants<unknown>,
+    ): unknown {
+      return base.sum(ctx, path, schema, variants)
+    },
+
+    // --- Annotated ------------------------------------------------------------
+    // Dispatch on tag to add mutation methods to leaf annotation refs.
+    // Delegating annotations ("doc", "movable", "tree") pass through.
+
+    annotated(
+      ctx: WritableContext,
+      path: Path,
+      schema: AnnotatedSchema,
+      inner: (() => unknown) | undefined,
+    ): unknown {
+      const result = base.annotated(ctx, path, schema, inner) as any
+
+      switch (schema.tag) {
+        case "text": {
+          result.insert = (index: number, content: string): void => {
+            ctx.dispatch(
+              path,
+              textChange([
+                ...(index > 0 ? [{ retain: index }] : []),
+                { insert: content },
+              ]),
+            )
+          }
+
+          result.delete = (index: number, length: number): void => {
+            ctx.dispatch(
+              path,
+              textChange([
+                ...(index > 0 ? [{ retain: index }] : []),
+                { delete: length },
+              ]),
+            )
+          }
+
+          result.update = (content: string): void => {
+            // Read current text length via the callable ref
+            const current: string = result()
+            ctx.dispatch(
+              path,
+              textChange([
+                ...(current.length > 0
+                  ? [{ delete: current.length }]
+                  : []),
+                { insert: content },
+              ]),
+            )
+          }
+
+          return result
         }
-        return false
-      },
 
-      set(_target, prop, value) {
-        if (typeof prop === "symbol") return false
-        ctx.dispatch(path, mapChange({ [String(prop)]: value }))
-        childCache.delete(prop)
-        return true
-      },
+        case "counter": {
+          result.increment = (n: number = 1): void => {
+            ctx.dispatch(path, incrementChange(n))
+          }
 
-      deleteProperty(_target, prop) {
-        if (typeof prop === "symbol") return false
-        ctx.dispatch(path, mapChange(undefined, [String(prop)]))
-        childCache.delete(String(prop))
-        return true
-      },
-    })
-  },
+          result.decrement = (n: number = 1): void => {
+            ctx.dispatch(path, incrementChange(-n))
+          }
 
-  // --- Sum -------------------------------------------------------------------
-  // Dispatches to the correct variant based on runtime store state.
-  //
-  // - Discriminated sums: read the discriminant key from the store value
-  //   and dispatch to the matching variant. Falls back to first variant
-  //   if the value is missing or the discriminant is unrecognized.
-  // - Nullable sums (positional, 2 variants, first is null): check if
-  //   the store value is null/undefined and dispatch accordingly.
-  // - General positional sums: no runtime discriminator available,
-  //   so we default to the first variant.
-
-  sum(
-    ctx: WritableContext,
-    path: Path,
-    schema: SumSchema,
-    variants: SumVariants<unknown>,
-  ): unknown {
-    if (schema.discriminant !== undefined && variants.byKey) {
-      // ── Discriminated sum ────────────────────────────────────────
-      const discSchema = schema as DiscriminatedSumSchema
-      const value = readByPath(ctx.store, path)
-
-      // Try to read the discriminant from the store value
-      if (isNonNullObject(value)) {
-        const discValue = value[schema.discriminant]
-        if (typeof discValue === "string" && discValue in discSchema.variantMap) {
-          return variants.byKey(discValue)
+          return result
         }
+
+        case "doc":
+        case "movable":
+        case "tree":
+          // Delegating annotations — inner was already called by the base
+          // interpreter, and the result carries the base's interpretation.
+          // withMutation's own cases (product, sequence, etc.) already
+          // attached mutation methods to the children during recursion.
+          return result
+
+        default:
+          // Unknown annotation — if the base delegated to inner or
+          // produced a scalar-like ref, add .set() for unannotated scalars.
+          if (inner !== undefined) {
+            return result
+          }
+          // Leaf annotation without known semantics — add scalar mutation
+          return this.scalar(ctx, path, {
+            _kind: "scalar" as const,
+            scalarKind: "any" as ScalarKind,
+          })
       }
-
-      // Fallback: first variant
-      const keys = Object.keys(discSchema.variantMap)
-      if (keys.length > 0) {
-        return variants.byKey(keys[0]!)
-      }
-      return undefined
-    }
-
-    // ── Positional sum ───────────────────────────────────────────
-    if (variants.byIndex) {
-      const posSchema = schema as PositionalSumSchema
-
-      // Nullable: dispatch based on whether the value is null/undefined
-      if (isNullableSum(posSchema)) {
-        const value = readByPath(ctx.store, path)
-        return (value === null || value === undefined)
-          ? variants.byIndex(0)  // null variant
-          : variants.byIndex(1)  // inner variant
-      }
-
-      // General positional sum: no runtime discriminator, use first
-      return variants.byIndex(0)
-    }
-
-    return undefined
-  },
-
-  // --- Annotated -------------------------------------------------------------
-  // Dispatches on annotation tag to produce specialized refs:
-  // - "text" → TextRef with .insert/.delete/.update
-  // - "counter" → CounterRef with .increment/.decrement
-  // - "doc", "movable", "tree" → delegate to inner
-  // - unknown → delegate to inner or return scalar ref
-
-  annotated(
-    ctx: WritableContext,
-    path: Path,
-    schema: AnnotatedSchema,
-    inner: (() => unknown) | undefined,
-  ): unknown {
-    switch (schema.tag) {
-      case "text":
-        return createTextRef(ctx, path)
-
-      case "counter":
-        return createCounterRef(ctx, path)
-
-      case "doc":
-      case "movable":
-      case "tree":
-        // These annotations wrap an inner schema — delegate
-        if (inner !== undefined) {
-          return inner()
-        }
-        return undefined
-
-      default:
-        // Unknown annotation — delegate to inner if present
-        if (inner !== undefined) {
-          return inner()
-        }
-        // Leaf annotation without known semantics — treat as scalar
-        return createScalarRef(ctx, path)
-    }
-  },
+    },
+  }
 }

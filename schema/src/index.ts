@@ -130,7 +130,7 @@ export type {
   ReadableSequenceRef,
 } from "./interpreters/readable.js"
 export {
-  writableInterpreter,
+  withMutation,
   createWritableContext,
   flush,
 } from "./interpreters/writable.js"
@@ -156,7 +156,7 @@ export {
 } from "./interpreters/validate.js"
 export type { ValidateContext } from "./interpreters/validate.js"
 
-// Changefeed decorator — observation layer via enrich(writableInterpreter, withChangefeed)
+// Changefeed decorator — observation layer via enrich(withMutation(readableInterpreter), withChangefeed)
 export {
   withChangefeed,
   createChangefeedContext,

@@ -1,8 +1,8 @@
 // Changefeed decorator — attaches [CHANGEFEED] to interpreted results via `enrich`.
 //
 // This module owns the observation concern (read + subscribe). It is
-// orthogonal to the writable interpreter which owns the mutation concern.
-// Compose them via `enrich(writableInterpreter, withChangefeed)`.
+// orthogonal to the mutation concern provided by `withMutation`.
+// Compose them via `enrich(withMutation(readableInterpreter), withChangefeed)`.
 //
 // Two subscription modes:
 // - Exact (via Changefeed.subscribe): fires only for changes at the exact path
@@ -192,7 +192,7 @@ export interface ChangefeedContext extends WritableContext {
  * const store = { title: "", count: 0 }
  * const wCtx = createWritableContext(store)
  * const cfCtx = createChangefeedContext(wCtx)
- * const doc = interpret(schema, enrich(writableInterpreter, withChangefeed), cfCtx)
+ * const doc = interpret(schema, enrich(withMutation(readableInterpreter), withChangefeed), cfCtx)
  * ```
  */
 export function createChangefeedContext(
@@ -301,7 +301,7 @@ export function subscribeDeep(
  * `Object.assign` is a harmless no-op.
  *
  * ```ts
- * const enriched = enrich(writableInterpreter, withChangefeed)
+ * const enriched = enrich(withMutation(readableInterpreter), withChangefeed)
  * const ctx = createChangefeedContext(createWritableContext(store))
  * const doc = interpret(schema, enriched, ctx)
  * // doc[CHANGEFEED].current returns the current store value

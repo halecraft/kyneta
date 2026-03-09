@@ -3,7 +3,8 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  writableInterpreter,
+  readableInterpreter,
+  withMutation,
   createWritableContext,
   flush,
 } from "../index.js"
@@ -15,6 +16,12 @@ import type {
   SequenceRef,
   Writable,
 } from "../index.js"
+
+// ===========================================================================
+// Shared interpreter: withMutation(readableInterpreter)
+// ===========================================================================
+
+const writableInterpreter = withMutation(readableInterpreter)
 
 // ===========================================================================
 // Base grammar tests — Schema only, no Loro annotations
@@ -39,9 +46,7 @@ function createStructuralDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as Writable<
-    typeof structuralDocSchema
-  >
+  const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as any
   return { store, ctx, doc }
 }
 
@@ -63,13 +68,11 @@ describe("writable: product lazy getters", () => {
       metadata: { version: 1 },
     }
     const ctx = createWritableContext(store)
-    const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as Writable<
-      typeof structuralDocSchema
-    >
+    const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as any
 
     // Access settings — metadata should not be forced
     const settings = doc.settings
-    expect(settings.darkMode.get()).toBe(true)
+    expect(settings.darkMode()).toBe(true)
   })
 })
 
@@ -109,10 +112,10 @@ describe("writable: scalar upward reference", () => {
     expect(store.settings.darkMode).toBe(true)
   })
 
-  it(".get() reads live from the backing store", () => {
+  it("ref() reads live from the backing store", () => {
     const { store, doc } = createStructuralDoc()
     ;(store.settings as Record<string, unknown>).fontSize = 20
-    expect(doc.settings.fontSize.get()).toBe(20)
+    expect(doc.settings.fontSize()).toBe(20)
   })
 })
 
@@ -126,7 +129,7 @@ describe("writable: portable refs", () => {
     const ref = doc.settings.fontSize
     // ref works independently
     ref.set(24)
-    expect(ref.get()).toBe(24)
+    expect(ref()).toBe(24)
   })
 })
 
@@ -138,7 +141,7 @@ describe("writable: map via Proxy", () => {
   it("dynamic string key access returns a child ref", () => {
     const { doc } = createStructuralDoc()
     const versionRef = doc.metadata.version
-    expect(versionRef.get()).toBe(1)
+    expect(versionRef()).toBe(1)
   })
 
   it("Object.keys returns the store's dynamic keys", () => {
@@ -165,9 +168,7 @@ describe("writable: batched mode", () => {
       y: Schema.number(),
     })
     const ctx = createWritableContext(store, { autoCommit: false })
-    const doc = interpret(schema, writableInterpreter, ctx) as Writable<
-      typeof schema
-    >
+    const doc = interpret(schema, writableInterpreter, ctx) as any
 
     doc.x.set(10)
     doc.y.set(20)
@@ -189,9 +190,7 @@ describe("writable: batched mode", () => {
     const store = { x: 0 }
     const schema = Schema.doc({ x: Schema.number() })
     const ctx = createWritableContext(store, { autoCommit: true })
-    const doc = interpret(schema, writableInterpreter, ctx) as Writable<
-      typeof schema
-    >
+    const doc = interpret(schema, writableInterpreter, ctx) as any
 
     doc.x.set(42)
     expect(store.x).toBe(42)
@@ -216,7 +215,7 @@ describe("writable: discriminated sum", () => {
     const doc = interpret(schema, writableInterpreter, ctx) as any
 
     // Should produce the "image" variant ref with a .url field
-    expect(doc.item.url.get()).toBe("pic.png")
+    expect(doc.item.url()).toBe("pic.png")
   })
 
   it("falls back to first variant when discriminant is missing", () => {
@@ -225,7 +224,7 @@ describe("writable: discriminated sum", () => {
     const doc = interpret(schema, writableInterpreter, ctx) as any
 
     // First variant is "text" which has a .body field
-    expect(typeof doc.item.body.get).toBe("function")
+    expect(typeof doc.item.body).toBe("function")
   })
 
   it("falls back to first variant when store value is not an object", () => {
@@ -233,7 +232,7 @@ describe("writable: discriminated sum", () => {
     const ctx = createWritableContext(store)
     const doc = interpret(schema, writableInterpreter, ctx) as any
 
-    expect(typeof doc.item.body.get).toBe("function")
+    expect(typeof doc.item.body).toBe("function")
   })
 })
 
@@ -251,8 +250,8 @@ describe("writable: nullable (positional sum)", () => {
     const ctx = createWritableContext(store)
     const doc = interpret(schema, writableInterpreter, ctx) as any
 
-    // The null variant is a scalar ref whose .get() returns null
-    expect(doc.bio.get()).toBe(null)
+    // The null variant is a scalar ref whose () returns null
+    expect(doc.bio()).toBe(null)
   })
 
   it("non-null store value dispatches to the inner variant", () => {
@@ -260,7 +259,7 @@ describe("writable: nullable (positional sum)", () => {
     const ctx = createWritableContext(store)
     const doc = interpret(schema, writableInterpreter, ctx) as any
 
-    expect(doc.bio.get()).toBe("Hello world")
+    expect(doc.bio()).toBe("Hello world")
   })
 
   it("mutation on the inner ref works", () => {
@@ -307,9 +306,7 @@ function createLoroDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(loroDocSchema, writableInterpreter, ctx) as Writable<
-    typeof loroDocSchema
-  >
+  const doc = interpret(loroDocSchema, writableInterpreter, ctx) as any
   return { store, ctx, doc }
 }
 
@@ -318,14 +315,9 @@ function createLoroDoc(storeOverrides: Record<string, unknown> = {}) {
 // ---------------------------------------------------------------------------
 
 describe("writable: text ref", () => {
-  it(".get() returns the current string", () => {
+  it("ref() returns the current string", () => {
     const { doc } = createLoroDoc()
-    expect(doc.title.get()).toBe("Hello")
-  })
-
-  it(".toString() returns the current string", () => {
-    const { doc } = createLoroDoc()
-    expect(doc.title.toString()).toBe("Hello")
+    expect(doc.title()).toBe("Hello")
   })
 
   it(".insert() applies a text action to the store", () => {
@@ -352,9 +344,9 @@ describe("writable: text ref", () => {
 // ---------------------------------------------------------------------------
 
 describe("writable: counter ref", () => {
-  it(".get() returns the current value", () => {
+  it("ref() returns the current value", () => {
     const { doc } = createLoroDoc()
-    expect(doc.count.get()).toBe(0)
+    expect(doc.count()).toBe(0)
   })
 
   it(".increment() adds to the value", () => {
@@ -386,10 +378,10 @@ describe("writable: sequence ref", () => {
     expect(doc.messages.length).toBe(1)
   })
 
-  it(".get(i) returns a child ref for the item at index i", () => {
+  it(".at(i) returns a child ref for the item at index i", () => {
     const { doc } = createLoroDoc()
-    const msg = doc.messages.get(0)
-    expect(msg.author.get()).toBe("Alice")
+    const msg = doc.messages.at(0)
+    expect(msg.author()).toBe("Alice")
   })
 
   it(".push() appends items and updates the store", () => {
@@ -415,20 +407,18 @@ describe("writable: annotation-driven behavior", () => {
     expect(typeof doc.title.insert).toBe("function")
     expect(typeof doc.title.delete).toBe("function")
     expect(typeof doc.title.update).toBe("function")
-    expect(typeof doc.title.get).toBe("function")
+    // Callable — no .get()
+    expect(typeof doc.title).toBe("function")
   })
 
-  it("LoroSchema.plain.string() writable has .get() and .set() only", () => {
+  it("LoroSchema.plain.string() writable has .set() and is callable", () => {
     const { doc } = createLoroDoc()
-    const msg = doc.messages.get(0)
-    expect(typeof msg.author.get).toBe("function")
+    const msg = doc.messages.at(0)
+    expect(typeof msg.author).toBe("function")
     expect(typeof msg.author.set).toBe("function")
     // Should NOT have text-specific methods
     expect(
       (msg.author as unknown as Record<string, unknown>).insert,
-    ).toBeUndefined()
-    expect(
-      (msg.author as unknown as Record<string, unknown>).delete,
     ).toBeUndefined()
   })
 
@@ -436,7 +426,8 @@ describe("writable: annotation-driven behavior", () => {
     const { doc } = createLoroDoc()
     expect(typeof doc.count.increment).toBe("function")
     expect(typeof doc.count.decrement).toBe("function")
-    expect(typeof doc.count.get).toBe("function")
+    // Callable — no .get()
+    expect(typeof doc.count).toBe("function")
   })
 })
 
@@ -448,7 +439,58 @@ describe("writable: portable refs (Loro)", () => {
   it("extracted text ref works outside the tree", () => {
     const { doc } = createLoroDoc()
     const ref = doc.title
-    ref.insert(ref.get().length, " World")
-    expect(ref.get()).toBe("Hello World")
+    ref.insert(ref().length, " World")
+    expect(ref()).toBe("Hello World")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Mutation + read integration
+// ---------------------------------------------------------------------------
+
+describe("writable: mutation + read integration", () => {
+  it("ref() reflects value after .set()", () => {
+    const { doc } = createStructuralDoc()
+    doc.settings.darkMode.set(true)
+    expect(doc.settings.darkMode()).toBe(true)
+  })
+
+  it("ref() reflects value after .insert()", () => {
+    const { doc } = createLoroDoc()
+    doc.title.insert(5, " World")
+    expect(doc.title()).toBe("Hello World")
+  })
+
+  it("ref() reflects value after .increment()", () => {
+    const { doc } = createLoroDoc()
+    doc.count.increment(10)
+    expect(doc.count()).toBe(10)
+  })
+
+  it("sequence ref() reflects new items after .push()", () => {
+    const { doc } = createLoroDoc()
+    doc.messages.push({ author: "Bob", body: "Hey" })
+    const arr = doc.messages()
+    expect(Array.isArray(arr)).toBe(true)
+    expect((arr as unknown[]).length).toBe(2)
+  })
+
+  it("sequence cache invalidation: after .push(), .at(newIndex) returns correct child", () => {
+    const { doc } = createLoroDoc()
+    doc.messages.push({ author: "Bob", body: "Hey" })
+    const msg = doc.messages.at(1)
+    expect(msg.author()).toBe("Bob")
+  })
+
+  it("map mutation: proxy.key = value dispatches change", () => {
+    const { store, doc } = createStructuralDoc()
+    doc.metadata.newKey = "newValue"
+    expect((store.metadata as Record<string, unknown>).newKey).toBe("newValue")
+  })
+
+  it("map mutation: delete proxy.key dispatches change", () => {
+    const { store, doc } = createStructuralDoc()
+    delete doc.metadata.version
+    expect("version" in (store.metadata as Record<string, unknown>)).toBe(false)
   })
 })

@@ -4,7 +4,8 @@ import {
   LoroSchema,
   interpret,
   enrich,
-  writableInterpreter,
+  readableInterpreter,
+  withMutation,
   createWritableContext,
   withChangefeed,
   createChangefeedContext,
@@ -13,7 +14,9 @@ import {
   hasChangefeed,
   CHANGEFEED,
 } from "../index.js"
-import type { Writable, TextRef, CounterRef, DeepEvent } from "../index.js"
+import type { Readable, Writable, TextRef, CounterRef, DeepEvent } from "../index.js"
+
+const writableInterpreter = withMutation(readableInterpreter)
 
 // ---------------------------------------------------------------------------
 // Shared fixture
@@ -47,9 +50,10 @@ function createChangefeedChatDoc(storeOverrides: Record<string, unknown> = {}) {
   const wCtx = createWritableContext(store)
   const cfCtx = createChangefeedContext(wCtx)
   const enriched = enrich(writableInterpreter, withChangefeed)
-  const doc = interpret(chatDocSchema, enriched, cfCtx) as Writable<
+  const doc = interpret(chatDocSchema, enriched, cfCtx) as Readable<
     typeof chatDocSchema
-  >
+  > &
+    Writable<typeof chatDocSchema>
   return { store, cfCtx, doc }
 }
 
@@ -242,7 +246,8 @@ describe("withChangefeed: batched mode", () => {
     const wCtx = createWritableContext(store, { autoCommit: false })
     const cfCtx = createChangefeedContext(wCtx)
     const enriched = enrich(writableInterpreter, withChangefeed)
-    const doc = interpret(schema, enriched, cfCtx) as Writable<typeof schema>
+    const doc = interpret(schema, enriched, cfCtx) as Readable<typeof schema> &
+      Writable<typeof schema>
 
     // Subscribe to the root to see notifications
     const cf = getChangefeed(doc)
@@ -406,7 +411,8 @@ describe("subscribeDeep: batched mode", () => {
     const wCtx = createWritableContext(store, { autoCommit: false })
     const cfCtx = createChangefeedContext(wCtx)
     const enriched = enrich(writableInterpreter, withChangefeed)
-    const doc = interpret(schema, enriched, cfCtx) as Writable<typeof schema>
+    const doc = interpret(schema, enriched, cfCtx) as Readable<typeof schema> &
+      Writable<typeof schema>
 
     const events: DeepEvent[] = []
     subscribeDeep(cfCtx, [], (e) => events.push(e))
