@@ -106,7 +106,7 @@ export type {
 } from "./interpret.js"
 
 // Guards — shared type-narrowing utilities
-export { isNonNullObject } from "./guards.js"
+export { isNonNullObject, isPropertyHost } from "./guards.js"
 
 // Store — shared utilities for reading/writing plain JS object stores
 export {

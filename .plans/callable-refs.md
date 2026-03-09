@@ -1,5 +1,7 @@
 # Callable Refs
 
+> **⚠️ Superseded.** This plan has been replaced by [`readable-interpreter.md`](./readable-interpreter.md), which inverts the architecture: reading is the host (not writing), mutation is composed on top via `withMutation`, and function-shaped refs are produced from the start (no wrapping combinator). Phase 1 (guard updates) is preserved and complete. All other phases are superseded.
+
 ## Background
 
 The `packages/schema` writable interpreter produces ref objects at each schema node: `ScalarRef<T>`, `TextRef`, `CounterRef`, `SequenceRef<T>`, plus plain objects for products and Proxies for maps. Reading the current value requires `.get()` on leaf refs — a pragmatic compromise inherited from `@loro-extended/change`, where direct value access was abandoned because refs need to carry both a getter and mutation methods. (Note: `@loro-extended/change` is production code and is not in scope for changes here.)
@@ -62,19 +64,19 @@ The current ref API has three overlapping read mechanisms (`.get()`, `[CHANGEFEE
 
 ## Phases
 
-### Phase 1: Update guards to accept functions 🔴
+### Phase 1: Update guards to accept functions ✅
 
 The `isNonNullObject` guard is used by `enrich`, `withChangefeed`, `plainInterpreter`, `validateInterpreter`, `store.ts`, and `zero.ts`. Currently it checks `typeof value === "object"`, which excludes functions. Since callable refs are function objects, the guard must also accept functions in the specific places where "can I attach properties / iterate keys?" is the intent. Separately, `hasChangefeed` in `changefeed.ts` has its own inline `typeof value === "object"` check that would also reject function-object refs.
 
 **Tasks:**
 
-- Add a new `isPropertyHost(value): value is object` guard in `guards.ts` that accepts both objects and functions 🔴
-- Replace `isNonNullObject` with `isPropertyHost` in `enrich` (`combinators.ts`) 🔴
-- Replace `isNonNullObject` with `isPropertyHost` in `withChangefeed` decorator (`with-changefeed.ts`) 🔴
-- Update `hasChangefeed` in `changefeed.ts` to accept functions: change `typeof value === "object"` to `(typeof value === "object" || typeof value === "function")` 🔴
-- Keep `isNonNullObject` unchanged for callers where "is this a plain JS object?" is the correct semantic (store reads in `store.ts`, validation in `validate.ts`, zero overlay in `zero.ts`, plain interpreter, writable sum dispatch) 🔴
-- Add tests: `isPropertyHost` returns `true` for functions, objects, arrays; `false` for primitives and null 🔴
-- Add test: `hasChangefeed` returns `true` for a function with `[CHANGEFEED]` attached 🔴
+- Add a new `isPropertyHost(value): value is object` guard in `guards.ts` that accepts both objects and functions ✅
+- Replace `isNonNullObject` with `isPropertyHost` in `enrich` (`combinators.ts`) ✅
+- Replace `isNonNullObject` with `isPropertyHost` in `withChangefeed` decorator (`with-changefeed.ts`) ✅
+- Update `hasChangefeed` in `changefeed.ts` to accept functions: change `typeof value === "object"` to `(typeof value === "object" || typeof value === "function")` ✅
+- Keep `isNonNullObject` unchanged for callers where "is this a plain JS object?" is the correct semantic (store reads in `store.ts`, validation in `validate.ts`, zero overlay in `zero.ts`, plain interpreter, writable sum dispatch) ✅
+- Add tests: `isPropertyHost` returns `true` for functions, objects, arrays; `false` for primitives and null ✅
+- Add test: `hasChangefeed` returns `true` for a function with `[CHANGEFEED]` attached ✅
 
 ### Phase 2: `callable()` combinator 🔴
 

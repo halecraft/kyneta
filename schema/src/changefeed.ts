@@ -110,7 +110,7 @@ export function hasChangefeed<S = unknown, A extends ChangeBase = ChangeBase>(
   return (
     value !== null &&
     value !== undefined &&
-    typeof value === "object" &&
+    (typeof value === "object" || typeof value === "function") &&
     CHANGEFEED in (value as object)
   )
 }
