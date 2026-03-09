@@ -293,6 +293,17 @@ export class Relation {
     return count;
   }
 
+  /**
+   * Count of all stored entries (including negative weights).
+   *
+   * Unlike `size` which counts only weight > 0 entries, this returns
+   * the total number of entries in the internal map. Used for delta
+   * databases where negative weights represent retractions.
+   */
+  get allEntryCount(): number {
+    return this._map.size;
+  }
+
   /** All tuples with weight > 0, in insertion order. */
   tuples(): readonly FactTuple[] {
     const result: FactTuple[] = [];
@@ -311,6 +322,21 @@ export class Relation {
       if (entry.weight > 0) {
         result.push({ tuple: entry.tuple, weight: entry.weight });
       }
+    }
+    return result;
+  }
+
+  /**
+   * All entries (including negative weights) as { tuple, weight } pairs.
+   *
+   * Unlike `weightedTuples()` which filters to weight > 0, this returns
+   * every stored entry. Used for delta databases where negative weights
+   * represent retractions.
+   */
+  allWeightedTuples(): readonly { readonly tuple: FactTuple; readonly weight: number }[] {
+    const result: { tuple: FactTuple; weight: number }[] = [];
+    for (const entry of this._map.values()) {
+      result.push({ tuple: entry.tuple, weight: entry.weight });
     }
     return result;
   }
@@ -510,15 +536,21 @@ export class Database {
     return count;
   }
 
-  /** Create a deep clone of this database. */
+  /**
+   * Create a deep clone of this database.
+   *
+   * Preserves all weights faithfully (including weight ≤ 0 entries)
+   * by delegating to Relation.clone() which copies the internal map
+   * directly. Previously this iterated tuples() (weight > 0 only) and
+   * called add() (weight = 1), silently flattening weights — a footgun
+   * for any caller that snapshots mid-evaluation.
+   *
+   * See Plan 006.1, task 2.0.
+   */
   clone(): Database {
     const result = new Database();
     for (const pred of this.predicates()) {
-      const srcRel = this.getRelation(pred);
-      const dstRel = result.relation(pred);
-      for (const tuple of srcRel.tuples()) {
-        dstRel.add(tuple);
-      }
+      result._relations.set(pred, this.getRelation(pred).clone());
     }
     return result;
   }

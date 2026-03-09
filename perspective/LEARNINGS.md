@@ -698,11 +698,74 @@ The pipeline composition root went from ~180 LOC (with `processConstraint` conta
 
 **Lesson**: When a composition root contains both DAG wiring and domain logic (resolution strategy, diffing), the domain logic should be pushed into a stage. The composition root should be pure wiring — connecting stages, routing deltas, nothing else.
 
+## Plan 006.1: Unified Weighted Evaluator
+
+### Four Semi-Naive Loops, Not Three — Duplication Compounds Silently
+
+The Plan 006.1 problem statement initially claimed "three places" of duplicated stratum-level logic. A thorough code audit revealed **four**: `evaluatePositiveStratum` and `evaluateStratumWithNegation` in `evaluate.ts` (batch), `evaluateMonotoneStratumIncremental` and `evaluateStratumDRed` in `incremental-evaluate.ts` (incremental), plus `fullRecompute` inside the `createIncrementalDatalogEvaluator` closure (rule-change recovery — itself a near-copy of the batch path). The fourth copy was hidden inside a closure, making it easy to miss during manual inventory.
+
+**Lesson**: When counting duplicated code for a refactor plan, grep for the *algorithm pattern* (e.g., the semi-naive while loop with `evaluateRuleSemiNaive` + `getPositiveAtomIndices`), not just the function names. Closures and inline helpers hide copies that a name-based search misses.
+
+### `Database`/`Relation` Public API Is Asymmetric — Positive-Only by Default
+
+`Relation.tuples()`, `weightedTuples()`, `has()`, and `size` all filter to weight > 0 entries. This is correct for accumulated databases where negative weights are transient (pruned by `distinct`). But when using `Database` as a **delta container** — where −1 entries represent retractions — these methods silently drop half the data.
+
+The fix: add `Relation.allWeightedTuples()` (returns all entries regardless of weight sign) and `Relation.allEntryCount` (counts all stored entries). Delta databases use these methods; accumulated databases continue using the weight > 0 filtered methods. The asymmetry is intentional — it's two different usage patterns for the same type — but it must be documented, because the default API does the wrong thing for deltas.
+
+**Lesson**: When repurposing a data structure for a second role (accumulated state → delta container), audit every public method for implicit assumptions about the first role. Methods that filter silently are more dangerous than methods that throw — at least a throw tells you something is wrong.
+
+### `Database.clone()` Was Silently Flattening Weights
+
+`Database.clone()` iterated `tuples()` (weight > 0 only) and called `add(tuple)` (weight = 1). A database with weight-3 entries would clone to weight-1. In practice, all converged databases have weight-1 entries post-`distinct`, so no test caught this. But any future use of `clone()` mid-evaluation (before `distinct` clamping) would silently corrupt state.
+
+The fix: delegate to `Relation.clone()` per predicate, which copies the internal `Map` directly (preserving all weights including ≤ 0 entries). One-line change, zero behavioral impact on existing code, removes a latent footgun.
+
+**Lesson**: "No test catches it" doesn't mean "it's fine." If a method's contract is "deep copy" but its implementation is "deep copy with silent data loss under conditions that don't currently occur," fix it now. The conditions will occur when you extend the system.
+
+### The `_inputDelta` Bug Was Real and Exactly as Described
+
+`evaluateMonotoneStratumIncremental` accepted an `_inputDelta` parameter but never used it. The initial pass evaluated all rules against the full `db` (both arguments to `evaluateRule` were `db`), making monotone stratum evaluation O(|DB|²) instead of O(|Δ|×|DB|). The underscore prefix was the code telling you it was unused — the evaluator fell back to full re-evaluation every step for monotone strata even when only a small delta arrived.
+
+The unified evaluator fixes this: `evaluatePositiveStratum` seeds semi-naive from `inputDelta` via `evaluateRuleSemiNaive`, matching each rule's positive atoms against the delta while other atoms match against the full db. Batch mode passes all ground facts as the input delta; incremental mode passes only the changed facts.
+
+**Lesson**: When a function parameter has an underscore prefix (`_inputDelta`), treat it as a bug report, not a style choice. Someone intended to use it, couldn't make it work, and left the parameter in place. The fix is often straightforward once the surrounding infrastructure supports it.
+
+### The Dirty Map Is Dual-Purpose Infrastructure — `distinct` + Delta Extraction
+
+The Plan 006.1 architecture identifies a single `Map<string, { fact, preWeight }>` that serves two roles:
+
+1. **Scoped `distinct`**: After each semi-naive iteration, clamp only dirty entries (weight > 1 → 1, weight < 0 → 0). O(|modified|) per iteration instead of O(|relation|).
+2. **Delta extraction**: After convergence, compare each entry's `preWeight` to the current weight. Zero-crossings (≤0 → >0 or >0 → ≤0) become the output delta.
+
+The key invariant: `preWeight` is captured on *first touch* and never overwritten. It represents the state before the current stratum evaluation began. Multiple mutations to the same fact during convergence are fine — the dirty map remembers only the starting point, and delta extraction only cares about the net effect.
+
+This eliminates both snapshot-and-diff (no pre-step clone of derived predicates) and per-fact provenance tracking (no derivation DAGs). The dirty map is O(|touched facts|) in memory and O(|touched facts|) in extraction time.
+
+**Lesson**: When you need both "what changed" (for delta output) and "what needs clamping" (for convergence), a single first-touch map serves both purposes. The first-touch-never-overwrite invariant is what makes it work — it decouples the tracking from the number of intermediate mutations.
+
+### Retraction Through Negation Strata Still Requires Wipe-and-Recompute
+
+The DBSP ideal is that Z-set weight arithmetic propagates retractions automatically — a −1 input produces −1 derivations, `distinct` clamps, and facts that lost all support reach weight 0. This works cleanly for positive strata. For negation strata, however, true weighted retraction propagation requires that the negation operator produce *new* +1 derivations when a previously-blocking fact drops to weight 0 (e.g., `not superseded(X)` succeeds for a new X when superseded(X) is retracted).
+
+The current implementation handles this pragmatically: when retractions are present, **all** affected strata (both positive and negation) use wipe-and-recompute. The dirty map captures pre-wipe weights, so delta extraction correctly produces −1 for retracted facts and +1 for newly derived facts. This is the same DRed pattern from Plan 006, but with dirty-map delta extraction instead of snapshot-and-diff — strictly less work.
+
+The retraction flag also propagates through strata: if stratum 0 produces −1 deltas, stratum 1 also uses wipe-and-recompute. This is conservative but correct. True incremental retraction through negation is deferred as an optimization.
+
+**Lesson**: The gap between "weights propagate automatically in theory" and "weights propagate automatically through negation" is significant. Negation inverts the signal: a retracted positive fact should produce a *new* negative fact, not just remove an existing one. Until the evaluator can derive new facts from absences, wipe-and-recompute remains the correct fallback.
+
+### Batch-as-Wrapper Validates the Incremental Core
+
+`evaluateUnified(rules, facts)` creates a fresh `createEvaluator(rules)`, converts all facts to a +1 ZSet, calls `step()`, and returns the database. This makes the batch path a thin wrapper over the incremental core — sharing 100% of the evaluation logic. The old batch evaluator in `evaluate.ts` continues to exist (for now) as the correctness oracle.
+
+The three-way oracle test validates: (1) old batch `evaluate()`, (2) unified single-step `createEvaluator + step(allFacts)`, and (3) unified one-at-a-time `createEvaluator + step(fact₁) + step(fact₂) + ...` all produce the same database. This is a stronger property than old-vs-new — it also validates that accumulated incremental state equals fresh single-step state.
+
+**Lesson**: When replacing a batch algorithm with an incremental one, keep the old implementation as an oracle and test three ways: old batch, new single-step (should equal batch), new multi-step (should equal both). The single-step test catches core algorithm bugs; the multi-step test catches state accumulation bugs. Both are necessary.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.
 
-2. ~~**What is the performance ceiling?**~~ **Resolved in Plan 006.** The incremental pipeline is now O(|Δ|) end-to-end for the common case (default rules via native solvers) and for the custom-rules case (via the incremental Datalog evaluator). The DRed wipe-and-recompute for negation strata is bounded by the number of slots/parents per step, not the total constraint count.
+2. ~~**What is the performance ceiling?**~~ **Resolved in Plan 006; refined in Plan 006.1.** The incremental pipeline is O(|Δ|) end-to-end for the common case (default rules via native solvers) and for the custom-rules case (via the incremental Datalog evaluator). Plan 006.1 replaced DRed's snapshot-and-diff with dirty-map delta extraction (O(|touched facts|) instead of O(|all derived facts|)). Wipe-and-recompute is still used when retractions are present, but the dirty map eliminates the pre-step snapshot clone and post-step full-database diff. The remaining optimization opportunity is true weighted retraction propagation through negation strata — currently deferred because wipe-and-recompute is bounded by the number of slots/parents per step.
 
 3. **Can cross-container constraints be made to work?** E.g., "if key X exists in Map A, then key Y must exist in Map B." This requires a solver that reasons across containers, which the current per-container solver architecture doesn't support.
 

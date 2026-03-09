@@ -268,35 +268,43 @@ interface RealityNode {
 
 ## Datalog Evaluator
 
-### Batch Implementation
+### Modules
 
-~1000 lines of TypeScript with zero external dependencies across 5 modules:
+~2500 lines of TypeScript with zero external dependencies across 7 modules:
 
 | Module | Purpose |
 |--------|---------|
-| `types.ts` | Atoms, terms (const, var, wildcard), rules, facts, `Relation`, `Database` |
-| `unify.ts` | Variable binding, substitution, term matching, guard evaluation |
+| `types.ts` | Atoms, terms (const, var, wildcard), rules, facts, weighted `Relation`, `Database` |
+| `unify.ts` | Variable binding, substitution (`{ bindings, weight }`), term matching, guard evaluation |
 | `stratify.ts` | Dependency graph, SCC detection, stratum ordering |
-| `evaluate.ts` | Bottom-up semi-naive fixed-point evaluation |
+| `evaluate.ts` | Per-rule evaluation core: `evaluateRule`, `evaluateRuleSemiNaive`, `groundHead`, body element dispatch |
+| `evaluator.ts` | Unified evaluator: `createEvaluator`, `evaluateStratumFromDelta`, dirty-map infrastructure, batch wrappers |
+| `incremental-evaluate.ts` | Legacy incremental evaluator (Plan 006; superseded by `evaluator.ts` in Plan 006.1, pending removal in Phase 3–4) |
 | `aggregate.ts` | min, max, count, sum over groups |
 
-`Relation` is backed by `Map<string, FactTuple>` — a single collection serving both O(1) dedup (`has`/`add`) and ordered iteration (`tuples()`). The `remove()` method (used only by the incremental evaluator's DRed phase) is O(1) via `Map.delete`. `Database` delegates to `Relation` per predicate, adding `removeFact()` for the same purpose. The batch evaluator never calls `remove` or `removeFact`.
+### Weighted Relations and Substitutions (Plan 006.1)
 
-### Incremental Implementation
+`Relation` is backed by `Map<string, { tuple: FactTuple, weight: number }>`. Each entry carries a Z-set weight: weight > 0 means "present," weight ≤ 0 means "absent" (pruned). Zero-weight entries are pruned eagerly. The public API is backward-compatible: `tuples()` returns weight > 0 tuples, `has()` checks weight > 0, `size` counts weight > 0 entries. `addWeighted(tuple, w)` sums weights. `weightedTuples()` returns `{ tuple, weight }` pairs for the positive-atom join path. `allWeightedTuples()` returns all entries including negative weights (for delta databases).
 
-`datalog/incremental-evaluate.ts` (~870 LOC) implements cross-time incremental Datalog evaluation following DBSP §4–5. It maintains a persistent `Database` across outer time steps — the same `Database` class the batch evaluator uses. The batch evaluator's per-rule functions (`evaluateRule`, `evaluateRuleSemiNaive`, etc.) are called directly with no adapters.
+`Substitution` is `{ bindings: ReadonlyMap<string, Value>, weight: number }`. Weight flows through evaluation: multiply on positive atom join (`sub.weight × tuple.weight`), preserve on negation/guard (boolean filter), reset to 1 on aggregation (group-by boundary), sum duplicates in `groundHead` (Z-set addition). In batch mode all weights are 1, so the weight infrastructure is invisible.
 
-**Two nested loops:**
-- **Outer (cross-time):** Each constraint insertion is one time step. Between steps, the accumulated `Database` persists.
-- **Inner (intra-time):** Within one step, semi-naive fixed-point iteration runs from the input delta.
+### Unified Evaluator (Plan 006.1)
 
-**Monotone strata** (no negation): Initial pass evaluates all rules against the full db, then semi-naive iterates from the initial delta. New derivations are merged into the accumulated db. No facts are ever removed.
+`datalog/evaluator.ts` (~1100 LOC) replaces four duplicated semi-naive loops (batch `evaluatePositiveStratum`/`evaluateStratumWithNegation`, incremental `evaluateMonotoneStratumIncremental`/`evaluateStratumDRed`, plus `fullRecompute`) with a single implementation.
 
-**Negation/aggregation strata** (DRed): Delete all derived facts for the stratum, then re-evaluate to a fixed point. This wipe-and-recompute approach is simpler than provenance tracking and efficient because negation strata are bounded by the number of slots/parents, not the total constraint count. Also used for monotone strata when the input delta contains retractions (weight −1).
+**Functional core — `evaluateStratumFromDelta`:** Given rules, a mutable database, and an input delta, run weighted semi-naive to convergence and return the output delta. Positive strata use semi-naive seeded from the input delta (the `_inputDelta` fix: O(|Δ|×|DB|) instead of the old O(|DB|²)). Negation strata use naive iteration. When retractions are present, both types use wipe-and-recompute with dirty-map delta extraction.
 
-**Resolution extraction:** Converts `ZSet<Fact>` of `winner`/`fugue_before` deltas to `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>`. Handles the winner replacement problem: when a winner changes, +1 and −1 entries for the same slotId would cancel under `zsetMap`. Instead, groups by slotId and applies replacement semantics (emit only +1 for changed winners).
+**Dirty map — dual-purpose infrastructure:** A single `Map<string, { fact, preWeight }>` keyed by `factKey` serves two roles:
+1. **Scoped `distinct`:** After each iteration, clamp only dirty entries (weight > 1 → 1, weight < 0 → 0). O(|modified|) per iteration, not O(|relation|).
+2. **Delta extraction:** After convergence, compare each entry's `preWeight` (captured on first touch, never overwritten) to the current weight. Zero-crossings (≤0 → >0 or >0 → ≤0) become the output delta with weight +1 or −1. No snapshot-and-diff needed.
 
-**Rule changes:** On `deltaRules`, restratifies and recomputes all derived facts from accumulated ground facts.
+**Imperative shell — `createEvaluator`:** Holds accumulated `Database`, rules, strata, and ground facts. `step(deltaFacts, deltaRules)` applies the delta, evaluates affected strata bottom-up, propagates stratum output deltas upward, and extracts resolution. The retraction flag propagates through strata: if stratum 0 produces −1 deltas, stratum 1 wipes-and-recomputes.
+
+**Batch as degenerate case:** `evaluateUnified(rules, facts)` creates a fresh evaluator, feeds all facts as +1 in a single step, and returns the database. The old batch `evaluate()` in `evaluate.ts` is preserved as the correctness oracle for three-way testing (old batch vs. new single-step vs. new multi-step).
+
+**Resolution extraction:** `winnerFactsToResolution` and `fuguePairFactsToResolution` read directly from the delta `Database` using `allWeightedTuples()`. No `ZSet<Fact>` intermediate or `groupByPredicate` splitting step needed — `Database` already groups facts by predicate. The winner replacement semantics (group by slotId, emit only +1 for changed winners) are preserved.
+
+**Rule changes:** On `deltaRules`, restratify, snapshot derived facts (scoped to union of old + new derived predicates), wipe and replay all strata, diff snapshots.
 
 ### Key Features
 
@@ -304,7 +312,8 @@ interface RealityNode {
 - **Aggregation**: `min`, `max`, `count`, `sum` — required for LWW (`max` by lamport)
 - **Guards**: Typed comparison operators (`eq`, `neq`, `lt`, `gt`, `lte`, `gte`) that filter substitutions without introducing predicate dependencies
 - **Wildcards**: `_` matches any value without binding — each occurrence independent
-- **Semi-naive evaluation**: Processes deltas rather than recomputing from scratch at each iteration
+- **Weighted semi-naive**: Substitutions carry Z-set weights through joins; `distinct` clamps weights per iteration; delta extraction via zero-crossing detection
+- **One evaluator**: `createEvaluator` subsumes both batch and incremental paths; no duplicated stratum-level logic
 
 ### Why TypeScript, Not WASM
 
@@ -347,9 +356,9 @@ Time travel is not a special mode. The solver is a pure function; the same `(S, 
 
 ---
 
-## Incremental Pipeline (Plan 005 complete, Plan 006 complete)
+## Incremental Pipeline (Plan 005 complete, Plan 006 complete, Plan 006.1 in progress)
 
-The batch `solve()` is O(|S|) per insertion. The incremental pipeline is O(|Δ|) end-to-end — all stages including evaluation are incremental. For the common case (default LWW/Fugue rules), native incremental solvers handle resolution in O(1) per slot. For custom rules, the incremental Datalog evaluator handles resolution with DRed bounded by slot/parent count per step.
+The batch `solve()` is O(|S|) per insertion. The incremental pipeline is O(|Δ|) end-to-end — all stages including evaluation are incremental. For the common case (default LWW/Fugue rules), native incremental solvers handle resolution in O(1) per slot. For custom rules, the unified evaluator handles resolution with dirty-map delta extraction. Wipe-and-recompute is used when retractions are present, bounded by slot/parent count per step; the dirty map eliminates the old pre-step snapshot clone and post-step full-database diff.
 
 ### Z-Sets
 
@@ -395,7 +404,7 @@ The pipeline composition root is pure wiring — ~70 LOC connecting stages and r
 
 ### Evaluation Stage (`incremental/evaluation.ts`)
 
-The evaluation stage is a **strategy wrapper**, not a simple DBSP operator. It delegates to either native incremental solvers (LWW + Fugue) or the incremental Datalog evaluator based on active rules. Its `step()` takes `(deltaFacts, deltaRules, getAccumulatedFacts, getActiveConstraints)` — the lazy getters are only called on strategy switches (bootstrapping the new strategy from accumulated facts).
+The evaluation stage is a **strategy wrapper**, not a simple DBSP operator. It delegates to either native incremental solvers (LWW + Fugue) or the Datalog evaluator based on active rules. Its `step()` takes `(deltaFacts, deltaRules, getAccumulatedFacts, getActiveConstraints)` — the lazy getters are only called on strategy switches (bootstrapping the new strategy from accumulated facts). Plan 006.1 Phase 3 will rewire this to use `createEvaluator` from the unified `evaluator.ts` instead of the legacy `createIncrementalDatalogEvaluator`.
 
 **Strategy switching:** When a `rule` constraint is added or retracted, the stage re-checks `selectResolutionStrategy`. If the strategy changes:
 1. The new strategy is bootstrapped from accumulated ground facts.
@@ -556,7 +565,8 @@ JavaScript's `number` is f64, which can only exactly represent integers up to 2^
 
 - **Real ed25519 signatures** — Phase 2 uses a stub that always returns valid
 - ~~**Incremental kernel pipeline**~~ (§9) — **Plan 005 complete.** All kernel stages are incremental, pipeline composition wired, 42 differential tests verify equivalence with batch.
-- ~~**Incremental Datalog evaluator**~~ (§9) — **Plan 006 complete.** Native incremental LWW/Fugue solvers for default rules (O(|Δ|)), incremental Datalog evaluator with DRed for custom rules, strategy switching between native and Datalog paths. The full pipeline is O(|Δ|) end-to-end. 1198 tests pass.
+- ~~**Incremental Datalog evaluator**~~ (§9) — **Plan 006 complete.** Native incremental LWW/Fugue solvers for default rules (O(|Δ|)), incremental Datalog evaluator with DRed for custom rules, strategy switching between native and Datalog paths. The full pipeline is O(|Δ|) end-to-end.
+- **Unified weighted evaluator** (Plan 006.1) — **Phase 1–2 complete, Phases 3–4 in progress.** Weighted `Relation`/`Substitution`, dirty-map `distinct` + delta extraction, unified `createEvaluator`. Remaining: wire into pipeline (Phase 3), delete legacy `incremental-evaluate.ts` and dead code (Phase 4). True weighted retraction propagation through negation (avoiding wipe-and-recompute) is a future optimization.
 - **Settled/Working set partitioning** (§11) — Bounds solver cost to recent activity
 - **Compaction** (§12) — Requires settled set; tombstone compaction is especially tricky for sequences due to origin references
 - **Wire format** (§13) — Batching and compact encoding for sync

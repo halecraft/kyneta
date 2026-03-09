@@ -115,3 +115,13 @@ export {
   diffDatabases,
   groupByPredicate,
 } from './incremental-evaluate.js';
+
+// --- Unified Evaluator (Plan 006.1, Phase 2) ---
+export type { Evaluator, EvaluatorStepResult } from './evaluator.js';
+
+export {
+  createEvaluator,
+  evaluateUnified,
+  evaluatePositiveUnified,
+  evaluateStratumFromDelta,
+} from './evaluator.js';
