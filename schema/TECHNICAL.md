@@ -12,7 +12,7 @@ The spike collapses both layers into **one recursive type** with five structural
 
 ```
 SchemaF<A> =
-  | Scalar(kind)                    — leaf: string, number, boolean, null, bytes, any
+  | Scalar(kind, constraint?)       — leaf: string, number, boolean, null, bytes, any
   | Product({ k₁: A, k₂: A, … })  — fixed-key record (struct, doc)
   | Sequence(A)                     — ordered collection (list)
   | Map(A)                          — dynamic-key collection (record)
@@ -21,6 +21,26 @@ SchemaF<A> =
 ```
 
 Annotations attach backend semantics without changing the recursive structure. `LoroSchema.text()` is `annotated("text")`. `LoroSchema.counter()` is `annotated("counter")`. `LoroSchema.movableList(item)` is `annotated("movable", sequence(item))`. The annotation set is open — third-party backends define their own tags.
+
+### Two-Namespace Design: `Schema` + `LoroSchema`
+
+The constructor namespace is split into two layers:
+
+**`Schema`** — the backend-agnostic base grammar. Contains scalars (`string`, `number`, `boolean`, `null`, `undefined`, `bytes`, `any`), structural composites (`struct`, `list`, `record`, `union`, `discriminatedUnion`, `nullable`), the `doc` root constructor, and low-level grammar-native constructors (`scalar`, `product`, `sequence`, `map`, `sum`, `discriminatedSum`, `annotated`).
+
+**`LoroSchema`** — the Loro-specific developer API. Re-exports everything from `Schema` and adds Loro annotation constructors (`text`, `counter`, `movableList`, `tree`) plus a `plain` sub-namespace with composition-constrained constructors that enforce "no CRDTs inside value blobs" at the type level.
+
+```
+Schema                          LoroSchema
+├── string()  number()  ...     ├── (all of Schema)
+├── struct()  list()  record()  ├── text()  counter()
+├── union()  nullable()         ├── movableList()  tree()
+├── discriminatedUnion()        └── plain.string()  plain.struct()  ...
+├── doc()
+└── scalar()  product()  ...
+```
+
+A Loro developer imports only `LoroSchema` — one namespace, one import. A backend-agnostic library imports `Schema`. The interpreter dispatch is identical regardless of which constructor produced the node — interpreters dispatch on `_kind` and annotation tag strings, not constructor origin.
 
 ### Composition Constraints Are Backend-Specific
 
@@ -45,32 +65,110 @@ One recursive `Schema` type discriminated by `_kind`:
 | `sum` | `Schema.sum([a, b])` | Positional or discriminated union |
 | `annotated` | `Schema.annotated("text")` | Open tag + optional inner schema + optional metadata |
 
-Developer-facing sugar (`Schema.struct()`, `Schema.doc()`, `Schema.string()`, etc.) produces nodes in this grammar. Loro-specific annotation constructors (`LoroSchema.text()`, `LoroSchema.counter()`, `LoroSchema.movableList()`, `LoroSchema.tree()`) live in the `LoroSchema` namespace (`src/loro-schema.ts`).
+Developer-facing sugar produces nodes in this grammar:
 
-### Actions (`src/action.ts`)
+| Sugar | Produces | Notes |
+|---|---|---|
+| `Schema.string()` | `scalar("string")` | |
+| `Schema.number(1, 2, 3)` | `scalar("number", [1,2,3])` | Constrained — see below |
+| `Schema.struct(fields)` | `product(fields)` | |
+| `Schema.list(item)` | `sequence(item)` | |
+| `Schema.record(item)` | `map(item)` | |
+| `Schema.union(a, b)` | `sum([a, b])` | Positional union |
+| `Schema.discriminatedUnion(key, map)` | `sum(key, map)` | Keyed variants |
+| `Schema.nullable(inner)` | `sum([scalar("null"), inner])` | Sugar for `union(null, X)` |
+| `Schema.doc(fields)` | `annotated("doc", product(fields))` | Root document |
 
-Actions are **interpretation-level** — the schema says "sequence," the backend picks the action vocabulary. Built-in action types use the retain/insert/delete cursor encoding:
+Loro-specific annotation constructors live in `LoroSchema` (`src/loro-schema.ts`):
 
-- `TextAction` — ops over characters
-- `SequenceAction<T>` — ops over array items
-- `MapAction` — key-level set/delete
-- `ReplaceAction<T>` — wholesale scalar swap
-- `IncrementAction` — counter delta
-- `TreeAction` — create/delete/move tree nodes
+| Sugar | Produces |
+|---|---|
+| `LoroSchema.text()` | `annotated("text")` |
+| `LoroSchema.counter()` | `annotated("counter")` |
+| `LoroSchema.movableList(item)` | `annotated("movable", sequence(item))` |
+| `LoroSchema.tree(nodeData)` | `annotated("tree", nodeData)` |
 
-Actions are an open protocol (`ActionBase` with string `type` discriminant). Third-party backends extend with their own types.
+### Scalar Value-Domain Constraints
 
-### Feed (`src/feed.ts`)
+`ScalarSchema<K, V>` has an optional second type parameter `V` (defaults to `ScalarPlain<K>`) and an optional `constraint?: readonly V[]` field. When present, the constraint lists allowed values and narrows both the type level and runtime validation:
 
-A feed is a coalgebra: `{ head: S, subscribe(cb: (action: A) => void): () => void }`. One symbol (`FEED = Symbol.for("kinetic:feed")`) replaces the previous two-symbol `SNAPSHOT` + `REACTIVE` design. WeakMap-based caching preserves referential identity (`ref[FEED] === ref[FEED]`).
+```ts
+Schema.string("public", "private")
+// → ScalarSchema<"string", "public" | "private">
+// → Plain<...> = "public" | "private"
+// → Writable<...> = ScalarRef<"public" | "private">
+// → constraint: ["public", "private"]
+```
+
+The constraint field is read by:
+- **`zeroInterpreter` / `Zero.structural`** — uses `constraint[0]` as the default instead of the generic kind default
+- **`validateInterpreter`** — checks value is in the constraint array
+- **`describe()`** — renders `string("public" | "private")` instead of just `string`
+
+Unconstrained scalars (`Schema.string()` with no arguments) have no `constraint` field at runtime and `V` defaults to the full kind type (`string`). This preserves full backward compatibility.
+
+### Sum Types: Union, Discriminated Union, Nullable
+
+The grammar has one `sum` kind with two flavors:
+
+**Positional sum** — `PositionalSumSchema` with a `variants: Schema[]` array. Created by `Schema.union(a, b, ...)`. The validate interpreter tries each variant in order with error rollback.
+
+**Discriminated sum** — `DiscriminatedSumSchema` with a `discriminant: string` key and `variantMap: Record<string, Schema>`. Created by `Schema.discriminatedUnion(key, map)`. The validate interpreter reads the discriminant value and dispatches to the matching variant in O(1).
+
+**Nullable** — `Schema.nullable(inner)` is sugar for `Schema.union(Schema.null(), inner)`. It produces a positional sum with exactly two variants where the first is `scalar("null")`. The `describe()` function and validate interpreter detect this pattern and render/report it as `nullable<inner>` rather than a generic union.
+
+### Path Representation
+
+The catamorphism accumulates a typed `Path` (array of `PathSegment` discriminated unions) as it descends:
+
+```ts
+type PathSegment =
+  | { readonly type: "key"; readonly key: string }
+  | { readonly type: "index"; readonly index: number }
+```
+
+All interpreters use this single representation. The key-vs-index distinction enables:
+- Human-readable error paths: `messages[0].author` (not `messages.0.author`)
+- Correct store access for both objects and arrays
+
+The `readByPath(store, path)` utility (exported from `writable.ts`) accepts `unknown` as its first parameter so all interpreters — including `plainInterpreter` with its `unknown` context and `validateInterpreter` with its `ValidateContext` — can use it without casts.
+
+The `formatPath(path)` utility (exported from `validate.ts`) converts a typed `Path` to a human-readable string for error reporting. Empty path → `"root"`.
+
+### Changes (`src/change.ts`)
+
+Changes are **interpretation-level** — the schema says "sequence," the backend picks the change vocabulary. Built-in change types use the retain/insert/delete cursor encoding:
+
+- `TextChange` — ops over characters
+- `SequenceChange<T>` — ops over array items
+- `MapChange` — key-level set/delete
+- `ReplaceChange<T>` — wholesale scalar swap
+- `IncrementChange` — counter delta
+- `TreeChange` — create/delete/move tree nodes
+
+Changes are an open protocol (`ChangeBase` with string `type` discriminant). Third-party backends extend with their own types.
+
+### Changefeed (`src/changefeed.ts`)
+
+A changefeed is a coalgebra: `{ current: S, subscribe(cb: (change: C) => void): () => void }`. One symbol (`CHANGEFEED = Symbol.for("kinetic:changefeed")`) replaces the previous two-symbol `SNAPSHOT` + `REACTIVE` design. WeakMap-based caching preserves referential identity (`ref[CHANGEFEED] === ref[CHANGEFEED]`).
 
 ### Step (`src/step.ts`)
 
-Pure state transitions: `(State, Action) → State`. Dispatches on the action's `type` discriminant, not on the schema — step is action-driven and schema-agnostic. Enables optimistic UI, time travel, testing without a CRDT runtime, and read-your-writes in batch mode.
+Pure state transitions: `(State, Change) → State`. Dispatches on the change's `type` discriminant, not on the schema — step is change-driven and schema-agnostic. Enables optimistic UI, time travel, testing without a CRDT runtime, and read-your-writes in batch mode.
 
 ### Zero (`src/zero.ts`)
 
-Default values separated from the schema. `Zero.structural(schema)` derives mechanical defaults by walking the grammar. `Zero.overlay(primary, fallback, schema)` performs deep structural merge — products recurse per-key, leaves use `firstDefined`. This replaces the `_placeholder` mechanism on shapes.
+Default values separated from the schema. `Zero.structural(schema)` derives mechanical defaults by walking the grammar. When a scalar has a non-empty `constraint`, `constraint[0]` is used as the default instead of the generic kind default. `Zero.overlay(primary, fallback, schema)` performs deep structural merge — products recurse per-key, leaves use `firstDefined`. This replaces the `_placeholder` mechanism on shapes.
+
+### Describe (`src/describe.ts`)
+
+Human-readable indented tree view of a schema. Pure function over schema data — no interpreter machinery, no dependencies beyond the schema types.
+
+Features:
+- **Constrained scalars** render as `string("public" | "private")` instead of just `string`
+- **Nullable sugar** is recognized: `sum([scalar("null"), X])` renders as `nullable<X>` instead of `union`
+- **Inline rendering** for simple types inside angle brackets: `list<string>`, `record<number>`, `movable-list<string>`, `nullable<string>`
+- **Nested indentation** for complex types
 
 ### Interpret (`src/interpret.ts`)
 
@@ -79,18 +177,50 @@ The generic catamorphism. `Interpreter<Ctx, A>` has one case per structural kind
 - **Thunks** (`() => A`) for product fields — laziness preserved
 - **Closures** (`(index) => A` / `(key) => A`) for sequence/map children
 - **Inner thunks** for annotated nodes
+- **Sum variants** via `SumVariants<A>` — `byIndex(i)` for positional, `byKey(k)` for discriminated
 
 This single walker replaces the 10+ parallel `switch (shape._type)` dispatch sites in the current codebase.
 
 ### Interpreters (`src/interpreters/`)
 
-Three built-in interpreters validate the pattern:
+Four built-in interpreters plus a decorator:
 
 | Interpreter | Context | Result | Purpose |
 |---|---|---|---|
 | `plainInterpreter` | Plain JS object (store) | `unknown` | Read values at each path — equivalent to `toJSON()` / `value()` |
 | `zeroInterpreter` | `void` | `unknown` | Produce structural defaults — proven equivalent to `Zero.structural()` |
 | `writableInterpreter` | `WritableContext` | Ref-like objects | Mutation methods, namespace isolation, portable refs |
+| `validateInterpreter` | `ValidateContext` | `unknown` | Validate plain values against schema, collect errors |
+| `withChangefeed` (decorator) | `ChangefeedContext` | Enriched refs | Adds `[CHANGEFEED]` subscription to writable refs |
+
+### Validate Interpreter (`src/interpreters/validate.ts`)
+
+**Architecture: one collecting interpreter, two public wrappers.**
+
+The interpreter always collects errors into a mutable `SchemaValidationError[]` accumulator — it never throws. On mismatch, it pushes an error and returns `undefined` as a sentinel. On success, it returns the validated value. Two thin public wrappers:
+
+- **`validate<S>(schema, value): Plain<S>`** — runs the interpreter, throws the first error if any
+- **`tryValidate<S>(schema, value)`** — returns `{ ok: true; value: Plain<S> }` or `{ ok: false; errors: SchemaValidationError[] }`
+
+**`SchemaValidationError`** extends `Error` with three fields:
+- `path: string` — human-readable dot/bracket path (e.g. `"messages[0].author"`, `"root"` for empty path)
+- `expected: string` — what the schema expected (e.g. `"string"`, `"one of \"a\" | \"b\""`, `"nullable<string>"`)
+- `actual: unknown` — the actual value found
+
+**Per-kind validation logic:**
+
+| Kind | Validates | On mismatch |
+|---|---|---|
+| `scalar` | `typeof` check (or `=== null`, `instanceof Uint8Array` for null/bytes). Then constraint check if present. | Pushes error with expected kind or allowed values |
+| `product` | Non-null, non-array object | Forces all field thunks (collects all field errors, no short-circuit) |
+| `sequence` | `Array.isArray()` | Validates each item (collects all item errors) |
+| `map` | Non-null, non-array object | Validates each key's value |
+| `sum` (positional) | Tries each variant with error rollback (`errors.length = mark`) | Single "expected one of union variants" error (or "nullable<X>" for nullable sums) |
+| `sum` (discriminated) | Object → discriminant exists → discriminant is string → discriminant is known key → validate variant body | Clear error for each failure mode at the discriminant path |
+| `annotated` (leaf) | `text` → string, `counter` → number | Error with annotation-qualified expected (e.g. `"string (text)"`) |
+| `annotated` (structural) | Delegates to inner thunk | Inner errors propagate |
+
+**Positional sum rollback:** When trying variant `i`, snapshot `const mark = errors.length`. If the variant pushes new errors (`errors.length > mark`), reset `errors.length = mark` to discard them before trying the next variant. If all variants fail, push a single summary error. For nullable sums (detected by the same pattern as `describe()`), the error message is `"nullable<inner>"` rather than generic.
 
 ### Writable Interpreter (`src/interpreters/writable.ts`)
 
@@ -98,28 +228,42 @@ The most architecturally significant piece. Validates that writable refs can be 
 
 **Context design.** `WritableContext` is the *same object* at every tree level — it carries the store, dispatch function, and subscriber map. The "where am I" information comes from the catamorphism's `path` parameter, which narrows automatically as the walker descends. No context re-derivation is needed.
 
-**Product nodes** use `Object.defineProperty` with lazy getters (no Proxy). Each getter forces its thunk on first access, caches the result, and returns the cached value on subsequent accesses. `[FEED]` is attached as a non-enumerable symbol property — `Object.keys()` returns only schema keys.
+**Product nodes** use `Object.defineProperty` with lazy getters (no Proxy). Each getter forces its thunk on first access, caches the result, and returns the cached value on subsequent accesses. `[CHANGEFEED]` is attached as a non-enumerable symbol property — `Object.keys()` returns only schema keys.
 
 **Map nodes** use `Proxy` — the one case where Proxy is necessary because keys are not known from the schema. The Proxy intercepts string property access for data and delegates symbol access to the base object for protocol.
 
-**Scalar nodes** demonstrate the "upward reference" pattern: `.set(value)` dispatches a `MapAction` to the *parent* path. The scalar carries no container of its own — it reaches its parent through the accumulated context captured in closures.
+**Scalar nodes** demonstrate the "upward reference" pattern: `.set(value)` dispatches a `MapChange` to the *parent* path. The scalar carries no container of its own — it reaches its parent through the accumulated context captured in closures.
 
 **Annotated nodes** dispatch on tag: `"text"` produces a `TextRef` with `.insert()/.delete()/.update()`, `"counter"` produces a `CounterRef` with `.increment()/.decrement()`, `"doc"/"movable"/"tree"` delegate to the inner schema.
 
-**Action dispatch** supports auto-commit (immediate apply + notify) and batched mode (accumulate in `pending`, apply on `flush()`).
+**Change dispatch** supports auto-commit (immediate apply + notify) and batched mode (accumulate in `pending`, apply on `flush()`).
+
+### Type-Level Interpretation: `Plain<S>` and `Writable<S>`
+
+Two recursive conditional types map schema types to their corresponding value types:
+
+**`Plain<S>`** — the plain JavaScript/JSON type. `Plain<ScalarSchema<"string", "a" | "b">>` = `"a" | "b"`. `Plain<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ x: number }`. Used for `toJSON()` return types, validation result types, and serialization boundaries.
+
+**`Writable<S>`** — the ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>`. `Writable<AnnotatedSchema<"text">>` = `TextRef`. Used to type the result of `interpret(schema, writableInterpreter, ctx)`.
+
+Both types account for constrained scalars: when `ScalarSchema<K, V>` has a narrowed `V`, `Plain` yields `V` (not `ScalarPlain<K>`) and `Writable` yields `ScalarRef<V>`.
 
 ## Verified Properties
 
-The spike validates these properties via runtime smoke tests (formal test suite in Phase 6):
+The spike validates these properties via 386 tests:
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: `doc.title === doc.title` — lazy getters cache on first access.
-3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names. `FEED in doc` is true. `FEED` is non-enumerable.
+3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names. `CHANGEFEED in doc` is true. `CHANGEFEED` is non-enumerable.
 4. **Portable refs**: `const ref = doc.settings.fontSize; bump(ref)` — works outside the tree because context is captured in closures.
 5. **Zero equivalence**: `interpret(schema, zeroInterpreter, undefined)` produces output identical to `Zero.structural(schema)`.
 6. **Plain round-trip**: `interpret(schema, plainInterpreter, store)` produces the identical object tree.
-7. **Feed subscription**: `doc.title[FEED].subscribe(cb)` receives actions; unsubscribe stops notifications.
-8. **Batched mode**: `autoCommit: false` accumulates actions; `flush()` applies all at once.
+7. **Changefeed subscription**: `doc.title[CHANGEFEED].subscribe(cb)` receives changes; unsubscribe stops notifications.
+8. **Batched mode**: `autoCommit: false` accumulates changes; `flush()` applies all at once.
+9. **Constrained scalar defaults**: `Zero.structural(Schema.string("a", "b"))` returns `"a"` (first constraint value).
+10. **Validation collects all errors**: `tryValidate` on a value with N type mismatches returns N errors (no short-circuit).
+11. **Positional sum rollback**: failed variant errors are discarded; successful variant produces zero spurious errors.
+12. **Type narrowing**: `validate(schema, value)` return type is `Plain<typeof schema>` — verified via `expectTypeOf`.
 
 ## File Map
 
@@ -128,18 +272,36 @@ packages/schema/
 ├── theory/
 │   └── interpreter-algebra.md   # Full theory document
 ├── src/
-│   ├── schema.ts                # Unified recursive type + constructors
-│   ├── action.ts                # ActionBase + built-in action types
-│   ├── feed.ts                  # FEED symbol, Feed/Feedable, WeakMap cache
-│   ├── step.ts                  # Pure (State, Action) → State transitions
+│   ├── schema.ts                # Unified recursive type + constructors + ScalarPlain
+│   ├── loro-schema.ts           # LoroSchema namespace (Loro annotations + plain)
+│   ├── change.ts                # ChangeBase + built-in change types
+│   ├── changefeed.ts            # CHANGEFEED symbol, Changefeed/HasChangefeed, WeakMap cache
+│   ├── step.ts                  # Pure (State, Change) → State transitions
 │   ├── zero.ts                  # Zero.structural, Zero.overlay
-│   ├── interpret.ts             # Interpreter interface + catamorphism
+│   ├── describe.ts              # Human-readable schema tree view
+│   ├── interpret.ts             # Interpreter interface + catamorphism + Path types
+│   ├── combinators.ts           # enrich, product, overlay, firstDefined
 │   ├── interpreters/
 │   │   ├── plain.ts             # Read from plain JS object
 │   │   ├── zero.ts              # Produce structural defaults
-│   │   └── writable.ts          # Ref-like objects with mutation methods
+│   │   ├── writable.ts          # Ref-like objects + Plain<S> + Writable<S>
+│   │   ├── with-changefeed.ts   # Changefeed decorator (observation layer)
+│   │   └── validate.ts          # Validate interpreter + validate/tryValidate
+│   ├── __tests__/
+│   │   ├── types.test.ts        # Type-level tests (expectTypeOf)
+│   │   ├── interpret.test.ts    # Catamorphism, constructors, LoroSchema
+│   │   ├── writable.test.ts     # Writable refs, actions, portable refs
+│   │   ├── with-changefeed.test.ts # Changefeed subscription, batched mode
+│   │   ├── zero.test.ts         # Zero.structural, Zero.overlay
+│   │   ├── describe.test.ts     # Schema tree view rendering
+│   │   ├── step.test.ts         # Pure state transitions
+│   │   └── validate.test.ts     # Validation: all kinds, errors, type narrowing
 │   └── index.ts                 # Barrel export
+├── example/
+│   ├── main.ts                  # Self-contained mini-app
+│   └── README.md                # Example documentation
 ├── package.json                 # No runtime deps
 ├── tsconfig.json
-└── tsup.config.ts
+├── tsup.config.ts
+└── TECHNICAL.md                 # This file
 ```

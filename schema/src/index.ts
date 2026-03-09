@@ -4,7 +4,12 @@
 // schema interpreter algebra spike.
 
 // Schema — unified recursive grammar (backend-agnostic)
-export { Schema, structuralKind, isAnnotated, unwrapAnnotation } from "./schema.js"
+export {
+  Schema,
+  structuralKind,
+  isAnnotated,
+  unwrapAnnotation,
+} from "./schema.js"
 // LoroSchema — Loro-specific annotations + composition constraints
 export { LoroSchema } from "./loro-schema.js"
 export { describe } from "./describe.js"
@@ -25,44 +30,52 @@ export type {
   ScalarPlain,
 } from "./schema.js"
 
-// Action types — the universal currency of change
+// Change types — the universal currency of change
 export type {
-  ActionBase,
-  Action,
-  BuiltinAction,
-  TextAction,
-  TextActionOp,
-  SequenceAction,
-  SequenceActionOp,
-  MapAction,
-  ReplaceAction,
-  TreeAction,
-  TreeActionOp,
-  IncrementAction,
-} from "./action.js"
+  ChangeBase,
+  Change,
+  BuiltinChange,
+  TextChange,
+  TextChangeOp,
+  SequenceChange,
+  SequenceChangeOp,
+  MapChange,
+  ReplaceChange,
+  TreeChange,
+  TreeChangeOp,
+  IncrementChange,
+} from "./change.js"
 
 export {
   // Type guards
-  isTextAction,
-  isSequenceAction,
-  isMapAction,
-  isReplaceAction,
-  isTreeAction,
-  isIncrementAction,
+  isTextChange,
+  isSequenceChange,
+  isMapChange,
+  isReplaceChange,
+  isTreeChange,
+  isIncrementChange,
   // Constructors
-  textAction,
-  sequenceAction,
-  mapAction,
-  replaceAction,
-  treeAction,
-  incrementAction,
-} from "./action.js"
+  textChange,
+  sequenceChange,
+  mapChange,
+  replaceChange,
+  treeChange,
+  incrementChange,
+} from "./change.js"
 
-// Feed — the unified reactive protocol
-export { FEED, getOrCreateFeed, isFeedable, staticFeed } from "./feed.js"
-export type { Feed, Feedable } from "./feed.js"
+// Changefeed — the unified reactive protocol
+export {
+  CHANGEFEED,
+  getOrCreateChangefeed,
+  hasChangefeed,
+  staticChangefeed,
+} from "./changefeed.js"
+export type {
+  Changefeed,
+  HasChangefeed,
+} from "./changefeed.js"
 
-// step — pure state transitions: (State, Action) → State
+// Step — pure state transitions: (State, Change) → State
 export {
   step,
   stepText,
@@ -77,7 +90,12 @@ export { Zero, scalarDefault } from "./zero.js"
 
 // interpret — the generic catamorphism over the schema functor
 export { interpret, createInterpreter } from "./interpret.js"
-export type { Interpreter, Path, PathSegment, SumVariants } from "./interpret.js"
+export type {
+  Interpreter,
+  Path,
+  PathSegment,
+  SumVariants,
+} from "./interpret.js"
 
 // Built-in interpreters
 export { plainInterpreter } from "./interpreters/plain.js"
@@ -90,7 +108,7 @@ export {
 export type {
   WritableContext,
   WritableOptions,
-  PendingAction,
+  PendingChange,
   Store,
   ScalarRef,
   TextRef,
@@ -113,9 +131,22 @@ export {
 } from "./interpreters/validate.js"
 export type { ValidateContext } from "./interpreters/validate.js"
 
-// Feed decorator — observation layer via enrich(writableInterpreter, withFeed)
-export { withFeed, createFeedableContext, feedableFlush } from "./interpreters/with-feed.js"
-export type { FeedableContext } from "./interpreters/with-feed.js"
+// Changefeed decorator — observation layer via enrich(writableInterpreter, withChangefeed)
+export {
+  withChangefeed,
+  createChangefeedContext,
+  changefeedFlush,
+} from "./interpreters/with-changefeed.js"
+export type { ChangefeedContext } from "./interpreters/with-changefeed.js"
+
+// Deprecated aliases (backward compat) — prefer the new names above
+export {
+  withChangefeed as withFeed,
+  createChangefeedContext as createFeedableContext,
+  changefeedFlush as feedableFlush,
+} from "./interpreters/with-changefeed.js"
+/** @deprecated Use `ChangefeedContext` */
+export type { ChangefeedContext as FeedableContext } from "./interpreters/with-changefeed.js"
 
 // Interpreter composition combinators
 export { enrich, product, overlay, firstDefined } from "./combinators.js"

@@ -21,20 +21,23 @@ import {
   writableInterpreter,
   createWritableContext,
   enrich,
-  withFeed,
-  createFeedableContext,
-  feedableFlush,
-  FEED,
-  isFeedable,
+  withChangefeed,
+  createChangefeedContext,
+  changefeedFlush,
+  CHANGEFEED,
+  hasChangefeed,
+  validate,
+  tryValidate,
+  SchemaValidationError,
 } from "../src/index.js"
 
 import type {
   Writable,
   Plain,
   WritableContext,
-  FeedableContext,
-  ActionBase,
-  Feed,
+  ChangefeedContext,
+  ChangeBase,
+  Changefeed,
   TextRef,
   CounterRef,
   ScalarRef,
@@ -65,7 +68,7 @@ const DOC_INTERNALS = Symbol("doc-internals")
 type DocInternals = {
   schema: AnnotatedSchema<"doc", ProductSchema>
   store: Store
-  fCtx: FeedableContext
+  cfCtx: ChangefeedContext
 }
 
 function getInternals(doc: object): DocInternals {
@@ -97,16 +100,16 @@ function createDoc<F extends Record<string, SchemaNode>>(
 
   // Wire up writable + feed in one shot
   const wCtx = createWritableContext(store)
-  const fCtx = createFeedableContext(wCtx)
-  const enriched = enrich(writableInterpreter, withFeed)
-  const surface = interpret(schema, enriched, fCtx) as object
+  const cfCtx = createChangefeedContext(wCtx)
+  const enriched = enrich(writableInterpreter, withChangefeed)
+  const surface = interpret(schema, enriched, cfCtx) as object
 
   // Attach toJSON via the plain interpreter
   const toJSON = () => interpret(schema, plainInterpreter, store)
 
   // Attach internal machinery (non-enumerable, hidden from Object.keys)
   Object.defineProperty(surface, DOC_INTERNALS, {
-    value: { schema, store, fCtx } satisfies DocInternals,
+    value: { schema, store, cfCtx } satisfies DocInternals,
     enumerable: false,
     configurable: false,
   })
@@ -138,9 +141,9 @@ function change<D extends object>(doc: D, fn: (draft: D) => void): D {
 
   // Create a batched context sharing the same store
   const batchWCtx = createWritableContext(store, { autoCommit: false })
-  const batchFCtx = createFeedableContext(batchWCtx)
-  const enriched = enrich(writableInterpreter, withFeed)
-  const draft = interpret(schema, enriched, batchFCtx) as D
+  const batchCfCtx = createChangefeedContext(batchWCtx)
+  const enriched = enrich(writableInterpreter, withChangefeed)
+  const draft = interpret(schema, enriched, batchCfCtx) as D
 
   // Execute the user's mutations (nothing hits the store yet)
   fn(draft)
@@ -148,30 +151,30 @@ function change<D extends object>(doc: D, fn: (draft: D) => void): D {
   // Flush: apply all actions to the store atomically.
   // The original doc's refs read live from the shared store,
   // so .get() etc. immediately reflect the new values.
-  feedableFlush(batchFCtx)
+  changefeedFlush(batchCfCtx)
 
   return doc
 }
 
 /**
- * Subscribe to changes on any feedable ref.
+ * Subscribe to changes on any ref with a changefeed.
  *
  * ```ts
- * subscribe(doc.title, action => console.log("title changed:", action))
+ * subscribe(doc.title, change => console.log("title changed:", change))
  * ```
  *
  * Returns an unsubscribe function.
  */
 function subscribe(
   ref: unknown,
-  callback: (action: ActionBase) => void,
+  callback: (change: ChangeBase) => void,
 ): () => void {
-  if (!isFeedable(ref)) {
+  if (!hasChangefeed(ref)) {
     throw new Error(
-      "subscribe() requires a feedable ref (created via createDoc)",
+      "subscribe() requires a changefeed ref (created via createDoc)",
     )
   }
-  return (ref as any)[FEED].subscribe(callback)
+  return (ref as any)[CHANGEFEED].subscribe(callback)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -335,7 +338,7 @@ change(doc, d => {
   d.name.update("Schema Algebra v3")
   d.stars.increment(100)
   d.settings.archived.set(true)
-  d.tasks.push({ title: "Ship it!", done: false, priority: 0 })
+  d.tasks.push({ title: "Ship it!", done: false, priority: 3 })
 })
 
 log(`change(doc, d => {`)
@@ -353,7 +356,7 @@ log(`doc.tasks.length → ${doc.tasks.length}`)
 
 section(7, "Subscribing to Changes")
 
-const actions: ActionBase[] = []
+const actions: ChangeBase[] = []
 const unsub = subscribe(doc.name, action => {
   actions.push(action)
 })
@@ -445,15 +448,81 @@ log(
 log(`"toJSON" in Object.keys(doc) → ${Object.keys(doc).includes("toJSON")}`)
 log(`typeof doc.toJSON → "${typeof doc.toJSON}"`)
 log("")
-log(`isFeedable(doc) → ${isFeedable(doc)}`)
-log(`isFeedable(doc.name) → ${isFeedable(doc.name)}`)
-log(`isFeedable(doc.stars) → ${isFeedable(doc.stars)}`)
-log(`isFeedable(doc.tasks) → ${isFeedable(doc.tasks)}`)
-log(`isFeedable(doc.settings) → ${isFeedable(doc.settings)}`)
+log(`isFeedable(doc) → ${hasChangefeed(doc)}`)
+log(`isFeedable(doc.name) → ${hasChangefeed(doc.name)}`)
+log(`isFeedable(doc.stars) → ${hasChangefeed(doc.stars)}`)
+log(`isFeedable(doc.tasks) → ${hasChangefeed(doc.tasks)}`)
+log(`isFeedable(doc.settings) → ${hasChangefeed(doc.settings)}`)
 
-// ─── 10. Final snapshot ─────────────────────────────────────────────────
+// ─── 10. Validation ─────────────────────────────────────────────────────
 
-section(10, "Final Snapshot")
+section(10, "Validation")
+
+log("validate() and tryValidate() check plain data against a schema.")
+log("They use the same interpreter algebra — no separate validation logic.")
+log("")
+
+// 10a. Validate the current doc snapshot (should pass)
+// validate() returns Plain<S> — TypeScript infers the fully typed result.
+// We access typed fields to demonstrate the narrowing works at compile time.
+const snapshot = doc.toJSON()
+const validated = validate(ProjectSchema, snapshot)
+log(`validate(ProjectSchema, doc.toJSON()) → passes ✓`)
+log(`  validated.name = "${validated.name}"`)
+log(`  validated.stars = ${validated.stars}`)
+log(`  validated.settings.visibility = "${validated.settings.visibility}"`)
+log("")
+
+// 10b. Validate invalid data — caught errors with path and message
+const badData = {
+  name: "ok",
+  description: "ok",
+  stars: "not a number", // ← wrong type
+  tasks: [
+    { title: "task", done: true, priority: 99 }, // ← priority not in [1,2,3]
+  ],
+  settings: {
+    visibility: "unlisted", // ← not "public" or "private"
+    maxTasks: 10,
+    archived: false,
+  },
+  bio: null,
+  labels: {},
+}
+
+const result = tryValidate(ProjectSchema, badData)
+if (!result.ok) {
+  log(`tryValidate(ProjectSchema, badData) → ${result.errors.length} errors:`)
+  for (const err of result.errors) {
+    log(
+      `  ✗ ${err.path}: expected ${err.expected}, got ${describeValue(err.actual)}`,
+    )
+  }
+}
+log("")
+
+// 10c. validate() throws on invalid data
+try {
+  validate(ProjectSchema, { ...badData, bio: 42 })
+} catch (e) {
+  if (e instanceof SchemaValidationError) {
+    log(`validate() throws SchemaValidationError:`)
+    log(`  path: "${e.path}"`)
+    log(`  expected: "${e.expected}"`)
+    log(`  message: "${e.message}"`)
+  }
+}
+
+function describeValue(v: unknown): string {
+  if (v === null) return "null"
+  if (v === undefined) return "undefined"
+  if (typeof v === "string") return `"${v}"`
+  return String(v)
+}
+
+// ─── 11. Final snapshot ─────────────────────────────────────────────────
+
+section(11, "Final Snapshot")
 
 log("doc.toJSON() →")
 log(

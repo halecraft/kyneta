@@ -1,22 +1,18 @@
-// Feed decorator — attaches [FEED] to interpreted results via `enrich`.
+// Changefeed decorator — attaches [CHANGEFEED] to interpreted results via `enrich`.
 //
 // This module owns the observation concern (read + subscribe). It is
 // orthogonal to the writable interpreter which owns the mutation concern.
-// Compose them via `enrich(writableInterpreter, withFeed)`.
+// Compose them via `enrich(writableInterpreter, withChangefeed)`.
 //
 // See theory §5.4 (capability decomposition) and §7.2 (enrich combinator).
 
-import type { ActionBase } from "../action.js"
+import type { ChangeBase } from "../change.js"
 import type { Decorator } from "../combinators.js"
-import { FEED } from "../feed.js"
-import type { Feed } from "../feed.js"
+import { CHANGEFEED } from "../changefeed.js"
+import type { Changefeed } from "../changefeed.js"
 import type { Path } from "../interpret.js"
-import type {
-  WritableContext,
-  PendingAction,
-  Store,
-} from "./writable.js"
-import { readByPath, applyActionToStore } from "./writable.js"
+import type { WritableContext, PendingChange, Store } from "./writable.js"
+import { readByPath, applyChangeToStore } from "./writable.js"
 
 // ---------------------------------------------------------------------------
 // Subscriber infrastructure
@@ -29,14 +25,14 @@ import { readByPath, applyActionToStore } from "./writable.js"
  */
 function pathKey(path: Path): string {
   return path
-    .map((seg) => (seg.type === "key" ? seg.key : String(seg.index)))
+    .map(seg => (seg.type === "key" ? seg.key : String(seg.index)))
     .join("\0")
 }
 
 function notifySubscribers(
-  subscribers: Map<string, Set<(action: ActionBase) => void>>,
+  subscribers: Map<string, Set<(action: ChangeBase) => void>>,
   path: Path,
-  action: ActionBase,
+  action: ChangeBase,
 ): void {
   const key = pathKey(path)
   const subs = subscribers.get(key)
@@ -48,9 +44,9 @@ function notifySubscribers(
 }
 
 function subscribeToPath(
-  subscribers: Map<string, Set<(action: ActionBase) => void>>,
+  subscribers: Map<string, Set<(action: ChangeBase) => void>>,
   path: Path,
-  callback: (action: ActionBase) => void,
+  callback: (action: ChangeBase) => void,
 ): () => void {
   const key = pathKey(path)
   let subs = subscribers.get(key)
@@ -71,30 +67,30 @@ function subscribeToPath(
 // Feed creation helper
 // ---------------------------------------------------------------------------
 
-function createFeedForPath(
-  subscribers: Map<string, Set<(action: ActionBase) => void>>,
+function createChangefeedForPath(
+  subscribers: Map<string, Set<(action: ChangeBase) => void>>,
   path: Path,
   readHead: () => unknown,
-): Feed<unknown, ActionBase> {
+): Changefeed<unknown, ChangeBase> {
   return {
-    get head() {
+    get current() {
       return readHead()
     },
-    subscribe(callback: (action: ActionBase) => void): () => void {
+    subscribe(callback: (action: ChangeBase) => void): () => void {
       return subscribeToPath(subscribers, path, callback)
     },
   }
 }
 
 // ---------------------------------------------------------------------------
-// Attach [FEED] non-enumerably to any object
+// Attach [CHANGEFEED] non-enumerably to any object
 // ---------------------------------------------------------------------------
 
-function attachFeed(
+function attachChangefeed(
   target: object,
-  feed: Feed<unknown, ActionBase>,
+  feed: Changefeed<unknown, ChangeBase>,
 ): void {
-  Object.defineProperty(target, FEED, {
+  Object.defineProperty(target, CHANGEFEED, {
     value: feed,
     enumerable: false,
     configurable: true,
@@ -109,14 +105,14 @@ function attachFeed(
 /**
  * A context that extends `WritableContext` with subscriber notification.
  *
- * Created by `createFeedableContext`, which wraps an existing writable
- * context's `dispatch` to notify subscribers after each action is applied.
+ * Created by `createChangefeedContext`, which wraps an existing writable
+ * context's `dispatch` to notify subscribers after each change is applied.
  *
- * The `withFeed` decorator reads `subscribers` from this context to
- * create feed objects.
+ * The `withChangefeed` decorator reads `subscribers` from this context to
+ * create changefeed objects.
  */
-export interface FeedableContext extends WritableContext {
-  readonly subscribers: Map<string, Set<(action: ActionBase) => void>>
+export interface ChangefeedContext extends WritableContext {
+  readonly subscribers: Map<string, Set<(action: ChangeBase) => void>>
 }
 
 /**
@@ -131,24 +127,21 @@ export interface FeedableContext extends WritableContext {
  * ```ts
  * const store = { title: "", count: 0 }
  * const wCtx = createWritableContext(store)
- * const fCtx = createFeedableContext(wCtx)
- * const doc = interpret(schema, enrich(writableInterpreter, withFeed), fCtx)
+ * const cfCtx = createChangefeedContext(wCtx)
+ * const doc = interpret(schema, enrich(writableInterpreter, withChangefeed), cfCtx)
  * ```
  */
-export function createFeedableContext(
+export function createChangefeedContext(
   writableCtx: WritableContext,
-): FeedableContext {
-  const subscribers = new Map<string, Set<(action: ActionBase) => void>>()
+): ChangefeedContext {
+  const subscribers = new Map<string, Set<(change: ChangeBase) => void>>()
 
-  const wrappedDispatch = (
-    path: Path,
-    action: ActionBase,
-  ): void => {
+  const wrappedDispatch = (path: Path, change: ChangeBase): void => {
     // Delegate to the original dispatch (applies action to store)
-    writableCtx.dispatch(path, action)
+    writableCtx.dispatch(path, change)
     // Then notify subscribers (observation layer)
     if (writableCtx.autoCommit) {
-      notifySubscribers(subscribers, path, action)
+      notifySubscribers(subscribers, path, change)
     }
     // In batched mode, notification happens at flush time
   }
@@ -163,42 +156,40 @@ export function createFeedableContext(
 }
 
 /**
- * Flushes pending actions AND notifies subscribers for each one.
+ * Flushes pending changes AND notifies subscribers for each one.
  *
- * This is the feedable equivalent of the bare `flush()` from writable.ts.
- * It imports and calls the bare flush (which applies actions to the store),
- * then notifies subscribers for each flushed action.
+ * This is the changefeed equivalent of the bare `flush()` from writable.ts.
+ * It imports and calls the bare flush (which applies changes to the store),
+ * then notifies subscribers for each flushed change.
  */
-export function feedableFlush(ctx: FeedableContext): PendingAction[] {
+export function changefeedFlush(ctx: ChangefeedContext): PendingChange[] {
   // We need to apply + notify. The bare flush applies but doesn't notify.
   // We replicate the apply + notify loop here rather than importing flush,
   // because we need to notify after each action.
   const flushed = [...ctx.pending]
-  for (const { path, action } of flushed) {
+  for (const { path, change: action } of flushed) {
     // Apply to store via the ORIGINAL dispatch path.
     // We can't use ctx.dispatch because in batched mode it would
     // re-accumulate. Instead, read from store and apply directly.
-    applyActionToStore(ctx.store, path, action)
+    applyChangeToStore(ctx.store, path, action)
     notifySubscribers(ctx.subscribers, path, action)
   }
   ctx.pending.length = 0
   return flushed
 }
 
-
-
 // ---------------------------------------------------------------------------
-// withFeed decorator
+// withChangefeed decorator
 // ---------------------------------------------------------------------------
 
 /**
- * A decorator that attaches `[FEED]` to object results produced by any
- * interpreter. Used via `enrich(anyInterpreter, withFeed)`.
+ * A decorator that attaches `[CHANGEFEED]` to object results produced by
+ * any interpreter. Used via `enrich(anyInterpreter, withChangefeed)`.
  *
- * For each object result, attaches a non-enumerable `[FEED]` property
- * containing a `Feed` whose:
- * - `head` reads the current value from the store at the node's path
- * - `subscribe` registers a callback for actions dispatched to that path
+ * For each object result, attaches a non-enumerable `[CHANGEFEED]` property
+ * containing a `Changefeed` whose:
+ * - `current` reads the current value from the store at the node's path
+ * - `subscribe` registers a callback for changes dispatched to that path
  *
  * For primitive results (strings, numbers, etc.), this is a no-op —
  * you can't attach properties to primitives.
@@ -208,36 +199,30 @@ export function feedableFlush(ctx: FeedableContext): PendingAction[] {
  * `Object.assign` is a harmless no-op.
  *
  * ```ts
- * const enriched = enrich(writableInterpreter, withFeed)
- * const ctx = createFeedableContext(createWritableContext(store))
+ * const enriched = enrich(writableInterpreter, withChangefeed)
+ * const ctx = createChangefeedContext(createWritableContext(store))
  * const doc = interpret(schema, enriched, ctx)
- * // doc[FEED].head returns the current store value
- * // doc[FEED].subscribe(cb) receives actions
+ * // doc[CHANGEFEED].current returns the current store value
+ * // doc[CHANGEFEED].subscribe(cb) receives changes
  * ```
  */
-export const withFeed: Decorator<FeedableContext, unknown, {}> = (
+export const withChangefeed: Decorator<ChangefeedContext, unknown, {}> = (
   result: unknown,
-  ctx: FeedableContext,
+  ctx: ChangefeedContext,
   path: Path,
 ): {} => {
-  if (
-    result === null ||
-    result === undefined ||
-    typeof result !== "object"
-  ) {
+  if (result === null || result === undefined || typeof result !== "object") {
     // Can't attach symbol properties to primitives — no-op
     return {}
   }
 
-  const feed = createFeedForPath(
-    ctx.subscribers,
-    path,
-    () => readByPath(ctx.store, path),
+  const feed = createChangefeedForPath(ctx.subscribers, path, () =>
+    readByPath(ctx.store, path),
   )
 
   // Attach directly via Object.defineProperty (non-enumerable).
   // This bypasses Proxy set traps — goes through defineProperty trap.
-  attachFeed(result, feed)
+  attachChangefeed(result, feed)
 
   // Return empty — enrich's Object.assign({}) is a no-op.
   return {}

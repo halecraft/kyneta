@@ -10,13 +10,13 @@
 // 5. Scalar nodes — .get()/.set() with upward reference to parent
 // 6. Sequence nodes — .get(i)/.push()/.insert()/.delete()/.length
 // 7. Map nodes — Proxy for dynamic keys
-// 8. Action dispatch — auto-commit vs batched mode
+// 8. Change dispatch — auto-commit vs batched mode
 // 9. Portable refs — refs carry their context as closures
 //
-// Feed attachment ([FEED] symbol) is NOT part of this interpreter.
-// It is an orthogonal observation concern provided by the `withFeed`
-// decorator via `enrich(writableInterpreter, withFeed)`.
-// See `with-feed.ts` and theory §5.4 (capability decomposition).
+// Changefeed attachment ([CHANGEFEED] symbol) is NOT part of this interpreter.
+// It is an orthogonal observation concern provided by the `withChangefeed`
+// decorator via `enrich(writableInterpreter, withChangefeed)`.
+// See `with-changefeed.ts` and theory §5.4 (capability decomposition).
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type {
@@ -32,14 +32,14 @@ import type {
   PositionalSumSchema,
   DiscriminatedSumSchema,
 } from "../schema.js"
-import type { ActionBase } from "../action.js"
+import type { ChangeBase } from "../change.js"
 import {
-  textAction,
-  sequenceAction,
-  mapAction,
-  replaceAction,
-  incrementAction,
-} from "../action.js"
+  textChange,
+  sequenceChange,
+  mapChange,
+  replaceChange,
+  incrementChange,
+} from "../change.js"
 import { step } from "../step.js"
 
 // ---------------------------------------------------------------------------
@@ -81,11 +81,7 @@ export function readByPath(store: unknown, path: Path): unknown {
  * Writes a value into a nested plain object at the given Path.
  * Creates intermediate objects as needed.
  */
-export function writeByPath(
-  store: Store,
-  path: Path,
-  value: unknown,
-): void {
+export function writeByPath(store: Store, path: Path, value: unknown): void {
   if (path.length === 0) return
   let current: Record<string | number, unknown> = store
   for (let i = 0; i < path.length - 1; i++) {
@@ -102,14 +98,14 @@ export function writeByPath(
   current[segKey(path[path.length - 1]!)] = value
 }
 
-export function applyActionToStore(
+export function applyChangeToStore(
   store: Store,
   path: Path,
-  action: ActionBase,
+  change: ChangeBase,
 ): void {
   if (path.length === 0) {
-    // Root-level action — apply step to the store itself and merge back
-    const next = step(store as Record<string, unknown>, action)
+    // Root-level change — apply step to the store itself and merge back
+    const next = step(store as Record<string, unknown>, change)
     if (next !== null && next !== undefined && typeof next === "object") {
       // Merge result keys into the store (preserving the store reference)
       const nextObj = next as Record<string, unknown>
@@ -126,7 +122,7 @@ export function applyActionToStore(
     return
   }
   const current = readByPath(store, path)
-  const next = step(current, action)
+  const next = step(current, change)
   writeByPath(store, path, next)
 }
 
@@ -140,29 +136,29 @@ export function applyActionToStore(
  * context carries resources that are the *same* at every level:
  *
  * - `store` — the root mutable store object
- * - `dispatch` — sends an action to the store (applies via step)
+ * - `dispatch` — sends a change to the store (applies via step)
  * - `autoCommit` — if true, each mutation dispatches immediately;
- *   if false, actions accumulate in `pending` until flushed
- * - `pending` — accumulated actions in batched mode (shared by reference)
+ *   if false, changes accumulate in `pending` until flushed
+ * - `pending` — accumulated changes in batched mode (shared by reference)
  *
  * The "where am I" information comes from the catamorphism's `path`
  * parameter, not from the context. This means the context doesn't need
  * to be re-derived at each level — it's the same object throughout.
  *
  * **No observation infrastructure here.** Subscriber notification is
- * provided by the feed layer (`createFeedableContext`) which wraps
- * `dispatch` to add notification after each action is applied.
+ * provided by the changefeed layer (`createChangefeedContext`) which wraps
+ * `dispatch` to add notification after each change is applied.
  */
 export interface WritableContext {
   readonly store: Store
-  readonly dispatch: (path: Path, action: ActionBase) => void
+  readonly dispatch: (path: Path, change: ChangeBase) => void
   readonly autoCommit: boolean
-  readonly pending: PendingAction[]
+  readonly pending: PendingChange[]
 }
 
-export interface PendingAction {
+export interface PendingChange {
   readonly path: Path
-  readonly action: ActionBase
+  readonly change: ChangeBase
 }
 
 // ---------------------------------------------------------------------------
@@ -176,8 +172,8 @@ export interface WritableOptions {
 /**
  * Creates a root WritableContext for a given store.
  *
- * Dispatch only applies actions to the store — no subscriber
- * notification. For observation, wrap with `createFeedableContext`.
+ * Dispatch only applies changes to the store — no subscriber
+ * notification. For observation, wrap with `createChangefeedContext`.
  *
  * ```ts
  * const store = { title: "", count: 0, items: [] }
@@ -190,16 +186,13 @@ export function createWritableContext(
   options: WritableOptions = {},
 ): WritableContext {
   const autoCommit = options.autoCommit ?? true
-  const pending: PendingAction[] = []
+  const pending: PendingChange[] = []
 
-  const dispatch = (
-    path: Path,
-    action: ActionBase,
-  ): void => {
+  const dispatch = (path: Path, change: ChangeBase): void => {
     if (autoCommit) {
-      applyActionToStore(store, path, action)
+      applyChangeToStore(store, path, change)
     } else {
-      pending.push({ path, action })
+      pending.push({ path, change })
     }
   }
 
@@ -212,16 +205,16 @@ export function createWritableContext(
 }
 
 /**
- * Flushes all pending actions in a batched context.
- * Applies each action to the store but does NOT notify subscribers.
+ * Flushes all pending changes in a batched context.
+ * Applies each change to the store but does NOT notify subscribers.
  * For notification, use the feedable context's flush wrapper.
  *
- * Returns the list of actions that were flushed.
+ * Returns the list of changes that were flushed.
  */
-export function flush(ctx: WritableContext): PendingAction[] {
+export function flush(ctx: WritableContext): PendingChange[] {
   const flushed = [...ctx.pending]
-  for (const { path, action } of flushed) {
-    applyActionToStore(ctx.store, path, action)
+  for (const { path, change } of flushed) {
+    applyChangeToStore(ctx.store, path, change)
   }
   ctx.pending.length = 0
   return flushed
@@ -309,42 +302,44 @@ export type { ScalarPlain } from "../schema.js"
 export type Plain<S extends Schema> =
   // --- Annotated: dispatch on tag ---
   S extends AnnotatedSchema<infer Tag, infer Inner>
-    ? Tag extends "text" ? string
-    : Tag extends "counter" ? number
-    : Tag extends "doc"
-      ? Inner extends ProductSchema<infer F>
+    ? Tag extends "text"
+      ? string
+      : Tag extends "counter"
+        ? number
+        : Tag extends "doc"
+          ? Inner extends ProductSchema<infer F>
+            ? { [K in keyof F]: Plain<F[K]> }
+            : unknown
+          : Tag extends "movable"
+            ? Inner extends SequenceSchema<infer I>
+              ? Plain<I>[]
+              : unknown
+            : Tag extends "tree"
+              ? Inner extends Schema
+                ? Plain<Inner>
+                : unknown
+              : // Unknown annotation with inner — delegate
+                Inner extends Schema
+                ? Plain<Inner>
+                : unknown
+    : // --- Scalar ---
+      S extends ScalarSchema<infer _K, infer V>
+      ? V
+      : // --- Product ---
+        S extends ProductSchema<infer F>
         ? { [K in keyof F]: Plain<F[K]> }
-        : unknown
-    : Tag extends "movable"
-      ? Inner extends SequenceSchema<infer I>
-        ? Plain<I>[]
-        : unknown
-    : Tag extends "tree"
-      ? Inner extends Schema
-        ? Plain<Inner>
-        : unknown
-    // Unknown annotation with inner — delegate
-    : Inner extends Schema
-      ? Plain<Inner>
-      : unknown
-  // --- Scalar ---
-  : S extends ScalarSchema<infer _K, infer V>
-    ? V
-  // --- Product ---
-  : S extends ProductSchema<infer F>
-    ? { [K in keyof F]: Plain<F[K]> }
-  // --- Sequence ---
-  : S extends SequenceSchema<infer I>
-    ? Plain<I>[]
-  // --- Map ---
-  : S extends MapSchema<infer I>
-    ? { [key: string]: Plain<I> }
-  // --- Sum ---
-  : S extends PositionalSumSchema<infer V>
-    ? Plain<V[number]>
-  : S extends DiscriminatedSumSchema<infer D, infer M>
-    ? { [K in keyof M]: Plain<M[K]> & { [_ in D]: K } }[keyof M]
-  : unknown
+        : // --- Sequence ---
+          S extends SequenceSchema<infer I>
+          ? Plain<I>[]
+          : // --- Map ---
+            S extends MapSchema<infer I>
+            ? { [key: string]: Plain<I> }
+            : // --- Sum ---
+              S extends PositionalSumSchema<infer V>
+              ? Plain<V[number]>
+              : S extends DiscriminatedSumSchema<infer D, infer M>
+                ? { [K in keyof M]: Plain<M[K]> & { [_ in D]: K } }[keyof M]
+                : unknown
 
 /**
  * Computes the writable ref type for a given schema type.
@@ -369,51 +364,50 @@ export type Plain<S extends Schema> =
 export type Writable<S extends Schema> =
   // --- Annotated: dispatch on tag ---
   S extends AnnotatedSchema<infer Tag, infer Inner>
-    ? Tag extends "text" ? TextRef
-    : Tag extends "counter" ? CounterRef
-    : Tag extends "doc"
-      ? Inner extends ProductSchema<infer F>
+    ? Tag extends "text"
+      ? TextRef
+      : Tag extends "counter"
+        ? CounterRef
+        : Tag extends "doc"
+          ? Inner extends ProductSchema<infer F>
+            ? { readonly [K in keyof F]: Writable<F[K]> }
+            : unknown
+          : Tag extends "movable"
+            ? Inner extends SequenceSchema<infer I>
+              ? SequenceRef<Writable<I>>
+              : unknown
+            : Tag extends "tree"
+              ? Inner extends Schema
+                ? Writable<Inner>
+                : unknown
+              : // Unknown annotation with inner — delegate
+                Inner extends Schema
+                ? Writable<Inner>
+                : unknown
+    : // --- Scalar ---
+      S extends ScalarSchema<infer _K, infer V>
+      ? ScalarRef<V>
+      : // --- Product ---
+        S extends ProductSchema<infer F>
         ? { readonly [K in keyof F]: Writable<F[K]> }
-        : unknown
-    : Tag extends "movable"
-      ? Inner extends SequenceSchema<infer I>
-        ? SequenceRef<Writable<I>>
-        : unknown
-    : Tag extends "tree"
-      ? Inner extends Schema
-        ? Writable<Inner>
-        : unknown
-    // Unknown annotation with inner — delegate
-    : Inner extends Schema
-      ? Writable<Inner>
-      : unknown
-  // --- Scalar ---
-  : S extends ScalarSchema<infer _K, infer V>
-    ? ScalarRef<V>
-  // --- Product ---
-  : S extends ProductSchema<infer F>
-    ? { readonly [K in keyof F]: Writable<F[K]> }
-  // --- Sequence ---
-  : S extends SequenceSchema<infer I>
-    ? SequenceRef<Writable<I>>
-  // --- Map ---
-  : S extends MapSchema<infer I>
-    ? { readonly [key: string]: Writable<I> }
-  // --- Sum ---
-  : S extends PositionalSumSchema
-    ? unknown
-  : S extends DiscriminatedSumSchema
-    ? unknown
-  : unknown
+        : // --- Sequence ---
+          S extends SequenceSchema<infer I>
+          ? SequenceRef<Writable<I>>
+          : // --- Map ---
+            S extends MapSchema<infer I>
+            ? { readonly [key: string]: Writable<I> }
+            : // --- Sum ---
+              S extends PositionalSumSchema
+              ? unknown
+              : S extends DiscriminatedSumSchema
+                ? unknown
+                : unknown
 
 // ---------------------------------------------------------------------------
 // Specialized ref factories
 // ---------------------------------------------------------------------------
 
-function createTextRef(
-  ctx: WritableContext,
-  path: Path,
-): TextRef {
+function createTextRef(ctx: WritableContext, path: Path): TextRef {
   const ref: TextRef = {
     toString(): string {
       const v = readByPath(ctx.store, path)
@@ -427,7 +421,7 @@ function createTextRef(
     insert(index: number, content: string): void {
       ctx.dispatch(
         path,
-        textAction([
+        textChange([
           ...(index > 0 ? [{ retain: index }] : []),
           { insert: content },
         ]),
@@ -437,7 +431,7 @@ function createTextRef(
     delete(index: number, length: number): void {
       ctx.dispatch(
         path,
-        textAction([
+        textChange([
           ...(index > 0 ? [{ retain: index }] : []),
           { delete: length },
         ]),
@@ -448,7 +442,7 @@ function createTextRef(
       const current = ref.toString()
       ctx.dispatch(
         path,
-        textAction([
+        textChange([
           ...(current.length > 0 ? [{ delete: current.length }] : []),
           { insert: content },
         ]),
@@ -459,10 +453,7 @@ function createTextRef(
   return ref
 }
 
-function createCounterRef(
-  ctx: WritableContext,
-  path: Path,
-): CounterRef {
+function createCounterRef(ctx: WritableContext, path: Path): CounterRef {
   const ref: CounterRef = {
     get(): number {
       const v = readByPath(ctx.store, path)
@@ -470,26 +461,26 @@ function createCounterRef(
     },
 
     increment(n: number = 1): void {
-      ctx.dispatch(path, incrementAction(n))
+      ctx.dispatch(path, incrementChange(n))
     },
 
     decrement(n: number = 1): void {
-      ctx.dispatch(path, incrementAction(-n))
+      ctx.dispatch(path, incrementChange(-n))
     },
   }
 
   return ref
 }
 
-function createScalarRef(
-  ctx: WritableContext,
-  path: Path,
-): ScalarRef {
+function createScalarRef(ctx: WritableContext, path: Path): ScalarRef {
   const parentPath = path.slice(0, -1)
   const lastSeg = path[path.length - 1]
-  const key = lastSeg !== undefined
-    ? (lastSeg.type === "key" ? lastSeg.key : String(lastSeg.index))
-    : undefined
+  const key =
+    lastSeg !== undefined
+      ? lastSeg.type === "key"
+        ? lastSeg.key
+        : String(lastSeg.index)
+      : undefined
 
   const ref: ScalarRef = {
     get(): unknown {
@@ -497,11 +488,11 @@ function createScalarRef(
     },
     set(value: unknown): void {
       if (key !== undefined) {
-        // Upward reference: dispatch MapAction to parent
-        ctx.dispatch(parentPath, mapAction({ [key]: value }))
+        // Upward reference: dispatch MapChange to parent
+        ctx.dispatch(parentPath, mapChange({ [key]: value }))
       } else {
         // Root scalar — use replace
-        ctx.dispatch(path, replaceAction(value))
+        ctx.dispatch(path, replaceChange(value))
       }
     },
   }
@@ -517,13 +508,13 @@ function createScalarRef(
  * A writable interpreter that produces ref-like objects backed by a
  * plain JS object store. Produces the **mutation surface** only.
  *
- * For observation (feeds), use `enrich(writableInterpreter, withFeed)`
- * with a `FeedableContext`.
+ * For observation (changefeeds), use `enrich(writableInterpreter, withChangefeed)`
+ * with a `ChangefeedContext`.
  *
  * - Context accumulation (store path derived from catamorphism's Path)
  * - Object.defineProperty for products (no Proxy)
  * - Proxy for maps (dynamic keys)
- * - Action dispatch with auto-commit and batched modes
+ * - Change dispatch with auto-commit and batched modes
  * - Portable refs (carry context as closures)
  *
  * ```ts
@@ -537,13 +528,9 @@ function createScalarRef(
 export const writableInterpreter: Interpreter<WritableContext, unknown> = {
   // --- Scalar ----------------------------------------------------------------
   // Bare scalars (unannotated) get .get()/.set(). This is the "upward
-  // reference" case — the scalar dispatches a MapAction to its parent.
+  // reference" case — the scalar dispatches a MapChange to its parent.
 
-  scalar(
-    ctx: WritableContext,
-    path: Path,
-    _schema: ScalarSchema,
-  ): ScalarRef {
+  scalar(ctx: WritableContext, path: Path, _schema: ScalarSchema): ScalarRef {
     return createScalarRef(ctx, path)
   },
 
@@ -580,7 +567,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
   },
 
   // --- Sequence --------------------------------------------------------------
-  // .get(i) returns a child ref. .push/.insert/.delete dispatch actions.
+  // .get(i) returns a child ref. .push/.insert/.delete dispatch changes.
 
   sequence(
     ctx: WritableContext,
@@ -603,7 +590,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
         const length = Array.isArray(arr) ? arr.length : 0
         ctx.dispatch(
           path,
-          sequenceAction([{ retain: length }, { insert: items }]),
+          sequenceChange([{ retain: length }, { insert: items }]),
         )
         childCache.clear()
       },
@@ -611,7 +598,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
       insert(index: number, ...items: unknown[]): void {
         ctx.dispatch(
           path,
-          sequenceAction([
+          sequenceChange([
             ...(index > 0 ? [{ retain: index }] : []),
             { insert: items },
           ]),
@@ -622,7 +609,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
       delete(index: number, count: number = 1): void {
         ctx.dispatch(
           path,
-          sequenceAction([
+          sequenceChange([
             ...(index > 0 ? [{ retain: index }] : []),
             { delete: count },
           ]),
@@ -673,7 +660,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
     const childCache = new Map<string, unknown>()
 
     // Target object — symbol-keyed protocol will be attached here
-    // by decorators (e.g. withFeed) via Object.defineProperty.
+    // by decorators (e.g. withChangefeed) via Object.defineProperty.
     const target: Record<string | symbol, unknown> = {}
 
     return new Proxy(target, {
@@ -734,7 +721,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
         return undefined
       },
 
-      // Allow symbol definitions from decorators (e.g. withFeed attaching [FEED])
+      // Allow symbol definitions from decorators (e.g. withChangefeed attaching [CHANGEFEED])
       defineProperty(_target, prop, descriptor) {
         if (typeof prop === "symbol") {
           Object.defineProperty(target, prop, descriptor)
@@ -745,14 +732,14 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
 
       set(_target, prop, value) {
         if (typeof prop === "symbol") return false
-        ctx.dispatch(path, mapAction({ [String(prop)]: value }))
+        ctx.dispatch(path, mapChange({ [String(prop)]: value }))
         childCache.delete(prop)
         return true
       },
 
       deleteProperty(_target, prop) {
         if (typeof prop === "symbol") return false
-        ctx.dispatch(path, mapAction(undefined, [String(prop)]))
+        ctx.dispatch(path, mapChange(undefined, [String(prop)]))
         childCache.delete(String(prop))
         return true
       },

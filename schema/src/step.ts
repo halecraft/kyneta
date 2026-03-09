@@ -8,15 +8,15 @@
 // step is action-driven and schema-agnostic.
 
 import type {
-  ActionBase,
-  TextAction,
-  TextActionOp,
-  SequenceAction,
-  SequenceActionOp,
-  MapAction,
-  ReplaceAction,
-  IncrementAction,
-} from "./action.js"
+  ChangeBase,
+  TextChange,
+  TextChangeOp,
+  SequenceChange,
+  SequenceChangeOp,
+  MapChange,
+  ReplaceChange,
+  IncrementChange,
+} from "./change.js"
 
 // ---------------------------------------------------------------------------
 // stepText — apply retain/insert/delete ops to a string
@@ -33,7 +33,7 @@ import type {
  * Ops are cursor-based: the cursor starts at 0 and advances through
  * retains and deletes. Inserts add characters at the cursor position.
  */
-export function stepText(state: string, action: TextAction): string {
+export function stepText(state: string, action: TextChange): string {
   let cursor = 0
   let result = ""
 
@@ -74,7 +74,7 @@ export function stepText(state: string, action: TextAction): string {
  */
 export function stepSequence<T>(
   state: readonly T[],
-  action: SequenceAction<T>,
+  action: SequenceChange<T>,
 ): T[] {
   let cursor = 0
   const result: T[] = []
@@ -122,7 +122,7 @@ export function stepSequence<T>(
  */
 export function stepMap<T extends Record<string, unknown>>(
   state: T,
-  action: MapAction,
+  action: MapChange,
 ): T {
   const result = { ...state }
 
@@ -153,7 +153,7 @@ export function stepMap<T extends Record<string, unknown>>(
  * → 99
  * ```
  */
-export function stepReplace<T>(_state: T, action: ReplaceAction<T>): T {
+export function stepReplace<T>(_state: T, action: ReplaceChange<T>): T {
   return action.value
 }
 
@@ -169,7 +169,7 @@ export function stepReplace<T>(_state: T, action: ReplaceAction<T>): T {
  * → 15
  * ```
  */
-export function stepIncrement(state: number, action: IncrementAction): number {
+export function stepIncrement(state: number, action: IncrementChange): number {
   return state + action.amount
 }
 
@@ -202,30 +202,30 @@ export function stepIncrement(state: number, action: IncrementAction): number {
  * → 15
  * ```
  */
-export function step<S>(state: S, action: ActionBase): S {
+export function step<S>(state: S, action: ChangeBase): S {
   switch (action.type) {
     case "text":
-      return stepText(state as string, action as TextAction) as S
+      return stepText(state as string, action as TextChange) as S
 
     case "sequence":
       return stepSequence(
         state as unknown[],
-        action as SequenceAction,
+        action as SequenceChange,
       ) as S
 
     case "map":
       return stepMap(
         state as Record<string, unknown>,
-        action as MapAction,
+        action as MapChange,
       ) as S
 
     case "replace":
-      return stepReplace(state, action as ReplaceAction<S>)
+      return stepReplace(state, action as ReplaceChange<S>)
 
     case "increment":
       return stepIncrement(
         state as number,
-        action as IncrementAction,
+        action as IncrementChange,
       ) as S
 
     default:

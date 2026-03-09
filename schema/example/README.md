@@ -17,9 +17,9 @@ The example has two halves:
 
 A thin, high-level API built entirely from schema primitives. In production this would live in its own package (or in `@loro-extended/change`). Here it lives in the example to prove the algebra supports this developer experience.
 
-- **`createDoc(schema, seed?)`** — Creates a typed, writable, feedable document handle from a schema and optional seed values. Wires up the store, writable context, feed context, enrichment, interpretation, and `toJSON()` in a single call.
+- **`createDoc(schema, seed?)`** — Creates a typed, writable, observable document handle from a schema and optional seed values. Wires up the store, writable context, changefeed context, enrichment, interpretation, and `toJSON()` in a single call.
 - **`change(doc, fn)`** — Batches mutations into a single atomic flush. The callback receives a draft with the same typed API.
-- **`subscribe(ref, callback)`** — Subscribes to actions on any feedable ref. Returns an unsubscribe function.
+- **`subscribe(ref, callback)`** — Subscribes to changes on any changefeed ref. Returns an unsubscribe function.
 
 ### The App (~200 lines)
 
@@ -34,11 +34,12 @@ Uses the facade exactly like an application developer would:
 7. **Subscribing to Changes** — `subscribe(doc.name, action => ...)`, unsubscribe
 8. **Portable Refs** — Extract refs, pass to standalone generic functions
 9. **Referential Identity & Namespace Isolation** — `doc.name === doc.name`, `Object.keys(doc)` returns only schema keys
-10. **Final Snapshot** — `doc.toJSON()` returns the full plain object
+10. **Validation** — `validate(ProjectSchema, snapshot)` narrows to `Plain<typeof ProjectSchema>`, `tryValidate()` collects multiple errors with human-readable paths, `validate()` throws `SchemaValidationError` on first error
+11. **Final Snapshot** — `doc.toJSON()` returns the full plain object
 
 ## The Point
 
-The developer never touches `interpret()`, `step()`, `Zero.structural()`, `FEED`, `WritableContext`, or any of the algebra primitives. Those are implementation details of the facade. The developer sees:
+The developer never touches `interpret()`, `step()`, `Zero.structural()`, `CHANGEFEED`, `WritableContext`, or any of the algebra primitives. Those are implementation details of the facade. The developer sees:
 
 ```
 Schema.doc({ ... })    →  define structure
@@ -46,6 +47,7 @@ createDoc(schema)      →  get a live document
 doc.title.insert(...)  →  mutate naturally
 change(doc, fn)        →  batch mutations
 subscribe(ref, cb)     →  observe changes
+validate(schema, data) →  validate & narrow types
 doc.toJSON()           →  snapshot
 ```
 

@@ -8,8 +8,8 @@ import {
   plainInterpreter,
   zeroInterpreter,
   enrich,
-  FEED,
-  isFeedable,
+  CHANGEFEED,
+  hasChangefeed,
 } from "../index.js"
 import type { Interpreter, Path } from "../index.js"
 
@@ -257,17 +257,17 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
 })
 
 describe("interpret: enrich combinator", () => {
-  it("enrich adds [FEED] to every object result", () => {
-    const FEED_SYM = Symbol.for("kinetic:feed")
+  it("enrich adds [CHANGEFEED] to every object result", () => {
+    const CF_SYM = Symbol.for("kinetic:changefeed")
 
-    const withFeed = (result: unknown, _ctx: unknown, _path: Path) => {
+    const withCf = (result: unknown, _ctx: unknown, _path: Path) => {
       if (result === null || result === undefined || typeof result !== "object") {
         return {}
       }
-      if (FEED_SYM in (result as object)) return {}
+      if (CF_SYM in (result as object)) return {}
       return {
-        [FEED_SYM]: {
-          get head() {
+        [CF_SYM]: {
+          get current() {
             return result
           },
           subscribe: () => () => {},
@@ -275,7 +275,7 @@ describe("interpret: enrich combinator", () => {
       }
     }
 
-    const enriched = enrich(zeroInterpreter, withFeed)
+    const enriched = enrich(zeroInterpreter, withCf)
     const schema = Schema.doc({
       title: Schema.string(),
       settings: Schema.struct({
@@ -284,7 +284,7 @@ describe("interpret: enrich combinator", () => {
     })
 
     const result = interpret(schema, enriched, undefined)
-    expect(isFeedable(result)).toBe(true)
+    expect(hasChangefeed(result)).toBe(true)
   })
 
   it("enrich preserves product-level results (enrich is for object-producing interpreters)", () => {
@@ -292,12 +292,12 @@ describe("interpret: enrich combinator", () => {
     // writableInterpreter), not for interpreters that produce primitives
     // (like zeroInterpreter which returns "" for string). Verify at the
     // product level where it works correctly.
-    const FEED_SYM = Symbol.for("kinetic:feed")
+    const CF_SYM = Symbol.for("kinetic:changefeed")
     const withMarker = (result: unknown, _ctx: unknown, _path: Path) => {
       if (result === null || result === undefined || typeof result !== "object") {
         return {}
       }
-      return { [FEED_SYM]: { head: "marker" } }
+      return { [CF_SYM]: { current: "marker" } }
     }
 
     const enriched = enrich(zeroInterpreter, withMarker)
@@ -309,7 +309,7 @@ describe("interpret: enrich combinator", () => {
 
     const result = interpret(schema, enriched, undefined) as Record<string | symbol, unknown>
     // The product result has the marker attached
-    expect((result as any)[FEED_SYM]).toEqual({ head: "marker" })
+    expect((result as any)[CF_SYM]).toEqual({ current: "marker" })
     // And the base zero values are preserved at the product level
     const settings = result.settings as Record<string, unknown>
     expect(settings).toBeDefined()

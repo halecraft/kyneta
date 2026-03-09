@@ -177,16 +177,16 @@ This avoids building two separate interpreters or bolting a "collecting mode" on
   - `validate`: throws on first error (from the collected list).
   - Type narrowing: `validate(schema, value)` return type is `Plain<typeof schema>` — verified via `expectTypeOf`.
 
-### Phase 4: Example and documentation 🔴
+### Phase 4: Example and documentation 🟢
 
-- Task: Update `example/main.ts`'s `ProjectSchema` to exercise new features: at least one constrained scalar (e.g. `visibility: Schema.string<"public" | "private">("public", "private")`) and one nullable field (e.g. `Schema.nullable(Schema.string())`). Update all `Schema.plain.*` calls to the flattened namespace. 🔴
-- Task: Add a validation section to `example/main.ts` (section 11, before final snapshot). Demonstrate: 🔴
+- Task: Update `example/main.ts`'s `ProjectSchema` to exercise new features: at least one constrained scalar (e.g. `visibility: Schema.string<"public" | "private">("public", "private")`) and one nullable field (e.g. `Schema.nullable(Schema.string())`). Update all `Schema.plain.*` calls to the flattened namespace. 🟢 (Already done in Phase 2)
+- Task: Add a validation section to `example/main.ts` (section 10, before final snapshot). Demonstrate: 🟢
   - Validating the current doc snapshot (should pass).
   - Validating invalid data with caught errors showing path and message.
   - Type narrowing: `const data: Plain<typeof ProjectSchema> = validate(ProjectSchema, rawJSON)`.
   - Using `tryValidate` to collect multiple errors.
-- Task: Update `example/README.md` to document the validation section. 🔴
-- Task: Update `TECHNICAL.md`: document the flattened namespace and rationale, add validate interpreter to the interpreters table, document `SchemaValidationError`, document scalar constraints, document `nullable`/`union`/`discriminatedUnion`, note that backend-specific composition constraints belong in backend adapter layers (not the base grammar). 🔴
+- Task: Update `example/README.md` to document the validation section. 🟢
+- Task: Update `TECHNICAL.md`: document the flattened namespace and rationale, add validate interpreter to the interpreters table, document `SchemaValidationError`, document scalar constraints, document `nullable`/`union`/`discriminatedUnion`, note that backend-specific composition constraints belong in backend adapter layers (not the base grammar). 🟢
 
 ## Tests
 

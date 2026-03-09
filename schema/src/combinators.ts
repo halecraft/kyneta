@@ -47,17 +47,17 @@ export type Decorator<Ctx, A, P> = (
  *
  * This is more appropriate than `product` when the added protocol
  * depends on the base result. Today's `TypedRef` is conceptually
- * `enrich(writable, withFeed)`.
+ * `enrich(writable, withChangefeed)`.
  *
  * ```ts
- * const withFeed: Decorator<WritableContext, unknown, { [FEED]: Feed }> =
+ * const withChangefeed: Decorator<WritableContext, unknown, { [CHANGEFEED]: Changefeed }> =
  *   (result, ctx, path) => ({
- *     [FEED]: getOrCreateFeed(result as object, () => createFeed(ctx, path)),
+ *     [CHANGEFEED]: getOrCreateChangefeed(result as object, () => createChangefeed(ctx, path)),
  *   })
  *
- * const enriched = enrich(writableInterpreter, withFeed)
+ * const enriched = enrich(writableInterpreter, withChangefeed)
  * const doc = interpret(schema, enriched, ctx)
- * // doc.title has both writable methods AND [FEED]
+ * // doc.title has both writable methods AND [CHANGEFEED]
  * ```
  *
  * The merge strategy uses `Object.assign` — the decorator's properties

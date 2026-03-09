@@ -1,15 +1,15 @@
-// Action types — the universal currency of change.
+// Change types — the universal currency of change.
 //
-// An action describes a change to a schema node. The same action structure
+// A change describes a delta to a schema node. The same change structure
 // flows in both directions:
-//   - Going in (developer → backend): the action describes intent
-//   - Coming out (backend → observer): the action describes what happened
-//   - Pure computation (step): (State, Action) → State
+//   - Going in (developer → backend): the change describes intent
+//   - Coming out (backend → observer): the change describes what happened
+//   - Pure computation (step): (State, Change) → State
 //
-// Actions are an open protocol identified by a string discriminant.
+// Changes are an open protocol identified by a string discriminant.
 // They are interpretation-level — the schema says "sequence," the backend
-// picks the action vocabulary. Built-in actions cover the common cases.
-// Third-party backends extend ActionBase with their own types.
+// picks the change vocabulary. Built-in changes cover the common cases.
+// Third-party backends extend ChangeBase with their own types.
 
 // ---------------------------------------------------------------------------
 // Base protocol
@@ -20,7 +20,7 @@
  * use well-known strings ("text", "sequence", "map", "replace", "tree").
  * Third-party backends extend this with their own types.
  */
-export interface ActionBase {
+export interface ChangeBase {
   readonly type: string
 }
 
@@ -28,35 +28,35 @@ export interface ActionBase {
 // Text actions — cursor-based retain/insert/delete over characters
 // ---------------------------------------------------------------------------
 
-export type TextActionOp =
+export type TextChangeOp =
   | { readonly retain: number }
   | { readonly insert: string }
   | { readonly delete: number }
 
-export interface TextAction extends ActionBase {
+export interface TextChange extends ChangeBase {
   readonly type: "text"
-  readonly ops: readonly TextActionOp[]
+  readonly ops: readonly TextChangeOp[]
 }
 
 // ---------------------------------------------------------------------------
 // Sequence actions — cursor-based retain/insert/delete over items
 // ---------------------------------------------------------------------------
 
-export type SequenceActionOp<T = unknown> =
+export type SequenceChangeOp<T = unknown> =
   | { readonly retain: number }
   | { readonly insert: readonly T[] }
   | { readonly delete: number }
 
-export interface SequenceAction<T = unknown> extends ActionBase {
+export interface SequenceChange<T = unknown> extends ChangeBase {
   readonly type: "sequence"
-  readonly ops: readonly SequenceActionOp<T>[]
+  readonly ops: readonly SequenceChangeOp<T>[]
 }
 
 // ---------------------------------------------------------------------------
 // Map actions — key-level set/delete for products and maps
 // ---------------------------------------------------------------------------
 
-export interface MapAction extends ActionBase {
+export interface MapChange extends ChangeBase {
   readonly type: "map"
   readonly set?: Readonly<Record<string, unknown>>
   readonly delete?: readonly string[]
@@ -66,7 +66,7 @@ export interface MapAction extends ActionBase {
 // Scalar replacement — wholesale value swap
 // ---------------------------------------------------------------------------
 
-export interface ReplaceAction<T = unknown> extends ActionBase {
+export interface ReplaceChange<T = unknown> extends ChangeBase {
   readonly type: "replace"
   readonly value: T
 }
@@ -75,7 +75,7 @@ export interface ReplaceAction<T = unknown> extends ActionBase {
 // Tree actions — structural operations on hierarchical trees
 // ---------------------------------------------------------------------------
 
-export type TreeActionOp =
+export type TreeChangeOp =
   | { readonly action: "create"; readonly index: number }
   | { readonly action: "delete"; readonly index: number }
   | {
@@ -84,16 +84,16 @@ export type TreeActionOp =
       readonly toIndex: number
     }
 
-export interface TreeAction extends ActionBase {
+export interface TreeChange extends ChangeBase {
   readonly type: "tree"
-  readonly ops: readonly TreeActionOp[]
+  readonly ops: readonly TreeChangeOp[]
 }
 
 // ---------------------------------------------------------------------------
 // Counter actions — increment/decrement
 // ---------------------------------------------------------------------------
 
-export interface IncrementAction extends ActionBase {
+export interface IncrementChange extends ChangeBase {
   readonly type: "increment"
   readonly amount: number
 }
@@ -102,49 +102,49 @@ export interface IncrementAction extends ActionBase {
 // Union of all built-in action types
 // ---------------------------------------------------------------------------
 
-export type BuiltinAction =
-  | TextAction
-  | SequenceAction
-  | MapAction
-  | ReplaceAction
-  | TreeAction
-  | IncrementAction
+export type BuiltinChange =
+  | TextChange
+  | SequenceChange
+  | MapChange
+  | ReplaceChange
+  | TreeChange
+  | IncrementChange
 
 /**
  * Any action — built-in or third-party. Use this as a general constraint
  * when writing code that is generic over all possible actions.
  */
-export type Action = ActionBase
+export type Change = ChangeBase
 
 // ---------------------------------------------------------------------------
 // Type guards
 // ---------------------------------------------------------------------------
 
-export function isTextAction(action: ActionBase): action is TextAction {
+export function isTextChange(action: ChangeBase): action is TextChange {
   return action.type === "text"
 }
 
-export function isSequenceAction(
-  action: ActionBase,
-): action is SequenceAction {
+export function isSequenceChange(
+  action: ChangeBase,
+): action is SequenceChange {
   return action.type === "sequence"
 }
 
-export function isMapAction(action: ActionBase): action is MapAction {
+export function isMapChange(action: ChangeBase): action is MapChange {
   return action.type === "map"
 }
 
-export function isReplaceAction(action: ActionBase): action is ReplaceAction {
+export function isReplaceChange(action: ChangeBase): action is ReplaceChange {
   return action.type === "replace"
 }
 
-export function isTreeAction(action: ActionBase): action is TreeAction {
+export function isTreeChange(action: ChangeBase): action is TreeChange {
   return action.type === "tree"
 }
 
-export function isIncrementAction(
-  action: ActionBase,
-): action is IncrementAction {
+export function isIncrementChange(
+  action: ChangeBase,
+): action is IncrementChange {
   return action.type === "increment"
 }
 
@@ -152,31 +152,31 @@ export function isIncrementAction(
 // Action constructors — convenience factories
 // ---------------------------------------------------------------------------
 
-export function textAction(ops: readonly TextActionOp[]): TextAction {
+export function textChange(ops: readonly TextChangeOp[]): TextChange {
   return { type: "text", ops }
 }
 
-export function sequenceAction<T>(
-  ops: readonly SequenceActionOp<T>[],
-): SequenceAction<T> {
+export function sequenceChange<T>(
+  ops: readonly SequenceChangeOp<T>[],
+): SequenceChange<T> {
   return { type: "sequence", ops }
 }
 
-export function mapAction(
+export function mapChange(
   set?: Record<string, unknown>,
   del?: string[],
-): MapAction {
+): MapChange {
   return { type: "map", set, delete: del }
 }
 
-export function replaceAction<T>(value: T): ReplaceAction<T> {
+export function replaceChange<T>(value: T): ReplaceChange<T> {
   return { type: "replace", value }
 }
 
-export function treeAction(ops: readonly TreeActionOp[]): TreeAction {
+export function treeChange(ops: readonly TreeChangeOp[]): TreeChange {
   return { type: "tree", ops }
 }
 
-export function incrementAction(amount: number): IncrementAction {
+export function incrementChange(amount: number): IncrementChange {
   return { type: "increment", amount }
 }
