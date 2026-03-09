@@ -24,15 +24,15 @@ const chatDocSchema = Schema.doc({
   count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
-      author: Schema.plain.string(),
+      author: Schema.string(),
       body: Schema.text(),
     }),
   ),
   settings: Schema.struct({
-    darkMode: Schema.plain.boolean(),
-    fontSize: Schema.plain.number(),
+    darkMode: Schema.boolean(),
+    fontSize: Schema.number(),
   }),
-  metadata: Schema.record(Schema.plain.any()),
+  metadata: Schema.record(Schema.any()),
 })
 
 function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
@@ -293,8 +293,8 @@ describe("writable: batched mode", () => {
   it("actions accumulate in pending and do not apply until flush", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.doc({
-      x: Schema.plain.number(),
-      y: Schema.plain.number(),
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = createWritableContext(store, { autoCommit: false })
     const doc = interpret(schema, writableInterpreter, ctx) as Writable<
@@ -319,7 +319,7 @@ describe("writable: batched mode", () => {
 
   it("auto-commit mode applies immediately", () => {
     const store = { x: 0 }
-    const schema = Schema.doc({ x: Schema.plain.number() })
+    const schema = Schema.doc({ x: Schema.number() })
     const ctx = createWritableContext(store, { autoCommit: true })
     const doc = interpret(schema, writableInterpreter, ctx) as Writable<
       typeof schema
@@ -345,7 +345,7 @@ describe("writable: annotation-driven behavior", () => {
     expect(typeof doc.title.get).toBe("function")
   })
 
-  it("Schema.plain.string() writable has .get() and .set() only", () => {
+  it("Schema.string() writable has .get() and .set() only", () => {
     const { doc } = createChatDoc()
     const msg = doc.messages.get(0)
     expect(typeof msg.author.get).toBe("function")

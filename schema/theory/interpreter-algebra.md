@@ -55,7 +55,7 @@ this functor. A concrete schema like:
 ```
 Schema.doc({
   title: Schema.text(),
-  todos: Schema.list(Schema.plain.string()),
+  todos: Schema.list(Schema.string()),
 })
 ```
 

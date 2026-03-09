@@ -45,7 +45,7 @@ One recursive `Schema` type discriminated by `_kind`:
 | `sum` | `Schema.sum([a, b])` | Positional or discriminated union |
 | `annotated` | `Schema.annotated("text")` | Open tag + optional inner schema + optional metadata |
 
-Developer-facing sugar (`Schema.text()`, `Schema.struct()`, `Schema.doc()`, `Schema.plain.string()`, etc.) produces nodes in this grammar.
+Developer-facing sugar (`Schema.text()`, `Schema.struct()`, `Schema.doc()`, `Schema.string()`, etc.) produces nodes in this grammar.
 
 ### Actions (`src/action.ts`)
 

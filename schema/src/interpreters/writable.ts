@@ -293,13 +293,13 @@ export type ScalarPlain<K extends ScalarKind> =
  *   title: Schema.text(),
  *   count: Schema.counter(),
  *   items: Schema.list(Schema.struct({
- *     name: Schema.plain.string(),
- *     done: Schema.plain.boolean(),
+ *     name: Schema.string(),
+ *     done: Schema.boolean(),
  *   })),
  *   settings: Schema.struct({
- *     darkMode: Schema.plain.boolean(),
+ *     darkMode: Schema.boolean(),
  *   }),
- *   metadata: Schema.record(Schema.plain.any()),
+ *   metadata: Schema.record(Schema.any()),
  * })
  *
  * type Doc = Plain<typeof s>
@@ -364,7 +364,7 @@ export type Plain<S extends Schema> =
  *   title: Schema.text(),
  *   count: Schema.counter(),
  *   settings: Schema.struct({
- *     darkMode: Schema.plain.boolean(),
+ *     darkMode: Schema.boolean(),
  *   }),
  * })
  *

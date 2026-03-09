@@ -103,7 +103,7 @@ describe("Zero.structural", () => {
 
     it("movableList delegates to inner sequence → empty array", () => {
       expect(
-        Zero.structural(Schema.movableList(Schema.plain.string())),
+        Zero.structural(Schema.movableList(Schema.string())),
       ).toEqual([])
     })
 
@@ -125,16 +125,16 @@ describe("Zero.structural", () => {
         count: Schema.counter(),
         messages: Schema.list(
           Schema.struct({
-            author: Schema.plain.string(),
+            author: Schema.string(),
             body: Schema.text(),
           }),
         ),
         settings: Schema.struct({
-          darkMode: Schema.plain.boolean(),
-          fontSize: Schema.plain.number(),
+          darkMode: Schema.boolean(),
+          fontSize: Schema.number(),
         }),
-        tags: Schema.plain.array(Schema.plain.string()),
-        metadata: Schema.record(Schema.plain.any()),
+        tags: Schema.list(Schema.string()),
+        metadata: Schema.record(Schema.any()),
       })
 
       expect(Zero.structural(chatDoc)).toEqual({
@@ -154,10 +154,10 @@ describe("Zero.overlay", () => {
     title: Schema.text(),
     count: Schema.counter(),
     settings: Schema.struct({
-      darkMode: Schema.plain.boolean(),
-      fontSize: Schema.plain.number(),
+      darkMode: Schema.boolean(),
+      fontSize: Schema.number(),
     }),
-    tags: Schema.plain.array(Schema.plain.string()),
+    tags: Schema.list(Schema.string()),
   })
 
   it("returns fallback when primary is undefined", () => {
@@ -204,7 +204,7 @@ describe("Zero.overlay", () => {
 
   it("sequences: primary wins wholesale (no per-item merge)", () => {
     const schema = Schema.doc({
-      items: Schema.list(Schema.plain.string()),
+      items: Schema.list(Schema.string()),
     })
     const primary = { items: ["a", "b"] }
     const fallback = { items: ["x", "y", "z"] }
@@ -219,8 +219,8 @@ describe("Zero.overlay", () => {
     const schema = Schema.doc({
       outer: Schema.struct({
         inner: Schema.struct({
-          value: Schema.plain.number(),
-          label: Schema.plain.string(),
+          value: Schema.number(),
+          label: Schema.string(),
         }),
       }),
     })
@@ -237,13 +237,13 @@ describe("Zero.overlay", () => {
 
 describe("Zero.for and Zero.partial", () => {
   it("Zero.for is a passthrough identity", () => {
-    const schema = Schema.doc({ x: Schema.plain.number() })
+    const schema = Schema.doc({ x: Schema.number() })
     const value = { x: 42 }
     expect(Zero.for(schema, value)).toBe(value)
   })
 
   it("Zero.partial is a passthrough identity", () => {
-    const schema = Schema.doc({ x: Schema.plain.number() })
+    const schema = Schema.doc({ x: Schema.number() })
     const value = { x: 42 }
     expect(Zero.partial(schema, value)).toBe(value)
   })

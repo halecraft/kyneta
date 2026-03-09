@@ -55,7 +55,7 @@ Additionally, the `change` package supports value-domain constraints on scalars 
 
 ## Phases
 
-### Phase 1: Flatten the `Schema` namespace 🔴
+### Phase 1: Flatten the `Schema` namespace 🟢
 
 Remove `Schema.plain`, promote scalars and composites to the top level, eliminate duplicate constructors.
 
@@ -78,10 +78,10 @@ Schema
   .sum(variants)  .discriminatedSum(key, map)  .annotated(tag, inner?, meta?)
 ```
 
-- Task: In `schema.ts`, move scalar constructors (`string`, `number`, `boolean`, `null`, `undefined`, `bytes`, `any`) from the `plain` object to standalone functions. Add `nullable`, `union`, `discriminatedUnion` as top-level functions. 🔴
-- Task: Add all new constructors to the `Schema` namespace object. Remove the `plain` property entirely. 🔴
-- Task: Update the JSDoc on the `Schema` namespace to document the three clear groupings (scalars, structural composites, annotated) plus the low-level group. 🔴
-- Task: Migrate all `Schema.plain.*` call sites across the package (~90+ occurrences across tests, example, and source). This is a mechanical find-and-replace: 🔴
+- Task: In `schema.ts`, move scalar constructors (`string`, `number`, `boolean`, `null`, `undefined`, `bytes`, `any`) from the `plain` object to standalone functions. Add `nullable`, `union`, `discriminatedUnion` as top-level functions. 🟢
+- Task: Add all new constructors to the `Schema` namespace object. Remove the `plain` property entirely. 🟢
+- Task: Update the JSDoc on the `Schema` namespace to document the three clear groupings (scalars, structural composites, annotated) plus the low-level group. 🟢
+- Task: Migrate all `Schema.plain.*` call sites across the package (~90+ occurrences across tests, example, and source). This is a mechanical find-and-replace: 🟢
   - `Schema.plain.string()` → `Schema.string()`
   - `Schema.plain.number()` → `Schema.number()`
   - `Schema.plain.boolean()` → `Schema.boolean()`
@@ -94,8 +94,8 @@ Schema
   - `Schema.plain.array(...)` → `Schema.list(...)` (rename to match top-level; only 3 call sites)
   - `Schema.plain.union(...)` → `Schema.union(...)`
   - `Schema.plain.discriminatedUnion(...)` → `Schema.discriminatedUnion(...)`
-- Task: Update barrel exports in `index.ts` — remove any `plain`-related references. 🔴
-- Task: Verify all 228 existing tests pass after migration. 🔴
+- Task: Update barrel exports in `index.ts` — remove any `plain`-related references. 🟢
+- Task: Verify all 228 existing tests pass after migration. 🟢
 
 ### Phase 2: Scalar value-domain constraints 🔴
 
@@ -258,3 +258,99 @@ We considered keeping some form of the `plain` namespace to enforce Loro's "no c
 ## Changeset
 
 No changeset needed — `packages/schema` is an internal package with no consumers.
+
+## Amendment: Extract `LoroSchema` — backend-specific annotations and composition constraints
+
+**Discovered during:** Phase 1 (flatten the `Schema` namespace)
+**Targets:** New Phase 1b, inserted between Phase 1 and Phase 2
+
+### Preamble
+
+Phase 1 flattened `Schema.plain.*` into the top-level `Schema` namespace, arguing that the container/value split was a Loro-specific implementation detail. This succeeded, but it surfaced a deeper tension: after flattening, `Schema.text()` and `Schema.string()` sit side by side with no clear guidance on when to use which. The answer is "it depends on your backend" — exactly the kind of leaked implementation detail we were trying to eliminate.
+
+The annotations `text`, `counter`, `movableList`, and `tree` are Loro-specific semantics. `text` means "collaborative string with insert/delete/marks" — a Loro CRDT container. `counter` means "collaborative number with increment/decrement." `movableList` means "sequence with move semantics." `tree` means "hierarchical CRDT." None of these concepts exist in a plain-JS backend, a Firestore backend, or any other non-CRDT system. They belong in a backend-specific builder layer, not the base grammar.
+
+The key insight is that **moving the constructors is purely a namespace concern**. The interpreter implementations (`writableInterpreter`, `zeroInterpreter`, `describe`, `Plain<S>`, `Writable<S>`) all dispatch on annotation tag strings — they don't care whether the constructor that produced the `annotated("text")` node lives in `Schema` or `LoroSchema`. No interpreter code changes.
+
+Additionally, the `plain` sub-namespace that Phase 1 removed was doing something valuable for Loro users: enforcing composition constraints (no CRDTs inside value blobs). Re-introducing `LoroSchema.plain.*` as a typed builder wrapper restores this constraint at the correct layer — not in the base grammar, but in the backend-specific API.
+
+### Learnings
+
+1. **`doc` stays in `Schema`.** "Named product root" is a reasonable structural concept for all schemas. This could be revisited later, but it's not a backend-specific annotation in the same way `text` and `counter` are.
+
+2. **`LoroSchema` should be the full developer-facing API for Loro users.** It re-exports everything from `Schema` (so users don't need two imports) plus the Loro-specific annotations. A Loro developer writes `LoroSchema.doc(...)` and `LoroSchema.text()` — one import, one namespace.
+
+3. **`LoroSchema.plain.*` restores composition constraints.** The type bounds on `LoroSchema.plain.struct(...)` would narrow to prevent nesting CRDT containers inside value blobs — the same constraint the `change` package enforces, but now explicit and layered rather than baked into the grammar.
+
+4. **The validate interpreter is unaffected.** Validation is structural — it looks through annotations to the implied type (`text` → string, `counter` → number). It doesn't need to know whether the constructor came from `Schema` or `LoroSchema`. Phases 2-4 can proceed with or without this extraction.
+
+5. **Interpreter hardcoded tag dispatch stays where it is.** `Plain<S>`, `Writable<S>`, `writableInterpreter`, and `Zero` all switch on tag strings like `"text"` and `"counter"`. This is correct — the interpreters are Loro-aware by design (they produce `TextRef`, `CounterRef`, etc.). The separation is about the *constructor namespace*, not the *interpreter dispatch*.
+
+### Target namespace structure
+
+**`Schema` (backend-agnostic base grammar):**
+
+```
+Schema
+  // Scalars (leaf values)
+  .string()  .number()  .boolean()  .null()  .undefined()  .bytes()  .any()
+
+  // Structural composites
+  .struct(fields)  .list(item)  .record(item)
+  .union(...)  .discriminatedUnion(key, map)  .nullable(inner)
+
+  // Root
+  .doc(fields)
+
+  // Low-level (grammar-native, power users)
+  .scalar(kind)  .product(fields)  .sequence(item)  .map(item)
+  .sum(variants)  .discriminatedSum(key, map)  .annotated(tag, inner?, meta?)
+```
+
+**`LoroSchema` (Loro-specific, re-exports Schema + adds annotations):**
+
+```
+LoroSchema
+  // Everything from Schema (re-exported)
+  .string()  .number()  .boolean()  .null()  .undefined()  .bytes()  .any()
+  .struct(fields)  .list(item)  .record(item)
+  .union(...)  .discriminatedUnion(key, map)  .nullable(inner)
+  .doc(fields)
+  .scalar(kind)  .product(fields)  .sequence(item)  .map(item)
+  .sum(variants)  .discriminatedSum(key, map)  .annotated(tag, inner?, meta?)
+
+  // Loro-specific annotations
+  .text()                   // annotated("text") — collaborative string
+  .counter()                // annotated("counter") — collaborative number
+  .movableList(item)        // annotated("movable", sequence(item))
+  .tree(nodeData)           // annotated("tree", nodeData)
+
+  // Composition-constrained plain values (no CRDTs inside value blobs)
+  .plain.string()  .plain.number()  .plain.boolean()  ...
+  .plain.struct(fields)  .plain.record(item)  .plain.array(item)
+  .plain.union(...)  .plain.discriminatedUnion(key, map)
+```
+
+### Tasks
+
+- Task: Create `src/loro-schema.ts` containing the `LoroSchema` namespace object. It spreads `Schema` and adds `text`, `counter`, `movableList`, `tree`. 🔴
+- Task: Move `text()`, `counter()`, `movableList()`, `tree()` functions out of `schema.ts` into `loro-schema.ts`. Remove them from the `Schema` namespace object. The functions themselves are unchanged. 🔴
+- Task: Create the `LoroSchema.plain` sub-namespace with composition-constrained constructors. For now these are identical to the base constructors (the type-level narrowing that prevents CRDT nesting is a follow-up concern for when the Loro adapter integrates). 🔴
+- Task: Add `LoroSchema.doc()` that delegates to `Schema.doc()` — for symmetry so Loro users only need one import. 🔴
+- Task: Export `LoroSchema` from `index.ts`. 🔴
+- Task: Migrate tests and example to use `LoroSchema` where Loro-specific annotations are used. Tests that exercise the base grammar (e.g. `Schema.scalar(...)`, `Schema.struct(...)`) stay on `Schema`. Tests that use `text`, `counter`, `movableList`, `tree` move to `LoroSchema`. 🔴
+- Task: Update `describe.ts` — no changes needed (dispatches on tag strings, not constructor origin). 🔴
+- Task: Update `Plain<S>` and `Writable<S>` — no changes needed (dispatch on `AnnotatedSchema<"text">` etc., which is the same regardless of constructor origin). 🔴
+- Task: Update JSDoc and `TECHNICAL.md` to document the two-namespace design. 🔴
+- Task: Verify all 228 existing tests pass after migration. 🔴
+
+### Migration impact
+
+The migration is mechanical — same pattern as Phase 1:
+- `Schema.text()` → `LoroSchema.text()`
+- `Schema.counter()` → `LoroSchema.counter()`
+- `Schema.movableList(...)` → `LoroSchema.movableList(...)`
+- `Schema.tree(...)` → `LoroSchema.tree(...)`
+- `Schema.doc(...)` stays as-is (or can use `LoroSchema.doc(...)` in Loro-specific contexts)
+
+Estimated ~60 occurrences across tests, example, and JSDoc.

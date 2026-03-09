@@ -17,8 +17,8 @@ describe("interpret: catamorphism laziness", () => {
     title: Schema.text(),
     count: Schema.counter(),
     settings: Schema.struct({
-      darkMode: Schema.plain.boolean(),
-      fontSize: Schema.plain.number(),
+      darkMode: Schema.boolean(),
+      fontSize: Schema.number(),
     }),
   })
 
@@ -66,7 +66,7 @@ describe("interpret: zero equivalence", () => {
     const schema = Schema.doc({
       title: Schema.text(),
       count: Schema.counter(),
-      items: Schema.list(Schema.plain.string()),
+      items: Schema.list(Schema.string()),
     })
 
     const viaZero = Zero.structural(schema)
@@ -77,10 +77,10 @@ describe("interpret: zero equivalence", () => {
   it("zeroInterpreter matches Zero.structural for nested products", () => {
     const schema = Schema.doc({
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
-        fontSize: Schema.plain.number(),
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
-      metadata: Schema.record(Schema.plain.any()),
+      metadata: Schema.record(Schema.any()),
     })
 
     expect(interpret(schema, zeroInterpreter, undefined)).toEqual(
@@ -89,9 +89,9 @@ describe("interpret: zero equivalence", () => {
   })
 
   it("zeroInterpreter matches Zero.structural for discriminated sums", () => {
-    const schema = Schema.plain.discriminatedUnion("type", {
-      text: Schema.struct({ content: Schema.plain.string() }),
-      image: Schema.struct({ url: Schema.plain.string() }),
+    const schema = Schema.discriminatedUnion("type", {
+      text: Schema.struct({ content: Schema.string() }),
+      image: Schema.struct({ url: Schema.string() }),
     })
 
     expect(interpret(schema, zeroInterpreter, undefined)).toEqual(
@@ -100,9 +100,9 @@ describe("interpret: zero equivalence", () => {
   })
 
   it("zeroInterpreter matches Zero.structural for positional sums", () => {
-    const schema = Schema.plain.union(
-      Schema.plain.string(),
-      Schema.plain.number(),
+    const schema = Schema.union(
+      Schema.string(),
+      Schema.number(),
     )
 
     expect(interpret(schema, zeroInterpreter, undefined)).toEqual(
@@ -129,17 +129,17 @@ describe("interpret: plain round-trip", () => {
       count: Schema.counter(),
       messages: Schema.list(
         Schema.struct({
-          author: Schema.plain.string(),
+          author: Schema.string(),
           body: Schema.text(),
-          likes: Schema.plain.number(),
+          likes: Schema.number(),
         }),
       ),
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
-        fontSize: Schema.plain.number(),
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
-      tags: Schema.plain.array(Schema.plain.string()),
-      metadata: Schema.record(Schema.plain.any()),
+      tags: Schema.list(Schema.string()),
+      metadata: Schema.record(Schema.any()),
     })
 
     const store = {
@@ -186,17 +186,17 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
   })
 
   it("Schema.struct() produces a product", () => {
-    const s = Schema.struct({ x: Schema.plain.number() })
+    const s = Schema.struct({ x: Schema.number() })
     expect(s._kind).toBe("product")
   })
 
   it("Schema.list() produces a sequence", () => {
-    const s = Schema.list(Schema.plain.string())
+    const s = Schema.list(Schema.string())
     expect(s._kind).toBe("sequence")
   })
 
   it("Schema.record() produces a map", () => {
-    const s = Schema.record(Schema.plain.any())
+    const s = Schema.record(Schema.any())
     expect(s._kind).toBe("map")
   })
 
@@ -208,14 +208,14 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
   })
 
   it("Schema.movableList() produces annotated('movable', sequence(...))", () => {
-    const s = Schema.movableList(Schema.plain.string())
+    const s = Schema.movableList(Schema.string())
     expect(s._kind).toBe("annotated")
     expect(s.tag).toBe("movable")
     expect(s.schema?._kind).toBe("sequence")
   })
 
-  it("Schema.plain.string() produces a bare scalar", () => {
-    const s = Schema.plain.string()
+  it("Schema.string() produces a bare scalar", () => {
+    const s = Schema.string()
     expect(s._kind).toBe("scalar")
     expect(s.scalarKind).toBe("string")
   })
@@ -244,7 +244,7 @@ describe("interpret: enrich combinator", () => {
     const schema = Schema.doc({
       title: Schema.text(),
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
+        darkMode: Schema.boolean(),
       }),
     })
 
@@ -268,7 +268,7 @@ describe("interpret: enrich combinator", () => {
     const enriched = enrich(zeroInterpreter, withMarker)
     const schema = Schema.doc({
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
+        darkMode: Schema.boolean(),
       }),
     })
 
@@ -320,7 +320,7 @@ describe("interpret: path accumulation", () => {
     const schema = Schema.doc({
       title: Schema.text(),
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
+        darkMode: Schema.boolean(),
       }),
     })
 

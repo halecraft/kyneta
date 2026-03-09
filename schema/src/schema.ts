@@ -265,76 +265,88 @@ function doc<F extends Record<string, Schema>>(fields: F): AnnotatedSchema<"doc"
 }
 
 // ---------------------------------------------------------------------------
-// Plain value constructors — Schema.plain.*
+// Scalar constructors (leaf values)
 // ---------------------------------------------------------------------------
-// These produce bare structural nodes (no annotation). They correspond
-// to what the current codebase calls "value shapes" — plain data stored
-// inside containers, not independently addressable CRDTs.
 
-const plain = {
-  /** Scalar string. */
-  string(): ScalarSchema<"string"> {
-    return scalar("string")
-  },
+/** Scalar string. Produces `scalar("string")`. */
+function string_(): ScalarSchema<"string"> {
+  return scalar("string")
+}
 
-  /** Scalar number. */
-  number(): ScalarSchema<"number"> {
-    return scalar("number")
-  },
+/** Scalar number. Produces `scalar("number")`. */
+function number_(): ScalarSchema<"number"> {
+  return scalar("number")
+}
 
-  /** Scalar boolean. */
-  boolean(): ScalarSchema<"boolean"> {
-    return scalar("boolean")
-  },
+/** Scalar boolean. Produces `scalar("boolean")`. */
+function boolean_(): ScalarSchema<"boolean"> {
+  return scalar("boolean")
+}
 
-  /** Scalar null. */
-  null(): ScalarSchema<"null"> {
-    return scalar("null")
-  },
+/** Scalar null. Produces `scalar("null")`. */
+function null_(): ScalarSchema<"null"> {
+  return scalar("null")
+}
 
-  /** Scalar undefined. */
-  undefined(): ScalarSchema<"undefined"> {
-    return scalar("undefined")
-  },
+/** Scalar undefined. Produces `scalar("undefined")`. */
+function undefined_(): ScalarSchema<"undefined"> {
+  return scalar("undefined")
+}
 
-  /** Binary data. */
-  bytes(): ScalarSchema<"bytes"> {
-    return scalar("bytes")
-  },
+/** Binary data. Produces `scalar("bytes")`. */
+function bytes(): ScalarSchema<"bytes"> {
+  return scalar("bytes")
+}
 
-  /** Opaque value — any type. */
-  any(): ScalarSchema<"any"> {
-    return scalar("any")
-  },
+/** Opaque value — any type. Produces `scalar("any")`. */
+function any(): ScalarSchema<"any"> {
+  return scalar("any")
+}
 
-  /** Fixed-key plain struct (product with no annotation). */
-  struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F> {
-    return product(fields)
-  },
+// ---------------------------------------------------------------------------
+// Structural composite constructors (sum sugar)
+// ---------------------------------------------------------------------------
 
-  /** Dynamic-key plain record (map with no annotation). */
-  record<I extends Schema>(item: I): MapSchema<I> {
-    return map(item)
-  },
+/**
+ * Positional union of schemas. Produces `sum(variants)`.
+ *
+ * ```ts
+ * Schema.union(Schema.string(), Schema.number())
+ * ```
+ */
+function union<V extends Schema[]>(...variants: [...V]): PositionalSumSchema<V> {
+  return sum(variants)
+}
 
-  /** Plain array (sequence with no annotation). */
-  array<I extends Schema>(item: I): SequenceSchema<I> {
-    return sequence(item)
-  },
+/**
+ * Discriminated union — variants keyed by discriminant value.
+ * Produces `discriminatedSum(discriminant, variantMap)`.
+ *
+ * ```ts
+ * Schema.discriminatedUnion("type", {
+ *   text: Schema.struct({ body: Schema.string() }),
+ *   image: Schema.struct({ url: Schema.string() }),
+ * })
+ * ```
+ */
+function discriminatedUnion<D extends string, M extends Record<string, Schema>>(
+  discriminant: D,
+  variantMap: M,
+): DiscriminatedSumSchema<D, M> {
+  return discriminatedSum(discriminant, variantMap)
+}
 
-  /** Union of schemas. */
-  union<V extends Schema[]>(...variants: [...V]): PositionalSumSchema<V> {
-    return sum(variants)
-  },
-
-  /** Discriminated union — variants keyed by discriminant value. */
-  discriminatedUnion<D extends string, M extends Record<string, Schema>>(
-    discriminant: D,
-    variantMap: M,
-  ): DiscriminatedSumSchema<D, M> {
-    return discriminatedSum(discriminant, variantMap)
-  },
-} as const
+/**
+ * Nullable schema — sugar for `union(null, inner)`.
+ * Produces `sum([scalar("null"), inner])`.
+ *
+ * ```ts
+ * Schema.nullable(Schema.string()) // string | null
+ * ```
+ */
+function nullable<S extends Schema>(inner: S): PositionalSumSchema<[ScalarSchema<"null">, S]> {
+  return sum([null_(), inner])
+}
 
 // ---------------------------------------------------------------------------
 // Schema namespace — all constructors gathered
@@ -347,27 +359,29 @@ const plain = {
  * const myDoc = Schema.doc({
  *   title: Schema.text(),
  *   count: Schema.counter(),
- *   tags: Schema.list(Schema.plain.string()),
+ *   tags: Schema.list(Schema.string()),
  *   metadata: Schema.struct({
- *     author: Schema.plain.string(),
- *     published: Schema.plain.boolean(),
+ *     author: Schema.string(),
+ *     published: Schema.boolean(),
  *   }),
  * })
  * ```
  *
- * **Low-level (grammar-native):**
+ * **Scalars (leaf values):**
+ * `Schema.string`, `Schema.number`, `Schema.boolean`, `Schema.null`,
+ * `Schema.undefined`, `Schema.bytes`, `Schema.any`
+ *
+ * **Structural composites:**
+ * `Schema.struct`, `Schema.list`, `Schema.record`,
+ * `Schema.union`, `Schema.discriminatedUnion`, `Schema.nullable`
+ *
+ * **Annotated (backend semantics):**
+ * `Schema.text`, `Schema.counter`, `Schema.movableList`,
+ * `Schema.tree`, `Schema.doc`
+ *
+ * **Low-level (grammar-native, power users):**
  * `Schema.scalar`, `Schema.product`, `Schema.sequence`, `Schema.map`,
  * `Schema.sum`, `Schema.discriminatedSum`, `Schema.annotated`
- *
- * **High-level (Loro-flavored sugar):**
- * `Schema.text`, `Schema.counter`, `Schema.list`, `Schema.movableList`,
- * `Schema.struct`, `Schema.record`, `Schema.tree`, `Schema.doc`
- *
- * **Plain values:**
- * `Schema.plain.string`, `Schema.plain.number`, `Schema.plain.boolean`,
- * `Schema.plain.null`, `Schema.plain.undefined`, `Schema.plain.bytes`,
- * `Schema.plain.any`, `Schema.plain.struct`, `Schema.plain.record`,
- * `Schema.plain.array`, `Schema.plain.union`, `Schema.plain.discriminatedUnion`
  */
 export const Schema = {
   // Low-level structural constructors
@@ -379,18 +393,29 @@ export const Schema = {
   discriminatedSum,
   annotated,
 
-  // Loro-flavored sugar
+  // Scalars (leaf values)
+  string: string_,
+  number: number_,
+  boolean: boolean_,
+  null: null_,
+  undefined: undefined_,
+  bytes,
+  any,
+
+  // Structural composites
+  struct,
+  list,
+  record,
+  union,
+  discriminatedUnion,
+  nullable,
+
+  // Annotated (backend semantics)
   text,
   counter,
-  list,
   movableList,
-  struct,
-  record,
   tree,
   doc,
-
-  // Plain value constructors
-  plain,
 } as const
 
 // ---------------------------------------------------------------------------

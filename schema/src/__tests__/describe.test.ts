@@ -15,12 +15,12 @@ testDescribe("describe", () => {
       expect(describe(Schema.scalar("boolean"))).toBe("boolean")
     })
 
-    it("describes plain.any()", () => {
-      expect(describe(Schema.plain.any())).toBe("any")
+    it("describes any()", () => {
+      expect(describe(Schema.any())).toBe("any")
     })
 
-    it("describes plain.bytes()", () => {
-      expect(describe(Schema.plain.bytes())).toBe("bytes")
+    it("describes bytes()", () => {
+      expect(describe(Schema.bytes())).toBe("bytes")
     })
   })
 
@@ -45,9 +45,9 @@ testDescribe("describe", () => {
 
     it("describes a flat struct", () => {
       const s = Schema.struct({
-        name: Schema.plain.string(),
-        age: Schema.plain.number(),
-        active: Schema.plain.boolean(),
+        name: Schema.string(),
+        age: Schema.number(),
+        active: Schema.boolean(),
       })
       expect(describe(s)).toBe(
         [
@@ -61,7 +61,7 @@ testDescribe("describe", () => {
     it("describes nested structs with indentation", () => {
       const s = Schema.struct({
         outer: Schema.struct({
-          inner: Schema.plain.number(),
+          inner: Schema.number(),
         }),
       })
       expect(describe(s)).toBe(
@@ -82,7 +82,7 @@ testDescribe("describe", () => {
 
   testDescribe("sequences", () => {
     it("describes list with inline scalar item", () => {
-      expect(describe(Schema.list(Schema.plain.string()))).toBe("list<string>")
+      expect(describe(Schema.list(Schema.string()))).toBe("list<string>")
     })
 
     it("describes list with inline annotation item", () => {
@@ -92,8 +92,8 @@ testDescribe("describe", () => {
     it("describes list with complex item on indented lines", () => {
       const s = Schema.list(
         Schema.struct({
-          title: Schema.plain.string(),
-          done: Schema.plain.boolean(),
+          title: Schema.string(),
+          done: Schema.boolean(),
         }),
       )
       expect(describe(s)).toBe(
@@ -107,7 +107,7 @@ testDescribe("describe", () => {
 
     it("describes labeled list with inline item", () => {
       const s = Schema.struct({
-        tags: Schema.list(Schema.plain.string()),
+        tags: Schema.list(Schema.string()),
       })
       expect(describe(s)).toBe("tags: list<string>")
     })
@@ -116,7 +116,7 @@ testDescribe("describe", () => {
       const s = Schema.struct({
         items: Schema.list(
           Schema.struct({
-            id: Schema.plain.number(),
+            id: Schema.number(),
           }),
         ),
       })
@@ -129,7 +129,7 @@ testDescribe("describe", () => {
     })
 
     it("describes nested list<list<string>> inline", () => {
-      expect(describe(Schema.list(Schema.list(Schema.plain.string())))).toBe(
+      expect(describe(Schema.list(Schema.list(Schema.string())))).toBe(
         "list<list<string>>",
       )
     })
@@ -137,7 +137,7 @@ testDescribe("describe", () => {
 
   testDescribe("maps", () => {
     it("describes record with inline scalar item", () => {
-      expect(describe(Schema.record(Schema.plain.string()))).toBe(
+      expect(describe(Schema.record(Schema.string()))).toBe(
         "record<string>",
       )
     })
@@ -145,7 +145,7 @@ testDescribe("describe", () => {
     it("describes record with complex item on indented lines", () => {
       const s = Schema.record(
         Schema.struct({
-          value: Schema.plain.number(),
+          value: Schema.number(),
         }),
       )
       expect(describe(s)).toBe(
@@ -158,23 +158,23 @@ testDescribe("describe", () => {
 
     it("describes labeled record inline", () => {
       const s = Schema.struct({
-        labels: Schema.record(Schema.plain.string()),
+        labels: Schema.record(Schema.string()),
       })
       expect(describe(s)).toBe("labels: record<string>")
     })
 
     it("describes record<list<number>> inline", () => {
       expect(
-        describe(Schema.record(Schema.list(Schema.plain.number()))),
+        describe(Schema.record(Schema.list(Schema.number()))),
       ).toBe("record<list<number>>")
     })
   })
 
   testDescribe("sums", () => {
     it("describes a positional union", () => {
-      const s = Schema.plain.union(
-        Schema.plain.string(),
-        Schema.plain.number(),
+      const s = Schema.union(
+        Schema.string(),
+        Schema.number(),
       )
       expect(describe(s)).toBe(
         [
@@ -186,9 +186,9 @@ testDescribe("describe", () => {
     })
 
     it("describes a discriminated union", () => {
-      const s = Schema.plain.discriminatedUnion("type", {
-        text: Schema.struct({ content: Schema.plain.string() }),
-        image: Schema.struct({ url: Schema.plain.string() }),
+      const s = Schema.discriminatedUnion("type", {
+        text: Schema.struct({ content: Schema.string() }),
+        image: Schema.struct({ url: Schema.string() }),
       })
       expect(describe(s)).toBe(
         [
@@ -218,7 +218,7 @@ testDescribe("describe", () => {
     })
 
     it("describes movable list with inline item", () => {
-      expect(describe(Schema.movableList(Schema.plain.string()))).toBe(
+      expect(describe(Schema.movableList(Schema.string()))).toBe(
         "movable-list<string>",
       )
     })
@@ -226,7 +226,7 @@ testDescribe("describe", () => {
     it("describes movable list with complex item", () => {
       const s = Schema.movableList(
         Schema.struct({
-          name: Schema.plain.string(),
+          name: Schema.string(),
         }),
       )
       expect(describe(s)).toBe(
@@ -240,8 +240,8 @@ testDescribe("describe", () => {
     it("describes tree with node data", () => {
       const s = Schema.tree(
         Schema.struct({
-          label: Schema.plain.string(),
-          weight: Schema.plain.number(),
+          label: Schema.string(),
+          weight: Schema.number(),
         }),
       )
       expect(describe(s)).toBe(
@@ -262,8 +262,8 @@ testDescribe("describe", () => {
       const s = Schema.annotated(
         "versioned",
         Schema.product({
-          value: Schema.plain.string(),
-          version: Schema.plain.number(),
+          value: Schema.string(),
+          version: Schema.number(),
         }),
       )
       expect(describe(s)).toBe(
@@ -284,17 +284,17 @@ testDescribe("describe", () => {
         stars: Schema.counter(),
         tasks: Schema.list(
           Schema.struct({
-            title: Schema.plain.string(),
-            done: Schema.plain.boolean(),
-            priority: Schema.plain.number(),
+            title: Schema.string(),
+            done: Schema.boolean(),
+            priority: Schema.number(),
           }),
         ),
         settings: Schema.struct({
-          visibility: Schema.plain.string(),
-          maxTasks: Schema.plain.number(),
-          archived: Schema.plain.boolean(),
+          visibility: Schema.string(),
+          maxTasks: Schema.number(),
+          archived: Schema.boolean(),
         }),
-        labels: Schema.record(Schema.plain.string()),
+        labels: Schema.record(Schema.string()),
       })
 
       expect(describe(s)).toBe(
@@ -323,9 +323,9 @@ testDescribe("describe", () => {
             name: Schema.text(),
             messages: Schema.list(
               Schema.struct({
-                author: Schema.plain.string(),
+                author: Schema.string(),
                 body: Schema.text(),
-                reactions: Schema.record(Schema.plain.number()),
+                reactions: Schema.record(Schema.number()),
               }),
             ),
           }),
@@ -349,13 +349,13 @@ testDescribe("describe", () => {
       const s = Schema.doc({
         tasks: Schema.movableList(
           Schema.struct({
-            title: Schema.plain.string(),
+            title: Schema.string(),
           }),
         ),
         hierarchy: Schema.tree(
           Schema.struct({
-            label: Schema.plain.string(),
-            color: Schema.plain.string(),
+            label: Schema.string(),
+            color: Schema.string(),
           }),
         ),
       })
@@ -374,9 +374,9 @@ testDescribe("describe", () => {
 
     it("describes schema with discriminated union field", () => {
       const s = Schema.doc({
-        content: Schema.plain.discriminatedUnion("type", {
-          text: Schema.struct({ body: Schema.plain.string() }),
-          image: Schema.struct({ url: Schema.plain.string(), width: Schema.plain.number() }),
+        content: Schema.discriminatedUnion("type", {
+          text: Schema.struct({ body: Schema.string() }),
+          image: Schema.struct({ url: Schema.string(), width: Schema.number() }),
         }),
       })
 
@@ -397,9 +397,9 @@ testDescribe("describe", () => {
   testDescribe("inline rendering", () => {
     it("inlines simple items in list inside a labeled field", () => {
       const s = Schema.struct({
-        a: Schema.list(Schema.plain.number()),
-        b: Schema.record(Schema.plain.boolean()),
-        c: Schema.movableList(Schema.plain.string()),
+        a: Schema.list(Schema.number()),
+        b: Schema.record(Schema.boolean()),
+        c: Schema.movableList(Schema.string()),
       })
       expect(describe(s)).toBe(
         [
@@ -412,7 +412,7 @@ testDescribe("describe", () => {
 
     it("does not inline products", () => {
       const s = Schema.struct({
-        nested: Schema.struct({ x: Schema.plain.number() }),
+        nested: Schema.struct({ x: Schema.number() }),
       })
       // Should be multi-line, not inlined
       expect(describe(s)).toBe(

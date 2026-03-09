@@ -22,15 +22,15 @@ const chatDocSchema = Schema.doc({
   count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
-      author: Schema.plain.string(),
+      author: Schema.string(),
       body: Schema.text(),
     }),
   ),
   settings: Schema.struct({
-    darkMode: Schema.plain.boolean(),
-    fontSize: Schema.plain.number(),
+    darkMode: Schema.boolean(),
+    fontSize: Schema.number(),
   }),
-  metadata: Schema.record(Schema.plain.any()),
+  metadata: Schema.record(Schema.any()),
 })
 
 function createFeedableChatDoc(storeOverrides: Record<string, unknown> = {}) {
@@ -234,8 +234,8 @@ describe("withFeed: batched mode", () => {
   it("feedableFlush applies pending actions AND notifies subscribers", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.doc({
-      x: Schema.plain.number(),
-      y: Schema.plain.number(),
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const wCtx = createWritableContext(store, { autoCommit: false })
     const fCtx = createFeedableContext(wCtx)

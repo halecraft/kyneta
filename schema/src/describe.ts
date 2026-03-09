@@ -45,8 +45,8 @@ import type {
  *   title: Schema.text(),
  *   count: Schema.counter(),
  *   items: Schema.list(Schema.struct({
- *     name: Schema.plain.string(),
- *     done: Schema.plain.boolean(),
+ *     name: Schema.string(),
+ *     done: Schema.boolean(),
  *   })),
  * })
  *

@@ -40,18 +40,18 @@ describe("type-level: scalar kind literal preservation", () => {
     expectTypeOf(s.scalarKind).toEqualTypeOf<"boolean">()
   })
 
-  it("Schema.plain.string() → scalarKind is literal 'string'", () => {
-    const s = Schema.plain.string()
+  it("Schema.string() → scalarKind is literal 'string'", () => {
+    const s = Schema.string()
     expectTypeOf(s.scalarKind).toEqualTypeOf<"string">()
   })
 
-  it("Schema.plain.number() → scalarKind is literal 'number'", () => {
-    const s = Schema.plain.number()
+  it("Schema.number() → scalarKind is literal 'number'", () => {
+    const s = Schema.number()
     expectTypeOf(s.scalarKind).toEqualTypeOf<"number">()
   })
 
-  it("Schema.plain.boolean() → scalarKind is literal 'boolean'", () => {
-    const s = Schema.plain.boolean()
+  it("Schema.boolean() → scalarKind is literal 'boolean'", () => {
+    const s = Schema.boolean()
     expectTypeOf(s.scalarKind).toEqualTypeOf<"boolean">()
   })
 })
@@ -73,12 +73,12 @@ describe("type-level: annotation tag literal preservation", () => {
   })
 
   it("Schema.movableList() → tag is literal 'movable'", () => {
-    const s = Schema.movableList(Schema.plain.string())
+    const s = Schema.movableList(Schema.string())
     expectTypeOf(s.tag).toEqualTypeOf<"movable">()
   })
 
   it("Schema.tree() → tag is literal 'tree'", () => {
-    const s = Schema.tree(Schema.struct({ label: Schema.plain.string() }))
+    const s = Schema.tree(Schema.struct({ label: Schema.string() }))
     expectTypeOf(s.tag).toEqualTypeOf<"tree">()
   })
 
@@ -114,7 +114,7 @@ describe("type-level: product field key and type preservation", () => {
     const s = Schema.struct({
       title: Schema.text(),
       count: Schema.counter(),
-      tags: Schema.list(Schema.plain.string()),
+      tags: Schema.list(Schema.string()),
     })
 
     // Each field should be its specific schema subtype
@@ -135,7 +135,7 @@ describe("type-level: product field key and type preservation", () => {
   it("Schema.doc inner product preserves field types through annotation", () => {
     const s = Schema.doc({
       title: Schema.text(),
-      items: Schema.list(Schema.plain.string()),
+      items: Schema.list(Schema.string()),
     })
 
     // The inner schema should be a typed product, not just Schema | undefined
@@ -160,8 +160,8 @@ describe("type-level: sequence and map item type preservation", () => {
   it("Schema.list item preserves the inner struct type", () => {
     const s = Schema.list(
       Schema.struct({
-        name: Schema.plain.string(),
-        active: Schema.plain.boolean(),
+        name: Schema.string(),
+        active: Schema.boolean(),
       }),
     )
     // item should be ProductSchema (or narrower), not just Schema
@@ -201,15 +201,15 @@ describe("type-level: nested composition preserves types end-to-end", () => {
       count: Schema.counter(),
       messages: Schema.list(
         Schema.struct({
-          author: Schema.plain.string(),
+          author: Schema.string(),
           body: Schema.text(),
         }),
       ),
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
-        fontSize: Schema.plain.number(),
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
-      metadata: Schema.record(Schema.plain.any()),
+      metadata: Schema.record(Schema.any()),
     })
 
     // Top-level: annotated("doc")
@@ -284,18 +284,18 @@ describe("type-level: Writable<S> for leaf annotations", () => {
 })
 
 describe("type-level: Writable<S> for scalars", () => {
-  it("Writable<plain.string()> = ScalarRef<string>", () => {
-    type Result = Writable<ReturnType<typeof Schema.plain.string>>
+  it("Writable<string()> = ScalarRef<string>", () => {
+    type Result = Writable<ReturnType<typeof Schema.string>>
     expectTypeOf<Result>().toEqualTypeOf<ScalarRef<string>>()
   })
 
-  it("Writable<plain.number()> = ScalarRef<number>", () => {
-    type Result = Writable<ReturnType<typeof Schema.plain.number>>
+  it("Writable<number()> = ScalarRef<number>", () => {
+    type Result = Writable<ReturnType<typeof Schema.number>>
     expectTypeOf<Result>().toEqualTypeOf<ScalarRef<number>>()
   })
 
-  it("Writable<plain.boolean()> = ScalarRef<boolean>", () => {
-    type Result = Writable<ReturnType<typeof Schema.plain.boolean>>
+  it("Writable<boolean()> = ScalarRef<boolean>", () => {
+    type Result = Writable<ReturnType<typeof Schema.boolean>>
     expectTypeOf<Result>().toEqualTypeOf<ScalarRef<boolean>>()
   })
 })
@@ -303,8 +303,8 @@ describe("type-level: Writable<S> for scalars", () => {
 describe("type-level: Writable<S> for products and structs", () => {
   it("Writable<struct({...})> has typed fields", () => {
     const s = Schema.struct({
-      name: Schema.plain.string(),
-      active: Schema.plain.boolean(),
+      name: Schema.string(),
+      active: Schema.boolean(),
     })
     type Result = Writable<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<{
@@ -328,7 +328,7 @@ describe("type-level: Writable<S> for products and structs", () => {
 
 describe("type-level: Writable<S> for sequences", () => {
   it("Writable<list(plain.string())> = SequenceRef<ScalarRef<string>>", () => {
-    const s = Schema.list(Schema.plain.string())
+    const s = Schema.list(Schema.string())
     type Result = Writable<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<SequenceRef<ScalarRef<string>>>()
   })
@@ -336,7 +336,7 @@ describe("type-level: Writable<S> for sequences", () => {
   it("Writable<list(struct({...}))> has typed item refs", () => {
     const s = Schema.list(
       Schema.struct({
-        name: Schema.plain.string(),
+        name: Schema.string(),
         body: Schema.text(),
       }),
     )
@@ -356,8 +356,8 @@ describe("type-level: Writable<S> for doc (annotated + product)", () => {
       title: Schema.text(),
       count: Schema.counter(),
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
-        fontSize: Schema.plain.number(),
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
     })
     type Result = Writable<typeof s>
@@ -379,15 +379,15 @@ describe("type-level: Writable<S> end-to-end realistic schema", () => {
       count: Schema.counter(),
       messages: Schema.list(
         Schema.struct({
-          author: Schema.plain.string(),
+          author: Schema.string(),
           body: Schema.text(),
         }),
       ),
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
-        fontSize: Schema.plain.number(),
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
-      metadata: Schema.record(Schema.plain.any()),
+      metadata: Schema.record(Schema.any()),
     })
 
     type Doc = Writable<typeof chatDoc>
@@ -434,38 +434,38 @@ describe("type-level: Plain<S> for leaf annotations", () => {
 })
 
 describe("type-level: Plain<S> for scalars", () => {
-  it("Plain<plain.string()> = string", () => {
-    type Result = Plain<ReturnType<typeof Schema.plain.string>>
+  it("Plain<string()> = string", () => {
+    type Result = Plain<ReturnType<typeof Schema.string>>
     expectTypeOf<Result>().toEqualTypeOf<string>()
   })
 
-  it("Plain<plain.number()> = number", () => {
-    type Result = Plain<ReturnType<typeof Schema.plain.number>>
+  it("Plain<number()> = number", () => {
+    type Result = Plain<ReturnType<typeof Schema.number>>
     expectTypeOf<Result>().toEqualTypeOf<number>()
   })
 
-  it("Plain<plain.boolean()> = boolean", () => {
-    type Result = Plain<ReturnType<typeof Schema.plain.boolean>>
+  it("Plain<boolean()> = boolean", () => {
+    type Result = Plain<ReturnType<typeof Schema.boolean>>
     expectTypeOf<Result>().toEqualTypeOf<boolean>()
   })
 
-  it("Plain<plain.null()> = null", () => {
-    type Result = Plain<ReturnType<typeof Schema.plain.null>>
+  it("Plain<null()> = null", () => {
+    type Result = Plain<ReturnType<typeof Schema.null>>
     expectTypeOf<Result>().toEqualTypeOf<null>()
   })
 
-  it("Plain<plain.undefined()> = undefined", () => {
-    type Result = Plain<ReturnType<typeof Schema.plain.undefined>>
+  it("Plain<undefined()> = undefined", () => {
+    type Result = Plain<ReturnType<typeof Schema.undefined>>
     expectTypeOf<Result>().toEqualTypeOf<undefined>()
   })
 
-  it("Plain<plain.bytes()> = Uint8Array", () => {
-    type Result = Plain<ReturnType<typeof Schema.plain.bytes>>
+  it("Plain<bytes()> = Uint8Array", () => {
+    type Result = Plain<ReturnType<typeof Schema.bytes>>
     expectTypeOf<Result>().toEqualTypeOf<Uint8Array>()
   })
 
-  it("Plain<plain.any()> = unknown", () => {
-    type Result = Plain<ReturnType<typeof Schema.plain.any>>
+  it("Plain<any()> = unknown", () => {
+    type Result = Plain<ReturnType<typeof Schema.any>>
     expectTypeOf<Result>().toEqualTypeOf<unknown>()
   })
 })
@@ -473,8 +473,8 @@ describe("type-level: Plain<S> for scalars", () => {
 describe("type-level: Plain<S> for products and structs", () => {
   it("Plain<struct({...})> has typed fields", () => {
     const s = Schema.struct({
-      name: Schema.plain.string(),
-      active: Schema.plain.boolean(),
+      name: Schema.string(),
+      active: Schema.boolean(),
     })
     type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<{
@@ -498,7 +498,7 @@ describe("type-level: Plain<S> for products and structs", () => {
 
 describe("type-level: Plain<S> for sequences", () => {
   it("Plain<list(plain.string())> = string[]", () => {
-    const s = Schema.list(Schema.plain.string())
+    const s = Schema.list(Schema.string())
     type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<string[]>()
   })
@@ -506,7 +506,7 @@ describe("type-level: Plain<S> for sequences", () => {
   it("Plain<list(struct({...}))> has typed item objects", () => {
     const s = Schema.list(
       Schema.struct({
-        name: Schema.plain.string(),
+        name: Schema.string(),
         body: Schema.text(),
       }),
     )
@@ -519,13 +519,13 @@ describe("type-level: Plain<S> for sequences", () => {
 
 describe("type-level: Plain<S> for maps", () => {
   it("Plain<record(plain.number())> = { [key: string]: number }", () => {
-    const s = Schema.record(Schema.plain.number())
+    const s = Schema.record(Schema.number())
     type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<{ [key: string]: number }>()
   })
 
   it("Plain<record(plain.any())> = { [key: string]: unknown }", () => {
-    const s = Schema.record(Schema.plain.any())
+    const s = Schema.record(Schema.any())
     type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<{ [key: string]: unknown }>()
   })
@@ -533,7 +533,7 @@ describe("type-level: Plain<S> for maps", () => {
 
 describe("type-level: Plain<S> for movable list", () => {
   it("Plain<movableList(plain.string())> = string[]", () => {
-    const s = Schema.movableList(Schema.plain.string())
+    const s = Schema.movableList(Schema.string())
     type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<string[]>()
   })
@@ -541,8 +541,8 @@ describe("type-level: Plain<S> for movable list", () => {
   it("Plain<movableList(struct({...}))> = typed object[]", () => {
     const s = Schema.movableList(
       Schema.struct({
-        id: Schema.plain.number(),
-        label: Schema.plain.string(),
+        id: Schema.number(),
+        label: Schema.string(),
       }),
     )
     type Result = Plain<typeof s>
@@ -558,8 +558,8 @@ describe("type-level: Plain<S> for doc (annotated + product)", () => {
       title: Schema.text(),
       count: Schema.counter(),
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
-        fontSize: Schema.plain.number(),
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
     })
     type Result = Plain<typeof s>
@@ -581,15 +581,15 @@ describe("type-level: Plain<S> end-to-end realistic schema", () => {
       count: Schema.counter(),
       messages: Schema.list(
         Schema.struct({
-          author: Schema.plain.string(),
+          author: Schema.string(),
           body: Schema.text(),
         }),
       ),
       settings: Schema.struct({
-        darkMode: Schema.plain.boolean(),
-        fontSize: Schema.plain.number(),
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
-      metadata: Schema.record(Schema.plain.any()),
+      metadata: Schema.record(Schema.any()),
     })
 
     type Doc = Plain<typeof chatDoc>

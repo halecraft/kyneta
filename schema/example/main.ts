@@ -206,19 +206,19 @@ const ProjectSchema = Schema.doc({
 
   tasks: Schema.list(
     Schema.struct({
-      title: Schema.plain.string(),
-      done: Schema.plain.boolean(),
-      priority: Schema.plain.number(),
+      title: Schema.string(),
+      done: Schema.boolean(),
+      priority: Schema.number(),
     }),
   ),
 
   settings: Schema.struct({
-    visibility: Schema.plain.string(),
-    maxTasks: Schema.plain.number(),
-    archived: Schema.plain.boolean(),
+    visibility: Schema.string(),
+    maxTasks: Schema.number(),
+    archived: Schema.boolean(),
   }),
 
-  labels: Schema.record(Schema.plain.string()),
+  labels: Schema.record(Schema.string()),
 })
 
 log(describe(ProjectSchema))

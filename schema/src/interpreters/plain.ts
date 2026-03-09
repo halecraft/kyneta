@@ -53,7 +53,7 @@ function readPath(store: unknown, path: Path): unknown {
  * const schema = Schema.doc({
  *   title: Schema.text(),
  *   count: Schema.counter(),
- *   tags: Schema.list(Schema.plain.string()),
+ *   tags: Schema.list(Schema.string()),
  * })
  * const result = interpret(schema, plainInterpreter, store)
  * // → { title: "Hello", count: 42, tags: ["a", "b"] }
@@ -61,7 +61,7 @@ function readPath(store: unknown, path: Path): unknown {
  *
  * ### Annotations are transparent
  *
- * `Schema.text()` and `Schema.plain.string()` both read a string from
+ * `Schema.text()` and `Schema.string()` both read a string from
  * the store. The plain interpreter doesn't distinguish between annotated
  * and unannotated nodes — it reads from the same path regardless.
  */

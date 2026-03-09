@@ -51,7 +51,7 @@ function annotationDefault(tag: string): { value: unknown } | undefined {
  * const schema = Schema.doc({
  *   title: Schema.text(),
  *   count: Schema.counter(),
- *   items: Schema.list(Schema.plain.string()),
+ *   items: Schema.list(Schema.string()),
  * })
  *
  * const viaZero = Zero.structural(schema)
