@@ -113,12 +113,12 @@ However, an engineering review reveals several internal structural issues, redun
   - Mutation on the inner ref of a nullable works (set a value, read it back)
 - Task: Type-level tests deferred — `Writable<PositionalSumSchema>` and `Writable<DiscriminatedSumSchema>` both map to `unknown`, which is correct for runtime-dispatched sums. No meaningful type-level assertion beyond `unknown`. ✅
 
-### Phase 4: Documentation updates 🔴
+### Phase 4: Documentation updates ✅
 
-- Task: Update `theory/interpreter-algebra.md` §14.7 (L1094–1101): replace "package is empty" text with a brief note that the spike has been implemented, referencing `TECHNICAL.md` for details. Keep the observation about `@loro-extended/change` shape coupling since that is still true for the production code. 🔴
-- Task: Update `TECHNICAL.md` "Verified Properties" section test count to match the actual count after all phases complete. 🔴
-- Task: Update `TECHNICAL.md` "Writable Interpreter" section to document the sum dispatch behavior: discriminated sums read the discriminant from the store, nullable sums inspect the value, general positional sums default to first variant. 🔴
-- Task: Update `TECHNICAL.md` "Architecture" section to note `store.ts`, `isNonNullObject`, and the removal of the zero interpreter. 🔴
+- Task: Update `theory/interpreter-algebra.md` §14.7 (L1094–1101): replaced "package is empty" with description of the implemented spike, kept observation about `@loro-extended/change` shape coupling. ✅
+- Task: Update `TECHNICAL.md` "Verified Properties" section test count to 398. Removed stale zeroInterpreter item (#5), added deep subscriptions (#7), discriminated sum dispatch (#13), nullable dispatch (#14). ✅
+- Task: Update `TECHNICAL.md` "Writable Interpreter" section: added "Sum nodes" paragraph documenting discriminated, nullable, and general positional dispatch behavior. ✅
+- Task: `TECHNICAL.md` "Architecture" section updates for `store.ts`, `guards.ts`, and zero interpreter removal were already applied in Phase 2 (file map and interpreter table). ✅
 
 ## Tests
 

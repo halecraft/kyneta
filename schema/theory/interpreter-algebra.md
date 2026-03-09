@@ -1091,13 +1091,19 @@ interpreter. The `TypedRefParams` already carries `mergeable`,
 `pathPrefix`, and `getContainer` — these are "how to access storage"
 parameters orthogonal to "what to do at each node."
 
-### 14.7. The `@loro-extended/schema` package is empty
+### 14.7. The `@loro-extended/schema` package implements the spike
 
-`packages/schema/` contains only this theory document. No `package.json`,
-no source code. All shape definitions live in `@loro-extended/change`
-at `packages/change/src/shape.ts`. The shape system is tightly coupled
-to Loro-specific ref types through the phantom types (`_mutable: TextRef`,
-etc.). Phase 5 (decouple schema from Loro) has not started.
+`packages/schema/` now contains a complete implementation of the schema
+interpreter algebra described in this document. The spike has ~2500 lines
+of source, 398 tests, three interpreters (plain, writable, validate),
+a changefeed decorator, composition combinators, and a self-contained
+example mini-app. See `packages/schema/TECHNICAL.md` for full details.
+
+All shape definitions in the **production** codebase still live in
+`@loro-extended/change` at `packages/change/src/shape.ts`, tightly
+coupled to Loro-specific ref types through phantom types
+(`_mutable: TextRef`, etc.). Phase 5 (decouple schema from Loro) has
+not started — the spike validates the architecture in isolation.
 
 ### 14.8. Operations and deltas are the same information
 

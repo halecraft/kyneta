@@ -275,6 +275,11 @@ The most architecturally significant piece. Validates that writable refs can be 
 
 **Change dispatch** supports auto-commit (immediate apply + notify) and batched mode (accumulate in `pending`, apply on `flush()`).
 
+**Sum nodes** dispatch based on runtime store state:
+- **Discriminated sums:** read the discriminant key from the store value and dispatch to the matching variant via `variants.byKey()`. Falls back to the first variant if the value is missing, not an object, or the discriminant is unrecognized.
+- **Nullable sums** (positional, 2 variants, first is `scalar("null")`): check whether the store value is `null`/`undefined` and dispatch to the null variant (index 0) or the inner variant (index 1) accordingly.
+- **General positional sums:** no runtime discriminator is available without backend-specific type information, so the first variant is used as a fallback.
+
 ### Type-Level Interpretation: `Plain<S>` and `Writable<S>`
 
 Two recursive conditional types map schema types to their corresponding value types:
@@ -287,20 +292,22 @@ Both types account for constrained scalars: when `ScalarSchema<K, V>` has a narr
 
 ## Verified Properties
 
-The spike validates these properties via 386 tests:
+The spike validates these properties via 398 tests:
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: `doc.title === doc.title` — lazy getters cache on first access.
 3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names. `CHANGEFEED in doc` is true. `CHANGEFEED` is non-enumerable.
 4. **Portable refs**: `const ref = doc.settings.fontSize; bump(ref)` — works outside the tree because context is captured in closures.
-5. **Zero equivalence**: `interpret(schema, zeroInterpreter, undefined)` produces output identical to `Zero.structural(schema)`.
-6. **Plain round-trip**: `interpret(schema, plainInterpreter, store)` produces the identical object tree.
-7. **Changefeed subscription**: `doc.title[CHANGEFEED].subscribe(cb)` receives changes; unsubscribe stops notifications.
+5. **Plain round-trip**: `interpret(schema, plainInterpreter, store)` produces the identical object tree.
+6. **Changefeed subscription**: `doc.title[CHANGEFEED].subscribe(cb)` receives changes; unsubscribe stops notifications.
+7. **Deep subscriptions**: `subscribeDeep(cfCtx, path, cb)` receives changes at the path and all descendants, with relative `origin` paths.
 8. **Batched mode**: `autoCommit: false` accumulates changes; `flush()` applies all at once.
 9. **Constrained scalar defaults**: `Zero.structural(Schema.string("a", "b"))` returns `"a"` (first constraint value).
 10. **Validation collects all errors**: `tryValidate` on a value with N type mismatches returns N errors (no short-circuit).
 11. **Positional sum rollback**: failed variant errors are discarded; successful variant produces zero spurious errors.
 12. **Type narrowing**: `validate(schema, value)` return type is `Plain<typeof schema>` — verified via `expectTypeOf`.
+13. **Discriminated sum dispatch**: writable interpreter reads the discriminant from the store and produces the correct variant's ref.
+14. **Nullable dispatch**: writable interpreter checks for `null`/`undefined` and dispatches to the correct positional variant.
 
 ## File Map
 
