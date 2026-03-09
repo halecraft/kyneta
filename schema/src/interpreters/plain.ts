@@ -15,28 +15,7 @@ import type {
   SumSchema,
   AnnotatedSchema,
 } from "../schema.js"
-
-// ---------------------------------------------------------------------------
-// Path resolution
-// ---------------------------------------------------------------------------
-
-/**
- * Reads a value from a nested plain object by following a path.
- */
-function readPath(store: unknown, path: Path): unknown {
-  let current: unknown = store
-  for (const segment of path) {
-    if (current === null || current === undefined) {
-      return undefined
-    }
-    if (segment.type === "key") {
-      current = (current as Record<string, unknown>)[segment.key]
-    } else {
-      current = (current as unknown[])[segment.index]
-    }
-  }
-  return current
-}
+import { readByPath } from "./writable.js"
 
 // ---------------------------------------------------------------------------
 // Plain interpreter
@@ -67,7 +46,7 @@ function readPath(store: unknown, path: Path): unknown {
  */
 export const plainInterpreter: Interpreter<unknown, unknown> = {
   scalar(ctx: unknown, path: Path, _schema: ScalarSchema): unknown {
-    return readPath(ctx, path)
+    return readByPath(ctx, path)
   },
 
   product(
@@ -92,7 +71,7 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     item: (index: number) => unknown,
   ): unknown {
     // Read the array at this path and interpret each item
-    const arr = readPath(ctx, path)
+    const arr = readByPath(ctx, path)
     if (!Array.isArray(arr)) {
       return []
     }
@@ -106,7 +85,7 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     item: (key: string) => unknown,
   ): unknown {
     // Read the object at this path and interpret each key
-    const obj = readPath(ctx, path)
+    const obj = readByPath(ctx, path)
     if (obj === null || obj === undefined || typeof obj !== "object") {
       return {}
     }
@@ -126,7 +105,7 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     // For discriminated sums, read the discriminant from the value
     // and interpret through the matching variant.
     if (schema.discriminant !== undefined && variants.byKey) {
-      const value = readPath(ctx, path)
+      const value = readByPath(ctx, path)
       if (value !== null && value !== undefined && typeof value === "object") {
         const discValue = (value as Record<string, unknown>)[schema.discriminant]
         if (typeof discValue === "string") {
@@ -141,7 +120,7 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     // belongs to at runtime without additional type information.
     // Return the raw value — callers that need variant dispatch should
     // use discriminated sums.
-    return readPath(ctx, path)
+    return readByPath(ctx, path)
   },
 
   annotated(
@@ -158,15 +137,9 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     }
 
     // Leaf annotations (text, counter) — read the raw value at path.
-    // We need ctx and path here but they were consumed by the inner
-    // interpretation. For leaf annotations without inner schema,
-    // the catamorphism doesn't advance the path, so we read directly.
-    // However, we don't have access to ctx/path in the right form here
-    // since inner is undefined. The catamorphism passes the same path
-    // for the annotation and its inner — so for leaf annotations, we
-    // need to read from the store ourselves.
-    //
-    // Actually, _ctx and _path ARE available — let's use them.
-    return readPath(_ctx, _path)
+    // The catamorphism passes the same path for the annotation and
+    // its inner — so for leaf annotations without inner schema,
+    // we read from the store directly.
+    return readByPath(_ctx, _path)
   },
 }

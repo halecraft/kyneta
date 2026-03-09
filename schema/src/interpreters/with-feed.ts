@@ -16,19 +16,26 @@ import type {
   PendingAction,
   Store,
 } from "./writable.js"
-import { readByPath, toStorePath, applyActionToStore } from "./writable.js"
+import { readByPath, applyActionToStore } from "./writable.js"
 
 // ---------------------------------------------------------------------------
-// Subscriber infrastructure (moved from writable.ts)
+// Subscriber infrastructure
 // ---------------------------------------------------------------------------
 
-function pathKey(path: readonly string[]): string {
-  return path.join("\0")
+/**
+ * Converts a Path to a stable string key for subscriber map lookup.
+ * Key segments use the key directly; index segments use their numeric
+ * string representation. NUL separator avoids collisions.
+ */
+function pathKey(path: Path): string {
+  return path
+    .map((seg) => (seg.type === "key" ? seg.key : String(seg.index)))
+    .join("\0")
 }
 
 function notifySubscribers(
   subscribers: Map<string, Set<(action: ActionBase) => void>>,
-  path: readonly string[],
+  path: Path,
   action: ActionBase,
 ): void {
   const key = pathKey(path)
@@ -42,10 +49,10 @@ function notifySubscribers(
 
 function subscribeToPath(
   subscribers: Map<string, Set<(action: ActionBase) => void>>,
-  storePath: readonly string[],
+  path: Path,
   callback: (action: ActionBase) => void,
 ): () => void {
-  const key = pathKey(storePath)
+  const key = pathKey(path)
   let subs = subscribers.get(key)
   if (!subs) {
     subs = new Set()
@@ -61,12 +68,12 @@ function subscribeToPath(
 }
 
 // ---------------------------------------------------------------------------
-// Feed creation helper (moved from writable.ts)
+// Feed creation helper
 // ---------------------------------------------------------------------------
 
 function createFeedForPath(
   subscribers: Map<string, Set<(action: ActionBase) => void>>,
-  storePath: readonly string[],
+  path: Path,
   readHead: () => unknown,
 ): Feed<unknown, ActionBase> {
   return {
@@ -74,13 +81,13 @@ function createFeedForPath(
       return readHead()
     },
     subscribe(callback: (action: ActionBase) => void): () => void {
-      return subscribeToPath(subscribers, storePath, callback)
+      return subscribeToPath(subscribers, path, callback)
     },
   }
 }
 
 // ---------------------------------------------------------------------------
-// Attach [FEED] non-enumerably to any object (moved from writable.ts)
+// Attach [FEED] non-enumerably to any object
 // ---------------------------------------------------------------------------
 
 function attachFeed(
@@ -134,14 +141,14 @@ export function createFeedableContext(
   const subscribers = new Map<string, Set<(action: ActionBase) => void>>()
 
   const wrappedDispatch = (
-    storePath: readonly string[],
+    path: Path,
     action: ActionBase,
   ): void => {
     // Delegate to the original dispatch (applies action to store)
-    writableCtx.dispatch(storePath, action)
+    writableCtx.dispatch(path, action)
     // Then notify subscribers (observation layer)
     if (writableCtx.autoCommit) {
-      notifySubscribers(subscribers, storePath, action)
+      notifySubscribers(subscribers, path, action)
     }
     // In batched mode, notification happens at flush time
   }
@@ -222,12 +229,10 @@ export const withFeed: Decorator<FeedableContext, unknown, {}> = (
     return {}
   }
 
-  const storePath = toStorePath(path)
-
   const feed = createFeedForPath(
     ctx.subscribers,
-    storePath,
-    () => readByPath(ctx.store, storePath),
+    path,
+    () => readByPath(ctx.store, path),
   )
 
   // Attach directly via Object.defineProperty (non-enumerable).

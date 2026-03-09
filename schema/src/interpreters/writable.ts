@@ -18,7 +18,7 @@
 // decorator via `enrich(writableInterpreter, withFeed)`.
 // See `with-feed.ts` and theory §5.4 (capability decomposition).
 
-import type { Interpreter, Path, PathSegment, SumVariants } from "../interpret.js"
+import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type {
   Schema,
   ScalarKind,
@@ -52,56 +52,58 @@ import { step } from "../step.js"
 export type Store = Record<string, unknown>
 
 // ---------------------------------------------------------------------------
-// Path conversion — catamorphism Path → string[] store path
+// Store helpers — read/write by Path
 // ---------------------------------------------------------------------------
 
 /**
- * Converts the catamorphism's typed Path into a flat string[] for store
- * access. Index segments become their string representation.
+ * Resolves a segment key for JS object access.
+ * Key segments use the key directly; index segments use the numeric index
+ * (which JS coerces to a string for object/array access).
  */
-export function toStorePath(path: Path): readonly string[] {
-  return path.map((seg) =>
-    seg.type === "key" ? seg.key : String(seg.index),
-  )
+function segKey(seg: Path[number]): string | number {
+  return seg.type === "key" ? seg.key : seg.index
 }
 
-// ---------------------------------------------------------------------------
-// Store helpers — read/write by path
-// ---------------------------------------------------------------------------
-
-export function readByPath(store: Store, path: readonly string[]): unknown {
+/**
+ * Reads a value from a nested plain object by following a Path.
+ */
+export function readByPath(store: unknown, path: Path): unknown {
   let current: unknown = store
-  for (const key of path) {
+  for (const seg of path) {
     if (current === null || current === undefined) return undefined
-    current = (current as Record<string, unknown>)[key]
+    current = (current as Record<string | number, unknown>)[segKey(seg)]
   }
   return current
 }
 
+/**
+ * Writes a value into a nested plain object at the given Path.
+ * Creates intermediate objects as needed.
+ */
 export function writeByPath(
   store: Store,
-  path: readonly string[],
+  path: Path,
   value: unknown,
 ): void {
   if (path.length === 0) return
-  let current: Record<string, unknown> = store
+  let current: Record<string | number, unknown> = store
   for (let i = 0; i < path.length - 1; i++) {
-    const key = path[i]!
+    const k = segKey(path[i]!)
     if (
-      current[key] === null ||
-      current[key] === undefined ||
-      typeof current[key] !== "object"
+      current[k] === null ||
+      current[k] === undefined ||
+      typeof current[k] !== "object"
     ) {
-      current[key] = {}
+      current[k] = {}
     }
-    current = current[key] as Record<string, unknown>
+    current = current[k] as Record<string | number, unknown>
   }
-  current[path[path.length - 1]!] = value
+  current[segKey(path[path.length - 1]!)] = value
 }
 
 export function applyActionToStore(
   store: Store,
-  path: readonly string[],
+  path: Path,
   action: ActionBase,
 ): void {
   if (path.length === 0) {
@@ -152,13 +154,13 @@ export function applyActionToStore(
  */
 export interface WritableContext {
   readonly store: Store
-  readonly dispatch: (storePath: readonly string[], action: ActionBase) => void
+  readonly dispatch: (path: Path, action: ActionBase) => void
   readonly autoCommit: boolean
   readonly pending: PendingAction[]
 }
 
 export interface PendingAction {
-  readonly path: readonly string[]
+  readonly path: Path
   readonly action: ActionBase
 }
 
@@ -190,13 +192,13 @@ export function createWritableContext(
   const pending: PendingAction[] = []
 
   const dispatch = (
-    storePath: readonly string[],
+    path: Path,
     action: ActionBase,
   ): void => {
     if (autoCommit) {
-      applyActionToStore(store, storePath, action)
+      applyActionToStore(store, path, action)
     } else {
-      pending.push({ path: storePath, action })
+      pending.push({ path, action })
     }
   }
 
@@ -418,11 +420,11 @@ export type Writable<S extends Schema> =
 
 function createTextRef(
   ctx: WritableContext,
-  storePath: readonly string[],
+  path: Path,
 ): TextRef {
   const ref: TextRef = {
     toString(): string {
-      const v = readByPath(ctx.store, storePath)
+      const v = readByPath(ctx.store, path)
       return typeof v === "string" ? v : String(v ?? "")
     },
 
@@ -432,7 +434,7 @@ function createTextRef(
 
     insert(index: number, content: string): void {
       ctx.dispatch(
-        storePath,
+        path,
         textAction([
           ...(index > 0 ? [{ retain: index }] : []),
           { insert: content },
@@ -442,7 +444,7 @@ function createTextRef(
 
     delete(index: number, length: number): void {
       ctx.dispatch(
-        storePath,
+        path,
         textAction([
           ...(index > 0 ? [{ retain: index }] : []),
           { delete: length },
@@ -453,7 +455,7 @@ function createTextRef(
     update(content: string): void {
       const current = ref.toString()
       ctx.dispatch(
-        storePath,
+        path,
         textAction([
           ...(current.length > 0 ? [{ delete: current.length }] : []),
           { insert: content },
@@ -467,20 +469,20 @@ function createTextRef(
 
 function createCounterRef(
   ctx: WritableContext,
-  storePath: readonly string[],
+  path: Path,
 ): CounterRef {
   const ref: CounterRef = {
     get(): number {
-      const v = readByPath(ctx.store, storePath)
+      const v = readByPath(ctx.store, path)
       return typeof v === "number" ? v : 0
     },
 
     increment(n: number = 1): void {
-      ctx.dispatch(storePath, incrementAction(n))
+      ctx.dispatch(path, incrementAction(n))
     },
 
     decrement(n: number = 1): void {
-      ctx.dispatch(storePath, incrementAction(-n))
+      ctx.dispatch(path, incrementAction(-n))
     },
   }
 
@@ -489,14 +491,17 @@ function createCounterRef(
 
 function createScalarRef(
   ctx: WritableContext,
-  storePath: readonly string[],
+  path: Path,
 ): ScalarRef {
-  const parentPath = storePath.slice(0, -1)
-  const key = storePath[storePath.length - 1]
+  const parentPath = path.slice(0, -1)
+  const lastSeg = path[path.length - 1]
+  const key = lastSeg !== undefined
+    ? (lastSeg.type === "key" ? lastSeg.key : String(lastSeg.index))
+    : undefined
 
   const ref: ScalarRef = {
     get(): unknown {
-      return readByPath(ctx.store, storePath)
+      return readByPath(ctx.store, path)
     },
     set(value: unknown): void {
       if (key !== undefined) {
@@ -504,7 +509,7 @@ function createScalarRef(
         ctx.dispatch(parentPath, mapAction({ [key]: value }))
       } else {
         // Root scalar — use replace
-        ctx.dispatch(storePath, replaceAction(value))
+        ctx.dispatch(path, replaceAction(value))
       }
     },
   }
@@ -547,7 +552,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
     path: Path,
     _schema: ScalarSchema,
   ): ScalarRef {
-    return createScalarRef(ctx, toStorePath(path))
+    return createScalarRef(ctx, path)
   },
 
   // --- Product ---------------------------------------------------------------
@@ -591,7 +596,6 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
     _schema: SequenceSchema,
     item: (index: number) => unknown,
   ): SequenceRef {
-    const storePath = toStorePath(path)
     const childCache = new Map<number, unknown>()
 
     const ref: SequenceRef = {
@@ -603,10 +607,10 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
       },
 
       push(...items: unknown[]): void {
-        const arr = readByPath(ctx.store, storePath)
+        const arr = readByPath(ctx.store, path)
         const length = Array.isArray(arr) ? arr.length : 0
         ctx.dispatch(
-          storePath,
+          path,
           sequenceAction([{ retain: length }, { insert: items }]),
         )
         childCache.clear()
@@ -614,7 +618,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
 
       insert(index: number, ...items: unknown[]): void {
         ctx.dispatch(
-          storePath,
+          path,
           sequenceAction([
             ...(index > 0 ? [{ retain: index }] : []),
             { insert: items },
@@ -625,7 +629,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
 
       delete(index: number, count: number = 1): void {
         ctx.dispatch(
-          storePath,
+          path,
           sequenceAction([
             ...(index > 0 ? [{ retain: index }] : []),
             { delete: count },
@@ -635,12 +639,12 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
       },
 
       get length(): number {
-        const arr = readByPath(ctx.store, storePath)
+        const arr = readByPath(ctx.store, path)
         return Array.isArray(arr) ? arr.length : 0
       },
 
       [Symbol.iterator](): Iterator<unknown> {
-        const arr = readByPath(ctx.store, storePath)
+        const arr = readByPath(ctx.store, path)
         const items = Array.isArray(arr) ? arr : []
         let i = 0
         return {
@@ -654,7 +658,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
       },
 
       toArray(): unknown[] {
-        const arr = readByPath(ctx.store, storePath)
+        const arr = readByPath(ctx.store, path)
         if (!Array.isArray(arr)) return []
         return arr.map((_item, i) => ref.get(i))
       },
@@ -674,7 +678,6 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
     _schema: MapSchema,
     item: (key: string) => unknown,
   ): unknown {
-    const storePath = toStorePath(path)
     const childCache = new Map<string, unknown>()
 
     // Target object — symbol-keyed protocol will be attached here
@@ -701,7 +704,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
           return prop in target
         }
         // String access → check store data
-        const obj = readByPath(ctx.store, storePath)
+        const obj = readByPath(ctx.store, path)
         if (obj !== null && obj !== undefined && typeof obj === "object") {
           return prop in (obj as Record<string, unknown>)
         }
@@ -711,7 +714,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
       ownKeys(_target) {
         // Include symbol keys from target (protocol attached by decorators)
         const symbolKeys = Object.getOwnPropertySymbols(target)
-        const obj = readByPath(ctx.store, storePath)
+        const obj = readByPath(ctx.store, path)
         if (obj !== null && obj !== undefined && typeof obj === "object") {
           return [...Object.keys(obj as Record<string, unknown>), ...symbolKeys]
         }
@@ -722,7 +725,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
         if (typeof prop === "symbol") {
           return Object.getOwnPropertyDescriptor(target, prop)
         }
-        const obj = readByPath(ctx.store, storePath)
+        const obj = readByPath(ctx.store, path)
         if (obj !== null && obj !== undefined && typeof obj === "object") {
           if (prop in (obj as Record<string, unknown>)) {
             if (!childCache.has(String(prop))) {
@@ -750,14 +753,14 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
 
       set(_target, prop, value) {
         if (typeof prop === "symbol") return false
-        ctx.dispatch(storePath, mapAction({ [String(prop)]: value }))
+        ctx.dispatch(path, mapAction({ [String(prop)]: value }))
         childCache.delete(prop)
         return true
       },
 
       deleteProperty(_target, prop) {
         if (typeof prop === "symbol") return false
-        ctx.dispatch(storePath, mapAction(undefined, [String(prop)]))
+        ctx.dispatch(path, mapAction(undefined, [String(prop)]))
         childCache.delete(String(prop))
         return true
       },
@@ -801,14 +804,12 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
     schema: AnnotatedSchema,
     inner: (() => unknown) | undefined,
   ): unknown {
-    const storePath = toStorePath(path)
-
     switch (schema.tag) {
       case "text":
-        return createTextRef(ctx, storePath)
+        return createTextRef(ctx, path)
 
       case "counter":
-        return createCounterRef(ctx, storePath)
+        return createCounterRef(ctx, path)
 
       case "doc":
       case "movable":
@@ -825,7 +826,7 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
           return inner()
         }
         // Leaf annotation without known semantics — treat as scalar
-        return createScalarRef(ctx, storePath)
+        return createScalarRef(ctx, path)
     }
   },
 }

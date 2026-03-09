@@ -46,7 +46,7 @@ Additionally, the `change` package supports value-domain constraints on scalars 
 - ~~`Schema.plain` sub-namespace exists with duplicate constructors and is the only home for scalars.~~ ✅ Phase 1
 - ~~`Schema.nullable`, `Schema.union`, `Schema.discriminatedUnion` are absent from the top level.~~ ✅ Phase 1
 - ~~Loro-specific annotations (`text`, `counter`, `movableList`, `tree`) leak into the backend-agnostic `Schema` namespace.~~ ✅ Phase 1b
-- Two redundant path representations: the catamorphism's typed `Path` (discriminated `PathSegment[]`) and the writable layer's flat `string[]`. The writable layer converts at every interpreter case boundary via `toStorePath()`, discarding the key-vs-index distinction. The `readPath` utility in `plain.ts` is module-private and duplicated in spirit by `readByPath` in `writable.ts`.
+- ~~Two redundant path representations: the catamorphism's typed `Path` (discriminated `PathSegment[]`) and the writable layer's flat `string[]`. The writable layer converts at every interpreter case boundary via `toStorePath()`, discarding the key-vs-index distinction. The `readPath` utility in `plain.ts` is module-private and duplicated in spirit by `readByPath` in `writable.ts`.~~ ✅ Phase 1c
 - `ScalarSchema` has no `constraint` field.
 - `ScalarPlain<K>` ignores any value-domain narrowing.
 - `Plain<S>` and `Writable<S>` don't account for constrained scalars.
@@ -99,25 +99,25 @@ Schema
 - Task: Update barrel exports in `index.ts` — remove any `plain`-related references. 🟢
 - Task: Verify all 228 existing tests pass after migration. 🟢
 
-### Phase 1c: Unify path representation 🔴
+### Phase 1c: Unify path representation 🟢
 
 Eliminate the redundant `string[]` path representation. Make the catamorphism's typed `Path` the single canonical path format across all interpreters and infrastructure.
 
 **Motivation:** Two path representations exist — the catamorphism's `Path` (array of `{ type: "key", key }` | `{ type: "index", index }` segments) and the writable layer's flat `string[]`. The writable layer converts via `toStorePath()` at every interpreter case boundary, losing the key-vs-index distinction. This distinction matters for human-readable error paths (`tasks[0].author` vs `tasks.0.author`) and is needed by the validate interpreter. Rather than extracting yet another `readPath` utility for Phase 3, unify now so all interpreters share one path type and one read function.
 
-- Task: Change `readByPath(store: Store, path: readonly string[])` in `writable.ts` to accept `Path` instead of `string[]`. The loop body changes from indexing by `key` to branching on `seg.type` — identical to the private `readPath` in `plain.ts`. 🔴
-- Task: Change `writeByPath(store: Store, path: readonly string[], value: unknown)` to accept `Path`. Same mechanical change. 🔴
-- Task: Change `applyActionToStore` to accept `Path` for its path parameter. 🔴
-- Task: Change `WritableContext.dispatch` signature from `(storePath: readonly string[], action: ActionBase) => void` to `(path: Path, action: ActionBase) => void`. 🔴
-- Task: Change `PendingAction.path` from `readonly string[]` to `Path`. 🔴
-- Task: Update `createWritableContext` — the `dispatch` closure and `pending` array use `Path`. 🔴
-- Task: Update all call sites in `writableInterpreter` — remove `toStorePath(path)` calls. Each case already receives `path: Path` from the catamorphism; pass it directly to `readByPath`, `writeByPath`, `ctx.dispatch`, and ref constructors. 🔴
-- Task: Update `createTextRef`, `createCounterRef`, `createScalarRef` to accept `Path` instead of `readonly string[]`. 🔴
-- Task: Update `with-feed.ts` — `pathKey`, `subscribeToPath`, `notifySubscribers`, `createFeedForPath`, `feedableFlush`, and the `withFeed` decorator all switch from `string[]` to `Path`. The `pathKey` function becomes `path.map(seg => seg.type === "key" ? seg.key : String(seg.index)).join("\0")`. 🔴
-- Task: Delete `toStorePath()` from `writable.ts` and remove its export from `index.ts`. 🔴
-- Task: Delete the private `readPath` from `plain.ts` — replace its call sites with the now-`Path`-compatible `readByPath` imported from `writable.ts`. 🔴
-- Task: Export `readByPath` from `index.ts` (already exported, just verify signature updated). 🔴
-- Task: Verify all 238 tests pass. No behavioral change — this is a pure representation unification. 🔴
+- Task: Change `readByPath(store: Store, path: readonly string[])` in `writable.ts` to accept `Path` instead of `string[]`. The loop body changes from indexing by `key` to branching on `seg.type` — identical to the private `readPath` in `plain.ts`. Also widened first parameter from `Store` to `unknown` so all interpreters (including `plainInterpreter` with its `unknown` context) can call it without casts. 🟢
+- Task: Change `writeByPath(store: Store, path: readonly string[], value: unknown)` to accept `Path`. Same mechanical change. 🟢
+- Task: Change `applyActionToStore` to accept `Path` for its path parameter. 🟢
+- Task: Change `WritableContext.dispatch` signature from `(storePath: readonly string[], action: ActionBase) => void` to `(path: Path, action: ActionBase) => void`. 🟢
+- Task: Change `PendingAction.path` from `readonly string[]` to `Path`. 🟢
+- Task: Update `createWritableContext` — the `dispatch` closure and `pending` array use `Path`. 🟢
+- Task: Update all call sites in `writableInterpreter` — remove `toStorePath(path)` calls. Each case already receives `path: Path` from the catamorphism; pass it directly to `readByPath`, `writeByPath`, `ctx.dispatch`, and ref constructors. 🟢
+- Task: Update `createTextRef`, `createCounterRef`, `createScalarRef` to accept `Path` instead of `readonly string[]`. 🟢
+- Task: Update `with-feed.ts` — `pathKey`, `subscribeToPath`, `notifySubscribers`, `createFeedForPath`, `feedableFlush`, and the `withFeed` decorator all switch from `string[]` to `Path`. The `pathKey` function becomes `path.map(seg => seg.type === "key" ? seg.key : String(seg.index)).join("\0")`. 🟢
+- Task: Delete `toStorePath()` from `writable.ts` and remove its export from `index.ts`. 🟢
+- Task: Delete the private `readPath` from `plain.ts` — replace its call sites with the now-`Path`-compatible `readByPath` imported from `writable.ts`. 🟢
+- Task: Export `readByPath` from `index.ts` (already exported, just verify signature updated). 🟢
+- Task: Verify all 238 tests pass. No behavioral change — this is a pure representation unification. 🟢
 
 ### Phase 2: Scalar value-domain constraints 🔴
 

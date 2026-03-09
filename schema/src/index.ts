@@ -100,8 +100,8 @@ export type {
   ScalarPlain,
 } from "./interpreters/writable.js"
 
-// Store utilities (shared by writable and feed layers)
-export { readByPath, toStorePath } from "./interpreters/writable.js"
+// Store utilities (shared by writable, plain, and feed layers)
+export { readByPath } from "./interpreters/writable.js"
 
 // Feed decorator — observation layer via enrich(writableInterpreter, withFeed)
 export { withFeed, createFeedableContext, feedableFlush } from "./interpreters/with-feed.js"
