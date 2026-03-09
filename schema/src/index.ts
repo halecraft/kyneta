@@ -136,8 +136,9 @@ export {
   withChangefeed,
   createChangefeedContext,
   changefeedFlush,
+  subscribeDeep,
 } from "./interpreters/with-changefeed.js"
-export type { ChangefeedContext } from "./interpreters/with-changefeed.js"
+export type { ChangefeedContext, DeepEvent } from "./interpreters/with-changefeed.js"
 
 // Deprecated aliases (backward compat) — prefer the new names above
 export {

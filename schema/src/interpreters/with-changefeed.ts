@@ -4,6 +4,10 @@
 // orthogonal to the writable interpreter which owns the mutation concern.
 // Compose them via `enrich(writableInterpreter, withChangefeed)`.
 //
+// Two subscription modes:
+// - Exact (via Changefeed.subscribe): fires only for changes at the exact path
+// - Deep (via subscribeDeep): fires for changes at the path or any descendant
+//
 // See theory §5.4 (capability decomposition) and §7.2 (enrich combinator).
 
 import type { ChangeBase } from "../change.js"
@@ -13,6 +17,25 @@ import type { Changefeed } from "../changefeed.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext, PendingChange, Store } from "./writable.js"
 import { readByPath, applyChangeToStore } from "./writable.js"
+
+// ---------------------------------------------------------------------------
+// Deep event — the envelope for deep subscription callbacks
+// ---------------------------------------------------------------------------
+
+/**
+ * An event delivered to deep subscribers. Contains the relative path
+ * from the subscriber's position to the dispatch origin, plus the change.
+ *
+ * Example: if you deep-subscribe at `["settings"]` and a change dispatches
+ * at `["settings", "darkMode"]`, you receive `{ origin: [{type:"key", key:"darkMode"}], change }`.
+ * If the change dispatches at `["settings"]` itself, `origin` is `[]`.
+ */
+export interface DeepEvent {
+  /** Path from the subscriber's position to the dispatch origin. */
+  readonly origin: Path
+  /** The change that was dispatched. */
+  readonly change: ChangeBase
+}
 
 // ---------------------------------------------------------------------------
 // Subscriber infrastructure
@@ -29,54 +52,92 @@ function pathKey(path: Path): string {
     .join("\0")
 }
 
-function notifySubscribers(
-  subscribers: Map<string, Set<(action: ChangeBase) => void>>,
-  path: Path,
-  action: ChangeBase,
-): void {
-  const key = pathKey(path)
-  const subs = subscribers.get(key)
-  if (subs) {
-    for (const cb of subs) {
-      cb(action)
-    }
-  }
-}
-
-function subscribeToPath(
-  subscribers: Map<string, Set<(action: ChangeBase) => void>>,
-  path: Path,
-  callback: (action: ChangeBase) => void,
+/**
+ * Generic "register callback in a keyed Set map with cleanup" helper.
+ * Both exact and deep subscribe delegate to this — no duplicate
+ * map-management code.
+ */
+function subscribeToMap<T>(
+  map: Map<string, Set<T>>,
+  key: string,
+  callback: T,
 ): () => void {
-  const key = pathKey(path)
-  let subs = subscribers.get(key)
+  let subs = map.get(key)
   if (!subs) {
     subs = new Set()
-    subscribers.set(key, subs)
+    map.set(key, subs)
   }
   subs.add(callback)
   return () => {
     subs!.delete(callback)
     if (subs!.size === 0) {
-      subscribers.delete(key)
+      map.delete(key)
+    }
+  }
+}
+
+/**
+ * Registers an exact-path subscription. Delegates to `subscribeToMap`.
+ */
+function subscribeToPath(
+  subscribers: Map<string, Set<(change: ChangeBase) => void>>,
+  path: Path,
+  callback: (change: ChangeBase) => void,
+): () => void {
+  return subscribeToMap(subscribers, pathKey(path), callback)
+}
+
+/**
+ * The single notification engine for a dispatch. Handles both exact
+ * and deep subscribers in one pass.
+ *
+ * 1. Exact: look up `pathKey(path)` in `ctx.subscribers`, invoke matches.
+ * 2. Deep: walk `i` from `path.length` down to `0`, look up
+ *    `pathKey(path.slice(0, i))` in `ctx.deepSubscribers`, invoke matches
+ *    with `{ origin: path.slice(i), change }`.
+ *
+ * When `i === path.length`, this fires deep subscribers at the dispatch
+ * path itself with `origin: []` — correct, since "something happened at
+ * my own path" is a legitimate event for a subtree subscriber.
+ */
+function notifyAll(
+  ctx: ChangefeedContext,
+  path: Path,
+  change: ChangeBase,
+): void {
+  // Exact subscribers
+  const key = pathKey(path)
+  const exact = ctx.subscribers.get(key)
+  if (exact) {
+    for (const cb of exact) cb(change)
+  }
+
+  // Deep subscribers — walk ancestors from self to root
+  for (let i = path.length; i >= 0; i--) {
+    const ancestorKey = pathKey(path.slice(0, i))
+    const deep = ctx.deepSubscribers.get(ancestorKey)
+    if (deep) {
+      const origin: Path = path.slice(i)
+      const event: DeepEvent = { origin, change }
+      for (const cb of deep) cb(event)
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Feed creation helper
+// Changefeed creation helper
 // ---------------------------------------------------------------------------
 
 function createChangefeedForPath(
-  subscribers: Map<string, Set<(action: ChangeBase) => void>>,
+  subscribers: Map<string, Set<(change: ChangeBase) => void>>,
   path: Path,
-  readHead: () => unknown,
+  readCurrent: () => unknown,
 ): Changefeed<unknown, ChangeBase> {
   return {
     get current() {
-      return readHead()
+      return readCurrent()
     },
-    subscribe(callback: (action: ChangeBase) => void): () => void {
+    subscribe(callback: (change: ChangeBase) => void): () => void {
       return subscribeToPath(subscribers, path, callback)
     },
   }
@@ -88,10 +149,10 @@ function createChangefeedForPath(
 
 function attachChangefeed(
   target: object,
-  feed: Changefeed<unknown, ChangeBase>,
+  cf: Changefeed<unknown, ChangeBase>,
 ): void {
   Object.defineProperty(target, CHANGEFEED, {
-    value: feed,
+    value: cf,
     enumerable: false,
     configurable: true,
     writable: false,
@@ -99,7 +160,7 @@ function attachChangefeed(
 }
 
 // ---------------------------------------------------------------------------
-// FeedableContext — extends WritableContext with subscriber notification
+// ChangefeedContext — extends WritableContext with subscriber notification
 // ---------------------------------------------------------------------------
 
 /**
@@ -109,10 +170,12 @@ function attachChangefeed(
  * context's `dispatch` to notify subscribers after each change is applied.
  *
  * The `withChangefeed` decorator reads `subscribers` from this context to
- * create changefeed objects.
+ * create changefeed objects. The `subscribeDeep` function reads
+ * `deepSubscribers` to register deep subscriptions.
  */
 export interface ChangefeedContext extends WritableContext {
-  readonly subscribers: Map<string, Set<(action: ChangeBase) => void>>
+  readonly subscribers: Map<string, Set<(change: ChangeBase) => void>>
+  readonly deepSubscribers: Map<string, Set<(event: DeepEvent) => void>>
 }
 
 /**
@@ -120,9 +183,9 @@ export interface ChangefeedContext extends WritableContext {
  *
  * The returned context has the same store, autoCommit, and pending array,
  * but its `dispatch` function calls the original dispatch AND notifies
- * subscribers. This is the dispatch-wrapping pattern: the writable
- * interpreter calls `ctx.dispatch` without knowing that notification
- * happens inside.
+ * subscribers (both exact and deep). This is the dispatch-wrapping pattern:
+ * the writable interpreter calls `ctx.dispatch` without knowing that
+ * notification happens inside.
  *
  * ```ts
  * const store = { title: "", count: 0 }
@@ -135,47 +198,85 @@ export function createChangefeedContext(
   writableCtx: WritableContext,
 ): ChangefeedContext {
   const subscribers = new Map<string, Set<(change: ChangeBase) => void>>()
+  const deepSubscribers = new Map<string, Set<(event: DeepEvent) => void>>()
+
+  // The dispatch closure needs the full ChangefeedContext for notifyAll,
+  // but the context object is constructed after the closure. Use a let
+  // binding that the closure captures by reference — by the time dispatch
+  // is called, `ctx` is populated.
+  let ctx: ChangefeedContext
 
   const wrappedDispatch = (path: Path, change: ChangeBase): void => {
-    // Delegate to the original dispatch (applies action to store)
+    // Delegate to the original dispatch (applies change to store)
     writableCtx.dispatch(path, change)
-    // Then notify subscribers (observation layer)
+    // Then notify all subscribers (observation layer)
     if (writableCtx.autoCommit) {
-      notifySubscribers(subscribers, path, change)
+      notifyAll(ctx, path, change)
     }
     // In batched mode, notification happens at flush time
   }
 
-  return {
+  ctx = {
     store: writableCtx.store,
     dispatch: wrappedDispatch,
     autoCommit: writableCtx.autoCommit,
     pending: writableCtx.pending,
     subscribers,
+    deepSubscribers,
   }
+
+  return ctx
 }
 
 /**
- * Flushes pending changes AND notifies subscribers for each one.
+ * Flushes pending changes AND notifies all subscribers (exact + deep)
+ * for each one.
  *
  * This is the changefeed equivalent of the bare `flush()` from writable.ts.
- * It imports and calls the bare flush (which applies changes to the store),
- * then notifies subscribers for each flushed change.
+ * It applies changes to the store and notifies subscribers for each
+ * flushed change.
  */
 export function changefeedFlush(ctx: ChangefeedContext): PendingChange[] {
-  // We need to apply + notify. The bare flush applies but doesn't notify.
-  // We replicate the apply + notify loop here rather than importing flush,
-  // because we need to notify after each action.
   const flushed = [...ctx.pending]
-  for (const { path, change: action } of flushed) {
-    // Apply to store via the ORIGINAL dispatch path.
-    // We can't use ctx.dispatch because in batched mode it would
-    // re-accumulate. Instead, read from store and apply directly.
-    applyChangeToStore(ctx.store, path, action)
-    notifySubscribers(ctx.subscribers, path, action)
+  for (const { path, change } of flushed) {
+    // Apply to store directly (not via ctx.dispatch, which would
+    // re-accumulate in batched mode).
+    applyChangeToStore(ctx.store, path, change)
+    notifyAll(ctx, path, change)
   }
   ctx.pending.length = 0
   return flushed
+}
+
+// ---------------------------------------------------------------------------
+// subscribeDeep — context-level deep subscription
+// ---------------------------------------------------------------------------
+
+/**
+ * Subscribe to changes at `path` and all descendant paths.
+ *
+ * The callback receives a `DeepEvent` with:
+ * - `origin`: the relative path from the subscriber's position to the
+ *   dispatch point (e.g. `[{type:"key", key:"darkMode"}]` if subscribed
+ *   at `["settings"]` and dispatch at `["settings", "darkMode"]`).
+ *   When the change dispatches at the subscriber's own path, `origin`
+ *   is `[]`.
+ * - `change`: the `ChangeBase` that was dispatched.
+ *
+ * Returns an unsubscribe function.
+ *
+ * ```ts
+ * const unsub = subscribeDeep(cfCtx, [], (event) => {
+ *   console.log(`Change at ${formatPath(event.origin)}:`, event.change.type)
+ * })
+ * ```
+ */
+export function subscribeDeep(
+  ctx: ChangefeedContext,
+  path: Path,
+  callback: (event: DeepEvent) => void,
+): () => void {
+  return subscribeToMap(ctx.deepSubscribers, pathKey(path), callback)
 }
 
 // ---------------------------------------------------------------------------
@@ -216,13 +317,13 @@ export const withChangefeed: Decorator<ChangefeedContext, unknown, {}> = (
     return {}
   }
 
-  const feed = createChangefeedForPath(ctx.subscribers, path, () =>
+  const cf = createChangefeedForPath(ctx.subscribers, path, () =>
     readByPath(ctx.store, path),
   )
 
   // Attach directly via Object.defineProperty (non-enumerable).
   // This bypasses Proxy set traps — goes through defineProperty trap.
-  attachChangefeed(result, feed)
+  attachChangefeed(result, cf)
 
   // Return empty — enrich's Object.assign({}) is a no-op.
   return {}
