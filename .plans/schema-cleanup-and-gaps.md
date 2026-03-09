@@ -99,18 +99,19 @@ However, an engineering review reveals several internal structural issues, redun
 - Task: Update combinator doc comments in `combinators.ts` that reference `zeroInterpreter` — replaced with hypothetical examples (`pathInterpreter`, `fallbackInterpreter`). ✅
 - Task: Run full test suite. Net test count decreased by 5 (397 → 392). ✅
 
-### Phase 3: Writable sum dispatch from store 🔴
+### Phase 3: Writable sum dispatch from store ✅
 
-- Task: Implement runtime-aware `sum()` in `writableInterpreter`: 🔴
+- Task: Implement runtime-aware `sum()` in `writableInterpreter`: ✅
   - **Discriminated sum:** Read `readByPath(ctx.store, path)`, extract the discriminant value from the object, dispatch to `variants.byKey(discValue)`. If the value is missing or the discriminant is not a known key, fall back to the first variant (preserving current behavior as the degenerate case).
   - **Positional sum (nullable):** Read the value from the store. Use `isNullableSum` (now imported from `schema.ts`). For nullable sums, return `variants.byIndex(0)` when the value is `null`/`undefined`, else `variants.byIndex(1)`. For general positional sums, return `variants.byIndex(0)` as a fallback (no runtime type discrimination is possible without backend-specific knowledge).
-- Task: Add tests in `writable.test.ts`: 🔴
+- Task: Add tests in `writable.test.ts` (6 new tests, 398 total): ✅
   - Discriminated sum writable ref dispatches to the correct variant based on store state
   - Discriminated sum falls back to first variant when discriminant is missing
+  - Discriminated sum falls back to first variant when store value is not an object
   - Nullable field returns a scalar ref with `.get()` returning `null` when store value is null
   - Nullable field returns the inner writable ref (e.g. `ScalarRef<string>`) when store value is non-null
   - Mutation on the inner ref of a nullable works (set a value, read it back)
-- Task: Add corresponding type-level tests in `types.test.ts` if `Writable<PositionalSumSchema>` needs refinement (currently maps to `unknown`). 🔴
+- Task: Type-level tests deferred — `Writable<PositionalSumSchema>` and `Writable<DiscriminatedSumSchema>` both map to `unknown`, which is correct for runtime-dispatched sums. No meaningful type-level assertion beyond `unknown`. ✅
 
 ### Phase 4: Documentation updates 🔴
 

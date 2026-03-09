@@ -19,18 +19,19 @@
 // See `with-changefeed.ts` and theory §5.4 (capability decomposition).
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
-import type {
-  Schema,
-  ScalarKind,
-  ScalarSchema,
-  ScalarPlain,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
-  AnnotatedSchema,
-  PositionalSumSchema,
-  DiscriminatedSumSchema,
+import {
+  isNullableSum,
+  type Schema,
+  type ScalarKind,
+  type ScalarSchema,
+  type ScalarPlain,
+  type ProductSchema,
+  type SequenceSchema,
+  type MapSchema,
+  type SumSchema,
+  type AnnotatedSchema,
+  type PositionalSumSchema,
+  type DiscriminatedSumSchema,
 } from "../schema.js"
 import type { ChangeBase } from "../change.js"
 import {
@@ -671,26 +672,59 @@ export const writableInterpreter: Interpreter<WritableContext, unknown> = {
   },
 
   // --- Sum -------------------------------------------------------------------
-  // Delegates to the appropriate variant based on runtime value or first
-  // variant as fallback.
+  // Dispatches to the correct variant based on runtime store state.
+  //
+  // - Discriminated sums: read the discriminant key from the store value
+  //   and dispatch to the matching variant. Falls back to first variant
+  //   if the value is missing or the discriminant is unrecognized.
+  // - Nullable sums (positional, 2 variants, first is null): check if
+  //   the store value is null/undefined and dispatch accordingly.
+  // - General positional sums: no runtime discriminator available,
+  //   so we default to the first variant.
 
   sum(
-    _ctx: WritableContext,
-    _path: Path,
+    ctx: WritableContext,
+    path: Path,
     schema: SumSchema,
     variants: SumVariants<unknown>,
   ): unknown {
     if (schema.discriminant !== undefined && variants.byKey) {
-      const keys = Object.keys(
-        (schema as { variantMap: Record<string, unknown> }).variantMap,
-      )
+      // ── Discriminated sum ────────────────────────────────────────
+      const discSchema = schema as DiscriminatedSumSchema
+      const value = readByPath(ctx.store, path)
+
+      // Try to read the discriminant from the store value
+      if (isNonNullObject(value)) {
+        const discValue = value[schema.discriminant]
+        if (typeof discValue === "string" && discValue in discSchema.variantMap) {
+          return variants.byKey(discValue)
+        }
+      }
+
+      // Fallback: first variant
+      const keys = Object.keys(discSchema.variantMap)
       if (keys.length > 0) {
         return variants.byKey(keys[0]!)
       }
+      return undefined
     }
+
+    // ── Positional sum ───────────────────────────────────────────
     if (variants.byIndex) {
+      const posSchema = schema as PositionalSumSchema
+
+      // Nullable: dispatch based on whether the value is null/undefined
+      if (isNullableSum(posSchema)) {
+        const value = readByPath(ctx.store, path)
+        return (value === null || value === undefined)
+          ? variants.byIndex(0)  // null variant
+          : variants.byIndex(1)  // inner variant
+      }
+
+      // General positional sum: no runtime discriminator, use first
       return variants.byIndex(0)
     }
+
     return undefined
   },
 

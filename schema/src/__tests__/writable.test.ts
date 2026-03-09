@@ -198,6 +198,81 @@ describe("writable: batched mode", () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Discriminated sum dispatch
+// ---------------------------------------------------------------------------
+
+describe("writable: discriminated sum", () => {
+  const schema = Schema.doc({
+    item: Schema.discriminatedUnion("type", {
+      text: Schema.struct({ body: Schema.string() }),
+      image: Schema.struct({ url: Schema.string() }),
+    }),
+  })
+
+  it("dispatches to the correct variant based on store discriminant", () => {
+    const store = { item: { type: "image", url: "pic.png" } }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, writableInterpreter, ctx) as any
+
+    // Should produce the "image" variant ref with a .url field
+    expect(doc.item.url.get()).toBe("pic.png")
+  })
+
+  it("falls back to first variant when discriminant is missing", () => {
+    const store = { item: {} }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, writableInterpreter, ctx) as any
+
+    // First variant is "text" which has a .body field
+    expect(typeof doc.item.body.get).toBe("function")
+  })
+
+  it("falls back to first variant when store value is not an object", () => {
+    const store = { item: 42 }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, writableInterpreter, ctx) as any
+
+    expect(typeof doc.item.body.get).toBe("function")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Nullable (positional sum) dispatch
+// ---------------------------------------------------------------------------
+
+describe("writable: nullable (positional sum)", () => {
+  const schema = Schema.doc({
+    bio: Schema.nullable(Schema.string()),
+  })
+
+  it("null store value dispatches to the null variant", () => {
+    const store = { bio: null }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, writableInterpreter, ctx) as any
+
+    // The null variant is a scalar ref whose .get() returns null
+    expect(doc.bio.get()).toBe(null)
+  })
+
+  it("non-null store value dispatches to the inner variant", () => {
+    const store = { bio: "Hello world" }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, writableInterpreter, ctx) as any
+
+    expect(doc.bio.get()).toBe("Hello world")
+  })
+
+  it("mutation on the inner ref works", () => {
+    const store = { bio: "old" }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, writableInterpreter, ctx) as any
+
+    doc.bio.set("new")
+    expect(store.bio).toBe("new")
+  })
+})
+
 // ===========================================================================
 // LoroSchema tests — Loro-specific annotation-driven behavior
 // ===========================================================================
