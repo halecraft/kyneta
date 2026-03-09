@@ -219,15 +219,16 @@ This single walker replaces the 10+ parallel `switch (shape._type)` dispatch sit
 
 ### Interpreters (`src/interpreters/`)
 
-Four built-in interpreters plus a decorator:
+Three built-in interpreters plus a decorator:
 
 | Interpreter | Context | Result | Purpose |
 |---|---|---|---|
 | `plainInterpreter` | Plain JS object (store) | `unknown` | Read values at each path — equivalent to `toJSON()` / `value()` |
-| `zeroInterpreter` | `void` | `unknown` | Produce structural defaults — proven equivalent to `Zero.structural()` |
 | `writableInterpreter` | `WritableContext` | Ref-like objects | Mutation methods, namespace isolation, portable refs |
 | `validateInterpreter` | `ValidateContext` | `unknown` | Validate plain values against schema, collect errors |
 | `withChangefeed` (decorator) | `ChangefeedContext` | Enriched refs | Adds `[CHANGEFEED]` subscription to writable refs |
+
+Note: an earlier version of the spike included a `zeroInterpreter` that proved `Zero.structural(schema)` is expressible as `interpret(schema, zeroInterpreter, undefined)`. This equivalence is mathematically interesting (documented in the theory) but the runtime artifact was redundant — `Zero.structural` is simpler and canonical. The zero interpreter was removed.
 
 ### Validate Interpreter (`src/interpreters/validate.ts`)
 
@@ -317,9 +318,10 @@ packages/schema/
 │   ├── describe.ts              # Human-readable schema tree view
 │   ├── interpret.ts             # Interpreter interface + catamorphism + Path types
 │   ├── combinators.ts           # enrich, product, overlay, firstDefined
+│   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject)
+│   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore
 │   ├── interpreters/
 │   │   ├── plain.ts             # Read from plain JS object
-│   │   ├── zero.ts              # Produce structural defaults
 │   │   ├── writable.ts          # Ref-like objects + Plain<S> + Writable<S>
 │   │   ├── with-changefeed.ts   # Changefeed decorator (observation layer)
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate

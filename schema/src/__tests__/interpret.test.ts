@@ -6,10 +6,10 @@ import {
   interpret,
   createInterpreter,
   plainInterpreter,
-  zeroInterpreter,
   enrich,
   CHANGEFEED,
   hasChangefeed,
+  isNonNullObject,
 } from "../index.js"
 import type { Interpreter, Path } from "../index.js"
 
@@ -63,56 +63,6 @@ describe("interpret: catamorphism laziness", () => {
 
     // count was never forced
     expect(forceCount).toBe(2)
-  })
-})
-
-describe("interpret: zero equivalence", () => {
-  it("zeroInterpreter produces the same result as Zero.structural for a flat doc", () => {
-    const schema = Schema.doc({
-      title: Schema.string(),
-      count: Schema.number(),
-      items: Schema.list(Schema.string()),
-    })
-
-    const viaZero = Zero.structural(schema)
-    const viaInterp = interpret(schema, zeroInterpreter, undefined)
-    expect(viaInterp).toEqual(viaZero)
-  })
-
-  it("zeroInterpreter matches Zero.structural for nested products", () => {
-    const schema = Schema.doc({
-      settings: Schema.struct({
-        darkMode: Schema.boolean(),
-        fontSize: Schema.number(),
-      }),
-      metadata: Schema.record(Schema.any()),
-    })
-
-    expect(interpret(schema, zeroInterpreter, undefined)).toEqual(
-      Zero.structural(schema),
-    )
-  })
-
-  it("zeroInterpreter matches Zero.structural for discriminated sums", () => {
-    const schema = Schema.discriminatedUnion("type", {
-      text: Schema.struct({ content: Schema.string() }),
-      image: Schema.struct({ url: Schema.string() }),
-    })
-
-    expect(interpret(schema, zeroInterpreter, undefined)).toEqual(
-      Zero.structural(schema),
-    )
-  })
-
-  it("zeroInterpreter matches Zero.structural for positional sums", () => {
-    const schema = Schema.union(
-      Schema.string(),
-      Schema.number(),
-    )
-
-    expect(interpret(schema, zeroInterpreter, undefined)).toEqual(
-      Zero.structural(schema),
-    )
   })
 })
 
@@ -257,14 +207,27 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
 })
 
 describe("interpret: enrich combinator", () => {
+  // A minimal object-producing interpreter for testing enrich.
+  // Products force all thunks into a plain object; annotated nodes
+  // delegate to inner; everything else returns an empty object.
+  const objectInterpreter = createInterpreter<void, unknown>(
+    () => ({}),
+    {
+      product: (_ctx, _path, _schema, fields) => {
+        const r: Record<string, unknown> = {}
+        for (const [k, t] of Object.entries(fields)) r[k] = t()
+        return r
+      },
+      annotated: (_ctx, _path, _schema, inner) => inner ? inner() : ({}),
+    },
+  )
+
   it("enrich adds [CHANGEFEED] to every object result", () => {
     const CF_SYM = Symbol.for("kinetic:changefeed")
 
     const withCf = (result: unknown, _ctx: unknown, _path: Path) => {
-      if (result === null || result === undefined || typeof result !== "object") {
-        return {}
-      }
-      if (CF_SYM in (result as object)) return {}
+      if (!isNonNullObject(result)) return {}
+      if (CF_SYM in result) return {}
       return {
         [CF_SYM]: {
           get current() {
@@ -275,7 +238,7 @@ describe("interpret: enrich combinator", () => {
       }
     }
 
-    const enriched = enrich(zeroInterpreter, withCf)
+    const enriched = enrich(objectInterpreter, withCf)
     const schema = Schema.doc({
       title: Schema.string(),
       settings: Schema.struct({
@@ -287,20 +250,14 @@ describe("interpret: enrich combinator", () => {
     expect(hasChangefeed(result)).toBe(true)
   })
 
-  it("enrich preserves product-level results (enrich is for object-producing interpreters)", () => {
-    // enrich is designed for interpreters that produce objects (like
-    // writableInterpreter), not for interpreters that produce primitives
-    // (like zeroInterpreter which returns "" for string). Verify at the
-    // product level where it works correctly.
+  it("enrich preserves product-level results", () => {
     const CF_SYM = Symbol.for("kinetic:changefeed")
     const withMarker = (result: unknown, _ctx: unknown, _path: Path) => {
-      if (result === null || result === undefined || typeof result !== "object") {
-        return {}
-      }
+      if (!isNonNullObject(result)) return {}
       return { [CF_SYM]: { current: "marker" } }
     }
 
-    const enriched = enrich(zeroInterpreter, withMarker)
+    const enriched = enrich(objectInterpreter, withMarker)
     const schema = Schema.doc({
       settings: Schema.struct({
         darkMode: Schema.boolean(),
@@ -310,7 +267,7 @@ describe("interpret: enrich combinator", () => {
     const result = interpret(schema, enriched, undefined) as Record<string | symbol, unknown>
     // The product result has the marker attached
     expect((result as any)[CF_SYM]).toEqual({ current: "marker" })
-    // And the base zero values are preserved at the product level
+    // And the base values are preserved at the product level
     const settings = result.settings as Record<string, unknown>
     expect(settings).toBeDefined()
     expect(typeof settings).toBe("object")
@@ -415,20 +372,6 @@ describe("interpret: LoroSchema constructors produce correct grammar nodes", () 
     expect(s._kind).toBe("annotated")
     expect(s.tag).toBe("tree")
     expect(s.schema?._kind).toBe("product")
-  })
-})
-
-describe("interpret: LoroSchema zero equivalence for annotations", () => {
-  it("zeroInterpreter handles text annotation (empty string)", () => {
-    const schema = LoroSchema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
-    })
-
-    const viaZero = Zero.structural(schema)
-    const viaInterp = interpret(schema, zeroInterpreter, undefined)
-    expect(viaInterp).toEqual(viaZero)
-    expect(viaZero).toEqual({ title: "", count: 0 })
   })
 })
 

@@ -111,7 +111,6 @@ export type { Store } from "./store.js"
 
 // Built-in interpreters
 export { plainInterpreter } from "./interpreters/plain.js"
-export { zeroInterpreter } from "./interpreters/zero.js"
 export {
   writableInterpreter,
   createWritableContext,

@@ -87,17 +87,17 @@ However, an engineering review reveals several internal structural issues, redun
 
 - Task: Run full test suite — all 397 tests pass with no modifications. ✅
 
-### Phase 2: Delete zero interpreter 🔴
+### Phase 2: Delete zero interpreter ✅
 
-- Task: Delete `src/interpreters/zero.ts`. 🔴
-- Task: Remove the `zeroInterpreter` export from `src/index.ts`. 🔴
-- Task: Update `interpret.test.ts`: 🔴
+- Task: Delete `src/interpreters/zero.ts`. ✅
+- Task: Remove the `zeroInterpreter` export from `src/index.ts`. ✅
+- Task: Update `interpret.test.ts`: ✅
   - Delete the entire `interpret: zero equivalence` describe block (4 tests that compare `zeroInterpreter` output to `Zero.structural`). The equivalence was a proof-of-concept demonstration; `Zero.structural` is the canonical implementation.
   - Delete the `interpret: LoroSchema zero equivalence for annotations` describe block (1 test). Same rationale.
-  - Update the two `interpret: enrich combinator` tests that use `zeroInterpreter` as a base. Replace with `createInterpreter<void, unknown>(() => undefined, { product: (_ctx, _path, _schema, fields) => { const r: Record<string, unknown> = {}; for (const [k, t] of Object.entries(fields)) r[k] = t(); return r }, annotated: (_ctx, _path, _schema, inner) => inner ? inner() : undefined })` or a similarly minimal interpreter that produces objects for `enrich` to operate on.
-- Task: Update `TECHNICAL.md` file map to remove `interpreters/zero.ts` entry. 🔴
-- Task: Update combinator doc comments in `combinators.ts` that reference `zeroInterpreter` — replace with `plainInterpreter` or a hypothetical example. 🔴
-- Task: Run full test suite. Net test count will decrease by 5 (the deleted equivalence tests). 🔴
+  - Update the two `interpret: enrich combinator` tests that use `zeroInterpreter` as a base. Replaced with a shared `objectInterpreter` via `createInterpreter` that produces objects at every node for `enrich` to operate on.
+- Task: Update `TECHNICAL.md` file map to remove `interpreters/zero.ts` entry. Also added `guards.ts` and `store.ts` entries (from Phase 1). ✅
+- Task: Update combinator doc comments in `combinators.ts` that reference `zeroInterpreter` — replaced with hypothetical examples (`pathInterpreter`, `fallbackInterpreter`). ✅
+- Task: Run full test suite. Net test count decreased by 5 (397 → 392). ✅
 
 ### Phase 3: Writable sum dispatch from store 🔴
 

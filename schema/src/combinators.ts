@@ -163,8 +163,8 @@ export function enrich<Ctx, A, P>(
  * before being passed to each base interpreter.
  *
  * ```ts
- * const paired = product(plainInterpreter, zeroInterpreter)
- * const [plain, zero] = interpret(schema, paired, ctx)
+ * const paired = product(plainInterpreter, pathInterpreter)
+ * const [plain, paths] = interpret(schema, paired, ctx)
  * ```
  */
 export function product<Ctx, A, B>(
@@ -342,14 +342,14 @@ export type MergeFn<A> = (
  * merged per-item). The merge function receives both results and
  * decides how to combine them.
  *
- * This is how the CRDT state + zero system works:
- * `overlay(crdtInterpreter, zeroInterpreter, firstDefined)`
+ * This is how the CRDT state + fallback system works:
+ * `overlay(crdtInterpreter, fallbackInterpreter, firstDefined)`
  *
  * ```ts
  * const firstDefined: MergeFn<unknown> = (primary, fallback) =>
  *   primary !== undefined ? primary : fallback
  *
- * const merged = overlay(crdtInterpreter, zeroInterpreter, firstDefined)
+ * const merged = overlay(crdtInterpreter, fallbackInterpreter, firstDefined)
  * ```
  *
  * For a deeper structural merge at the value level (not the interpreter
