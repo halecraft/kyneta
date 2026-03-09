@@ -1,13 +1,16 @@
 // === Incremental Evaluation Stage ===
 // Strategy wrapper that delegates to either native incremental solvers
-// (LWW + Fugue) or the incremental Datalog evaluator, based on active rules.
+// (LWW + Fugue) or the unified weighted Datalog evaluator, based on
+// active rules.
 //
 // This stage sits between projection and skeleton in the incremental DAG:
 //
 //   P^Δ (projection) → Δ_facts → E^Δ (this stage) → { Δ_resolved, Δ_fuguePairs } → K^Δ (skeleton)
 //
 // The native path (Phase 2–3) handles default LWW/Fugue rules in O(|Δ|).
-// The incremental Datalog path (Phase 5–6) handles custom rules incrementally.
+// The Datalog path uses the unified evaluator from Plan 006.1, which
+// replaces the old incremental-evaluate.ts with weighted semi-naive
+// evaluation and dirty-map-based delta extraction.
 //
 // Strategy switching occurs when rule constraints are added or retracted.
 // On switch, the new strategy is bootstrapped from accumulated facts and
@@ -16,7 +19,7 @@
 // strategy and combined with the switch diff.
 //
 // See Plan 006 §Architecture, §Functional Core / Imperative Shell.
-// See Plan 006 Phase 6: Wire Incremental Datalog into Evaluation Stage.
+// See Plan 006.1 Phase 3: Wire Unified Evaluator into Pipeline.
 // See theory/incremental.md §9.7 (native solver fast path).
 
 import type { Fact, Rule } from '../../datalog/types.js';
@@ -49,9 +52,9 @@ import {
   type IncrementalFugue,
 } from '../../solver/incremental-fugue.js';
 import {
-  createIncrementalDatalogEvaluator,
-  type IncrementalDatalogEvaluator,
-} from '../../datalog/incremental-evaluate.js';
+  createEvaluator,
+  type Evaluator,
+} from '../../datalog/evaluator.js';
 import type { ZSet } from '../../base/zset.js';
 import {
   zsetEmpty,
@@ -274,12 +277,12 @@ function diffResolution(
 // ---------------------------------------------------------------------------
 
 /**
- * Convert the incremental Datalog evaluator's `currentResolution()`
+ * Convert the unified Datalog evaluator's `currentResolution()`
  * into a full `ResolutionResult` for the `current()` method and
  * strategy-switch diffing.
  */
 function datalogCurrentResolution(
-  datalog: IncrementalDatalogEvaluator,
+  datalog: Evaluator,
 ): ResolutionResult {
   const res = datalog.currentResolution();
   return {
@@ -316,9 +319,9 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
   let lww: IncrementalLWW = createIncrementalLWW();
   let fugue: IncrementalFugue = createIncrementalFugue();
 
-  // Incremental Datalog evaluator — lazily created on first switch
+  // Unified Datalog evaluator — lazily created on first switch
   // to 'datalog' strategy. Holds its own accumulated Database.
-  let datalog: IncrementalDatalogEvaluator | null = null;
+  let datalog: Evaluator | null = null;
 
   // Accumulated rules for strategy detection on rule changes.
   let accumulatedRules: Rule[] = [];
@@ -372,9 +375,9 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
   /**
    * Switch from native to incremental Datalog.
    *
-   * Creates a new IncrementalDatalogEvaluator, bootstraps it from
-   * accumulated ground facts, and diffs against the native path's
-   * accumulated resolution.
+   * Creates a new unified Evaluator, bootstraps it from accumulated
+   * ground facts, and diffs against the native path's accumulated
+   * resolution.
    *
    * Returns only the switch diff — the caller is responsible for
    * processing deltaFacts through the new strategy afterward.
@@ -388,9 +391,9 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
   } {
     const oldResolution = nativeCurrentResolution();
 
-    // Create the incremental Datalog evaluator with current rules.
+    // Create the unified Datalog evaluator with current rules.
     const rules = extractRules(getActiveConstraints());
-    datalog = createIncrementalDatalogEvaluator(rules);
+    datalog = createEvaluator(rules);
 
     // Bootstrap from accumulated ground facts.
     const accFacts = getAccumulatedFacts();

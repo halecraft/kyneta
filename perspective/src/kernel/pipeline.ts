@@ -40,7 +40,7 @@ import {
   type ResolutionResult,
 } from './resolve.js';
 import { buildSkeleton } from './skeleton.js';
-import { evaluate } from '../datalog/evaluate.js';
+import { evaluateUnified as evaluate } from '../datalog/evaluator.js';
 import type { Rule } from '../datalog/types.js';
 import {
   extractRules,
