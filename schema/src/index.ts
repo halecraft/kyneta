@@ -119,6 +119,17 @@ export type { Store } from "./store.js"
 // Built-in interpreters
 export { plainInterpreter } from "./interpreters/plain.js"
 export {
+  readableInterpreter,
+  INVALIDATE,
+  SET_HANDLER,
+  DELETE_HANDLER,
+} from "./interpreters/readable.js"
+export type {
+  RefContext,
+  Readable,
+  ReadableSequenceRef,
+} from "./interpreters/readable.js"
+export {
   writableInterpreter,
   createWritableContext,
   flush,

@@ -52,15 +52,34 @@ import { isNonNullObject } from "../guards.js"
 export { type Store, readByPath, writeByPath, applyChangeToStore } from "../store.js"
 
 // ---------------------------------------------------------------------------
+// RefContext — minimal context for read-only interpretation
+// ---------------------------------------------------------------------------
+
+/**
+ * The minimal context for read-only interpretation. Contains only a
+ * store — enough to read values at any path.
+ *
+ * This is the base context type. `WritableContext` extends it with
+ * dispatch and batching. `ChangefeedContext` extends further with
+ * subscriber maps. Each layer adds only what it needs.
+ */
+export interface RefContext {
+  readonly store: Store
+}
+
+// ---------------------------------------------------------------------------
 // WritableContext — shared state flowing through the tree
 // ---------------------------------------------------------------------------
 
 /**
- * The context shared across the entire interpreted tree. Unlike the
- * catamorphism's `path` parameter (which narrows automatically), the
- * context carries resources that are the *same* at every level:
+ * The context shared across the entire interpreted tree. Extends
+ * `RefContext` with mutation infrastructure.
  *
- * - `store` — the root mutable store object
+ * Unlike the catamorphism's `path` parameter (which narrows
+ * automatically), the context carries resources that are the *same*
+ * at every level:
+ *
+ * - `store` — the root mutable store object (from `RefContext`)
  * - `dispatch` — sends a change to the store (applies via step)
  * - `autoCommit` — if true, each mutation dispatches immediately;
  *   if false, changes accumulate in `pending` until flushed
@@ -74,8 +93,7 @@ export { type Store, readByPath, writeByPath, applyChangeToStore } from "../stor
  * provided by the changefeed layer (`createChangefeedContext`) which wraps
  * `dispatch` to add notification after each change is applied.
  */
-export interface WritableContext {
-  readonly store: Store
+export interface WritableContext extends RefContext {
   readonly dispatch: (path: Path, change: ChangeBase) => void
   readonly autoCommit: boolean
   readonly pending: PendingChange[]

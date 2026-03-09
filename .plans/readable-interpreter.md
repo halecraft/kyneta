@@ -71,7 +71,7 @@ The current ref API has three overlapping read mechanisms (`.get()`, `[CHANGEFEE
 
 Completed in prior work. `isPropertyHost` guard accepts functions. `enrich`, `withChangefeed`, and `hasChangefeed` all handle function-object refs.
 
-### Phase 2: `readableInterpreter` — the readable host 🔴
+### Phase 2: `readableInterpreter` — the readable host ✅
 
 Create a new `Interpreter<RefContext, unknown>` that produces function-shaped handles at every schema node. This is the foundational building block — a read-only, callable, navigable document tree.
 
@@ -101,18 +101,18 @@ Sequence and map refs attach `[INVALIDATE]` for child cache management. Map Prox
 
 **Tasks:**
 
-- Add `RefContext` interface to `writable.ts` (or new file), make `WritableContext extends RefContext` 🔴
-- Create `src/interpreters/readable.ts` with `readableInterpreter` 🔴
-- Implement `scalar` case: arrow function returning `readByPath(ctx.store, path)`, plus hint-aware `[Symbol.toPrimitive]` 🔴
-- Implement `product` case: arrow function with lazy child getters via `Object.defineProperty` on the function 🔴
-- Implement `sequence` case: arrow function with `.at(i)` (child navigation via cache), `.length` getter, `[Symbol.iterator]` generator, `[INVALIDATE]` symbol 🔴
-- Implement `map` case: Proxy with arrow function target, `apply` trap, read-only traps, `[SET_HANDLER]`/`[DELETE_HANDLER]` delegation, `[INVALIDATE]` symbol, `defineProperty` trap for symbol-keyed protocol 🔴
-- Implement `sum` case: identical to current writable sum (reads discriminant from store, dispatches to variant) 🔴
-- Implement `annotated` case: `"text"` → callable with text-specific `toPrimitive`; `"counter"` → callable with hint-aware `toPrimitive`; delegating tags → `inner()` pass-through 🔴
-- Export `INVALIDATE`, `SET_HANDLER`, `DELETE_HANDLER` symbols 🔴
-- Export `readableInterpreter` and `RefContext` from `index.ts` 🔴
-- Add `Readable<S>` recursive type alongside `Plain<S>` 🔴
-- Add tests for read-only document (see Tests section) 🔴
+- Add `RefContext` interface to `writable.ts` (or new file), make `WritableContext extends RefContext` ✅
+- Create `src/interpreters/readable.ts` with `readableInterpreter` ✅
+- Implement `scalar` case: arrow function returning `readByPath(ctx.store, path)`, plus hint-aware `[Symbol.toPrimitive]` ✅
+- Implement `product` case: arrow function with lazy child getters via `Object.defineProperty` on the function ✅
+- Implement `sequence` case: arrow function with `.at(i)` (child navigation via cache), `.length` getter, `[Symbol.iterator]` generator, `[INVALIDATE]` symbol ✅
+- Implement `map` case: Proxy with arrow function target, `apply` trap, read-only traps, `[SET_HANDLER]`/`[DELETE_HANDLER]` delegation, `[INVALIDATE]` symbol, `defineProperty` trap for symbol-keyed protocol ✅
+- Implement `sum` case: identical to current writable sum (reads discriminant from store, dispatches to variant) ✅
+- Implement `annotated` case: `"text"` → callable with text-specific `toPrimitive`; `"counter"` → callable with hint-aware `toPrimitive`; delegating tags → `inner()` pass-through ✅
+- Export `INVALIDATE`, `SET_HANDLER`, `DELETE_HANDLER` symbols ✅
+- Export `readableInterpreter` and `RefContext` from `index.ts` ✅
+- Add `Readable<S>` recursive type alongside `Plain<S>` ✅
+- Add tests for read-only document (see Tests section) ✅
 
 ### Phase 3: `withMutation` — interpreter transformer 🔴
 
