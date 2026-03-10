@@ -235,6 +235,20 @@ describe("writable: map ref", () => {
     expect(doc.metadata.at("color")!()).toBe("red")
   })
 
+  it(".get() and .set() are symmetric: .set(k, v) then .get(k) returns v", () => {
+    const { doc } = createStructuralDoc()
+    doc.metadata.set("color", "red")
+    expect(doc.metadata.get("color")).toBe("red")
+  })
+
+  it(".get(key) returns plain value after mutation (not a function)", () => {
+    const { doc } = createStructuralDoc()
+    doc.metadata.set("color", "red")
+    const val = doc.metadata.get("color")
+    expect(typeof val).not.toBe("function")
+    expect(val).toBe("red")
+  })
+
   it("after .delete(), .has() returns false", () => {
     const { doc } = createStructuralDoc()
     expect(doc.metadata.has("version")).toBe(true)
@@ -481,6 +495,14 @@ describe("writable: sequence ref", () => {
     const { store, doc } = createLoroDoc()
     doc.messages.delete(0)
     expect((store.messages as unknown[]).length).toBe(0)
+  })
+
+  it(".get(i) returns the plain value directly after .push()", () => {
+    const { doc } = createLoroDoc()
+    doc.messages.push({ author: "Bob", body: "Hey" })
+    const val = doc.messages.get(1)
+    expect(typeof val).not.toBe("function")
+    expect(val).toEqual({ author: "Bob", body: "Hey" })
   })
 })
 

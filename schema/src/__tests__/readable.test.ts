@@ -265,6 +265,49 @@ describe("readable: sequence ref", () => {
     const { doc } = createReadOnlyLoroDoc()
     expect(doc.messages.at(-1)).toBeUndefined()
   })
+
+  it(".get(i) returns the plain value directly (not a function)", () => {
+    const { doc } = createReadOnlyLoroDoc()
+    const val = doc.messages.get(0)
+    expect(typeof val).not.toBe("function")
+    expect(val).toEqual({ author: "Alice", body: "Hi" })
+  })
+
+  it(".get(i) returns undefined for out-of-bounds index", () => {
+    const { doc } = createReadOnlyLoroDoc()
+    expect(doc.messages.get(100)).toBeUndefined()
+    expect(doc.messages.get(-1)).toBeUndefined()
+  })
+
+  it(".get(i) returns a deep plain snapshot for structural items", () => {
+    const { doc } = createReadOnlyLoroDoc({
+      messages: [
+        { author: "Alice", body: "Hi" },
+        { author: "Bob", body: "Hey" },
+      ],
+    })
+    const first = doc.messages.get(0)
+    expect(first).toEqual({ author: "Alice", body: "Hi" })
+    const second = doc.messages.get(1)
+    expect(second).toEqual({ author: "Bob", body: "Hey" })
+  })
+
+  it(".get(i) reflects store mutations (live read)", () => {
+    const store = {
+      title: "Hello",
+      count: 0,
+      messages: [{ author: "Alice", body: "Hi" }],
+      settings: { darkMode: false, fontSize: 14 },
+      metadata: {},
+    }
+    const ctx: RefContext = { store }
+    const doc = interpret(loroDocSchema, readableInterpreter, ctx) as any
+    expect(doc.messages.get(0)).toEqual({ author: "Alice", body: "Hi" })
+    // Mutate store directly
+    ;(store.messages as unknown[]).push({ author: "Bob", body: "Hey" })
+    doc.messages[INVALIDATE]()
+    expect(doc.messages.get(1)).toEqual({ author: "Bob", body: "Hey" })
+  })
 })
 
 // ===========================================================================
@@ -346,6 +389,54 @@ describe("readable: map ref", () => {
   it(".at(key) caches child refs (referential identity)", () => {
     const { doc } = createReadOnlyDoc()
     expect(doc.metadata.at("version")).toBe(doc.metadata.at("version"))
+  })
+
+  it(".get(key) returns the plain value directly (not a function)", () => {
+    const { doc } = createReadOnlyDoc()
+    const val = doc.metadata.get("version")
+    expect(typeof val).not.toBe("function")
+    expect(val).toBe(1)
+  })
+
+  it(".get(key) returns undefined for missing key", () => {
+    const { doc } = createReadOnlyDoc()
+    expect(doc.metadata.get("nonexistent")).toBeUndefined()
+  })
+
+  it(".get(key) returns a deep plain snapshot for structural items", () => {
+    const schema = Schema.doc({
+      records: Schema.record(
+        Schema.struct({
+          color: Schema.string(),
+          priority: Schema.number(),
+        }),
+      ),
+    })
+    const store = {
+      records: { bug: { color: "red", priority: 1 } },
+    }
+    const ctx: RefContext = { store }
+    const doc = interpret(schema, readableInterpreter, ctx) as any
+    expect(doc.records.get("bug")).toEqual({ color: "red", priority: 1 })
+  })
+
+  it("JSON.stringify(mapRef.get(key)) returns the JSON-serialized value", () => {
+    const schema = Schema.doc({
+      labels: Schema.record(Schema.string()),
+    })
+    const store = { labels: { bug: "red" } }
+    const ctx: RefContext = { store }
+    const doc = interpret(schema, readableInterpreter, ctx) as any
+    expect(JSON.stringify(doc.labels.get("bug"))).toBe('"red"')
+  })
+
+  it(".get(key) reflects store mutations (live read)", () => {
+    const { store, doc } = createReadOnlyDoc()
+    expect(doc.metadata.get("version")).toBe(1)
+    // Mutate store directly
+    ;(store.metadata as Record<string, unknown>).version = 42
+    doc.metadata[INVALIDATE]("version")
+    expect(doc.metadata.get("version")).toBe(42)
   })
 })
 
@@ -526,14 +617,42 @@ describe("type-level: Readable<S>", () => {
     const _checkChild: (r: Result) => Readable<ReturnType<typeof Schema.string>> = (r) => r.title
   })
 
-  it("Readable<record(string())> is ReadableMapRef<Readable<string()>>", () => {
+  it("Readable<record(string())>: .at() returns ref, .get() returns plain value", () => {
     const s = Schema.record(Schema.string())
     type Result = Readable<typeof s>
-    // Should be ReadableMapRef
+    // .at() returns Readable ref
     const _checkAt: (r: Result) => Readable<ReturnType<typeof Schema.string>> | undefined = (r) => r.at("x")
+    // .get() returns plain string
+    const _checkGet: (r: Result) => string | undefined = (r) => r.get("x")
     const _checkHas: (r: Result) => boolean = (r) => r.has("x")
     const _checkKeys: (r: Result) => string[] = (r) => r.keys()
     const _checkSize: (r: Result) => number = (r) => r.size
-    const _checkCall: (r: Result) => Record<string, unknown> = (r) => r()
+    const _checkCall: (r: Result) => Record<string, string> = (r) => r()
+  })
+
+  it("Readable<record(struct({...}))>: .get() returns plain struct", () => {
+    const itemSchema = Schema.struct({
+      color: Schema.string(),
+      priority: Schema.number(),
+    })
+    const s = Schema.record(itemSchema)
+    type Result = Readable<typeof s>
+    // .get() returns the plain struct type
+    const _checkGet: (r: Result) => { color: string; priority: number } | undefined = (r) => r.get("x")
+    // .at() returns the readable ref (callable, with navigation)
+    const _checkAt: (r: Result) => Readable<typeof itemSchema> | undefined = (r) => r.at("x")
+  })
+
+  it("Readable<list(struct({...}))>: .get() returns plain struct", () => {
+    const itemSchema = Schema.struct({
+      title: Schema.string(),
+      done: Schema.boolean(),
+    })
+    const s = Schema.list(itemSchema)
+    type Result = Readable<typeof s>
+    // .get() returns the plain struct type
+    const _checkGet: (r: Result) => { title: string; done: boolean } | undefined = (r) => r.get(0)
+    // .at() returns the readable ref (callable, with navigation)
+    const _checkAt: (r: Result) => Readable<typeof itemSchema> | undefined = (r) => r.at(0)
   })
 })

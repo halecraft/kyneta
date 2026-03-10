@@ -133,7 +133,7 @@ This is the foundational rename. The current `.get()` on maps becomes `.at()`. N
 - `.at(key)` caches child refs (referential identity)
 - Iteration still yields refs (smoke check)
 
-### PR 2: `(packages/schema) feat: add .get() as read-value verb on maps and sequences` 🔴
+### PR 2: `(packages/schema) feat: add .get() as read-value verb on maps and sequences` ✅
 
 **Type: Feature — user-visible behavior change**
 
@@ -141,16 +141,16 @@ Add the new `.get()` method to both `ReadableMapRef` and `ReadableSequenceRef`. 
 
 **Scope:**
 
-- 🔴 Add second type parameter to `ReadableMapRef<T = unknown, V = unknown>`. Add `.at(key): T | undefined` (already present from PR 1) and `.get(key): V | undefined`.
-- 🔴 Add second type parameter to `ReadableSequenceRef<T = unknown, V = unknown>`. Add `.get(index): V | undefined`.
-- 🔴 Update `Readable<S>`:
+- ✅ Add second type parameter to `ReadableMapRef<T = unknown, V = unknown>`. Add `.at(key): T | undefined` (already present from PR 1) and `.get(key): V | undefined`.
+- ✅ Add second type parameter to `ReadableSequenceRef<T = unknown, V = unknown>`. Add `.get(index): V | undefined`.
+- ✅ Update `Readable<S>`:
   - Map branch: `ReadableMapRef<Readable<I>>` → `ReadableMapRef<Readable<I>, Plain<I>>`
   - Sequence branch: `ReadableSequenceRef<Readable<I>>` → `ReadableSequenceRef<Readable<I>, Plain<I>>`
   - `annotated("movable")` branch: same pattern as sequence
-- 🔴 In `readableInterpreter.map()` runtime: add `Object.defineProperty(ref, "get", { value: (key) => { const child = ref.at(key); return child !== undefined ? child() : undefined } })`.
-- 🔴 In `readableInterpreter.sequence()` runtime: add `Object.defineProperty(ref, "get", { value: (index) => { const child = ref.at(index); return child !== undefined ? child() : undefined } })`.
-- 🔴 Update `example/main.ts` Section 5: `doc.labels.at("bug")!()` → `doc.labels.get("bug")` for the primary read path. Add examples showing both `.at()` (navigation) and `.get()` (read). Show `JSON.stringify(doc.labels.get("bug"))` working. Show `.set()` / `.get()` symmetry.
-- 🔴 Update `example/main.ts` Section 4: add `.get(i)` examples alongside `.at(i)`.
+- ✅ In `readableInterpreter.map()` runtime: add `Object.defineProperty(ref, "get", { value: (key) => { const child = ref.at(key); return child !== undefined ? child() : undefined } })`.
+- ✅ In `readableInterpreter.sequence()` runtime: add `Object.defineProperty(ref, "get", { value: (index) => { const child = ref.at(index); return child !== undefined ? child() : undefined } })`.
+- ✅ Update `example/main.ts` Section 5: `doc.labels.at("bug")!()` → `doc.labels.get("bug")` for the primary read path. Add examples showing both `.at()` (navigation) and `.get()` (read). Show `JSON.stringify(doc.labels.get("bug"))` working. Show `.set()` / `.get()` symmetry.
+- ✅ Update `example/main.ts` Section 4: add `.get(i)` examples alongside `.at(i)`.
 
 **New tests:**
 

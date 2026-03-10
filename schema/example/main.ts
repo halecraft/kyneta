@@ -345,10 +345,15 @@ const task = doc.tasks.at(0)!
 log(`
     doc.tasks.push(...)  ×3
     doc.tasks.length → ${doc.tasks.length}
+
+    Navigate with .at(i) → ref (callable, subscribable):
     doc.tasks.at(0).title() → "${task.title()}"
     doc.tasks.at(0).done()  → ${task.done()}
 
-    Iterating:
+    Read with .get(i) → plain value (symmetric with mutation):
+    doc.tasks.get(0) → ${JSON.stringify(doc.tasks.get(0))}
+
+    Iterating (yields refs):
     ${[...doc.tasks].map(item => `  [${item.done() ? "✓" : " "}] ${item.title()} (priority: ${item.priority()})`).join("\n    ")}
 `)
 
@@ -359,8 +364,11 @@ log(`doc.tasks.delete(1) → length is now ${doc.tasks.length}`)
 
 section(5, "Working with Records (dynamic keys)")
 
-// Records expose a Map-like API: .set(), .at(), .delete(), .has(),
-// .keys(), .size, .entries(), .values(), .clear(). Type-safe, no casts.
+// Records have two access verbs:
+//   .at(key)  → navigate to a ref (callable, subscribable)
+//   .get(key) → read the plain value (symmetric with .set())
+// Plus: .set(), .delete(), .has(), .keys(), .size, .entries(),
+//       .values(), .clear(). Type-safe, no casts.
 doc.labels.set("bug", "red")
 doc.labels.set("feature", "blue")
 doc.labels.set("docs", "green")
@@ -374,8 +382,14 @@ log(`
       .join(", ")}]
     doc.labels.has("bug") → ${doc.labels.has("bug")}
     doc.labels.has("missing") → ${doc.labels.has("missing")}
-    doc.labels.at("bug")!() → "${doc.labels.at("bug")!()}"
     doc.labels.size → ${doc.labels.size}
+
+    Read with .get(key) → plain value (symmetric with .set()):
+    doc.labels.get("bug") → "${doc.labels.get("bug")}"
+    JSON.stringify(doc.labels.get("bug")) → ${JSON.stringify(doc.labels.get("bug"))}
+
+    Navigate with .at(key) → ref (callable, subscribable):
+    doc.labels.at("bug")!() → "${doc.labels.at("bug")!()}"
 `)
 
 // ─── 6. Batched mutations with change() ─────────────────────────────────

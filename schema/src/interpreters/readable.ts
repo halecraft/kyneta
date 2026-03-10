@@ -65,9 +65,12 @@ export const INVALIDATE: unique symbol = Symbol.for(
  * child ref or `undefined` for out-of-bounds indices.
  * `.length` reflects the store array length.
  */
-export interface ReadableSequenceRef<T = unknown> {
-  (): unknown[]
+export interface ReadableSequenceRef<T = unknown, V = unknown> {
+  (): V[]
+  /** Navigate to a child ref by index. Returns undefined for out-of-bounds. */
   at: (index: number) => T | undefined
+  /** Read the plain value at index. Returns undefined for out-of-bounds. */
+  get: (index: number) => V | undefined
   readonly length: number
   [Symbol.iterator](): Iterator<T>
 }
@@ -79,11 +82,13 @@ export interface ReadableSequenceRef<T = unknown> {
  * `.size`, `.entries()`, `.values()`, `[Symbol.iterator]` provide
  * Map-like introspection.
  */
-export interface ReadableMapRef<T = unknown> {
+export interface ReadableMapRef<T = unknown, V = unknown> {
   /** Callable: returns a deep plain snapshot of the entire map. */
-  (): Record<string, unknown>
+  (): Record<string, V>
   /** Navigate to a child ref by key. Returns undefined if key is not in the store. */
   at(key: string): T | undefined
+  /** Read the plain value at key. Returns undefined if key is not in the store. Equivalent to `.at(key)?.()`. */
+  get(key: string): V | undefined
   /** Check if a key exists in the store. */
   has(key: string): boolean
   /** Return all current store keys. */
@@ -134,7 +139,7 @@ export type Readable<S extends Schema> =
             : unknown
           : Tag extends "movable"
             ? Inner extends SequenceSchema<infer I>
-              ? ReadableSequenceRef<Readable<I>>
+              ? ReadableSequenceRef<Readable<I>, Plain<I>>
               : unknown
             : Tag extends "tree"
               ? Inner extends Schema
@@ -154,10 +159,10 @@ export type Readable<S extends Schema> =
           }
         : // --- Sequence ---
           S extends SequenceSchema<infer I>
-          ? ReadableSequenceRef<Readable<I>>
+          ? ReadableSequenceRef<Readable<I>, Plain<I>>
           : // --- Map ---
             S extends MapSchema<infer I>
-            ? ReadableMapRef<Readable<I>>
+            ? ReadableMapRef<Readable<I>, Plain<I>>
             : // --- Sum ---
               S extends PositionalSumSchema<infer V>
               ? Readable<V[number]>
@@ -263,6 +268,15 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
       return childCache.get(index)
     }
 
+    Object.defineProperty(ref, "get", {
+      value: (index: number): unknown => {
+        const child = ref.at(index)
+        return child !== undefined ? child() : undefined
+      },
+      enumerable: false,
+      configurable: true,
+    })
+
     Object.defineProperty(ref, "length", {
       get() {
         const arr = readByPath(ctx.store, path)
@@ -336,6 +350,15 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
           childCache.set(key, item(key))
         }
         return childCache.get(key)
+      },
+      enumerable: false,
+      configurable: true,
+    })
+
+    Object.defineProperty(ref, "get", {
+      value: (key: string): unknown => {
+        const child = ref.at(key)
+        return child !== undefined ? child() : undefined
       },
       enumerable: false,
       configurable: true,
