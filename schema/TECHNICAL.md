@@ -323,13 +323,28 @@ All methods are non-enumerable, so `Object.keys(mapRef)` returns `[]` — matchi
 
 ### Mutation Layer (`withMutation` in `src/interpreters/writable.ts`)
 
-An interpreter transformer: `withMutation(base)` takes `Interpreter<RefContext, A>` and returns `Interpreter<WritableContext, A>`. It delegates to the base for structural cases (product, sum) and adds mutation methods at leaf/collection cases:
+An interpreter transformer: `withMutation(base)` takes `Interpreter<RefContext, A>` and returns `Interpreter<WritableContext, A>`. It adds mutation methods at each case:
 
-- **Scalar:** `.set(value)` — dispatches `MapChange` to parent (upward reference pattern).
+- **Scalar:** `.set(value)` — dispatches `ReplaceChange` at own path.
+- **Product:** `.set(plainObject)` — dispatches `ReplaceChange` at own path. Attached as a non-enumerable method via `Object.defineProperty` (same pattern as map refs). Enables atomic subtree replacement: one change instead of N per-leaf operations. `Writable<ProductSchema<F>>` = `{ readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>`.
 - **Text:** `.insert(index, content)`, `.delete(index, length)`, `.update(content)` — dispatches `TextChange`. Note: `update()` reads the current text via `ref()` (the callable read from the base) to compute the delete length.
 - **Counter:** `.increment(n?)`, `.decrement(n?)` — dispatches `IncrementChange`.
 - **Sequence:** `.push(...items)`, `.insert(index, ...items)`, `.delete(index, count?)` — dispatches `SequenceChange`. Calls `[INVALIDATE]()` to clear the full child cache after each mutation.
 - **Map:** attaches `.set(key, value)`, `.delete(key)`, and `.clear()` directly to the map ref as non-enumerable methods via `Object.defineProperty`. `.set()` dispatches `MapChange` and calls `[INVALIDATE](key)` for per-key cache invalidation. `.delete()` dispatches `MapChange` with a delete list and calls `[INVALIDATE](key)`. `.clear()` reads all current keys from the store, dispatches a single `MapChange` deleting all of them, and calls `[INVALIDATE]()` (full cache clear). This is a compound operation — there is no primitive "clear" change type.
+- **Sum:** pure structural dispatch — delegates to the base interpreter.
+
+#### Dispatch Model
+
+**Every node dispatches at its own path.** This is a universal invariant with no exceptions. Scalar `.set()` dispatches `ReplaceChange` at `["settings", "darkMode"]`, not `MapChange` at `["settings"]`. Product `.set()` dispatches `ReplaceChange` at `["settings"]`. Text `.insert()` dispatches `TextChange` at `["title"]`. The dispatch path always equals the node's path in the schema tree.
+
+This design gives developers two mutation granularities:
+
+- **Leaf `.set()`** for surgical edits — one scalar, one `ReplaceChange`, one notification at the leaf path.
+- **Product `.set()`** for bulk replacement — one struct, one `ReplaceChange`, one notification at the product path.
+
+For future Loro integration, a `ReplaceChange` at a product path maps naturally to a single `LoroMap.set(key, entireBlob)` operation. The Loro-specific interpreter (when built) will translate `ReplaceChange` at a plain subtree path into the appropriate Loro API calls. The base library stays backend-agnostic — it models the clean case where every node owns its own dispatch.
+
+> **Historical note:** An earlier version used an "upward reference" pattern where scalar `.set()` dispatched `MapChange` to the parent path. This was a Loro-ism (Loro stores plain values inside `LoroMap` containers, so setting a boolean means calling `loroMap.set("key", true)` on the parent). The upward dispatch broke exact-path subscribers on scalars, conflated change types, and prevented product-level `.set()`. It was removed in favor of self-path dispatch.
 
 **Change dispatch** supports auto-commit (immediate apply + notify) and batched mode (accumulate in `pending`, apply on `flush()`).
 
@@ -343,13 +358,13 @@ Three recursive conditional types map schema types to their corresponding value 
 
 **`Readable<S>`** — the callable ref type. `Readable<ScalarSchema<"number">>` = `(() => number) & { [Symbol.toPrimitive]: ... }`. `Readable<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `(() => { x: number }) & { readonly x: Readable<ScalarSchema<"number">> }`. Used to type the result of `interpret(schema, readableInterpreter, ctx)`.
 
-**`Writable<S>`** — the mutation-only ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>` (just `.set()`). `Writable<AnnotatedSchema<"text">>` = `TextRef` (just `.insert()`, `.delete()`, `.update()`). Consumer code that composes both uses `Readable<S> & Writable<S>`.
+**`Writable<S>`** — the mutation-only ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>` (just `.set()`). `Writable<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ readonly x: ScalarRef<number> } & ProductRef<{ x: number }>` (field refs + `.set()`). `Writable<AnnotatedSchema<"text">>` = `TextRef` (just `.insert()`, `.delete()`, `.update()`). Consumer code that composes both uses `Readable<S> & Writable<S>`.
 
 All three types account for constrained scalars: when `ScalarSchema<K, V>` has a narrowed `V`, `Plain` yields `V`, `Readable` yields `(() => V) & { toPrimitive }`, and `Writable` yields `ScalarRef<V>`.
 
 ## Verified Properties
 
-The spike validates these properties via 516 tests:
+The spike validates these properties via 524 tests:
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: `doc.title === doc.title` — lazy getters cache on first access. `mapRef.get("x") === mapRef.get("x")` — map child refs are cached.
@@ -372,6 +387,8 @@ The spike validates these properties via 516 tests:
 19. **Map-like API**: map refs expose `.get(key)`, `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]` for reads; `.set(key, value)`, `.delete(key)`, `.clear()` for writes. `.get("missing")` returns `undefined`. No Proxy, no string index signature.
 20. **Sequence `.at()` bounds check**: `.at(100)` on a 2-item array returns `undefined`; `.at(-1)` returns `undefined`. Matches `Array.prototype.at()` semantics.
 21. **Capability composition**: `enrich(withMutation(readableInterpreter), withChangefeed)` produces refs with all three capabilities.
+22. **Self-path dispatch**: every mutation dispatches at its own path. Scalar `.set()` dispatches `ReplaceChange` at the scalar's path (not `MapChange` at the parent). Exact-path changefeed subscribers on scalars fire on `.set()`.
+23. **Product `.set()`**: `doc.settings.set({ darkMode: true, fontSize: 20 })` dispatches a single `ReplaceChange` at the product's path. The `.set()` method is non-enumerable. Individual field refs still work after product `.set()`. Batched mode accumulates one `PendingChange`.
 
 ## File Map
 
@@ -390,10 +407,11 @@ packages/schema/
 │   ├── interpret.ts             # Interpreter interface + catamorphism + Path types
 │   ├── combinators.ts           # enrich, product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
+│   ├── interpreter-types.ts     # RefContext, Plain<S> — shared types across interpreters
 │   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore
 │   ├── interpreters/
 │   │   ├── readable.ts          # Callable function-shaped refs + Readable<S> + composability symbols
-│   │   ├── writable.ts          # withMutation transformer + mutation-only ref interfaces + Plain<S> + Writable<S>
+│   │   ├── writable.ts          # withMutation transformer + mutation-only ref interfaces + Writable<S>
 │   │   ├── plain.ts             # Read from plain JS object (eager deep snapshot)
 │   │   ├── with-changefeed.ts   # Changefeed decorator (observation layer)
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate
