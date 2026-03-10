@@ -1,0 +1,29 @@
+{
+	"name": "prism",
+	"version": "0.0.1",
+	"description": "Convergent Constraint Systems - A constraint-based approach to CRDTs",
+	"type": "module",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest",
+		"test:run": "vitest run",
+		"typecheck": "tsc --noEmit",
+		"lint": "eslint src tests"
+	},
+	"keywords": [
+		"crdt",
+		"ccs",
+		"convergent-constraint-systems",
+		"collaborative",
+		"distributed"
+	],
+	"author": "",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^20.10.0",
+		"typescript": "^5.3.0",
+		"vitest": "^1.0.0"
+	}
+}

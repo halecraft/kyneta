@@ -1,0 +1,8 @@
+- we're currently using a simplified containment check without wildcards for permissions, we should develop this further
+- wait, a bookmark is a constraint? and any peer can add a bookmark? This seems like a vector for abuse.
+- verifySignature is a stub right now
+- are there opportunities for simplification by implementing well-known algorithms? for example reverse toplogical traversal in computeActive
+- are we doing any dumb `await import` statements? or type-only imports inline with code? (Why does claude do this??)
+- have we solved the convergent insert problem for seq containers inside map containers? e.g. two peers insert concurrently into a map containing a list, that neither of them knows about, do both items get inserted?
+- Loro's text.update(str) natively applies Myers diff, that's cool, we should do it too
+-
