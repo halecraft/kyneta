@@ -61,12 +61,12 @@ Separately, product nodes lack a `.set(plainObject)` method. This means there's 
 - ✅ Add tests in `with-changefeed.test.ts`: exact subscriber on product fires on `.set()`; deep subscriber on root sees product `.set()` with correct origin.
 - ✅ Add type-level test in `types.test.ts`: `Writable<ProductSchema<{ x: ScalarSchema<"number"> }>>` has `.set({ x: number })`. Also updated all existing product/struct type assertions to include `& ProductRef<...>`.
 
-### Phase 3: Update example 🔴
+### Phase 3: Update example ✅
 
-- 🔴 **Section 3** (Direct Mutations): after per-field `doc.settings.visibility.set("private")` and `doc.settings.maxTasks.set(50)`, add `doc.settings.set({ visibility: "public", maxTasks: 100, archived: false })` to show bulk struct assignment. Log the result.
-- 🔴 **Section 6** (Batched Mutations): replace `d.settings.archived.set(true)` with `d.settings.set({ visibility: "private", maxTasks: 25, archived: true })` inside the `change()` block to demonstrate product `.set()` in batch context.
-- 🔴 **Section 8** (Portable Refs): add a one-liner variant of `resetSettings` using `doc.settings.set({...})` alongside the existing per-ref version. Comment contrasting the two granularities.
-- 🔴 **Section 11** (Deep Subscriptions): output naturally changes — `doc.settings.maxTasks.set(999)` now shows `origin: settings.maxTasks, type: replace` instead of `origin: settings, type: map`. Add a `doc.settings.set({...})` call to contrast: product `.set()` dispatches at the product path.
+- ✅ **Section 3** (Direct Mutations): after per-field `doc.settings.visibility.set("private")` and `doc.settings.maxTasks.set(50)`, add `doc.settings.set({ visibility: "public", maxTasks: 100, archived: false })` to show bulk struct assignment. Log the result.
+- ✅ **Section 6** (Batched Mutations): replaced `d.settings.archived.set(true)` with `d.settings.set({ visibility: "private", maxTasks: 25, archived: true })` inside the `change()` block to demonstrate product `.set()` in batch context.
+- ✅ **Section 8** (Portable Refs): added a one-liner variant of `resetSettings` using `doc.settings.set({...})` alongside the existing per-ref version, contrasting the two granularities.
+- ✅ **Section 11** (Deep Subscriptions): output now shows `origin: settings.maxTasks, type: replace` for scalar dispatch. Added `doc.settings.set({...})` call showing `origin: settings, type: replace` — product dispatches at the product path.
 
 ### Phase 4: Documentation 🔴
 

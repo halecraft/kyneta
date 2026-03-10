@@ -208,8 +208,31 @@ const section = (n: number, title: string) => {
 }
 
 const log = (msg: string) => {
-  for (const line of msg.split("\n")) {
-    console.log(`  ${line}`)
+  // Indent-aware: if the string starts with a newline followed by
+  // whitespace, treat that whitespace as the "base indent" to strip.
+  let lines = msg.split("\n")
+
+  // Detect optional leading newline
+  if (lines.length > 1 && lines[0]!.trim() === "") {
+    lines = lines.slice(1) // drop the empty first line
+  }
+
+  // Detect optional trailing empty line (closing backtick on its own line)
+  if (lines.length > 1 && lines[lines.length - 1]!.trim() === "") {
+    lines = lines.slice(0, -1)
+  }
+
+  // Find the minimum indentation across non-empty lines
+  let minIndent = Infinity
+  for (const line of lines) {
+    if (line.trim() === "") continue
+    const match = line.match(/^(\s*)/)
+    if (match) minIndent = Math.min(minIndent, match[1]!.length)
+  }
+  if (!isFinite(minIndent)) minIndent = 0
+
+  for (const line of lines) {
+    console.log(`  ${line.slice(minIndent)}`)
   }
 }
 
@@ -252,50 +275,63 @@ const doc = createDoc(ProjectSchema, {
   settings: { visibility: "public" },
 })
 
-log(`const doc = createDoc(ProjectSchema, { name: "Schema Algebra", ... })`)
-log("")
-log(`doc.toJSON() →`)
-log(
-  `${JSON.stringify(doc.toJSON(), null, 2)
-    .split("\n")
-    .map(l => "  " + l)
-    .join("\n")}`,
-)
+const showDoc = () => {
+  log(
+    `\ndoc() → \n${JSON.stringify(doc(), null, 2)
+      .split("\n")
+      .map(l => "  " + l)
+      .join("\n")}`,
+  )
+}
+
+log(`const doc = createDoc(ProjectSchema, { name: "Schema Algebra", ... })\n`)
+showDoc()
 
 // ─── 3. Direct mutations (auto-commit) ──────────────────────────────────
 
 section(3, "Direct Mutations (auto-commit)")
 
 doc.name.insert(doc.name().length, " v2")
-log(`doc.name.insert(end, " v2")`)
-log(`doc.name() → "${doc.name()}"`)
-
 doc.description.update("A unified recursive grammar for document structure")
-log(`doc.description.update("A unified recursive grammar...")`)
+log(`
+    doc.name.insert(end, " v2")
+    doc.name() → "${doc.name()}"
+
+    doc.description.update("A unified recursive grammar...")
+`)
 
 doc.stars.increment(42)
-log(`doc.stars.increment(42)`)
-log(`doc.stars() → ${doc.stars()}`)
+log(`
+    doc.stars.increment(42)
+    doc.stars() → ${doc.stars()}
+`)
 
 doc.stars.decrement(2)
-log(`doc.stars.decrement(2) → ${doc.stars()}`)
+log(`
+    doc.stars.decrement(2) → ${doc.stars()}
+`)
 
 doc.settings.visibility.set("private")
-log(
-  `doc.settings.visibility.set("private") → "${doc.settings.visibility()}"`,
-)
-
 doc.settings.maxTasks.set(50)
-log(`doc.settings.maxTasks.set(50) → ${doc.settings.maxTasks()}`)
 
-log("")
-log(`doc.toJSON() →`)
-log(
-  `${JSON.stringify(doc.toJSON(), null, 2)
-    .split("\n")
-    .map(l => "  " + l)
-    .join("\n")}`,
-)
+log(`
+    doc.settings.visibility.set("private") → "${doc.settings.visibility()}"
+
+    doc.settings.maxTasks.set(50) → ${doc.settings.maxTasks()}
+`)
+
+// Product .set() — bulk struct replacement in a single ReplaceChange
+doc.settings.set({ visibility: "public", maxTasks: 100, archived: false })
+log(`
+    doc.settings.set({ visibility: "public", maxTasks: 100, archived: false })
+      → visibility="${doc.settings.visibility()}"
+      → maxTasks=${doc.settings.maxTasks()}
+      → archived=${doc.settings.archived()}
+`)
+
+log("\n\n")
+
+showDoc()
 
 // ─── 4. Working with lists ──────────────────────────────────────────────
 
@@ -304,20 +340,17 @@ section(4, "Working with Lists")
 doc.tasks.push({ title: "Design the grammar", done: true, priority: 1 })
 doc.tasks.push({ title: "Implement catamorphism", done: true, priority: 1 })
 doc.tasks.push({ title: "Write the facade", done: false, priority: 2 })
-log(`doc.tasks.push(...)  ×3`)
-log(`doc.tasks.length → ${doc.tasks.length}`)
 
 const task = doc.tasks.at(0)!
-log(`doc.tasks.at(0).title() → "${task.title()}"`)
-log(`doc.tasks.at(0).done()  → ${task.done()}`)
+log(`
+    doc.tasks.push(...)  ×3
+    doc.tasks.length → ${doc.tasks.length}
+    doc.tasks.at(0).title() → "${task.title()}"
+    doc.tasks.at(0).done()  → ${task.done()}
 
-log("")
-log("Iterating:")
-for (const item of doc.tasks) {
-  log(
-    `  [${item.done() ? "✓" : " "}] ${item.title()} (priority: ${item.priority()})`,
-  )
-}
+    Iterating:
+    ${[...doc.tasks].map(item => `  [${item.done() ? "✓" : " "}] ${item.title()} (priority: ${item.priority()})`).join("\n    ")}
+`)
 
 doc.tasks.delete(1)
 log(`doc.tasks.delete(1) → length is now ${doc.tasks.length}`)
@@ -331,18 +364,19 @@ section(5, "Working with Records (dynamic keys)")
 doc.labels.set("bug", "red")
 doc.labels.set("feature", "blue")
 doc.labels.set("docs", "green")
-log(`doc.labels.set("bug", "red")`)
-log(`doc.labels.set("feature", "blue")`)
-log(`doc.labels.set("docs", "green")`)
-log(
-  `doc.labels.keys() → [${doc.labels.keys()
-    .map((k: string) => `"${k}"`)
-    .join(", ")}]`,
-)
-log(`doc.labels.has("bug") → ${doc.labels.has("bug")}`)
-log(`doc.labels.has("missing") → ${doc.labels.has("missing")}`)
-log(`doc.labels.get("bug")!() → "${doc.labels.get("bug")!()}"`)
-log(`doc.labels.size → ${doc.labels.size}`)
+log(`
+    doc.labels.set("bug", "red")
+    doc.labels.set("feature", "blue")
+    doc.labels.set("docs", "green")
+    doc.labels.keys() → [${doc.labels
+      .keys()
+      .map((k: string) => `"${k}"`)
+      .join(", ")}]
+    doc.labels.has("bug") → ${doc.labels.has("bug")}
+    doc.labels.has("missing") → ${doc.labels.has("missing")}
+    doc.labels.get("bug")!() → "${doc.labels.get("bug")!()}"
+    doc.labels.size → ${doc.labels.size}
+`)
 
 // ─── 6. Batched mutations with change() ─────────────────────────────────
 
@@ -353,20 +387,25 @@ log(`Before: stars = ${doc.stars()}, name = "${doc.name()}"`)
 change(doc, d => {
   d.name.update("Schema Algebra v3")
   d.stars.increment(100)
-  d.settings.archived.set(true)
+  // Product .set() in batch: one ReplaceChange instead of N scalar writes
+  d.settings.set({ visibility: "private", maxTasks: 25, archived: true })
   d.tasks.push({ title: "Ship it!", done: false, priority: 3 })
 })
 
-log(`change(doc, d => {`)
-log(`  d.name.update("Schema Algebra v3")`)
-log(`  d.stars.increment(100)`)
-log(`  d.settings.archived.set(true)`)
-log(`  d.tasks.push({ title: "Ship it!", ... })`)
-log(`})`)
-log("")
-log(`After: stars = ${doc.stars()}, name = "${doc.name()}"`)
-log(`doc.settings.archived() → ${doc.settings.archived()}`)
-log(`doc.tasks.length → ${doc.tasks.length}`)
+log(`
+    change(doc, d => {
+      d.name.update("Schema Algebra v3")
+      d.stars.increment(100)
+      d.settings.set({ visibility: "private", maxTasks: 25, archived: true })
+      d.tasks.push({ title: "Ship it!", ... })
+    })
+
+    After: stars = ${doc.stars()}, name = "${doc.name()}"
+    doc.settings.visibility() → "${doc.settings.visibility()}"
+    doc.settings.maxTasks() → ${doc.settings.maxTasks()}
+    doc.settings.archived() → ${doc.settings.archived()}
+    doc.tasks.length → ${doc.tasks.length}
+`)
 
 // ─── 7. Subscribing to changes ──────────────────────────────────────────
 
@@ -377,21 +416,19 @@ const unsub = subscribe(doc.name, action => {
   actions.push(action)
 })
 
-log(`subscribe(doc.name, action => ...)`)
-log("")
+log(`subscribe(doc.name, action => ...)\n`)
 
 doc.name.insert(0, "✨ ")
-log(`doc.name.insert(0, "✨ ")`)
 doc.name.insert(doc.name().length, " ✨")
-log(`doc.name.insert(end, " ✨")`)
-log(`→ "${doc.name()}"`)
-log(
-  `→ ${actions.length} actions received, types: [${actions.map(a => `"${a.type}"`).join(", ")}]`,
-)
+log(`
+    doc.name.insert(0, "✨ ")
+    doc.name.insert(end, " ✨")
+    → "${doc.name()}"
+    → ${actions.length} actions received, types: [${actions.map(a => `"${a.type}"`).join(", ")}]
+`)
 
 unsub()
 doc.name.insert(0, "IGNORED ")
-log("")
 log(`After unsub → still ${actions.length} actions (delivery stopped)`)
 // Undo the pollution so later sections are clean
 doc.name.update("Schema Algebra v3")
@@ -400,8 +437,9 @@ doc.name.update("Schema Algebra v3")
 
 section(8, "Portable Refs")
 
-log("Refs carry their context in closures — pass them anywhere.")
-log("")
+log(`
+    Refs carry their context in closures — pass them anywhere.
+`)
 
 // A function that knows nothing about our document
 function resetSettings(
@@ -422,14 +460,20 @@ resetSettings(
   doc.settings.maxTasks,
   doc.settings.archived,
 )
-log(
-  `resetSettings(doc.settings.visibility, doc.settings.maxTasks, doc.settings.archived)`,
-)
-log(
-  `After:  visibility="${doc.settings.visibility()}", maxTasks=${doc.settings.maxTasks()}, archived=${doc.settings.archived()}`,
-)
+log(`
+    resetSettings(doc.settings.visibility, doc.settings.maxTasks, doc.settings.archived)
+    After:  visibility="${doc.settings.visibility()}", maxTasks=${doc.settings.maxTasks()}, archived=${doc.settings.archived()}
+`)
 
-log("")
+// Contrast: product .set() replaces the entire struct in one call.
+// Leaf .set() for surgical edits, product .set() for bulk replacement.
+doc.settings.set({ visibility: "private", maxTasks: 50, archived: true })
+log(`
+    Or: doc.settings.set({ visibility: "private", maxTasks: 50, archived: true })
+      → visibility="${doc.settings.visibility()}", maxTasks=${doc.settings.maxTasks()}, archived=${doc.settings.archived()}
+`)
+// Restore for later sections
+doc.settings.set({ visibility: "public", maxTasks: 100, archived: false })
 
 // A generic "append tag" function — typed with Readable & Writable
 // The intersection captures both "callable read" and "mutation methods".
@@ -438,7 +482,6 @@ function tag(ref: (() => string) & TextRef, label: string) {
 }
 
 tag(doc.name, "released")
-log(`tag(doc.name, "released") → "${doc.name()}"`)
 
 // A generic counter helper — typed with Readable & Writable
 function ensureMinimum(ref: (() => number) & CounterRef, min: number) {
@@ -448,47 +491,52 @@ function ensureMinimum(ref: (() => number) & CounterRef, min: number) {
 
 log(`doc.stars() → ${doc.stars()}`)
 ensureMinimum(doc.stars, 200)
-log(`ensureMinimum(doc.stars, 200) → ${doc.stars()}`)
+log(`
+    tag(doc.name, "released") → "${doc.name()}"
+    ensureMinimum(doc.stars, 200) → ${doc.stars()}
+`)
 
 // ─── 9. Referential identity & namespace isolation ──────────────────────
 
 section(9, "Referential Identity & Namespace Isolation")
 
-log(`doc.name === doc.name → ${doc.name === doc.name}`)
-log(`doc.settings === doc.settings → ${doc.settings === doc.settings}`)
-log("")
-log(
-  `Object.keys(doc) → [${Object.keys(doc)
-    .map(k => `"${k}"`)
-    .join(", ")}]`,
-)
-log(`"toJSON" in Object.keys(doc) → ${Object.keys(doc).includes("toJSON")}`)
-log(`typeof doc.toJSON → "${typeof doc.toJSON}"`)
-log("")
-log(`isFeedable(doc) → ${hasChangefeed(doc)}`)
-log(`isFeedable(doc.name) → ${hasChangefeed(doc.name)}`)
-log(`isFeedable(doc.stars) → ${hasChangefeed(doc.stars)}`)
-log(`isFeedable(doc.tasks) → ${hasChangefeed(doc.tasks)}`)
-log(`isFeedable(doc.settings) → ${hasChangefeed(doc.settings)}`)
+log(`
+    doc.name === doc.name → ${doc.name === doc.name}
+    doc.settings === doc.settings → ${doc.settings === doc.settings}
+
+    Object.keys(doc) → [${Object.keys(doc)
+      .map(k => `"${k}"`)
+      .join(", ")}]
+    "toJSON" in Object.keys(doc) → ${Object.keys(doc).includes("toJSON")}
+    typeof doc.toJSON → "${typeof doc.toJSON}"
+
+    isFeedable(doc) → ${hasChangefeed(doc)}
+    isFeedable(doc.name) → ${hasChangefeed(doc.name)}
+    isFeedable(doc.stars) → ${hasChangefeed(doc.stars)}
+    isFeedable(doc.tasks) → ${hasChangefeed(doc.tasks)}
+    isFeedable(doc.settings) → ${hasChangefeed(doc.settings)}
+`)
 
 // ─── 10. Validation ─────────────────────────────────────────────────────
 
 section(10, "Validation")
 
-log("validate() and tryValidate() check plain data against a schema.")
-log("They use the same interpreter algebra — no separate validation logic.")
-log("")
+log(`
+    validate() and tryValidate() check plain data against a schema.
+    They use the same interpreter algebra — no separate validation logic.
+`)
 
 // 10a. Validate the current doc snapshot (should pass)
 // validate() returns Plain<S> — TypeScript infers the fully typed result.
 // We access typed fields to demonstrate the narrowing works at compile time.
 const snapshot = doc.toJSON()
 const validated = validate(ProjectSchema, snapshot)
-log(`validate(ProjectSchema, doc.toJSON()) → passes ✓`)
-log(`  validated.name = "${validated.name}"`)
-log(`  validated.stars = ${validated.stars}`)
-log(`  validated.settings.visibility = "${validated.settings.visibility}"`)
-log("")
+log(`
+    validate(ProjectSchema, doc.toJSON()) → passes ✓
+      validated.name = "${validated.name}"
+      validated.stars = ${validated.stars}
+      validated.settings.visibility = "${validated.settings.visibility}"
+`)
 
 // 10b. Validate invalid data — caught errors with path and message
 const badData = {
@@ -509,24 +557,23 @@ const badData = {
 
 const result = tryValidate(ProjectSchema, badData)
 if (!result.ok) {
-  log(`tryValidate(ProjectSchema, badData) → ${result.errors.length} errors:`)
-  for (const err of result.errors) {
-    log(
-      `  ✗ ${err.path}: expected ${err.expected}, got ${describeValue(err.actual)}`,
-    )
-  }
+  log(`
+    tryValidate(ProjectSchema, badData) → ${result.errors.length} errors:
+    ${result.errors.map(err => `  ✗ ${err.path}: expected ${err.expected}, got ${describeValue(err.actual)}`).join("\n    ")}
+  `)
 }
-log("")
 
 // 10c. validate() throws on invalid data
 try {
   validate(ProjectSchema, { ...badData, bio: 42 })
 } catch (e) {
   if (e instanceof SchemaValidationError) {
-    log(`validate() throws SchemaValidationError:`)
-    log(`  path: "${e.path}"`)
-    log(`  expected: "${e.expected}"`)
-    log(`  message: "${e.message}"`)
+    log(`
+        validate() throws SchemaValidationError:
+          path: "${e.path}"
+          expected: "${e.expected}"
+          message: "${e.message}"
+    `)
   }
 }
 
@@ -541,14 +588,15 @@ function describeValue(v: unknown): string {
 
 section(11, "Deep Subscriptions (subscribeDeep)")
 
-log("subscribeDeep notifies for changes anywhere in a subtree.")
-log("The Changefeed coalgebra is unchanged — subscribeDeep is")
-log("context-level infrastructure in the observation layer.")
-log("")
+log(`
+    subscribeDeep notifies for changes anywhere in a subtree.
+    The Changefeed coalgebra is unchanged — subscribeDeep is
+    context-level infrastructure in the observation layer.
+`)
 
 const { cfCtx } = getInternals(doc)
 const deepEvents: { origin: string; type: string }[] = []
-const deepUnsub = subscribeDeep(cfCtx, [], (event) => {
+const deepUnsub = subscribeDeep(cfCtx, [], event => {
   deepEvents.push({
     origin: formatPath(event.origin),
     type: event.change.type,
@@ -559,103 +607,99 @@ doc.name.update("Deep Test")
 doc.stars.increment(1)
 doc.settings.maxTasks.set(999)
 
-log(`After 3 mutations (name, stars, settings):`)
-log(`  ${deepEvents.length} deep events received:`)
-for (const e of deepEvents) {
-  log(`    origin: ${e.origin}, type: ${e.type}`)
-}
+log(`
+    After 3 mutations (name, stars, settings.maxTasks):
+      ${deepEvents.length} deep events received:
+      ${deepEvents.map(e => `  origin: ${e.origin}, type: ${e.type}`).join("\n      ")}
+`)
+
+// Contrast: product .set() dispatches at the product path, not at each leaf
+doc.settings.set({ visibility: "public", maxTasks: 100, archived: false })
+
+const last = deepEvents[deepEvents.length - 1]!
+log(`
+    After doc.settings.set({...}) — 1 product-level dispatch:
+      ${deepEvents.length} total deep events (${deepEvents.length - 3} new):
+        origin: ${last.origin}, type: ${last.type}
+
+    Leaf .set() → origin includes the scalar segment (e.g. settings.maxTasks)
+    Product .set() → origin stops at the product (e.g. settings)
+`)
 
 deepUnsub()
 doc.name.update("Schema Algebra v3 [released]") // restore, not observed
-
-// ─── 12. Final snapshot ─────────────────────────────────────────────────
 
 // ─── 12. Read-only documents ────────────────────────────────────────────
 
 section(12, "Read-Only Documents")
 
-log("readableInterpreter alone produces a callable, navigable document")
-log("with no mutation methods and no dispatch context.")
-log("")
+log(`
+    readableInterpreter alone produces a callable, navigable document
+    with no mutation methods and no dispatch context.
+`)
 
 {
   const roStore = { ...doc.toJSON() }
   const roCtx: RefContext = { store: roStore }
-  const roDoc = interpret(ProjectSchema, readableInterpreter, roCtx) as Readable<
-    typeof ProjectSchema
-  >
+  const roDoc = interpret(
+    ProjectSchema,
+    readableInterpreter,
+    roCtx,
+  ) as Readable<typeof ProjectSchema>
 
-  log(`const roDoc = interpret(schema, readableInterpreter, { store })`)
-  log(`roDoc.name() → "${roDoc.name()}"`)
-  log(`roDoc.stars() → ${roDoc.stars()}`)
-  log(`roDoc.settings.visibility() → "${roDoc.settings.visibility()}"`)
-  log(`roDoc.tasks.at(0).title() → "${roDoc.tasks.at(0)!.title()}"`)
-  log(`roDoc.tasks.length → ${roDoc.tasks.length}`)
-  log(`typeof roDoc.name → "${typeof roDoc.name}" (function-shaped ref)`)
-  log("")
-  log(`// No mutation methods:`)
-  log(`"set" in roDoc.stars → ${"set" in roDoc.stars}`)
-  log(`"insert" in roDoc.name → ${"insert" in roDoc.name}`)
-  log(`"increment" in roDoc.stars → ${"increment" in roDoc.stars}`)
+  log(`
+      const roDoc = interpret(schema, readableInterpreter, { store })
+      roDoc.name() → "${roDoc.name()}"
+      roDoc.stars() → ${roDoc.stars()}
+      roDoc.settings.visibility() → "${roDoc.settings.visibility()}"
+      roDoc.tasks.at(0).title() → "${roDoc.tasks.at(0)!.title()}"
+      roDoc.tasks.length → ${roDoc.tasks.length}
+      typeof roDoc.name → "${typeof roDoc.name}" (function-shaped ref)
+
+      // No mutation methods:
+      "set" in roDoc.stars → ${"set" in roDoc.stars}
+      "insert" in roDoc.name → ${"insert" in roDoc.name}
+      "increment" in roDoc.stars → ${"increment" in roDoc.stars}
+  `)
 }
 
 // ─── 13. Template literal coercion via toPrimitive ──────────────────────
 
 section(13, "Template Literal Coercion (toPrimitive)")
 
-log("Leaf refs support [Symbol.toPrimitive] — no ref() call needed")
-log("in template literals or coercion contexts.")
-log("")
+log(`
+    Leaf refs support [Symbol.toPrimitive] — no ref() call needed
+    in template literals or coercion contexts.
 
-log(`\`Project: \${doc.name}\` → "Project: ${doc.name}"`)
-log(`\`Stars: \${doc.stars}\` → "Stars: ${doc.stars}"`)
-log(`\`Desc: \${doc.description}\` → "Desc: ${doc.description}"`)
-log("")
-log(`// Hint-aware coercion:`)
-log(`+doc.stars → ${+doc.stars}  (number hint)`)
-log(`String(doc.name) → "${String(doc.name)}"  (string hint)`)
-log(`doc.stars[Symbol.toPrimitive]("number") → ${doc.stars[Symbol.toPrimitive]("number")}`)
-log(`doc.stars[Symbol.toPrimitive]("string") → "${doc.stars[Symbol.toPrimitive]("string")}"`)
+    \`Project: \${doc.name}\` → "Project: ${doc.name}"
+    \`Stars: \${doc.stars}\` → "Stars: ${doc.stars}"
+    \`Desc: \${doc.description}\` → "Desc: ${doc.description}"
+
+    // Hint-aware coercion:
+    +doc.stars → ${+doc.stars}  (number hint)
+    String(doc.name) → "${String(doc.name)}"  (string hint)
+    doc.stars[Symbol.toPrimitive]("number") → ${doc.stars[Symbol.toPrimitive]("number")}
+    doc.stars[Symbol.toPrimitive]("string") → "${doc.stars[Symbol.toPrimitive]("string")}"
+`)
 
 // ─── 14. The composition algebra ────────────────────────────────────────
 
 section(14, "The Composition Algebra")
 
-log("Three orthogonal building blocks, independently useful:")
-log("")
-log("  readableInterpreter              → read-only callable refs")
-log("  withMutation(readableInterpreter) → read + mutation")
-log("  enrich(..., withChangefeed)       → read + mutation + observation")
-log("")
-log("Each level adds only the context it needs:")
-log("  RefContext      { store }")
-log("  WritableContext { store, dispatch, autoCommit, pending }")
-log("  ChangefeedContext { ... + subscribers, deepSubscribers }")
+log(`
+    Three orthogonal building blocks, independently useful:
+
+      readableInterpreter              → read-only callable refs
+      withMutation(readableInterpreter) → read + mutation
+      enrich(..., withChangefeed)       → read + mutation + observation
+
+    Each level adds only the context it needs:
+      RefContext      { store }
+      WritableContext { store, dispatch, autoCommit, pending }
+      ChangefeedContext { ... + subscribers, deepSubscribers }
+`)
 
 // ─── 15. Final Snapshot ─────────────────────────────────────────────────
 
 section(15, "Final Snapshot")
-
-log("doc.toJSON() →")
-log(
-  JSON.stringify(doc.toJSON(), null, 2)
-    .split("\n")
-    .map(l => "  " + l)
-    .join("\n"),
-)
-
-// ─── Done ───────────────────────────────────────────────────────────────
-
-console.log()
-console.log("═".repeat(68))
-console.log()
-log("This entire app ran on plain JS objects.")
-log("No CRDT runtime. No Loro. No network. No dependencies.")
-log("")
-log("Reading is the foundational capability (readableInterpreter).")
-log("Mutation composes on top (withMutation).")
-log("Observation composes on top of that (withChangefeed).")
-log("")
-log("The same schema, the same developer experience,")
-log("can target any backend via different interpreters.")
-console.log()
+showDoc()
