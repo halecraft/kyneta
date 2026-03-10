@@ -74,16 +74,16 @@ export interface ReadableSequenceRef<T = unknown> {
 
 /**
  * An interface for readable map refs: callable + Map-like navigation.
- * The call signature returns the plain record. `.get(key)` returns a
- * child ref or `undefined` for missing keys. `.has()`, `.keys()`,
+ * The call signature returns the plain record. `.at(key)` navigates to
+ * a child ref or `undefined` for missing keys. `.has()`, `.keys()`,
  * `.size`, `.entries()`, `.values()`, `[Symbol.iterator]` provide
  * Map-like introspection.
  */
 export interface ReadableMapRef<T = unknown> {
   /** Callable: returns a deep plain snapshot of the entire map. */
   (): Record<string, unknown>
-  /** Get a child ref by key. Returns undefined if key is not in the store. */
-  get(key: string): T | undefined
+  /** Navigate to a child ref by key. Returns undefined if key is not in the store. */
+  at(key: string): T | undefined
   /** Check if a key exists in the store. */
   has(key: string): boolean
   /** Return all current store keys. */
@@ -296,7 +296,7 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
   // Arrow function with Map-like methods attached as non-enumerable
   // properties via Object.defineProperty. No Proxy needed.
   //
-  // .get(key) checks store existence before creating a child ref.
+  // .at(key) checks store existence before creating a child ref.
   // .has(), .keys(), .size, .entries(), .values(), [Symbol.iterator]
   // provide Map-like introspection. [INVALIDATE] retained for cache
   // coordination with the mutation layer.
@@ -321,7 +321,7 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
 
     // --- Map-like methods (all non-enumerable) ---
 
-    Object.defineProperty(ref, "get", {
+    Object.defineProperty(ref, "at", {
       value: (key: string): unknown => {
         const obj = readByPath(ctx.store, path)
         if (
@@ -372,7 +372,7 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
     Object.defineProperty(ref, "entries", {
       value: function* (): IterableIterator<[string, unknown]> {
         for (const key of storeKeys()) {
-          yield [key, ref.get(key)]
+          yield [key, ref.at(key)]
         }
       },
       enumerable: false,
@@ -382,7 +382,7 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
     Object.defineProperty(ref, "values", {
       value: function* (): IterableIterator<unknown> {
         for (const key of storeKeys()) {
-          yield ref.get(key)
+          yield ref.at(key)
         }
       },
       enumerable: false,
@@ -392,7 +392,7 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
     Object.defineProperty(ref, Symbol.iterator, {
       value: function* (): IterableIterator<[string, unknown]> {
         for (const key of storeKeys()) {
-          yield [key, ref.get(key)]
+          yield [key, ref.at(key)]
         }
       },
       enumerable: false,

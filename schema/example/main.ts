@@ -359,7 +359,7 @@ log(`doc.tasks.delete(1) → length is now ${doc.tasks.length}`)
 
 section(5, "Working with Records (dynamic keys)")
 
-// Records expose a Map-like API: .set(), .get(), .delete(), .has(),
+// Records expose a Map-like API: .set(), .at(), .delete(), .has(),
 // .keys(), .size, .entries(), .values(), .clear(). Type-safe, no casts.
 doc.labels.set("bug", "red")
 doc.labels.set("feature", "blue")
@@ -374,7 +374,7 @@ log(`
       .join(", ")}]
     doc.labels.has("bug") → ${doc.labels.has("bug")}
     doc.labels.has("missing") → ${doc.labels.has("missing")}
-    doc.labels.get("bug")!() → "${doc.labels.get("bug")!()}"
+    doc.labels.at("bug")!() → "${doc.labels.at("bug")!()}"
     doc.labels.size → ${doc.labels.size}
 `)
 

@@ -272,16 +272,16 @@ describe("readable: sequence ref", () => {
 // ===========================================================================
 
 describe("readable: map ref", () => {
-  it(".get(key) returns a callable child ref", () => {
+  it(".at(key) returns a callable child ref", () => {
     const { doc } = createReadOnlyDoc()
-    const versionRef = doc.metadata.get("version")
+    const versionRef = doc.metadata.at("version")
     expect(typeof versionRef).toBe("function")
     expect(versionRef!()).toBe(1)
   })
 
-  it(".get(key) returns undefined for missing key", () => {
+  it(".at(key) returns undefined for missing key", () => {
     const { doc } = createReadOnlyDoc()
-    expect(doc.metadata.get("nonexistent")).toBeUndefined()
+    expect(doc.metadata.at("nonexistent")).toBeUndefined()
   })
 
   it("map ref is callable and returns plain record", () => {
@@ -343,9 +343,9 @@ describe("readable: map ref", () => {
     expect(typeof pairs[0]![1]).toBe("function")
   })
 
-  it(".get(key) caches child refs (referential identity)", () => {
+  it(".at(key) caches child refs (referential identity)", () => {
     const { doc } = createReadOnlyDoc()
-    expect(doc.metadata.get("version")).toBe(doc.metadata.get("version"))
+    expect(doc.metadata.at("version")).toBe(doc.metadata.at("version"))
   })
 })
 
@@ -444,11 +444,11 @@ describe("readable: composability hooks", () => {
     const { doc } = createReadOnlyDoc({
       metadata: { a: 1, b: 2 },
     })
-    const aRef = doc.metadata.get("a")
-    const bRef = doc.metadata.get("b")
+    const aRef = doc.metadata.at("a")
+    const bRef = doc.metadata.at("b")
     doc.metadata[INVALIDATE]("a")
-    expect(doc.metadata.get("a")).not.toBe(aRef)
-    expect(doc.metadata.get("b")).toBe(bRef)
+    expect(doc.metadata.at("a")).not.toBe(aRef)
+    expect(doc.metadata.at("b")).toBe(bRef)
   })
 })
 
@@ -530,7 +530,7 @@ describe("type-level: Readable<S>", () => {
     const s = Schema.record(Schema.string())
     type Result = Readable<typeof s>
     // Should be ReadableMapRef
-    const _checkGet: (r: Result) => Readable<ReturnType<typeof Schema.string>> | undefined = (r) => r.get("x")
+    const _checkAt: (r: Result) => Readable<ReturnType<typeof Schema.string>> | undefined = (r) => r.at("x")
     const _checkHas: (r: Result) => boolean = (r) => r.has("x")
     const _checkKeys: (r: Result) => string[] = (r) => r.keys()
     const _checkSize: (r: Result) => number = (r) => r.size

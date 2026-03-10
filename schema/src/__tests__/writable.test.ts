@@ -190,9 +190,9 @@ describe("writable: portable refs", () => {
 // ---------------------------------------------------------------------------
 
 describe("writable: map ref", () => {
-  it(".get(key) returns a callable child ref", () => {
+  it(".at(key) returns a callable child ref", () => {
     const { doc } = createStructuralDoc()
-    const versionRef = doc.metadata.get("version")
+    const versionRef = doc.metadata.at("version")
     expect(versionRef!()).toBe(1)
   })
 
@@ -229,10 +229,10 @@ describe("writable: map ref", () => {
     expect(doc.metadata.keys()).toEqual([])
   })
 
-  it("after .set(), .get() returns the new value", () => {
+  it("after .set(), .at() returns the new value", () => {
     const { doc } = createStructuralDoc()
     doc.metadata.set("color", "red")
-    expect(doc.metadata.get("color")!()).toBe("red")
+    expect(doc.metadata.at("color")!()).toBe("red")
   })
 
   it("after .delete(), .has() returns false", () => {
