@@ -123,7 +123,6 @@ export {
   INVALIDATE,
 } from "./interpreters/readable.js"
 export type {
-  RefContext,
   Readable,
   ReadableSequenceRef,
   ReadableMapRef,
@@ -143,8 +142,10 @@ export type {
   SequenceRef,
   WritableMapRef,
   Writable,
-  Plain,
 } from "./interpreters/writable.js"
+
+// Shared interpreter types (canonical location)
+export type { RefContext, Plain } from "./interpreter-types.js"
 
 // Validate interpreter — schema-driven validation with collecting errors
 export {

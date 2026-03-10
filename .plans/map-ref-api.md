@@ -199,16 +199,16 @@ export interface ReadableMapRef<T = unknown> {
 
 **Not touched:** `schema.ts`, `loro-schema.ts`, `change.ts`, `step.ts`, `store.ts`, `combinators.ts`, `guards.ts`, `changefeed.ts`, `plain.ts`, `validate.ts`, `interpret.ts`.
 
-### PR 3: `(packages/schema) docs: update TECHNICAL.md and plans for Map-like API` 🔴
+### PR 3: `(packages/schema) docs: update TECHNICAL.md and plans for Map-like API` ✅
 
 **Why separate:** Pure documentation. No code behavior. Different reviewer attention than the implementation PRs.
 
 **Tasks:**
 
-- Update TECHNICAL.md §"Readable Interpreter": replace Proxy map description with Map-like API; document `.get()` store-existence check; document sequence `.at()` bounds check; note that map iteration follows `Map` semantics (yields `[key, ref]` entries) while sequence iteration follows `Array` semantics (yields bare refs) 🔴
-- Update TECHNICAL.md §"Mutation Layer": replace Proxy handler installation with direct method attachment for maps; document `.clear()` 🔴
-- Update TECHNICAL.md §"Composability hooks": remove `[SET_HANDLER]` / `[DELETE_HANDLER]` entirely; note only `[INVALIDATE]` remains for maps 🔴
-- Update TECHNICAL.md §"Verified Properties": update map-related properties (Map-like API, no Proxy); add sequence `.at()` bounds-check property 🔴
+- Update TECHNICAL.md §"Readable Interpreter": replace Proxy map description with Map-like API; document `.get()` store-existence check; document sequence `.at()` bounds check; note that map iteration follows `Map` semantics (yields `[key, ref]` entries) while sequence iteration follows `Array` semantics (yields bare refs) ✅
+- Update TECHNICAL.md §"Mutation Layer": replace Proxy handler installation with direct method attachment for maps; document `.clear()` ✅
+- Update TECHNICAL.md §"Composability hooks": remove `[SET_HANDLER]` / `[DELETE_HANDLER]` entirely; note only `[INVALIDATE]` remains for maps ✅
+- Update TECHNICAL.md §"Verified Properties": update map-related properties (Map-like API, no Proxy); add sequence `.at()` bounds-check property ✅
 
 ## Test Specifications
 

@@ -301,17 +301,25 @@ The foundational building block. Every ref is an **arrow function**: `ref()` ret
 
 **Product nodes** use `Object.defineProperty` with lazy getters on the function. Each getter forces its thunk on first access, caches the result, and returns the cached value on subsequent accesses. `Object.keys(fn)` returns only schema field names (arrow functions' built-in `name` and `length` are non-enumerable and can be shadowed by `configurable: true` getters).
 
-**Map nodes** use `Proxy` with an **arrow function target**. This gives `typeof proxy === "function"` and enables an `apply` trap on the same Proxy — no second Proxy needed. String keys route to child refs via a cache; symbol keys route to the target (for protocol like `[CHANGEFEED]`, `[INVALIDATE]`). Arrow functions are used as Proxy targets (not `function(){}`) because they have only `length` and `name` as own keys — avoiding `arguments`/`caller`/`prototype` invariant violations.
+**Map nodes** (`ReadableMapRef<T>`) are arrow functions with **Map-like methods** attached as non-enumerable properties via `Object.defineProperty`. No Proxy is used. Methods:
+- `.get(key)` — checks store existence before creating a child ref; returns `undefined` for missing keys (deliberate behavior change from the earlier Proxy, which unconditionally created zombie refs for any string key).
+- `.has(key)` — checks if a key exists in the store.
+- `.keys()` — returns current store keys.
+- `.size` — getter returning the number of store entries.
+- `.entries()` — yields `[key, childRef]` pairs (matches `Map` iteration semantics).
+- `.values()` — yields child refs.
+- `[Symbol.iterator]` — yields `[key, childRef]` pairs (matches `Map`, not `Array`).
 
-**Sequence nodes** are callable functions with `.at(i)` for child navigation, `.length` getter, and `[Symbol.iterator]` generator.
+All methods are non-enumerable, so `Object.keys(mapRef)` returns `[]` — matching `Object.keys(new Map())` behavior. `.get(key)` caches child refs for referential identity: `mapRef.get("x") === mapRef.get("x")`.
+
+**Sequence nodes** are callable functions with `.at(i)` for child navigation, `.length` getter, and `[Symbol.iterator]` generator. `.at(i)` **checks bounds** — it reads the store array length and returns `undefined` for out-of-bounds indices (including negative indices), matching `Array.prototype.at()` semantics. Note that sequence iteration follows **Array** semantics (yields bare child refs), while map iteration follows **Map** semantics (yields `[key, ref]` entries).
 
 **Annotated nodes** dispatch on tag: `"text"` produces a callable ref with text-specific `[Symbol.toPrimitive]` (always returns string); `"counter"` produces a callable ref with hint-aware `[Symbol.toPrimitive]` (number for `"default"`/`"number"`, string for `"string"`); `"doc"`/`"movable"`/`"tree"` delegate to `inner()`. Unannotated scalars get a generic hint-aware `[Symbol.toPrimitive]`.
 
 **Sum nodes** dispatch based on runtime store state (discriminated sums read the discriminant, nullable sums check for null/undefined, general positional sums fall back to first variant).
 
-**Composability hooks:** The readable interpreter exposes well-known symbols for inter-layer communication:
+**Composability hooks:** The readable interpreter exposes one well-known symbol for inter-layer communication:
 - `[INVALIDATE](key?)` on sequence/map refs — mutation layer calls this to clear child caches after writes.
-- `[SET_HANDLER]` / `[DELETE_HANDLER]` on map Proxy targets — mutation layer fills these so that `proxy.key = value` and `delete proxy.key` dispatch changes. Without a handler installed, writes are rejected (read-only by default).
 
 ### Mutation Layer (`withMutation` in `src/interpreters/writable.ts`)
 
@@ -321,7 +329,7 @@ An interpreter transformer: `withMutation(base)` takes `Interpreter<RefContext, 
 - **Text:** `.insert(index, content)`, `.delete(index, length)`, `.update(content)` — dispatches `TextChange`. Note: `update()` reads the current text via `ref()` (the callable read from the base) to compute the delete length.
 - **Counter:** `.increment(n?)`, `.decrement(n?)` — dispatches `IncrementChange`.
 - **Sequence:** `.push(...items)`, `.insert(index, ...items)`, `.delete(index, count?)` — dispatches `SequenceChange`. Calls `[INVALIDATE]()` to clear the full child cache after each mutation.
-- **Map:** fills `[SET_HANDLER]` and `[DELETE_HANDLER]` via `Object.defineProperty` through the Proxy. Each handler dispatches `MapChange` and calls `[INVALIDATE](key)` for per-key cache invalidation.
+- **Map:** attaches `.set(key, value)`, `.delete(key)`, and `.clear()` directly to the map ref as non-enumerable methods via `Object.defineProperty`. `.set()` dispatches `MapChange` and calls `[INVALIDATE](key)` for per-key cache invalidation. `.delete()` dispatches `MapChange` with a delete list and calls `[INVALIDATE](key)`. `.clear()` reads all current keys from the store, dispatches a single `MapChange` deleting all of them, and calls `[INVALIDATE]()` (full cache clear). This is a compound operation — there is no primitive "clear" change type.
 
 **Change dispatch** supports auto-commit (immediate apply + notify) and batched mode (accumulate in `pending`, apply on `flush()`).
 
@@ -341,11 +349,11 @@ All three types account for constrained scalars: when `ScalarSchema<K, V>` has a
 
 ## Verified Properties
 
-The spike validates these properties via 503 tests:
+The spike validates these properties via 516 tests:
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
-2. **Referential identity**: `doc.title === doc.title` — lazy getters cache on first access.
-3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names (even on function-shaped refs). `CHANGEFEED in doc` is true. `CHANGEFEED` is non-enumerable.
+2. **Referential identity**: `doc.title === doc.title` — lazy getters cache on first access. `mapRef.get("x") === mapRef.get("x")` — map child refs are cached.
+3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names (even on function-shaped refs). `Object.keys(mapRef)` returns `[]` (methods are non-enumerable). `CHANGEFEED in doc` is true. `CHANGEFEED` is non-enumerable.
 4. **Portable refs**: `const ref = doc.settings.fontSize; bump(ref)` — works outside the tree because context is captured in closures.
 5. **Plain round-trip**: `interpret(schema, plainInterpreter, store)` produces the identical object tree.
 6. **Changefeed subscription**: `doc.title[CHANGEFEED].subscribe(cb)` receives changes; unsubscribe stops notifications.
@@ -361,8 +369,9 @@ The spike validates these properties via 503 tests:
 16. **`toPrimitive` coercion**: `` `Stars: ${doc.count}` `` works via `[Symbol.toPrimitive]`; counter is hint-aware (number for default, string for string hint).
 17. **Read-only documents**: `interpret(schema, readableInterpreter, { store })` produces a fully navigable, callable document with no mutation methods.
 18. **Cache invalidation**: `[INVALIDATE]()` clears full cache; `[INVALIDATE](key)` clears single entry. Verified on both sequence and map refs.
-19. **Single Proxy for maps**: map refs use one Proxy with a function target — no Proxy-on-Proxy. `apply` trap handles callability.
-20. **Capability composition**: `enrich(withMutation(readableInterpreter), withChangefeed)` produces refs with all three capabilities.
+19. **Map-like API**: map refs expose `.get(key)`, `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]` for reads; `.set(key, value)`, `.delete(key)`, `.clear()` for writes. `.get("missing")` returns `undefined`. No Proxy, no string index signature.
+20. **Sequence `.at()` bounds check**: `.at(100)` on a 2-item array returns `undefined`; `.at(-1)` returns `undefined`. Matches `Array.prototype.at()` semantics.
+21. **Capability composition**: `enrich(withMutation(readableInterpreter), withChangefeed)` produces refs with all three capabilities.
 
 ## File Map
 

@@ -1,0 +1,117 @@
+// interpreter-types — shared type definitions used across interpreters.
+//
+// These are pure type-level definitions with no runtime code. They live
+// here to break the circular dependency between readable.ts and writable.ts:
+//
+//   - RefContext is the minimal read-only context (used by readable, extended by writable)
+//   - Plain<S> is the schema-to-plain-JS-type mapping (used by readable, writable, validate)
+//
+// Previously RefContext lived in writable.ts (and was re-exported by readable.ts)
+// and Plain<S> lived in writable.ts (forcing readable.ts to duplicate it as ReadablePlain<S>).
+
+import type { Store } from "./store.js"
+import type {
+  Schema,
+  ScalarSchema,
+  ProductSchema,
+  SequenceSchema,
+  MapSchema,
+  AnnotatedSchema,
+  PositionalSumSchema,
+  DiscriminatedSumSchema,
+} from "./schema.js"
+
+// ---------------------------------------------------------------------------
+// RefContext — minimal context for read-only interpretation
+// ---------------------------------------------------------------------------
+
+/**
+ * The minimal context for read-only interpretation. Contains only a
+ * store — enough to read values at any path.
+ *
+ * This is the base context type. `WritableContext` extends it with
+ * dispatch and batching. `ChangefeedContext` extends further with
+ * subscriber maps. Each layer adds only what it needs.
+ */
+export interface RefContext {
+  readonly store: Store
+}
+
+// ---------------------------------------------------------------------------
+// Plain<S> — type-level interpretation from schema type to plain JS type
+// ---------------------------------------------------------------------------
+
+/**
+ * Computes the plain JavaScript/JSON type for a given schema type.
+ *
+ * This is the foundational type-level interpretation: it maps schema
+ * nodes to bare JavaScript values (string, number, arrays, objects).
+ *
+ * Use `Plain<S>` for `toJSON()` return types, serialization boundaries,
+ * snapshot types, and anywhere you need the "just data" shape of a schema.
+ *
+ * ```ts
+ * const s = Schema.doc({
+ *   title: Schema.string(),
+ *   count: Schema.number(),
+ *   items: Schema.list(Schema.struct({
+ *     name: Schema.string(),
+ *     done: Schema.boolean(),
+ *   })),
+ *   settings: Schema.struct({
+ *     darkMode: Schema.boolean(),
+ *   }),
+ *   metadata: Schema.record(Schema.any()),
+ * })
+ *
+ * type Doc = Plain<typeof s>
+ * // = {
+ * //     title: string
+ * //     count: number
+ * //     items: { name: string; done: boolean }[]
+ * //     settings: { darkMode: boolean }
+ * //     metadata: { [key: string]: unknown }
+ * //   }
+ * ```
+ */
+export type Plain<S extends Schema> =
+  // --- Annotated: dispatch on tag ---
+  S extends AnnotatedSchema<infer Tag, infer Inner>
+    ? Tag extends "text"
+      ? string
+      : Tag extends "counter"
+        ? number
+        : Tag extends "doc"
+          ? Inner extends ProductSchema<infer F>
+            ? { [K in keyof F]: Plain<F[K]> }
+            : unknown
+          : Tag extends "movable"
+            ? Inner extends SequenceSchema<infer I>
+              ? Plain<I>[]
+              : unknown
+            : Tag extends "tree"
+              ? Inner extends Schema
+                ? Plain<Inner>
+                : unknown
+              : // Unknown annotation with inner — delegate
+                Inner extends Schema
+                ? Plain<Inner>
+                : unknown
+    : // --- Scalar ---
+      S extends ScalarSchema<infer _K, infer V>
+      ? V
+      : // --- Product ---
+        S extends ProductSchema<infer F>
+        ? { [K in keyof F]: Plain<F[K]> }
+        : // --- Sequence ---
+          S extends SequenceSchema<infer I>
+          ? Plain<I>[]
+          : // --- Map ---
+            S extends MapSchema<infer I>
+            ? { [key: string]: Plain<I> }
+            : // --- Sum ---
+              S extends PositionalSumSchema<infer V>
+              ? Plain<V[number]>
+              : S extends DiscriminatedSumSchema<infer D, infer M>
+                ? { [K in keyof M]: Plain<M[K]> & { [_ in D]: K } }[keyof M]
+                : unknown

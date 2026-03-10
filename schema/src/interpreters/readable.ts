@@ -33,10 +33,10 @@ import {
 import { type Store, readByPath } from "../store.js"
 import { isNonNullObject } from "../guards.js"
 
-import type { RefContext } from "./writable.js"
+import type { RefContext, Plain } from "../interpreter-types.js"
 
 // Re-export RefContext for consumers
-export type { RefContext } from "./writable.js"
+export type { RefContext } from "../interpreter-types.js"
 
 // ---------------------------------------------------------------------------
 // Composability symbols
@@ -128,7 +128,7 @@ export type Readable<S extends Schema> =
           }
         : Tag extends "doc"
           ? Inner extends ProductSchema<infer F>
-            ? (() => { [K in keyof F]: ReadablePlain<F[K]> }) & {
+            ? (() => { [K in keyof F]: Plain<F[K]> }) & {
                 readonly [K in keyof F]: Readable<F[K]>
               }
             : unknown
@@ -149,7 +149,7 @@ export type Readable<S extends Schema> =
       ? (() => V) & { [Symbol.toPrimitive](hint: string): V | string }
       : // --- Product ---
         S extends ProductSchema<infer F>
-        ? (() => { [K in keyof F]: ReadablePlain<F[K]> }) & {
+        ? (() => { [K in keyof F]: Plain<F[K]> }) & {
             readonly [K in keyof F]: Readable<F[K]>
           }
         : // --- Sequence ---
@@ -163,47 +163,6 @@ export type Readable<S extends Schema> =
               ? Readable<V[number]>
               : S extends DiscriminatedSumSchema
                 ? unknown
-                : unknown
-
-/**
- * Helper: extract the plain type from a schema (mirrors Plain<S> but
- * avoids circular import with writable.ts).
- */
-type ReadablePlain<S extends Schema> =
-  S extends AnnotatedSchema<infer Tag, infer Inner>
-    ? Tag extends "text"
-      ? string
-      : Tag extends "counter"
-        ? number
-        : Tag extends "doc"
-          ? Inner extends ProductSchema<infer F>
-            ? { [K in keyof F]: ReadablePlain<F[K]> }
-            : unknown
-          : Tag extends "movable"
-            ? Inner extends SequenceSchema<infer I>
-              ? ReadablePlain<I>[]
-              : unknown
-            : Tag extends "tree"
-              ? Inner extends Schema
-                ? ReadablePlain<Inner>
-                : unknown
-              : Inner extends Schema
-                ? ReadablePlain<Inner>
-                : unknown
-    : S extends ScalarSchema<infer _K, infer V>
-      ? V
-      : S extends ProductSchema<infer F>
-        ? { [K in keyof F]: ReadablePlain<F[K]> }
-        : S extends SequenceSchema<infer I>
-          ? ReadablePlain<I>[]
-          : S extends MapSchema<infer I>
-            ? { [key: string]: ReadablePlain<I> }
-            : S extends PositionalSumSchema<infer V>
-              ? ReadablePlain<V[number]>
-              : S extends DiscriminatedSumSchema<infer D, infer M>
-                ? {
-                    [K in keyof M]: ReadablePlain<M[K]> & { [_ in D]: K }
-                  }[keyof M]
                 : unknown
 
 // ---------------------------------------------------------------------------

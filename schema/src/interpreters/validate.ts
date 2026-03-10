@@ -24,7 +24,7 @@ import {
   type PositionalSumSchema,
   type DiscriminatedSumSchema,
 } from "../schema.js"
-import type { Plain } from "./writable.js"
+import type { Plain } from "../interpreter-types.js"
 import { readByPath } from "../store.js"
 import { isNonNullObject } from "../guards.js"
 

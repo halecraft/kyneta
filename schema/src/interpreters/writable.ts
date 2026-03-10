@@ -1,10 +1,13 @@
 // Writable interpreter layer — mutation methods composed onto readable refs.
 //
 // This module provides:
-// 1. Context types: RefContext (read-only), WritableContext (read + write)
+// 1. WritableContext (extends RefContext with dispatch + batching)
 // 2. Mutation-only ref interfaces: ScalarRef, TextRef, CounterRef, SequenceRef
 // 3. withMutation(base) — interpreter transformer that adds mutation methods
-// 4. Plain<S> and Writable<S> type-level interpretations
+// 4. Writable<S> type-level interpretation
+//
+// Shared types used across interpreters (RefContext, Plain<S>) live in
+// `../interpreter-types.ts` and are re-exported here for backward compat.
 //
 // The readable interpreter (`readableInterpreter`) owns reading + structural
 // navigation. This module owns mutation. Observation is owned by
@@ -45,25 +48,13 @@ import {
 import {
   INVALIDATE,
 } from "./readable.js"
+import type { RefContext, Plain } from "../interpreter-types.js"
 
 // Re-export store utilities for backward compatibility
 export { type Store, readByPath, writeByPath, applyChangeToStore } from "../store.js"
 
-// ---------------------------------------------------------------------------
-// RefContext — minimal context for read-only interpretation
-// ---------------------------------------------------------------------------
-
-/**
- * The minimal context for read-only interpretation. Contains only a
- * store — enough to read values at any path.
- *
- * This is the base context type. `WritableContext` extends it with
- * dispatch and batching. `ChangefeedContext` extends further with
- * subscriber maps. Each layer adds only what it needs.
- */
-export interface RefContext {
-  readonly store: Store
-}
+// Re-export shared types for backward compatibility
+export type { RefContext, Plain } from "../interpreter-types.js"
 
 // ---------------------------------------------------------------------------
 // WritableContext — shared state flowing through the tree
@@ -208,86 +199,6 @@ export interface WritableMapRef<V = unknown> {
 // ScalarPlain is re-exported from schema.ts (the canonical definition).
 // It maps ScalarKind literals to their corresponding TypeScript types.
 export type { ScalarPlain } from "../schema.js"
-
-// ---------------------------------------------------------------------------
-// Plain<S> — type-level interpretation from schema type to plain JS type
-// ---------------------------------------------------------------------------
-
-/**
- * Computes the plain JavaScript/JSON type for a given schema type.
- *
- * This is the type-level counterpart to `Writable<S>`: where `Writable`
- * maps schema nodes to ref types (TextRef, CounterRef, etc.), `Plain`
- * maps them to bare JavaScript values (string, number, arrays, objects).
- *
- * Use `Plain<S>` for `toJSON()` return types, serialization boundaries,
- * snapshot types, and anywhere you need the "just data" shape of a schema.
- *
- * ```ts
- * const s = Schema.doc({
- *   title: Schema.string(),
- *   count: Schema.number(),
- *   items: Schema.list(Schema.struct({
- *     name: Schema.string(),
- *     done: Schema.boolean(),
- *   })),
- *   settings: Schema.struct({
- *     darkMode: Schema.boolean(),
- *   }),
- *   metadata: Schema.record(Schema.any()),
- * })
- *
- * type Doc = Plain<typeof s>
- * // = {
- * //     title: string
- * //     count: number
- * //     items: { name: string; done: boolean }[]
- * //     settings: { darkMode: boolean }
- * //     metadata: { [key: string]: unknown }
- * //   }
- * ```
- */
-export type Plain<S extends Schema> =
-  // --- Annotated: dispatch on tag ---
-  S extends AnnotatedSchema<infer Tag, infer Inner>
-    ? Tag extends "text"
-      ? string
-      : Tag extends "counter"
-        ? number
-        : Tag extends "doc"
-          ? Inner extends ProductSchema<infer F>
-            ? { [K in keyof F]: Plain<F[K]> }
-            : unknown
-          : Tag extends "movable"
-            ? Inner extends SequenceSchema<infer I>
-              ? Plain<I>[]
-              : unknown
-            : Tag extends "tree"
-              ? Inner extends Schema
-                ? Plain<Inner>
-                : unknown
-              : // Unknown annotation with inner — delegate
-                Inner extends Schema
-                ? Plain<Inner>
-                : unknown
-    : // --- Scalar ---
-      S extends ScalarSchema<infer _K, infer V>
-      ? V
-      : // --- Product ---
-        S extends ProductSchema<infer F>
-        ? { [K in keyof F]: Plain<F[K]> }
-        : // --- Sequence ---
-          S extends SequenceSchema<infer I>
-          ? Plain<I>[]
-          : // --- Map ---
-            S extends MapSchema<infer I>
-            ? { [key: string]: Plain<I> }
-            : // --- Sum ---
-              S extends PositionalSumSchema<infer V>
-              ? Plain<V[number]>
-              : S extends DiscriminatedSumSchema<infer D, infer M>
-                ? { [K in keyof M]: Plain<M[K]> & { [_ in D]: K } }[keyof M]
-                : unknown
 
 /**
  * Computes the mutation-only ref type for a given schema type.
