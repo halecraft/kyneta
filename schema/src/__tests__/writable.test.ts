@@ -120,6 +120,58 @@ describe("writable: scalar dispatch", () => {
 })
 
 // ---------------------------------------------------------------------------
+// Product .set() — atomic subtree replacement
+// ---------------------------------------------------------------------------
+
+describe("writable: product .set()", () => {
+  it(".set(plainObject) writes entire object to store", () => {
+    const { store, doc } = createStructuralDoc()
+    doc.settings.set({ darkMode: true, fontSize: 24 })
+    expect(store.settings).toEqual({ darkMode: true, fontSize: 24 })
+  })
+
+  it(".set() is non-enumerable (doesn't appear in Object.keys)", () => {
+    const { doc } = createStructuralDoc()
+    const keys = Object.keys(doc.settings)
+    expect(keys).toEqual(["darkMode", "fontSize"])
+    expect(keys).not.toContain("set")
+  })
+
+  it("individual field refs still work after product .set()", () => {
+    const { doc } = createStructuralDoc()
+    doc.settings.set({ darkMode: true, fontSize: 24 })
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.settings.fontSize()).toBe(24)
+    // Leaf .set() still works after product .set()
+    doc.settings.darkMode.set(false)
+    expect(doc.settings.darkMode()).toBe(false)
+  })
+
+  it(".set() inside batched mode accumulates one PendingChange", () => {
+    const store = {
+      settings: { darkMode: false, fontSize: 14 },
+      metadata: { version: 1 },
+    }
+    const ctx = createWritableContext(store, { autoCommit: false })
+    const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as any
+
+    doc.settings.set({ darkMode: true, fontSize: 20 })
+
+    expect(ctx.pending.length).toBe(1)
+    expect(ctx.pending[0].change.type).toBe("replace")
+    expect(ctx.pending[0].change.value).toEqual({ darkMode: true, fontSize: 20 })
+
+    // Not yet applied
+    expect(store.settings).toEqual({ darkMode: false, fontSize: 14 })
+
+    // Flush applies it
+    const flushed = flush(ctx)
+    expect(store.settings).toEqual({ darkMode: true, fontSize: 20 })
+    expect(flushed.length).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Portable refs
 // ---------------------------------------------------------------------------
 

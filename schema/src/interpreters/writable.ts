@@ -183,6 +183,14 @@ export interface SequenceRef<T = unknown> {
 }
 
 /**
+ * Mutation-only interface for product refs. Added by `withMutation`.
+ * Enables atomic replacement of an entire struct subtree in one change.
+ */
+export interface ProductRef<T = unknown> {
+  set(value: T): void
+}
+
+/**
  * Mutation-only interface for map refs. Added by `withMutation`.
  * Reading is provided by `ReadableMapRef` from the readable interpreter.
  */
@@ -231,7 +239,7 @@ export type Writable<S extends Schema> =
         ? CounterRef
         : Tag extends "doc"
           ? Inner extends ProductSchema<infer F>
-            ? { readonly [K in keyof F]: Writable<F[K]> }
+            ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
             : unknown
           : Tag extends "movable"
             ? Inner extends SequenceSchema<infer I>
@@ -250,7 +258,7 @@ export type Writable<S extends Schema> =
       ? ScalarRef<V>
       : // --- Product ---
         S extends ProductSchema<infer F>
-        ? { readonly [K in keyof F]: Writable<F[K]> }
+        ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
         : // --- Sequence ---
           S extends SequenceSchema<infer I>
           ? SequenceRef<Writable<I>>
@@ -313,7 +321,7 @@ export function withMutation(
     },
 
     // --- Product --------------------------------------------------------------
-    // Pure structural — pass through. Products have no mutation methods.
+    // Add .set(plainObject) for atomic subtree replacement.
 
     product(
       ctx: WritableContext,
@@ -321,7 +329,17 @@ export function withMutation(
       schema: ProductSchema,
       fields: Readonly<Record<string, () => unknown>>,
     ): unknown {
-      return base.product(ctx, path, schema, fields)
+      const result = base.product(ctx, path, schema, fields) as any
+
+      Object.defineProperty(result, "set", {
+        value: (value: unknown): void => {
+          ctx.dispatch(path, replaceChange(value))
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      return result
     },
 
     // --- Sequence -------------------------------------------------------------

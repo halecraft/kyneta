@@ -140,6 +140,7 @@ export type {
   TextRef,
   CounterRef,
   SequenceRef,
+  ProductRef,
   WritableMapRef,
   Writable,
 } from "./interpreters/writable.js"

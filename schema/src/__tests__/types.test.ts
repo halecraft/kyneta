@@ -18,6 +18,7 @@ import {
   type TextRef,
   type CounterRef,
   type SequenceRef,
+  type ProductRef,
   type WritableMapRef,
   type PlainSchema,
   type PlainProductSchema,
@@ -279,16 +280,25 @@ describe("type-level: Writable<S> for scalars", () => {
 })
 
 describe("type-level: Writable<S> for products and structs", () => {
-  it("Writable<struct({...})> has typed fields", () => {
+  it("Writable<struct({...})> has typed fields and .set()", () => {
     const s = Schema.struct({
       name: Schema.string(),
       active: Schema.boolean(),
     })
     type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{
-      readonly name: ScalarRef<string>
-      readonly active: ScalarRef<boolean>
-    }>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      {
+        readonly name: ScalarRef<string>
+        readonly active: ScalarRef<boolean>
+      } & ProductRef<{ name: string; active: boolean }>
+    >()
+  })
+
+  it("Writable<ProductSchema<{ x: ScalarSchema<'number'> }>> has .set({ x: number })", () => {
+    type Result = Writable<ProductSchema<{ x: ScalarSchema<"number"> }>>
+    expectTypeOf<Result>().toHaveProperty("set")
+    expectTypeOf<Result["set"]>().toBeFunction()
+    expectTypeOf<Result["set"]>().toEqualTypeOf<(value: { x: number }) => void>()
   })
 })
 
@@ -308,10 +318,12 @@ describe("type-level: Writable<S> for sequences", () => {
     )
     type Result = Writable<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<
-      SequenceRef<{
-        readonly name: ScalarRef<string>
-        readonly active: ScalarRef<boolean>
-      }>
+      SequenceRef<
+        {
+          readonly name: ScalarRef<string>
+          readonly active: ScalarRef<boolean>
+        } & ProductRef<{ name: string; active: boolean }>
+      >
     >()
   })
 })
@@ -326,13 +338,18 @@ describe("type-level: Writable<S> for doc (annotated + product)", () => {
       }),
     })
     type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{
-      readonly title: ScalarRef<string>
-      readonly settings: {
-        readonly darkMode: ScalarRef<boolean>
-        readonly fontSize: ScalarRef<number>
-      }
-    }>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      {
+        readonly title: ScalarRef<string>
+        readonly settings: {
+          readonly darkMode: ScalarRef<boolean>
+          readonly fontSize: ScalarRef<number>
+        } & ProductRef<{ darkMode: boolean; fontSize: number }>
+      } & ProductRef<{
+        title: string
+        settings: { darkMode: boolean; fontSize: number }
+      }>
+    >()
   })
 })
 
@@ -362,17 +379,21 @@ describe("type-level: Writable<S> end-to-end structural schema", () => {
 
     // Nested sequence of structs
     expectTypeOf<Doc["messages"]>().toEqualTypeOf<
-      SequenceRef<{
-        readonly author: ScalarRef<string>
-        readonly body: ScalarRef<string>
-      }>
+      SequenceRef<
+        {
+          readonly author: ScalarRef<string>
+          readonly body: ScalarRef<string>
+        } & ProductRef<{ author: string; body: string }>
+      >
     >()
 
     // Nested struct
-    expectTypeOf<Doc["settings"]>().toEqualTypeOf<{
-      readonly darkMode: ScalarRef<boolean>
-      readonly fontSize: ScalarRef<number>
-    }>()
+    expectTypeOf<Doc["settings"]>().toEqualTypeOf<
+      {
+        readonly darkMode: ScalarRef<boolean>
+        readonly fontSize: ScalarRef<number>
+      } & ProductRef<{ darkMode: boolean; fontSize: number }>
+    >()
 
     // Record (dynamic keys) — Map-like mutation interface
     expectTypeOf<Doc["metadata"]>().toEqualTypeOf<WritableMapRef<unknown>>()
@@ -621,16 +642,20 @@ describe("type-level: Writable<S> end-to-end Loro schema", () => {
     expectTypeOf<Doc["count"]>().toEqualTypeOf<CounterRef>()
 
     expectTypeOf<Doc["messages"]>().toEqualTypeOf<
-      SequenceRef<{
-        readonly author: ScalarRef<string>
-        readonly body: TextRef
-      }>
+      SequenceRef<
+        {
+          readonly author: ScalarRef<string>
+          readonly body: TextRef
+        } & ProductRef<{ author: string; body: string }>
+      >
     >()
 
-    expectTypeOf<Doc["settings"]>().toEqualTypeOf<{
-      readonly darkMode: ScalarRef<boolean>
-      readonly fontSize: ScalarRef<number>
-    }>()
+    expectTypeOf<Doc["settings"]>().toEqualTypeOf<
+      {
+        readonly darkMode: ScalarRef<boolean>
+        readonly fontSize: ScalarRef<number>
+      } & ProductRef<{ darkMode: boolean; fontSize: number }>
+    >()
 
     expectTypeOf<Doc["metadata"]>().toEqualTypeOf<WritableMapRef<unknown>>()
   })
@@ -943,9 +968,11 @@ describe("type-level: LoroSchema.plain.* constructors enforce PlainSchema constr
     expectTypeOf<P>().toEqualTypeOf<{ name: string; active: boolean }>()
 
     type W = Writable<typeof s>
-    expectTypeOf<W>().toEqualTypeOf<{
-      readonly name: ScalarRef<string>
-      readonly active: ScalarRef<boolean>
-    }>()
+    expectTypeOf<W>().toEqualTypeOf<
+      {
+        readonly name: ScalarRef<string>
+        readonly active: ScalarRef<boolean>
+      } & ProductRef<{ name: string; active: boolean }>
+    >()
   })
 })

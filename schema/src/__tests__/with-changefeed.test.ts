@@ -361,6 +361,36 @@ describe("subscribeDeep: scalar self-path dispatch", () => {
   })
 })
 
+describe("subscribeDeep: product .set() dispatch", () => {
+  it("exact subscriber on product fires on .set()", () => {
+    const { doc } = createChangefeedChatDoc()
+    const cf = getChangefeed(doc.settings)
+    const received: unknown[] = []
+    cf.subscribe((change: unknown) => received.push(change))
+
+    doc.settings.set({ darkMode: true, fontSize: 20 })
+
+    expect(received).toHaveLength(1)
+    expect((received[0] as { type: string }).type).toBe("replace")
+    expect((received[0] as { type: string; value: unknown }).value).toEqual({
+      darkMode: true,
+      fontSize: 20,
+    })
+  })
+
+  it("deep subscriber on root sees product .set() with correct origin", () => {
+    const { cfCtx, doc } = createChangefeedChatDoc()
+    const events: DeepEvent[] = []
+    subscribeDeep(cfCtx, [], (e) => events.push(e))
+
+    doc.settings.set({ darkMode: true, fontSize: 20 })
+
+    expect(events).toHaveLength(1)
+    expect(events[0]!.origin).toEqual([{ type: "key", key: "settings" }])
+    expect(events[0]!.change.type).toBe("replace")
+  })
+})
+
 describe("subscribeDeep: unsubscribe", () => {
   it("unsubscribe stops delivery", () => {
     const { cfCtx, doc } = createChangefeedChatDoc()

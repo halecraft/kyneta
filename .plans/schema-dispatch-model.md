@@ -52,14 +52,14 @@ Separately, product nodes lack a `.set(plainObject)` method. This means there's 
 - ✅ Update `with-changefeed.test.ts` batched mode test: switched root exact subscriber to deep subscriber at root, since scalar `.set()` now dispatches `ReplaceChange` at `["x"]` (not `MapChange` at `[]`). Also updated batched deep subscription test change types from `"map"` to `"replace"`.
 - ✅ Add test: exact-path changefeed subscriber on a scalar fires on `.set()`.
 
-### Phase 2: Add product `.set()` 🔴
+### Phase 2: Add product `.set()` ✅
 
-- 🔴 Add `ProductRef<T>` interface to `writable.ts`: `{ set(value: T): void }`.
-- 🔴 Update `Writable<S>` type: product case changes from `{ readonly [K in keyof F]: Writable<F[K]> }` to `{ readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>`. Same for `doc` annotation's inner product case.
-- 🔴 In `withMutation` product case, stop passing through. Add `.set(value)` to the base result as a non-enumerable method (via `Object.defineProperty`, matching the pattern used by map refs). Dispatches `ReplaceChange` at own path.
-- 🔴 Add tests in `writable.test.ts`: product `.set()` writes entire object to store; individual field refs still work after product `.set()`; product `.set()` inside batched mode accumulates one `PendingChange`.
-- 🔴 Add tests in `with-changefeed.test.ts`: exact subscriber on product fires on `.set()`; deep subscriber on root sees product `.set()` with correct origin.
-- 🔴 Add type-level test in `types.test.ts`: `Writable<ProductSchema<{ x: ScalarSchema<"number"> }>>` has `.set({ x: number })`.
+- ✅ Add `ProductRef<T>` interface to `writable.ts`: `{ set(value: T): void }`.
+- ✅ Update `Writable<S>` type: product case changes from `{ readonly [K in keyof F]: Writable<F[K]> }` to `{ readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>`. Same for `doc` annotation's inner product case.
+- ✅ In `withMutation` product case, stop passing through. Add `.set(value)` to the base result as a non-enumerable method (via `Object.defineProperty`, matching the pattern used by map refs). Dispatches `ReplaceChange` at own path.
+- ✅ Add tests in `writable.test.ts`: product `.set()` writes entire object to store; individual field refs still work after product `.set()`; product `.set()` inside batched mode accumulates one `PendingChange`.
+- ✅ Add tests in `with-changefeed.test.ts`: exact subscriber on product fires on `.set()`; deep subscriber on root sees product `.set()` with correct origin.
+- ✅ Add type-level test in `types.test.ts`: `Writable<ProductSchema<{ x: ScalarSchema<"number"> }>>` has `.set({ x: number })`. Also updated all existing product/struct type assertions to include `& ProductRef<...>`.
 
 ### Phase 3: Update example 🔴
 
