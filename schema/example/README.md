@@ -43,7 +43,7 @@ Uses the facade exactly like an application developer would:
 2. **Create a Document** — `createDoc(ProjectSchema, { name: "..." })`
 3. **Direct Mutations** — `doc.name.insert()`, `doc.stars.increment()`, `doc.settings.visibility.set()`
 4. **Working with Lists** — `doc.tasks.push()`, `doc.tasks.at(0).title()`, iteration via `for..of`, delete
-5. **Working with Records** — Dynamic key access via Proxy, `Object.keys()`, `in` operator
+5. **Working with Records** — Map-like API: `.set()`, `.get()`, `.delete()`, `.has()`, `.keys()`, `.size`, `.clear()`
 6. **Batched Mutations** — `change(doc, d => { d.name.update(...); d.stars.increment(...) })`
 7. **Subscribing to Changes** — `subscribe(doc.name, action => ...)`, unsubscribe
 8. **Portable Refs** — Extract refs, pass to standalone generic functions typed with `(() => T) & MutationRef`

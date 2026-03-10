@@ -77,7 +77,7 @@ Three PRs, dependency-ordered. Each is individually sound (builds, tests pass, n
 
 **Not touched:** No map code, no Proxy code, no `SET_HANDLER`/`DELETE_HANDLER`, no `with-changefeed.test.ts`.
 
-### PR 2: `(packages/schema) feat: Map-like API for map refs — ReadableMapRef, WritableMapRef, Proxy removal` 🔴
+### PR 2: `(packages/schema) feat: Map-like API for map refs — ReadableMapRef, WritableMapRef, Proxy removal` ✅
 
 **Why atomic:** The readable map change, writable map change, test migration, example migration, export cleanup, and stale comment removal form one logical behavior change. Splitting them would leave broken intermediate states — you can't land the new interfaces without the test rewrites and old symbol removal. This is pre-1.0 experimental code; the plan says "remove, don't deprecate."
 
@@ -126,56 +126,56 @@ export interface ReadableMapRef<T = unknown> {
 
 **Implementation — readable layer:**
 
-- Define `ReadableMapRef<T>` interface in `readable.ts` 🔴
-- Update `Readable<MapSchema<I>>` type to use `ReadableMapRef<Readable<I>>` 🔴
-- Rewrite readable interpreter `map` case: arrow function target with `.get()`, `.has()`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]` attached as non-enumerable methods via `Object.defineProperty`; `.get()` checks store existence before creating child ref; `[INVALIDATE]` retained; no Proxy 🔴
-- Remove `SET_HANDLER` and `DELETE_HANDLER` symbol definitions from `readable.ts` 🔴
-- Remove all Proxy-trap-related comments in `readable.ts` map case header 🔴
+- Define `ReadableMapRef<T>` interface in `readable.ts` ✅
+- Update `Readable<MapSchema<I>>` type to use `ReadableMapRef<Readable<I>>` ✅
+- Rewrite readable interpreter `map` case: arrow function target with `.get()`, `.has()`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]` attached as non-enumerable methods via `Object.defineProperty`; `.get()` checks store existence before creating child ref; `[INVALIDATE]` retained; no Proxy ✅
+- Remove `SET_HANDLER` and `DELETE_HANDLER` symbol definitions from `readable.ts` ✅
+- Remove all Proxy-trap-related comments in `readable.ts` map case header ✅
 
 **Implementation — writable layer:**
 
-- Define `WritableMapRef` interface (or inline in `Writable` type) in `writable.ts` — `.set(key, value)`, `.delete(key)`, `.clear()` 🔴
-- Update `Writable<MapSchema<I>>` type: replace `{ readonly [key: string]: Writable<I> }` with the new map mutation interface 🔴
-- Rewrite `withMutation` map case: attach `.set()`, `.delete()`, `.clear()` directly to the result, with `[INVALIDATE]` calls for cache coordination 🔴
-- Remove `SET_HANDLER` and `DELETE_HANDLER` imports from `writable.ts` 🔴
-- Remove all `SET_HANDLER` / `DELETE_HANDLER` related code from `withMutation` map case 🔴
+- Define `WritableMapRef` interface (or inline in `Writable` type) in `writable.ts` — `.set(key, value)`, `.delete(key)`, `.clear()` ✅
+- Update `Writable<MapSchema<I>>` type: replace `{ readonly [key: string]: Writable<I> }` with the new map mutation interface ✅
+- Rewrite `withMutation` map case: attach `.set()`, `.delete()`, `.clear()` directly to the result, with `[INVALIDATE]` calls for cache coordination ✅
+- Remove `SET_HANDLER` and `DELETE_HANDLER` imports from `writable.ts` ✅
+- Remove all `SET_HANDLER` / `DELETE_HANDLER` related code from `withMutation` map case ✅
 
 **Implementation — changefeed & exports:**
 
-- Remove stale Proxy comments in `with-changefeed.ts` ("bypasses Proxy set traps" etc.) 🔴
-- `index.ts`: remove `SET_HANDLER` and `DELETE_HANDLER` exports 🔴
-- `index.ts`: add `ReadableMapRef` and `WritableMapRef` (if named) to type exports 🔴
+- Remove stale Proxy comments in `with-changefeed.ts` ("bypasses Proxy set traps" etc.) ✅
+- `index.ts`: remove `SET_HANDLER` and `DELETE_HANDLER` exports ✅
+- `index.ts`: add `ReadableMapRef` and `WritableMapRef` (if named) to type exports ✅
 
 **Tests — readable:**
 
-- `readable.test.ts`: rewrite "map via Proxy" describe block (rename to "map ref") 🔴
+- `readable.test.ts`: rewrite "map via Proxy" describe block (rename to "map ref") ✅
   - `doc.metadata.version` → `doc.metadata.get("version")`
   - `Object.keys(doc.metadata)` → `doc.metadata.keys()`
   - `"version" in doc.metadata` → `doc.metadata.has("version")`
   - Remove "map proxy rejects writes when no SET_HANDLER is installed" test
   - Add tests for `.get("nonexistent")` returning `undefined`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`
-- `readable.test.ts`: update composability hooks tests 🔴
+- `readable.test.ts`: update composability hooks tests ✅
   - Remove `SET_HANDLER` / `DELETE_HANDLER` symbol tests
   - Keep `INVALIDATE` symbol test
   - Update `INVALIDATE` map tests to use `.get()` instead of dot access
-- `readable.test.ts`: add type-level test for `Readable<MapSchema>` (new coverage, not migration) 🔴
+- `readable.test.ts`: add type-level test for `Readable<MapSchema>` (new coverage, not migration) ✅
 
 **Tests — writable:**
 
-- `writable.test.ts`: rewrite map tests 🔴
+- `writable.test.ts`: rewrite map tests ✅
   - `doc.metadata.get("version")` for reads
   - `doc.metadata.set("newKey", "newValue")` for writes
   - `doc.metadata.delete("version")` for deletes
   - `doc.metadata.keys()` for key listing
   - `doc.metadata.has("version")` for existence
   - Add `.clear()` test
-- `writable.test.ts`: rewrite map mutation tests (L485–495) 🔴
+- `writable.test.ts`: rewrite map mutation tests (L485–495) ✅
   - `proxy.key = value` → `doc.metadata.set("newKey", "newValue")`
   - `delete proxy.key` → `doc.metadata.delete("version")`
 
 **Tests — changefeed (all four map-touching tests by name):**
 
-- `with-changefeed.test.ts` 🔴
+- `with-changefeed.test.ts` ✅
   - `"map refs have changefeed (via Proxy defineProperty trap)"` → rename to `"map refs have changefeed"`
   - `"[CHANGEFEED] is accessible on map proxy via symbol"` → rename to `"[CHANGEFEED] is accessible on map ref via symbol"`
   - `"Object.keys on map proxy returns only store keys"` → **rewrite**: `Object.keys` on a bare function no longer returns store keys; migrate to `doc.metadata.keys()` and update assertion + test name (e.g. `"map ref .keys() returns store keys"`)
@@ -184,18 +184,18 @@ export interface ReadableMapRef<T = unknown> {
 
 **Tests — types:**
 
-- `types.test.ts`: update `Writable<S>` map type assertions — replace `{ readonly [key: string]: ScalarRef<unknown> }` with new `WritableMapRef` shape 🔴
+- `types.test.ts`: update `Writable<S>` map type assertions — replace `{ readonly [key: string]: ScalarRef<unknown> }` with new `WritableMapRef` shape ✅
 
 **Example & plan cleanup:**
 
-- `example/main.ts`: rewrite section 5 (Records) — no casts needed 🔴
+- `example/main.ts`: rewrite section 5 (Records) — no casts needed ✅
   - `doc.labels.set("bug", "red")` for writes
   - `doc.labels.get("bug")!()` for reads (or just log the ref)
   - `doc.labels.keys()` for key listing
   - `doc.labels.has("bug")` for existence
   - Remove the `const labels = doc.labels as unknown as Record<string, string>` cast
-- `example/README.md`: update section 5 description 🔴
-- `readable-interpreter.md` plan: remove references to `SET_HANDLER` / `DELETE_HANDLER` in the Composability hooks section and elsewhere; these are historical artifacts of a design that no longer exists 🔴
+- `example/README.md`: update section 5 description ✅
+- `readable-interpreter.md` plan: remove references to `SET_HANDLER` / `DELETE_HANDLER` in the Composability hooks section and elsewhere; these are historical artifacts of a design that no longer exists ✅
 
 **Not touched:** `schema.ts`, `loro-schema.ts`, `change.ts`, `step.ts`, `store.ts`, `combinators.ts`, `guards.ts`, `changefeed.ts`, `plain.ts`, `validate.ts`, `interpret.ts`.
 

@@ -18,6 +18,7 @@ import {
   type TextRef,
   type CounterRef,
   type SequenceRef,
+  type WritableMapRef,
   type PlainSchema,
   type PlainProductSchema,
   type PlainSequenceSchema,
@@ -373,10 +374,8 @@ describe("type-level: Writable<S> end-to-end structural schema", () => {
       readonly fontSize: ScalarRef<number>
     }>()
 
-    // Record (dynamic keys)
-    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<{
-      readonly [key: string]: ScalarRef<unknown>
-    }>()
+    // Record (dynamic keys) — Map-like mutation interface
+    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<WritableMapRef<unknown>>()
   })
 })
 
@@ -633,9 +632,7 @@ describe("type-level: Writable<S> end-to-end Loro schema", () => {
       readonly fontSize: ScalarRef<number>
     }>()
 
-    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<{
-      readonly [key: string]: ScalarRef<unknown>
-    }>()
+    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<WritableMapRef<unknown>>()
   })
 })
 

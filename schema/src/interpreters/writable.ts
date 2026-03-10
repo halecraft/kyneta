@@ -44,8 +44,6 @@ import {
 } from "../store.js"
 import {
   INVALIDATE,
-  SET_HANDLER,
-  DELETE_HANDLER,
 } from "./readable.js"
 
 // Re-export store utilities for backward compatibility
@@ -193,6 +191,16 @@ export interface SequenceRef<T = unknown> {
   [Symbol.iterator](): Iterator<T>
 }
 
+/**
+ * Mutation-only interface for map refs. Added by `withMutation`.
+ * Reading is provided by `ReadableMapRef` from the readable interpreter.
+ */
+export interface WritableMapRef<V = unknown> {
+  set(key: string, value: V): void
+  delete(key: string): void
+  clear(): void
+}
+
 // ---------------------------------------------------------------------------
 // Type-level interpretations — schema type → TypeScript type
 // ---------------------------------------------------------------------------
@@ -337,7 +345,7 @@ export type Writable<S extends Schema> =
           ? SequenceRef<Writable<I>>
           : // --- Map ---
             S extends MapSchema<infer I>
-            ? { readonly [key: string]: Writable<I> }
+            ? WritableMapRef<Plain<I>>
             : // --- Sum ---
               S extends PositionalSumSchema
               ? unknown
@@ -467,8 +475,8 @@ export function withMutation(
     },
 
     // --- Map ------------------------------------------------------------------
-    // Fill [SET_HANDLER] and [DELETE_HANDLER] on the base map Proxy so that
-    // `proxy.key = value` and `delete proxy.key` dispatch changes.
+    // Attach .set(), .delete(), .clear() directly to the base map ref.
+    // No Proxy, no SET_HANDLER/DELETE_HANDLER — methods are first-class.
 
     map(
       ctx: WritableContext,
@@ -476,25 +484,38 @@ export function withMutation(
       schema: MapSchema,
       item: (key: string) => unknown,
     ): unknown {
-      const result = base.map(ctx, path, schema, item)
+      const result = base.map(ctx, path, schema, item) as any
 
-      // Fill mutation handlers via defineProperty (goes through the Proxy's
-      // defineProperty trap, which forwards symbol keys to the target).
-      Object.defineProperty(result, SET_HANDLER, {
-        value: (prop: string, value: unknown): boolean => {
-          ctx.dispatch(path, mapChange({ [prop]: value }))
-          ;(result as any)[INVALIDATE](prop)
-          return true
+      Object.defineProperty(result, "set", {
+        value: (key: string, value: unknown): void => {
+          ctx.dispatch(path, mapChange({ [key]: value }))
+          result[INVALIDATE](key)
         },
+        enumerable: false,
         configurable: true,
       })
 
-      Object.defineProperty(result, DELETE_HANDLER, {
-        value: (prop: string): boolean => {
-          ctx.dispatch(path, mapChange(undefined, [prop]))
-          ;(result as any)[INVALIDATE](prop)
-          return true
+      Object.defineProperty(result, "delete", {
+        value: (key: string): void => {
+          ctx.dispatch(path, mapChange(undefined, [key]))
+          result[INVALIDATE](key)
         },
+        enumerable: false,
+        configurable: true,
+      })
+
+      Object.defineProperty(result, "clear", {
+        value: (): void => {
+          const obj = readByPath(ctx.store, path)
+          if (obj !== null && obj !== undefined && typeof obj === "object") {
+            const allKeys = Object.keys(obj as Record<string, unknown>)
+            if (allKeys.length > 0) {
+              ctx.dispatch(path, mapChange(undefined, allKeys))
+            }
+          }
+          result[INVALIDATE]()
+        },
+        enumerable: false,
         configurable: true,
       })
 

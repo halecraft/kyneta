@@ -88,7 +88,7 @@ describe("withChangefeed: hasChangefeed", () => {
     expect(hasChangefeed(doc.messages)).toBe(true)
   })
 
-  it("map refs have changefeed (via Proxy defineProperty trap)", () => {
+  it("map refs have changefeed", () => {
     const { doc } = createChangefeedChatDoc()
     expect(hasChangefeed(doc.metadata)).toBe(true)
   })
@@ -117,14 +117,14 @@ describe("withChangefeed: namespace isolation", () => {
     expect(keys).toEqual(["title", "count", "messages", "settings", "metadata"])
   })
 
-  it("[CHANGEFEED] is accessible on map proxy via symbol", () => {
+  it("[CHANGEFEED] is accessible on map ref via symbol", () => {
     const { doc } = createChangefeedChatDoc()
     expect(CF_SYM in (doc.metadata as object)).toBe(true)
   })
 
-  it("Object.keys on map proxy returns only store keys", () => {
+  it("map ref .keys() returns store keys", () => {
     const { doc } = createChangefeedChatDoc()
-    expect(Object.keys(doc.metadata)).toEqual(["version"])
+    expect(doc.metadata.keys()).toEqual(["version"])
   })
 })
 

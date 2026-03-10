@@ -297,8 +297,8 @@ export function subscribeDeep(
  * you can't attach properties to primitives.
  *
  * The decorator mutates the result directly via `Object.defineProperty`
- * (which bypasses Proxy `set` traps) and returns `{}` so that `enrich`'s
- * `Object.assign` is a harmless no-op.
+ * and returns `{}` so that `enrich`'s `Object.assign` is a harmless
+ * no-op.
  *
  * ```ts
  * const enriched = enrich(withMutation(readableInterpreter), withChangefeed)
@@ -323,7 +323,6 @@ export const withChangefeed: Decorator<ChangefeedContext, unknown, {}> = (
   )
 
   // Attach directly via Object.defineProperty (non-enumerable).
-  // This bypasses Proxy set traps — goes through defineProperty trap.
   attachChangefeed(result, cf)
 
   // Return empty — enrich's Object.assign({}) is a no-op.

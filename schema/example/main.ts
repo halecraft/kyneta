@@ -326,25 +326,23 @@ log(`doc.tasks.delete(1) → length is now ${doc.tasks.length}`)
 
 section(5, "Working with Records (dynamic keys)")
 
-// Records use Proxy — any string key returns a typed ref.
-// TypeScript's `readonly` index signature prevents direct assignment,
-// but at runtime the Proxy's set trap dispatches a MapChange.
-// We narrow the cast to `Record<string, string>` (not `any`).
-const labels = doc.labels as unknown as Record<string, string>
-labels.bug = "red"
-labels.feature = "blue"
-labels.docs = "green"
-log(`doc.labels.bug = "red"`)
-log(`doc.labels.feature = "blue"`)
-log(`doc.labels.docs = "green"`)
+// Records expose a Map-like API: .set(), .get(), .delete(), .has(),
+// .keys(), .size, .entries(), .values(), .clear(). Type-safe, no casts.
+doc.labels.set("bug", "red")
+doc.labels.set("feature", "blue")
+doc.labels.set("docs", "green")
+log(`doc.labels.set("bug", "red")`)
+log(`doc.labels.set("feature", "blue")`)
+log(`doc.labels.set("docs", "green")`)
 log(
-  `Object.keys(doc.labels) → [${Object.keys(doc.labels)
-    .map(k => `"${k}"`)
+  `doc.labels.keys() → [${doc.labels.keys()
+    .map((k: string) => `"${k}"`)
     .join(", ")}]`,
 )
-log(`"bug" in doc.labels → ${"bug" in doc.labels}`)
-log(`"missing" in doc.labels → ${"missing" in doc.labels}`)
-log(`doc.labels.bug() → "${doc.labels.bug()}"`)
+log(`doc.labels.has("bug") → ${doc.labels.has("bug")}`)
+log(`doc.labels.has("missing") → ${doc.labels.has("missing")}`)
+log(`doc.labels.get("bug")!() → "${doc.labels.get("bug")!()}"`)
+log(`doc.labels.size → ${doc.labels.size}`)
 
 // ─── 6. Batched mutations with change() ─────────────────────────────────
 

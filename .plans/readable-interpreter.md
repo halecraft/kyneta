@@ -85,19 +85,17 @@ interface RefContext {
 
 Minimal — reading requires only a store. `WritableContext extends RefContext` adds `dispatch`, `autoCommit`, `pending`. `ChangefeedContext extends WritableContext` adds subscriber maps. This makes the context hierarchy explicit.
 
-**Composability hooks:** The readable interpreter exposes three well-known symbols on sequence and map refs for mutation layer integration:
+**Composability hooks:** The readable interpreter exposes one well-known symbol on sequence and map refs for mutation layer integration:
 
 ```ts
 const INVALIDATE: unique symbol   // (key?: string | number) => void — clears child cache entry or all
-const SET_HANDLER: unique symbol   // (prop: string, value: unknown) => boolean — map set hook
-const DELETE_HANDLER: unique symbol // (prop: string) => boolean — map delete hook
 ```
 
-Sequence and map refs attach `[INVALIDATE]` for child cache management. Map Proxy `set`/`deleteProperty` traps delegate through `[SET_HANDLER]`/`[DELETE_HANDLER]` — rejecting writes if no handler is installed (read-only by default).
+Sequence and map refs attach `[INVALIDATE]` for child cache management. The mutation layer (`withMutation`) attaches `.set()`, `.delete()`, `.clear()` methods directly to map refs and calls `[INVALIDATE]` after each mutation to keep caches consistent.
 
 **`[Symbol.toPrimitive]` attachment:** The `annotated` case has access to `schema.tag` and attaches hint-aware coercion directly. Text always returns the string. Counter returns the number on `"default"`/`"number"` hints, `String(n)` on `"string"` hint. Unannotated scalars get a generic hint-aware coercion. The `toPrimitive` body reads from the store directly (same closure over `ctx.store` and `path`) — no indirection through a symbol slot.
 
-**Map Proxy design:** The Proxy target is an arrow function (not a plain object). This means `typeof proxy === "function"` and the Proxy can have an `apply` trap — no second Proxy needed. Arrow functions have only `length` and `name` as own keys (both `configurable: true`), avoiding the `arguments`/`caller`/`prototype` invariant issues of `function(){}` declarations. The `ownKeys` trap must include `length` and `name` to satisfy Proxy invariants, but both are non-enumerable, so `Object.keys()` returns only store keys.
+**Map ref design:** Map refs are arrow functions with Map-like methods (`.get()`, `.has()`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`) attached as non-enumerable properties via `Object.defineProperty`. No Proxy is used. `.get(key)` checks store existence before creating a child ref, returning `undefined` for missing keys. `typeof mapRef === "function"` and `mapRef()` returns the plain record snapshot.
 
 **Tasks:**
 
@@ -106,10 +104,10 @@ Sequence and map refs attach `[INVALIDATE]` for child cache management. Map Prox
 - Implement `scalar` case: arrow function returning `readByPath(ctx.store, path)`, plus hint-aware `[Symbol.toPrimitive]` ✅
 - Implement `product` case: arrow function with lazy child getters via `Object.defineProperty` on the function ✅
 - Implement `sequence` case: arrow function with `.at(i)` (child navigation via cache), `.length` getter, `[Symbol.iterator]` generator, `[INVALIDATE]` symbol ✅
-- Implement `map` case: Proxy with arrow function target, `apply` trap, read-only traps, `[SET_HANDLER]`/`[DELETE_HANDLER]` delegation, `[INVALIDATE]` symbol, `defineProperty` trap for symbol-keyed protocol ✅
+- Implement `map` case: arrow function with Map-like methods (`.get()`, `.has()`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`), `[INVALIDATE]` symbol, no Proxy ✅
 - Implement `sum` case: identical to current writable sum (reads discriminant from store, dispatches to variant) ✅
 - Implement `annotated` case: `"text"` → callable with text-specific `toPrimitive`; `"counter"` → callable with hint-aware `toPrimitive`; delegating tags → `inner()` pass-through ✅
-- Export `INVALIDATE`, `SET_HANDLER`, `DELETE_HANDLER` symbols ✅
+- Export `INVALIDATE` symbol ✅
 - Export `readableInterpreter` and `RefContext` from `index.ts` ✅
 - Add `Readable<S>` recursive type alongside `Plain<S>` ✅
 - Add tests for read-only document (see Tests section) ✅
@@ -128,7 +126,7 @@ This is an **interpreter-level combinator** (like `enrich`, `product`, `overlay`
 - `scalar` case: call `base.scalar(...)`, attach `.set()` ✅
 - `product` case: pass through (`return base.product(...)`) ✅
 - `sequence` case: call `base.sequence(...)`, attach `.push()`, `.insert()`, `.delete()` with `[INVALIDATE]` calls ✅
-- `map` case: call `base.map(...)`, fill `[SET_HANDLER]` and `[DELETE_HANDLER]` via `Object.defineProperty` through the Proxy, with `[INVALIDATE]` calls ✅
+- `map` case: call `base.map(...)`, attach `.set()`, `.delete()`, `.clear()` directly, with `[INVALIDATE]` calls ✅
 - `sum` case: pass through ✅
 - `annotated` case: dispatch on `schema.tag` — `"text"` gets `.insert()`, `.delete()`, `.update()`; `"counter"` gets `.increment()`, `.decrement()`; delegating tags pass through ✅
 - Remove `.get()` from `ScalarRef`, `TextRef`, `CounterRef` interfaces ✅
@@ -211,8 +209,8 @@ Already complete: 24 tests for `isPropertyHost`, `isNonNullObject`, `hasChangefe
 **Composability hooks:**
 
 - `readableInterpreter` sequence ref has `[INVALIDATE]` symbol
-- `readableInterpreter` map ref has `[INVALIDATE]`, `[SET_HANDLER]`, `[DELETE_HANDLER]` symbols accessible
-- Map ref rejects `proxy.x = value` when no `[SET_HANDLER]` is installed
+- `readableInterpreter` map ref has `[INVALIDATE]` symbol accessible
+- Map ref `.get("missing")` returns `undefined` for absent keys
 
 ### Phase 3 tests (`withMutation`)
 
@@ -318,7 +316,7 @@ Already landed. Adds `isPropertyHost` to `guards.ts`, switches `enrich` + `withC
 
 **Type:** Feature
 
-Adds `readableInterpreter` in a new `src/interpreters/readable.ts`. Introduces `RefContext` interface. Every ref is a callable function: `ref()` returns the current plain value. `[Symbol.toPrimitive]` on leaf refs. `[INVALIDATE]`, `[SET_HANDLER]`, `[DELETE_HANDLER]` composability symbols. `Readable<S>` type. No breaking changes — `writableInterpreter` still exists alongside.
+Adds `readableInterpreter` in a new `src/interpreters/readable.ts`. Introduces `RefContext` interface. Every ref is a callable function: `ref()` returns the current plain value. `[Symbol.toPrimitive]` on leaf refs. `[INVALIDATE]` composability symbol. Map refs use Map-like API (`ReadableMapRef`). `Readable<S>` type. No breaking changes — `writableInterpreter` still exists alongside.
 
 ### PR 3: `(packages/schema) feat: withMutation transformer, decompose writableInterpreter` ✅
 
@@ -398,7 +396,7 @@ The `Decorator<Ctx, A, P>` type receives `(result, ctx, path)` but no schema inf
 
 ### Composability hooks via well-known symbols
 
-The `[INVALIDATE]`, `[SET_HANDLER]`, `[DELETE_HANDLER]` pattern is analogous to `[CHANGEFEED]` — symbol-keyed protocol that decorators/transformers attach to or read from. The readable interpreter defines the hooks; `withMutation` fills them. This is a general pattern for inter-layer communication without coupling.
+The `[INVALIDATE]` pattern is analogous to `[CHANGEFEED]` — symbol-keyed protocol that decorators/transformers attach to or read from. The readable interpreter defines the hook; `withMutation` calls it after mutations. The mutation layer attaches `.set()`, `.delete()`, `.clear()` methods directly to map refs — no symbol-based delegation needed. Only `[INVALIDATE]` remains for cross-layer cache coordination.
 
 ### `toPrimitive` is tag-dependent but read-only
 

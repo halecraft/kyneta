@@ -121,13 +121,12 @@ export { plainInterpreter } from "./interpreters/plain.js"
 export {
   readableInterpreter,
   INVALIDATE,
-  SET_HANDLER,
-  DELETE_HANDLER,
 } from "./interpreters/readable.js"
 export type {
   RefContext,
   Readable,
   ReadableSequenceRef,
+  ReadableMapRef,
 } from "./interpreters/readable.js"
 export {
   withMutation,
@@ -142,6 +141,7 @@ export type {
   TextRef,
   CounterRef,
   SequenceRef,
+  WritableMapRef,
   Writable,
   Plain,
 } from "./interpreters/writable.js"

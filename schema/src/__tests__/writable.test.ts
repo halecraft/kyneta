@@ -137,22 +137,57 @@ describe("writable: portable refs", () => {
 // Map via Proxy
 // ---------------------------------------------------------------------------
 
-describe("writable: map via Proxy", () => {
-  it("dynamic string key access returns a child ref", () => {
+describe("writable: map ref", () => {
+  it(".get(key) returns a callable child ref", () => {
     const { doc } = createStructuralDoc()
-    const versionRef = doc.metadata.version
-    expect(versionRef()).toBe(1)
+    const versionRef = doc.metadata.get("version")
+    expect(versionRef!()).toBe(1)
   })
 
-  it("Object.keys returns the store's dynamic keys", () => {
+  it(".keys() returns the store's dynamic keys", () => {
     const { doc } = createStructuralDoc()
-    expect(Object.keys(doc.metadata)).toEqual(["version"])
+    expect(doc.metadata.keys()).toEqual(["version"])
   })
 
-  it("'in' operator checks store keys", () => {
+  it(".has(key) checks store keys", () => {
     const { doc } = createStructuralDoc()
-    expect("version" in doc.metadata).toBe(true)
-    expect("nonexistent" in doc.metadata).toBe(false)
+    expect(doc.metadata.has("version")).toBe(true)
+    expect(doc.metadata.has("nonexistent")).toBe(false)
+  })
+
+  it(".set(key, value) dispatches change and updates store", () => {
+    const { store, doc } = createStructuralDoc()
+    doc.metadata.set("newKey", "newValue")
+    expect((store.metadata as Record<string, unknown>).newKey).toBe("newValue")
+  })
+
+  it(".delete(key) dispatches change and removes from store", () => {
+    const { store, doc } = createStructuralDoc()
+    doc.metadata.delete("version")
+    expect("version" in (store.metadata as Record<string, unknown>)).toBe(false)
+  })
+
+  it(".clear() removes all keys from the store", () => {
+    const { store, doc } = createStructuralDoc()
+    doc.metadata.set("a", 1)
+    doc.metadata.set("b", 2)
+    doc.metadata.clear()
+    expect(Object.keys(store.metadata as Record<string, unknown>)).toEqual([])
+    expect(doc.metadata.size).toBe(0)
+    expect(doc.metadata.keys()).toEqual([])
+  })
+
+  it("after .set(), .get() returns the new value", () => {
+    const { doc } = createStructuralDoc()
+    doc.metadata.set("color", "red")
+    expect(doc.metadata.get("color")!()).toBe("red")
+  })
+
+  it("after .delete(), .has() returns false", () => {
+    const { doc } = createStructuralDoc()
+    expect(doc.metadata.has("version")).toBe(true)
+    doc.metadata.delete("version")
+    expect(doc.metadata.has("version")).toBe(false)
   })
 })
 
@@ -482,15 +517,15 @@ describe("writable: mutation + read integration", () => {
     expect(msg.author()).toBe("Bob")
   })
 
-  it("map mutation: proxy.key = value dispatches change", () => {
+  it("map mutation: .set(key, value) dispatches change", () => {
     const { store, doc } = createStructuralDoc()
-    doc.metadata.newKey = "newValue"
+    doc.metadata.set("newKey", "newValue")
     expect((store.metadata as Record<string, unknown>).newKey).toBe("newValue")
   })
 
-  it("map mutation: delete proxy.key dispatches change", () => {
+  it("map mutation: .delete(key) dispatches change", () => {
     const { store, doc } = createStructuralDoc()
-    delete doc.metadata.version
+    doc.metadata.delete("version")
     expect("version" in (store.metadata as Record<string, unknown>)).toBe(false)
   })
 })

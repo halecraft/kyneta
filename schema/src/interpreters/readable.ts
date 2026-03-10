@@ -3,9 +3,9 @@
 //
 // Every ref is an arrow function: `ref()` returns the current plain value
 // at that path (`readByPath(ctx.store, path)`). Structural nodes have
-// navigation (lazy getters for products, `.at(i)` for sequences, Proxy
-// for maps). Leaf annotations get `[Symbol.toPrimitive]` for template
-// literal coercion.
+// navigation (lazy getters for products, `.at(i)` for sequences,
+// Map-like methods for maps). Leaf annotations get `[Symbol.toPrimitive]`
+// for template literal coercion.
 //
 // The readable interpreter owns **reading + structural navigation**.
 // Mutation is a separate concern provided by `withMutation`.
@@ -14,8 +14,6 @@
 // Composability hooks:
 // - `[INVALIDATE]` on sequence/map refs — called by mutation layer to
 //   clear child caches after writes.
-// - `[SET_HANDLER]` / `[DELETE_HANDLER]` on map Proxy targets — filled
-//   by mutation layer to handle `proxy.key = value` and `delete proxy.key`.
 //
 // See theory §5.4 (capability decomposition) and readable-interpreter.md.
 
@@ -34,6 +32,7 @@ import {
 } from "../schema.js"
 import { type Store, readByPath } from "../store.js"
 import { isNonNullObject } from "../guards.js"
+
 import type { RefContext } from "./writable.js"
 
 // Re-export RefContext for consumers
@@ -56,32 +55,6 @@ export const INVALIDATE: unique symbol = Symbol.for(
   "schema:invalidate",
 ) as any
 
-/**
- * Symbol for map set handler. The map Proxy's `set` trap delegates
- * through this. When not installed, string-key writes are rejected.
- *
- * Filled by `withMutation`:
- * ```ts
- * target[SET_HANDLER] = (prop, value) => { dispatch(...); return true }
- * ```
- */
-export const SET_HANDLER: unique symbol = Symbol.for(
-  "schema:set-handler",
-) as any
-
-/**
- * Symbol for map delete handler. The map Proxy's `deleteProperty` trap
- * delegates through this. When not installed, deletes are rejected.
- *
- * Filled by `withMutation`:
- * ```ts
- * target[DELETE_HANDLER] = (prop) => { dispatch(...); return true }
- * ```
- */
-export const DELETE_HANDLER: unique symbol = Symbol.for(
-  "schema:delete-handler",
-) as any
-
 // ---------------------------------------------------------------------------
 // Readable<S> — type-level interpretation for readable refs
 // ---------------------------------------------------------------------------
@@ -97,6 +70,32 @@ export interface ReadableSequenceRef<T = unknown> {
   at: (index: number) => T | undefined
   readonly length: number
   [Symbol.iterator](): Iterator<T>
+}
+
+/**
+ * An interface for readable map refs: callable + Map-like navigation.
+ * The call signature returns the plain record. `.get(key)` returns a
+ * child ref or `undefined` for missing keys. `.has()`, `.keys()`,
+ * `.size`, `.entries()`, `.values()`, `[Symbol.iterator]` provide
+ * Map-like introspection.
+ */
+export interface ReadableMapRef<T = unknown> {
+  /** Callable: returns a deep plain snapshot of the entire map. */
+  (): Record<string, unknown>
+  /** Get a child ref by key. Returns undefined if key is not in the store. */
+  get(key: string): T | undefined
+  /** Check if a key exists in the store. */
+  has(key: string): boolean
+  /** Return all current store keys. */
+  keys(): string[]
+  /** Number of entries in the store. */
+  readonly size: number
+  /** Iterate over [key, childRef] pairs. */
+  entries(): IterableIterator<[string, T]>
+  /** Iterate over child refs. */
+  values(): IterableIterator<T>
+  /** Iterate over [key, childRef] pairs. */
+  [Symbol.iterator](): IterableIterator<[string, T]>
 }
 
 /**
@@ -158,9 +157,7 @@ export type Readable<S extends Schema> =
           ? ReadableSequenceRef<Readable<I>>
           : // --- Map ---
             S extends MapSchema<infer I>
-            ? (() => { [key: string]: ReadablePlain<I> }) & {
-                readonly [key: string]: Readable<I>
-              }
+            ? ReadableMapRef<Readable<I>>
             : // --- Sum ---
               S extends PositionalSumSchema<infer V>
               ? Readable<V[number]>
@@ -337,12 +334,13 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
   },
 
   // --- Map -------------------------------------------------------------------
-  // Proxy with arrow function target. The function target gives us:
-  // - `typeof proxy === "function"`
-  // - `apply` trap for callable `proxy()` — no second Proxy needed
+  // Arrow function with Map-like methods attached as non-enumerable
+  // properties via Object.defineProperty. No Proxy needed.
   //
-  // String keys → child refs (via cache). Symbol keys → target (protocol).
-  // set/deleteProperty delegate through [SET_HANDLER]/[DELETE_HANDLER].
+  // .get(key) checks store existence before creating a child ref.
+  // .has(), .keys(), .size, .entries(), .values(), [Symbol.iterator]
+  // provide Map-like introspection. [INVALIDATE] retained for cache
+  // coordination with the mutation layer.
 
   map(
     ctx: RefContext,
@@ -352,11 +350,98 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
   ): unknown {
     const childCache = new Map<string, unknown>()
 
-    // Arrow function target — clean Proxy target (no arguments/caller/prototype)
-    const target = (() => readByPath(ctx.store, path)) as any
+    const ref: any = () => readByPath(ctx.store, path)
+
+    // --- Helper: read store keys ---
+    function storeKeys(): string[] {
+      const obj = readByPath(ctx.store, path)
+      return obj !== null && obj !== undefined && typeof obj === "object"
+        ? Object.keys(obj as Record<string, unknown>)
+        : []
+    }
+
+    // --- Map-like methods (all non-enumerable) ---
+
+    Object.defineProperty(ref, "get", {
+      value: (key: string): unknown => {
+        const obj = readByPath(ctx.store, path)
+        if (
+          obj === null ||
+          obj === undefined ||
+          typeof obj !== "object" ||
+          !(key in (obj as Record<string, unknown>))
+        ) {
+          return undefined
+        }
+        if (!childCache.has(key)) {
+          childCache.set(key, item(key))
+        }
+        return childCache.get(key)
+      },
+      enumerable: false,
+      configurable: true,
+    })
+
+    Object.defineProperty(ref, "has", {
+      value: (key: string): boolean => {
+        const obj = readByPath(ctx.store, path)
+        return (
+          obj !== null &&
+          obj !== undefined &&
+          typeof obj === "object" &&
+          key in (obj as Record<string, unknown>)
+        )
+      },
+      enumerable: false,
+      configurable: true,
+    })
+
+    Object.defineProperty(ref, "keys", {
+      value: (): string[] => storeKeys(),
+      enumerable: false,
+      configurable: true,
+    })
+
+    Object.defineProperty(ref, "size", {
+      get(): number {
+        return storeKeys().length
+      },
+      enumerable: false,
+      configurable: true,
+    })
+
+    Object.defineProperty(ref, "entries", {
+      value: function* (): IterableIterator<[string, unknown]> {
+        for (const key of storeKeys()) {
+          yield [key, ref.get(key)]
+        }
+      },
+      enumerable: false,
+      configurable: true,
+    })
+
+    Object.defineProperty(ref, "values", {
+      value: function* (): IterableIterator<unknown> {
+        for (const key of storeKeys()) {
+          yield ref.get(key)
+        }
+      },
+      enumerable: false,
+      configurable: true,
+    })
+
+    Object.defineProperty(ref, Symbol.iterator, {
+      value: function* (): IterableIterator<[string, unknown]> {
+        for (const key of storeKeys()) {
+          yield [key, ref.get(key)]
+        }
+      },
+      enumerable: false,
+      configurable: true,
+    })
 
     // Composability hook: mutation layer calls this to invalidate caches
-    target[INVALIDATE] = (key?: string) => {
+    ref[INVALIDATE] = (key?: string) => {
       if (key !== undefined) {
         childCache.delete(key)
       } else {
@@ -364,99 +449,7 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
       }
     }
 
-    return new Proxy(target, {
-      apply(t: any) {
-        return t()
-      },
-
-      get(_target: any, prop: string | symbol, _receiver: any) {
-        // Symbol access → target (protocol attached by decorators)
-        if (typeof prop === "symbol") {
-          return target[prop]
-        }
-
-        // String access → child ref (data)
-        if (!childCache.has(prop)) {
-          childCache.set(prop, item(prop))
-        }
-        return childCache.get(prop)
-      },
-
-      has(_target: any, prop: string | symbol) {
-        // Symbol access → check target (protocol)
-        if (typeof prop === "symbol") {
-          return prop in target
-        }
-        // String access → check store data
-        const obj = readByPath(ctx.store, path)
-        if (isNonNullObject(obj)) {
-          return prop in obj
-        }
-        return false
-      },
-
-      ownKeys(_target: any) {
-        // Must include arrow function's own keys to satisfy Proxy invariants
-        const fnKeys = ["length", "name"] as (string | symbol)[]
-        const symbolKeys = Object.getOwnPropertySymbols(target)
-        const obj = readByPath(ctx.store, path)
-        if (isNonNullObject(obj)) {
-          return [...fnKeys, ...Object.keys(obj), ...symbolKeys]
-        }
-        return [...fnKeys, ...symbolKeys]
-      },
-
-      getOwnPropertyDescriptor(_target: any, prop: string | symbol) {
-        if (typeof prop === "symbol") {
-          return Object.getOwnPropertyDescriptor(target, prop)
-        }
-        // Arrow function's own non-enumerable properties
-        if (prop === "length" || prop === "name") {
-          return Object.getOwnPropertyDescriptor(target, prop)
-        }
-        const obj = readByPath(ctx.store, path)
-        if (isNonNullObject(obj)) {
-          if (prop in obj) {
-            if (!childCache.has(String(prop))) {
-              childCache.set(String(prop), item(String(prop)))
-            }
-            return {
-              configurable: true,
-              enumerable: true,
-              writable: true,
-              value: childCache.get(String(prop)),
-            }
-          }
-        }
-        return undefined
-      },
-
-      // Allow symbol definitions from decorators (e.g. withChangefeed,
-      // withMutation filling SET_HANDLER/DELETE_HANDLER)
-      defineProperty(_target: any, prop: string | symbol, descriptor: PropertyDescriptor) {
-        if (typeof prop === "symbol") {
-          Object.defineProperty(target, prop, descriptor)
-          return true
-        }
-        return false
-      },
-
-      // Delegate to SET_HANDLER if installed, otherwise reject
-      set(_target: any, prop: string | symbol, value: unknown) {
-        if (typeof prop === "symbol") return false
-        const handler = target[SET_HANDLER]
-        if (!handler) return false // read-only — rejected
-        return handler(String(prop), value)
-      },
-
-      // Delegate to DELETE_HANDLER if installed, otherwise reject
-      deleteProperty(_target: any, prop: string | symbol) {
-        if (typeof prop === "symbol") return false
-        const handler = target[DELETE_HANDLER]
-        if (!handler) return false // read-only — rejected
-        return handler(String(prop))
-      },
-    })
+    return ref
   },
 
   // --- Sum -------------------------------------------------------------------

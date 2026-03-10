@@ -5,15 +5,13 @@ import {
   interpret,
   readableInterpreter,
   INVALIDATE,
-  SET_HANDLER,
-  DELETE_HANDLER,
   enrich,
   withChangefeed,
   createChangefeedContext,
   createWritableContext,
   hasChangefeed,
 } from "../index.js"
-import type { RefContext, Readable } from "../index.js"
+import type { RefContext, Readable, ReadableMapRef } from "../index.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -270,15 +268,20 @@ describe("readable: sequence ref", () => {
 })
 
 // ===========================================================================
-// Map — Proxy with function target
+// Map — Map-like API with function target
 // ===========================================================================
 
-describe("readable: map via Proxy", () => {
-  it("string key access returns a callable child ref", () => {
+describe("readable: map ref", () => {
+  it(".get(key) returns a callable child ref", () => {
     const { doc } = createReadOnlyDoc()
-    const versionRef = doc.metadata.version
+    const versionRef = doc.metadata.get("version")
     expect(typeof versionRef).toBe("function")
-    expect(versionRef()).toBe(1)
+    expect(versionRef!()).toBe(1)
+  })
+
+  it(".get(key) returns undefined for missing key", () => {
+    const { doc } = createReadOnlyDoc()
+    expect(doc.metadata.get("nonexistent")).toBeUndefined()
   })
 
   it("map ref is callable and returns plain record", () => {
@@ -286,29 +289,63 @@ describe("readable: map via Proxy", () => {
     expect(doc.metadata()).toEqual({ version: 1 })
   })
 
-  it("Object.keys returns the store's dynamic keys", () => {
+  it(".keys() returns the store's dynamic keys", () => {
     const { doc } = createReadOnlyDoc()
-    expect(Object.keys(doc.metadata)).toEqual(["version"])
+    expect(doc.metadata.keys()).toEqual(["version"])
   })
 
-  it("'in' operator checks store keys", () => {
+  it(".has(key) checks store keys", () => {
     const { doc } = createReadOnlyDoc()
-    expect("version" in doc.metadata).toBe(true)
-    expect("nonexistent" in doc.metadata).toBe(false)
+    expect(doc.metadata.has("version")).toBe(true)
+    expect(doc.metadata.has("nonexistent")).toBe(false)
   })
 
-  it("typeof map proxy is 'function'", () => {
+  it("typeof map ref is 'function'", () => {
     const { doc } = createReadOnlyDoc()
     expect(typeof doc.metadata).toBe("function")
   })
 
-  it("map proxy rejects writes when no SET_HANDLER is installed", () => {
+  it(".size reflects store entry count", () => {
     const { doc } = createReadOnlyDoc()
-    // In strict mode, Proxy set returning false throws TypeError
-    expect(() => {
-      "use strict"
-      doc.metadata.newKey = "value"
-    }).toThrow()
+    expect(doc.metadata.size).toBe(1)
+  })
+
+  it(".size reflects store with multiple entries", () => {
+    const { doc } = createReadOnlyDoc({ metadata: { a: 1, b: 2, c: 3 } })
+    expect(doc.metadata.size).toBe(3)
+  })
+
+  it(".entries() yields [key, childRef] pairs", () => {
+    const { doc } = createReadOnlyDoc({ metadata: { a: 1, b: 2 } })
+    const entries = [...doc.metadata.entries()]
+    expect(entries.length).toBe(2)
+    expect(entries[0]![0]).toBe("a")
+    expect(typeof entries[0]![1]).toBe("function")
+    expect(entries[0]![1]()).toBe(1)
+  })
+
+  it(".values() yields child refs", () => {
+    const { doc } = createReadOnlyDoc({ metadata: { a: 1, b: 2 } })
+    const vals = [...doc.metadata.values()]
+    expect(vals.length).toBe(2)
+    expect(typeof vals[0]).toBe("function")
+    expect(vals[0]()).toBe(1)
+  })
+
+  it("[Symbol.iterator] yields [key, childRef] pairs", () => {
+    const { doc } = createReadOnlyDoc({ metadata: { x: 10, y: 20 } })
+    const pairs: [string, unknown][] = []
+    for (const entry of doc.metadata) {
+      pairs.push(entry)
+    }
+    expect(pairs.length).toBe(2)
+    expect(pairs[0]![0]).toBe("x")
+    expect(typeof pairs[0]![1]).toBe("function")
+  })
+
+  it(".get(key) caches child refs (referential identity)", () => {
+    const { doc } = createReadOnlyDoc()
+    expect(doc.metadata.get("version")).toBe(doc.metadata.get("version"))
   })
 })
 
@@ -407,18 +444,11 @@ describe("readable: composability hooks", () => {
     const { doc } = createReadOnlyDoc({
       metadata: { a: 1, b: 2 },
     })
-    const aRef = doc.metadata.a
-    const bRef = doc.metadata.b
+    const aRef = doc.metadata.get("a")
+    const bRef = doc.metadata.get("b")
     doc.metadata[INVALIDATE]("a")
-    expect(doc.metadata.a).not.toBe(aRef)
-    expect(doc.metadata.b).toBe(bRef)
-  })
-
-  it("map ref has [SET_HANDLER] and [DELETE_HANDLER] accessible via symbol", () => {
-    const { doc } = createReadOnlyDoc()
-    // Initially undefined (no mutation layer installed)
-    expect(doc.metadata[SET_HANDLER]).toBeUndefined()
-    expect(doc.metadata[DELETE_HANDLER]).toBeUndefined()
+    expect(doc.metadata.get("a")).not.toBe(aRef)
+    expect(doc.metadata.get("b")).toBe(bRef)
   })
 })
 
@@ -494,5 +524,16 @@ describe("type-level: Readable<S>", () => {
     const _checkCall: (r: Result) => { title: string } = (r) => r()
     // Navigation
     const _checkChild: (r: Result) => Readable<ReturnType<typeof Schema.string>> = (r) => r.title
+  })
+
+  it("Readable<record(string())> is ReadableMapRef<Readable<string()>>", () => {
+    const s = Schema.record(Schema.string())
+    type Result = Readable<typeof s>
+    // Should be ReadableMapRef
+    const _checkGet: (r: Result) => Readable<ReturnType<typeof Schema.string>> | undefined = (r) => r.get("x")
+    const _checkHas: (r: Result) => boolean = (r) => r.has("x")
+    const _checkKeys: (r: Result) => string[] = (r) => r.keys()
+    const _checkSize: (r: Result) => number = (r) => r.size
+    const _checkCall: (r: Result) => Record<string, unknown> = (r) => r()
   })
 })
