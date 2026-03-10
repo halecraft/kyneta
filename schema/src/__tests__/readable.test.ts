@@ -227,7 +227,7 @@ describe("readable: sequence ref", () => {
 
   it(".at(i) returns a child ref that is itself callable", () => {
     const { doc } = createReadOnlyLoroDoc()
-    const msg = doc.messages.at(0)
+    const msg = doc.messages.at(0)!
     expect(typeof msg).toBe("function")
     expect(msg.author()).toBe("Alice")
   })
@@ -256,6 +256,16 @@ describe("readable: sequence ref", () => {
   it(".at(i) caches child refs (referential identity)", () => {
     const { doc } = createReadOnlyLoroDoc()
     expect(doc.messages.at(0)).toBe(doc.messages.at(0))
+  })
+
+  it(".at(i) returns undefined for out-of-bounds index", () => {
+    const { doc } = createReadOnlyLoroDoc()
+    expect(doc.messages.at(100)).toBeUndefined()
+  })
+
+  it(".at(i) returns undefined for negative index", () => {
+    const { doc } = createReadOnlyLoroDoc()
+    expect(doc.messages.at(-1)).toBeUndefined()
   })
 })
 
@@ -366,7 +376,7 @@ describe("readable: composability hooks", () => {
         { author: "Bob", body: "Hey" },
       ],
     })
-    const first = doc.messages.at(0)
+    const first = doc.messages.at(0)!
     expect(doc.messages.at(0)).toBe(first) // cached
     doc.messages[INVALIDATE]()
     // After invalidation, .at(0) creates a new ref (different identity)
@@ -380,8 +390,8 @@ describe("readable: composability hooks", () => {
         { author: "Bob", body: "Hey" },
       ],
     })
-    const first = doc.messages.at(0)
-    const second = doc.messages.at(1)
+    const first = doc.messages.at(0)!
+    const second = doc.messages.at(1)!
     doc.messages[INVALIDATE](0)
     // Index 0 is cleared, index 1 is preserved
     expect(doc.messages.at(0)).not.toBe(first)

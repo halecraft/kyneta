@@ -307,7 +307,7 @@ doc.tasks.push({ title: "Write the facade", done: false, priority: 2 })
 log(`doc.tasks.push(...)  ×3`)
 log(`doc.tasks.length → ${doc.tasks.length}`)
 
-const task = doc.tasks.at(0)
+const task = doc.tasks.at(0)!
 log(`doc.tasks.at(0).title() → "${task.title()}"`)
 log(`doc.tasks.at(0).done()  → ${task.done()}`)
 
@@ -591,7 +591,7 @@ log("")
   log(`roDoc.name() → "${roDoc.name()}"`)
   log(`roDoc.stars() → ${roDoc.stars()}`)
   log(`roDoc.settings.visibility() → "${roDoc.settings.visibility()}"`)
-  log(`roDoc.tasks.at(0).title() → "${roDoc.tasks.at(0).title()}"`)
+  log(`roDoc.tasks.at(0).title() → "${roDoc.tasks.at(0)!.title()}"`)
   log(`roDoc.tasks.length → ${roDoc.tasks.length}`)
   log(`typeof roDoc.name → "${typeof roDoc.name}" (function-shaped ref)`)
   log("")

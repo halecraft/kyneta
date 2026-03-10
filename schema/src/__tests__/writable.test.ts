@@ -380,7 +380,7 @@ describe("writable: sequence ref", () => {
 
   it(".at(i) returns a child ref for the item at index i", () => {
     const { doc } = createLoroDoc()
-    const msg = doc.messages.at(0)
+    const msg = doc.messages.at(0)!
     expect(msg.author()).toBe("Alice")
   })
 
@@ -413,7 +413,7 @@ describe("writable: annotation-driven behavior", () => {
 
   it("LoroSchema.plain.string() writable has .set() and is callable", () => {
     const { doc } = createLoroDoc()
-    const msg = doc.messages.at(0)
+    const msg = doc.messages.at(0)!
     expect(typeof msg.author).toBe("function")
     expect(typeof msg.author.set).toBe("function")
     // Should NOT have text-specific methods
@@ -478,7 +478,7 @@ describe("writable: mutation + read integration", () => {
   it("sequence cache invalidation: after .push(), .at(newIndex) returns correct child", () => {
     const { doc } = createLoroDoc()
     doc.messages.push({ author: "Bob", body: "Hey" })
-    const msg = doc.messages.at(1)
+    const msg = doc.messages.at(1)!
     expect(msg.author()).toBe("Bob")
   })
 

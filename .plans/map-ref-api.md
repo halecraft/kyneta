@@ -56,7 +56,7 @@ Map refs use a Proxy-based string index signature that conflates reads and write
 
 Three PRs, dependency-ordered. Each is individually sound (builds, tests pass, no broken intermediate states).
 
-### PR 1: `(packages/schema) feat: sequence .at() bounds check — return T | undefined for out-of-bounds` 🔴
+### PR 1: `(packages/schema) feat: sequence .at() bounds check — return T | undefined for out-of-bounds` ✅
 
 **Why separate:** Orthogonal to the map redesign. Touches different interfaces, different interpreter cases, different tests. Small and focused. Establishes the "collections signal absence" pattern before the map PR builds on it.
 
@@ -64,16 +64,16 @@ Three PRs, dependency-ordered. Each is individually sound (builds, tests pass, n
 
 **Implementation:**
 
-- `readable.ts`: Update `ReadableSequenceRef<T>` interface: `.at()` return type from `T` to `T | undefined` 🔴
-- `readable.ts`: Update readable interpreter `sequence` case: `.at(i)` checks store array length, returns `undefined` for out-of-bounds 🔴
-- `writable.ts`: Update `SequenceRef<T>` interface: `.at()` return type from `T` to `T | undefined` (parallel change) 🔴
+- `readable.ts`: Update `ReadableSequenceRef<T>` interface: `.at()` return type from `T` to `T | undefined` ✅
+- `readable.ts`: Update readable interpreter `sequence` case: `.at(i)` checks store array length, returns `undefined` for out-of-bounds ✅
+- `writable.ts`: Update `SequenceRef<T>` interface: `.at()` return type from `T` to `T | undefined` (parallel change) ✅
 
 **Tests:**
 
-- `readable.test.ts`: Add `.at(100)` → `undefined` test, `.at(-1)` → `undefined` test 🔴
-- `readable.test.ts`: Update existing `.at(0)` call sites to handle `| undefined` (add `!`) 🔴
-- `writable.test.ts`: Update `.at()` call sites (L383 `msg.author()`, L416 `msg.author`, L481 `msg.author()` — add `!`) 🔴
-- `example/main.ts`: Update `.at(0)` call sites (L310 `task.title()`, L594 `roDoc.tasks.at(0).title()` — add `!` or `?.`) 🔴
+- `readable.test.ts`: Add `.at(100)` → `undefined` test, `.at(-1)` → `undefined` test ✅
+- `readable.test.ts`: Update existing `.at(0)` call sites to handle `| undefined` (add `!`) ✅
+- `writable.test.ts`: Update `.at()` call sites (L383 `msg.author()`, L416 `msg.author`, L481 `msg.author()` — add `!`) ✅
+- `example/main.ts`: Update `.at(0)` call sites (L310 `task.title()`, L594 `roDoc.tasks.at(0).title()` — add `!` or `?.`) ✅
 
 **Not touched:** No map code, no Proxy code, no `SET_HANDLER`/`DELETE_HANDLER`, no `with-changefeed.test.ts`.
 

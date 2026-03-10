@@ -89,11 +89,12 @@ export const DELETE_HANDLER: unique symbol = Symbol.for(
 /**
  * An interface for readable sequence refs: callable + navigation.
  * The call signature returns the plain array. `.at(i)` returns a
- * child ref. `.length` reflects the store array length.
+ * child ref or `undefined` for out-of-bounds indices.
+ * `.length` reflects the store array length.
  */
 export interface ReadableSequenceRef<T = unknown> {
   (): unknown[]
-  at: (index: number) => T
+  at: (index: number) => T | undefined
   readonly length: number
   [Symbol.iterator](): Iterator<T>
 }
@@ -294,6 +295,12 @@ export const readableInterpreter: Interpreter<RefContext, unknown> = {
     const ref: any = () => readByPath(ctx.store, path)
 
     ref.at = (index: number): unknown => {
+      // Bounds check: return undefined for out-of-bounds indices
+      // (including negative indices, for simplicity)
+      const arr = readByPath(ctx.store, path)
+      const len = Array.isArray(arr) ? arr.length : 0
+      if (index < 0 || index >= len) return undefined
+
       if (!childCache.has(index)) {
         childCache.set(index, item(index))
       }

@@ -185,7 +185,7 @@ export interface CounterRef {
 }
 
 export interface SequenceRef<T = unknown> {
-  at: (index: number) => T
+  at: (index: number) => T | undefined
   push: (...items: unknown[]) => void
   insert: (index: number, ...items: unknown[]) => void
   delete: (index: number, count?: number) => void
