@@ -301,8 +301,9 @@ The foundational building block. Every ref is an **arrow function**: `ref()` ret
 
 **Product nodes** use `Object.defineProperty` with lazy getters on the function. Each getter forces its thunk on first access, caches the result, and returns the cached value on subsequent accesses. `Object.keys(fn)` returns only schema field names (arrow functions' built-in `name` and `length` are non-enumerable and can be shadowed by `configurable: true` getters).
 
-**Map nodes** (`ReadableMapRef<T>`) are arrow functions with **Map-like methods** attached as non-enumerable properties via `Object.defineProperty`. No Proxy is used. Methods:
-- `.get(key)` — checks store existence before creating a child ref; returns `undefined` for missing keys (deliberate behavior change from the earlier Proxy, which unconditionally created zombie refs for any string key).
+**Map nodes** (`ReadableMapRef<T, V>`) are arrow functions with **Map-like methods** attached as non-enumerable properties via `Object.defineProperty`. No Proxy is used. Two access verbs provide non-overlapping semantics (see *Design Decision: Navigate vs Read* below):
+- `.at(key)` — **navigate**: checks store existence before creating a child ref; returns `undefined` for missing keys. Caches child refs for referential identity: `mapRef.at("x") === mapRef.at("x")`.
+- `.get(key)` — **read**: returns the plain value at the key (`Plain<I> | undefined`). Implemented as `.at(key)?.()` — navigate then fold. Symmetric with `.set(key, value)`. `JSON.stringify(mapRef.get("x"))` works correctly (returns data, not `undefined`).
 - `.has(key)` — checks if a key exists in the store.
 - `.keys()` — returns current store keys.
 - `.size` — getter returning the number of store entries.
@@ -310,9 +311,9 @@ The foundational building block. Every ref is an **arrow function**: `ref()` ret
 - `.values()` — yields child refs.
 - `[Symbol.iterator]` — yields `[key, childRef]` pairs (matches `Map`, not `Array`).
 
-All methods are non-enumerable, so `Object.keys(mapRef)` returns `[]` — matching `Object.keys(new Map())` behavior. `.get(key)` caches child refs for referential identity: `mapRef.get("x") === mapRef.get("x")`.
+All methods are non-enumerable, so `Object.keys(mapRef)` returns `[]` — matching `Object.keys(new Map())` behavior. The type parameter `T` is the ref type (used by `.at()`, iteration), while `V` is the plain value type (used by `.get()`, the call signature). In `Readable<S>`, these are wired as `ReadableMapRef<Readable<I>, Plain<I>>`.
 
-**Sequence nodes** are callable functions with `.at(i)` for child navigation, `.length` getter, and `[Symbol.iterator]` generator. `.at(i)` **checks bounds** — it reads the store array length and returns `undefined` for out-of-bounds indices (including negative indices), matching `Array.prototype.at()` semantics. Note that sequence iteration follows **Array** semantics (yields bare child refs), while map iteration follows **Map** semantics (yields `[key, ref]` entries).
+**Sequence nodes** (`ReadableSequenceRef<T, V>`) are callable functions with `.at(i)` for child navigation, `.get(i)` for plain value reads, `.length` getter, and `[Symbol.iterator]` generator. `.at(i)` **checks bounds** — it reads the store array length and returns `undefined` for out-of-bounds indices (including negative indices), matching `Array.prototype.at()` semantics. `.get(i)` returns the plain value at the index (`Plain<I> | undefined`), implemented as `.at(i)?.()`. Note that sequence iteration follows **Array** semantics (yields bare child refs), while map iteration follows **Map** semantics (yields `[key, ref]` entries). In `Readable<S>`, wired as `ReadableSequenceRef<Readable<I>, Plain<I>>`.
 
 **Annotated nodes** dispatch on tag: `"text"` produces a callable ref with text-specific `[Symbol.toPrimitive]` (always returns string); `"counter"` produces a callable ref with hint-aware `[Symbol.toPrimitive]` (number for `"default"`/`"number"`, string for `"string"`); `"doc"`/`"movable"`/`"tree"` delegate to `inner()`. Unannotated scalars get a generic hint-aware `[Symbol.toPrimitive]`.
 
@@ -362,12 +363,35 @@ Three recursive conditional types map schema types to their corresponding value 
 
 All three types account for constrained scalars: when `ScalarSchema<K, V>` has a narrowed `V`, `Plain` yields `V`, `Readable` yields `(() => V) & { toPrimitive }`, and `Writable` yields `ScalarRef<V>`.
 
+### Design Decision: Navigate vs Read
+
+Collections support two distinct operations that were originally conflated under a single `.get()` verb on maps:
+
+1. **Navigate** — descend the schema tree to obtain a **ref** (a handle with identity, subscriptions, mutation capabilities).
+2. **Read** — extract the current **plain value** at a position.
+
+For products, these are cleanly separated: `doc.settings` navigates (property access → ref), `doc.settings()` reads (call → plain value). For collections, the vocabulary is:
+
+| Verb | Operation | Returns | Available on |
+|---|---|---|---|
+| `.at(key\|index)` | Navigate | `Ref \| undefined` | Maps, Sequences |
+| `.get(key\|index)` | Read | `Plain<I> \| undefined` | Maps, Sequences |
+| `()` | Fold | `Plain<S>` | All refs |
+
+`.get()` is defined as `.at(x)?.()` — it composes navigation and fold. This avoids duplicating store-reading logic and automatically benefits from cache invalidation (after mutation, `[INVALIDATE]` clears the child cache → `.get()` calls `.at()` → cache miss → fresh ref → fresh value).
+
+**Why `.at()` for navigation:** `.at()` already existed on sequences (matching `Array.prototype.at()` semantics). Extending it to maps creates a uniform navigation verb for all dynamic-key collections.
+
+**Why `.get()` for reading:** Every JavaScript collection API (`Map`, `WeakMap`, `URLSearchParams`, `Headers`, `FormData`) uses `.get()` to return a value. Making `.get()` return a ref violated universal developer expectations, caused type asymmetry with `.set()`, and produced `undefined` from `JSON.stringify()` (since refs are functions).
+
+**Why iteration yields refs, not values:** Refs are the primary currency of the reactive system. In reactive frameworks (e.g. `packages/kinetic`), iterating over refs to bind them to DOM nodes is the core use case. Plain values are trivially available via fold: `Object.entries(doc.labels())` or `doc.tasks().forEach(...)`.
+
 ## Verified Properties
 
-The spike validates these properties via 524 tests:
+The spike validates these properties via 538 tests:
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
-2. **Referential identity**: `doc.title === doc.title` — lazy getters cache on first access. `mapRef.get("x") === mapRef.get("x")` — map child refs are cached.
+2. **Referential identity**: `doc.title === doc.title` — lazy getters cache on first access. `mapRef.at("x") === mapRef.at("x")` — map child refs are cached.
 3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names (even on function-shaped refs). `Object.keys(mapRef)` returns `[]` (methods are non-enumerable). `CHANGEFEED in doc` is true. `CHANGEFEED` is non-enumerable.
 4. **Portable refs**: `const ref = doc.settings.fontSize; bump(ref)` — works outside the tree because context is captured in closures.
 5. **Plain round-trip**: `interpret(schema, plainInterpreter, store)` produces the identical object tree.
@@ -384,8 +408,8 @@ The spike validates these properties via 524 tests:
 16. **`toPrimitive` coercion**: `` `Stars: ${doc.count}` `` works via `[Symbol.toPrimitive]`; counter is hint-aware (number for default, string for string hint).
 17. **Read-only documents**: `interpret(schema, readableInterpreter, { store })` produces a fully navigable, callable document with no mutation methods.
 18. **Cache invalidation**: `[INVALIDATE]()` clears full cache; `[INVALIDATE](key)` clears single entry. Verified on both sequence and map refs.
-19. **Map-like API**: map refs expose `.get(key)`, `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]` for reads; `.set(key, value)`, `.delete(key)`, `.clear()` for writes. `.get("missing")` returns `undefined`. No Proxy, no string index signature.
-20. **Sequence `.at()` bounds check**: `.at(100)` on a 2-item array returns `undefined`; `.at(-1)` returns `undefined`. Matches `Array.prototype.at()` semantics.
+19. **Navigate vs Read vocabulary**: map and sequence refs expose two access verbs — `.at(key|index)` for navigation (returns a ref) and `.get(key|index)` for reading (returns a plain value). `.get()` is symmetric with `.set()`. `JSON.stringify(mapRef.get("x"))` returns the serialized value (not `undefined`). Iteration yields refs (not values). Map refs also expose `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`; `.set(key, value)`, `.delete(key)`, `.clear()` for writes. No Proxy, no string index signature.
+20. **Sequence `.at()` / `.get()` bounds check**: `.at(100)` on a 2-item array returns `undefined`; `.at(-1)` returns `undefined`. `.get(100)` and `.get(-1)` also return `undefined`. Matches `Array.prototype.at()` semantics.
 21. **Capability composition**: `enrich(withMutation(readableInterpreter), withChangefeed)` produces refs with all three capabilities.
 22. **Self-path dispatch**: every mutation dispatches at its own path. Scalar `.set()` dispatches `ReplaceChange` at the scalar's path (not `MapChange` at the parent). Exact-path changefeed subscribers on scalars fire on `.set()`.
 23. **Product `.set()`**: `doc.settings.set({ darkMode: true, fontSize: 20 })` dispatches a single `ReplaceChange` at the product's path. The `.set()` method is non-enumerable. Individual field refs still work after product `.set()`. Batched mode accumulates one `PendingChange`.

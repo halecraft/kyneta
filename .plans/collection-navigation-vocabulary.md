@@ -173,16 +173,16 @@ Type-level:
 - `Readable<record(struct({...}))>`: `.get("x")` is `{ ... } | undefined` (plain struct)
 - `Readable<list(struct({...}))>`: `.get(0)` is `{ ... } | undefined` (plain struct)
 
-### PR 3: `(packages/schema) docs: document navigate-vs-read vocabulary in TECHNICAL.md` 🔴
+### PR 3: `(packages/schema) docs: document navigate-vs-read vocabulary in TECHNICAL.md` ✅
 
 **Type: Documentation only**
 
-- 🔴 Update TECHNICAL.md Readable Interpreter section: document `.at()` / `.get()` vocabulary distinction
-- 🔴 Update `ReadableMapRef` description: `.at(key)` navigates (returns ref), `.get(key)` reads (returns plain value)
-- 🔴 Update `ReadableSequenceRef` description: add `.get(i)` documentation
-- 🔴 Update Verified Properties #19 (Map-like API) to reflect new vocabulary
-- 🔴 Add a "Design Decision: Navigate vs Read" subsection explaining the vocabulary rationale
-- 🔴 Verify `index.ts` exports — no new exports needed; interfaces gained a second defaulted type parameter which is backward-compatible
+- ✅ Update TECHNICAL.md Readable Interpreter section: document `.at()` / `.get()` vocabulary distinction
+- ✅ Update `ReadableMapRef` description: `.at(key)` navigates (returns ref), `.get(key)` reads (returns plain value)
+- ✅ Update `ReadableSequenceRef` description: add `.get(i)` documentation
+- ✅ Update Verified Properties #19 (Map-like API) to reflect new vocabulary
+- ✅ Add a "Design Decision: Navigate vs Read" subsection explaining the vocabulary rationale
+- ✅ Verify `index.ts` exports — no new exports needed; interfaces gained a second defaulted type parameter which is backward-compatible
 
 ## Transitive Effect Analysis
 
