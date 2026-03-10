@@ -249,10 +249,10 @@ describe("withChangefeed: batched mode", () => {
     const doc = interpret(schema, enriched, cfCtx) as Readable<typeof schema> &
       Writable<typeof schema>
 
-    // Subscribe to the root to see notifications
-    const cf = getChangefeed(doc)
-    const received: unknown[] = []
-    cf.subscribe((change) => received.push(change))
+    // Deep subscriber on root — scalar .set() dispatches ReplaceChange at
+    // the scalar's own path, so an exact subscriber at root won't see it.
+    const received: DeepEvent[] = []
+    subscribeDeep(cfCtx, [], (e) => received.push(e))
 
     doc.x.set(10)
     doc.y.set(20)
@@ -267,8 +267,10 @@ describe("withChangefeed: batched mode", () => {
     expect(store.x).toBe(10)
     expect(store.y).toBe(20)
     expect(flushed.length).toBe(2)
-    // Subscribers on root were notified (MapChange dispatches to root path [])
+    // Deep subscriber at root sees both scalar ReplaceChanges
     expect(received.length).toBe(2)
+    expect(received[0]!.change.type).toBe("replace")
+    expect(received[1]!.change.type).toBe("replace")
   })
 })
 
@@ -314,22 +316,22 @@ describe("subscribeDeep: basic dispatch", () => {
   })
 })
 
-describe("subscribeDeep: scalar upward dispatch", () => {
-  it("deep subscriber on settings receives scalar set at own path (origin [])", () => {
+describe("subscribeDeep: scalar self-path dispatch", () => {
+  it("deep subscriber on settings receives scalar set with origin [darkMode]", () => {
     const { cfCtx, doc } = createChangefeedChatDoc()
     const events: DeepEvent[] = []
     // Subscribe deep at ["settings"]
     subscribeDeep(cfCtx, [{ type: "key", key: "settings" }], (e) => events.push(e))
 
-    // darkMode.set() dispatches a MapChange to ["settings"] (parent), not ["settings","darkMode"]
+    // darkMode.set() dispatches ReplaceChange at ["settings","darkMode"]
     doc.settings.darkMode.set(true)
 
     expect(events).toHaveLength(1)
-    expect(events[0]!.origin).toEqual([])
-    expect(events[0]!.change.type).toBe("map")
+    expect(events[0]!.origin).toEqual([{ type: "key", key: "darkMode" }])
+    expect(events[0]!.change.type).toBe("replace")
   })
 
-  it("deep subscriber on root receives scalar set from settings.darkMode.set()", () => {
+  it("deep subscriber on root receives scalar set with full origin path", () => {
     const { cfCtx, doc } = createChangefeedChatDoc()
     const events: DeepEvent[] = []
     subscribeDeep(cfCtx, [], (e) => events.push(e))
@@ -337,8 +339,25 @@ describe("subscribeDeep: scalar upward dispatch", () => {
     doc.settings.darkMode.set(true)
 
     expect(events).toHaveLength(1)
-    // MapChange dispatches to ["settings"], so relative to root it's [{key:"settings"}]
-    expect(events[0]!.origin).toEqual([{ type: "key", key: "settings" }])
+    // ReplaceChange dispatches at ["settings","darkMode"], so relative to root:
+    expect(events[0]!.origin).toEqual([
+      { type: "key", key: "settings" },
+      { type: "key", key: "darkMode" },
+    ])
+    expect(events[0]!.change.type).toBe("replace")
+  })
+
+  it("exact-path subscriber on scalar fires on .set()", () => {
+    const { doc } = createChangefeedChatDoc()
+    const cf = getChangefeed(doc.settings.darkMode)
+    const received: unknown[] = []
+    cf.subscribe((change: unknown) => received.push(change))
+
+    doc.settings.darkMode.set(true)
+
+    expect(received).toHaveLength(1)
+    expect((received[0] as { type: string }).type).toBe("replace")
+    expect((received[0] as { type: string; value: unknown }).value).toBe(true)
   })
 })
 
@@ -366,16 +385,19 @@ describe("subscribeDeep: multi-level", () => {
     subscribeDeep(cfCtx, [], (e) => rootEvents.push(e))
     subscribeDeep(cfCtx, [{ type: "key", key: "settings" }], (e) => settingsEvents.push(e))
 
-    // darkMode.set() dispatches MapChange at ["settings"]
+    // darkMode.set() dispatches ReplaceChange at ["settings","darkMode"]
     doc.settings.darkMode.set(true)
 
-    // Root sees origin: [{key:"settings"}]
+    // Root sees origin: [{key:"settings"},{key:"darkMode"}]
     expect(rootEvents).toHaveLength(1)
-    expect(rootEvents[0]!.origin).toEqual([{ type: "key", key: "settings" }])
+    expect(rootEvents[0]!.origin).toEqual([
+      { type: "key", key: "settings" },
+      { type: "key", key: "darkMode" },
+    ])
 
-    // Settings sees origin: [] (dispatch is at its own path)
+    // Settings sees origin: [{key:"darkMode"}]
     expect(settingsEvents).toHaveLength(1)
-    expect(settingsEvents[0]!.origin).toEqual([])
+    expect(settingsEvents[0]!.origin).toEqual([{ type: "key", key: "darkMode" }])
   })
 })
 
@@ -425,10 +447,10 @@ describe("subscribeDeep: batched mode", () => {
 
     changefeedFlush(cfCtx)
 
-    // Now notified
+    // Now notified — scalar .set() dispatches ReplaceChange at own path
     expect(events).toHaveLength(2)
-    expect(events[0]!.change.type).toBe("map")
-    expect(events[1]!.change.type).toBe("map")
+    expect(events[0]!.change.type).toBe("replace")
+    expect(events[1]!.change.type).toBe("replace")
   })
 })
 

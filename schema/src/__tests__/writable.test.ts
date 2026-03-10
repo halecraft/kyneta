@@ -102,10 +102,10 @@ describe("writable: namespace isolation", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Scalar upward reference
+// Scalar dispatch (self-path ReplaceChange)
 // ---------------------------------------------------------------------------
 
-describe("writable: scalar upward reference", () => {
+describe("writable: scalar dispatch", () => {
   it(".set() writes to the backing store at the correct path", () => {
     const { store, doc } = createStructuralDoc()
     doc.settings.darkMode.set(true)

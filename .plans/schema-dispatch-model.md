@@ -1,6 +1,6 @@
 # Schema Dispatch Model: Self-Path Dispatch + Product `.set()`
 
-## Status: 🔴 Not Started
+## Status: 🟡 In Progress
 
 ## Background
 
@@ -44,13 +44,13 @@ Separately, product nodes lack a `.set(plainObject)` method. This means there's 
 
 ## Phases and Tasks
 
-### Phase 1: Fix scalar dispatch model 🔴
+### Phase 1: Fix scalar dispatch model ✅
 
-- 🔴 In `withMutation` scalar case, replace upward `MapChange` dispatch with `ReplaceChange` at own path. Remove `parentPath`, `lastSeg`, `key` computation. The scalar case becomes: `result.set = (value) => ctx.dispatch(path, replaceChange(value))`.
-- 🔴 Update `writable.test.ts`: rename "scalar upward reference" describe block to "scalar dispatch". Update assertions — store write still works (via `applyChangeToStore` + `writeByPath`), but the mechanism is now `ReplaceChange` at own path.
-- 🔴 Update `with-changefeed.test.ts`: rename "scalar upward dispatch" describe block. Fix `origin` and `change.type` expectations: scalar `.set()` now dispatches at `["settings", "darkMode"]` (not `["settings"]`), so deep subscriber at `["settings"]` sees `origin: [{type:"key", key:"darkMode"}]` with type `"replace"` (not `origin: []` with type `"map"`). Deep subscriber at root sees `origin: [{type:"key",key:"settings"},{type:"key",key:"darkMode"}]`.
-- 🔴 Update `with-changefeed.test.ts` batched mode test: the root exact subscriber currently receives `MapChange` from scalar `.set()`. After the fix, scalar `.set()` dispatches `ReplaceChange` at `["x"]`, so a root exact subscriber won't see it (the path doesn't match `[]`). Switch the test to use a deep subscriber at root, or subscribe at the scalar's own path.
-- 🔴 Add test: exact-path changefeed subscriber on a scalar fires on `.set()`.
+- ✅ In `withMutation` scalar case, replace upward `MapChange` dispatch with `ReplaceChange` at own path. Remove `parentPath`, `lastSeg`, `key` computation. The scalar case becomes: `result.set = (value) => ctx.dispatch(path, replaceChange(value))`.
+- ✅ Update `writable.test.ts`: rename "scalar upward reference" describe block to "scalar dispatch". Update assertions — store write still works (via `applyChangeToStore` + `writeByPath`), but the mechanism is now `ReplaceChange` at own path.
+- ✅ Update `with-changefeed.test.ts`: rename "scalar upward dispatch" describe block. Fix `origin` and `change.type` expectations: scalar `.set()` now dispatches at `["settings", "darkMode"]` (not `["settings"]`), so deep subscriber at `["settings"]` sees `origin: [{type:"key", key:"darkMode"}]` with type `"replace"` (not `origin: []` with type `"map"`). Deep subscriber at root sees `origin: [{type:"key",key:"settings"},{type:"key",key:"darkMode"}]`.
+- ✅ Update `with-changefeed.test.ts` batched mode test: switched root exact subscriber to deep subscriber at root, since scalar `.set()` now dispatches `ReplaceChange` at `["x"]` (not `MapChange` at `[]`). Also updated batched deep subscription test change types from `"map"` to `"replace"`.
+- ✅ Add test: exact-path changefeed subscriber on a scalar fires on `.set()`.
 
 ### Phase 2: Add product `.set()` 🔴
 

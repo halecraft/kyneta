@@ -296,6 +296,7 @@ export function withMutation(
   return {
     // --- Scalar ---------------------------------------------------------------
     // Add .set() to the base scalar ref.
+    // Every node dispatches at its own path — no upward reference.
 
     scalar(
       ctx: WritableContext,
@@ -304,23 +305,8 @@ export function withMutation(
     ): unknown {
       const result = base.scalar(ctx, path, schema) as any
 
-      const parentPath = path.slice(0, -1)
-      const lastSeg = path[path.length - 1]
-      const key =
-        lastSeg !== undefined
-          ? lastSeg.type === "key"
-            ? lastSeg.key
-            : String(lastSeg.index)
-          : undefined
-
       result.set = (value: unknown): void => {
-        if (key !== undefined) {
-          // Upward reference: dispatch MapChange to parent
-          ctx.dispatch(parentPath, mapChange({ [key]: value }))
-        } else {
-          // Root scalar — use replace
-          ctx.dispatch(path, replaceChange(value))
-        }
+        ctx.dispatch(path, replaceChange(value))
       }
 
       return result
