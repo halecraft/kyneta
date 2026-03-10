@@ -1,0 +1,83 @@
+{
+  "name": "@loro-extended/kinetic",
+  "version": "0.0.1",
+  "description": "Compiled delta-driven UI framework for Loro documents",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./compiler": {
+      "types": "./dist/compiler/index.d.ts",
+      "import": "./dist/compiler/index.js",
+      "default": "./dist/compiler/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite/plugin.d.ts",
+      "import": "./dist/vite/plugin.js",
+      "default": "./dist/vite/plugin.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js",
+      "default": "./dist/server/index.js"
+    },
+    "./loro": {
+      "types": "./dist/loro/index.d.ts",
+      "import": "./dist/loro/index.js",
+      "default": "./dist/loro/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js",
+      "default": "./dist/runtime/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    },
+    "./types/elements": {
+      "types": "./src/types/elements.d.ts"
+    },
+    "./src": "./src/index.ts",
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "dependencies": {
+    "@loro-extended/reactive": "workspace:^",
+    "js-beautify": "^1.15.4",
+    "ts-morph": "^25.0.0"
+  },
+  "peerDependencies": {
+    "@loro-extended/change": "workspace:^",
+    "loro-crdt": "^1.10.6"
+  },
+  "devDependencies": {
+    "@loro-extended/change": "workspace:^",
+    "@types/js-beautify": "^1.14.3",
+    "@types/jsdom": "^21.1.7",
+    "@typescript/native-preview": "7.0.0-dev.20260103.1",
+    "jsdom": "^26.1.0",
+    "loro-crdt": "^1.10.6",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vite": "^6.1.1",
+    "vitest": "^4.0.17"
+  }
+}
