@@ -1010,15 +1010,19 @@ The implementation delivers:
    current weight after convergence — zero-crossings become the output
    delta.  No snapshot-and-diff needed.
 
-**Current limitation — negation strata:** True incremental retraction
-propagation through negation (where a retracted positive fact produces
-new derivations from `not`) is not yet implemented.  Negation and
-aggregation strata always use wipe-and-recompute: delete all derived
-facts, re-evaluate from scratch, and extract the delta via the dirty
-map.  This is correct and bounded by slot/parent count per step, but
-is O(|stratum|) rather than O(|Δ|).  Positive strata with only
-insertions use true weighted semi-naive (O(|Δ|×|DB|)).  This is a
-future optimization opportunity.
+**Differential negation (Plan 006.2):** True incremental retraction
+propagation through negation is now implemented.  The unified
+semi-naive loop treats negation atoms as delta sources alongside
+positive atoms.  `evaluateDifferentialNegation` processes delta
+entries with sign inversion: `output_weight = sub.weight × (−deltaWeight)`.
+Appearance of a negated fact blocks derivations (→ −1); disappearance
+unblocks (→ +1).  The dual-weight `Relation` (`weight` for true Z-set
+multiplicity, `clampedWeight` for post-distinct presence) ensures
+facts with multiple derivation paths survive partial retraction.
+The asymmetric join (`ΔA ⋈ P_new + P_old ⋈ ΔB`) prevents self-join
+double-counting.  All non-aggregation strata use the unified
+O(|Δ|×|DB|) loop.  Only aggregation strata retain wipe-and-recompute
+(scoped limitation — no default rules use aggregation).
 
 ### 9.5 Monotone Strata (Fugue Rules)
 

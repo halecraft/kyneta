@@ -277,42 +277,60 @@ interface RealityNode {
 | `types.ts` | Atoms, terms (const, var, wildcard), rules, facts, weighted `Relation`, `Database` |
 | `unify.ts` | Variable binding, substitution (`{ bindings, weight }`), term matching, guard evaluation |
 | `stratify.ts` | Dependency graph, SCC detection, stratum ordering |
-| `evaluate.ts` | Per-rule evaluation core: `evaluateRule`, `evaluateRuleSemiNaive`, `groundHead`, body element dispatch; `evaluateNaive` test utility |
-| `evaluator.ts` | Unified evaluator: `createEvaluator`, `evaluateStratumFromDelta`, dirty-map infrastructure, batch wrappers (`evaluate`, `evaluatePositive`) |
+| `evaluate.ts` | Per-rule evaluation core: `evaluateRule`, `evaluateRuleDelta` (asymmetric join), `evaluateDifferentialNegation`, `groundHead`, body element dispatch; `evaluateNaive` test utility |
+| `evaluator.ts` | Unified evaluator: `createEvaluator`, `evaluateStratumFromDelta` (unified semi-naive loop), dirty-map infrastructure, batch wrappers (`evaluate`, `evaluatePositive`) |
 | `aggregate.ts` | min, max, count, sum over groups |
 
-### Weighted Relations and Substitutions (Plan 006.1)
+### Dual-Weight Relations (Plan 006.2)
 
-`Relation` is backed by `Map<string, { tuple: FactTuple, weight: number }>`. Each entry carries a Z-set weight: weight > 0 means "present," weight ≤ 0 means "absent" (pruned). Zero-weight entries are pruned eagerly. The public API is backward-compatible: `tuples()` returns weight > 0 tuples, `has()` checks weight > 0, `size` counts weight > 0 entries. `addWeighted(tuple, w)` sums weights. `weightedTuples()` returns `{ tuple, weight }` pairs for the positive-atom join path. `allWeightedTuples()` returns all entries including negative weights (for delta databases).
+Each `Relation` entry stores two weights:
 
-`Substitution` is `{ bindings: ReadonlyMap<string, Value>, weight: number }`. Weight flows through evaluation: multiply on positive atom join (`sub.weight × tuple.weight`), preserve on negation/guard (boolean filter), reset to 1 on aggregation (group-by boundary), sum duplicates in `groundHead` (Z-set addition). In batch mode all weights are 1, so the weight infrastructure is invisible.
+- **`weight`** — true Z-set multiplicity. The count of independent derivation paths minus retraction paths. May be >1 (multiple paths), 0 (all paths retracted), or transiently <0 during iteration (clamped by `applyDistinct`).
+- **`clampedWeight`** — post-`distinct` presence signal: `weight > 0 ? 1 : 0`. Updated eagerly by `addWeighted` for mid-iteration visibility; authoritatively by `applyDistinct` for the negative-floor clamp.
 
-### Unified Evaluator (Plan 006.1)
+`applyDistinct` is DBSP's `distinct(w)(x) = max(0, w(x))` — it floors negatives to 0 but does NOT clamp positives to 1. Weights >1 represent genuine independent derivation paths and must be preserved for correct retraction accounting. A fact with weight 2 (two derivation paths) that receives a −1 delta drops to weight 1 — no zero-crossing, no retraction propagated. Only when weight reaches 0 does `clampedWeight` change and a retraction enter the delta.
 
-`datalog/evaluator.ts` (~1250 LOC) replaces four duplicated semi-naive loops (batch `evaluatePositiveStratum`/`evaluateStratumWithNegation`, incremental `evaluateMonotoneStratumIncremental`/`evaluateStratumDRed`, plus `fullRecompute`) with a single implementation. The old `incremental-evaluate.ts` and the stratum-level functions in `evaluate.ts` have been deleted (Plan 006.1, Phase 4).
+The public API reads `clampedWeight`: `tuples()`, `has()`, `size`, `weightedTuples()`, `isEmpty()` all filter on `clampedWeight > 0`. `weightedTuples()` returns `clampedWeight` (always 1) as the weight value — preventing weight explosion in recursive joins. `allWeightedTuples()` returns the true `weight` including negatives (for delta databases).
 
-**Functional core — `evaluateStratumFromDelta`:** Given rules, a mutable database, and an input delta, run weighted semi-naive to convergence and return the output delta. Positive strata use semi-naive seeded from the input delta (the `_inputDelta` fix: O(|Δ|×|DB|) instead of the old O(|DB|²)). Negation/aggregation strata always use wipe-and-recompute — even insertion-only deltas can invalidate negation-derived facts when lower strata produce new positive facts (e.g., `not reachable(X)` becomes false when `reachable(X)` is newly derived). Positive strata with retractions also use wipe-and-recompute, since semi-naive alone cannot handle lost support from retracted input facts.
+### Weighted Substitutions (Plan 006.1)
+
+`Substitution` is `{ bindings: ReadonlyMap<string, Value>, weight: number }`. Weight flows through evaluation: multiply on positive atom join (`sub.weight × tuple.weight`), preserve on negation/guard (boolean filter), sign-invert on differential negation (`sub.weight × −deltaWeight`), reset to 1 on aggregation (group-by boundary), sum duplicates in `groundHead` (Z-set addition). In batch mode all weights are 1, so the weight infrastructure is invisible.
+
+### Unified Evaluator (Plan 006.1, extended by Plan 006.2)
+
+`datalog/evaluator.ts` (~800 LOC) provides a single algorithm for all stratum types. The old four duplicated semi-naive loops, `wipeAndRecompute`, `evaluatePositiveStratum`, and `evaluateNegationStratum` are all deleted.
+
+**Functional core — `evaluateStratumFromDelta(rules, db, inputDelta)`:** A unified semi-naive loop that handles positive strata, negation strata, insertions, and retractions uniformly. No `hasNegOrAgg` or `inputHasRetractions` parameters — the same algorithm runs everywhere. The sole exception is aggregation strata, which delegate to `recomputeAggregationStratum` (wipe-and-recompute, scoped limitation).
+
+**Asymmetric join (DBSP incremental join):** For a self-join `A ⋈ B` where A = B = P, standard semi-naive computes `ΔA ⋈ P_new + P_new ⋈ ΔB`, double-counting pairs where both elements are in ΔP. The correct formulation is `ΔA ⋈ P_new + P_old ⋈ ΔB`. Implementation: `step()` applies the input delta to `db` (= P_new), then `evaluateStratumFromDelta` constructs P_old = P_new − inputDelta via `constructDbOld()` (O(|delta|)). For the iteration phase, P_old = db − currentDelta. `evaluateRuleDelta(rule, fullDbOld, fullDbNew, delta, deltaIdx)` dispatches per body element position: positions before deltaIdx on the same predicate use P_new; positions after use P_old.
+
+**Differential negation:** `evaluateDifferentialNegation(atom, delta, subs)` processes changes in negated predicates with sign inversion: `output_weight = sub.weight × (−deltaWeight)`. Appearance of a negated fact blocks (→ −1); disappearance unblocks (→ +1). Both positive and negation atoms are delta sources in the unified loop — the body element at `deltaIdx` knows its own kind and dispatches accordingly.
+
+**Bidirectional `applyDerivedFact`:** Detects zero-crossings in both directions. absent→present (weight crosses ≤0 to >0) adds +1 to the next delta. present→absent (weight crosses >0 to ≤0) adds −1. A weight change from 2 to 1 does NOT cross zero — no delta entry. This enables cascading retractions through recursive rules.
 
 **Dirty map — dual-purpose infrastructure:** A single `Map<string, { fact, preWeight }>` keyed by `factKey` serves two roles:
-1. **Scoped `distinct`:** After each iteration, clamp only dirty entries (weight > 1 → 1, weight < 0 → 0). O(|modified|) per iteration, not O(|relation|).
+1. **Scoped `distinct`:** After each iteration, floor only dirty entries with weight < 0 to 0. O(|modified|) per iteration, not O(|relation|). Weights >1 are preserved (true multiplicities).
 2. **Delta extraction:** After convergence, compare each entry's `preWeight` (captured on first touch, never overwritten) to the current weight. Zero-crossings (≤0 → >0 or >0 → ≤0) become the output delta with weight +1 or −1. No snapshot-and-diff needed.
 
-**Imperative shell — `createEvaluator`:** Holds accumulated `Database`, rules, strata, and ground facts. `step(deltaFacts, deltaRules)` applies the delta, evaluates affected strata bottom-up, propagates stratum output deltas upward, and extracts resolution. The retraction flag propagates through strata: if stratum 0 produces −1 deltas, stratum 1 wipes-and-recomputes.
+**Imperative shell — `createEvaluator`:** Holds accumulated `Database`, rules, strata, and ground facts. `step(deltaFacts, deltaRules)` applies the ground fact delta to `db`, evaluates affected strata bottom-up via the unified loop, propagates stratum output deltas upward, and extracts resolution. No `retractionsPresent` flag — each stratum handles its own retractions via the unified loop.
 
 **Batch as degenerate case:** `evaluate(rules, facts)` (aliased from `evaluateUnified`) creates a fresh evaluator, feeds all facts as +1 in a single step, and returns the database. `evaluateNaive()` in `evaluate.ts` serves as the independent correctness oracle for cross-checking semi-naive evaluation.
 
-**Resolution extraction:** `winnerFactsToResolution` and `fuguePairFactsToResolution` read directly from the delta `Database` using `allWeightedTuples()`. No `ZSet<Fact>` intermediate or `groupByPredicate` splitting step needed — `Database` already groups facts by predicate. The winner replacement semantics (group by slotId, emit only +1 for changed winners) are preserved.
+**Resolution extraction:** `winnerFactsToResolution` and `fuguePairFactsToResolution` read directly from the delta `Database` using `allWeightedTuples()`. No `ZSet<Fact>` intermediate or `groupByPredicate` splitting step needed — `Database` already groups facts by predicate.
 
-**Rule changes:** On `deltaRules`, restratify, snapshot derived facts (scoped to union of old + new derived predicates), wipe and replay all strata, diff snapshots.
+**Rule changes:** On `deltaRules`, restratify, snapshot derived facts (scoped to union of old + new derived predicates), wipe and replay all strata, diff snapshots. This is retained as wipe-then-replay because rule changes alter the set of derivable facts in ways that can't be incrementally discovered.
 
 ### Key Features
 
 - **Stratified negation**: `not` in rule bodies, safe via stratum ordering (cyclic negation rejected with error)
-- **Aggregation**: `min`, `max`, `count`, `sum` — required for LWW (`max` by lamport)
+- **Differential negation**: Negation atoms are delta sources — appearance of a negated fact retracts derivations, disappearance unblocks them, all via sign-inverted weight propagation (no wipe-and-recompute)
+- **Aggregation**: `min`, `max`, `count`, `sum` — required for LWW (`max` by lamport). Aggregation strata retain wipe-and-recompute (scoped limitation)
 - **Guards**: Typed comparison operators (`eq`, `neq`, `lt`, `gt`, `lte`, `gte`) that filter substitutions without introducing predicate dependencies
 - **Wildcards**: `_` matches any value without binding — each occurrence independent
-- **Weighted semi-naive**: Substitutions carry Z-set weights through joins; `distinct` clamps weights per iteration; delta extraction via zero-crossing detection
-- **One evaluator**: `createEvaluator` subsumes both batch and incremental paths; no duplicated stratum-level logic
+- **Dual-weight relations**: True Z-set multiplicity (`weight`) alongside post-distinct presence signal (`clampedWeight`). Facts with multiple derivation paths survive partial retraction
+- **Asymmetric join**: DBSP incremental join prevents self-join double-counting. Each derivation path counted exactly once, making negative-floor `distinct` correct
+- **Weighted semi-naive**: Substitutions carry Z-set weights through joins; `distinct` floors negatives per iteration; delta extraction via zero-crossing detection
+- **One evaluator, one algorithm**: `createEvaluator` subsumes both batch and incremental paths; no conditional routing based on stratum type or retraction presence
 
 ### Why TypeScript, Not WASM
 
@@ -355,9 +373,9 @@ Time travel is not a special mode. The solver is a pure function; the same `(S, 
 
 ---
 
-## Incremental Pipeline (Plan 005 complete, Plan 006 complete, Plan 006.1 complete)
+## Incremental Pipeline (Plan 005 complete, Plan 006 complete, Plan 006.1 complete, Plan 006.2 complete)
 
-The batch `solve()` is O(|S|) per insertion. The incremental pipeline is O(|Δ|) end-to-end — all stages including evaluation are incremental. For the common case (default LWW/Fugue rules), native incremental solvers handle resolution in O(1) per slot. For custom rules, the unified evaluator handles resolution with dirty-map delta extraction. Wipe-and-recompute is used when retractions are present, bounded by slot/parent count per step; the dirty map eliminates the old pre-step snapshot clone and post-step full-database diff.
+The batch `solve()` is O(|S|) per insertion. The incremental pipeline is O(|Δ|) end-to-end — all stages including evaluation are incremental. For the common case (default LWW/Fugue rules), native incremental solvers handle resolution in O(1) per slot. For custom rules, the unified evaluator processes both insertions and retractions incrementally via the unified semi-naive loop with differential negation. All stratum types (positive, negation, mixed) use the same algorithm. Only aggregation strata retain wipe-and-recompute (scoped limitation).
 
 ### Z-Sets
 
@@ -412,7 +430,7 @@ The evaluation stage is a **strategy wrapper**, not a simple DBSP operator. It d
 
 **Native path** (>99% common case): Routes facts by predicate to `IncrementalLWW` and `IncrementalFugue`. No calls to `projection.current()` or `retraction.current()` — fully O(|Δ|).
 
-**Datalog path** (custom rules): Delegates to the unified `Evaluator` from `evaluator.ts`. Also O(|Δ|) per step for positive strata; negation strata use wipe-and-recompute bounded by slot/parent count.
+**Datalog path** (custom rules): Delegates to the unified `Evaluator` from `evaluator.ts`. O(|Δ|×|DB|) per step for all strata (positive, negation, mixed) via the unified semi-naive loop with differential negation and asymmetric join. Only aggregation strata use wipe-and-recompute (bounded by group count).
 
 `ResolutionResult` is no longer the inter-stage type between evaluation and skeleton — `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>` are. `ResolutionResult` remains as a materialization convenience for `current()` and strategy-switch diffing.
 
@@ -565,7 +583,8 @@ JavaScript's `number` is f64, which can only exactly represent integers up to 2^
 - **Real ed25519 signatures** — Phase 2 uses a stub that always returns valid
 - ~~**Incremental kernel pipeline**~~ (§9) — **Plan 005 complete.** All kernel stages are incremental, pipeline composition wired, 42 differential tests verify equivalence with batch.
 - ~~**Incremental Datalog evaluator**~~ (§9) — **Plan 006 complete.** Native incremental LWW/Fugue solvers for default rules (O(|Δ|)), incremental Datalog evaluator for custom rules, strategy switching between native and Datalog paths. The full pipeline is O(|Δ|) end-to-end.
-- ~~**Unified weighted evaluator**~~ (Plan 006.1) — **Complete.** Weighted `Relation`/`Substitution`, dirty-map `distinct` + delta extraction, unified `createEvaluator` replacing four duplicated semi-naive loops. Legacy `incremental-evaluate.ts` deleted, dead code removed. True weighted retraction propagation through negation strata (avoiding wipe-and-recompute) is a future optimization.
+- ~~**Unified weighted evaluator**~~ (Plan 006.1) — **Complete.** Weighted `Relation`/`Substitution`, dirty-map `distinct` + delta extraction, unified `createEvaluator` replacing four duplicated semi-naive loops. Legacy `incremental-evaluate.ts` deleted, dead code removed.
+- ~~**Differential negation and true incremental retraction**~~ (Plan 006.2) — **Complete.** Dual-weight `Relation` (weight + clampedWeight), asymmetric join preventing self-join double-counting, differential negation with sign inversion, bidirectional `applyDerivedFact`, unified semi-naive loop for all stratum types. Wipe-and-recompute eliminated for negation strata; retained only for aggregation strata (scoped limitation). `wipeAndRecompute`, `evaluatePositiveStratum`, `evaluateNegationStratum`, `retractionsPresent` flag all deleted.
 - **Settled/Working set partitioning** (§11) — Bounds solver cost to recent activity
 - **Compaction** (§12) — Requires settled set; tombstone compaction is especially tricky for sequences due to origin references
 - **Wire format** (§13) — Batching and compact encoding for sync

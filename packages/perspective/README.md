@@ -82,7 +82,7 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 
 ## Project Status
 
-**Phases 1–5 complete. Plan 005 complete. Plan 006 complete.** The full Unified CCS Engine is implemented and tested. The incremental pipeline is O(|Δ|) end-to-end — native incremental solvers for default rules, incremental Datalog evaluator with DRed for custom rules, strategy switching between paths.
+**Phases 1–5 complete. Plans 005, 006, 006.1, 006.2 complete.** The full Unified CCS Engine is implemented and tested. The incremental pipeline is O(|Δ|) end-to-end — native incremental solvers for default rules, unified weighted Datalog evaluator with differential negation and asymmetric join for custom rules, strategy switching between paths.
 
 | Phase | Status | What |
 |-------|--------|------|
@@ -97,10 +97,12 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 | 5. Bootstrap & Integration | ✅ | `createReality()`, default rules, multi-agent sync, 30 integration tests |
 | **Plan 005: Incremental Kernel** | ✅ | Z-set algebra, incremental kernel stages, pipeline composition, 42 differential tests |
 | **Plan 006: Incremental Datalog** | ✅ | Native incremental LWW/Fugue, incremental Datalog evaluator, evaluation stage, strategy switching |
+| **Plan 006.1: Unified Evaluator** | ✅ | Weighted Relation/Substitution, dirty-map distinct + delta extraction, single evaluator replacing four loops |
+| **Plan 006.2: Differential Negation** | ✅ | Dual-weight Relation, asymmetric join, differential negation, unified semi-naive loop for all strata |
 
-**1198 tests across 33 files, all passing.**
+**1304 tests across 34 files, all passing.**
 
-See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the batch engine plan, [.plans/005-incremental-kernel-pipeline.md](./.plans/005-incremental-kernel-pipeline.md) for the incremental kernel plan, and [.plans/006-incremental-datalog-evaluator.md](./.plans/006-incremental-datalog-evaluator.md) for the incremental Datalog plan.
+See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the batch engine plan, [.plans/005-incremental-kernel-pipeline.md](./.plans/005-incremental-kernel-pipeline.md) for the incremental kernel plan, [.plans/006-incremental-datalog-evaluator.md](./.plans/006-incremental-datalog-evaluator.md) for the incremental Datalog plan, and [.plans/006.2-differential-negation.md](./.plans/006.2-differential-negation.md) for the differential negation plan.
 
 ## Architecture
 
@@ -136,11 +138,11 @@ prism/
 │   │       ├── pipeline.ts       Incremental composition root (DAG wiring)
 │   │       └── index.ts          Barrel export
 │   ├── datalog/              Stratified bottom-up evaluator
-│   │   ├── types.ts            Atoms, terms, rules, facts, Relation (Map-backed), Database
+│   │   ├── types.ts            Atoms, terms, rules, facts, dual-weight Relation, Database
 │   │   ├── unify.ts            Variable binding, substitution, guards
 │   │   ├── stratify.ts         Dependency graph, SCC, stratum ordering
-│   │   ├── evaluate.ts         Batch semi-naive fixed-point evaluation
-│   │   ├── incremental-evaluate.ts  Cross-time incremental evaluator with DRed (Plan 006)
+│   │   ├── evaluate.ts         Per-rule core: evaluateRuleDelta (asymmetric join), differentialNegation, groundHead
+│   │   ├── evaluator.ts        Unified evaluator: createEvaluator, evaluateStratumFromDelta, batch wrappers
 │   │   └── aggregate.ts        min, max, count, sum
 │   ├── solver/               Native optimizations (§B.7)
 │   │   ├── lww.ts              Batch LWW: max_by(lamport, peer)
@@ -149,9 +151,9 @@ prism/
 │   │   └── incremental-fugue.ts  Per-parent Fugue tree maintenance (Plan 006)
 │   ├── bootstrap.ts          Reality creation + default solver rules (§B.8)
 │   └── index.ts              Public API
-├── tests/                    1198 tests across 33 files
+├── tests/                    1304 tests across 34 files
 │   ├── base/                 Z-set algebra
-│   ├── datalog/              Evaluator, unification, stratification, rules, incremental evaluator
+│   ├── datalog/              Evaluator, unification, stratification, rules, differential negation
 │   ├── kernel/               Store, agent, authority, pipeline, skeleton, ...
 │   │   └── incremental/        Incremental stages, evaluation, pipeline (differential)
 │   ├── solver/               LWW/Fugue equivalence + incremental solver tests
@@ -186,7 +188,7 @@ bun install
 ```bash
 bun install          # Install dependencies
 bun run test         # Run tests in watch mode
-bun run test:run     # Run tests once (1098 tests)
+bun run test:run     # Run tests once (1304 tests)
 bun run typecheck    # TypeScript type checking
 ```
 

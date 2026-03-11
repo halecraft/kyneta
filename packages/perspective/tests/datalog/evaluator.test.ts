@@ -25,6 +25,7 @@ import {
   constTerm,
   positiveAtom,
   negation,
+  aggregation,
   neq,
   gt,
   eq,
@@ -733,7 +734,7 @@ describe('applyDistinct with dual-weight', () => {
     inputDelta.addFact(fact('p', ['a']));
     inputDelta.addFact(fact('q', ['a']));
 
-    evaluateStratumFromDelta(rules, db, inputDelta, false);
+    evaluateStratumFromDelta(rules, db, inputDelta);
 
     // derived(a) should be present with true weight >= 2 (dual-weight
     // preserves multiplicity). clampedWeight is 1 (visible via has()).
@@ -803,7 +804,7 @@ describe('evaluateStratumFromDelta', () => {
     inputDelta.addFact(fact('base', ['a']));
     inputDelta.addFact(fact('base', ['b']));
 
-    const outputDelta = evaluateStratumFromDelta(rules, db, inputDelta, false);
+    const outputDelta = evaluateStratumFromDelta(rules, db, inputDelta);
 
     // Should derive derived(a) and derived(b).
     expect(db.hasFact(fact('derived', ['a']))).toBe(true);
@@ -829,7 +830,7 @@ describe('evaluateStratumFromDelta', () => {
     const inputDelta = new Database();
     // Empty input delta — nothing new to process.
 
-    const outputDelta = evaluateStratumFromDelta(rules, db, inputDelta, false);
+    const outputDelta = evaluateStratumFromDelta(rules, db, inputDelta);
 
     expect(outputDelta.size).toBe(0);
   });
@@ -859,7 +860,7 @@ describe('evaluateStratumFromDelta', () => {
     inputDelta.addFact(fact('edge', ['b', 'c']));
     inputDelta.addFact(fact('edge', ['c', 'd']));
 
-    evaluateStratumFromDelta(rules, db, inputDelta, false);
+    evaluateStratumFromDelta(rules, db, inputDelta);
 
     expect(db.hasFact(fact('path', ['a', 'b']))).toBe(true);
     expect(db.hasFact(fact('path', ['b', 'c']))).toBe(true);
@@ -898,7 +899,7 @@ describe('evaluateStratumFromDelta', () => {
     inputDelta.addFact(fact('edge', ['b', 'c']));
     inputDelta.addFact(fact('edge', ['a', 'c']));
 
-    evaluateStratumFromDelta(rules, db, inputDelta, false);
+    evaluateStratumFromDelta(rules, db, inputDelta);
 
     // path(a,c) should exist — presence is correct.
     expect(db.hasFact(fact('path', ['a', 'c']))).toBe(true);
@@ -954,7 +955,7 @@ describe('evaluateStratumFromDelta', () => {
     inputDelta.addFact(fact('candidate', ['c']));
 
     // Stratum 0: derive rejected facts (positive).
-    const stratum0Delta = evaluateStratumFromDelta(positiveRules, db, inputDelta, false);
+    const stratum0Delta = evaluateStratumFromDelta(positiveRules, db, inputDelta);
 
     // Build input delta for stratum 1 from stratum 0's output + original input.
     const stratum1Input = new Database();
@@ -970,7 +971,7 @@ describe('evaluateStratumFromDelta', () => {
     }
 
     // Stratum 1: derive winner facts (negation).
-    evaluateStratumFromDelta(negationRules, db, stratum1Input, true);
+    evaluateStratumFromDelta(negationRules, db, stratum1Input);
 
     // 'c' is the greatest, so it should be the winner.
     expect(db.hasFact(fact('winner', ['c']))).toBe(true);
@@ -999,12 +1000,301 @@ describe('evaluateStratumFromDelta', () => {
     const inputDelta = new Database();
     inputDelta.addFact(fact('base', ['b'])); // Only 'b' is new.
 
-    const outputDelta = evaluateStratumFromDelta(rules, db, inputDelta, false);
+    const outputDelta = evaluateStratumFromDelta(rules, db, inputDelta);
 
     // 'a' was already derived — should NOT appear in delta.
     // 'b' is newly derived — should appear as +1.
     expect(outputDelta.hasFact(fact('derived', ['b']))).toBe(true);
     expect(outputDelta.size).toBe(1);
+  });
+
+  // --- Phase 2 tests: unified loop with differential negation ---
+
+  it('retraction cascades through transitive closure', () => {
+    // path(X,Y) :- edge(X,Y).
+    // path(X,Z) :- edge(X,Y), path(Y,Z).
+    const rules: Rule[] = [
+      rule(
+        atom('path', [varTerm('X'), varTerm('Y')]),
+        [positiveAtom(atom('edge', [varTerm('X'), varTerm('Y')]))],
+      ),
+      rule(
+        atom('path', [varTerm('X'), varTerm('Z')]),
+        [
+          positiveAtom(atom('edge', [varTerm('X'), varTerm('Y')])),
+          positiveAtom(atom('path', [varTerm('Y'), varTerm('Z')])),
+        ],
+      ),
+    ];
+
+    const db = new Database();
+    // Insert edges: a→b→c→d
+    db.addFact(fact('edge', ['a', 'b']));
+    db.addFact(fact('edge', ['b', 'c']));
+    db.addFact(fact('edge', ['c', 'd']));
+
+    const insertDelta = new Database();
+    insertDelta.addFact(fact('edge', ['a', 'b']));
+    insertDelta.addFact(fact('edge', ['b', 'c']));
+    insertDelta.addFact(fact('edge', ['c', 'd']));
+
+    evaluateStratumFromDelta(rules, db, insertDelta);
+
+    // All transitive paths should exist.
+    expect(db.hasFact(fact('path', ['a', 'b']))).toBe(true);
+    expect(db.hasFact(fact('path', ['a', 'c']))).toBe(true);
+    expect(db.hasFact(fact('path', ['a', 'd']))).toBe(true);
+    expect(db.hasFact(fact('path', ['b', 'c']))).toBe(true);
+    expect(db.hasFact(fact('path', ['b', 'd']))).toBe(true);
+    expect(db.hasFact(fact('path', ['c', 'd']))).toBe(true);
+
+    // Retract edge b→c.
+    db.addWeightedFact(fact('edge', ['b', 'c']), -1);
+    const retractDelta = new Database();
+    retractDelta.addWeightedFact(fact('edge', ['b', 'c']), -1);
+
+    const outputDelta = evaluateStratumFromDelta(rules, db, retractDelta);
+
+    // Paths through b→c should be retracted.
+    expect(db.hasFact(fact('path', ['b', 'c']))).toBe(false);
+    expect(db.hasFact(fact('path', ['b', 'd']))).toBe(false);
+    expect(db.hasFact(fact('path', ['a', 'c']))).toBe(false);
+    expect(db.hasFact(fact('path', ['a', 'd']))).toBe(false);
+
+    // Paths not through b→c survive.
+    expect(db.hasFact(fact('path', ['a', 'b']))).toBe(true);
+    expect(db.hasFact(fact('path', ['c', 'd']))).toBe(true);
+
+    // Output delta should contain −1 for retracted paths.
+    expect(outputDelta.getRelation('path').allEntryCount).toBeGreaterThan(0);
+  });
+
+  it('negation stratum: +1 to negated predicate blocks derivation (−1 output)', () => {
+    // winner(X) :- candidate(X), not rejected(X).
+    // The negation stratum receives a +1 delta for rejected(a).
+    // This should block winner(a) → produce −1 in the output delta.
+    const negRules: Rule[] = [
+      rule(
+        atom('winner', [varTerm('X')]),
+        [
+          positiveAtom(atom('candidate', [varTerm('X')])),
+          negation(atom('rejected', [varTerm('X')])),
+        ],
+      ),
+    ];
+
+    const db = new Database();
+    db.addFact(fact('candidate', ['a']));
+    db.addFact(fact('candidate', ['b']));
+    // winner(a) and winner(b) are derived (no rejections yet).
+    const seedDelta = new Database();
+    seedDelta.addFact(fact('candidate', ['a']));
+    seedDelta.addFact(fact('candidate', ['b']));
+    evaluateStratumFromDelta(negRules, db, seedDelta);
+    expect(db.hasFact(fact('winner', ['a']))).toBe(true);
+    expect(db.hasFact(fact('winner', ['b']))).toBe(true);
+
+    // Now rejected(a) appears (+1 delta to the negated predicate).
+    db.addFact(fact('rejected', ['a']));
+    const blockDelta = new Database();
+    blockDelta.addFact(fact('rejected', ['a']));
+
+    const outputDelta = evaluateStratumFromDelta(negRules, db, blockDelta);
+
+    // winner(a) should be retracted.
+    expect(db.hasFact(fact('winner', ['a']))).toBe(false);
+    // winner(b) survives — rejected(b) was never added.
+    expect(db.hasFact(fact('winner', ['b']))).toBe(true);
+    // Output delta should contain −1 for winner(a).
+    expect(outputDelta.getRelation('winner').getWeight(['a'])).toBe(-1);
+  });
+
+  it('negation stratum: −1 to negated predicate unblocks derivation (+1 output)', () => {
+    // winner(X) :- candidate(X), not rejected(X).
+    // rejected(a) is present. winner(a) is NOT derived.
+    // Retract rejected(a) → winner(a) should appear.
+    const negRules: Rule[] = [
+      rule(
+        atom('winner', [varTerm('X')]),
+        [
+          positiveAtom(atom('candidate', [varTerm('X')])),
+          negation(atom('rejected', [varTerm('X')])),
+        ],
+      ),
+    ];
+
+    const db = new Database();
+    db.addFact(fact('candidate', ['a']));
+    db.addFact(fact('candidate', ['b']));
+    db.addFact(fact('rejected', ['a']));
+    // Seed: only winner(b) is derived (a is rejected).
+    const seedDelta = new Database();
+    seedDelta.addFact(fact('candidate', ['a']));
+    seedDelta.addFact(fact('candidate', ['b']));
+    seedDelta.addFact(fact('rejected', ['a']));
+    evaluateStratumFromDelta(negRules, db, seedDelta);
+    expect(db.hasFact(fact('winner', ['a']))).toBe(false);
+    expect(db.hasFact(fact('winner', ['b']))).toBe(true);
+
+    // Now retract rejected(a) (−1 delta to the negated predicate).
+    db.addWeightedFact(fact('rejected', ['a']), -1);
+    const unblockDelta = new Database();
+    unblockDelta.addWeightedFact(fact('rejected', ['a']), -1);
+
+    const outputDelta = evaluateStratumFromDelta(negRules, db, unblockDelta);
+
+    // winner(a) should now be derived.
+    expect(db.hasFact(fact('winner', ['a']))).toBe(true);
+    // winner(b) still present.
+    expect(db.hasFact(fact('winner', ['b']))).toBe(true);
+    // Output delta should contain +1 for winner(a).
+    expect(outputDelta.getRelation('winner').getWeight(['a'])).toBe(1);
+  });
+
+  it('self-join correctness: superseded weight is 1, not 2 (asymmetric join)', () => {
+    // superseded(CnId, Slot) :- active_value(CnId, Slot, _, L1, _),
+    //   active_value(CnId2, Slot, _, L2, _), CnId ≠ CnId2, L2 > L1.
+    // With two values (alice L=10, bob L=20), superseded(alice) should
+    // have weight exactly 1 — one derivation path, not 2 from
+    // double-counting.
+    const supersededRule = rule(
+      atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
+      [
+        positiveAtom(
+          atom('active_value', [
+            varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), _,
+          ]),
+        ),
+        positiveAtom(
+          atom('active_value', [
+            varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), _,
+          ]),
+        ),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        gt(varTerm('L2'), varTerm('L1')),
+      ],
+    );
+
+    const db = new Database();
+    db.addFact(fact('active_value', ['alice@1', 'slot:title', 'Hello', 10, 'alice']));
+    db.addFact(fact('active_value', ['bob@1', 'slot:title', 'World', 20, 'bob']));
+
+    const insertDelta = new Database();
+    insertDelta.addFact(fact('active_value', ['alice@1', 'slot:title', 'Hello', 10, 'alice']));
+    insertDelta.addFact(fact('active_value', ['bob@1', 'slot:title', 'World', 20, 'bob']));
+
+    evaluateStratumFromDelta([supersededRule], db, insertDelta);
+
+    // superseded(alice) should exist with weight exactly 1.
+    expect(db.hasFact(fact('superseded', ['alice@1', 'slot:title']))).toBe(true);
+    expect(db.getRelation('superseded').getWeight(['alice@1', 'slot:title'])).toBe(1);
+
+    // Retract bob → superseded(alice) should be retracted (weight 0).
+    db.addWeightedFact(fact('active_value', ['bob@1', 'slot:title', 'World', 20, 'bob']), -1);
+    const retractDelta = new Database();
+    retractDelta.addWeightedFact(fact('active_value', ['bob@1', 'slot:title', 'World', 20, 'bob']), -1);
+
+    evaluateStratumFromDelta([supersededRule], db, retractDelta);
+
+    expect(db.hasFact(fact('superseded', ['alice@1', 'slot:title']))).toBe(false);
+  });
+
+  it('three-value multi-path: superseded survives partial retraction (weight 2→1)', () => {
+    // alice (L=10), bob (L=20), charlie (L=30).
+    // superseded(alice) is derived by BOTH bob and charlie (weight 2).
+    // Retract charlie → superseded(alice) survives with weight 1.
+    const supersededRule = rule(
+      atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
+      [
+        positiveAtom(
+          atom('active_value', [
+            varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), _,
+          ]),
+        ),
+        positiveAtom(
+          atom('active_value', [
+            varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), _,
+          ]),
+        ),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        gt(varTerm('L2'), varTerm('L1')),
+      ],
+    );
+
+    const db = new Database();
+    db.addFact(fact('active_value', ['alice@1', 'slot:title', 'A', 10, 'alice']));
+    db.addFact(fact('active_value', ['bob@1', 'slot:title', 'B', 20, 'bob']));
+    db.addFact(fact('active_value', ['charlie@1', 'slot:title', 'C', 30, 'charlie']));
+
+    const insertDelta = new Database();
+    insertDelta.addFact(fact('active_value', ['alice@1', 'slot:title', 'A', 10, 'alice']));
+    insertDelta.addFact(fact('active_value', ['bob@1', 'slot:title', 'B', 20, 'bob']));
+    insertDelta.addFact(fact('active_value', ['charlie@1', 'slot:title', 'C', 30, 'charlie']));
+
+    evaluateStratumFromDelta([supersededRule], db, insertDelta);
+
+    // superseded(alice) should have weight 2 (derived by bob AND charlie).
+    expect(db.hasFact(fact('superseded', ['alice@1', 'slot:title']))).toBe(true);
+    expect(db.getRelation('superseded').getWeight(['alice@1', 'slot:title'])).toBe(2);
+
+    // superseded(bob) should have weight 1 (derived by charlie only).
+    expect(db.hasFact(fact('superseded', ['bob@1', 'slot:title']))).toBe(true);
+    expect(db.getRelation('superseded').getWeight(['bob@1', 'slot:title'])).toBe(1);
+
+    // Retract charlie.
+    db.addWeightedFact(fact('active_value', ['charlie@1', 'slot:title', 'C', 30, 'charlie']), -1);
+    const retractDelta = new Database();
+    retractDelta.addWeightedFact(fact('active_value', ['charlie@1', 'slot:title', 'C', 30, 'charlie']), -1);
+
+    const outputDelta = evaluateStratumFromDelta([supersededRule], db, retractDelta);
+
+    // superseded(alice) SURVIVES — weight 2→1, no zero-crossing.
+    expect(db.hasFact(fact('superseded', ['alice@1', 'slot:title']))).toBe(true);
+    expect(db.getRelation('superseded').getWeight(['alice@1', 'slot:title'])).toBe(1);
+
+    // superseded(bob) is RETRACTED — weight 1→0, zero-crossing.
+    expect(db.hasFact(fact('superseded', ['bob@1', 'slot:title']))).toBe(false);
+
+    // Output delta: superseded(bob) retracted (−1), superseded(alice) not
+    // in delta (no zero-crossing).
+    expect(outputDelta.getRelation('superseded').getWeight(['bob@1', 'slot:title'])).toBe(-1);
+    // superseded(alice) should NOT appear in the output delta.
+    expect(outputDelta.getRelation('superseded').getWeight(['alice@1', 'slot:title'])).toBe(0);
+  });
+
+  it('aggregation stratum still wipe-and-recomputes correctly', () => {
+    // count_rule: item_count(Group, Count) :- count(member(Group, Item), as Count grouped by Group).
+    // This uses aggregation, so it should use wipe-and-recompute.
+    const aggClause = {
+      fn: 'count' as const,
+      groupBy: ['Group'],
+      over: 'Item',
+      result: 'Count',
+      source: atom('member', [varTerm('Group'), varTerm('Item')]),
+    };
+    const countRule = rule(
+      atom('group_count', [varTerm('Group'), varTerm('Count')]),
+      [aggregation(aggClause)],
+    );
+
+    const db = new Database();
+    db.addFact(fact('member', ['a', 1]));
+    db.addFact(fact('member', ['a', 2]));
+    db.addFact(fact('member', ['a', 3]));
+    db.addFact(fact('member', ['b', 10]));
+    db.addFact(fact('member', ['b', 20]));
+
+    const insertDelta = new Database();
+    insertDelta.addFact(fact('member', ['a', 1]));
+    insertDelta.addFact(fact('member', ['a', 2]));
+    insertDelta.addFact(fact('member', ['a', 3]));
+    insertDelta.addFact(fact('member', ['b', 10]));
+    insertDelta.addFact(fact('member', ['b', 20]));
+
+    evaluateStratumFromDelta([countRule], db, insertDelta);
+
+    expect(db.hasFact(fact('group_count', ['a', 3]))).toBe(true);
+    expect(db.hasFact(fact('group_count', ['b', 2]))).toBe(true);
   });
 });
 

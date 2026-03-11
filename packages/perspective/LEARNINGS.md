@@ -743,15 +743,13 @@ This eliminates both snapshot-and-diff (no pre-step clone of derived predicates)
 
 **Lesson**: When you need both "what changed" (for delta output) and "what needs clamping" (for convergence), a single first-touch map serves both purposes. The first-touch-never-overwrite invariant is what makes it work — it decouples the tracking from the number of intermediate mutations.
 
-### Retraction Through Negation Strata Still Requires Wipe-and-Recompute
+### Retraction Through Negation Strata Still Requires Wipe-and-Recompute ✅ (Resolved in Plan 006.2)
 
 The DBSP ideal is that Z-set weight arithmetic propagates retractions automatically — a −1 input produces −1 derivations, `distinct` clamps, and facts that lost all support reach weight 0. This works cleanly for positive strata. For negation strata, however, true weighted retraction propagation requires that the negation operator produce *new* +1 derivations when a previously-blocking fact drops to weight 0 (e.g., `not superseded(X)` succeeds for a new X when superseded(X) is retracted).
 
-The current implementation handles this pragmatically: when retractions are present, **all** affected strata (both positive and negation) use wipe-and-recompute. The dirty map captures pre-wipe weights, so delta extraction correctly produces −1 for retracted facts and +1 for newly derived facts. This is the same DRed pattern from Plan 006, but with dirty-map delta extraction instead of snapshot-and-diff — strictly less work.
+~~The current implementation handles this pragmatically: when retractions are present, **all** affected strata (both positive and negation) use wipe-and-recompute.~~ **Resolved.** Plan 006.2 implements differential negation (`evaluateDifferentialNegation`), which processes delta entries with sign inversion: `output_weight = sub.weight × (−deltaWeight)`. Appearance of a negated fact blocks derivations (→ −1); disappearance unblocks (→ +1). The unified semi-naive loop treats negation atoms as delta sources alongside positive atoms, eliminating wipe-and-recompute for all non-aggregation strata.
 
-The retraction flag also propagates through strata: if stratum 0 produces −1 deltas, stratum 1 also uses wipe-and-recompute. This is conservative but correct. True incremental retraction through negation is deferred as an optimization.
-
-**Lesson**: The gap between "weights propagate automatically in theory" and "weights propagate automatically through negation" is significant. Negation inverts the signal: a retracted positive fact should produce a *new* negative fact, not just remove an existing one. Until the evaluator can derive new facts from absences, wipe-and-recompute remains the correct fallback.
+**Updated lesson**: The gap between "weights propagate automatically through positive joins" and "weights propagate through negation" is real but bridgeable. The key insight is that differential negation is just sign inversion applied to the delta of the negated relation — it's not a fundamentally different operator, just the DBSP complement to weighted joins. The body element at `deltaIdx` knows its own kind and dispatches accordingly — no separate function or parameter needed.
 
 ### Batch-as-Wrapper Validates the Incremental Core
 
@@ -761,11 +759,53 @@ The three-way oracle test validates: (1) old batch `evaluate()`, (2) unified sin
 
 **Lesson**: When replacing a batch algorithm with an incremental one, keep the old implementation as an oracle and test three ways: old batch, new single-step (should equal batch), new multi-step (should equal both). The single-step test catches core algorithm bugs; the multi-step test catches state accumulation bugs. Both are necessary.
 
+## Plan 006.2: Differential Negation and True Incremental Retraction
+
+### `distinct` Destroys Multiplicity — The Three-Value LWW Bug
+
+Plan 006.1's single-weight `Relation` clamped weights to 0/1 via `applyDistinct`. This destroys Z-set multiplicity: a fact derived by two paths has weight 1 after clamping. Retracting one path drops weight to 0 — an incorrect retraction, since alternative support still exists (e.g., `superseded(alice)` derived by both bob and charlie; retracting charlie should not retract `superseded(alice)` because bob still supersedes her).
+
+The fix is dual weights: `weight` stores true Z-set multiplicity, `clampedWeight` stores the post-distinct presence signal. `applyDistinct` becomes negative-floor-only (`max(0, w)`), not 0/1 clamping. This was caught by mathematical review before any code was written — it would have been caught by the three-value LWW test, but only after implementation.
+
+**Lesson**: When extending a data structure with dual-role semantics (accumulated state AND delta container), the invariants of the two roles can conflict. Weight clamping was correct for set-oriented presence but destructive for Z-set multiplicity. The fix isn't choosing one — it's storing both.
+
+### Semi-Naive Self-Join Double-Counting Requires Asymmetric Join
+
+Standard semi-naive iterates delta positions for self-joins: `superseded(A,S) :- active_value(A,...), active_value(B,...), ...`. With delta `{alice, bob}`, both `deltaIdx=0` and `deltaIdx=1` produce `superseded(alice)` — weight 2 for a single genuine derivation. On retraction, only one path reverses, leaving weight 1 — the fact incorrectly survives.
+
+The fix is DBSP's asymmetric join: `ΔA ⋈ B_new + A_old ⋈ ΔB` where `A_old = A_new − ΔA`. Positions before `deltaIdx` use P_new; positions after use P_old. Each derivation path counted exactly once.
+
+A first attempt to use "deferred delta" (don't apply inputDelta to `db` before evaluation, pass P_old and P_new separately) was architecturally cleaner but incompatible with `step()`'s multi-stratum model — the first stratum's inputDelta application would be double-applied by the second stratum. The working approach: `step()` applies ground facts to `db` (= P_new), then `evaluateStratumFromDelta` constructs P_old = P_new − inputDelta. This is O(|delta|) via `constructDbOld()`, not O(|DB|) for cloning.
+
+**Lesson**: DBSP's `distinct` operator is `max(0, w)` (negative floor), NOT `clamp(0, 1, w)`. The 0/1 clamping masks semi-naive double-counting. To use true Z-set multiplicities, the semi-naive evaluation itself must be correct — which requires the asymmetric join formulation. These two fixes (dual-weight + asymmetric join) are co-dependent.
+
+### The Body Element Knows Its Kind — Don't Pass What You Can Read
+
+`evaluateRuleDelta` handles both positive atoms and negation atoms as delta sources without a `deltaKind` parameter. The body element at `deltaIdx` already carries `kind: 'atom' | 'negation'`, so the switch branch dispatches to `evaluatePositiveAtom` or `evaluateDifferentialNegation` by reading the element. One function, one loop, zero parallel code paths.
+
+**Lesson**: When generalizing a function to handle a new case, check if the dispatch information is already in the data. Adding a parameter for information that's already present in the input creates a synchronization obligation that adds no value.
+
+### Dirty Map Should Track Only Derived Facts, Not Input Facts
+
+During implementation, `evaluateStratumFromDelta` initially recorded inputDelta entries in the dirty map (to track pre-delta weights for `extractDelta`). This caused input facts to appear in the output delta — e.g., `base(b): +1` would show up alongside `derived(b): +1`. The stratum's output delta should contain only changes to facts that this stratum *derives*, not changes to its *inputs*.
+
+The fix: don't record inputDelta in the dirty map. Only facts touched by `applyDerivedFact` (i.e., facts this stratum computes) enter the dirty map. Input facts are the responsibility of the caller (`step()`), not the stratum evaluator.
+
+**Lesson**: In a layered pipeline, each stage should report only the changes it *causes*, not echo back changes it *receives*. The dirty map's scope should match the stratum's derivation scope.
+
+### `constructDbOld` vs Deferred Delta — Architecture Meets Multi-Stratum Reality
+
+The plan's original architecture called for `step()` to NOT apply ground facts before stratum evaluation, passing `db` as P_old. This is elegant for a single stratum but breaks for multi-stratum evaluation: each stratum's `evaluateStratumFromDelta` would apply the inputDelta to `db`, but the cumulative inputDelta for stratum 1 includes both ground facts AND stratum 0's output. Ground facts would be double-applied.
+
+The working design inverts the approach: `step()` applies ground facts to `db` (= P_new), and `evaluateStratumFromDelta` subtracts the inputDelta to get P_old. This works cleanly for multi-stratum because each stratum only subtracts its own inputDelta from the already-updated `db`.
+
+**Lesson**: Theoretical designs that work for the single-operator case often break when composed in a pipeline. Test the multi-stratum case early — it's where the abstractions meet reality.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.
 
-2. ~~**What is the performance ceiling?**~~ **Resolved in Plan 006; refined in Plan 006.1.** The incremental pipeline is O(|Δ|) end-to-end for the common case (default rules via native solvers) and for the custom-rules case (via the incremental Datalog evaluator). Plan 006.1 replaced DRed's snapshot-and-diff with dirty-map delta extraction (O(|touched facts|) instead of O(|all derived facts|)). Wipe-and-recompute is still used when retractions are present, but the dirty map eliminates the pre-step snapshot clone and post-step full-database diff. The remaining optimization opportunity is true weighted retraction propagation through negation strata — currently deferred because wipe-and-recompute is bounded by the number of slots/parents per step.
+2. ~~**What is the performance ceiling?**~~ **Resolved in Plan 006; refined in Plans 006.1 and 006.2.** The incremental pipeline is O(|Δ|) end-to-end for the common case (default rules via native solvers) and for the custom-rules case (via the unified Datalog evaluator). Plan 006.1 replaced DRed's snapshot-and-diff with dirty-map delta extraction (O(|touched facts|) instead of O(|all derived facts|)). Plan 006.2 eliminated wipe-and-recompute for negation strata via differential negation and the asymmetric join — all non-aggregation strata now use the unified O(|Δ|×|DB|) semi-naive loop. The remaining scoped limitation is aggregation strata (wipe-and-recompute, bounded by group count), which is acceptable since no default rules use aggregation.
 
 3. **Can cross-container constraints be made to work?** E.g., "if key X exists in Map A, then key Y must exist in Map B." This requires a solver that reasons across containers, which the current per-container solver architecture doesn't support.
 
