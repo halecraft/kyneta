@@ -1,0 +1,255 @@
+\begin{thebibliography}{10}
+
+\bibitem{aurora}
+The {Aurora} project.
+\newblock \url{http://cs.brown.edu/research/aurora/}, December 2004.
+
+\bibitem{abadi-fossacs15}
+Martín Abadi, Frank McSherry, and Gordon Plotkin.
+\newblock Foundations of differential dataflow.
+\newblock In {\em Foundations of Software Science and Computation Structures
+  (FoSSaCS)}, London, UK, April 11-18 2015.
+\newblock URL:
+  \url{http://homepages.inf.ed.ac.uk/gdp/publications/differentialweb.pdf}.
+
+\bibitem{Abiteboul-book95}
+Serge Abiteboul, Richard Hull, and Victor Vianu.
+\newblock {\em Foundations of Databases}.
+\newblock Addison-Wesley, 1995.
+\newblock URL: \url{http://webdam.inria.fr/Alice/}.
+
+\bibitem{picallo-scop19}
+Mario Alvarez-Picallo, Alex Eyers-Taylor, Michael Peyton~Jones, and C.-H.~Luke
+  Ong.
+\newblock Fixing incremental computation.
+\newblock In {\em European Symposium on Programming Languages and Systems
+  (ESOP)}, pages 525--552, Prague, Czech Republic, April 6–11 2019.
+\newblock URL:
+  \url{https://link.springer.com/chapter/10.1007/978-3-030-17184-1_19}.
+
+\bibitem{Apt-sigmod87}
+Krzysztof~R. Apt and Jean{-}Marc Pugin.
+\newblock Maintenance of stratified databases viewed as a belief revision
+  system.
+\newblock In Moshe~Y. Vardi, editor, {\em ACM SIGMOD International conference
+  on Management of data (SIGMOD)}, pages 136--145, San Diego, California, March
+  23-25 1987.
+\newblock \href {https://doi.org/10.1145/28659.28674}
+  {\path{doi:10.1145/28659.28674}}.
+
+\bibitem{arasu-tr02}
+Arvind Arasu, Shivnath Babu, and Jennifer Widom.
+\newblock An abstract semantics and concrete language for continuous queries
+  over streams and relations.
+\newblock Technical Report 2002-57, Stanford InfoLab, 2002.
+\newblock URL: \url{http://ilpubs.stanford.edu:8090/563/}.
+
+\bibitem{tr}
+Mihai Budiu, Frank McSherry, Leonid Ryzhyk, and Val Tannen.
+\newblock {DBSP}: A language for expressing incremental view maintenance for
+  rich query languages.
+\newblock
+  https://github.com/vmware/database-stream-processor/blob/main/doc/spec.pdf.
+\newblock December 2021.
+
+\bibitem{Ceri-VLDB91}
+Stefano Ceri and Jennifer Widom.
+\newblock Deriving production rules for incremental view maintenance.
+\newblock In Guy~M. Lohman, Am{\'{\i}}lcar Sernadas, and Rafael Camps, editors,
+  {\em International Conference of Very Large Data Bases (VLDB)}, pages
+  577--589, Barcelona, Spain, 1991.
+\newblock URL: \url{http://www.vldb.org/conf/1991/P577.PDF}.
+
+\bibitem{chothia-vldb16}
+Zaheer Chothia, John Liagouris, Frank McSherry, and Timothy Roscoe.
+\newblock Explaining outputs in modern data analytics.
+\newblock {\em Proc. VLDB Endow.}, 9(12):1137–1148, August 2016.
+\newblock URL: \url{https://doi.org/10.14778/2994509.2994530}.
+
+\bibitem{Dewan-iis92}
+Hasanat~M. Dewan, David Ohsie, Salvatore~J. Stolfo, Ouri Wolfson, and Sushil~Da
+  Silva.
+\newblock Incremental database rule processing in {PARADISER}.
+\newblock {\em J. Intell. Inf. Syst.}, 1(2):177--209, 1992.
+\newblock \href {https://doi.org/10.1007/BF00962282}
+  {\path{doi:10.1007/BF00962282}}.
+
+\bibitem{greco-sldm15}
+Sergio Greco and Cristian Molinaro.
+\newblock Datalog and logic databases.
+\newblock {\em Synthesis Lectures on Data Management}, 7(2):1--169, 2015.
+\newblock URL: \url{https://doi.org/10.2200/S00648ED1V01Y201505DTM041}.
+
+\bibitem{green-tcs11}
+Todd~J Green, Zachary~G Ives, and Val Tannen.
+\newblock Reconcilable differences.
+\newblock {\em Theory of Computing Systems}, 49(2):460--488, 2011.
+\newblock URL:
+  \url{https://web.cs.ucdavis.edu/~green/papers/tocs11_differences.pdf}.
+
+\bibitem{green-pods07}
+Todd~J. Green, Grigoris Karvounarakis, and Val Tannen.
+\newblock Provenance semirings.
+\newblock In {\em Symposium on Principles of Database Systems (PODS)}, page
+  31–40, Beijing, China, June 11-14 2007.
+\newblock URL: \url{https://doi.org/10.1145/1265530.1265535}.
+
+\bibitem{gupta-idb95}
+Ashish Gupta, Inderpal~Singh Mumick, et~al.
+\newblock Maintenance of materialized views: Problems, techniques, and
+  applications.
+\newblock {\em IEEE Data Eng. Bull.}, 18(2):3--18, 1995.
+
+\bibitem{gupta-idb93}
+Ashish Gupta, Inderpal~Singh Mumick, and V.~S. Subrahmanian.
+\newblock Maintaining views incrementally.
+\newblock In {\em Proceedings of the 1993 ACM SIGMOD International Conference
+  on Management of Data}, SIGMOD '93, page 157–166, Washington, D.C., USA,
+  1993.
+\newblock URL: \url{https://doi.org/10.1145/170035.170066}.
+
+\bibitem{gupta-sigmod93}
+Ashish Gupta, Inderpal~Singh Mumick, and V.~S. Subrahmanian.
+\newblock Maintaining views incrementally.
+\newblock In {\em ACM SIGMOD International conference on Management of data
+  (SIGMOD)}, pages 157--166, Washington, DC, May 26-28 1993. {ACM} Press.
+\newblock \href {https://doi.org/10.1145/170035.170066}
+  {\path{doi:10.1145/170035.170066}}.
+
+\bibitem{Harrison-wdd92}
+John~V. Harrison and Suzanne~W. Dietrich.
+\newblock Maintenance of materialized views in a deductive database: An update
+  propagation approach.
+\newblock In Kotagiri Ramamohanarao, James Harland, and Guozhu Dong, editors,
+  {\em Workshop on Deductive Databases}, volume {CITRI/TR-92-65} of {\em
+  Technical Report}, pages 56--65, Washington, D.C., November 14 1992.
+  Department of Computer Science, University of Melbourne.
+
+\bibitem{jafarpour-edbt19}
+Hojjat Jafarpour, Rohan Desai, and Damian Guy.
+\newblock {KSQL}: Streaming {SQL} engine for {Apache Kafka}.
+\newblock In {\em International Conference on Extending Database Technology
+  (EDBT)}, pages 524--533, Lisbon, Portugal, March 26-29 2019.
+\newblock URL:
+  \url{http://openproceedings.org/2019/conf/edbt/EDBT19_paper_329.pdf}.
+
+\bibitem{johnson-phd83}
+Steven~Dexter Johnson.
+\newblock {\em Synthesis of Digital Designs from Recursion Equations}.
+\newblock PhD thesis, Indiana University, May 1983.
+\newblock
+  \url{https://help.luddy.indiana.edu/techreports/TRNNN.cgi?trnum=TR141}.
+
+\bibitem{kahn-ifip74}
+Gilles Kahn.
+\newblock The semantics of a simple language for parallel programming.
+\newblock In {\em {IFIP} Congress on Information Processing}, 1974.
+\newblock URL:
+  \url{http://www1.cs.columbia.edu/~sedwards/papers/kahn1974semantics.pdf}.
+
+\bibitem{koch-pods10}
+Christoph Koch.
+\newblock Incremental query evaluation in a ring of databases.
+\newblock In {\em Symposium on Principles of Database Systems (PODS)}, page
+  87–98, Indianapolis, Indiana, USA, 2010.
+\newblock URL: \url{https://doi.org/10.1145/1807085.1807100}.
+
+\bibitem{koch-pods16}
+Christoph Koch, Daniel Lupei, and Val Tannen.
+\newblock Incremental view maintenance for collection programming.
+\newblock In {\em Symposium on Principles of Database Systems (PODS)}, page
+  75–90, San Francisco, California, USA, 2016.
+\newblock URL: \url{https://doi.org/10.1145/2902251.2902286}.
+
+\bibitem{Kotowski-rr11}
+Jakub Kotowski, Fran{\c{c}}ois Bry, and Simon Brodt.
+\newblock Reasoning as axioms change - incremental view maintenance
+  reconsidered.
+\newblock In {\em Web Reasoning and Rule Systems {RR}}, volume 6902 of {\em
+  Lecture Notes in Computer Science}, pages 139--154, Galway, Ireland, August
+  29-30 2011. Springer.
+\newblock \href {https://doi.org/10.1007/978-3-642-23580-1\_11}
+  {\path{doi:10.1007/978-3-642-23580-1\_11}}.
+
+\bibitem{lee-ifip93}
+Edward~A. Lee.
+\newblock Multidimensional streams rooted in dataflow.
+\newblock In {\em {IFIP} Working Conference on Architectures and Compilation
+  Techniques for Fine and Medium Grain Parallelism}, Orlando, FL, January 20-22
+  1993.
+\newblock URL:
+  \url{https://ptolemy.berkeley.edu/publications/papers/93/mdsdf/}.
+
+\bibitem{lee-ieee95}
+Edward~A. Lee and Thomas~M. Parks.
+\newblock Dataflow process networks.
+\newblock {\em Proceedings of the IEEE}, pages 773--801, May 1995.
+\newblock URL:
+  \url{https://ptolemy.berkeley.edu/publications/papers/95/processNets/}.
+
+\bibitem{Lu-sigmod95}
+James~J. Lu, Guido Moerkotte, Joachim Sch{\"{u}}, and V.~S. Subrahmanian.
+\newblock Efficient maintenance of materialized mediated views.
+\newblock In {\em ACM SIGMOD International conference on Management of data
+  (SIGMOD)}, pages 340--351, San Jose, California, May 22-25 1995.
+\newblock \href {https://doi.org/10.1145/223784.223850}
+  {\path{doi:10.1145/223784.223850}}.
+
+\bibitem{mchserry-vldb20}
+Frank McSherry, Andrea Lattuada, Malte Schwarzkopf, and Timothy Roscoe.
+\newblock Shared arrangements: Practical inter-query sharing for streaming
+  dataflows.
+\newblock {\em Proc. VLDB Endow.}, 13(10):1793–1806, June 2020.
+\newblock URL: \url{https://doi.org/10.14778/3401960.3401974}.
+
+\bibitem{mcsherry-cidr13}
+Frank McSherry, Derek~Gordon Murray, Rebecca Isaacs, and Michael Isard.
+\newblock Differential dataflow.
+\newblock In {\em Conference on Innovative Data Systems Research (CIDR)},
+  Asilomar, CA, January 6--9 2013.
+\newblock URL: \url{http://cidrdb.org/cidr2013/Papers/CIDR13\_Paper111.pdf}.
+
+\bibitem{motik-ai19}
+Boris Motik, Yavor Nenov, Robert Piro, and Ian Horrocks.
+\newblock Maintenance of {Datalog} materialisations revisited.
+\newblock {\em Artif. Intell.}, 269:76--136, 2019.
+\newblock URL: \url{https://doi.org/10.1016/j.artint.2018.12.004}.
+
+\bibitem{motik-aaai15}
+Boris Motik, Yavor Nenov, Robert Edgar~Felix Piro, and Ian Horrocks.
+\newblock Incremental update of {Datalog}< materialisation: the
+  backward/forward algorithm.
+\newblock In {\em Conference on Artificial Intelligence (AAAI)}, pages
+  1560--1568, Austin, Texas, January 25-30 2015. {AAAI} Press.
+\newblock URL:
+  \url{http://www.aaai.org/ocs/index.php/AAAI/AAAI15/paper/view/9660}.
+
+\bibitem{murray-sosp13}
+Derek~G. Murray, Frank McSherry, Rebecca Isaacs, Michael Isard, Paul Barham,
+  and Mart\'{\i}n Abadi.
+\newblock {Naiad}: A timely dataflow system.
+\newblock In {\em ACM Symposium on Operating Systems Principles (SOSP)}, page
+  439–455, Farminton, Pennsylvania, 2013.
+\newblock URL: \url{https://doi.org/10.1145/2517349.2522738}.
+
+\bibitem{rabiner-book75}
+L.~R. Rabiner and B.~Gold, editors.
+\newblock {\em Theory and Application of Digital Signal Processing}.
+\newblock Prentice-Hall, 1975.
+
+\bibitem{Staudt-vldb96}
+Martin Staudt and Matthias Jarke.
+\newblock Incremental maintenance of externally materialized views.
+\newblock In {\em International Conference of Very Large Data Bases (VLDB)},
+  pages 75--86, Mumbai (Bombay), India, September 3-6 1996.
+\newblock URL: \url{http://www.vldb.org/conf/1996/P075.PDF}.
+
+\bibitem{Wolfson-sigmod91}
+Ouri Wolfson, Hasanat~M. Dewan, Salvatore~J. Stolfo, and Yechiam Yemini.
+\newblock Incremental evaluation of rules and its relationship to parallelism.
+\newblock In {\em ACM SIGMOD International conference on Management of data
+  (SIGMOD)}, pages 78--87, Denver, Colorado, May 29-31 1991. {ACM} Press.
+\newblock \href {https://doi.org/10.1145/115790.115799}
+  {\path{doi:10.1145/115790.115799}}.
+
+\end{thebibliography}

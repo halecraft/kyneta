@@ -1,0 +1,20 @@
+\section{Conclusions}\label{sec:conclusions}%\label{sec:ddlog}
+
+In this paper we have introduced \dbsp, a model of computation based on 
+infinite streams over abelian groups.  In this model streams are used 
+to model consecutive snapshots of a database, consecutive changes (or transactions)
+applied to a database, and consecutive values of loop-carried variables.
+
+We have defined an abstract notion of incremental computation over streams, 
+and defined the incrementalization operator
+$\inc{\cdot}$, which transforms a stream computation $Q$ into its incremental version $\inc{Q}$.
+The incrementalization operator has some very nice algebraic properties, which
+can generate very efficient incremental implementations for linear and bilinear
+computations.
+
+We have then applied these tools to two domains: relational queries and recursive 
+stratified queries.  This gave us a general algorithm for incrementalizing an arbitrary
+query, including recursive queries.
+However, we believe that both the incrementalization algorithm and \dbsp are even more
+powerful and can apply to even richer classes of query languages, including 
+languages operating on nested relations and streaming query languages.

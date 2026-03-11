@@ -1,0 +1,900 @@
+\section{Incremental recursive programs}\label{sec:nested}
+
+In \secref{sec:streams}--\ref{sec:relational} 
+we showed how to incrementalize a relational query by
+compiling it into a circuit, lifting the circuit to compute on streams, and
+applying the $\inc{\cdot}$ operator to the lifted circuit.  In \secref{sec:datalog} we showed
+how to compile a recursive query into a circuit that employs incremental
+computation internally to compute the fixed point.
+Here we combine these results to construct a circuit that evaluates a \emph{recursive
+query incrementally}.  The circuit receives a stream of updates to input
+relations, and for every update recomputes the fixed point.  To do this
+incrementally, it preserves the stream of changes to recursive relations
+produced by the iterative fixed point computation, and adjusts this stream to
+account for the modified inputs.  Thus, every element of the input stream yields
+a stream of adjustments to the fixed point computation, using
+\emph{nested streams}.
+
+Nested streams, or streams of streams, $\stream{\stream{A}} = \N \rightarrow (\N
+\rightarrow A)$, are well defined, since streams form an abelian group.
+Equivalently, a nested stream is a value in $\N \times \N \to A$, i.e., a matrix
+with an infinite number of rows, indexed by two-dimensional time $(t_0, t_1)$. 
+where each row is a stream.  In
+\secref{sec-nested-examples} we show a few example nested stream
+computations.
+
+Lifting a stream operator $S: \stream{A} \to \stream{B}$ yields an operator over
+nested streams $\lift{S}: \stream{\stream{A}} \to \stream{\stream{B}}$, such
+that $(\lift{S})(s) = S \circ s$, or, pointwise: $(\lift{S}(s))[t_0][t_1] =
+S(s[t_0])[t_1], \forall t_0, t_1 \in \N$.  In particular, a scalar function $f:
+A \rightarrow B$ can be lifted twice to produce an operator between streams of
+streams: $\lift{\lift{f}}: \stream{\stream{A}} \rightarrow \stream{\stream{B}}$.
+
+We define a partial order over timestamps: $(i_0, i_1)
+\leq (t_0, t_1)$ iff $i_0 \leq t_0$ and $i_1 \leq t_1$.  We extend the
+definition of strictness for operators over nested streams: a stream operator
+$F: \stream{\stream{A}} \to \stream{\stream{B}}$ is strict if for any $s, s' \in
+\stream{\stream{A}}$ and all times $t, i \in \N \times \N$ we have $\forall i <
+t, s[i] = s'[i]$ implies $F(s)[t] = F(s')[t]$.
+Proposition~\ref{prop-unique-fix} holds for this notion of strictness, i.e., the fixed point operator $\fix{\alpha}{F(\alpha)}$ is well defined for a strict operator $F$.
+
+\begin{proposition}\label{prop-liftz}
+The operator $\lift{\zm}: \stream{\stream{A}} \to \stream{\stream{A}}$ is strict.
+\end{proposition}
+
+The operator $\zm$ on nested streams delays ``rows'' of the matrix, 
+while $\lift{\zm}$ delays ``columns''.  (See examples in 
+\secref{sec-nested-examples}).
+
+The $\I$ operator on $\stream{\stream{A}}$ operates on rows
+of the matrix, treating each row as a single value.
+Lifting a stream operator computing on $\stream{A}$, 
+such as $\I: \stream{A} \to \stream{A}$, also produces an operator on nested streams, but
+this time computing on the columns of the matrix
+$\lift{\I}: \stream{\stream{A}} \to \stream{\stream{A}}.$  
+
+\begin{proposition}[Lifting cycles]
+\label{prop-lift-cycle}
+For a binary, causal $T$ we have:
+$\lift{(\lambda s. \fix{\alpha}{T(s,\zm(\alpha)}))} = \lambda s. \fix{\alpha}{(\lift{T})(s,(\lift{\zm})(\alpha))}$
+\noindent i.e., lifting a circuit containing a ``cycle'' can be accomplished by
+lifting all operators independently, including the $\zm$ back-edge.
+\end{proposition}
+
+This means that lifting a \dbsp stream function can be expressed within \dbsp
+itself.  For example, we have:
+
+\begin{tabular}{m{2cm}m{.5cm}m{4cm}}
+\begin{tikzpicture}[>=latex]
+  \node[] (input) {$i$};
+  \node[block, right of=input] (I) {$\lift{\I}$};
+  \node[right of=I] (output)  {$o$};
+  \draw[->] (input) -- (I);
+  \draw[->] (I) -- (output);
+\end{tikzpicture}
+& $\cong$ &
+\begin{tikzpicture}[>=latex]
+  \node[] (input) {$i$};
+  \node[block, circle, right of=input, inner sep=0cm] (p) {$+$};
+  \node[right of=p, node distance=1.5cm] (output)  {$o$};
+  \node[block, below of=p, node distance=.7cm] (z) {$\lift{\zm}$};
+  \draw[->] (input) -- (p);
+  \draw[->] (p) -- node (mid) {} (output);
+  \draw[->] (z) -- (p);
+  \draw[->] (mid.center) |- (z);
+\end{tikzpicture}
+\end{tabular}
+
+This proposition gives the ability to lift
+entire circuits, including circuits computing on streams and having feedback edges,
+which are well-defined, due to Proposition~\ref{prop-liftz}.  
+With this machinery we can now apply Algorithm~\ref{algorithm-inc} to arbitrary
+circuits, even circuits built for recursively-defined relations.  
+Consider the ``semi-naive'' circuit~(\ref{eq:seminaive}),
+and denote $\distinct \circ R$ with $T$:
+
+\begin{center}
+\begin{tikzpicture}[>=latex]
+  \node[] (Iinput) {\code{I}};
+  \node[block, right of=Iinput] (Idelta) {$\delta_0$};
+  \node[block, right of=Idelta] (f) {$\inc{(\lift{T})}$};
+  \node[block, right of=f, node distance=1.5cm] (S) {$\int$};
+  \node[right of=S] (output)  {\code{O}};
+  \draw[->] (f) -- node (o) {} (S);
+  \node[block, below of=o, node distance=.7cm] (z) {$\zm$};
+  \draw[->] (Iinput) -- (Idelta);
+  \draw[->] (S) -- (output);
+  \draw[->] (o.center) -- (z);
+  \draw[->] (z) -| (f);
+  \draw[->] (Idelta) -- (f);
+\end{tikzpicture}
+\vspace{-2mm}
+\end{center}
+
+\noindent Lift the entire circuit using Proposition~\ref{prop-lift-cycle} and incrementalize it:
+
+\begin{tikzpicture}[>=latex]
+  \node[] (Iinput) {\code{I}};
+  \node[block, right of=Iinput] (I) {$\I$};
+  \node[block, right of=I] (Idelta) {$\lift{\delta_0}$};
+  \node[block, right of=Idelta, node distance=1.5cm] (f) {$\lift{\inc{(\lift{T})}}$};
+  \node[block, right of=f, node distance=1.5cm] (S) {$\lift{\int}$};
+  \node[block, right of=S] (D) {$\D$};
+  \node[right of=D] (output)  {\code{O}};
+  \draw[->] (f) -- node (o) {} (S);
+  \node[block, below of=o, node distance=.7cm] (z) {$\lift{\zm}$};
+  \draw[->] (Iinput) -- (I);
+  \draw[->] (I) -- (Idelta);
+  \draw[->] (S) -- (D);
+  \draw[->] (D) -- (output);
+  \draw[->] (o.center) -- (z);
+  \draw[->] (z) -| (f);
+  \draw[->] (Idelta) -- (f);
+\end{tikzpicture}
+
+\noindent Now apply the chain rule to this circuit:
+\begin{equation}
+\vspace{-2.1ex}
+\begin{aligned}
+\label{eq:increcursive}
+\begin{tikzpicture}[>=latex]
+  \node[] (Iinput) {\code{I}};
+  \node[block, right of=Iinput] (Idelta) {$\lift{\delta_0}$};
+  \node[block, right of=Idelta, node distance=2cm] (f) {$\inc{(\lift{\inc{(\lift{T})}})}$};
+  \node[block, right of=f, node distance=2cm] (S) {$\lift{\int}$};
+  \node[right of=S] (output)  {\code{O}};
+  \draw[->] (f) -- node (o) {} (S);
+  \node[block, below of=o, node distance=.7cm] (z) {$\lift{\zm}$};
+  \draw[->] (Iinput) -- (Idelta);
+  \draw[->] (S) -- (output);
+  \draw[->] (o.center) -- (z);
+  \draw[->] (z) -| (f);
+  \draw[->] (Idelta) -- (f);
+\end{tikzpicture}
+\end{aligned}
+\end{equation}
+This is the incremental version of an arbitrary recursive query.
+
+\subsection{Example}\label{sec:recursive-example}
+
+In this section we derive the incremental version of a circuit containing
+recursion, by applying Algorithm~\ref{algorithm-inc}.  We start with a very simple
+program, expressed in Datalog, which computes the transitive closure of a directed
+graph:
+
+\begin{lstlisting}[language=ddlog]
+// Edge relation with head and tail
+input relation E(h: Node, t: Node)
+// Reach relation with source s and sink t
+output relation R(s: Node, t: Node)
+R(x, x) :- E(x, _).
+R(x, x) :- E(_, x).
+R(x, y) :- E(x, y).
+R(x, y) :- E(x, z), R(z, y).
+\end{lstlisting}
+
+We haven't explained how Datalog is translated to circuits, but most Datalog
+operators are relational in nature.  Assuming one could write 
+recursive queries in SQL where a view is defined in terms of itself, the
+above program would be implemented by the following (illegal) SQL query:
+
+\begin{lstlisting}[language=SQL]
+CREATE VIEW R AS 
+(SELECT E.h, E.h FROM E)
+UNION
+(SELECT E.t, E.t FROM E)
+UNION
+(SELECT * FROM E)
+UNION
+(SELECT E.h, R.t 
+ FROM E JOIN R 
+ ON E.t = R.s)
+\end{lstlisting}
+
+We apply the algorithm from \refsec{sec:datalog} to create first the non-recursive circuit,
+by assuming that \code{R} is already computed as a view \code{R1}, and using \code{R1}
+in the definition of \code{R} instead of itself:
+
+\begin{lstlisting}[language=SQL]
+CREATE VIEW Reach AS 
+(SELECT E.h, E.h FROM E)
+UNION
+(SELECT E.t, E.t FROM E)
+UNION
+(SELECT * FROM E)
+UNION
+(SELECT E.h, R1.t 
+ FROM E JOIN R ON E.t = R1.s)
+\end{lstlisting}
+
+Now we implement this query as a \dbsp circuit with two inputs \code{E} and \code{R1}:
+
+\noindent
+\begin{tikzpicture}[>=latex, node distance=1.2cm]
+  \node[] (E) {\code{E}};
+  \node[above of=E, node distance=.6cm] (R1) {\code{R1}};
+  \node[block, right of=R1] (j) {$\bowtie_{t=s}$};
+  \node[block, right of=j] (pj) {$\pi_{h, t}$};
+  \node[block, below of=j] (p1) {$\pi_{h}$};
+  \node[block, right of=p1] (s1) {$\sigma_{h, h}$};
+  \node[block, below of=p1, node distance=.6cm] (p2)  {$\pi_{t}$};
+  \node[block, right of=p2] (s2) {$\sigma_{t, t}$};
+  \node[below of=pj, node distance=.6cm] (mid) {};
+  \node[block, circle, right of=mid, inner sep=0cm, node distance=1.5cm] (plus) {$+$};
+  \node[block, right of=plus] (d) {$\distinct$};
+  \node[right of=d] (R) {\code{R}};
+  \draw[->] (R1) -- (j);
+  \draw[->] (E) -- (j);
+  \draw[->] (j) -- (pj);
+  \draw[->] (E) -- (p1);
+  \draw[->] (p1) -- (s1);
+  \draw[->] (E) -- (p2);
+  \draw[->] (p2) -- (s2);
+  \draw[->] (E) -- (plus);
+  \draw[->] (pj) -- (plus);
+  \draw[->] (s1) -- (plus);
+  \draw[->] (s2) -- (plus);
+  \draw[->] (plus) -- (d);
+  \draw[->] (d) -- (R);
+\end{tikzpicture}
+
+Now lift the circuit by lifting each operator pointwise, and connect it in a feedback
+loop by connecting input \code{R1} from the output \code{R} through a \zm operator and bracket
+everything with $\delta_0 -- \int$:
+
+\noindent
+\begin{tikzpicture}[>=latex]
+  \node[] (Einput) {\code{E}};
+  % generic part
+  \node[block, right of=Einput, node distance=.8cm] (ID) {$\delta_0$};
+  \node[block, right of=ID, node distance=.8cm] (E) {$\I$};
+  
+  % relational query
+  \node[right of=E] (empty) {};
+  \node[block, above of=empty, node distance=.6cm] (j) {$\lift{\bowtie_{t=s}}$};
+  \node[block, right of=j, node distance=1.2cm] (pj) {$\lift{\pi_{h, t}}$};
+  \node[block, below of=j] (p1) {$\lift{\pi_{h}}$};
+  \node[block, right of=p1] (s1) {$\lift{\sigma_{h, h}}$};
+  \node[block, below of=p1, node distance=.6cm] (p2)  {$\lift{\pi_{t}}$};
+  \node[block, right of=p2] (s2) {$\lift{\sigma_{t, t}}$};
+  \node[below of=pj, node distance=.6cm] (mid) {};
+  \node[block, circle, right of=mid, inner sep=0cm, node distance=1.2cm] (plus) {$+$};
+  \node[block, right of=plus] (d) {$\lift{\distinct}$};
+  \draw[->] (E) -- (j);
+  \draw[->] (j) -- (pj);
+  \draw[->] (E) -- (p1);
+  \draw[->] (p1) -- (s1);
+  \draw[->] (E) -- (p2);
+  \draw[->] (p2) -- (s2);
+  \draw[->] (E) -- (plus);
+  \draw[->] (pj) -- (plus);
+  \draw[->] (s1) -- (plus);
+  \draw[->] (s2) -- (plus);
+  \draw[->] (plus) -- (d);
+  
+  % generic part
+  \node[block, right of=d, node distance=1.1cm] (D) {$\D$};
+  \node[block, right of=D, node distance=.8cm] (S) {$\int$};
+  \node[right of=S, node distance=.8cm] (output)  {\code{R}};
+  \draw[->] (Einput) -- (ID);
+  \draw[->] (ID) -- (E);
+  \draw[->] (d) -- node (o) {} (D);
+  \draw[->] (D) -- (S);
+  \draw[->] (S) -- (output);
+  \node[block, above of=j, node distance=.8cm] (z) {$\zm$};
+  \draw[->] (o.center) |- (z);
+  \draw[->] (z) -- (j);
+\end{tikzpicture}
+
+The above circuit is a complete implementation of the non-streaming
+recursive query; given an input relation \code{E} it will produce
+its transitive closure \code{R} at the output.  
+
+Now we use the semina\"ive property~\ref{eq:seminaive} to rewrite the circuit:
+
+(To save space in the figures we will omit the indices from $\pi$ and $\sigma$
+in the subsequent figures, for example by writing just $\pi$ instead of $\pi_h$.)
+
+\noindent
+\begin{tikzpicture}[>=latex, node distance=1.4cm]
+  \node[] (Einput) {\code{E}};
+  % generic part
+  \node[block, right of=Einput, node distance=.8cm] (E) {$\delta_0$};
+  
+  % relational query
+  \node[right of=E] (empty) {};
+  \node[block, above of=empty, node distance=.6cm] (j) {$\inc{(\lift{\bowtie})}$};
+  \node[block, right of=j] (pj) {$\inc{(\lift{\pi})}$};
+  \node[block, below of=j, node distance=1cm] (p1) {$\inc{(\lift{\pi})}$};
+  \node[block, right of=p1] (s1) {$\inc{(\lift{\sigma)}}$};
+  \node[block, below of=p1, node distance=.6cm] (p2)  {$\inc{(\lift{\pi})}$};
+  \node[block, right of=p2] (s2) {$\inc{(\lift{\sigma})}$};
+  \node[below of=pj, node distance=.6cm] (mid) {};
+  \node[block, circle, right of=mid, inner sep=0cm, node distance=1.2cm] (plus) {$+$};
+  \node[block, right of=plus] (d) {$\inc{(\lift{\distinct})}$};
+  \draw[->] (E) -- (j);
+  \draw[->] (j) -- (pj);
+  \draw[->] (E) -- (p1);
+  \draw[->] (p1) -- (s1);
+  \draw[->] (E) -- (p2);
+  \draw[->] (p2) -- (s2);
+  \draw[->] (E) -- (plus);
+  \draw[->] (pj) -- (plus);
+  \draw[->] (s1) -- (plus);
+  \draw[->] (s2) -- (plus);
+  \draw[->] (plus) -- (d);
+  
+  % generic part
+  \node[block, right of=d] (S) {$\int$};
+  \node[right of=S, node distance=.8cm] (output)  {\code{R}};
+  \draw[->] (Einput) -- (E);
+  \draw[->] (d) -- node (o) {} (S);
+  \draw[->] (S) -- (output);
+  \node[block, above of=j, node distance=.8cm] (z) {$\zm$};
+  \draw[->] (o.center) |- (z);
+  \draw[->] (z) -- (j);
+\end{tikzpicture}
+
+Using the linearity of $\lift\pi$ and $\lift\sigma$, this can be rewritten as an equivalent
+circuit:
+
+\noindent
+\begin{tikzpicture}[>=latex, node distance=1.3cm]
+  \node[] (Einput) {\code{E}};
+  % generic part
+  \node[block, right of=Einput, node distance=.8cm] (E) {$\delta_0$};
+  
+  % relational query
+  \node[right of=E] (empty) {};
+  \node[block, above of=empty, node distance=.6cm] (j) {$\inc{(\lift{\bowtie})}$};
+  \node[block, right of=j] (pj) {$\lift{\pi}$};
+  \node[block, below of=j, node distance=1cm] (p1) {$\lift{\pi}$};
+  \node[block, right of=p1] (s1) {$\lift{\sigma}$};
+  \node[block, below of=p1, node distance=.6cm] (p2)  {$\lift{\pi}$};
+  \node[block, right of=p2] (s2) {$\lift{\sigma}$};
+  \node[below of=pj, node distance=.6cm] (mid) {};
+  \node[block, circle, right of=mid, inner sep=0cm, node distance=1.2cm] (plus) {$+$};
+  \node[block, right of=plus] (d) {$\inc{(\lift{\distinct})}$};
+  \draw[->] (E) -- (j);
+  \draw[->] (j) -- (pj);
+  \draw[->] (E) -- (p1);
+  \draw[->] (p1) -- (s1);
+  \draw[->] (E) -- (p2);
+  \draw[->] (p2) -- (s2);
+  \draw[->] (E) -- (plus);
+  \draw[->] (pj) -- (plus);
+  \draw[->] (s1) -- (plus);
+  \draw[->] (s2) -- (plus);
+  \draw[->] (plus) -- (d);
+  
+  % generic part
+  \node[block, right of=d] (S) {$\int$};
+  \node[right of=S, node distance=.8cm] (output)  {\code{R}};
+  \draw[->] (Einput) -- (E);
+  \draw[->] (d) -- node (o) {} (S);
+  \draw[->] (S) -- (output);
+  \node[block, above of=j, node distance=.8cm] (z) {$\zm$};
+  \draw[->] (o.center) |- (z);
+  \draw[->] (z) -- (j);
+\end{tikzpicture}
+
+To make this circuit into a streaming computation that evaluates a new transitive
+closure for a stream of inputs \code{E}, we lift it entirely,
+using Proposition~\ref{prop-lift-cycle}:
+
+\noindent
+\begin{tikzpicture}[>=latex, node distance=1.3cm]
+  \node[] (Einput) {\code{E}};
+  % generic part
+  \node[block, right of=Einput, node distance=.8cm] (E) {$\lift{\delta_0}$};
+  
+  % relational query
+  \node[right of=E] (empty) {};
+  \node[block, above of=empty, node distance=.6cm] (j) {$\lift{\inc{(\lift{\bowtie})}}$};
+  \node[block, right of=j] (pj) {$\lift{\lift{\pi}}$};
+  \node[block, below of=j, node distance=1cm] (p1) {$\lift{\lift{\pi}}$};
+  \node[block, right of=p1] (s1) {$\lift{\lift{\sigma}}$};
+  \node[block, below of=p1, node distance=.6cm] (p2)  {$\lift{\lift{\pi}}$};
+  \node[block, right of=p2] (s2) {$\lift{\lift{\sigma}}$};
+  \node[below of=pj, node distance=.6cm] (mid) {};
+  \node[block, circle, right of=mid, inner sep=0cm, node distance=1.2cm] (plus) {$+$};
+  \node[block, right of=plus] (d) {$\lift{\inc{(\lift{\distinct})}}$};
+  \draw[->] (E) -- (j);
+  \draw[->] (j) -- (pj);
+  \draw[->] (E) -- (p1);
+  \draw[->] (p1) -- (s1);
+  \draw[->] (E) -- (p2);
+  \draw[->] (p2) -- (s2);
+  \draw[->] (E) -- (plus);
+  \draw[->] (pj) -- (plus);
+  \draw[->] (s1) -- (plus);
+  \draw[->] (s2) -- (plus);
+  \draw[->] (plus) -- (d);
+  
+  % generic part
+  \node[block, right of=d, node distance=1.5cm] (S) {$\lift{\int}$};
+  \node[right of=S, node distance=.8cm] (output)  {\code{R}};
+  \draw[->] (Einput) -- (E);
+  \draw[->] (d) -- node (o) {} (S);
+  \draw[->] (S) -- (output);
+  \node[block, above of=j, node distance=.8cm] (z) {$\lift{\zm}$};
+  \draw[->] (o.center) |- (z);
+  \draw[->] (z) -- (j);
+\end{tikzpicture}
+
+We convert this circuit into an incremental circuit, which receives
+in each transaction the changes to relation \code{E} and produces the 
+corresponding changes to relation \code{R}:
+
+\noindent
+\begin{tikzpicture}[>=latex, node distance=1.3cm]
+  \node[] (DE) {$\Delta$\code{E}};
+  \node[block, right of=DE, node distance=.7cm] (Einput) {$\I$};
+  \draw[->] (DE) -- (Einput);
+  % generic part
+  \node[block, right of=Einput, node distance=.8cm] (E) {$\lift{\delta_0}$};
+  
+  % relational query
+  \node[right of=E, node distance=1.2cm] (empty) {};
+  \node[block, above of=empty, node distance=.6cm] (j) {$\lift{\inc{(\lift{\bowtie})}}$};
+  \node[block, right of=j] (pj) {$\lift{\lift{\pi}}$};
+  \node[block, below of=j, node distance=1cm] (p1) {$\lift{\lift{\pi}}$};
+  \node[block, right of=p1] (s1) {$\lift{\lift{\sigma}}$};
+  \node[block, below of=p1, node distance=.6cm] (p2)  {$\lift{\lift{\pi}}$};
+  \node[block, right of=p2] (s2) {$\lift{\lift{\sigma}}$};
+  \node[below of=pj, node distance=.6cm] (mid) {};
+  \node[block, circle, right of=mid, inner sep=0cm, node distance=1cm] (plus) {$+$};
+  \node[block, right of=plus, node distance=1.2cm] (d) {$\lift{\inc{(\lift{\distinct})}}$};
+  \draw[->] (E) -- (j);
+  \draw[->] (j) -- (pj);
+  \draw[->] (E) -- (p1);
+  \draw[->] (p1) -- (s1);
+  \draw[->] (E) -- (p2);
+  \draw[->] (p2) -- (s2);
+  \draw[->] (E) -- (plus);
+  \draw[->] (pj) -- (plus);
+  \draw[->] (s1) -- (plus);
+  \draw[->] (s2) -- (plus);
+  \draw[->] (plus) -- (d);
+  
+  % generic part
+  \node[block, right of=d] (S) {$\lift{\int}$};
+  \node[block, right of=S, node distance=.7cm] (OD) {$\D$};
+  \node[right of=OD, node distance=.8cm] (output)  {$\Delta$\code{R}};
+  \draw[->] (Einput) -- (E);
+  \draw[->] (d) -- node (o) {} (S);
+  \draw[->] (S) -- (OD);
+  \draw[->] (OD) -- (output);
+  \node[block, above of=j, node distance=.8cm] (z) {$\lift{\zm}$};
+  \draw[->] (o.center) |- (z);
+  \draw[->] (z) -- (j);
+\end{tikzpicture}
+
+We can now apply again the chain rule to this circuit:
+
+\noindent
+\begin{tikzpicture}[>=latex, node distance=1.4cm]
+  \node[] (Einput) {$\Delta$\code{E}};
+  % generic part
+  \node[block, right of=Einput, node distance=1cm] (E) {$\inc{(\lift{\delta_0})}$};
+  
+  % relational query
+  \node[right of=E] (empty) {};
+  \node[block, above of=empty, node distance=.6cm] (j) {$\inc{(\lift{\inc{(\lift{\bowtie})}})}$};
+  \node[block, right of=j, node distance=1.6cm] (pj) {$\inc{(\lift{\lift{\pi}})}$};
+  \node[block, below of=j, node distance=1cm] (p1) {$\inc{(\lift{\lift{\pi}})}$};
+  \node[block, right of=p1] (s1) {$\inc{(\lift{\lift{\sigma}})}$};
+  \node[block, below of=p1, node distance=.6cm] (p2)  {$\inc{(\lift{\lift{\pi}})}$};
+  \node[block, right of=p2] (s2) {$\inc{(\lift{\lift{\sigma}})}$};
+  \node[below of=pj, node distance=.6cm] (mid) {};
+  \node[block, circle, right of=mid, inner sep=0cm, node distance=1cm] (plus) {$+$};
+  \node[block, right of=plus] (d) {$\inc{(\lift{\inc{(\lift{\distinct})}})}$};
+  \draw[->] (E) -- (j);
+  \draw[->] (j) -- (pj);
+  \draw[->] (E) -- (p1);
+  \draw[->] (p1) -- (s1);
+  \draw[->] (E) -- (p2);
+  \draw[->] (p2) -- (s2);
+  \draw[->] (E) -- (plus);
+  \draw[->] (pj) -- (plus);
+  \draw[->] (s1) -- (plus);
+  \draw[->] (s2) -- (plus);
+  \draw[->] (plus) -- (d);
+  
+  % generic part
+  \node[block, right of=d, node distance=1.8cm] (S) {$\inc{(\lift{\int})}$};
+  \node[right of=S, node distance=1cm] (output)  {$\Delta$\code{R}};
+  \draw[->] (Einput) -- (E);
+  \draw[->] (d) -- node (o) {} (S);
+  \draw[->] (S) -- (output);
+  \node[block, above of=j, node distance=.8cm] (z) {$\inc{(\lift{\zm})}$};
+  \draw[->] (o.center) |- (z);
+  \draw[->] (z) -- (j);
+\end{tikzpicture}
+
+We now take advantage of the linearity of $\lift\delta_0$, $\lift\int$, 
+$\lift\zm$, $\lift\lift\pi$, and $\lift\lift\sigma$ to simplify the circuit
+by removing some $\inc{\cdot}$ invocations:
+
+\noindent
+\begin{tikzpicture}[>=latex, node distance=1.3cm]
+  \node[] (Einput) {$\Delta$\code{E}};
+  % generic part
+  \node[block, right of=Einput, node distance=.8cm] (E) {$\lift{\delta_0}$};
+  
+  % relational query
+  \node[right of=E] (empty) {};
+  \node[block, above of=empty, node distance=.6cm] (j) {$\inc{(\lift{\inc{(\lift{\bowtie})}})}$};
+  \node[block, right of=j, node distance=1.6cm] (pj) {$\lift{\lift{\pi}}$};
+  \node[block, below of=j, node distance=1cm] (p1) {$\lift{\lift{\pi}}$};
+  \node[block, right of=p1] (s1) {$\lift{\lift{\sigma}}$};
+  \node[block, below of=p1, node distance=.6cm] (p2)  {$\lift{\lift{\pi}}$};
+  \node[block, right of=p2] (s2) {$\lift{\lift{\sigma}}$};
+  \node[below of=pj, node distance=.6cm] (mid) {};
+  \node[block, circle, right of=mid, inner sep=0cm, node distance=.8cm] (plus) {$+$};
+  \node[block, right of=plus] (d) {$\inc{(\lift{\inc{(\lift{\distinct})}})}$};
+  \draw[->] (E) -- (j);
+  \draw[->] (j) -- (pj);
+  \draw[->] (E) -- (p1);
+  \draw[->] (p1) -- (s1);
+  \draw[->] (E) -- (p2);
+  \draw[->] (p2) -- (s2);
+  \draw[->] (E) -- (plus);
+  \draw[->] (pj) -- (plus);
+  \draw[->] (s1) -- (plus);
+  \draw[->] (s2) -- (plus);
+  \draw[->] (plus) -- (d);
+  
+  % generic part
+  \node[block, right of=d, node distance=1.8cm] (S) {$\lift{\int}$};
+  \node[right of=S, node distance=.8cm] (output)  {$\Delta$\code{R}};
+  \draw[->] (Einput) -- (E);
+  \draw[->] (d) -- node (o) {} (S);
+  \draw[->] (S) -- (output);
+  \node[block, above of=j, node distance=.8cm] (z) {$\lift{\zm}$};
+  \draw[->] (o.center) |- (z);
+  \draw[->] (z) -- (j);
+\end{tikzpicture}
+
+There are two applications of $\inc{\cdot}$ left in this circuit: $\inc{(\lift{\inc{(\lift{\bowtie})}})}$
+and $\inc{(\lift{\inc{(\lift\distinct)}})}$.  We expand their implementations separately,
+and we stitch them into the global circuit at the end.  This ability to reason about
+sub-circuits independently highlights the modularity of \dbsp.
+
+The join is expanded twice, using the bilinearity
+of $\lift\bowtie$ and $\lift\lift\bowtie$.  Let's start with the inner circuit,
+implementing $\inc{(\lift{\bowtie})}$, given by Theorem~\ref{bilinear}:
+
+\begin{tabular}{m{2cm}m{.5cm}m{4.5cm}}
+\begin{tikzpicture}[auto,>=latex]
+    \node[] (a) {$a$};
+    \node[below of=a, node distance=.6cm] (midway) {};
+    \node[below of=midway, node distance=.6cm] (b) {$b$};
+    \node[block, right of=midway] (q) {$\inc{(\lift{\bowtie})}$};
+    \node[right of=q] (output) {$o$};
+    \draw[->] (a) -| (q);
+    \draw[->] (b) -| (q);
+    \draw[->] (q) -- (output);
+\end{tikzpicture} &
+$\cong$ &
+\begin{tikzpicture}[auto,>=latex]
+  \node[] (a) {$a$}; 
+  \node[block, below of=a, node distance=.6cm] (ab) {$\lift\bowtie$};
+  \node[below of=ab, node distance=.6cm] (b) {$b$};
+  \node[block, right of=a, node distance=1cm] (jI1) {$\I$};
+  \node[block, right of=b, node distance=1cm] (jI2) {$\I$};
+  \draw[->] (a) -- (jI1);
+  \draw[->] (b) -- (jI2);
+  \node[block, right of=jI1, node distance=.8cm] (ZI1) {$\zm$};
+  \node[block, right of=jI2, node distance=.8cm] (ZI2) {$\zm$};
+  \draw[->] (jI1) -- (ZI1);
+  \draw[->] (jI2) -- (ZI2);
+  \node[block, right of=ZI1] (DI1) {$\lift\bowtie$};
+  \node[block, right of=ZI2] (DI2) {$\lift\bowtie$};
+  \draw[->] (ZI1) -- (DI1);
+  \draw[->] (ZI2) -- (DI2);
+  \node[block, circle, below of=DI1, inner sep=0cm, node distance=.6cm] (sum) {$+$};
+  \node[right of=sum] (output) {$o$};
+  \draw[->] (ab) -- (sum);
+  \draw[->] (DI1) -- (sum);
+  \draw[->] (DI2) -- (sum);
+  \draw[->] (a) -- (ab);
+  \draw[->] (b) -- (ab);
+  \draw[->] (a) -- (DI2);
+  \draw[->] (b) -- (DI1);
+  \draw[->] (sum) -- (output);
+\end{tikzpicture}
+\end{tabular}
+
+Now we lift and incrementalize to get the circuit for $\inc{(\lift{\inc{(\lift{\bowtie})}})}$:
+
+\begin{tikzpicture}[auto,>=latex]
+  \node[] (a) {$a$}; 
+  \node[below of=a, node distance=.8cm] (midway) {};
+  \node[below of=ab, node distance=.8cm] (b) {$b$};
+
+  \node[block, right of=a] (Ia) {$\I$};
+  \node[block, right of=b] (Ib) {$\I$};
+  \draw[->] (a) -- (Ia);
+  \draw[->] (b) -- (Ib);
+    
+  \node[block, below of=Ia, node distance=.7cm] (ab) {$\lift\lift\bowtie$};
+  \node[block, right of=Ia, node distance=1cm] (jI1) {$\lift\I$};
+  \node[block, right of=Ib, node distance=1cm] (jI2) {$\lift\I$};
+  \draw[->] (Ia) -- (jI1);
+  \draw[->] (Ib) -- (jI2);
+  \node[block, right of=jI1] (ZI1) {$\lift\zm$};
+  \node[block, right of=jI2] (ZI2) {$\lift\zm$};
+  \draw[->] (jI1) -- (ZI1);
+  \draw[->] (jI2) -- (ZI2);
+  \node[block, right of=ZI1] (DI1) {$\lift\lift\bowtie$};
+  \node[block, right of=ZI2] (DI2) {$\lift\lift\bowtie$};
+  \draw[->] (ZI1) -- (DI1);
+  \draw[->] (ZI2) -- (DI2);
+  \node[block, circle, below of=DI1, inner sep=0cm, node distance=.7cm] (sum) {$+$};
+  \node[block, right of=sum] (D) {$\D$};
+  \node[right of=D] (output) {$o$};
+  \draw[->] (ab) -- (sum);
+  \draw[->] (DI1) -- (sum);
+  \draw[->] (DI2) -- (sum);
+  \draw[->] (Ia) -- (ab);
+  \draw[->] (Ib) -- (ab);
+  \draw[->] (Ia) -- (DI2);
+  \draw[->] (Ib) -- (DI1);
+  \draw[->] (sum) -- (D);
+  \draw[->] (D) -- (output);
+\end{tikzpicture}
+
+Applying the chain rule and the linearity of $\lift\I$ and $\lift\zm$ this becomes:
+
+\begin{tikzpicture}[auto,>=latex, node distance=1.2cm]
+  \node[] (a) {$a$}; 
+  \node[block, below of=a, node distance=.8cm] (ab) {$\inc{(\lift\lift\bowtie)}$};
+  \node[below of=ab, node distance=.8cm] (b) {$b$};
+  \node[block, right of=a, node distance=1cm] (jI1) {$\lift{\I}$};
+  \node[block, right of=b, node distance=1cm] (jI2) {$\lift{\I}$};
+  \draw[->] (a) -- (jI1);
+  \draw[->] (b) -- (jI2);
+  \node[block, right of=jI1] (ZI1) {$\lift{\zm}$};
+  \node[block, right of=jI2] (ZI2) {$\lift{\zm}$};
+  \draw[->] (jI1) -- (ZI1);
+  \draw[->] (jI2) -- (ZI2);
+  \node[block, right of=ZI1] (DI1) {$\inc{(\lift\lift\bowtie)}$};
+  \node[block, right of=ZI2] (DI2) {$\inc{(\lift\lift\bowtie)}$};
+  \draw[->] (ZI1) -- (DI1);
+  \draw[->] (ZI2) -- (DI2);
+  \node[block, circle, below of=DI1, inner sep=0cm, node distance=.8cm] (sum) {$+$};
+  \node[right of=sum] (output) {$o$};
+  \draw[->] (ab) -- (sum);
+  \draw[->] (DI1) -- (sum);
+  \draw[->] (DI2) -- (sum);
+  \draw[->] (a) -- (ab);
+  \draw[->] (b) -- (ab);
+  \draw[->] (a) -- (DI2);
+  \draw[->] (b) -- (DI1);
+  \draw[->] (sum) -- (output);
+\end{tikzpicture}
+
+We now have three applications of $\inc{(\lift\lift\bowtie)}$.  Each of these is the
+incremental form of a bilinear operator, so it looks like in the end we will have $3\times3$ 
+applications of $\lift\lift\bowtie$.  In fact, the overall expression can be simplified
+(see~\cite{tr} for a precise derivation), and the end result only has 4 terms in $\lift\lift\bowtie$.
+
+Here is the final form of the expanded join circuit:
+
+\begin{tikzpicture}[auto,>=latex]
+  \node[] (a) {$a$}; 
+  \node[below of=a, node distance=.8cm] (b) {$b$};
+  
+  \node[block, right of=a] (LIa) {$\lift{\I}$};
+  \node[block, above of=LIa, node distance=.8cm] (Ia) {$\I$};
+  \node[block, right of=LIa] (IIa) {$\I$};
+  \node[block, right of=Ia] (zIa) {$\zm$};
+  \draw[->] (a) -- (LIa);
+  \draw[->] (a) -- (Ia);
+  \draw[->] (Ia) -- (zIa);
+  \draw[->] (LIa) -- (IIa);
+  
+  \node[block, right of=b] (Ib) {$\I$};
+  \node[block, below of=Ib, node distance=.8cm] (LIb) {$\lift\I$};
+  \node[block, right of=Ib] (zb) {$\zm$};
+  \node[block, right of=LIb] (IIb) {$\I$};
+  \node[block, right of=IIb] (zIIb) {$\lift\zm$};
+  \node[block, below of=IIb] (zIb) {$\lift\zm$};
+  \draw[->] (b) -- (Ib);
+  \draw[->] (b) -- (LIb);
+  \draw[->] (Ib) -- (zb);
+  \draw[->] (LIb) -- (IIb);
+  \draw[->] (IIb) -- (zIIb);
+  \draw[->] (LIb) -- (zIb);
+  
+  \node[block, right of=zIIb] (j1) {$\lift\lift\bowtie$};
+  \node[block, above of=j1, node distance=.8cm]   (j2) {$\lift\lift\bowtie$};
+  \node[block, above of=j2, node distance=.8cm]   (j3) {$\lift\lift\bowtie$};
+  \node[block, above of=j3, node distance=.8cm]   (j4) {$\lift\lift\bowtie$};
+  \draw[->] (zIIb) -- (j1);
+  \draw[->] (a) -- (j1);
+  \draw[->] (zb) -- (j2);
+  \draw[->] (LIa) -- (j2);
+  \draw[->] (IIa) -- (j3);
+  \draw[->] (b) -- (j3);
+  \draw[->] (zIa) -- (j4);
+  \draw[->] (zIb) -- (j4);
+  
+  \node[block, right of=j3] (plus) {$+$};
+  \draw[->] (j1) -- (plus);
+  \draw[->] (j2) -- (plus);
+  \draw[->] (j3) -- (plus);
+  \draw[->] (j4) -- (plus); 
+  \node[right of=plus] (o) {$o$};
+  \draw[->] (plus) -- (o);
+\end{tikzpicture}
+
+Returning to $\inc{(\lift{\inc{(\lift\distinct)}})}$, we can compute its circuit by expanding
+once using Proposition~\ref{prop-inc_distinct}:
+
+\noindent
+\begin{tabular}{m{3cm}m{.5cm}m{3.5cm}}
+\begin{tikzpicture}[>=latex]
+\node[] (input) {$i$};
+\node[block, right of=input, node distance=1.5cm] (d) {$\inc{(\lift{\inc{(\lift{\distinct})}})}$};
+\node[right of=d, node distance=1.5cm] (output) {$o$};
+\draw[->] (input) -- (d);
+\draw[->] (d) -- (output);
+\end{tikzpicture}
+& $\cong$ &
+\begin{tikzpicture}[>=latex, node distance=.8cm]
+    \node[] (input) {$i$};
+    \node[block, right of=input] (I) {$\I$};
+    \node[block, right of=I] (LI) {$\lift{\I}$};
+    \node[block, right of=LI, node distance=1cm] (z) {$\lift{\zm}$};
+    \node[block, below of=z, node distance=.8cm] (H) {$\lift{\lift{H}}$};
+    \node[block, right of=H] (D) {$\D$};
+    \node[right of=D] (output) {$o$};
+    \draw[->] (input) -- (I);
+    \draw[->] (I) -- node (mid) {} (LI);
+    \draw[->] (LI) -- (z);
+    \draw[->] (mid.center) |- (H);
+    \draw[->] (z) -- (H);
+    \draw[->] (H) -- (D);
+    \draw[->] (D) -- (output);
+\end{tikzpicture}
+\end{tabular}
+
+Finally, stitching all these pieces together we get the final circuit
+shown in Figure~\ref{fig:recursive-example}.
+
+\begin{figure*}[h]
+\begin{tikzpicture}[>=latex]
+  \node[] (Einput) {$\Delta$\code{E}};
+  % generic part
+  \node[block, right of=Einput, node distance=.8cm] (dE) {$\lift{\delta_0}$};
+  \draw[->] (Einput) -- (dE); 
+  \node[right of=dE] (empty) {};
+
+  % join(a,b)
+  \node[block, above of=empty, node distance=2.5cm] (b) { };
+  \node[block, above of=b, node distance=.8cm] (a) { };
+  \draw[->] (dE) -- (b);
+  
+  \node[block, right of=a] (LIa) {$\lift{\I}$};
+  \node[block, above of=LIa, node distance=.8cm] (Ia) {$\I$};
+  \node[block, right of=LIa] (IIa) {$\I$};
+  \node[block, right of=Ia] (zIa) {$\zm$};
+  \draw[->] (a) -- (LIa);
+  \draw[->] (a) -- (Ia);
+  \draw[->] (Ia) -- (zIa);
+  \draw[->] (LIa) -- (IIa);
+  
+  \node[block, right of=b] (Ib) {$\I$};
+  \node[block, below of=Ib, node distance=.8cm] (LIb) {$\lift\I$};
+  \node[block, right of=Ib] (zb) {$\zm$};
+  \node[block, right of=LIb] (IIb) {$\I$};
+  \node[block, right of=IIb] (zIIb) {$\lift\zm$};
+  \node[block, below of=IIb] (zIb) {$\lift\zm$};
+  \draw[->] (b) -- (Ib);
+  \draw[->] (b) -- (LIb);
+  \draw[->] (Ib) -- (zb);
+  \draw[->] (LIb) -- (IIb);
+  \draw[->] (IIb) -- (zIIb);
+  \draw[->] (LIb) -- (zIb);
+  
+  \node[block, right of=zIIb] (j1) {$\lift\lift\bowtie$};
+  \node[block, above of=j1, node distance=.8cm]   (j2) {$\lift\lift\bowtie$};
+  \node[block, above of=j2, node distance=.8cm]   (j3) {$\lift\lift\bowtie$};
+  \node[block, above of=j3, node distance=.8cm]   (j4) {$\lift\lift\bowtie$};
+  \draw[->] (zIIb) -- (j1);
+  \draw[->] (a) -- (j1);
+  \draw[->] (zb) -- (j2);
+  \draw[->] (LIa) -- (j2);
+  \draw[->] (IIa) -- (j3);
+  \draw[->] (b) -- (j3);
+  \draw[->] (zIa) -- (j4);
+  \draw[->] (zIb) -- (j4);
+  
+  \node[block, right of=j3, circle, inner sep=0cm] (plus) {$+$};
+  \draw[->] (j1) -- (plus);
+  \draw[->] (j2) -- (plus);
+  \draw[->] (j3) -- (plus);
+  \draw[->] (j4) -- (plus); 
+  
+  % relational query
+  \node[block, right of=plus] (pj) {$\lift{\lift{\pi}}$};
+  \node[block, below of=empty] (p1) {$\lift{\lift{\pi}}$};
+  \node[block, right of=p1] (s1) {$\lift{\lift{\sigma}}$};
+  \node[block, below of=p1, node distance=.6cm] (p2)  {$\lift{\lift{\pi}}$};
+  \node[block, right of=p2] (s2) {$\lift{\lift{\sigma}}$};
+  \node[below of=pj, node distance=.6cm] (mid) {};
+  \node[block, circle, right of=empty, inner sep=0cm, node distance=8cm] (relplus) {$+$};
+  
+  \draw[->] (plus) -- (pj);
+  \draw[->] (dE) -- (p1);
+  \draw[->] (p1) -- (s1);
+  \draw[->] (dE) -- (p2);
+  \draw[->] (p2) -- (s2);
+  \draw[->] (dE) -- (relplus);
+  \draw[->] (pj) -- (relplus);
+  \draw[->] (s1) -- (relplus);
+  \draw[->] (s2) -- (relplus);
+  
+    % distinct
+    \node[block, right of=relplus] (distI) {$\I$};
+    \node[block, right of=distI] (distLI) {$\lift{\I}$};
+    \node[block, right of=distLI, node distance=1cm] (distz) {$\lift{\zm}$};
+    \node[block, below of=distz, node distance=.8cm] (distH) {$\lift{\lift{H}}$};
+    \node[block, right of=distH] (distD) {$\D$};
+    \draw[->] (relplus) -- (distI);
+    \draw[->] (distI) -- node (distmid) {} (distLI);
+    \draw[->] (distLI) -- (distz);
+    \draw[->] (distmid.center) |- (distH);
+    \draw[->] (distz) -- (distH);
+    \draw[->] (distH) -- (distD);
+  
+  % generic part
+  \node[block, right of=distD] (S) {$\lift{\int}$};
+  \node[right of=S, node distance=.8cm] (output)  {$\Delta$\code{R}};
+  \draw[->] (distD) -- node (o) {} (S);
+  \draw[->] (S) -- (output);
+  \node[block, above of=a, node distance=1.2cm] (z) {$\lift{\zm}$};
+  \draw[->] (o.center) |- (z);
+  \draw[->] (z) -- (a);
+\end{tikzpicture}
+\caption{Final form of circuit from \refsec{sec:recursive-example}\label{fig:recursive-example}.}
+\end{figure*}
+
+\subsection{Complexity of incremental recursive queries}
+
+\paragraph{Time complexity}
+
+The time complexity of an incremental recursive query can be estimated as a product of
+the number of fixed point iterations and the complexity of each iteration. The
+incrementalized circuit (\ref{eq:increcursive}) performs the same number of
+iterations as the non-incremental circuit (\ref{eq:seminaive}) in the worst case:
+once the non-incremental circuit reaches the fixed point, its output is constant
+and so is its derivative computed by the incrementalized circuit.
+
+Consider a nested stream of changes $s \in \stream{\stream{A}}, s[t_1][t_2]$,
+where $t_1$ is the input timestamp and $t_2$ is the fixed point iteration number.
+The unoptimized loop body $\inc{(\lift{\inc{(\lift{T})}})} = 
+\D \circ \lift{\D} \circ \lift{\lift{T}}
+\circ \lift{\I} \circ \I$ has the same time complexity as $T$ applied to the
+aggregated input of size $R(s)[t_1][t_2] \defn \norm{(\lift{\I} \circ
+\I)(s)[t_1][t_2]} = \norm{\sum_{(i_1,i_2) \leq (t_1, t_2)} s[i_1][i_2]}$.  As
+before, an optimized circuit can be significantly more efficient.  For instance,
+by applying Theorem~\ref{bilinear} twice, to $\bowtie$ and $\lift{\bowtie}$, we
+obtain a circuit for nested incremental join $s_1
+\inc{(\lift{\inc{(\lift{\bowtie})}})} s_2$ that runs in
+$O(\norm{\lift{\I}(s1)[t1][t2]} \times \norm{\I(s2)[t1][t2]}) \ll 
+O(R(s_1) \times R(s_2))$ (because each term is correspondingly smaller).
+
+\paragraph{Space complexity} Integration ($\I$) and differentiation ($\D$) of a
+stream $s \in \stream{\stream{A}}$ uses memory proportional to
+$\sum_{t_2}\norm{\sum_{t_1}s[t_1][t_2]}$, i.e., the total size of changes
+aggregated over columns of the matrix.  The unoptimized circuit integrates
+and differentiates respectively inputs and outputs of the recursive program
+fragment.  As we move $\I$ and $\D$ inside the circuit using the chain rule, we
+additionally store changes to intermediate streams.  Effectively we cache results of 
+fixed point iterations from earlier timestamps to update them efficiently as new input changes arrive.
+Notice that space is proportional to the number of iterations of the inner while loop.
+
+

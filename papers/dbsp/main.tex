@@ -1,0 +1,201 @@
+\documentclass[
+sigconf, % conference proceedings
+%anonymous,  % do not show authors
+nonacm, 
+authorversion,
+natbib,  % bib style
+balance  % equalize columns on last page
+]{acmart}
+
+
+%\acmConference[CONF]{Conference}{2022}{USA}
+\settopmatter{printfolios=true} % print page numbers
+
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage[utf8]{inputenc}
+\usepackage{array}
+\usepackage{stmaryrd}
+\usepackage{tikz}
+\usepackage{comment}
+\usepackage{xspace}
+\usepackage{listofitems}
+\usepackage{graphicx}
+\usepackage[final]{listings}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{amsthm}
+\usepackage{titlesec}
+
+% space saving tricks
+\newif\ifstreamexamples
+\streamexamplestrue
+\newif\ifzsetexamples
+\zsetexamplestrue
+%\titlespacing{\paragraph}{0pt}{0pt}{1em}  
+%\titlespacing{\section}{0pt}{*.9}{*.9}
+%\titlespacing{\subsection}{0pt}{*.9}{*.9}
+\widowpenalty=0
+\clubpenalty=0
+\newtheoremstyle{note} % name
+{2pt} % Space above
+{2pt} % Space below
+{}    % Body font
+{}    % Indent amount
+{\bfseries} % Theorem head font
+{:}   % Punctuation after theorem head
+{.5em}% ⟨Space after theorem head
+{}    % Theorem head spec (can be left empty, meaning ‘normal’
+
+\numberwithin{equation}{section}
+
+\graphicspath{ {.} }
+\lstset{language=Java,
+  commentstyle=\color{brown},
+  keywordstyle=\color{blue},
+  stringstyle=\color{red},
+  basicstyle=\ttfamily}
+
+\lstdefinelanguage{ddlog}{
+  language=Java, % we base it on Java, just for comments
+  morekeywords={input, output, typedef, relation, typedef, bool, not,
+    string, bit, extern, function, var, for, match, skip, in, integer, % not really in DDlog
+    Aggregate, FlatMap},
+  deletestring=[b]{'}
+}
+\hypersetup{
+  colorlinks   = true,    % Colours links instead of ugly boxes
+  urlcolor     = blue,    % Colour for external hyperlinks
+  linkcolor    = blue,    % Colour of internal links
+  citecolor    = red      % Colour of citations
+}
+\hypersetup{final}
+
+\usetikzlibrary{shapes, arrows.meta, positioning}
+\tikzstyle{block}=[draw,fill=white,rectangle]
+\tikzstyle{every node}=[font=\small]
+
+\theoremstyle{note}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{example}[theorem]{Example}
+\newtheorem{algorithm}[theorem]{Algorithm}
+\newcommand{\dbsp}{DBSP\xspace}
+
+% Used when a term is first defined.  Adds the term to the index.
+\newcommand{\defined}[1]{\textbf{#1}\index{}}
+\newcommand{\zr}{$\Z$-set\xspace}
+\newcommand{\zrs}{$\Z$-sets\xspace} % plural
+\newcommand{\means}[1]{\ensuremath{\llbracket #1 \rrbracket}}
+\newcommand{\code}[1]{\mbox{\texttt{#1}}}
+\newcommand{\Z}{\mathbb{Z}}  % integers
+\newcommand{\N}{\mathbb{N}}  % naturals
+\newcommand{\B}{\mathbb{B}}  % Booleans
+\newcommand{\R}{\mathbb{R}}  % reals
+% stream with elements of a given type
+\newcommand{\stream}[1]{\ensuremath{\mathcal{S}_{#1}}}
+% finite stream with elements of a given type (zero almost everywhere)
+\newcommand{\streamf}[1]{\ensuremath{\overline{\mathcal{S}_{#1}}}}
+\newcommand{\zm}{\ensuremath{z^{-1}}} % stream delay operator
+\newcommand{\I}{\mathcal{I}}  % stream integration
+\newcommand{\D}{\mathcal{D}}  % stream derivative
+\newcommand{\inc}[1]{{#1}^{\Delta}}
+\newcommand{\distinct}{\mathit{distinct}}  % distinct operator
+% set with elements of given type
+\newcommand{\secref}[1]{\S\ref{#1}}  % reference to a section
+\newcommand{\refsec}[1]{\secref{#1}}
+\newcommand{\set}[1]{\mathit{set}_{#1}}
+\newcommand{\id}{\ensuremath{\mathit{id}}} % identity function
+\newcommand{\isset}{\mbox{isset}}
+\newcommand{\ispositive}{\mbox{ispositive}}
+\newcommand{\defn}{\stackrel{\textrm{\scriptsize def}}{=}}
+\newcommand{\map}{\mbox{map}}
+\newcommand{\fix}[2]{\mbox{fix}\,#1.#2}
+\newcommand{\lift}[1]{{\uparrow}#1}              
+\newcommand{\rew}{\ensuremath{\mapsto}} % rewriting
+\newcommand{\birew}{\ensuremath{\mapsfrom\!\mapsto}} % bidirectional rewriting
+\newcommand{\pair}[2]{\ensuremath{\langle #1,#2 \rangle}} % pairing
+\newcommand{\norm}[1]{\| #1 \|} % norm; requires math mode
+\newcommand{\zpp}[1]{\mbox{zpp}(#1)}
+\newcommand{\makeset}{\ensuremath{\mbox{makeset}}}
+\newcommand{\sv}[1]{ % simple stream value, supplied as a space-separated list of 5 values
+\setsepchar{ }
+\readlist\arg{#1}
+{[}
+\begin{array}{cccccc}
+    \arg[1] & \arg[2] & \arg[3] & \arg[4] & \arg[5] & \cdots
+\end{array}
+{]}
+}
+
+\newcommand{\st}{\;|\;}
+
+\newcommand{\cut}[2]{#1|_{_{\leq #2}}}
+\newcommand{\scut}[2]{#1|_{_{< #2}}}
+
+\setlength{\marginparwidth}{1.5cm}
+%\newcommand{\scream}[2]{\marginpar{\raggedright \footnotesize \textbf{#1}: #2}}
+\newcommand{\scream}[2]{{\color{red} \textbf{#1}: #2}}
+\newcommand{\val}[1]{\scream{VAL}{#1}}
+\newcommand{\mihai}[1]{\scream{MIHAI}{#1}}
+\newcommand{\leonid}[1]{\scream{LEONID}{#1}}
+\newcommand{\frank}[1]{\scream{FRANK}{#1}}
+
+\title{\dbsp: Automatic Incremental View Maintenance for Rich Query Languages}
+\author{Mihai Budiu}
+\affiliation{VMware Research}
+\email{mbudiu@vmware.com}
+%\and
+\author
+{Frank McSherry}
+\affiliation{Materialize Inc.}
+\email{mcsherry@materialize.com}
+%\and
+\author
+{Leonid Ryzhyk}
+\affiliation{VMware Research}
+\email{lryzhyk@vmware.com}
+%\and
+\author
+{Val Tannen}
+\affiliation{University of Pennsylvania}
+\email{val@seas.upenn.edu}
+
+\begin{abstract}
+Incremental view maintenance has been for a long time a central problem in database theory~\cite{gupta-idb93}.
+Many solutions have been proposed for restricted classes of database languages,
+such as the relational algebra, or Datalog.  These techniques do not naturally generalize to
+richer languages.  In this paper we give a general
+solution to this problem in 3 steps: (1) we describe a simple but expressive language
+called \dbsp for describing computations over data streams; (2) we give a general algorithm for 
+solving the incremental view maintenance problem for arbitrary \dbsp programs, and (3) we show
+how to model many rich database query languages (including the full relational queries, 
+grouping and aggregation, monotonic and non-monotonic recursion, and streaming aggregation) using \dbsp.  
+As a consequence, we obtain efficient
+incremental view maintenance techniques for all these rich languages.
+\end{abstract}
+
+\begin{document}
+
+\maketitle
+
+\input{intro}
+\input{streams}
+\input{relational}
+\input{recursion}
+\input{nested}
+\input{extensions}
+\input{implementation}
+\input{related}
+\input{conclusions}
+
+\bibliographystyle{plainurl}
+\bibliography{main}
+
+\appendix
+\input{extra}
+
+\end{document}

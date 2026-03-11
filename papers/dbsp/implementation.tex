@@ -1,0 +1,24 @@
+\section{Implementation}\label{sec:implementation}
+
+We are prototyping an implementation of \dbsp as part of an
+open-source project with an MIT license: 
+\url{https://github.com/vmware/database-stream-processor}.
+The implementation is written in Rust.
+The implementation consists of a library and a runtime.
+The library provides APIs for basic algebraic data types:
+such as groups, finite maps, \zr, indexed \zr.  
+A separate circuit construction API allows users to 
+create \dbsp circuits by placing operator nodes (corresponding to boxes in our diagrams)
+and connecting them with streams, which correspond to the
+arrows in our diagrams.  The library provides pre-built generic operators
+for integration, differentiation, delay, nested integration and differentiation.
+The \zr library provides functions for computing the basic \zr operations
+corresponding to plus, negation, grouping, joining, aggregation.
+
+For iterative computations we provide the $\delta_0$ operator and
+an operator that approximates $\int$ by terminating iteration of
+a loop at a user-specified condition (usually the condition is the 
+requirement for a zero to appear in a specified stream).
+The low level library allows users to construct incremental
+circuits manually.  Our plan is to add a higher-level library
+(a compiler) which will automatically incrementalize a circuit.

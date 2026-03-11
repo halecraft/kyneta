@@ -1,0 +1,252 @@
+\section{Recursive queries}\label{sec:recursion}
+
+Recursive queries are very useful in a many applications.
+For example, many graph algorithms (such as graph reachability
+or transitive closure) are naturally expressed using recursive queries.
+
+We introduce two new stream operators that are instrumental in
+expressing recursive query evaluation.  These operators allow us
+to build circuits implementing looping constructs, which 
+are used to iterate computations until a fixed-point is reached.
+
+\begin{definition}\label{def:zae}
+We say that a stream $s \in \stream{A}$ is \defined{zero almost-everywhere} if it has a finite 
+number of non-zero values, i.e., there exists a time $t_0 \in \N$
+s.t. $\forall t \geq t_0 . s[t] = 0$.
+\noindent Denote the set of streams that are zero almost everywhere
+by $\streamf{A}$.
+\end{definition}
+
+\paragraph{Stream introduction}
+
+The delta function (named from the Dirac delta function) $\delta_0 : A \rightarrow \stream{A}$
+produces a stream from a scalar value:
+$$\delta_0(v)[t] \defn \left\{
+\begin{array}{ll}
+  v & \mbox{if } t = 0 \\
+  0_A & \mbox{ otherwise}
+\end{array}
+\right.
+$$
+\ifstreamexamples
+For example, $\delta_0(5)$ is the stream $\sv{5 0 0 0 0}$.
+\fi
+
+\begin{comment}
+Here is a diagram showing a $\delta_0$ operator; note that the input is a scalar value,
+while the output is a stream:  
+
+\begin{tikzpicture}[auto,node distance=1cm,>=latex]
+    \node[] (input) {$i$};
+    \node[block, right of=input] (delta) {$\delta_0$};
+    \node[right of=delta] (output) {$o$};
+    \draw[->] (input) -- (delta);
+    \draw[->] (delta) -- (output);
+\end{tikzpicture}
+\end{comment}
+
+\paragraph{Stream elimination}
+
+We define the function $\int : \streamf{A} \rightarrow
+A$, over streams that are zero almost everywhere, as 
+$\int(s) \defn \sum_{t \geq 0} s[t]$.  
+$\int$ is closely related to $\I$; if $\I$ is the
+indefinite integral, $\int$ is the definite integral on the
+interval $0 - \infty$.
+
+For many implementation strategies (including  
+relational and Datalog queries given below) the $\int$
+operator can be approximated finitely and precisely by integrating until the
+first 0 value encountered, since it can be proven that its input is always
+the derivative of a monotone stream.
+
+\begin{comment}
+Here is a diagram using the $\int$ operator; note that  the result it 
+produces is a scalar, and not a stream:
+
+\begin{tikzpicture}[auto,node distance=1cm,>=latex]
+    \node[] (input) {$i$};
+    \node[block, right of=input] (S) {$\int$};
+    \node[right of=S] (output) {$o$};
+    \draw[->] (input) -- (S);
+    \draw[->] (S) -- (output);
+\end{tikzpicture}
+\end{comment}
+
+$\delta_0$ is the left inverse of $\int$, i.e.: $\int \circ \; \delta_0 = \id_A$.  
+\begin{proposition}
+$\delta_0$ and $\int$ are LTI.
+\end{proposition}
+
+\paragraph{Nested time domains}
+
+So far we used a tacit assumption that ``time'' is common for all
+streams in a program.  For example, when we add two streams, 
+we assume that they use the same ``clock'' for the time dimension.
+However, the $\delta_0$ operator creates a stream with a ``new'', independent time
+dimension.  We require \emph{well-formed circuits}
+to ``insulate'' such
+nested time domains by nesting them between a $\delta_0$ and an $\int$ operator:
+
+\begin{center}
+\begin{tikzpicture}[auto,node distance=1cm,>=latex]
+    \node[] (input) {$i$};
+    \node[block, right of=input] (delta) {$\delta_0$};
+    \node[block, right of=delta] (f) {$Q$};
+    \draw[->] (input) -- (delta);
+    \draw[->] (delta) -- (f);
+
+    \node[block, right of=f] (S) {$\int$};
+    \node[right of=S] (output) {$o$};
+    \draw[->] (f) -- (S);
+    \draw[->] (S) -- (output);
+\end{tikzpicture}
+\end{center}
+
+\begin{proposition}
+If $Q$ is time-invariant, the circuit above has the zero-preservation
+property: $\zpp{\int \circ\; Q \circ \delta_o}$.
+\end{proposition}
+
+\subsection{Implementing Recursive Datalog}\label{sec:datalog}
+
+We illustrate the implementation of recursive queries in \dbsp for
+stratified Datalog.
+Datalog is strictly more expressive than
+relational algebra since it can express recursive programs, e.g.:
+{\small
+\begin{lstlisting}[language=ddlog]
+O(v) :- I(v).  // base case
+O(v) :- I(z), O(x), v = ... .  // rec case
+\end{lstlisting}
+}
+In general, a recursive Datalog program defines a set of
+mutually recursive relations $O_1,..,O_n$ as an equation
+$(O_1,..,O_n)=R(I_1,..,I_m, O_1,..,O_n)$, where $I_1,..,I_m$ are
+input relations and $R$ is a relational (non-recursive) query.
+
+The following algorithm generates a circuit that computes a
+solution to this equation.  We describe the algorithm informally and 
+for the special case of a single input $I$ and single output $O$; the general case
+can be found in the companion technical report~\cite{tr}, and is only 
+slightly more involved.
+
+\noindent 
+\begin{enumerate}[nosep, leftmargin=\parindent]
+\item Implement the non-recursive relational query $R$ as described in
+    \secref{sec:relational} and Table~\ref{tab:relational}; this produces
+    an acyclic circuit whose inputs and outputs are a \zr (i.e., not a stream):
+    \begin{center}
+    \begin{tikzpicture}[auto,>=latex]
+      \node[] (I) {\code{I}};
+      \node[below of=I, node distance=.5cm] (O) {\code{O}};
+      \node[block, right of=I] (R) {$R$};
+      \node[right of=R] (o) {\code{O}};
+      \draw[->] (I) -- (R);
+      \draw[->] (O) -| (R);
+      \draw[->] (R) -- (o);
+    \end{tikzpicture} 
+    \end{center}
+\item Lift this circuit to operate on streams and connect the output to the input in a feedback cycle as follows:
+
+\noindent
+\begin{tikzpicture}[auto,>=latex, node distance=.8cm]
+  \node[] (Iinput) {\code{I}};
+  \node[block, right of=Iinput] (ID) {$\delta_0$};
+  \node[block, right of=ID] (II) {$\I$};
+  \node[block, right of=II] (f) {$\lift{R}$};
+  \node[block, right of=f, node distance=1.5cm] (distinct) {$\lift{\distinct}$};
+  \node[block, right of=distinct, node distance=1.5cm] (D) {$\D$};
+  \node[block, right of=D] (S) {$\int$};
+  \node[right of=S] (output)  {\code{O}};
+  \draw[->] (Iinput) -- (ID);
+  \draw[->] (ID) -- (II);
+  \draw[->] (II) -- (f);
+  \draw[->] (f) -- (distinct);
+  \draw[->] (distinct) -- node (o) {$o$} (D);
+  \draw[->] (D) -- (S);
+  \draw[->] (S) -- (output);
+  \node[block, below of=distinct, node distance=.7cm] (z) {$\zm$};
+  \draw[->] (o) |- (z);
+  \draw[->] (z) -| (f);
+\end{tikzpicture}
+
+We construct $\lift{R}$ by lifting each operator of the circuit individually 
+according to Proposition~\ref{prop:distributivity}.
+\end{enumerate}
+
+The inner loop of the circuit computes the fixed point of $R$.  The differentiation
+operator $\D$ yields the set of new Datalog facts (changes) computed by each iteration of the loop.
+When the set of new facts becomes empty the iterations have completed.
+$\int$ computes the value of the fixed point by aggregating these changes.
+
+\begin{theorem}[Recursion correctness]\label{theorem:recursion}
+If $\isset(\code{I})$, the output of the circuit above is
+the relation $\code{O}$ as defined by the Datalog semantics 
+as a function of the input relation \code{I}.
+\end{theorem}
+\label{proof-recursion}
+\begin{proof}
+Let us compute the contents of the $o$ stream, produced at the output
+of the $\distinct$ operator.  We will show that this stream is composed
+of increasing approximations of the value of \code{O}.
+
+We define the following one-argument function: $S(x) = \lambda x . R(\code{I}, x)$.
+Notice that the left input of the $\lift{R}$ block is a constant stream
+with the value \code{I}.  Due to the stratified nature of the language,
+we must have $\ispositive(S)$, so $\forall x . S(x) \geq x$.
+Also $\lift{S}$ is time-invariant, so $S(0) = 0$.
+From \secref{sec:relational}, the definition of set union we know that
+$x \cup y = \distinct(x + y)$.
+We get the following system of equations:
+$$
+\begin{aligned}
+o[0] =& S(0) \\
+o[t] =& S(o[t-1]) \\
+\end{aligned}
+$$ 
+So, by induction on $t$ we have $o[t] = S^t(0)$, where by 
+$S^t$ we mean $\underbrace{S \circ S \circ \ldots \circ S}_{t}$.
+$S$ is monotone; thus, if there is a time $k$ such that $S^k(0) = S^{k+1}(0)$, we have 
+$\forall j \in \N . S^{k+j}(0) = S^k(0)$.  Applying a derivative to this stream
+will then produce a stream that is zero almost everywhere, and integrating
+this derivative will return the last distinct value in the stream $o$.
+
+This is essentially the definition of the semantics of a recursive Datalog relation:
+$\code{O} = \fix{x}{R(\code{I}, x)}$.
+\end{proof}
+
+Note that the use of unbounded data domains (like integers with arithmetic) does 
+not guarantee convergence for all programs.
+
+In fact, this circuit implements the standard \defined{na\"{\i}ve evaluation}
+algorithm (e.g., see Algorithm~1 in \cite{greco-sldm15}).
+Notice that the inner part of the circuit is the incremental
+form of another circuit, since it is sandwiched between $\I$ and $\D$ operators.
+Using the cycle rule of Proposition~\ref{prop-inc-properties} we can rewrite this circuit as:
+%
+\begin{equation}
+\begin{aligned}
+\label{eq:seminaive}
+\begin{tikzpicture}[auto,>=latex]
+  \node[] (Iinput) {\code{I}};
+  \node[block, right of=Iinput] (Idelta) {$\delta_0$};
+  \node[block, right of=Idelta] (f) {$\inc{(\lift{R})}$};
+  \node[block, right of=f, node distance=1.6cm] (distinct) {$\inc{\lift{(\distinct})}$};
+  \node[block, right of=distinct, node distance=1.5cm] (S) {$\int$};
+  \node[right of=S] (output)  {\code{O}};
+  \node[block, below of=distinct, node distance=.7cm] (z) {$\zm$};
+  \draw[->] (Iinput) -- (Idelta);
+  \draw[->] (f) -- (distinct);
+  \draw[->] (distinct) -- node (o) {} (S);
+  \draw[->] (S) -- (output);
+  \draw[->] (o) |- (z);
+  \draw[->] (z) -| (f);
+  \draw[->] (Idelta) -- (f);
+\end{tikzpicture}
+\end{aligned}
+\end{equation}
+
+This last circuit effectively implements the \defined{semi-na\"{\i}ve evaluation}
+algorithm (Algorithm~2 from~\cite{greco-sldm15}).  The correctness of semi-na\"{\i}ve
+evaluation is an immediate consequence of the cycle rule.

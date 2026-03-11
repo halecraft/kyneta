@@ -1,0 +1,54 @@
+\section{Related work}\label{sec:related}
+
+\dbsp using non-nested streams is a simplified instance of a Kahn 
+network~\cite{kahn-ifip74}.  Johnson~\cite{johnson-phd83}
+studies a very similar computational model without nested streams and its 
+expressiveness. The implementation of such streaming models of computation and their
+relationship to dataflow machines has been studied by Lee~\cite{lee-ieee95}.
+Lee~\cite{lee-ifip93} also introduced streams of streams and the $\lift{\zm}$ operator.
+
+In \secref{sec:extensions} we have discussed the connections with window and stream database 
+queries~\cite{arasu-tr02,aurora}.
+
+Incremental view maintenance (e.g.~\cite{gupta-idb93}) is
+surveyed in~\cite{gupta-idb95}; a large bibliography is present in~\cite{motik-ai19}. 
+Its most formal aspect is propagating ``deltas'' through algebraic expressions:
+$Q(R+\Delta R)=Q(R)+\Delta Q(R,\Delta R)$. This work eventually crystallized in~\cite{koch-pods16}. DBSP 
+incrementalization is both more modular and more fine-grain since it deals with streams of updates. 
+Both~\cite{koch-pods10} and~\cite{green-tcs11} use \zrs to uniformly model insertions/deletions.
+
+Picallo et al.~\cite{picallo-scop19} provide a general solution to IVM for
+rich languages.  \dbsp requires a group structure on the values operated on; 
+this assumption has two major practical benefits: it simplifies the mathematics considerably
+(e.g., Picallo uses monoid actions to model changes), and it provides a general, simple
+algorithm (\ref{algorithm-inc}) for incrementalizing arbitrary programs.  The downside of 
+\dbsp is that one has to find a suitable group structure (e.g., \zrs for sets) to ``embed'' 
+the computation.  Picallo's notion of ``derivative'' is not unique: they need creativity to choose
+the right derivative definition, we need creativity to find the right group structure.
+
+\begin{comment}
+The main problem that change structures address is that the types used in programs are not
+closed under subtraction (e.g., the delta between two sets is not a set). 
+Although a relational \dbsp circuit computes
+only on positive \zr values, its incremental version may compute on negative 
+values, but the equivalence of the two programs guarantees correctness even though the
+type system of \zrs does not.  \val{Safe to delete this para}
+\end{comment}
+
+Many heuristic algorithms were published for Datalog-like languages, e.g., 
+counting based approaches~\cite{Dewan-iis92,motik-aaai15} that maintain the number of derivations,
+DRed~\cite{gupta-sigmod93} and its variants~\cite{Ceri-VLDB91,Wolfson-sigmod91,%
+Staudt-vldb96,Kotowski-rr11,Lu-sigmod95,Apt-sigmod87}, the backward-forward algorithm and variants~\cite{motik-aaai15,
+Harrison-wdd92,motik-ai19}.  \dbsp is more general than these approaches.  
+Interestingly, the \zrs multiplicities in our relational implementation 
+are related to the counting-number-of-derivations approaches.
+
+\dbsp is tightly related to Differential Dataflow (DD)~\cite{mcsherry-cidr13, murray-sosp13}
+and its theoretical foundations~\cite{abadi-fossacs15} (and recently~\cite{mchserry-vldb20,chothia-vldb16}).
+All \dbsp operators are based on DD operators.  DD's computational model is more powerful than
+\dbsp, since it allows past values in a stream to be "updated".
+In contrast, our model assumes that the inputs of a computation arrive in the time order while allowing 
+for nested time domains via the modular lifting transformer.  However, \dbsp can express both
+incremental and non-incremental computations; in essence \dbsp is ``deconstructing'' DD into 
+simple component building blocks; the core Proposition~\ref{prop-inc-properties} and
+the Algorithm based on it~\ref{algorithm-inc} are new contributions.

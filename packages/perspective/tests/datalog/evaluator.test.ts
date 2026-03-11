@@ -1883,51 +1883,6 @@ describe('Unified Evaluator', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Retraction through negation stratum without DRed
-  // ---------------------------------------------------------------------------
-
-  describe('retraction through negation without DRed', () => {
-    it('retracted winner ground fact yields new winner via weight propagation', () => {
-      const lwwRules = buildDefaultLWWRules();
-      const evaluator = createEvaluator(lwwRules);
-      const slotId = 'slot:title';
-
-      // Insert two competing values.
-      const f1 = makeActiveValueFact('alice', 1, slotId, 'Hello', 10);
-      const f2 = makeActiveValueFact('bob', 1, slotId, 'World', 20);
-      evaluator.step(factsToZSet([f1, f2]), zsetEmpty());
-
-      // Bob wins (lamport 20 > 10).
-      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('World');
-
-      // Retract bob's value — alice should become the new winner.
-      evaluator.step(factsToWeightedZSet([[f2, -1]]), zsetEmpty());
-
-      const resolution = evaluator.currentResolution();
-      expect(resolution.winners.size).toBe(1);
-      expect(resolution.winners.get(slotId)!.content).toBe('Hello');
-    });
-
-    it('retraction and re-insertion work correctly', () => {
-      const lwwRules = buildDefaultLWWRules();
-      const evaluator = createEvaluator(lwwRules);
-      const slotId = 'slot:title';
-
-      const f1 = makeActiveValueFact('alice', 1, slotId, 'Hello', 10);
-      evaluator.step(factsToZSet([f1]), zsetEmpty());
-      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('Hello');
-
-      // Retract.
-      evaluator.step(factsToWeightedZSet([[f1, -1]]), zsetEmpty());
-      expect(evaluator.currentResolution().winners.size).toBe(0);
-
-      // Re-insert.
-      evaluator.step(factsToZSet([f1]), zsetEmpty());
-      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('Hello');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // Rule changes
   // ---------------------------------------------------------------------------
 
@@ -2464,17 +2419,14 @@ describe('Unified Evaluator', () => {
       expect(db.getRelation('derived').getWeight(['a'])).toBeGreaterThan(0);
     });
 
-    it('self-join weights reflect derivation paths (pre-asymmetric-join)', () => {
+    it('self-join weights are exact with asymmetric join (no double-counting)', () => {
       // superseded involves a self-join on active_value.
-      // With dual-weight (Plan 006.2 Phase 0), true multiplicities are
-      // preserved. Without the asymmetric join (Phase 2), self-join
-      // double-counting inflates weights. This test documents current
-      // behavior; Phase 2 will correct the weights and this test will
-      // be updated to verify exact multiplicities.
-      //
-      // Key invariant: presence is correct. All superseded facts exist
-      // and all non-superseded facts don't. weightedTuples() returns
-      // clampedWeight = 1 for all present entries.
+      // With dual-weight + asymmetric join (Plan 006.2), each derivation
+      // path is counted exactly once. Three values: alice (L=10),
+      // bob (L=20), charlie (L=30).
+      //   superseded(alice) ← bob supersedes alice AND charlie supersedes alice = weight 2
+      //   superseded(bob)   ← charlie supersedes bob = weight 1
+      //   charlie is not superseded.
       const lwwRules = buildDefaultLWWRules();
       const evaluator = createEvaluator(lwwRules);
       const slotId = 'slot:title';
@@ -2488,10 +2440,13 @@ describe('Unified Evaluator', () => {
       evaluator.step(factsToZSet(facts), zsetEmpty());
 
       const db = evaluator.currentDatabase();
-      // All superseded facts should be present.
-      for (const tuple of db.getRelation('superseded').tuples()) {
-        expect(db.getRelation('superseded').getWeight(tuple)).toBeGreaterThan(0);
-      }
+      const aliceKey = cnIdKey(createCnId('alice', 1));
+      const bobKey = cnIdKey(createCnId('bob', 1));
+
+      // Exact weights — asymmetric join prevents double-counting.
+      expect(db.getRelation('superseded').getWeight([aliceKey, slotId])).toBe(2);
+      expect(db.getRelation('superseded').getWeight([bobKey, slotId])).toBe(1);
+
       // weightedTuples() returns clampedWeight = 1 for joins.
       for (const { weight } of db.getRelation('superseded').weightedTuples()) {
         expect(weight).toBe(1);
@@ -2566,6 +2521,289 @@ describe('Unified Evaluator', () => {
 
       // deltaResolved should reflect the change.
       expect(zsetIsEmpty(result.deltaResolved)).toBe(false);
+    });
+
+    it('retraction in stratum 0 cascades through stratum 1 negation via step()', () => {
+      // This is the multi-stratum retraction propagation test.
+      // Stratum 0 (positive): superseded(CnId, Slot).
+      // Stratum 1 (negation): winner(Slot, CnId, Val) :- ..., not superseded(CnId, Slot).
+      //
+      // Insert alice (L=10), bob (L=20). Bob wins.
+      // Retract bob → stratum 0 produces −1 for superseded(alice),
+      // stratum 1 sees that change and derives winner(alice).
+      //
+      // Without correct inter-stratum −1 propagation, stratum 1 would
+      // not see the superseded retraction and alice would never win.
+      const lwwRules = buildDefaultLWWRules();
+      const evaluator = createEvaluator(lwwRules);
+      const slotId = 'slot:title';
+
+      const alice = makeActiveValueFact('alice', 1, slotId, 'A', 10);
+      const bob = makeActiveValueFact('bob', 1, slotId, 'B', 20);
+      evaluator.step(factsToZSet([alice, bob]), zsetEmpty());
+      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('B');
+
+      // Retract bob — the −1 must propagate: stratum 0 retracts
+      // superseded(alice), stratum 1 derives winner(alice).
+      const result = evaluator.step(factsToWeightedZSet([[bob, -1]]), zsetEmpty());
+
+      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('A');
+
+      // deltaResolved should contain the winner change.
+      expect(zsetIsEmpty(result.deltaResolved)).toBe(false);
+
+      // deltaDerived should contain both −1 (old winner/superseded) and +1 (new winner).
+      let hasNeg = false;
+      let hasPos = false;
+      zsetForEach(result.deltaDerived, (entry) => {
+        if (entry.weight < 0) hasNeg = true;
+        if (entry.weight > 0) hasPos = true;
+      });
+      expect(hasNeg).toBe(true);
+      expect(hasPos).toBe(true);
+    });
+
+    it('re-insertion after full retraction restores derived facts via step()', () => {
+      // insert alice → winner(alice). Retract → no winner.
+      // Re-insert alice → winner(alice) again.
+      // Validates the weight round-trip: 0 → 1 → 0 → 1 across strata.
+      const lwwRules = buildDefaultLWWRules();
+      const evaluator = createEvaluator(lwwRules);
+      const slotId = 'slot:title';
+
+      const alice = makeActiveValueFact('alice', 1, slotId, 'A', 10);
+
+      // Insert.
+      evaluator.step(factsToZSet([alice]), zsetEmpty());
+      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('A');
+
+      // Retract.
+      evaluator.step(factsToWeightedZSet([[alice, -1]]), zsetEmpty());
+      expect(evaluator.currentResolution().winners.size).toBe(0);
+
+      // Re-insert — derived facts must reappear.
+      const result = evaluator.step(factsToZSet([alice]), zsetEmpty());
+      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('A');
+
+      // The re-insertion should produce +1 derived deltas.
+      let hasPositive = false;
+      zsetForEach(result.deltaDerived, (entry) => {
+        if (entry.weight > 0) hasPositive = true;
+      });
+      expect(hasPositive).toBe(true);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Mechanism verification tests (Plan 006.2, Phase 4)
+  // ---------------------------------------------------------------------------
+
+  describe('mechanism verification (Plan 006.2 Phase 4)', () => {
+    it('LWW three-value retraction: superseded(alice) survives, winner changes charlie→bob', () => {
+      // The critical three-value test. alice (L=10), bob (L=20), charlie (L=30).
+      // superseded(alice) is derived by BOTH bob and charlie (weight 2).
+      // superseded(bob) is derived by charlie only (weight 1).
+      // winner = charlie.
+      // Retract charlie → superseded(alice) survives (weight 2→1),
+      // superseded(bob) retracted (weight 1→0), winner changes to bob.
+      const lwwRules = buildDefaultLWWRules();
+      const evaluator = createEvaluator(lwwRules);
+      const slotId = 'slot:title';
+
+      const alice = makeActiveValueFact('alice', 1, slotId, 'A', 10);
+      const bob = makeActiveValueFact('bob', 1, slotId, 'B', 20);
+      const charlie = makeActiveValueFact('charlie', 1, slotId, 'C', 30);
+
+      evaluator.step(factsToZSet([alice, bob, charlie]), zsetEmpty());
+
+      // Charlie wins (lamport 30).
+      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('C');
+
+      // Both alice and bob should be superseded.
+      const db = evaluator.currentDatabase();
+      expect(db.hasFact(fact('superseded', [
+        cnIdKey(createCnId('alice', 1)), slotId,
+      ]))).toBe(true);
+      expect(db.hasFact(fact('superseded', [
+        cnIdKey(createCnId('bob', 1)), slotId,
+      ]))).toBe(true);
+
+      // Retract charlie.
+      const result = evaluator.step(factsToWeightedZSet([[charlie, -1]]), zsetEmpty());
+
+      // Winner should change to bob (not alice).
+      const resolution = evaluator.currentResolution();
+      expect(resolution.winners.get(slotId)!.content).toBe('B');
+
+      // superseded(alice) should SURVIVE — bob still supersedes alice.
+      const dbAfter = evaluator.currentDatabase();
+      expect(dbAfter.hasFact(fact('superseded', [
+        cnIdKey(createCnId('alice', 1)), slotId,
+      ]))).toBe(true);
+
+      // superseded(bob) should be RETRACTED — charlie was the only one superseding bob.
+      expect(dbAfter.hasFact(fact('superseded', [
+        cnIdKey(createCnId('bob', 1)), slotId,
+      ]))).toBe(false);
+
+      // deltaResolved should reflect the winner change.
+      expect(zsetIsEmpty(result.deltaResolved)).toBe(false);
+    });
+
+    it('recursive retraction cascade via createEvaluator: edge removal retracts transitive paths', () => {
+      // edges a→b→c→d, retract b→c.
+      // reachable(a,c), reachable(a,d), reachable(b,c), reachable(b,d) retracted.
+      // reachable(a,b) and reachable(c,d) survive.
+      const rules: Rule[] = [
+        rule(
+          atom('reachable', [varTerm('X'), varTerm('Y')]),
+          [positiveAtom(atom('edge', [varTerm('X'), varTerm('Y')]))],
+        ),
+        rule(
+          atom('reachable', [varTerm('X'), varTerm('Z')]),
+          [
+            positiveAtom(atom('edge', [varTerm('X'), varTerm('Y')])),
+            positiveAtom(atom('reachable', [varTerm('Y'), varTerm('Z')])),
+          ],
+        ),
+      ];
+
+      const evaluator = createEvaluator(rules);
+
+      const edges: Fact[] = [
+        fact('edge', ['a', 'b']),
+        fact('edge', ['b', 'c']),
+        fact('edge', ['c', 'd']),
+      ];
+      evaluator.step(factsToZSet(edges), zsetEmpty());
+
+      const db1 = evaluator.currentDatabase();
+      expect(db1.hasFact(fact('reachable', ['a', 'd']))).toBe(true);
+      expect(db1.hasFact(fact('reachable', ['b', 'd']))).toBe(true);
+
+      // Retract edge b→c.
+      evaluator.step(factsToWeightedZSet([[fact('edge', ['b', 'c']), -1]]), zsetEmpty());
+
+      const db2 = evaluator.currentDatabase();
+      // Paths through b→c are gone.
+      expect(db2.hasFact(fact('reachable', ['b', 'c']))).toBe(false);
+      expect(db2.hasFact(fact('reachable', ['b', 'd']))).toBe(false);
+      expect(db2.hasFact(fact('reachable', ['a', 'c']))).toBe(false);
+      expect(db2.hasFact(fact('reachable', ['a', 'd']))).toBe(false);
+
+      // Paths not through b→c survive.
+      expect(db2.hasFact(fact('reachable', ['a', 'b']))).toBe(true);
+      expect(db2.hasFact(fact('reachable', ['c', 'd']))).toBe(true);
+    });
+
+    it('diamond alternative support: reachable(a,c) survives when one of two paths retracted', () => {
+      // edges: a→b, b→c, a→c (direct). Two paths from a to c.
+      // Retract a→b. reachable(a,b) retracted, but reachable(a,c) survives
+      // via the direct edge (weight 2→1, no zero-crossing).
+      const rules: Rule[] = [
+        rule(
+          atom('reachable', [varTerm('X'), varTerm('Y')]),
+          [positiveAtom(atom('edge', [varTerm('X'), varTerm('Y')]))],
+        ),
+        rule(
+          atom('reachable', [varTerm('X'), varTerm('Z')]),
+          [
+            positiveAtom(atom('edge', [varTerm('X'), varTerm('Y')])),
+            positiveAtom(atom('reachable', [varTerm('Y'), varTerm('Z')])),
+          ],
+        ),
+      ];
+
+      const evaluator = createEvaluator(rules);
+
+      const edges: Fact[] = [
+        fact('edge', ['a', 'b']),
+        fact('edge', ['b', 'c']),
+        fact('edge', ['a', 'c']),  // Direct edge: alternative support.
+      ];
+      evaluator.step(factsToZSet(edges), zsetEmpty());
+
+      const db1 = evaluator.currentDatabase();
+      expect(db1.hasFact(fact('reachable', ['a', 'b']))).toBe(true);
+      expect(db1.hasFact(fact('reachable', ['a', 'c']))).toBe(true);
+      expect(db1.hasFact(fact('reachable', ['b', 'c']))).toBe(true);
+
+      // Retract a→b. The path a→b→c is gone, but a→c (direct) remains.
+      evaluator.step(factsToWeightedZSet([[fact('edge', ['a', 'b']), -1]]), zsetEmpty());
+
+      const db2 = evaluator.currentDatabase();
+      // a→b is gone — reachable(a,b) retracted.
+      expect(db2.hasFact(fact('reachable', ['a', 'b']))).toBe(false);
+      // a→c survives via direct edge — dual-weight prevents over-retraction.
+      expect(db2.hasFact(fact('reachable', ['a', 'c']))).toBe(true);
+      // b→c still holds (edge b→c was not retracted).
+      expect(db2.hasFact(fact('reachable', ['b', 'c']))).toBe(true);
+    });
+
+    it('differential negation timing: new superseding value produces −1 old winner, +1 new winner', () => {
+      // Insert alice (L=10) → winner(alice).
+      // Insert bob (L=20) → supersedes alice → winner changes.
+      // Verify the step result contains both −1 for old winner and +1 for new.
+      const lwwRules = buildDefaultLWWRules();
+      const evaluator = createEvaluator(lwwRules);
+      const slotId = 'slot:title';
+
+      const alice = makeActiveValueFact('alice', 1, slotId, 'A', 10);
+      evaluator.step(factsToZSet([alice]), zsetEmpty());
+      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('A');
+
+      // Insert bob — supersedes alice.
+      const bob = makeActiveValueFact('bob', 1, slotId, 'B', 20);
+      const result = evaluator.step(factsToZSet([bob]), zsetEmpty());
+
+      // Winner changed to bob.
+      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('B');
+
+      // deltaDerived should contain both +1 and −1 entries.
+      let hasPositive = false;
+      let hasNegative = false;
+      zsetForEach(result.deltaDerived, (entry) => {
+        if (entry.weight > 0) hasPositive = true;
+        if (entry.weight < 0) hasNegative = true;
+      });
+      // New winner/superseded facts produce +1; old winner retraction produces −1.
+      expect(hasPositive).toBe(true);
+      expect(hasNegative).toBe(true);
+
+      // deltaResolved should contain the winner change.
+      let resolvedCount = 0;
+      zsetForEach(result.deltaResolved, () => { resolvedCount++; });
+      expect(resolvedCount).toBeGreaterThan(0);
+    });
+
+    it('LWW two-value retraction: intermediate weight states are correct', () => {
+      // alice (L=10), bob (L=20). superseded(alice) weight=1.
+      // Retract bob → superseded(alice) retracted (weight 1→0),
+      // winner changes bob→alice.
+      const lwwRules = buildDefaultLWWRules();
+      const evaluator = createEvaluator(lwwRules);
+      const slotId = 'slot:title';
+
+      const alice = makeActiveValueFact('alice', 1, slotId, 'A', 10);
+      const bob = makeActiveValueFact('bob', 1, slotId, 'B', 20);
+      evaluator.step(factsToZSet([alice, bob]), zsetEmpty());
+
+      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('B');
+
+      // Verify superseded(alice) exists with weight 1.
+      const db1 = evaluator.currentDatabase();
+      const aliceCnIdKey = cnIdKey(createCnId('alice', 1));
+      expect(db1.hasFact(fact('superseded', [aliceCnIdKey, slotId]))).toBe(true);
+      expect(db1.getRelation('superseded').getWeight([aliceCnIdKey, slotId])).toBe(1);
+
+      // Retract bob.
+      evaluator.step(factsToWeightedZSet([[bob, -1]]), zsetEmpty());
+
+      const db2 = evaluator.currentDatabase();
+      // superseded(alice) retracted — weight crossed zero.
+      expect(db2.hasFact(fact('superseded', [aliceCnIdKey, slotId]))).toBe(false);
+      // alice is now the winner.
+      expect(evaluator.currentResolution().winners.get(slotId)!.content).toBe('A');
     });
   });
 });
