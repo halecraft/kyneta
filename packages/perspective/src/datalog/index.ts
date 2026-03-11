@@ -96,12 +96,15 @@ export {
   evaluateNaive,
   evaluateRule,
   evaluateRuleSemiNaive,
+  evaluateRuleDelta,
   evaluatePositiveAtom,
   evaluateNegation,
+  evaluateDifferentialNegation,
   evaluateGuardElement,
   evaluateAggregationElement,
   groundHead,
   getPositiveAtomIndices,
+  getNegationAtomIndices,
 } from './evaluate.js';
 
 // --- Unified Evaluator (Plan 006.1) ---

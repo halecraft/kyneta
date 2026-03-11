@@ -35,6 +35,19 @@ import {
 } from '../../src/datalog/types.js';
 import type { Fact, Rule, Value } from '../../src/datalog/types.js';
 import {
+  evaluatePositiveAtom,
+  evaluateRuleDelta,
+  evaluateRuleSemiNaive,
+  evaluateDifferentialNegation,
+  getNegationAtomIndices,
+  getPositiveAtomIndices,
+  evaluateNegation,
+  groundHead,
+} from '../../src/datalog/evaluate.js';
+import {
+  EMPTY_SUBSTITUTION,
+} from '../../src/datalog/unify.js';
+import {
   createEvaluator,
   evaluateUnified,
   evaluateUnified as evaluate,
@@ -340,6 +353,355 @@ describe('Database.hasAnyEntries (Plan 006.2 Phase 0)', () => {
     db.addWeightedFact(fact('p', ['a']), -1);
     // Entry pruned (weight = 0).
     expect(db.hasAnyEntries()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Differential Negation Primitives (Plan 006.2, Phase 1)
+// ---------------------------------------------------------------------------
+
+describe('evaluateDifferentialNegation (Plan 006.2 Phase 1)', () => {
+  it('appearance in negated relation produces negative weight', () => {
+    // Delta has +1 for blocked(x) → negation inverts to -1.
+    const delta = new Database();
+    delta.addWeightedFact(fact('blocked', ['x']), 1);
+
+    const a = atom('blocked', [varTerm('X')]);
+    const sub = { bindings: new Map<string, Value>(), weight: 1 };
+    const results = evaluateDifferentialNegation(a, delta, [sub]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.weight).toBe(-1); // 1 × (-(+1)) = -1
+    expect(results[0]!.bindings.get('X')).toBe('x');
+  });
+
+  it('disappearance from negated relation produces positive weight', () => {
+    // Delta has -1 for blocked(x) → negation inverts to +1.
+    const delta = new Database();
+    delta.addWeightedFact(fact('blocked', ['x']), -1);
+
+    const a = atom('blocked', [varTerm('X')]);
+    const sub = { bindings: new Map<string, Value>(), weight: 1 };
+    const results = evaluateDifferentialNegation(a, delta, [sub]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.weight).toBe(1); // 1 × (-(-1)) = +1
+    expect(results[0]!.bindings.get('X')).toBe('x');
+  });
+
+  it('propagates incoming substitution weight through sign inversion', () => {
+    const delta = new Database();
+    delta.addWeightedFact(fact('blocked', ['x']), 1);
+
+    const a = atom('blocked', [varTerm('X')]);
+    // Incoming sub has weight 3.
+    const sub = { bindings: new Map<string, Value>(), weight: 3 };
+    const results = evaluateDifferentialNegation(a, delta, [sub]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.weight).toBe(-3); // 3 × (-(+1)) = -3
+  });
+
+  it('handles multiple delta entries and multiple substitutions', () => {
+    const delta = new Database();
+    delta.addWeightedFact(fact('blocked', ['x']), 1);
+    delta.addWeightedFact(fact('blocked', ['y']), -1);
+
+    const a = atom('blocked', [varTerm('X')]);
+    const sub = { bindings: new Map<string, Value>(), weight: 1 };
+    const results = evaluateDifferentialNegation(a, delta, [sub]);
+
+    expect(results).toHaveLength(2);
+    const xResult = results.find((r) => r.bindings.get('X') === 'x');
+    const yResult = results.find((r) => r.bindings.get('X') === 'y');
+    expect(xResult!.weight).toBe(-1); // appearance blocks
+    expect(yResult!.weight).toBe(1);  // disappearance unblocks
+  });
+
+  it('returns empty for empty delta', () => {
+    const delta = new Database();
+    const a = atom('blocked', [varTerm('X')]);
+    const sub = { bindings: new Map<string, Value>(), weight: 1 };
+    const results = evaluateDifferentialNegation(a, delta, [sub]);
+    expect(results).toHaveLength(0);
+  });
+
+  it('only matches entries for the correct predicate', () => {
+    const delta = new Database();
+    delta.addWeightedFact(fact('other', ['x']), 1);
+
+    const a = atom('blocked', [varTerm('X')]);
+    const sub = { bindings: new Map<string, Value>(), weight: 1 };
+    const results = evaluateDifferentialNegation(a, delta, [sub]);
+    expect(results).toHaveLength(0);
+  });
+});
+
+describe('evaluatePositiveAtom allEntries parameter (Plan 006.2 Phase 1)', () => {
+  it('allEntries=false (default): uses weightedTuples, returns clampedWeight=1', () => {
+    const db = new Database();
+    db.relation('p').addWeighted(['a'], 3);
+
+    const a = atom('p', [varTerm('X')]);
+    const results = evaluatePositiveAtom(a, db, [EMPTY_SUBSTITUTION]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.weight).toBe(1); // clampedWeight, not true weight
+    expect(results[0]!.bindings.get('X')).toBe('a');
+  });
+
+  it('allEntries=true: uses allWeightedTuples, returns true weight', () => {
+    const db = new Database();
+    db.relation('p').addWeighted(['a'], 3);
+
+    const a = atom('p', [varTerm('X')]);
+    const results = evaluatePositiveAtom(a, db, [EMPTY_SUBSTITUTION], true);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.weight).toBe(3); // true weight
+    expect(results[0]!.bindings.get('X')).toBe('a');
+  });
+
+  it('allEntries=true: sees negative-weight entries in delta DBs', () => {
+    const delta = new Database();
+    delta.addWeightedFact(fact('p', ['a']), -1);
+
+    const a = atom('p', [varTerm('X')]);
+    const results = evaluatePositiveAtom(a, delta, [EMPTY_SUBSTITUTION], true);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.weight).toBe(-1); // negative weight visible
+    expect(results[0]!.bindings.get('X')).toBe('a');
+  });
+
+  it('allEntries=false: hides negative-weight entries', () => {
+    const delta = new Database();
+    delta.addWeightedFact(fact('p', ['a']), -1);
+
+    const a = atom('p', [varTerm('X')]);
+    const results = evaluatePositiveAtom(a, delta, [EMPTY_SUBSTITUTION], false);
+
+    expect(results).toHaveLength(0); // negative entry invisible
+  });
+
+  it('allEntries=false on accumulated DB with weight=2: returns clampedWeight=1', () => {
+    const db = new Database();
+    db.relation('p').addWeighted(['a'], 1);
+    db.relation('p').addWeighted(['a'], 1);
+    expect(db.getRelation('p').getWeight(['a'])).toBe(2);
+
+    const a = atom('p', [varTerm('X')]);
+    const results = evaluatePositiveAtom(a, db, [EMPTY_SUBSTITUTION]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.weight).toBe(1); // clampedWeight prevents explosion
+  });
+});
+
+describe('evaluateRuleDelta (Plan 006.2 Phase 1)', () => {
+  it('positive atom delta source: identical to old evaluateRuleSemiNaive', () => {
+    // derived(X) :- base(X).
+    const r = rule(
+      atom('derived', [varTerm('X')]),
+      [positiveAtom(atom('base', [varTerm('X')]))],
+    );
+
+    const fullDb = new Database();
+    fullDb.addFact(fact('base', ['a']));
+    fullDb.addFact(fact('base', ['b']));
+
+    const delta = new Database();
+    delta.addFact(fact('base', ['a']));
+
+    // deltaIdx=0: match base against delta.
+    const results = evaluateRuleDelta(r, fullDb, fullDb, delta, 0);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.fact).toEqual(fact('derived', ['a']));
+    expect(results[0]!.weight).toBe(1);
+  });
+
+  it('negation delta source: differential negation with sign inversion', () => {
+    // winner(Slot, CnId, Value) :- active_value(CnId, Slot, Value, _, _),
+    //   not superseded(CnId, Slot).
+    const winnerRule = rule(
+      atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
+      [
+        positiveAtom(
+          atom('active_value', [
+            varTerm('CnId'), varTerm('Slot'), varTerm('Value'), _, _,
+          ]),
+        ),
+        negation(
+          atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
+        ),
+      ],
+    );
+
+    // fullDb has alice in active_value.
+    const fullDb = new Database();
+    fullDb.addFact(fact('active_value', ['alice@1', 'slot:title', 'Hello', 10, 'alice']));
+
+    // Delta: superseded(alice@1, slot:title) appeared (+1).
+    // This should BLOCK alice's winner derivation → weight = -1.
+    const delta = new Database();
+    delta.addWeightedFact(fact('superseded', ['alice@1', 'slot:title']), 1);
+
+    // deltaIdx=1: the negation body element.
+    const results = evaluateRuleDelta(winnerRule, fullDb, fullDb, delta, 1);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.fact.predicate).toBe('winner');
+    expect(results[0]!.weight).toBe(-1); // blocked → retraction
+  });
+
+  it('negation delta source: disappearance unblocks derivation', () => {
+    const winnerRule = rule(
+      atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
+      [
+        positiveAtom(
+          atom('active_value', [
+            varTerm('CnId'), varTerm('Slot'), varTerm('Value'), _, _,
+          ]),
+        ),
+        negation(
+          atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
+        ),
+      ],
+    );
+
+    const fullDb = new Database();
+    fullDb.addFact(fact('active_value', ['alice@1', 'slot:title', 'Hello', 10, 'alice']));
+
+    // Delta: superseded(alice@1, slot:title) disappeared (-1).
+    // This should UNBLOCK alice's winner derivation → weight = +1.
+    const delta = new Database();
+    delta.addWeightedFact(fact('superseded', ['alice@1', 'slot:title']), -1);
+
+    const results = evaluateRuleDelta(winnerRule, fullDb, fullDb, delta, 1);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.fact.predicate).toBe('winner');
+    expect(results[0]!.weight).toBe(1); // unblocked → new derivation
+  });
+
+  it('evaluateRuleSemiNaive alias produces same results as evaluateRuleDelta', () => {
+    const r = rule(
+      atom('derived', [varTerm('X')]),
+      [positiveAtom(atom('base', [varTerm('X')]))],
+    );
+
+    const fullDb = new Database();
+    fullDb.addFact(fact('base', ['a']));
+
+    const delta = new Database();
+    delta.addFact(fact('base', ['b']));
+
+    const resultNew = evaluateRuleDelta(r, fullDb, fullDb, delta, 0);
+    const resultOld = evaluateRuleSemiNaive(r, fullDb, delta, 0);
+
+    expect(resultNew).toEqual(resultOld);
+  });
+
+  it('positive atom delta with negative-weight entry produces retraction', () => {
+    // Rule: derived(X) :- base(X).
+    const r = rule(
+      atom('derived', [varTerm('X')]),
+      [positiveAtom(atom('base', [varTerm('X')]))],
+    );
+
+    const fullDb = new Database();
+    fullDb.addFact(fact('base', ['a']));
+
+    // Delta contains a retraction.
+    const delta = new Database();
+    delta.addWeightedFact(fact('base', ['a']), -1);
+
+    // allEntries=true at the delta index sees the -1 entry.
+    const results = evaluateRuleDelta(r, fullDb, fullDb, delta, 0);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.fact).toEqual(fact('derived', ['a']));
+    expect(results[0]!.weight).toBe(-1);
+  });
+
+  it('asymmetric join: positions before deltaIdx use fullDbNew', () => {
+    // superseded(CnId, Slot) :- active_value(CnId, Slot, _, L1, _),
+    //   active_value(CnId2, Slot, _, L2, _), CnId ≠ CnId2, L2 > L1.
+    const supersededRule = rule(
+      atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
+      [
+        positiveAtom(
+          atom('active_value', [
+            varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), _,
+          ]),
+        ),
+        positiveAtom(
+          atom('active_value', [
+            varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), _,
+          ]),
+        ),
+        neq(varTerm('CnId'), varTerm('CnId2')),
+        gt(varTerm('L2'), varTerm('L1')),
+      ],
+    );
+
+    // P_old is empty — no active_value entries yet.
+    const dbOld = new Database();
+
+    // P_new has both alice and bob.
+    const dbNew = new Database();
+    dbNew.addFact(fact('active_value', ['alice@1', 'slot:title', 'Hello', 10, 'alice']));
+    dbNew.addFact(fact('active_value', ['bob@1', 'slot:title', 'World', 20, 'bob']));
+
+    // Delta contains both alice and bob.
+    const delta = new Database();
+    delta.addFact(fact('active_value', ['alice@1', 'slot:title', 'Hello', 10, 'alice']));
+    delta.addFact(fact('active_value', ['bob@1', 'slot:title', 'World', 20, 'bob']));
+
+    // deltaIdx=0: first active_value from delta.
+    // Position 1 (j > deltaIdx): uses dbOld (empty) → no matches.
+    const results0 = evaluateRuleDelta(supersededRule, dbOld, dbNew, delta, 0);
+
+    // deltaIdx=1: second active_value from delta.
+    // Position 0 (j < deltaIdx, same predicate): uses dbNew → alice and bob visible.
+    const results1 = evaluateRuleDelta(supersededRule, dbOld, dbNew, delta, 1);
+
+    // With asymmetric join:
+    // deltaIdx=0: CnId from delta (alice, bob), CnId2 from dbOld (empty) → 0 results.
+    // deltaIdx=1: CnId from dbNew (alice, bob), CnId2 from delta (alice, bob) → alice superseded.
+    // Total: 1 derivation of superseded(alice, slot:title). No double-counting.
+    const allResults = [...results0, ...results1];
+    const supersededFacts = allResults.filter((r) => r.weight > 0);
+    expect(supersededFacts).toHaveLength(1);
+    expect(supersededFacts[0]!.fact.values[0]).toBe('alice@1');
+  });
+});
+
+describe('getNegationAtomIndices (Plan 006.2 Phase 1)', () => {
+  it('returns indices of negation body elements', () => {
+    const body = [
+      positiveAtom(atom('a', [varTerm('X')])),
+      negation(atom('b', [varTerm('X')])),
+      positiveAtom(atom('c', [varTerm('X')])),
+      negation(atom('d', [varTerm('X')])),
+    ];
+    expect(getNegationAtomIndices(body)).toEqual([1, 3]);
+  });
+
+  it('returns empty for body with no negations', () => {
+    const body = [
+      positiveAtom(atom('a', [varTerm('X')])),
+      positiveAtom(atom('b', [varTerm('X')])),
+    ];
+    expect(getNegationAtomIndices(body)).toEqual([]);
+  });
+
+  it('returns all indices for all-negation body', () => {
+    const body = [
+      negation(atom('a', [varTerm('X')])),
+      negation(atom('b', [varTerm('X')])),
+    ];
+    expect(getNegationAtomIndices(body)).toEqual([0, 1]);
   });
 });
 

@@ -35,7 +35,9 @@ import {
 import {
   evaluateRule,
   evaluateRuleSemiNaive,
+  evaluateRuleDelta,
   getPositiveAtomIndices,
+  getNegationAtomIndices,
 } from './evaluate.js';
 import type { WeightedFact } from './evaluate.js';
 import {

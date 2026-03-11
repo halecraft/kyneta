@@ -2,10 +2,11 @@
 // Per-rule evaluation functions used by both the unified evaluator
 // (evaluator.ts) and the naive test utility below.
 //
-// Weight semantics (Plan 006.1):
+// Weight semantics (Plan 006.1, extended by Plan 006.2):
 // - Substitutions carry weights through evaluation.
 // - Positive atom join: weight = sub.weight × tuple.weight (provenance product).
 // - Negation/guard: weight preserved on pass, substitution dropped on fail.
+// - Differential negation: weight = sub.weight × (-deltaWeight) (sign inversion).
 // - Aggregation: output weight = 1 (group-by boundary resets provenance).
 // - groundHead: duplicate facts sum weights (Z-set addition).
 // - evaluateRule returns WeightedFact[] with summed weights per fact.
@@ -160,6 +161,10 @@ export function evaluateRule(
  * atoms match against the full database.
  *
  * Returns weighted derived facts with duplicate-summing.
+ *
+ * @deprecated Use `evaluateRuleDelta` for new code. This function is
+ *   retained for backward compatibility and does not support asymmetric
+ *   joins or differential negation.
  */
 export function evaluateRuleSemiNaive(
   rule: Rule,
@@ -167,25 +172,99 @@ export function evaluateRuleSemiNaive(
   delta: Database,
   deltaIdx: number,
 ): WeightedFact[] {
+  return evaluateRuleDelta(rule, fullDb, fullDb, delta, deltaIdx);
+}
+
+/**
+ * Evaluate a single rule in delta-driven mode with asymmetric join support.
+ *
+ * One specific body element (at `deltaIdx`) matches against the `delta`
+ * database, while other body elements match against `fullDbOld` or
+ * `fullDbNew` depending on their position relative to `deltaIdx`. The
+ * body element at `deltaIdx` knows its own kind (`atom` vs `negation`),
+ * so no separate `deltaKind` parameter is needed.
+ *
+ * **Asymmetric join (DBSP incremental join):**
+ * For a binary join `A ⋈ B` where A = B = P (self-join), the correct
+ * incremental update is `ΔA ⋈ B_new + A_old ⋈ ΔB`. Standard semi-naive
+ * uses `A_new` for both, double-counting pairs where both elements are
+ * in ΔP. The asymmetry ensures each (a, b) pair is counted exactly once.
+ *
+ * For non-delta positive atoms:
+ * - Positions `j < deltaIdx` on the same predicate as the delta: use
+ *   `fullDbNew` (post-update state, = P_new).
+ * - Positions `j > deltaIdx`, or on different predicates: use `fullDbOld`
+ *   (pre-update state, = P_old).
+ *
+ * For the delta element itself:
+ * - `case 'atom'`: evaluate against `delta` with `allEntries: true`
+ *   (sees negative-weight entries for retraction propagation).
+ * - `case 'negation'`: evaluate via `evaluateDifferentialNegation`
+ *   against `delta` (sign inversion for negation semantics).
+ *
+ * Non-delta negations evaluate against `fullDbNew` (the current state
+ * of the negated relation matters for boolean negation-as-failure).
+ *
+ * @param rule       The rule to evaluate.
+ * @param fullDbOld  Pre-update database (P_old). For predicates not in
+ *                   the delta, this is identical to fullDbNew.
+ * @param fullDbNew  Post-update database (P_new = P_old + delta).
+ * @param delta      The delta database (changed entries only).
+ * @param deltaIdx   Index of the body element driven by the delta.
+ * @returns          Weighted derived facts with duplicate-summing.
+ *
+ * See Plan 006.2, Phase 1, Task 1.2.
+ * See DBSP (Budiu & McSherry, 2023) §3.2.
+ */
+export function evaluateRuleDelta(
+  rule: Rule,
+  fullDbOld: Database,
+  fullDbNew: Database,
+  delta: Database,
+  deltaIdx: number,
+): WeightedFact[] {
   let subs: Substitution[] = [EMPTY_SUBSTITUTION];
+
+  // Collect predicates present in the delta for asymmetric join dispatch.
+  const deltaPreds = new Set<string>(delta.predicates());
 
   for (let i = 0; i < rule.body.length; i++) {
     if (subs.length === 0) break;
 
     const element = rule.body[i]!;
+    const isDeltaSource = i === deltaIdx;
 
     switch (element.kind) {
       case 'atom': {
-        // Use delta for the designated atom, full db for others
-        const db = i === deltaIdx ? delta : fullDb;
-        subs = evaluatePositiveAtom(element.atom, db, subs);
+        if (isDeltaSource) {
+          // Delta source: match against delta with allEntries = true
+          // to see negative-weight entries (retraction propagation).
+          subs = evaluatePositiveAtom(element.atom, delta, subs, true);
+        } else {
+          // Asymmetric join: positions before deltaIdx on the same
+          // predicate as the delta use fullDbNew (P_new); positions
+          // after use fullDbOld (P_old). This prevents double-counting
+          // in self-joins.
+          const db = (i < deltaIdx && deltaPreds.has(element.atom.predicate))
+            ? fullDbNew : fullDbOld;
+          subs = evaluatePositiveAtom(element.atom, db, subs);
+        }
         break;
       }
-      case 'negation':
-        subs = evaluateNegation(element.atom, fullDb, subs);
+      case 'negation': {
+        if (isDeltaSource) {
+          // Differential negation: process the delta entries with
+          // sign inversion (appearance blocks, disappearance unblocks).
+          subs = evaluateDifferentialNegation(element.atom, delta, subs);
+        } else {
+          // Non-delta negation: boolean negation-as-failure against
+          // the current (post-update) state.
+          subs = evaluateNegation(element.atom, fullDbNew, subs);
+        }
         break;
+      }
       case 'aggregation':
-        subs = evaluateAggregationElement(element.agg, fullDb, subs);
+        subs = evaluateAggregationElement(element.agg, fullDbNew, subs);
         break;
       case 'guard':
         subs = evaluateGuardElement(element, subs);
@@ -213,14 +292,27 @@ export function evaluateRuleSemiNaive(
  * matchAtomAgainstRelation) so that we have access to each tuple for
  * weight lookup. This avoids re-grounding the atom — which would fail
  * for atoms containing wildcards.
+ *
+ * @param a          The atom to match.
+ * @param db         The database to match against.
+ * @param subs       Current substitutions to extend.
+ * @param allEntries When `true`, uses `allWeightedTuples()` which includes
+ *                   negative-weight entries (for delta databases). When
+ *                   `false` (default), uses `weightedTuples()` which returns
+ *                   only clampedWeight > 0 entries with weight = 1
+ *                   (preventing weight explosion in recursive joins).
+ *                   See Plan 006.2, Phase 1, Task 1.4.
  */
 export function evaluatePositiveAtom(
   a: Atom,
   db: Database,
   subs: readonly Substitution[],
+  allEntries: boolean = false,
 ): Substitution[] {
   const relation = db.getRelation(a.predicate);
-  const entries = relation.weightedTuples();
+  const entries = allEntries
+    ? relation.allWeightedTuples()
+    : relation.weightedTuples();
 
   const results: Substitution[] = [];
   for (const sub of subs) {
@@ -265,6 +357,58 @@ export function evaluateNegation(
     if (matches.length === 0) {
       // No match — negation holds, keep this substitution (weight preserved)
       results.push(sub);
+    }
+  }
+  return results;
+}
+
+/**
+ * Evaluate differential negation: process delta entries for a negated atom
+ * with sign inversion.
+ *
+ * Unlike `evaluateNegation` (boolean filter — pass or block), this function
+ * produces weighted substitutions from changes in the negated relation:
+ *
+ * - Delta weight +1 (fact appeared in negated relation): this binding is
+ *   now blocked → emit substitution with `weight = sub.weight × (-1)`.
+ * - Delta weight −1 (fact disappeared from negated relation): this binding
+ *   is now unblocked → emit substitution with `weight = sub.weight × (+1)`.
+ *
+ * The general formula is: `output_weight = sub.weight × (-deltaWeight)`.
+ *
+ * The sign inversion encodes negation-as-failure semantics: appearance of
+ * a negated fact *removes* derivations; disappearance *adds* derivations.
+ *
+ * Uses `allWeightedTuples()` to see both positive and negative delta entries.
+ *
+ * @param a      The negated atom to match against the delta.
+ * @param delta  The delta database (entries with +1 or −1 weights).
+ * @param subs   Current substitutions to extend.
+ * @returns      Extended substitutions with sign-inverted weights.
+ *
+ * See Plan 006.2, Phase 1, Task 1.1.
+ */
+export function evaluateDifferentialNegation(
+  a: Atom,
+  delta: Database,
+  subs: readonly Substitution[],
+): Substitution[] {
+  const relation = delta.getRelation(a.predicate);
+  const entries = relation.allWeightedTuples();
+
+  if (entries.length === 0) return [];
+
+  const results: Substitution[] = [];
+  for (const sub of subs) {
+    for (const { tuple, weight: deltaWeight } of entries) {
+      const extended = matchAtomWithTuple(a, tuple, sub);
+      if (extended === null) continue;
+
+      // Sign inversion: appearance (+1) blocks (→ -1), disappearance (-1) unblocks (→ +1).
+      const outputWeight = extended.weight * (-deltaWeight);
+      if (outputWeight !== 0) {
+        results.push({ bindings: extended.bindings, weight: outputWeight });
+      }
     }
   }
   return results;
@@ -359,6 +503,24 @@ export function getPositiveAtomIndices(body: readonly BodyElement[]): number[] {
   const indices: number[] = [];
   for (let i = 0; i < body.length; i++) {
     if (body[i]!.kind === 'atom') {
+      indices.push(i);
+    }
+  }
+  return indices;
+}
+
+/**
+ * Get indices of negation body elements (for differential negation).
+ *
+ * Mirrors `getPositiveAtomIndices`. Used by the unified semi-naive loop
+ * to enumerate negation atoms as potential delta sources.
+ *
+ * See Plan 006.2, Phase 1, Task 1.3.
+ */
+export function getNegationAtomIndices(body: readonly BodyElement[]): number[] {
+  const indices: number[] = [];
+  for (let i = 0; i < body.length; i++) {
+    if (body[i]!.kind === 'negation') {
       indices.push(i);
     }
   }
