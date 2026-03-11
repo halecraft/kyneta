@@ -1,5 +1,5 @@
 {
-	"name": "prism",
+	"name": "@kyneta/perspective",
 	"version": "0.0.1",
 	"description": "Convergent Constraint Systems - A constraint-based approach to CRDTs",
 	"type": "module",
