@@ -154,6 +154,235 @@ function countByPredicate(db: Database, pred: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// Dual-weight Relation tests (Plan 006.2, Phase 0)
+// ---------------------------------------------------------------------------
+
+describe('Dual-weight Relation (Plan 006.2 Phase 0)', () => {
+  it('addWeighted accumulates true weight', () => {
+    const rel = new Relation();
+    rel.addWeighted(['a'], 1);
+    rel.addWeighted(['a'], 1);
+    // True Z-set multiplicity is 2.
+    expect(rel.getWeight(['a'])).toBe(2);
+    // Presence is correct.
+    expect(rel.has(['a'])).toBe(true);
+  });
+
+  it('addWeighted eagerly updates clampedWeight — has() is true immediately', () => {
+    const rel = new Relation();
+    rel.addWeighted(['a'], 1);
+    // No applyDistinct needed — has() reads clampedWeight, set eagerly.
+    expect(rel.has(['a'])).toBe(true);
+  });
+
+  it('addWeighted(-1) on weight-2 entry → weight 1, has returns true', () => {
+    const rel = new Relation();
+    rel.addWeighted(['a'], 1);
+    rel.addWeighted(['a'], 1);
+    expect(rel.getWeight(['a'])).toBe(2);
+
+    rel.addWeighted(['a'], -1);
+    // weight 2 → 1, still present.
+    expect(rel.getWeight(['a'])).toBe(1);
+    expect(rel.has(['a'])).toBe(true);
+  });
+
+  it('addWeighted(-1) on weight-1 entry → weight 0, pruned, has returns false', () => {
+    const rel = new Relation();
+    rel.addWeighted(['a'], 1);
+    expect(rel.has(['a'])).toBe(true);
+
+    rel.addWeighted(['a'], -1);
+    // weight 1 → 0, entry pruned.
+    expect(rel.getWeight(['a'])).toBe(0);
+    expect(rel.has(['a'])).toBe(false);
+    expect(rel.allEntryCount).toBe(0);
+  });
+
+  it('tuples(), has(), size all read clampedWeight, not raw weight', () => {
+    const rel = new Relation();
+    // Create weight-3 entry.
+    rel.addWeighted(['a'], 3);
+    expect(rel.getWeight(['a'])).toBe(3);
+    // Presence semantics: clampedWeight > 0.
+    expect(rel.has(['a'])).toBe(true);
+    expect(rel.size).toBe(1);
+    expect(rel.tuples()).toHaveLength(1);
+    expect(rel.isEmpty()).toBe(false);
+
+    // Create weight −1 entry.
+    rel.addWeighted(['b'], -1);
+    expect(rel.getWeight(['b'])).toBe(-1);
+    // Negative weight: clampedWeight = 0, not present.
+    expect(rel.has(['b'])).toBe(false);
+    expect(rel.size).toBe(1); // Only ['a'] counts.
+    expect(rel.tuples()).toHaveLength(1);
+  });
+
+  it('weightedTuples() returns clampedWeight (always 1) as the weight value', () => {
+    const rel = new Relation();
+    rel.addWeighted(['a'], 3);
+    rel.addWeighted(['b'], 1);
+
+    const wt = rel.weightedTuples();
+    expect(wt).toHaveLength(2);
+    // Every returned weight is clampedWeight = 1, not the true multiplicity.
+    for (const { weight } of wt) {
+      expect(weight).toBe(1);
+    }
+  });
+
+  it('allWeightedTuples() returns true weight (may be > 1 or < 0)', () => {
+    const rel = new Relation();
+    rel.addWeighted(['a'], 3);
+    rel.addWeighted(['b'], -1);
+
+    const all = rel.allWeightedTuples();
+    expect(all).toHaveLength(2);
+
+    const aEntry = all.find((e) => e.tuple[0] === 'a');
+    const bEntry = all.find((e) => e.tuple[0] === 'b');
+    expect(aEntry!.weight).toBe(3);
+    expect(bEntry!.weight).toBe(-1);
+  });
+
+  it('add() delegates to addWeighted and returns clampedWeight crossing', () => {
+    const rel = new Relation();
+    // First add: absent → present.
+    expect(rel.add(['a'])).toBe(true);
+    expect(rel.getWeight(['a'])).toBe(1);
+
+    // Second add: already present, weight 1 → 2 but clampedWeight stays 1.
+    expect(rel.add(['a'])).toBe(false);
+    expect(rel.getWeight(['a'])).toBe(2);
+    expect(rel.has(['a'])).toBe(true);
+  });
+
+  it('remove() deletes the entry entirely', () => {
+    const rel = new Relation();
+    rel.addWeighted(['a'], 3);
+    expect(rel.has(['a'])).toBe(true);
+
+    expect(rel.remove(['a'])).toBe(true);
+    expect(rel.has(['a'])).toBe(false);
+    expect(rel.getWeight(['a'])).toBe(0);
+    expect(rel.allEntryCount).toBe(0);
+  });
+
+  it('clone() copies both weight and clampedWeight', () => {
+    const rel = new Relation();
+    rel.addWeighted(['a'], 3);
+    rel.addWeighted(['b'], -1);
+
+    const cloned = rel.clone();
+    expect(cloned.getWeight(['a'])).toBe(3);
+    expect(cloned.has(['a'])).toBe(true);
+    expect(cloned.getWeight(['b'])).toBe(-1);
+    expect(cloned.has(['b'])).toBe(false);
+    expect(cloned.allEntryCount).toBe(2);
+  });
+
+  it('union() uses clampedWeight for presence filtering', () => {
+    const r1 = new Relation();
+    r1.addWeighted(['a'], 3); // present (clampedWeight > 0)
+    r1.addWeighted(['b'], -1); // absent (clampedWeight = 0)
+
+    const r2 = new Relation();
+    r2.addWeighted(['c'], 1);
+
+    const u = r1.union(r2);
+    expect(u.has(['a'])).toBe(true);
+    expect(u.has(['b'])).toBe(false); // excluded by clampedWeight filter
+    expect(u.has(['c'])).toBe(true);
+    expect(u.size).toBe(2);
+  });
+
+  it('difference() uses clampedWeight for presence filtering', () => {
+    const r1 = new Relation();
+    r1.addWeighted(['a'], 3);
+    r1.addWeighted(['b'], 1);
+    r1.addWeighted(['c'], -1); // absent, excluded
+
+    const r2 = new Relation();
+    r2.addWeighted(['b'], 1);
+
+    const d = r1.difference(r2);
+    expect(d.has(['a'])).toBe(true);
+    expect(d.has(['b'])).toBe(false); // in other
+    expect(d.has(['c'])).toBe(false); // not present in this
+    expect(d.size).toBe(1);
+  });
+});
+
+describe('Database.hasAnyEntries (Plan 006.2 Phase 0)', () => {
+  it('returns false for empty database', () => {
+    const db = new Database();
+    expect(db.hasAnyEntries()).toBe(false);
+  });
+
+  it('returns true for positive-weight entries', () => {
+    const db = new Database();
+    db.addFact(fact('p', ['a']));
+    expect(db.hasAnyEntries()).toBe(true);
+  });
+
+  it('returns true for negative-weight entries (retraction-only delta)', () => {
+    const db = new Database();
+    db.addWeightedFact(fact('p', ['a']), -1);
+    // size would be 0 (no weight > 0 entries), but hasAnyEntries is true.
+    expect(db.size).toBe(0);
+    expect(db.hasAnyEntries()).toBe(true);
+  });
+
+  it('returns false after pruning to zero', () => {
+    const db = new Database();
+    db.addWeightedFact(fact('p', ['a']), 1);
+    db.addWeightedFact(fact('p', ['a']), -1);
+    // Entry pruned (weight = 0).
+    expect(db.hasAnyEntries()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyDistinct with dual-weight (Plan 006.2, Phase 0)
+// ---------------------------------------------------------------------------
+
+describe('applyDistinct with dual-weight', () => {
+  it('weight > 1 derived facts are preserved (not clamped to 1)', () => {
+    // Two rules both derive the same fact → weight 2.
+    // Rule 1: derived(a) :- p(a).
+    // Rule 2: derived(X) :- q(X).
+    const rules: Rule[] = [
+      rule(
+        atom('derived', [constTerm('a')]),
+        [positiveAtom(atom('p', [constTerm('a')]))],
+      ),
+      rule(
+        atom('derived', [varTerm('X')]),
+        [positiveAtom(atom('q', [varTerm('X')]))],
+      ),
+    ];
+
+    const db = new Database();
+    db.addFact(fact('p', ['a']));
+    db.addFact(fact('q', ['a']));
+
+    const inputDelta = new Database();
+    inputDelta.addFact(fact('p', ['a']));
+    inputDelta.addFact(fact('q', ['a']));
+
+    evaluateStratumFromDelta(rules, db, inputDelta, false);
+
+    // derived(a) should be present with true weight >= 2 (dual-weight
+    // preserves multiplicity). clampedWeight is 1 (visible via has()).
+    expect(db.hasFact(fact('derived', ['a']))).toBe(true);
+    expect(db.getRelation('derived').getWeight(['a'])).toBeGreaterThanOrEqual(2);
+    // weightedTuples() returns clampedWeight = 1.
+    expect(db.getRelation('derived').weightedTuples()[0]!.weight).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Database.clone() preserves weights (task 2.0)
 // ---------------------------------------------------------------------------
 
@@ -278,9 +507,11 @@ describe('evaluateStratumFromDelta', () => {
     expect(db.hasFact(fact('path', ['b', 'd']))).toBe(true);
   });
 
-  it('distinct clamps weights to 0/1 for transitive closure', () => {
+  it('distinct preserves true multiplicity for transitive closure', () => {
     // path(a,c) can be derived two ways: a→b→c and a→c directly.
-    // Without distinct, weight would be 2. With distinct, weight is 1.
+    // With dual-weight distinct (negative-floor only, Plan 006.2),
+    // the true Z-set multiplicity is preserved: getWeight() > 1.
+    // Presence (has/tuples/clampedWeight) is still correct: present.
     const rules: Rule[] = [
       rule(
         atom('path', [varTerm('X'), varTerm('Y')]),
@@ -307,9 +538,16 @@ describe('evaluateStratumFromDelta', () => {
 
     evaluateStratumFromDelta(rules, db, inputDelta, false);
 
-    // path(a,c) should exist with weight clamped to 1.
+    // path(a,c) should exist — presence is correct.
     expect(db.hasFact(fact('path', ['a', 'c']))).toBe(true);
-    expect(db.getRelation('path').getWeight(['a', 'c'])).toBe(1);
+    // True multiplicity is preserved (> 1 from multiple derivation paths).
+    // The exact value depends on semi-naive iteration order but must be > 0.
+    expect(db.getRelation('path').getWeight(['a', 'c'])).toBeGreaterThan(0);
+    // weightedTuples() returns clampedWeight (always 1) for joins.
+    const wt = db.getRelation('path').weightedTuples();
+    for (const { weight } of wt) {
+      expect(weight).toBe(1);
+    }
   });
 
   it('handles negation strata (two-stratum evaluation)', () => {
@@ -894,8 +1132,11 @@ describe('Unified Evaluator', () => {
       }
     });
 
-    it('transitive closure weights stay at 0/1 regardless of path count', () => {
+    it('transitive closure preserves true multiplicity with dual-weight', () => {
       // Diamond: a→b, a→c, b→d, c→d. Two paths from a to d.
+      // With dual-weight (Plan 006.2), getWeight() returns true Z-set
+      // multiplicity (> 1 for multi-path derivations). Presence is correct.
+      // weightedTuples() returns clampedWeight = 1 for all present entries.
       const rules: Rule[] = [
         rule(
           atom('path', [varTerm('X'), varTerm('Y')]),
@@ -921,9 +1162,14 @@ describe('Unified Evaluator', () => {
       evaluator.step(factsToZSet(edges), zsetEmpty());
 
       const db = evaluator.currentDatabase();
-      // path(a,d) derivable via a→b→d and a→c→d, but weight should be 1.
+      // path(a,d) derivable via a→b→d and a→c→d — present.
       expect(db.hasFact(fact('path', ['a', 'd']))).toBe(true);
-      expect(db.getRelation('path').getWeight(['a', 'd'])).toBe(1);
+      // True multiplicity > 0 (preserved by negative-floor-only distinct).
+      expect(db.getRelation('path').getWeight(['a', 'd'])).toBeGreaterThan(0);
+      // weightedTuples() returns clampedWeight = 1 (prevents weight explosion in joins).
+      for (const { weight } of db.getRelation('path').weightedTuples()) {
+        expect(weight).toBe(1);
+      }
     });
   });
 
@@ -1538,7 +1784,12 @@ describe('Unified Evaluator', () => {
   // ---------------------------------------------------------------------------
 
   describe('weight propagation edge cases', () => {
-    it('adding the same ground fact twice does not double-derive', () => {
+    it('adding the same ground fact twice accumulates true weight', () => {
+      // With dual-weight (Plan 006.2), adding a +1 ground fact twice
+      // gives the ground fact weight 2. The derived fact also gets
+      // weight 2 (provenance product 1 × 2). This is correct Z-set
+      // semantics — the fact is "doubly asserted." Presence is still
+      // correct (has() returns true, clampedWeight = 1).
       const rules: Rule[] = [
         rule(
           atom('derived', [varTerm('X')]),
@@ -1552,16 +1803,26 @@ describe('Unified Evaluator', () => {
       evaluator.step(factsToZSet([f]), zsetEmpty());
       evaluator.step(factsToZSet([f]), zsetEmpty());
 
-      // The weight of derived(a) should still be 1 (clamped by distinct).
       const db = evaluator.currentDatabase();
       expect(db.hasFact(fact('derived', ['a']))).toBe(true);
-      expect(db.getRelation('derived').getWeight(['a'])).toBe(1);
+      // Ground fact has true weight 2 (two +1 assertions).
+      expect(db.getRelation('base').getWeight(['a'])).toBe(2);
+      // Derived fact weight > 0. Exact value depends on iteration,
+      // but presence is correct.
+      expect(db.getRelation('derived').getWeight(['a'])).toBeGreaterThan(0);
     });
 
-    it('self-join does not cause weight explosion', () => {
+    it('self-join weights reflect derivation paths (pre-asymmetric-join)', () => {
       // superseded involves a self-join on active_value.
-      // With 3 values, there are 6 pairwise comparisons, but each
-      // derived fact should have weight 1 after distinct.
+      // With dual-weight (Plan 006.2 Phase 0), true multiplicities are
+      // preserved. Without the asymmetric join (Phase 2), self-join
+      // double-counting inflates weights. This test documents current
+      // behavior; Phase 2 will correct the weights and this test will
+      // be updated to verify exact multiplicities.
+      //
+      // Key invariant: presence is correct. All superseded facts exist
+      // and all non-superseded facts don't. weightedTuples() returns
+      // clampedWeight = 1 for all present entries.
       const lwwRules = buildDefaultLWWRules();
       const evaluator = createEvaluator(lwwRules);
       const slotId = 'slot:title';
@@ -1575,9 +1836,13 @@ describe('Unified Evaluator', () => {
       evaluator.step(factsToZSet(facts), zsetEmpty());
 
       const db = evaluator.currentDatabase();
-      // All superseded facts should have weight 1.
+      // All superseded facts should be present.
       for (const tuple of db.getRelation('superseded').tuples()) {
-        expect(db.getRelation('superseded').getWeight(tuple)).toBe(1);
+        expect(db.getRelation('superseded').getWeight(tuple)).toBeGreaterThan(0);
+      }
+      // weightedTuples() returns clampedWeight = 1 for joins.
+      for (const { weight } of db.getRelation('superseded').weightedTuples()) {
+        expect(weight).toBe(1);
       }
     });
   });

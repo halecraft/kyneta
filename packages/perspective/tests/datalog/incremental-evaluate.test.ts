@@ -1140,17 +1140,23 @@ describe('weighted positive atom join multiplies weights', () => {
     }
   });
 
-  it('weight > 1 tuples multiply correctly', () => {
+  it('weight > 1 tuples return clampedWeight via weightedTuples()', () => {
     const db = new Database();
-    // Add a tuple with weight 3
+    // Add a tuple with weight 3 (true Z-set multiplicity).
     const rel = db.relation('edge');
     rel.addWeighted(['a', 'b'], 3);
 
+    // evaluatePositiveAtom uses weightedTuples() which returns
+    // clampedWeight (always 1) to prevent weight explosion in
+    // recursive joins. The true weight (3) is only visible via
+    // allWeightedTuples() and getWeight().
     const a = atom('edge', [constTerm('a'), varTerm('Y')]);
     const results = evaluatePositiveAtom(a, db, [EMPTY_SUBSTITUTION]);
     expect(results).toHaveLength(1);
-    expect(results[0]!.weight).toBe(3); // 1 × 3
+    expect(results[0]!.weight).toBe(1); // 1 × clampedWeight(1), not 1 × 3
     expect(results[0]!.bindings.get('Y')).toBe('b');
+    // True weight is preserved in the relation.
+    expect(rel.getWeight(['a', 'b'])).toBe(3);
   });
 });
 

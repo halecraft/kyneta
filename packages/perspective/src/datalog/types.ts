@@ -266,29 +266,52 @@ export interface Substitution {
 }
 
 // ---------------------------------------------------------------------------
-// Relation — a weighted set of tuples for a single predicate.
+// Relation — a dual-weight set of tuples for a single predicate.
 //
-// Internally stored as a Map<string, { tuple, weight }> keyed by serialized
-// tuple. Each entry carries an integer weight (Z-set semantics from DBSP).
-// Weight > 0 means "present", weight ≤ 0 means "absent" (pruned or pending
-// retraction). Zero-weight entries are pruned eagerly.
+// Internally stored as a Map<string, RelationEntry> keyed by serialized
+// tuple. Each entry carries two integer weights (DBSP Z-set semantics).
 //
-// Backward compatibility: `add(tuple)` is sugar for `addWeighted(tuple, 1)`.
-// `has(tuple)` checks weight > 0. `tuples()` returns weight > 0 tuples.
-// Consumers that don't inspect weights see identical behavior to the old
-// boolean-presence Relation.
+// Presence-checking methods (`has`, `tuples`, `size`, `weightedTuples`,
+// `isEmpty`) all read `clampedWeight`. `getWeight` and `allWeightedTuples`
+// return the true `weight`.
 //
-// See Plan 006.1, Phase 1 (tasks 1.1–1.9).
+// Zero-weight entries are pruned eagerly (both `weight` and `clampedWeight`
+// are 0 → entry deleted).
+//
+// See Plan 006.2, Phase 0 (tasks 0.1–0.10).
+// See DBSP (Budiu & McSherry, 2023) §5 (nested streams, distinct operator).
 // ---------------------------------------------------------------------------
 
-export class Relation {
-  private readonly _map: Map<string, { tuple: FactTuple; weight: number }> = new Map();
+/**
+ * Dual-weight entry stored per tuple in a Relation.
+ *
+ * - `weight`: the true Z-set multiplicity — number of independent
+ *   derivation paths minus retraction paths. May be > 1 (multiple
+ *   derivation paths), 0 (all paths retracted), or transiently < 0
+ *   during an iteration (retraction overshoot, floored by `applyDistinct`).
+ *
+ * - `clampedWeight`: the post-`distinct` presence signal, always 0 or 1.
+ *   Updated **eagerly** by `addWeighted` for mid-iteration visibility —
+ *   facts derived by one rule are immediately visible to subsequent rules
+ *   via `weightedTuples()`. Authoritatively set by `applyDistinct` for the
+ *   negative-floor clamp.
+ *
+ * See Plan 006.2, Phase 0; DBSP §5 (nested streams, distinct^Δ).
+ */
+interface RelationEntry {
+  readonly tuple: FactTuple;
+  weight: number;
+  clampedWeight: number;
+}
 
-  /** Count of tuples with weight > 0. */
+export class Relation {
+  private readonly _map: Map<string, RelationEntry> = new Map();
+
+  /** Count of tuples with clampedWeight > 0 (i.e., "present" tuples). */
   get size(): number {
     let count = 0;
     for (const entry of this._map.values()) {
-      if (entry.weight > 0) count++;
+      if (entry.clampedWeight > 0) count++;
     }
     return count;
   }
@@ -296,7 +319,7 @@ export class Relation {
   /**
    * Count of all stored entries (including negative weights).
    *
-   * Unlike `size` which counts only weight > 0 entries, this returns
+   * Unlike `size` which counts only clampedWeight > 0 entries, this returns
    * the total number of entries in the internal map. Used for delta
    * databases where negative weights represent retractions.
    */
@@ -304,23 +327,29 @@ export class Relation {
     return this._map.size;
   }
 
-  /** All tuples with weight > 0, in insertion order. */
+  /** All tuples with clampedWeight > 0, in insertion order. */
   tuples(): readonly FactTuple[] {
     const result: FactTuple[] = [];
     for (const entry of this._map.values()) {
-      if (entry.weight > 0) {
+      if (entry.clampedWeight > 0) {
         result.push(entry.tuple);
       }
     }
     return result;
   }
 
-  /** All entries with weight > 0 as { tuple, weight } pairs. */
+  /**
+   * All entries with clampedWeight > 0 as { tuple, weight } pairs.
+   *
+   * The returned `weight` is the `clampedWeight` (always 1 for present
+   * entries). This prevents weight explosion in recursive rules — joins
+   * see weight 1, not the true multiplicity.
+   */
   weightedTuples(): readonly { readonly tuple: FactTuple; readonly weight: number }[] {
     const result: { tuple: FactTuple; weight: number }[] = [];
     for (const entry of this._map.values()) {
-      if (entry.weight > 0) {
-        result.push({ tuple: entry.tuple, weight: entry.weight });
+      if (entry.clampedWeight > 0) {
+        result.push({ tuple: entry.tuple, weight: entry.clampedWeight });
       }
     }
     return result;
@@ -329,9 +358,11 @@ export class Relation {
   /**
    * All entries (including negative weights) as { tuple, weight } pairs.
    *
-   * Unlike `weightedTuples()` which filters to weight > 0, this returns
-   * every stored entry. Used for delta databases where negative weights
-   * represent retractions.
+   * Unlike `weightedTuples()` which filters to clampedWeight > 0 and
+   * returns the clamped value, this returns every stored entry with the
+   * true `weight`. Used for delta databases where negative weights
+   * represent retractions and true multiplicities matter for the
+   * provenance product.
    */
   allWeightedTuples(): readonly { readonly tuple: FactTuple; readonly weight: number }[] {
     const result: { tuple: FactTuple; weight: number }[] = [];
@@ -343,36 +374,40 @@ export class Relation {
 
   /**
    * Add a tuple with weight 1. Returns true if the tuple became newly
-   * present (weight went from ≤0 to >0).
+   * present (clampedWeight went from 0 to 1).
    *
-   * Sugar for `addWeighted(tuple, 1)` with a boolean return.
+   * Inlines the addWeighted logic for efficiency (single map lookup in
+   * the common case) while maintaining the same dual-weight semantics.
    */
   add(tuple: FactTuple): boolean {
     const key = serializeTuple(tuple);
     const existing = this._map.get(key);
     if (existing !== undefined) {
-      const oldWeight = existing.weight;
-      const newWeight = oldWeight + 1;
+      const oldClamped = existing.clampedWeight;
+      const newWeight = existing.weight + 1;
       if (newWeight === 0) {
         this._map.delete(key);
         return false;
       }
       existing.weight = newWeight;
-      return oldWeight <= 0 && newWeight > 0;
+      existing.clampedWeight = newWeight > 0 ? 1 : 0;
+      return oldClamped === 0 && existing.clampedWeight === 1;
     }
-    this._map.set(key, { tuple, weight: 1 });
+    this._map.set(key, { tuple, weight: 1, clampedWeight: 1 });
     return true;
   }
 
-  /** Check if a tuple is present (weight > 0). */
+  /** Check if a tuple is present (clampedWeight > 0). */
   has(tuple: FactTuple): boolean {
     const entry = this._map.get(serializeTuple(tuple));
-    return entry !== undefined && entry.weight > 0;
+    return entry !== undefined && entry.clampedWeight > 0;
   }
 
   /**
    * Add a weighted delta to a tuple. Weights are summed. Zero-weight
-   * entries are pruned. Returns the new weight.
+   * entries are pruned. `clampedWeight` is eagerly set to
+   * `newWeight > 0 ? 1 : 0` for mid-iteration visibility.
+   * Returns the new weight.
    */
   addWeighted(tuple: FactTuple, weight: number): number {
     if (weight === 0) {
@@ -388,27 +423,34 @@ export class Relation {
         return 0;
       }
       existing.weight = newWeight;
+      existing.clampedWeight = newWeight > 0 ? 1 : 0;
       return newWeight;
     }
-    this._map.set(key, { tuple, weight });
+    this._map.set(key, { tuple, weight, clampedWeight: weight > 0 ? 1 : 0 });
     return weight;
   }
 
-  /** Get the weight of a tuple. Returns 0 if absent. */
+  /**
+   * Get the true Z-set weight of a tuple. Returns 0 if absent.
+   *
+   * This returns the raw multiplicity, not the clamped presence signal.
+   * Used by dirty-map `preWeight` recording and zero-crossing detection
+   * in `applyDerivedFact`.
+   */
   getWeight(tuple: FactTuple): number {
     const entry = this._map.get(serializeTuple(tuple));
     return entry !== undefined ? entry.weight : 0;
   }
 
   /**
-   * Remove a tuple from the relation (zero its weight).
-   * Returns true if the tuple was present (weight > 0) and is now absent.
+   * Remove a tuple from the relation (delete the entry entirely).
+   * Returns true if the tuple was present (clampedWeight > 0) and is now absent.
    */
   remove(tuple: FactTuple): boolean {
     const key = serializeTuple(tuple);
     const existing = this._map.get(key);
     if (existing === undefined) return false;
-    if (existing.weight <= 0) {
+    if (existing.clampedWeight <= 0) {
       // Already absent — prune and report no change.
       this._map.delete(key);
       return false;
@@ -418,42 +460,55 @@ export class Relation {
     return true;
   }
 
-  /** Create a new Relation containing all weight > 0 tuples from both. */
+  /**
+   * Create a new Relation containing all clampedWeight > 0 tuples from both.
+   * Presence semantics: uses clampedWeight for filtering, preserves
+   * original weights in the result.
+   */
   union(other: Relation): Relation {
     const result = new Relation();
     for (const entry of this._map.values()) {
-      if (entry.weight > 0) {
-        result._map.set(serializeTuple(entry.tuple), { tuple: entry.tuple, weight: entry.weight });
+      if (entry.clampedWeight > 0) {
+        result._map.set(serializeTuple(entry.tuple), {
+          tuple: entry.tuple, weight: entry.weight, clampedWeight: entry.clampedWeight,
+        });
       }
     }
     for (const entry of other._map.values()) {
-      if (entry.weight > 0) {
+      if (entry.clampedWeight > 0) {
         const key = serializeTuple(entry.tuple);
         const existing = result._map.get(key);
         if (existing === undefined) {
-          result._map.set(key, { tuple: entry.tuple, weight: entry.weight });
+          result._map.set(key, {
+            tuple: entry.tuple, weight: entry.weight, clampedWeight: entry.clampedWeight,
+          });
         }
-        // If already present from `this`, keep it (union = set union for weight > 0).
+        // If already present from `this`, keep it (union = set union for clampedWeight > 0).
       }
     }
     return result;
   }
 
-  /** Create a new Relation containing weight > 0 tuples in this but not in other. */
+  /**
+   * Create a new Relation containing clampedWeight > 0 tuples in this
+   * but not in other.
+   */
   difference(other: Relation): Relation {
     const result = new Relation();
     for (const entry of this._map.values()) {
-      if (entry.weight > 0 && !other.has(entry.tuple)) {
-        result._map.set(serializeTuple(entry.tuple), { tuple: entry.tuple, weight: entry.weight });
+      if (entry.clampedWeight > 0 && !other.has(entry.tuple)) {
+        result._map.set(serializeTuple(entry.tuple), {
+          tuple: entry.tuple, weight: entry.weight, clampedWeight: entry.clampedWeight,
+        });
       }
     }
     return result;
   }
 
-  /** True if no tuples have weight > 0. */
+  /** True if no tuples have clampedWeight > 0. */
   isEmpty(): boolean {
     for (const entry of this._map.values()) {
-      if (entry.weight > 0) return false;
+      if (entry.clampedWeight > 0) return false;
     }
     return true;
   }
@@ -462,7 +517,9 @@ export class Relation {
   clone(): Relation {
     const result = new Relation();
     for (const [key, entry] of this._map) {
-      result._map.set(key, { tuple: entry.tuple, weight: entry.weight });
+      result._map.set(key, {
+        tuple: entry.tuple, weight: entry.weight, clampedWeight: entry.clampedWeight,
+      });
     }
     return result;
   }
@@ -555,7 +612,7 @@ export class Database {
     return result;
   }
 
-  /** Total number of facts with weight > 0 across all relations. */
+  /** Total number of facts with clampedWeight > 0 across all relations. */
   get size(): number {
     let total = 0;
     for (const rel of this._relations.values()) {
@@ -564,7 +621,22 @@ export class Database {
     return total;
   }
 
-  /** Check if a fact exists (weight > 0) in the database. */
+  /**
+   * Check if any relation has any stored entries (regardless of weight sign).
+   *
+   * Unlike `size` which counts only clampedWeight > 0 entries, this returns
+   * true if any relation has any stored entries at all — including negative-
+   * weight entries in delta databases. Used for convergence checks and seed
+   * guards where retraction-only deltas must not be silently skipped.
+   */
+  hasAnyEntries(): boolean {
+    for (const rel of this._relations.values()) {
+      if (rel.allEntryCount > 0) return true;
+    }
+    return false;
+  }
+
+  /** Check if a fact exists (clampedWeight > 0) in the database. */
   hasFact(f: Fact): boolean {
     return this.getRelation(f.predicate).has(f.values);
   }

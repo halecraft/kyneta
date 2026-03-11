@@ -102,28 +102,36 @@ function touchFact(
 }
 
 /**
- * Apply `distinct` to all dirty entries: clamp weights to 0/1.
+ * Apply `distinct` to all dirty entries: negative-floor only.
  *
- * - weight > 1 → set to 1 (via addWeighted with negative delta)
- * - weight < 0 → set to 0 (via addWeighted with positive delta to reach 0)
+ * DBSP's `distinct` operator is `distinct(w)(x) = max(0, w(x))` — it
+ * floors negatives to 0 but does NOT clamp positives to 1. Weights > 1
+ * represent genuine independent derivation paths (true Z-set multiplicity)
+ * and must be preserved for correct retraction accounting.
+ *
+ * - weight < 0 → set to 0 (via addWeighted with -w, which prunes the entry).
+ *   `clampedWeight` is already 0 from the eager update in `addWeighted`.
+ * - weight >= 0 → no action. `clampedWeight` is already correct from the
+ *   eager update in `addWeighted`.
  *
  * Returns true if any weight was clamped (callers may use this for
  * convergence checks in negation strata).
+ *
+ * See Plan 006.2, Phase 0, Task 0.2.
+ * See DBSP (Budiu & McSherry, 2023) §5 (nested streams, distinct operator).
  */
 function applyDistinct(db: Database, dirty: DirtyMap): boolean {
   let clamped = false;
   for (const { fact } of dirty.values()) {
     const rel = db.getRelation(fact.predicate);
     const w = rel.getWeight(fact.values);
-    if (w > 1) {
-      // Clamp to 1: subtract (w - 1).
-      rel.addWeighted(fact.values, 1 - w);
-      clamped = true;
-    } else if (w < 0) {
-      // Clamp to 0: add (-w) to reach 0, which prunes the entry.
+    if (w < 0) {
+      // Floor to 0: add (-w) to reach 0, which prunes the entry.
       rel.addWeighted(fact.values, -w);
       clamped = true;
     }
+    // weight >= 0: no action. True multiplicity (weight > 1) is preserved.
+    // clampedWeight is already correct from eager update in addWeighted.
   }
   return clamped;
 }
