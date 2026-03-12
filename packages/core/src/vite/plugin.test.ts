@@ -236,7 +236,9 @@ describe("Vite Plugin", () => {
 
       // Source with a for-of loop that needs listRegion
       const source = `
-        import type { ListRef } from "@loro-extended/change"
+        import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+        type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
+        interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>; readonly length: number; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }
         declare const items: ListRef<string>
 
         const app = div(() => {
@@ -250,7 +252,7 @@ describe("Vite Plugin", () => {
 
       // Should have listRegion import from /runtime
       expect(result?.code).toContain("listRegion")
-      expect(result?.code).toContain('@loro-extended/kinetic/runtime"')
+      expect(result?.code).toContain('@kyneta/core/runtime"')
     })
 
     it("should merge imports with existing kinetic imports", () => {
@@ -262,7 +264,7 @@ describe("Vite Plugin", () => {
 
       // Source that already has kinetic imports
       const source = `
-        import { mount, Scope } from "@loro-extended/kinetic"
+        import { mount, Scope } from "@kyneta/core"
 
         div(() => {
           h1("Hello")
@@ -276,7 +278,7 @@ describe("Vite Plugin", () => {
       // Original kinetic import should still be there
       expect(result?.code).toContain("mount")
       expect(result?.code).toContain("Scope")
-      expect(result?.code).toContain('@loro-extended/kinetic"')
+      expect(result?.code).toContain('@kyneta/core"')
     })
 
     it("should not add imports for static-only builders", () => {

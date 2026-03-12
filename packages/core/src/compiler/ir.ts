@@ -55,7 +55,6 @@ export type IRNodeKind =
   | "content"
   | "loop"
   | "conditional"
-  | "binding"
   | "statement"
   | "target-block"
 
@@ -212,7 +211,6 @@ export type TemplateHoleKind =
   | "text"
   | "attribute"
   | "event"
-  | "binding"
   | "region"
   | "component"
 
@@ -244,12 +242,6 @@ export interface TemplateHole {
 
   /** For event holes: the handler function source expression */
   handlerSource?: string
-
-  /** For binding holes: the binding type */
-  bindingType?: "value" | "checked"
-
-  /** For binding holes: the ref source expression */
-  refSource?: string
 
   /** For region holes: the original IR node (LoopNode or ConditionalNode) */
   regionNode?: LoopNode | ConditionalNode
@@ -371,29 +363,12 @@ export interface EventHandlerNode {
 // =============================================================================
 
 /**
- * A two-way binding on an element attribute.
- */
-export interface ElementBinding {
-  /** The attribute being bound (e.g., "value", "checked") */
-  attribute: string
-
-  /** The ref source (e.g., "doc.title") */
-  refSource: string
-
-  /** The type of binding */
-  bindingType: "value" | "checked"
-
-  span: SourceSpan
-}
-
-/**
  * An HTML element.
  *
  * Elements can have:
  * - Static or reactive attributes
  * - Static or reactive children
  * - Event handlers
- * - Two-way bindings
  */
 export interface ElementNode extends IRNodeBase {
   kind: "element"
@@ -406,9 +381,6 @@ export interface ElementNode extends IRNodeBase {
 
   /** Event handlers on this element */
   eventHandlers: EventHandlerNode[]
-
-  /** Two-way bindings on this element */
-  bindings: ElementBinding[]
 
   /** Children of this element */
   children: ChildNode[]
@@ -545,32 +517,6 @@ export interface ConditionalNode extends IRNodeBase {
    */
   subscriptionTarget: Dependency | null
 }
-
-// =============================================================================
-// Binding Types
-// =============================================================================
-
-/**
- * A standalone two-way binding node.
- *
- * Note: Bindings are typically stored on ElementNode.bindings.
- * This node type exists for cases where a binding needs to be
- * represented as a child node.
- *
- * ```typescript
- * input({ type: "text", value: bind(doc.title) })
- * ```
- */
-export interface BindingNode extends IRNodeBase {
-  kind: "binding"
-
-  /** The ref being bound (e.g., "doc.title") */
-  refSource: string
-
-  /** The type of binding based on element/attribute */
-  bindingType: "value" | "checked"
-}
-
 // =============================================================================
 // Statement Types
 // =============================================================================
@@ -634,7 +580,6 @@ export type ChildNode =
   | ContentValue
   | LoopNode
   | ConditionalNode
-  | BindingNode
   | StatementNode
   | TargetBlockNode
 
@@ -720,12 +665,6 @@ export function isConditionalNode(node: ChildNode): node is ConditionalNode {
   return node.kind === "conditional"
 }
 
-/**
- * Check if a node is a binding.
- */
-export function isBindingNode(node: ChildNode): node is BindingNode {
-  return node.kind === "binding"
-}
 
 /**
  * Check if a node is a statement.
@@ -1113,7 +1052,7 @@ export function mergeNode(
         a.tag,
         mergedAttributes,
         a.eventHandlers,
-        a.bindings,
+        [],
         mergedChildren,
         a.span,
       ),
@@ -1298,7 +1237,7 @@ export function createLiteral(value: string, span: SourceSpan): ContentValue {
  * @param tag - HTML tag name or component name
  * @param attributes - Attributes on this element
  * @param eventHandlers - Event handlers
- * @param bindings - Two-way bindings
+ * @param _bindings - Ignored (kept for call-site compatibility during migration)
  * @param children - Child nodes
  * @param span - Source location
  * @param factorySource - For components: the source expression to call
@@ -1307,14 +1246,13 @@ export function createElement(
   tag: string,
   attributes: AttributeNode[],
   eventHandlers: EventHandlerNode[],
-  bindings: ElementBinding[],
+  _bindings: unknown[],
   children: ChildNode[],
   span: SourceSpan,
   factorySource?: string,
 ): ElementNode {
   const isReactive =
     attributes.some(attr => isReactiveContent(attr.value)) ||
-    bindings.length > 0 ||
     children.some(child => isReactiveContent(child)) ||
     children.some(child => child.kind === "element" && child.isReactive) ||
     children.some(
@@ -1328,7 +1266,6 @@ export function createElement(
     tag,
     attributes,
     eventHandlers,
-    bindings,
     children,
     isReactive,
     span,
@@ -1494,9 +1431,6 @@ export function createBuilder(
         // dependencies from both client: and server: blocks inform
         // subscription setup even if one target's code is stripped later.
         collectDependencies(node.children)
-      } else if (node.kind === "binding") {
-        // Bindings are tracked separately, not as dependencies
-        // The refSource is used for binding generation, not subscription
       }
     }
   }
@@ -1611,7 +1545,6 @@ function filterChildNode(
     // Leaf nodes — no children to recurse into
     case "content":
     case "statement":
-    case "binding":
       return node
 
     // target-block is already handled by filterChildren before this function
@@ -1720,7 +1653,6 @@ function dissolveChildNode(node: ChildNode): ChildNode {
     // Leaf nodes — no children to recurse into
     case "content":
     case "statement":
-    case "binding":
       return node
 
     // target-block children are recursed into (dissolution may run

@@ -20,7 +20,6 @@
 
 export type {
   AttributeNode,
-  BindingNode,
   BindingTime,
   BuilderNode,
   ChildNode,
@@ -58,7 +57,6 @@ export {
   // Target block filtering
   filterTargetBlocks,
   // Type guards
-  isBindingNode,
   isConditionalNode,
   isContentNode,
   isElementNode,
@@ -168,7 +166,7 @@ export const COMPILER_VERSION = "0.1.0"
  *
  * @example
  * ```ts
- * import { compile } from "@loro-extended/kinetic/compiler"
+ * import { compile } from "@kyneta/core/compiler"
  *
  * const result = compile(`
  *   div(() => {

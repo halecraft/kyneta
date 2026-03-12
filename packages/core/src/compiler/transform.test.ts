@@ -23,6 +23,74 @@ import {
 } from "./transform.js"
 
 // =============================================================================
+// Inline Type Stubs for Transform Tests
+// =============================================================================
+
+/**
+ * Inline type declarations for CHANGEFEED-based ref types.
+ *
+ * Transform tests use `transformSource()` which resolves modules from the real
+ * filesystem. Since `@loro-extended/change` no longer exists, test source strings
+ * must declare their types inline. This helper provides the type stubs that mirror
+ * the schema's CHANGEFEED protocol with narrow change types for proper deltaKind
+ * extraction.
+ *
+ * Usage: prepend to test source strings that need reactive types.
+ */
+const CHANGEFEED_TYPE_STUBS = `
+import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+
+type TextChange = { readonly type: "text"; readonly ops: readonly unknown[] }
+type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
+type MapChange = { readonly type: "map"; readonly set?: Record<string, unknown>; readonly delete?: readonly string[] }
+type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+type IncrementChange = { readonly type: "increment"; readonly amount: number }
+
+interface TextRef extends HasChangefeed<string, TextChange> {
+  readonly [CHANGEFEED]: Changefeed<string, TextChange>
+  insert(pos: number, text: string): void
+  delete(pos: number, len: number): void
+  toString(): string
+  get(): string
+}
+
+interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> {
+  readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>
+  get(): number
+  increment(n: number): void
+}
+
+interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {
+  readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>
+  readonly length: number
+  at(index: number): T | undefined
+  push(item: T): void
+  insert(index: number, item: T): void
+  delete(index: number, len?: number): void
+  toArray(): T[]
+  [Symbol.iterator](): Iterator<T>
+}
+
+interface StructRef<T> extends HasChangefeed<T, MapChange> {
+  readonly [CHANGEFEED]: Changefeed<T, MapChange>
+  get<K extends keyof T>(key: K): T[K]
+}
+
+type TypedDoc<Shape> = Shape & HasChangefeed<unknown, MapChange> & {
+  readonly [CHANGEFEED]: Changefeed<unknown, MapChange>
+  toJSON(): unknown
+}
+`
+
+/**
+ * Wrap source code with the inline type stubs.
+ * Use when a test source string needs TextRef, CounterRef, ListRef, etc.
+ */
+function withTypes(source: string): string {
+  return CHANGEFEED_TYPE_STUBS + "\n" + source
+}
+
+// =============================================================================
 // hasBuilderCalls Tests
 // =============================================================================
 
@@ -363,10 +431,10 @@ describe("collectRequiredImports", () => {
 
   it("should return empty set for static-only builders", () => {
     const builder = createBuilder("div", [], [], [], span)
-    const { runtime, loro } = collectRequiredImports([builder])
+
+    const { runtime } = collectRequiredImports([builder])
 
     expect(runtime.size).toBe(0)
-    expect(loro.size).toBe(0)
   })
 
   it("should include subscribe for reactive builders", () => {
@@ -478,69 +546,7 @@ describe("collectRequiredImports", () => {
     expect(runtime.has("conditionalRegion")).toBe(false)
   })
 
-  it("should include bindTextValue for value bindings", () => {
-    const builder = createBuilder(
-      "div",
-      [],
-      [],
-      [
-        {
-          kind: "element",
-          tag: "input",
-          attributes: [],
-          eventHandlers: [],
-          bindings: [
-            {
-              attribute: "value",
-              refSource: "doc.text",
-              bindingType: "value",
-              span,
-            },
-          ],
-          children: [],
-          isReactive: true,
-          span,
-        },
-      ],
-      span,
-    )
 
-    const { loro } = collectRequiredImports([builder])
-
-    expect(loro.has("bindTextValue")).toBe(true)
-  })
-
-  it("should include bindChecked for checked bindings", () => {
-    const builder = createBuilder(
-      "div",
-      [],
-      [],
-      [
-        {
-          kind: "element",
-          tag: "input",
-          attributes: [],
-          eventHandlers: [],
-          bindings: [
-            {
-              attribute: "checked",
-              refSource: "doc.enabled",
-              bindingType: "checked",
-              span,
-            },
-          ],
-          children: [],
-          isReactive: true,
-          span,
-        },
-      ],
-      span,
-    )
-
-    const { loro } = collectRequiredImports([builder])
-
-    expect(loro.has("bindChecked")).toBe(true)
-  })
 
   it("should collect imports from multiple builders", () => {
     const builder1 = createBuilder(
@@ -613,7 +619,6 @@ describe("collectRequiredImports", () => {
       tag: "div",
       attributes: [multiDepAttr],
       eventHandlers: [],
-      bindings: [],
       children: [],
       span,
       isReactive: true,
@@ -736,7 +741,6 @@ describe("collectRequiredImports", () => {
             },
           ],
           eventHandlers: [],
-          bindings: [],
           children: [],
           isReactive: true,
           span,
@@ -774,7 +778,6 @@ describe("collectRequiredImports", () => {
             },
           ],
           eventHandlers: [],
-          bindings: [],
           children: [],
           isReactive: true,
           span,
@@ -812,7 +815,6 @@ describe("collectRequiredImports", () => {
             },
           ],
           eventHandlers: [],
-          bindings: [],
           children: [],
           isReactive: true,
           span,
@@ -850,7 +852,6 @@ describe("collectRequiredImports", () => {
             },
           ],
           eventHandlers: [],
-          bindings: [],
           children: [],
           isReactive: true,
           span,
@@ -881,41 +882,38 @@ describe("mergeImports", () => {
 
     mergeImports(sourceFile, {
       runtime: new Set(["subscribe", "listRegion"]),
-      loro: new Set(),
     })
 
     const result = sourceFile.getFullText()
     expect(result).toContain("listRegion")
     expect(result).toContain("subscribe")
-    expect(result).toContain("@loro-extended/kinetic/runtime")
+    expect(result).toContain("@kyneta/core/runtime")
   })
 
-  it("should merge imports with existing kinetic/runtime import", () => {
+  it("should merge imports with existing core/runtime import", () => {
     const importLine =
-      'import { subscribe } from "@loro-extended/kinetic/runtime"'
+      'import { subscribe } from "@kyneta/core/runtime"'
     const sourceFile = createSourceFile(`${importLine}\n\nconst app = div()`)
 
     mergeImports(sourceFile, {
       runtime: new Set(["subscribe", "listRegion"]),
-      loro: new Set(),
     })
 
     const result = sourceFile.getFullText()
     expect(result).toContain("subscribe")
     expect(result).toContain("listRegion")
     const importMatches =
-      result.match(/@loro-extended\/kinetic\/runtime/g) || []
+      result.match(/@kyneta\/core\/runtime/g) || []
     expect(importMatches.length).toBe(1)
   })
 
   it("should not duplicate existing imports", () => {
     const importLine =
-      'import { subscribe } from "@loro-extended/kinetic/runtime"'
+      'import { subscribe } from "@kyneta/core/runtime"'
     const sourceFile = createSourceFile(`${importLine}\n\nconst app = div()`)
 
     mergeImports(sourceFile, {
       runtime: new Set(["subscribe", "listRegion"]),
-      loro: new Set(),
     })
 
     const result = sourceFile.getFullText()
@@ -924,7 +922,7 @@ describe("mergeImports", () => {
     expect(result).toContain("listRegion")
     // Only one import statement for /runtime
     const importMatches =
-      result.match(/@loro-extended\/kinetic\/runtime/g) || []
+      result.match(/@kyneta\/core\/runtime/g) || []
     expect(importMatches.length).toBe(1)
   })
 
@@ -933,30 +931,28 @@ describe("mergeImports", () => {
 
     mergeImports(sourceFile, {
       runtime: new Set(),
-      loro: new Set(),
     })
 
     const result = sourceFile.getFullText()
-    expect(result).not.toContain("@loro-extended/kinetic")
+    expect(result).not.toContain("@kyneta/core")
   })
 
   it("should preserve other imports", () => {
     const lines = [
-      'import { LoroDoc } from "loro-crdt"',
-      'import { createTypedDoc } from "@loro-extended/change"',
+      'import { describe } from "vitest"',
+      'import { CHANGEFEED } from "@kyneta/schema"',
       "",
-      "const doc = new LoroDoc()",
+      "const x = 1",
     ]
     const sourceFile = createSourceFile(lines.join("\n"))
 
     mergeImports(sourceFile, {
       runtime: new Set(["subscribe"]),
-      loro: new Set(),
     })
 
     const result = sourceFile.getFullText()
-    expect(result).toContain("LoroDoc")
-    expect(result).toContain("createTypedDoc")
+    expect(result).toContain("describe")
+    expect(result).toContain("CHANGEFEED")
     expect(result).toContain("subscribe")
   })
 })
@@ -1064,7 +1060,14 @@ describe("transformSourceInPlace", () => {
 
   it("should return correct required imports for list regions", () => {
     const lines = [
-      'import type { ListRef } from "@loro-extended/change"',
+      'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
+      "type SequenceChange<T = unknown> = { readonly type: \"sequence\"; readonly ops: readonly unknown[] }",
+      "interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {",
+      "  readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>",
+      "  readonly length: number",
+      "  at(index: number): T | undefined",
+      "  [Symbol.iterator](): Iterator<T>",
+      "}",
       "declare const items: ListRef<string>",
       "",
       "const app = div(() => {",
@@ -1092,7 +1095,6 @@ describe("transformSourceInPlace", () => {
     const result = transformSourceInPlace(source)
 
     expect(result.requiredImports.runtime.size).toBe(0)
-    expect(result.requiredImports.loro.size).toBe(0)
   })
 
   it("should handle deeply nested structures", () => {
@@ -1120,11 +1122,10 @@ describe("transformSourceInPlace", () => {
 
   it("should preserve existing imports", () => {
     const lines = [
-      'import { LoroDoc } from "loro-crdt"',
-      'import { createTypedDoc, Shape } from "@loro-extended/change"',
+      'import { describe } from "vitest"',
+      'import { CHANGEFEED } from "@kyneta/schema"',
       "",
-      "const schema = Shape.doc({ count: Shape.counter() })",
-      "const doc = createTypedDoc(schema, new LoroDoc())",
+      "const x = 1",
       "",
       "const app = div(() => {",
       '  h1("App")',
@@ -1135,9 +1136,8 @@ describe("transformSourceInPlace", () => {
     const result = transformSourceInPlace(source)
     const code = result.sourceFile.getFullText()
 
-    expect(code).toContain("LoroDoc")
-    expect(code).toContain("createTypedDoc")
-    expect(code).toContain("Shape")
+    expect(code).toContain("describe")
+    expect(code).toContain("CHANGEFEED")
   })
 })
 
@@ -1205,7 +1205,9 @@ describe("transformSourceInPlace - HTML target", () => {
 
   it("should generate list map expression for for-of loops", () => {
     const lines = [
-      'import { ListRef } from "@loro-extended/change"',
+      'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
+      "type SequenceChange<T = unknown> = { readonly type: \"sequence\"; readonly ops: readonly unknown[] }",
+      "interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>; readonly length: number; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }",
       "declare const items: ListRef<string>",
       "",
       "const app = div(() => {",
@@ -1229,7 +1231,9 @@ describe("transformSourceInPlace - HTML target", () => {
 
   it("should generate ternary for conditional regions", () => {
     const lines = [
-      'import { CounterRef } from "@loro-extended/change"',
+      'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
+      "type ReplaceChange<T = unknown> = { readonly type: \"replace\"; readonly value: T }",
+      "interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }",
       "declare const count: CounterRef",
       "",
       "const app = div(() => {",
@@ -1256,7 +1260,9 @@ describe("transformSourceInPlace - HTML target", () => {
 
   it("should dissolve conditional on template cloning path (DOM target)", () => {
     const lines = [
-      'import { CounterRef } from "@loro-extended/change"',
+      'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
+      "type ReplaceChange<T = unknown> = { readonly type: \"replace\"; readonly value: T }",
+      "interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }",
       "declare const count: CounterRef",
       "",
       "const app = div(() => {",
@@ -1303,10 +1309,9 @@ describe("transformSourceInPlace - HTML target", () => {
 // Reactive Type Resolution Tests
 // =============================================================================
 
-describe("reactive type resolution from @loro-extended/change", () => {
-  it("should resolve ListRef type from @loro-extended/change import", () => {
-    const source = `
-      import { ListRef } from "@loro-extended/change"
+describe("reactive type resolution from @kyneta/schema", () => {
+  it("should resolve ListRef type from inline CHANGEFEED types", () => {
+    const source = withTypes(`
       declare const items: ListRef<string>
 
       div(() => {
@@ -1314,7 +1319,7 @@ describe("reactive type resolution from @loro-extended/change", () => {
           li(item)
         }
       })
-    `
+    `)
 
     const result = transformSource(source, { target: "dom" })
 
@@ -1325,15 +1330,14 @@ describe("reactive type resolution from @loro-extended/change", () => {
     expect(result.ir[0].children[0].kind).toBe("loop")
   })
 
-  it("should resolve TextRef type from @loro-extended/change import", () => {
-    const source = `
-      import { TextRef } from "@loro-extended/change"
+  it("should resolve TextRef type from inline CHANGEFEED types", () => {
+    const source = withTypes(`
       declare const title: TextRef
 
       div(() => {
-        h1(title.toString())
+        p(title.get())
       })
-    `
+    `)
 
     const result = transformSource(source, { target: "dom" })
 
@@ -1344,7 +1348,9 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
   it("should resolve CounterRef type from @loro-extended/change import", () => {
     const source = `
-      import { CounterRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
       declare const count: CounterRef
 
       div(() => {
@@ -1363,7 +1369,13 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
   it("should resolve createTypedDoc return type", () => {
     const source = `
-      import { createTypedDoc, Shape, ListRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
+      type MapChange = { readonly type: "map"; readonly set?: Record<string, unknown>; readonly delete?: readonly string[] }
+      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
+      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
+      interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>; readonly length: number; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }
 
       const schema = Shape.doc({
         items: Shape.list(Shape.plain.string())
@@ -1386,7 +1398,10 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
   it("should handle mixed imported and inline types", () => {
     const source = `
-      import { TextRef, CounterRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
+      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number; increment(n: number): void }
 
       interface AppDoc {
         title: TextRef
@@ -1410,12 +1425,10 @@ describe("reactive type resolution from @loro-extended/change", () => {
     expect(result.ir[0].isReactive).toBe(true)
   })
 
-  it("should produce listRegion for for-of over imported ListRef", () => {
-    // Critical test: the compiler must resolve ListRef from @loro-extended/change
+  it("should produce listRegion for for-of over inline ListRef", () => {
+    // Critical test: the compiler must resolve ListRef with CHANGEFEED
     // to detect doc.todos as reactive and generate listRegion
-    const source = `
-      import { ListRef } from "@loro-extended/change"
-
+    const source = withTypes(`
       interface TodoDoc {
         todos: ListRef<string>
       }
@@ -1429,7 +1442,7 @@ describe("reactive type resolution from @loro-extended/change", () => {
           }
         })
       })
-    `
+    `)
 
     const result = transformSource(source, { target: "dom" })
 
@@ -1451,7 +1464,8 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
   it("should produce deltaKind 'text' and textRegion for TextRef direct read", () => {
     const source = `
-      import { TextRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
       declare const title: TextRef
       div(() => { h1(title.toString()) })
     `
@@ -1471,7 +1485,9 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
   it("should produce deltaKind 'sequence' for ListRef", () => {
     const source = `
-      import { ListRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
+      interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>; readonly length: number; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }
       declare const items: ListRef<string>
       div(() => {
         for (const item of items) {
@@ -1490,7 +1506,9 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
   it("should produce deltaKind 'replace' for CounterRef", () => {
     const source = `
-      import { CounterRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
       declare const count: CounterRef
       div(() => { p(count.get()) })
     `
@@ -1509,17 +1527,9 @@ describe("reactive type resolution from @loro-extended/change", () => {
 // =============================================================================
 
 describe("schema-inferred reactive detection (zero ceremony)", () => {
-  it("should detect reactive types from createTypedDoc without explicit interface", () => {
-    const source = `
-      import { createTypedDoc, Shape } from "@loro-extended/change"
-
-      const TodoSchema = Shape.doc({
-        title: Shape.text(),
-        todos: Shape.list(Shape.plain.string()),
-        completedCount: Shape.counter(),
-      })
-
-      const doc = createTypedDoc(TodoSchema)
+  it("should detect reactive types from TypedDoc without explicit interface", () => {
+    const source = withTypes(`
+      declare const doc: TypedDoc<{ title: TextRef; todos: ListRef<string> }>
 
       div(() => {
         h1(doc.title.toString())
@@ -1527,7 +1537,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
           li(item)
         }
       })
-    `
+    `)
 
     const result = transformSource(source, { target: "dom" })
 
@@ -1541,7 +1551,13 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
   it("should detect conditional reactive types from schema inference", () => {
     const source = `
-      import { createTypedDoc, Shape } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      type MapChange = { readonly type: "map" }
+      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
+      type TypedDoc<S> = S & HasChangefeed<unknown, MapChange> & { readonly [CHANGEFEED]: Changefeed<unknown, MapChange> }
+      declare function createTypedDoc<S>(schema: unknown): TypedDoc<S>
+      const Shape = { doc: (s: any) => s, counter: () => ({}) }
 
       const Schema = Shape.doc({
         count: Shape.counter(),
@@ -1564,7 +1580,13 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
   it("should work with schema defined inline", () => {
     const source = `
-      import { createTypedDoc, Shape } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      type MapChange = { readonly type: "map" }
+      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
+      type TypedDoc<S> = S & HasChangefeed<unknown, MapChange> & { readonly [CHANGEFEED]: Changefeed<unknown, MapChange> }
+      declare function createTypedDoc<S>(schema: unknown): TypedDoc<S>
+      const Shape = { doc: (s: any) => s, counter: () => ({}) }
 
       const doc = createTypedDoc(Shape.doc({
         items: Shape.list(Shape.plain.string()),
@@ -1584,7 +1606,13 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
   it("should work with createTypedDoc options parameter", () => {
     const source = `
-      import { createTypedDoc, Shape } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      type MapChange = { readonly type: "map" }
+      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
+      type TypedDoc<S> = S & HasChangefeed<unknown, MapChange> & { readonly [CHANGEFEED]: Changefeed<unknown, MapChange> }
+      declare function createTypedDoc<S>(schema: unknown, opts?: unknown): TypedDoc<S>
+      const Shape = { doc: (s: any) => s, counter: () => ({}) }
 
       const Schema = Shape.doc({
         title: Shape.text(),
@@ -1609,7 +1637,13 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
   it("should produce both DOM and HTML targets from same schema-inferred source", () => {
     const source = `
-      import { createTypedDoc, Shape } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      type MapChange = { readonly type: "map" }
+      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
+      type TypedDoc<S> = S & HasChangefeed<unknown, MapChange> & { readonly [CHANGEFEED]: Changefeed<unknown, MapChange> }
+      declare function createTypedDoc<S>(schema: unknown): TypedDoc<S>
+      const Shape = { doc: (s: any) => s, counter: () => ({}) }
 
       const Schema = Shape.doc({
         title: Shape.text(),
@@ -1655,7 +1689,8 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 describe("bare reactive ref in content position", () => {
   it("compiles bare TextRef to textRegion", () => {
     const source = `
-      import { TextRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
       declare const doc: { title: TextRef }
       div(() => {
         p(doc.title)
@@ -1667,13 +1702,12 @@ describe("bare reactive ref in content position", () => {
   })
 
   it("compiles bare CounterRef to subscribeWithValue with .get()", () => {
-    const source = `
-      import { CounterRef } from "@loro-extended/change"
+    const source = withTypes(`
       declare const doc: { count: CounterRef }
       div(() => {
         span(doc.count)
       })
-    `
+    `)
     const result = transformSource(source, { target: "dom" })
     expect(result.code).toContain("subscribeWithValue(")
     expect(result.code).toContain("doc.count.get()")
@@ -1681,7 +1715,8 @@ describe("bare reactive ref in content position", () => {
 
   it("still supports explicit .get() call", () => {
     const source = `
-      import { TextRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
       declare const doc: { title: TextRef }
       div(() => {
         p(doc.title.get())
@@ -1693,7 +1728,8 @@ describe("bare reactive ref in content position", () => {
 
   it("still supports explicit .toString() call", () => {
     const source = `
-      import { TextRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
       declare const doc: { title: TextRef }
       div(() => {
         p(doc.title.toString())
@@ -1705,7 +1741,8 @@ describe("bare reactive ref in content position", () => {
 
   it("bare ref inside expression is not an implicit read", () => {
     const source = `
-      import { TextRef } from "@loro-extended/change"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
       declare const doc: { first: TextRef, last: TextRef }
       div(() => {
         p(doc.first.get() + " " + doc.last.get())
@@ -1723,11 +1760,10 @@ describe("bare reactive ref in content position", () => {
 
 describe("extractDependencies fix for reactive-typed property access (transform)", () => {
   it("captures doc.title as dependency when doc is TypedDoc (not reactive) but doc.title is TextRef", () => {
-    const source = `
-      import { createTypedDoc, Shape } from "@loro-extended/change"
-      const doc = createTypedDoc(Shape.doc({ title: Shape.text() }))
+    const source = withTypes(`
+      declare const doc: TypedDoc<{ title: TextRef }>
       div(() => { p(doc.title) })
-    `
+    `)
     const result = transformSource(source, { target: "dom" })
     const p = result.ir[0].children[0] as any
     const content = p.children[0]
@@ -1738,12 +1774,11 @@ describe("extractDependencies fix for reactive-typed property access (transform)
     expect(result.code).toContain("textRegion(")
   })
 
-  it("bare CounterRef from createTypedDoc uses subscribeWithValue with .get()", () => {
-    const source = `
-      import { createTypedDoc, Shape } from "@loro-extended/change"
-      const doc = createTypedDoc(Shape.doc({ count: Shape.counter() }))
+  it("bare CounterRef from TypedDoc uses subscribeWithValue with .get()", () => {
+    const source = withTypes(`
+      declare const doc: TypedDoc<{ count: CounterRef }>
       div(() => { span(doc.count) })
-    `
+    `)
     const result = transformSource(source, { target: "dom" })
     expect(result.code).toContain("subscribeWithValue(")
     expect(result.code).toContain("doc.count.get()")
@@ -1762,23 +1797,20 @@ describe("dependency subsumption", () => {
     //   { source: "doc.title", deltaKind: "text" }
     // That gives dependencies.length === 2, breaking isTextRegionContent.
     // Subsumption drops "doc" because "doc.title" is more specific.
-    const source = `
-      import { createTypedDoc, Shape } from "@loro-extended/change"
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+    const source = withTypes(`
+      declare const doc: TypedDoc<{ title: TextRef }>
       div(() => { h1(doc.title.toString()) })
-    `
+    `)
     const result = transformSource(source, { target: "dom" })
     expect(result.code).toContain("textRegion")
     expect(result.code).not.toContain("subscribeMultiple")
   })
 
   it("doc.title bare ref with reactive TypedDoc produces textRegion", () => {
-    const source = `
-      import { createTypedDoc, Shape } from "@loro-extended/change"
-      const doc = createTypedDoc(Shape.doc({ title: Shape.text() }))
+    const source = withTypes(`
+      declare const doc: TypedDoc<{ title: TextRef }>
       div(() => { p(doc.title) })
-    `
+    `)
     const result = transformSource(source, { target: "dom" })
     const p = result.ir[0].children[0] as any
     const content = p.children[0]
@@ -1792,7 +1824,10 @@ describe("dependency subsumption", () => {
   it("does not subsume unrelated deps", () => {
     // "a" and "b" are not prefixes of each other — both should remain
     const source = `
-      import { LocalRef } from "@loro-extended/reactive"
+      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      declare class LocalRef<T> implements HasChangefeed<T, ReplaceChange<T>> { readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>; get(): T; set(value: T): void }
+      declare function state<T>(initial: T): LocalRef<T>
       declare const a: LocalRef<number>
       declare const b: LocalRef<number>
       div(() => { span(a.get() + b.get()) })

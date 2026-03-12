@@ -211,12 +211,6 @@ function emitChild(
     case "conditional":
       return emitConditional(node, state, indent)
 
-    case "binding":
-      // Bindings render as their current value in SSR
-      return [
-        `${indent}_html += \`\${${escapeExpr(`String(${node.refSource}.get ? ${node.refSource}.get() : ${node.refSource})`)}}\``,
-      ]
-
     default:
       return []
   }

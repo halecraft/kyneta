@@ -166,13 +166,13 @@ Replace the runtime's `REACTIVE`/`SNAPSHOT` subscription infrastructure with `CH
 - `text-patch.test.ts`: rewrite stubs to use `CHANGEFEED` protocol; verify `planTextPatch` (pure, unchanged), `textRegion` with changefeed-based refs, `inputTextRegion` with changefeed-based refs
 - `regions.test.ts`: rewrite with `CHANGEFEED`-based mock refs using `.at()` (not `.get()`) for ref access; verify `planDeltaOps` with `SequenceChangeOp<T>[]` (uses `insert.length` + ref lookup, not plain values from change); verify `listRegion` initial render + subscription; verify `conditionalRegion` (largely unchanged)
 
-## Phase 4: Compiler Detection Rewiring 🔴
+## Phase 4: Compiler Detection Rewiring 🟢
 
 Teach the compiler to detect `[CHANGEFEED]` instead of `[REACTIVE]`/`[SNAPSHOT]`, and extract delta kinds from the changefeed subscribe callback's change type.
 
 ### Tasks
 
-1. Update `src/compiler/reactive-detection.ts` 🔴
+1. Update `src/compiler/reactive-detection.ts` 🟢
 
    - Replace `isReactiveSymbolProperty` with `isChangefeedSymbolProperty` using params `("kinetic:changefeed", "CHANGEFEED", "__@CHANGEFEED@")`
    - Remove `isSnapshotSymbolProperty` (no longer needed — `CHANGEFEED` subsumes both)
@@ -187,14 +187,14 @@ Teach the compiler to detect `[CHANGEFEED]` instead of `[REACTIVE]`/`[SNAPSHOT]`
    - Update the string literal allowlist in `getDeltaKind` to include `"sequence"` and `"increment"` (currently only allows `"replace" | "text" | "list" | "map" | "tree"` — without this update, `"sequence"` would silently fall back to `"replace"`, disabling list region optimizations)
    - Update `resolveReactiveImports` to resolve `@kyneta/schema` instead of `@loro-extended/reactive`, and scan for `@kyneta/*` imports instead of `@loro-extended/*`
 
-2. Update `src/compiler/analyze.ts` 🔴
+2. Update `src/compiler/analyze.ts` 🟢
 
    - Rename imports: `isReactiveType` → `isChangefeedType`, `isSnapshotableType` → removed
    - `expressionIsReactive` → `expressionIsChangefeed` (or keep name, change internal check)
    - `detectImplicitRead`: check `isChangefeedType` instead of separate `isReactiveType` + `isSnapshotableType` (changefeed implies both capabilities)
    - `extractDependencies`: use `isChangefeedType` for the reactive check
 
-3. Update `src/compiler/transform.ts` 🔴
+3. Update `src/compiler/transform.ts` 🟢
 
    - Update `parseSource` to call renamed module resolution function (resolves `@kyneta/schema` instead of `@loro-extended/reactive`)
    - Update `generateDOMImports`: change `"@loro-extended/kinetic/runtime"` → `"@kyneta/core/runtime"`, remove the `loro` import line entirely (no `@loro-extended/kinetic/loro` subpath)
@@ -202,13 +202,13 @@ Teach the compiler to detect `[CHANGEFEED]` instead of `[REACTIVE]`/`[SNAPSHOT]`
    - Update `collectRequiredImports`: remove `loro` set from return type; remove binding-related collection (`bindChecked`, `bindTextValue`); keep `inputTextRegion` in `runtime` set
    - Update doc comments referencing `@loro-extended/kinetic`
 
-4. Update `src/compiler/codegen/dom.ts` 🔴
+4. Update `src/compiler/codegen/dom.ts` 🟢 — also removed binding case from `codegen/html.ts`
 
    - Verify no direct imports from `@loro-extended/*` (there are none — codegen operates on IR)
    - The `"kinetic:if"` comment marker string in `generateConditional` is fine to keep (it's a DOM comment, not a package reference)
    - Remove `generateBinding` function and the `"binding"` case in `generateHoleSetup` — these generate `bindTextValue(...)`, `bindChecked(...)`, `bindNumericValue(...)` calls that would import from the now-removed `./loro` subpath
 
-5. Remove binding infrastructure from IR and analysis 🔴
+5. Remove binding infrastructure from IR and analysis 🟢
 
    - `src/compiler/ir.ts`: remove `BindingNode` interface, `ElementBinding` interface, `isBindingNode` type guard; remove `bindings` field from `ElementNode`; remove `"binding"` from `ChildNode` union; remove `"binding"` from `TemplateHoleKind`; remove `bindingType` and `refSource` from `TemplateHole`
    - `src/compiler/analyze.ts`: remove `BindingInfo` interface, remove binding detection code from `analyzeProps`, remove binding mapping in `analyzeElementCall`
@@ -222,8 +222,14 @@ Teach the compiler to detect `[CHANGEFEED]` instead of `[REACTIVE]`/`[SNAPSHOT]`
 
   **Critical: narrow change types in test stubs.** Each ref type stub must declare a *specific* change type in its `Changefeed` — e.g., `[CHANGEFEED]: Changefeed<string, TextChange>` for text refs, `[CHANGEFEED]: Changefeed<T[], SequenceChange<T>>` for sequence refs, not `Changefeed<unknown, ChangeBase>`. Without narrowing, `getDeltaKind` sees `ChangeBase.type` as `string` (not a string literal), `isStringLiteral()` returns false, and delta kind silently falls back to `"replace"` — disabling all list/text region optimizations. This mirrors the existing constraint documented in TECHNICAL.md §Reactive Detection → Delta Kind Extraction: "Each typed ref must declare its specific delta type."
 
-- `integration.test.ts`: update type stubs; test changefeed-based detection end-to-end from source → IR → codegen
-- `transform.test.ts`: verify module resolution targets `@kyneta/schema`
+- `integration.test.ts`: deferred to Phase 5 — the file's top-level `import { createTypedDoc, loro, Shape } from "@loro-extended/change"` causes a suite-level failure before any test runs. Rewriting this ~3400-line file requires removing the `@loro-extended/change` dependency entirely, which is Phase 5 scope.
+- `transform.test.ts`: ✅ all 82 tests pass — module resolution targets `@kyneta/schema`; inline `CHANGEFEED_TYPE_STUBS` helper replaces `@loro-extended/change` imports; import path assertions updated to `@kyneta/core/runtime`; binding import tests removed
+- `vite/plugin.test.ts`: ✅ all 14 tests pass — import path assertions updated
+- `analyze.test.ts`: ✅ all 107 tests pass — type stubs rewritten to CHANGEFEED protocol
+- `template.test.ts`: ✅ 49 tests pass — binding hole test removed (binding infrastructure removed)
+- `walk.test.ts`: ✅ binding event test removed (BindingEvent type removed)
+
+**Remaining suite-level failures (6 files, all Phase 5):** `integration.test.ts`, `binding.test.ts`, `edit-text.test.ts`, `serialize.test.ts`, `ssr.test.ts`, `todo.test.ts` — all fail on `import ... from "@loro-extended/change"`.
 
 ## Phase 5: Type Definitions and Loro Subpath Removal 🔴
 
@@ -268,6 +274,14 @@ Remove Loro-specific types, bindings, and the `./loro` export. Make `src/types.t
 7. Update `src/index.ts` to remove re-exports from `./loro/index.js` (`bind`, `isBinding`, `editText`) 🔴
 
 8. Update `src/errors.ts` if any Loro-specific error codes exist (verify and clean) 🔴
+
+9. Rewrite `src/compiler/integration.test.ts` type stubs 🔴
+
+   This ~3400-line file fails at suite level due to `import { createTypedDoc, loro, Shape } from "@loro-extended/change"` at line 14. The rewrite is contained:
+   - Remove the `@loro-extended/change` import and replace with inline CHANGEFEED-based type stubs (same pattern as `analyze.test.ts`'s `addSchemaTypes` and `transform.test.ts`'s `CHANGEFEED_TYPE_STUBS`)
+   - The file's `addBaseReactiveTypes` / `addLoroTypes` helpers (if any) must be rewritten to CHANGEFEED protocol
+   - Source strings in test cases that `import { TextRef } from "@loro-extended/change"` must use inline type declarations or `withTypes()` pattern
+   - Binding-related test sections (Task 8.1–8.3) should be removed since binding infrastructure was removed in Phase 4
 
 ### Tests
 

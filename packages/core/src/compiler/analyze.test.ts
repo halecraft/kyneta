@@ -21,9 +21,8 @@ import {
   isReactiveType,
 } from "./analyze.js"
 import {
-  getSnapshotType,
+  isChangefeedType,
   isComponentFactoryType,
-  isSnapshotableType,
   resolveReactiveImports,
 } from "./reactive-detection.js"
 import type { ContentValue } from "./ir.js"
@@ -58,30 +57,33 @@ function createSourceFile(
 }
 
 /**
- * Add the shared reactive type definitions (REACTIVE symbol, Reactive interface).
- * This must be called before addLoroTypes or addReactiveTypes.
+ * Add the shared changefeed type definitions (CHANGEFEED symbol, Changefeed interface).
+ * This must be called before addSchemaTypes or addReactiveTypes.
+ *
+ * Mirrors the protocol from @kyneta/schema:
+ * - CHANGEFEED: unique symbol (Symbol.for("kinetic:changefeed"))
+ * - Changefeed<S, C>: { current: S, subscribe(cb: (change: C) => void): () => void }
+ * - HasChangefeed<S, C>: { readonly [CHANGEFEED]: Changefeed<S, C> }
+ * - ChangeBase: { type: string, origin?: string }
  */
-function addBaseReactiveTypes(project: Project) {
+function addBaseChangefeedTypes(project: Project) {
   project.createSourceFile(
-    "reactive-base.d.ts",
+    "changefeed-base.d.ts",
     `
-    export const REACTIVE: unique symbol
-    export const SNAPSHOT: unique symbol
-    export type SnapshotFn<S> = (self: unknown) => S
-    export interface Snapshotable<S> {
-      readonly [SNAPSHOT]: SnapshotFn<S>
+    export const CHANGEFEED: unique symbol
+
+    export interface ChangeBase {
+      readonly type: string
+      readonly origin?: string
     }
-    export type ReactiveDelta =
-      | { type: "replace" }
-      | { type: "text"; ops: unknown[] }
-      | { type: "list"; ops: unknown[] }
-      | { type: "map"; ops: { keys: string[] } }
-      | { type: "tree"; ops: unknown[] }
-    export type DeltaKind = ReactiveDelta["type"]
-    export type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> = (self: unknown, callback: (delta: D) => void) => () => void
-    export interface Reactive<S = unknown, D extends ReactiveDelta = ReactiveDelta> extends Snapshotable<S> {
-      readonly [SNAPSHOT]: SnapshotFn<S>
-      readonly [REACTIVE]: ReactiveSubscribe<D>
+
+    export interface Changefeed<S, C extends ChangeBase = ChangeBase> {
+      readonly current: S
+      subscribe(callback: (change: C) => void): () => void
+    }
+
+    export interface HasChangefeed<S = unknown, C extends ChangeBase = ChangeBase> {
+      readonly [CHANGEFEED]: Changefeed<S, C>
     }
   `,
     { overwrite: true },
@@ -89,57 +91,60 @@ function addBaseReactiveTypes(project: Project) {
 }
 
 /**
- * Add Loro type definitions to the project.
- * Imports REACTIVE from the shared base to ensure type identity.
+ * Add schema-style type definitions to the project.
+ * Imports CHANGEFEED from the shared base to ensure type identity.
+ *
+ * Each ref type declares a *specific* change type in its Changefeed —
+ * e.g., Changefeed<string, TextChange> for text refs. Without narrowing,
+ * getDeltaKind sees ChangeBase.type as `string` (not a literal) and
+ * silently falls back to "replace".
  */
-function addLoroTypes(project: Project) {
-  addBaseReactiveTypes(project)
+function addSchemaTypes(project: Project) {
+  addBaseChangefeedTypes(project)
   project.createSourceFile(
-    "loro-types.d.ts",
+    "schema-types.d.ts",
     `
-    import { REACTIVE, SNAPSHOT, SnapshotFn, ReactiveSubscribe, Reactive, ReactiveDelta } from "./reactive-base"
+    import { CHANGEFEED, ChangeBase, Changefeed, HasChangefeed } from "./changefeed-base"
 
-    type TextDelta = { type: "text"; ops: unknown[] }
-    type ListDelta = { type: "list"; ops: unknown[] }
-    type MapDelta = { type: "map"; ops: { keys: string[] } }
-    type ReplaceDelta = { type: "replace" }
+    export type TextChange = { readonly type: "text"; readonly ops: readonly unknown[] }
+    export type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
+    export type MapChange = { readonly type: "map"; readonly set?: Record<string, unknown>; readonly delete?: readonly string[] }
+    export type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+    export type IncrementChange = { readonly type: "increment"; readonly amount: number }
+    export type TreeChange = { readonly type: "tree"; readonly ops: readonly unknown[] }
 
-    export interface TextRef extends Reactive<string, TextDelta> {
-      readonly [SNAPSHOT]: SnapshotFn<string>
-      readonly [REACTIVE]: ReactiveSubscribe<TextDelta>
+    export interface TextRef extends HasChangefeed<string, TextChange> {
+      readonly [CHANGEFEED]: Changefeed<string, TextChange>
       insert(pos: number, text: string): void
       delete(pos: number, len: number): void
       toString(): string
       get(): string
     }
 
-    export interface CounterRef extends Reactive<number, ReplaceDelta> {
-      readonly [SNAPSHOT]: SnapshotFn<number>
-      readonly [REACTIVE]: ReactiveSubscribe<ReplaceDelta>
+    export interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> {
+      readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>
       get(): number
       increment(n: number): void
     }
 
-    export interface ListRef<T> extends Reactive<ListRef<T>, ListDelta> {
-      readonly [SNAPSHOT]: SnapshotFn<ListRef<T>>
-      readonly [REACTIVE]: ReactiveSubscribe<ListDelta>
+    export interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {
+      readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>
       push(item: T): void
       insert(index: number, item: T): void
       delete(index: number, len?: number): void
-      get(index: number): T
+      at(index: number): T | undefined
       toArray(): T[]
-      length: number
+      readonly length: number
+      [Symbol.iterator](): Iterator<T>
     }
 
-    export interface StructRef<T> extends Reactive<StructRef<T>, MapDelta> {
-      readonly [SNAPSHOT]: SnapshotFn<StructRef<T>>
-      readonly [REACTIVE]: ReactiveSubscribe<MapDelta>
+    export interface StructRef<T> extends HasChangefeed<T, MapChange> {
+      readonly [CHANGEFEED]: Changefeed<T, MapChange>
       get<K extends keyof T>(key: K): T[K]
     }
 
-    export type TypedDoc<Shape> = Shape & {
-      readonly [SNAPSHOT]: SnapshotFn<unknown>
-      readonly [REACTIVE]: ReactiveSubscribe<MapDelta>
+    export type TypedDoc<Shape> = Shape & HasChangefeed<unknown, MapChange> & {
+      readonly [CHANGEFEED]: Changefeed<unknown, MapChange>
       toJSON(): unknown
     }
   `,
@@ -147,24 +152,28 @@ function addLoroTypes(project: Project) {
   )
 }
 
+// Backward-compatible alias — many test beforeEach blocks call addLoroTypes
+const addLoroTypes = addSchemaTypes
+
 /**
  * Add reactive type definitions (LocalRef, etc.) to the project.
- * Imports REACTIVE from the shared base to ensure type identity.
+ * Uses CHANGEFEED protocol.
  */
 function addReactiveTypes(project: Project) {
-  addBaseReactiveTypes(project)
+  addBaseChangefeedTypes(project)
   project.createSourceFile(
     "reactive-types.d.ts",
     `
-    import { REACTIVE, SNAPSHOT, SnapshotFn, ReactiveSubscribe, Reactive, ReactiveDelta } from "./reactive-base"
-    export { REACTIVE, SNAPSHOT, SnapshotFn, ReactiveSubscribe, Reactive, ReactiveDelta }
-    export class LocalRef<T> implements Reactive<T, { type: "replace" }> {
-      readonly [SNAPSHOT]: SnapshotFn<T>
-      readonly [REACTIVE]: ReactiveSubscribe<{ type: "replace" }>
+    import { CHANGEFEED, ChangeBase, Changefeed, HasChangefeed } from "./changefeed-base"
+    export { CHANGEFEED, ChangeBase, Changefeed, HasChangefeed }
+
+    export type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+
+    export class LocalRef<T> implements HasChangefeed<T, ReplaceChange<T>> {
+      readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
       constructor(initial: T)
       get(): T
       set(value: T): void
-      subscribe(callback: (delta: { type: "replace" }) => void): () => void
     }
   `,
     { overwrite: true },
@@ -476,14 +485,14 @@ describe("isReactiveType", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("should detect TextRef as reactive", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       const x = title
     `,
@@ -506,7 +515,7 @@ describe("isReactiveType", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       const x = count
     `,
@@ -528,7 +537,7 @@ describe("isReactiveType", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { ListRef } from "./loro-types"
+      import { ListRef } from "./schema-types"
       declare const items: ListRef<string>
       const x = items
     `,
@@ -685,14 +694,14 @@ describe("expressionIsReactive", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("should detect direct ref access as reactive", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       count.get()
     `,
@@ -707,7 +716,7 @@ describe("expressionIsReactive", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       const x = \`Count: \${count.get()}\`
     `,
@@ -748,7 +757,7 @@ describe("expressionIsReactive", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       count.get().toString()
     `,
@@ -765,7 +774,7 @@ describe("expressionIsReactive", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       count.get().toFixed(2).trim()
     `,
@@ -821,14 +830,14 @@ describe("extractDependencies", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("should extract single dependency from method call", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       count.get()
     `,
@@ -845,7 +854,7 @@ describe("extractDependencies", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { StructRef, TextRef } from "./loro-types"
+      import { StructRef, TextRef } from "./schema-types"
       declare const doc: StructRef<{ title: TextRef }>
       doc.get("title").toString()
     `,
@@ -877,7 +886,7 @@ describe("extractDependencies", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       title.toString()
     `,
@@ -896,7 +905,7 @@ describe("extractDependencies", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { ListRef } from "./loro-types"
+      import { ListRef } from "./schema-types"
       declare const items: ListRef<string>
       items.length
     `,
@@ -936,7 +945,7 @@ describe("extractDependencies", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       count.get()
     `,
@@ -961,7 +970,7 @@ describe("analyzeExpression", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("should create text node for string literal", () => {
@@ -1007,7 +1016,7 @@ describe("analyzeExpression", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       count.get()
     `,
@@ -1032,14 +1041,14 @@ describe("detectDirectRead", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("detects title.get() as direct read", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       title.get()
     `,
@@ -1056,7 +1065,7 @@ describe("detectDirectRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       title.toString()
     `,
@@ -1073,7 +1082,7 @@ describe("detectDirectRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const doc: { title: TextRef }
       doc.title.get()
     `,
@@ -1090,7 +1099,7 @@ describe("detectDirectRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       title.get().toUpperCase()
     `,
@@ -1109,7 +1118,7 @@ describe("detectDirectRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       declare const subtitle: TextRef
       title.get() + subtitle.get()
@@ -1128,7 +1137,7 @@ describe("detectDirectRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       \`Hello \${title.get()}\`
     `,
@@ -1146,7 +1155,7 @@ describe("detectDirectRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { ListRef } from "./loro-types"
+      import { ListRef } from "./schema-types"
       declare const items: ListRef<string>
       items.get(0)
     `,
@@ -1179,7 +1188,7 @@ describe("detectDirectRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       title.get()
     `,
@@ -1198,7 +1207,7 @@ describe("detectDirectRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       \`Hello \${title.get()}\`
     `,
@@ -1332,7 +1341,7 @@ describe("analyzeBuilder", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("should analyze simple static builder", () => {
@@ -1380,7 +1389,7 @@ describe("analyzeBuilder", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
 
       div(() => {
@@ -1432,7 +1441,7 @@ describe("analyzeBuilder", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { ListRef } from "./loro-types"
+      import { ListRef } from "./schema-types"
       declare const items: ListRef<string>
 
       ul(() => {
@@ -1464,7 +1473,7 @@ describe("analyzeBuilder", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
 
       div(() => {
@@ -1500,7 +1509,7 @@ describe("analyzeBuilder", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
 
       div(() => {
@@ -1573,7 +1582,7 @@ describe("analyzeStatement - arbitrary statements", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("should capture variable declarations as StatementNode", () => {
@@ -1631,7 +1640,7 @@ describe("analyzeStatement - arbitrary statements", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { ListRef } from "./loro-types"
+      import { ListRef } from "./schema-types"
       declare const items: ListRef<{ get(): string }>
 
       ul(() => {
@@ -1672,7 +1681,7 @@ describe("analyzeStatement - arbitrary statements", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
 
       div(() => {
@@ -1918,14 +1927,14 @@ describe("integration: complex builder analysis", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("should handle todo list example structure", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { ListRef, TextRef } from "./loro-types"
+      import { ListRef, TextRef } from "./schema-types"
 
       interface Todo {
         text: string
@@ -1975,7 +1984,7 @@ describe("integration: complex builder analysis", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef, TextRef } from "./loro-types"
+      import { CounterRef, TextRef } from "./schema-types"
 
       declare const title: TextRef
       declare const count: CounterRef
@@ -2012,7 +2021,7 @@ describe("analyzeStatement - target labels", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("should produce TargetBlockNode for client: label", () => {
@@ -2209,14 +2218,14 @@ describe("analyzeStatement - target labels", () => {
 })
 
 // =============================================================================
-// Phase 4: SNAPSHOT Protocol Compiler Tests
+// Phase 4: CHANGEFEED Protocol Compiler Tests
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// isSnapshotableType Tests
+// isChangefeedType Tests (replaces isSnapshotableType)
 // -----------------------------------------------------------------------------
 
-describe("isSnapshotableType", () => {
+describe("isChangefeedType", () => {
   let project: Project
 
   beforeEach(() => {
@@ -2224,43 +2233,43 @@ describe("isSnapshotableType", () => {
     addLoroTypes(project)
   })
 
-  it("detects TextRef as snapshotable", () => {
+  it("detects TextRef as having changefeed", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
     `,
     )
 
     const varDecl = sourceFile.getVariableDeclaration("title")!
-    expect(isSnapshotableType(varDecl.getType())).toBe(true)
+    expect(isChangefeedType(varDecl.getType())).toBe(true)
   })
 
-  it("detects CounterRef as snapshotable", () => {
+  it("detects CounterRef as having changefeed", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
     `,
     )
 
     const varDecl = sourceFile.getVariableDeclaration("count")!
-    expect(isSnapshotableType(varDecl.getType())).toBe(true)
+    expect(isChangefeedType(varDecl.getType())).toBe(true)
   })
 
-  it("detects ListRef as snapshotable", () => {
+  it("detects ListRef as having changefeed", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { ListRef } from "./loro-types"
+      import { ListRef } from "./schema-types"
       declare const items: ListRef<string>
     `,
     )
 
     const varDecl = sourceFile.getVariableDeclaration("items")!
-    expect(isSnapshotableType(varDecl.getType())).toBe(true)
+    expect(isChangefeedType(varDecl.getType())).toBe(true)
   })
 
   it("rejects plain object types", () => {
@@ -2272,7 +2281,7 @@ describe("isSnapshotableType", () => {
     )
 
     const varDecl = sourceFile.getVariableDeclaration("obj")!
-    expect(isSnapshotableType(varDecl.getType())).toBe(false)
+    expect(isChangefeedType(varDecl.getType())).toBe(false)
   })
 
   it("rejects any and unknown", () => {
@@ -2284,72 +2293,21 @@ describe("isSnapshotableType", () => {
     `,
     )
 
-    expect(isSnapshotableType(sourceFile.getVariableDeclaration("a")!.getType())).toBe(false)
-    expect(isSnapshotableType(sourceFile.getVariableDeclaration("u")!.getType())).toBe(false)
+    expect(isChangefeedType(sourceFile.getVariableDeclaration("a")!.getType())).toBe(false)
+    expect(isChangefeedType(sourceFile.getVariableDeclaration("u")!.getType())).toBe(false)
   })
 
-  it("handles union types (snapshotable if any branch is)", () => {
+  it("handles union types (has changefeed if any branch does)", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const maybeRef: TextRef | null
     `,
     )
 
     const varDecl = sourceFile.getVariableDeclaration("maybeRef")!
-    expect(isSnapshotableType(varDecl.getType())).toBe(true)
-  })
-})
-
-// -----------------------------------------------------------------------------
-// getSnapshotType Tests
-// -----------------------------------------------------------------------------
-
-describe("getSnapshotType", () => {
-  let project: Project
-
-  beforeEach(() => {
-    project = createProject()
-    addLoroTypes(project)
-  })
-
-  it("returns 'string' for TextRef", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { TextRef } from "./loro-types"
-      declare const title: TextRef
-    `,
-    )
-
-    const varDecl = sourceFile.getVariableDeclaration("title")!
-    expect(getSnapshotType(varDecl.getType())).toBe("string")
-  })
-
-  it("returns 'number' for CounterRef", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { CounterRef } from "./loro-types"
-      declare const count: CounterRef
-    `,
-    )
-
-    const varDecl = sourceFile.getVariableDeclaration("count")!
-    expect(getSnapshotType(varDecl.getType())).toBe("number")
-  })
-
-  it("returns undefined for non-snapshotable types", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      declare const obj: { name: string }
-    `,
-    )
-
-    const varDecl = sourceFile.getVariableDeclaration("obj")!
-    expect(getSnapshotType(varDecl.getType())).toBeUndefined()
+    expect(isChangefeedType(varDecl.getType())).toBe(true)
   })
 })
 
@@ -2362,14 +2320,14 @@ describe("detectImplicitRead", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("detects bare TextRef as implicit read", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const doc: { title: TextRef }
       doc.title
     `,
@@ -2403,7 +2361,7 @@ describe("detectImplicitRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const doc: { title: TextRef }
       doc.title.get()
     `,
@@ -2421,7 +2379,7 @@ describe("detectImplicitRead", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       count
     `,
@@ -2444,14 +2402,14 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("bare TextRef produces reactive content with synthesized .get() source", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       title
     `,
@@ -2473,7 +2431,7 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
       count
     `,
@@ -2493,7 +2451,7 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       title.get()
     `,
@@ -2512,7 +2470,7 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       title.toString()
     `,
@@ -2531,7 +2489,7 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const doc: { title: TextRef }
       doc.title
     `,
@@ -2557,14 +2515,14 @@ describe("extractDependencies fix for reactive-typed property access", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("captures doc.title as dependency when doc is not reactive but doc.title is TextRef", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const doc: { title: TextRef }
       doc.title
     `,
@@ -2583,7 +2541,7 @@ describe("extractDependencies fix for reactive-typed property access", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const doc: { title: TextRef }
       doc.title.get()
     `,
@@ -2602,7 +2560,7 @@ describe("extractDependencies fix for reactive-typed property access", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef } from "./loro-types"
+      import { CounterRef } from "./schema-types"
       declare const doc: { count: CounterRef }
       doc.count
     `,
@@ -2623,7 +2581,7 @@ describe("extractDependencies fix for reactive-typed property access", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef } from "./loro-types"
+      import { TextRef } from "./schema-types"
       declare const title: TextRef
       title.get()
     `,
@@ -2648,14 +2606,14 @@ describe("dependency subsumption", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("doc.title.toString() with reactive TypedDoc produces only doc.title dep (subsumes doc)", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef, TypedDoc } from "./loro-types"
+      import { TextRef, TypedDoc } from "./schema-types"
       declare const doc: TypedDoc<{ title: TextRef }>
       doc.title.toString()
     `,
@@ -2675,7 +2633,7 @@ describe("dependency subsumption", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef, TypedDoc } from "./loro-types"
+      import { TextRef, TypedDoc } from "./schema-types"
       declare const doc: TypedDoc<{ title: TextRef }>
       doc.title.get()
     `,
@@ -2694,9 +2652,10 @@ describe("dependency subsumption", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { REACTIVE, SNAPSHOT, SnapshotFn, ReactiveSubscribe, Reactive } from "./reactive-base"
-      declare const a: Reactive<number, { type: "replace" }>
-      declare const b: Reactive<number, { type: "replace" }>
+      import { CHANGEFEED, Changefeed, HasChangefeed, ChangeBase } from "./changefeed-base"
+      type ReplaceChange<T> = { readonly type: "replace"; readonly value: T }
+      declare const a: HasChangefeed<number, ReplaceChange<number>> & { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number; toString(): string }
+      declare const b: HasChangefeed<number, ReplaceChange<number>> & { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number; toString(): string }
       a.toString() + b.toString()
     `,
     )
@@ -2713,7 +2672,7 @@ describe("dependency subsumption", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef, TypedDoc } from "./loro-types"
+      import { TextRef, TypedDoc } from "./schema-types"
       declare const doc: TypedDoc<{ title: TextRef }>
       doc
     `,
@@ -2726,11 +2685,11 @@ describe("dependency subsumption", () => {
     expect(isReactiveType(type)).toBe(true)
   })
 
-  it("isSnapshotableType detects TypedDoc as snapshotable", () => {
+  it("isChangefeedType detects TypedDoc as having changefeed", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { TextRef, TypedDoc } from "./loro-types"
+      import { TextRef, TypedDoc } from "./schema-types"
       declare const doc: TypedDoc<{ title: TextRef }>
       doc
     `,
@@ -2740,6 +2699,6 @@ describe("dependency subsumption", () => {
     const expr = exprStmt.getChildAtIndex(0)
     const type = (expr as any).getType()
 
-    expect(isSnapshotableType(type)).toBe(true)
+    expect(isChangefeedType(type)).toBe(true)
   })
 })

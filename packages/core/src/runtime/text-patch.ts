@@ -20,6 +20,7 @@
 
 import {
   CHANGEFEED,
+  isTextChange,
   type ChangeBase,
   type HasChangefeed,
   type TextChangeOp,
@@ -220,7 +221,7 @@ export function inputTextRegion(
   subscribe(
     ref,
     (change: ChangeBase) => {
-      if (change.type === "text") {
+      if (isTextChange(change)) {
         // Origin-driven selectMode dispatch:
         // - local edits (typing, undo, redo) → "end" (cursor follows edit)
         // - remote/unknown edits → "preserve" (cursor stays relative)
@@ -228,7 +229,7 @@ export function inputTextRegion(
         // Surgical update — O(k) where k is the edit size
         patchInputValue(
           input,
-          (change as { ops: TextChangeOp[] }).ops,
+          change.ops,
           mode,
         )
       } else {
@@ -277,9 +278,9 @@ export function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
   subscribe(
     ref,
     (change: ChangeBase) => {
-      if (change.type === "text") {
+      if (isTextChange(change)) {
         // Surgical update — O(k) where k is the edit size
-        patchText(textNode, (change as { ops: TextChangeOp[] }).ops)
+        patchText(textNode, change.ops)
       } else {
         // Fallback for non-text changes (e.g., "replace") — O(n) full replacement
         textNode.textContent = readValue()

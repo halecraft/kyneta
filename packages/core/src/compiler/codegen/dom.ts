@@ -463,11 +463,6 @@ function generateElement(
     lines.push(...generateEventHandler(elementVar, handler, state))
   }
 
-  // Set up two-way bindings
-  for (const binding of node.bindings) {
-    lines.push(...generateBinding(elementVar, binding, state))
-  }
-
   // Generate children
   for (const child of node.children) {
     const childResult = generateChild(child, elementVar, state)
@@ -477,36 +472,7 @@ function generateElement(
   return { code: lines, varName: elementVar }
 }
 
-// =============================================================================
-// Binding Generation
-// =============================================================================
 
-/**
- * Generate code for a two-way binding.
- */
-function generateBinding(
-  elementVar: string,
-  binding: import("../ir.js").ElementBinding,
-  state: CodegenState,
-): string[] {
-  const lines: string[] = []
-  const ind = getIndent(state)
-
-  if (binding.bindingType === "checked") {
-    // Checkbox binding
-    lines.push(
-      `${ind}bindChecked(${elementVar}, ${binding.refSource}, ${state.scopeVar})`,
-    )
-  } else if (binding.attribute === "value") {
-    // Determine if numeric or text based on element type
-    // For now, assume text - we could enhance this with element type info
-    lines.push(
-      `${ind}bindTextValue(${elementVar}, ${binding.refSource}, ${state.scopeVar})`,
-    )
-  }
-
-  return lines
-}
 
 // =============================================================================
 // Child Generation
@@ -573,11 +539,7 @@ function generateChild(
       break
     }
 
-    case "binding": {
-      // Bindings are handled as part of element generation
-      // This case handles standalone binding nodes if they occur
-      break
-    }
+
 
     case "statement": {
       // Emit statement source verbatim
@@ -1083,23 +1045,7 @@ function generateHoleSetup(
       break
     }
 
-    case "binding": {
-      // Two-way binding - wire to the grabbed element
-      const bindingType = hole.bindingType
-      const refSource = hole.refSource
-      if (!bindingType || !refSource) break
 
-      if (bindingType === "checked") {
-        lines.push(
-          `${ind}bindChecked(${nodeRef}, ${refSource}, ${state.scopeVar})`,
-        )
-      } else {
-        lines.push(
-          `${ind}bindTextValue(${nodeRef}, ${refSource}, ${state.scopeVar})`,
-        )
-      }
-      break
-    }
 
     case "region": {
       // Region hole - the grabbed node is the opening comment marker

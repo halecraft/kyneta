@@ -291,37 +291,6 @@ describe("walkIR", () => {
     })
   })
 
-  describe("binding walking", () => {
-    it("should yield binding events for element bindings", () => {
-      const element = makeElement(
-        "input",
-        [],
-        [],
-        [],
-        [
-          {
-            attribute: "value",
-            refSource: "doc.title",
-            bindingType: "value",
-            span: makeSpan(),
-          },
-        ],
-      )
-      const node = makeBuilder("div", [element])
-      const events = collectEvents(node)
-
-      const bindingEvents = events.filter(e => e.type === "binding")
-      expect(bindingEvents).toHaveLength(1)
-      expect(bindingEvents[0]).toMatchObject({
-        type: "binding",
-        attribute: "value",
-        refSource: "doc.title",
-        bindingType: "value",
-        path: [0],
-      })
-    })
-  })
-
   describe("region walking", () => {
     it("should yield regionPlaceholder for reactive loops", () => {
       const loop = createLoop(

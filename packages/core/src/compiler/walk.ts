@@ -147,20 +147,7 @@ export interface ComponentPlaceholderEvent {
   path: number[]
 }
 
-/**
- * Event emitted for a two-way binding.
- */
-export interface BindingEvent {
-  type: "binding"
-  /** The binding attribute (e.g., "value", "checked") */
-  attribute: string
-  /** The ref source expression */
-  refSource: string
-  /** The binding type */
-  bindingType: "value" | "checked"
-  /** Path to the containing element */
-  path: number[]
-}
+
 
 /**
  * Union of all walk events.
@@ -175,7 +162,6 @@ export type WalkEvent =
   | DynamicContentEvent
   | RegionPlaceholderEvent
   | ComponentPlaceholderEvent
-  | BindingEvent
 
 // =============================================================================
 // Walker Implementation
@@ -325,17 +311,6 @@ function* walkElement(
     }
   }
 
-  // Emit bindings
-  for (const binding of node.bindings) {
-    yield {
-      type: "binding",
-      attribute: binding.attribute,
-      refSource: binding.refSource,
-      bindingType: binding.bindingType,
-      path: [...pathStack],
-    }
-  }
-
   const isVoid = VOID_ELEMENTS.has(node.tag)
 
   if (isVoid) {
@@ -423,22 +398,6 @@ function* walkChild(
 
     case "conditional":
       yield* walkConditional(node, pathStack)
-      break
-
-    case "binding":
-      // BindingNode represents a bind() call in content position
-      // For walking purposes, treat as dynamic content
-      yield {
-        type: "dynamicContent",
-        node: {
-          kind: "content",
-          source: `${node.refSource}.get ? ${node.refSource}.get() : ${node.refSource}`,
-          bindingTime: "reactive",
-          dependencies: [],
-          span: node.span,
-        },
-        path: [...pathStack],
-      }
       break
 
     case "statement":

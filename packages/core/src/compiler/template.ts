@@ -153,18 +153,7 @@ function processEvent(
       // No HTML output for event handlers
       return inOpeningTag
 
-    case "binding":
-      // Record hole for two-way binding
-      holes.push({
-        path: event.path,
-        kind: "binding",
-        bindingType: event.bindingType,
-        refSource: event.refSource,
-        attributeName: event.attribute,
-      })
-      // Emit placeholder attribute
-      htmlParts.push(` ${event.attribute}=""`)
-      return inOpeningTag
+
 
     case "staticText":
       // Close opening tag if needed before content

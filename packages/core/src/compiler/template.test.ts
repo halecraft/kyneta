@@ -278,25 +278,6 @@ describe("extractTemplate", () => {
       expect(eventHole!.path).toEqual([0])
     })
 
-    it("should record hole for two-way binding", () => {
-      const binding = {
-        attribute: "value",
-        refSource: "doc.title",
-        bindingType: "value" as const,
-        span: makeSpan(),
-      }
-      const element = makeElement("input", [], [], [], [binding])
-      const node = makeBuilder("div", [element])
-      const template = extractTemplate(node)
-
-      expect(template.holes).toHaveLength(1)
-      expect(template.holes[0]).toMatchObject({
-        kind: "binding",
-        bindingType: "value",
-        refSource: "doc.title",
-        path: [0],
-      })
-    })
   })
 
   // =============================================================================

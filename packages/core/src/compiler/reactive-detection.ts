@@ -1,29 +1,28 @@
 /**
- * Reactive Type Detection and Component Factory Detection
+ * Changefeed Type Detection and Component Factory Detection
  *
  * This module provides functions to detect whether TypeScript types implement
- * the Reactive interface from @loro-extended/reactive, and whether types
- * implement the ComponentFactory interface from Kinetic.
+ * the CHANGEFEED protocol from @kyneta/schema, and whether types implement
+ * the ComponentFactory interface from Kinetic.
  *
  * Detection uses a three-layer property-level strategy that checks whether
- * a candidate type has a property keyed by the `[REACTIVE]` unique symbol:
+ * a candidate type has a property keyed by the `[CHANGEFEED]` unique symbol:
  *
  * 1. **Symbol.for() tracing** — When the symbol's declaration has an
  *    initializer (source files), we walk the AST to verify it's
- *    `Symbol.for("kinetic:reactive")`. This is the most robust check.
+ *    `Symbol.for("kinetic:changefeed")`. This is the most robust check.
  *
  * 2. **Symbol declaration name** — In `.d.ts` files the initializer is
  *    erased, but the `unique symbol` type still carries a reference back
  *    to the variable that declared it. We check that variable's name
- *    is `"REACTIVE"`.
+ *    is `"CHANGEFEED"`.
  *
  * 3. **Property escaped name** — As a last-resort fallback, we check
- *    the property's own mangled name (`__@REACTIVE@<id>`).
+ *    the property's own mangled name (`__@CHANGEFEED@<id>`).
  *
- * This approach is more robust than the previous `isTypeAssignableTo`
- * strategy because it works regardless of whether the `Reactive` interface
- * has generic type parameters (which caused `isTypeAssignableTo` to fail
- * when `Reactive<D>` was introduced).
+ * This approach is more robust than `isTypeAssignableTo` because it works
+ * regardless of whether the `Changefeed` interface has generic type
+ * parameters.
  *
  * @packageDocumentation
  */
@@ -50,7 +49,7 @@ const resolvedModules = new WeakMap<Project, Set<string>>()
  * load external package types.
  *
  * @param project - The ts-morph Project
- * @param moduleSpecifier - The module to resolve (e.g., "@loro-extended/change")
+ * @param moduleSpecifier - The module to resolve (e.g., "@kyneta/schema")
  * @param fromFile - The file requesting the import (for resolution context)
  */
 export function resolveAndAddModule(
@@ -90,10 +89,10 @@ export function resolveAndAddModule(
 }
 
 /**
- * Resolve common reactive-related modules for a source file.
+ * Resolve changefeed-related modules for a source file.
  *
- * This scans the source file's imports and resolves any modules that might
- * contain reactive types (@loro-extended/change, @loro-extended/reactive, etc.)
+ * This resolves `@kyneta/schema` (the sole reactive type provider) and
+ * any other `@kyneta/*` packages found in the source file's imports.
  *
  * @param project - The ts-morph Project
  * @param sourceFile - The source file to scan for imports
@@ -102,13 +101,13 @@ export function resolveReactiveImports(
   project: Project,
   sourceFile: SourceFile,
 ): void {
-  // Always resolve the reactive package for the probe type
-  resolveAndAddModule(project, "@loro-extended/reactive", sourceFile)
+  // Always resolve @kyneta/schema — it defines CHANGEFEED and all change types
+  resolveAndAddModule(project, "@kyneta/schema", sourceFile)
 
-  // Scan imports and resolve any @loro-extended packages
+  // Scan imports and resolve any @kyneta packages
   for (const importDecl of sourceFile.getImportDeclarations()) {
     const moduleSpecifier = importDecl.getModuleSpecifierValue()
-    if (moduleSpecifier.startsWith("@loro-extended/")) {
+    if (moduleSpecifier.startsWith("@kyneta/")) {
       resolveAndAddModule(project, moduleSpecifier, sourceFile)
     }
   }
@@ -134,9 +133,9 @@ export function resolveReactiveImports(
  *    with `mangledPrefix`.
  *
  * @param compilerSymbol - The compiler symbol to inspect
- * @param symbolForKey - The string key passed to Symbol.for() (e.g., "kinetic:reactive")
- * @param declarationName - The variable name of the symbol declaration (e.g., "REACTIVE")
- * @param mangledPrefix - The mangled property name prefix (e.g., "__@REACTIVE@")
+ * @param symbolForKey - The string key passed to Symbol.for() (e.g., "kinetic:changefeed")
+ * @param declarationName - The variable name of the symbol declaration (e.g., "CHANGEFEED")
+ * @param mangledPrefix - The mangled property name prefix (e.g., "__@CHANGEFEED@")
  * @returns true if this property is keyed by the specified well-known symbol
  */
 function isWellKnownSymbolProperty(
@@ -146,7 +145,7 @@ function isWellKnownSymbolProperty(
   mangledPrefix: string,
 ): boolean {
   // Access the symbol's internal links to get the nameType.
-  // For computed property names like [REACTIVE], TypeScript stores the
+  // For computed property names like [CHANGEFEED], TypeScript stores the
   // type of the key expression (the unique symbol type) as `nameType`.
   const links = (compilerSymbol as any).links as
     | Record<string, unknown>
@@ -181,7 +180,7 @@ function isWellKnownSymbolProperty(
       // Layer 2: Check the symbol's declaration name.
       // In .d.ts files the initializer is erased, but the unique symbol
       // type still references the variable that declared it. Its
-      // escapedName is the clean variable name (e.g., "REACTIVE"),
+      // escapedName is the clean variable name (e.g., "CHANGEFEED"),
       // not the mangled property name.
       if (nameSymbol) {
         const symName = nameSymbol.escapedName as string
@@ -204,78 +203,60 @@ function isWellKnownSymbolProperty(
 }
 
 /**
- * Check whether a compiler symbol represents the `[REACTIVE]` property.
- * Delegates to `isWellKnownSymbolProperty` with REACTIVE-specific parameters.
+ * Check whether a compiler symbol represents the `[CHANGEFEED]` property.
+ * Delegates to `isWellKnownSymbolProperty` with CHANGEFEED-specific parameters.
  */
-function isReactiveSymbolProperty(compilerSymbol: ts.Symbol): boolean {
+function isChangefeedSymbolProperty(compilerSymbol: ts.Symbol): boolean {
   return isWellKnownSymbolProperty(
     compilerSymbol,
-    "kinetic:reactive",
-    "REACTIVE",
-    "__@REACTIVE@",
+    "kinetic:changefeed",
+    "CHANGEFEED",
+    "__@CHANGEFEED@",
   )
 }
 
 /**
- * Check whether a compiler symbol represents the `[SNAPSHOT]` property.
- * Delegates to `isWellKnownSymbolProperty` with SNAPSHOT-specific parameters.
- */
-function isSnapshotSymbolProperty(compilerSymbol: ts.Symbol): boolean {
-  return isWellKnownSymbolProperty(
-    compilerSymbol,
-    "kinetic:snapshot",
-    "SNAPSHOT",
-    "__@SNAPSHOT@",
-  )
-}
-
-/**
- * Check if a type is reactive.
+ * Check if a type has a changefeed.
  *
- * A type is reactive if it has a property keyed by the `[REACTIVE]` unique
- * symbol from `@loro-extended/reactive`. This is the property that the
+ * A type has a changefeed if it has a property keyed by the `[CHANGEFEED]`
+ * unique symbol from `@kyneta/schema`. This is the property that the
  * Kinetic compiler uses to identify reactive types, and the runtime uses
  * to subscribe to changes.
  *
+ * The `[CHANGEFEED]` symbol subsumes the old two-symbol design:
+ * - `[REACTIVE]` → `[CHANGEFEED].subscribe(cb)`
+ * - `[SNAPSHOT]` → `[CHANGEFEED].current`
+ *
  * The detection is purely property-level — it does not rely on
- * `isTypeAssignableTo` against the `Reactive` interface, which avoids
- * issues with generic type parameters on the interface.
+ * `isTypeAssignableTo` against the `HasChangefeed` interface, which avoids
+ * issues with generic type parameters.
  *
  * Handles:
- * - Direct types (TextRef, ListRef<T>, LocalRef<T>, etc.)
- * - Union types (reactive if any branch is reactive)
+ * - Direct types (TextRef, SequenceRef<T>, LocalRef<T>, etc.)
+ * - Union types (reactive if any branch has changefeed)
  * - Types from `.d.ts` files (where `Symbol.for()` initializers are erased)
  * - Types from `.ts` source files (where initializers are available)
  *
  * @param type - The ts-morph Type to check
- * @returns true if the type implements Reactive
- *
- * @example
- * ```typescript
- * const varDecl = sourceFile.getVariableDeclaration("myRef")
- * const type = varDecl.getType()
- * if (isReactiveType(type)) {
- *   // This type implements Reactive — it has a [REACTIVE] property
- * }
- * ```
+ * @returns true if the type has a [CHANGEFEED] property
  */
-export function isReactiveType(type: Type): boolean {
+export function isChangefeedType(type: Type): boolean {
   // Exclude `any` and `unknown` — they match everything but are not reactive.
   const typeText = type.getText()
   if (typeText === "any" || typeText === "unknown") {
     return false
   }
 
-  // Handle union types: reactive if any branch is reactive.
-  // e.g., LocalRef<number> | null → true because LocalRef is reactive.
+  // Handle union types: reactive if any branch has changefeed.
+  // e.g., LocalRef<number> | null → true because LocalRef has changefeed.
   if (type.isUnion()) {
-    return type.getUnionTypes().some(t => isReactiveType(t))
+    return type.getUnionTypes().some(t => isChangefeedType(t))
   }
 
-  // Check the type's properties for one keyed by the REACTIVE symbol.
+  // Check the type's properties for one keyed by the CHANGEFEED symbol.
   const properties = type.compilerType.getProperties()
   for (const prop of properties) {
-    if (isReactiveSymbolProperty(prop)) {
+    if (isChangefeedSymbolProperty(prop)) {
       return true
     }
   }
@@ -283,192 +264,111 @@ export function isReactiveType(type: Type): boolean {
   return false
 }
 
-/**
- * Check if a type is snapshotable.
- *
- * A type is snapshotable if it has a property keyed by the `[SNAPSHOT]` unique
- * symbol from `@loro-extended/reactive`. This indicates the type can have its
- * current state read uniformly via the `[SNAPSHOT]` protocol.
- *
- * Follows the same pattern as `isReactiveType`: excludes `any`/`unknown`,
- * handles union types, and uses property-level detection.
- *
- * @param type - The ts-morph Type to check
- * @returns true if the type implements Snapshotable
- */
-export function isSnapshotableType(type: Type): boolean {
-  // Exclude `any` and `unknown` — they match everything but are not snapshotable.
-  const typeText = type.getText()
-  if (typeText === "any" || typeText === "unknown") {
-    return false
-  }
-
-  // Handle union types: snapshotable if any branch is snapshotable.
-  if (type.isUnion()) {
-    return type.getUnionTypes().some(t => isSnapshotableType(t))
-  }
-
-  // Check the type's properties for one keyed by the SNAPSHOT symbol.
-  const properties = type.compilerType.getProperties()
-  for (const prop of properties) {
-    if (isSnapshotSymbolProperty(prop)) {
-      return true
-    }
-  }
-
-  return false
-}
+// Backward-compatible alias — analyze.ts re-exports this name.
+// The function is the same; CHANGEFEED subsumes both REACTIVE and SNAPSHOT.
+export { isChangefeedType as isReactiveType }
 
 /**
- * Get the snapshot return type for a snapshotable type.
+ * Get the delta kind for a type with a changefeed.
  *
- * Extracts the return type `S` from the `[SNAPSHOT]` property's call signature.
- * The property has type `SnapshotFn<S>` which is `(self: unknown) => S`.
+ * This inspects the `[CHANGEFEED]` property's type to determine what kind
+ * of changes the changefeed emits. The property type is
+ * `Changefeed<S, C>` which has a `subscribe` method whose callback
+ * receives `C`. We extract the `type` literal from `C`.
  *
- * @param type - The ts-morph Type to inspect (must be snapshotable)
- * @returns The snapshot return type as text (e.g., "string", "number"), or undefined
- */
-export function getSnapshotType(type: Type): string | undefined {
-  // Handle union types: use the first snapshotable branch
-  if (type.isUnion()) {
-    for (const t of type.getUnionTypes()) {
-      if (isSnapshotableType(t)) {
-        return getSnapshotType(t)
-      }
-    }
-    return undefined
-  }
-
-  // Find the [SNAPSHOT] property
-  const properties = type.compilerType.getProperties()
-  let snapshotProperty: ts.Symbol | undefined
-
-  for (const prop of properties) {
-    if (isSnapshotSymbolProperty(prop)) {
-      snapshotProperty = prop
-      break
-    }
-  }
-
-  if (!snapshotProperty) {
-    return undefined
-  }
-
-  try {
-    const checker = (type.compilerType as { checker?: ts.TypeChecker }).checker
-    if (!checker) {
-      return undefined
-    }
-
-    const propType = checker.getTypeOfSymbol(snapshotProperty)
-    const callSignatures = propType.getCallSignatures()
-
-    if (callSignatures.length === 0) {
-      return undefined
-    }
-
-    // The return type of (self: unknown) => S is S
-    const returnType = callSignatures[0].getReturnType()
-    return checker.typeToString(returnType)
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * Get the delta kind for a reactive type.
- *
- * This inspects the `[REACTIVE]` property's type to determine what kind of
- * deltas the reactive emits. The property has type `ReactiveSubscribe<D>`
- * which is `(self, callback: (delta: D) => void) => () => void`.
- *
- * We extract `D` by:
- * 1. Getting the `[REACTIVE]` property type
- * 2. Getting the call signature's second parameter (the callback)
- * 3. Getting the callback's first parameter type (the delta type `D`)
- * 4. Reading the `type` property's literal type from that delta
+ * Extraction path (7 hops):
+ * 1. `[CHANGEFEED]` property → property type (`Changefeed<S, C>`)
+ * 2. → `.subscribe` method
+ * 3. → subscribe call signature
+ * 4. → `params[0]` (callback `(change: C) => void`)
+ * 5. → callback call signature
+ * 6. → `params[0]` (change `C`)
+ * 7. → `.type` property → string literal value
  *
  * Falls back to "replace" for unknown types or extraction failures.
  *
- * @param type - The ts-morph Type to inspect (must be reactive)
+ * @param type - The ts-morph Type to inspect (must have changefeed)
  * @returns The delta kind this type emits
  */
 export function getDeltaKind(type: Type): DeltaKind {
-  // Handle union types: use the first reactive branch's delta kind
+  // Handle union types: use the first changefeed branch's delta kind
   if (type.isUnion()) {
     for (const t of type.getUnionTypes()) {
-      if (isReactiveType(t)) {
+      if (isChangefeedType(t)) {
         return getDeltaKind(t)
       }
     }
     return "replace"
   }
 
-  // Find the [REACTIVE] property
+  // Find the [CHANGEFEED] property
   const properties = type.compilerType.getProperties()
-  let reactiveProperty: ts.Symbol | undefined
+  let changefeedProperty: ts.Symbol | undefined
 
   for (const prop of properties) {
-    if (isReactiveSymbolProperty(prop)) {
-      reactiveProperty = prop
+    if (isChangefeedSymbolProperty(prop)) {
+      changefeedProperty = prop
       break
     }
   }
 
-  if (!reactiveProperty) {
+  if (!changefeedProperty) {
     return "replace"
   }
 
   try {
-    // Get the property's type
-    // The property type is ReactiveSubscribe<D> = (self, callback: (delta: D) => void) => () => void
-    // Note: `checker` is not part of the public ts.Type interface but is available
-    // on instantiated types. We use a type assertion to access it.
+    // Get the type checker. Not part of the public ts.Type interface but
+    // available on instantiated types.
     const checker = (type.compilerType as { checker?: ts.TypeChecker }).checker
     if (!checker) {
       return "replace"
     }
 
-    const propType = checker.getTypeOfSymbol(reactiveProperty)
-    const callSignatures = propType.getCallSignatures()
+    // Hop 1: Get the [CHANGEFEED] property type → Changefeed<S, C>
+    const changefeedType = checker.getTypeOfSymbol(changefeedProperty)
 
-    if (callSignatures.length === 0) {
+    // Hop 2: Get the `.subscribe` method on Changefeed<S, C>
+    const subscribeProp = changefeedType.getProperty("subscribe")
+    if (!subscribeProp) {
       return "replace"
     }
 
-    // Get the second parameter (callback: (delta: D) => void)
-    const sig = callSignatures[0]
-    const params = sig.getParameters()
+    const subscribeType = checker.getTypeOfSymbol(subscribeProp)
 
-    if (params.length < 2) {
+    // Hop 3: Get the call signature of subscribe
+    const subscribeSignatures = subscribeType.getCallSignatures()
+    if (subscribeSignatures.length === 0) {
       return "replace"
     }
 
-    const callbackParam = params[1]
+    const subscribeSig = subscribeSignatures[0]
+    const subscribeParams = subscribeSig.getParameters()
+    if (subscribeParams.length === 0) {
+      return "replace"
+    }
+
+    // Hop 4: Get the callback parameter type → (change: C) => void
+    const callbackParam = subscribeParams[0]
     const callbackType = checker.getTypeOfSymbol(callbackParam)
 
-    // The callback type is (delta: D) => void
+    // Hop 5: Get the callback's call signature
     const callbackSignatures = callbackType.getCallSignatures()
-
     if (callbackSignatures.length === 0) {
       return "replace"
     }
 
-    // Get the first parameter of the callback (delta: D)
     const callbackSig = callbackSignatures[0]
-    const deltaParams = callbackSig.getParameters()
-
-    if (deltaParams.length === 0) {
+    const changeParams = callbackSig.getParameters()
+    if (changeParams.length === 0) {
       return "replace"
     }
 
-    const deltaParam = deltaParams[0]
-    const deltaType = checker.getTypeOfSymbol(deltaParam)
+    // Hop 6: Get the change parameter type → C (the change type)
+    const changeParam = changeParams[0]
+    const changeType = checker.getTypeOfSymbol(changeParam)
 
-    // Now extract the "type" property from the delta type
-    // The delta type is { type: "text" | "list" | ... ; ops?: ... }
-    const typeProperty = deltaType.getProperty("type")
-
+    // Hop 7: Extract the "type" property from the change type
+    const typeProperty = changeType.getProperty("type")
     if (!typeProperty) {
       return "replace"
     }

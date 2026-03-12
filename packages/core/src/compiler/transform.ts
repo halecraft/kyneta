@@ -113,7 +113,6 @@ export interface TransformInPlaceResult {
    */
   requiredImports: {
     runtime: Set<string>
-    loro: Set<string>
   }
 }
 
@@ -133,15 +132,14 @@ let sharedProject: Project | null = null
  * The project uses the real filesystem so that imports from node_modules
  * resolve naturally — no type stubs needed. The Vite plugin passes the
  * file's real absolute path, enabling ts-morph's module resolution to
- * find @loro-extended/change, @loro-extended/kinetic, etc. via pnpm
- * workspace symlinks.
+ * find @kyneta/schema, @kyneta/core, etc. via pnpm workspace symlinks.
  *
  * Key configuration:
  * - moduleResolution: Bundler (100) for pnpm compatibility
  * - skipFileDependencyResolution: true — we manually resolve external
  *   packages to avoid loading all of node_modules. This is necessary
  *   because TypeScript needs the .d.ts files to properly analyze types
- *   from external packages (like detecting [REACTIVE] properties).
+ *   from external packages (like detecting [CHANGEFEED] properties).
  *
  * Do NOT use tsConfigFilePath — it's 500ms+ due to loading all files.
  */
@@ -178,9 +176,9 @@ export function resetProject(): void {
 /**
  * Parse source code into a ts-morph SourceFile.
  *
- * After creating the source file, this resolves any @loro-extended imports
- * so that TypeScript can fully analyze external reactive types (detecting
- * [REACTIVE] properties, etc.).
+ * After creating the source file, this resolves any @kyneta imports
+ * so that TypeScript can fully analyze changefeed types (detecting
+ * [CHANGEFEED] properties, etc.).
  */
 function parseSource(source: string, filename: string): SourceFile {
   const project = getProject()
@@ -197,7 +195,7 @@ function parseSource(source: string, filename: string): SourceFile {
     overwrite: true,
   })
 
-  // Resolve @loro-extended imports so TypeScript can analyze reactive types
+  // Resolve @kyneta imports so TypeScript can analyze changefeed types
   resolveReactiveImports(project, sourceFile)
 
   return sourceFile
@@ -211,21 +209,16 @@ function parseSource(source: string, filename: string): SourceFile {
  * Collect required runtime imports from IR nodes.
  *
  * This is a pure function that analyzes the IR and returns the set
- * of runtime function names that need to be imported.
- *
- * Returns two sets:
- * - `runtime`: Functions from `@loro-extended/kinetic/runtime` (subscribe, listRegion, etc.)
- * - `loro`: Functions from `@loro-extended/kinetic/loro` (bindTextValue, bindChecked, etc.)
+ * of runtime function names that need to be imported from
+ * `@kyneta/core/runtime`.
  *
  * @param ir - Array of builder nodes to analyze
- * @returns Object with `runtime` and `loro` import sets
+ * @returns Object with `runtime` import set
  */
 export function collectRequiredImports(ir: BuilderNode[]): {
   runtime: Set<string>
-  loro: Set<string>
 } {
   const runtime = new Set<string>()
-  const loro = new Set<string>()
 
   function collectFromChildren(children: ChildNode[]): void {
     for (const child of children) {
@@ -246,14 +239,6 @@ export function collectRequiredImports(ir: BuilderNode[]): {
           collectFromChildren(branch.body)
         }
       } else if (child.kind === "element") {
-        // Check for bindings on elements (these come from /loro subpath)
-        for (const binding of child.bindings) {
-          if (binding.bindingType === "checked") {
-            loro.add("bindChecked")
-          } else {
-            loro.add("bindTextValue")
-          }
-        }
         // Check for multi-dependency attributes and inputTextRegion candidates
         for (const attr of child.attributes) {
           if (
@@ -294,7 +279,7 @@ export function collectRequiredImports(ir: BuilderNode[]): {
     collectFromBuilder(builder)
   }
 
-  return { runtime, loro }
+  return { runtime }
 }
 
 /**
@@ -319,11 +304,8 @@ function formatImportStatement(
  * Generate imports for the runtime functions used in DOM output.
  */
 function generateDOMImports(ir: BuilderNode[]): string {
-  const { runtime, loro } = collectRequiredImports(ir)
-  let result = ""
-  result += formatImportStatement(runtime, "@loro-extended/kinetic/runtime")
-  result += formatImportStatement(loro, "@loro-extended/kinetic/loro")
-  return result
+  const { runtime } = collectRequiredImports(ir)
+  return formatImportStatement(runtime, "@kyneta/core/runtime")
 }
 
 // =============================================================================
@@ -380,26 +362,19 @@ function mergeImportsForModule(
  * Merge required imports into a source file.
  *
  * This function modifies the source file in place, adding imports from
- * the appropriate subpaths:
- * - Runtime functions from `@loro-extended/kinetic/runtime`
- * - Loro bindings from `@loro-extended/kinetic/loro`
+ * `@kyneta/core/runtime`.
  *
  * @param sourceFile - The ts-morph SourceFile to modify
- * @param requiredImports - Object with `runtime` and `loro` import sets
+ * @param requiredImports - Object with `runtime` import set
  */
 export function mergeImports(
   sourceFile: SourceFile,
-  requiredImports: { runtime: Set<string>; loro: Set<string> },
+  requiredImports: { runtime: Set<string> },
 ): void {
   mergeImportsForModule(
     sourceFile,
     requiredImports.runtime,
-    "@loro-extended/kinetic/runtime",
-  )
-  mergeImportsForModule(
-    sourceFile,
-    requiredImports.loro,
-    "@loro-extended/kinetic/loro",
+    "@kyneta/core/runtime",
   )
 }
 

@@ -15,9 +15,8 @@
 
 import {
   getDeltaKind,
+  isChangefeedType,
   isComponentFactoryType,
-  isReactiveType,
-  isSnapshotableType,
 } from "./reactive-detection.js"
 import {
   type ArrayBindingPattern,
@@ -47,7 +46,6 @@ import type {
   ConditionalBranch,
   ContentNode,
   Dependency,
-  ElementBinding,
   EventHandlerNode,
   SourceSpan,
 } from "./ir.js"
@@ -278,8 +276,9 @@ export function getSpan(node: Node): SourceSpan {
 // Type Analysis
 // =============================================================================
 
-// isReactiveType is imported from ./reactive-detection.js
-export { isReactiveType }
+// isChangefeedType is imported from ./reactive-detection.js.
+// Re-export under both names for backward compatibility.
+export { isChangefeedType, isChangefeedType as isReactiveType }
 
 /**
  * Check if an expression accesses a reactive ref.
@@ -291,8 +290,8 @@ export function expressionIsReactive(expr: Expression): boolean {
   // Get the type of the expression
   const type = expr.getType()
 
-  // Check if the result type is reactive
-  if (isReactiveType(type)) {
+  // Check if the result type has a changefeed
+  if (isChangefeedType(type)) {
     return true
   }
 
@@ -300,7 +299,7 @@ export function expressionIsReactive(expr: Expression): boolean {
   if (expr.getKind() === SyntaxKind.PropertyAccessExpression) {
     const propAccess = expr as PropertyAccessExpression
     const objType = propAccess.getExpression().getType()
-    if (isReactiveType(objType)) {
+    if (isChangefeedType(objType)) {
       return true
     }
     // Recursively check the object expression
@@ -316,7 +315,7 @@ export function expressionIsReactive(expr: Expression): boolean {
     if (calleeExpr.getKind() === SyntaxKind.PropertyAccessExpression) {
       const propAccess = calleeExpr as PropertyAccessExpression
       const objType = propAccess.getExpression().getType()
-      if (isReactiveType(objType)) {
+      if (isChangefeedType(objType)) {
         return true
       }
       // Recursively check the callee's object expression for deeper chains.
@@ -367,7 +366,7 @@ export function expressionIsReactive(expr: Expression): boolean {
       const decls = symbol.getDeclarations()
       for (const decl of decls) {
         const declType = decl.getType()
-        if (isReactiveType(declType)) {
+        if (isChangefeedType(declType)) {
           return true
         }
       }
@@ -401,17 +400,17 @@ export function extractDependencies(expr: Expression): Dependency[] {
       const propAccess = node as PropertyAccessExpression
       const objExpr = propAccess.getExpression()
       const objType = objExpr.getType()
-      if (isReactiveType(objType)) {
+      if (isChangefeedType(objType)) {
         addDep(objExpr.getText(), objType)
       }
 
-      // Also check if the *result* of the property access is reactive.
+      // Also check if the *result* of the property access has a changefeed.
       // This captures cases like `doc.title` where `doc` (TypedDoc) is not
       // reactive but `doc.title` (TextRef) is. Without this, the dependency
       // would be missed entirely. The depsMap deduplication ensures no
       // double-capture when the expression is already captured above.
       const resultType = propAccess.getType()
-      if (isReactiveType(resultType)) {
+      if (isChangefeedType(resultType)) {
         addDep(propAccess.getText(), resultType)
       }
     }
@@ -425,7 +424,7 @@ export function extractDependencies(expr: Expression): Dependency[] {
         const propAccess = calleeExpr as PropertyAccessExpression
         const objExpr = propAccess.getExpression()
         const objType = objExpr.getType()
-        if (isReactiveType(objType)) {
+        if (isChangefeedType(objType)) {
           addDep(objExpr.getText(), objType)
         }
       }
@@ -442,7 +441,7 @@ export function extractDependencies(expr: Expression): Dependency[] {
 
       if (!isPropertyName) {
         const type = (node as Expression).getType()
-        if (isReactiveType(type)) {
+        if (isChangefeedType(type)) {
           addDep(node.getText(), type)
         }
       }
@@ -538,7 +537,7 @@ export function detectDirectRead(expr: Expression): string | undefined {
   const receiver = propAccess.getExpression()
   const receiverType = receiver.getType()
 
-  if (!isReactiveType(receiverType)) {
+  if (!isChangefeedType(receiverType)) {
     return undefined
   }
 
@@ -576,14 +575,11 @@ export function detectImplicitRead(expr: Expression): string | undefined {
     return undefined
   }
 
-  // 2. Expression's type must be reactive
+  // 2. Expression's type must have a changefeed.
+  // CHANGEFEED subsumes both REACTIVE and SNAPSHOT — any type with
+  // [CHANGEFEED] is both subscribable and has a readable .current.
   const type = expr.getType()
-  if (!isReactiveType(type)) {
-    return undefined
-  }
-
-  // 3. Expression's type must be snapshotable
-  if (!isSnapshotableType(type)) {
+  if (!isChangefeedType(type)) {
     return undefined
   }
 
@@ -646,42 +642,7 @@ export function analyzeExpression(expr: Expression): ContentNode {
 // Props Analysis
 // =============================================================================
 
-/**
- * Check if a call expression is a bind() call.
- */
-function isBindCall(expr: Expression): boolean {
-  if (expr.getKind() !== SyntaxKind.CallExpression) {
-    return false
-  }
-  const call = expr as CallExpression
-  const callee = call.getExpression()
-  return callee.getText() === "bind"
-}
 
-/**
- * Extract the ref source from a bind() call.
- */
-function extractBindRefSource(expr: CallExpression): string | null {
-  const args = expr.getArguments()
-  if (args.length === 0) {
-    return null
-  }
-  return args[0].getText()
-}
-
-/**
- * Binding information extracted from props.
- */
-export interface BindingInfo {
-  /** The attribute being bound (e.g., "value", "checked") */
-  attribute: string
-  /** The ref source (e.g., "doc.title") */
-  refSource: string
-  /** The type of binding */
-  bindingType: "value" | "checked"
-  /** Source span */
-  span: SourceSpan
-}
 
 /**
  * Analyze props object literal.
@@ -689,11 +650,9 @@ export interface BindingInfo {
 export function analyzeProps(obj: ObjectLiteralExpression): {
   attributes: AttributeNode[]
   eventHandlers: EventHandlerNode[]
-  bindings: BindingInfo[]
 } {
   const attributes: AttributeNode[] = []
   const eventHandlers: EventHandlerNode[] = []
-  const bindings: BindingInfo[] = []
 
   for (const prop of obj.getProperties()) {
     // Property assignment: { name: value }
@@ -719,18 +678,6 @@ export function analyzeProps(obj: ObjectLiteralExpression): {
           handlerSource: valueNode.getText(),
           span: getSpan(prop),
         })
-      } else if (isBindCall(valueNode)) {
-        // Two-way binding: value: bind(doc.title)
-        const refSource = extractBindRefSource(valueNode as CallExpression)
-        if (refSource) {
-          const bindingType = name === "checked" ? "checked" : "value"
-          bindings.push({
-            attribute: name,
-            refSource,
-            bindingType,
-            span: getSpan(prop),
-          })
-        }
       } else {
         // Regular attribute
         const value = analyzeExpression(valueNode)
@@ -746,7 +693,7 @@ export function analyzeProps(obj: ObjectLiteralExpression): {
     }
   }
 
-  return { attributes, eventHandlers, bindings }
+  return { attributes, eventHandlers }
 }
 
 // =============================================================================
@@ -1069,7 +1016,6 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
 
   let props: AttributeNode[] = []
   let eventHandlers: EventHandlerNode[] = []
-  let bindings: ElementBinding[] = []
   const children: ChildNode[] = []
   let startIndex = 0
 
@@ -1079,12 +1025,6 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
     const propsResult = analyzeProps(firstArg as ObjectLiteralExpression)
     props = propsResult.attributes
     eventHandlers = propsResult.eventHandlers
-    bindings = propsResult.bindings.map(b => ({
-      attribute: b.attribute,
-      refSource: b.refSource,
-      bindingType: b.bindingType,
-      span: b.span,
-    }))
     startIndex = 1
   }
 
@@ -1124,7 +1064,7 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
     factoryName,
     props,
     eventHandlers,
-    bindings,
+    [],
     children,
     getSpan(call),
     isComponent ? factoryName : undefined,
