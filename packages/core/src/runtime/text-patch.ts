@@ -19,11 +19,11 @@
  */
 
 import {
-  SNAPSHOT,
-  type ReactiveDelta,
-  type Snapshotable,
-  type TextDeltaOp,
-} from "@loro-extended/reactive"
+  CHANGEFEED,
+  type ChangeBase,
+  type HasChangefeed,
+  type TextChangeOp,
+} from "@kyneta/schema"
 import type { Scope } from "./scope.js"
 import { subscribe } from "./subscribe.js"
 
@@ -72,7 +72,7 @@ export type TextPatchOp =
  * // → [{ kind: "delete", offset: 2, count: 3 }]
  * ```
  */
-export function planTextPatch(ops: TextDeltaOp[]): TextPatchOp[] {
+export function planTextPatch(ops: TextChangeOp[]): TextPatchOp[] {
   const result: TextPatchOp[] = []
   let cursor = 0
 
@@ -115,7 +115,7 @@ export function planTextPatch(ops: TextDeltaOp[]): TextPatchOp[] {
  * // text.textContent === "Hello World"
  * ```
  */
-export function patchText(textNode: Text, ops: TextDeltaOp[]): void {
+export function patchText(textNode: Text, ops: TextChangeOp[]): void {
   const patchOps = planTextPatch(ops)
 
   for (const op of patchOps) {
@@ -157,7 +157,7 @@ export function patchText(textNode: Text, ops: TextDeltaOp[]): void {
  */
 export function patchInputValue(
   input: HTMLInputElement | HTMLTextAreaElement,
-  ops: TextDeltaOp[],
+  ops: TextChangeOp[],
   selectMode: "preserve" | "end" = "preserve",
 ): void {
   const patchOps = planTextPatch(ops)
@@ -186,14 +186,14 @@ export function patchInputValue(
  * 4. Fall back to full replacement for non-text deltas
  *
  * **Origin-driven selectMode dispatch:** The subscription dispatches
- * `setRangeText` selectMode based on `delta.origin`:
+ * `setRangeText` selectMode based on `change.origin`:
  * - `origin === "local"` → `"end"` (cursor advances past inserts, stays at
  *   delete point). Correct for local typing, undo, and redo.
  * - anything else (`"import"`, `undefined`) → `"preserve"` (cursor shifts
  *   relative to remote edits). Correct for remote collaborator edits.
  *
  * @param input - The input or textarea element to manage
- * @param ref - The reactive text ref (must have a `get()` method)
+ * @param ref - The reactive text ref (must implement [CHANGEFEED])
  * @param scope - The scope for subscription cleanup
  *
  * @example
@@ -209,9 +209,9 @@ export function inputTextRegion(
   ref: unknown,
   scope: Scope,
 ): void {
-  // Read initial state via [SNAPSHOT] protocol
-  const snapshotable = ref as Snapshotable<string>
-  const readValue = () => snapshotable[SNAPSHOT](ref)
+  // Read initial state via [CHANGEFEED] protocol
+  const changefeedRef = ref as HasChangefeed<string>
+  const readValue = () => changefeedRef[CHANGEFEED].current
 
   // Set initial value
   input.value = readValue()
@@ -219,16 +219,20 @@ export function inputTextRegion(
   // Subscribe to changes
   subscribe(
     ref,
-    (delta: ReactiveDelta) => {
-      if (delta.type === "text") {
+    (change: ChangeBase) => {
+      if (change.type === "text") {
         // Origin-driven selectMode dispatch:
         // - local edits (typing, undo, redo) → "end" (cursor follows edit)
         // - remote/unknown edits → "preserve" (cursor stays relative)
-        const mode = delta.origin === "local" ? "end" : "preserve"
+        const mode = change.origin === "local" ? "end" : "preserve"
         // Surgical update — O(k) where k is the edit size
-        patchInputValue(input, delta.ops, mode)
+        patchInputValue(
+          input,
+          (change as { ops: TextChangeOp[] }).ops,
+          mode,
+        )
       } else {
-        // Fallback for non-text deltas (e.g., "replace") — O(n) full replacement
+        // Fallback for non-text changes (e.g., "replace") — O(n) full replacement
         input.value = readValue()
       }
     },
@@ -250,7 +254,7 @@ export function inputTextRegion(
  * 3. Apply surgical patches for text deltas, fall back to full replacement otherwise
  *
  * @param textNode - The DOM Text node to manage
- * @param ref - The reactive text ref (must have a `get()` method)
+ * @param ref - The reactive text ref (must implement [CHANGEFEED])
  * @param scope - The scope for subscription cleanup
  *
  * @example
@@ -262,9 +266,9 @@ export function inputTextRegion(
  * ```
  */
 export function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
-  // Read initial state via [SNAPSHOT] protocol
-  const snapshotable = ref as Snapshotable<string>
-  const readValue = () => snapshotable[SNAPSHOT](ref)
+  // Read initial state via [CHANGEFEED] protocol
+  const changefeedRef = ref as HasChangefeed<string>
+  const readValue = () => changefeedRef[CHANGEFEED].current
 
   // Set initial value
   textNode.textContent = readValue()
@@ -272,12 +276,12 @@ export function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
   // Subscribe to changes
   subscribe(
     ref,
-    (delta: ReactiveDelta) => {
-      if (delta.type === "text") {
+    (change: ChangeBase) => {
+      if (change.type === "text") {
         // Surgical update — O(k) where k is the edit size
-        patchText(textNode, delta.ops)
+        patchText(textNode, (change as { ops: TextChangeOp[] }).ops)
       } else {
-        // Fallback for non-text deltas (e.g., "replace") — O(n) full replacement
+        // Fallback for non-text changes (e.g., "replace") — O(n) full replacement
         textNode.textContent = readValue()
       }
     },

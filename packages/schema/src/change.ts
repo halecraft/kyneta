@@ -19,9 +19,16 @@
  * All actions carry a string `type` discriminant. Built-in action types
  * use well-known strings ("text", "sequence", "map", "replace", "tree").
  * Third-party backends extend this with their own types.
+ *
+ * The optional `origin` field carries provenance metadata — e.g.
+ * `"local"` for edits made by the current user, `"import"` for
+ * changes arriving from a remote peer. Consumers that don't need
+ * provenance can ignore it (it's always optional and undefined-safe).
  */
 export interface ChangeBase {
   readonly type: string
+  /** Optional provenance tag (e.g. "local", "import"). */
+  readonly origin?: string
 }
 
 // ---------------------------------------------------------------------------

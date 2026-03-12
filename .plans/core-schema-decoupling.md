@@ -119,26 +119,26 @@ Create a `LocalRef` implementation in `@kyneta/core` that uses `CHANGEFEED` inst
 
 - `src/reactive/local-ref.test.ts`: `state(0)` creates a LocalRef; `.get()` returns initial value; `.set(v)` updates; `hasChangefeed(ref)` returns true; `ref[CHANGEFEED].current` returns live value; `ref[CHANGEFEED].subscribe(cb)` fires on `.set()` with `ReplaceChange`; unsubscribe stops notifications; multiple subscribers independent
 
-## Phase 3: Runtime Subscription Rewiring 🔴
+## Phase 3: Runtime Subscription Rewiring 🟢
 
 Replace the runtime's `REACTIVE`/`SNAPSHOT` subscription infrastructure with `CHANGEFEED` from `@kyneta/schema`.
 
 ### Tasks
 
-1. Rewrite `src/runtime/subscribe.ts` to use `CHANGEFEED` 🔴
+1. Rewrite `src/runtime/subscribe.ts` to use `CHANGEFEED` 🟢
 
    - Replace `import { isReactive, REACTIVE, type ReactiveDelta } from "@loro-extended/reactive"` with `import { CHANGEFEED, hasChangefeed, type ChangeBase } from "@kyneta/schema"`
    - `subscribe(ref, handler, scope)`: validate via `hasChangefeed(ref)`, subscribe via `ref[CHANGEFEED].subscribe(handler)`, handler receives `ChangeBase` instead of `ReactiveDelta`
    - `subscribeWithValue(ref, getValue, onValue, scope)`: keep the caller-provided `getValue` closure — it evaluates the *user's expression* (e.g. `() => doc.count.get().toString()`), not just the raw ref value. `CHANGEFEED.current` returns the ref's own value, but codegen expressions may transform it. The `getValue` closure serves a different purpose than `.current`.
    - `subscribeMultiple(refs, handler, scope)`: same pattern, `ChangeBase` in wrapper
 
-2. Rewrite `src/runtime/text-patch.ts` 🔴
+2. Rewrite `src/runtime/text-patch.ts` 🟢
 
    - Replace `SNAPSHOT` / `Snapshotable` / `ReactiveDelta` / `TextDeltaOp` imports with `CHANGEFEED` / `HasChangefeed` / `ChangeBase` / `TextChangeOp` from `@kyneta/schema`
    - `textRegion`: read initial via `(ref as HasChangefeed<string>)[CHANGEFEED].current`, subscribe via `subscribe(ref, ...)`, dispatch on `change.type === "text"` with `change.ops: TextChangeOp[]`
    - `inputTextRegion`: same pattern; delta provenance (`origin` field) needs to be addressed — schema's `ChangeBase` does not carry `origin`. Add an optional `origin?: string` field to `ChangeBase` in `@kyneta/schema` — this is a one-line, backward-compatible addition that aligns with the schema's open-protocol philosophy (the field is already documented as optional/undefined-safe in the old protocol). Without provenance, `inputTextRegion` would use `"preserve"` selectMode for all edits, causing incorrect cursor behavior for local typing.
 
-3. Rewrite `src/runtime/regions.ts` 🔴
+3. Rewrite `src/runtime/regions.ts` 🟢
 
    - Replace `import type { ListDeltaOp, ReactiveDelta } from "@loro-extended/reactive"` with `import { type ChangeBase, type SequenceChange, type SequenceChangeOp } from "@kyneta/schema"`
    - Dispatch on `change.type === "sequence"` instead of `delta.type === "list"`
@@ -158,7 +158,7 @@ Replace the runtime's `REACTIVE`/`SNAPSHOT` subscription infrastructure with `CH
 
    The change carries data (for `step()` / pure computation); the runtime uses the ref tree (for DOM). These are two different layers serving different purposes.
 
-4. Update `src/runtime/index.ts` to remove references to `@loro-extended/kinetic` in doc comments 🔴
+4. Update `src/runtime/index.ts` to remove references to `@loro-extended/kinetic` in doc comments 🟢
 
 ### Tests
 

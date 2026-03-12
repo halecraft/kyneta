@@ -4,18 +4,18 @@
  * Provides functions for subscribing to reactive value changes and
  * managing subscription lifecycles within scopes.
  *
- * This module is Loro-agnostic — it uses the [REACTIVE] symbol from
- * @loro-extended/reactive to subscribe to any reactive type (LocalRef,
- * Loro refs, custom reactive types).
+ * This module uses the [CHANGEFEED] symbol from @kyneta/schema to
+ * subscribe to any reactive type that implements the changefeed
+ * protocol (LocalRef, schema-interpreted refs, custom reactive types).
  *
  * @packageDocumentation
  */
 
 import {
-  isReactive,
-  REACTIVE,
-  type ReactiveDelta,
-} from "@loro-extended/reactive"
+  CHANGEFEED,
+  hasChangefeed,
+  type ChangeBase,
+} from "@kyneta/schema"
 import type { Scope } from "./scope.js"
 
 /**
@@ -68,37 +68,36 @@ export function getActiveSubscriptionCount(): number {
  * Subscribe to a reactive ref's changes.
  *
  * This function is called by compiled code.
- * It subscribes via the [REACTIVE] symbol and registers
+ * It subscribes via the [CHANGEFEED] symbol and registers
  * cleanup with the provided scope.
  *
- * Works with any type that implements the Reactive interface:
- * - LocalRef from @loro-extended/reactive
- * - Loro typed refs (TextRef, ListRef, etc.) from @loro-extended/change
- * - Custom reactive types
+ * Works with any type that implements the HasChangefeed interface:
+ * - LocalRef from @kyneta/core
+ * - Schema-interpreted refs from @kyneta/schema
+ * - Custom reactive types with [CHANGEFEED]
  *
- * @param ref - A reactive value (must have [REACTIVE] property)
- * @param handler - Called when the ref changes, with a delta describing the change
+ * @param ref - A reactive value (must have [CHANGEFEED] property)
+ * @param handler - Called when the ref changes, with a change describing what happened
  * @param scope - The scope that owns this subscription
  * @returns Subscription ID for manual unsubscription (rarely needed)
  */
 export function subscribe(
   ref: unknown,
-  handler: (delta: ReactiveDelta) => void,
+  handler: (change: ChangeBase) => void,
   scope: Scope,
 ): SubscriptionId {
   const id = ++subscriptionIdCounter
 
-  // Validate that ref is reactive
-  if (!isReactive(ref)) {
+  // Validate that ref has a changefeed
+  if (!hasChangefeed(ref)) {
     throw new Error(
       "subscribe called with non-reactive value. " +
-        "Expected a value with [REACTIVE] property.",
+        "Expected a value with [CHANGEFEED] property.",
     )
   }
 
-  // Subscribe via the [REACTIVE] symbol
-  // The ref's [REACTIVE] implementation handles translation to ReactiveDelta
-  const unsubscribeFn = ref[REACTIVE](ref, handler)
+  // Subscribe via the [CHANGEFEED] symbol
+  const unsubscribeFn = ref[CHANGEFEED].subscribe(handler)
 
   // Track the subscription
   activeSubscriptions.set(id, { ref, unsubscribe: unsubscribeFn })
@@ -138,8 +137,14 @@ export function unsubscribe(id: SubscriptionId): boolean {
  * 1. Set the initial value
  * 2. Update on changes
  *
- * The delta is ignored — this function always re-reads the value via getValue().
+ * The change is ignored — this function always re-reads the value via getValue().
  * This is the fallback for expressions where delta-based patching isn't possible.
+ *
+ * Note: `getValue` is a caller-provided closure that evaluates the *user's
+ * expression* (e.g. `() => doc.count.get().toString()`), not just the raw
+ * ref value. `CHANGEFEED.current` returns the ref's own value, but codegen
+ * expressions may transform it. The `getValue` closure serves a different
+ * purpose than `.current`.
  *
  * @param ref - A reactive value
  * @param getValue - Function to get the current value from the ref
@@ -156,10 +161,10 @@ export function subscribeWithValue<T>(
   // Call immediately with current value
   onValue(getValue())
 
-  // Subscribe to changes — ignore the delta and re-read the value
+  // Subscribe to changes — ignore the change and re-read the value
   return subscribe(
     ref,
-    (_delta: ReactiveDelta) => {
+    (_change: ChangeBase) => {
       onValue(getValue())
     },
     scope,
@@ -179,7 +184,7 @@ export function subscribeMultiple(
   handler: () => void,
   scope: Scope,
 ): SubscriptionId[] {
-  // Wrap the void handler to accept and ignore the delta
-  const wrappedHandler = (_delta: ReactiveDelta) => handler()
+  // Wrap the void handler to accept and ignore the change
+  const wrappedHandler = (_change: ChangeBase) => handler()
   return refs.map(ref => subscribe(ref, wrappedHandler, scope))
 }

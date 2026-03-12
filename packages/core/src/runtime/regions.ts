@@ -1,8 +1,8 @@
 /**
  * Region management for lists and conditionals.
  *
- * Regions are DOM areas that update reactively based on Loro data:
- * - List regions: Render items from a LoroList, update via deltas
+ * Regions are DOM areas that update reactively based on data changes:
+ * - List regions: Render items from a sequence ref, update via deltas
  * - Conditional regions: Show/hide content based on a condition
  *
  * ## List Region Architecture (Functional Core / Imperative Shell)
@@ -11,14 +11,14 @@
  *
  * **Functional Core** (pure, testable):
  * - `planInitialRender(listRef)` → `ListRegionOp<T>[]`
- * - `planDeltaOps(listRef, event)` → `ListRegionOp<T>[]`
+ * - `planDeltaOps(listRef, deltaOps)` → `ListRegionOp<T>[]`
  *
  * **Imperative Shell** (DOM manipulation):
  * - `executeOp(parent, state, handlers, op)` — applies single operation
  *
- * Both planning functions use `listRef.get(index)` to obtain refs, ensuring
- * handlers always receive `PlainValueRef<T>` for value shapes. This enables
- * the component pattern where refs are passed for two-way binding:
+ * Both planning functions use `listRef.at(index)` to obtain refs, ensuring
+ * handlers always receive refs for value shapes. This enables the component
+ * pattern where refs are passed for two-way binding:
  *
  * ```typescript
  * for (const itemRef of doc.items) {
@@ -29,7 +29,7 @@
  * @packageDocumentation
  */
 
-import type { ListDeltaOp, ReactiveDelta } from "@loro-extended/reactive"
+import type { ChangeBase, SequenceChangeOp } from "@kyneta/schema"
 import type {
   ConditionalRegionHandlers,
   ConditionalRegionOp,
@@ -205,8 +205,8 @@ export function releaseSlot(parent: Node, slot: Slot): void {
 export interface ListRefLike<T> {
   /** Number of items in the list */
   readonly length: number
-  /** Get item at index — returns ref for value shapes */
-  get(index: number): T | undefined
+  /** Get ref at index — returns ref for value shapes */
+  at(index: number): T | undefined
 }
 
 /**
@@ -243,7 +243,7 @@ interface ListRegionState<T> extends RegionStateBase {
  * Plan operations for initial render of a list region.
  *
  * This is a pure function that returns insert operations for all items
- * in the list. Uses `listRef.get(i)` to obtain refs (not raw values).
+ * in the list. Uses `listRef.at(i)` to obtain refs (not raw values).
  *
  * @param listRef - The list ref to iterate over
  * @returns Array of insert operations
@@ -255,7 +255,7 @@ export function planInitialRender<T>(
 ): ListRegionOp<T>[] {
   const ops: ListRegionOp<T>[] = []
   for (let i = 0; i < listRef.length; i++) {
-    const item = listRef.get(i)
+    const item = listRef.at(i)
     if (item !== undefined) {
       ops.push({ kind: "insert", index: i, item })
     }
@@ -264,24 +264,27 @@ export function planInitialRender<T>(
 }
 
 /**
- * Plan operations based on list delta ops from a ReactiveDelta.
+ * Plan operations based on sequence change ops from a SequenceChange.
  *
- * Converts Kinetic's ListDeltaOp[] into ListRegionOp[] for DOM manipulation.
- * For inserts, it uses `listRef.get(index)` to obtain refs (not raw values).
+ * Converts SequenceChangeOp<T>[] into ListRegionOp[] for DOM manipulation.
+ * For inserts, it uses `listRef.at(index)` to obtain refs from the live
+ * ref tree — the plain values in the change ops are NOT passed to handlers.
+ * This preserves the two-layer model: changes carry data (for step/pure
+ * computation), the runtime uses the ref tree (for DOM).
  *
  * Emits batch operations when count > 1 for better DOM performance:
  * - batch-insert: One DocumentFragment insertion instead of N insertBefore calls
  * - batch-delete: One Range.deleteContents() instead of N removeChild calls
  *
- * @param listRef - The list ref (already updated by the source)
- * @param deltaOps - The list delta operations from a ReactiveDelta
+ * @param listRef - The sequence ref (already updated by the source)
+ * @param deltaOps - The sequence change operations from a SequenceChange
  * @returns Array of operations to apply
  *
  * @internal - Exported for testing
  */
 export function planDeltaOps<T>(
   listRef: ListRefLike<T>,
-  deltaOps: ListDeltaOp[],
+  deltaOps: SequenceChangeOp<unknown>[],
 ): ListRegionOp<T>[] {
   const ops: ListRegionOp<T>[] = []
   let index = 0
@@ -301,14 +304,16 @@ export function planDeltaOps<T>(
       }
       // Don't advance index - next op is at same position
     } else if ("insert" in delta) {
-      const insertCount = delta.insert
+      // insert carries readonly T[] — use .length as count, then look up
+      // refs from the live ref tree via listRef.at(index)
+      const insertCount = delta.insert.length
       if (insertCount > 1) {
         // Batch insert: one DocumentFragment insertion instead of N insertBefore calls
-        // Note: batch-insert carries count, not items. Executor calls listRef.get()
+        // Note: batch-insert carries count, not items. Executor calls listRef.at()
         ops.push({ kind: "batch-insert", index, count: insertCount })
       } else {
-        // Single insert: use listRef.get() to get ref
-        const item = listRef.get(index)
+        // Single insert: use listRef.at() to get ref
+        const item = listRef.at(index)
         if (item !== undefined) {
           ops.push({ kind: "insert", index, item })
         }
@@ -390,7 +395,7 @@ function executeOp<T>(
     const newScopes: (Scope | null)[] = []
 
     for (let i = 0; i < op.count; i++) {
-      const item = state.listRef.get(op.index + i)
+      const item = state.listRef.at(op.index + i)
       if (item === undefined) continue
 
       const itemScope = needsScope ? state.parentScope.createChild() : null
@@ -532,7 +537,7 @@ export function listRegion<T>(
   handlers: ListRegionHandlers<T>,
   scope: Scope,
 ): void {
-  // Cast to ListRefLike - the listRef must have .length and .get()
+  // Cast to ListRefLike - the listRef must have .length and .at()
   const typedListRef = listRef as ListRefLike<T>
 
   // Initialize state with listRef stored for delta handling
@@ -550,13 +555,16 @@ export function listRegion<T>(
   // Subscribe to changes
   subscribe(
     listRef,
-    (delta: ReactiveDelta) => {
-      // Only process sequence deltas — other delta types trigger full re-render
-      if (delta.type === "sequence") {
-        const regionOps = planDeltaOps(state.listRef, delta.ops)
+    (change: ChangeBase) => {
+      // Only process sequence changes — other change types trigger full re-render
+      if (change.type === "sequence") {
+        const regionOps = planDeltaOps(
+          state.listRef,
+          (change as { ops: SequenceChangeOp<unknown>[] }).ops,
+        )
         executeOps(parent, state, handlers, regionOps)
       } else {
-        // Fallback: non-sequence delta (e.g., "replace") — full re-render
+        // Fallback: non-sequence change (e.g., "replace") — full re-render
         // Clear existing items
         for (let i = state.slots.length - 1; i >= 0; i--) {
           const slot = state.slots[i]

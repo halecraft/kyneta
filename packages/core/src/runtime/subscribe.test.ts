@@ -1,17 +1,18 @@
-import { createTypedDoc, loro, Shape } from "@loro-extended/change"
-import {
-  LocalRef,
-  REACTIVE,
-  SNAPSHOT,
-  type ReactiveDelta,
-  type ReactiveSubscribe,
-  type SnapshotFn,
-} from "@loro-extended/reactive"
+/**
+ * Tests for subscribe.ts — subscription management using CHANGEFEED protocol.
+ *
+ * These tests use LocalRef from src/reactive (Phase 2) as the reactive
+ * primitive, replacing the old @loro-extended/reactive types.
+ */
+
+import { CHANGEFEED, type ChangeBase, hasChangefeed } from "@kyneta/schema"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { LocalRef, state } from "../reactive/local-ref.js"
 import { resetScopeIdCounter, Scope } from "./scope.js"
 import {
   activeSubscriptions,
   getActiveSubscriptionCount,
+  getActiveSubscriptions,
   resetSubscriptionIdCounter,
   subscribe,
   subscribeMultiple,
@@ -31,65 +32,68 @@ describe("subscribe", () => {
   })
 
   describe("subscribe", () => {
-    it("should subscribe to a TextRef and receive events", () => {
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+    it("should subscribe to a LocalRef and receive changes", () => {
+      const ref = state(0)
       const scope = new Scope()
       const handler = vi.fn()
 
-      const id = subscribe(doc.title, handler, scope)
+      const id = subscribe(ref, handler, scope)
 
       expect(id).toBe(1)
       expect(getActiveSubscriptionCount()).toBe(1)
 
       // Make a change
-      doc.title.insert(0, "Hello")
-      loro(doc).commit()
+      ref.set(42)
 
-      expect(handler).toHaveBeenCalled()
-
-      scope.dispose()
-    })
-
-    it("should subscribe to a CounterRef and receive events", () => {
-      const schema = Shape.doc({ count: Shape.counter() })
-      const doc = createTypedDoc(schema)
-      const scope = new Scope()
-      const handler = vi.fn()
-
-      subscribe(doc.count, handler, scope)
-
-      doc.count.increment(5)
-      loro(doc).commit()
-
-      expect(handler).toHaveBeenCalled()
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0][0]).toEqual({
+        type: "replace",
+        value: 42,
+      })
 
       scope.dispose()
     })
 
-    it("should subscribe to a ListRef and receive events", () => {
-      const schema = Shape.doc({ items: Shape.list(Shape.plain.string()) })
-      const doc = createTypedDoc(schema)
+    it("should subscribe to a string LocalRef and receive changes", () => {
+      const ref = state("hello")
       const scope = new Scope()
       const handler = vi.fn()
 
-      subscribe(doc.items, handler, scope)
+      subscribe(ref, handler, scope)
 
-      doc.items.push("item1")
-      loro(doc).commit()
+      ref.set("world")
 
-      expect(handler).toHaveBeenCalled()
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0][0]).toEqual({
+        type: "replace",
+        value: "world",
+      })
+
+      scope.dispose()
+    })
+
+    it("should receive multiple changes", () => {
+      const ref = state(0)
+      const scope = new Scope()
+      const handler = vi.fn()
+
+      subscribe(ref, handler, scope)
+
+      ref.set(1)
+      ref.set(2)
+      ref.set(3)
+
+      expect(handler).toHaveBeenCalledTimes(3)
 
       scope.dispose()
     })
 
     it("should unsubscribe when scope is disposed", () => {
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+      const ref = state(0)
       const scope = new Scope()
       const handler = vi.fn()
 
-      subscribe(doc.title, handler, scope)
+      subscribe(ref, handler, scope)
 
       expect(getActiveSubscriptionCount()).toBe(1)
 
@@ -98,21 +102,19 @@ describe("subscribe", () => {
       expect(getActiveSubscriptionCount()).toBe(0)
 
       // Make a change after dispose
-      doc.title.insert(0, "Hello")
-      loro(doc).commit()
+      ref.set(99)
 
       // Handler should not be called after dispose
       expect(handler).not.toHaveBeenCalled()
     })
 
     it("should return unique subscription IDs", () => {
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+      const ref = state(0)
       const scope = new Scope()
 
-      const id1 = subscribe(doc.title, () => {}, scope)
-      const id2 = subscribe(doc.title, () => {}, scope)
-      const id3 = subscribe(doc.title, () => {}, scope)
+      const id1 = subscribe(ref, () => {}, scope)
+      const id2 = subscribe(ref, () => {}, scope)
+      const id3 = subscribe(ref, () => {}, scope)
 
       expect(id1).toBe(1)
       expect(id2).toBe(2)
@@ -122,14 +124,13 @@ describe("subscribe", () => {
     })
 
     it("should track subscription in active subscriptions map", () => {
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+      const ref = state(0)
       const scope = new Scope()
 
-      const id = subscribe(doc.title, () => {}, scope)
+      const id = subscribe(ref, () => {}, scope)
 
       expect(activeSubscriptions.has(id)).toBe(true)
-      expect(activeSubscriptions.get(id)?.ref).toBe(doc.title)
+      expect(activeSubscriptions.get(id)?.ref).toBe(ref)
 
       scope.dispose()
 
@@ -139,11 +140,10 @@ describe("subscribe", () => {
 
   describe("unsubscribe", () => {
     it("should unsubscribe and return true for valid ID", () => {
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+      const ref = state(0)
       const scope = new Scope()
 
-      const id = subscribe(doc.title, () => {}, scope)
+      const id = subscribe(ref, () => {}, scope)
 
       expect(getActiveSubscriptionCount()).toBe(1)
 
@@ -163,11 +163,10 @@ describe("subscribe", () => {
     })
 
     it("should return false when called twice with same ID", () => {
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+      const ref = state(0)
       const scope = new Scope()
 
-      const id = subscribe(doc.title, () => {}, scope)
+      const id = subscribe(ref, () => {}, scope)
 
       expect(unsubscribe(id)).toBe(true)
       expect(unsubscribe(id)).toBe(false)
@@ -178,17 +177,13 @@ describe("subscribe", () => {
 
   describe("subscribeWithValue", () => {
     it("should call onValue immediately with initial value", () => {
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+      const ref = state("Hello")
       const scope = new Scope()
-
-      doc.title.insert(0, "Hello")
-      loro(doc).commit()
 
       const values: string[] = []
       subscribeWithValue(
-        doc.title,
-        () => doc.title.toString(),
+        ref,
+        () => ref.get(),
         value => values.push(value),
         scope,
       )
@@ -199,27 +194,24 @@ describe("subscribe", () => {
     })
 
     it("should call onValue on subsequent changes", () => {
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+      const ref = state("")
       const scope = new Scope()
 
       const values: string[] = []
       subscribeWithValue(
-        doc.title,
-        () => doc.title.toString(),
+        ref,
+        () => ref.get(),
         value => values.push(value),
         scope,
       )
 
       expect(values).toEqual([""])
 
-      doc.title.insert(0, "Hello")
-      loro(doc).commit()
+      ref.set("Hello")
 
       expect(values).toEqual(["", "Hello"])
 
-      doc.title.insert(5, " World")
-      loro(doc).commit()
+      ref.set("Hello World")
 
       expect(values).toEqual(["", "Hello", "Hello World"])
 
@@ -227,44 +219,61 @@ describe("subscribe", () => {
     })
 
     it("should stop receiving values after scope dispose", () => {
-      const schema = Shape.doc({ count: Shape.counter() })
-      const doc = createTypedDoc(schema)
+      const ref = state(0)
       const scope = new Scope()
 
       const values: number[] = []
       subscribeWithValue(
-        doc.count,
-        () => doc.count.get(),
+        ref,
+        () => ref.get(),
         value => values.push(value),
         scope,
       )
 
-      doc.count.increment(1)
-      loro(doc).commit()
+      ref.set(1)
 
       expect(values).toEqual([0, 1])
 
       scope.dispose()
 
-      doc.count.increment(1)
-      loro(doc).commit()
+      ref.set(2)
 
       // Should not receive value after dispose
       expect(values).toEqual([0, 1])
+    })
+
+    it("should use the getValue closure, not CHANGEFEED.current", () => {
+      // This tests the critical design: getValue evaluates the user's
+      // expression, which may transform the raw ref value.
+      const ref = state(5)
+      const scope = new Scope()
+
+      const values: string[] = []
+      subscribeWithValue(
+        ref,
+        () => `count: ${ref.get()}`, // transformed expression
+        value => values.push(value),
+        scope,
+      )
+
+      expect(values).toEqual(["count: 5"])
+
+      ref.set(10)
+
+      expect(values).toEqual(["count: 5", "count: 10"])
+
+      scope.dispose()
     })
   })
 
   describe("subscribeMultiple", () => {
     it("should subscribe to multiple refs", () => {
-      const schema = Shape.doc({
-        title: Shape.text(),
-        count: Shape.counter(),
-      })
-      const doc = createTypedDoc(schema)
+      const a = state("a")
+      const b = state(0)
       const scope = new Scope()
       const handler = vi.fn()
 
-      const ids = subscribeMultiple([doc.title, doc.count], handler, scope)
+      const ids = subscribeMultiple([a, b], handler, scope)
 
       expect(ids).toHaveLength(2)
       expect(getActiveSubscriptionCount()).toBe(2)
@@ -275,23 +284,18 @@ describe("subscribe", () => {
     })
 
     it("should call handler when any ref changes", () => {
-      const schema = Shape.doc({
-        title: Shape.text(),
-        count: Shape.counter(),
-      })
-      const doc = createTypedDoc(schema)
+      const a = state("a")
+      const b = state(0)
       const scope = new Scope()
       const handler = vi.fn()
 
-      subscribeMultiple([doc.title, doc.count], handler, scope)
+      subscribeMultiple([a, b], handler, scope)
 
-      doc.title.insert(0, "Hello")
-      loro(doc).commit()
+      a.set("hello")
 
       expect(handler).toHaveBeenCalledTimes(1)
 
-      doc.count.increment(5)
-      loro(doc).commit()
+      b.set(5)
 
       expect(handler).toHaveBeenCalledTimes(2)
 
@@ -301,23 +305,20 @@ describe("subscribe", () => {
 
   describe("subscription counter for testing", () => {
     it("should track active subscription count", () => {
-      const schema = Shape.doc({
-        a: Shape.text(),
-        b: Shape.text(),
-        c: Shape.text(),
-      })
-      const doc = createTypedDoc(schema)
+      const a = state(1)
+      const b = state(2)
+      const c = state(3)
       const scope = new Scope()
 
       expect(getActiveSubscriptionCount()).toBe(0)
 
-      subscribe(doc.a, () => {}, scope)
+      subscribe(a, () => {}, scope)
       expect(getActiveSubscriptionCount()).toBe(1)
 
-      subscribe(doc.b, () => {}, scope)
+      subscribe(b, () => {}, scope)
       expect(getActiveSubscriptionCount()).toBe(2)
 
-      subscribe(doc.c, () => {}, scope)
+      subscribe(c, () => {}, scope)
       expect(getActiveSubscriptionCount()).toBe(3)
 
       scope.dispose()
@@ -325,38 +326,41 @@ describe("subscribe", () => {
     })
 
     it("should reset counter with resetSubscriptionIdCounter", () => {
-      const schema = Shape.doc({ title: Shape.text() })
-      const doc = createTypedDoc(schema)
+      const ref = state(0)
       const scope1 = new Scope()
       const scope2 = new Scope()
 
-      const id1 = subscribe(doc.title, () => {}, scope1)
+      const id1 = subscribe(ref, () => {}, scope1)
       expect(id1).toBe(1)
 
       scope1.dispose()
       resetSubscriptionIdCounter()
 
-      const id2 = subscribe(doc.title, () => {}, scope2)
+      const id2 = subscribe(ref, () => {}, scope2)
       expect(id2).toBe(1)
 
       scope2.dispose()
     })
   })
 
+  describe("getActiveSubscriptions", () => {
+    it("should return a read-only view", () => {
+      const readOnly = getActiveSubscriptions()
+      expect(readOnly).toBe(activeSubscriptions)
+    })
+  })
+
   describe("integration with scope hierarchy", () => {
     it("should unsubscribe child subscriptions when parent scope disposes", () => {
-      const schema = Shape.doc({
-        items: Shape.list(Shape.struct({ name: Shape.plain.string() })),
-      })
-      const doc = createTypedDoc(schema)
-      const parentScope = new Scope("parent")
+      const ref = state(0)
+      const parentScope = new Scope()
 
       // Simulate list items with their own scopes
       const childScope1 = parentScope.createChild()
       const childScope2 = parentScope.createChild()
 
-      subscribe(doc.items, () => {}, childScope1)
-      subscribe(doc.items, () => {}, childScope2)
+      subscribe(ref, () => {}, childScope1)
+      subscribe(ref, () => {}, childScope2)
 
       expect(getActiveSubscriptionCount()).toBe(2)
 
@@ -367,19 +371,16 @@ describe("subscribe", () => {
     })
 
     it("should allow nested scopes with independent subscriptions", () => {
-      const schema = Shape.doc({
-        title: Shape.text(),
-        count: Shape.counter(),
-      })
-      const doc = createTypedDoc(schema)
+      const a = state("a")
+      const b = state(0)
 
-      const root = new Scope("root")
+      const root = new Scope()
       const child1 = root.createChild()
       const child2 = root.createChild()
 
-      subscribe(doc.title, () => {}, root)
-      subscribe(doc.title, () => {}, child1)
-      subscribe(doc.count, () => {}, child2)
+      subscribe(a, () => {}, root)
+      subscribe(a, () => {}, child1)
+      subscribe(b, () => {}, child2)
 
       expect(getActiveSubscriptionCount()).toBe(3)
 
@@ -394,17 +395,20 @@ describe("subscribe", () => {
   })
 
   describe("LocalRef support", () => {
-    it("should subscribe to LocalRef and receive replace deltas", () => {
+    it("should subscribe to LocalRef and receive replace changes", () => {
       const ref = new LocalRef(0)
       const scope = new Scope()
-      const deltas: ReactiveDelta[] = []
+      const changes: ChangeBase[] = []
 
-      subscribe(ref, delta => deltas.push(delta), scope)
+      subscribe(ref, change => changes.push(change), scope)
 
       ref.set(1)
       ref.set(2)
 
-      expect(deltas).toEqual([{ type: "replace" }, { type: "replace" }])
+      expect(changes).toEqual([
+        { type: "replace", value: 1 },
+        { type: "replace", value: 2 },
+      ])
 
       scope.dispose()
     })
@@ -448,26 +452,27 @@ describe("subscribe", () => {
   })
 
   describe("custom reactive types", () => {
-    it("should subscribe to custom reactive type", () => {
-      // Create a minimal custom reactive type
-      const listeners = new Set<(delta: ReactiveDelta) => void>()
+    it("should subscribe to custom changefeed type", () => {
+      // Create a minimal custom changefeed type
+      const listeners = new Set<(change: ChangeBase) => void>()
       const customReactive = {
-        [SNAPSHOT]: ((_self: unknown) => null) as SnapshotFn<null>,
-        [REACTIVE]: ((
-          self: unknown,
-          callback: (delta: ReactiveDelta) => void,
-        ) => {
-          listeners.add(callback)
-          return () => listeners.delete(callback)
-        }) as ReactiveSubscribe,
+        [CHANGEFEED]: {
+          get current() {
+            return null
+          },
+          subscribe(callback: (change: ChangeBase) => void): () => void {
+            listeners.add(callback)
+            return () => listeners.delete(callback)
+          },
+        },
       }
 
       const scope = new Scope()
-      const received: ReactiveDelta[] = []
+      const received: ChangeBase[] = []
 
-      subscribe(customReactive, delta => received.push(delta), scope)
+      subscribe(customReactive, change => received.push(change), scope)
 
-      // Emit a delta manually
+      // Emit a change manually
       listeners.forEach(cb => cb({ type: "replace" }))
 
       expect(received).toEqual([{ type: "replace" }])
@@ -484,6 +489,36 @@ describe("subscribe", () => {
 
       expect(() => {
         subscribe(notReactive, () => {}, scope)
+      }).toThrow("non-reactive")
+
+      scope.dispose()
+    })
+
+    it("should throw for null", () => {
+      const scope = new Scope()
+
+      expect(() => {
+        subscribe(null, () => {}, scope)
+      }).toThrow("non-reactive")
+
+      scope.dispose()
+    })
+
+    it("should throw for undefined", () => {
+      const scope = new Scope()
+
+      expect(() => {
+        subscribe(undefined, () => {}, scope)
+      }).toThrow("non-reactive")
+
+      scope.dispose()
+    })
+
+    it("should throw for primitives", () => {
+      const scope = new Scope()
+
+      expect(() => {
+        subscribe(42, () => {}, scope)
       }).toThrow("non-reactive")
 
       scope.dispose()
