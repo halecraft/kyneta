@@ -38,17 +38,18 @@ This classification enables **binding-time promotion**: when branches diverge on
 
 ### Delta Kind: An Orthogonal Property
 
-For reactive dependencies, the compiler also tracks **delta kind** — what kind of structured change information the source provides. Named delta types are exported from `@loro-extended/reactive`:
+For reactive dependencies, the compiler also tracks **delta kind** — what kind of structured change information the source provides. Named change types are defined in `@kyneta/schema`:
 
 ```typescript
-type DeltaKind = "replace" | "text" | "list" | "map" | "tree"
+type DeltaKind = "replace" | "text" | "sequence" | "map" | "tree" | "increment"
 
-// Named delta types (each is one member of the ReactiveDelta union)
-type ReplaceDelta = { type: "replace" }
-type TextDelta = { type: "text"; ops: TextDeltaOp[] }
-type ListDelta = { type: "list"; ops: ListDeltaOp[] }
-type MapDelta = { type: "map"; ops: MapDeltaOp }
-type TreeDelta = { type: "tree"; ops: TreeDeltaOp[] }
+// Named change types (each is one member of the BuiltinChange union)
+type ReplaceChange<T> = { type: "replace"; value: T }
+type TextChange = { type: "text"; ops: TextChangeOp[] }
+type SequenceChange<T> = { type: "sequence"; ops: SequenceChangeOp<T>[] }
+type MapChange = { type: "map"; set?: Record<string, unknown>; delete?: string[] }
+type TreeChange = { type: "tree"; ops: TreeChangeOp[] }
+type IncrementChange = { type: "increment"; amount: number }
 ```
 
 Delta kind is **orthogonal to binding time**, not a fourth level. All reactive values change at runtime (same *when*), but they differ in *how much structural information* accompanies the notification:
@@ -57,9 +58,10 @@ Delta kind is **orthogonal to binding time**, not a fourth level. All reactive v
 literal  <  render  <  reactive
                          ├── replace (re-read + replace)
                          ├── text (character-level patch)
-                         ├── list (structural list ops)
+                         ├── sequence (structural sequence ops)
                          ├── map (key-level patch)
-                         └── tree (hierarchical ops)
+                         ├── tree (hierarchical ops)
+                         └── increment (counter delta)
 ```
 
 Each reactive dependency is represented as:
@@ -71,7 +73,7 @@ interface Dependency {
 }
 ```
 
-The `deltaKind` is an **optimization hint** that codegen can dispatch on. When the expression is a "direct read" and the delta kind is rich (text, list, etc.), codegen can emit specialized patch code. Otherwise it falls back to replace semantics. The fallback is always safe.
+The `deltaKind` is an **optimization hint** that codegen can dispatch on. When the expression is a "direct read" and the delta kind is rich (text, sequence, etc.), codegen can emit specialized patch code. Otherwise it falls back to replace semantics. The fallback is always safe.
 
 ### ContentValue: Unified Content Representation
 
@@ -558,15 +560,15 @@ Once a type is confirmed reactive, the compiler extracts its **delta kind** via 
 2. Get the `ReactiveSubscribe<D>` call signature
 3. Extract `D` from the callback parameter `(delta: D) => void`
 4. Read the `type` property from `D`
-5. If it's a single string literal (`"text"`, `"list"`, etc.), return it as the `DeltaKind`
+5. If it's a single string literal (`"text"`, `"sequence"`, etc.), return it as the `DeltaKind`
 6. Otherwise fall back to `"replace"`
 
-**Critical requirement:** Step 5 only works when `D` is a **narrowed** single-member type (e.g., `TextDelta`), not the full `ReactiveDelta` union. If `D` defaults to `ReactiveDelta`, the `type` property resolves to `"replace" | "text" | "list" | "map" | "tree"` — a union, not a string literal — and `isStringLiteral()` returns false, causing a silent fallback to `"replace"`.
+**Critical requirement:** Step 5 only works when `D` is a **narrowed** single-member type (e.g., `TextChange`), not the full `BuiltinChange` union. If `D` defaults to `ChangeBase`, the `type` property resolves to `string` — not a string literal — and `isStringLiteral()` returns false, causing a silent fallback to `"replace"`.
 
-Each typed ref must therefore declare its specific delta type:
+Each typed ref must therefore declare its specific change type:
 
 ```typescript
-// TextRef narrows D to TextDelta — getDeltaKind returns "text"
+// TextRef narrows C to TextChange — getDeltaKind returns "text"
 declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>
 
 // Without narrowing, D defaults to ReactiveDelta — getDeltaKind returns "replace"
@@ -814,7 +816,7 @@ function subscribe(
 ```
 
 The handler receives a `ReactiveDelta` describing what changed. This enables:
-- **List regions**: Extract `delta.ops` for O(k) DOM updates
+- **Sequence regions**: Extract `delta.ops` for O(k) DOM updates
 - **Text regions**: Use `insertData`/`deleteData` for O(k) surgical text updates
 - **Fallback**: For `"replace"` deltas or complex expressions, re-read the entire value
 
@@ -858,21 +860,21 @@ The `listRegion` runtime follows **Functional Core / Imperative Shell** pattern:
 
 **Functional Core** (pure, testable):
 - `planInitialRender(listRef)` → `ListRegionOp<T>[]`
-- `planDeltaOps(listRef, deltaOps: ListDeltaOp[])` → `ListRegionOp<T>[]`
+- `planDeltaOps(listRef, deltaOps: SequenceChangeOp<T>[])` → `ListRegionOp<T>[]`
 
 **Imperative Shell** (DOM manipulation):
 - `executeOp(parent, state, handlers, op)` — applies single operation
 
-The `listRegion` subscribe callback receives `ReactiveDelta` and dispatches:
+The `listRegion` subscribe callback receives a change and dispatches:
 
 ```typescript
-subscribe(listRef, (delta: ReactiveDelta) => {
-  if (delta.type === "list") {
+subscribe(listRef, (change: ChangeBase) => {
+  if (change.type === "sequence") {
     // O(k) update where k = number of changed items
-    const ops = planDeltaOps(state.listRef, delta.ops)
+    const ops = planDeltaOps(state.listRef, change.ops)
     executeOps(parent, state, handlers, ops)
   } else {
-    // Fallback: full re-render for "replace" or other delta types
+    // Fallback: full re-render for "replace" or other change types
     clearAll(state)
     const ops = planInitialRender(state.listRef)
     executeOps(parent, state, handlers, ops)
@@ -895,7 +897,7 @@ for (const itemRef of doc.items) {
 1. Use `listRef.get(index)` instead of `.toArray()` for ref preservation
 2. Delta inserts use count only — `listRef.get(index)` fetches actual values
 3. Store `listRef` in state for delta handling
-4. Non-list deltas (e.g., `"replace"`) trigger full re-render as fallback
+4. Non-sequence deltas (e.g., `"replace"`) trigger full re-render as fallback
 5. HTML codegen uses `[...listSource]` (iterator returns refs)
 
 ### Text Region Architecture
@@ -1486,7 +1488,7 @@ Every delta region has three phases:
 |-------------|-----------------|------------------------|------------|------------|
 | Text | `planTextPatch(ops)` | `patchText(node, ops)` | `"text"` | Text node |
 | Input Text | `planTextPatch(ops)` | `patchInputValue(input, ops)` | `"text"` | `<input>` / `<textarea>` value |
-| List | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"list"` | Parent element children |
+| Sequence | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"sequence"` | Parent element children |
 | Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition ref | Branch swap |
 
 ### Delta Provenance
@@ -1505,10 +1507,10 @@ Each region type handles its matching delta surgically:
 
 - **Text deltas** → `insertData` / `deleteData` on Text nodes (character-level)
 - **Input text deltas** → `patchInputValue` via `setRangeText` with origin-driven selectMode: `"end"` for local edits (cursor follows edit), `"preserve"` for remote edits (cursor preserves position)
-- **List deltas** → `insertBefore` / `removeChild` on parent (element-level)
+- **Sequence deltas** → `insertBefore` / `removeChild` on parent (element-level)
 - **Condition changes** → `replaceChild` for branch swapping
 
-When a delta type doesn't match the region type (e.g., a "replace" delta arrives at a list region), the region falls back to full re-render — clear all items and re-create from scratch.
+When a delta type doesn't match the region type (e.g., a "replace" delta arrives at a sequence region), the region falls back to full re-render — clear all items and re-create from scratch.
 
 ### Composability
 

@@ -330,7 +330,7 @@ describe("walkIR", () => {
         "item",
         null,
         [makeLiteral("item")],
-        [{ source: "doc.items", deltaKind: "list" }],
+        [{ source: "doc.items", deltaKind: "sequence" }],
         makeSpan(),
       )
       const node = makeBuilder("ul", [loop])

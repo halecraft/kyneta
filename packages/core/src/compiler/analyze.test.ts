@@ -892,7 +892,7 @@ describe("extractDependencies", () => {
     expect(deps[0].deltaKind).toBe("text")
   })
 
-  it("ListRef dependency has deltaKind 'list'", () => {
+  it("ListRef dependency has deltaKind 'sequence'", () => {
     const sourceFile = createSourceFile(
       project,
       `
@@ -908,7 +908,7 @@ describe("extractDependencies", () => {
     const deps = extractDependencies(propAccess)
     expect(deps.length).toBe(1)
     expect(deps[0].source).toBe("items")
-    expect(deps[0].deltaKind).toBe("list")
+    expect(deps[0].deltaKind).toBe("sequence")
   })
 
   it("LocalRef dependency has deltaKind 'replace'", () => {

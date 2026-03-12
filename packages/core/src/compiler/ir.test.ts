@@ -119,7 +119,7 @@ describe("createBuilder - dependency collection", () => {
         "item",
         null,
         [li],
-        [dep("doc.items", "list")],
+        [dep("doc.items", "sequence")],
         span(),
       )
       const builder = createBuilder("ul", [], [], [loop], span())
@@ -142,7 +142,7 @@ describe("createBuilder - dependency collection", () => {
         "item",
         null,
         [li],
-        [dep("doc.items", "list")],
+        [dep("doc.items", "sequence")],
         span(),
       )
       const builder = createBuilder("ul", [], [], [loop], span())
@@ -353,7 +353,7 @@ describe("createBuilder - dependency collection", () => {
         "item",
         null,
         [li],
-        [dep("doc.items", "list")],
+        [dep("doc.items", "sequence")],
         span(),
       )
       const ul = createElement("ul", [], [], [], [loop], span())
@@ -372,7 +372,7 @@ describe("createBuilder - dependency collection", () => {
         createContent(
           "doc.items.length > 0",
           "reactive",
-          [dep("doc.items", "list")],
+          [dep("doc.items", "sequence")],
           span(),
         ),
         [ul],
@@ -381,7 +381,7 @@ describe("createBuilder - dependency collection", () => {
       const elseBranch = createConditionalBranch(null, [emptyP], span())
       const conditional = createConditional(
         [ifBranch, elseBranch],
-        dep("doc.items", "list"),
+        dep("doc.items", "sequence"),
         span(),
       )
 
@@ -483,7 +483,7 @@ describe("computeHasReactiveItems", () => {
       "item",
       null,
       [li],
-      [dep("items", "list")],
+      [dep("items", "sequence")],
       span(),
     )
     expect(computeHasReactiveItems([loop])).toBe(true)

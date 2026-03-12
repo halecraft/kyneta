@@ -311,7 +311,7 @@ describe("extractTemplate", () => {
         "item",
         null,
         [makeLiteral("item")],
-        [{ source: "doc.items", deltaKind: "list" }],
+        [{ source: "doc.items", deltaKind: "sequence" }],
         makeSpan(),
       )
       const node = makeBuilder("ul", [loop])
@@ -365,7 +365,7 @@ describe("extractTemplate", () => {
         "item",
         null,
         [makeLiteral("item")],
-        [{ source: "doc.items1", deltaKind: "list" }],
+        [{ source: "doc.items1", deltaKind: "sequence" }],
         makeSpan(),
       )
       const loop2 = createLoop(
@@ -374,7 +374,7 @@ describe("extractTemplate", () => {
         "item",
         null,
         [makeLiteral("item")],
-        [{ source: "doc.items2", deltaKind: "list" }],
+        [{ source: "doc.items2", deltaKind: "sequence" }],
         makeSpan(),
       )
       const node = makeBuilder("div", [loop1, loop2])

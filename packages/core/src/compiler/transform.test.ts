@@ -1469,7 +1469,7 @@ describe("reactive type resolution from @loro-extended/change", () => {
     expect(result.code).not.toMatch(/subscribeWithValue\(title/)
   })
 
-  it("should produce deltaKind 'list' for ListRef", () => {
+  it("should produce deltaKind 'sequence' for ListRef", () => {
     const source = `
       import { ListRef } from "@loro-extended/change"
       declare const items: ListRef<string>
@@ -1484,7 +1484,7 @@ describe("reactive type resolution from @loro-extended/change", () => {
 
     const loop = result.ir[0].children[0] as any
     expect(loop.kind).toBe("loop")
-    expect(loop.dependencies[0].deltaKind).toBe("list")
+    expect(loop.dependencies[0].deltaKind).toBe("sequence")
     expect(result.code).toContain("listRegion")
   })
 

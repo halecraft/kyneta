@@ -551,12 +551,12 @@ export function listRegion<T>(
   subscribe(
     listRef,
     (delta: ReactiveDelta) => {
-      // Only process list deltas — other delta types trigger full re-render
-      if (delta.type === "list") {
+      // Only process sequence deltas — other delta types trigger full re-render
+      if (delta.type === "sequence") {
         const regionOps = planDeltaOps(state.listRef, delta.ops)
         executeOps(parent, state, handlers, regionOps)
       } else {
-        // Fallback: non-list delta (e.g., "replace") — full re-render
+        // Fallback: non-sequence delta (e.g., "replace") — full re-render
         // Clear existing items
         for (let i = state.slots.length - 1; i >= 0; i--) {
           const slot = state.slots[i]

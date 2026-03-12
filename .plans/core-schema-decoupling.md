@@ -63,21 +63,21 @@ The goal is to make `@kyneta/core` depend on `@kyneta/schema` (which it already 
 | Module resolution | `resolveAndAddModule("@loro-extended/reactive", ...)` | `resolveAndAddModule("@kyneta/schema", ...)` |
 | Package name in docs | `@loro-extended/kinetic` | `@kyneta/core` |
 
-## Phase 1: IR and Change Vocabulary Alignment 🔴
+## Phase 1: IR and Change Vocabulary Alignment 🟢
 
 Align the IR's `DeltaKind` type with schema's change type discriminants. This is a pure data-level change with no runtime or compiler detection changes.
 
 ### Tasks
 
-1. Update `DeltaKind` in `src/compiler/ir.ts` from `"replace" | "text" | "list" | "map" | "tree"` to `"replace" | "text" | "sequence" | "map" | "tree" | "increment"` 🔴
+1. Update `DeltaKind` in `src/compiler/ir.ts` from `"replace" | "text" | "list" | "map" | "tree"` to `"replace" | "text" | "sequence" | "map" | "tree" | "increment"` 🟢
 
-2. Update all `"list"` string literals to `"sequence"` in codegen dispatch sites (`src/compiler/codegen/dom.ts`, `src/compiler/codegen/html.ts`) 🔴
+2. Update all `"list"` string literals to `"sequence"` in codegen dispatch sites (`src/compiler/codegen/dom.ts`, `src/compiler/codegen/html.ts`) 🟢 — `dom.ts` had no `"list"` delta kind literals; `html.ts` has `"list"` only as a DOM marker type (not delta kind), left as-is
 
-3. Update the `TECHNICAL.md` delta kind table and all references from `"list"` to `"sequence"` 🔴
+3. Update the `TECHNICAL.md` delta kind table and all references from `"list"` to `"sequence"` 🟢
 
-4. Update `regions.ts` delta dispatch from `delta.type === "list"` to `delta.type === "sequence"` (this is a string literal change only; the actual import rewiring happens in Phase 3) 🔴
+4. Update `regions.ts` delta dispatch from `delta.type === "list"` to `delta.type === "sequence"` (this is a string literal change only; the actual import rewiring happens in Phase 3) 🟢
 
-5. Update all test assertions that reference `deltaKind: "list"` to `deltaKind: "sequence"` across `analyze.test.ts`, `codegen/dom.test.ts`, `integration.test.ts` 🔴
+5. Update all test assertions that reference `deltaKind: "list"` to `deltaKind: "sequence"` across `analyze.test.ts`, `ir.test.ts`, `template.test.ts`, `walk.test.ts`, `transform.test.ts` 🟢 — also added `"list"` → `"sequence"` mapping in `getDeltaKind` allowlist so legacy types still work
 
 ### Tests
 

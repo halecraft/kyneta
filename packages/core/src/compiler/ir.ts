@@ -90,11 +90,12 @@ export type BindingTime = "literal" | "render" | "reactive"
  *
  * - **replace**: Opaque change — re-read entire value (default, like other frameworks)
  * - **text**: Character-level ops — enables surgical text node updates
- * - **list**: Structural list ops — enables O(k) list region updates
+ * - **sequence**: Structural sequence ops — enables O(k) list region updates
  * - **map**: Key-level changes — enables patching only changed entries
  * - **tree**: Hierarchical changes — enables structural tree updates
+ * - **increment**: Counter increment/decrement — enables in-place numeric updates
  */
-export type DeltaKind = "replace" | "text" | "list" | "map" | "tree"
+export type DeltaKind = "replace" | "text" | "sequence" | "map" | "tree" | "increment"
 
 /**
  * A reactive dependency with its delta kind.
@@ -114,7 +115,7 @@ export type DeltaKind = "replace" | "text" | "list" | "map" | "tree"
  * // For expression: doc.items.length
  * const dep: Dependency = {
  *   source: "doc.items",
- *   deltaKind: "list"
+ *   deltaKind: "sequence"
  * }
  *
  * // For expression: isOpen.get()

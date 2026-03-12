@@ -478,12 +478,18 @@ export function getDeltaKind(type: Type): DeltaKind {
     // Check if it's a string literal type
     if (typePropertyType.isStringLiteral()) {
       const value = typePropertyType.value as string
+      // Map legacy "list" → "sequence" for backward compatibility with
+      // existing type definitions that predate the vocabulary alignment.
+      if (value === "list") {
+        return "sequence"
+      }
       if (
         value === "replace" ||
         value === "text" ||
-        value === "list" ||
+        value === "sequence" ||
         value === "map" ||
-        value === "tree"
+        value === "tree" ||
+        value === "increment"
       ) {
         return value
       }
