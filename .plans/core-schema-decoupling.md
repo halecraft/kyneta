@@ -84,13 +84,13 @@ Align the IR's `DeltaKind` type with schema's change type discriminants. This is
 - All existing `DeltaKind` tests pass with `"sequence"` replacing `"list"`
 - Codegen tests verify `"sequence"` dispatch produces correct code
 
-## Phase 2: Local Reactive State (`LocalRef`/`state()`) 🔴
+## Phase 2: Local Reactive State (`LocalRef`/`state()`) 🟢
 
 Create a `LocalRef` implementation in `@kyneta/core` that uses `CHANGEFEED` instead of `REACTIVE`+`SNAPSHOT`. This is a prerequisite for Phases 3–4 because the runtime and compiler tests depend on having a local reactive primitive.
 
 ### Tasks
 
-1. Create `src/reactive/local-ref.ts` with `LocalRef<T>` class and `state<T>(initial)` factory function 🔴
+1. Create `src/reactive/local-ref.ts` with `LocalRef<T>` class and `state<T>(initial)` factory function 🟢
 
    Critical interface:
 
@@ -109,11 +109,11 @@ Create a `LocalRef` implementation in `@kyneta/core` that uses `CHANGEFEED` inst
 
    Use `getOrCreateChangefeed` from `@kyneta/schema` for the `[CHANGEFEED]` getter implementation — this provides WeakMap-based caching and referential identity (`ref[CHANGEFEED] === ref[CHANGEFEED]`) without re-implementing the pattern.
 
-2. Create `src/reactive/index.ts` barrel that exports `LocalRef`, `state`, `isLocalRef` 🔴
+2. Create `src/reactive/index.ts` barrel that exports `LocalRef`, `state`, `isLocalRef` 🟢
 
-3. Update `src/index.ts` to re-export from `src/reactive/index.ts` instead of `@loro-extended/reactive` 🔴
+3. Update `src/index.ts` to re-export from `src/reactive/index.ts` instead of `@loro-extended/reactive` 🟢
 
-4. Remove the re-export block for `@loro-extended/reactive` from `src/index.ts` 🔴
+4. Remove the re-export block for `@loro-extended/reactive` from `src/index.ts` 🟢
 
 ### Tests
 

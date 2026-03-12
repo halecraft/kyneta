@@ -113,14 +113,7 @@ export type {
 } from "./types.js"
 
 // =============================================================================
-// Reactive Primitives (re-exported from @loro-extended/reactive)
+// Reactive Primitives
 // =============================================================================
 
-export {
-  isReactive,
-  LocalRef,
-  REACTIVE,
-  type Reactive,
-  type ReactiveSubscribe,
-  state,
-} from "@loro-extended/reactive"
+export { LocalRef, state, isLocalRef } from "./reactive/index.js"
