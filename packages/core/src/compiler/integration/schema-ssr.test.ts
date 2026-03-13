@@ -19,7 +19,6 @@ import {
   withMutation,
   createWritableContext,
   withChangefeed,
-  createChangefeedContext,
   hasChangefeed,
   CHANGEFEED,
   Zero,
@@ -78,14 +77,13 @@ function createDoc(storeOverrides: Record<string, unknown> = {}) {
     ...Zero.structural(todoSchema),
     ...storeOverrides,
   } as Record<string, unknown>
-  const wCtx = createWritableContext(store)
-  const cfCtx = createChangefeedContext(wCtx)
+  const ctx = createWritableContext(store)
   const enriched = enrich(writableInterpreter, withChangefeed)
-  const doc = interpret(todoSchema, enriched, cfCtx) as Readable<
+  const doc = interpret(todoSchema, enriched, ctx) as Readable<
     typeof todoSchema
   > &
     Writable<typeof todoSchema>
-  return { doc, store, cfCtx }
+  return { doc, store, ctx }
 }
 
 // ---------------------------------------------------------------------------

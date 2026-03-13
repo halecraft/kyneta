@@ -7,7 +7,6 @@ import {
   INVALIDATE,
   enrich,
   withChangefeed,
-  createChangefeedContext,
   createWritableContext,
   hasChangefeed,
 } from "../index.js"
@@ -555,10 +554,9 @@ describe("readable: composition with withChangefeed", () => {
       count: LoroSchema.counter(),
     })
     // withChangefeed needs WritableContext (extends RefContext)
-    const wCtx = createWritableContext(store)
-    const cfCtx = createChangefeedContext(wCtx)
+    const ctx = createWritableContext(store)
     const enriched = enrich(readableInterpreter, withChangefeed)
-    const doc = interpret(schema, enriched, cfCtx) as any
+    const doc = interpret(schema, enriched, ctx) as any
 
     expect(hasChangefeed(doc)).toBe(true)
     expect(hasChangefeed(doc.title)).toBe(true)

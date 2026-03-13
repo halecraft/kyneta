@@ -1,19 +1,20 @@
 // Writable interpreter layer — mutation methods composed onto readable refs.
 //
 // This module provides:
-// 1. WritableContext (extends RefContext with dispatch + batching)
-// 2. Mutation-only ref interfaces: ScalarRef, TextRef, CounterRef, SequenceRef
-// 3. withMutation(base) — interpreter transformer that adds mutation methods
-// 4. Writable<S> type-level interpretation
+// 1. WritableContext (extends RefContext with dispatch + transactions)
+// 2. CONTEXT symbol — composability hook for discovering a ref's context
+// 3. Mutation-only ref interfaces: ScalarRef, TextRef, CounterRef, SequenceRef
+// 4. withMutation(base) — interpreter transformer that adds mutation methods
+// 5. Writable<S> type-level interpretation
 //
 // Shared types used across interpreters (RefContext, Plain<S>) live in
 // `../interpreter-types.ts` and are re-exported here for backward compat.
 //
 // The readable interpreter (`readableInterpreter`) owns reading + structural
-// navigation. This module owns mutation. Observation is owned by
-// `withChangefeed`. The three compose:
+// navigation. This module owns mutation. Observation is owned by the
+// changefeed layer. The three compose:
 //
-//   enrich(withMutation(readableInterpreter), withChangefeed)
+//   withCompositionalChangefeed(withMutation(readableInterpreter))
 //
 // See theory §5.4 (capability decomposition) and readable-interpreter.md.
 
@@ -57,12 +58,48 @@ export { type Store, readByPath, writeByPath, applyChangeToStore } from "../stor
 export type { RefContext, Plain } from "../interpreter-types.js"
 
 // ---------------------------------------------------------------------------
+// CONTEXT symbol — composability hook for discovering a ref's context
+// ---------------------------------------------------------------------------
+
+/**
+ * Symbol that refs carry to expose their originating `WritableContext`.
+ * This enables `change()` and other utilities to discover the context
+ * from any ref without a WeakMap or re-interpretation.
+ *
+ * Follows the same pattern as `INVALIDATE` in `readable.ts` — a
+ * composability hook defined in the layer that owns the concept.
+ *
+ * Uses `Symbol.for` so multiple copies share the same identity.
+ */
+export const CONTEXT: unique symbol = Symbol.for("kyneta:context") as any
+
+/**
+ * An object that carries a `[CONTEXT]` symbol referencing the
+ * `WritableContext` used during interpretation.
+ */
+export interface HasContext {
+  readonly [CONTEXT]: WritableContext
+}
+
+/**
+ * Returns `true` if `value` has a `[CONTEXT]` symbol property.
+ */
+export function hasContext(value: unknown): value is HasContext {
+  return (
+    value !== null &&
+    value !== undefined &&
+    (typeof value === "object" || typeof value === "function") &&
+    CONTEXT in (value as object)
+  )
+}
+
+// ---------------------------------------------------------------------------
 // WritableContext — shared state flowing through the tree
 // ---------------------------------------------------------------------------
 
 /**
  * The context shared across the entire interpreted tree. Extends
- * `RefContext` with mutation infrastructure.
+ * `RefContext` with mutation infrastructure and transaction support.
  *
  * Unlike the catamorphism's `path` parameter (which narrows
  * automatically), the context carries resources that are the *same*
@@ -70,22 +107,28 @@ export type { RefContext, Plain } from "../interpreter-types.js"
  *
  * - `store` — the root mutable store object (from `RefContext`)
  * - `dispatch` — sends a change to the store (applies via step)
- * - `autoCommit` — if true, each mutation dispatches immediately;
- *   if false, changes accumulate in `pending` until flushed
- * - `pending` — accumulated changes in batched mode (shared by reference)
+ * - `beginTransaction` / `commit` / `abort` — transaction lifecycle
+ *
+ * By default, `dispatch` applies changes immediately (auto-commit).
+ * During a transaction, `dispatch` buffers changes internally until
+ * `commit()` replays them through the normal dispatch path.
  *
  * The "where am I" information comes from the catamorphism's `path`
  * parameter, not from the context. This means the context doesn't need
  * to be re-derived at each level — it's the same object throughout.
  *
  * **No observation infrastructure here.** Subscriber notification is
- * provided by the changefeed layer (`createChangefeedContext`) which wraps
- * `dispatch` to add notification after each change is applied.
+ * provided by the changefeed layer which wraps `dispatch` to add
+ * notification after each change is applied.
  */
 export interface WritableContext extends RefContext {
   readonly dispatch: (path: Path, change: ChangeBase) => void
-  readonly autoCommit: boolean
-  readonly pending: PendingChange[]
+  /** Enter a transaction — dispatch buffers until commit/abort. */
+  beginTransaction(): void
+  /** Replay buffered changes through dispatch, return the list. */
+  commit(): PendingChange[]
+  /** Discard buffered changes without applying. */
+  abort(): void
 }
 
 export interface PendingChange {
@@ -97,15 +140,12 @@ export interface PendingChange {
 // createWritableContext — factory for the root context
 // ---------------------------------------------------------------------------
 
-export interface WritableOptions {
-  autoCommit?: boolean
-}
-
 /**
  * Creates a root WritableContext for a given store.
  *
- * Dispatch only applies changes to the store — no subscriber
- * notification. For observation, wrap with `createChangefeedContext`.
+ * Dispatch applies changes to the store immediately by default.
+ * Use `beginTransaction()` / `commit()` to buffer and atomically
+ * apply a batch of changes.
  *
  * ```ts
  * const store = { title: "", count: 0, items: [] }
@@ -113,43 +153,68 @@ export interface WritableOptions {
  * const doc = interpret(schema, withMutation(readableInterpreter), ctx)
  * ```
  */
-export function createWritableContext(
-  store: Store,
-  options: WritableOptions = {},
-): WritableContext {
-  const autoCommit = options.autoCommit ?? true
+export function createWritableContext(store: Store): WritableContext {
   const pending: PendingChange[] = []
+  let inTransaction = false
+  let replaying = false
 
   const dispatch = (path: Path, change: ChangeBase): void => {
-    if (autoCommit) {
-      applyChangeToStore(store, path, change)
-    } else {
+    if (inTransaction && !replaying) {
       pending.push({ path, change })
+    } else {
+      applyChangeToStore(store, path, change)
     }
   }
 
-  return {
+  const beginTransaction = (): void => {
+    if (inTransaction) {
+      throw new Error("Already in a transaction (nested transactions are not supported)")
+    }
+    inTransaction = true
+  }
+
+  const commit = (): PendingChange[] => {
+    if (!inTransaction) {
+      throw new Error("No active transaction to commit")
+    }
+    const flushed = [...pending]
+    pending.length = 0
+    inTransaction = false
+
+    // Replay through ctx.dispatch (the property on the returned object),
+    // NOT the closure-captured `dispatch` function. This is critical:
+    // layers like `withChangefeed` replace `ctx.dispatch` with a wrapper
+    // that adds notification. If we called the closure `dispatch` directly,
+    // we'd bypass those wrappers and subscribers would never fire.
+    replaying = true
+    try {
+      for (const { path, change } of flushed) {
+        ctx.dispatch(path, change)
+      }
+    } finally {
+      replaying = false
+    }
+
+    return flushed
+  }
+
+  const abort = (): void => {
+    if (!inTransaction) {
+      throw new Error("No active transaction to abort")
+    }
+    pending.length = 0
+    inTransaction = false
+  }
+
+  const ctx: WritableContext = {
     store,
     dispatch,
-    autoCommit,
-    pending,
+    beginTransaction,
+    commit,
+    abort,
   }
-}
 
-/**
- * Flushes all pending changes in a batched context.
- * Applies each change to the store but does NOT notify subscribers.
- * For notification, use the feedable context's flush wrapper.
- *
- * Returns the list of changes that were flushed.
- */
-export function flush(ctx: WritableContext): PendingChange[] {
-  const flushed = [...ctx.pending]
-  for (const { path, change } of flushed) {
-    applyChangeToStore(ctx.store, path, change)
-  }
-  ctx.pending.length = 0
-  return flushed
+  return ctx
 }
 
 // ---------------------------------------------------------------------------

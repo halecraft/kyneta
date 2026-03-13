@@ -134,11 +134,12 @@ export type {
 export {
   withMutation,
   createWritableContext,
-  flush,
+  CONTEXT,
+  hasContext,
 } from "./interpreters/writable.js"
 export type {
   WritableContext,
-  WritableOptions,
+  HasContext,
   PendingChange,
   ScalarRef,
   TextRef,
@@ -162,23 +163,10 @@ export {
 } from "./interpreters/validate.js"
 export type { ValidateContext } from "./interpreters/validate.js"
 
-// Changefeed decorator — observation layer via enrich(withMutation(readableInterpreter), withChangefeed)
+// Changefeed decorator — transitional observation layer (Phase 5 removes this)
 export {
   withChangefeed,
-  createChangefeedContext,
-  changefeedFlush,
-  subscribeDeep,
 } from "./interpreters/with-changefeed.js"
-export type { ChangefeedContext, DeepEvent } from "./interpreters/with-changefeed.js"
-
-// Deprecated aliases (backward compat) — prefer the new names above
-export {
-  withChangefeed as withFeed,
-  createChangefeedContext as createFeedableContext,
-  changefeedFlush as feedableFlush,
-} from "./interpreters/with-changefeed.js"
-/** @deprecated Use `ChangefeedContext` */
-export type { ChangefeedContext as FeedableContext } from "./interpreters/with-changefeed.js"
 
 // Interpreter composition combinators
 export { enrich, product, overlay, firstDefined } from "./combinators.js"

@@ -6,7 +6,6 @@ import {
   readableInterpreter,
   withMutation,
   createWritableContext,
-  flush,
 } from "../index.js"
 import type {
   WritableContext,
@@ -147,27 +146,25 @@ describe("writable: product .set()", () => {
     expect(doc.settings.darkMode()).toBe(false)
   })
 
-  it(".set() inside batched mode accumulates one PendingChange", () => {
+  it(".set() inside transaction accumulates until commit", () => {
     const store = {
       settings: { darkMode: false, fontSize: 14 },
       metadata: { version: 1 },
     }
-    const ctx = createWritableContext(store, { autoCommit: false })
+    const ctx = createWritableContext(store)
     const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as any
 
+    ctx.beginTransaction()
     doc.settings.set({ darkMode: true, fontSize: 20 })
-
-    expect(ctx.pending.length).toBe(1)
-    expect(ctx.pending[0].change.type).toBe("replace")
-    expect(ctx.pending[0].change.value).toEqual({ darkMode: true, fontSize: 20 })
 
     // Not yet applied
     expect(store.settings).toEqual({ darkMode: false, fontSize: 14 })
 
-    // Flush applies it
-    const flushed = flush(ctx)
+    // Commit applies it
+    const flushed = ctx.commit()
     expect(store.settings).toEqual({ darkMode: true, fontSize: 20 })
     expect(flushed.length).toBe(1)
+    expect(flushed[0].change.type).toBe("replace")
   })
 })
 
@@ -261,36 +258,35 @@ describe("writable: map ref", () => {
 // Batched mode
 // ---------------------------------------------------------------------------
 
-describe("writable: batched mode", () => {
-  it("actions accumulate in pending and do not apply until flush", () => {
+describe("writable: transactions", () => {
+  it("actions accumulate in transaction and do not apply until commit", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.doc({
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = createWritableContext(store, { autoCommit: false })
+    const ctx = createWritableContext(store)
     const doc = interpret(schema, writableInterpreter, ctx) as any
 
+    ctx.beginTransaction()
     doc.x.set(10)
     doc.y.set(20)
 
     // Not yet applied
     expect(store.x).toBe(0)
     expect(store.y).toBe(0)
-    expect(ctx.pending.length).toBe(2)
 
-    // Flush
-    const flushed = flush(ctx)
+    // Commit
+    const flushed = ctx.commit()
     expect(store.x).toBe(10)
     expect(store.y).toBe(20)
     expect(flushed.length).toBe(2)
-    expect(ctx.pending.length).toBe(0)
   })
 
-  it("auto-commit mode applies immediately", () => {
+  it("dispatch applies immediately outside a transaction", () => {
     const store = { x: 0 }
     const schema = Schema.doc({ x: Schema.number() })
-    const ctx = createWritableContext(store, { autoCommit: true })
+    const ctx = createWritableContext(store)
     const doc = interpret(schema, writableInterpreter, ctx) as any
 
     doc.x.set(42)
