@@ -223,3 +223,34 @@ function projectStructure(
     ]));
   }
 }
+
+// ---------------------------------------------------------------------------
+// Fact→Constraint Tracing
+// ---------------------------------------------------------------------------
+
+/**
+ * Known predicates whose position-0 value is a CnIdKey string.
+ */
+const CONSTRAINT_KEY_PREDICATES: ReadonlySet<string> = new Set([
+  ACTIVE_VALUE.predicate,
+  ACTIVE_STRUCTURE_SEQ.predicate,
+  CONSTRAINT_PEER.predicate,
+]);
+
+/**
+ * Extract the constraint key (CnIdKey) from position 0 of a projected fact,
+ * if the fact belongs to a known projected relation. Returns `null` for
+ * unrecognised predicates or facts with empty value tuples.
+ *
+ * O(1), stateless — just reads `f.values[0]`.
+ */
+export function constraintKeyFromFact(f: Fact): string | null {
+  if (!CONSTRAINT_KEY_PREDICATES.has(f.predicate)) {
+    return null;
+  }
+  const v = f.values[0];
+  if (typeof v !== 'string') {
+    return null;
+  }
+  return v;
+}

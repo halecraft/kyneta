@@ -33,6 +33,7 @@ import type {
 import { cnIdKey } from '../cnid.js';
 import type { Fact } from '../../datalog/types.js';
 import { fact, factKey } from '../../datalog/types.js';
+import { constraintKeyFromFact } from '../projection.js';
 import {
   ACTIVE_VALUE,
   ACTIVE_STRUCTURE_SEQ,
@@ -86,6 +87,16 @@ export interface IncrementalProjection {
   current(): Fact[];
 
   /**
+   * Get all factKeys produced by a given constraint CnIdKey.
+   *
+   * Used by compaction to determine which facts are affected when a
+   * constraint is removed. Returns undefined if the constraint has
+   * no projected facts (e.g., it's a retract or rule constraint, or
+   * it was orphaned).
+   */
+  factsForConstraint(constraintKey: string): ReadonlySet<string> | undefined;
+
+  /**
    * Reset to empty state.
    */
   reset(): void;
@@ -113,6 +124,11 @@ export function createIncrementalProjection(
   // Accumulated projected facts, keyed by factKey for O(1) dedup/removal.
   let accFacts = new Map<string, Fact>();
 
+  // Reverse index: CnIdKey → Set<factKey> of facts produced by that
+  // constraint. Updated on project/retract. Used by compaction to
+  // trace from a constraint to its projected facts.
+  let constraintToFacts = new Map<string, Set<string>>();
+
   // Orphaned value constraints whose target structure is not yet known.
   // Keyed by the target CnId key string, value is array of value constraints
   // targeting that structure.
@@ -129,7 +145,7 @@ export function createIncrementalProjection(
    */
   function projectValue(
     vc: ValueConstraint,
-  ): { fact: Fact; key: string } | null {
+  ): { fact: Fact; key: string; constraintKey: string } | null {
     const targetKey = cnIdKey(vc.payload.target);
     const index = getIndex();
     const sid = index.structureToSlot.get(targetKey);
@@ -145,7 +161,7 @@ export function createIncrementalProjection(
       vc.lamport,
       vc.id.peer,
     ]);
-    return { fact: f, key: factKey(f) };
+    return { fact: f, key: factKey(f), constraintKey: cnIdKey(vc.id) };
   }
 
   /**
@@ -155,9 +171,9 @@ export function createIncrementalProjection(
    */
   function projectSeqStructure(
     sc: StructureConstraint,
-  ): { facts: Fact[]; keys: string[] } {
+  ): { facts: Fact[]; keys: string[]; constraintKey: string } {
     const payload = sc.payload;
-    if (payload.kind !== 'seq') return { facts: [], keys: [] };
+    if (payload.kind !== 'seq') return { facts: [], keys: [], constraintKey: cnIdKey(sc.id) };
 
     const seqFact = fact(ACTIVE_STRUCTURE_SEQ.predicate, [
       cnIdKey(sc.id),
@@ -174,7 +190,33 @@ export function createIncrementalProjection(
     return {
       facts: [seqFact, peerFact],
       keys: [factKey(seqFact), factKey(peerFact)],
+      constraintKey: cnIdKey(sc.id),
     };
+  }
+
+  /**
+   * Track a projected fact in the reverse index.
+   */
+  function trackFact(constraintKey: string, fKey: string): void {
+    let set = constraintToFacts.get(constraintKey);
+    if (set === undefined) {
+      set = new Set();
+      constraintToFacts.set(constraintKey, set);
+    }
+    set.add(fKey);
+  }
+
+  /**
+   * Remove a projected fact from the reverse index.
+   */
+  function untrackFact(constraintKey: string, fKey: string): void {
+    const set = constraintToFacts.get(constraintKey);
+    if (set !== undefined) {
+      set.delete(fKey);
+      if (set.size === 0) {
+        constraintToFacts.delete(constraintKey);
+      }
+    }
   }
 
   /**
@@ -241,6 +283,7 @@ export function createIncrementalProjection(
         if (result !== null) {
           // Orphan resolved — add to accumulated facts and emit +1
           accFacts.set(result.key, result.fact);
+          trackFact(result.constraintKey, result.key);
           delta = zsetAdd(delta, zsetSingleton(result.key, result.fact, 1));
           removeOrphan(vc);
         }
@@ -273,6 +316,7 @@ export function createIncrementalProjection(
           if (result !== null) {
             // Target found — emit fact with weight +1
             accFacts.set(result.key, result.fact);
+            trackFact(result.constraintKey, result.key);
             delta = zsetAdd(delta, zsetSingleton(result.key, result.fact, 1));
           } else {
             // Target not found — orphan
@@ -280,10 +324,11 @@ export function createIncrementalProjection(
           }
         } else if (c.type === 'structure') {
           const sc = c as StructureConstraint;
-          const { facts, keys } = projectSeqStructure(sc);
+          const { facts, keys, constraintKey } = projectSeqStructure(sc);
 
           for (let i = 0; i < facts.length; i++) {
             accFacts.set(keys[i]!, facts[i]!);
+            trackFact(constraintKey, keys[i]!);
             delta = zsetAdd(delta, zsetSingleton(keys[i]!, facts[i]!, 1));
           }
         }
@@ -305,14 +350,16 @@ export function createIncrementalProjection(
           const result = projectValue(vc);
           if (result !== null) {
             accFacts.delete(result.key);
+            untrackFact(result.constraintKey, result.key);
             delta = zsetAdd(delta, zsetSingleton(result.key, result.fact, -1));
           }
         } else if (c.type === 'structure') {
           const sc = c as StructureConstraint;
-          const { facts, keys } = projectSeqStructure(sc);
+          const { facts, keys, constraintKey } = projectSeqStructure(sc);
 
           for (let i = 0; i < facts.length; i++) {
             accFacts.delete(keys[i]!);
+            untrackFact(constraintKey, keys[i]!);
             delta = zsetAdd(delta, zsetSingleton(keys[i]!, facts[i]!, -1));
           }
         }
@@ -336,11 +383,16 @@ export function createIncrementalProjection(
     return Array.from(accFacts.values());
   }
 
+  function factsForConstraint(constraintKey: string): ReadonlySet<string> | undefined {
+    return constraintToFacts.get(constraintKey);
+  }
+
   function reset(): void {
     accFacts = new Map();
+    constraintToFacts = new Map();
     orphansByTarget = new Map();
     orphansByOwnKey = new Map();
   }
 
-  return { step, current, reset };
+  return { step, current, factsForConstraint, reset };
 }

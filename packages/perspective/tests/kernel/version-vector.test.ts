@@ -24,6 +24,8 @@ import {
   vvPeers,
   vvIsEmpty,
   vvTotalOps,
+  vvMin,
+  isConstraintBelowFrontier,
 } from '../../src/kernel/version-vector.js';
 import { createCnId } from '../../src/kernel/cnid.js';
 import type { Constraint, StructureConstraint } from '../../src/kernel/types.js';
@@ -557,6 +559,104 @@ describe('Version Vector', () => {
 
     it('returns 0 for empty version vector', () => {
       expect(vvTotalOps(createVersionVector())).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Component-wise Minimum
+  // -------------------------------------------------------------------------
+
+  describe('vvMin', () => {
+    it('returns empty VV for empty input array', () => {
+      const result = vvMin([]);
+      expect(result.size).toBe(0);
+    });
+
+    it('returns same VV for single input', () => {
+      const vv = vvFromObject({ alice: 3, bob: 5 });
+      const result = vvMin([vv]);
+      expect(vvGet(result, 'alice')).toBe(3);
+      expect(vvGet(result, 'bob')).toBe(5);
+      expect(result.size).toBe(2);
+    });
+
+    it('returns component-wise min for two VVs with same peers', () => {
+      const a = vvFromObject({ alice: 3, bob: 5 });
+      const b = vvFromObject({ alice: 7, bob: 2 });
+      const result = vvMin([a, b]);
+      expect(vvGet(result, 'alice')).toBe(3);
+      expect(vvGet(result, 'bob')).toBe(2);
+      expect(result.size).toBe(2);
+    });
+
+    it('returns component-wise min for three VVs', () => {
+      const a = vvFromObject({ alice: 5, bob: 3 });
+      const b = vvFromObject({ alice: 2, bob: 8 });
+      const c = vvFromObject({ alice: 4, bob: 1 });
+      const result = vvMin([a, b, c]);
+      expect(vvGet(result, 'alice')).toBe(2);
+      expect(vvGet(result, 'bob')).toBe(1);
+      expect(result.size).toBe(2);
+    });
+
+    it('omits peers missing from any VV (non-overlapping peer sets)', () => {
+      const a = vvFromObject({ alice: 3, bob: 5 });
+      const b = vvFromObject({ alice: 7, charlie: 2 });
+      const result = vvMin([a, b]);
+      // alice is in both → min(3,7) = 3
+      expect(vvGet(result, 'alice')).toBe(3);
+      // bob is only in a, charlie is only in b → both absent
+      expect(result.has('bob')).toBe(false);
+      expect(result.has('charlie')).toBe(false);
+      expect(result.size).toBe(1);
+    });
+
+    it('omits peers where one VV has counter 0', () => {
+      // A peer present in a VV with counter 0 means no ops seen.
+      // min with 0 = 0, which is equivalent to absent.
+      const a = vvFromObject({ alice: 3, bob: 0 });
+      const b = vvFromObject({ alice: 5, bob: 4 });
+      const result = vvMin([a, b]);
+      expect(vvGet(result, 'alice')).toBe(3);
+      // bob has min(0, 4) = 0, which is absent
+      expect(result.has('bob')).toBe(false);
+      expect(result.size).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Frontier Checking
+  // -------------------------------------------------------------------------
+
+  describe('isConstraintBelowFrontier', () => {
+    it('returns true when constraint is below frontier', () => {
+      // frontier[alice] = 5 means seen counters 0..4
+      // constraint with counter 3 → 3 < 5 → seen → true
+      const c = makeConstraint('alice', 3);
+      const frontier = vvFromObject({ alice: 5 });
+      expect(isConstraintBelowFrontier(c, frontier)).toBe(true);
+    });
+
+    it('returns false when constraint is at frontier (not yet seen)', () => {
+      // frontier[alice] = 5 means seen counters 0..4
+      // constraint with counter 5 → 5 < 5 is false → not seen → false
+      const c = makeConstraint('alice', 5);
+      const frontier = vvFromObject({ alice: 5 });
+      expect(isConstraintBelowFrontier(c, frontier)).toBe(false);
+    });
+
+    it('returns false when constraint is above frontier', () => {
+      // frontier[alice] = 3 means seen counters 0..2
+      // constraint with counter 5 → 5 < 3 is false → not seen → false
+      const c = makeConstraint('alice', 5);
+      const frontier = vvFromObject({ alice: 3 });
+      expect(isConstraintBelowFrontier(c, frontier)).toBe(false);
+    });
+
+    it('returns false for empty frontier (nothing seen)', () => {
+      const c = makeConstraint('alice', 0);
+      const frontier = createVersionVector();
+      expect(isConstraintBelowFrontier(c, frontier)).toBe(false);
     });
   });
 });

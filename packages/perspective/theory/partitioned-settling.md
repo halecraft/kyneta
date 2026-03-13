@@ -247,10 +247,13 @@ Partition key analysis is performed once at stratification time (and
 re-performed when rules change, which already triggers restratification).
 
 The analysis is:
-1. For each rule in the stratum, compute the intersection of variables
-   appearing in the head AND in every body element (positive atoms,
-   negation atoms).
-2. Intersect across all rules in the stratum.
+1. Compute the **cross-rule head intersection** — variables that appear
+   in every rule's head. This is the maximum possible PK.
+2. For each rule, **validate** the candidate PK against its body atoms
+   using the functional-lookup relaxation (see below). A body atom is
+   **PK-required** if it is not PK-covered; PK-required atoms must
+   contain the PK variables. If a PK-required atom lacks a candidate
+   variable, narrow the candidate. Iterate until stable.
 3. If the result is non-empty, the stratum is partitionable. Map the
    PK variables to head tuple positions to define the partitioning
    function.
@@ -260,6 +263,53 @@ This is O(|rules| × |body elements|) — negligible compared to evaluation.
 Guards are excluded from the intersection because they constrain values
 but don't reference predicates. Aggregation body elements are excluded
 because they introduce group-by boundaries.
+
+#### Functional-Lookup Relaxation
+
+A naive algorithm intersects the PK candidate with every body atom's
+variables. This is too conservative: it fails on rules like
+
+    fugue_child(Parent, CnId, OL, OR, Peer) :-
+      active_structure_seq(CnId, Parent, OL, OR),
+      constraint_peer(CnId, Peer).
+
+The naive per-rule intersection gives PK = {CnId} (since `Parent` is
+absent from `constraint_peer`). When combined with `fugue_descendant`
+(PK = {Parent}), the cross-rule intersection is ∅ — falsely destroying
+partitionability.
+
+The key insight: `constraint_peer(CnId, Peer)` is a **functional
+lookup** keyed by `CnId`. The variable `CnId` is already bound by
+`active_structure_seq`, which contains `Parent`. For a fixed `Parent`,
+the set of matching `constraint_peer` facts is fully determined — it
+introduces no cross-partition dependencies. The atom is a satellite
+join, not a bridging join.
+
+Formally, a body atom is **PK-covered** if all its variables are
+**reachable** from the PK candidate through other body atoms:
+
+1. Initialize the reachable set R = PK candidate variables.
+2. For each body atom, if any of its variables are in R, add all of
+   its variables to R. Repeat until R is stable.
+3. A body atom is PK-covered iff all its variables ⊆ R.
+
+PK-covered atoms are excluded from the PK intersection. Only
+**PK-required** atoms (those with at least one variable NOT in R) must
+contain the PK variables. For the `fugue_child` rule with PK candidate
+{Parent}:
+
+- R starts as {Parent}.
+- `active_structure_seq(CnId, Parent, OL, OR)` overlaps R (has Parent),
+  so R grows to {Parent, CnId, OL, OR}.
+- `constraint_peer(CnId, Peer)` overlaps R (has CnId), so R grows to
+  {Parent, CnId, OL, OR, Peer}.
+- Both atoms are PK-covered (all vars ⊆ R). No PK-required atoms exist.
+- Validated PK = {Parent}. ✅
+
+The algorithm computes the cross-rule head intersection first, giving
+the relaxation the correct target. Computing per-rule PKs independently
+and then intersecting would fail because different rules may have
+different strict PKs ({CnId} vs {Parent}) that don't intersect.
 
 ### 3.5 When Rules Change
 

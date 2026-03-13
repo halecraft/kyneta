@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   projectToFacts,
+  constraintKeyFromFact,
   ACTIVE_VALUE,
   ACTIVE_STRUCTURE_SEQ,
   CONSTRAINT_PEER,
@@ -22,6 +23,7 @@ import type {
   Value,
 } from '../../src/kernel/types.js';
 import type { Fact } from '../../src/datalog/types.js';
+import { fact } from '../../src/datalog/types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -549,5 +551,39 @@ describe('projectToFacts', () => {
       expect(avFacts).toHaveLength(1);
       expect(avFacts[0]!.values[ACTIVE_VALUE.SLOT]).toBe('root:profile');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// constraintKeyFromFact
+// ---------------------------------------------------------------------------
+
+describe('constraintKeyFromFact', () => {
+  it('returns CnIdKey at position 0 for an active_value fact', () => {
+    const cnIdKey = 'alice@42';
+    const f = fact(ACTIVE_VALUE.predicate, [cnIdKey, 'slot:x', 'hello', 1, 'alice']);
+    expect(constraintKeyFromFact(f)).toBe(cnIdKey);
+  });
+
+  it('returns CnIdKey at position 0 for an active_structure_seq fact', () => {
+    const cnIdKey = 'bob@7';
+    const f = fact(ACTIVE_STRUCTURE_SEQ.predicate, [cnIdKey, 'parent@1', null, null]);
+    expect(constraintKeyFromFact(f)).toBe(cnIdKey);
+  });
+
+  it('returns CnIdKey at position 0 for a constraint_peer fact', () => {
+    const cnIdKey = 'carol@99';
+    const f = fact(CONSTRAINT_PEER.predicate, [cnIdKey, 'carol']);
+    expect(constraintKeyFromFact(f)).toBe(cnIdKey);
+  });
+
+  it('returns null for a fact with an unknown predicate', () => {
+    const f = fact('some_other_relation', ['value0', 'value1']);
+    expect(constraintKeyFromFact(f)).toBeNull();
+  });
+
+  it('returns null for a fact with empty values', () => {
+    const f = fact('active_value', []);
+    expect(constraintKeyFromFact(f)).toBeNull();
   });
 });

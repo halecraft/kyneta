@@ -228,6 +228,34 @@ export interface Reality {
 }
 
 // ---------------------------------------------------------------------------
+// Settling & Compaction (§11, §12)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compaction policy controls which constraints are eligible for removal.
+ *
+ * - 'frontier-only': Remove only constraints below V_stable whose
+ *   retraction chains are depth-exhausted.
+ * - 'snapshot-preserving': Remove dominated constraints below V_stable,
+ *   preserving enough for historical snapshot queries.
+ * - 'full-history': Remove all dominated constraints below V_stable
+ *   regardless of historical query support.
+ */
+export type CompactionPolicy = 'frontier-only' | 'snapshot-preserving' | 'full-history';
+
+/**
+ * Configuration for the stability frontier.
+ *
+ * The frontier V_stable is the component-wise minimum of all agents'
+ * version vectors. Single-agent: V_stable = store VV. Multi-agent:
+ * V_stable = vvMin(peer VVs).
+ */
+export interface FrontierConfig {
+  /** Compaction policy. */
+  readonly compactionPolicy: CompactionPolicy;
+}
+
+// ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
 

@@ -1039,4 +1039,125 @@ describe('IncrementalProjection', () => {
       expect(predicates.filter((p) => p === CONSTRAINT_PEER.predicate).length).toBe(1);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // factsForConstraint reverse index (Plan 007, Phase 1, Task 1.8)
+  // -------------------------------------------------------------------------
+
+  describe('factsForConstraint reverse index', () => {
+    it('returns factKeys for a projected value constraint', () => {
+      const h = createHarness();
+      const root = makeRoot('a', 0, 'doc');
+      const child = makeMapChild('a', 1, root.id, 'name');
+      const indexDelta = h.addStructures(root, child);
+
+      const vc = makeValue('a', 2, child.id, 'hello');
+      h.projection.step(cset(vc), indexDelta);
+
+      const vcKey = cnIdKey(vc.id);
+      const factKeys = h.projection.factsForConstraint(vcKey);
+      expect(factKeys).toBeDefined();
+      expect(factKeys!.size).toBe(1);
+
+      // The single factKey should correspond to the active_value fact.
+      const facts = h.projection.current();
+      const valueFact = facts.find((f) => f.predicate === ACTIVE_VALUE.predicate);
+      expect(valueFact).toBeDefined();
+      expect(factKeys!.has(factKey(valueFact!))).toBe(true);
+    });
+
+    it('returns factKeys for a projected seq structure constraint', () => {
+      const h = createHarness();
+      const root = makeRoot('a', 0, 'doc', 'seq');
+      const child = makeSeqChild('a', 1, root.id);
+      const indexDelta = h.addStructures(root, child);
+
+      // Step with the seq child as active.
+      h.projection.step(cset(child), indexDelta);
+
+      const scKey = cnIdKey(child.id);
+      const factKeys = h.projection.factsForConstraint(scKey);
+      expect(factKeys).toBeDefined();
+      // Seq structure produces 2 facts: active_structure_seq + constraint_peer.
+      expect(factKeys!.size).toBe(2);
+    });
+
+    it('returns undefined for a constraint with no projected facts', () => {
+      const h = createHarness();
+
+      // Retract constraints are not projected.
+      const root = makeRoot('a', 0, 'doc');
+      const retract = makeRetract('a', 1, root.id);
+      h.addStructures(root);
+      h.projection.step(cset(retract), structureIndexDeltaEmpty());
+
+      const factKeys = h.projection.factsForConstraint(cnIdKey(retract.id));
+      expect(factKeys).toBeUndefined();
+    });
+
+    it('returns undefined for an orphaned value constraint', () => {
+      const h = createHarness();
+
+      // Value targeting a structure that hasn't arrived yet.
+      const missingTarget = createCnId('a', 99);
+      const vc = makeValue('a', 1, missingTarget, 'orphaned');
+      h.projection.step(cset(vc), structureIndexDeltaEmpty());
+
+      const factKeys = h.projection.factsForConstraint(cnIdKey(vc.id));
+      // Orphaned — no facts projected yet.
+      expect(factKeys).toBeUndefined();
+    });
+
+    it('tracks facts when orphan is resolved by later structure arrival', () => {
+      const h = createHarness();
+      const root = makeRoot('a', 0, 'doc');
+      const child = makeMapChild('a', 1, root.id, 'name');
+
+      // Step 1: Value arrives before structure — orphaned.
+      const vc = makeValue('a', 2, child.id, 'hello');
+      h.projection.step(cset(vc), structureIndexDeltaEmpty());
+      expect(h.projection.factsForConstraint(cnIdKey(vc.id))).toBeUndefined();
+
+      // Step 2: Structure arrives — orphan resolved.
+      const indexDelta = h.addStructures(root, child);
+      h.projection.step(zsetEmpty(), indexDelta);
+
+      const factKeys = h.projection.factsForConstraint(cnIdKey(vc.id));
+      expect(factKeys).toBeDefined();
+      expect(factKeys!.size).toBe(1);
+    });
+
+    it('cleans up reverse index on value retraction', () => {
+      const h = createHarness();
+      const root = makeRoot('a', 0, 'doc');
+      const child = makeMapChild('a', 1, root.id, 'name');
+      const indexDelta = h.addStructures(root, child);
+
+      const vc = makeValue('a', 2, child.id, 'hello');
+
+      // Step 1: Project value.
+      h.projection.step(cset(vc), indexDelta);
+      expect(h.projection.factsForConstraint(cnIdKey(vc.id))).toBeDefined();
+
+      // Step 2: Retract value (weight −1).
+      h.projection.step(cset(vc, -1), structureIndexDeltaEmpty());
+
+      // Reverse index should be cleaned up.
+      expect(h.projection.factsForConstraint(cnIdKey(vc.id))).toBeUndefined();
+    });
+
+    it('cleans up reverse index on reset', () => {
+      const h = createHarness();
+      const root = makeRoot('a', 0, 'doc');
+      const child = makeMapChild('a', 1, root.id, 'name');
+      const indexDelta = h.addStructures(root, child);
+
+      const vc = makeValue('a', 2, child.id, 'hello');
+      h.projection.step(cset(vc), indexDelta);
+      expect(h.projection.factsForConstraint(cnIdKey(vc.id))).toBeDefined();
+
+      h.projection.reset();
+      expect(h.projection.factsForConstraint(cnIdKey(vc.id))).toBeUndefined();
+    });
+  });
 });

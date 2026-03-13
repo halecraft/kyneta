@@ -1,6 +1,7 @@
 // === Stratification Tests ===
 // Tests for dependency graph construction, SCC detection, stratification
-// validation, and cyclic negation rejection.
+// validation, cyclic negation rejection, finer-grained stratification,
+// and partition key extraction.
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -14,6 +15,7 @@ import {
   aggregation,
   neq,
   gt,
+  lt,
   eq,
 } from '../../src/datalog/types.js';
 import type { Rule, AggregationClause } from '../../src/datalog/types.js';
@@ -21,10 +23,16 @@ import {
   buildDependencyGraph,
   computeSCCs,
   stratify,
+  extractPartitionKey,
   bodyPredicates,
   headPredicates,
 } from '../../src/datalog/stratify.js';
-import type { DependencyGraph, Stratum } from '../../src/datalog/stratify.js';
+import type { DependencyGraph, Stratum, PartitionKeyInfo } from '../../src/datalog/stratify.js';
+import {
+  buildDefaultRules,
+  buildDefaultLWWRules,
+  buildDefaultFugueRules,
+} from '../../src/bootstrap.js';
 
 // ---------------------------------------------------------------------------
 // Dependency Graph Construction
@@ -953,5 +961,438 @@ describe('complex stratification', () => {
     expect(cStratum).toBeDefined();
     expect(aStratum).toBeDefined();
     expect(aStratum!.index).toBeGreaterThan(cStratum!.index);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finer-Grained Stratification (Plan 007, Phase 1, Task 1.3)
+// ---------------------------------------------------------------------------
+
+describe('finer-grained stratification', () => {
+  it('default LWW + Fugue rules produce 4 strata instead of 2', () => {
+    const rules = buildDefaultRules();
+    const result = stratify(rules);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const strata = result.value;
+
+    // Should produce 4 strata: 2 families × 2 dependency levels.
+    const strataWithRules = strata.filter((s) => s.rules.length > 0);
+    expect(strataWithRules.length).toBe(4);
+
+    // Stratum for superseded: 2 rules (supersededByLamport, supersededByPeer)
+    const supersededStratum = strata.find((s) => s.predicates.has('superseded'));
+    expect(supersededStratum).toBeDefined();
+    expect(supersededStratum!.rules.length).toBe(2);
+
+    // Stratum for fugue_child + fugue_descendant: 3 rules
+    const fugueChildStratum = strata.find((s) => s.predicates.has('fugue_child'));
+    expect(fugueChildStratum).toBeDefined();
+    expect(fugueChildStratum!.predicates.has('fugue_descendant')).toBe(true);
+    expect(fugueChildStratum!.rules.length).toBe(3);
+
+    // Stratum for winner: 1 rule
+    const winnerStratum = strata.find((s) => s.predicates.has('winner'));
+    expect(winnerStratum).toBeDefined();
+    expect(winnerStratum!.rules.length).toBe(1);
+
+    // Stratum for fugue_before: 5 rules
+    const fugueBeforeStratum = strata.find((s) => s.predicates.has('fugue_before'));
+    expect(fugueBeforeStratum).toBeDefined();
+    expect(fugueBeforeStratum!.rules.length).toBe(5);
+
+    // Ordering: level 0 strata before level 1 strata.
+    expect(supersededStratum!.index).toBeLessThan(winnerStratum!.index);
+    expect(fugueChildStratum!.index).toBeLessThan(fugueBeforeStratum!.index);
+
+    // LWW and Fugue strata are separate at each level.
+    expect(supersededStratum!.index).not.toBe(fugueChildStratum!.index);
+    expect(winnerStratum!.index).not.toBe(fugueBeforeStratum!.index);
+  });
+
+  it('strata at the same dependency level are independent (no cross-references)', () => {
+    const rules = buildDefaultRules();
+    const result = stratify(rules);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const strata = result.value;
+    const supersededStratum = strata.find((s) => s.predicates.has('superseded'))!;
+    const fugueChildStratum = strata.find((s) => s.predicates.has('fugue_child'))!;
+
+    // Verify they are at the same dependency level (both at level 0).
+    // They should have separate indices but both come before the level-1 strata.
+    const winnerStratum = strata.find((s) => s.predicates.has('winner'))!;
+    const fugueBeforeStratum = strata.find((s) => s.predicates.has('fugue_before'))!;
+
+    expect(supersededStratum.index).toBeLessThan(winnerStratum.index);
+    expect(supersededStratum.index).toBeLessThan(fugueBeforeStratum.index);
+    expect(fugueChildStratum.index).toBeLessThan(winnerStratum.index);
+    expect(fugueChildStratum.index).toBeLessThan(fugueBeforeStratum.index);
+
+    // No derived predicate from superseded stratum appears in fugue stratum bodies.
+    const supersededPreds = supersededStratum.predicates;
+    for (const r of fugueChildStratum.rules) {
+      const bodyPreds = bodyPredicates(r.body);
+      for (const bp of bodyPreds) {
+        expect(supersededPreds.has(bp)).toBe(false);
+      }
+    }
+  });
+
+  it('adding a cross-family rule merges components into one stratum', () => {
+    // Start with LWW + Fugue rules, then add a rule that bridges them.
+    const defaultRules = buildDefaultRules();
+
+    // Cross-family rule: references both active_value (LWW input)
+    // and fugue_child (Fugue derived) — this creates a derived-predicate
+    // link between LWW and Fugue strata at level 0.
+    const crossRule: Rule = rule(
+      atom('mixed', [varTerm('S'), varTerm('P')]),
+      [
+        positiveAtom(atom('superseded', [varTerm('CnId'), varTerm('S')])),
+        positiveAtom(atom('fugue_child', [varTerm('P'), varTerm('CnId2'), _, _, _])),
+      ],
+    );
+
+    const result = stratify([...defaultRules, crossRule]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const strata = result.value;
+
+    // The cross rule should merge superseded and fugue_child into one
+    // component at level 0 (since mixed depends on both derived preds
+    // at level 0).
+    const supersededStratum = strata.find((s) => s.predicates.has('superseded'))!;
+    const fugueChildStratum = strata.find((s) => s.predicates.has('fugue_child'))!;
+    const mixedStratum = strata.find((s) => s.predicates.has('mixed'))!;
+
+    // mixed, superseded, and fugue_child should all be in the same stratum
+    // because mixed references derived predicates from both families at level 0.
+    expect(supersededStratum.index).toBe(fugueChildStratum.index);
+    expect(mixedStratum.index).toBe(supersededStratum.index);
+  });
+
+  it('single-family rule sets produce same strata as before', () => {
+    // LWW rules only — should produce 2 strata (superseded, winner).
+    const lwwRules = buildDefaultLWWRules();
+    const result = stratify(lwwRules);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const strata = result.value;
+    const strataWithRules = strata.filter((s) => s.rules.length > 0);
+    expect(strataWithRules.length).toBe(2);
+
+    const supersededStratum = strata.find((s) => s.predicates.has('superseded'));
+    const winnerStratum = strata.find((s) => s.predicates.has('winner'));
+    expect(supersededStratum).toBeDefined();
+    expect(winnerStratum).toBeDefined();
+    expect(winnerStratum!.index).toBeGreaterThan(supersededStratum!.index);
+  });
+
+  it('ground predicates do not bridge independent families', () => {
+    // Two independent rule families that share a ground predicate.
+    // family_a derives from ground_input, family_b derives from ground_input.
+    // They should NOT be merged into one stratum.
+    const rules: Rule[] = [
+      rule(
+        atom('derived_a', [varTerm('X')]),
+        [positiveAtom(atom('ground_input', [varTerm('X'), varTerm('Y')]))],
+      ),
+      rule(
+        atom('derived_b', [varTerm('Y')]),
+        [positiveAtom(atom('ground_input', [varTerm('X'), varTerm('Y')]))],
+      ),
+    ];
+
+    const result = stratify(rules);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const strata = result.value;
+    const aStratum = strata.find((s) => s.predicates.has('derived_a'))!;
+    const bStratum = strata.find((s) => s.predicates.has('derived_b'))!;
+
+    // They should be in separate strata — ground_input doesn't bridge them.
+    expect(aStratum.index).not.toBe(bStratum.index);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Partition Key Extraction (Plan 007, Phase 1, Tasks 1.5 + 1.6)
+// ---------------------------------------------------------------------------
+
+describe('extractPartitionKey', () => {
+  it('superseded stratum → PK = {Slot} at correct positions', () => {
+    // superseded(CnId, Slot) :- active_value(CnId, Slot, _, L1, _),
+    //   active_value(CnId2, Slot, _, L2, _), L2 > L1.
+    // superseded(CnId, Slot) :- active_value(CnId, Slot, _, L1, P1),
+    //   active_value(CnId2, Slot, _, L2, P2), L2 == L1, P2 > P1.
+    const rules = buildDefaultLWWRules().filter(
+      (r) => r.head.predicate === 'superseded',
+    );
+    expect(rules.length).toBe(2);
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables.length).toBeGreaterThan(0);
+    expect(pk.variables).toContain('Slot');
+
+    // Slot is at position 1 in the superseded head: superseded(CnId, Slot)
+    const headPos = pk.headPositions.get('superseded');
+    expect(headPos).toBeDefined();
+    expect(headPos).toContain(1);
+
+    // Slot is at position 1 in active_value: active_value(CnId, Slot, _, L, _)
+    const bodyPos = pk.bodyPositions.get('active_value');
+    expect(bodyPos).toBeDefined();
+    expect(bodyPos).toContain(1);
+  });
+
+  it('fugue_before stratum → PK = {Parent}', () => {
+    const rules = buildDefaultFugueRules().filter(
+      (r) => r.head.predicate === 'fugue_before',
+    );
+    expect(rules.length).toBe(5);
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables.length).toBeGreaterThan(0);
+    expect(pk.variables).toContain('Parent');
+
+    // Parent is at position 0 in fugue_before head: fugue_before(Parent, A, B)
+    const headPos = pk.headPositions.get('fugue_before');
+    expect(headPos).toBeDefined();
+    expect(headPos).toContain(0);
+  });
+
+  it('winner stratum → PK = {Slot}', () => {
+    // winner(Slot, CnId, Value) :- active_value(CnId, Slot, Value, _, _),
+    //   not superseded(CnId, Slot).
+    const rules = buildDefaultLWWRules().filter(
+      (r) => r.head.predicate === 'winner',
+    );
+    expect(rules.length).toBe(1);
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables).toContain('Slot');
+
+    // Slot is at position 0 in winner head: winner(Slot, CnId, Value)
+    const headPos = pk.headPositions.get('winner');
+    expect(headPos).toBeDefined();
+    expect(headPos).toContain(0);
+  });
+
+  it('fugue_child + fugue_descendant stratum → PK = {Parent} (functional-lookup relaxation)', () => {
+    // fugue_child's strict per-rule PK would be {CnId} (CnId appears in
+    // head and every body atom including constraint_peer). But the cross-
+    // rule head intersection is {Parent} — and with functional-lookup
+    // relaxation, constraint_peer(CnId, Peer) is PK-covered because CnId
+    // is reachable from Parent through active_structure_seq. So the
+    // relaxed PK = {Parent} for the combined stratum.
+    const rules = buildDefaultFugueRules().filter(
+      (r) =>
+        r.head.predicate === 'fugue_child' ||
+        r.head.predicate === 'fugue_descendant',
+    );
+    expect(rules.length).toBe(3);
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables).toContain('Parent');
+
+    // Parent is at position 0 in fugue_child head: fugue_child(Parent, CnId, ...)
+    const headPos = pk.headPositions.get('fugue_child');
+    expect(headPos).toBeDefined();
+    expect(headPos).toContain(0);
+  });
+
+  it('fugue_descendant rules alone → PK = {Parent}', () => {
+    // When fugue_descendant is analyzed independently, Parent appears
+    // in the head and every body atom of both rules — no relaxation needed.
+    const rules = buildDefaultFugueRules().filter(
+      (r) => r.head.predicate === 'fugue_descendant',
+    );
+    expect(rules.length).toBe(2);
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables).toContain('Parent');
+  });
+
+  it('rule with no shared variable → PK = ∅', () => {
+    // result(X) :- source(Y). — X is in head but not in body, Y in body but not head.
+    const rules: Rule[] = [
+      rule(
+        atom('result', [varTerm('X')]),
+        [positiveAtom(atom('source', [varTerm('Y')]))],
+      ),
+    ];
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables.length).toBe(0);
+    expect(pk.headPositions.size).toBe(0);
+    expect(pk.bodyPositions.size).toBe(0);
+  });
+
+  it('multi-rule stratum where one rule lacks the shared variable → PK = ∅', () => {
+    // r1: out(X) :- in(X, Y).     — X is shared
+    // r2: out(Z) :- other(W).     — Z is in head only, W in body only
+    // Cross-rule intersection: {X} ∩ ∅ = ∅
+    const rules: Rule[] = [
+      rule(
+        atom('out', [varTerm('X')]),
+        [positiveAtom(atom('in', [varTerm('X'), varTerm('Y')]))],
+      ),
+      rule(
+        atom('out', [varTerm('Z')]),
+        [positiveAtom(atom('other', [varTerm('W')]))],
+      ),
+    ];
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables.length).toBe(0);
+  });
+
+  it('empty rules → PK = ∅', () => {
+    const pk = extractPartitionKey([]);
+    expect(pk.variables.length).toBe(0);
+  });
+
+  it('rule with only guards (no atoms) → PK = ∅', () => {
+    // out(X) :- X > 0.  — guard only, no positive/negation body atoms
+    const rules: Rule[] = [
+      rule(
+        atom('out', [varTerm('X')]),
+        [gt(varTerm('X'), constTerm(0))],
+      ),
+    ];
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables.length).toBe(0);
+  });
+
+  it('default rules: each stratum has correct partitionKey populated', () => {
+    const rules = buildDefaultRules();
+    const result = stratify(rules);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const strata = result.value;
+
+    // superseded stratum — PK contains Slot
+    const supersededStratum = strata.find((s) => s.predicates.has('superseded'))!;
+    expect(supersededStratum.partitionKey.variables).toContain('Slot');
+
+    // fugue_child + fugue_descendant stratum — PK = {Parent} (functional-lookup
+    // relaxation: constraint_peer is PK-covered via CnId from active_structure_seq)
+    const fugueChildStratum = strata.find((s) => s.predicates.has('fugue_child'))!;
+    expect(fugueChildStratum.partitionKey.variables).toContain('Parent');
+
+    // winner stratum — PK contains Slot
+    const winnerStratum = strata.find((s) => s.predicates.has('winner'))!;
+    expect(winnerStratum.partitionKey.variables).toContain('Slot');
+
+    // fugue_before stratum — PK contains Parent
+    const fugueBeforeStratum = strata.find((s) => s.predicates.has('fugue_before'))!;
+    expect(fugueBeforeStratum.partitionKey.variables).toContain('Parent');
+  });
+
+  it('PK variables are sorted deterministically', () => {
+    // Rule with multiple shared variables: result(A, B) :- src(A, B).
+    const rules: Rule[] = [
+      rule(
+        atom('result', [varTerm('B'), varTerm('A')]),
+        [positiveAtom(atom('src', [varTerm('B'), varTerm('A')]))],
+      ),
+    ];
+
+    const pk = extractPartitionKey(rules);
+    // Both A and B are shared — they should be sorted alphabetically.
+    expect(pk.variables).toEqual(['A', 'B']);
+  });
+
+  // -------------------------------------------------------------------------
+  // Functional-lookup relaxation edge cases
+  //
+  // The relaxation classifies body atoms as "PK-covered" (satellite joins)
+  // vs "PK-required" (must contain PK vars). These tests exercise the
+  // reachability analysis in isolation with synthetic rules.
+  // -------------------------------------------------------------------------
+
+  it('disconnected atom is NOT PK-covered → PK narrows away', () => {
+    // r1: out(K, V) :- a(K, V, Y), b(W).
+    //
+    // PK candidate from head: {K, V}.
+    // Reachable from {K, V}: start {K, V} → a(K, V, Y) overlaps → add Y → {K, V, Y}.
+    // b(W) has zero overlap with {K, V, Y} → PK-required.
+    // Intersect {K, V} with {W} → ∅.
+    //
+    // This is a Cartesian-product join. The atom b(W) genuinely
+    // introduces a cross-partition dependency: every partition
+    // reads all b facts. The relaxation must NOT cover it.
+    const rules: Rule[] = [
+      rule(
+        atom('out', [varTerm('K'), varTerm('V')]),
+        [
+          positiveAtom(atom('a', [varTerm('K'), varTerm('V'), varTerm('Y')])),
+          positiveAtom(atom('b', [varTerm('W')])),
+        ],
+      ),
+    ];
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables.length).toBe(0);
+  });
+
+  it('chained lookup (two hops) is PK-covered → PK = {K}', () => {
+    // out(K, V) :- a(K, X), b(X, Y), c(Y, V).
+    //
+    // Reachable from {K}: K → a → X → b → Y → c → V.
+    // All three atoms are PK-covered. No PK-required atoms.
+    // PK = {K}.
+    //
+    // Tests that reachability is transitive (multi-hop), not just
+    // one-hop from the PK atom.
+    const rules: Rule[] = [
+      rule(
+        atom('out', [varTerm('K'), varTerm('V')]),
+        [
+          positiveAtom(atom('a', [varTerm('K'), varTerm('X')])),
+          positiveAtom(atom('b', [varTerm('X'), varTerm('Y')])),
+          positiveAtom(atom('c', [varTerm('Y'), varTerm('V')])),
+        ],
+      ),
+    ];
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables).toContain('K');
+  });
+
+  it('cross-rule narrowing: one rule supports PK, other does not → PK = ∅', () => {
+    // r1: out(K, V) :- a(K, X), b(X, V).  — PK = {K} (b is PK-covered via X)
+    // r2: out(K, W) :- c(W).               — K is in head but not in body at all
+    //
+    // r1 validates PK = {K}. r2 has c(W) which is PK-required (W is not
+    // reachable from {K} — c has no overlap with any PK-containing atom).
+    // K ∉ c → PK narrows to ∅.
+    //
+    // Tests that cross-rule validation correctly rejects a PK that
+    // one rule supports but another doesn't.
+    const rules: Rule[] = [
+      rule(
+        atom('out', [varTerm('K'), varTerm('V')]),
+        [
+          positiveAtom(atom('a', [varTerm('K'), varTerm('X')])),
+          positiveAtom(atom('b', [varTerm('X'), varTerm('V')])),
+        ],
+      ),
+      rule(
+        atom('out', [varTerm('K'), varTerm('W')]),
+        [positiveAtom(atom('c', [varTerm('W')]))],
+      ),
+    ];
+
+    const pk = extractPartitionKey(rules);
+    expect(pk.variables.length).toBe(0);
   });
 });

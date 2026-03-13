@@ -770,6 +770,9 @@ export function createEvaluator(
   /** Current stratification (recomputed on rule changes). */
   let strata: readonly Stratum[] = [];
 
+  /** Map from stratum index → Stratum for O(1) lookup. */
+  let strataByIndex: Map<number, Stratum> = new Map();
+
   /** Map from predicate → affected stratum indices. */
   let predToStrata: Map<string, Set<number>> = new Map();
 
@@ -792,6 +795,7 @@ export function createEvaluator(
   function restratify(): void {
     if (rules.length === 0) {
       strata = [];
+      strataByIndex = new Map();
       predToStrata = new Map();
       allDerivedPreds = new Set();
       return;
@@ -801,12 +805,17 @@ export function createEvaluator(
     if (!result.ok) {
       // Cyclic negation — clear strata.
       strata = [];
+      strataByIndex = new Map();
       predToStrata = new Map();
       allDerivedPreds = new Set();
       return;
     }
 
     strata = result.value;
+    strataByIndex = new Map();
+    for (const s of strata) {
+      strataByIndex.set(s.index, s);
+    }
     predToStrata = buildPredicateToAffectedStrata(strata);
     allDerivedPreds = headPredicates(rules);
   }
@@ -1041,7 +1050,7 @@ export function createEvaluator(
     const outputDelta = new Database();
 
     for (const stratumIdx of affectedIndices) {
-      const stratum = strata.find((s) => s.index === stratumIdx);
+      const stratum = strataByIndex.get(stratumIdx);
       if (stratum === undefined || stratum.rules.length === 0) continue;
 
       const stratumDelta = evaluateStratumFromDelta(
@@ -1142,6 +1151,7 @@ export function createEvaluator(
     db = new Database();
     rules = [];
     strata = [];
+    strataByIndex = new Map();
     predToStrata = new Map();
     allDerivedPreds = new Set();
     accumulatedGroundFacts = new Map();

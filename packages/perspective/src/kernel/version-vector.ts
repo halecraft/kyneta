@@ -317,3 +317,61 @@ export function vvTotalOps(vv: VersionVector): number {
   }
   return total;
 }
+
+// ---------------------------------------------------------------------------
+// Component-wise Minimum
+// ---------------------------------------------------------------------------
+
+/**
+ * Component-wise minimum across all version vectors.
+ *
+ * For each peer that appears in ALL input VVs, the result contains that peer
+ * with the minimum counter across the inputs. If a peer is missing from any
+ * VV, it is absent from the result (since vvGet returns 0 for missing peers,
+ * and min with 0 = 0, which is equivalent to absent).
+ *
+ * Empty input returns an empty VV.
+ */
+export function vvMin(vvs: readonly VersionVector[]): MutableVersionVector {
+  if (vvs.length === 0) return createVersionVector();
+
+  const result = createVersionVector();
+
+  // Start with the peers from the first VV
+  const first = vvs[0]!;
+  for (const [peer, counter] of first) {
+    let min = counter;
+    let presentInAll = true;
+    for (let i = 1; i < vvs.length; i++) {
+      const vv = vvs[i]!;
+      if (!vv.has(peer)) {
+        presentInAll = false;
+        break;
+      }
+      const c = vv.get(peer)!;
+      if (c < min) min = c;
+    }
+    if (presentInAll && min > 0) {
+      result.set(peer, min);
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Frontier Checking
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a constraint's CnId has been seen by the frontier version vector.
+ *
+ * Semantic wrapper around vvHasSeenCnId for readability in frontier checks.
+ * Returns true iff frontier[c.id.peer] > c.id.counter.
+ */
+export function isConstraintBelowFrontier(
+  c: Constraint,
+  frontier: VersionVector,
+): boolean {
+  return vvHasSeenCnId(frontier, c.id);
+}

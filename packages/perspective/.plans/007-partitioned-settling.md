@@ -117,8 +117,8 @@ and per-parent partitioning.
 ### What Exists
 
 - **Version vectors:** `version-vector.ts` has `vvGet`, `vvCompare`,
-  `vvIncludes`, `vvMerge`, `vvHasSeenCnId`. Component-wise minimum
-  (`vvMin`) is not implemented but is trivial.
+  `vvIncludes`, `vvMerge`, `vvHasSeenCnId`, `vvMin` (component-wise
+  minimum), and `isConstraintBelowFrontier` (semantic wrapper).
 - **Per-stage accumulated state:** Every incremental stage holds mutable
   state (`allByKey`, `domStatus`, `accFacts`, `db`, mutable tree, etc.).
 - **Retraction depth:** `maxDepth: 2` default. Makes settling decidable —
@@ -127,33 +127,35 @@ and per-parent partitioning.
 - **CnId ordering:** `vvHasSeenCnId(V_stable, c.id)` checks if a
   constraint is below the frontier.
 - **Stratification:** `stratify.ts` builds dependency graphs, SCCs,
-  stratum assignments. However, Step 4 of `stratify()` groups ALL SCCs
-  at the same dependency level into a single stratum. For the default
-  rules, this merges LWW predicates (`superseded`) with Fugue predicates
-  (`fugue_child`, `fugue_descendant`) into stratum 0, and `winner` with
-  `fugue_before` into stratum 1. Cross-rule partition key intersection
-  over these mixed strata produces PK = ∅. Finer-grained stratification
-  (splitting independent components) is needed before partition key
-  extraction can succeed.
+  stratum assignments. Step 4 splits independent SCCs at the same
+  dependency level into separate strata via connected-component analysis
+  (Phase 1, Task 1.3). Ground predicates are excluded from connectivity.
+  For the default LWW + Fugue rules, this produces 4 strata (2 families
+  × 2 levels), each with a non-empty partition key.
+- **Partition key extraction:** `extractPartitionKey()` computes the
+  cross-rule head variable intersection and validates per-rule using a
+  functional-lookup relaxation (reachability-based PK-coverage). Each
+  `Stratum` carries a `partitionKey: PartitionKeyInfo` field.
 - **Dual-weight Relations:** `weight` / `clampedWeight` correctly track
   Z-set multiplicities for incremental evaluation.
+- **Fact↔constraint tracing:** `constraintKeyFromFact(f)` reads
+  `f.values[0]` for known predicates (O(1), stateless). The incremental
+  projection stage maintains a `constraintToFacts` reverse index with
+  `factsForConstraint(constraintKey)` for compaction.
+- **Evaluator stratum lookup:** `strataByIndex: Map<number, Stratum>`
+  replaces linear `strata.find()` search.
+- **Type scaffolding:** `CompactionPolicy`, `FrontierConfig` types
+  defined in `kernel/types.ts`.
 
 ### What's Missing
 
-- `vvMin` (component-wise minimum of version vectors).
 - Stability frontier type and `advanceFrontier` computation.
-- Finer-grained stratification: split independent SCCs at the same
-  dependency level into separate strata so partition key extraction
-  succeeds on the default LWW + Fugue rules.
-- Partition key extraction from rules (variable intersection analysis).
 - Optional partition index inside `Relation` (arranged relation mode).
 - Per-partition `evaluateStratumFromDelta` routing.
-- `constraintKeyFromFact` utility for fact→constraint tracing (the CnIdKey
-  is already embedded in fact tuples at position 0 — no new index needed).
 - Per-stage settled detection and frozen/working partition.
 - Frontier advancement protocol with functional core / imperative shell
   separation (`computeSettled` → `applySettling`).
-- Compaction rules and store `compact()` operation.
+- Compaction rules and store `compact()` / `removeConstraints` operation.
 - Multi-agent VV exchange (deferred — requires sync protocol).
 
 ---
@@ -163,8 +165,9 @@ and per-parent partitioning.
 ### Stability Frontier
 
 ```typescript
-// version-vector.ts — new export
+// version-vector.ts — implemented (Phase 1, Tasks 1.1–1.2)
 function vvMin(vvs: readonly VersionVector[]): VersionVector;
+function isConstraintBelowFrontier(c: Constraint, frontier: VersionVector): boolean;
 ```
 
 For multi-agent: `V_stable = vvMin([vv_alice, vv_bob, ...])`. For
@@ -222,6 +225,25 @@ For the default rules, this produces **4 strata** instead of 2:
 | 2 | `winner` | 1 | `{Slot}` ✅ |
 | 3 | `fugue_before` | 5 | `{Parent}` ✅ |
 
+All four strata are partitionable. Stratum 1 requires the **functional-
+lookup relaxation** described below.
+
+> **Implementation note — functional-lookup relaxation (Phase 1):** A
+> naive per-rule variable intersection would give `fugue_child` PK =
+> `{CnId}` (not `{Parent}`), because `constraint_peer(CnId, Peer)`
+> lacks `Parent`. The cross-rule intersection `{CnId} ∩ {Parent} = ∅`
+> would then kill partitionability for the combined stratum. However,
+> `constraint_peer` is a **functional lookup** keyed by `CnId`, and
+> `CnId` is already bound by `active_structure_seq(CnId, Parent, ...)`
+> which does contain `Parent`. For a fixed `Parent`, the set of matching
+> `constraint_peer` facts is fully determined — it introduces no cross-
+> partition dependencies. The `extractPartitionKey` algorithm recognizes
+> this pattern: it computes the cross-rule head intersection (`{Parent}`)
+> first, then validates each rule using a reachability analysis that
+> classifies `constraint_peer` as "PK-covered" (all its variables are
+> reachable from `{Parent}` through other body atoms). Only PK-required
+> atoms (those NOT fully covered) must contain the PK variables.
+
 Strata 0–1 are at dependency level 0 (no negative deps) and can be
 evaluated in any order. Strata 2–3 are at level 1 (negative deps on
 level 0) and can also be evaluated in any order relative to each other.
@@ -244,17 +266,18 @@ They can be evaluated in any order. The current sequential bottom-up loop
 handles this correctly without modification — it just processes more,
 smaller strata.
 
-**Performance note:** The evaluator's `computeAffectedStrata` and
-`strata.find()` should use Map lookups (not linear search) to avoid
-O(|strata|²) overhead when stratum count grows. This is a minor code
-quality fix, not an architectural change.
+**Performance note:** The evaluator's `strata.find()` has been replaced
+with `strataByIndex: Map<number, Stratum>` for O(1) lookup (Phase 1,
+Task 1.4).
 
 ### Partition Key Extraction
 
-At stratification time, for each stratum, compute:
+At stratification time, for each stratum, `extractPartitionKey()` computes
+the partition key. The interface and function are exported from
+`stratify.ts` (implemented in Phase 1):
 
 ```typescript
-// stratify.ts — new export
+// stratify.ts — implemented
 interface PartitionKeyInfo {
   /** Variable names that form the partition key (empty = not partitionable). */
   readonly variables: readonly string[];
@@ -267,12 +290,25 @@ interface PartitionKeyInfo {
 function extractPartitionKey(rules: readonly Rule[]): PartitionKeyInfo;
 ```
 
-Algorithm: for each rule, intersect the set of variables appearing in the
-head with those appearing in every positive/negation body atom. Intersect
-across all rules in the stratum. Map surviving variables to tuple positions
-in each predicate. Because strata are now fine-grained (one connected
-component per stratum), the cross-rule intersection operates over rules
-that share predicates, not over unrelated rule families.
+Algorithm (cross-rule-head-first with functional-lookup relaxation):
+
+1. Compute the **cross-rule head intersection** — variables that appear
+   in every rule's head. This is the maximum possible PK.
+2. For each rule, **validate** the candidate against body atoms. A body
+   atom is **PK-covered** if all its variables are reachable from the PK
+   candidate through other body atoms (transitive closure). PK-covered
+   atoms are satellite joins (functional lookups) that don't introduce
+   cross-partition dependencies. Only **PK-required** atoms (those with
+   unreachable variables) must contain the PK variables.
+3. Narrow the candidate if any PK-required atom lacks a candidate
+   variable. Re-validate until stable.
+4. Map surviving variables to tuple positions in each predicate.
+
+The functional-lookup relaxation is critical for the `fugue_child` +
+`fugue_descendant` stratum: `constraint_peer(CnId, Peer)` lacks `Parent`
+but is PK-covered because `CnId` is reachable from `{Parent}` through
+`active_structure_seq`. Without the relaxation, this stratum would have
+PK = ∅. See § Learnings: Functional-Lookup Relaxation.
 
 ### Partition-Aware Relation (Arranged Mode)
 
@@ -344,27 +380,27 @@ projection stage creates `active_value` facts with `cnIdKey(vc.id)` at
 position 0, and `active_structure_seq` facts with `cnIdKey(sc.id)` at
 position 0. No new index is needed for the fact→constraint direction.
 
-Add a utility function:
+**Implemented (Phase 1):**
 
 ```typescript
-// kernel/projection.ts — new export
+// kernel/projection.ts — implemented
 function constraintKeyFromFact(f: Fact): string | null;
 ```
 
-This reads `f.values[0]` for known fact predicates (`active_value`,
+Reads `f.values[0]` for known fact predicates (`active_value`,
 `active_structure_seq`, `constraint_peer`). O(1), no state, can't go
 stale.
 
-For the reverse direction (constraint→facts), the projection stage gains
-a lightweight index for use by compaction:
+For the reverse direction (constraint→facts), the incremental projection
+stage maintains a lightweight index for use by compaction:
 
 ```typescript
-// incremental/projection.ts — internal addition
+// incremental/projection.ts — implemented
 // CnIdKey → Set<factKey> of facts it produced
 let constraintToFacts: Map<string, Set<string>>;
 ```
 
-Updated on project/retract. Exposed as:
+Updated on project/retract. Exposed on `IncrementalProjection`:
 
 ```typescript
 interface IncrementalProjection {
@@ -373,6 +409,66 @@ interface IncrementalProjection {
   factsForConstraint(constraintKey: string): ReadonlySet<string> | undefined;
 }
 ```
+
+### Lazy-View `constructDbOld` (Pre-Partition Optimization)
+
+The current `constructDbOld` calls `db.clone()` — an O(|db|) deep copy
+of every predicate's entire relation — then subtracts the delta. This is
+called **1 + N times per stratum evaluation** (once for the seed phase,
+once per fixpoint iteration), and the evaluator processes S affected
+strata per `step()`. Total clone cost per step:
+**(1 + N₁) + (1 + N₂) + ... + (1 + Nₛ)** full O(|db|) clones.
+
+For the default rules, only 2 of 4 strata are recursive (`fugue_child` +
+`fugue_descendant` via transitive closure, `fugue_before` via transitive
+closure + subtree propagation). Non-recursive strata (`superseded`,
+`winner`) converge in 1 seed pass with 0 iterations. But for recursive
+strata, N scales as ~log₂(K) where K is the partition size (the
+semi-naive "doubling" strategy roughly doubles the reachable set each
+iteration). Under a single parent with 100 children, N ≈ 7 — meaning
+~8 full O(|db|) clones for that one stratum.
+
+**Note:** For the default rules, the native `IncrementalLWW` +
+`IncrementalFugue` solvers bypass `evaluateStratumFromDelta` entirely,
+so `constructDbOld` cost is zero on the native path. This optimization
+targets the Datalog path (activated by custom rules).
+
+**Fix (Phase 1.5):** Replace eager cloning with a **lazy view**. A
+`DatabaseView` reads from the underlying `db` and materializes
+differences only for predicates present in the delta. For a delta
+touching 2 of 20 predicates, this is O(|delta|) instead of O(|db|) —
+and crucially, the cost is O(|delta|) per iteration, not O(|db|).
+
+```typescript
+// evaluator.ts — replaces constructDbOld
+class DatabaseView implements ReadonlyDatabase {
+  constructor(
+    private readonly base: Database,
+    private readonly delta: Database,
+  ) {}
+
+  /** Return P_old for a predicate: base − delta. Lazily materialized. */
+  getRelation(pred: string): Relation {
+    const baseRel = this.base.getRelation(pred);
+    const deltaRel = this.delta.getRelation(pred);
+    if (deltaRel.allEntryCount === 0) return baseRel; // no delta → share
+    return baseRel.subtract(deltaRel);                 // materialize once
+  }
+}
+```
+
+The key property: `evaluateRuleDelta` only reads predicates that appear
+in the rule's body atoms. Most predicates are untouched by any given
+delta, so the view short-circuits for them. The materialized subtractions
+can be cached within the view for repeated access to the same predicate
+within one evaluation pass.
+
+**Layering with partitioned evaluation (Phase 3):** Phase 1.5's lazy
+view is independent of partitioning and delivers the first-order win
+(O(|delta|) instead of O(|db|)). Phase 3's partition-scoped cloning
+adds a second-order win: the fixpoint iteration count N becomes
+per-partition, and each partition's view materializes only that
+partition's entries. The two optimizations compose multiplicatively.
 
 ### Per-Stage Settling (Functional Core / Imperative Shell)
 
@@ -441,7 +537,7 @@ zero-weight/settled entries.
 
 ## Phases and Tasks
 
-### Phase 1: Frontier Infrastructure 🔴
+### Phase 1: Frontier Infrastructure 🟢 (complete)
 
 Foundation: V_stable computation, finer-grained stratification, partition
 key extraction, fact→constraint tracing. No behavioral changes to the
@@ -451,11 +547,11 @@ pipeline beyond stratification producing more strata.
 
 - **1.1** Add `vvMin(vvs: readonly VersionVector[]): VersionVector` to
   `version-vector.ts`. Component-wise minimum across all VVs. Empty input
-  returns empty VV. 🔴
+  returns empty VV. 🟢
 
 - **1.2** Add `isConstraintBelowFrontier(c: Constraint, frontier: VersionVector): boolean`
   to `version-vector.ts`. Delegates to `vvHasSeenCnId`. Semantic wrapper
-  for readability. 🔴
+  for readability. 🟢
 
 - **1.3** Refine `stratify()` Step 4 to produce **finer-grained strata**.
   After computing SCC stratum levels, compute connected components among
@@ -467,12 +563,12 @@ pipeline beyond stratification producing more strata.
   do not create evaluation dependencies between derived-predicate
   families. Emit one `Stratum` per connected component instead of one
   per level. Assign sequential indices that respect level ordering.
-  Verify the default LWW + Fugue rules produce 4 strata instead of 2. 🔴
+  Verify the default LWW + Fugue rules produce 4 strata instead of 2. 🟢
 
 - **1.4** Fix `strata.find()` in the evaluator's `step()` hot loop to
   use a `Map<number, Stratum>` lookup instead of linear search. This is
   a prerequisite for finer stratification — more strata means
-  `strata.find()` cost matters. 🔴
+  `strata.find()` cost matters. 🟢
 
 - **1.5** Implement `extractPartitionKey(rules: readonly Rule[]): PartitionKeyInfo`
   in `stratify.ts`. For each rule, compute the intersection of variables
@@ -480,21 +576,21 @@ pipeline beyond stratification producing more strata.
   Intersect across all rules in the stratum. Map to tuple positions.
   Because strata are now fine-grained, this operates over rules that
   share predicates — the cross-rule intersection succeeds for the
-  default rules. 🔴
+  default rules. 🟢
 
 - **1.6** Extend `Stratum` interface with `readonly partitionKey: PartitionKeyInfo`.
-  Populate during `stratify()`. 🔴
+  Populate during `stratify()`. 🟢
 
 - **1.7** Add `constraintKeyFromFact(f: Fact): string | null` to
   `kernel/projection.ts`. Reads `f.values[0]` for known fact predicates.
-  O(1), no state. 🔴
+  O(1), no state. 🟢
 
 - **1.8** Add `constraintToFacts: Map<string, Set<string>>` reverse index
   to the incremental projection stage. Update on project/retract. Expose
-  `factsForConstraint(constraintKey)`. 🔴
+  `factsForConstraint(constraintKey)`. 🟢
 
 - **1.9** Add `CompactionPolicy` type and `FrontierConfig` to
-  `kernel/types.ts`. 🔴
+  `kernel/types.ts`. 🟢
 
 #### Tests
 
@@ -520,6 +616,64 @@ pipeline beyond stratification producing more strata.
 - `constraintKeyFromFact` on unknown predicate → null.
 - Projection `factsForConstraint`: insert a value constraint, verify
   returns the correct factKey set. Retract, verify cleanup.
+
+### Phase 1.5: Lazy-View `constructDbOld` 🔴
+
+Replace the eager O(|db|) `constructDbOld` with a lazy `DatabaseView`
+that materializes P_old = P_new − Δ only for predicates actually
+accessed during rule evaluation. This is independent of partitioning
+and delivers the first-order performance win for the Datalog evaluation
+path.
+
+**Motivation:** `constructDbOld` is called (1 + N) times per stratum
+evaluation, where N is the fixpoint iteration count. For recursive
+strata (transitive closure), N ≈ log₂(K). Each call currently clones
+every predicate in the database — including predicates untouched by the
+delta. A lazy view avoids this by sharing unchanged predicates and only
+materializing the subtraction for predicates present in the delta.
+
+#### Tasks
+
+- **1.5.1** Introduce a `ReadonlyDatabase` interface in `types.ts` with
+  `getRelation(pred): Relation`, `predicates(): Iterable<string>`, and
+  `hasFact(f): boolean`. `Database` implements it. The evaluator
+  functions (`evaluateRuleDelta`, `evaluatePositiveAtom`, etc.) already
+  take `Database` — widen their parameter types to `ReadonlyDatabase`
+  where they only read. 🔴
+
+- **1.5.2** Implement `DatabaseView` in `evaluator.ts`. Constructor
+  takes `(base: Database, delta: Database)`. `getRelation(pred)` returns
+  `base.getRelation(pred)` when `delta.getRelation(pred).allEntryCount
+  === 0` (zero-copy share), otherwise computes and caches
+  `base.getRelation(pred).subtract(delta.getRelation(pred))`. The cache
+  is a `Map<string, Relation>` local to the view instance. 🔴
+
+- **1.5.3** Add `Relation.subtract(other: Relation): Relation` utility.
+  Returns a new `Relation` with weights `this.weight − other.weight` for
+  each entry. Entries with resulting weight 0 are pruned. This replaces
+  the inline loop in the current `constructDbOld`. 🔴
+
+- **1.5.4** Replace both call sites of `constructDbOld` in
+  `evaluateStratumFromDelta` (seed phase + iteration loop) with
+  `new DatabaseView(db, delta)`. Remove the `constructDbOld` function.
+  Update the comment that incorrectly claims O(|delta|). 🔴
+
+- **1.5.5** Verify that all existing tests pass unchanged — the lazy
+  view is a pure performance optimization with identical semantics. 🔴
+
+#### Tests
+
+- `DatabaseView.getRelation` returns the base relation unchanged when
+  delta has no entries for that predicate (identity — verify same object
+  reference).
+- `DatabaseView.getRelation` returns the correct P_old when delta has
+  entries for that predicate (verify weights are subtracted).
+- `DatabaseView` caches materialized relations (second call to
+  `getRelation` for the same predicate returns the cached result).
+- Three-way oracle (batch ≡ single-step ≡ one-at-a-time) continues to
+  hold — primary correctness gate.
+- Performance: for a database with 10 predicates and a delta touching 1,
+  only 1 relation is materialized (the other 9 are shared).
 
 ### Phase 2: Partition-Aware Relation 🔴
 
@@ -591,6 +745,15 @@ routing happens per-stratum — each stratum has a single partition key
 bottom-up; the partition routing is an inner loop within each stratum's
 evaluation.
 
+Phase 1.5's lazy `DatabaseView` is the foundation here. Partition
+routing composes with the lazy view: each partition's evaluation
+creates a `DatabaseView` scoped to that partition's entries, so the
+per-iteration materialization cost is O(|partition_delta|) instead of
+O(|db|). For recursive strata, the fixpoint iteration count N also
+becomes per-partition — a parent with 100 children iterates ~7 times
+on its own partition, while a parent with 2 children iterates ~1 time,
+rather than both paying for ~7 iterations over the full database.
+
 #### Tasks
 
 - **3.1** In `createEvaluator`, after `restratify()`, call
@@ -609,13 +772,13 @@ evaluation.
   — it receives fewer tuples, scoped to the partition. When PK is empty:
   evaluate the entire stratum as today. 🔴
 
-- **3.3** Replace `db.clone()` in `constructDbOld` with scoped cloning.
-  For partitioned strata: clone only the affected partitions' sub-maps,
-  not the entire DB. For non-partitioned strata: clone only the
-  predicates that appear in the delta (the current code clones ALL
-  predicates including those untouched by the delta — wasteful). This
-  is both a correctness fix for the partitioned case and a performance
-  fix for the general case. Fix the misleading "O(|delta|)" comment. 🔴
+- **3.3** Extend `DatabaseView` (Phase 1.5) with partition-scoped
+  construction. For partitioned strata: the view wraps partition
+  sub-relations, so `getRelation(pred)` returns only entries matching
+  the current partition key. This composes with the lazy materialization
+  — unchanged predicates are still zero-copy shared, and subtraction
+  is scoped to the partition's entries. For non-partitioned strata:
+  `DatabaseView` works as-is from Phase 1.5. 🔴
 
 - **3.4** Skip frozen partitions in the evaluation loop. If inputDelta
   has entries for a frozen key, this is a consistency error (settled inputs
@@ -652,8 +815,9 @@ evaluation.
   back to per-stratum. Verify correctness.
 - Retraction in one partition doesn't affect another partition's derived
   facts.
-- `constructDbOld` only builds P_old for affected partition keys (verify
-  via a test that the frozen partition is not cloned/subtracted).
+- Partition-scoped `DatabaseView` only materializes P_old for the
+  current partition's predicates (verify via a test that the frozen
+  partition's relations are not materialized).
 - Permutation test: all orderings of 3 values across 2 slots produce
   same resolution, with and without partition freezing.
 
@@ -790,6 +954,41 @@ operation — no delta propagation.
 ---
 
 ## Transitive Effect Analysis
+
+### `constructDbOld` replaced by lazy `DatabaseView`
+
+**Direct:** `constructDbOld` (which calls `db.clone()`) is removed.
+Both call sites in `evaluateStratumFromDelta` — seed phase and
+per-iteration — are replaced with `new DatabaseView(db, delta)`.
+`evaluateRuleDelta`, `evaluatePositiveAtom`, and other functions that
+accept a `Database` parameter are widened to accept `ReadonlyDatabase`.
+`Relation` gains a `subtract(other)` method.
+
+**Transitive:** The `DatabaseView` is a read-only wrapper — it never
+mutates `db`. Functions that previously received a `Database` (for
+`dbOld`) only ever read from it (calling `getRelation`, `hasFact`),
+so widening to `ReadonlyDatabase` is safe. The batch oracle
+(`evaluateNaive`) does not use `constructDbOld` and is unaffected.
+
+**Risk:** If any code path writes to `dbOld` (calling `addWeightedFact`,
+`addFact`, etc.), the `ReadonlyDatabase` interface would catch this at
+compile time — that's the point of the interface. Inspection of
+`evaluateStratumFromDelta` confirms `dbOld` is only read: it's passed
+as the `dbOld` argument to `evaluateRuleDelta`, which uses it for
+lookups in the asymmetric join (positions after `deltaIdx` read from
+`dbOld`).
+
+**Performance semantics:** The lazy view caches materialized
+subtractions in a per-instance `Map<string, Relation>`. Within a
+single `evaluateStratumFromDelta` invocation, each predicate is
+subtracted at most once per view instance. Across fixpoint iterations,
+each iteration creates a fresh `DatabaseView` with a new (typically
+small) `currentDelta`, so caching does not leak across iterations.
+
+**Mitigation:** Three-way oracle (batch ≡ single-step ≡ one-at-a-time)
+is the primary correctness gate. `DatabaseView.getRelation` must
+return the same results as the old `constructDbOld` for all predicates
+— this is verified by the existing evaluator test suite.
 
 ### `Relation` gains optional partition mode
 
@@ -943,26 +1142,27 @@ the settled set only grew (or stayed the same).
 
 ### Files to Modify
 
-| File | Changes |
-|------|---------|
-| `src/kernel/version-vector.ts` | Add `vvMin`, `isConstraintBelowFrontier` |
-| `src/datalog/stratify.ts` | Finer-grained stratification (split independent SCCs), add `extractPartitionKey`, extend `Stratum` |
-| `src/datalog/types.ts` | Add partition mode to `Relation` (enablePartitioning, freeze/unfreeze, partition-scoped iteration) |
-| `src/datalog/evaluator.ts` | Partition routing in `step()`, scoped `constructDbOld`, partition setup in `createEvaluator`, `strata.find()` → Map lookup, rule-change `unfreezeAll` |
-| `src/kernel/projection.ts` | Add `constraintKeyFromFact` utility |
-| `src/kernel/incremental/projection.ts` | `constraintToFacts` reverse index, `factsForConstraint` |
-| `src/kernel/incremental/retraction.ts` | `applySettling`, settled detection, `isDepthExhausted` query |
-| `src/kernel/incremental/evaluation.ts` | `applySettling` delegation |
-| `src/kernel/incremental/skeleton.ts` | `applySettling` (node freezing) |
-| `src/kernel/incremental/pipeline.ts` | `advanceFrontier`, `compact`, `settledSlots` |
-| `src/kernel/store.ts` | `removeConstraints` |
-| `src/kernel/types.ts` | `CompactionPolicy`, `FrontierConfig` |
-| `src/solver/incremental-lww.ts` | Per-slot settling |
-| `src/solver/incremental-fugue.ts` | Per-parent settling |
-| `theory/partitioned-settling.md` | Amend §3.2 to note finer-grained stratification requirement |
-| `TECHNICAL.md` | Settled/working section, pipeline updates |
-| `LEARNINGS.md` | Implementation discoveries |
-| `.plans/004-incremental-roadmap.md` | Status updates, 006.2 addition |
+| File | Changes | Status |
+|------|---------|--------|
+| `src/kernel/version-vector.ts` | Add `vvMin`, `isConstraintBelowFrontier` | ✅ Phase 1 |
+| `src/datalog/stratify.ts` | Finer-grained stratification (split independent SCCs), add `extractPartitionKey`, extend `Stratum` | ✅ Phase 1 |
+| `src/datalog/types.ts` | Add `ReadonlyDatabase` interface, `Relation.subtract()` (Phase 1.5); add partition mode to `Relation` (Phase 2) | Phase 1.5, Phase 2 |
+| `src/datalog/evaluator.ts` | `DatabaseView` lazy-view replacement for `constructDbOld` (Phase 1.5); partition routing in `step()`, partition-scoped `DatabaseView`, partition setup in `createEvaluator`, rule-change `unfreezeAll` (Phase 3) | ⚬ `strataByIndex` Map done (Phase 1); lazy view in Phase 1.5; partition routing in Phase 3 |
+| `src/datalog/evaluate.ts` | Widen `Database` params to `ReadonlyDatabase` where read-only | Phase 1.5 |
+| `src/kernel/projection.ts` | Add `constraintKeyFromFact` utility | ✅ Phase 1 |
+| `src/kernel/incremental/projection.ts` | `constraintToFacts` reverse index, `factsForConstraint` | ✅ Phase 1 |
+| `src/kernel/incremental/retraction.ts` | `applySettling`, settled detection, `isDepthExhausted` query | Phase 4 |
+| `src/kernel/incremental/evaluation.ts` | `applySettling` delegation | Phase 4 |
+| `src/kernel/incremental/skeleton.ts` | `applySettling` (node freezing) | Phase 4 |
+| `src/kernel/incremental/pipeline.ts` | `advanceFrontier`, `compact`, `settledSlots` | Phases 4–5 |
+| `src/kernel/store.ts` | `removeConstraints` | Phase 5 |
+| `src/kernel/types.ts` | `CompactionPolicy`, `FrontierConfig` | ✅ Phase 1 |
+| `src/solver/incremental-lww.ts` | Per-slot settling | Phase 4 |
+| `src/solver/incremental-fugue.ts` | Per-parent settling | Phase 4 |
+| `theory/partitioned-settling.md` | Amend §3.2 to note finer-grained stratification requirement; add §3.4 functional-lookup relaxation | ✅ Phase 1 |
+| `TECHNICAL.md` | Settled/working section, pipeline updates | Phase 6 |
+| `LEARNINGS.md` | Implementation discoveries | Phase 6 |
+| `.plans/004-incremental-roadmap.md` | Status updates, 006.2 addition | Phase 6 |
 
 ### Files to Add
 
@@ -976,7 +1176,7 @@ the settled set only grew (or stayed the same).
 |------|---------|
 | `tests/kernel/version-vector.test.ts` | `vvMin` tests |
 | `tests/datalog/stratify.test.ts` | Finer-grained stratification tests, `extractPartitionKey` tests |
-| `tests/datalog/evaluator.test.ts` | Partitioned evaluation, freezing, rule-change unfreeze tests, evaluator correctness with finer strata |
+| `tests/datalog/evaluator.test.ts` | `DatabaseView` lazy-view tests (Phase 1.5); partitioned evaluation, freezing, rule-change unfreeze tests (Phase 3); evaluator correctness with finer strata |
 | `tests/kernel/projection.test.ts` | `constraintKeyFromFact` tests |
 | `tests/kernel/incremental/projection.test.ts` | `constraintToFacts` reverse index tests |
 | `tests/kernel/settling.test.ts` | New: `computeSettlingPlan` pure function tests |
@@ -1098,8 +1298,9 @@ that share no predicates are independent by construction and can safely
 become separate strata.
 
 This was caught during pre-implementation code review (Plan 007 research
-phase). The theory document `theory/partitioned-settling.md` §3.2 should
-be amended to note this requirement.
+phase). The theory document `theory/partitioned-settling.md` §3.2 has
+been amended with an implementation note describing the finer-grained
+stratification requirement and the ground-predicate exclusion rule.
 
 ### The Constraint Key Is Already in the Tuple — Don't Index What You Have
 
@@ -1119,12 +1320,41 @@ serves this purpose for compaction.
 The current `constructDbOld` calls `db.clone()` which copies all
 predicates, all entries — O(|db|). The code comment claims "O(|delta|),
 not O(|DB|)" but this refers only to the subtraction step; the clone
-dominates. Furthermore, `constructDbOld` is called at least twice per
-stratum per step (seed + each iteration of the convergence loop). For a
-reality with 100k facts and 5 active slots, every delta triggers 100k+
-entry clones. The fix has two levels: (1) clone only predicates that
-appear in the delta (a pre-007 win), (2) clone only affected partitions
-(the full fix in Phase 3).
+dominates. Furthermore, `constructDbOld` is called **(1 + N) times per
+stratum evaluation** — once in the seed phase, once per fixpoint
+iteration — where N is the fixpoint iteration count. Across S affected
+strata, total clone cost per `step()` is:
+
+  **(1 + N₁) + (1 + N₂) + ... + (1 + Nₛ)** full O(|db|) clones
+
+For non-recursive strata (`superseded`, `winner`), N = 0 — exactly 1
+clone each. For recursive strata (`fugue_child` + `fugue_descendant`,
+`fugue_before`), N ≈ log₂(K) where K is the partition size under the
+semi-naive doubling strategy. A parent with 100 children means ~8 clones
+of the entire database for one stratum evaluation.
+
+**Important caveat:** For the default rules, the native `IncrementalLWW`
++ `IncrementalFugue` solvers bypass the Datalog evaluator entirely, so
+`constructDbOld` cost is zero on the native path. This cost only
+manifests when custom rules push the system onto the Datalog path.
+
+The fix has two independent, composable levels:
+
+1. **Lazy-view `DatabaseView` (Phase 1.5):** Replace `db.clone()` with
+   a lazy view that shares unchanged predicates and only materializes
+   P_old for predicates present in the delta. Cost drops from O(|db|)
+   to O(|delta|) per invocation. This is independent of partitioning.
+
+2. **Partition-scoped views (Phase 3):** The `DatabaseView` wraps
+   partition sub-relations, so materialization is scoped to one
+   partition's entries. Additionally, fixpoint iteration count N becomes
+   per-partition — a parent with 100 children iterates ~7 times on its
+   own partition, a parent with 2 children iterates ~1 time, rather
+   than both paying for the maximum.
+
+For 10,000 settled slots and 3 active slots, the combined effect is
+dramatic: Phase 1.5 eliminates cloning of untouched predicates;
+Phase 3 ensures each iteration only touches the active partition.
 
 ### Cross-Stratum Settling Must Be Explicit
 
@@ -1135,6 +1365,27 @@ output partition for key k frozen?" This must propagate bottom-up through
 strata in evaluation order, and the `computeSettlingPlan` function must
 process strata sequentially (not independently) to read lower-stratum
 frozen state.
+
+### Functional-Lookup Relaxation Recovers Fugue Partitionability
+
+The `fugue_child` rule joins `active_structure_seq(CnId, Parent, OL, OR)`
+with `constraint_peer(CnId, Peer)`. A naive per-rule variable intersection
+gives PK = `{CnId}` for `fugue_child` (since `Parent` is absent from
+`constraint_peer`), while `fugue_descendant` gives PK = `{Parent}`. The
+cross-rule intersection `{CnId} ∩ {Parent} = ∅` — apparently destroying
+partitionability.
+
+The fix: recognize that `constraint_peer` is a **functional lookup**. Its
+join variable `CnId` is already bound by `active_structure_seq`, which
+contains `Parent`. For a fixed `Parent`, the matching `constraint_peer`
+facts are fully determined — no cross-partition dependency exists. The
+`extractPartitionKey` algorithm now computes the cross-rule head
+intersection first (`{Parent}`), then validates each rule using a
+reachability analysis: starting from `{Parent}`, it traces through atoms
+that contain PK variables to determine which other atoms are "PK-covered"
+(all their variables are reachable). `constraint_peer` is PK-covered
+because `CnId` reaches it from `active_structure_seq`. Only PK-required
+atoms must contain the PK. Result: all 4 strata are partitionable.
 
 ### Rule Changes Must Reset Partition State
 
