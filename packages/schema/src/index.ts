@@ -122,6 +122,18 @@ export type { Store } from "./store.js"
 
 // Built-in interpreters
 export { plainInterpreter } from "./interpreters/plain.js"
+
+// Bottom interpreter — universal foundation and capability lattice
+export {
+  READ,
+  makeCarrier,
+  bottomInterpreter,
+} from "./interpreters/bottom.js"
+export type {
+  HasRead,
+  HasNavigation,
+  HasCaching,
+} from "./interpreters/bottom.js"
 export {
   readableInterpreter,
   INVALIDATE,
