@@ -484,21 +484,21 @@ Rename `withMutation` to `withWritable`. Change to invalidate before dispatch. G
 - Task: Update `schema-ssr.test.ts` in `@kyneta/core`: replace `readableInterpreter` → `withCaching(withReadable(bottomInterpreter))`, `withMutation` → `withWritable`, update imports. 🟢
 - Task: Update the compositional-changefeeds plan: replace all `CONTEXT` → `TRANSACT`, `HasContext` → `HasTransact`, `hasContext` → `hasTransact`, `withMutation` → `withWritable`, `readableInterpreter` → `withCaching(withReadable(bottomInterpreter))`. Update "Sequence Subscription Timing" section to reflect cache-consistent-at-notification-time. 🟢
 
-### Phase 6: Documentation 🔴
+### Phase 6: Documentation 🟢
 
-- Task: **Fix pre-existing TECHNICAL.md staleness.** The following are stale from the compositional-changefeeds Phase 2 work and must be fixed regardless of this plan: 🔴
+- Task: **Fix pre-existing TECHNICAL.md staleness.** The following are stale from the compositional-changefeeds Phase 2 work and must be fixed regardless of this plan: 🟢
   - Remove entire "Deep Subscriptions" section (L176–211) — `subscribeDeep`, `DeepEvent`, `notifyAll`, `createChangefeedContext`, `changefeedFlush` are all removed.
   - Fix context hierarchy (L274) — remove `ChangefeedContext { subscribers, deepSubscribers }`, remove `autoCommit`/`pending` from `WritableContext`, describe current `RefContext → WritableContext` with `beginTransaction`/`commit`/`abort`.
   - Fix dispatch model (L349) — replace "auto-commit / batched mode" with transaction API.
   - Fix interpreter table (L253) — `withChangefeed` context is `WritableContext`, not `ChangefeedContext`.
   - Fix Verified Properties #7 (deep subscriptions → removed) and #8 (batched mode → transaction API).
   - Add `transaction.test.ts` to File Map.
-- Task: Update `TECHNICAL.md` § "Interpreters": document the four-layer stack, the capability lattice with compile-time enforcement, symbol-keyed composability hooks (`READ`, `INVALIDATE`, `CHANGEFEED`, `TRANSACT`), the combinatorial stack table, and the three morphism classes (foundation, refinement + interposition, extension). 🔴
-- Task: Update `TECHNICAL.md` § "Readable Interpreter": remove description of monolithic implementation. Document `withReadable` and `withCaching` as decomposed layers. Note that `Readable<S>`, `ReadableSequenceRef`, `ReadableMapRef` types remain in `readable.ts`. 🔴
-- Task: Update `TECHNICAL.md` § "Mutation Layer": rename to "Writable Layer" (`withWritable`). Document invalidate-before-dispatch ordering, `INVALIDATE(change)` contract, Functional Core pattern (`planCacheUpdate` + `applyCacheOps`). 🔴
-- Task: Update `TECHNICAL.md` § "Verified Properties": update property 2 (referential identity requires `withCaching`). Add properties for compile-time composition safety. 🔴
-- Task: Update `TECHNICAL.md` § "File Map": add `bottom.ts`, `with-readable.ts`, `with-caching.ts` and their test files. Remove `readable.ts` implementation description (file still exists for types). 🔴
-- Task: Fix stale comment in `interpreter-types.ts` (L33–34) that references `ChangefeedContext`. 🔴
+- Task: Update `TECHNICAL.md` § "Interpreters": document the four-layer stack, the capability lattice with compile-time enforcement, symbol-keyed composability hooks (`READ`, `INVALIDATE`, `CHANGEFEED`, `TRANSACT`), the combinatorial stack table, and the three morphism classes (foundation, refinement + interposition, extension). 🟢
+- Task: Update `TECHNICAL.md` § "Readable Interpreter": remove description of monolithic implementation. Document `withReadable` and `withCaching` as decomposed layers. Note that `Readable<S>`, `ReadableSequenceRef`, `ReadableMapRef` types remain in `readable.ts`. 🟢
+- Task: Update `TECHNICAL.md` § "Mutation Layer": rename to "Writable Layer" (`withWritable`). Document invalidate-before-dispatch ordering, `INVALIDATE(change)` contract, Functional Core pattern (`planCacheUpdate` + `applyCacheOps`). 🟢
+- Task: Update `TECHNICAL.md` § "Verified Properties": update property 2 (referential identity requires `withCaching`). Add properties for compile-time composition safety. 🟢
+- Task: Update `TECHNICAL.md` § "File Map": add `bottom.ts`, `with-readable.ts`, `with-caching.ts` and their test files. Remove `readable.ts` implementation description (file still exists for types). 🟢
+- Task: Fix stale comment in `interpreter-types.ts` (L33–34) that references `ChangefeedContext`. 🟢
 
 ## Tests
 

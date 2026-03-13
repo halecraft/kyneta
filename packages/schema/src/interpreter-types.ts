@@ -30,8 +30,8 @@ import type {
  * store — enough to read values at any path.
  *
  * This is the base context type. `WritableContext` extends it with
- * dispatch and batching. `ChangefeedContext` extends further with
- * subscriber maps. Each layer adds only what it needs.
+ * dispatch and transaction support (`beginTransaction`/`commit`/`abort`).
+ * Each layer adds only what it needs.
  */
 export interface RefContext {
   readonly store: Store
