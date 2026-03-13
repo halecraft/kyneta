@@ -117,6 +117,7 @@ export {
   readByPath,
   writeByPath,
   applyChangeToStore,
+  dispatchSum,
 } from "./store.js"
 export type { Store } from "./store.js"
 
@@ -134,6 +135,10 @@ export type {
   HasNavigation,
   HasCaching,
 } from "./interpreters/bottom.js"
+
+// withReadable — refinement transformer (reading + navigation, no caching)
+export { withReadable } from "./interpreters/with-readable.js"
+
 export {
   readableInterpreter,
   INVALIDATE,
