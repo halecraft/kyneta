@@ -1,11 +1,11 @@
 /**
- * Vite Plugin for Kinetic
+ * Vite Plugin for Kyneta
  *
- * Transforms TypeScript files containing Kinetic builder calls into
+ * Transforms TypeScript files containing Kyneta builder calls into
  * delta-driven DOM code at build time.
  *
  * The plugin:
- * 1. Detects files that may contain Kinetic builder patterns
+ * 1. Detects files that may contain Kyneta builder patterns
  * 2. Transforms builder calls into compiled DOM manipulation code in-place
  * 3. Supports hot module replacement for development
  *
@@ -20,9 +20,9 @@ import {
 } from "../compiler/index.js"
 
 /**
- * Options for the Kinetic Vite plugin.
+ * Options for the Kyneta Vite plugin.
  */
-export interface KineticPluginOptions {
+export interface KynetaPluginOptions {
   /**
    * File extensions to transform.
    * @default [".ts", ".tsx"]
@@ -104,7 +104,7 @@ function shouldTransform(
  * 2. Replaces each with its compiled factory function
  * 3. Merges required runtime imports
  */
-function transformKineticSource(
+function transformKynetaSource(
   code: string,
   filename: string,
   target: "dom" | "html",
@@ -113,13 +113,13 @@ function transformKineticSource(
   // Quick check - does this file have any builder patterns?
   if (!hasBuilderCalls(code)) {
     if (debug) {
-      console.log(`[kinetic] Skipping ${filename} - no builder calls found`)
+      console.log(`[kyneta] Skipping ${filename} - no builder calls found`)
     }
     return null
   }
 
   if (debug) {
-    console.log(`[kinetic] Transforming ${filename}`)
+    console.log(`[kyneta] Transforming ${filename}`)
   }
 
   try {
@@ -138,7 +138,7 @@ function transformKineticSource(
     mergeImports(result.sourceFile, result.requiredImports)
 
     if (debug) {
-      console.log(`[kinetic] Compiled ${result.ir.length} builder(s)`)
+      console.log(`[kyneta] Compiled ${result.ir.length} builder(s)`)
     }
 
     return {
@@ -147,13 +147,13 @@ function transformKineticSource(
     }
   } catch (error) {
     // Log error but don't fail the build - let TypeScript handle syntax errors
-    console.error(`[kinetic] Error transforming ${filename}:`, error)
+    console.error(`[kyneta] Error transforming ${filename}:`, error)
     return null
   }
 }
 
 /**
- * Create a Vite plugin for Kinetic compilation.
+ * Create a Vite plugin for Kyneta compilation.
  *
  * @param options - Plugin configuration
  * @returns Vite plugin
@@ -162,10 +162,10 @@ function transformKineticSource(
  * ```ts
  * // vite.config.ts
  * import { defineConfig } from "vite"
- * import kinetic from "@loro-extended/kinetic/vite"
+ * import kyneta from "@kyneta/core/vite"
  *
  * export default defineConfig({
- *   plugins: [kinetic()],
+ *   plugins: [kyneta()],
  * })
  * ```
  *
@@ -173,11 +173,11 @@ function transformKineticSource(
  * ```ts
  * // With options
  * import { defineConfig } from "vite"
- * import kinetic from "@loro-extended/kinetic/vite"
+ * import kyneta from "@kyneta/core/vite"
  *
  * export default defineConfig({
  *   plugins: [
- *     kinetic({
+ *     kyneta({
  *       extensions: [".ts", ".tsx"],
  *       exclude: ["node_modules", "test"],
  *       debug: true,
@@ -186,15 +186,15 @@ function transformKineticSource(
  * })
  * ```
  */
-export default function kineticPlugin(
-  options: KineticPluginOptions = {},
+export default function kynetaPlugin(
+  options: KynetaPluginOptions = {},
 ): Plugin {
   const extensions = options.extensions ?? [".ts", ".tsx"]
   const debug = options.debug ?? false
   let isDev = false
 
   return {
-    name: "kinetic",
+    name: "kyneta",
 
     // Run before esbuild strips TypeScript types.
     // The compiler needs type annotations (interface, type imports, etc.)
@@ -206,12 +206,12 @@ export default function kineticPlugin(
       isDev = config.command === "serve"
       if (debug) {
         console.log(
-          `[kinetic] Running in ${isDev ? "development" : "production"} mode`,
+          `[kyneta] Running in ${isDev ? "development" : "production"} mode`,
         )
       }
     },
 
-    // Transform files containing Kinetic builder patterns
+    // Transform files containing Kyneta builder patterns
     transform(code, id, transformOptions) {
       // Skip if file shouldn't be transformed
       if (!shouldTransform(id, extensions, options.include, options.exclude)) {
@@ -225,7 +225,7 @@ export default function kineticPlugin(
       const target = transformOptions?.ssr ? "html" : "dom"
 
       // Transform the source
-      return transformKineticSource(code, id, target, debug)
+      return transformKynetaSource(code, id, target, debug)
     },
 
     // Handle hot module replacement
@@ -239,13 +239,13 @@ export default function kineticPlugin(
         return
       }
 
-      // Check if this file has Kinetic builder calls
+      // Check if this file has Kyneta builder calls
       // If so, we need to invalidate the module
       const checkForBuilders = async () => {
         const code = await ctx.read()
         if (hasBuilderCalls(code)) {
           if (debug) {
-            console.log(`[kinetic] HMR update for ${file}`)
+            console.log(`[kyneta] HMR update for ${file}`)
           }
           // Return the modules to trigger a full re-transform
           return modules
@@ -260,4 +260,9 @@ export default function kineticPlugin(
 }
 
 // Named export for explicit import
-export { kineticPlugin }
+export { kynetaPlugin }
+
+/** @deprecated Use KynetaPluginOptions instead */
+export type { KynetaPluginOptions as KineticPluginOptions }
+/** @deprecated Use kynetaPlugin instead */
+export { kynetaPlugin as kineticPlugin }

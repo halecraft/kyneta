@@ -770,7 +770,7 @@ describe("compiler integration - text patching", () => {
     })
 
     it("should handle client: block before elements (template cloning)", () => {
-      // The kinetic-todo crash: client: block unwraps to statements,
+      // The kyneta-todo crash: client: block unwraps to statements,
       // shifting all subsequent element paths in the walker.
       const source = `
         const app = div(() => {

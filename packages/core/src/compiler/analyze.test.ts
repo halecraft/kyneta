@@ -1,5 +1,5 @@
 /**
- * Unit tests for Kinetic compiler analysis.
+ * Unit tests for Kyneta compiler analysis.
  *
  * These tests verify that the analysis module correctly transforms
  * TypeScript AST into IR nodes.

@@ -84,19 +84,19 @@ These are wire-format-breaking changes that must happen atomically across `@kyne
   - `packages/core/src/compiler/integration/*.test.ts`
 - **Task 1.5**: Run full test suites for both `packages/schema` and `packages/core` ✅
 
-### Phase 2: Rename — Public API & Source Code 🔴
+### Phase 2: Rename — Public API & Source Code ✅
 
 These affect TypeScript API surface. The old names get deprecated re-exports.
 
-- **Task 2.1**: Rename `KineticError` → `KynetaError`, `KineticErrorCode` → `KynetaErrorCode` in `packages/core/src/errors.ts`; add deprecated re-exports for the old names 🔴
-- **Task 2.2**: Rename `KineticPluginOptions` → `KynetaPluginOptions`, `kineticPlugin` → `kynetaPlugin` in `packages/core/src/vite/plugin.ts`; add deprecated re-exports 🔴
-- **Task 2.3**: Rename internal function `transformKineticSource` → `transformKynetaSource` in `packages/core/src/vite/plugin.ts` 🔴
-- **Task 2.4**: Update all console log prefixes from `[kinetic]` → `[kyneta]` 🔴
-- **Task 2.5**: Update error message strings: `"Kinetic code must run..."` → `"Kyneta code must run..."`, `"Kinetic Compiler Error:"` → `"Kyneta Compiler Error:"` 🔴
-- **Task 2.6**: Update all `@loro-extended/kinetic` import paths in JSDoc examples → `@kyneta/core` 🔴
-- **Task 2.7**: Update `packages/core/src/index.ts` re-exports to use new names (with deprecated aliases) 🔴
-- **Task 2.8**: Update all test files that reference renamed identifiers 🔴
-- **Task 2.9**: Run full test suite 🔴
+- **Task 2.1**: Rename `KineticError` → `KynetaError`, `KineticErrorCode` → `KynetaErrorCode` in `packages/core/src/errors.ts`; add deprecated re-exports for the old names ✅
+- **Task 2.2**: Rename `KineticPluginOptions` → `KynetaPluginOptions`, `kineticPlugin` → `kynetaPlugin` in `packages/core/src/vite/plugin.ts`; add deprecated re-exports ✅
+- **Task 2.3**: Rename internal function `transformKineticSource` → `transformKynetaSource` in `packages/core/src/vite/plugin.ts` ✅
+- **Task 2.4**: Update all console log prefixes from `[kinetic]` → `[kyneta]` ✅
+- **Task 2.5**: Update error message strings: `"Kinetic code must run..."` → `"Kyneta code must run..."`, `"Kinetic Compiler Error:"` → `"Kyneta Compiler Error:"` ✅
+- **Task 2.6**: Update all `@loro-extended/kinetic` import paths in JSDoc examples → `@kyneta/core` ✅
+- **Task 2.7**: Update `packages/core/src/index.ts` re-exports to use new names (with deprecated aliases) ✅
+- **Task 2.8**: Update all test files that reference renamed identifiers ✅
+- **Task 2.9**: Run full test suite ✅
 
 ### Phase 3: Rename — Documentation 🔴
 

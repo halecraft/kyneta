@@ -1,5 +1,5 @@
 /**
- * Transform Orchestration for Kinetic Compiler
+ * Transform Orchestration for Kyneta Compiler
  *
  * This module is the "imperative shell" that orchestrates the compilation process.
  * It coordinates between analysis (AST → IR) and code generation (IR → output).
@@ -16,7 +16,7 @@
 
 import { type CallExpression, Project, type SourceFile, ts } from "ts-morph"
 import { resolveReactiveImports } from "./reactive-detection.js"
-import { CompilerError, KineticErrorCode } from "../errors.js"
+import { CompilerError, KynetaErrorCode } from "../errors.js"
 import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
 import {
   generateElementFactory,
@@ -409,7 +409,7 @@ function analyzeAllBuilders(
       const line = call.getStartLineNumber()
       const col = call.getStart() - call.getStartLinePos()
       throw new CompilerError(
-        KineticErrorCode.COMPILER_TRANSFORM_ERROR,
+        KynetaErrorCode.COMPILER_TRANSFORM_ERROR,
         `Failed to analyze builder call: ${e instanceof Error ? e.message : String(e)}`,
         { file: filename, line, column: col },
       )
@@ -451,7 +451,7 @@ export function transformSourceInPlace(
     sourceFile = parseSource(source, filename)
   } catch (e) {
     throw new CompilerError(
-      KineticErrorCode.COMPILER_PARSE_ERROR,
+      KynetaErrorCode.COMPILER_PARSE_ERROR,
       `Failed to parse source: ${e instanceof Error ? e.message : String(e)}`,
       { file: filename, line: 1, column: 0 },
     )
@@ -612,7 +612,7 @@ export function transformSource(
     sourceFile = parseSource(source, filename)
   } catch (e) {
     throw new CompilerError(
-      KineticErrorCode.COMPILER_PARSE_ERROR,
+      KynetaErrorCode.COMPILER_PARSE_ERROR,
       `Failed to parse source: ${e instanceof Error ? e.message : String(e)}`,
       { file: filename, line: 1, column: 0 },
     )

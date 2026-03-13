@@ -1,5 +1,5 @@
 /**
- * AST Analysis for Kinetic Compiler
+ * AST Analysis for Kyneta Compiler
  *
  * This module analyzes TypeScript AST (via ts-morph) and produces IR nodes.
  * All functions are pure - they take AST nodes and return IR without side effects.
@@ -903,7 +903,7 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
   if (stmt.getKind() === SyntaxKind.ReturnStatement) {
     const line = stmt.getStartLineNumber()
     throw new Error(
-      `Kinetic Compiler Error: Return statement not supported in builder function at line ${line}.\n` +
+      `Kyneta Compiler Error: Return statement not supported in builder function at line ${line}.\n` +
         `Builder functions must produce DOM elements, not return early.`,
     )
   }

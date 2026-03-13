@@ -880,7 +880,7 @@ describe("mergeImports", () => {
     return project.createSourceFile("test.ts", code)
   }
 
-  it("should add new import when no kinetic import exists", () => {
+  it("should add new import when no kyneta import exists", () => {
     const sourceFile = createSourceFile("const x = 1\nconst y = 2")
 
     mergeImports(sourceFile, {

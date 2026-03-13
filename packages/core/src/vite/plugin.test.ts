@@ -1,38 +1,38 @@
 /**
  * Vite Plugin Tests
  *
- * Tests for the Kinetic Vite plugin functionality.
+ * Tests for the Kyneta Vite plugin functionality.
  * Updated for in-place builder replacement behavior.
  */
 
 import { describe, expect, it } from "vitest"
-import kineticPlugin, { type KineticPluginOptions } from "./plugin.js"
+import kynetaPlugin, { type KynetaPluginOptions } from "./plugin.js"
 
 describe("Vite Plugin", () => {
   describe("plugin creation", () => {
     it("should create a plugin with default options", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
 
-      expect(plugin.name).toBe("kinetic")
+      expect(plugin.name).toBe("kyneta")
       expect(plugin.transform).toBeDefined()
       expect(plugin.handleHotUpdate).toBeDefined()
     })
 
     it("should create a plugin with custom options", () => {
-      const options: KineticPluginOptions = {
+      const options: KynetaPluginOptions = {
         extensions: [".ts"],
         debug: true,
         exclude: ["node_modules", "dist"],
       }
 
-      const plugin = kineticPlugin(options)
-      expect(plugin.name).toBe("kinetic")
+      const plugin = kynetaPlugin(options)
+      expect(plugin.name).toBe("kyneta")
     })
   })
 
   describe("file filtering", () => {
     it("should transform .ts/.tsx files with builder calls", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -52,7 +52,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should skip excluded files and non-matching extensions", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -73,7 +73,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should respect custom include/exclude patterns", () => {
-      const plugin = kineticPlugin({
+      const plugin = kynetaPlugin({
         include: ["src/components"],
         exclude: ["node_modules", "generated"],
       })
@@ -97,7 +97,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should respect custom extensions", () => {
-      const plugin = kineticPlugin({
+      const plugin = kynetaPlugin({
         extensions: [".kinetic.ts"],
       })
       const transform = plugin.transform as (
@@ -117,7 +117,7 @@ describe("Vite Plugin", () => {
 
   describe("in-place replacement", () => {
     it("should replace builder calls with compiled factory functions", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -141,7 +141,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should preserve non-builder code", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -173,7 +173,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should compile multiple builder calls in place", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -204,7 +204,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should not contain duplicate code (no append)", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -218,8 +218,8 @@ describe("Vite Plugin", () => {
 
       const result = transform(source, "/path/to/file.ts")
 
-      // Should NOT have the old "Kinetic Compiled Output" comment
-      expect(result?.code).not.toContain("// === Kinetic Compiled Output ===")
+      // Should NOT have the old "Kyneta Compiled Output" comment
+      expect(result?.code).not.toContain("// === Kyneta Compiled Output ===")
       // Should have exactly one assignment to app
       const appAssignments = (result?.code.match(/const app =/g) || []).length
       expect(appAssignments).toBe(1)
@@ -228,7 +228,7 @@ describe("Vite Plugin", () => {
 
   describe("import handling", () => {
     it("should add runtime imports when needed for list regions", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -255,14 +255,14 @@ describe("Vite Plugin", () => {
       expect(result?.code).toContain('@kyneta/core/runtime"')
     })
 
-    it("should merge imports with existing kinetic imports", () => {
-      const plugin = kineticPlugin()
+    it("should merge imports with existing kyneta imports", () => {
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
       ) => { code: string } | null
 
-      // Source that already has kinetic imports
+      // Source that already has kyneta imports
       const source = `
         import { mount, Scope } from "@kyneta/core"
 
@@ -275,14 +275,14 @@ describe("Vite Plugin", () => {
 
       expect(result).not.toBeNull()
 
-      // Original kinetic import should still be there
+      // Original kyneta import should still be there
       expect(result?.code).toContain("mount")
       expect(result?.code).toContain("Scope")
       expect(result?.code).toContain('@kyneta/core"')
     })
 
     it("should not add imports for static-only builders", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -308,7 +308,7 @@ describe("Vite Plugin", () => {
 
   describe("error handling", () => {
     it("should not crash on invalid syntax", () => {
-      const plugin = kineticPlugin()
+      const plugin = kynetaPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,

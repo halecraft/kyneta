@@ -353,7 +353,7 @@ export function createRenderFunction(
  *
  * @example
  * ```ts
- * import { renderToString } from "@loro-extended/kinetic/server"
+ * import { renderToString } from "@kyneta/core/server"
  * import { compiledApp } from "./app.server.js" // compiled by Vite/build
  *
  * const html = renderToString(compiledApp, doc, { hydratable: true })

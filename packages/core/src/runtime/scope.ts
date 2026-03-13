@@ -229,7 +229,7 @@ export function getRootScope(): Scope {
   if (!rootScope) {
     throw new Error(
       "No root scope. Did you forget to call mount()? " +
-        "Kinetic code must run inside a mounted application.",
+        "Kyneta code must run inside a mounted application.",
     )
   }
   return rootScope

@@ -3,7 +3,7 @@
  *
  * A compiled delta-driven UI framework powered by the CHANGEFEED protocol.
  *
- * Kinetic transforms natural TypeScript into code that directly consumes
+ * Kyneta transforms natural TypeScript into code that directly consumes
  * structured deltas for O(k) DOM updates, where k is the number of operations.
  *
  * @example
@@ -40,6 +40,9 @@ export {
   CompilerError,
   HydrationMismatchError,
   InvalidMountTargetError,
+  KynetaError,
+  KynetaErrorCode,
+  // Deprecated aliases
   KineticError,
   KineticErrorCode,
   ScopeDisposedError,

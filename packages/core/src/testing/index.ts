@@ -13,7 +13,7 @@
  *   resetSubscriptionIdCounter,
  *   activeSubscriptions,
  *   createCountingContainer,
- * } from "@loro-extended/kinetic/testing"
+ * } from "@kyneta/core/testing"
  *
  * beforeEach(() => {
  *   resetScopeIdCounter()

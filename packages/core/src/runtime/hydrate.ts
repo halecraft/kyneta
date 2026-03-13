@@ -410,7 +410,7 @@ export function hydrateConditionalRegion(
  *
  * @example
  * ```ts
- * import { hydrate } from "@loro-extended/kinetic"
+ * import { hydrate } from "@kyneta/core"
  *
  * const container = document.getElementById("root")!
  * const scope = new Scope("root")

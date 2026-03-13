@@ -1,7 +1,7 @@
 /**
  * Hydration Module Tests
  *
- * Tests for hydrating SSR-rendered DOM with Kinetic subscriptions.
+ * Tests for hydrating SSR-rendered DOM with Kyneta subscriptions.
  */
 
 import { JSDOM } from "jsdom"

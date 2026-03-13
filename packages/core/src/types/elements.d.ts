@@ -19,7 +19,7 @@
  *
  * Usage:
  *   Add to your source file:
- *   /// <reference types="@loro-extended/kinetic/types/elements" />
+ *   /// <reference types="@kyneta/core/types/elements" />
  *
  * @packageDocumentation
  */

@@ -28,7 +28,7 @@ import { setRootScope, Scope } from "./scope.js"
  *
  * @example
  * ```ts
- * import { div, h1, mount } from "@loro-extended/kinetic"
+ * import { div, h1, mount } from "@kyneta/core"
  *
  * const app = div(() => {
  *   h1("Hello, World!")
