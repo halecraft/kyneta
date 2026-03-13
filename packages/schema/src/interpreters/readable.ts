@@ -42,18 +42,11 @@ export type { RefContext } from "../interpreter-types.js"
 // Composability symbols
 // ---------------------------------------------------------------------------
 
-/**
- * Symbol for cache invalidation. Attached to sequence and map refs.
- *
- * Called by `withMutation` after dispatching changes:
- * - `ref[INVALIDATE]()` — clears the entire child cache
- * - `ref[INVALIDATE](key)` — clears a single entry
- *
- * Uses `Symbol.for` so multiple copies of this module share identity.
- */
-export const INVALIDATE: unique symbol = Symbol.for(
-  "schema:invalidate",
-) as any
+// INVALIDATE is now defined in with-caching.ts (Phase 3).
+// Imported for local use in readableInterpreter, and re-exported for
+// backward compatibility with writable.ts and tests.
+import { INVALIDATE } from "./with-caching.js"
+export { INVALIDATE }
 
 // ---------------------------------------------------------------------------
 // Readable<S> — type-level interpretation for readable refs

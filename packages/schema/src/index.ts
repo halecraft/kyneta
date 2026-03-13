@@ -139,9 +139,17 @@ export type {
 // withReadable — refinement transformer (reading + navigation, no caching)
 export { withReadable } from "./interpreters/with-readable.js"
 
+// withCaching — interposition transformer (identity-preserving caching + INVALIDATE)
+export {
+  withCaching,
+  INVALIDATE,
+  planCacheUpdate,
+  applyCacheOps,
+} from "./interpreters/with-caching.js"
+export type { CacheOp } from "./interpreters/with-caching.js"
+
 export {
   readableInterpreter,
-  INVALIDATE,
 } from "./interpreters/readable.js"
 export type {
   Readable,
