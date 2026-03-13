@@ -1,5 +1,5 @@
 /**
- * Core type definitions for Kinetic.
+ * Core type definitions for Kyneta.
  *
  * These types define the user-facing API that the TypeScript Language Server
  * understands without compilation.

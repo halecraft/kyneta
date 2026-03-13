@@ -6,7 +6,7 @@ A compiled delta-driven UI framework powered by the CHANGEFEED protocol from `@k
 
 ## Overview
 
-Kinetic transforms natural TypeScript into code that directly consumes structured deltas for O(k) DOM updates, where k is the number of operations (not the size of your data).
+Kyneta transforms natural TypeScript into code that directly consumes structured deltas for O(k) DOM updates, where k is the number of operations (not the size of your data).
 
 ### The Problem
 
@@ -14,7 +14,7 @@ Traditional UI frameworks, including React, must diff entire data structures to 
 
 ### The Solution
 
-Reactive data sources that implement the `CHANGEFEED` protocol already know exactly what changed — they provide deltas like "insert item at index 3". Kinetic's compiler transforms natural TypeScript into code that directly consumes these deltas, updating only the affected DOM nodes.
+Reactive data sources that implement the `CHANGEFEED` protocol already know exactly what changed — they provide deltas like "insert item at index 3". Kyneta's compiler transforms natural TypeScript into code that directly consumes these deltas, updating only the affected DOM nodes.
 
 ```typescript
 // What you write (natural TypeScript)
@@ -39,7 +39,7 @@ div(() => {
 
 ### Bare Reactive Refs
 
-Kinetic supports passing reactive refs directly as children — no `.get()` or `.toString()` required:
+Kyneta supports passing reactive refs directly as children — no `.get()` or `.toString()` required:
 
 ```typescript
 // All three produce identical compiled output:
@@ -52,7 +52,7 @@ The compiler detects that `doc.title` implements `CHANGEFEED` (reactive + observ
 
 ## Server-Side Rendering
 
-Kinetic supports server-side rendering with optional pretty-printing for development:
+Kyneta supports server-side rendering with optional pretty-printing for development:
 
 ```typescript
 import { renderToDocument } from '@kyneta/core/server'
@@ -87,7 +87,7 @@ const prettyHtml = renderToDocument(renderApp, doc, {
 
 ## Components
 
-Kinetic supports user-defined components via the `ComponentFactory` type. The compiler uses TypeScript's type system to detect component functions — no special syntax or naming conventions required.
+Kyneta supports user-defined components via the `ComponentFactory` type. The compiler uses TypeScript's type system to detect component functions — no special syntax or naming conventions required.
 
 ```typescript
 import type { ComponentFactory } from "@kyneta/core"
@@ -187,7 +187,7 @@ This is an experimental prototype exploring whether compilation can unlock O(k) 
 
 ### Compilation Model
 
-Kinetic uses a multi-phase compiler:
+Kyneta uses a multi-phase compiler:
 
 1. **Analysis** (`analyze.ts`) — Parses TypeScript AST via ts-morph, produces IR
 2. **Walking** (`walk.ts`) — Generator-based IR traversal yields structural events
@@ -223,7 +223,7 @@ Unlike React or Solid, there are no `div()`, `h1()`, etc. functions at runtime. 
 - The **compiler** transforms builder calls into direct DOM manipulation
 - You run the **compiled output**, not the source
 
-This means you cannot currently run Kinetic code without compilation.
+This means you cannot currently run Kyneta code without compilation.
 
 ## Architecture
 
@@ -250,7 +250,7 @@ This means you cannot currently run Kinetic code without compilation.
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    Kinetic Runtime                          │
+│                    Kyneta Runtime                           │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐    │
 │  │ mount()     │ │ Regions     │ │ CHANGEFEED Protocol │    │
 │  │ dispose()   │ │ Management  │ │ (delta handlers)    │    │
@@ -316,7 +316,7 @@ The remaining work to complete the prototype:
 | Solid              | ❌         | ✅    | ✅          | ✅       | ~              | ✅               |
 | Svelte             | ❌         | ~     | ✅          | ✅       | ~              | ~                |
 | Vue                | ❌         | ~     | ✅          | ✅       | ❌             | ❌               |
-| **Kinetic**        | ~*         | ✅    | ✅          | ✅       | ✅             | ✅               |
+| **Kyneta**         | ~*         | ✅    | ✅          | ✅       | ✅             | ✅               |
 
 \* Source is valid TypeScript (LSP works), but compilation required for execution
 

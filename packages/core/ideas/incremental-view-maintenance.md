@@ -1,12 +1,12 @@
-# Incremental View Maintenance for Kinetic
+# Incremental View Maintenance for Kyneta
 
 ## Overview
 
-This document explores how **incremental view maintenance** — a well-studied technique from database systems — could be applied to Kinetic's reactive rendering. The goal is to derive surgical DOM updates from CRDT deltas by understanding the **semantics** of expressions, not just their dependencies.
+This document explores how **incremental view maintenance** — a well-studied technique from database systems — could be applied to Kyneta's reactive rendering. The goal is to derive surgical DOM updates from CRDT deltas by understanding the **semantics** of expressions, not just their dependencies.
 
 ## The Current Model
 
-Today, Kinetic tracks reactive dependencies and re-evaluates expressions when they change:
+Today, Kyneta tracks reactive dependencies and re-evaluates expressions when they change:
 
 ```typescript
 p(title.get().toUpperCase())
@@ -312,6 +312,6 @@ The compiler's job is to:
 
 ## Conclusion
 
-Incremental view maintenance offers a path to **optimal reactive rendering** — updates proportional to the change size, not the data size. By understanding expression semantics at compile time, Kinetic can emit specialized runtime code that propagates CRDT deltas through computations to derive minimal DOM mutations.
+Incremental view maintenance offers a path to **optimal reactive rendering** — updates proportional to the change size, not the data size. By understanding expression semantics at compile time, Kyneta can emit specialized runtime code that propagates CRDT deltas through computations to derive minimal DOM mutations.
 
 This is the logical endpoint of delta-driven reactivity: not just knowing *that* something changed, but understanding *how* it changed and *what that means* for the rendered output.

@@ -2,7 +2,7 @@
  * Hydration for SSR-Rendered DOM
  *
  * This module provides functionality to "hydrate" server-rendered HTML,
- * attaching Kinetic's reactive subscriptions to existing DOM nodes without
+ * attaching Kyneta's reactive subscriptions to existing DOM nodes without
  * recreating them.
  *
  * Hydration process:
@@ -399,7 +399,7 @@ export function hydrateConditionalRegion(
 /**
  * Hydrate a server-rendered container.
  *
- * This attaches Kinetic's reactive system to existing DOM nodes
+ * This attaches Kyneta's reactive system to existing DOM nodes
  * without recreating them, enabling seamless SSR-to-client transitions.
  *
  * @param container - The container element with server-rendered content

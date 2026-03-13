@@ -1,5 +1,5 @@
 /**
- * Intermediate Representation (IR) for the Kinetic compiler.
+ * Intermediate Representation (IR) for the Kyneta compiler.
  *
  * The IR is a tree structure that represents the analyzed source code.
  * It captures the semantic meaning of builder functions in a form that

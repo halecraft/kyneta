@@ -1,5 +1,5 @@
 /**
- * Testing utilities for Kinetic runtime.
+ * Testing utilities for Kyneta runtime.
  *
  * These functions are used to reset state between tests and inspect
  * internal subscription tracking. They are exported from the `/testing`

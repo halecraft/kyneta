@@ -29,7 +29,7 @@ produces a confusing Vite error: `Failed to resolve entry for package`.
 
 The IR `DeltaKind` type uses vocabulary like `"sequence"` (formerly `"list"`).
 But the SSR hydration system emits DOM comment markers like
-`<!--kinetic:list:1-->` via `RegionMarkerType = "list" | "if"` in
+`<!--kyneta:list:1-->` via `RegionMarkerType = "list" | "if"` in
 `html-constants.ts`. These are **different namespaces**: one is an internal IR
 discriminant, the other is a user-facing HTML convention parsed by the
 hydration system. Renaming the IR vocabulary does not require renaming the DOM
@@ -207,7 +207,7 @@ After Phase 3, the remaining failures are:
 **Phase 4 targets** (compiler detection — need type stub rewiring):
 - `integration.test.ts` — imports `@loro-extended/change` at top level
 - `transform.test.ts` — `@loro-extended/change` module resolution in source strings
-- `plugin.test.ts` — hardcoded `@loro-extended/kinetic/runtime` import path assertion
+- `plugin.test.ts` — hardcoded `@kyneta/core/runtime` import path assertion
 
 **Phase 5 targets** (Loro removal — entire files to delete or gut):
 - `binding.test.ts` — uses `loro()` unwrapper

@@ -1,10 +1,10 @@
-# Kinetic Technical Documentation
+# Kyneta Technical Documentation
 
-This document provides technical details about the Kinetic compiler architecture, intermediate representation (IR), and code generation strategies.
+This document provides technical details about the Kyneta compiler architecture, intermediate representation (IR), and code generation strategies.
 
 ## Architecture Overview
 
-Kinetic follows a **Functional Core / Imperative Shell** architecture via an Intermediate Representation (IR):
+Kyneta follows a **Functional Core / Imperative Shell** architecture via an Intermediate Representation (IR):
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -20,7 +20,7 @@ Kinetic follows a **Functional Core / Imperative Shell** architecture via an Int
 
 ## DOM Algebra: Applicative/Monadic Decomposition
 
-Kinetic's compilation pipeline performs **partial evaluation** at three stages, decomposing UI code into Applicative (static structure) and Monadic (dynamic structure) layers.
+Kyneta's compilation pipeline performs **partial evaluation** at three stages, decomposing UI code into Applicative (static structure) and Monadic (dynamic structure) layers.
 
 ### Binding-Time Analysis
 
@@ -305,7 +305,7 @@ for the full architecture.
 
 ### Target Labels: `client:` / `server:` Blocks
 
-Kinetic uses TypeScript's labeled statement syntax to mark code as client-only
+Kyneta uses TypeScript's labeled statement syntax to mark code as client-only
 or server-only inside builder functions.
 
 #### Syntax
@@ -464,12 +464,12 @@ and conditional branches.
 **Loop generation (both reactive and render-time):**
 ```javascript
 _html += `<ul>`
-_html += `<!--kinetic:list:0-->`
+_html += `<!--kyneta:list:0-->`
 for (const itemRef of [...items]) {
   const item = itemRef.get()
   _html += `<li>${__escapeHtml(String(item))}</li>`
 }
-_html += `<!--/kinetic:list-->`
+_html += `<!--/kyneta:list-->`
 _html += `</ul>`
 ```
 
@@ -478,13 +478,13 @@ Reactive loops use spread syntax `[...items]` to preserve ref objects.
 
 **Conditional generation (both reactive and render-time):**
 ```javascript
-_html += `<!--kinetic:if:0-->`
+_html += `<!--kyneta:if:0-->`
 if (condition) {
   _html += `<p>yes</p>`
 } else {
   _html += `<p>no</p>`
 }
-_html += `<!--/kinetic:if-->`
+_html += `<!--/kyneta:if-->`
 ```
 
 The code structure is identical for reactive and render-time — only the marker comments differ.
@@ -495,7 +495,7 @@ The compiler detects reactive types by checking whether a candidate type has a p
 
 ```typescript
 // @kyneta/schema
-export const CHANGEFEED = Symbol.for("kinetic:changefeed")
+export const CHANGEFEED = Symbol.for("kyneta:changefeed")
 export interface Changefeed<S = unknown, C extends ChangeBase = ChangeBase> {
   readonly current: S
   subscribe(callback: (change: C) => void): () => void
@@ -511,7 +511,7 @@ Detection is implemented in `reactive-detection.ts` using a three-layer strategy
 
 | Parameter | Value |
 |-----------|-------|
-| `symbolForKey` | `"kinetic:changefeed"` |
+| `symbolForKey` | `"kyneta:changefeed"` |
 | `declarationName` | `"CHANGEFEED"` |
 | `mangledPrefix` | `"__@CHANGEFEED@"` |
 
@@ -524,7 +524,7 @@ The three layers, from most to least robust:
 All three layers are necessary. Layer 1 works in source `.ts` files, layer 2 in `.d.ts` (built packages), and layer 3 handles edge cases where the type system loses the symbol reference chain. The mock `.d.ts` files in `analyze.test.ts` exercise layer 2 specifically.
 
 The delegate function:
-- `isChangefeedSymbolProperty(sym)` → `isWellKnownSymbolProperty(sym, "kinetic:changefeed", "CHANGEFEED", "__@CHANGEFEED@")`
+- `isChangefeedSymbolProperty(sym)` → `isWellKnownSymbolProperty(sym, "kyneta:changefeed", "CHANGEFEED", "__@CHANGEFEED@")`
 
 Additionally: exclude `any`/`unknown`, check union branches individually.
 
@@ -655,7 +655,7 @@ Conditional dissolution is implemented as a pure IR→IR transform (`dissolveCon
 The key correctness argument: the walker (`walk.ts`) and template extraction (`template.ts`) consume post-dissolution IR. Dissolvable conditionals are replaced by their merged children (elements/content with ternary values) before any downstream consumer runs. This means:
 
 - The walker never emits `regionPlaceholder` events for dissolved conditionals
-- Template extraction never generates `<!--kinetic:if:N-->` comment markers for them
+- Template extraction never generates `<!--kyneta:if:N-->` comment markers for them
 - The walk plan's child-index assumptions are never violated by dissolution
 - Codegen (both `generateConditional` and `generateConditionalWithMarker`) only sees non-dissolvable `ConditionalNode` instances
 
@@ -689,7 +689,7 @@ Only "leaf" statements become `StatementNode`:
 Builder functions have a contract: they produce DOM nodes or HTML strings. Early `return` breaks this contract. We emit a compile-time error with line number rather than generating broken code:
 
 ```
-Kinetic Compiler Error: Return statement not supported in builder function at line 5.
+Kyneta Compiler Error: Return statement not supported in builder function at line 5.
 Builder functions must produce DOM elements, not return early.
 ```
 
@@ -734,7 +734,7 @@ packages/core/src/compiler/
 
 ### Child Type
 
-The `Child` type union in `types.ts` accepts `HasChangefeed`, enabling bare reactive refs in content position (e.g., `p(doc.title)` where `doc.title` has `[CHANGEFEED]`). This is safe because the Kinetic compiler intercepts the call and synthesizes `read()` in the IR before codegen — the raw ref never reaches `textContent`. The `Child` type exists only for TypeScript's authoring-time benefit.
+The `Child` type union in `types.ts` accepts `HasChangefeed`, enabling bare reactive refs in content position (e.g., `p(doc.title)` where `doc.title` has `[CHANGEFEED]`). This is safe because the Kyneta compiler intercepts the call and synthesizes `read()` in the IR before codegen — the raw ref never reaches `textContent`. The `Child` type exists only for TypeScript's authoring-time benefit.
 
 ### Cross-Package Dependencies
 
@@ -988,10 +988,10 @@ type Slot =
 **Multi-element fragments** use comment markers to delimit the range:
 
 ```html
-<!--kinetic:start-->
+<!--kyneta:start-->
 <span>a</span>
 <span>b</span>
-<!--kinetic:end-->
+<!--kyneta:end-->
 ```
 
 The `claimSlot()` helper automatically chooses the appropriate strategy. When compile-time `slotKind` is provided, it dispatches directly without runtime inspection. The `releaseSlot()` function handles removal for both cases.
@@ -1137,7 +1137,7 @@ _tmpl_0.innerHTML = "<div><span></span><p></p></div>"
 Regions (loops and non-dissolvable conditionals) become comment placeholder holes in the template:
 
 ```html
-<ul><!--kinetic:list:1--><!--/kinetic:list--></ul>
+<ul><!--kyneta:list:1--><!--/kyneta:list--></ul>
 ```
 
 The walker grabs the opening comment node, which is passed to `listRegion()` or `conditionalRegion()` as the mount point. This format matches SSR hydration markers, ensuring template-cloned and SSR-rendered DOM are structurally identical.
@@ -1241,7 +1241,7 @@ This is especially valuable for CRDT synchronization where remote peers may send
 
 ## Component Model
 
-Kinetic supports user-defined components alongside HTML element factories. Components are ordinary TypeScript functions typed as `ComponentFactory` — the compiler recognizes them via the type system.
+Kyneta supports user-defined components alongside HTML element factories. Components are ordinary TypeScript functions typed as `ComponentFactory` — the compiler recognizes them via the type system.
 
 ### ComponentFactory Type
 

@@ -55,7 +55,7 @@ const LOCAL_REF_BRAND: unique symbol = Symbol("LocalRef")
 
 /**
  * A local reactive value. Implements the `CHANGEFEED` protocol so it
- * can be subscribed to by the Kinetic runtime (and any other consumer
+ * can be subscribed to by the Kyneta runtime (and any other consumer
  * that understands `[CHANGEFEED]`).
  *
  * The ref is callable — `ref()` returns the current value (like
@@ -83,7 +83,7 @@ export interface LocalRef<T> {
 /**
  * Create a local reactive value.
  *
- * This is the primary API for local state in Kinetic components.
+ * This is the primary API for local state in Kyneta components.
  * Returns a callable `LocalRef<T>` — call it to read, use `.set()` to write.
  *
  * @param initial - The initial value

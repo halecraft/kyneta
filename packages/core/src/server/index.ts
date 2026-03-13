@@ -1,7 +1,7 @@
 /**
- * Kinetic Server-Side Rendering
+ * Kyneta Server-Side Rendering
  *
- * Provides utilities for rendering Kinetic elements to HTML strings
+ * Provides utilities for rendering Kyneta elements to HTML strings
  * on the server.
  *
  * @packageDocumentation

@@ -1,5 +1,5 @@
 /**
- * Kinetic Compiler
+ * Kyneta Compiler
  *
  * Transforms natural TypeScript into delta-driven DOM code.
  *

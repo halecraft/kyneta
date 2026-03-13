@@ -3,7 +3,7 @@
  *
  * This module provides functions to detect whether TypeScript types implement
  * the CHANGEFEED protocol from @kyneta/schema, and whether types implement
- * the ComponentFactory interface from Kinetic.
+ * the ComponentFactory interface from Kyneta.
  *
  * Detection uses a three-layer property-level strategy that checks whether
  * a candidate type has a property keyed by the `[CHANGEFEED]` unique symbol:
@@ -220,7 +220,7 @@ function isChangefeedSymbolProperty(compilerSymbol: ts.Symbol): boolean {
  *
  * A type has a changefeed if it has a property keyed by the `[CHANGEFEED]`
  * unique symbol from `@kyneta/schema`. This is the property that the
- * Kinetic compiler uses to identify reactive types, and the runtime uses
+ * Kyneta compiler uses to identify reactive types, and the runtime uses
  * to subscribe to changes.
  *
  * The `[CHANGEFEED]` symbol subsumes the old two-symbol design:

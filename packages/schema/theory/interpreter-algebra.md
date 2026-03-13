@@ -363,7 +363,7 @@ context provides the executor (see §8).
 
 ### 4.7. Compiler integration
 
-The Kinetic compiler uses the action type to determine patching strategy.
+The Kyneta compiler uses the action type to determine patching strategy.
 For **built-in** action types, it emits optimized direct calls at build
 time:
 
@@ -389,7 +389,7 @@ time** (after import, before first render — normal module initialization
 order):
 
 ```typescript
-import { registerPatchStrategy } from "@loro-extended/kinetic/runtime"
+import { registerPatchStrategy } from "@kyneta/core/runtime"
 
 registerPatchStrategy("richtext", (element, feed, action) => {
   // Custom DOM patching for rich text actions
@@ -418,7 +418,7 @@ changes next.
 The feed protocol is expressed through a single symbol:
 
 ```typescript
-const FEED = Symbol.for("kinetic:feed")
+const FEED = Symbol.for("kyneta:feed")
 
 interface Feed<S, A extends ActionBase> {
   /** The head — current value, always live (a getter) */
@@ -525,7 +525,7 @@ Today's `TypedRef` combines both:
 | **Subscribable** | Action notification | `feed.subscribe` |
 | **Writable** | State mutation | `.set()`, `.insert()`, etc. |
 
-A feed is Readable + Subscribable. The Kinetic compiler only needs feeds
+A feed is Readable + Subscribable. The Kyneta compiler only needs feeds
 — it reads heads and subscribes to tails but never mutates. The
 `change()` blocks need the Writable capability. `toJSON()` only needs
 the Readable capability.
@@ -859,7 +859,7 @@ definition — no new proxy system, no new tree walker.
 
 The question "should `for (const item of doc.todos)` yield a string or a
 PlainRef?" becomes: "which interpreter is active?" In a reactive context
-(the Kinetic compiler's generated code), the feed interpreter is active,
+(the Kyneta compiler's generated code), the feed interpreter is active,
 so items are feeds. In a plain context (`toJSON`), the Plain interpreter
 is active, so items are strings. The schema is the same; the
 interpretation differs.
@@ -946,9 +946,9 @@ to there is incremental:
 - `Feed` interface: `{ head: S, subscribe(cb) → unsub }`
 - Open the action vocabulary: `ActionBase` protocol with string
   discriminant
-- Update Kinetic compiler's `isReactiveType` / `getDeltaKind` to detect
+- Update Kyneta compiler's `isReactiveType` / `getDeltaKind` to detect
   `[FEED]` and extract `A` from `Feed<S, A>`
-- Update Kinetic runtime to consume `feed.head` / `feed.subscribe`
+- Update Kyneta runtime to consume `feed.head` / `feed.subscribe`
 - No external API shape changes; `TypedDoc`, `TypedRef` types remain
   stable
 

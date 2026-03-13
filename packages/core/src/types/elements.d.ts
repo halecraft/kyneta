@@ -5,7 +5,7 @@
  * write in their source code. They exist ONLY for TypeScript type checking -
  * there is no runtime implementation.
  *
- * The Kinetic compiler transforms calls to these factories into direct DOM
+ * The Kyneta compiler transforms calls to these factories into direct DOM
  * manipulation code. For example:
  *
  *   div(() => { h1("Hello") })

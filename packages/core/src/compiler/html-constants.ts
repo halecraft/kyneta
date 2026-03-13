@@ -102,7 +102,7 @@ export function escapeHtml(str: string): string {
 // =============================================================================
 
 /**
- * Region marker types supported by Kinetic.
+ * Region marker types supported by Kyneta.
  */
 export type RegionMarkerType = "list" | "if"
 

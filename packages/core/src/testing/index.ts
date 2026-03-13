@@ -1,7 +1,7 @@
 /**
- * Testing utilities for Kinetic.
+ * Testing utilities for Kyneta.
  *
- * This subpath provides functions for testing Kinetic components:
+ * This subpath provides functions for testing Kyneta components:
  * - Reset functions for cleaning up state between tests
  * - Subscription tracking for verifying cleanup
  * - DOM operation counting for performance assertions

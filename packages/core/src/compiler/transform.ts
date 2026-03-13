@@ -662,7 +662,7 @@ export function transformFile(
 }
 
 /**
- * Check if source code contains any kinetic builder calls.
+ * Check if source code contains any kyneta builder calls.
  *
  * This is useful for the Vite plugin to quickly determine if transformation is needed.
  *

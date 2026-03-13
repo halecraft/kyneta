@@ -1,7 +1,7 @@
 /**
- * Mount and dispose functions for Kinetic applications.
+ * Mount and dispose functions for Kyneta applications.
  *
- * mount() renders a Kinetic element to the DOM and returns a dispose function.
+ * mount() renders a Kyneta element to the DOM and returns a dispose function.
  * All subscriptions and cleanup are managed automatically via scopes.
  *
  * @packageDocumentation
@@ -12,7 +12,7 @@ import type { MountOptions, MountResult, ScopeInterface } from "../types.js"
 import { setRootScope, Scope } from "./scope.js"
 
 /**
- * Mount a Kinetic element to a DOM container.
+ * Mount a Kyneta element to a DOM container.
  *
  * Creates a root scope and passes it to the element factory. All reactive
  * subscriptions registered via the scope are disposed when the returned
@@ -20,7 +20,7 @@ import { setRootScope, Scope } from "./scope.js"
  *
  * @param element - A scope-accepting factory that returns a DOM node.
  *   This is the `Element` type (`(scope: ScopeInterface) => Node`), which
- *   is what the Kinetic compiler produces from builder calls like
+ *   is what the Kyneta compiler produces from builder calls like
  *   `div(() => { h1("Hello") })`.
  * @param container - The DOM element to mount into
  * @param options - Mount options (e.g., hydration mode)

@@ -1,7 +1,7 @@
 /**
  * Generator-Based IR Walker
  *
- * This module provides a generator-based tree walker for the Kinetic IR.
+ * This module provides a generator-based tree walker for the Kyneta IR.
  * It yields structural events that consumers can process to generate
  * different outputs (SSR HTML, template extraction, etc.).
  *

@@ -1,7 +1,7 @@
 /**
- * Server-Side Rendering for Kinetic
+ * Server-Side Rendering for Kyneta
  *
- * This module provides functions to render Kinetic elements to HTML strings
+ * This module provides functions to render Kyneta elements to HTML strings
  * on the server. The key insight is that SSR doesn't need a DOM - we generate
  * JavaScript code that produces HTML strings directly via template literals.
  *
@@ -72,7 +72,7 @@ export interface RenderToStringOptions {
 /**
  * A compiled SSR render function.
  *
- * This is the output of compiling a Kinetic component for SSR.
+ * This is the output of compiling a Kyneta component for SSR.
  * It takes a context containing the Loro document and returns HTML.
  */
 export type SSRRenderFunction = (ctx: SSRContext) => string
@@ -343,7 +343,7 @@ export function createRenderFunction(
  * Render HTML from a pre-compiled render function.
  *
  * This is the primary API for SSR. It takes a compiled render function
- * (output of the Kinetic compiler in HTML mode) and a Loro document,
+ * (output of the Kyneta compiler in HTML mode) and a Loro document,
  * and returns the rendered HTML string.
  *
  * @param renderFn - The compiled render function

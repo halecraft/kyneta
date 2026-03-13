@@ -98,14 +98,14 @@ These affect TypeScript API surface. The old names get deprecated re-exports.
 - **Task 2.8**: Update all test files that reference renamed identifiers ✅
 - **Task 2.9**: Run full test suite ✅
 
-### Phase 3: Rename — Documentation 🔴
+### Phase 3: Rename — Documentation ✅
 
-- **Task 3.1**: Rename all "Kinetic" → "Kyneta" in `packages/core/README.md` 🔴
-- **Task 3.2**: Rename all "Kinetic" → "Kyneta" in `packages/core/TECHNICAL.md` 🔴
-- **Task 3.3**: Rename all "Kinetic" → "Kyneta" in `packages/core/LEARNINGS.md` 🔴
-- **Task 3.4**: Rename in `packages/schema/TECHNICAL.md` 🔴
-- **Task 3.5**: Rename in all JSDoc comments and module-level docstrings across `packages/core/src/` 🔴
-- **Task 3.6**: Replace root `TECHNICAL.md` (currently stale `loro-extended` content) with a monorepo overview for the Kyneta project 🔴
+- **Task 3.1**: Rename all "Kinetic" → "Kyneta" in `packages/core/README.md` ✅
+- **Task 3.2**: Rename all "Kinetic" → "Kyneta" in `packages/core/TECHNICAL.md` ✅
+- **Task 3.3**: Rename all "Kinetic" → "Kyneta" in `packages/core/LEARNINGS.md` ✅
+- **Task 3.4**: Rename in `packages/schema/TECHNICAL.md` ✅
+- **Task 3.5**: Rename in all JSDoc comments and module-level docstrings across `packages/core/src/` ✅
+- **Task 3.6**: Replace root `TECHNICAL.md` (currently stale `loro-extended` content) with a monorepo overview for the Kyneta project 🔴 (no root TECHNICAL.md exists; deferred to separate task)
 
 Plan documents in `.plans/` and `packages/core/.plans/` are historical records and will NOT be renamed. They reflect the state of the world at the time they were written.
 
