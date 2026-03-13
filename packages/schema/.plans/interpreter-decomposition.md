@@ -455,7 +455,7 @@ Extract caching from `readableInterpreter` into a standalone transformer. Redefi
 
 Rename `withMutation` to `withWritable`. Change to invalidate before dispatch. Guard for stacks without caching.
 
-- Task: Rename `withMutation` to `withWritable` in `writable.ts`. Update the function signature to `<A>(base: Interpreter<RefContext, A>): Interpreter<WritableContext, A>`. Update all JSDoc and comments. 🟢 (Function and JSDoc updated. ~9 stale `withMutation` references remain in comments across `readable.ts`, `with-changefeed.ts`, `combinators.ts` — cosmetic only.)
+- Task: Rename `withMutation` to `withWritable` in `writable.ts`. Update the function signature to `<A>(base: Interpreter<RefContext, A>): Interpreter<WritableContext, A>`. Update all JSDoc and comments. 🟢
 - Task: Update every mutation method to: (1) construct the change, (2) call `if (INVALIDATE in result) result[INVALIDATE](change)`, (3) call `ctx.dispatch(path, change)`. Remove all post-dispatch `INVALIDATE` calls. 🟢
 - Task: For scalar, text, and counter — `INVALIDATE` is not present (`withCaching` doesn't add it to leaves), so the guard skips it. Verify no regression. 🟢
 - Task: Remove `withMutation` export. Export only `withWritable`. 🟢
@@ -471,18 +471,18 @@ Rename `withMutation` to `withWritable`. Change to invalidate before dispatch. G
   - Discriminated sum, nullable sum.
   - `withWritable(bottomInterpreter)` (write-only): `.set()` dispatches, `ref()` throws.
 
-### Phase 5: Rename `CONTEXT` → `TRANSACT`, Add `inTransaction`, Remove Old API 🔴
+### Phase 5: Rename `CONTEXT` → `TRANSACT`, Add `inTransaction`, Remove Old API 🟢
 
-- Task: In `writable.ts`: rename `CONTEXT` → `TRANSACT`, `HasContext` → `HasTransact`, `hasContext` → `hasTransact`. Change the symbol string from `"kyneta:context"` to `"kyneta:transact"`. 🔴
-- Task: Add `readonly inTransaction: boolean` to `WritableContext` interface. In `createWritableContext`, expose the internal `inTransaction` flag as a getter. 🔴
-- Task: Update `index.ts` exports: remove `CONTEXT`, `HasContext`, `hasContext`. Add `TRANSACT`, `HasTransact`, `hasTransact`. 🔴
-- Task: Delete the monolithic `readableInterpreter` implementation from `readable.ts`. Keep type exports only: `Readable<S>`, `ReadableSequenceRef<T, V>`, `ReadableMapRef<T, V>`. Move `INVALIDATE` re-export to import from `with-caching.ts`. 🔴
-- Task: Update `index.ts`: remove `readableInterpreter` export. Remove `withMutation` export (already done in Phase 4 but verify). Remove `CONTEXT`, `HasContext`, `hasContext` exports. 🔴
-- Task: Rewrite `readable.test.ts` to test `withCaching(withReadable(bottomInterpreter))` directly. Same behavioral coverage, new import names. 🔴
-- Task: Rewrite `transaction.test.ts`: use `withWritable` + composed stacks. Add `ctx.inTransaction` tests (`false` by default, `true` after `beginTransaction`, `false` after `commit`, `false` after `abort`). Add `TRANSACT` symbol identity test. 🔴
-- Task: Rewrite `with-changefeed.test.ts`: use `withWritable` + composed stacks + `enrich`. 🔴
-- Task: Update `schema-ssr.test.ts` in `@kyneta/core`: replace `readableInterpreter` → `withCaching(withReadable(bottomInterpreter))`, `withMutation` → `withWritable`, update imports. 🔴
-- Task: Update the compositional-changefeeds plan: replace all `CONTEXT` → `TRANSACT`, `HasContext` → `HasTransact`, `hasContext` → `hasTransact`, `withMutation` → `withWritable`, `readableInterpreter` → `withCaching(withReadable(bottomInterpreter))`. Update "Sequence Subscription Timing" section to reflect cache-consistent-at-notification-time. 🔴
+- Task: In `writable.ts`: rename `CONTEXT` → `TRANSACT`, `HasContext` → `HasTransact`, `hasContext` → `hasTransact`. Change the symbol string from `"kyneta:context"` to `"kyneta:transact"`. 🟢
+- Task: Add `readonly inTransaction: boolean` to `WritableContext` interface. In `createWritableContext`, expose the internal `inTransaction` flag as a getter. 🟢
+- Task: Update `index.ts` exports: remove `CONTEXT`, `HasContext`, `hasContext`. Add `TRANSACT`, `HasTransact`, `hasTransact`. 🟢
+- Task: Delete the monolithic `readableInterpreter` implementation from `readable.ts`. Keep type exports only: `Readable<S>`, `ReadableSequenceRef<T, V>`, `ReadableMapRef<T, V>`. Move `INVALIDATE` re-export to import from `with-caching.ts`. 🟢
+- Task: Update `index.ts`: remove `readableInterpreter` export. Remove `withMutation` export (already done in Phase 4 but verify). Remove `CONTEXT`, `HasContext`, `hasContext` exports. 🟢
+- Task: Rewrite `readable.test.ts` to test `withCaching(withReadable(bottomInterpreter))` directly. Same behavioral coverage, new import names. 🟢
+- Task: Rewrite `transaction.test.ts`: use `withWritable` + composed stacks. Add `ctx.inTransaction` tests (`false` by default, `true` after `beginTransaction`, `false` after `commit`, `false` after `abort`). Add `TRANSACT` symbol identity test. 🟢
+- Task: Rewrite `with-changefeed.test.ts`: use `withWritable` + composed stacks + `enrich`. 🟢
+- Task: Update `schema-ssr.test.ts` in `@kyneta/core`: replace `readableInterpreter` → `withCaching(withReadable(bottomInterpreter))`, `withMutation` → `withWritable`, update imports. 🟢
+- Task: Update the compositional-changefeeds plan: replace all `CONTEXT` → `TRANSACT`, `HasContext` → `HasTransact`, `hasContext` → `hasTransact`, `withMutation` → `withWritable`, `readableInterpreter` → `withCaching(withReadable(bottomInterpreter))`. Update "Sequence Subscription Timing" section to reflect cache-consistent-at-notification-time. 🟢
 
 ### Phase 6: Documentation 🔴
 

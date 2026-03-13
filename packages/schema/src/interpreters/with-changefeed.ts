@@ -1,8 +1,8 @@
 // Changefeed decorator — attaches [CHANGEFEED] to interpreted results via `enrich`.
 //
 // This module owns the observation concern (read + subscribe). It is
-// orthogonal to the mutation concern provided by `withMutation`.
-// Compose them via `enrich(withMutation(readableInterpreter), withChangefeed)`.
+// orthogonal to the mutation concern provided by `withWritable`.
+// Compose them via `enrich(withWritable(withCaching(withReadable(bottomInterpreter))), withChangefeed)`.
 //
 // This is transitional scaffolding — Phase 5 replaces `withChangefeed`
 // with `withCompositionalChangefeed` (an interpreter transformer) and
@@ -192,7 +192,7 @@ function ensureNotificationWiring(
  * no-op.
  *
  * ```ts
- * const enriched = enrich(withMutation(readableInterpreter), withChangefeed)
+ * const enriched = enrich(withWritable(withCaching(withReadable(bottomInterpreter))), withChangefeed)
  * const ctx = createWritableContext(store)
  * const doc = interpret(schema, enriched, ctx)
  * // doc[CHANGEFEED].current returns the current store value

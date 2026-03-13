@@ -4,8 +4,8 @@
 
 The `@kyneta/schema` package implements a schema interpreter algebra where a recursive schema type is walked by a generic catamorphism (`interpret`), producing refs at each node. Three orthogonal interpreter layers compose to form the full ref surface:
 
-1. **`readableInterpreter`** — callable function-shaped refs (`ref()` returns current value)
-2. **`withMutation(base)`** — interpreter transformer adding `.set()`, `.insert()`, `.increment()`, etc.
+1. **`withCaching(withReadable(bottomInterpreter))`** — callable function-shaped refs (`ref()` returns current value)
+2. **`withWritable(base)`** — interpreter transformer adding `.set()`, `.insert()`, `.increment()`, etc.
 3. **`withChangefeed`** — `enrich` decorator attaching `[CHANGEFEED]` observation protocol
 
 The changefeed layer provides a coalgebra at each node: `{ current: S, subscribe(cb): unsubscribe }`. This is a Moore machine — one state, one output stream.
@@ -67,7 +67,7 @@ The compiled runtime in `@kyneta/core` subscribes to refs via `ref[CHANGEFEED].s
 2. The existing `Changefeed.subscribe` remains node-level: leaf refs fire on any mutation; composite refs fire only on structural changes at that node (e.g., `SequenceChange` for lists, `ReplaceChange` for products). This is backward-compatible — all existing runtime regions (`listRegion`, `conditionalRegion`, `valueRegion`, `textRegion`) work unchanged.
 3. `subscribeDeep`, the flat `deepSubscribers` map, `ChangefeedContext`, `createChangefeedContext`, `changefeedFlush`, and `notifyAll` are eliminated. Tree-level observation is provided by `ComposedChangefeed.subscribeTree`. Notification flows through the changefeed tree, not flat maps.
 4. The `WritableContext` gains transaction support (`beginTransaction` / `commit` / `abort`), replacing the old `autoCommit` / `pending` / `flush` mechanism. `change()` uses the same refs, same context — no re-interpretation.
-5. Refs carry a `[CONTEXT]` symbol referencing their `WritableContext`, making context discoverable for `change()`.
+5. Refs carry a `[TRANSACT]` symbol referencing their `WritableContext`, making context discoverable for `change()`.
 6. The fluent composition API `interpret(schema, ctx).with(readable).with(mutation).with(changefeed)` provides explicit, ordered layering.
 7. All new behavior has test coverage. Existing tests for removed infrastructure are replaced by equivalent tests against the new APIs.
 
@@ -79,7 +79,7 @@ The compiled runtime in `@kyneta/core` subscribes to refs via `ref[CHANGEFEED].s
 - `autoCommit`, `pending`, `flush`, and `changefeedFlush` are all surface area for the same concept that the transaction API subsumes.
 - Refs do not carry a reference to their originating context. The `change()` facade uses a `DOC_INTERNALS` WeakMap — fragile and only available at the document root.
 - No `ComposedChangefeed` interface or `subscribeTree` method exists.
-- No `CONTEXT` symbol exists. (It will be added to `writable.ts`, following the `INVALIDATE`-in-`readable.ts` pattern.)
+- No `TRANSACT` symbol exists. (It will be added to `writable.ts`, following the `INVALIDATE`-in-`readable.ts` pattern.)
 - The `interpret` API returns a result directly — no fluent builder.
 - No `InterpreterLayer` abstraction exists for fluent `.with()` chaining.
 
@@ -128,7 +128,7 @@ This preserves backward compatibility: `@kyneta/core`'s runtime calls `ref[CHANG
 
 Compositional changefeeds require interpreter-level access to the recursive structure. Specifically, the `product` case needs to access the child field results (which are already `A & Changefeed`) to compose their changefeeds. The `sequence` case needs access to the item closure to subscribe to dynamically created items.
 
-The solution is an **interpreter transformer** — the same pattern as `withMutation(base)`. It takes a base interpreter, returns a new interpreter that delegates to the base for the core result and adds changefeed protocol with full access to children.
+The solution is an **interpreter transformer** — the same pattern as `withWritable(base)`. It takes a base interpreter, returns a new interpreter that delegates to the base for the core result and adds changefeed protocol with full access to children.
 
 ```ts
 function withCompositionalChangefeed(
@@ -183,24 +183,24 @@ Critically, `commit()` must replay through `dispatch` (not bypass it via raw `ap
 
 ### `CONTEXT` Symbol on Refs
 
-Every mutation method already closes over `ctx` (the `WritableContext`). Making this explicit via a symbol-keyed property enables `change()` to discover the context from any ref. The `CONTEXT` symbol lives in `writable.ts` alongside `WritableContext` — the same pattern as `INVALIDATE` in `readable.ts` (a composability hook defined in the layer that owns the concept):
+Every mutation method already closes over `ctx` (the `WritableContext`). Making this explicit via a symbol-keyed property enables `change()` to discover the context from any ref. The `TRANSACT` symbol lives in `writable.ts` alongside `WritableContext` — the same pattern as `INVALIDATE` in `readable.ts` (a composability hook defined in the layer that owns the concept):
 
 ```ts
 // In writable.ts, alongside WritableContext
-const CONTEXT: unique symbol = Symbol.for("kyneta:context") as any
+const TRANSACT: unique symbol = Symbol.for("kyneta:transact") as any
 
-interface HasContext {
-  readonly [CONTEXT]: WritableContext
+interface HasTransact {
+  readonly [TRANSACT]: WritableContext
 }
 ```
 
 `change()` becomes:
 
 ```ts
-function change<D extends HasContext>(ref: D, fn: (ref: D) => void): void {
-  ref[CONTEXT].beginTransaction()
+function change<D extends HasTransact>(ref: D, fn: (ref: D) => void): void {
+  ref[TRANSACT].beginTransaction()
   fn(ref)
-  ref[CONTEXT].commit()
+  ref[TRANSACT].commit()
 }
 ```
 
@@ -208,7 +208,7 @@ No `DOC_INTERNALS` WeakMap. No re-interpretation. No empty context. Works on any
 
 ### Fluent Interpreter Composition
 
-The current composition `enrich(withMutation(readableInterpreter), withChangefeed)` is inside-out and not self-documenting. A fluent builder makes the layering explicit:
+The current composition `enrich(withWritable(withCaching(withReadable(bottomInterpreter))), withChangefeed)` is inside-out and not self-documenting. A fluent builder makes the layering explicit:
 
 ```ts
 const doc = interpret(schema, ctx)
@@ -261,14 +261,14 @@ Define the types. No runtime implementation yet.
 
 Replace the old `autoCommit` / `pending` / `flush` batched mode with a proper transaction API. Remove `ChangefeedContext`, `createChangefeedContext`, `changefeedFlush`, and `flush`.
 
-- Task: Define `CONTEXT` symbol in `src/interpreters/writable.ts`: `Symbol.for("kyneta:context")`. This follows the same pattern as `INVALIDATE` in `readable.ts` — a composability hook defined in the layer that owns the concept. 🟢
-- Task: Define `HasContext` interface in `writable.ts`. 🟢
+- Task: Define `TRANSACT` symbol in `src/interpreters/writable.ts`: `Symbol.for("kyneta:transact")`. This follows the same pattern as `INVALIDATE` in `readable.ts` — a composability hook defined in the layer that owns the concept. 🟢
+- Task: Define `HasTransact` interface in `writable.ts`. 🟢
 - Task: Replace `WritableContext` interface: remove `autoCommit` and `pending`, add `beginTransaction()`, `commit()`, `abort()`. The new interface is `{ dispatch, beginTransaction, commit, abort }`. 🟢
 - Task: Remove `WritableOptions` interface. `createWritableContext(store)` no longer accepts options — dispatch always auto-commits by default. 🟢
 - Task: Implement transaction methods in `createWritableContext`. `beginTransaction` sets an internal flag causing `dispatch` to buffer into an internal pending array instead of applying. `commit` replays each pending change through the normal `dispatch` path (with a re-entrancy guard to prevent re-buffering during replay), then clears the buffer and returns the flushed changes. `abort` discards the buffer. Nested transactions are not supported — `beginTransaction` while already in a transaction throws. 🟢
 - Task: Remove `flush(ctx)` from `writable.ts`. 🟢
 - Task: Remove `ChangefeedContext`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `DeepEvent`, `notifyAll`, `pathKey`, `subscribeToPath` from `with-changefeed.ts`. The `withChangefeed` decorator remains temporarily (removed in Phase 5) and needs adaptation. Currently it's typed as `Decorator<ChangefeedContext, ...>` and reads `ctx.subscribers` (the flat map from `ChangefeedContext`). Since `ChangefeedContext` no longer exists, retype `withChangefeed` as `Decorator<WritableContext, ...>` and give it its own module-level `Map<string, Set<...>>` for exact-path subscriptions. The decorator's shape doesn't change — it still attaches a `[CHANGEFEED]` with `current`/`subscribe` — but notification now requires the decorator to also wrap `ctx.dispatch` to fire its own subscriber map (the same wrapping that `createChangefeedContext` used to do). Keep `subscribeToMap` as a private helper in this file since `withChangefeed` still needs it. This is throwaway scaffolding — Phase 5 deletes the entire file. 🟢
-- Task: Add `hasContext(value)` type guard in `writable.ts`. Export `CONTEXT`, `HasContext`, `hasContext` from `index.ts`. Remove exports for `ChangefeedContext`, `createChangefeedContext`, `changefeedFlush`, `flush`, `subscribeDeep`, `DeepEvent`. 🟢
+- Task: Add `hasTransact(value)` type guard in `writable.ts`. Export `TRANSACT`, `HasTransact`, `hasTransact` from `index.ts`. Remove exports for `ChangefeedContext`, `createChangefeedContext`, `changefeedFlush`, `flush`, `subscribeDeep`, `DeepEvent`. 🟢
 - Task: Update existing tests in `writable.test.ts`: replace `autoCommit: false` + `flush()` tests with equivalent `beginTransaction` / `commit` tests. 🟢
 - Task: Update existing tests in `with-changefeed.test.ts`: remove batched-mode tests that depend on `changefeedFlush`. Replace with transaction-based equivalents where the behavior is covered by the new API. Remove `subscribeDeep` tests (the behavior moves to `subscribeTree` in Phase 3). 🟢
 - Task: New tests in `transaction.test.ts`: `beginTransaction` → mutations do not apply to store until `commit`. `commit` applies all pending changes to the store via replay through `dispatch`. `commit` returns the list of flushed `PendingChange` entries. `abort` discards pending changes; store is unchanged. `beginTransaction` while already in a transaction throws. `commit` without `beginTransaction` throws. `abort` without `beginTransaction` throws. `dispatch` applies immediately outside a transaction (replaces old `autoCommit: true` test). 🟢
@@ -278,11 +278,11 @@ Replace the old `autoCommit` / `pending` / `flush` batched mode with a proper tr
 
 The core implementation. Replaces `withChangefeed` (the `enrich` decorator).
 
-- Task: **Extract shared changefeed utilities** into `src/changefeed-utils.ts`: move `attachChangefeed` (non-enumerable `Object.defineProperty` for `[CHANGEFEED]`) and `attachSymbolProperty` (generalized non-enumerable symbol attachment for `[CONTEXT]`) out of `with-changefeed.ts`. Update `with-changefeed.ts` to import from the new module. This prevents duplication between old and new interpreters. 🔴
+- Task: **Extract shared changefeed utilities** into `src/changefeed-utils.ts`: move `attachChangefeed` (non-enumerable `Object.defineProperty` for `[CHANGEFEED]`) and `attachSymbolProperty` (generalized non-enumerable symbol attachment for `[TRANSACT]`) out of `with-changefeed.ts`. Update `with-changefeed.ts` to import from the new module. This prevents duplication between old and new interpreters. 🔴
 - Task: Create `src/interpreters/with-composed-changefeed.ts`. Implement `withCompositionalChangefeed(base): Interpreter<WritableContext, unknown>`. 🔴
-- Task: **Scalar case**: Produce a `Changefeed` (not `ComposedChangefeed` — no children). `subscribe` fires on any change dispatched at this path. Attach `[CHANGEFEED]` and `[CONTEXT]` as non-enumerable symbol properties. 🔴
-- Task: **Product case**: Produce a `ComposedChangefeed`. `subscribe` fires on changes at this node's own path only (e.g., `product.set()`). `subscribeTree` subscribes to each child field's changefeed: if the child has `ComposedChangefeed`, subscribe to its `subscribeTree`; otherwise subscribe to its `subscribe`. Aggregate with origin path prefix. Attach `[CHANGEFEED]` and `[CONTEXT]`. Children are accessed by forcing the field thunks — the product case receives `fields: Record<string, () => A>` from the catamorphism, so child changefeeds are available after forcing. 🔴
-- Task: **Sequence case**: Produce a `ComposedChangefeed`. `subscribe` fires on `SequenceChange` at this path. `subscribeTree` composes: subscribes to own `subscribe` stream (structural changes, re-emitted with `origin: []`) AND dynamically manages per-item subscriptions. The transformer maintains its own `Map<number, () => void>` of active per-item unsubscribe functions, independent of the readable layer's `childCache`. On `SequenceChange`: parse ops to determine inserts/deletes, unsubscribe from removed items, force-materialize new items via `.at(newIndex)` (store is already updated, cache already invalidated by `withMutation`), subscribe to their changefeeds, and shift tracking for retained items. Attach `[CHANGEFEED]` and `[CONTEXT]`. 🔴
+- Task: **Scalar case**: Produce a `Changefeed` (not `ComposedChangefeed` — no children). `subscribe` fires on any change dispatched at this path. Attach `[CHANGEFEED]` and `[TRANSACT]` as non-enumerable symbol properties. 🔴
+- Task: **Product case**: Produce a `ComposedChangefeed`. `subscribe` fires on changes at this node's own path only (e.g., `product.set()`). `subscribeTree` subscribes to each child field's changefeed: if the child has `ComposedChangefeed`, subscribe to its `subscribeTree`; otherwise subscribe to its `subscribe`. Aggregate with origin path prefix. Attach `[CHANGEFEED]` and `[TRANSACT]`. Children are accessed by forcing the field thunks — the product case receives `fields: Record<string, () => A>` from the catamorphism, so child changefeeds are available after forcing. 🔴
+- Task: **Sequence case**: Produce a `ComposedChangefeed`. `subscribe` fires on `SequenceChange` at this path. `subscribeTree` composes: subscribes to own `subscribe` stream (structural changes, re-emitted with `origin: []`) AND dynamically manages per-item subscriptions. The transformer maintains its own `Map<number, () => void>` of active per-item unsubscribe functions, independent of the readable layer's `childCache`. On `SequenceChange`: parse ops to determine inserts/deletes, unsubscribe from removed items, force-materialize new items via `.at(newIndex)` (store is already updated, cache already invalidated by `withWritable`), subscribe to their changefeeds, and shift tracking for retained items. Attach `[CHANGEFEED]` and `[TRANSACT]`. 🔴
 - Task: **Map case**: Produce a `ComposedChangefeed`. Similar to sequence — maintains its own `Map<string, () => void>` of per-entry unsubscribe functions. `subscribe` fires on `MapChange` at this path. `subscribeTree` composes structural + per-entry content changes. On `MapChange`: subscribe to new keys (via `.at(key)`), unsubscribe from deleted keys. 🔴
 - Task: **Sum case**: Delegate to base. 🔴
 - Task: **Annotated case**: Dispatch on tag. `"text"`, `"counter"` → leaf, produce `Changefeed`. `"doc"`, `"movable"`, `"tree"` → delegate to inner (which handles composition). 🔴
@@ -294,8 +294,8 @@ The core implementation. Replaces `withChangefeed` (the `enrich` decorator).
 - Task: Define `InterpreterLayer` interface in `interpret.ts`. 🔴
 - Task: Define `InterpretBuilder` interface in `interpret.ts`. 🔴
 - Task: Implement `interpret(schema, ctx)` overload that returns an `InterpretBuilder`. The existing `interpret(schema, interpreter, ctx)` signature remains. Overload resolution: if the second argument is an `Interpreter`, use the existing path; if it's a context object (no interpreter methods), return a builder. 🔴
-- Task: Wrap `readableInterpreter` as `readable: InterpreterLayer`. 🔴
-- Task: Wrap `withMutation` as `mutation: InterpreterLayer`. 🔴
+- Task: Wrap `withCaching(withReadable(bottomInterpreter))` as `readable: InterpreterLayer`. 🔴
+- Task: Wrap `withWritable` as `mutation: InterpreterLayer`. 🔴
 - Task: Wrap `withCompositionalChangefeed` as `changefeed: InterpreterLayer`. 🔴
 - Task: Export layers and builder types from `index.ts`. 🔴
 - Task: Tests: fluent API produces refs identical to manual composition. Type-level tests verify accumulated types. 🔴
@@ -305,13 +305,13 @@ The core implementation. Replaces `withChangefeed` (the `enrich` decorator).
 - Task: Delete `withChangefeed` decorator from `with-changefeed.ts`. If the file is empty after removing all old infrastructure, delete it. 🔴
 - Task: Remove `enrich` combinator and `Decorator` type from `combinators.ts` if no other decorators remain. (Check: `enrich` is only used by `withChangefeed`.) 🔴
 - Task: Remove old exports from `index.ts`: `withChangefeed`, `enrich`, `Decorator`, and any remaining old aliases (`withFeed`, `createFeedableContext`, `feedableFlush`, `FeedableContext`). 🔴
-- Task: Update `example/main.ts` to use `withCompositionalChangefeed`, `CONTEXT`, transactions, and the fluent API. Remove `DOC_INTERNALS` symbol and `getInternals`. 🔴
-- Task: Update `packages/core/src/compiler/integration/schema-ssr.test.ts` — migrate from `enrich(writableInterpreter, withChangefeed)` to `withCompositionalChangefeed(writableInterpreter)`. 🔴
+- Task: Update `example/main.ts` to use `withCompositionalChangefeed`, `TRANSACT`, transactions, and the fluent API. Remove `DOC_INTERNALS` symbol and `getInternals`. 🔴
+- Task: Update `packages/core/src/compiler/integration/schema-ssr.test.ts` — migrate from `enrich(withWritable(withCaching(withReadable(bottomInterpreter))), withChangefeed)` to `withCompositionalChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))`. 🔴
 - Task: Delete old test cases in `with-changefeed.test.ts` that test removed infrastructure. Consolidate remaining valid test scenarios into `composed-changefeed.test.ts` if not already covered. 🔴
 
 ### Phase 6: Documentation 🔴
 
-- Task: Update `TECHNICAL.md`: document `ComposedChangefeed` / `TreeEvent` protocol, the two-coalgebra design, the interpreter transformer approach, `CONTEXT` symbol, transaction API, fluent builder. Replace the "Deep Subscriptions" section with "Compositional Changefeeds" section. Update file map. Update verified properties list. 🔴
+- Task: Update `TECHNICAL.md`: document `ComposedChangefeed` / `TreeEvent` protocol, the two-coalgebra design, the interpreter transformer approach, `TRANSACT` symbol, transaction API, fluent builder. Replace the "Deep Subscriptions" section with "Compositional Changefeeds" section. Update file map. Update verified properties list. 🔴
 - Task: Update `theory/interpreter-algebra.md` if it references the old changefeed design. 🔴
 
 ## Tests
@@ -345,14 +345,14 @@ Risk areas and test strategies:
 - **Sequence insert-in-middle resubscription**: insert at index 1 in a 3-item list, mutate the new item at index 1 → `subscribeTree` fires. Mutate the item now at index 2 (shifted from old index 1) → `subscribeTree` fires with updated origin index.
 - **`subscribeTree` at own path**: structural change on a list delivers `{ origin: [], change: SequenceChange }` to tree subscribers.
 - **Unsubscribe cleans up**: unsubscribe from `subscribeTree`, mutate descendants → no callback.
-- **`CONTEXT` is present and correct**: `ref[CONTEXT]` returns the `WritableContext` used during interpretation.
+- **`TRANSACT` is present and correct**: `ref[TRANSACT]` returns the `WritableContext` used during interpretation.
 - **Transaction + compositional notification**: `beginTransaction`, mutate two fields, `commit` → tree subscribers fire at commit time (not during mutations), receiving both changes.
 - **Transaction dispatch replay**: `beginTransaction`, mutate, `commit` → verify changes go through `dispatch` (not raw `applyChangeToStore`) by confirming the compositional changefeed's dispatch wrapper fires.
 - **Coexistence**: exact `subscribe` and `subscribeTree` on the same ref both fire for a change at that node's own path.
 
 ### Phase 4 Tests (in `fluent.test.ts`)
 
-- Fluent API produces refs functionally equivalent to manual `withCompositionalChangefeed(withMutation(readableInterpreter))`.
+- Fluent API produces refs functionally equivalent to manual `withCompositionalChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))`.
 - `.done()` returns a typed result with all accumulated capabilities.
 - Existing `interpret(schema, interpreter, ctx)` still works (regression).
 
@@ -372,7 +372,7 @@ Gains overloaded `interpret` signature (builder path) and `InterpreterLayer` / `
 
 ### `interpreters/writable.ts`
 
-`WritableContext` is replaced: `autoCommit` and `pending` are removed, `beginTransaction` / `commit` / `abort` are added. `createWritableContext` no longer accepts `WritableOptions`. `flush()` is removed. `CONTEXT` symbol and `HasContext` are added. All callsites currently go through `createWritableContext()` — no hand-constructed `WritableContext` objects exist.
+`WritableContext` is replaced: `autoCommit` and `pending` are removed, `beginTransaction` / `commit` / `abort` are added. `createWritableContext` no longer accepts `WritableOptions`. `flush()` is removed. `TRANSACT` symbol and `HasTransact` are added. All callsites currently go through `createWritableContext()` — no hand-constructed `WritableContext` objects exist.
 
 ### `interpreters/with-changefeed.ts`
 
@@ -398,19 +398,19 @@ Updated in Phase 2 to use plain `WritableContext` (removing `createChangefeedCon
 
 ### `index.ts` barrel exports
 
-Phase 2 removes: `ChangefeedContext`, `createChangefeedContext`, `changefeedFlush`, `flush`, `subscribeDeep`, `DeepEvent`. Phase 2 adds: `CONTEXT`, `HasContext`, `hasContext`. Phase 3 adds: `withCompositionalChangefeed`. Phase 4 adds: `InterpreterLayer`, `InterpretBuilder`, `readable`, `mutation`, `changefeed` layers. Phase 5 removes: `withChangefeed`, `enrich`, `Decorator`, old aliases.
+Phase 2 removes: `ChangefeedContext`, `createChangefeedContext`, `changefeedFlush`, `flush`, `subscribeDeep`, `DeepEvent`. Phase 2 adds: `TRANSACT`, `HasTransact`, `hasTransact`. Phase 3 adds: `withCompositionalChangefeed`. Phase 4 adds: `InterpreterLayer`, `InterpretBuilder`, `readable`, `mutation`, `changefeed` layers. Phase 5 removes: `withChangefeed`, `enrich`, `Decorator`, old aliases.
 
 ### `example/main.ts`
 
-Phase 5 updates the example to use the new API. The old `DOC_INTERNALS` symbol and `changefeedFlush`-based `change()` are replaced with `CONTEXT` + `beginTransaction` / `commit`. No external consumers depend on the example.
+Phase 5 updates the example to use the new API. The old `DOC_INTERNALS` symbol and `changefeedFlush`-based `change()` are replaced with `TRANSACT` + `beginTransaction` / `commit`. No external consumers depend on the example.
 
 ## Sequence Subscription Timing
 
 The sequence case of `withCompositionalChangefeed` is the most complex due to dynamic child subscription management. Key timing constraint discovered during planning:
 
-1. **Dispatch** — `ctx.dispatch(path, sequenceChange(...))` applies the change to the store synchronously (outside a transaction). The store now has the new/removed items. Shallow subscribers fire here.
-2. **INVALIDATE** — `withMutation` calls `result[INVALIDATE]()` immediately after dispatch, clearing the readable interpreter's `childCache`. Old cached refs are gone.
-3. **Tree subscription handler** — the composed changefeed's own shallow subscriber receives the `SequenceChange`. At this point, the store is updated and the cache is cleared. The handler can call `.at(newIndex)` to force-materialize fresh child refs with their changefeeds, then subscribe to them.
+1. **INVALIDATE** — `withWritable` calls `result[INVALIDATE]()` immediately *before* dispatch, clearing the readable interpreter's `childCache`. Old cached refs are gone. This ensures that any subscriber triggered by dispatch will see fresh refs if they call `.at()`.
+2. **Dispatch** — `ctx.dispatch(path, sequenceChange(...))` applies the change to the store synchronously (outside a transaction). The store now has the new/removed items. Shallow subscribers fire here.
+3. **Tree subscription handler** — the composed changefeed's own shallow subscriber receives the `SequenceChange`. At this point, the cache is already cleared and the store is updated. The handler can call `.at(newIndex)` to force-materialize fresh child refs with their changefeeds, then subscribe to them.
 
 The transformer maintains its **own** `Map<number, () => void>` of per-item unsubscribe functions, independent of the readable layer's `childCache`. On structural changes, it parses the `SequenceChange` ops (retain/insert/delete) to determine which indices changed, tears down subscriptions for removed items, and rebuilds for new items. For insert-in-middle, all subscriptions at and after the insert point are torn down and re-established at shifted indices — this is O(k + shifted) per structural change, where k is the number of inserted/deleted items. For typical list operations (push, pop, splice), this is efficient.
 
@@ -422,7 +422,7 @@ The transformer maintains its **own** `Map<number, () => void>` of per-item unsu
 |---|---|---|
 | Changefeed protocol | `src/changefeed.ts` | Base `Changefeed` interface — extend with `ComposedChangefeed`, `TreeEvent` |
 | Current changefeed decorator | `src/interpreters/with-changefeed.ts` | Reference implementation for flat subscriber maps; extract utilities, then remove |
-| Writable interpreter | `src/interpreters/writable.ts` | `WritableContext` — replace batched mode with transaction methods + `CONTEXT` symbol; `withMutation` — pattern to follow for interpreter transformer |
+| Writable interpreter | `src/interpreters/writable.ts` | `WritableContext` — replace batched mode with transaction methods + `TRANSACT` symbol; `withWritable` — pattern to follow for interpreter transformer |
 | Readable interpreter | `src/interpreters/readable.ts` | Base interpreter; `INVALIDATE` symbol pattern for composability hooks |
 | Catamorphism | `src/interpret.ts` | `Interpreter` interface, `interpret` function — add overload and builder |
 | Combinators | `src/combinators.ts` | `enrich` — understand what it can't do (no child access); `Decorator` type; remove in Phase 5 if no other users |
@@ -442,9 +442,9 @@ These are relevant findings from `packages/core/LEARNINGS.md` and the existing p
 
 - **`SequenceChangeOp.insert` carries items, not a count.** The "two-layer model" — change layer carries plain values, ref layer carries reactive handles. The composed changefeed's sequence handler must use `.at()` to get refs, not read from the change's insert array.
 - **`subscribeWithValue`'s `getValue` closure is NOT `CHANGEFEED.current`.** The runtime's `read()` helper extracts `current` from the coalgebra, but codegen expressions may transform the value. The compositional changefeed doesn't change this — `subscribe` still emits raw changes, and the runtime still re-reads via closures.
-- **`Object.defineProperty` bypasses Proxy `set` traps.** From `.plans/feed-separation.md` — when attaching symbol properties to Proxy-backed objects (like map refs), use `Object.defineProperty` not assignment. The `attachChangefeed` utility already does this correctly; `attachSymbolProperty` for `[CONTEXT]` must follow the same pattern.
+- **`Object.defineProperty` bypasses Proxy `set` traps.** From `.plans/feed-separation.md` — when attaching symbol properties to Proxy-backed objects (like map refs), use `Object.defineProperty` not assignment. The `attachChangefeed` utility already does this correctly; `attachSymbolProperty` for `[TRANSACT]` must follow the same pattern.
 - **`getOrCreateChangefeed` WeakMap caching.** `LocalRef` uses this for its `[CHANGEFEED]` getter. The compositional changefeed creates changefeeds during interpretation (not lazily), so this caching pattern is not needed — but `LocalRef` and other external implementors continue to use it unchanged.
-- **`INVALIDATE` uses `Symbol.for("schema:invalidate")` — the namespace predates the `kyneta:` convention.** The new `CONTEXT` symbol uses `Symbol.for("kyneta:context")` to follow the convention established by `CHANGEFEED` (`Symbol.for("kyneta:changefeed")`). `INVALIDATE` is not renamed — it's an internal composability hook, not a public protocol symbol.
+- **`INVALIDATE` uses `Symbol.for("schema:invalidate")` — the namespace predates the `kyneta:` convention.** The new `TRANSACT` symbol uses `Symbol.for("kyneta:transact")` to follow the convention established by `CHANGEFEED` (`Symbol.for("kyneta:changefeed")`). `INVALIDATE` is not renamed — it's an internal composability hook, not a public protocol symbol.
 
 ## Alternatives Considered
 

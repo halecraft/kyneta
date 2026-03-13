@@ -614,7 +614,7 @@ describe("type-level: Writable<S> for Loro leaf annotations", () => {
     expectTypeOf<Result>().toEqualTypeOf<{
       readonly title: TextRef
       readonly count: CounterRef
-    }>()
+    } & ProductRef<{ title: string; count: number }>>()
   })
 })
 

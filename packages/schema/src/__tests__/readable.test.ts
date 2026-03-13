@@ -3,14 +3,23 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  readableInterpreter,
+  bottomInterpreter,
+  withReadable,
+  withCaching,
   INVALIDATE,
   enrich,
   withChangefeed,
   createWritableContext,
   hasChangefeed,
+  replaceChange,
+  sequenceChange,
+  mapChange,
 } from "../index.js"
 import type { RefContext, Readable, ReadableMapRef } from "../index.js"
+
+// Composed interpreter stack — functionally equivalent to the removed
+// monolithic readableInterpreter.
+const readableInterpreter = withCaching(withReadable(bottomInterpreter))
 
 // ===========================================================================
 // Shared fixtures
@@ -304,7 +313,7 @@ describe("readable: sequence ref", () => {
     expect(doc.messages.get(0)).toEqual({ author: "Alice", body: "Hi" })
     // Mutate store directly
     ;(store.messages as unknown[]).push({ author: "Bob", body: "Hey" })
-    doc.messages[INVALIDATE]()
+    doc.messages[INVALIDATE](replaceChange([]))
     expect(doc.messages.get(1)).toEqual({ author: "Bob", body: "Hey" })
   })
 })
@@ -434,7 +443,7 @@ describe("readable: map ref", () => {
     expect(doc.metadata.get("version")).toBe(1)
     // Mutate store directly
     ;(store.metadata as Record<string, unknown>).version = 42
-    doc.metadata[INVALIDATE]("version")
+    doc.metadata[INVALIDATE](mapChange(undefined, ["version"]))
     expect(doc.metadata.get("version")).toBe(42)
   })
 })
@@ -505,12 +514,13 @@ describe("readable: composability hooks", () => {
     })
     const first = doc.messages.at(0)!
     expect(doc.messages.at(0)).toBe(first) // cached
-    doc.messages[INVALIDATE]()
+    // replaceChange([]) triggers a full cache clear
+    doc.messages[INVALIDATE](replaceChange([]))
     // After invalidation, .at(0) creates a new ref (different identity)
     expect(doc.messages.at(0)).not.toBe(first)
   })
 
-  it("sequence [INVALIDATE](key) clears single entry", () => {
+  it("sequence [INVALIDATE](change) with delete shifts cached entries", () => {
     const { doc } = createReadOnlyLoroDoc({
       messages: [
         { author: "Alice", body: "Hi" },
@@ -519,10 +529,12 @@ describe("readable: composability hooks", () => {
     })
     const first = doc.messages.at(0)!
     const second = doc.messages.at(1)!
-    doc.messages[INVALIDATE](0)
-    // Index 0 is cleared, index 1 is preserved
-    expect(doc.messages.at(0)).not.toBe(first)
-    expect(doc.messages.at(1)).toBe(second)
+    // Delete index 0: [{ retain: 0 }, { delete: 1 }]
+    // This removes index 0 and shifts index 1 → index 0
+    doc.messages[INVALIDATE](sequenceChange([{ retain: 0 }, { delete: 1 }]))
+    // Index 0 was deleted, so the old first ref is gone.
+    // The old second ref (Bob) is now shifted to index 0.
+    expect(doc.messages.at(0)).toBe(second)
   })
 
   it("map ref has [INVALIDATE] symbol", () => {
@@ -530,13 +542,14 @@ describe("readable: composability hooks", () => {
     expect(typeof doc.metadata[INVALIDATE]).toBe("function")
   })
 
-  it("map [INVALIDATE](key) clears single entry", () => {
+  it("map [INVALIDATE](change) clears single entry", () => {
     const { doc } = createReadOnlyDoc({
       metadata: { a: 1, b: 2 },
     })
     const aRef = doc.metadata.at("a")
     const bRef = doc.metadata.at("b")
-    doc.metadata[INVALIDATE]("a")
+    // Invalidate key "a" via mapChange with delete
+    doc.metadata[INVALIDATE](mapChange(undefined, ["a"]))
     expect(doc.metadata.at("a")).not.toBe(aRef)
     expect(doc.metadata.at("b")).toBe(bRef)
   })

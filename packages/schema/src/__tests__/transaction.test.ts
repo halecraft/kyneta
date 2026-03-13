@@ -10,6 +10,8 @@ import {
   createWritableContext,
   enrich,
   withChangefeed,
+  TRANSACT,
+  hasTransact,
 } from "../index.js"
 import type { Readable, Writable } from "../index.js"
 
@@ -116,6 +118,60 @@ describe("transaction: error guards", () => {
   it("abort without beginTransaction throws", () => {
     const { ctx } = createPointDoc()
     expect(() => ctx.abort()).toThrow(/no active transaction/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// inTransaction observable state
+// ---------------------------------------------------------------------------
+
+describe("transaction: inTransaction", () => {
+  it("false by default", () => {
+    const { ctx } = createPointDoc()
+    expect(ctx.inTransaction).toBe(false)
+  })
+
+  it("true after beginTransaction", () => {
+    const { ctx } = createPointDoc()
+    ctx.beginTransaction()
+    expect(ctx.inTransaction).toBe(true)
+  })
+
+  it("false after commit", () => {
+    const { ctx, doc } = createPointDoc()
+    ctx.beginTransaction()
+    doc.x.set(10)
+    ctx.commit()
+    expect(ctx.inTransaction).toBe(false)
+  })
+
+  it("false after abort", () => {
+    const { ctx, doc } = createPointDoc()
+    ctx.beginTransaction()
+    doc.x.set(10)
+    ctx.abort()
+    expect(ctx.inTransaction).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// TRANSACT symbol identity
+// ---------------------------------------------------------------------------
+
+describe("transaction: TRANSACT symbol", () => {
+  it("TRANSACT is the expected Symbol.for string", () => {
+    expect(TRANSACT).toBe(Symbol.for("kyneta:transact"))
+  })
+
+  it("hasTransact returns true for objects with TRANSACT", () => {
+    const obj = { [TRANSACT]: {} }
+    expect(hasTransact(obj)).toBe(true)
+  })
+
+  it("hasTransact returns false for plain objects", () => {
+    expect(hasTransact({})).toBe(false)
+    expect(hasTransact(null)).toBe(false)
+    expect(hasTransact(undefined)).toBe(false)
   })
 })
 

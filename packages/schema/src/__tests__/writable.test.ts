@@ -703,6 +703,7 @@ describe("writable: write-only stack", () => {
       beginTransaction: () => {},
       commit: () => [],
       abort: () => {},
+      inTransaction: false,
     }
     const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
 

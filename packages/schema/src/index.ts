@@ -148,9 +148,9 @@ export {
 } from "./interpreters/with-caching.js"
 export type { CacheOp } from "./interpreters/with-caching.js"
 
-export {
-  readableInterpreter,
-} from "./interpreters/readable.js"
+// Readable types — type-level interpretation for readable refs
+// (The monolithic readableInterpreter is removed; use
+// withCaching(withReadable(bottomInterpreter)) instead.)
 export type {
   Readable,
   ReadableSequenceRef,
@@ -159,12 +159,12 @@ export type {
 export {
   withWritable,
   createWritableContext,
-  CONTEXT,
-  hasContext,
+  TRANSACT,
+  hasTransact,
 } from "./interpreters/writable.js"
 export type {
   WritableContext,
-  HasContext,
+  HasTransact,
   PendingChange,
   ScalarRef,
   TextRef,

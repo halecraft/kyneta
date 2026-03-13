@@ -2,7 +2,7 @@
 //
 // This module provides:
 // 1. WritableContext (extends RefContext with dispatch + transactions)
-// 2. CONTEXT symbol — composability hook for discovering a ref's context
+// 2. TRANSACT symbol — composability hook for discovering a ref's context
 // 3. Mutation-only ref interfaces: ScalarRef, TextRef, CounterRef, SequenceRef
 // 4. withWritable(base) — interpreter transformer that adds mutation methods
 // 5. Writable<S> type-level interpretation
@@ -58,7 +58,7 @@ export { type Store, readByPath, writeByPath, applyChangeToStore } from "../stor
 export type { RefContext, Plain } from "../interpreter-types.js"
 
 // ---------------------------------------------------------------------------
-// CONTEXT symbol — composability hook for discovering a ref's context
+// TRANSACT symbol — composability hook for discovering a ref's context
 // ---------------------------------------------------------------------------
 
 /**
@@ -71,25 +71,25 @@ export type { RefContext, Plain } from "../interpreter-types.js"
  *
  * Uses `Symbol.for` so multiple copies share the same identity.
  */
-export const CONTEXT: unique symbol = Symbol.for("kyneta:context") as any
+export const TRANSACT: unique symbol = Symbol.for("kyneta:transact") as any
 
 /**
- * An object that carries a `[CONTEXT]` symbol referencing the
+ * An object that carries a `[TRANSACT]` symbol referencing the
  * `WritableContext` used during interpretation.
  */
-export interface HasContext {
-  readonly [CONTEXT]: WritableContext
+export interface HasTransact {
+  readonly [TRANSACT]: WritableContext
 }
 
 /**
- * Returns `true` if `value` has a `[CONTEXT]` symbol property.
+ * Returns `true` if `value` has a `[TRANSACT]` symbol property.
  */
-export function hasContext(value: unknown): value is HasContext {
+export function hasTransact(value: unknown): value is HasTransact {
   return (
     value !== null &&
     value !== undefined &&
     (typeof value === "object" || typeof value === "function") &&
-    CONTEXT in (value as object)
+    TRANSACT in (value as object)
   )
 }
 
@@ -129,6 +129,7 @@ export interface WritableContext extends RefContext {
   commit(): PendingChange[]
   /** Discard buffered changes without applying. */
   abort(): void
+  readonly inTransaction: boolean
 }
 
 export interface PendingChange {
@@ -150,7 +151,7 @@ export interface PendingChange {
  * ```ts
  * const store = { title: "", count: 0, items: [] }
  * const ctx = createWritableContext(store)
- * const doc = interpret(schema, withMutation(readableInterpreter), ctx)
+ * const doc = interpret(schema, withWritable(withCaching(withReadable(bottomInterpreter))), ctx)
  * ```
  */
 export function createWritableContext(store: Store): WritableContext {
@@ -212,6 +213,7 @@ export function createWritableContext(store: Store): WritableContext {
     beginTransaction,
     commit,
     abort,
+    get inTransaction() { return inTransaction },
   }
 
   return ctx
@@ -248,7 +250,7 @@ export interface SequenceRef<T = unknown> {
 }
 
 /**
- * Mutation-only interface for product refs. Added by `withMutation`.
+ * Mutation-only interface for product refs. Added by `withWritable`.
  * Enables atomic replacement of an entire struct subtree in one change.
  */
 export interface ProductRef<T = unknown> {
@@ -256,7 +258,7 @@ export interface ProductRef<T = unknown> {
 }
 
 /**
- * Mutation-only interface for map refs. Added by `withMutation`.
+ * Mutation-only interface for map refs. Added by `withWritable`.
  * Reading is provided by `ReadableMapRef` from the readable interpreter.
  */
 export interface WritableMapRef<V = unknown> {
@@ -278,7 +280,7 @@ export type { ScalarPlain } from "../schema.js"
  *
  * This maps schema nodes to their mutation interfaces. Reading is
  * provided by the `Readable<S>` type (from the readable interpreter).
- * At runtime, `withMutation(readableInterpreter)` produces refs that
+ * At runtime, `withWritable(withCaching(withReadable(bottomInterpreter)))` produces refs that
  * satisfy both `Readable<S>` and `Writable<S>`.
  *
  * ```ts
