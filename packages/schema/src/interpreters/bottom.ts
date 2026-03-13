@@ -33,15 +33,15 @@ import type { ChangeBase } from "../change.js"
 // ---------------------------------------------------------------------------
 // Forward-declared INVALIDATE symbol type
 // ---------------------------------------------------------------------------
-// The INVALIDATE runtime symbol lives in readable.ts today and will move
-// to with-caching.ts in Phase 3. We declare its type here so HasCaching
-// can reference it without importing the runtime value or using a
-// computed Symbol.for() in the interface (which esbuild rejects).
+// The INVALIDATE runtime symbol lives in with-caching.ts. We declare its
+// type here so HasCaching can reference it without importing the runtime
+// value or using a computed Symbol.for() in the interface (which esbuild
+// rejects).
 
 declare const INVALIDATE_SYMBOL: unique symbol
 /**
  * Type-level reference to the INVALIDATE symbol.
- * At runtime this is `Symbol.for("schema:invalidate")`.
+ * At runtime this is `Symbol.for("kyneta:invalidate")`.
  */
 export type INVALIDATE_TYPE = typeof INVALIDATE_SYMBOL
 
@@ -122,8 +122,7 @@ export interface HasNavigation extends HasRead {
  * Note: The INVALIDATE slot uses a declared symbol type rather than
  * `Symbol.for(...)` because esbuild doesn't support computed property
  * names with expressions in interfaces. The runtime symbol identity
- * is `Symbol.for("schema:invalidate")`, defined in readable.ts (and
- * moving to with-caching.ts in Phase 3).
+ * is `Symbol.for("kyneta:invalidate")`, defined in with-caching.ts.
  */
 export interface HasCaching extends HasNavigation {
   readonly [INVALIDATE_SYMBOL]?: (change: ChangeBase) => void

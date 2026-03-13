@@ -592,7 +592,7 @@ describe("withCaching: full doc tree", () => {
 
 describe("INVALIDATE symbol", () => {
   it("is stable across references (Symbol.for identity)", () => {
-    const other = Symbol.for("schema:invalidate")
+    const other = Symbol.for("kyneta:invalidate")
     expect(INVALIDATE).toBe(other)
   })
 })

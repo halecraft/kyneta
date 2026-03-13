@@ -53,11 +53,9 @@ import type { RefContext } from "../interpreter-types.js"
  * entire cache depending on the change type and node kind.
  *
  * Uses `Symbol.for` so multiple copies of this module share identity.
- * The symbol string `"schema:invalidate"` is unchanged from the
- * original definition in readable.ts.
  */
 export const INVALIDATE: unique symbol = Symbol.for(
-  "schema:invalidate",
+  "kyneta:invalidate",
 ) as any
 
 // ---------------------------------------------------------------------------

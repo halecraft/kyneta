@@ -250,7 +250,7 @@ Cross-layer communication uses four well-known symbols:
 | Symbol | Module | Purpose |
 |---|---|---|
 | `READ` (`kyneta:read`) | `bottom.ts` | Controls what `carrier()` does — default throws, `withReadable` fills it |
-| `INVALIDATE` (`schema:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — `withWritable` calls before dispatch |
+| `INVALIDATE` (`kyneta:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — `withWritable` calls before dispatch |
 | `CHANGEFEED` (`kyneta:changefeed`) | `changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it |
 | `TRANSACT` (`kyneta:transact`) | `writable.ts` | Context discovery — refs carry a reference to their `WritableContext` |
 

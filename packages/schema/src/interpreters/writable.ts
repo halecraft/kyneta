@@ -371,6 +371,23 @@ export type Writable<S extends Schema> =
 export function withWritable<A>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<WritableContext, A> {
+  // Helper: attach [TRANSACT] as a non-enumerable symbol property.
+  // Uses Object.defineProperty to bypass Proxy set traps on map refs.
+  function attachTransact(result: unknown, ctx: WritableContext): void {
+    if (
+      result !== null &&
+      result !== undefined &&
+      (typeof result === "object" || typeof result === "function")
+    ) {
+      Object.defineProperty(result, TRANSACT, {
+        value: ctx,
+        enumerable: false,
+        configurable: true,
+        writable: false,
+      })
+    }
+  }
+
   return {
     // --- Scalar ---------------------------------------------------------------
     // Add .set() to the base scalar ref.
@@ -389,6 +406,7 @@ export function withWritable<A>(
         ctx.dispatch(path, change)
       }
 
+      attachTransact(result, ctx)
       return result
     },
 
@@ -413,6 +431,7 @@ export function withWritable<A>(
         configurable: true,
       })
 
+      attachTransact(result, ctx)
       return result
     },
 
@@ -455,6 +474,7 @@ export function withWritable<A>(
         ctx.dispatch(path, change)
       }
 
+      attachTransact(result, ctx)
       return result
     },
 
@@ -506,6 +526,7 @@ export function withWritable<A>(
         configurable: true,
       })
 
+      attachTransact(result, ctx)
       return result
     },
 
@@ -569,6 +590,7 @@ export function withWritable<A>(
             )
           }
 
+          attachTransact(result, ctx)
           return result
         }
 
@@ -581,6 +603,7 @@ export function withWritable<A>(
             ctx.dispatch(path, incrementChange(-n))
           }
 
+          attachTransact(result, ctx)
           return result
         }
 
@@ -591,6 +614,8 @@ export function withWritable<A>(
           // interpreter, and the result carries the base's interpretation.
           // withWritable's own cases (product, sequence, etc.) already
           // attached mutation methods to the children during recursion.
+          // [TRANSACT] is already attached by the inner case (product,
+          // sequence, etc.) — no need to attach again.
           return result
 
         default:

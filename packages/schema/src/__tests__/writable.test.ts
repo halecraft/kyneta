@@ -9,6 +9,8 @@ import {
   withWritable,
   createWritableContext,
   READ,
+  TRANSACT,
+  hasTransact,
 } from "../index.js"
 import { INVALIDATE } from "../interpreters/with-caching.js"
 import type {
@@ -771,5 +773,98 @@ describe("writable: mutation + read integration", () => {
     const { store, doc } = createStructuralDoc()
     doc.metadata.delete("version")
     expect("version" in (store.metadata as Record<string, unknown>)).toBe(false)
+  })
+})
+
+// ===========================================================================
+// TRANSACT attachment — withWritable attaches [TRANSACT] to all refs
+// ===========================================================================
+
+describe("writable: TRANSACT attachment", () => {
+  it("scalar ref has [TRANSACT] pointing to ctx", () => {
+    const { ctx, doc } = createStructuralDoc()
+    expect(doc.settings.darkMode[TRANSACT]).toBe(ctx)
+  })
+
+  it("product ref has [TRANSACT] pointing to ctx", () => {
+    const { ctx, doc } = createStructuralDoc()
+    expect(doc.settings[TRANSACT]).toBe(ctx)
+  })
+
+  it("sequence ref has [TRANSACT] pointing to ctx", () => {
+    const { ctx, doc } = createLoroDoc()
+    expect(doc.messages[TRANSACT]).toBe(ctx)
+  })
+
+  it("map ref has [TRANSACT] pointing to ctx", () => {
+    const { ctx, doc } = createStructuralDoc()
+    expect(doc.metadata[TRANSACT]).toBe(ctx)
+  })
+
+  it("text annotated ref has [TRANSACT] pointing to ctx", () => {
+    const { ctx, doc } = createLoroDoc()
+    expect(doc.title[TRANSACT]).toBe(ctx)
+  })
+
+  it("counter annotated ref has [TRANSACT] pointing to ctx", () => {
+    const { ctx, doc } = createLoroDoc()
+    expect(doc.count[TRANSACT]).toBe(ctx)
+  })
+
+  it("doc (delegating annotation) ref has [TRANSACT] pointing to ctx", () => {
+    const { ctx, doc } = createLoroDoc()
+    expect(doc[TRANSACT]).toBe(ctx)
+  })
+
+  it("[TRANSACT] does not appear in Object.keys()", () => {
+    const { doc } = createStructuralDoc()
+    expect(Object.keys(doc.settings)).not.toContain(TRANSACT)
+    expect(Object.keys(doc.settings)).not.toContain(String(TRANSACT))
+  })
+
+  it("hasTransact() returns true for refs with [TRANSACT]", () => {
+    const { doc } = createStructuralDoc()
+    expect(hasTransact(doc)).toBe(true)
+    expect(hasTransact(doc.settings)).toBe(true)
+    expect(hasTransact(doc.settings.darkMode)).toBe(true)
+    expect(hasTransact(doc.metadata)).toBe(true)
+  })
+
+  it("[TRANSACT] works on Proxy-backed map refs", () => {
+    const { ctx, doc } = createStructuralDoc()
+    // Map refs use Proxy — Object.defineProperty must bypass set trap
+    expect(doc.metadata[TRANSACT]).toBe(ctx)
+    // Verify the map still works normally after TRANSACT attachment
+    doc.metadata.set("newKey", "newValue")
+    expect(doc.metadata.at("newKey")()).toBe("newValue")
+  })
+
+  it("[TRANSACT] is present on cacheless stack refs", () => {
+    const schema = Schema.doc({
+      n: Schema.number(),
+    })
+    const store = { n: 0 }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, cachelessInterpreter, ctx) as any
+    expect(doc.n[TRANSACT]).toBe(ctx)
+    expect(doc[TRANSACT]).toBe(ctx)
+  })
+
+  it("[TRANSACT] is present on write-only stack refs", () => {
+    const schema = Schema.struct({ n: Schema.number() })
+    const store = { n: 0 }
+    const dispatched: unknown[] = []
+    const ctx: WritableContext = {
+      store,
+      dispatch: (path, change) => dispatched.push({ path, change }),
+      beginTransaction: () => { throw new Error("not implemented") },
+      commit: () => { throw new Error("not implemented") },
+      abort: () => { throw new Error("not implemented") },
+      inTransaction: false,
+    }
+    const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
+    // Write-only product ref has [TRANSACT] (child .n is not navigable
+    // without withReadable, so we test the product itself)
+    expect(ref[TRANSACT]).toBe(ctx)
   })
 })

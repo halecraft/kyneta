@@ -79,12 +79,12 @@ _Updated to reflect current state after Phases 1–2 completion and interpreter-
 - ~~`ChangefeedContext` carries two flat subscriber maps.~~ Removed in Phase 2. The transitional `withChangefeed` uses a module-level `WeakMap<WritableContext, ...>` instead.
 - ~~`WritableContext` has no transaction API.~~ Solved in Phase 2. `beginTransaction` / `commit` / `abort` are implemented and tested.
 - ~~`autoCommit`, `pending`, `flush`, and `changefeedFlush`~~ Removed in Phase 2.
-- ~~Refs do not carry a reference to their originating context.~~ `TRANSACT` symbol exists in `writable.ts`. However, `withWritable` does not yet attach `[TRANSACT]` to refs — Phase 3 adds this.
+- ~~Refs do not carry a reference to their originating context.~~ Solved in Phase 3b. `withWritable` attaches `[TRANSACT]` to every ref via `Object.defineProperty`.
 - ~~No `ComposedChangefeed` interface or `subscribeTree` method exists.~~ Types defined in Phase 1. No runtime implementation yet.
 - ~~No `TRANSACT` symbol exists.~~ Defined in Phase 2.
 - The `interpret` API returns a result directly — no fluent builder.
 - No `InterpreterLayer` abstraction exists for fluent `.with()` chaining.
-- `INVALIDATE` uses `Symbol.for("schema:invalidate")` — inconsistent with the `kyneta:` namespace convention used by `CHANGEFEED` and `TRANSACT`. Phase 3 renames it to `kyneta:invalidate`.
+- ~~`INVALIDATE` uses `Symbol.for("schema:invalidate")`~~ Renamed to `Symbol.for("kyneta:invalidate")` in Phase 3a.
 - The `enrich` combinator and `Decorator` type exist but have no remaining purpose once the new `withChangefeed` transformer replaces the old decorator.
 - `example/main.ts` is frozen in the pre-Phase-2 era — it imports removed symbols (`readableInterpreter`, `withMutation`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `ChangefeedContext`, `autoCommit`). It does not compile against the current barrel.
 
@@ -293,17 +293,17 @@ Replace the old `autoCommit` / `pending` / `flush` batched mode with a proper tr
 
 The core implementation. The new `withChangefeed` interpreter transformer replaces the old `enrich`-based decorator of the same name. The old decorator in `with-changefeed.ts` is deleted and the file is replaced with the transformer. This phase also renames `INVALIDATE` to use `kyneta:invalidate` for namespace consistency, and makes `withWritable` attach `[TRANSACT]` to all refs it produces.
 
-#### Sub-phase 3a: `INVALIDATE` namespace rename 🔴
+#### Sub-phase 3a: `INVALIDATE` namespace rename 🟢
 
-- Task: Rename `Symbol.for("schema:invalidate")` to `Symbol.for("kyneta:invalidate")` in `src/interpreters/with-caching.ts`. 🔴
-- Task: Update the `INVALIDATE` symbol identity test in `src/__tests__/with-caching.test.ts` to expect `Symbol.for("kyneta:invalidate")`. 🔴
-- Task: Update JSDoc comments in `with-caching.ts` and `bottom.ts` that reference the old symbol string. 🔴
-- Task: Update `TECHNICAL.md` symbol table to show `kyneta:invalidate`. 🔴
+- Task: Rename `Symbol.for("schema:invalidate")` to `Symbol.for("kyneta:invalidate")` in `src/interpreters/with-caching.ts`. 🟢
+- Task: Update the `INVALIDATE` symbol identity test in `src/__tests__/with-caching.test.ts` to expect `Symbol.for("kyneta:invalidate")`. 🟢
+- Task: Update JSDoc comments in `with-caching.ts` and `bottom.ts` that reference the old symbol string. 🟢
+- Task: Update `TECHNICAL.md` symbol table to show `kyneta:invalidate`. 🟢
 
-#### Sub-phase 3b: `withWritable` attaches `[TRANSACT]` 🔴
+#### Sub-phase 3b: `withWritable` attaches `[TRANSACT]` 🟢
 
-- Task: In `withWritable`, attach `[TRANSACT]` as a non-enumerable symbol property on every ref produced: scalar, product, sequence, map, and annotated cases. Use `Object.defineProperty` (not assignment) to bypass Proxy `set` traps on map refs. The value is `ctx` (the `WritableContext`). 🔴
-- Task: Tests: `ref[TRANSACT] === ctx` for scalar, product, sequence, map, and annotated refs. `TRANSACT` does not appear in `Object.keys()`. Works on Proxy-backed map refs. 🔴
+- Task: In `withWritable`, attach `[TRANSACT]` as a non-enumerable symbol property on every ref produced: scalar, product, sequence, map, and annotated cases. Use `Object.defineProperty` (not assignment) to bypass Proxy `set` traps on map refs. The value is `ctx` (the `WritableContext`). 🟢
+- Task: Tests: `ref[TRANSACT] === ctx` for scalar, product, sequence, map, and annotated refs. `TRANSACT` does not appear in `Object.keys()`. Works on Proxy-backed map refs. 🟢
 
 #### Sub-phase 3c: Delete old `withChangefeed` decorator and `enrich` combinator 🔴
 
@@ -416,11 +416,11 @@ Gains overloaded `interpret` signature (builder path) and `InterpreterLayer` / `
 ### `interpreters/writable.ts`
 
 Phase 2 (done): `WritableContext` replaced with transaction API. `TRANSACT` symbol added.
-Phase 3b (pending): `withWritable` gains `[TRANSACT]` attachment on all refs via `Object.defineProperty`. This is a small addition to each case — the existing mutation method attachment is unchanged.
+Phase 3b (done): `withWritable` gains `[TRANSACT]` attachment on all refs via `Object.defineProperty`. Each case calls `attachTransact(result, ctx)` — a helper that uses `Object.defineProperty` with `enumerable: false` to bypass Proxy `set` traps on map refs. 12 new tests in `writable.test.ts` verify identity, non-enumerability, and Proxy compatibility.
 
 ### `interpreters/with-caching.ts`
 
-Phase 3a (pending): `INVALIDATE` symbol string renamed from `"schema:invalidate"` to `"kyneta:invalidate"`. Pure string change, no structural modifications.
+Phase 3a (done): `INVALIDATE` symbol string renamed from `"schema:invalidate"` to `"kyneta:invalidate"`. Pure string change, no structural modifications.
 
 ### `interpreters/with-changefeed.ts`
 
