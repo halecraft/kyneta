@@ -14,4 +14,13 @@
  * @packageDocumentation
  */
 
-export { farmPlugin as default, type KynetaPluginOptions } from "../index.js"
+import type { JsPlugin } from "@farmfe/core"
+import { createFarmPlugin } from "unplugin"
+import { unpluginFactory, type KynetaPluginOptions } from "../index.js"
+
+const farmPlugin: (options?: KynetaPluginOptions) => JsPlugin =
+  createFarmPlugin(unpluginFactory)
+
+export default farmPlugin
+
+export type { KynetaPluginOptions }

@@ -163,24 +163,3 @@ export const unpluginFactory: UnpluginFactory<
  * Most consumers should use the bundler-specific exports below instead.
  */
 export const unplugin = /* #__PURE__ */ createUnplugin(unpluginFactory)
-
-// ---------------------------------------------------------------------------
-// Bundler-specific exports
-// ---------------------------------------------------------------------------
-
-/** Vite plugin for Kyneta. */
-export const vitePlugin = unplugin.vite
-/** Bun plugin for Kyneta. */
-export const bunPlugin = unplugin.bun
-/** Farm plugin for Kyneta. */
-export const farmPlugin = unplugin.farm
-/** Rollup plugin for Kyneta. */
-export const rollupPlugin = unplugin.rollup
-/** Rolldown plugin for Kyneta. */
-export const rolldownPlugin = unplugin.rolldown
-/** esbuild plugin for Kyneta. */
-export const esbuildPlugin = unplugin.esbuild
-/** webpack plugin for Kyneta. */
-export const webpackPlugin = unplugin.webpack
-/** Rspack plugin for Kyneta. */
-export const rspackPlugin = unplugin.rspack

@@ -195,15 +195,17 @@ New subpath exports in `package.json`:
 
 The `./vite` export remains for backward compatibility, re-exporting from `./unplugin/vite`.
 
-### Phase 5: unplugin — Integration Tests 🔴
+### Phase 5: unplugin — Integration Tests ✅
 
 Each integration test validates the full pipeline: source code with builder patterns → plugin transform → verify compiled output contains the expected runtime calls (`listRegion`, `textRegion`, `conditionalRegion`, etc.) and does NOT contain raw builder calls.
 
-- **Task 5.1**: Create `packages/core/src/unplugin/__tests__/vite.test.ts` — integration test using unplugin's Vite adapter 🔴
-- **Task 5.2**: Create `packages/core/src/unplugin/__tests__/bun.test.ts` — integration test using unplugin's Bun adapter via `Bun.build()` 🔴
-- **Task 5.3**: Create `packages/core/src/unplugin/__tests__/farm.test.ts` — integration test using unplugin's Farm adapter 🔴
-- **Task 5.4**: Create shared test fixture: a `.ts` file with builder patterns, a `.ts` file without (control), and expected output assertions 🔴
-- **Task 5.5**: Run full test suite 🔴
+- **Task 5.1**: Create `packages/core/src/unplugin/__tests__/vite.test.ts` — integration test using unplugin's Vite adapter ✅
+- **Task 5.2**: Create `packages/core/src/unplugin/__tests__/bun.test.ts` — integration test using unplugin's Bun adapter via `Bun.build()` ✅
+- **Task 5.3**: Create `packages/core/src/unplugin/__tests__/farm.test.ts` — integration test using unplugin's Farm adapter ✅
+- **Task 5.4**: Create shared test fixture: a `.ts` file with builder patterns, a `.ts` file without (control), and expected output assertions ✅
+- **Task 5.5**: Run full test suite ✅ (869 tests: 844 original + 25 new)
+- **Bonus**: Created `packages/core/src/unplugin/__tests__/transform.test.ts` — 14 tests for the universal transform handler code path (used by all non-Vite bundlers)
+- **Bonus**: Added `@farmfe/core` as a devDependency for real Farm integration tests
 
 Test shape for each target:
 
@@ -230,12 +232,12 @@ it("skips files without builder patterns", async () => {
 
 The Bun test requires `bun` to be available; it can be skipped in CI environments without Bun via a conditional `describe.skipIf`. Similarly, Farm requires `@farmfe/core` as a devDependency.
 
-### Phase 6: Cleanup & Verification 🔴
+### Phase 6: Cleanup & Verification ✅
 
-- **Task 6.1**: Grep entire codebase for remaining `kinetic` references (case-insensitive) outside `.plans/` and `node_modules/` — should be zero 🔴
-- **Task 6.2**: Verify `@kyneta/core/vite` backward-compat export works (import the old path, get a working plugin) 🔴
-- **Task 6.3**: Run full test suites for `packages/schema` and `packages/core` 🔴
-- **Task 6.4**: Build both packages (`tsup`) and verify exports resolve 🔴
+- **Task 6.1**: Grep entire codebase for remaining `kinetic` references (case-insensitive) outside `.plans/` and `node_modules/` — zero results ✅
+- **Task 6.2**: Verify `@kyneta/core/vite` backward-compat export works (import the old path, get a working plugin) ✅
+- **Task 6.3**: Run full test suites for `packages/schema` (538) and `packages/core` (869) ✅
+- **Task 6.4**: Build both packages (`tsup`) and verify all 13 subpath exports resolve ✅
 
 ## Transitive Effect Analysis
 

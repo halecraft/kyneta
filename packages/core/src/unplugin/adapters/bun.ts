@@ -16,4 +16,8 @@
  * @packageDocumentation
  */
 
-export { bunPlugin as default, type KynetaPluginOptions } from "../index.js"
+import { createBunPlugin } from "unplugin"
+import { unpluginFactory, type KynetaPluginOptions } from "../index.js"
+
+export default createBunPlugin(unpluginFactory)
+export type { KynetaPluginOptions }

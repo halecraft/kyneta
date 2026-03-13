@@ -14,4 +14,9 @@
  * @packageDocumentation
  */
 
-export { vitePlugin as default, type KynetaPluginOptions } from "../index.js"
+import { createVitePlugin } from "unplugin"
+import { unpluginFactory, type KynetaPluginOptions } from "../index.js"
+
+export default createVitePlugin(unpluginFactory)
+
+export type { KynetaPluginOptions }
