@@ -14,7 +14,6 @@
  */
 
 import jsBeautify from "js-beautify"
-import type { LoroDoc } from "loro-crdt"
 
 import {
   escapeHtml,
@@ -23,7 +22,7 @@ import {
 } from "../compiler/html-constants.js"
 
 // Re-export escapeHtml for public API compatibility
-// (users may import from "@loro-extended/kinetic/server")
+// (users may import from "@kyneta/core/server")
 export { escapeHtml, isVoidElement }
 
 // =============================================================================
@@ -37,7 +36,7 @@ export interface SSRContext {
   /**
    * The Loro document containing the data to render.
    */
-  doc: LoroDoc | unknown
+  doc: unknown
 
   /**
    * Counter for generating unique hydration marker IDs.
@@ -298,7 +297,7 @@ export function renderConditional(
  */
 export function executeRender(
   renderFn: SSRRenderFunction,
-  doc: LoroDoc | unknown,
+  doc: unknown,
   options: RenderToStringOptions = {},
 ): string {
   const ctx: SSRContext = {
@@ -362,7 +361,7 @@ export function createRenderFunction(
  */
 export function renderToString(
   renderFn: SSRRenderFunction,
-  doc: LoroDoc | unknown,
+  doc: unknown,
   options: RenderToStringOptions = {},
 ): string {
   return executeRender(renderFn, doc, options)
@@ -380,7 +379,7 @@ export function renderToString(
  */
 export function renderToDocument(
   renderFn: SSRRenderFunction,
-  doc: LoroDoc | unknown,
+  doc: unknown,
   options: RenderToStringOptions & {
     /** Document title */
     title?: string

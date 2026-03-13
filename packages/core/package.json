@@ -33,11 +33,6 @@
 			"import": "./dist/server/index.js",
 			"default": "./dist/server/index.js"
 		},
-		"./loro": {
-			"types": "./dist/loro/index.d.ts",
-			"import": "./dist/loro/index.js",
-			"default": "./dist/loro/index.js"
-		},
 		"./runtime": {
 			"types": "./dist/runtime/index.d.ts",
 			"import": "./dist/runtime/index.js",
@@ -64,15 +59,11 @@
 		"js-beautify": "^1.15.4",
 		"ts-morph": "^25.0.0"
 	},
-	"peerDependencies": {
-		"loro-crdt": "^1.10.6"
-	},
 	"devDependencies": {
 		"@types/js-beautify": "^1.14.3",
 		"@types/jsdom": "^21.1.7",
 		"@typescript/native-preview": "7.0.0-dev.20260103.1",
 		"jsdom": "^26.1.0",
-		"loro-crdt": "^1.10.6",
 		"tsup": "^8.5.0",
 		"typescript": "^5.9.2",
 		"vite": "^6.1.1",

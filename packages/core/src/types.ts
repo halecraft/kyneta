@@ -5,29 +5,7 @@
  * understands without compilation.
  */
 
-import type {
-  CounterRef,
-  ListRef,
-  MovableListRef,
-  PlainValueRef,
-  RecordRef,
-  StructRef,
-  TextRef,
-  TreeRef,
-} from "@loro-extended/change"
-import type { Reactive } from "@loro-extended/reactive"
-
-/**
- * Union of all typed ref types that can be used with bind().
- */
-type AnyTypedRef =
-  | TextRef
-  | CounterRef
-  | ListRef<any>
-  | MovableListRef<any>
-  | RecordRef<any>
-  | StructRef<any>
-  | TreeRef<any>
+import type { HasChangefeed } from "@kyneta/schema"
 
 // =============================================================================
 // Element Types
@@ -113,35 +91,8 @@ export type Child =
   | null
   | undefined
   | Element
-  | Binding<unknown>
+  | HasChangefeed
   | Node
-  | Reactive<any, any>
-
-// =============================================================================
-// Binding Types
-// =============================================================================
-
-/**
- * A Binding connects a Loro ref to a DOM input for two-way data flow.
- * Created with `bind(ref)`.
- */
-export interface Binding<T> {
-  readonly __brand: "kinetic:binding"
-  readonly ref: PlainValueRef<T> | AnyTypedRef
-}
-
-/**
- * Create a two-way binding for a Loro ref.
- * Use with input elements to sync value with CRDT state.
- *
- * @example
- * ```ts
- * input({ type: "text", value: bind(doc.title) })
- * ```
- */
-export type BindFunction = <T>(
-  ref: PlainValueRef<T> | AnyTypedRef,
-) => Binding<T>
 
 // =============================================================================
 // Element Factory Types

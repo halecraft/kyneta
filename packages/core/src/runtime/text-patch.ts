@@ -73,7 +73,7 @@ export type TextPatchOp =
  * // → [{ kind: "delete", offset: 2, count: 3 }]
  * ```
  */
-export function planTextPatch(ops: TextChangeOp[]): TextPatchOp[] {
+export function planTextPatch(ops: readonly TextChangeOp[]): TextPatchOp[] {
   const result: TextPatchOp[] = []
   let cursor = 0
 
@@ -116,7 +116,7 @@ export function planTextPatch(ops: TextChangeOp[]): TextPatchOp[] {
  * // text.textContent === "Hello World"
  * ```
  */
-export function patchText(textNode: Text, ops: TextChangeOp[]): void {
+export function patchText(textNode: Text, ops: readonly TextChangeOp[]): void {
   const patchOps = planTextPatch(ops)
 
   for (const op of patchOps) {
@@ -158,7 +158,7 @@ export function patchText(textNode: Text, ops: TextChangeOp[]): void {
  */
 export function patchInputValue(
   input: HTMLInputElement | HTMLTextAreaElement,
-  ops: TextChangeOp[],
+  ops: readonly TextChangeOp[],
   selectMode: "preserve" | "end" = "preserve",
 ): void {
   const patchOps = planTextPatch(ops)

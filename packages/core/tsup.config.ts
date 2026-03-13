@@ -6,7 +6,6 @@ export default defineConfig({
     "compiler/index": "src/compiler/index.ts",
     "vite/plugin": "src/vite/plugin.ts",
     "server/index": "src/server/index.ts",
-    "loro/index": "src/loro/index.ts",
     "runtime/index": "src/runtime/index.ts",
     "testing/index": "src/testing/index.ts",
   },
@@ -14,5 +13,4 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  external: ["@loro-extended/change", "loro-crdt"],
 })

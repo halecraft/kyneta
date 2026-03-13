@@ -284,7 +284,7 @@ export function planInitialRender<T>(
  */
 export function planDeltaOps<T>(
   listRef: ListRefLike<T>,
-  deltaOps: SequenceChangeOp<unknown>[],
+  deltaOps: readonly SequenceChangeOp<unknown>[],
 ): ListRegionOp<T>[] {
   const ops: ListRegionOp<T>[] = []
   let index = 0
