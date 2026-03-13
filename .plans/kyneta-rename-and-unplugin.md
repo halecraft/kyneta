@@ -109,14 +109,14 @@ These affect TypeScript API surface. The old names get deprecated re-exports.
 
 Plan documents in `.plans/` and `packages/core/.plans/` are historical records and will NOT be renamed. They reflect the state of the world at the time they were written.
 
-### Phase 4: unplugin — Core Plugin 🔴
+### Phase 4: unplugin — Core Plugin ✅
 
-- **Task 4.1**: Add `unplugin` as a dependency of `@kyneta/core` 🔴
-- **Task 4.2**: Create `packages/core/src/unplugin/index.ts` — the universal plugin factory 🔴
-- **Task 4.3**: Create `packages/core/src/unplugin/transform.ts` — extract the host-agnostic transform logic from the Vite plugin into a shared module 🔴
-- **Task 4.4**: Create `packages/core/src/unplugin/filter.ts` — extract `shouldTransform` into a shared module 🔴
-- **Task 4.5**: Rewrite `packages/core/src/vite/plugin.ts` as a thin re-export from the unplugin adapter 🔴
-- **Task 4.6**: Add subpath exports to `packages/core/package.json` 🔴
+- **Task 4.1**: Add `unplugin` as a dependency of `@kyneta/core` ✅
+- **Task 4.2**: Create `packages/core/src/unplugin/index.ts` — the universal plugin factory ✅
+- **Task 4.3**: Create `packages/core/src/unplugin/transform.ts` — extract the host-agnostic transform logic from the Vite plugin into a shared module ✅
+- **Task 4.4**: Create `packages/core/src/unplugin/filter.ts` — extract `shouldTransform` into a shared module ✅
+- **Task 4.5**: Rewrite `packages/core/src/vite/plugin.ts` as a thin re-export from the unplugin adapter ✅
+- **Task 4.6**: Add subpath exports to `packages/core/package.json` ✅
 
 The unplugin factory:
 

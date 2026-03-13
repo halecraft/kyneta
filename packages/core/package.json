@@ -23,6 +23,41 @@
 			"import": "./dist/compiler/index.js",
 			"default": "./dist/compiler/index.js"
 		},
+		"./unplugin": {
+			"types": "./dist/unplugin/index.d.ts",
+			"import": "./dist/unplugin/index.js",
+			"default": "./dist/unplugin/index.js"
+		},
+		"./unplugin/vite": {
+			"types": "./dist/unplugin/adapters/vite.d.ts",
+			"import": "./dist/unplugin/adapters/vite.js",
+			"default": "./dist/unplugin/adapters/vite.js"
+		},
+		"./unplugin/bun": {
+			"types": "./dist/unplugin/adapters/bun.d.ts",
+			"import": "./dist/unplugin/adapters/bun.js",
+			"default": "./dist/unplugin/adapters/bun.js"
+		},
+		"./unplugin/farm": {
+			"types": "./dist/unplugin/adapters/farm.d.ts",
+			"import": "./dist/unplugin/adapters/farm.js",
+			"default": "./dist/unplugin/adapters/farm.js"
+		},
+		"./unplugin/rollup": {
+			"types": "./dist/unplugin/adapters/rollup.d.ts",
+			"import": "./dist/unplugin/adapters/rollup.js",
+			"default": "./dist/unplugin/adapters/rollup.js"
+		},
+		"./unplugin/rolldown": {
+			"types": "./dist/unplugin/adapters/rolldown.d.ts",
+			"import": "./dist/unplugin/adapters/rolldown.js",
+			"default": "./dist/unplugin/adapters/rolldown.js"
+		},
+		"./unplugin/esbuild": {
+			"types": "./dist/unplugin/adapters/esbuild.d.ts",
+			"import": "./dist/unplugin/adapters/esbuild.js",
+			"default": "./dist/unplugin/adapters/esbuild.js"
+		},
 		"./vite": {
 			"types": "./dist/vite/plugin.d.ts",
 			"import": "./dist/vite/plugin.js",
@@ -57,7 +92,8 @@
 	"dependencies": {
 		"@kyneta/schema": "workspace:^",
 		"js-beautify": "^1.15.4",
-		"ts-morph": "^25.0.0"
+		"ts-morph": "^25.0.0",
+		"unplugin": "^3.0.0"
 	},
 	"devDependencies": {
 		"@types/js-beautify": "^1.14.3",

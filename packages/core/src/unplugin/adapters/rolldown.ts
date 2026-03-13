@@ -1,0 +1,1 @@
+export { rolldownPlugin as default } from "../index.js"
