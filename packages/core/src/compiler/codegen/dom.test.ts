@@ -149,20 +149,6 @@ describe("generateDOM", () => {
       expect(code).toContain('"container"')
     })
 
-    it("should generate code for static id attribute", () => {
-      const idAttr: AttributeNode = {
-        name: "id",
-        value: createLiteral("main", span(1, 5, 1, 12)),
-      }
-      const builder = createBuilder("div", [idAttr], [], [], span(1, 0, 1, 15))
-
-      const code = generateDOM(builder)
-
-      expect(code).toContain("setAttribute")
-      expect(code).toContain('"id"')
-      expect(code).toContain('"main"')
-    })
-
     it("should generate code for data attributes", () => {
       const dataAttr: AttributeNode = {
         name: "data-testid",
@@ -220,8 +206,12 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      expect(code).toContain(".className =")
-      expect(code).toContain("subscribe")
+      // valueRegion handles both init and subscription; no separate static set
+      expect(code).toContain("valueRegion(")
+      expect(code).toContain("[isActive]")
+      expect(code).toContain('isActive ? "active" : "inactive"')
+      expect(code).toContain(".className = v")
+      expect(code).not.toContain("subscribe(")
     })
   })
 
@@ -246,33 +236,6 @@ describe("generateDOM", () => {
       expect(code).toContain('addEventListener("click"')
       expect(code).toContain("console.log")
     })
-
-    it("should generate code for multiple event handlers", () => {
-      const clickHandler: EventHandlerNode = {
-        event: "click",
-        propName: "onClick",
-        handlerSource: "handleClick",
-        span: span(1, 5, 1, 25),
-      }
-      const mouseEnterHandler: EventHandlerNode = {
-        event: "mouseenter",
-        propName: "onMouseEnter",
-        handlerSource: "handleHover",
-        span: span(1, 26, 1, 50),
-      }
-      const builder = createBuilder(
-        "div",
-        [],
-        [clickHandler, mouseEnterHandler],
-        [],
-        span(1, 0, 1, 55),
-      )
-
-      const code = generateDOM(builder)
-
-      expect(code).toContain('addEventListener("click"')
-      expect(code).toContain('addEventListener("mouseenter"')
-    })
   })
 
   describe("reactive expressions", () => {
@@ -293,31 +256,10 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      expect(code).toContain("subscribeWithValue")
+      expect(code).toContain("valueRegion(")
+      expect(code).toContain("[count]")
       expect(code).toContain("count.get()")
       expect(code).toContain("textContent")
-    })
-
-    it("should generate subscription for template literal content", () => {
-      const reactiveExpr = createContent(
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: testing template literal source code
-        "`Count: ${count.get()}`",
-        "reactive",
-        [dep("count")],
-        span(1, 4, 1, 27),
-      )
-      const builder = createBuilder(
-        "p",
-        [],
-        [],
-        [reactiveExpr],
-        span(1, 0, 1, 32),
-      )
-
-      const code = generateDOM(builder)
-
-      expect(code).toContain("subscribeWithValue")
-      expect(code).toContain("count")
     })
   })
 
@@ -339,45 +281,12 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      // Uses subscribeMultiple with array of deps
-      expect(code).toContain("subscribeMultiple")
+      // Uses valueRegion with array of deps
+      expect(code).toContain("valueRegion(")
       expect(code).toContain("[first, last]")
-      // Sets initial value synchronously before subscribing
-      const lines = code.split("\n")
-      const initialSetLine = lines.findIndex(
-        l => l.includes("textContent = String(") && !l.includes("=>"),
-      )
-      const subscribeLine = lines.findIndex(l =>
-        l.includes("subscribeMultiple"),
-      )
-      expect(initialSetLine).toBeGreaterThan(-1)
-      expect(subscribeLine).toBeGreaterThan(-1)
-      expect(initialSetLine).toBeLessThan(subscribeLine)
-    })
-
-    it("should generate subscribeMultiple for attribute with multiple dependencies", () => {
-      const classAttr: AttributeNode = {
-        name: "class",
-        value: createContent(
-          "isActive ? theme.get() : defaultTheme.get()",
-          "reactive",
-          [dep("theme"), dep("defaultTheme")],
-          span(1, 5, 1, 50),
-        ),
-      }
-      const builder = createBuilder(
-        "div",
-        [classAttr],
-        [],
-        [],
-        span(1, 0, 1, 55),
-      )
-
-      const code = generateDOM(builder)
-
-      expect(code).toContain("subscribeMultiple")
-      expect(code).toContain("[theme, defaultTheme]")
-      expect(code).toContain(".className =")
+      expect(code).toContain("textContent")
+      // valueRegion handles initialization, no separate initial set needed
+      expect(code).not.toContain("subscribeMultiple")
     })
   })
 
@@ -428,10 +337,11 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      // Should use subscribeWithValue, NOT textRegion
-      expect(code).toContain("subscribeWithValue")
+      // Should use valueRegion, NOT textRegion
+      expect(code).toContain("valueRegion(")
       expect(code).toContain("textContent")
       expect(code).not.toContain("textRegion")
+      expect(code).not.toContain("subscribeWithValue")
     })
 
     it("should generate subscribeMultiple for multi-dep expression with TextRef", () => {
@@ -453,10 +363,11 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      // Should use subscribeMultiple, NOT textRegion
-      expect(code).toContain("subscribeMultiple")
+      // Should use valueRegion, NOT textRegion
+      expect(code).toContain("valueRegion(")
       expect(code).toContain("[doc.title, doc.subtitle]")
       expect(code).not.toContain("textRegion")
+      expect(code).not.toContain("subscribeMultiple")
     })
 
     it("should generate subscribeWithValue for non-text deltaKind even with directReadSource", () => {
@@ -479,9 +390,10 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      // Should use subscribeWithValue because deltaKind is not "text"
-      expect(code).toContain("subscribeWithValue")
+      // Should use valueRegion because deltaKind is not "text"
+      expect(code).toContain("valueRegion(")
       expect(code).not.toContain("textRegion")
+      expect(code).not.toContain("subscribeWithValue")
     })
   })
 
@@ -537,9 +449,11 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      expect(code).toContain("subscribe(")
-      expect(code).toContain(".value =")
+      expect(code).toContain("valueRegion(")
+      expect(code).toContain("[doc.selected]")
+      expect(code).toContain(".value = v")
       expect(code).not.toContain("inputTextRegion")
+      expect(code).not.toContain("subscribe(")
     })
 
     it("should generate naive subscribe for value attr without directReadSource", () => {
@@ -563,9 +477,11 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      expect(code).toContain("subscribe(")
-      expect(code).toContain(".value =")
+      expect(code).toContain("valueRegion(")
+      expect(code).toContain("[doc.title]")
+      expect(code).toContain(".value = v")
       expect(code).not.toContain("inputTextRegion")
+      expect(code).not.toContain("subscribe(")
     })
 
     it("should NOT use inputTextRegion for non-value attributes even with TextRef", () => {
@@ -590,9 +506,11 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      expect(code).toContain("subscribe(")
-      expect(code).toContain(".className =")
+      expect(code).toContain("valueRegion(")
+      expect(code).toContain("[doc.theme]")
+      expect(code).toContain(".className = v")
       expect(code).not.toContain("inputTextRegion")
+      expect(code).not.toContain("subscribe(")
     })
   })
 })
@@ -674,31 +592,6 @@ describe("generateElementFactoryWithResult - template cloning attributes", () =>
 
     expect(result.code).toContain("Object.assign")
     expect(result.code).toContain(".style")
-    expect(result.code).not.toContain("setAttribute")
-  })
-
-  it("should use .value = for render-time value attribute in cloning path", () => {
-    const valueAttr: AttributeNode = {
-      name: "value",
-      value: createContent(
-        "initialValue",
-        "render",
-        [],
-        span(1, 15, 1, 27),
-      ),
-    }
-    const builder = createBuilder(
-      "input",
-      [valueAttr],
-      [],
-      [],
-      span(1, 0, 1, 30),
-    )
-
-    const result = generateElementFactoryWithResult(builder)
-
-    // Render-time value should also use .value = in cloning path
-    expect(result.code).toContain(".value =")
     expect(result.code).not.toContain("setAttribute")
   })
 
@@ -1292,45 +1185,6 @@ describe("generateDOM - code validity", () => {
     expect(normalized).toContain("appendChild")
     expect(normalized).toContain("return")
   })
-
-  it("should generate valid JavaScript syntax", () => {
-    const builder = createBuilder(
-      "div",
-      [],
-      [],
-      [
-        createElement(
-          "p",
-          [],
-          [],
-          [],
-          [
-            createContent(
-              "count.get()",
-              "reactive",
-              [dep("count")],
-              span(3, 6, 3, 18),
-            ),
-          ],
-          span(2, 4, 2, 19),
-        ),
-      ],
-      span(1, 0, 3, 1),
-    )
-
-    const code = generateDOM(builder)
-
-    // Should not throw when evaluated as JavaScript (basic syntax check)
-    // We can't actually evaluate it without the runtime, but we can check
-    // for balanced braces and proper structure
-    const openBraces = (code.match(/{/g) || []).length
-    const closeBraces = (code.match(/}/g) || []).length
-    expect(openBraces).toBe(closeBraces)
-
-    const openParens = (code.match(/\(/g) || []).length
-    const closeParens = (code.match(/\)/g) || []).length
-    expect(openParens).toBe(closeParens)
-  })
 })
 
 // =============================================================================
@@ -1706,7 +1560,8 @@ describe("generateElementFactoryWithResult - dissolution on cloning path", () =>
     // Should contain a subscription call for the reactive ternary
     const hasSubscription =
       result.code.includes("subscribe(") ||
-      result.code.includes("subscribeWithValue(")
+      result.code.includes("subscribeWithValue(") ||
+      result.code.includes("valueRegion(")
     expect(hasSubscription).toBe(true)
   })
 

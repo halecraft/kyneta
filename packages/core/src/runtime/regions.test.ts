@@ -666,7 +666,7 @@ describe("regions", () => {
       conditionalRegion(
         marker,
         condRef,
-        () => condRef.get() > 0,
+        () => condRef() > 0,
         {
           whenTrue: () => {
             const p = document.createElement("p")
@@ -698,7 +698,7 @@ describe("regions", () => {
       conditionalRegion(
         marker,
         condRef,
-        () => condRef.get() > 0,
+        () => condRef() > 0,
         {
           whenTrue: () => {
             const p = document.createElement("p")
@@ -730,7 +730,7 @@ describe("regions", () => {
       conditionalRegion(
         marker,
         condRef,
-        () => condRef.get() > 0,
+        () => condRef() > 0,
         {
           whenTrue: () => {
             const p = document.createElement("p")
@@ -757,7 +757,7 @@ describe("regions", () => {
       conditionalRegion(
         marker,
         condRef,
-        () => condRef.get() > 0,
+        () => condRef() > 0,
         {
           whenTrue: () => {
             const p = document.createElement("p")
@@ -801,7 +801,7 @@ describe("regions", () => {
       conditionalRegion(
         marker,
         condRef,
-        () => condRef.get() > 0,
+        () => condRef() > 0,
         {
           whenTrue: () => {
             const p = document.createElement("p")
@@ -839,7 +839,7 @@ describe("regions", () => {
       conditionalRegion(
         marker,
         condRef,
-        () => condRef.get() > 0,
+        () => condRef() > 0,
         {
           whenTrue: () => {
             const p = document.createElement("p")
@@ -867,7 +867,7 @@ describe("regions", () => {
       conditionalRegion(
         marker,
         condRef,
-        () => condRef.get() > 0,
+        () => condRef() > 0,
         {
           whenTrue: () => {
             const frag = document.createDocumentFragment()

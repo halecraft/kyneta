@@ -15,6 +15,7 @@ import {
   type SequenceChangeOp,
   type TextChangeOp,
   replaceChange,
+  incrementChange,
 } from "@kyneta/schema"
 import { JSDOM } from "jsdom"
 import ts from "typescript"
@@ -23,10 +24,12 @@ import {
   conditionalRegion,
   inputTextRegion,
   listRegion,
+  read,
   subscribe,
   subscribeMultiple,
   subscribeWithValue,
   textRegion,
+  valueRegion,
   Scope,
 } from "../../runtime/index.js"
 import {
@@ -61,10 +64,12 @@ export {
   conditionalRegion,
   inputTextRegion,
   listRegion,
+  read,
   subscribe,
   subscribeMultiple,
   subscribeWithValue,
   textRegion,
+  valueRegion,
   Scope,
 }
 export {
@@ -123,21 +128,23 @@ type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T 
 type IncrementChange = { readonly type: "increment"; readonly amount: number }
 
 interface TextRef extends HasChangefeed<string, TextChange> {
+  (): string
   readonly [CHANGEFEED]: Changefeed<string, TextChange>
   insert(pos: number, text: string): void
   delete(pos: number, len: number): void
-  toString(): string
-  get(): string
+  [Symbol.toPrimitive](hint: string): string
 }
 
-interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> {
-  readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>
-  get(): number
+interface CounterRef extends HasChangefeed<number, IncrementChange> {
+  (): number
+  readonly [CHANGEFEED]: Changefeed<number, IncrementChange>
   increment(n: number): void
-  readonly value: CounterRef
+  decrement(n: number): void
+  [Symbol.toPrimitive](hint: string): number | string
 }
 
 interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {
+  (): T[]
   readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>
   readonly length: number
   at(index: number): T | undefined
@@ -145,15 +152,12 @@ interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {
   push(item: T): void
   insert(index: number, item: T): void
   delete(index: number, len?: number): void
-  set(index: number, value: T): void
-  toArray(): T[]
-  entries(): IterableIterator<[number, T]>
   [Symbol.iterator](): Iterator<T>
 }
 
 interface StructRef<T> extends HasChangefeed<T, MapChange> {
+  (): T
   readonly [CHANGEFEED]: Changefeed<T, MapChange>
-  get<K extends keyof T>(key: K): T[K]
 }
 `
 
@@ -267,6 +271,8 @@ export function getRuntimeDeps(): Record<string, unknown> {
     subscribe,
     subscribeMultiple,
     subscribeWithValue,
+    valueRegion,
+    read,
     listRegion,
     conditionalRegion,
     textRegion,
@@ -370,12 +376,7 @@ export function createMockTextRef(initial: string = ""): {
         cb({ type: "text", ops, origin: "local" } as ChangeBase)
       }
     },
-    toString(): string {
-      return content
-    },
-    get(): string {
-      return content
-    },
+
     get [CHANGEFEED](): Changefeed<string, ChangeBase> {
       return {
         get current(): string {
@@ -420,13 +421,10 @@ export function createMockCounterRef(initial: number = 0): {
     },
     increment(n: number): void {
       count += n
-      const change = replaceChange(count) as ChangeBase
+      const change = incrementChange(n) as ChangeBase
       for (const cb of subscribers) {
         cb(change)
       }
-    },
-    get value(): number {
-      return count
     },
     get [CHANGEFEED](): Changefeed<number, ChangeBase> {
       return {

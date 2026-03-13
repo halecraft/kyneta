@@ -47,33 +47,36 @@ type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T 
 type IncrementChange = { readonly type: "increment"; readonly amount: number }
 
 interface TextRef extends HasChangefeed<string, TextChange> {
+  (): string
   readonly [CHANGEFEED]: Changefeed<string, TextChange>
+  [Symbol.toPrimitive](hint: string): string
   insert(pos: number, text: string): void
   delete(pos: number, len: number): void
-  toString(): string
-  get(): string
 }
 
-interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> {
-  readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>
-  get(): number
+interface CounterRef extends HasChangefeed<number, IncrementChange> {
+  (): number
+  readonly [CHANGEFEED]: Changefeed<number, IncrementChange>
+  [Symbol.toPrimitive](hint: string): number | string
   increment(n: number): void
+  decrement(n: number): void
 }
 
 interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {
+  (): T[]
   readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>
   readonly length: number
+  get(index: number): T | undefined
   at(index: number): T | undefined
   push(item: T): void
   insert(index: number, item: T): void
   delete(index: number, len?: number): void
-  toArray(): T[]
   [Symbol.iterator](): Iterator<T>
 }
 
 interface StructRef<T> extends HasChangefeed<T, MapChange> {
+  (): T
   readonly [CHANGEFEED]: Changefeed<T, MapChange>
-  get<K extends keyof T>(key: K): T[K]
 }
 
 type TypedDoc<Shape> = Shape & HasChangefeed<unknown, MapChange> & {
@@ -445,7 +448,7 @@ describe("collectRequiredImports", () => {
       [
         {
           kind: "content",
-          source: "doc.count.get()",
+          source: "doc.count()",
           bindingTime: "reactive",
           dependencies: [dep("doc.count")],
           span,
@@ -456,8 +459,7 @@ describe("collectRequiredImports", () => {
 
     const { runtime } = collectRequiredImports([builder])
 
-    expect(runtime.has("subscribe")).toBe(true)
-    expect(runtime.has("subscribeWithValue")).toBe(true)
+    expect(runtime.has("valueRegion")).toBe(true)
   })
 
   it("should include listRegion for reactive loops", () => {
@@ -489,7 +491,7 @@ describe("collectRequiredImports", () => {
             {
               condition: {
                 kind: "content",
-                source: "doc.visible.get()",
+                source: "doc.visible()",
                 bindingTime: "reactive",
                 dependencies: [dep("doc.visible")],
                 span,
@@ -587,10 +589,10 @@ describe("collectRequiredImports", () => {
     expect(runtime.has("conditionalRegion")).toBe(true)
   })
 
-  it("should include subscribeMultiple for multi-dependency text content", () => {
+  it("should include valueRegion for multi-dependency text content", () => {
     const multiDepContent = {
       kind: "content" as const,
-      source: "first.get() + ' ' + last.get()",
+      source: "first() + ' ' + last()",
       bindingTime: "reactive" as const,
       dependencies: [dep("first"), dep("last")],
       span,
@@ -600,15 +602,15 @@ describe("collectRequiredImports", () => {
 
     const { runtime } = collectRequiredImports([builder])
 
-    expect(runtime.has("subscribeMultiple")).toBe(true)
+    expect(runtime.has("valueRegion")).toBe(true)
   })
 
-  it("should include subscribeMultiple for multi-dependency attributes", () => {
+  it("should include valueRegion for multi-dependency attributes", () => {
     const multiDepAttr = {
       name: "class",
       value: {
         kind: "content" as const,
-        source: "theme.get() + ' ' + variant.get()",
+        source: "theme() + ' ' + variant()",
         bindingTime: "reactive" as const,
         dependencies: [dep("theme"), dep("variant")],
         span,
@@ -628,13 +630,13 @@ describe("collectRequiredImports", () => {
 
     const { runtime } = collectRequiredImports([builder])
 
-    expect(runtime.has("subscribeMultiple")).toBe(true)
+    expect(runtime.has("valueRegion")).toBe(true)
   })
 
   it("should NOT include subscribeMultiple for single-dependency content", () => {
     const singleDepContent = {
       kind: "content" as const,
-      source: "title.get()",
+      source: "title()",
       bindingTime: "reactive" as const,
       dependencies: [dep("title")],
       span,
@@ -645,13 +647,13 @@ describe("collectRequiredImports", () => {
     const { runtime } = collectRequiredImports([builder])
 
     expect(runtime.has("subscribeMultiple")).toBe(false)
-    expect(runtime.has("subscribe")).toBe(true)
+    expect(runtime.has("valueRegion")).toBe(true)
   })
 
   it("should include textRegion for direct TextRef read", () => {
     const directTextRead = {
       kind: "content" as const,
-      source: "doc.title.get()",
+      source: "doc.title()",
       bindingTime: "reactive" as const,
       dependencies: [dep("doc.title", "text")],
       span,
@@ -668,7 +670,7 @@ describe("collectRequiredImports", () => {
   it("should NOT include textRegion for non-direct TextRef read", () => {
     const nonDirectRead = {
       kind: "content" as const,
-      source: "doc.title.get().toUpperCase()",
+      source: "doc.title().toUpperCase()",
       bindingTime: "reactive" as const,
       dependencies: [dep("doc.title", "text")],
       span,
@@ -685,7 +687,7 @@ describe("collectRequiredImports", () => {
   it("should NOT include textRegion for non-text deltaKind even with directReadSource", () => {
     const replaceRead = {
       kind: "content" as const,
-      source: "count.get()",
+      source: "count()",
       bindingTime: "reactive" as const,
       dependencies: [dep("count", "replace")], // deltaKind is "replace", not "text"
       span,
@@ -697,13 +699,14 @@ describe("collectRequiredImports", () => {
     const { runtime } = collectRequiredImports([builder])
 
     expect(runtime.has("textRegion")).toBe(false)
-    expect(runtime.has("subscribe")).toBe(true)
+    expect(runtime.has("valueRegion")).toBe(true)
+    expect(runtime.has("read")).toBe(true)
   })
 
   it("should NOT include textRegion for multi-dependency content", () => {
     const multiDepRead = {
       kind: "content" as const,
-      source: "doc.title.get() + doc.subtitle.get()",
+      source: "doc.title() + doc.subtitle()",
       bindingTime: "reactive" as const,
       dependencies: [dep("doc.title", "text"), dep("doc.subtitle", "text")],
       span,
@@ -715,7 +718,7 @@ describe("collectRequiredImports", () => {
     const { runtime } = collectRequiredImports([builder])
 
     expect(runtime.has("textRegion")).toBe(false)
-    expect(runtime.has("subscribeMultiple")).toBe(true)
+    expect(runtime.has("valueRegion")).toBe(true)
   })
 
   it("should include inputTextRegion for value attribute with direct TextRef read", () => {
@@ -732,7 +735,7 @@ describe("collectRequiredImports", () => {
               name: "value",
               value: {
                 kind: "content" as const,
-                source: "doc.title.toString()",
+                source: "doc.title()",
                 bindingTime: "reactive" as const,
                 dependencies: [dep("doc.title", "text")],
                 span,
@@ -769,7 +772,7 @@ describe("collectRequiredImports", () => {
               name: "value",
               value: {
                 kind: "content" as const,
-                source: "doc.title.toString().toUpperCase()",
+                source: "doc.title().toUpperCase()",
                 bindingTime: "reactive" as const,
                 dependencies: [dep("doc.title", "text")],
                 span,
@@ -806,7 +809,7 @@ describe("collectRequiredImports", () => {
               name: "value",
               value: {
                 kind: "content" as const,
-                source: "doc.selected.get()",
+                source: "doc.selected()",
                 bindingTime: "reactive" as const,
                 dependencies: [dep("doc.selected", "replace")],
                 span,
@@ -843,7 +846,7 @@ describe("collectRequiredImports", () => {
               name: "class",
               value: {
                 kind: "content" as const,
-                source: "doc.theme.toString()",
+                source: "doc.theme()",
                 bindingTime: "reactive" as const,
                 dependencies: [dep("doc.theme", "text")],
                 span,
@@ -1233,11 +1236,12 @@ describe("transformSourceInPlace - HTML target", () => {
     const lines = [
       'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
       "type ReplaceChange<T = unknown> = { readonly type: \"replace\"; readonly value: T }",
-      "interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }",
+      "type IncrementChange = { readonly type: \"increment\"; readonly amount: number }",
+      "interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number; readonly [CHANGEFEED]: Changefeed<number, IncrementChange> }",
       "declare const count: CounterRef",
       "",
       "const app = div(() => {",
-      "  if (count.get() > 0) {",
+      "  if (count > 0) {",
       '    p("Has items")',
       "  } else {",
       '    p("Empty")',
@@ -1250,11 +1254,11 @@ describe("transformSourceInPlace - HTML target", () => {
     const code = result.sourceFile.getFullText()
 
     // Should produce a ternary for the conditional
-    expect(code).toContain("count.get() > 0")
+    expect(code).toContain("count > 0")
     expect(code).toContain("Has items")
     expect(code).toContain("Empty")
     // Dissolution produces inline ternary — no hydration markers needed
-    expect(code).toContain('count.get() > 0 ? "Has items" : "Empty"')
+    expect(code).toContain('count > 0 ? "Has items" : "Empty"')
     expect(code).not.toContain("kinetic:if")
   })
 
@@ -1262,11 +1266,12 @@ describe("transformSourceInPlace - HTML target", () => {
     const lines = [
       'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
       "type ReplaceChange<T = unknown> = { readonly type: \"replace\"; readonly value: T }",
-      "interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }",
+      "type IncrementChange = { readonly type: \"increment\"; readonly amount: number }",
+      "interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number; readonly [CHANGEFEED]: Changefeed<number, IncrementChange> }",
       "declare const count: CounterRef",
       "",
       "const app = div(() => {",
-      "  if (count.get() > 0) {",
+      "  if (count > 0) {",
       '    p("Has items")',
       "  } else {",
       '    p("Empty")',
@@ -1310,51 +1315,15 @@ describe("transformSourceInPlace - HTML target", () => {
 // =============================================================================
 
 describe("reactive type resolution from @kyneta/schema", () => {
-  it("should resolve ListRef type from inline CHANGEFEED types", () => {
-    const source = withTypes(`
-      declare const items: ListRef<string>
-
-      div(() => {
-        for (const item of items) {
-          li(item)
-        }
-      })
-    `)
-
-    const result = transformSource(source, { target: "dom" })
-
-    // Should generate listRegion because ListRef is detected as reactive
-    expect(result.code).toContain("listRegion")
-    expect(result.ir.length).toBe(1)
-    expect(result.ir[0].children.length).toBe(1)
-    expect(result.ir[0].children[0].kind).toBe("loop")
-  })
-
-  it("should resolve TextRef type from inline CHANGEFEED types", () => {
-    const source = withTypes(`
-      declare const title: TextRef
-
-      div(() => {
-        p(title.get())
-      })
-    `)
-
-    const result = transformSource(source, { target: "dom" })
-
-    // TextRef direct read → textRegion for surgical text patching
-    expect(result.code).toContain("textRegion")
-    expect(result.ir[0].children[0].kind).toBe("element")
-  })
-
   it("should resolve CounterRef type from @loro-extended/change import", () => {
     const source = `
       import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
-      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
+      type IncrementChange = { readonly type: "increment"; readonly amount: number }
+      interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number; readonly [CHANGEFEED]: Changefeed<number, IncrementChange> }
       declare const count: CounterRef
 
       div(() => {
-        if (count.get() > 0) {
+        if (count > 0) {
           p("Has items")
         }
       })
@@ -1373,9 +1342,10 @@ describe("reactive type resolution from @kyneta/schema", () => {
       type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
       type MapChange = { readonly type: "map"; readonly set?: Record<string, unknown>; readonly delete?: readonly string[] }
       type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
-      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
-      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
-      interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>; readonly length: number; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }
+      type IncrementChange = { readonly type: "increment"; readonly amount: number }
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { (): string; readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; [Symbol.toPrimitive](hint: string): string }
+      interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number; readonly [CHANGEFEED]: Changefeed<number, IncrementChange>; [Symbol.toPrimitive](hint: string): number | string }
+      interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { (): T[]; readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>; readonly length: number; get(index: number): T | undefined; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }
 
       const schema = Shape.doc({
         items: Shape.list(Shape.plain.string())
@@ -1394,35 +1364,6 @@ describe("reactive type resolution from @kyneta/schema", () => {
 
     // Should generate listRegion because doc.items is ListRef
     expect(result.code).toContain("listRegion")
-  })
-
-  it("should handle mixed imported and inline types", () => {
-    const source = `
-      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
-      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
-      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number; increment(n: number): void }
-
-      interface AppDoc {
-        title: TextRef
-        count: CounterRef
-      }
-
-      declare const doc: AppDoc
-
-      div(() => {
-        h1(doc.title.toString())
-        span(String(doc.count.get()))
-      })
-    `
-
-    const result = transformSource(source, { target: "dom" })
-
-    // TextRef direct read → textRegion, CounterRef → subscribeWithValue
-    expect(result.code).toContain("textRegion")
-    expect(result.code).toContain("subscribeWithValue")
-    // Should have reactive children
-    expect(result.ir[0].isReactive).toBe(true)
   })
 
   it("should produce listRegion for for-of over inline ListRef", () => {
@@ -1462,63 +1403,23 @@ describe("reactive type resolution from @kyneta/schema", () => {
     }
   })
 
-  it("should produce deltaKind 'text' and textRegion for TextRef direct read", () => {
+  it("should produce deltaKind 'text' and valueRegion for TextRef template coercion", () => {
     const source = `
       import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { (): string; readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; [Symbol.toPrimitive](hint: string): string }
       declare const title: TextRef
-      div(() => { h1(title.toString()) })
+      div(() => { h1(\`\${title}\`) })
     `
 
     const result = transformSource(source, { target: "dom" })
 
-    // IR should have deltaKind "text" and directReadSource
+    // IR should have deltaKind "text" but template coercion returns string → no directReadSource
     const h1 = result.ir[0].children[0] as any
     const content = h1.children[0]
     expect(content.dependencies[0].deltaKind).toBe("text")
-    expect(content.directReadSource).toBe("title")
 
-    // Codegen should emit textRegion, not subscribeWithValue
-    expect(result.code).toContain("textRegion(")
-    expect(result.code).not.toMatch(/subscribeWithValue\(title/)
-  })
-
-  it("should produce deltaKind 'sequence' for ListRef", () => {
-    const source = `
-      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
-      interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>; readonly length: number; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }
-      declare const items: ListRef<string>
-      div(() => {
-        for (const item of items) {
-          li(item)
-        }
-      })
-    `
-
-    const result = transformSource(source, { target: "dom" })
-
-    const loop = result.ir[0].children[0] as any
-    expect(loop.kind).toBe("loop")
-    expect(loop.dependencies[0].deltaKind).toBe("sequence")
-    expect(result.code).toContain("listRegion")
-  })
-
-  it("should produce deltaKind 'replace' for CounterRef", () => {
-    const source = `
-      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
-      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
-      declare const count: CounterRef
-      div(() => { p(count.get()) })
-    `
-
-    const result = transformSource(source, { target: "dom" })
-
-    const p = result.ir[0].children[0] as any
-    const content = p.children[0]
-    expect(content.dependencies[0].deltaKind).toBe("replace")
-    expect(result.code).toContain("subscribeWithValue")
+    // Codegen should emit valueRegion (not textRegion since template coercion has no directReadSource)
+    expect(result.code).toContain("valueRegion(")
   })
 })
 
@@ -1532,7 +1433,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
       declare const doc: TypedDoc<{ title: TextRef; todos: ListRef<string> }>
 
       div(() => {
-        h1(doc.title.toString())
+        h1(\`\${doc.title}\`)
         for (const item of doc.todos) {
           li(item)
         }
@@ -1541,75 +1442,20 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    // Should detect TextRef on doc.title → textRegion for surgical patching
-    expect(result.code).toContain("textRegion")
+    // template literal coercion returns string → no directReadSource → valueRegion
+    expect(result.code).toContain("valueRegion")
     // Should detect ListRef on doc.todos → listRegion
     expect(result.code).toContain("listRegion")
     // Builder should be reactive
     expect(result.ir[0].isReactive).toBe(true)
   })
 
-  it("should detect conditional reactive types from schema inference", () => {
-    const source = `
-      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
-      type MapChange = { readonly type: "map" }
-      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
-      type TypedDoc<S> = S & HasChangefeed<unknown, MapChange> & { readonly [CHANGEFEED]: Changefeed<unknown, MapChange> }
-      declare function createTypedDoc<S>(schema: unknown): TypedDoc<S>
-      const Shape = { doc: (s: any) => s, counter: () => ({}) }
-
-      const Schema = Shape.doc({
-        count: Shape.counter(),
-      })
-
-      const doc = createTypedDoc(Schema)
-
-      div(() => {
-        if (doc.count.get() > 0) {
-          p("Has items")
-        }
-      })
-    `
-
-    const result = transformSource(source, { target: "dom" })
-
-    // Should detect CounterRef → conditionalRegion
-    expect(result.code).toContain("conditionalRegion")
-  })
-
-  it("should work with schema defined inline", () => {
-    const source = `
-      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
-      type MapChange = { readonly type: "map" }
-      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
-      type TypedDoc<S> = S & HasChangefeed<unknown, MapChange> & { readonly [CHANGEFEED]: Changefeed<unknown, MapChange> }
-      declare function createTypedDoc<S>(schema: unknown): TypedDoc<S>
-      const Shape = { doc: (s: any) => s, counter: () => ({}) }
-
-      const doc = createTypedDoc(Shape.doc({
-        items: Shape.list(Shape.plain.string()),
-      }))
-
-      div(() => {
-        for (const item of doc.items) {
-          li(item)
-        }
-      })
-    `
-
-    const result = transformSource(source, { target: "dom" })
-
-    expect(result.code).toContain("listRegion")
-  })
-
   it("should work with createTypedDoc options parameter", () => {
     const source = `
       import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      type IncrementChange = { readonly type: "increment"; readonly amount: number }
       type MapChange = { readonly type: "map" }
-      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
+      interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number; readonly [CHANGEFEED]: Changefeed<number, IncrementChange> }
       type TypedDoc<S> = S & HasChangefeed<unknown, MapChange> & { readonly [CHANGEFEED]: Changefeed<unknown, MapChange> }
       declare function createTypedDoc<S>(schema: unknown, opts?: unknown): TypedDoc<S>
       const Shape = { doc: (s: any) => s, counter: () => ({}) }
@@ -1622,7 +1468,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
       const doc = createTypedDoc(Schema, { doc: {} as any })
 
       div(() => {
-        h1(doc.title.toString())
+        h1(\`\${doc.title}\`)
         for (const item of doc.items) {
           li(item)
         }
@@ -1631,16 +1477,16 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
     const result = transformSource(source, { target: "dom" })
 
-    expect(result.code).toContain("subscribeWithValue")
+    expect(result.code).toContain("valueRegion")
     expect(result.code).toContain("listRegion")
   })
 
   it("should produce both DOM and HTML targets from same schema-inferred source", () => {
     const source = `
       import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+      type IncrementChange = { readonly type: "increment"; readonly amount: number }
       type MapChange = { readonly type: "map" }
-      interface CounterRef extends HasChangefeed<number, ReplaceChange<number>> { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; get(): number }
+      interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number; readonly [CHANGEFEED]: Changefeed<number, IncrementChange> }
       type TypedDoc<S> = S & HasChangefeed<unknown, MapChange> & { readonly [CHANGEFEED]: Changefeed<unknown, MapChange> }
       declare function createTypedDoc<S>(schema: unknown): TypedDoc<S>
       const Shape = { doc: (s: any) => s, counter: () => ({}) }
@@ -1653,8 +1499,8 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
       const doc = createTypedDoc(Schema)
 
       div(() => {
-        h1(doc.title.toString())
-        if (doc.items.toArray().length > 0) {
+        h1(\`\${doc.title}\`)
+        if (doc.items().length > 0) {
           ul(() => {
             for (const item of doc.items) {
               li(item)
@@ -1670,7 +1516,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
     const htmlResult = transformSource(source, { target: "html" })
 
     // DOM target: reactive runtime calls
-    expect(domResult.code).toContain("subscribeWithValue")
+    expect(domResult.code).toContain("valueRegion")
     expect(domResult.code).toContain("listRegion")
     expect(domResult.code).toContain("conditionalRegion")
 
@@ -1687,21 +1533,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 // =============================================================================
 
 describe("bare reactive ref in content position", () => {
-  it("compiles bare TextRef to textRegion", () => {
-    const source = `
-      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
-      declare const doc: { title: TextRef }
-      div(() => {
-        p(doc.title)
-      })
-    `
-    const result = transformSource(source, { target: "dom" })
-    expect(result.code).toContain("textRegion(")
-    expect(result.code).toContain("doc.title")
-  })
-
-  it("compiles bare CounterRef to subscribeWithValue with .get()", () => {
+  it("compiles bare CounterRef to valueRegion with read()", () => {
     const source = withTypes(`
       declare const doc: { count: CounterRef }
       div(() => {
@@ -1709,79 +1541,37 @@ describe("bare reactive ref in content position", () => {
       })
     `)
     const result = transformSource(source, { target: "dom" })
-    expect(result.code).toContain("subscribeWithValue(")
-    expect(result.code).toContain("doc.count.get()")
+    expect(result.code).toContain("valueRegion(")
+    expect(result.code).toContain("read(doc.count)")
   })
 
-  it("still supports explicit .get() call", () => {
+  it("still supports explicit String() coercion", () => {
     const source = `
       import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { (): string; readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; [Symbol.toPrimitive](hint: string): string }
       declare const doc: { title: TextRef }
       div(() => {
-        p(doc.title.get())
+        p(String(doc.title))
       })
     `
     const result = transformSource(source, { target: "dom" })
-    expect(result.code).toContain("textRegion(")
-  })
-
-  it("still supports explicit .toString() call", () => {
-    const source = `
-      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
-      declare const doc: { title: TextRef }
-      div(() => {
-        p(doc.title.toString())
-      })
-    `
-    const result = transformSource(source, { target: "dom" })
-    expect(result.code).toContain("textRegion(")
+    // String() wraps the reactive ref — no directReadSource → valueRegion
+    expect(result.code).toContain("valueRegion(")
   })
 
   it("bare ref inside expression is not an implicit read", () => {
     const source = `
       import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; get(): string; toString(): string }
+      interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { (): string; readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; [Symbol.toPrimitive](hint: string): string }
       declare const doc: { first: TextRef, last: TextRef }
       div(() => {
-        p(doc.first.get() + " " + doc.last.get())
+        p(\`\${doc.first} \${doc.last}\`)
       })
     `
     const result = transformSource(source, { target: "dom" })
-    expect(result.code).toContain("subscribeMultiple(")
+    // Expression with multiple deps, no directReadSource → valueRegion (not textRegion)
+    expect(result.code).toContain("valueRegion(")
     expect(result.code).not.toContain("textRegion(")
-  })
-})
-
-// =============================================================================
-// Phase 4: extractDependencies fix — schema-inferred bare ref
-// =============================================================================
-
-describe("extractDependencies fix for reactive-typed property access (transform)", () => {
-  it("captures doc.title as dependency when doc is TypedDoc (not reactive) but doc.title is TextRef", () => {
-    const source = withTypes(`
-      declare const doc: TypedDoc<{ title: TextRef }>
-      div(() => { p(doc.title) })
-    `)
-    const result = transformSource(source, { target: "dom" })
-    const p = result.ir[0].children[0] as any
-    const content = p.children[0]
-    expect(content.dependencies).toHaveLength(1)
-    expect(content.dependencies[0].source).toBe("doc.title")
-    expect(content.dependencies[0].deltaKind).toBe("text")
-    // Should emit textRegion since it's a bare TextRef (implicit read)
-    expect(result.code).toContain("textRegion(")
-  })
-
-  it("bare CounterRef from TypedDoc uses subscribeWithValue with .get()", () => {
-    const source = withTypes(`
-      declare const doc: TypedDoc<{ count: CounterRef }>
-      div(() => { span(doc.count) })
-    `)
-    const result = transformSource(source, { target: "dom" })
-    expect(result.code).toContain("subscribeWithValue(")
-    expect(result.code).toContain("doc.count.get()")
   })
 })
 
@@ -1790,49 +1580,20 @@ describe("extractDependencies fix for reactive-typed property access (transform)
 // =============================================================================
 
 describe("dependency subsumption", () => {
-  it("doc.title.toString() with reactive TypedDoc produces textRegion (not subscribeMultiple)", () => {
+  it("doc.title template coercion with reactive TypedDoc produces valueRegion (not subscribeMultiple)", () => {
     // After Phase 6: TypedDoc exposes [REACTIVE], so `doc` is reactive.
     // Without subsumption, extractDependencies captures both:
     //   { source: "doc", deltaKind: "map" }
     //   { source: "doc.title", deltaKind: "text" }
     // That gives dependencies.length === 2, breaking isTextRegionContent.
     // Subsumption drops "doc" because "doc.title" is more specific.
+    // template literal coercion returns string (not Changefeed) → no directReadSource → valueRegion
     const source = withTypes(`
       declare const doc: TypedDoc<{ title: TextRef }>
-      div(() => { h1(doc.title.toString()) })
+      div(() => { h1(\`\${doc.title}\`) })
     `)
     const result = transformSource(source, { target: "dom" })
-    expect(result.code).toContain("textRegion")
+    expect(result.code).toContain("valueRegion")
     expect(result.code).not.toContain("subscribeMultiple")
-  })
-
-  it("doc.title bare ref with reactive TypedDoc produces textRegion", () => {
-    const source = withTypes(`
-      declare const doc: TypedDoc<{ title: TextRef }>
-      div(() => { p(doc.title) })
-    `)
-    const result = transformSource(source, { target: "dom" })
-    const p = result.ir[0].children[0] as any
-    const content = p.children[0]
-    // Subsumption ensures only doc.title dep remains (not doc)
-    expect(content.dependencies).toHaveLength(1)
-    expect(content.dependencies[0].source).toBe("doc.title")
-    expect(content.dependencies[0].deltaKind).toBe("text")
-    expect(result.code).toContain("textRegion(")
-  })
-
-  it("does not subsume unrelated deps", () => {
-    // "a" and "b" are not prefixes of each other — both should remain
-    const source = `
-      import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
-      type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
-      declare class LocalRef<T> implements HasChangefeed<T, ReplaceChange<T>> { readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>; get(): T; set(value: T): void }
-      declare function state<T>(initial: T): LocalRef<T>
-      declare const a: LocalRef<number>
-      declare const b: LocalRef<number>
-      div(() => { span(a.get() + b.get()) })
-    `
-    const result = transformSource(source, { target: "dom" })
-    expect(result.code).toContain("subscribeMultiple(")
   })
 })

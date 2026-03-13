@@ -11,6 +11,7 @@ import {
   conditionalRegion,
   createMockCounterRef,
   installDOMGlobals,
+  read,
   resetTestState,
   Scope,
   subscribeWithValue,
@@ -69,7 +70,7 @@ describe("compiler integration - conditional regions", () => {
 
       expect(conditionalRegion.subscriptionTarget).toEqual({
         source: "doc.count",
-        deltaKind: "replace",
+        deltaKind: "increment",
       })
     })
 
@@ -263,7 +264,7 @@ describe("compiler integration - conditional regions", () => {
       // Subscribe to reactive content
       subscribeWithValue(
         count,
-        () => (count.get() > 0 ? "Has items" : "Empty"),
+        () => (read(count) > 0 ? "Has items" : "Empty"),
         v => {
           text.textContent = String(v)
         },

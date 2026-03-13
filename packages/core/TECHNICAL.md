@@ -474,7 +474,7 @@ _html += `</ul>`
 ```
 
 Reactive loops include hydration markers; render-time loops omit them.
-Reactive loops use spread syntax `[...items]` to preserve `PlainValueRef` objects.
+Reactive loops use spread syntax `[...items]` to preserve ref objects.
 
 **Conditional generation (both reactive and render-time):**
 ```javascript
@@ -491,31 +491,29 @@ The code structure is identical for reactive and render-time — only the marker
 
 ## Reactive Detection
 
-The compiler detects reactive types by checking whether a candidate type has properties keyed by the `[REACTIVE]` and/or `[SNAPSHOT]` unique symbols from `@loro-extended/reactive`:
+The compiler detects reactive types by checking whether a candidate type has a property keyed by the `CHANGEFEED` unique symbol from `@kyneta/schema`:
 
 ```typescript
-// @loro-extended/reactive
-export const REACTIVE = Symbol.for("kinetic:reactive")
-export const SNAPSHOT = Symbol.for("kinetic:snapshot")
-export type SnapshotFn<S> = (self: unknown) => S
-export type ReactiveSubscribe<D extends ReactiveDelta = ReactiveDelta> =
-  (self: unknown, callback: (delta: D) => void) => () => void
-export interface Reactive<S = unknown, D extends ReactiveDelta = ReplaceDelta>
-  extends Snapshotable<S> {
-  readonly [SNAPSHOT]: SnapshotFn<S>
-  readonly [REACTIVE]: ReactiveSubscribe<D>
+// @kyneta/schema
+export const CHANGEFEED = Symbol.for("kinetic:changefeed")
+export interface Changefeed<S = unknown, C extends ChangeBase = ChangeBase> {
+  readonly current: S
+  subscribe(callback: (change: C) => void): () => void
+}
+export interface HasChangefeed<S = unknown, C extends ChangeBase = ChangeBase> {
+  readonly [CHANGEFEED]: Changefeed<S, C>
 }
 ```
 
-### Parameterized Symbol Detection (`isWellKnownSymbolProperty`)
+### Symbol Detection (`isWellKnownSymbolProperty`)
 
-Detection is implemented in `reactive-detection.ts` using a **parameterized** three-layer strategy. The core function `isWellKnownSymbolProperty(compilerSymbol, symbolForKey, declarationName, mangledPrefix)` accepts:
+Detection is implemented in `reactive-detection.ts` using a three-layer strategy. The core function `isWellKnownSymbolProperty(compilerSymbol, symbolForKey, declarationName, mangledPrefix)` checks for the `CHANGEFEED` symbol:
 
-| Parameter | REACTIVE | SNAPSHOT |
-|-----------|----------|----------|
-| `symbolForKey` | `"kinetic:reactive"` | `"kinetic:snapshot"` |
-| `declarationName` | `"REACTIVE"` | `"SNAPSHOT"` |
-| `mangledPrefix` | `"__@REACTIVE@"` | `"__@SNAPSHOT@"` |
+| Parameter | Value |
+|-----------|-------|
+| `symbolForKey` | `"kinetic:changefeed"` |
+| `declarationName` | `"CHANGEFEED"` |
+| `mangledPrefix` | `"__@CHANGEFEED@"` |
 
 The three layers, from most to least robust:
 
@@ -523,141 +521,115 @@ The three layers, from most to least robust:
 2. **Symbol declaration name** — In `.d.ts` files the initializer is erased, but the `unique symbol` type still carries a reference back to the variable that declared it. Check that variable's `escapedName` matches `declarationName`.
 3. **Property escaped name** — As a last-resort fallback, check the property's own mangled name starts with `mangledPrefix`.
 
-All three layers are necessary for both symbols. Layer 1 works in source `.ts` files, layer 2 in `.d.ts` (built packages), and layer 3 handles edge cases where the type system loses the symbol reference chain. The mock `.d.ts` files in `analyze.test.ts` exercise layer 2 specifically.
+All three layers are necessary. Layer 1 works in source `.ts` files, layer 2 in `.d.ts` (built packages), and layer 3 handles edge cases where the type system loses the symbol reference chain. The mock `.d.ts` files in `analyze.test.ts` exercise layer 2 specifically.
 
-Two one-line delegates wrap the parameterized function:
-- `isReactiveSymbolProperty(sym)` → `isWellKnownSymbolProperty(sym, "kinetic:reactive", "REACTIVE", "__@REACTIVE@")`
-- `isSnapshotSymbolProperty(sym)` → `isWellKnownSymbolProperty(sym, "kinetic:snapshot", "SNAPSHOT", "__@SNAPSHOT@")`
+The delegate function:
+- `isChangefeedSymbolProperty(sym)` → `isWellKnownSymbolProperty(sym, "kinetic:changefeed", "CHANGEFEED", "__@CHANGEFEED@")`
 
 Additionally: exclude `any`/`unknown`, check union branches individually.
 
-This approach replaced an earlier `isTypeAssignableTo(candidate, Reactive)` strategy. That broke when `Reactive` gained a generic parameter `<D>` — TypeScript's `getType()` on a generic interface returns a type with an unresolved type parameter, which fails assignability checks. The property-level approach is immune to changes in the `Reactive` interface's generic signature.
+This approach replaced an earlier `isTypeAssignableTo(candidate, Reactive)` strategy. That broke when the reactive interface gained a generic parameter — TypeScript's `getType()` on a generic interface returns a type with an unresolved type parameter, which fails assignability checks. The property-level approach is immune to changes in the interface's generic signature.
 
 ### Type Detection Functions
 
 | Function | Checks For | Used By |
 |----------|-----------|---------|
-| `isReactiveType(type)` | `[REACTIVE]` property | `expressionIsReactive`, `extractDependencies`, `detectDirectRead` |
-| `isSnapshotableType(type)` | `[SNAPSHOT]` property | `detectImplicitRead` |
-| `getSnapshotType(type)` | Return type `S` of `[SNAPSHOT]` call signature | Future use (e.g., type-aware codegen) |
-| `getDeltaKind(type)` | Delta kind `D` from `[REACTIVE]` call signature | Codegen optimization dispatch |
+| `isChangefeedType(type)` | `[CHANGEFEED]` property | `expressionIsReactive`, `extractDependencies`, `analyzeExpression` |
+| `getDeltaKind(type)` | Delta kind from `Changefeed<S, C>`'s `C` type parameter | Codegen optimization dispatch |
 
-`isSnapshotableType` follows the same pattern as `isReactiveType`: excludes `any`/`unknown`, handles union types, and uses property-level detection via `isSnapshotSymbolProperty`.
-
-`getSnapshotType` extracts the return type `S` from `[SNAPSHOT]`'s call signature via the TypeChecker. For `TextRef` it returns `"string"`, for `CounterRef` it returns `"number"`. Returns `undefined` for non-snapshotable types.
-
-**Why `isReactiveType` and `isSnapshotableType` are separate:** The compiler's `isReactiveType` only checks for `[REACTIVE]` — it was written before `[SNAPSHOT]` existed and has not been tightened. `detectImplicitRead` checks `isSnapshotableType` separately as a correctness guard: it ensures the compiler only synthesizes `.get()` for types that genuinely have a snapshot protocol. If a future type had `[REACTIVE]` without `[SNAPSHOT]` (e.g., a write-only channel), `detectImplicitRead` would correctly reject it. Each detection function checks exactly what it needs.
+`isChangefeedType` excludes `any`/`unknown`, handles union types (checks each branch), and uses property-level detection via `isChangefeedSymbolProperty`.
 
 ### Module Resolution
 
-The compiler uses `skipFileDependencyResolution: true` for fast project creation, then manually resolves `@loro-extended/*` packages via `ts.resolveModuleName()` and `project.addSourceFileAtPath()`. This avoids the ~500ms overhead of `tsConfigFilePath` while still enabling full type analysis of external packages.
+The compiler uses `skipFileDependencyResolution: true` for fast project creation, then manually resolves `@kyneta/schema` via `ts.resolveModuleName()` and `project.addSourceFileAtPath()`. This avoids the ~500ms overhead of `tsConfigFilePath` while still enabling full type analysis of external packages.
 
 ### Delta Kind Extraction (`getDeltaKind`)
 
-Once a type is confirmed reactive, the compiler extracts its **delta kind** via `getDeltaKind()` in `reactive-detection.ts`. This determines what optimizations codegen can apply:
+Once a type is confirmed as a Changefeed, the compiler extracts its **delta kind** via `getDeltaKind()` in `reactive-detection.ts`. This determines what optimizations codegen can apply:
 
-1. Find the `[REACTIVE]` property on the type
-2. Get the `ReactiveSubscribe<D>` call signature
-3. Extract `D` from the callback parameter `(delta: D) => void`
-4. Read the `type` property from `D`
+1. Find the `[CHANGEFEED]` property on the type
+2. Get the `Changefeed<S, C>` type
+3. Extract the `subscribe` method's callback parameter type `C`
+4. Read the `type` property from `C`
 5. If it's a single string literal (`"text"`, `"sequence"`, etc.), return it as the `DeltaKind`
 6. Otherwise fall back to `"replace"`
 
-**Critical requirement:** Step 5 only works when `D` is a **narrowed** single-member type (e.g., `TextChange`), not the full `BuiltinChange` union. If `D` defaults to `ChangeBase`, the `type` property resolves to `string` — not a string literal — and `isStringLiteral()` returns false, causing a silent fallback to `"replace"`.
+**Critical requirement:** Step 5 only works when `C` is a **narrowed** single-member type (e.g., `TextChange`), not the full `BuiltinChange` union. If `C` defaults to `ChangeBase`, the `type` property resolves to `string` — not a string literal — and `isStringLiteral()` returns false, causing a silent fallback to `"replace"`.
 
 Each typed ref must therefore declare its specific change type:
 
 ```typescript
 // TextRef narrows C to TextChange — getDeltaKind returns "text"
-declare readonly [REACTIVE]: ReactiveSubscribe<TextDelta>
+readonly [CHANGEFEED]: Changefeed<string, TextChange>
 
-// Without narrowing, D defaults to ReactiveDelta — getDeltaKind returns "replace"
-readonly [REACTIVE]: ReactiveSubscribe  // ← WRONG: silently breaks delta dispatch
+// Without narrowing, C defaults to ChangeBase — getDeltaKind returns "replace"
+readonly [CHANGEFEED]: Changefeed<string, ChangeBase>  // ← WRONG: silently breaks delta dispatch
 ```
-
-See [packages/change/TECHNICAL.md](../change/TECHNICAL.md) for the full table of ref-to-delta mappings.
 
 ### Caveats
 
 - **`any` is assignable to everything.** Undeclared identifiers are `any` and must be explicitly excluded.
-- **Union types need branch-level checking.** `LocalRef<T> | null` doesn't itself have a `[REACTIVE]` property, but the `LocalRef<T>` branch does.
+- **Union types need branch-level checking.** `LocalRef<T> | null` doesn't itself have a `[CHANGEFEED]` property, but the `LocalRef<T>` branch does.
 - **`links.nameType` is a TypeScript internal.** It has been stable across TS 4.x–6.x and is fundamental to computed property name handling, but layers 2 and 3 serve as fallbacks if it ever changes.
-- **Types are resolved from `dist/`, not source files.** `transformSource` uses `useInMemoryFileSystem: false` and resolves `@loro-extended/change` via `ts.resolveModuleName()`, which follows `package.json` exports to the built `dist/index.d.ts`. After changing type declarations (e.g., adding a `declare readonly [REACTIVE]` override), you must rebuild the upstream packages (`pnpm run build` in `@loro-extended/reactive` and `@loro-extended/change`) before compiler tests will see the changes.
+- **Types are resolved from `dist/`, not source files.** `transformSource` uses `useInMemoryFileSystem: false` and resolves `@kyneta/schema` via `ts.resolveModuleName()`, which follows `package.json` exports to the built `dist/index.d.ts`. After changing type declarations (e.g., adding a `[CHANGEFEED]` property), you must rebuild `@kyneta/schema` (`pnpm run build`) before compiler tests will see the changes.
 - **`toContain` on generated code can give false positives.** Generated code includes import statements listing all runtime functions. `expect(code).toContain("subscribeWithValue")` will match the import `import { subscribeWithValue, textRegion } from ...` even when `subscribeWithValue` is never called. Use more specific patterns like `toContain("textRegion(")` or `not.toMatch(/subscribeWithValue\(title/)`.
 
-### Direct-Read Detection
+### Changefeed-Native Expression Analysis
 
-For text patching optimization, the compiler detects when an expression is a "direct read" — i.e., the expression is exactly `ref.get()` or `ref.toString()` with no transformation or combination.
+The compiler determines whether an expression qualifies for surgical delta patching via a single type-level question: **"is this expression itself a Changefeed?"**
 
-**Detection algorithm** (implemented in `detectDirectRead`):
-1. Root node must be a `CallExpression`
-2. Callee must be a `PropertyAccessExpression` (`receiver.method`)
-3. Method name must be `"get"` or `"toString"`
-4. Call must have zero arguments
-5. Receiver's type must be reactive (`isReactiveType`)
+**The user controls the boundary** between surgical deltas and replace semantics:
 
-**Key insight**: Checking the *root* node type implicitly rejects nested `.get()` calls. If `title.get()` is inside a larger expression like `title.get().toUpperCase()`, the root is the outer `toUpperCase()` call, not the inner `get()`.
+| User writes | Expression type | Compiler emits | Semantics |
+|---|---|---|---|
+| `doc.title` | Has `[CHANGEFEED]` with `TextChange` | `textRegion(node, doc.title, scope)` | Surgical O(k) |
+| `doc.title()` | `string` | `valueRegion(...)` | Replace O(n) |
+| `doc.title.get()` | `string` | `valueRegion(...)` | Replace O(n) |
+| `doc.title.get().toUpperCase()` | `string` | `valueRegion(...)` | Replace O(n) |
+| `doc.items` | Has `[CHANGEFEED]` with `SequenceChange` | `listRegion(...)` | Surgical O(k) |
+| `doc.count` | Has `[CHANGEFEED]` with `IncrementChange` | `valueRegion(...)` | Replace (no surgical counter region) |
 
-**Examples:**
-| Expression | Direct Read? | Reason |
-|------------|--------------|--------|
-| `title.get()` | ✅ Yes | Root is `.get()` on reactive |
-| `doc.title.get()` | ✅ Yes | Property access chain, root is `.get()` |
-| `title.toString()` | ✅ Yes | `.toString()` is equivalent |
-| `title.get().toUpperCase()` | ❌ No | Root is `.toUpperCase()`, not `.get()` |
-| `title.get() + suffix` | ❌ No | Root is `BinaryExpression` |
-| `` `Hello ${title.get()}` `` | ❌ No | Root is `TemplateExpression` |
-| `title.get(0)` | ❌ No | Has arguments |
+This is **explicit and predictable** — pass the Changefeed itself for delta support, or extract a value for replace. No heuristics, no method-name recognition, no peeking into expressions.
 
-When detected, the IR's `ContentValue.directReadSource` is set to the receiver's source text (e.g., `"doc.title"`), enabling codegen to emit `textRegion` instead of `subscribeWithValue`.
+**Detection algorithm** (implemented in `analyzeExpression`):
+1. Check `expressionIsReactive(expr)` — does any part of the expression depend on a Changefeed?
+2. If reactive, extract dependencies via `extractDependencies(expr)`
+3. Check `isChangefeedType(expr.getType())` — is this expression *itself* a Changefeed?
+4. If yes: set `directReadSource = expr.getText()`, synthesize `source = "read(expr.getText())"`
+5. If no: `directReadSource` is not set, `source = expr.getText()` (user's expression as-is)
 
-### Implicit-Read Detection (Bare Reactive Refs)
-
-`detectImplicitRead` handles the complementary case: a bare reactive ref in content position *without* `.get()` or `.toString()`. For example, `p(doc.title)` where `doc.title` is a `TextRef`.
-
-**Detection algorithm** (implemented in `detectImplicitRead`):
-1. Expression must NOT be a `CallExpression` (those go through `detectDirectRead`)
-2. Expression's type must be reactive (`isReactiveType`)
-3. Expression's type must be snapshotable (`isSnapshotableType`)
-
-**`analyzeExpression` calls both detectors sequentially:**
-```
-detectDirectRead(expr) ?? detectImplicitRead(expr)
-```
-
-When `detectImplicitRead` matches, `analyzeExpression` **synthesizes** `.get()` in the IR:
-- IR `source`: `"doc.title.get()"` — synthesized, so generated code produces a value
-- IR `directReadSource`: `"doc.title"` — the bare ref, passed to `textRegion`
-
-**Why `.get()` and not `[SNAPSHOT]()`:** The `textRegion` path doesn't use `source` — it passes `directReadSource` directly, and `textRegion` calls `[SNAPSHOT]` internally. For the `subscribeWithValue` fallback path, codegen emits `() => source` where `source` must be valid JavaScript. `"doc.title.get()"` works because `.get()` exists on every scalar ref. `"doc.title[SNAPSHOT](doc.title)"` would require importing `SNAPSHOT` from `@loro-extended/reactive` in the generated code — a new import from a different package for no benefit.
+**The `read()` helper:** When the expression IS a Changefeed, the compiler synthesizes `read(ref)` instead of the bare ref. The `read` function is the observation morphism of the coalgebra — it extracts `ref[CHANGEFEED].current`. This avoids embedding the `[CHANGEFEED]` symbol access in generated code (which would require importing the symbol).
 
 **Examples:**
-| Expression | Implicit Read? | Reason |
-|------------|----------------|--------|
-| `doc.title` (TextRef) | ✅ Yes | Reactive + snapshotable, not a call |
-| `count` (CounterRef) | ✅ Yes | Reactive + snapshotable, not a call |
-| `doc.title.get()` | ❌ No | CallExpression → `detectDirectRead` handles it |
-| `someString` | ❌ No | Not reactive |
-| `doc.title + " suffix"` | ❌ No | Root is BinaryExpression (reactive, but not a bare ref) |
+| Expression | `isChangefeedType`? | `directReadSource` | `source` |
+|---|---|---|---|
+| `doc.title` (text ref) | ✅ Yes | `"doc.title"` | `"read(doc.title)"` |
+| `count` (counter ref) | ✅ Yes | `"count"` | `"read(count)"` |
+| `doc.title()` | ❌ No (returns `string`) | not set | `"doc.title()"` |
+| `doc.title.get()` | ❌ No (returns `string`) | not set | `"doc.title.get()"` |
+| `count > 0` | ❌ No (returns `boolean`) | not set | `"count > 0"` |
+| `` `Hello ${doc.title}` `` | ❌ No (returns `string`) | not set | `` "`Hello ${doc.title}`" `` |
 
-**Why `detectDirectRead` and `detectImplicitRead` are separate:** They answer structurally different questions. `detectDirectRead` is structural AST analysis (root is a `CallExpression`). `detectImplicitRead` is type-level analysis (expression *is* the ref). Combining them would violate single-responsibility. They never overlap — `detectImplicitRead` rejects `CallExpression` as its first check.
+**Why this replaces the old `detectDirectRead`:** The old approach recognized `.get()` and `.toString()` as "direct reads" via AST pattern matching — a syntactic heuristic pretending to be a semantic question. It couldn't recognize `ref()` (callable refs from `@kyneta/schema`), and it created a hidden coupling between the compiler and specific ref method names. The new approach asks the correct algebraic question: is this expression a coalgebra (Changefeed), or has the user already extracted a value?
+
+**Behavioral change from the old approach:** `doc.title.get()` previously triggered `textRegion` (via `detectDirectRead`). Now it triggers `valueRegion` (because the expression returns `string`, not a Changefeed). This is intentionally correct — for `LocalRef`, `textRegion`'s surgical path was never invoked anyway (`LocalRef` emits `ReplaceChange`, which hits the `else` fallback). For schema text refs, the user writes bare `doc.title` to get surgical support.
 
 ### Dependency Extraction (`extractDependencies`)
 
 The `extractDependencies` visitor walks the expression AST and captures reactive dependencies. It has four cases:
 
-1. **PropertyAccess on reactive object** — `doc.title.get()` → captures `doc.title` (the object is `TextRef`)
-2. **PropertyAccess whose result type is reactive** — `doc.title` where `doc` is `TypedDoc` (not reactive) but `doc.title` is `TextRef` (reactive) → captures `doc.title`
+1. **PropertyAccess on reactive object** — `doc.title.get()` → captures `doc.title` (the object has `[CHANGEFEED]`)
+2. **PropertyAccess whose result type is reactive** — `doc.title` where `doc` is not a Changefeed but `doc.title` is → captures `doc.title`
 3. **Call on reactive object** — captures the callee's receiver
 4. **Identifier that is reactive** — captures itself (skips identifiers that are property names in a PropertyAccess)
 
 Case 2 was added in Phase 4 to fix a pre-existing bug: when `doc` is not reactive but `doc.title` is, none of the other cases fired. The `depsMap` deduplication (keyed by source text) prevents double-capture when both the object and result are reactive.
 
-**Dependency subsumption:** After collecting all dependencies, `extractDependencies` applies a subsumption rule: any dependency whose source is a strict prefix of another dependency's source (at a dot boundary) is removed. For example, if both `"doc"` (deltaKind `"map"`) and `"doc.title"` (deltaKind `"text"`) are captured, `"doc"` is dropped because `"doc.title"` is more specific. The dot-boundary check ensures `"d"` is NOT subsumed by `"doc"` — the character after the prefix must be `"."`. This rule became necessary when `TypedDoc` was made reactive (exposing `[REACTIVE]` on the type): without it, `doc.title.toString()` would produce two dependencies, breaking the `isTextRegionContent` check (`dependencies.length === 1 && deltaKind === "text"`) and degrading from `textRegion` (surgical DOM patching) to `subscribeMultiple` (full replacement).
+**Dependency subsumption:** After collecting all dependencies, `extractDependencies` applies a subsumption rule: any dependency whose source is a strict prefix of another dependency's source (at a dot boundary) is removed. For example, if both `"doc"` (deltaKind `"map"`) and `"doc.title"` (deltaKind `"text"`) are captured, `"doc"` is dropped because `"doc.title"` is more specific. The dot-boundary check ensures `"d"` is NOT subsumed by `"doc"` — the character after the prefix must be `"."`. This rule became necessary when a document type exposes `[CHANGEFEED]` on the root: without it, `doc.title.toString()` would produce two dependencies, breaking the `isTextRegionContent` check (`dependencies.length === 1 && deltaKind === "text"`) and degrading from `textRegion` (surgical DOM patching) to `subscribeMultiple` (full replacement).
 
 ### Binding-Time Classification
 
-When a reactive type is detected:
+When a Changefeed type is detected:
 - Expressions become `ContentValue` with `bindingTime: "reactive"`
 - Loops over reactive iterables become `LoopNode` with `iterableBindingTime: "reactive"`
 - Conditionals with reactive conditions become `ConditionalNode` with `subscriptionTarget: string`
@@ -739,7 +711,7 @@ Users don't need to know this distinction — both "just work" with natural Type
 ## File Structure
 
 ```
-packages/kinetic/src/compiler/
+packages/core/src/compiler/
 ├── analyze.ts               # AST → IR analysis (imports isReactiveType)
 ├── analyze.test.ts          # Analysis unit tests
 ├── reactive-detection.ts    # Reactive type + ComponentFactory detection
@@ -762,97 +734,68 @@ packages/kinetic/src/compiler/
 
 ### Child Type
 
-The `Child` type union in `types.ts` accepts `Reactive<any, any>`, enabling bare reactive refs in content position (e.g., `p(doc.title)` where `doc.title` is a `TextRef`). This is safe because the Kinetic compiler intercepts the call and synthesizes `.get()` in the IR before codegen — the raw ref never reaches `textContent`. The `Child` type exists only for TypeScript's authoring-time benefit.
+The `Child` type union in `types.ts` accepts `HasChangefeed`, enabling bare reactive refs in content position (e.g., `p(doc.title)` where `doc.title` has `[CHANGEFEED]`). This is safe because the Kinetic compiler intercepts the call and synthesizes `read()` in the IR before codegen — the raw ref never reaches `textContent`. The `Child` type exists only for TypeScript's authoring-time benefit.
 
 ### Cross-Package Dependencies
 
 
 ```
-@loro-extended/reactive       # REACTIVE symbol, Reactive interface, LocalRef
+@kyneta/schema       # CHANGEFEED symbol, Changefeed interface, change types
     ↑
-    ├── @loro-extended/change # Implements Reactive on all TypedRefs
-    └── @loro-extended/kinetic # Re-exports; compiler detects; runtime subscribes
+    └── @kyneta/core # Compiler detects [CHANGEFEED]; runtime subscribes via it
 ```
 
 ## Runtime Dependencies
 
-> **`[SNAPSHOT]` Protocol in the Runtime:** Both `textRegion` and `inputTextRegion` read initial state via `ref[SNAPSHOT](ref)` (cast to `Snapshotable<string>`), not ad-hoc interface casts. The `subscribe()` function gates on `isReactive()`, which requires both `[REACTIVE]` and `[SNAPSHOT]` at runtime. `listRegion` is the exception — it uses `ListRefLike<T>` because the functional-core planning functions need `{ length, get(i) }`, and replacing the cast with `[SNAPSHOT]` would return `self` then still need a cast.
+> **`CHANGEFEED` Protocol in the Runtime:** Both `textRegion` and `inputTextRegion` read initial state via `ref[CHANGEFEED].current`. The `subscribe()` function gates on the presence of `[CHANGEFEED]` at runtime. `listRegion` is the exception — it uses `ListRefLike<T>` because the functional-core planning functions need `{ length, at(i) }`.
 
 
-Generated code imports runtime functions from `@loro-extended/kinetic/runtime`:
+Generated code imports runtime functions from `@kyneta/core/runtime`:
 
-- `subscribe(ref, handler, scope)` — Low-level reactive subscription (delta-aware)
+- `subscribe(ref, handler, scope)` — CHANGEFEED-based subscription (delta-aware)
 - `subscribeWithValue(ref, getter, callback, scope)` — Subscribe + immediate call with value
 - `subscribeMultiple(refs, callback, scope)` — Subscribe to multiple dependencies
+- `valueRegion(node, ref, getValue, onValue, scope)` — Replace-semantic updates for any Changefeed
 - `listRegion(parent, list, handlers, scope)` — Delta-driven list rendering
 - `conditionalRegion(marker, target, condition, handlers, scope)` — Reactive conditionals
-- `textRegion(textNode, ref, scope)` — Surgical text patching for direct TextRef reads
-
-And from `@loro-extended/kinetic/loro` (Loro-specific):
-
-- `bindTextValue(input, ref, scope)` — Two-way text binding
-- `bindChecked(input, ref, scope)` — Two-way checkbox binding
-- `bindNumericValue(input, ref, scope)` — Two-way numeric binding
+- `textRegion(textNode, ref, scope)` — Surgical text patching for direct text Changefeed reads
+- `inputTextRegion(input, ref, scope)` — Surgical `<input>`/`<textarea>` value patching
+- `read(ref)` — Universal value accessor: `ref[CHANGEFEED].current`
 
 All runtime functions accept a `scope` parameter for cleanup tracking.
 
 ### Delta-Aware Subscription
 
-The core `subscribe` function uses the `[REACTIVE]` symbol from `@loro-extended/reactive`:
+The core `subscribe` function uses the `CHANGEFEED` symbol from `@kyneta/schema`:
 
 ```typescript
 function subscribe(
   ref: unknown,
-  handler: (delta: ReactiveDelta) => void,
+  handler: (change: ChangeBase) => void,
   scope: Scope,
 ): SubscriptionId {
-  if (!isReactive(ref)) {
+  const changefeed = (ref as any)[CHANGEFEED]
+  if (!changefeed) {
     throw new Error("subscribe called with non-reactive value")
   }
-  const unsubscribe = ref[REACTIVE](ref, handler)
+  const unsubscribe = changefeed.subscribe(handler)
   scope.onDispose(() => unsubscribe())
   return id
 }
 ```
 
-The handler receives a `ReactiveDelta` describing what changed. This enables:
-- **Sequence regions**: Extract `delta.ops` for O(k) DOM updates
+The handler receives a `ChangeBase` (or narrowed subtype) describing what changed. This enables:
+- **Sequence regions**: Extract `change.ops` for O(k) DOM updates
 - **Text regions**: Use `insertData`/`deleteData` for O(k) surgical text updates
-- **Fallback**: For `"replace"` deltas or complex expressions, re-read the entire value
+- **Fallback**: For `"replace"` changes or complex expressions, re-read the entire value
 
-### Loro-Agnostic Core Runtime
+### Backend-Agnostic Core Runtime
 
-The core runtime (`@loro-extended/kinetic/runtime`) has **no imports from `@loro-extended/change`**. It depends only on `@loro-extended/reactive` for the `REACTIVE` symbol and delta types. This enables:
+The core runtime (`@kyneta/core/runtime`) depends only on `@kyneta/schema` for the `CHANGEFEED` symbol and change types. It has no backend-specific imports. This enables:
 
-1. **Custom reactive types** — `LocalRef` and user-defined reactives work without Loro
-2. **Future extensibility** — Other CRDT libraries could provide their own bindings
+1. **Custom reactive types** — `LocalRef` and user-defined Changefeeds work without any specific CRDT backend
+2. **Future extensibility** — Any CRDT library or state management system can provide Changefeed-compatible refs
 3. **Clear dependency graph** — Core runtime is minimal and portable
-
-### Loro Bindings Subpath
-
-Two-way bindings (`bind:value`, `bind:checked`) and operation-aware write functions live in a separate subpath that requires direct Loro container access:
-
-```typescript
-// Generated code for components with bindings:
-import { subscribe } from "@loro-extended/kinetic/runtime"
-import { bindTextValue } from "@loro-extended/kinetic/loro"
-```
-
-The binding functions use `loro()` to access raw Loro containers for write operations, while still using `subscribe` (via `[REACTIVE]`) for the read/subscribe side.
-
-**The `unknown` boundary:** Binding functions accept `ref: unknown` because compiled code passes refs without static type information. The `loro()` unwrapper validates the input first, then runtime dispatch via `isLoroText()` / `isLoroCounter()` discriminators determines the container type. These discriminators use LoroText-specific methods (`.insert`) and LoroCounter-specific methods (`.increment` + `.value`) rather than universally-inherited methods like `.toString()`, which would be inert as discriminators.
-
-**`editText(ref: TextRef)`** — Returns a `beforeinput` event handler that translates DOM editing operations into typed-ref `insert()` / `delete()` calls with auto-commit. This is the write-direction complement to `inputTextRegion` (the read direction). Unlike `bindTextValue`, it:
-- Uses `beforeinput` (not `input`) to intercept edits before the browser applies them
-- Uses a "try to handle, then prevent default on success" pattern — each `InputHandler` returns `boolean` to signal whether it performed the CRDT mutation
-- Calls `e.preventDefault()` only when the handler returns `true`; lets the browser handle natively when `false`
-- For word/line deletions where `getTargetRanges()` returns empty (common for `<input>` elements), wires a one-shot `input` event listener that reconciles the CRDT via `ref.update(target.value)` (Loro's Myers' diff)
-- Preserves CRDT character-level merge semantics (no full-text replacement on the happy path)
-- Auto-commits via the typed ref API (not raw container mutations)
-- Handles IME composition (`isComposing` skip + `insertFromComposition`)
-- Passes through `historyUndo` / `historyRedo` without intercepting
-
-Usage: `input({ value: doc.title.toString(), onBeforeInput: editText(doc.title) })` — two independent, composable props. The read direction (`value:`) and write direction (`onBeforeInput:`) are decoupled; neither requires the other.
 
 ### List Region Architecture
 
@@ -882,9 +825,9 @@ subscribe(listRef, (change: ChangeBase) => {
 }, scope)
 ```
 
-Both planning functions use `listRef.get(index)` to obtain refs, ensuring
-handlers always receive `PlainValueRef<T>` for value shapes. This enables
-the component pattern where refs are passed for two-way binding:
+Both planning functions use `listRef.at(index)` to obtain refs, ensuring
+handlers always receive refs for value shapes. This enables the component
+pattern where refs are passed for two-way binding:
 
 ```typescript
 for (const itemRef of doc.items) {
@@ -894,20 +837,20 @@ for (const itemRef of doc.items) {
 ```
 
 **Key design decisions:**
-1. Use `listRef.get(index)` instead of `.toArray()` for ref preservation
-2. Delta inserts use count only — `listRef.get(index)` fetches actual values
+1. Use `listRef.at(index)` instead of `.toArray()` for ref preservation
+2. Delta inserts use count only — `listRef.at(index)` fetches actual values
 3. Store `listRef` in state for delta handling
 4. Non-sequence deltas (e.g., `"replace"`) trigger full re-render as fallback
 5. HTML codegen uses `[...listSource]` (iterator returns refs)
 
 ### Text Region Architecture
 
-The `textRegion` runtime enables **O(k) surgical text updates** for direct `TextRef` reads, where k is the edit size rather than the full string length.
+The `textRegion` runtime enables **O(k) surgical text updates** for direct text Changefeed reads, where k is the edit size rather than the full string length.
 
 **When it applies:**
-- Expression is a direct read (`ref.get()` / `ref.toString()`) or a bare reactive ref (`ref` alone) on a single `TextRef`
+- Expression is itself a Changefeed (bare ref like `doc.title`)
 - The dependency has `deltaKind: "text"`
-- The expression is a "direct read" or "implicit read" — not transformed (e.g., `.toUpperCase()`) or combined with other deps
+- The expression has not been transformed (e.g., `.toUpperCase()`) or combined with other deps
 
 **Functional Core** (pure, testable):
 - `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
@@ -916,21 +859,21 @@ The `textRegion` runtime enables **O(k) surgical text updates** for direct `Text
 - `patchText(textNode, ops)` — applies patches via `insertData`/`deleteData`
 - `textRegion(textNode, ref, scope)` — subscription-aware wrapper
 
-The `textRegion` function reads initial state via the `[SNAPSHOT]` protocol:
+The `textRegion` function reads initial state via the `CHANGEFEED` protocol:
 
 ```typescript
 function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
-  const snapshotable = ref as Snapshotable<string>
-  const readValue = () => snapshotable[SNAPSHOT](ref)
+  const changefeed = ref[CHANGEFEED]
+  const readValue = () => changefeed.current
 
-  textNode.textContent = readValue()  // Initial value via [SNAPSHOT]
+  textNode.textContent = readValue()  // Initial value via CHANGEFEED.current
 
-  subscribe(ref, (delta: ReactiveDelta) => {
-    if (delta.type === "text") {
+  subscribe(ref, (change: ChangeBase) => {
+    if (change.type === "text") {
       // O(k) surgical update
-      patchText(textNode, delta.ops)
+      patchText(textNode, change.ops)
     } else {
-      // Fallback for non-text deltas
+      // Fallback for non-text changes
       textNode.textContent = readValue()
     }
   }, scope)
@@ -949,11 +892,11 @@ The "cursor doesn't advance on delete" is critical — subsequent ops apply at t
 ```typescript
 // In generateReactiveContentSubscription:
 if (directReadSource && deps.length === 1 && deps[0].deltaKind === "text") {
-  // Direct or implicit TextRef read — surgical patching
+  // Direct text Changefeed read — surgical patching
   emit: textRegion(textVar, directReadSource, scopeVar)
 } else if (deps.length === 1) {
   // Single dep, non-direct — full replacement
-  emit: subscribeWithValue(...)
+  emit: valueRegion(...)
 } else {
   // Multi-dep — full replacement
   emit: subscribeMultiple(...)
@@ -961,19 +904,18 @@ if (directReadSource && deps.length === 1 && deps[0].deltaKind === "text") {
 ```
 
 **Key design decisions:**
-1. `[SNAPSHOT]` protocol keeps runtime Loro-agnostic — `textRegion` casts to `Snapshotable<string>` and calls `ref[SNAPSHOT](ref)` instead of ad-hoc interface casts. (`ListRefLike<T>` remains for `listRegion` because the planning functions need `{ length, get(i) }` — replacing the cast with `[SNAPSHOT]` would return `self` then still need a cast.)
-2. Non-text deltas (e.g., `"replace"` from `LocalRef`) trigger full `textContent` replacement via `[SNAPSHOT]`
-3. Multi-dep expressions always use `subscribeMultiple` — delta describes one source, not output
-4. Direct-read and implicit-read detection are complementary AST/type analyses at the expression root
-5. Bare refs (`p(doc.title)`) produce the same codegen as explicit reads (`p(doc.title.get())`) — the compiler synthesizes `.get()` in the IR source, but `textRegion` reads initial state via `[SNAPSHOT]` internally
+1. `CHANGEFEED` protocol keeps runtime backend-agnostic — `textRegion` reads `ref[CHANGEFEED].current` instead of ad-hoc interface casts. (`ListRefLike<T>` remains for `listRegion` because the planning functions need `{ length, at(i) }`.)
+2. Non-text changes (e.g., `"replace"` from `LocalRef`) trigger full `textContent` replacement via `CHANGEFEED.current`
+3. Multi-dep expressions always use `subscribeMultiple` — change describes one source, not output
+4. Bare refs (`p(doc.title)`) produce the same codegen as explicit reads (`p(doc.title.get())`) — the compiler synthesizes `read()` in the IR source, but `textRegion` reads initial state via `CHANGEFEED.current` internally
 
 ### Input Text Region Architecture
 
-The `inputTextRegion` runtime enables **O(k) surgical value updates** for `<input>` and `<textarea>` elements backed by a `TextRef`. It is the input-element analog of `textRegion` (which targets Text nodes).
+The `inputTextRegion` runtime enables **O(k) surgical value updates** for `<input>` and `<textarea>` elements backed by a text Changefeed. It is the input-element analog of `textRegion` (which targets Text nodes).
 
 **When it applies (codegen dispatch):**
 - Attribute name is `value`
-- Expression is a direct or implicit read of a single `TextRef` (`directReadSource` is set)
+- Expression is itself a Changefeed (`directReadSource` is set)
 - The dependency has `deltaKind: "text"`
 
 Both the createElement path (`generateAttributeSubscription`) and the template cloning path (`generateHoleSetup`) check via `isInputTextRegionCandidate()`. When the condition is met:
@@ -989,19 +931,19 @@ Unlike `textRegion` which uses `insertData`/`deleteData` on Text nodes, input el
 
 **`setRangeText("preserve")` cursor caveat:** Per the HTML spec, `"preserve"` adjusts `selectionStart` only when it is *strictly greater than* the replacement range endpoints. When inserting at the cursor position (`start === end === selectionStart`), neither adjustment branch fires — the cursor stays put. This means typing "Hello" character by character produces "olleH" because each character is inserted at position 0 (the cursor never advances). `"preserve"` was designed for edits happening *elsewhere* in the text, not at the cursor.
 
-**Origin-driven selectMode dispatch:** `inputTextRegion` dispatches selectMode based on `delta.origin`:
+**Origin-driven selectMode dispatch:** `inputTextRegion` dispatches selectMode based on `change.origin`:
 
 - **`origin === "local"`** → `setRangeText(..., "end")` — cursor advances past inserts, stays at delete point. Correct for local typing, undo, and redo.
 - **anything else** (`"import"`, `undefined`) → `setRangeText(..., "preserve")` — cursor shifts relative to remote edits. Correct for remote collaborator edits.
 
-No active-edit flags, cursor arithmetic, or cross-module coordination needed. The `origin` field (from `@loro-extended/reactive`, forwarded by the reactive bridge from Loro's `LoroEventBatch.by`) is the sole discriminant.
+No active-edit flags, cursor arithmetic, or cross-module coordination needed. The `origin` field on `ChangeBase` (from `@kyneta/schema`) is the sole discriminant. Backend adapters (e.g., a future Loro adapter) forward provenance info into this field.
 
 **Functional Core** (shared with `textRegion`):
 - `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
 
 **Imperative Shell:**
 - `patchInputValue(input, ops, selectMode?)` — applies patches via `setRangeText(selectMode)` (default `"preserve"`)
-- `inputTextRegion(input, ref, scope)` — subscription-aware wrapper, dispatches selectMode on `delta.origin`
+- `inputTextRegion(input, ref, scope)` — subscription-aware wrapper, dispatches selectMode on `change.origin`
 
 ```typescript
 function inputTextRegion(
@@ -1009,53 +951,23 @@ function inputTextRegion(
   ref: unknown,
   scope: Scope,
 ): void {
-  const snapshotable = ref as Snapshotable<string>
-  const readValue = () => snapshotable[SNAPSHOT](ref)
+  const changefeed = ref[CHANGEFEED]
+  const readValue = () => changefeed.current
 
-  input.value = readValue()  // Initial value via [SNAPSHOT]
+  input.value = readValue()  // Initial value via CHANGEFEED.current
 
-  subscribe(ref, (delta: ReactiveDelta) => {
-    if (delta.type === "text") {
-      const mode = delta.origin === "local" ? "end" : "preserve"
-      patchInputValue(input, delta.ops, mode)  // O(k) surgical update
+  subscribe(ref, (change: ChangeBase) => {
+    if (change.type === "text") {
+      const mode = change.origin === "local" ? "end" : "preserve"
+      patchInputValue(input, change.ops, mode)  // O(k) surgical update
     } else {
-      input.value = readValue()       // Fallback via [SNAPSHOT]
+      input.value = readValue()       // Fallback via CHANGEFEED.current
     }
   }, scope)
 }
 ```
 
 **The `setAttribute` fix:** The `generateAttributeUpdateCode` helper was extracted as the single source of truth for attribute→DOM-API mapping. This fixed a latent bug in the template cloning path where `setAttribute("value", x)` was used instead of `.value =`. After user interaction, `setAttribute` only changes the HTML default attribute — not the live DOM property. The same fix covers `checked`, `disabled`, `class`, `style`, and `data-*` in both the createElement and cloneNode codegen paths.
-
-**Integration with `editText` — three-tier strategy:**
-
-`editText` uses a tiered approach to translate DOM editing operations into CRDT mutations:
-
-1. **CRDT-first** (character insert/delete, selection delete, line breaks) — handler computes the mutation from `selectionStart`/`selectionEnd` and `e.data`, calls `ref.insert()`/`ref.delete()`, returns `true`. Caller calls `e.preventDefault()`. The synchronous `commitIfAuto()` fires `inputTextRegion`'s subscription, which applies the delta via `setRangeText("end")`.
-
-2. **`getTargetRanges()`** (word/line deletions) — browser provides deletion boundaries as `StaticRange` objects. Handler reads `startOffset`/`endOffset`, calls `ref.delete()`, returns `true`. Same `preventDefault` + subscription path as tier 1.
-
-3. **Browser-native + reconciliation** (fallback when `getTargetRanges()` returns empty and cursor is collapsed — common for `<input>` elements) — handler returns `false`. `preventDefault` is NOT called. A one-shot `input` event listener reconciles the CRDT after the browser performs the native deletion: `ref.update(target.value)` uses Loro's Myers' diff to compute minimal character-level CRDT operations from old→new. The subsequent `commitIfAuto()` fires `inputTextRegion`'s subscription; since the browser already updated `input.value`, the `setRangeText` calls are logically benign (applying identical text).
-
-The full write→read cycle for **tier 1/2** (CRDT-first) is synchronous within one event loop tick:
-1. `beforeinput` → handler reads `selectionStart`/`selectionEnd`, mutates CRDT, returns `true`
-2. `commitIfAuto()` fires synchronously → Loro event system → `translateEventBatch` → `ReactiveDelta { type: "text", origin: "local" }`
-3. `inputTextRegion` callback receives delta with `origin: "local"` → calls `patchInputValue(input, ops, "end")`
-4. `setRangeText(..., "end")` updates `input.value` and places cursor at end of replacement range
-5. Caller calls `e.preventDefault()` — browser's default action is suppressed
-
-The write→read cycle for **tier 3** (browser-native fallback) spans two events:
-1. `beforeinput` → handler returns `false`, one-shot `input` listener attached
-2. Browser performs native word/line deletion, updates `input.value`
-3. `input` event fires → listener saves `target.value`, restores `target.value = ref.toString()` (old CRDT state)
-4. `ref.update(savedValue)` → Myers' diff → CRDT ops → `commitIfAuto()`
-5. `inputTextRegion` subscription fires → `patchInputValue` applies delta to old DOM value → produces correct new DOM value
-
-**Why the DOM restore (step 3)?** `ref.update()` triggers `commitIfAuto()`, which fires `inputTextRegion`'s subscription synchronously. The subscription applies a text delta via `patchInputValue` / `setRangeText` — but those ops are relative to the *old* CRDT state. If `input.value` already shows the new state (browser applied it in step 2), the delta double-applies (e.g., a "delete 5 chars at offset 0" op removes characters from the already-correct shorter string). Restoring `input.value` to the old CRDT state before calling `ref.update()` ensures the subscription applies the delta to the correct base.
-
-For remote edits, `translateEventBatch` produces `origin: "import"`, and `inputTextRegion` calls `patchInputValue(input, ops, "preserve")` — correctly shifting the local cursor relative to remote insertions/deletions.
-
-All DOM updates and cursor positioning flow through `inputTextRegion` → `patchInputValue` → `setRangeText`. `editText`'s DOM side-effects are `e.preventDefault()` (tier 1/2), `addEventListener("input", ..., { once: true })` (tier 3), and the transient `target.value` restore in the reconciliation listener (tier 3).
 
 ### Region Algebra
 
@@ -1490,16 +1402,21 @@ Every delta region has three phases:
 | Input Text | `planTextPatch(ops)` | `patchInputValue(input, ops)` | `"text"` | `<input>` / `<textarea>` value |
 | Sequence | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"sequence"` | Parent element children |
 | Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition ref | Branch swap |
+| Value | — | `onValue(getValue())` | any (re-read) | Text node, attribute, etc. |
+
+`valueRegion` is the **terminal object** in the delta region algebra — a region whose delta dispatch strategy is always "replace." It re-reads via `getValue()` and applies via `onValue()` on every change from any subscribed ref. It unifies the previous `subscribeWithValue` (single ref) and `subscribeMultiple` + manual init (multiple refs) into one function with a uniform three-phase pattern. All Changefeed → DOM wiring functions are now named as "regions."
+
+The `read()` runtime helper is the universal value accessor for Changefeeds in generated code: `read(ref)` returns `ref[CHANGEFEED].current`. It keeps the `CHANGEFEED` symbol internal to the runtime, avoiding a cross-package import in every compiled component.
 
 ### Delta Provenance
 
-`ReactiveDelta` carries an optional `origin` field (`"local"` | `"import"` | undefined) forwarded from Loro's `LoroEventBatch.by`. This is a **provenance dimension** of the delta algebra — it describes *who caused the change*, not just *what changed*.
+`ChangeBase` carries an optional `origin` field (`"local"` | `"import"` | undefined). Backend adapters forward provenance information into this field (e.g., a Loro adapter would map `LoroEventBatch.by` to `origin`). This is a **provenance dimension** of the delta algebra — it describes *who caused the change*, not just *what changed*.
 
 Most region types ignore provenance (Text nodes, lists, conditionals have no ephemeral local state affected by origin). The exception is `inputTextRegion`, where cursor management depends on whether the edit is local or remote. See **Input Text Region Architecture** above.
 
-**Design principle:** Provenance is metadata on the delta, not a separate channel. This keeps the `subscribe` callback signature simple (`(delta: D) => void`) and lets consumers opt in to origin-awareness by reading `delta.origin`. Non-Loro reactive types (e.g., `LocalRef`) omit the field — consumers treat `undefined` as "unknown origin" and fall back to safe defaults.
+**Design principle:** Provenance is metadata on the change, not a separate channel. This keeps the `subscribe` callback signature simple (`(change: C) => void`) and lets consumers opt in to origin-awareness by reading `change.origin`. Non-backend reactive types (e.g., `LocalRef`) omit the field — consumers treat `undefined` as "unknown origin" and fall back to safe defaults.
 
-**Loro `by` field mapping:** Loro's `"local"` origin fires for both user input and local undo/redo operations. The delta algebra forwards this faithfully. For `inputTextRegion`, this is correct — both user typing and local undo/redo want `"end"` selectMode (cursor follows the edit). Remote edits want `"preserve"` selectMode (cursor stays put relative to surrounding text).
+**Origin semantics:** `"local"` origin fires for both user input and local undo/redo operations. For `inputTextRegion`, this is correct — both user typing and local undo/redo want `"end"` selectMode (cursor follows the edit). Remote edits want `"preserve"` selectMode (cursor stays put relative to surrounding text).
 
 ### Delta Dispatch Strategy
 

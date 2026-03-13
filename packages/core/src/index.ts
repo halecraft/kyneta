@@ -1,14 +1,14 @@
 /**
- * @loro-extended/kinetic
+ * @kyneta/core
  *
- * A compiled delta-driven UI framework for Loro documents.
+ * A compiled delta-driven UI framework powered by the CHANGEFEED protocol.
  *
  * Kinetic transforms natural TypeScript into code that directly consumes
- * Loro CRDT deltas for O(k) DOM updates, where k is the number of operations.
+ * structured deltas for O(k) DOM updates, where k is the number of operations.
  *
  * @example
  * ```ts
- * import { div, h1, p, mount } from "@loro-extended/kinetic"
+ * import { div, h1, p, mount } from "@kyneta/core"
  *
  * // Write natural TypeScript with builder pattern
  * const app = div(() => {
@@ -74,15 +74,17 @@ export {
 // Runtime API (re-exported from /runtime subpath)
 // =============================================================================
 
-// Compiled code imports from @loro-extended/kinetic/runtime directly.
+// Compiled code imports from @kyneta/core/runtime directly.
 // These are re-exported here for convenience.
 export {
   conditionalRegion,
   listRegion,
+  read,
   subscribe,
   subscribeMultiple,
   subscribeWithValue,
   unsubscribe,
+  valueRegion,
   type SubscriptionId,
 } from "./runtime/index.js"
 
@@ -107,4 +109,5 @@ export type {
 // Reactive Primitives
 // =============================================================================
 
-export { LocalRef, state, isLocalRef } from "./reactive/index.js"
+export type { LocalRef } from "./reactive/index.js"
+export { state, isLocalRef } from "./reactive/index.js"

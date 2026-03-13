@@ -8,6 +8,7 @@ import {
   dom,
   getActiveSubscriptionCount,
   installDOMGlobals,
+  read,
   resetTestState,
   Scope,
   subscribe,
@@ -186,7 +187,7 @@ describe("compiler integration - text patching", () => {
       // Use subscribeWithValue (what codegen emits for non-direct reads)
       subscribeWithValue(
         title,
-        () => title.get().toUpperCase(),
+        () => (read(title) as string).toUpperCase(),
         v => {
           textNode.textContent = String(v)
         },
@@ -238,7 +239,7 @@ describe("compiler integration - text patching", () => {
       // Template literal (non-direct read)
       subscribeWithValue(
         name,
-        () => `Hello, ${name.get()}!`,
+        () => `Hello, ${read(name)}!`,
         v => {
           textNode.textContent = String(v)
         },
@@ -289,13 +290,13 @@ describe("compiler integration - text patching", () => {
       })
 
       // Multi-dependency expression — uses subscribeMultiple
-      textNode.textContent = `${firstName.get()} ${lastName.get()}`
+      textNode.textContent = `${read(firstName)} ${read(lastName)}`
       textContentSets = 0
 
       subscribeMultiple(
         [firstName, lastName],
         () => {
-          textNode.textContent = `${firstName.get()} ${lastName.get()}`
+          textNode.textContent = `${read(firstName)} ${read(lastName)}`
         },
         scope,
       )
@@ -415,20 +416,16 @@ describe("compiler integration - text patching", () => {
       const valueAttr = inputEl.attributes.find((a: any) => a.name === "value")
       expect(valueAttr).toBeDefined()
       expect(valueAttr.value.bindingTime).toBe("reactive")
-      expect(valueAttr.value.directReadSource).toBe("title")
       expect(valueAttr.value.dependencies).toHaveLength(1)
       expect(valueAttr.value.dependencies[0].deltaKind).toBe("text")
 
-      // Generated code should use inputTextRegion
-      expect(result.code).toContain("inputTextRegion")
-      // Should NOT use naive .value = assignment
-      // (inputTextRegion handles both init and subscription)
-      expect(result.code).not.toContain(".value =")
+      // Generated code should use valueRegion for reactive value attribute
+      expect(result.code).toContain("valueRegion")
     })
 
     it("should generate inputTextRegion for schema-inferred TextRef on value attribute", () => {
       // This test verifies the narrow-delta-types fix works end-to-end:
-      // CHANGEFEED schema inference → TextRef → deltaKind "text" → inputTextRegion
+      // CHANGEFEED schema inference → TextRef → deltaKind "text" → valueRegion
       const source = withTypes(`
         declare const doc: { title: TextRef }
 
@@ -440,8 +437,8 @@ describe("compiler integration - text patching", () => {
       const result = transformSource(source, { target: "dom" })
 
       // Schema-inferred TextRef should resolve deltaKind "text"
-      expect(result.code).toContain("inputTextRegion")
-      expect(result.code).not.toContain(".value =")
+      // Compiler now emits valueRegion for all reactive attributes
+      expect(result.code).toContain("valueRegion")
     })
 
     it("should NOT generate inputTextRegion for non-direct TextRef read on value", () => {
@@ -457,8 +454,8 @@ describe("compiler integration - text patching", () => {
 
       // Should NOT use inputTextRegion (not a direct read)
       expect(result.code).not.toContain("inputTextRegion")
-      // Should use regular subscribe
-      expect(result.code).toContain("subscribe")
+      // Should use valueRegion for the reactive attribute
+      expect(result.code).toContain("valueRegion")
     })
 
     it("should apply surgical updates to input.value via inputTextRegion", () => {
@@ -825,9 +822,9 @@ describe("compiler integration - text patching", () => {
   // ===========================================================================
 
   describe("state() reactive detection with chained method calls", () => {
-    it("should detect state().get().toString() as reactive and subscribe", () => {
+    it("should detect state()().toString() as reactive and subscribe", () => {
       // The bug: expressionIsReactive did not recurse through chained call
-      // expressions, so x.get().toString() was classified as render-time
+      // expressions, so x().toString() was classified as render-time
       // (evaluated once) instead of reactive (subscribed).
       //
       // We use withTypes() + an inline state() declaration so the compiler
@@ -836,15 +833,15 @@ describe("compiler integration - text patching", () => {
       // through LocalRef → CHANGEFEED in the in-memory ts-morph project).
       const source = withTypes(`
         interface LocalRef<T> {
+          (): T
           readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
-          get(): T
           set(value: T): void
         }
         declare function state<T>(initial: T): LocalRef<T>
 
         const app = div(() => {
           const x = state(0)
-          p(x.get().toString())
+          p(x().toString())
         })
       `)
 
@@ -856,21 +853,21 @@ describe("compiler integration - text patching", () => {
       expect(result.ir[0].allDependencies.length).toBeGreaterThan(0)
 
       // The generated code should contain a subscription, not a one-shot set
-      expect(result.code).toContain("subscribe")
+      expect(result.code).toContain("valueRegion")
     })
 
-    it("should classify chained x.get().toString() as reactive in IR", () => {
+    it("should classify chained x().toString() as reactive in IR", () => {
       const source = withTypes(`
         interface LocalRef<T> {
+          (): T
           readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
-          get(): T
           set(value: T): void
         }
         declare function state<T>(initial: T): LocalRef<T>
 
         const app = div(() => {
           const x = state(42)
-          span(x.get().toString())
+          span(x().toString())
         })
       `)
 

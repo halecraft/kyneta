@@ -1,6 +1,9 @@
 /**
  * Tests for LocalRef and state() — local reactive primitives
  * using the CHANGEFEED protocol from @kyneta/schema.
+ *
+ * LocalRef uses the callable pattern from schema's readable interpreter:
+ * `ref()` returns the current value (replaces the old `.get()` method).
  */
 
 import { describe, expect, it, vi } from "vitest"
@@ -9,36 +12,42 @@ import {
   hasChangefeed,
   type ReplaceChange,
 } from "@kyneta/schema"
-import { LocalRef, state, isLocalRef } from "./local-ref.js"
+import { state, isLocalRef } from "./local-ref.js"
+import type { LocalRef } from "./local-ref.js"
 
 describe("LocalRef", () => {
   describe("state() factory", () => {
     it("creates a LocalRef", () => {
       const ref = state(0)
-      expect(ref).toBeInstanceOf(LocalRef)
+      expect(isLocalRef(ref)).toBe(true)
     })
 
     it("accepts any type as initial value", () => {
-      expect(state(0).get()).toBe(0)
-      expect(state("hello").get()).toBe("hello")
-      expect(state(true).get()).toBe(true)
-      expect(state(null).get()).toBe(null)
-      expect(state(undefined).get()).toBe(undefined)
-      expect(state({ x: 1 }).get()).toEqual({ x: 1 })
-      expect(state([1, 2, 3]).get()).toEqual([1, 2, 3])
+      expect(state(0)()).toBe(0)
+      expect(state("hello")()).toBe("hello")
+      expect(state(true)()).toBe(true)
+      expect(state(null)()).toBe(null)
+      expect(state(undefined)()).toBe(undefined)
+      expect(state({ x: 1 })()).toEqual({ x: 1 })
+      expect(state([1, 2, 3])()).toEqual([1, 2, 3])
+    })
+
+    it("returns a callable function", () => {
+      const ref = state(42)
+      expect(typeof ref).toBe("function")
     })
   })
 
-  describe("get() / set()", () => {
-    it("returns the initial value", () => {
+  describe("callable read / set()", () => {
+    it("returns the initial value when called", () => {
       const ref = state(42)
-      expect(ref.get()).toBe(42)
+      expect(ref()).toBe(42)
     })
 
     it("returns the updated value after set()", () => {
       const ref = state(0)
       ref.set(10)
-      expect(ref.get()).toBe(10)
+      expect(ref()).toBe(10)
     })
 
     it("supports multiple sequential updates", () => {
@@ -46,13 +55,13 @@ describe("LocalRef", () => {
       ref.set("b")
       ref.set("c")
       ref.set("d")
-      expect(ref.get()).toBe("d")
+      expect(ref()).toBe("d")
     })
 
     it("supports setting to the same value", () => {
       const ref = state(1)
       ref.set(1)
-      expect(ref.get()).toBe(1)
+      expect(ref()).toBe(1)
     })
   })
 
@@ -68,6 +77,11 @@ describe("LocalRef", () => {
       expect(isLocalRef("hello")).toBe(false)
       expect(isLocalRef({})).toBe(false)
       expect(isLocalRef([])).toBe(false)
+    })
+
+    it("returns false for plain functions", () => {
+      expect(isLocalRef(() => 42)).toBe(false)
+      expect(isLocalRef(function named() {})).toBe(false)
     })
   })
 
@@ -103,11 +117,11 @@ describe("LocalRef", () => {
         expect(ref[CHANGEFEED].current).toBe(5)
       })
 
-      it("is always in sync with get()", () => {
+      it("is always in sync with ref()", () => {
         const ref = state("start")
-        expect(ref[CHANGEFEED].current).toBe(ref.get())
+        expect(ref[CHANGEFEED].current).toBe(ref())
         ref.set("end")
-        expect(ref[CHANGEFEED].current).toBe(ref.get())
+        expect(ref[CHANGEFEED].current).toBe(ref())
       })
     })
 
@@ -252,7 +266,7 @@ describe("LocalRef", () => {
         let valueInHandler: number | undefined
 
         ref[CHANGEFEED].subscribe(() => {
-          valueInHandler = ref.get()
+          valueInHandler = ref()
         })
 
         ref.set(42)
@@ -291,8 +305,8 @@ describe("LocalRef", () => {
       expect(handlerA).toHaveBeenCalledTimes(1)
       expect(handlerB).toHaveBeenCalledTimes(1)
 
-      expect(a.get()).toBe(10)
-      expect(b.get()).toBe(20)
+      expect(a()).toBe(10)
+      expect(b()).toBe(20)
     })
   })
 })

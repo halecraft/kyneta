@@ -19,14 +19,13 @@
  */
 
 import {
-  CHANGEFEED,
   isTextChange,
   type ChangeBase,
   type HasChangefeed,
   type TextChangeOp,
 } from "@kyneta/schema"
 import type { Scope } from "./scope.js"
-import { subscribe } from "./subscribe.js"
+import { read, subscribe } from "./subscribe.js"
 
 // =============================================================================
 // Types
@@ -210,9 +209,9 @@ export function inputTextRegion(
   ref: unknown,
   scope: Scope,
 ): void {
-  // Read initial state via [CHANGEFEED] protocol
+  // Read initial state via the coalgebra observation morphism
   const changefeedRef = ref as HasChangefeed<string>
-  const readValue = () => changefeedRef[CHANGEFEED].current
+  const readValue = () => read(changefeedRef)
 
   // Set initial value
   input.value = readValue()
@@ -267,9 +266,9 @@ export function inputTextRegion(
  * ```
  */
 export function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
-  // Read initial state via [CHANGEFEED] protocol
+  // Read initial state via the coalgebra observation morphism
   const changefeedRef = ref as HasChangefeed<string>
-  const readValue = () => changefeedRef[CHANGEFEED].current
+  const readValue = () => read(changefeedRef)
 
   // Set initial value
   textNode.textContent = readValue()

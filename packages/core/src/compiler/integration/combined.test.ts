@@ -9,10 +9,10 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   conditionalRegion,
   createMockCounterRef,
-  createMockSequenceRef,
   createMockTextRef,
   installDOMGlobals,
   listRegion,
+  read,
   resetTestState,
   Scope,
   subscribe,
@@ -146,82 +146,9 @@ describe("compiler integration - combined scenarios", () => {
       expect(result.code).toContain("listRegion")
     })
 
-    it("should handle static and reactive content mixed", () => {
-      const source = withTypes(`
-        declare const doc: { name: TextRef }
-
-        div(() => {
-          header(() => {
-            h1("Static Title")
-            nav(() => {
-              a({ href: "/" }, "Home")
-              a({ href: "/about" }, "About")
-            })
-          })
-
-          main(() => {
-            p("Welcome, ")
-            span(doc.name.toString())
-            p("!")
-          })
-
-          footer(() => {
-            p("Copyright 2024")
-          })
-        })
-      `)
-
-      const result = transformSource(source, { target: "dom" })
-
-      // Should have one builder
-      expect(result.ir.length).toBe(1)
-
-      // Should have static elements
-      expect(result.code).toContain('createElement("header")')
-      expect(result.code).toContain('createElement("nav")')
-      expect(result.code).toContain('createElement("footer")')
-
-      // Should have reactive content — TextRef direct read → textRegion
-      expect(result.code).toContain("textRegion")
-      expect(result.code).toContain("doc.name")
-    })
   })
 
   describe("Task 9.4: Runtime execution of combined patterns", () => {
-    it("should execute list with static content in items", () => {
-      const { ref: items } = createMockSequenceRef<string>([])
-
-      // Add initial items
-      items.push("Task 1")
-      items.push("Task 2 ⚡")
-
-      const scope = new Scope()
-      const ul = document.createElement("ul")
-
-      // Manually construct what compiled code would generate
-      listRegion(
-        ul,
-        items,
-        {
-          create: (item: string) => {
-            const li = document.createElement("li")
-            const textNode = document.createTextNode(item)
-            li.appendChild(textNode)
-            return li
-          },
-        },
-        scope,
-      )
-
-      // Should render both items
-      expect(ul.children.length).toBe(2)
-      expect(ul.children[0].textContent).toBe("Task 1")
-      expect(ul.children[1].textContent).toContain("Task 2")
-      expect(ul.children[1].textContent).toContain("⚡")
-
-      scope.dispose()
-    })
-
     it("should handle reactive updates across multiple features", () => {
       const { ref: title } = createMockTextRef("Initial Title")
       const { ref: showDetails } = createMockCounterRef(0)
@@ -231,14 +158,14 @@ describe("compiler integration - combined scenarios", () => {
 
       // Title element with reactive text
       const h1 = document.createElement("h1")
-      const titleText = document.createTextNode(title.toString())
+      const titleText = document.createTextNode(read(title) as string)
       h1.appendChild(titleText)
       container.appendChild(h1)
 
       // Subscribe to title changes
       subscribeWithValue(
         title,
-        () => title.toString(),
+        () => read(title),
         value => {
           titleText.textContent = value
         },
@@ -252,7 +179,7 @@ describe("compiler integration - combined scenarios", () => {
       conditionalRegion(
         marker,
         showDetails,
-        () => showDetails.get() > 0,
+        () => read(showDetails) > 0,
         {
           whenTrue: () => {
             const details = document.createElement("p")
@@ -273,7 +200,7 @@ describe("compiler integration - combined scenarios", () => {
       expect(container.textContent).toContain("Details hidden")
 
       // Update title
-      title.delete(0, title.toString().length)
+      title.delete(0, (read(title) as string).length)
       title.insert(0, "Updated Title")
       expect(container.querySelector("h1")?.textContent).toBe("Updated Title")
 

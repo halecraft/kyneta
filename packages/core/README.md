@@ -2,11 +2,11 @@
 
 > 🧪 **Prototype** — This package is an experimental exploration of compiled delta-driven UI. Not ready for production use.
 
-A compiled delta-driven UI framework for Loro documents.
+A compiled delta-driven UI framework powered by the CHANGEFEED protocol from `@kyneta/schema`.
 
 ## Overview
 
-Kinetic transforms natural TypeScript into code that directly consumes Loro CRDT deltas for O(k) DOM updates, where k is the number of operations (not the size of your data).
+Kinetic transforms natural TypeScript into code that directly consumes structured deltas for O(k) DOM updates, where k is the number of operations (not the size of your data).
 
 ### The Problem
 
@@ -14,7 +14,7 @@ Traditional UI frameworks, including React, must diff entire data structures to 
 
 ### The Solution
 
-Loro CRDTs already know exactly what changed — they provide deltas like "insert item at index 3". Kinetic's compiler transforms natural TypeScript into code that directly consumes these deltas, updating only the affected DOM nodes.
+Reactive data sources that implement the `CHANGEFEED` protocol already know exactly what changed — they provide deltas like "insert item at index 3". Kinetic's compiler transforms natural TypeScript into code that directly consumes these deltas, updating only the affected DOM nodes.
 
 ```typescript
 // What you write (natural TypeScript)
@@ -48,7 +48,7 @@ p(doc.title.get())        // Also works: explicit .get()
 p(doc.title.toString())   // Also works: explicit .toString()
 ```
 
-The compiler detects that `doc.title` is a `TextRef` (reactive + snapshotable), synthesizes the `.get()` call internally, and routes it to `textRegion` for O(k) surgical text patching. For non-text refs like `CounterRef`, the compiler synthesizes `.get()` and uses `subscribeWithValue` for full-replacement updates.
+The compiler detects that `doc.title` implements `CHANGEFEED` (reactive + observable), synthesizes the value read internally, and routes it to `textRegion` for O(k) surgical text patching. For non-text refs, the compiler synthesizes a value read and uses `valueRegion` for full-replacement updates.
 
 ## Server-Side Rendering
 
@@ -113,6 +113,23 @@ Components:
 - Work with template cloning (serialized as placeholders, instantiated at runtime)
 - Can accept props, a builder callback, both, or neither
 
+## Local Reactive State
+
+Use `state()` to create local reactive refs that participate in the CHANGEFEED protocol:
+
+```typescript
+import { state } from "@kyneta/core"
+
+const count = state(0)
+
+div(() => {
+  p(`Count: ${count.get()}`)
+  button({ onClick: () => count.set(count.get() + 1) }, "Increment")
+})
+```
+
+`state()` returns a `LocalRef<T>` — a lightweight reactive primitive that implements the `CHANGEFEED` symbol from `@kyneta/schema`. The compiler detects it via the same type-level mechanism used for any Changefeed-bearing ref.
+
 ## Client & Server Code
 
 Inside builder functions, use labeled blocks to mark code as client-only or server-only:
@@ -143,7 +160,7 @@ These are standard TypeScript [labeled statements](https://developer.mozilla.org
 
 ## Prototype Status
 
-This is an experimental prototype exploring whether compilation can unlock O(k) UI updates from CRDT deltas.
+This is an experimental prototype exploring whether compilation can unlock O(k) UI updates from structured deltas.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -153,7 +170,7 @@ This is an experimental prototype exploring whether compilation can unlock O(k) 
 | Runtime primitives | ✅ | Scope, subscriptions, regions |
 | Compiler infrastructure | ✅ | IR, analysis, codegen |
 | Static compilation | ✅ | Elements, attributes, text |
-| Reactive expressions | ✅ | Type-based ref detection, bare-ref support |
+| Reactive expressions | ✅ | CHANGEFEED-based type detection, bare-ref support |
 | List transform | ✅ | O(k) verified with tests |
 | Conditional transform | ✅ | if/else-if/else chains |
 | Input binding | ✅ | text, checkbox, numeric |
@@ -162,10 +179,9 @@ This is an experimental prototype exploring whether compilation can unlock O(k) 
 | Component model | ✅ | Type-based ComponentFactory detection |
 | Lazy scopes | ✅ | Skip allocation for static list items |
 | Target labels | ✅ | `client:` / `server:` blocks |
+| Local reactive state | ✅ | `state()` / `LocalRef` via CHANGEFEED |
 | Vite plugin | 🔴 | Placeholder only |
 | SSR + Hydration | 🟡 | Codegen + target labels done, hydration wiring needed |
-
-**Test coverage**: 1000 tests passing
 
 ## How It Works
 
@@ -180,18 +196,20 @@ Kinetic uses a multi-phase compiler:
 5. **Code Generation** (`codegen/dom.ts`, `codegen/html.ts`) — Transforms IR to JavaScript
 6. **Orchestration** (`transform.ts`) — Coordinates the pipeline, hoists template declarations
 
-The key insight is **type-based reactive detection**: the compiler uses TypeScript's type checker to identify expressions involving Loro ref types (TextRef, ListRef, etc.), then generates appropriate subscriptions. Component functions are also detected via type inspection (`ComponentFactory`).
+The key insight is **CHANGEFEED-based reactive detection**: the compiler uses TypeScript's type checker to identify expressions whose types carry the `CHANGEFEED` symbol (from `@kyneta/schema`), then generates appropriate subscriptions. The delta kind (text, sequence, etc.) is extracted from the `Changefeed`'s change type to dispatch to the optimal region handler. Component functions are also detected via type inspection (`ComponentFactory`).
 
 ### Runtime
 
 The compiled code calls into a minimal runtime:
 
 - `Scope` — Ownership tracking with parent-child cleanup (lazy allocation, numeric IDs)
-- `subscribe` / `subscribeWithValue` — Loro ref subscriptions (delta-aware)
+- `subscribe` — CHANGEFEED-based subscription (delta-aware)
+- `valueRegion` — Replace-semantic updates for any Changefeed or computed expression
 - `listRegion` — Delta-based list updates with batch insert/delete
 - `conditionalRegion` — Branch swapping
 - `textRegion` — Character-level text patching via `insertData`/`deleteData`
-- `bindTextValue` / `bindChecked` — Two-way input binding
+- `inputTextRegion` — Surgical `<input>`/`<textarea>` value patching via `setRangeText`
+- `read(ref)` — Universal value accessor: `ref[CHANGEFEED].current`
 
 ### Template Cloning
 
@@ -234,7 +252,7 @@ This means you cannot currently run Kinetic code without compilation.
 ┌─────────────────────────────────────────────────────────────┐
 │                    Kinetic Runtime                          │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐    │
-│  │ mount()     │ │ Regions     │ │ Loro Integration    │    │
+│  │ mount()     │ │ Regions     │ │ CHANGEFEED Protocol │    │
 │  │ dispose()   │ │ Management  │ │ (delta handlers)    │    │
 │  └─────────────┘ └─────────────┘ └─────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
@@ -243,8 +261,9 @@ This means you cannot currently run Kinetic code without compilation.
 ## Running Tests
 
 ```bash
-# Run all kinetic tests
 pnpm turbo run verify --filter=@kyneta/core -- logic
+# Run all tests
+cd packages/core && npx vitest run
 
 # Run specific test file
 pnpm turbo run verify --filter=@kyneta/core -- logic -- -t 'list region'
@@ -264,6 +283,22 @@ expect(scope.id).toBe("scope-1")
 expect(scope.id).toBe(1)
 ```
 
+### CHANGEFEED protocol (replaces REACTIVE + SNAPSHOT)
+
+The reactive protocol has been unified from two symbols (`REACTIVE` + `SNAPSHOT`) to a single `CHANGEFEED` symbol from `@kyneta/schema`:
+
+```typescript
+// Old (two-symbol design from @loro-extended/reactive)
+ref[REACTIVE](ref, callback)   // subscribe
+ref[SNAPSHOT](ref)              // read current value
+
+// New (single-symbol CHANGEFEED coalgebra from @kyneta/schema)
+ref[CHANGEFEED].subscribe(cb)  // subscribe
+ref[CHANGEFEED].current        // read current value
+```
+
+The compiler, runtime, and all region handlers now use this single protocol. Any object implementing `CHANGEFEED` is automatically detected as reactive.
+
 ## What's Next
 
 The remaining work to complete the prototype:
@@ -272,8 +307,6 @@ The remaining work to complete the prototype:
 2. **SSR + Hydration** — Server rendering with client hydration
 3. **Integration Test** — Full app validation
 4. **Component builder callbacks** — Passing children to components
-
-See `.plans/kinetic-delta-driven-ui.md` for the complete plan.
 
 ## Comparison
 

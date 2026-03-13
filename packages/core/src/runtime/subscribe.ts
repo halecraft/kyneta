@@ -15,6 +15,7 @@ import {
   CHANGEFEED,
   hasChangefeed,
   type ChangeBase,
+  type HasChangefeed,
 } from "@kyneta/schema"
 import type { Scope } from "./scope.js"
 
@@ -130,8 +131,99 @@ export function unsubscribe(id: SubscriptionId): boolean {
   return true
 }
 
+// =============================================================================
+// Universal Read Helper
+// =============================================================================
+
+/**
+ * Read the current value from a Changefeed ref.
+ *
+ * This is the observation morphism of the coalgebra — it extracts the
+ * current state (head) from a Changefeed. Generated code calls this
+ * instead of embedding `ref[CHANGEFEED].current` directly, which would
+ * require importing the `CHANGEFEED` symbol into every compiled component.
+ *
+ * @param ref - A reactive value (must have [CHANGEFEED] property)
+ * @returns The current value of the ref
+ *
+ * @example
+ * ```typescript
+ * const title: TextRef = doc.title
+ * read(title) // → "Hello World"
+ * ```
+ */
+export function read<T = unknown>(ref: HasChangefeed<T>): T {
+  return ref[CHANGEFEED].current
+}
+
+// =============================================================================
+// Value Region — Unified Fallback Region
+// =============================================================================
+
+/**
+ * Wire one or more Changefeed refs to a DOM target via re-read semantics.
+ *
+ * This is the terminal object in the delta region algebra — a region whose
+ * delta dispatch strategy is always "replace." It re-reads via `getValue()`
+ * and applies via `onValue()` on every change from any ref.
+ *
+ * Follows the same three-phase pattern as `textRegion` and `listRegion`:
+ * 1. **Initial render** — `onValue(getValue())`
+ * 2. **Subscribe** — `subscribe(ref, ..., scope)` for each ref
+ * 3. **Delta dispatch** — always re-evaluate: `onValue(getValue())`
+ *
+ * Unifies the previous `subscribeWithValue` (single ref) and
+ * `subscribeMultiple` + manual init (multiple refs) into one function.
+ *
+ * @param refs - Array of reactive values to subscribe to
+ * @param getValue - Closure evaluating the user's expression
+ * @param onValue - Applies the value to the DOM target
+ * @param scope - The scope that owns these subscriptions
+ *
+ * @example
+ * ```typescript
+ * // Single ref — counter display
+ * valueRegion([doc.count], () => read(doc.count), (v) => {
+ *   textNode.textContent = String(v)
+ * }, scope)
+ *
+ * // Multiple refs — derived expression
+ * valueRegion([doc.firstName, doc.lastName], () => `${read(doc.firstName)} ${read(doc.lastName)}`, (v) => {
+ *   textNode.textContent = v
+ * }, scope)
+ * ```
+ */
+export function valueRegion<T>(
+  refs: unknown[],
+  getValue: () => T,
+  onValue: (value: T) => void,
+  scope: Scope,
+): void {
+  // Phase 1: Initial render
+  onValue(getValue())
+
+  // Phase 2: Subscribe to all refs
+  for (const ref of refs) {
+    subscribe(
+      ref,
+      (_change: ChangeBase) => {
+        // Phase 3: Delta dispatch — always re-read
+        onValue(getValue())
+      },
+      scope,
+    )
+  }
+}
+
+// =============================================================================
+// Legacy Subscription Helpers (Deprecated)
+// =============================================================================
+
 /**
  * Subscribe to a reactive ref and call handler immediately with current value.
+ *
+ * @deprecated Use {@link valueRegion} instead.
+ * `subscribeWithValue(ref, gv, ov, scope)` → `valueRegion([ref], gv, ov, scope)`
  *
  * This is useful for reactive expressions where you want to:
  * 1. Set the initial value
@@ -173,6 +265,9 @@ export function subscribeWithValue<T>(
 
 /**
  * Subscribe to multiple refs and call handler when any changes.
+ *
+ * @deprecated Use {@link valueRegion} instead.
+ * `subscribeMultiple(refs, handler, scope)` → `valueRegion(refs, getValue, onValue, scope)`
  *
  * @param refs - Array of reactive values
  * @param handler - Called when any ref changes

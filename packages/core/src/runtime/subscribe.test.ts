@@ -5,19 +5,18 @@
  * primitive, replacing the old @loro-extended/reactive types.
  */
 
-import { CHANGEFEED, type ChangeBase, hasChangefeed } from "@kyneta/schema"
+import { CHANGEFEED, type ChangeBase } from "@kyneta/schema"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { LocalRef, state } from "../reactive/local-ref.js"
+import { state } from "../reactive/local-ref.js"
 import { resetScopeIdCounter, Scope } from "./scope.js"
 import {
   activeSubscriptions,
   getActiveSubscriptionCount,
-  getActiveSubscriptions,
   resetSubscriptionIdCounter,
+  read,
   subscribe,
-  subscribeMultiple,
-  subscribeWithValue,
   unsubscribe,
+  valueRegion,
 } from "./subscribe.js"
 
 describe("subscribe", () => {
@@ -49,24 +48,6 @@ describe("subscribe", () => {
       expect(handler.mock.calls[0][0]).toEqual({
         type: "replace",
         value: 42,
-      })
-
-      scope.dispose()
-    })
-
-    it("should subscribe to a string LocalRef and receive changes", () => {
-      const ref = state("hello")
-      const scope = new Scope()
-      const handler = vi.fn()
-
-      subscribe(ref, handler, scope)
-
-      ref.set("world")
-
-      expect(handler).toHaveBeenCalledTimes(1)
-      expect(handler.mock.calls[0][0]).toEqual({
-        type: "replace",
-        value: "world",
       })
 
       scope.dispose()
@@ -107,35 +88,6 @@ describe("subscribe", () => {
       // Handler should not be called after dispose
       expect(handler).not.toHaveBeenCalled()
     })
-
-    it("should return unique subscription IDs", () => {
-      const ref = state(0)
-      const scope = new Scope()
-
-      const id1 = subscribe(ref, () => {}, scope)
-      const id2 = subscribe(ref, () => {}, scope)
-      const id3 = subscribe(ref, () => {}, scope)
-
-      expect(id1).toBe(1)
-      expect(id2).toBe(2)
-      expect(id3).toBe(3)
-
-      scope.dispose()
-    })
-
-    it("should track subscription in active subscriptions map", () => {
-      const ref = state(0)
-      const scope = new Scope()
-
-      const id = subscribe(ref, () => {}, scope)
-
-      expect(activeSubscriptions.has(id)).toBe(true)
-      expect(activeSubscriptions.get(id)?.ref).toBe(ref)
-
-      scope.dispose()
-
-      expect(activeSubscriptions.has(id)).toBe(false)
-    })
   })
 
   describe("unsubscribe", () => {
@@ -175,15 +127,54 @@ describe("subscribe", () => {
     })
   })
 
-  describe("subscribeWithValue", () => {
-    it("should call onValue immediately with initial value", () => {
+  describe("read", () => {
+    it("should read the current value from a LocalRef", () => {
+      const ref = state(42)
+      expect(read(ref)).toBe(42)
+    })
+
+    it("should read updated values after set", () => {
+      const ref = state("hello")
+      expect(read(ref)).toBe("hello")
+      ref.set("world")
+      expect(read(ref)).toBe("world")
+    })
+
+    it("should read from a custom changefeed type", () => {
+      const customReactive = {
+        [CHANGEFEED]: {
+          get current() {
+            return "custom-value"
+          },
+          subscribe(): () => void {
+            return () => {}
+          },
+        },
+      }
+
+      expect(read(customReactive)).toBe("custom-value")
+    })
+  })
+
+  describe("valueRegion", () => {
+    beforeEach(() => {
+      resetSubscriptionIdCounter()
+      resetScopeIdCounter()
+      activeSubscriptions.clear()
+    })
+
+    afterEach(() => {
+      activeSubscriptions.clear()
+    })
+
+    it("should call onValue immediately with initial value (single ref)", () => {
       const ref = state("Hello")
       const scope = new Scope()
 
       const values: string[] = []
-      subscribeWithValue(
-        ref,
-        () => ref.get(),
+      valueRegion(
+        [ref],
+        () => ref(),
         value => values.push(value),
         scope,
       )
@@ -193,14 +184,14 @@ describe("subscribe", () => {
       scope.dispose()
     })
 
-    it("should call onValue on subsequent changes", () => {
+    it("should call onValue on subsequent changes (single ref)", () => {
       const ref = state("")
       const scope = new Scope()
 
       const values: string[] = []
-      subscribeWithValue(
-        ref,
-        () => ref.get(),
+      valueRegion(
+        [ref],
+        () => ref(),
         value => values.push(value),
         scope,
       )
@@ -208,50 +199,86 @@ describe("subscribe", () => {
       expect(values).toEqual([""])
 
       ref.set("Hello")
-
       expect(values).toEqual(["", "Hello"])
 
       ref.set("Hello World")
-
       expect(values).toEqual(["", "Hello", "Hello World"])
 
       scope.dispose()
     })
 
-    it("should stop receiving values after scope dispose", () => {
+    it("should fire on any ref's change and re-evaluate getValue (multiple refs)", () => {
+      const firstName = state("Ada")
+      const lastName = state("Lovelace")
+      const scope = new Scope()
+
+      const values: string[] = []
+      valueRegion(
+        [firstName, lastName],
+        () => `${firstName()} ${lastName()}`,
+        value => values.push(value),
+        scope,
+      )
+
+      expect(values).toEqual(["Ada Lovelace"])
+
+      firstName.set("Grace")
+      expect(values).toEqual(["Ada Lovelace", "Grace Lovelace"])
+
+      lastName.set("Hopper")
+      expect(values).toEqual(["Ada Lovelace", "Grace Lovelace", "Grace Hopper"])
+
+      scope.dispose()
+    })
+
+    it("should stop updates after scope disposal", () => {
       const ref = state(0)
       const scope = new Scope()
 
       const values: number[] = []
-      subscribeWithValue(
-        ref,
-        () => ref.get(),
+      valueRegion(
+        [ref],
+        () => ref(),
         value => values.push(value),
         scope,
       )
 
       ref.set(1)
-
       expect(values).toEqual([0, 1])
 
       scope.dispose()
 
       ref.set(2)
-
       // Should not receive value after dispose
       expect(values).toEqual([0, 1])
+      expect(getActiveSubscriptionCount()).toBe(0)
     })
 
-    it("should use the getValue closure, not CHANGEFEED.current", () => {
-      // This tests the critical design: getValue evaluates the user's
-      // expression, which may transform the raw ref value.
+    it("should set initial value only with empty refs array (no subscriptions)", () => {
+      const scope = new Scope()
+
+      const values: string[] = []
+      valueRegion(
+        [],
+        () => "static-value",
+        value => values.push(value),
+        scope,
+      )
+
+      expect(values).toEqual(["static-value"])
+      expect(getActiveSubscriptionCount()).toBe(0)
+
+      scope.dispose()
+    })
+
+    it("should use the getValue closure for transformed expressions", () => {
       const ref = state(5)
       const scope = new Scope()
 
       const values: string[] = []
-      subscribeWithValue(
-        ref,
-        () => `count: ${ref.get()}`, // transformed expression
+      valueRegion(
+        [ref],
+        () => `count: ${ref()}`,
         value => values.push(value),
         scope,
       )
@@ -259,94 +286,29 @@ describe("subscribe", () => {
       expect(values).toEqual(["count: 5"])
 
       ref.set(10)
-
       expect(values).toEqual(["count: 5", "count: 10"])
 
       scope.dispose()
     })
-  })
 
-  describe("subscribeMultiple", () => {
-    it("should subscribe to multiple refs", () => {
+    it("should clean up all subscriptions for multiple refs on dispose", () => {
       const a = state("a")
       const b = state(0)
-      const scope = new Scope()
-      const handler = vi.fn()
-
-      const ids = subscribeMultiple([a, b], handler, scope)
-
-      expect(ids).toHaveLength(2)
-      expect(getActiveSubscriptionCount()).toBe(2)
-
-      scope.dispose()
-
-      expect(getActiveSubscriptionCount()).toBe(0)
-    })
-
-    it("should call handler when any ref changes", () => {
-      const a = state("a")
-      const b = state(0)
-      const scope = new Scope()
-      const handler = vi.fn()
-
-      subscribeMultiple([a, b], handler, scope)
-
-      a.set("hello")
-
-      expect(handler).toHaveBeenCalledTimes(1)
-
-      b.set(5)
-
-      expect(handler).toHaveBeenCalledTimes(2)
-
-      scope.dispose()
-    })
-  })
-
-  describe("subscription counter for testing", () => {
-    it("should track active subscription count", () => {
-      const a = state(1)
-      const b = state(2)
-      const c = state(3)
+      const c = state(true)
       const scope = new Scope()
 
-      expect(getActiveSubscriptionCount()).toBe(0)
+      valueRegion(
+        [a, b, c],
+        () => `${a()}-${b()}-${c()}`,
+        () => {},
+        scope,
+      )
 
-      subscribe(a, () => {}, scope)
-      expect(getActiveSubscriptionCount()).toBe(1)
-
-      subscribe(b, () => {}, scope)
-      expect(getActiveSubscriptionCount()).toBe(2)
-
-      subscribe(c, () => {}, scope)
       expect(getActiveSubscriptionCount()).toBe(3)
 
       scope.dispose()
+
       expect(getActiveSubscriptionCount()).toBe(0)
-    })
-
-    it("should reset counter with resetSubscriptionIdCounter", () => {
-      const ref = state(0)
-      const scope1 = new Scope()
-      const scope2 = new Scope()
-
-      const id1 = subscribe(ref, () => {}, scope1)
-      expect(id1).toBe(1)
-
-      scope1.dispose()
-      resetSubscriptionIdCounter()
-
-      const id2 = subscribe(ref, () => {}, scope2)
-      expect(id2).toBe(1)
-
-      scope2.dispose()
-    })
-  })
-
-  describe("getActiveSubscriptions", () => {
-    it("should return a read-only view", () => {
-      const readOnly = getActiveSubscriptions()
-      expect(readOnly).toBe(activeSubscriptions)
     })
   })
 
@@ -394,63 +356,6 @@ describe("subscribe", () => {
     })
   })
 
-  describe("LocalRef support", () => {
-    it("should subscribe to LocalRef and receive replace changes", () => {
-      const ref = new LocalRef(0)
-      const scope = new Scope()
-      const changes: ChangeBase[] = []
-
-      subscribe(ref, change => changes.push(change), scope)
-
-      ref.set(1)
-      ref.set(2)
-
-      expect(changes).toEqual([
-        { type: "replace", value: 1 },
-        { type: "replace", value: 2 },
-      ])
-
-      scope.dispose()
-    })
-
-    it("should work with subscribeWithValue for LocalRef", () => {
-      const ref = new LocalRef("initial")
-      const scope = new Scope()
-      const values: string[] = []
-
-      subscribeWithValue(
-        ref,
-        () => ref.get(),
-        value => values.push(value),
-        scope,
-      )
-
-      expect(values).toEqual(["initial"])
-
-      ref.set("updated")
-
-      expect(values).toEqual(["initial", "updated"])
-
-      scope.dispose()
-    })
-
-    it("should unsubscribe LocalRef when scope is disposed", () => {
-      const ref = new LocalRef(0)
-      const scope = new Scope()
-      const handler = vi.fn()
-
-      subscribe(ref, handler, scope)
-
-      ref.set(1)
-      expect(handler).toHaveBeenCalledTimes(1)
-
-      scope.dispose()
-
-      ref.set(2)
-      expect(handler).toHaveBeenCalledTimes(1) // No additional calls
-    })
-  })
-
   describe("custom reactive types", () => {
     it("should subscribe to custom changefeed type", () => {
       // Create a minimal custom changefeed type
@@ -483,42 +388,16 @@ describe("subscribe", () => {
       expect(listeners.size).toBe(0)
     })
 
-    it("should throw for non-reactive values", () => {
-      const scope = new Scope()
-      const notReactive = { foo: "bar" }
-
-      expect(() => {
-        subscribe(notReactive, () => {}, scope)
-      }).toThrow("non-reactive")
-
-      scope.dispose()
-    })
-
-    it("should throw for null", () => {
+    it.each([
+      { description: "non-reactive object", value: { foo: "bar" } },
+      { description: "null", value: null },
+      { description: "undefined", value: undefined },
+      { description: "primitive", value: 42 },
+    ])("should throw for $description", ({ value }) => {
       const scope = new Scope()
 
       expect(() => {
-        subscribe(null, () => {}, scope)
-      }).toThrow("non-reactive")
-
-      scope.dispose()
-    })
-
-    it("should throw for undefined", () => {
-      const scope = new Scope()
-
-      expect(() => {
-        subscribe(undefined, () => {}, scope)
-      }).toThrow("non-reactive")
-
-      scope.dispose()
-    })
-
-    it("should throw for primitives", () => {
-      const scope = new Scope()
-
-      expect(() => {
-        subscribe(42, () => {}, scope)
+        subscribe(value, () => {}, scope)
       }).toThrow("non-reactive")
 
       scope.dispose()

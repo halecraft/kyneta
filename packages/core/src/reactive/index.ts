@@ -9,4 +9,5 @@
  * @packageDocumentation
  */
 
-export { LocalRef, state, isLocalRef } from "./local-ref.js"
+export type { LocalRef } from "./local-ref.js"
+export { state, isLocalRef } from "./local-ref.js"

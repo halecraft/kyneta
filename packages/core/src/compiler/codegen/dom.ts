@@ -200,24 +200,14 @@ function generateReactiveContentSubscription(
     lines.push(
       `${ind}textRegion(${textVar}, ${node.directReadSource}, ${state.scopeVar})`,
     )
-  } else if (node.dependencies.length === 1) {
-    // Single dependency - use subscribeWithValue
-    const dep = node.dependencies[0]
+  } else {
+    // Use valueRegion — the terminal object in the delta region algebra.
+    // Unifies single-dep and multi-dep into one path.
+    const depSources = node.dependencies.map(d => d.source).join(", ")
     lines.push(
-      `${ind}subscribeWithValue(${dep.source}, () => ${node.source}, (v) => {`,
+      `${ind}valueRegion([${depSources}], () => ${node.source}, (v) => {`,
     )
     lines.push(`${ind}${state.indent}${textVar}.textContent = String(v)`)
-    lines.push(`${ind}}, ${state.scopeVar})`)
-  } else {
-    // Multiple dependencies - use subscribeMultiple with initial render
-    const depSources = node.dependencies.map(d => d.source).join(", ")
-    // Set initial value
-    lines.push(`${ind}${textVar}.textContent = String(${node.source})`)
-    // Subscribe to all dependencies
-    lines.push(`${ind}subscribeMultiple([${depSources}], () => {`)
-    lines.push(
-      `${ind}${state.indent}${textVar}.textContent = String(${node.source})`,
-    )
     lines.push(`${ind}}, ${state.scopeVar})`)
   }
 
@@ -298,8 +288,13 @@ function generateAttributeSet(
   attr: AttributeNode,
   state: CodegenState,
 ): string[] {
-  // Skip static set when inputTextRegion will handle initialization
+  // Skip when inputTextRegion will handle initialization
   if (isInputTextRegionAttribute(attr)) {
+    return []
+  }
+
+  // Skip when valueRegion will handle initialization (reactive attributes)
+  if (attr.value.bindingTime === "reactive") {
     return []
   }
 
@@ -345,22 +340,16 @@ function generateAttributeSubscription(
     return lines
   }
 
-  // Generate the update code using the shared helper
-  const updateCode = generateAttributeUpdateCode(elementVar, attr.name, attr.value.source)
-
-  if (deps.length === 1) {
-    // Single dependency - use subscribe
-    const dep = deps[0]
-    lines.push(`${ind}subscribe(${dep.source}, () => {`)
-    lines.push(`${ind}${state.indent}${updateCode}`)
-    lines.push(`${ind}}, ${state.scopeVar})`)
-  } else {
-    // Multiple dependencies - use subscribeMultiple
-    const depSources = deps.map(d => d.source).join(", ")
-    lines.push(`${ind}subscribeMultiple([${depSources}], () => {`)
-    lines.push(`${ind}${state.indent}${updateCode}`)
-    lines.push(`${ind}}, ${state.scopeVar})`)
-  }
+  // Use valueRegion with getter/setter split.
+  // The getter evaluates the user's expression; the setter applies the value
+  // to the DOM via generateAttributeUpdateCode with a parameterized value.
+  const depSources = deps.map(d => d.source).join(", ")
+  const updateCode = generateAttributeUpdateCode(elementVar, attr.name, "v")
+  lines.push(
+    `${ind}valueRegion([${depSources}], () => ${attr.value.source}, (v) => {`,
+  )
+  lines.push(`${ind}${state.indent}${updateCode}`)
+  lines.push(`${ind}}, ${state.scopeVar})`)
 
   return lines
 }
@@ -1015,18 +1004,12 @@ function generateHoleSetup(
       } else if (contentNode.bindingTime === "reactive") {
         // Reactive - needs subscription
         const deps = contentNode.dependencies
-        const updateCode = generateAttributeUpdateCode(nodeRef, attrName, contentNode.source)
-        if (deps.length === 1) {
-          const dep = deps[0]
-          lines.push(`${ind}subscribe(${dep.source}, () => {`)
-          lines.push(`${ind}${state.indent}${updateCode}`)
-          lines.push(`${ind}}, ${state.scopeVar})`)
-        } else if (deps.length > 1) {
+        if (deps.length > 0) {
           const depSources = deps.map(d => d.source).join(", ")
-          // Set initial value
-          lines.push(`${ind}${updateCode}`)
-          // Subscribe to all deps
-          lines.push(`${ind}subscribeMultiple([${depSources}], () => {`)
+          const updateCode = generateAttributeUpdateCode(nodeRef, attrName, "v")
+          lines.push(
+            `${ind}valueRegion([${depSources}], () => ${contentNode.source}, (v) => {`,
+          )
           lines.push(`${ind}${state.indent}${updateCode}`)
           lines.push(`${ind}}, ${state.scopeVar})`)
         }

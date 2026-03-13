@@ -239,39 +239,37 @@ export function collectRequiredImports(ir: BuilderNode[]): {
           collectFromChildren(branch.body)
         }
       } else if (child.kind === "element") {
-        // Check for multi-dependency attributes and inputTextRegion candidates
         for (const attr of child.attributes) {
+          // Reactive attributes use valueRegion (except inputTextRegion)
           if (
             attr.value.bindingTime === "reactive" &&
-            attr.value.dependencies.length > 1
+            attr.value.dependencies.length > 0
           ) {
-            runtime.add("subscribeMultiple")
-          }
-          // Check for delta-aware value attribute (enables inputTextRegion)
-          if (isInputTextRegionAttribute(attr)) {
-            runtime.add("inputTextRegion")
+            if (isInputTextRegionAttribute(attr)) {
+              runtime.add("inputTextRegion")
+            } else {
+              runtime.add("valueRegion")
+            }
           }
         }
         // Recurse into element children
         collectFromChildren(child.children)
       } else if (child.kind === "content") {
-        // Check for direct TextRef read (enables textRegion optimization)
         if (isTextRegionContent(child)) {
           runtime.add("textRegion")
+        } else if (child.bindingTime === "reactive" && child.dependencies.length > 0) {
+          // Non-textRegion reactive content uses valueRegion
+          runtime.add("valueRegion")
         }
-        // Check for multi-dependency content (text nodes)
-        if (child.bindingTime === "reactive" && child.dependencies.length > 1) {
-          runtime.add("subscribeMultiple")
+        // Check if synthesized source contains read() call
+        if (child.directReadSource) {
+          runtime.add("read")
         }
       }
     }
   }
 
   function collectFromBuilder(node: BuilderNode): void {
-    if (node.isReactive) {
-      runtime.add("subscribe")
-      runtime.add("subscribeWithValue")
-    }
     collectFromChildren(node.children)
   }
 

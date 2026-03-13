@@ -2,12 +2,13 @@
  * Local reactive state primitive.
  *
  * `LocalRef<T>` is a simple reactive value that participates in the
- * `CHANGEFEED` protocol from `@kyneta/schema`. It replaces the old
- * `LocalRef` from `@loro-extended/reactive` which used the two-symbol
- * `REACTIVE`+`SNAPSHOT` design.
+ * `CHANGEFEED` protocol from `@kyneta/schema`. It uses the callable
+ * pattern established by schema's readable interpreter — the ref itself
+ * is a function, so `ref()` returns the current value.
  *
  * Use `state(initial)` to create a `LocalRef<T>`. The ref:
- * - Exposes `.get()` / `.set(value)` for reading and writing
+ * - Is callable: `ref()` returns current value (replaces old `.get()`)
+ * - Exposes `.set(value)` for writing
  * - Implements `[CHANGEFEED]` for the reactive protocol
  * - Emits `ReplaceChange<T>` on every `.set()` call
  *
@@ -17,14 +18,14 @@
  * import { CHANGEFEED } from "@kyneta/schema"
  *
  * const count = state(0)
- * count.get()  // 0
+ * count()  // 0
  *
  * count[CHANGEFEED].subscribe((change) => {
  *   console.log("new value:", change.value)
  * })
  *
  * count.set(1)  // subscriber fires with { type: "replace", value: 1 }
- * count.get()   // 1
+ * count()       // 1
  * ```
  *
  * @packageDocumentation
@@ -39,7 +40,17 @@ import {
 } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
-// LocalRef
+// Brand symbol for isLocalRef detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Internal brand symbol. Attached to every LocalRef function-object so
+ * `isLocalRef` can identify them without relying on `instanceof`.
+ */
+const LOCAL_REF_BRAND: unique symbol = Symbol("LocalRef")
+
+// ---------------------------------------------------------------------------
+// LocalRef type
 // ---------------------------------------------------------------------------
 
 /**
@@ -47,68 +58,22 @@ import {
  * can be subscribed to by the Kinetic runtime (and any other consumer
  * that understands `[CHANGEFEED]`).
  *
- * Emits `ReplaceChange<T>` — the simplest change type — on every
- * `.set()` call. The change carries the new value.
+ * The ref is callable — `ref()` returns the current value (like
+ * schema's readable interpreter). `.set(value)` writes a new value
+ * and notifies subscribers with a `ReplaceChange<T>`.
  */
-export class LocalRef<T> {
-  /** Current value — mutated in place by `.set()`. */
-  #value: T
+export interface LocalRef<T> {
+  /** Read the current value. */
+  (): T
 
-  /** Set of active subscriber callbacks. */
-  #subscribers = new Set<(change: ReplaceChange<T>) => void>()
+  /** Write a new value and notify all subscribers. */
+  set(value: T): void
 
-  constructor(initial: T) {
-    this.#value = initial
-  }
+  /** The changefeed for this ref. */
+  readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
 
-  /**
-   * Read the current value.
-   */
-  get(): T {
-    return this.#value
-  }
-
-  /**
-   * Write a new value and notify all subscribers.
-   *
-   * Subscribers are called synchronously, in insertion order.
-   * Each receives a `ReplaceChange<T>` with the new value.
-   */
-  set(value: T): void {
-    this.#value = value
-    const change = replaceChange(value)
-    for (const cb of this.#subscribers) {
-      cb(change)
-    }
-  }
-
-  /**
-   * The changefeed for this ref.
-   *
-   * Uses `getOrCreateChangefeed` from `@kyneta/schema` for
-   * WeakMap-based caching — ensures referential identity:
-   * `ref[CHANGEFEED] === ref[CHANGEFEED]`.
-   */
-  get [CHANGEFEED](): Changefeed<T, ReplaceChange<T>> {
-    return getOrCreateChangefeed(this, () => {
-      // Capture `this` for the closure — the changefeed object is
-      // cached per-instance by the WeakMap, so `self` is stable.
-      const self = this
-      return {
-        get current(): T {
-          return self.#value
-        },
-        subscribe(
-          callback: (change: ReplaceChange<T>) => void,
-        ): () => void {
-          self.#subscribers.add(callback)
-          return () => {
-            self.#subscribers.delete(callback)
-          }
-        },
-      }
-    })
-  }
+  /** @internal Brand for isLocalRef detection. */
+  readonly [LOCAL_REF_BRAND]: true
 }
 
 // ---------------------------------------------------------------------------
@@ -119,20 +84,62 @@ export class LocalRef<T> {
  * Create a local reactive value.
  *
  * This is the primary API for local state in Kinetic components.
+ * Returns a callable `LocalRef<T>` — call it to read, use `.set()` to write.
  *
  * @param initial - The initial value
- * @returns A `LocalRef<T>` that participates in the `CHANGEFEED` protocol
+ * @returns A callable `LocalRef<T>` that participates in the `CHANGEFEED` protocol
  *
  * @example
  * ```typescript
  * const count = state(0)
- * count.get()   // 0
+ * count()     // 0
  * count.set(1)  // notifies subscribers
- * count.get()   // 1
+ * count()     // 1
  * ```
  */
 export function state<T>(initial: T): LocalRef<T> {
-  return new LocalRef(initial)
+  // Mutable state captured by closure
+  let value: T = initial
+  const subscribers = new Set<(change: ReplaceChange<T>) => void>()
+
+  // The callable ref — arrow function that returns current value
+  const ref: any = () => value
+
+  // .set() — write and notify
+  ref.set = (newValue: T): void => {
+    value = newValue
+    const change = replaceChange(newValue)
+    for (const cb of subscribers) {
+      cb(change)
+    }
+  }
+
+  // [CHANGEFEED] — uses getOrCreateChangefeed for WeakMap-based caching
+  // (ensures referential identity: ref[CHANGEFEED] === ref[CHANGEFEED])
+  Object.defineProperty(ref, CHANGEFEED, {
+    get(): Changefeed<T, ReplaceChange<T>> {
+      return getOrCreateChangefeed(ref, () => ({
+        get current(): T {
+          return value
+        },
+        subscribe(
+          callback: (change: ReplaceChange<T>) => void,
+        ): () => void {
+          subscribers.add(callback)
+          return () => {
+            subscribers.delete(callback)
+          }
+        },
+      }))
+    },
+    enumerable: false,
+    configurable: false,
+  })
+
+  // Brand for isLocalRef
+  ref[LOCAL_REF_BRAND] = true
+
+  return ref as LocalRef<T>
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +148,13 @@ export function state<T>(initial: T): LocalRef<T> {
 
 /**
  * Check if a value is a `LocalRef`.
+ *
+ * Uses a brand symbol rather than `instanceof` since LocalRef is now
+ * a function-object created by `state()`, not a class instance.
  */
 export function isLocalRef(value: unknown): value is LocalRef<unknown> {
-  return value instanceof LocalRef
+  return (
+    typeof value === "function" &&
+    (value as any)[LOCAL_REF_BRAND] === true
+  )
 }

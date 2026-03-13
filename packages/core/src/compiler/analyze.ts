@@ -311,6 +311,14 @@ export function expressionIsReactive(expr: Expression): boolean {
     const call = expr as CallExpression
     const calleeExpr = call.getExpression()
 
+    // Check if the callee itself is a Changefeed type (callable ref pattern).
+    // e.g., x() where x is a LocalRef<T> — the callee `x` has a Changefeed
+    // type, so calling it (reading the value) is reactive.
+    const calleeType = calleeExpr.getType()
+    if (isChangefeedType(calleeType)) {
+      return true
+    }
+
     // Check if calling a method on a reactive type
     if (calleeExpr.getKind() === SyntaxKind.PropertyAccessExpression) {
       const propAccess = calleeExpr as PropertyAccessExpression
@@ -319,10 +327,10 @@ export function expressionIsReactive(expr: Expression): boolean {
         return true
       }
       // Recursively check the callee's object expression for deeper chains.
-      // e.g., x.get().toString() — the immediate object x.get() returns
-      // number (not reactive), but x.get() itself calls a method on x
+      // e.g., x().toString() — the immediate object x() returns
+      // number (not reactive), but x itself is a callable ref
       // which IS reactive. Without this, chained expressions like
-      // x.get().toString() are misclassified as render-time.
+      // x().toString() are misclassified as render-time.
       if (expressionIsReactive(propAccess.getExpression())) {
         return true
       }
@@ -504,6 +512,11 @@ export function extractDependencies(expr: Expression): Dependency[] {
  * detectDirectRead(parse("title.toString()")) // → "title"
  * detectDirectRead(parse("title.get().toUpperCase()")) // → undefined (root is outer call)
  * detectDirectRead(parse("title.get() + subtitle.get()")) // → undefined (root is binary)
+ *
+ * @deprecated Replaced by Changefeed-native analysis in `analyzeExpression`.
+ * The compiler now asks "is this expression itself a Changefeed?" via
+ * `isChangefeedType` instead of pattern-matching on method names. Retained
+ * only for documentation of the previous approach.
  */
 export function detectDirectRead(expr: Expression): string | undefined {
   // 1. Must be a CallExpression
@@ -569,6 +582,10 @@ export function detectDirectRead(expr: Expression): string | undefined {
  * detectImplicitRead(parse("doc.title.get()")) // → undefined (CallExpression)
  * detectImplicitRead(parse("someString"))      // → undefined (not reactive)
  */
+/**
+ * @deprecated Replaced by Changefeed-native analysis in `analyzeExpression`.
+ * Retained only for documentation of the previous approach.
+ */
 export function detectImplicitRead(expr: Expression): string | undefined {
   // 1. Must NOT be a CallExpression — those are handled by detectDirectRead
   if (expr.getKind() === SyntaxKind.CallExpression) {
@@ -592,6 +609,24 @@ export function detectImplicitRead(expr: Expression): string | undefined {
 
 /**
  * Analyze an expression and return the appropriate content node.
+ *
+ * Uses Changefeed-native analysis: the single question "is this expression
+ * itself a Changefeed?" replaces the old `detectDirectRead` / `detectImplicitRead`
+ * heuristics. The user controls the boundary:
+ *
+ * - `doc.title` (TextRef — IS a Changefeed) → `directReadSource` set, `read()` synthesized
+ * - `doc.title()` (string — NOT a Changefeed) → user's expression as-is
+ * - `doc.title.get()` (string — NOT a Changefeed) → user's expression as-is
+ *
+ * When the expression IS a Changefeed:
+ * - `directReadSource` = expression text (e.g. `"doc.title"`)
+ * - `source` = `read(doc.title)` — synthesized via the universal read helper
+ * - Codegen dispatches on `directReadSource` + `deltaKind` for surgical regions
+ *
+ * When the expression is NOT a Changefeed but depends on one(s):
+ * - `directReadSource` is NOT set
+ * - `source` = user's expression verbatim
+ * - Codegen emits `valueRegion` with replace semantics
  */
 export function analyzeExpression(expr: Expression): ContentNode {
   const span = getSpan(expr)
@@ -614,23 +649,19 @@ export function analyzeExpression(expr: Expression): ContentNode {
   // Check if reactive
   if (expressionIsReactive(expr)) {
     const deps = extractDependencies(expr)
-    // Check for direct read (enables surgical text patching)
-    const directReadSource = detectDirectRead(expr)
-    if (directReadSource) {
-      return createContent(source, "reactive", deps, span, directReadSource)
+
+    // Changefeed-native check: is this expression itself a Changefeed?
+    // If yes, the user passed the coalgebra — we can dispatch on delta kind.
+    // If no, the user extracted a value — replace semantics.
+    const exprType = expr.getType()
+    if (isChangefeedType(exprType)) {
+      // Expression IS a Changefeed — set directReadSource and synthesize read()
+      const directReadSource = source
+      const synthesizedSource = `read(${source})`
+      return createContent(synthesizedSource, "reactive", deps, span, directReadSource)
     }
 
-    // Check for implicit read — bare reactive ref in content position
-    // e.g., `doc.title` (a TextRef) without `.get()` or `.toString()`
-    const implicitReadSource = detectImplicitRead(expr)
-    if (implicitReadSource) {
-      // Synthesize `.get()` in the IR source so generated code produces a
-      // value, not a ref object. The directReadSource is the bare ref itself,
-      // which textRegion/inputTextRegion use to subscribe and call [SNAPSHOT].
-      const synthesizedSource = `${implicitReadSource}.get()`
-      return createContent(synthesizedSource, "reactive", deps, span, implicitReadSource)
-    }
-
+    // Expression is NOT a Changefeed but depends on one(s) — use as-is
     return createContent(source, "reactive", deps, span)
   }
 
