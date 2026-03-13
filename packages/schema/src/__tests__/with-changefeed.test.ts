@@ -4,8 +4,10 @@ import {
   LoroSchema,
   interpret,
   enrich,
-  readableInterpreter,
-  withMutation,
+  bottomInterpreter,
+  withReadable,
+  withCaching,
+  withWritable,
   createWritableContext,
   withChangefeed,
   hasChangefeed,
@@ -13,7 +15,7 @@ import {
 } from "../index.js"
 import type { Readable, Writable } from "../index.js"
 
-const writableInterpreter = withMutation(readableInterpreter)
+const writableInterpreter = withWritable(withCaching(withReadable(bottomInterpreter)))
 
 // ---------------------------------------------------------------------------
 // Shared fixture
@@ -46,7 +48,7 @@ function createChangefeedChatDoc(storeOverrides: Record<string, unknown> = {}) {
   }
   const ctx = createWritableContext(store)
   const enriched = enrich(writableInterpreter, withChangefeed)
-  const doc = interpret(chatDocSchema, enriched, ctx) as Readable<
+  const doc = interpret(chatDocSchema, enriched, ctx) as unknown as Readable<
     typeof chatDocSchema
   > &
     Writable<typeof chatDocSchema>
@@ -197,7 +199,7 @@ describe("withChangefeed: transaction integration", () => {
     })
     const ctx = createWritableContext(store)
     const enriched = enrich(writableInterpreter, withChangefeed)
-    const doc = interpret(schema, enriched, ctx) as Readable<typeof schema> &
+    const doc = interpret(schema, enriched, ctx) as unknown as Readable<typeof schema> &
       Writable<typeof schema>
 
     ctx.beginTransaction()

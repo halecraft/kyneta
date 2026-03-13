@@ -157,7 +157,7 @@ export type {
   ReadableMapRef,
 } from "./interpreters/readable.js"
 export {
-  withMutation,
+  withWritable,
   createWritableContext,
   CONTEXT,
   hasContext,

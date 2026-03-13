@@ -3,15 +3,17 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  readableInterpreter,
-  withMutation,
+  bottomInterpreter,
+  withReadable,
+  withCaching,
+  withWritable,
   createWritableContext,
   enrich,
   withChangefeed,
 } from "../index.js"
 import type { Readable, Writable } from "../index.js"
 
-const writableInterpreter = withMutation(readableInterpreter)
+const writableInterpreter = withWritable(withCaching(withReadable(bottomInterpreter)))
 
 // ---------------------------------------------------------------------------
 // Shared fixture
@@ -134,7 +136,7 @@ describe("transaction: commit replays through wrappable ctx.dispatch", () => {
     const store = { x: 0, y: 0 }
     const ctx = createWritableContext(store)
     const enriched = enrich(writableInterpreter, withChangefeed)
-    const doc = interpret(pointSchema, enriched, ctx) as Readable<
+    const doc = interpret(pointSchema, enriched, ctx) as unknown as Readable<
       typeof pointSchema
     > &
       Writable<typeof pointSchema>

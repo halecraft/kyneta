@@ -374,18 +374,18 @@ The `planCacheUpdate` / `applyCacheOps` decomposition applies to collections. Pr
 
 ## Phases
 
-### Phase 1: Foundation — `bottomInterpreter`, `READ`, Capability Types 🔴
+### Phase 1: Foundation — `bottomInterpreter`, `READ`, Capability Types 🟢
 
 Introduce the universal foundation and the compile-time capability lattice.
 
-- Task: Create `src/interpreters/bottom.ts`. 🔴
-- Task: Define runtime symbols: `READ = Symbol.for("kyneta:read")`. 🔴
-- Task: Define phantom brand symbols: `declare const NAVIGATION: unique symbol`, `declare const CACHING: unique symbol`. Export the symbol *types* (not values — they're `declare const`). 🔴
-- Task: Define capability interfaces: `HasRead` (has `[READ]`), `HasNavigation extends HasRead` (has `[NAVIGATION]: true`), `HasCaching extends HasNavigation` (has optional `[INVALIDATE]`, has `[CACHING]: true`). 🔴
-- Task: Implement `makeCarrier(): HasRead`. The carrier is `(...args: unknown[]) => ref[READ](...args)` where `READ` defaults to a function that throws `"No reader configured — compose with withReadable to enable reading"`. 🔴
-- Task: Implement `bottomInterpreter: Interpreter<unknown, HasRead>`. Each case returns `makeCarrier()`. The `annotated` case delegates to `inner()` when present. The `product`, `sequence`, `map`, and `sum` cases ignore field thunks / item closures / variants. 🔴
-- Task: Export `READ`, `NAVIGATION`, `CACHING`, `HasRead`, `HasNavigation`, `HasCaching`, `makeCarrier`, `bottomInterpreter` from `index.ts`. 🔴
-- Task: Tests in `bottom.test.ts`: 🔴
+- Task: Create `src/interpreters/bottom.ts`. 🟢
+- Task: Define runtime symbols: `READ = Symbol.for("kyneta:read")`. 🟢
+- Task: Define phantom brand symbols: `declare const NAVIGATION: unique symbol`, `declare const CACHING: unique symbol`. Export the symbol *types* (not values — they're `declare const`). 🟢
+- Task: Define capability interfaces: `HasRead` (has `[READ]`), `HasNavigation extends HasRead` (has `[NAVIGATION]: true`), `HasCaching extends HasNavigation` (has optional `[INVALIDATE]`, has `[CACHING]: true`). 🟢
+- Task: Implement `makeCarrier(): HasRead`. The carrier is `(...args: unknown[]) => ref[READ](...args)` where `READ` defaults to a function that throws `"No reader configured — compose with withReadable to enable reading"`. 🟢
+- Task: Implement `bottomInterpreter: Interpreter<unknown, HasRead>`. Each case returns `makeCarrier()`. The `annotated` case delegates to `inner()` when present. The `product`, `sequence`, `map`, and `sum` cases ignore field thunks / item closures / variants. 🟢
+- Task: Export `READ`, `NAVIGATION`, `CACHING`, `HasRead`, `HasNavigation`, `HasCaching`, `makeCarrier`, `bottomInterpreter` from `index.ts`. 🟡 (`NAVIGATION` and `CACHING` phantom type re-exports from `index.ts` missing — exported from `bottom.ts` only. Minor: consumers use the interfaces, not the raw phantom symbols.)
+- Task: Tests in `bottom.test.ts`: 🟢
   - Every schema kind produces a callable function carrier.
   - Calling a bottom carrier throws `"No reader configured"`.
   - `READ` symbol is present on every carrier.
@@ -393,21 +393,21 @@ Introduce the universal foundation and the compile-time capability lattice.
   - Annotated nodes with inner schemas delegate correctly.
   - **Type-level tests**: `typeof bottomInterpreter` is `Interpreter<unknown, HasRead>`. The result extends `HasRead`. The result does NOT extend `HasNavigation` (using `expectTypeOf` negative assertion).
 
-### Phase 2: Refinement — `withReadable` Transformer 🔴
+### Phase 2: Refinement — `withReadable` Transformer 🟢
 
 Extract store reading and structural navigation from `readableInterpreter` into a standalone transformer.
 
-- Task: Extract shared sum dispatch into `dispatchSum(value, schema, variants)` in `src/store.ts`. Update `plainInterpreter` to use it. 🔴
-- Task: Create `src/interpreters/with-readable.ts`. Implement `withReadable<A extends HasRead>(base: Interpreter<RefContext, A>): Interpreter<RefContext, A & HasNavigation>`. 🔴
-- Task: **Scalar case**: call base, set `ref[READ] = () => readByPath(store, path)`. Add `[Symbol.toPrimitive]`. 🔴
-- Task: **Product case**: call base, set `ref[READ] = () => readByPath(store, path)`. Define enumerable lazy getters that force the thunk on *every* access (no caching). Use `isNonNullObject` from `guards.ts` consistently. 🔴
-- Task: **Sequence case**: call base, set `ref[READ]`. Attach `.at(i)` (calls `item(i)` fresh each time), `.get(i)`, `.length`, `[Symbol.iterator]`. 🔴
-- Task: **Map case**: call base, set `ref[READ]`. Attach `.at(key)`, `.get(key)`, `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`. Use `isNonNullObject` consistently. 🔴
-- Task: **Sum case**: call base, then use `dispatchSum` for store-driven variant resolution. 🔴
-- Task: **Annotated case**: dispatch on tag. `"text"` → set `READ` to text-coercing reader + `toPrimitive`. `"counter"` → set `READ` to number-coercing reader + hint-aware `toPrimitive`. `"doc"`, `"movable"`, `"tree"` → delegate to inner. Default → delegate to inner or treat as scalar. 🔴
-- Task: Each case downcasts thunks/closures: `const baseFields = fields as Readonly<Record<string, () => A>>` before passing to `base`. 🔴
-- Task: Export `withReadable` from `index.ts`. 🔴
-- Task: Tests in `with-readable.test.ts`: 🔴
+- Task: Extract shared sum dispatch into `dispatchSum(value, schema, variants)` in `src/store.ts`. Update `plainInterpreter` to use it. 🟡 (`dispatchSum` extracted and exported. `plainInterpreter` NOT yet updated to use it — still has inline sum dispatch logic.)
+- Task: Create `src/interpreters/with-readable.ts`. Implement `withReadable<A extends HasRead>(base: Interpreter<RefContext, A>): Interpreter<RefContext, A & HasNavigation>`. 🟢
+- Task: **Scalar case**: call base, set `ref[READ] = () => readByPath(store, path)`. Add `[Symbol.toPrimitive]`. 🟢
+- Task: **Product case**: call base, set `ref[READ] = () => readByPath(store, path)`. Define enumerable lazy getters that force the thunk on *every* access (no caching). Use `isNonNullObject` from `guards.ts` consistently. 🟢
+- Task: **Sequence case**: call base, set `ref[READ]`. Attach `.at(i)` (calls `item(i)` fresh each time), `.get(i)`, `.length`, `[Symbol.iterator]`. 🟢
+- Task: **Map case**: call base, set `ref[READ]`. Attach `.at(key)`, `.get(key)`, `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`. Use `isNonNullObject` consistently. 🟢
+- Task: **Sum case**: call base, then use `dispatchSum` for store-driven variant resolution. 🟢
+- Task: **Annotated case**: dispatch on tag. `"text"` → set `READ` to text-coercing reader + `toPrimitive`. `"counter"` → set `READ` to number-coercing reader + hint-aware `toPrimitive`. `"doc"`, `"movable"`, `"tree"` → delegate to inner. Default → delegate to inner or treat as scalar. 🟢
+- Task: Each case downcasts thunks/closures: `const baseFields = fields as Readonly<Record<string, () => A>>` before passing to `base`. 🟢
+- Task: Export `withReadable` from `index.ts`. 🟢
+- Task: Tests in `with-readable.test.ts`: 🟢
   - `withReadable(bottomInterpreter)` produces callable refs that return store values.
   - Product field navigation: `ref.title()` returns the field value.
   - Sequence `.at(i)`, `.length`, `.get(i)`, iterator all work.
@@ -418,30 +418,30 @@ Extract store reading and structural navigation from `readableInterpreter` into 
   - Bounds checking: `.at(-1)` and `.at(outOfBounds)` return `undefined`.
   - **Type-level tests**: result of `withReadable(bottomInterpreter)` extends `HasNavigation`. `withReadable(bottomInterpreter)` extends `HasRead`.
   - **Compile-time negative test**: `// @ts-expect-error` on `withReadable(plainInterpreter)` — `plainInterpreter` is `Interpreter<unknown, unknown>`, not `Interpreter<_, HasRead>`.
-- Task: Tests for `dispatchSum` in `store.test.ts` (or `sum-dispatch.test.ts`): discriminated dispatch, nullable dispatch, fallback to first variant, missing discriminant. 🔴
+- Task: Tests for `dispatchSum` in `store.test.ts` (or `sum-dispatch.test.ts`): discriminated dispatch, nullable dispatch, fallback to first variant, missing discriminant. 🟢 (9 tests in `with-readable.test.ts`)
 
-### Phase 3: Interposition — `withCaching` Transformer and New `INVALIDATE` 🔴
+### Phase 3: Interposition — `withCaching` Transformer and New `INVALIDATE` 🟢
 
 Extract caching from `readableInterpreter` into a standalone transformer. Redefine `INVALIDATE` to accept changes.
 
-- Task: Create `src/interpreters/with-caching.ts`. Implement `withCaching<A extends HasNavigation>(base: Interpreter<RefContext, A>): Interpreter<RefContext, A & HasCaching>`. 🔴
-- Task: Move `INVALIDATE` symbol definition from `readable.ts` into `with-caching.ts`. The symbol string `"schema:invalidate"` does not change. 🔴
-- Task: Implement `planCacheUpdate(change: ChangeBase, kind: "sequence" | "map" | "product"): CacheOp[]` as a pure function. Export for testing. 🔴
-- Task: Implement `applyCacheOps<K>(cache: Map<K, unknown>, ops: CacheOp<K>[]): void`. Export for testing. 🔴
-- Task: **Product case**: call base, wrap field getters with `resolved`/`cached` memoization. Expose `INVALIDATE(change)`: delegates to `planCacheUpdate(change, "product")` → always `clear` for `ReplaceChange`, then clears all `resolved` flags. 🔴
-- Task: **Sequence case**: call base, wrap `.at(i)` with `childCache: Map<number, unknown>`. Expose `INVALIDATE(change)`: delegates to `planCacheUpdate(change, "sequence")` → `applyCacheOps(childCache, ops)`. 🔴
-- Task: **Map case**: call base, wrap `.at(key)` with `childCache: Map<string, unknown>`. Expose `INVALIDATE(change)`: delegates to `planCacheUpdate(change, "map")` → `applyCacheOps(childCache, ops)`. 🔴
-- Task: **Scalar, sum, annotated cases**: delegate to base (no caching needed at leaves). 🔴
-- Task: Each case downcasts thunks/closures before passing to base. 🔴
-- Task: Export `withCaching`, `INVALIDATE`, `planCacheUpdate`, `applyCacheOps` from `index.ts`. 🔴
-- Task: Tests in `with-caching.test.ts`: 🔴
+- Task: Create `src/interpreters/with-caching.ts`. Implement `withCaching<A extends HasNavigation>(base: Interpreter<RefContext, A>): Interpreter<RefContext, A & HasCaching>`. 🟢
+- Task: Move `INVALIDATE` symbol definition from `readable.ts` into `with-caching.ts`. The symbol string `"schema:invalidate"` does not change. 🟢 (`readable.ts` now imports from `with-caching.ts` and re-exports for backward compat.)
+- Task: Implement `planCacheUpdate(change: ChangeBase, kind: "sequence" | "map" | "product"): CacheOp[]` as a pure function. Export for testing. 🟢
+- Task: Implement `applyCacheOps<K>(cache: Map<K, unknown>, ops: CacheOp<K>[]): void`. Export for testing. 🟢
+- Task: **Product case**: call base, wrap field getters with `resolved`/`cached` memoization. Expose `INVALIDATE(change)`: delegates to `planCacheUpdate(change, "product")` → always `clear` for `ReplaceChange`, then clears all `resolved` flags. 🟢
+- Task: **Sequence case**: call base, wrap `.at(i)` with `childCache: Map<number, unknown>`. Expose `INVALIDATE(change)`: delegates to `planCacheUpdate(change, "sequence")` → `applyCacheOps(childCache, ops)`. 🟢
+- Task: **Map case**: call base, wrap `.at(key)` with `childCache: Map<string, unknown>`. Expose `INVALIDATE(change)`: delegates to `planCacheUpdate(change, "map")` → `applyCacheOps(childCache, ops)`. 🟢
+- Task: **Scalar, sum, annotated cases**: delegate to base (no caching needed at leaves). 🟢
+- Task: Each case downcasts thunks/closures before passing to base. 🟢
+- Task: Export `withCaching`, `INVALIDATE`, `planCacheUpdate`, `applyCacheOps` from `index.ts`. 🟢
+- Task: Tests in `with-caching.test.ts`: 🟢
   - `withCaching(withReadable(bottomInterpreter))` produces refs with referential identity (`ref.title === ref.title`, `seq.at(0) === seq.at(0)`, `map.at("k") === map.at("k")`).
   - After `INVALIDATE` with `sequenceChange`, `.at()` returns fresh refs.
   - After `INVALIDATE` with `mapChange({ delete: ["k"] })`, `map.at("k")` returns a fresh ref.
   - After `INVALIDATE` with `replaceChange` on a product, all field caches cleared.
   - After `INVALIDATE` with an unrecognized change type, full clear.
   - **Type-level tests**: result extends `HasCaching`. `// @ts-expect-error` on `withCaching(bottomInterpreter)`.
-- Task: Table-driven tests for `planCacheUpdate` in `plan-cache-update.test.ts`: 🔴
+- Task: Table-driven tests for `planCacheUpdate` in `plan-cache-update.test.ts`: 🟢
   - Sequence insert-at-middle: `[{ retain: 2 }, { insert: ["x"] }]` → `[{ type: "shift", from: 2, delta: 1 }]`.
   - Sequence delete: `[{ retain: 1 }, { delete: 1 }]` → `[{ type: "delete", keys: [1] }, { type: "shift", from: 2, delta: -1 }]`.
   - Sequence append: `[{ retain: N }, { insert: items }]` → `[]` (no existing entries affected).
@@ -451,17 +451,17 @@ Extract caching from `readableInterpreter` into a standalone transformer. Redefi
   - Product replace: `replaceChange(...)` → `[{ type: "clear" }]`.
   - Unrecognized change: `{ type: "unknown" }` → `[{ type: "clear" }]`.
 
-### Phase 4: Extension — `withWritable` (Rename + Invalidate-Before-Dispatch) 🔴
+### Phase 4: Extension — `withWritable` (Rename + Invalidate-Before-Dispatch) 🟢
 
 Rename `withMutation` to `withWritable`. Change to invalidate before dispatch. Guard for stacks without caching.
 
-- Task: Rename `withMutation` to `withWritable` in `writable.ts`. Update the function signature to `<A>(base: Interpreter<RefContext, A>): Interpreter<WritableContext, A>`. Update all JSDoc and comments. 🔴
-- Task: Update every mutation method to: (1) construct the change, (2) call `if (INVALIDATE in result) result[INVALIDATE](change)`, (3) call `ctx.dispatch(path, change)`. Remove all post-dispatch `INVALIDATE` calls. 🔴
-- Task: For scalar, text, and counter — `INVALIDATE` is not present (`withCaching` doesn't add it to leaves), so the guard skips it. Verify no regression. 🔴
-- Task: Remove `withMutation` export. Export only `withWritable`. 🔴
-- Task: Import `INVALIDATE` from `with-caching.ts` (instead of `readable.ts`). 🔴
-- Task: Update `index.ts`: export `withWritable` (remove `withMutation`). 🔴
-- Task: Tests in `writable.test.ts` (rewritten): 🔴
+- Task: Rename `withMutation` to `withWritable` in `writable.ts`. Update the function signature to `<A>(base: Interpreter<RefContext, A>): Interpreter<WritableContext, A>`. Update all JSDoc and comments. 🟢 (Function and JSDoc updated. ~9 stale `withMutation` references remain in comments across `readable.ts`, `with-changefeed.ts`, `combinators.ts` — cosmetic only.)
+- Task: Update every mutation method to: (1) construct the change, (2) call `if (INVALIDATE in result) result[INVALIDATE](change)`, (3) call `ctx.dispatch(path, change)`. Remove all post-dispatch `INVALIDATE` calls. 🟢
+- Task: For scalar, text, and counter — `INVALIDATE` is not present (`withCaching` doesn't add it to leaves), so the guard skips it. Verify no regression. 🟢
+- Task: Remove `withMutation` export. Export only `withWritable`. 🟢
+- Task: Import `INVALIDATE` from `with-caching.ts` (instead of `readable.ts`). 🟢
+- Task: Update `index.ts`: export `withWritable` (remove `withMutation`). 🟢
+- Task: Tests in `writable.test.ts` (rewritten): 🟢
   - `withWritable(withReadable(bottomInterpreter))` (no caching): `push()` works, store updated, no crash from missing `INVALIDATE`.
   - `withWritable(withCaching(withReadable(bottomInterpreter)))`: after `push()`, `.at(newIndex)` returns the correct ref immediately (cache pre-updated before dispatch).
   - After `insert(1, item)` on a 3-item cached list: `.at(1)` is a new ref, `.at(2)` is fresh (shifted), not the stale cached ref.

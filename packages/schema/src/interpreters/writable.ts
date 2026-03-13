@@ -1,22 +1,22 @@
-// Writable interpreter layer — mutation methods composed onto readable refs.
+// Writable interpreter layer — mutation methods composed onto any carrier.
 //
 // This module provides:
 // 1. WritableContext (extends RefContext with dispatch + transactions)
 // 2. CONTEXT symbol — composability hook for discovering a ref's context
 // 3. Mutation-only ref interfaces: ScalarRef, TextRef, CounterRef, SequenceRef
-// 4. withMutation(base) — interpreter transformer that adds mutation methods
+// 4. withWritable(base) — interpreter transformer that adds mutation methods
 // 5. Writable<S> type-level interpretation
 //
 // Shared types used across interpreters (RefContext, Plain<S>) live in
 // `../interpreter-types.ts` and are re-exported here for backward compat.
 //
-// The readable interpreter (`readableInterpreter`) owns reading + structural
-// navigation. This module owns mutation. Observation is owned by the
-// changefeed layer. The three compose:
+// withWritable is a pure extension — it has no bound on A and works with
+// any carrier. Mutation methods are bolted on; reading is not required.
+// Invalidate-before-dispatch: if the carrier has [INVALIDATE] (from
+// withCaching), the change is sent to the cache BEFORE dispatch, so
+// subscribers see consistent caches.
 //
-//   withCompositionalChangefeed(withMutation(readableInterpreter))
-//
-// See theory §5.4 (capability decomposition) and readable-interpreter.md.
+// See .plans/interpreter-decomposition.md §Phase 4.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import {
@@ -48,7 +48,7 @@ import {
 } from "../store.js"
 import {
   INVALIDATE,
-} from "./readable.js"
+} from "./with-caching.js"
 import type { RefContext, Plain } from "../interpreter-types.js"
 
 // Re-export store utilities for backward compatibility
@@ -66,7 +66,7 @@ export type { RefContext, Plain } from "../interpreter-types.js"
  * This enables `change()` and other utilities to discover the context
  * from any ref without a WeakMap or re-interpretation.
  *
- * Follows the same pattern as `INVALIDATE` in `readable.ts` — a
+ * Follows the same pattern as `INVALIDATE` in `with-caching.ts` — a
  * composability hook defined in the layer that owns the concept.
  *
  * Uses `Symbol.for` so multiple copies share the same identity.
@@ -338,34 +338,37 @@ export type Writable<S extends Schema> =
                 : unknown
 
 // ---------------------------------------------------------------------------
-// withMutation — interpreter transformer
+// withWritable — interpreter transformer
 // ---------------------------------------------------------------------------
 
 /**
  * An interpreter transformer that adds mutation methods to any
- * ref-producing interpreter. Takes an `Interpreter<RefContext, A>` and
+ * carrier-producing interpreter. Takes an `Interpreter<RefContext, A>` and
  * returns an `Interpreter<WritableContext, A>`.
  *
  * The base interpreter's cases receive a `WritableContext` (which extends
- * `RefContext`), so they work unchanged. `withMutation` adds mutation
+ * `RefContext`), so they work unchanged. `withWritable` adds mutation
  * methods at leaf and collection cases, and passes through for purely
  * structural cases (product, sum).
  *
- * **Cache invalidation:** After dispatching mutation changes,
- * `withMutation` calls `result[INVALIDATE](key?)` on the base's
- * sequence/map refs to keep child caches consistent.
+ * **Invalidate-before-dispatch:** For nodes that have `[INVALIDATE]`
+ * (provided by `withCaching`), `withWritable` calls
+ * `result[INVALIDATE](change)` BEFORE `ctx.dispatch(path, change)`.
+ * This ensures caches are consistent when subscribers fire during
+ * dispatch. When caching is absent (e.g. `withWritable(withReadable(
+ * bottomInterpreter))`), the `INVALIDATE in result` guard skips it.
  *
  * ```ts
- * const interp = withMutation(readableInterpreter)
+ * const interp = withWritable(withCaching(withReadable(bottomInterpreter)))
  * const ctx = createWritableContext(store)
  * const doc = interpret(schema, interp, ctx)
- * doc.title.insert(0, "Hello")   // mutation via withMutation
- * doc.title()                    // "Hello" via readableInterpreter
+ * doc.title.insert(0, "Hello")   // mutation via withWritable
+ * doc.title()                    // "Hello" via withReadable
  * ```
  */
-export function withMutation(
-  base: Interpreter<RefContext, unknown>,
-): Interpreter<WritableContext, unknown> {
+export function withWritable<A>(
+  base: Interpreter<RefContext, A>,
+): Interpreter<WritableContext, A> {
   return {
     // --- Scalar ---------------------------------------------------------------
     // Add .set() to the base scalar ref.
@@ -375,11 +378,13 @@ export function withMutation(
       ctx: WritableContext,
       path: Path,
       schema: ScalarSchema,
-    ): unknown {
+    ): A {
       const result = base.scalar(ctx, path, schema) as any
 
       result.set = (value: unknown): void => {
-        ctx.dispatch(path, replaceChange(value))
+        const change = replaceChange(value)
+        if (INVALIDATE in result) result[INVALIDATE](change)
+        ctx.dispatch(path, change)
       }
 
       return result
@@ -392,13 +397,15 @@ export function withMutation(
       ctx: WritableContext,
       path: Path,
       schema: ProductSchema,
-      fields: Readonly<Record<string, () => unknown>>,
-    ): unknown {
+      fields: Readonly<Record<string, () => A>>,
+    ): A {
       const result = base.product(ctx, path, schema, fields) as any
 
       Object.defineProperty(result, "set", {
         value: (value: unknown): void => {
-          ctx.dispatch(path, replaceChange(value))
+          const change = replaceChange(value)
+          if (INVALIDATE in result) result[INVALIDATE](change)
+          ctx.dispatch(path, change)
         },
         enumerable: false,
         configurable: true,
@@ -409,46 +416,41 @@ export function withMutation(
 
     // --- Sequence -------------------------------------------------------------
     // Add .push(), .insert(), .delete() to the base sequence ref.
-    // Call [INVALIDATE] after each mutation to keep caches consistent.
+    // Invalidate-before-dispatch: cache is updated BEFORE ctx.dispatch
+    // so subscribers see consistent state.
 
     sequence(
       ctx: WritableContext,
       path: Path,
       schema: SequenceSchema,
-      item: (index: number) => unknown,
-    ): unknown {
+      item: (index: number) => A,
+    ): A {
       const result = base.sequence(ctx, path, schema, item) as any
 
       result.push = (...items: unknown[]): void => {
         const arr = readByPath(ctx.store, path)
         const length = Array.isArray(arr) ? arr.length : 0
-        ctx.dispatch(
-          path,
-          sequenceChange([{ retain: length }, { insert: items }]),
-        )
-        result[INVALIDATE]()
+        const change = sequenceChange([{ retain: length }, { insert: items }])
+        if (INVALIDATE in result) result[INVALIDATE](change)
+        ctx.dispatch(path, change)
       }
 
       result.insert = (index: number, ...items: unknown[]): void => {
-        ctx.dispatch(
-          path,
-          sequenceChange([
-            ...(index > 0 ? [{ retain: index }] : []),
-            { insert: items },
-          ]),
-        )
-        result[INVALIDATE]()
+        const change = sequenceChange([
+          ...(index > 0 ? [{ retain: index }] : []),
+          { insert: items },
+        ])
+        if (INVALIDATE in result) result[INVALIDATE](change)
+        ctx.dispatch(path, change)
       }
 
       result.delete = (index: number, count: number = 1): void => {
-        ctx.dispatch(
-          path,
-          sequenceChange([
-            ...(index > 0 ? [{ retain: index }] : []),
-            { delete: count },
-          ]),
-        )
-        result[INVALIDATE]()
+        const change = sequenceChange([
+          ...(index > 0 ? [{ retain: index }] : []),
+          { delete: count },
+        ])
+        if (INVALIDATE in result) result[INVALIDATE](change)
+        ctx.dispatch(path, change)
       }
 
       return result
@@ -456,20 +458,21 @@ export function withMutation(
 
     // --- Map ------------------------------------------------------------------
     // Attach .set(), .delete(), .clear() directly to the base map ref.
-    // No Proxy, no SET_HANDLER/DELETE_HANDLER — methods are first-class.
+    // Invalidate-before-dispatch for each mutation.
 
     map(
       ctx: WritableContext,
       path: Path,
       schema: MapSchema,
-      item: (key: string) => unknown,
-    ): unknown {
+      item: (key: string) => A,
+    ): A {
       const result = base.map(ctx, path, schema, item) as any
 
       Object.defineProperty(result, "set", {
         value: (key: string, value: unknown): void => {
-          ctx.dispatch(path, mapChange({ [key]: value }))
-          result[INVALIDATE](key)
+          const change = mapChange({ [key]: value })
+          if (INVALIDATE in result) result[INVALIDATE](change)
+          ctx.dispatch(path, change)
         },
         enumerable: false,
         configurable: true,
@@ -477,8 +480,9 @@ export function withMutation(
 
       Object.defineProperty(result, "delete", {
         value: (key: string): void => {
-          ctx.dispatch(path, mapChange(undefined, [key]))
-          result[INVALIDATE](key)
+          const change = mapChange(undefined, [key])
+          if (INVALIDATE in result) result[INVALIDATE](change)
+          ctx.dispatch(path, change)
         },
         enumerable: false,
         configurable: true,
@@ -490,10 +494,11 @@ export function withMutation(
           if (obj !== null && obj !== undefined && typeof obj === "object") {
             const allKeys = Object.keys(obj as Record<string, unknown>)
             if (allKeys.length > 0) {
-              ctx.dispatch(path, mapChange(undefined, allKeys))
+              const change = mapChange(undefined, allKeys)
+              if (INVALIDATE in result) result[INVALIDATE](change)
+              ctx.dispatch(path, change)
             }
           }
-          result[INVALIDATE]()
         },
         enumerable: false,
         configurable: true,
@@ -509,8 +514,8 @@ export function withMutation(
       ctx: WritableContext,
       path: Path,
       schema: SumSchema,
-      variants: SumVariants<unknown>,
-    ): unknown {
+      variants: SumVariants<A>,
+    ): A {
       return base.sum(ctx, path, schema, variants)
     },
 
@@ -522,8 +527,8 @@ export function withMutation(
       ctx: WritableContext,
       path: Path,
       schema: AnnotatedSchema,
-      inner: (() => unknown) | undefined,
-    ): unknown {
+      inner: (() => A) | undefined,
+    ): A {
       const result = base.annotated(ctx, path, schema, inner) as any
 
       switch (schema.tag) {
@@ -582,7 +587,7 @@ export function withMutation(
         case "tree":
           // Delegating annotations — inner was already called by the base
           // interpreter, and the result carries the base's interpretation.
-          // withMutation's own cases (product, sequence, etc.) already
+          // withWritable's own cases (product, sequence, etc.) already
           // attached mutation methods to the children during recursion.
           return result
 

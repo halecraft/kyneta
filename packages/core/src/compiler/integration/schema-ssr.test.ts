@@ -16,7 +16,7 @@ import {
   interpret,
   enrich,
   readableInterpreter,
-  withMutation,
+  withWritable,
   createWritableContext,
   withChangefeed,
   hasChangefeed,
@@ -70,7 +70,7 @@ const todoSchema = LoroSchema.doc({
   ),
 })
 
-const writableInterpreter = withMutation(readableInterpreter)
+const writableInterpreter = withWritable(readableInterpreter)
 
 function createDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = {

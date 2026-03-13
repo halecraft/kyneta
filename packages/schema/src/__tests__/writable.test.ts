@@ -3,10 +3,14 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  readableInterpreter,
-  withMutation,
+  bottomInterpreter,
+  withReadable,
+  withCaching,
+  withWritable,
   createWritableContext,
+  READ,
 } from "../index.js"
+import { INVALIDATE } from "../interpreters/with-caching.js"
 import type {
   WritableContext,
   TextRef,
@@ -15,12 +19,23 @@ import type {
   SequenceRef,
   Writable,
 } from "../index.js"
+import type { RefContext } from "../interpreter-types.js"
 
 // ===========================================================================
-// Shared interpreter: withMutation(readableInterpreter)
+// Composed stacks
 // ===========================================================================
 
-const writableInterpreter = withMutation(readableInterpreter)
+// Full stack: readable + caching + writable (the standard composition)
+const fullInterpreter = withWritable(withCaching(withReadable(bottomInterpreter)))
+
+// Cacheless stack: readable + writable (no caching layer)
+const cachelessInterpreter = withWritable(withReadable(bottomInterpreter))
+
+// Write-only stack: writable on bare carriers (ref() throws)
+const writeOnlyInterpreter = withWritable(bottomInterpreter)
+
+// Backward compat alias used by most tests
+const writableInterpreter = fullInterpreter
 
 // ===========================================================================
 // Base grammar tests — Schema only, no Loro annotations
@@ -45,7 +60,7 @@ function createStructuralDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as any
+  const doc = interpret(structuralDocSchema, fullInterpreter, ctx) as any
   return { store, ctx, doc }
 }
 
@@ -403,7 +418,7 @@ function createLoroDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(loroDocSchema, writableInterpreter, ctx) as any
+  const doc = interpret(loroDocSchema, fullInterpreter, ctx) as any
   return { store, ctx, doc }
 }
 
@@ -552,6 +567,164 @@ describe("writable: portable refs (Loro)", () => {
 // ---------------------------------------------------------------------------
 // Mutation + read integration
 // ---------------------------------------------------------------------------
+
+// ===========================================================================
+// Invalidate-before-dispatch (the core timing fix)
+// ===========================================================================
+
+describe("writable: invalidate-before-dispatch", () => {
+  const listSchema = LoroSchema.doc({
+    items: Schema.list(Schema.struct({ name: Schema.string() })),
+  })
+
+  function createCachedListDoc(items: Array<{ name: string }>) {
+    const store = { items }
+    const ctx = createWritableContext(store)
+    const doc = interpret(listSchema, fullInterpreter, ctx) as any
+    return { doc, store, ctx }
+  }
+
+  it("after push(), .at(newIndex) returns correct child immediately", () => {
+    const { doc } = createCachedListDoc([{ name: "a" }])
+    // Populate cache
+    expect(doc.items.at(0).name()).toBe("a")
+    // Push a new item
+    doc.items.push({ name: "b" })
+    // New index should be immediately accessible
+    expect(doc.items.at(1).name()).toBe("b")
+    // Existing ref is preserved
+    expect(doc.items.at(0).name()).toBe("a")
+  })
+
+  it("after insert(1, item) on 3-item list, shifted indices are fresh", () => {
+    const { doc } = createCachedListDoc([
+      { name: "a" },
+      { name: "b" },
+      { name: "c" },
+    ])
+    // Populate cache for all items
+    const refA = doc.items.at(0)
+    const refB = doc.items.at(1)
+    const refC = doc.items.at(2)
+
+    // Insert at index 1
+    doc.items.insert(1, { name: "x" })
+
+    // index 0: unchanged
+    expect(doc.items.at(0)).toBe(refA)
+    expect(doc.items.at(0).name()).toBe("a")
+    // index 1: new item (not the old refB)
+    expect(doc.items.at(1)).not.toBe(refB)
+    expect(doc.items.at(1).name()).toBe("x")
+    // index 2: shifted from old index 1 (refB)
+    expect(doc.items.at(2)).toBe(refB)
+    // index 3: shifted from old index 2 (refC)
+    expect(doc.items.at(3)).toBe(refC)
+  })
+
+  it("after delete(0, 1), cache shifts preserve ref identity", () => {
+    const { doc } = createCachedListDoc([
+      { name: "a" },
+      { name: "b" },
+      { name: "c" },
+    ])
+    // Populate cache
+    const refA = doc.items.at(0)
+    const refB = doc.items.at(1)
+    const refC = doc.items.at(2)
+
+    // Delete first item
+    doc.items.delete(0, 1)
+
+    // Cache identity is preserved: refB shifted from index 1 → 0,
+    // refC shifted from index 2 → 1. refA was deleted from cache.
+    expect(doc.items.at(0)).toBe(refB)
+    expect(doc.items.at(1)).toBe(refC)
+
+    // Store is correctly updated
+    expect(doc.items.length).toBe(2)
+    expect(doc.items()).toEqual([{ name: "b" }, { name: "c" }])
+  })
+})
+
+// ===========================================================================
+// Cacheless stack (no caching, no crash)
+// ===========================================================================
+
+describe("writable: cacheless stack", () => {
+  it("push() works without caching, store updated, no crash", () => {
+    const schema = LoroSchema.doc({
+      items: Schema.list(Schema.struct({ name: Schema.string() })),
+    })
+    const store = { items: [{ name: "a" }] }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, cachelessInterpreter, ctx) as any
+
+    doc.items.push({ name: "b" })
+    expect((store.items as any[]).length).toBe(2)
+    expect((store.items as any[])[1]).toEqual({ name: "b" })
+  })
+
+  it("map .set() works without caching", () => {
+    const schema = Schema.doc({ meta: Schema.record(Schema.number()) })
+    const store = { meta: { a: 1 } }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, cachelessInterpreter, ctx) as any
+
+    doc.meta.set("b", 2)
+    expect((store.meta as any).b).toBe(2)
+  })
+
+  it("scalar .set() works without caching", () => {
+    const schema = Schema.doc({ n: Schema.number() })
+    const store = { n: 0 }
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, cachelessInterpreter, ctx) as any
+
+    doc.n.set(42)
+    expect(store.n).toBe(42)
+  })
+})
+
+// ===========================================================================
+// Write-only stack (ref() throws, mutation works)
+// ===========================================================================
+
+describe("writable: write-only stack", () => {
+  it(".set() dispatches changes", () => {
+    // Write-only uses bottomInterpreter which ignores product fields,
+    // so we test with a bare scalar schema (not wrapped in doc).
+    const schema = Schema.number()
+    const store = {} as any
+    const dispatched: Array<{ path: any; change: any }> = []
+    const ctx: WritableContext = {
+      store,
+      dispatch: (path, change) => dispatched.push({ path, change }),
+      beginTransaction: () => {},
+      commit: () => [],
+      abort: () => {},
+    }
+    const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
+
+    ref.set(42)
+    expect(dispatched.length).toBe(1)
+    expect(dispatched[0].change.type).toBe("replace")
+    expect(dispatched[0].change.value).toBe(42)
+  })
+
+  it("ref() throws (no reader configured)", () => {
+    const schema = Schema.number()
+    const store = {} as any
+    const ctx = createWritableContext(store)
+    const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
+
+    expect(() => ref()).toThrow("No reader configured")
+  })
+})
+
+// ===========================================================================
+// Mutation + read integration
+// ===========================================================================
 
 describe("writable: mutation + read integration", () => {
   it("ref() reflects value after .set()", () => {
