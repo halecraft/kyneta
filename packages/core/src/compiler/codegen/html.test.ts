@@ -816,8 +816,8 @@ describe("generateHTML - reactive loops", () => {
     const code = htmlLines(builder)
 
     // Should contain hydration markers
-    expect(code).toContain("kinetic:list:")
-    expect(code).toContain("/kinetic:list")
+    expect(code).toContain("kyneta:list:")
+    expect(code).toContain("/kyneta:list")
     // Should use for...of with spread for reactive loops
     expect(code).toContain("for (const item of [...items])")
   })
@@ -845,7 +845,7 @@ describe("generateHTML - reactive loops", () => {
     const code = htmlLines(builder, { hydratable: false })
 
     // Should NOT contain hydration markers
-    expect(code).not.toContain("kinetic:list")
+    expect(code).not.toContain("kyneta:list")
   })
 })
 
@@ -883,8 +883,8 @@ describe("generateHTML - reactive conditionals", () => {
     const code = htmlLines(builder)
 
     // Should contain hydration markers
-    expect(code).toContain("kinetic:if:")
-    expect(code).toContain("/kinetic:if")
+    expect(code).toContain("kyneta:if:")
+    expect(code).toContain("/kyneta:if")
     // Should use if/else structure
     expect(code).toContain("if (visible)")
   })
@@ -909,7 +909,7 @@ describe("generateHTML - reactive conditionals", () => {
     const code = htmlLines(builder)
 
     // Should NOT contain hydration markers
-    expect(code).not.toContain("kinetic:if")
+    expect(code).not.toContain("kyneta:if")
   })
 })
 

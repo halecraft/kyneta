@@ -57,7 +57,7 @@ function createChangefeedChatDoc(storeOverrides: Record<string, unknown> = {}) {
   return { store, cfCtx, doc }
 }
 
-const CF_SYM = Symbol.for("kinetic:changefeed")
+const CF_SYM = Symbol.for("kyneta:changefeed")
 
 function getChangefeed(obj: unknown): { current: unknown; subscribe: (cb: (c: unknown) => void) => () => void } {
   return (obj as Record<symbol, { current: unknown; subscribe: (cb: (c: unknown) => void) => () => void }>)[CF_SYM]

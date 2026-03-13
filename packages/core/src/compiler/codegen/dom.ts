@@ -772,7 +772,7 @@ function generateConditional(
   const lines: string[] = []
   const ind = getIndent(state)
   const markerVar = genVar(state, "marker")
-  lines.push(`${ind}const ${markerVar} = document.createComment("kinetic:if")`)
+  lines.push(`${ind}const ${markerVar} = document.createComment("kyneta:if")`)
   lines.push(`${ind}${parentVar}.appendChild(${markerVar})`)
   lines.push(...generateConditionalRegionCall(node, markerVar, state))
 

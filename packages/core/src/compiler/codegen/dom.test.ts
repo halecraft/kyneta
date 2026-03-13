@@ -1549,7 +1549,7 @@ describe("generateElementFactoryWithResult - dissolution on cloning path", () =>
 
     // Template HTML should NOT contain region comment markers
     for (const decl of result.moduleDeclarations) {
-      expect(decl).not.toContain("kinetic:if")
+      expect(decl).not.toContain("kyneta:if")
     }
 
     // Should contain ternary expression (the dissolved merge result)
@@ -1624,7 +1624,7 @@ describe("generateElementFactoryWithResult - dissolution on cloning path", () =>
 
     // Template HTML should contain region comment markers
     const hasMarker = result.moduleDeclarations.some(decl =>
-      decl.includes("kinetic:if"),
+      decl.includes("kyneta:if"),
     )
     expect(hasMarker).toBe(true)
   })

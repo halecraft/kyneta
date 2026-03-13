@@ -305,8 +305,8 @@ describe("extractTemplate", () => {
         regionNode: loop,
       })
       // HTML should have comment markers
-      expect(template.html).toContain("<!--kinetic:list:1-->")
-      expect(template.html).toContain("<!--/kinetic:list-->")
+      expect(template.html).toContain("<!--kyneta:list:1-->")
+      expect(template.html).toContain("<!--/kyneta:list-->")
     })
 
     it("should record hole for reactive conditional", () => {
@@ -335,8 +335,8 @@ describe("extractTemplate", () => {
         regionNode: conditional,
       })
       // HTML should have comment markers for conditional
-      expect(template.html).toContain("<!--kinetic:if:1-->")
-      expect(template.html).toContain("<!--/kinetic:if-->")
+      expect(template.html).toContain("<!--kyneta:if:1-->")
+      expect(template.html).toContain("<!--/kyneta:if-->")
     })
 
     it("should assign unique marker IDs to multiple regions", () => {
@@ -362,8 +362,8 @@ describe("extractTemplate", () => {
       const template = extractTemplate(node)
 
       expect(template.holes).toHaveLength(2)
-      expect(template.html).toContain("<!--kinetic:list:1-->")
-      expect(template.html).toContain("<!--kinetic:list:2-->")
+      expect(template.html).toContain("<!--kyneta:list:1-->")
+      expect(template.html).toContain("<!--kyneta:list:2-->")
       expect(template.markerIdCounter).toBe(2)
     })
   })

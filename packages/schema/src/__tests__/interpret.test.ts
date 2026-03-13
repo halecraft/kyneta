@@ -223,7 +223,7 @@ describe("interpret: enrich combinator", () => {
   )
 
   it("enrich adds [CHANGEFEED] to every object result", () => {
-    const CF_SYM = Symbol.for("kinetic:changefeed")
+    const CF_SYM = Symbol.for("kyneta:changefeed")
 
     const withCf = (result: unknown, _ctx: unknown, _path: Path) => {
       if (!isNonNullObject(result)) return {}
@@ -251,7 +251,7 @@ describe("interpret: enrich combinator", () => {
   })
 
   it("enrich preserves product-level results", () => {
-    const CF_SYM = Symbol.for("kinetic:changefeed")
+    const CF_SYM = Symbol.for("kyneta:changefeed")
     const withMarker = (result: unknown, _ctx: unknown, _path: Path) => {
       if (!isNonNullObject(result)) return {}
       return { [CF_SYM]: { current: "marker" } }

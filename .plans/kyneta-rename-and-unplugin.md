@@ -59,20 +59,20 @@ These are already exported from `@kyneta/core/compiler`. The Vite wrapper adds f
 
 ## Phases
 
-### Phase 1: Rename — Runtime Identifiers 🔴
+### Phase 1: Rename — Runtime Identifiers ✅
 
 These are wire-format-breaking changes that must happen atomically across `@kyneta/schema` and `@kyneta/core`.
 
-- **Task 1.1**: Rename `Symbol.for("kinetic:changefeed")` → `Symbol.for("kyneta:changefeed")` in `packages/schema/src/changefeed.ts` 🔴
-- **Task 1.2**: Update compiler's symbol detection string `"kinetic:changefeed"` → `"kyneta:changefeed"` in `packages/core/src/compiler/reactive-detection.ts` 🔴
-- **Task 1.3**: Rename all DOM comment marker prefixes from `kinetic:` → `kyneta:` across SSR codegen, html-constants, hydration regex, and regions 🔴
+- **Task 1.1**: Rename `Symbol.for("kinetic:changefeed")` → `Symbol.for("kyneta:changefeed")` in `packages/schema/src/changefeed.ts` ✅
+- **Task 1.2**: Update compiler's symbol detection string `"kinetic:changefeed"` → `"kyneta:changefeed"` in `packages/core/src/compiler/reactive-detection.ts` ✅
+- **Task 1.3**: Rename all DOM comment marker prefixes from `kinetic:` → `kyneta:` across SSR codegen, html-constants, hydration regex, and regions ✅
   - `packages/core/src/server/render.ts` — marker generation
   - `packages/core/src/compiler/codegen/html.ts` — SSR codegen markers
   - `packages/core/src/compiler/codegen/dom.ts` — DOM codegen markers
   - `packages/core/src/compiler/html-constants.ts` — shared marker templates
   - `packages/core/src/runtime/hydrate.ts` — `MARKER_REGEX` pattern
   - `packages/core/src/runtime/regions.ts` — slot markers (`kyneta:start`, `kyneta:end`, `kyneta:item`)
-- **Task 1.4**: Update all test assertions that match on marker strings or Symbol keys 🔴
+- **Task 1.4**: Update all test assertions that match on marker strings or Symbol keys ✅
   - `packages/schema/src/__tests__/interpret.test.ts`
   - `packages/schema/src/__tests__/with-changefeed.test.ts`
   - `packages/core/src/server/render.test.ts`
@@ -82,7 +82,7 @@ These are wire-format-breaking changes that must happen atomically across `@kyne
   - `packages/core/src/compiler/codegen/html.test.ts`
   - `packages/core/src/compiler/codegen/dom.test.ts`
   - `packages/core/src/compiler/integration/*.test.ts`
-- **Task 1.5**: Run full test suites for both `packages/schema` and `packages/core` 🔴
+- **Task 1.5**: Run full test suites for both `packages/schema` and `packages/core` ✅
 
 ### Phase 2: Rename — Public API & Source Code 🔴
 

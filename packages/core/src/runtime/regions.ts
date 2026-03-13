@@ -106,8 +106,8 @@ export function claimSlot(
         parent.insertBefore(placeholder, referenceNode)
         return { kind: "single", node: placeholder }
       }
-      const startMarker = document.createComment("kinetic:start")
-      const endMarker = document.createComment("kinetic:end")
+      const startMarker = document.createComment("kyneta:start")
+      const endMarker = document.createComment("kyneta:end")
       parent.insertBefore(startMarker, referenceNode)
       parent.insertBefore(content, referenceNode)
       parent.insertBefore(endMarker, referenceNode)
@@ -134,8 +134,8 @@ export function claimSlot(
       return { kind: "single", node: child }
     } else {
       // Multi-element fragment - use start/end markers
-      const startMarker = document.createComment("kinetic:start")
-      const endMarker = document.createComment("kinetic:end")
+      const startMarker = document.createComment("kyneta:start")
+      const endMarker = document.createComment("kyneta:end")
 
       // Insert: startMarker, then fragment contents, then endMarker
       parent.insertBefore(startMarker, referenceNode)
@@ -411,8 +411,8 @@ function executeOp<T>(
           newSlots.push({ kind: "single", node: child })
         } else if (node.childNodes.length > 1) {
           // Multi-child fragment - need range markers
-          const startMarker = document.createComment("kinetic:item")
-          const endMarker = document.createComment("/kinetic:item")
+          const startMarker = document.createComment("kyneta:item")
+          const endMarker = document.createComment("/kyneta:item")
           fragment.appendChild(startMarker)
           fragment.appendChild(node) // Moves all children
           fragment.appendChild(endMarker)

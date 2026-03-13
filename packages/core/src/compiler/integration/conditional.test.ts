@@ -112,7 +112,7 @@ describe("compiler integration - conditional regions", () => {
       const result = transformSource(source, { target: "dom" })
 
       expect(result.code).toContain("conditionalRegion")
-      expect(result.code).toContain('document.createComment("kinetic:if")')
+      expect(result.code).toContain('document.createComment("kyneta:if")')
     })
 
     it("should generate whenTrue handler that returns element", () => {

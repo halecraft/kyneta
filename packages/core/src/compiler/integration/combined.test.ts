@@ -173,7 +173,7 @@ describe("compiler integration - combined scenarios", () => {
       )
 
       // Conditional details section
-      const marker = document.createComment("kinetic:if")
+      const marker = document.createComment("kyneta:if")
       container.appendChild(marker)
 
       conditionalRegion(

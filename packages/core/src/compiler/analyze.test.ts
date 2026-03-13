@@ -58,7 +58,7 @@ function createSourceFile(
  * This must be called before addSchemaTypes or addReactiveTypes.
  *
  * Mirrors the protocol from @kyneta/schema:
- * - CHANGEFEED: unique symbol (Symbol.for("kinetic:changefeed"))
+ * - CHANGEFEED: unique symbol (Symbol.for("kyneta:changefeed"))
  * - Changefeed<S, C>: { current: S, subscribe(cb: (change: C) => void): () => void }
  * - HasChangefeed<S, C>: { readonly [CHANGEFEED]: Changefeed<S, C> }
  * - ChangeBase: { type: string, origin?: string }

@@ -83,28 +83,28 @@ describe("hydration markers", () => {
       const id2 = generateMarkerId(ctx, "list")
       const id3 = generateMarkerId(ctx, "if")
 
-      expect(id1).toBe("kinetic:list:1")
-      expect(id2).toBe("kinetic:list:2")
-      expect(id3).toBe("kinetic:if:3")
+      expect(id1).toBe("kyneta:list:1")
+      expect(id2).toBe("kyneta:list:2")
+      expect(id3).toBe("kyneta:if:3")
     })
 
     it("should start counter at 1 for new context", () => {
       const ctx: SSRContext = { doc: {} }
       const id = generateMarkerId(ctx, "test")
-      expect(id).toBe("kinetic:test:1")
+      expect(id).toBe("kyneta:test:1")
     })
   })
 
   describe("openMarker", () => {
     it("should create opening marker comment", () => {
-      expect(openMarker("kinetic:list:1")).toBe("<!--kinetic:list:1-->")
+      expect(openMarker("kyneta:list:1")).toBe("<!--kyneta:list:1-->")
     })
   })
 
   describe("closeMarker", () => {
     it("should create closing marker comment", () => {
-      expect(closeMarker("list")).toBe("<!--/kinetic:list-->")
-      expect(closeMarker("if")).toBe("<!--/kinetic:if-->")
+      expect(closeMarker("list")).toBe("<!--/kyneta:list-->")
+      expect(closeMarker("if")).toBe("<!--/kyneta:if-->")
     })
   })
 })
@@ -265,8 +265,8 @@ describe("renderList", () => {
     const ctx: SSRContext = { doc: {} }
     const result = renderList(ctx, [], () => "", true)
 
-    expect(result).toContain("<!--kinetic:list:")
-    expect(result).toContain("<!--/kinetic:list-->")
+    expect(result).toContain("<!--kyneta:list:")
+    expect(result).toContain("<!--/kyneta:list-->")
   })
 
   it("should render items with markers", () => {
@@ -279,11 +279,11 @@ describe("renderList", () => {
       true,
     )
 
-    expect(result).toContain("<!--kinetic:list:")
+    expect(result).toContain("<!--kyneta:list:")
     expect(result).toContain('<li data-index="0">a</li>')
     expect(result).toContain('<li data-index="1">b</li>')
     expect(result).toContain('<li data-index="2">c</li>')
-    expect(result).toContain("<!--/kinetic:list-->")
+    expect(result).toContain("<!--/kyneta:list-->")
   })
 
   it("should render without markers when hydratable is false", () => {
@@ -323,10 +323,10 @@ describe("renderConditional", () => {
       true,
     )
 
-    expect(result).toContain("<!--kinetic:if:")
+    expect(result).toContain("<!--kyneta:if:")
     expect(result).toContain("<p>Yes</p>")
     expect(result).not.toContain("<p>No</p>")
-    expect(result).toContain("<!--/kinetic:if-->")
+    expect(result).toContain("<!--/kyneta:if-->")
   })
 
   it("should render false branch when condition is false", () => {
@@ -353,8 +353,8 @@ describe("renderConditional", () => {
       true,
     )
 
-    expect(result).toContain("<!--kinetic:if:")
-    expect(result).toContain("<!--/kinetic:if-->")
+    expect(result).toContain("<!--kyneta:if:")
+    expect(result).toContain("<!--/kyneta:if-->")
     expect(result).not.toContain("<p>Yes</p>")
   })
 
@@ -493,11 +493,11 @@ describe("pretty printing", () => {
 
   it("should preserve hydration markers when pretty printing", () => {
     const render = () =>
-      "<div><!--kinetic:list:1--><li>Item</li><!--/kinetic:list--></div>"
+      "<div><!--kyneta:list:1--><li>Item</li><!--/kyneta:list--></div>"
     const result = renderToString(render, {}, { pretty: true })
 
-    expect(result).toContain("<!--kinetic:list:1-->")
-    expect(result).toContain("<!--/kinetic:list-->")
+    expect(result).toContain("<!--kyneta:list:1-->")
+    expect(result).toContain("<!--/kyneta:list-->")
   })
 
   it("should handle nested elements with pretty printing", () => {

@@ -109,7 +109,7 @@ function _genVar(state: CodegenState, hint: string = "html"): string {
  * Generate a unique marker ID.
  */
 function genMarkerId(state: CodegenState, type: string): string {
-  return `kinetic:${type}:${state.markerCounter++}`
+  return `kyneta:${type}:${state.markerCounter++}`
 }
 
 /**
@@ -357,7 +357,7 @@ function emitLoop(
 
   // Hydration markers (end, only for reactive loops)
   if (state.hydratable && isReactive) {
-    lines.push(`${indent}_html += \`<!--/kinetic:list-->\``)
+    lines.push(`${indent}_html += \`<!--/kyneta:list-->\``)
   }
 
   return lines
@@ -410,7 +410,7 @@ function emitConditional(
 
   // Hydration markers (end, only for reactive conditionals)
   if (state.hydratable && isReactive) {
-    lines.push(`${indent}_html += \`<!--/kinetic:if-->\``)
+    lines.push(`${indent}_html += \`<!--/kyneta:if-->\``)
   }
 
   return lines

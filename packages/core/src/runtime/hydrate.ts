@@ -100,9 +100,9 @@ interface RegionState {
 
 /**
  * Regex to parse hydration markers.
- * Matches: kinetic:type:id or /kinetic:type
+ * Matches: kyneta:type:id or /kyneta:type
  */
-const MARKER_REGEX = /^(\/?)kinetic:(\w+)(?::(\d+))?$/
+const MARKER_REGEX = /^(\/?)kyneta:(\w+)(?::(\d+))?$/
 
 /**
  * Parse a comment node to extract hydration marker info.

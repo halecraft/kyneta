@@ -44,7 +44,7 @@ beforeEach(() => {
 
 describe("parseMarker", () => {
   it("should parse opening list marker", () => {
-    const comment = document.createComment("kinetic:list:1")
+    const comment = document.createComment("kyneta:list:1")
     const marker = parseMarker(comment)
 
     expect(marker).not.toBeNull()
@@ -54,7 +54,7 @@ describe("parseMarker", () => {
   })
 
   it("should parse opening if marker", () => {
-    const comment = document.createComment("kinetic:if:42")
+    const comment = document.createComment("kyneta:if:42")
     const marker = parseMarker(comment)
 
     expect(marker).not.toBeNull()
@@ -64,7 +64,7 @@ describe("parseMarker", () => {
   })
 
   it("should parse closing list marker", () => {
-    const comment = document.createComment("/kinetic:list")
+    const comment = document.createComment("/kyneta:list")
     const marker = parseMarker(comment)
 
     expect(marker).not.toBeNull()
@@ -73,7 +73,7 @@ describe("parseMarker", () => {
   })
 
   it("should parse closing if marker", () => {
-    const comment = document.createComment("/kinetic:if")
+    const comment = document.createComment("/kyneta:if")
     const marker = parseMarker(comment)
 
     expect(marker).not.toBeNull()
@@ -100,10 +100,10 @@ describe("findMarkers", () => {
   it("should find all markers in a container", () => {
     const container = document.createElement("div")
     container.innerHTML = `
-      <!--kinetic:list:1-->
+      <!--kyneta:list:1-->
       <li>Item 1</li>
       <li>Item 2</li>
-      <!--/kinetic:list-->
+      <!--/kyneta:list-->
     `
 
     const markers = findMarkers(container)
@@ -118,13 +118,13 @@ describe("findMarkers", () => {
   it("should find nested markers", () => {
     const container = document.createElement("div")
     container.innerHTML = `
-      <!--kinetic:if:1-->
+      <!--kyneta:if:1-->
       <div>
-        <!--kinetic:list:2-->
+        <!--kyneta:list:2-->
         <span>Item</span>
-        <!--/kinetic:list-->
+        <!--/kyneta:list-->
       </div>
-      <!--/kinetic:if-->
+      <!--/kyneta:if-->
     `
 
     const markers = findMarkers(container)
@@ -150,9 +150,9 @@ describe("matchRegions", () => {
   it("should match opening and closing markers", () => {
     const container = document.createElement("div")
     container.innerHTML = `
-      <!--kinetic:list:1-->
+      <!--kyneta:list:1-->
       <li>Item</li>
-      <!--/kinetic:list-->
+      <!--/kyneta:list-->
     `
 
     const markers = findMarkers(container)
@@ -165,7 +165,7 @@ describe("matchRegions", () => {
 
   it("should capture children between markers", () => {
     const container = document.createElement("div")
-    container.innerHTML = `<!--kinetic:list:1--><li>A</li><li>B</li><!--/kinetic:list-->`
+    container.innerHTML = `<!--kyneta:list:1--><li>A</li><li>B</li><!--/kyneta:list-->`
 
     const markers = findMarkers(container)
     const regions = matchRegions(markers)

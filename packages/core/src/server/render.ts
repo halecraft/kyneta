@@ -90,7 +90,7 @@ export type SSRRenderFunction = (ctx: SSRContext) => string
  */
 export function generateMarkerId(ctx: SSRContext, type: string): string {
   ctx._markerId = (ctx._markerId ?? 0) + 1
-  return `kinetic:${type}:${ctx._markerId}`
+  return `kyneta:${type}:${ctx._markerId}`
 }
 
 /**
@@ -110,7 +110,7 @@ export function openMarker(id: string): string {
  * @returns HTML comment string
  */
 export function closeMarker(type: string): string {
-  return `<!--/kinetic:${type}-->`
+  return `<!--/kyneta:${type}-->`
 }
 
 // =============================================================================

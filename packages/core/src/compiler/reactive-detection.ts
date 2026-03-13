@@ -10,7 +10,7 @@
  *
  * 1. **Symbol.for() tracing** — When the symbol's declaration has an
  *    initializer (source files), we walk the AST to verify it's
- *    `Symbol.for("kinetic:changefeed")`. This is the most robust check.
+ *    `Symbol.for("kyneta:changefeed")`. This is the most robust check.
  *
  * 2. **Symbol declaration name** — In `.d.ts` files the initializer is
  *    erased, but the `unique symbol` type still carries a reference back
@@ -133,7 +133,7 @@ export function resolveReactiveImports(
  *    with `mangledPrefix`.
  *
  * @param compilerSymbol - The compiler symbol to inspect
- * @param symbolForKey - The string key passed to Symbol.for() (e.g., "kinetic:changefeed")
+ * @param symbolForKey - The string key passed to Symbol.for() (e.g., "kyneta:changefeed")
  * @param declarationName - The variable name of the symbol declaration (e.g., "CHANGEFEED")
  * @param mangledPrefix - The mangled property name prefix (e.g., "__@CHANGEFEED@")
  * @returns true if this property is keyed by the specified well-known symbol
@@ -209,7 +209,7 @@ function isWellKnownSymbolProperty(
 function isChangefeedSymbolProperty(compilerSymbol: ts.Symbol): boolean {
   return isWellKnownSymbolProperty(
     compilerSymbol,
-    "kinetic:changefeed",
+    "kyneta:changefeed",
     "CHANGEFEED",
     "__@CHANGEFEED@",
   )

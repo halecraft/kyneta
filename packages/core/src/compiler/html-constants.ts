@@ -110,9 +110,9 @@ export type RegionMarkerType = "list" | "if"
  * A pair of opening and closing marker strings.
  */
 export interface RegionMarkers {
-  /** Opening marker: `<!--kinetic:type:id-->` */
+  /** Opening marker: `<!--kyneta:type:id-->` */
   open: string
-  /** Closing marker: `<!--/kinetic:type-->` */
+  /** Closing marker: `<!--/kyneta:type-->` */
   close: string
 }
 
@@ -124,7 +124,7 @@ export interface RegionMarkers {
  * - Template cloning: Marks where dynamic regions will be mounted
  *
  * The format is compatible with the hydration system in `hydrate.ts`,
- * which uses `MARKER_REGEX = /^(\/?)kinetic:(\w+)(?::(\d+))?$/`
+ * which uses `MARKER_REGEX = /^(\/?)kyneta:(\w+)(?::(\d+))?$/`
  *
  * @param type - The region type ("list" or "if")
  * @param id - Unique marker ID (typically from a counter)
@@ -133,11 +133,11 @@ export interface RegionMarkers {
  * @example
  * ```ts
  * const markers = generateRegionMarkers("list", 1)
- * // markers.open === "<!--kinetic:list:1-->"
- * // markers.close === "<!--/kinetic:list-->"
+ * // markers.open === "<!--kyneta:list:1-->"
+ * // markers.close === "<!--/kyneta:list-->"
  *
  * // In template HTML:
- * // <ul><!--kinetic:list:1--><!--/kinetic:list--></ul>
+ * // <ul><!--kyneta:list:1--><!--/kyneta:list--></ul>
  * ```
  */
 export function generateRegionMarkers(
@@ -145,8 +145,8 @@ export function generateRegionMarkers(
   id: number,
 ): RegionMarkers {
   return {
-    open: `<!--kinetic:${type}:${id}-->`,
-    close: `<!--/kinetic:${type}-->`,
+    open: `<!--kyneta:${type}:${id}-->`,
+    close: `<!--/kyneta:${type}-->`,
   }
 }
 
@@ -158,8 +158,8 @@ export function generateRegionMarkers(
  *
  * @param type - The region type ("list" or "if")
  * @param id - Unique marker ID
- * @returns The marker ID string (e.g., "kinetic:list:1")
+ * @returns The marker ID string (e.g., "kyneta:list:1")
  */
 export function generateMarkerId(type: RegionMarkerType, id: number): string {
-  return `kinetic:${type}:${id}`
+  return `kyneta:${type}:${id}`
 }

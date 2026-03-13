@@ -1229,7 +1229,7 @@ describe("transformSourceInPlace - HTML target", () => {
     expect(code).toContain("[...")
     expect(code).toContain("<li>")
     // Should have hydration markers
-    expect(code).toContain("kinetic:list")
+    expect(code).toContain("kyneta:list")
   })
 
   it("should generate ternary for conditional regions", () => {
@@ -1259,7 +1259,7 @@ describe("transformSourceInPlace - HTML target", () => {
     expect(code).toContain("Empty")
     // Dissolution produces inline ternary — no hydration markers needed
     expect(code).toContain('count > 0 ? "Has items" : "Empty"')
-    expect(code).not.toContain("kinetic:if")
+    expect(code).not.toContain("kyneta:if")
   })
 
   it("should dissolve conditional on template cloning path (DOM target)", () => {
@@ -1289,7 +1289,7 @@ describe("transformSourceInPlace - HTML target", () => {
     expect(code).not.toContain("whenFalse")
 
     // Template HTML should not contain region comment markers
-    expect(code).not.toContain("kinetic:if")
+    expect(code).not.toContain("kyneta:if")
 
     // Should contain ternary from dissolution
     expect(code).toContain("?")
@@ -1523,8 +1523,8 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
     // HTML target: accumulation-line architecture with for...of loops and if/else blocks
     expect(htmlResult.code).toContain("for (const")
     expect(htmlResult.code).toContain("<h1>")
-    expect(htmlResult.code).toContain("kinetic:list")
-    expect(htmlResult.code).toContain("kinetic:if")
+    expect(htmlResult.code).toContain("kyneta:list")
+    expect(htmlResult.code).toContain("kyneta:if")
   })
 })
 

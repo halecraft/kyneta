@@ -21,7 +21,7 @@ import type { ChangeBase } from "./change.js"
  * Uses `Symbol.for` so that multiple copies of this module (e.g. in
  * different bundle chunks) share the same symbol identity.
  */
-export const CHANGEFEED: unique symbol = Symbol.for("kinetic:changefeed") as any
+export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed") as any
 
 // ---------------------------------------------------------------------------
 // Core interfaces
