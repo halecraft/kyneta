@@ -30,8 +30,10 @@ import {
   ok,
   err,
   Database,
+  Relation,
   factKey,
 } from './types.js';
+import type { ReadonlyDatabase } from './types.js';
 import {
   evaluateRule,
   evaluateRuleDelta,
@@ -189,26 +191,57 @@ function stratumHasAggregation(rules: readonly Rule[]): boolean {
 }
 
 /**
- * Construct `dbOld` by subtracting `delta` from `db` for predicates
- * present in the delta. This gives us P_old = P_new - ΔP.
+ * Lazy read-only view of a database with a delta subtracted.
+ *
+ * Computes P_old = P_new − Δ lazily: `getRelation(pred)` returns the
+ * base relation unchanged when the delta has no entries for that
+ * predicate, and materializes `base.subtract(delta)` on first access
+ * otherwise. Materialized results are cached for the lifetime of the
+ * view instance.
+ *
+ * This replaces the eager `constructDbOld` which called `db.clone()`
+ * (O(|db|) — copying every predicate's entire relation) followed by
+ * weight subtraction. The lazy view is O(|delta|) in the common case
+ * where rule bodies reference many predicates but the delta touches
+ * only a few.
  *
  * Used for the asymmetric join: positions after deltaIdx use P_old,
- * positions before deltaIdx use P_new (= db). The delta entries
- * represent the change, so subtracting them recovers the pre-update
- * state.
+ * positions before deltaIdx use P_new (= db).
  *
- * This is O(|delta|), not O(|DB|).
- *
- * See Plan 006.2, Phase 2, Tasks 2.3–2.4.
+ * See Plan 007, Phase 1.5, Task 1.5.2.
  */
-function constructDbOld(db: Database, delta: Database): Database {
-  const dbOld = db.clone();
-  for (const pred of delta.predicates()) {
-    for (const { tuple, weight } of delta.getRelation(pred).allWeightedTuples()) {
-      dbOld.addWeightedFact({ predicate: pred, values: tuple }, -weight);
-    }
+export class DatabaseView implements ReadonlyDatabase {
+  private readonly _cache: Map<string, Relation> = new Map();
+
+  constructor(
+    private readonly _base: Database,
+    private readonly _delta: Database,
+  ) {}
+
+  getRelation(predicate: string): Relation {
+    // Fast path: check cache first (for repeated access to the same predicate).
+    const cached = this._cache.get(predicate);
+    if (cached !== undefined) return cached;
+
+    const baseRel = this._base.getRelation(predicate);
+    const deltaRel = this._delta.getRelation(predicate);
+
+    // No delta entries for this predicate — share the base relation directly.
+    if (deltaRel.allEntryCount === 0) return baseRel;
+
+    // Materialize P_old for this predicate: base − delta.
+    const result = baseRel.subtract(deltaRel);
+    this._cache.set(predicate, result);
+    return result;
   }
-  return dbOld;
+
+  predicates(): Iterable<string> {
+    return this._base.predicates();
+  }
+
+  hasFact(f: Fact): boolean {
+    return this.getRelation(f.predicate).has(f.values);
+  }
 }
 
 /**
@@ -259,15 +292,15 @@ export function evaluateStratumFromDelta(
   // --- Seed phase (asymmetric join) ---
   //
   // db is P_new (input delta already applied by the caller).
-  // Construct P_old = P_new - inputDelta for the asymmetric join.
-  // Seed-derived facts are collected without mutating db, then
-  // applied after all rules are evaluated to detect zero-crossings.
+  // Construct a lazy view for P_old = P_new - inputDelta.
+  // The DatabaseView only materializes the subtraction for predicates
+  // actually accessed during rule evaluation — O(|delta|), not O(|db|).
   //
   // The asymmetric join ensures each derivation path is counted
-  // exactly once: positions after deltaIdx use P_old, positions
-  // before deltaIdx use P_new (= db).
+  // exactly once: positions after deltaIdx use P_old (the view),
+  // positions before deltaIdx use P_new (= db).
 
-  const dbOld = constructDbOld(db, inputDelta);
+  const dbOld: ReadonlyDatabase = new DatabaseView(db, inputDelta);
 
   // Collect all seed-derived facts without applying them yet.
   const seedDerived: WeightedFact[] = [];
@@ -327,9 +360,10 @@ export function evaluateStratumFromDelta(
   while (currentDelta.hasAnyEntries() && iterations < MAX_ITERATIONS) {
     iterations++;
 
-    // Construct P_old for this iteration: db - currentDelta.
+    // Construct a lazy view for P_old: db - currentDelta.
     // This is needed for the asymmetric join on self-join predicates.
-    const dbOldIter = constructDbOld(db, currentDelta);
+    // The view materializes only predicates accessed by rule bodies.
+    const dbOldIter: ReadonlyDatabase = new DatabaseView(db, currentDelta);
 
     const nextDelta = new Database();
 

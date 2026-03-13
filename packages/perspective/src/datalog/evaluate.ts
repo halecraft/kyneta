@@ -31,6 +31,7 @@ import type {
   Fact,
   AggregationClause,
   GuardElement,
+  ReadonlyDatabase,
 } from './types.js';
 import {
   Database,
@@ -125,8 +126,8 @@ export function evaluateNaive(
  */
 export function evaluateRule(
   rule: Rule,
-  fullDb: Database,
-  matchDb: Database,
+  fullDb: ReadonlyDatabase,
+  matchDb: ReadonlyDatabase,
 ): WeightedFact[] {
   // Start with a single empty substitution (weight 1)
   let subs: Substitution[] = [EMPTY_SUBSTITUTION];
@@ -168,8 +169,8 @@ export function evaluateRule(
  */
 export function evaluateRuleSemiNaive(
   rule: Rule,
-  fullDb: Database,
-  delta: Database,
+  fullDb: ReadonlyDatabase,
+  delta: ReadonlyDatabase,
   deltaIdx: number,
 ): WeightedFact[] {
   return evaluateRuleDelta(rule, fullDb, fullDb, delta, deltaIdx);
@@ -218,9 +219,9 @@ export function evaluateRuleSemiNaive(
  */
 export function evaluateRuleDelta(
   rule: Rule,
-  fullDbOld: Database,
-  fullDbNew: Database,
-  delta: Database,
+  fullDbOld: ReadonlyDatabase,
+  fullDbNew: ReadonlyDatabase,
+  delta: ReadonlyDatabase,
   deltaIdx: number,
 ): WeightedFact[] {
   let subs: Substitution[] = [EMPTY_SUBSTITUTION];
@@ -305,7 +306,7 @@ export function evaluateRuleDelta(
  */
 export function evaluatePositiveAtom(
   a: Atom,
-  db: Database,
+  db: ReadonlyDatabase,
   subs: readonly Substitution[],
   allEntries: boolean = false,
 ): Substitution[] {
@@ -344,7 +345,7 @@ export function evaluatePositiveAtom(
  */
 export function evaluateNegation(
   a: Atom,
-  db: Database,
+  db: ReadonlyDatabase,
   subs: readonly Substitution[],
 ): Substitution[] {
   const relation = db.getRelation(a.predicate);
@@ -390,7 +391,7 @@ export function evaluateNegation(
  */
 export function evaluateDifferentialNegation(
   a: Atom,
-  delta: Database,
+  delta: ReadonlyDatabase,
   subs: readonly Substitution[],
 ): Substitution[] {
   const relation = delta.getRelation(a.predicate);
@@ -439,7 +440,7 @@ export function evaluateGuardElement(
  */
 export function evaluateAggregationElement(
   agg: AggregationClause,
-  db: Database,
+  db: ReadonlyDatabase,
   subs: readonly Substitution[],
 ): Substitution[] {
   const results: Substitution[] = [];

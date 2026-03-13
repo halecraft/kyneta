@@ -29,8 +29,8 @@ import type {
 import {
   serializeValue,
   compareValues,
-  Database,
 } from './types.js';
+import type { ReadonlyDatabase } from './types.js';
 import {
   matchAtomWithTuple,
   EMPTY_SUBSTITUTION,
@@ -114,7 +114,7 @@ interface AggregationGroup {
  */
 export function evaluateAggregation(
   agg: AggregationClause,
-  db: Database,
+  db: ReadonlyDatabase,
   baseSub: Substitution,
 ): Substitution[] {
   const relation = db.getRelation(agg.source.predicate);
@@ -305,7 +305,7 @@ function computeMax(values: readonly Value[]): Value | undefined {
  */
 export function evaluateAggregationForSubs(
   agg: AggregationClause,
-  db: Database,
+  db: ReadonlyDatabase,
   subs: readonly Substitution[],
 ): Substitution[] {
   const results: Substitution[] = [];

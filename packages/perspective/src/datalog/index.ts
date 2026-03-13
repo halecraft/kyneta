@@ -22,6 +22,7 @@ export type {
   FactTuple,
   Fact,
   Substitution,
+  ReadonlyDatabase,
   Result,
   StratificationError,
   CyclicNegationError,

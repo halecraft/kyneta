@@ -513,6 +513,62 @@ export class Relation {
     return true;
   }
 
+  /**
+   * Subtract another relation's weights from this one, returning a new
+   * Relation with weights `this.weight − other.weight` for each entry.
+   *
+   * Entries present in `this` but not in `other` are copied as-is.
+   * Entries present in `other` but not in `this` appear with negated
+   * weight. Entries whose resulting weight is 0 are pruned.
+   *
+   * Used by `DatabaseView` to lazily compute P_old = P_new − Δ for
+   * the asymmetric join in `evaluateStratumFromDelta`.
+   *
+   * See Plan 007, Phase 1.5, Task 1.5.3.
+   */
+  subtract(other: Relation): Relation {
+    const result = new Relation();
+
+    // Copy all entries from this, subtracting other's weights where present.
+    for (const [key, entry] of this._map) {
+      const otherEntry = other._map.get(key);
+      if (otherEntry === undefined) {
+        // No corresponding entry in other — copy as-is.
+        result._map.set(key, {
+          tuple: entry.tuple,
+          weight: entry.weight,
+          clampedWeight: entry.clampedWeight,
+        });
+      } else {
+        const newWeight = entry.weight - otherEntry.weight;
+        if (newWeight !== 0) {
+          result._map.set(key, {
+            tuple: entry.tuple,
+            weight: newWeight,
+            clampedWeight: newWeight > 0 ? 1 : 0,
+          });
+        }
+        // newWeight === 0 → prune (don't add to result).
+      }
+    }
+
+    // Entries in other but not in this → negated weight.
+    for (const [key, entry] of other._map) {
+      if (!this._map.has(key)) {
+        const negWeight = -entry.weight;
+        if (negWeight !== 0) {
+          result._map.set(key, {
+            tuple: entry.tuple,
+            weight: negWeight,
+            clampedWeight: negWeight > 0 ? 1 : 0,
+          });
+        }
+      }
+    }
+
+    return result;
+  }
+
   /** Deep clone — copies all entries (including weight ≤ 0 entries). */
   clone(): Relation {
     const result = new Relation();
@@ -526,10 +582,31 @@ export class Relation {
 }
 
 // ---------------------------------------------------------------------------
+// ReadonlyDatabase — read-only interface for Database access.
+//
+// Used by evaluation functions that only need to read relations (e.g.,
+// evaluateRuleDelta's fullDbOld parameter). Enables DatabaseView to
+// provide a lazy view without exposing mutation methods.
+//
+// See Plan 007, Phase 1.5, Task 1.5.1.
+// ---------------------------------------------------------------------------
+
+export interface ReadonlyDatabase {
+  /** Get the relation if it exists, or an empty relation if it doesn't. */
+  getRelation(predicate: string): Relation;
+
+  /** All predicate names in the database. */
+  predicates(): Iterable<string>;
+
+  /** Check if a fact exists (clampedWeight > 0) in the database. */
+  hasFact(f: Fact): boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Database — a collection of relations keyed by predicate name.
 // ---------------------------------------------------------------------------
 
-export class Database {
+export class Database implements ReadonlyDatabase {
   private readonly _relations: Map<string, Relation> = new Map();
 
   /** Get or create the relation for the given predicate. */
