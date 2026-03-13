@@ -76,11 +76,15 @@ export {
   CHANGEFEED,
   getOrCreateChangefeed,
   hasChangefeed,
+  hasComposedChangefeed,
   staticChangefeed,
 } from "./changefeed.js"
 export type {
   Changefeed,
+  ComposedChangefeed,
   HasChangefeed,
+  HasComposedChangefeed,
+  TreeEvent,
 } from "./changefeed.js"
 
 // Step — pure state transitions: (State, Change) → State

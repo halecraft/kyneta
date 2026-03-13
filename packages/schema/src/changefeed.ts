@@ -8,6 +8,7 @@
 // This replaces the previous two-symbol design (SNAPSHOT + REACTIVE).
 
 import type { ChangeBase } from "./change.js"
+import type { Path } from "./interpret.js"
 
 // ---------------------------------------------------------------------------
 // Symbol
@@ -53,6 +54,54 @@ export interface Changefeed<S, C extends ChangeBase = ChangeBase> {
  */
 export interface HasChangefeed<S = unknown, A extends ChangeBase = ChangeBase> {
   readonly [CHANGEFEED]: Changefeed<S, A>
+}
+
+// ---------------------------------------------------------------------------
+// Compositional changefeed — tree-level observation
+// ---------------------------------------------------------------------------
+
+/**
+ * A tree event carries a change together with its relative origin path.
+ *
+ * When a `subscribeTree` subscriber receives a `TreeEvent`, `origin`
+ * is the path from the subscription point down to where the change
+ * actually occurred. When the change is at the subscription point
+ * itself, `origin` is `[]`.
+ */
+export interface TreeEvent {
+  readonly origin: Path
+  readonly change: ChangeBase
+}
+
+/**
+ * Extension of `Changefeed` for tree-structured (composite) refs.
+ *
+ * `subscribe` remains node-level — it fires only for changes at this
+ * node's own path (e.g., `SequenceChange` for lists, `ReplaceChange`
+ * for products).
+ *
+ * `subscribeTree` fires for all descendant changes with relative
+ * origin paths, making it a strict superset of `subscribe` (tree
+ * subscribers also see own-path changes with `origin: []`).
+ *
+ * Only composite refs (products, sequences, maps) implement this.
+ * Leaf refs (scalars, text, counters) implement plain `Changefeed`.
+ */
+export interface ComposedChangefeed<S, C extends ChangeBase = ChangeBase>
+  extends Changefeed<S, C> {
+  /** Subscribe to changes at this node and all descendants. */
+  subscribeTree(callback: (event: TreeEvent) => void): () => void
+}
+
+/**
+ * An object that carries a composed changefeed under the `[CHANGEFEED]`
+ * symbol — i.e. a composite ref with tree-level observation.
+ */
+export interface HasComposedChangefeed<
+  S = unknown,
+  A extends ChangeBase = ChangeBase,
+> {
+  readonly [CHANGEFEED]: ComposedChangefeed<S, A>
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +162,19 @@ export function hasChangefeed<S = unknown, A extends ChangeBase = ChangeBase>(
     (typeof value === "object" || typeof value === "function") &&
     CHANGEFEED in (value as object)
   )
+}
+
+/**
+ * Returns `true` if `value` has a `[CHANGEFEED]` property whose value
+ * has a `subscribeTree` method — i.e. it implements `HasComposedChangefeed`.
+ */
+export function hasComposedChangefeed<
+  S = unknown,
+  A extends ChangeBase = ChangeBase,
+>(value: unknown): value is HasComposedChangefeed<S, A> {
+  if (!hasChangefeed(value)) return false
+  const cf = value[CHANGEFEED]
+  return typeof (cf as any).subscribeTree === "function"
 }
 
 // ---------------------------------------------------------------------------

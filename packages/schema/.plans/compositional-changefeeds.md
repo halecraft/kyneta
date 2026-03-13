@@ -247,15 +247,15 @@ This eliminates `notifyAll`, `pathKey`, `subscribeToPath`, `subscribeToMap`, and
 
 ## Phases
 
-### Phase 1: `ComposedChangefeed` Interface and `TreeEvent` 🔴
+### Phase 1: `ComposedChangefeed` Interface and `TreeEvent` 🟢
 
 Define the types. No runtime implementation yet.
 
-- Task: Define `TreeEvent` interface in `changefeed.ts`: `{ readonly origin: Path, readonly change: ChangeBase }`. 🔴
-- Task: Define `ComposedChangefeed<S, C>` interface in `changefeed.ts` extending `Changefeed<S, C>` with `subscribeTree(callback: (event: TreeEvent) => void): () => void`. 🔴
-- Task: Define `HasComposedChangefeed<S, C>` interface with `readonly [CHANGEFEED]: ComposedChangefeed<S, C>`. 🔴
-- Task: Add `hasComposedChangefeed(value)` type guard in `changefeed.ts`. 🔴
-- Task: Export all new types and guards from `index.ts`. 🔴
+- Task: Define `TreeEvent` interface in `changefeed.ts`: `{ readonly origin: Path, readonly change: ChangeBase }`. 🟢
+- Task: Define `ComposedChangefeed<S, C>` interface in `changefeed.ts` extending `Changefeed<S, C>` with `subscribeTree(callback: (event: TreeEvent) => void): () => void`. 🟢
+- Task: Define `HasComposedChangefeed<S, C>` interface with `readonly [CHANGEFEED]: ComposedChangefeed<S, C>`. 🟢
+- Task: Add `hasComposedChangefeed(value)` type guard in `changefeed.ts`. 🟢
+- Task: Export all new types and guards from `index.ts`. 🟢
 
 ### Phase 2: `CONTEXT` Symbol and `WritableContext` Transactions 🔴
 
