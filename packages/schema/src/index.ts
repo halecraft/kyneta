@@ -205,6 +205,10 @@ export {
 } from "./interpreters/with-changefeed.js"
 export type { NotificationPlan } from "./interpreters/with-changefeed.js"
 
+// Facade — library-level change capture and declarative application
+export { change, applyChanges } from "./facade.js"
+export type { ApplyChangesOptions } from "./facade.js"
+
 // Interpreter composition combinators
 export { product, overlay, firstDefined } from "./combinators.js"
 export type { MergeFn } from "./combinators.js"

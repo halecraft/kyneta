@@ -330,14 +330,14 @@ Then `ctx.flush(origin?)` delivers all accumulated notifications as batched Chan
 
 Note: `[INVALIDATE]` **remains on refs** as a public symbol. It's still part of the `HasCaching` interface and can be called directly for advanced use cases. What changes is that `withWritable` no longer needs to call it — `prepare` does.
 
-### Phase 5: Library-level `change` and `applyChanges` 🔴
+### Phase 5: Library-level `change` and `applyChanges` 🟢
 
 Implement `applyChanges` as a public function in `@kyneta/schema`. Also implement a library-level `change` that returns `PendingChange[]` instead of the doc, making the two functions symmetric duals that produce/consume the same currency.
 
 Both functions live in a new module `src/facade.ts`. The example facade functions (`createDoc`, `change`, `subscribe`) remain in `example/main.ts` as teaching code; the library functions are the production versions.
 
-- Task: Create `src/facade.ts` with `change` and `applyChanges` implementations. 🔴
-- Task: Export `change`, `applyChanges`, and `ApplyChangesOptions` from `src/index.ts`. 🔴
+- Task: Create `src/facade.ts` with `change` and `applyChanges` implementations. 🟢
+- Task: Export `change`, `applyChanges`, and `ApplyChangesOptions` from `src/index.ts`. 🟢
 
 #### `change` signature
 
@@ -378,7 +378,7 @@ No special invalidation logic needed — the `prepare` pipeline (from Phase 4) h
 
 Same as the example facade but returns `PendingChange[]` from `ctx.commit()` instead of the doc.
 
-### Phase 6: Tests 🟡
+### Phase 6: Tests 🟢
 
 Tests that were already implemented in PR 4 (batched notification infrastructure):
 
@@ -390,18 +390,18 @@ Tests that were already implemented in PR 4 (batched notification infrastructure
 
 Tests remaining (depend on Phase 4 `INVALIDATE` pipeline and/or Phase 5 `change`/`applyChanges`):
 
-- Task: Test that `applyChanges` applies changes to the store correctly (text, sequence, replace, increment). 🔴 (Phase 5)
-- Task: Test that `applyChanges` fires changefeed subscribers exactly **once** with a `Changeset` containing all changes (not once per change). 🔴 (Phase 5)
-- Task: Test round-trip: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docB()` matches `docA()`. 🔴 (Phase 5)
-- Task: Test that caches are surgically invalidated: after `applyChanges` modifies `doc.settings.darkMode`, `doc.settings.darkMode()` returns the new value, but `doc.messages.at(0)` still returns the same cached ref (not blown away). 🔴 (Phase 4 + Phase 5)
-- Task: Test that `change` returns `PendingChange[]` with correct paths and change types. 🔴 (Phase 5)
-- Task: Test error handling: `applyChanges` on a non-transactable ref throws. 🔴 (Phase 5)
-- Task: Test that `applyChanges(doc, [])` is a no-op (returns empty array, no subscribers fire). 🔴 (Phase 5)
+- Task: Test that `applyChanges` applies changes to the store correctly (text, sequence, replace, increment). 🟢 `facade.test.ts` "applyChanges: basic behavior" (4 tests: replace, text, sequence, increment)
+- Task: Test that `applyChanges` fires changefeed subscribers exactly **once** with a `Changeset` containing all changes (not once per change). 🟢 `facade.test.ts` "fires subscribers exactly once with all changes" + "batched changes at the same path produce one Changeset with N changes"
+- Task: Test round-trip: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docB()` matches `docA()`. 🟢 `facade.test.ts` "round-trip: change → applyChanges" (6 tests: text+settings, push, counter, mixed, insert, delete)
+- Task: Test that caches are surgically invalidated: after `applyChanges` modifies `doc.settings.darkMode`, `doc.settings.darkMode()` returns the new value, but `doc.messages.at(0)` still returns the same cached ref (not blown away). 🟢 `facade.test.ts` "invalidates cache at target path, preserves unrelated caches"
+- Task: Test that `change` returns `PendingChange[]` with correct paths and change types. 🟢 `facade.test.ts` "returns PendingChange[] with correct paths and change types" + "captures multiple mutations" + "captures text mutations" + "captures counter mutations"
+- Task: Test error handling: `applyChanges` on a non-transactable ref throws. 🟢 `facade.test.ts` "throws on non-transactable ref" (both change and applyChanges)
+- Task: Test that `applyChanges(doc, [])` is a no-op (returns empty array, no subscribers fire). 🟢 `facade.test.ts` "empty ops is a no-op (no subscribers fire)"
 - Task: Test cache invalidation via prepare pipeline (Phase 4 verification): directly call `ctx.prepare(path, change)` + `ctx.flush()` on a cached document. Assert the cache at that path is invalidated and subsequent reads return the new value. 🟢 `with-caching.test.ts` "ctx.prepare + ctx.flush invalidates cache at target path (bypassing mutation methods)" + "ctx.prepare invalidates sequence cache (shift on insert)"
 - Task: Test surgical invalidation: mutating one path preserves unrelated cached refs (path-keyed handlers only fire for the affected path). 🟢 `with-caching.test.ts` "surgical invalidation: mutating one path preserves unrelated cached refs"
 - Task: Test read-only stack backward compatibility: `withCaching(withReadable(bottom))` with plain `RefContext` still works — reading, caching identity, `[INVALIDATE]` present and functional. 🟢 `with-caching.test.ts` "withCaching(withReadable(bottom)) with plain RefContext still works"
-- Task: Test `applyChanges` during active transaction throws. 🔴 (Phase 5)
-- Task: Test `Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` round-trip: the output of `subscribeTree` on docA can be used to reconstruct `PendingChange[]` input for `applyChanges` on docB (modulo absolute vs. relative paths). 🔴 (Phase 5)
+- Task: Test `applyChanges` during active transaction throws. 🟢 `facade.test.ts` "throws during active transaction"
+- Task: Test `Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` round-trip: the output of `subscribeTree` on docA can be used to reconstruct `PendingChange[]` input for `applyChanges` on docB (modulo absolute vs. relative paths). 🟢 `facade.test.ts` "tree events from docA can reconstruct PendingChange[] for docB" + "tree events from a subtree carry relative paths". Note: tree subscribers receive one Changeset<TreeEvent> per affected child path (not one combined changeset), so reconstruction uses `flatMap` across changesets.
 
 ### Phase 7: Documentation 🔴
 
@@ -722,15 +722,16 @@ Reviewer sees: the actual semantic change. Subscribers now receive batched `Chan
 
 Reviewer sees: cache invalidation moves from manual convention (each mutation method calls INVALIDATE) to pipeline enforcement (prepare does it). The mutation methods simplify to "construct change, dispatch." The reviewer can verify: "every mutation method lost its INVALIDATE guard, `ensureCacheWiring` mirrors the existing `ensurePrepareWiring` pattern, all tests pass."
 
-### PR 6 — feat: library-level `change` and `applyChanges`
+### PR 6 — feat: library-level `change` and `applyChanges` 🟢
 
 **Phase 5 + Phase 6 tests. Type: feature (new public API + tests).**
 
 Introduces the two symmetric duals: imperative `change` (returns `PendingChange[]`) and declarative `applyChanges` (consumes `PendingChange[]`). Both use `executeBatch` under the hood.
 
-- Create `src/facade.ts` with `change` and `applyChanges`
-- Export from `src/index.ts`
-- Tests: round-trip, batched notification, origin tagging, surgical invalidation, error paths, auto-commit changeset shape, `applyChanges` during transaction throws, `Changeset<TreeEvent>` round-trip isomorphism
+- Create `src/facade.ts` with `change` and `applyChanges` 🟢
+- Export `change`, `applyChanges`, `ApplyChangesOptions` from `src/index.ts` 🟢
+- 34 tests in `facade.test.ts`: round-trip (6), basic change behavior (7), basic applyChanges behavior (9), batched notification (3), origin tagging (3), surgical cache invalidation (2), tree event round-trip (2), changefeed integration (2) 🟢
+- 835/835 schema tests, 869/869 core tests 🟢
 
 Reviewer sees: the payoff — the public API that motivated the entire plan. The round-trip test is the crown jewel ("mutate docA, capture ops, apply to docB, assert equal"). The reviewer can verify: "the API surface is small, `executeBatch` does the heavy lifting, tests are comprehensive."
 
@@ -754,7 +755,7 @@ Reviewer sees: documentation catching up to the implementation. No code changes.
 ```
 PR 7  docs: TECHNICAL.md and plan updates                                    🔴
   ↑
-PR 6  feat: library-level change/applyChanges + tests                        🔴  ← next
+PR 6  feat: library-level change/applyChanges + tests                        🟢
   ↑
 PR 5  feat: INVALIDATE into prepare pipeline (atomic with withWritable)      🟢
   ↑
