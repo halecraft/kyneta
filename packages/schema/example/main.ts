@@ -1,18 +1,22 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //
-//   @loro-extended/schema — Example Mini-App
+//   @kyneta/schema — Example Mini-App
 //
 //   This example builds a thin, high-level facade on top of the schema
 //   algebra primitives, then uses that facade to demonstrate the apex
 //   developer experience: the same ergonomics as @loro-extended/change,
 //   but running on a plain JS object store with zero CRDT runtime.
 //
-//   The architecture decomposes into three orthogonal building blocks:
-//     1. readableInterpreter  — callable function-shaped refs (the host)
-//     2. withMutation(base)   — adds .set(), .insert(), .increment(), etc.
-//     3. withChangefeed       — adds [CHANGEFEED] observation protocol
+//   The architecture decomposes into four composable interpreter layers:
+//     1. readable    — callable function-shaped refs with caching
+//     2. writable    — adds .set(), .insert(), .increment(), etc.
+//     3. changefeed  — adds [CHANGEFEED] / subscribeTree observation
 //
-//   Compose them: enrich(withMutation(readableInterpreter), withChangefeed)
+//   Compose them fluently:
+//     interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
+//
+//   Or manually:
+//     withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
 //
 //   Run with:  npx tsx example/main.ts   (from packages/schema/)
 //
@@ -25,16 +29,20 @@ import {
   describe,
   interpret,
   plainInterpreter,
-  readableInterpreter,
-  withMutation,
-  createWritableContext,
-  enrich,
+  bottomInterpreter,
+  withReadable,
+  withCaching,
+  withWritable,
   withChangefeed,
-  createChangefeedContext,
-  changefeedFlush,
-  subscribeDeep,
+  createWritableContext,
+  readable,
+  writable,
+  changefeed,
   CHANGEFEED,
+  TRANSACT,
   hasChangefeed,
+  hasComposedChangefeed,
+  hasTransact,
   validate,
   tryValidate,
   SchemaValidationError,
@@ -44,17 +52,14 @@ import {
 import type {
   Writable,
   Readable,
-  ReadableSequenceRef,
   Plain,
   RefContext,
   WritableContext,
-  ChangefeedContext,
   ChangeBase,
-  Changefeed,
+  TreeEvent,
   TextRef,
   CounterRef,
   ScalarRef,
-  SequenceRef,
   Store,
 } from "../src/index.js"
 import type {
@@ -68,28 +73,15 @@ import type {
 //   FACADE — The high-level API built on schema primitives
 //
 //   In production this would live in its own package (or in
-//   @loro-extended/change). Here it lives in the example to prove
+//   @kyneta/change). Here it lives in the example to prove
 //   the algebra supports this developer experience.
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-// A document handle: the thing developers interact with.
-// Hides stores, contexts, interpreters — just typed refs + convenience.
-
-const DOC_INTERNALS = Symbol("doc-internals")
-
-type DocInternals = {
-  schema: AnnotatedSchema<"doc", ProductSchema>
-  store: Store
-  cfCtx: ChangefeedContext
-}
-
-function getInternals(doc: unknown): DocInternals {
-  return (doc as Record<symbol, DocInternals>)[DOC_INTERNALS]
-}
-
 /**
- * Create a typed document from a schema, optionally seeded with initial values.
+ * Create a typed document from a schema, optionally seeded with
+ * initial values. Returns a fully wired document with read, write,
+ * and observation capabilities.
  *
  * ```ts
  * const doc = createDoc(MySchema)
@@ -112,21 +104,16 @@ function createDoc<F extends Record<string, SchemaNode>>(
     : defaults
   const store: Store = { ...initial }
 
-  // Wire up writable + feed in one shot
-  const wCtx = createWritableContext(store)
-  const cfCtx = createChangefeedContext(wCtx)
-  const enriched = enrich(withMutation(readableInterpreter), withChangefeed)
-  const surface = interpret(schema, enriched, cfCtx) as object
+  // Wire up the full interpreter stack via the fluent builder
+  const ctx = createWritableContext(store)
+  const surface = interpret(schema, ctx)
+    .with(readable)
+    .with(writable)
+    .with(changefeed)
+    .done() as object
 
   // Attach toJSON via the plain interpreter
   const toJSON = () => interpret(schema, plainInterpreter, store)
-
-  // Attach internal machinery (non-enumerable, hidden from Object.keys)
-  Object.defineProperty(surface, DOC_INTERNALS, {
-    value: { schema, store, cfCtx } satisfies DocInternals,
-    enumerable: false,
-    configurable: false,
-  })
 
   Object.defineProperty(surface, "toJSON", {
     value: toJSON,
@@ -138,7 +125,13 @@ function createDoc<F extends Record<string, SchemaNode>>(
 }
 
 /**
- * Batch mutations into a single atomic flush.
+ * Batch mutations into a single atomic transaction.
+ *
+ * Uses the `[TRANSACT]` symbol to discover the `WritableContext`
+ * from any ref — no internal WeakMap or re-interpretation needed.
+ *
+ * During the transaction, dispatch buffers changes. On commit,
+ * changes replay through dispatch so changefeed subscribers fire.
  *
  * ```ts
  * change(doc, d => {
@@ -151,22 +144,20 @@ function createDoc<F extends Record<string, SchemaNode>>(
  * Returns the doc for chaining.
  */
 function change<D extends object>(doc: D, fn: (draft: D) => void): D {
-  const { schema, store } = getInternals(doc)
-
-  // Create a batched context sharing the same store
-  const batchWCtx = createWritableContext(store, { autoCommit: false })
-  const batchCfCtx = createChangefeedContext(batchWCtx)
-  const enriched = enrich(withMutation(readableInterpreter), withChangefeed)
-  const draft = interpret(schema, enriched, batchCfCtx) as D
-
-  // Execute the user's mutations (nothing hits the store yet)
-  fn(draft)
-
-  // Flush: apply all actions to the store atomically.
-  // The original doc's refs read live from the shared store,
-  // so ref() etc. immediately reflect the new values.
-  changefeedFlush(batchCfCtx)
-
+  if (!hasTransact(doc)) {
+    throw new Error(
+      "change() requires a ref with [TRANSACT] (created via createDoc)",
+    )
+  }
+  const ctx: WritableContext = (doc as any)[TRANSACT]
+  ctx.beginTransaction()
+  try {
+    fn(doc)
+    ctx.commit()
+  } catch (e) {
+    ctx.abort()
+    throw e
+  }
   return doc
 }
 
@@ -392,16 +383,16 @@ log(`
     doc.labels.at("bug")!() → "${doc.labels.at("bug")!()}"
 `)
 
-// ─── 6. Batched mutations with change() ─────────────────────────────────
+// ─── 6. Transactions with change() ──────────────────────────────────────
 
-section(6, "Batched Mutations with change()")
+section(6, "Transactions with change()")
 
 log(`Before: stars = ${doc.stars()}, name = "${doc.name()}"`)
 
 change(doc, d => {
   d.name.update("Schema Algebra v3")
   d.stars.increment(100)
-  // Product .set() in batch: one ReplaceChange instead of N scalar writes
+  // Product .set() in transaction: one ReplaceChange instead of N scalar writes
   d.settings.set({ visibility: "private", maxTasks: 25, archived: true })
   d.tasks.push({ title: "Ship it!", done: false, priority: 3 })
 })
@@ -524,11 +515,14 @@ log(`
     "toJSON" in Object.keys(doc) → ${Object.keys(doc).includes("toJSON")}
     typeof doc.toJSON → "${typeof doc.toJSON}"
 
-    isFeedable(doc) → ${hasChangefeed(doc)}
-    isFeedable(doc.name) → ${hasChangefeed(doc.name)}
-    isFeedable(doc.stars) → ${hasChangefeed(doc.stars)}
-    isFeedable(doc.tasks) → ${hasChangefeed(doc.tasks)}
-    isFeedable(doc.settings) → ${hasChangefeed(doc.settings)}
+    hasChangefeed(doc) → ${hasChangefeed(doc)}
+    hasChangefeed(doc.name) → ${hasChangefeed(doc.name)}
+    hasChangefeed(doc.stars) → ${hasChangefeed(doc.stars)}
+    hasChangefeed(doc.tasks) → ${hasChangefeed(doc.tasks)}
+    hasChangefeed(doc.settings) → ${hasChangefeed(doc.settings)}
+
+    hasTransact(doc) → ${hasTransact(doc)}
+    hasTransact(doc.name) → ${hasTransact(doc.name)}
 `)
 
 // ─── 10. Validation ─────────────────────────────────────────────────────
@@ -569,6 +563,13 @@ const badData = {
   labels: {},
 }
 
+function describeValue(v: unknown): string {
+  if (v === null) return "null"
+  if (v === undefined) return "undefined"
+  if (typeof v === "string") return `"${v}"`
+  return String(v)
+}
+
 const result = tryValidate(ProjectSchema, badData)
 if (!result.ok) {
   log(`
@@ -591,70 +592,119 @@ try {
   }
 }
 
-function describeValue(v: unknown): string {
-  if (v === null) return "null"
-  if (v === undefined) return "undefined"
-  if (typeof v === "string") return `"${v}"`
-  return String(v)
-}
+// ─── 11. Compositional tree subscriptions ───────────────────────────────
 
-// ─── 11. Deep subscriptions ─────────────────────────────────────────────
-
-section(11, "Deep Subscriptions (subscribeDeep)")
+section(11, "Compositional Tree Subscriptions (subscribeTree)")
 
 log(`
-    subscribeDeep notifies for changes anywhere in a subtree.
-    The Changefeed coalgebra is unchanged — subscribeDeep is
-    context-level infrastructure in the observation layer.
+    subscribeTree notifies for changes anywhere in a subtree.
+    It is part of the [CHANGEFEED] protocol on composite refs —
+    no raw context object needed. Each event carries an origin
+    path relative to the subscription point.
 `)
 
-const { cfCtx } = getInternals(doc)
-const deepEvents: { origin: string; type: string }[] = []
-const deepUnsub = subscribeDeep(cfCtx, [], event => {
-  deepEvents.push({
-    origin: formatPath(event.origin),
-    type: event.change.type,
-  })
-})
+// Product refs have ComposedChangefeed with subscribeTree
+log(`
+    hasComposedChangefeed(doc.settings) → ${hasComposedChangefeed(doc.settings)}
+    hasComposedChangefeed(doc.tasks) → ${hasComposedChangefeed(doc.tasks)}
+    hasComposedChangefeed(doc.name) → ${hasComposedChangefeed(doc.name)}  (leaf — no tree)
+`)
 
-doc.name.update("Deep Test")
-doc.stars.increment(1)
+const treeEvents: { origin: string; type: string }[] = []
+const treeUnsub = doc.settings[CHANGEFEED].subscribeTree(
+  (event: TreeEvent) => {
+    treeEvents.push({
+      origin: formatPath(event.origin),
+      type: event.change.type,
+    })
+  },
+)
+
 doc.settings.maxTasks.set(999)
+doc.settings.visibility.set("private")
 
 log(`
-    After 3 mutations (name, stars, settings.maxTasks):
-      ${deepEvents.length} deep events received:
-      ${deepEvents.map(e => `  origin: ${e.origin}, type: ${e.type}`).join("\n      ")}
+    After 2 leaf mutations (maxTasks, visibility):
+      ${treeEvents.length} tree events received:
+      ${treeEvents.map(e => `  origin: ${e.origin}, type: ${e.type}`).join("\n      ")}
 `)
 
 // Contrast: product .set() dispatches at the product path, not at each leaf
 doc.settings.set({ visibility: "public", maxTasks: 100, archived: false })
 
-const last = deepEvents[deepEvents.length - 1]!
+const last = treeEvents[treeEvents.length - 1]!
 log(`
     After doc.settings.set({...}) — 1 product-level dispatch:
-      ${deepEvents.length} total deep events (${deepEvents.length - 3} new):
+      ${treeEvents.length} total tree events (${treeEvents.length - 2} new):
         origin: ${last.origin}, type: ${last.type}
 
     Leaf .set() → origin includes the scalar segment (e.g. settings.maxTasks)
-    Product .set() → origin stops at the product (e.g. settings)
+    Product .set() → origin is [] (change is at the subscription point itself)
 `)
 
-deepUnsub()
-doc.name.update("Schema Algebra v3 [released]") // restore, not observed
+treeUnsub()
+doc.settings.maxTasks.set(100) // not observed
 
-// ─── 12. Read-only documents ────────────────────────────────────────────
+// ─── 12. Transaction + tree subscription integration ────────────────────
 
-section(12, "Read-Only Documents")
+section(12, "Transaction + Tree Subscription Integration")
 
 log(`
-    readableInterpreter alone produces a callable, navigable document
+    During a transaction, dispatch buffers changes in the store but
+    the changefeed dispatch wrapper still fires listeners eagerly.
+    On commit, changes replay through dispatch — so listeners fire
+    again. The key invariant: the store is unchanged until commit.
+`)
+
+const txEvents: { origin: string; type: string }[] = []
+doc.settings[CHANGEFEED].subscribeTree((event: TreeEvent) => {
+  txEvents.push({
+    origin: formatPath(event.origin),
+    type: event.change.type,
+  })
+})
+
+// Use the transaction API directly (change() wraps this)
+const ctx = (doc as any)[TRANSACT] as WritableContext
+ctx.beginTransaction()
+doc.settings.visibility.set("private")
+doc.settings.maxTasks.set(42)
+const countDuringBuffer = txEvents.length
+
+log(`
+    After 2 mutations inside transaction (before commit):
+      txEvents.length → ${txEvents.length}  (listeners fire eagerly)
+      doc.settings.visibility() → "${doc.settings.visibility()}"  (but store is unchanged!)
+`)
+
+const flushed = ctx.commit()
+
+log(`
+    After commit:
+      txEvents.length → ${txEvents.length}  (replay fired ${txEvents.length - countDuringBuffer} more)
+      flushed.length → ${flushed.length}
+      doc.settings.visibility() → "${doc.settings.visibility()}"  (store updated)
+      doc.settings.maxTasks() → ${doc.settings.maxTasks()}
+`)
+
+// Restore
+doc.settings.set({ visibility: "public", maxTasks: 100, archived: false })
+
+// ─── 13. Read-only documents ────────────────────────────────────────────
+
+section(13, "Read-Only Documents")
+
+log(`
+    The readable layer alone produces a callable, navigable document
     with no mutation methods and no dispatch context.
 `)
 
 {
   const roStore = { ...doc.toJSON() }
   const roCtx: RefContext = { store: roStore }
+
+  // Manual composition — equivalent to .with(readable).done()
+  const readableInterpreter = withCaching(withReadable(bottomInterpreter))
   const roDoc = interpret(
     ProjectSchema,
     readableInterpreter,
@@ -674,12 +724,16 @@ log(`
       "set" in roDoc.stars → ${"set" in roDoc.stars}
       "insert" in roDoc.name → ${"insert" in roDoc.name}
       "increment" in roDoc.stars → ${"increment" in roDoc.stars}
+
+      // No observation:
+      hasChangefeed(roDoc.name) → ${hasChangefeed(roDoc.name)}
+      hasTransact(roDoc.name) → ${hasTransact(roDoc.name)}
   `)
 }
 
-// ─── 13. Template literal coercion via toPrimitive ──────────────────────
+// ─── 14. Template literal coercion via toPrimitive ──────────────────────
 
-section(13, "Template Literal Coercion (toPrimitive)")
+section(14, "Template Literal Coercion (toPrimitive)")
 
 log(`
     Leaf refs support [Symbol.toPrimitive] — no ref() call needed
@@ -696,24 +750,35 @@ log(`
     doc.stars[Symbol.toPrimitive]("string") → "${doc.stars[Symbol.toPrimitive]("string")}"
 `)
 
-// ─── 14. The composition algebra ────────────────────────────────────────
+// ─── 15. The composition algebra ────────────────────────────────────────
 
-section(14, "The Composition Algebra")
+section(15, "The Composition Algebra")
 
 log(`
-    Three orthogonal building blocks, independently useful:
+    Four composable interpreter layers, independently useful:
 
-      readableInterpreter              → read-only callable refs
-      withMutation(readableInterpreter) → read + mutation
-      enrich(..., withChangefeed)       → read + mutation + observation
+      Fluent builder API:
+        interpret(schema, ctx)
+          .with(readable)              → read-only callable refs
+          .with(writable)              → read + mutation
+          .with(changefeed)            → read + mutation + observation
+          .done()
+
+      Manual composition (equivalent):
+        withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
 
     Each level adds only the context it needs:
-      RefContext      { store }
-      WritableContext { store, dispatch, autoCommit, pending }
-      ChangefeedContext { ... + subscribers, deepSubscribers }
+      RefContext        { store }
+      WritableContext   { store, dispatch, beginTransaction, commit, abort }
+
+    Symbol-keyed composability hooks:
+      [READ]        — controls what carrier() does (bottomInterpreter → withReadable)
+      [INVALIDATE]  — change-driven cache invalidation (withCaching → withWritable)
+      [TRANSACT]    — context discovery from any ref (withWritable)
+      [CHANGEFEED]  — observation coalgebra with subscribeTree (withChangefeed)
 `)
 
-// ─── 15. Final Snapshot ─────────────────────────────────────────────────
+// ─── 16. Final Snapshot ─────────────────────────────────────────────────
 
-section(15, "Final Snapshot")
+section(16, "Final Snapshot")
 showDoc()

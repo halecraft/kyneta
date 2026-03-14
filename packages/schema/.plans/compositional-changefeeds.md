@@ -86,7 +86,7 @@ _Updated to reflect current state after Phases 1–3 completion._
 - ~~The `enrich` combinator and `Decorator` type exist.~~ Removed in Phase 3c. The remaining combinators (`product`, `overlay`, `firstDefined`) are unaffected.
 - ~~The `interpret` API returns a result directly — no fluent builder.~~ Solved in Phase 4. `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()`.
 - ~~No `InterpreterLayer` abstraction exists for fluent `.with()` chaining.~~ Defined in Phase 4. Pre-built layers in `src/layers.ts`.
-- `example/main.ts` is frozen in the pre-Phase-2 era — it imports removed symbols (`readableInterpreter`, `withMutation`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `ChangefeedContext`, `autoCommit`). It does not compile against the current barrel.
+- ~~`example/main.ts` is frozen in the pre-Phase-2 era.~~ Rewritten in Phase 5. Uses fluent builder, `TRANSACT` transactions, `subscribeTree`. Runs cleanly.
 - `TECHNICAL.md` has several stale references: file map lists deleted `with-changefeed.test.ts` (should be `changefeed.test.ts`), describes `combinators.ts` as containing `enrich`, describes `with-changefeed.ts` as a "transitional" decorator, and the "Changefeed Decorator" section still documents the old `enrich`-based design.
 - `guards.ts` JSDoc mentions `enrich` (stale); `changefeed.ts` JSDoc mentions "enriched value" (stale).
 - `theory/interpreter-algebra.md` §14.7 refers to "a changefeed decorator" — should say "a changefeed interpreter transformer."
@@ -347,11 +347,12 @@ The core implementation. The new `withChangefeed` interpreter transformer replac
 - Task: Export layers and builder types from `index.ts`. `InterpreterLayer`, `InterpretBuilder` (types), `readable`, `writable`, `changefeed` (runtime). 🟢
 - Task: Tests in `fluent.test.ts`: 24 tests covering basic functionality, equivalence with manual composition, transaction integration, error handling, layer identity, three-arg regression, caching identity, partial stacks, and type-level verification. 🟢
 
-### Phase 5: Rewrite `example/main.ts` 🔴
+### Phase 5: Rewrite `example/main.ts` 🟢
 
-Old changefeed infrastructure, `enrich`, and `Decorator` were already removed in Phase 3. The `schema-ssr.test.ts` migration was also handled in Phase 3. This phase focuses solely on the example.
+Old changefeed infrastructure, `enrich`, and `Decorator` were already removed in Phase 3. The `schema-ssr.test.ts` migration was also handled in Phase 3. This phase rewrote the example and its README.
 
-- Task: Rewrite `example/main.ts` to use the current API: `withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))`, `TRANSACT` symbol, transaction API, and (if Phase 4 is done) the fluent builder. Remove `DOC_INTERNALS` symbol and `getInternals`. Replace `change()` with `ref[TRANSACT].beginTransaction()` / `commit()`. Replace `subscribeDeep` demo with `subscribeTree` demo. Replace `readableInterpreter` with `withCaching(withReadable(bottomInterpreter))`. Replace `withMutation` with `withWritable`. Remove all imports of symbols that no longer exist (`createChangefeedContext`, `changefeedFlush`, `ChangefeedContext`, `subscribeDeep`, `autoCommit`). 🔴
+- Task: Rewrite `example/main.ts` to use the current API. `createDoc()` uses the fluent builder: `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()`. `change()` uses `doc[TRANSACT].beginTransaction()` / `commit()` / `abort()` — no `DOC_INTERNALS`, no `getInternals`, no re-interpretation. `subscribeDeep` demo replaced with `subscribeTree` via `doc.settings[CHANGEFEED].subscribeTree(cb)`. New section 12 demonstrates transaction + tree subscription integration. Read-only section uses `withCaching(withReadable(bottomInterpreter))`. Composition algebra section updated to show four layers, fluent builder, and symbol hooks. All removed imports eliminated (`readableInterpreter`, `withMutation`, `enrich`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `ChangefeedContext`, `autoCommit`). Example runs cleanly with 16 sections. 🟢
+- Task: Rewrite `example/README.md` to document the current architecture: four-layer stack, fluent composition, `TRANSACT`-based transactions, compositional `subscribeTree`, symbol-keyed hooks table. 🟢
 
 ### Phase 6: Documentation 🔴
 
@@ -360,7 +361,7 @@ Old changefeed infrastructure, `enrich`, and `Decorator` were already removed in
 
 ## Tests
 
-New test file `src/__tests__/transaction.test.ts` for context transactions (Phase 2) — ✅ done. New test file `src/__tests__/changefeed.test.ts` for compositional behavior (Phase 3) — ✅ done, replaces deleted `with-changefeed.test.ts`. New test file `src/__tests__/fluent.test.ts` for the builder API (Phase 4) — ✅ done, 11 tests (consolidated from 24 — removed low-value layer-name, trivial type-export, and redundant equivalence tests; added builder-branching and custom-layer tests). All 767 tests pass as of Phase 4 completion.
+New test file `src/__tests__/transaction.test.ts` for context transactions (Phase 2) — ✅ done. New test file `src/__tests__/changefeed.test.ts` for compositional behavior (Phase 3) — ✅ done, replaces deleted `with-changefeed.test.ts`. New test file `src/__tests__/fluent.test.ts` for the builder API (Phase 4) — ✅ done, 11 tests (consolidated from 24 — removed low-value layer-name, trivial type-export, and redundant equivalence tests; added builder-branching and custom-layer tests). All 767 tests pass as of Phase 5 completion.
 
 ### Phase 2 Tests (in `transaction.test.ts`) 🟢
 
@@ -475,9 +476,9 @@ Phase 3c (done): removed `enrich`, `Decorator`, old `withChangefeed` export, rem
 Phase 3d (done): added `withChangefeed` and `attachChangefeed` from new transformer path.
 Phase 4 (done): added `InterpreterLayer`, `InterpretBuilder` (types) and `readable`, `writable`, `changefeed` (layers from `layers.ts`).
 
-### `example/main.ts` 🔴
+### `example/main.ts` 🟢
 
-**Currently non-functional.** Imports symbols that no longer exist in the barrel (`readableInterpreter`, `withMutation`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `enrich`, `ChangefeedContext`, `autoCommit`). Phase 5 rewrites it. No external consumers depend on the example.
+Phase 5 (done): Complete rewrite. `createDoc()` uses the fluent builder. `change()` uses `[TRANSACT]` for transactions (no re-interpretation). `subscribeDeep` replaced with `subscribeTree`. New section demonstrating transaction + tree subscription integration. All removed imports eliminated. README updated. Runs cleanly with 16 sections.
 
 ## Sequence Subscription Timing
 
@@ -510,7 +511,8 @@ The transformer maintains its **own** `Map<number, () => void>` of per-item unsu
 | Transaction tests | `src/__tests__/transaction.test.ts` | Transaction lifecycle, `inTransaction`, `TRANSACT` symbol, dispatch wrappability | ✅ Complete |
 | Writable tests | `src/__tests__/writable.test.ts` | `withWritable` mutation, `[TRANSACT]` attachment, invalidate-before-dispatch | ✅ Complete |
 | Fluent tests | `src/__tests__/fluent.test.ts` | 11 tests: partial stacks, full stack, transactions, builder branching, custom layer, error, regression, types | ✅ Complete |
-| Example facade | `example/main.ts` | **Non-functional** — imports deleted symbols; rewritten in Phase 5 | 🔴 Phase 5 |
+| Example facade | `example/main.ts` | Fluent builder, `TRANSACT` transactions, `subscribeTree`, 16 sections | ✅ Complete |
+| Example docs | `example/README.md` | Architecture, facade, key concepts, symbol hooks table | ✅ Complete |
 | Core runtime subscribe | `packages/core/src/runtime/subscribe.ts` | Consumes `[CHANGEFEED].subscribe` — verified no breakage | ✅ No changes |
 | Core runtime regions | `packages/core/src/runtime/regions.ts` | `listRegion` subscribes to list refs — node-level semantics preserved | ✅ No changes |
 | Core integration test | `packages/core/src/compiler/integration/schema-ssr.test.ts` | Only external consumer — uses `withChangefeed(writableInterpreter)` | ✅ Complete |
