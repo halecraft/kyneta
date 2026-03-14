@@ -114,7 +114,7 @@ export type {
 } from "./interpret.js"
 
 // Pre-built interpreter layers for fluent composition
-export { readable, writable, changefeed } from "./layers.js"
+export { navigation, readable, writable, changefeed } from "./layers.js"
 
 // Guards — shared type-narrowing utilities
 export { isNonNullObject, isPropertyHost } from "./guards.js"
@@ -126,6 +126,9 @@ export {
   applyChangeToStore,
   dispatchSum,
   pathKey,
+  storeArrayLength,
+  storeKeys,
+  storeHasKey,
 } from "./store.js"
 export type { Store } from "./store.js"
 
@@ -145,7 +148,10 @@ export type {
   HasCaching,
 } from "./interpreters/bottom.js"
 
-// withReadable — refinement transformer (reading + navigation, no caching)
+// withNavigation — structural navigation (coalgebraic addressing, no reading)
+export { withNavigation } from "./interpreters/with-navigation.js"
+
+// withReadable — refinement transformer (reading only, requires navigation)
 export { withReadable } from "./interpreters/with-readable.js"
 
 // withCaching — interposition transformer (identity-preserving caching + INVALIDATE)

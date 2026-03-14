@@ -5,6 +5,7 @@ import {
   interpret,
   bottomInterpreter,
   withReadable,
+  withNavigation,
   withCaching,
   withWritable,
   createWritableContext,
@@ -27,10 +28,10 @@ import type { RefContext } from "../interpreter-types.js"
 // ===========================================================================
 
 // Full stack: readable + caching + writable (the standard composition)
-const fullInterpreter = withWritable(withCaching(withReadable(bottomInterpreter)))
+const fullInterpreter = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
 
 // Cacheless stack: readable + writable (no caching layer)
-const cachelessInterpreter = withWritable(withReadable(bottomInterpreter))
+const cachelessInterpreter = withWritable(withReadable(withNavigation(bottomInterpreter)))
 
 // Write-only stack: writable on bare carriers (ref() throws)
 const writeOnlyInterpreter = withWritable(bottomInterpreter)

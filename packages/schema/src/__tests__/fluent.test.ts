@@ -7,6 +7,7 @@ import {
   withReadable,
   withCaching,
   withWritable,
+  withNavigation,
   withChangefeed,
   createWritableContext,
   readable,
@@ -290,7 +291,7 @@ describe("fluent: three-arg interpret regression", () => {
   it("interpret(schema, interpreter, ctx) still works", () => {
     const store = { x: 10, y: 20 }
     const ctx = createWritableContext(store)
-    const interp = withWritable(withCaching(withReadable(bottomInterpreter)))
+    const interp = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
     const doc = interpret(pointSchema, interp, ctx) as any
 
     expect(doc.x()).toBe(10)
@@ -304,7 +305,7 @@ describe("fluent: three-arg interpret regression", () => {
     })
     const store = { nested: { a: 99 } }
     const ctx: RefContext = { store }
-    const interp = withCaching(withReadable(bottomInterpreter))
+    const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
     const doc = interpret(innerSchema, interp, ctx, [
       { type: "key", key: "nested" },
     ]) as any

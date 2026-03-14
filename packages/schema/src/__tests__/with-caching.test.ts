@@ -19,6 +19,7 @@ import type {
   HasCaching,
 } from "../interpreters/bottom.js"
 import { withReadable } from "../interpreters/with-readable.js"
+import { withNavigation } from "../interpreters/with-navigation.js"
 import { withCaching, INVALIDATE } from "../interpreters/with-caching.js"
 import type { Interpreter } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
@@ -46,7 +47,7 @@ const loroDocSchema = LoroSchema.doc({
   ),
 })
 
-const cachedInterp = withCaching(withReadable(bottomInterpreter))
+const cachedInterp = withCaching(withReadable(withNavigation(bottomInterpreter)))
 
 function createDoc(
   schema: Parameters<typeof interpret>[0],
@@ -609,7 +610,7 @@ describe("INVALIDATE symbol", () => {
 // ===========================================================================
 
 describe("withCaching: prepare-pipeline invalidation", () => {
-  const fullInterpreter = withWritable(withCaching(withReadable(bottomInterpreter)))
+  const fullInterpreter = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
 
   const docSchema = Schema.doc({
     settings: Schema.struct({
@@ -702,7 +703,7 @@ describe("withCaching: prepare-pipeline invalidation", () => {
 
 describe("withCaching: read-only stack backward compatibility", () => {
   it("withCaching(withReadable(bottom)) with plain RefContext still works", () => {
-    const readOnlyInterp = withCaching(withReadable(bottomInterpreter))
+    const readOnlyInterp = withCaching(withReadable(withNavigation(bottomInterpreter)))
     const store = {
       settings: { darkMode: false, fontSize: 14 },
     }
@@ -736,13 +737,13 @@ describe("withCaching: read-only stack backward compatibility", () => {
 
 describe("type-level: withCaching", () => {
   it("withCaching(withReadable(bottomInterpreter)) is Interpreter<RefContext, HasCall & HasNavigation & HasCaching>", () => {
-    const cached = withCaching(withReadable(bottomInterpreter))
+    const cached = withCaching(withReadable(withNavigation(bottomInterpreter)))
     const _check: Interpreter<RefContext, HasCall & HasNavigation & HasCaching> = cached
     void _check
   })
 
   it("result of cached interpreter satisfies HasCaching", () => {
-    const cached = withCaching(withReadable(bottomInterpreter))
+    const cached = withCaching(withReadable(withNavigation(bottomInterpreter)))
     const ctx: RefContext = { store: { n: 1 } }
     const result = interpret(Schema.struct({ n: Schema.number() }), cached, ctx)
     const _check: HasCaching = result
@@ -750,7 +751,7 @@ describe("type-level: withCaching", () => {
   })
 
   it("result of cached interpreter also satisfies HasNavigation and HasCall", () => {
-    const cached = withCaching(withReadable(bottomInterpreter))
+    const cached = withCaching(withReadable(withNavigation(bottomInterpreter)))
     const ctx: RefContext = { store: "test" as any }
     const result = interpret(Schema.string(), cached, ctx)
     const _checkNav: HasNavigation = result

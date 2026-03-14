@@ -67,6 +67,33 @@ export function readByPath(store: unknown, path: Path): unknown {
 }
 
 /**
+ * Returns the length of the array at the given path in the store.
+ * Returns 0 if the value is not an array.
+ */
+export function storeArrayLength(store: unknown, path: Path): number {
+  const arr = readByPath(store, path)
+  return Array.isArray(arr) ? arr.length : 0
+}
+
+/**
+ * Returns the keys of the object at the given path in the store.
+ * Returns an empty array if the value is not a non-null object.
+ */
+export function storeKeys(store: unknown, path: Path): string[] {
+  const obj = readByPath(store, path)
+  return isNonNullObject(obj) ? Object.keys(obj) : []
+}
+
+/**
+ * Returns true if the object at the given path has the specified key.
+ * Returns false if the value is not a non-null object or the key is missing.
+ */
+export function storeHasKey(store: unknown, path: Path, key: string): boolean {
+  const obj = readByPath(store, path)
+  return isNonNullObject(obj) && key in obj
+}
+
+/**
  * Writes a value into a nested plain object at the given Path.
  * Creates intermediate objects as needed.
  */

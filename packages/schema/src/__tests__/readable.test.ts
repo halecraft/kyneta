@@ -6,6 +6,7 @@ import {
   bottomInterpreter,
   withReadable,
   withCaching,
+  withNavigation,
   INVALIDATE,
   withChangefeed,
   withWritable,
@@ -19,7 +20,7 @@ import type { RefContext, Readable, ReadableMapRef } from "../index.js"
 
 // Composed interpreter stack — functionally equivalent to the removed
 // monolithic readableInterpreter.
-const readableInterpreter = withCaching(withReadable(bottomInterpreter))
+const readableInterpreter = withCaching(withReadable(withNavigation(bottomInterpreter)))
 
 // ===========================================================================
 // Shared fixtures

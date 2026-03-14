@@ -1,33 +1,31 @@
 // withChangefeed — compositional changefeed interpreter transformer.
 //
 // This module owns the observation concern. It takes a base interpreter
-// that produces refs with WritableContext support and attaches
+// that produces refs with HasRead (filled [CALL] slot) and attaches
 // [CHANGEFEED] to every node:
 //
 // - Leaf refs (scalar, text, counter) get a plain Changefeed
 // - Composite refs (product, sequence, map) get a ComposedChangefeed
 //   with subscribeTree for tree-level observation
 //
-// Notification flow: the transformer wraps ctx.prepare to accumulate
-// {path, change} entries without firing subscribers. It wraps ctx.flush
-// to group accumulated entries by path and deliver one Changeset per
-// subscriber. Tree notification propagates via subscription composition
-// (children → parent) without any flat subscriber map.
+// The Changefeed protocol defines a Moore machine: .current (output
+// function) + .subscribe (transition observer). A Moore machine with
+// no transitions is still valid — it's a constant. This means
+// withChangefeed works on both read-write AND read-only stacks:
 //
-// Phase separation:
-// - prepare: accumulate {path, change} pairs (no notification)
-// - flush: group by path, deliver Changeset per listener, clear accumulator
+// - Read-write: ctx has prepare/flush → notifications fire on mutation
+// - Read-only: ctx has no prepare/flush → .subscribe never fires,
+//   .current still works. Valid static Moore machine.
 //
-// This means:
-// - Auto-commit (single mutation) → executeBatch → 1 prepare + 1 flush
-//   → subscribers receive Changeset of exactly 1 change
-// - Transaction commit → executeBatch → N prepares + 1 flush
-//   → subscribers receive Changeset of N changes (batched)
-// - Subscribers never see partially-applied state
+// Notification flow (read-write only): the transformer wraps ctx.prepare
+// to accumulate {path, change} entries without firing subscribers. It
+// wraps ctx.flush to group accumulated entries by path and deliver one
+// Changeset per subscriber.
 //
-// Compose: withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
+// Compose: withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
+// Or read-only: withChangefeed(withCaching(withReadable(withNavigation(bottom))))
 //
-// See .plans/apply-changes.md §Phase 3, PR 4.
+// See .plans/navigation-layer.md §Phase 2, Task 2.2b.
 
 import type { ChangeBase } from "../change.js"
 import { isSequenceChange } from "../change.js"
@@ -51,10 +49,12 @@ import type {
   ComposedChangefeed,
   TreeEvent,
 } from "../changefeed.js"
-import type { WritableContext, PendingChange } from "./writable.js"
+import type { PendingChange } from "./writable.js"
 import { readByPath, pathKey } from "../store.js"
 import { isPropertyHost } from "../guards.js"
 import { CALL } from "./bottom.js"
+import type { HasRead } from "./bottom.js"
+import type { RefContext } from "../interpreter-types.js"
 
 // ---------------------------------------------------------------------------
 // Attach [CHANGEFEED] non-enumerably to any object
@@ -170,29 +170,62 @@ interface ContextWiringState {
   readonly originalFlush: (origin?: string) => void
 }
 
-// WeakMap ensures a single prepare/flush wrapper per WritableContext,
+/**
+ * Returns `true` if `ctx` has `prepare` and `flush` methods — i.e. it's
+ * a `WritableContext`, not a plain `RefContext`. This duck-type check
+ * allows `withChangefeed` to keep its `RefContext` type signature while
+ * participating in the prepare pipeline when composed with `withWritable`.
+ */
+function hasPreparePipeline(ctx: RefContext): ctx is RefContext & {
+  prepare: (path: Path, change: ChangeBase) => void
+  flush: (origin?: string) => void
+} {
+  return (
+    "prepare" in ctx && typeof (ctx as any).prepare === "function" &&
+    "flush" in ctx && typeof (ctx as any).flush === "function"
+  )
+}
+
+// WeakMap ensures a single prepare/flush wrapper per context,
 // shared across all nodes interpreted with that context.
-const contextState = new WeakMap<WritableContext, ContextWiringState>()
+const contextState = new WeakMap<RefContext, ContextWiringState>()
 
 /**
- * Ensures the given WritableContext has its `prepare` and `flush` wrapped
- * for changefeed notification. Returns the shared listener map.
+ * Ensures the given context has its `prepare` and `flush` wrapped
+ * for changefeed notification. Returns the shared listener map, or
+ * `null` if the context doesn't have `prepare`/`flush` (read-only
+ * stack).
  *
+ * On read-only stacks, returns `null` — `.subscribe` callbacks are
+ * registered in a local listener map but never fired. This produces
+ * valid static Moore machines (.current works, .subscribe is a no-op).
+ *
+ * On read-write stacks:
  * - `prepare` wrapping: after the inner prepare (store mutation), appends
  *   `{path, change}` to the pending accumulator. No notification fires.
  * - `flush` wrapping: calls `planNotifications` (pure) to group changes
  *   by path, then `deliverNotifications` (imperative) to fire listeners.
  *   Clears the accumulator before firing for re-entrancy safety.
  *   Calls the inner flush afterwards.
- *
- * No `inTransaction` guard is needed — `prepare` and `flush` are never
- * called during a transaction. Transaction buffering lives in `dispatch`;
- * `executeBatch` (which calls `prepare`/`flush`) guards against being
- * called during an active transaction.
  */
+
+// WeakMap for read-only contexts: each gets its own orphaned listener
+// map. Subscribers register but nothing feeds into it — valid static
+// Moore machine. Separate per-context to avoid cross-contamination.
+const readOnlyState = new WeakMap<RefContext, Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>>()
+
 function ensurePrepareWiring(
-  ctx: WritableContext,
+ ctx: RefContext,
 ): Map<string, Set<(changeset: Changeset<ChangeBase>) => void>> {
+ if (!hasPreparePipeline(ctx)) {
+   let listeners = readOnlyState.get(ctx)
+   if (!listeners) {
+     listeners = new Map()
+     readOnlyState.set(ctx, listeners)
+   }
+   return listeners
+ }
+
   let state = contextState.get(ctx)
   if (state) return state.listeners
 
@@ -689,20 +722,26 @@ function createMapChangefeed(
  * `flush` once, so subscribers fire at commit time — not during buffering.
  *
  * ```ts
- * const interp = withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
+ * // Full stack (read + write + observe):
+ * const interp = withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
  * const ctx = createWritableContext(store)
  * const doc = interpret(schema, interp, ctx)
- * doc[CHANGEFEED].subscribe(cb)       // node-level
- * doc[CHANGEFEED].subscribeTree(cb)   // tree-level
+ * doc[CHANGEFEED].subscribe(cb)       // fires on mutation
+ *
+ * // Read-only stack (observe without mutation):
+ * const roInterp = withChangefeed(withCaching(withReadable(withNavigation(bottom))))
+ * const roDoc = interpret(schema, roInterp, { store })
+ * roDoc[CHANGEFEED].current           // works — reads via [CALL]
+ * roDoc[CHANGEFEED].subscribe(cb)     // valid — never fires
  * ```
  */
-export function withChangefeed<A>(
-  base: Interpreter<WritableContext, A>,
-): Interpreter<WritableContext, A> {
+export function withChangefeed<A extends HasRead>(
+  base: Interpreter<RefContext, A>,
+): Interpreter<RefContext, A> {
   return {
     // --- Scalar ---------------------------------------------------------------
     scalar(
-      ctx: WritableContext,
+      ctx: RefContext,
       path: Path,
       schema: ScalarSchema,
     ): A {
@@ -711,7 +750,7 @@ export function withChangefeed<A>(
       if (isPropertyHost(result)) {
         const listeners = ensurePrepareWiring(ctx)
         const cf = createLeafChangefeed(listeners, path, () =>
-          readByPath(ctx.store, path),
+          (result as any)[CALL](),
         )
         attachChangefeed(result as object, cf)
       }
@@ -721,7 +760,7 @@ export function withChangefeed<A>(
 
     // --- Product --------------------------------------------------------------
     product(
-      ctx: WritableContext,
+      ctx: RefContext,
       path: Path,
       schema: ProductSchema,
       fields: Readonly<Record<string, () => A>>,
@@ -748,7 +787,7 @@ export function withChangefeed<A>(
 
     // --- Sequence -------------------------------------------------------------
     sequence(
-      ctx: WritableContext,
+      ctx: RefContext,
       path: Path,
       schema: SequenceSchema,
       item: (index: number) => A,
@@ -785,7 +824,7 @@ export function withChangefeed<A>(
 
     // --- Map ------------------------------------------------------------------
     map(
-      ctx: WritableContext,
+      ctx: RefContext,
       path: Path,
       schema: MapSchema,
       item: (key: string) => A,
@@ -824,7 +863,7 @@ export function withChangefeed<A>(
     // Pure structural dispatch — pass through. The resolved variant
     // already has [CHANGEFEED] from whichever case handled it.
     sum(
-      ctx: WritableContext,
+      ctx: RefContext,
       path: Path,
       schema: SumSchema,
       variants: SumVariants<A>,
@@ -834,7 +873,7 @@ export function withChangefeed<A>(
 
     // --- Annotated ------------------------------------------------------------
     annotated(
-      ctx: WritableContext,
+      ctx: RefContext,
       path: Path,
       schema: AnnotatedSchema,
       inner: (() => A) | undefined,
@@ -848,7 +887,7 @@ export function withChangefeed<A>(
           if (isPropertyHost(result)) {
             const listeners = ensurePrepareWiring(ctx)
             const cf = createLeafChangefeed(listeners, path, () =>
-              readByPath(ctx.store, path),
+              (result as any)[CALL](),
             )
             attachChangefeed(result as object, cf)
           }
@@ -871,7 +910,7 @@ export function withChangefeed<A>(
           if (isPropertyHost(result)) {
             const listeners = ensurePrepareWiring(ctx)
             const cf = createLeafChangefeed(listeners, path, () =>
-              readByPath(ctx.store, path),
+              (result as any)[CALL](),
             )
             attachChangefeed(result as object, cf)
           }

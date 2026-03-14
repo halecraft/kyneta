@@ -643,13 +643,15 @@ export function withWritable<A>(
           }
 
           result.update = (content: string): void => {
-            // Read current text length via the callable ref
-            const current: string = result()
+            // Read current text length via store inspection (not carrier call)
+            // so navigate+write stacks work without a reading layer.
+            const current = readByPath(ctx.store, path)
+            const currentLength = typeof current === "string" ? current.length : 0
             ctx.dispatch(
               path,
               textChange([
-                ...(current.length > 0
-                  ? [{ delete: current.length }]
+                ...(currentLength > 0
+                  ? [{ delete: currentLength }]
                   : []),
                 { insert: content },
               ]),

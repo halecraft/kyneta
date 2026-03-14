@@ -20,32 +20,59 @@ import type { InterpreterLayer } from "./interpret.js"
 import type { RefContext } from "./interpreter-types.js"
 import type { WritableContext } from "./interpreters/writable.js"
 
+import { withNavigation } from "./interpreters/with-navigation.js"
 import { withReadable } from "./interpreters/with-readable.js"
 import { withCaching } from "./interpreters/with-caching.js"
 import { withWritable } from "./interpreters/writable.js"
 import { withChangefeed } from "./interpreters/with-changefeed.js"
 
 // ---------------------------------------------------------------------------
-// readable — reading + navigation + identity-preserving caching
+// navigation — structural addressing only
 // ---------------------------------------------------------------------------
 
 /**
- * Readable layer: reading + navigation + identity-preserving caching.
+ * Navigation layer: structural addressing (product field getters,
+ * sequence/map `.at()`, `.length`, `.keys()`, etc.).
  *
- * Composes `withCaching(withReadable(base))` in a single layer.
+ * Composes `withNavigation(base)` in a single layer.
+ *
+ * Context: `RefContext` → `RefContext` (no widening).
+ *
+ * ```ts
+ * interpret(schema, ctx).with(navigation).done()
+ * // equivalent to:
+ * interpret(schema, withNavigation(bottomInterpreter), ctx)
+ * ```
+ */
+export const navigation: InterpreterLayer<RefContext, RefContext> = {
+  name: "navigation",
+  transform(base) {
+    return withNavigation(base)
+  },
+}
+
+// ---------------------------------------------------------------------------
+// readable — navigation + reading + identity-preserving caching
+// ---------------------------------------------------------------------------
+
+/**
+ * Readable layer: navigation + reading + identity-preserving caching.
+ *
+ * Composes `withCaching(withReadable(withNavigation(base)))` in a single
+ * layer.
  *
  * Context: `RefContext` → `RefContext` (no widening).
  *
  * ```ts
  * interpret(schema, ctx).with(readable).done()
  * // equivalent to:
- * interpret(schema, withCaching(withReadable(bottomInterpreter)), ctx)
+ * interpret(schema, withCaching(withReadable(withNavigation(bottomInterpreter))), ctx)
  * ```
  */
 export const readable: InterpreterLayer<RefContext, RefContext> = {
   name: "readable",
   transform(base) {
-    return withCaching(withReadable(base))
+    return withCaching(withReadable(withNavigation(base)))
   },
 }
 
@@ -62,7 +89,7 @@ export const readable: InterpreterLayer<RefContext, RefContext> = {
  * ```ts
  * interpret(schema, ctx).with(readable).with(writable).done()
  * // equivalent to:
- * interpret(schema, withWritable(withCaching(withReadable(bottomInterpreter))), ctx)
+ * interpret(schema, withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))), ctx)
  * ```
  */
 export const writable: InterpreterLayer<RefContext, WritableContext> = {
@@ -80,8 +107,9 @@ export const writable: InterpreterLayer<RefContext, WritableContext> = {
  * Changefeed layer: compositional observation protocol (`[CHANGEFEED]`,
  * `subscribeTree`).
  *
- * Wraps `withChangefeed(base)`. Requires `WritableContext` (must come
- * after `writable`).
+ * Wraps `withChangefeed(base)`. Accepts `RefContext` — works on both
+ * read-only and read-write stacks. On read-only stacks, produces
+ * valid Moore machines (`.current` works, `.subscribe` never fires).
  *
  * ```ts
  * interpret(schema, ctx)
@@ -92,12 +120,12 @@ export const writable: InterpreterLayer<RefContext, WritableContext> = {
  * // equivalent to:
  * interpret(
  *   schema,
- *   withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter)))),
+ *   withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))),
  *   ctx,
  * )
  * ```
  */
-export const changefeed: InterpreterLayer<WritableContext, WritableContext> = {
+export const changefeed: InterpreterLayer<RefContext, RefContext> = {
   name: "changefeed",
   transform(base) {
     return withChangefeed(base)

@@ -162,9 +162,9 @@ Update type-level tests in `with-caching.test.ts`:
 - `withCaching(bottomInterpreter)` is a compile error (needs `HasNavigation`)
 - `withCaching(withNavigation(bottomInterpreter))` compiles (once `withNavigation` exists — can defer to Phase 2 or use `withReadable` which still produces `HasNavigation`)
 
-## Phase 2: Extract `withNavigation` from `withReadable` 🔴
+## Phase 2: Extract `withNavigation` from `withReadable` 🟢
 
-### Task 2.0: Extract store-inspection helpers into `store.ts` 🔴
+### Task 2.0: Extract store-inspection helpers into `store.ts` 🟢
 
 The navigation code in `with-readable.ts` repeats store-inspection patterns: `readByPath → Array.isArray → length` (sequences), `readByPath → isNonNullObject → Object.keys` (maps), and `readByPath → isNonNullObject → key in obj` (map key existence). These appear 4+ times in the map case alone.
 
@@ -180,7 +180,7 @@ These are structural inspection — "what does the store look like at this posit
 
 Pushing imperative store access into the store module makes `withNavigation` more declarative and aligns with the project's FC/IS principle.
 
-### Task 2.1: Create `src/interpreters/with-navigation.ts` 🔴
+### Task 2.1: Create `src/interpreters/with-navigation.ts` 🟢
 
 Extract navigation logic from `with-readable.ts` into a new `withNavigation` transformer. Use the `storeArrayLength`, `storeKeys`, `storeHasKey` helpers from Task 2.0 instead of inline `readByPath` + type-checking patterns.
 
@@ -209,7 +209,7 @@ export function withNavigation<A extends HasCall>(
 
 **Note on store access in navigation:** `.at(i)` checks bounds via `readByPath(ctx.store, path)` to determine array length. `.at(key)` checks key existence similarly. This is **structural inspection** — "does this position exist?" — not value reading. The `RefContext` (which has `.store`) is sufficient. This does not create a dependency on `withReadable`.
 
-### Task 2.2: Slim `withReadable` to reading-only concerns 🔴
+### Task 2.2: Slim `withReadable` to reading-only concerns 🟢
 
 Change `withReadable`'s input constraint from `A extends HasCall` to `A extends HasNavigation`. Remove all navigation logic (field getters, `.at()`, `.has()`, `.keys()`, etc.). What remains:
 
@@ -232,7 +232,7 @@ export function withReadable<A extends HasNavigation>(
 
 Composition check: `withCaching` requires `HasNavigation`. `withReadable` produces `A & HasRead`, and `HasRead extends HasNavigation`, so `withCaching(withReadable(withNavigation(bottom)))` typechecks. ✓ And `withCaching(withNavigation(bottom))` also typechecks (caching without reading). ✓
 
-### Task 2.2a: Fix `text.update()` to use store inspection instead of carrier call 🔴
+### Task 2.2a: Fix `text.update()` to use store inspection instead of carrier call 🟢
 
 `withWritable`'s text `.update()` method currently calls `result()` to read the current text length:
 
@@ -265,7 +265,7 @@ result.update = (content: string): void => {
 
 This is a one-line behavioral change with zero impact on existing tests — the store always has the same value that `result()` would return. The fix makes `withWritable` internally consistent: all mutation methods use store inspection, none depend on the carrier's call behavior.
 
-### Task 2.2b: Widen `withChangefeed` from `WritableContext` to `RefContext`, require `HasRead` 🔴
+### Task 2.2b: Widen `withChangefeed` from `WritableContext` to `RefContext`, require `HasRead` 🟢
 
 `withChangefeed` currently requires `WritableContext`:
 
@@ -293,7 +293,7 @@ Therefore `withChangefeed` should accept `RefContext` (read-only) and degrade gr
 
 **Impact on existing code:** Zero behavioral change for the standard full stack (`withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))`). The `WritableContext` is a subtype of `RefContext`, so all existing call sites compile. The `HasRead` bound is satisfied because `withReadable` is always present in existing compositions. The only new capability is that `withChangefeed` can now be composed on read-only stacks.
 
-### Task 2.3: Update `layers.ts` 🔴
+### Task 2.3: Update `layers.ts` 🟢
 
 The `readable` layer currently composes `withCaching(withReadable(base))`. Update to `withCaching(withReadable(withNavigation(base)))`. Export a new `navigation` layer for standalone use. Update `changefeed` layer from `InterpreterLayer<WritableContext, WritableContext>` to `InterpreterLayer<RefContext, RefContext>` (Task 2.2b).
 
@@ -314,11 +314,11 @@ export const changefeed: InterpreterLayer<RefContext, RefContext> = {
 }
 ```
 
-### Task 2.4: Update `index.ts` barrel exports 🔴
+### Task 2.4: Update `index.ts` barrel exports 🟢
 
 Export `withNavigation` and the `navigation` layer. Export `NavigableSequenceRef` and `NavigableMapRef` type interfaces (introduced in Phase 3). Export `CALL` and `HasCall`.
 
-### Task 2.5: Tests for `withNavigation` 🔴
+### Task 2.5: Tests for `withNavigation` 🟢
 
 Create `src/__tests__/with-navigation.test.ts`:
 
@@ -342,7 +342,7 @@ Update `src/__tests__/with-readable.test.ts`:
 - Verify `.get()` on sequence and map works
 - Verify `[Symbol.toPrimitive]` works
 
-### Task 2.6: Update existing tests for new composition 🔴
+### Task 2.6: Update existing tests for new composition 🟢
 
 Any test that calls `withReadable(bottomInterpreter)` directly must change to `withReadable(withNavigation(bottomInterpreter))`. Grep for `withReadable(bottom` to find all call sites. Also grep for `READ` imports and update to `CALL`.
 
@@ -754,7 +754,7 @@ Adds `HasRead` back as a **new** phantom brand meaning "the `[CALL]` slot has be
 
 ---
 
-### PR 3: `feat: extract withNavigation from withReadable` 🔴
+### PR 3: `feat: extract withNavigation from withReadable` 🟢
 
 **Type:** Feature — new runtime layer + slimmed existing layer
 

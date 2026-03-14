@@ -14,8 +14,10 @@ import {
 import type {
   HasCall,
   HasNavigation,
+  HasRead,
 } from "../interpreters/bottom.js"
 import { withReadable } from "../interpreters/with-readable.js"
+import { withNavigation } from "../interpreters/with-navigation.js"
 import type { Interpreter } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 
@@ -42,7 +44,7 @@ const loroDocSchema = LoroSchema.doc({
   ),
 })
 
-const readableInterp = withReadable(bottomInterpreter)
+const readableInterp = withReadable(withNavigation(bottomInterpreter))
 
 function createDoc(
   schema: Parameters<typeof interpret>[0],
@@ -695,26 +697,34 @@ describe("dispatchSum", () => {
 // ===========================================================================
 
 describe("type-level: withReadable", () => {
-  it("withReadable(bottomInterpreter) is Interpreter<RefContext, HasCall & HasNavigation>", () => {
-    const readable = withReadable(bottomInterpreter)
-    const _check: Interpreter<RefContext, HasCall & HasNavigation> = readable
+  it("withReadable(withNavigation(bottomInterpreter)) produces HasRead", () => {
+    const readable = withReadable(withNavigation(bottomInterpreter))
+    const _check: Interpreter<RefContext, HasCall & HasNavigation & HasRead> = readable
     void _check
   })
 
-  it("result of withReadable(bottomInterpreter) satisfies HasNavigation", () => {
-    const readable = withReadable(bottomInterpreter)
+  it("result satisfies HasRead", () => {
+    const readable = withReadable(withNavigation(bottomInterpreter))
     const ctx: RefContext = { store: "test" as any }
     const result = interpret(Schema.string(), readable, ctx)
-    const _check: HasNavigation = result
+    const _check: HasRead = result
     void _check
   })
 
-  it("result of withReadable(bottomInterpreter) also satisfies HasCall", () => {
-    const readable = withReadable(bottomInterpreter)
+  it("result also satisfies HasNavigation and HasCall", () => {
+    const readable = withReadable(withNavigation(bottomInterpreter))
     const ctx: RefContext = { store: "test" as any }
     const result = interpret(Schema.string(), readable, ctx)
-    const _check: HasCall = result
-    void _check
+    const _checkNav: HasNavigation = result
+    const _checkCall: HasCall = result
+    void _checkNav
+    void _checkCall
+  })
+
+  it("withReadable(bottomInterpreter) is a compile error (requires HasNavigation)", () => {
+    // @ts-expect-error — bottomInterpreter produces HasCall, withReadable requires HasNavigation
+    const _bad = withReadable(bottomInterpreter)
+    void _bad
   })
 
   it("withReadable(plainInterpreter) is a type error (plain has unknown, not HasCall)", () => {

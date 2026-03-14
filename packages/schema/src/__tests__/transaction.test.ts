@@ -5,6 +5,7 @@ import {
   interpret,
   bottomInterpreter,
   withReadable,
+  withNavigation,
   withCaching,
   withWritable,
   createWritableContext,
@@ -15,7 +16,7 @@ import {
 } from "../index.js"
 import type { Readable, Writable } from "../index.js"
 
-const writableInterpreter = withWritable(withCaching(withReadable(bottomInterpreter)))
+const writableInterpreter = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
 
 // ---------------------------------------------------------------------------
 // Shared fixture

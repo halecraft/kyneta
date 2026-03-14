@@ -5,6 +5,7 @@ import {
   interpret,
   bottomInterpreter,
   withReadable,
+  withNavigation,
   withCaching,
   withWritable,
   withChangefeed,
@@ -27,7 +28,7 @@ import type {
 // ===========================================================================
 
 const fullInterpreter = withChangefeed(
-  withWritable(withCaching(withReadable(bottomInterpreter))),
+  withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))),
 )
 
 // ===========================================================================
