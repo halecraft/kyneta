@@ -93,11 +93,11 @@ The changefeed factories received a `readCurrent` closure returning `readByPath(
 - Task: Existing `toEqual` tests all pass unchanged. 🟢
 - Task: All ~26 existing `toBe` identity tests pass unchanged (they test child ref caching, not composite `[READ]` output). 🟢
 
-### Phase 4: Documentation 🔴
+### Phase 4: Documentation 🟢
 
-- Task: Update `TECHNICAL.md` §withReadable to document that composite `[READ]` produces a fresh snapshot via child fold, not a store reference. 🔴
-- Task: Update `TECHNICAL.md` "Verified Properties" §5 to clarify snapshot freshness semantics. 🔴
-- Task: Add a note to `TECHNICAL.md` explaining the relationship between `ref()` and `plainInterpreter`: both produce structurally identical output, but `ref()` folds through child `[READ]` slots (which benefits from caching layers), while `plainInterpreter` is a standalone eager fold with no carrier overhead. 🔴
+- Task: Update `TECHNICAL.md` §withReadable to document that composite `[READ]` produces a fresh snapshot via child fold, not a store reference. 🟢
+- Task: Update `TECHNICAL.md` "Verified Properties" §5 to clarify snapshot freshness semantics. 🟢
+- Task: Add a note to `TECHNICAL.md` explaining the relationship between `ref()` and `plainInterpreter`: both produce structurally identical output, but `ref()` folds through child `[READ]` slots (which benefits from caching layers), while `plainInterpreter` is a standalone eager fold with no carrier overhead. 🟢
 
 ## Tests
 

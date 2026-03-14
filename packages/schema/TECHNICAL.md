@@ -266,14 +266,16 @@ The `product`, `sequence`, `map`, and `sum` cases ignore their thunks/closures/v
 
 #### withReadable (`src/interpreters/with-readable.ts`)
 
-The refinement transformer. Fills the `[READ]` slot with `() => readByPath(store, path)` and adds structural navigation:
+The refinement transformer. Fills the `[READ]` slot and adds structural navigation:
 
-- **Scalar:** `READ` + hint-aware `[Symbol.toPrimitive]`
-- **Product:** `READ` + enumerable lazy getters for each field. **No caching** — each access forces the thunk afresh.
-- **Sequence:** `READ` + `.at(i)`, `.get(i)`, `.length`, `[Symbol.iterator]`. `.at(i)` calls `item(i)` fresh each time.
-- **Map:** `READ` + `.at(key)`, `.get(key)`, `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`. All non-enumerable.
+- **Scalar:** `READ` returns `readByPath(store, path)` (immutable primitive). Hint-aware `[Symbol.toPrimitive]`.
+- **Product:** `READ` folds child values through the carrier's property getters (`result[key]()` for each field), producing a **fresh plain object**. This composes with `withCaching`'s memoized getters — the fold reuses cached child refs but always produces a distinct snapshot. Enumerable lazy getters for each field. **No caching** — each access forces the thunk afresh.
+- **Sequence:** `READ` folds child values via the raw `item(i)()` closure (not `result.at()`), producing a **fresh array**. Uses `readByPath` for structure discovery (array length) but never returns the store array directly. The raw closure is used instead of the cached `.at()` because `withCaching`'s cache shifting can leave refs with stale paths after insert/delete. `.at(i)`, `.get(i)`, `.length`, `[Symbol.iterator]`.
+- **Map:** `READ` folds child values via the raw `item(key)()` closure, producing a **fresh record**. Same design as sequence — `readByPath` for key discovery, raw closure for values. `.at(key)`, `.get(key)`, `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`. All non-enumerable.
 - **Sum:** Uses `dispatchSum(value, schema, variants)` from `store.ts` for store-driven variant resolution.
 - **Annotated:** `"text"` → string-coercing reader + toPrimitive. `"counter"` → number-coercing reader + hint-aware toPrimitive. `"doc"`/`"movable"`/`"tree"` → delegate to inner.
+
+**Snapshot isolation.** Composite `ref()` always returns a fresh plain object — mutating the returned value does not affect the store. `ref()` and `plainInterpreter` produce extensionally equal output for the same store state. Both are F-algebras over the schema functor; `ref()` folds through the carrier stack (benefiting from child ref caching), while `plainInterpreter` is a standalone eager fold with no carrier overhead.
 
 **Identity is not preserved at this layer.** `ref.title !== ref.title` — each property access produces a new child ref. Use `withCaching` for identity.
 
@@ -440,7 +442,7 @@ The spike validates these properties via 718 tests:
 2. **Referential identity**: requires `withCaching` — `doc.title === doc.title`, `seq.at(0) === seq.at(0)`, `map.at("k") === map.at("k")`. Without `withCaching`, each access produces a new ref.
 3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names (even on function-shaped refs). `Object.keys(mapRef)` returns `[]` (methods are non-enumerable). `CHANGEFEED in doc` is true. `CHANGEFEED` is non-enumerable.
 4. **Portable refs**: `const ref = doc.settings.fontSize; bump(ref)` — works outside the tree because context is captured in closures.
-5. **Plain round-trip**: `interpret(schema, plainInterpreter, store)` produces the identical object tree.
+5. **Plain round-trip / snapshot isolation**: `interpret(schema, plainInterpreter, store)` produces the identical object tree. Calling `ref()` on any composite also produces a fresh, structurally equal plain object — mutating the returned value does not affect the store. `CHANGEFEED.current` on composites returns the same fresh snapshot (it delegates to `[READ]`). Leaf nodes return immutable primitives in both cases.
 6. **Changefeed subscription**: `doc.title[CHANGEFEED].subscribe(cb)` receives changes; unsubscribe stops notifications.
 7. **Transaction API**: `beginTransaction()` buffers changes; `commit()` replays through `ctx.dispatch` (enabling notification wrappers to fire); `abort()` discards. `ctx.inTransaction` reflects current state.
 8. **Constrained scalar defaults**: `Zero.structural(Schema.string("a", "b"))` returns `"a"` (first constraint value).
