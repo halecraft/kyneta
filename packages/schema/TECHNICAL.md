@@ -134,7 +134,18 @@ The grammar has one `sum` kind with two flavors:
 
 **Positional sum** — `PositionalSumSchema` with a `variants: Schema[]` array. Created by `Schema.union(a, b, ...)`. The validate interpreter tries each variant in order with error rollback.
 
-**Discriminated sum** — `DiscriminatedSumSchema` with a `discriminant: string` key and `variantMap: Record<string, Schema>`. Created by `Schema.discriminatedUnion(key, map)`. The validate interpreter reads the discriminant value and dispatches to the matching variant in O(1).
+**Discriminated sum** — `DiscriminatedSumSchema` with a `discriminant: string` key and `variants: ProductSchema[]` array. Created by `Schema.discriminatedUnion(key, variants)`. Follows the Zod/Valibot convention: each variant is a `ProductSchema` that explicitly declares the discriminant as a constrained string scalar field. The variant map key (`"text"`, `"image"`) comes from the field's constraint value, not from an external object key.
+
+```ts
+Schema.discriminatedUnion("type", [
+  Schema.struct({ type: Schema.string("text"), body: LoroSchema.text() }),
+  Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+])
+```
+
+The constructor validates: each variant must have the discriminant field, the field must be a constrained string scalar, and no two variants may share a discriminant value. A derived `variantMap: Record<string, ProductSchema>` is built eagerly by `buildVariantMap()` for O(1) dispatch.
+
+This design means the discriminant is a real field in the schema tree — interpreters that walk variant fields naturally include it in their output. `Plain<S>` is a simple `Plain<V[number]>` union (no type-level injection needed). `Zero.structural` produces the discriminant value from the field's constraint. The `doc() → validate()` round-trip closes without special-casing.
 
 **Nullable** — `Schema.nullable(inner)` is sugar for `Schema.union(Schema.null(), inner)`. It produces a positional sum with exactly two variants where the first is `scalar("null")`. The `describe()` function and validate interpreter detect this pattern and render/report it as `nullable<inner>` rather than a generic union.
 
@@ -388,14 +399,18 @@ Layers like `withChangefeed` wrap `prepare` (to accumulate notification entries)
 
 The `TRANSACT` symbol (`Symbol.for("kyneta:transact")`) and `HasTransact` interface enable context discovery from any ref — `change()` and `applyChanges()` find the `WritableContext` without a WeakMap or re-interpretation.
 
-#### Facade: `change` and `applyChanges` (`src/facade.ts`)
+#### Facade (`src/facade.ts`)
 
-The library-level API for change capture and declarative application:
+The library-level API for change capture, declarative application, and observation:
 
 - **`change(ref, fn) → PendingChange[]`** — imperative mutation capture. Runs `fn` inside a transaction, returns the captured changes. Aborts on error.
 - **`applyChanges(ref, ops, {origin?}) → PendingChange[]`** — declarative application. Applies a list of changes via `executeBatch`, triggering the full prepare pipeline (cache invalidation + store mutation + notification accumulation) then flush (batched `Changeset` delivery). Empty ops is a no-op.
+- **`subscribe(ref, cb) → () => void`** — node-level observation. Callback receives `Changeset`. For leaf refs, fires on any mutation. For composite refs, fires only on node-level changes (e.g. product `.set()`), not child mutations.
+- **`subscribeTree(ref, cb) → () => void`** — tree-level observation. Callback receives `Changeset<TreeEvent>` with relative paths. Only works on composite refs (products, sequences, maps). A strict superset of `subscribe` — tree subscribers also see own-path changes with `path: []`.
 
-These are symmetric duals: `change` produces `PendingChange[]`, `applyChanges` consumes them. Round-trip correctness is verified: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docA()` deep-equals `docB()`.
+`change` and `applyChanges` are symmetric duals: `change` produces `PendingChange[]`, `applyChanges` consumes them. Round-trip correctness is verified: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docA()` deep-equals `docB()`.
+
+All four functions discover capabilities via symbols on refs (`[TRANSACT]` for `change`/`applyChanges`, `[CHANGEFEED]` for `subscribe`/`subscribeTree`). All throw clear errors when the ref lacks the required symbol.
 
 #### Changefeed Transformer (`src/interpreters/with-changefeed.ts`)
 
@@ -524,7 +539,7 @@ packages/schema/
 ├── theory/
 │   └── interpreter-algebra.md   # Full theory document
 ├── src/
-│   ├── schema.ts                # Unified recursive type + constructors + ScalarPlain
+│   ├── schema.ts                # Unified recursive type + constructors + ScalarPlain + buildVariantMap
 │   ├── loro-schema.ts           # LoroSchema namespace (Loro annotations + plain)
 │   ├── change.ts                # ChangeBase + built-in change types
 │   ├── changefeed.ts            # CHANGEFEED symbol, Changeset, Changefeed/ComposedChangefeed, TreeEvent
@@ -532,7 +547,7 @@ packages/schema/
 │   ├── zero.ts                  # Zero.structural, Zero.overlay
 │   ├── describe.ts              # Human-readable schema tree view
 │   ├── interpret.ts             # Interpreter interface + catamorphism + Path types
-│   ├── facade.ts                # Library-level change() and applyChanges()
+│   ├── facade.ts                # Library-level change, applyChanges, subscribe, subscribeTree
 │   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition
 │   ├── combinators.ts           # product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
@@ -568,7 +583,7 @@ packages/schema/
 │   │   └── validate.test.ts     # Validation: all kinds, errors, type narrowing
 │   └── index.ts                 # Barrel export
 ├── example/
-│   ├── main.ts                  # Self-contained mini-app with createDoc, change, subscribe
+│   ├── main.ts                  # Showcase of the full @kyneta/schema API surface (no local facade)
 │   └── README.md                # Example documentation
 ├── package.json                 # No runtime deps
 ├── tsconfig.json
