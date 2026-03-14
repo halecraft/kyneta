@@ -6,7 +6,7 @@ The `@kyneta/schema` package implements a schema interpreter algebra where a rec
 
 1. **`withCaching(withReadable(bottomInterpreter))`** — callable function-shaped refs (`ref()` returns current value)
 2. **`withWritable(base)`** — interpreter transformer adding `.set()`, `.insert()`, `.increment()`, etc.
-3. **`withChangefeed`** — `enrich` decorator attaching `[CHANGEFEED]` observation protocol (transitional; being replaced by an interpreter transformer)
+3. **`withChangefeed(base)`** — interpreter transformer attaching `[CHANGEFEED]` observation protocol with compositional `subscribeTree`
 
 The changefeed layer provides a coalgebra at each node: `{ current: S, subscribe(cb): unsubscribe }`. This is a Moore machine — one state, one output stream.
 
@@ -73,20 +73,23 @@ The compiled runtime in `@kyneta/core` subscribes to refs via `ref[CHANGEFEED].s
 
 ## Gap
 
-_Updated to reflect current state after Phases 1–2 completion and interpreter-decomposition plan completion._
+_Updated to reflect current state after Phases 1–3 completion._
 
 - ~~`withChangefeed` is an `enrich` decorator.~~ Replaced in Phase 3c/3d. `withChangefeed` is now an interpreter transformer with full compositional tree subscription support.
-- ~~`ChangefeedContext` carries two flat subscriber maps.~~ Removed in Phase 2. The transitional `withChangefeed` uses a module-level `WeakMap<WritableContext, ...>` instead.
+- ~~`ChangefeedContext` carries two flat subscriber maps.~~ Removed in Phase 2. `withChangefeed` uses a per-context `WeakMap<WritableContext, ...>` for dispatch wiring instead.
 - ~~`WritableContext` has no transaction API.~~ Solved in Phase 2. `beginTransaction` / `commit` / `abort` are implemented and tested.
 - ~~`autoCommit`, `pending`, `flush`, and `changefeedFlush`~~ Removed in Phase 2.
 - ~~Refs do not carry a reference to their originating context.~~ Solved in Phase 3b. `withWritable` attaches `[TRANSACT]` to every ref via `Object.defineProperty`.
-- ~~No `ComposedChangefeed` interface or `subscribeTree` method exists.~~ Types defined in Phase 1. No runtime implementation yet.
+- ~~No `ComposedChangefeed` interface or `subscribeTree` method exists.~~ Types defined in Phase 1. Runtime implemented in Phase 3d. 35 tests in `changefeed.test.ts`.
 - ~~No `TRANSACT` symbol exists.~~ Defined in Phase 2.
-- The `interpret` API returns a result directly — no fluent builder.
-- No `InterpreterLayer` abstraction exists for fluent `.with()` chaining.
 - ~~`INVALIDATE` uses `Symbol.for("schema:invalidate")`~~ Renamed to `Symbol.for("kyneta:invalidate")` in Phase 3a.
 - ~~The `enrich` combinator and `Decorator` type exist.~~ Removed in Phase 3c. The remaining combinators (`product`, `overlay`, `firstDefined`) are unaffected.
+- The `interpret` API returns a result directly — no fluent builder.
+- No `InterpreterLayer` abstraction exists for fluent `.with()` chaining.
 - `example/main.ts` is frozen in the pre-Phase-2 era — it imports removed symbols (`readableInterpreter`, `withMutation`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `ChangefeedContext`, `autoCommit`). It does not compile against the current barrel.
+- `TECHNICAL.md` has several stale references: file map lists deleted `with-changefeed.test.ts` (should be `changefeed.test.ts`), describes `combinators.ts` as containing `enrich`, describes `with-changefeed.ts` as a "transitional" decorator, and the "Changefeed Decorator" section still documents the old `enrich`-based design.
+- `guards.ts` JSDoc mentions `enrich` (stale); `changefeed.ts` JSDoc mentions "enriched value" (stale).
+- `theory/interpreter-algebra.md` §14.7 refers to "a changefeed decorator" — should say "a changefeed interpreter transformer."
 
 ## Design Decisions
 
@@ -252,13 +255,16 @@ The existing `interpret(schema, interpreter, ctx)` signature remains for power u
 
 ### Notification Flow in Compositional Design
 
-With compositional changefeeds, notification does not use flat subscriber maps at all. Instead:
+Notification has two layers:
 
-1. A mutation dispatches via `ctx.dispatch(path, change)` → `applyChangeToStore` updates the store.
-2. The `withChangefeed` interpreter transformer attaches a `dispatch` wrapper at each node that also fires the node's own (shallow) subscribers.
-3. Tree-level notification propagates up the changefeed tree: each composite's `subscribeTree` implementation aggregates child events and re-emits with extended origin paths.
+1. **Flat dispatch-level trigger**: `withChangefeed` wraps `ctx.dispatch` (once per context, idempotently via `WeakMap`) with a notification interceptor. After `applyChangeToStore` updates the store, the wrapper does an O(1) lookup in a `Map<string, Set<callback>>` keyed by path string, firing all listeners registered at that exact path.
+2. **Compositional tree propagation**: `subscribeTree` on composite refs subscribes to each child's changefeed. When a child fires (via the flat dispatch trigger), the parent's tree subscribers receive the event with a prefixed origin path. This propagates upward through the changefeed tree with O(depth) overhead.
 
-This eliminates `notifyAll`, `pathKey`, `subscribeToPath`, `subscribeToMap`, and the flat subscriber infrastructure entirely. Subscribers live on the changefeed objects themselves, which form a tree.
+The old global `notifyAll`, `pathKey`, `subscribeToPath`, `subscribeToMap`, `deepSubscribers`, and `ChangefeedContext` infrastructure is eliminated. The flat map that remains is scoped per-context (not global) and serves only as the dispatch-level trigger — tree composition is handled by the changefeed objects themselves.
+
+**Dispatch wrapping ordering invariant**: `withChangefeed` wraps `ctx.dispatch` during `interpret()`. `commit()` replays through `ctx.dispatch` (the object property, not the closure-captured function). This means the changefeed wrapper fires during replay, so subscribers fire at commit time. This invariant is tested explicitly in `transaction.test.ts` and `changefeed.test.ts`.
+
+**Product child wiring is wire-once**: product fields are structurally static, so child subscriptions are established lazily on the first `subscribeTree` call and never torn down. The short-circuit `if (treeSubs.size === 0) return` in child callbacks prevents wasted work when no tree subscribers are active, but the underlying child subscriptions remain. This is an asymmetry with sequence/map (which tear down on last unsubscribe) — acceptable because product fields are fixed.
 
 ## Phases
 
@@ -289,7 +295,7 @@ Replace the old `autoCommit` / `pending` / `flush` batched mode with a proper tr
 - Task: New tests in `transaction.test.ts`: `beginTransaction` → mutations do not apply to store until `commit`. `commit` applies all pending changes to the store via replay through `dispatch`. `commit` returns the list of flushed `PendingChange` entries. `abort` discards pending changes; store is unchanged. `beginTransaction` while already in a transaction throws. `commit` without `beginTransaction` throws. `abort` without `beginTransaction` throws. `dispatch` applies immediately outside a transaction (replaces old `autoCommit: true` test). 🟢
 - Task: Update `schema-ssr.test.ts` in `@kyneta/core`: replace `createChangefeedContext(wCtx)` with plain `createWritableContext(store)`. The `withChangefeed` decorator still works with `WritableContext` during the transition. 🟢
 
-### Phase 3: `withChangefeed` Interpreter Transformer + `INVALIDATE` Rename + `TRANSACT` Attachment 🔴
+### Phase 3: `withChangefeed` Interpreter Transformer + `INVALIDATE` Rename + `TRANSACT` Attachment 🟢
 
 The core implementation. The new `withChangefeed` interpreter transformer replaces the old `enrich`-based decorator of the same name. The old decorator in `with-changefeed.ts` is deleted and the file is replaced with the transformer. This phase also renames `INVALIDATE` to use `kyneta:invalidate` for namespace consistency, and makes `withWritable` attach `[TRANSACT]` to all refs it produces.
 
@@ -354,7 +360,7 @@ Old changefeed infrastructure, `enrich`, and `Decorator` were already removed in
 
 ## Tests
 
-New test file `src/__tests__/transaction.test.ts` for context transactions (Phase 2) — ✅ done. New test file `src/__tests__/changefeed.test.ts` for the compositional behavior (Phase 3 — replaces the old `with-changefeed.test.ts`). New test file `src/__tests__/fluent.test.ts` for the builder API (Phase 4). Existing test files `writable.test.ts` and `with-changefeed.test.ts` were updated in Phase 2. The old `with-changefeed.test.ts` is deleted in Phase 3c and replaced by `changefeed.test.ts` in Phase 3d.
+New test file `src/__tests__/transaction.test.ts` for context transactions (Phase 2) — ✅ done. New test file `src/__tests__/changefeed.test.ts` for compositional behavior (Phase 3) — ✅ done, replaces deleted `with-changefeed.test.ts`. New test file `src/__tests__/fluent.test.ts` for the builder API (Phase 4 — not yet created). All 756 tests pass as of Phase 3 completion.
 
 ### Phase 2 Tests (in `transaction.test.ts`) 🟢
 
@@ -368,7 +374,7 @@ New test file `src/__tests__/transaction.test.ts` for context transactions (Phas
 - `commit` without `beginTransaction` throws. 🟢
 - `abort` without `beginTransaction` throws. 🟢
 
-### Phase 3 Tests (in `changefeed.test.ts`)
+### Phase 3 Tests (in `changefeed.test.ts`) 🟢
 
 This test file replaces the old `with-changefeed.test.ts` and covers all compositional behavior.
 
@@ -406,7 +412,7 @@ This test file replaces the old `with-changefeed.test.ts` and covers all composi
 
 ## Transitive Effect Analysis
 
-_Updated to reflect completed phases and revised plan._
+_Updated to reflect Phases 1–3 completion._
 
 ### `changefeed.ts` 🟢
 
@@ -425,42 +431,42 @@ Phase 3b (done): `withWritable` gains `[TRANSACT]` attachment on all refs via `O
 
 Phase 3a (done): `INVALIDATE` symbol string renamed from `"schema:invalidate"` to `"kyneta:invalidate"`. Pure string change, no structural modifications.
 
-### `interpreters/with-changefeed.ts`
+### `interpreters/with-changefeed.ts` 🟢
 
-Phase 3c/3d (done): Old transitional decorator deleted and replaced with a new interpreter transformer at the same path. `withChangefeed(base)` takes an `Interpreter<WritableContext, A>` and returns `Interpreter<WritableContext, A>`. Leaf refs get plain `Changefeed`; composite refs (product, sequence, map) get `ComposedChangefeed` with `subscribeTree`. Notification uses per-context dispatch wrapping (idempotent via WeakMap) + per-node listener sets. No flat subscriber maps. Dynamic subscription management for sequences and maps (tear-down/rebuild on structural changes). `attachChangefeed` utility exported for external use.
+Phase 3c/3d (done): Old transitional decorator deleted and replaced with a new interpreter transformer at the same path. `withChangefeed(base)` takes an `Interpreter<WritableContext, A>` and returns `Interpreter<WritableContext, A>`. Leaf refs get plain `Changefeed`; composite refs (product, sequence, map) get `ComposedChangefeed` with `subscribeTree`. Notification uses per-context dispatch wrapping (idempotent via WeakMap) + per-node listener sets. Dynamic subscription management for sequences and maps (tear-down/rebuild on structural changes). `attachChangefeed` utility exported for external use.
 
-### `combinators.ts`
+### `combinators.ts` 🟢
 
 Phase 3c (done): `enrich` and `Decorator` removed. The remaining combinators (`product`, `overlay`, `firstDefined`) are unaffected.
 
-### `interpreters/readable.ts`
+### `interpreters/readable.ts` 🟢
 
-No modifications. The readable interpreter is the base layer — composition works through it, not by modifying it.
+No modifications needed. The readable interpreter is the base layer — composition works through it, not by modifying it.
 
-### `@kyneta/core` runtime (`subscribe.ts`, `regions.ts`)
+### `@kyneta/core` runtime (`subscribe.ts`, `regions.ts`) 🟢
 
-**Zero changes required.** The runtime calls `ref[CHANGEFEED].subscribe(handler)`, which remains node-level on both leaf and composite refs. `listRegion` continues to receive only `SequenceChange`. `conditionalRegion` and `valueRegion` continue to work with leaf refs.
+**Zero changes required.** Verified in `schema-ssr.test.ts` integration tests. The runtime calls `ref[CHANGEFEED].subscribe(handler)`, which remains node-level on both leaf and composite refs. `listRegion` continues to receive only `SequenceChange`. `conditionalRegion` and `valueRegion` continue to work with leaf refs.
 
 Future work: `@kyneta/core` may add a `subscribeTree` runtime helper that checks for `ComposedChangefeed` and calls `subscribeTree`. This is additive and not part of this plan.
 
-### `@kyneta/core` compiler integration test (`schema-ssr.test.ts`)
+### `@kyneta/core` compiler integration test (`schema-ssr.test.ts`) 🟢
 
-Updated in Phase 2 to use plain `WritableContext` (done). Updated in Phase 3d to use `withChangefeed(withWritable(...))` (removing `enrich` + old decorator). This is the only external consumer.
+Updated in Phase 2 to use plain `WritableContext` (done). Updated in Phase 3d to use `withChangefeed(writableInterpreter)` where `writableInterpreter = withWritable(withCaching(withReadable(bottomInterpreter)))` (done). This is the only external consumer. All integration tests pass.
 
-### `@kyneta/core` compiler (`reactive-detection.ts`, `dom.ts`)
+### `@kyneta/core` compiler (`reactive-detection.ts`, `dom.ts`) 🟢
 
 **Zero changes required.** The compiler detects reactivity via the `[CHANGEFEED]` symbol property on types. `ComposedChangefeed extends Changefeed`, so it still has `[CHANGEFEED]`. The compiler's `getDeltaKind` 7-hop type walk reads the `subscribe` method's callback parameter type — unchanged. The compiler always emits node-level subscriptions, which is exactly `Changefeed.subscribe`.
 
-### `index.ts` barrel exports
+### `index.ts` barrel exports 🟢 (through Phase 3)
 
 Phase 2 (done): removed `ChangefeedContext`, `createChangefeedContext`, `changefeedFlush`, `flush`, `subscribeDeep`, `DeepEvent`. Added `TRANSACT`, `HasTransact`, `hasTransact`.
-Phase 3c: removes `enrich`, `Decorator`, old `withChangefeed` export, any remaining aliases.
-Phase 3d: adds `withChangefeed` (from new transformer path).
-Phase 4: adds `InterpreterLayer`, `InterpretBuilder`, `readable`, `writable`, `changefeed` layers.
+Phase 3c (done): removed `enrich`, `Decorator`, old `withChangefeed` export, remaining aliases.
+Phase 3d (done): added `withChangefeed` and `attachChangefeed` from new transformer path.
+Phase 4: will add `InterpreterLayer`, `InterpretBuilder`, `readable`, `writable`, `changefeed` layers.
 
-### `example/main.ts`
+### `example/main.ts` 🔴
 
-Phase 5 rewrites the example to use the current API. The old `DOC_INTERNALS` symbol and `changefeedFlush`-based `change()` are replaced with `TRANSACT` + `beginTransaction` / `commit`. No external consumers depend on the example.
+**Currently non-functional.** Imports symbols that no longer exist in the barrel (`readableInterpreter`, `withMutation`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `enrich`, `ChangefeedContext`, `autoCommit`). Phase 5 rewrites it. No external consumers depend on the example.
 
 ## Sequence Subscription Timing
 
@@ -476,37 +482,46 @@ The transformer maintains its **own** `Map<number, () => void>` of per-item unsu
 
 ## Resources for Implementation Context
 
-| Resource | Path | Relevance |
-|---|---|---|
-| Changefeed protocol | `src/changefeed.ts` | `Changefeed`, `ComposedChangefeed`, `TreeEvent` — the interfaces `withChangefeed` implements |
-| Transitional changefeed decorator | `src/interpreters/with-changefeed.ts` | Current flat subscriber implementation; reference for `attachChangefeed` utility; deleted in Phase 3c |
-| Writable interpreter | `src/interpreters/writable.ts` | `WritableContext`, `TRANSACT`, `withWritable` — gains `[TRANSACT]` attachment in Phase 3b |
-| Caching transformer | `src/interpreters/with-caching.ts` | `INVALIDATE` symbol — renamed to `kyneta:invalidate` in Phase 3a |
-| Readable interpreter | `src/interpreters/readable.ts` | Base interpreter types; no modifications needed |
-| Catamorphism | `src/interpret.ts` | `Interpreter` interface, `interpret` function — add overload and builder in Phase 4 |
-| Combinators | `src/combinators.ts` | `enrich`, `Decorator` — removed in Phase 3c; `product`, `overlay`, `firstDefined` remain |
-| Change types | `src/change.ts` | `ChangeBase`, `SequenceChange`, `MapChange`, `ReplaceChange` |
-| Store utilities | `src/store.ts` | `applyChangeToStore`, `readByPath` |
-| Guards | `src/guards.ts` | `isPropertyHost` — for attaching symbol properties |
-| Existing changefeed tests | `src/__tests__/with-changefeed.test.ts` | Test patterns and fixtures; deleted in Phase 3c, scenarios recreated in `changefeed.test.ts` |
-| Existing writable tests | `src/__tests__/writable.test.ts` | Transaction tests already updated in Phase 2 |
-| Example facade | `example/main.ts` | Frozen pre-Phase-2; rewritten in Phase 5 |
-| Core runtime subscribe | `packages/core/src/runtime/subscribe.ts` | Consumes `[CHANGEFEED].subscribe` — verify no breakage |
-| Core runtime regions | `packages/core/src/runtime/regions.ts` | `listRegion` subscribes to list refs — verify node-level semantics preserved |
-| Core integration test | `packages/core/src/compiler/integration/schema-ssr.test.ts` | Only external consumer — updated in Phase 2 (done), Phase 3d (pending) |
+| Resource | Path | Relevance | Status |
+|---|---|---|---|
+| Changefeed protocol | `src/changefeed.ts` | `Changefeed`, `ComposedChangefeed`, `TreeEvent` — the interfaces `withChangefeed` implements | ✅ Complete |
+| Changefeed transformer | `src/interpreters/with-changefeed.ts` | Canonical interpreter transformer; `withChangefeed(base)`, `attachChangefeed`, dispatch wrapping, compositional `subscribeTree` | ✅ Complete |
+| Writable interpreter | `src/interpreters/writable.ts` | `WritableContext`, `TRANSACT`, `withWritable` with `[TRANSACT]` attachment | ✅ Complete |
+| Caching transformer | `src/interpreters/with-caching.ts` | `INVALIDATE` symbol (`kyneta:invalidate`) | ✅ Complete |
+| Readable interpreter | `src/interpreters/readable.ts` | Base interpreter types; no modifications needed | ✅ No changes |
+| Catamorphism | `src/interpret.ts` | `Interpreter` interface, `interpret` function — add overload and builder in Phase 4 | Phase 4 |
+| Combinators | `src/combinators.ts` | `product`, `overlay`, `firstDefined` (enrich/Decorator removed in Phase 3c) | ✅ Complete |
+| Change types | `src/change.ts` | `ChangeBase`, `SequenceChange`, `MapChange`, `ReplaceChange` | ✅ No changes |
+| Store utilities | `src/store.ts` | `applyChangeToStore`, `readByPath` | ✅ No changes |
+| Guards | `src/guards.ts` | `isPropertyHost` — for attaching symbol properties | ✅ No changes (JSDoc stale: mentions `enrich`) |
+| Changefeed tests | `src/__tests__/changefeed.test.ts` | 35 tests covering compositional behavior; replaces old `with-changefeed.test.ts` | ✅ Complete |
+| Transaction tests | `src/__tests__/transaction.test.ts` | Transaction lifecycle, `inTransaction`, `TRANSACT` symbol, dispatch wrappability | ✅ Complete |
+| Writable tests | `src/__tests__/writable.test.ts` | `withWritable` mutation, `[TRANSACT]` attachment, invalidate-before-dispatch | ✅ Complete |
+| Example facade | `example/main.ts` | **Non-functional** — imports deleted symbols; rewritten in Phase 5 | 🔴 Phase 5 |
+| Core runtime subscribe | `packages/core/src/runtime/subscribe.ts` | Consumes `[CHANGEFEED].subscribe` — verified no breakage | ✅ No changes |
+| Core runtime regions | `packages/core/src/runtime/regions.ts` | `listRegion` subscribes to list refs — node-level semantics preserved | ✅ No changes |
+| Core integration test | `packages/core/src/compiler/integration/schema-ssr.test.ts` | Only external consumer — uses `withChangefeed(writableInterpreter)` | ✅ Complete |
 
 ## Learnings from Existing Codebase
 
-These are relevant findings from `packages/core/LEARNINGS.md` and the existing plan documents:
+These are relevant findings from `packages/core/LEARNINGS.md`, the existing plan documents, and implementation experience.
 
-- **`SequenceChangeOp.insert` carries items, not a count.** The "two-layer model" — change layer carries plain values, ref layer carries reactive handles. The composed changefeed's sequence handler must use `.at()` to get refs, not read from the change's insert array.
-- **`subscribeWithValue`'s `getValue` closure is NOT `CHANGEFEED.current`.** The runtime's `read()` helper extracts `current` from the coalgebra, but codegen expressions may transform the value. The compositional changefeed doesn't change this — `subscribe` still emits raw changes, and the runtime still re-reads via closures.
-- **`Object.defineProperty` bypasses Proxy `set` traps.** From `.plans/feed-separation.md` — when attaching symbol properties to Proxy-backed objects (like map refs), use `Object.defineProperty` not assignment. The `attachChangefeed` utility already does this correctly; `[TRANSACT]` attachment in `withWritable` must follow the same pattern.
+### Confirmed During Implementation
+
+- **`SequenceChangeOp.insert` carries items, not a count.** The "two-layer model" — change layer carries plain values, ref layer carries reactive handles. The composed changefeed's sequence handler uses `.at()` to get refs, not read from the change's insert array. ✅ Implemented correctly.
+- **`Object.defineProperty` bypasses Proxy `set` traps.** Both `attachChangefeed` and `attachTransact` use `Object.defineProperty` with `enumerable: false`, `configurable: true`. ✅ Implemented and tested.
 - **`getOrCreateChangefeed` WeakMap caching.** `LocalRef` uses this for its `[CHANGEFEED]` getter. The compositional changefeed creates changefeeds during interpretation (not lazily), so this caching pattern is not needed — but `LocalRef` and other external implementors continue to use it unchanged.
-- **`INVALIDATE` uses `Symbol.for("schema:invalidate")` — the namespace predates the `kyneta:` convention.** Phase 3a renames it to `Symbol.for("kyneta:invalidate")` for consistency with `CHANGEFEED` (`kyneta:changefeed`) and `TRANSACT` (`kyneta:transact`).
-- **Symbol ownership: each transformer attaches only the symbol it owns.** `withWritable` owns and attaches `[TRANSACT]`. `withChangefeed` owns and attaches `[CHANGEFEED]`. `withCaching` owns and attaches `[INVALIDATE]`. This keeps layers decoupled — `withWritable` without `withChangefeed` still has `[TRANSACT]` on refs.
-- **`enrich` combinator has no remaining users after `withChangefeed` becomes a transformer.** The other combinators (`product`, `overlay`, `firstDefined`) are independent and remain. `enrich` and `Decorator` are removed in Phase 3c.
-- **`example/main.ts` is frozen pre-Phase-2.** It imports symbols that no longer exist in `index.ts` (`readableInterpreter`, `withMutation`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `ChangefeedContext`). It doesn't compile. Phase 5 rewrites it.
+- **Symbol ownership: each transformer attaches only the symbol it owns.** `withWritable` owns `[TRANSACT]`. `withChangefeed` owns `[CHANGEFEED]`. `withCaching` owns `[INVALIDATE]`. Layers are decoupled — `withWritable` without `withChangefeed` still has `[TRANSACT]` on refs. ✅ Verified.
+- **`INVALIDATE` renamed to `kyneta:invalidate`** for consistency with `CHANGEFEED` (`kyneta:changefeed`) and `TRANSACT` (`kyneta:transact`). ✅ Done in Phase 3a.
+- **`enrich` combinator has no remaining users.** Removed in Phase 3c. The remaining combinators (`product`, `overlay`, `firstDefined`) are unaffected. ✅ Done.
+
+### Discovered During Implementation
+
+- **`commit()` must replay through `ctx.dispatch` (the object property), not the closure-captured function.** This is critical: `withChangefeed` replaces `ctx.dispatch` with a wrapper that adds notification. If `commit()` called the closure variable directly, subscribers would silently stop receiving events at commit time. This was a real bug during development. The invariant is defended by explicit tests in both `transaction.test.ts` and `changefeed.test.ts`.
+- **Sequence/map teardown-and-rebuild is O(n) per structural change.** The implementation tears down all per-item subscriptions and rebuilds for the new length on every structural change. This is correct but not optimal — a more sophisticated approach would parse retain/insert/delete ops to shift subscriptions. Acceptable for the spike; noted as a future optimization.
+- **Product child subscriptions are wire-once, never torn down.** Unlike sequences/maps (which clean up when the last tree subscriber unsubscribes), product child subscriptions persist forever once established. The child callbacks short-circuit with `if (treeSubs.size === 0) return`, so no wasted work, but the underlying subscriptions remain. This is an acceptable asymmetry since product fields are structurally static.
+- **`example/main.ts` is completely non-functional.** It imports symbols that no longer exist in `index.ts` (`readableInterpreter`, `withMutation`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `ChangefeedContext`, `autoCommit`). Phase 5 rewrites it.
+- **`subscribeWithValue`'s `getValue` closure is NOT `CHANGEFEED.current`.** The runtime's `read()` helper extracts `current` from the coalgebra, but codegen expressions may transform the value. The compositional changefeed doesn't change this — `subscribe` still emits raw changes, and the runtime still re-reads via closures.
 
 ## Alternatives Considered
 
