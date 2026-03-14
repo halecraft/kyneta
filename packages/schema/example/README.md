@@ -1,16 +1,20 @@
 # @kyneta/schema — Example Mini-App
 
-A self-contained example that builds a high-level document API on top of the schema algebra primitives, then uses it to demonstrate the apex developer experience — the same ergonomics as `@loro-extended/change`, but running on a plain JS object store with zero CRDT runtime.
+A self-contained example that exercises the full `@kyneta/schema` API surface using direct library imports — no local facade, no wrapper class. Every function used here (`change`, `applyChanges`, `subscribe`, `subscribeTree`, `validate`, etc.) is imported from the library barrel.
 
 ## Architecture
 
-The example showcases the **four-layer composable interpreter stack**:
+The interpreter stack decomposes into **five composable layers**, each independently useful:
 
 | Layer | What it provides | Context needed |
 |---|---|---|
-| `readable` | Callable function-shaped refs with caching — `ref()` reads the current value | `RefContext { store }` |
-| `writable` | Adds `.set()`, `.insert()`, `.increment()`, etc. | `WritableContext { store, dispatch, ... }` |
-| `changefeed` | Adds `[CHANGEFEED]` observation protocol with `subscribeTree` | `WritableContext` |
+| `navigation` | Structural addressing — product field getters, `.at()`, `.keys()`, `.length`, sum dispatch | `RefContext { store }` |
+| `readable` | Fills the `[CALL]` slot — `ref()` returns the current plain value | `RefContext { store }` |
+| `caching` | Identity-preserving memoization — `doc.name === doc.name` | `RefContext { store }` |
+| `writable` | Mutation methods — `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` | `WritableContext { store, dispatch, … }` |
+| `changefeed` | Observation protocol — `[CHANGEFEED]`, `subscribe`, `subscribeTree` | `RefContext` (works on read-only stacks too) |
+
+The pre-built `readable` layer bundles navigation + reading + caching in one step. Most users compose with the pre-built layers:
 
 **Fluent composition:**
 
@@ -25,7 +29,7 @@ const doc = interpret(schema, ctx)
 **Manual composition (equivalent):**
 
 ```ts
-const interp = withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
+const interp = withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))))
 const doc = interpret(schema, interp, ctx)
 ```
 
@@ -35,41 +39,58 @@ Each concern is independently useful — a read-only document needs only the `re
 
 ```sh
 # From packages/schema/
+bun run example/main.ts
+
+# Or with tsx:
 npx tsx example/main.ts
 ```
 
 ## Structure
 
-The example has two halves:
+### Setup (~15 lines)
 
-### The Facade (~80 lines)
+Document creation is explicit — no `createDoc` wrapper:
 
-A thin, high-level API built entirely from schema primitives. In production this would live in its own package (or in `@kyneta/change`). Here it lives in the example to prove the algebra supports this developer experience.
+```ts
+const defaults = Zero.structural(ProjectSchema)
+const initial = Zero.overlay(seed, defaults, ProjectSchema)
+const store: Store = { ...initial }
+const ctx = createWritableContext(store)
 
-- **`createDoc(schema, seed?)`** — Creates a typed, writable, observable document handle from a schema and optional seed values. Uses the fluent builder: `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()`. Attaches `toJSON()` via the plain interpreter. Return type is `Readable<F[K]> & Writable<F[K]>`.
-- **`change(doc, fn)`** — Wraps mutations in a transaction. Discovers the `WritableContext` via `doc[TRANSACT]` — no internal WeakMap or re-interpretation needed. On commit, changefeed subscribers fire.
-- **`subscribe(ref, callback)`** — Subscribes to changes on any changefeed ref via `ref[CHANGEFEED].subscribe()`. Returns an unsubscribe function.
+const doc = interpret(ProjectSchema, ctx)
+  .with(readable)
+  .with(writable)
+  .with(changefeed)
+  .done() as Ref<typeof ProjectSchema>
+```
 
-### The App (~400 lines)
+### Library-Level Functions
 
-Uses the facade exactly like an application developer would:
+The example uses four library-level functions from `facade.ts` — no local wrappers:
 
-1. **Define a Schema** — `LoroSchema.doc({ ... })` with text, counter, list, struct, record, nullable, constrained scalars
-2. **Create a Document** — `createDoc(ProjectSchema, { name: "..." })`
-3. **Direct Mutations** — `doc.name.insert()`, `doc.stars.increment()`, `doc.settings.visibility.set()`
-4. **Working with Lists** — `doc.tasks.push()`, `doc.tasks.at(0).title()`, iteration via `for..of`, delete
-5. **Working with Records** — Map-like API: `.set()`, `.get()`, `.delete()`, `.has()`, `.keys()`, `.size`, `.clear()`
-6. **Transactions with change()** — `change(doc, d => { d.name.update(...); d.stars.increment(...) })` — atomic, with abort-on-error
-7. **Subscribing to Changes** — `subscribe(doc.name, action => ...)`, unsubscribe
-8. **Portable Refs** — Extract refs, pass to standalone generic functions typed with `(() => T) & MutationRef`
-9. **Referential Identity & Namespace Isolation** — `doc.name === doc.name`, `Object.keys(doc)` returns only schema keys, `hasChangefeed()`, `hasTransact()`
-10. **Validation** — `validate(ProjectSchema, snapshot)` narrows to `Plain<typeof ProjectSchema>`, `tryValidate()` collects multiple errors with human-readable paths, `validate()` throws `SchemaValidationError` on first error
-11. **Compositional Tree Subscriptions** — `doc.settings[CHANGEFEED].subscribeTree(cb)` notifies for changes anywhere in the subtree, with relative `origin` paths. Part of the `[CHANGEFEED]` protocol — no raw context needed
-12. **Transaction + Tree Subscription Integration** — Shows how `beginTransaction()` / `commit()` interacts with `subscribeTree`: store is unchanged until commit, listeners fire at commit time via dispatch replay
-13. **Read-Only Documents** — `interpret(schema, readableInterpreter, { store })` produces a fully navigable, callable document with no mutation methods, no observation, no dispatch context
-14. **Template Literal Coercion** — `` `Stars: ${doc.stars}` `` works via `[Symbol.toPrimitive]` — no `ref()` call needed in template literals; hint-aware (number for counters, string for text)
-15. **The Composition Algebra** — Summary of the four layers, context requirements, and symbol-keyed composability hooks
-16. **Final Snapshot** — `doc.toJSON()` returns the full plain object
+- **`change(ref, fn)`** — Runs mutations inside a transaction, returns `PendingChange[]`. Discovers the `WritableContext` via `ref[TRANSACT]`.
+- **`applyChanges(ref, ops, options?)`** — Applies captured changes to a (potentially different) document. Triggers the full prepare/flush pipeline. Supports `{ origin }` provenance tagging.
+- **`subscribe(ref, cb)`** — Node-level observation. Callback receives a `Changeset`.
+- **`subscribeTree(ref, cb)`** — Tree-level observation for composites (products, sequences, maps). Callback receives `Changeset<TreeEvent>` with relative paths.
+
+### The Sections (~600 lines)
+
+The example is organized into 14 sections:
+
+1. **Define a Schema** — `LoroSchema.doc({ ... })` with text, counter, list of struct, plain struct, discriminated union, nullable, record, constrained scalars
+2. **Create a Document** — Inline setup with `Zero.overlay`, `createWritableContext`, fluent builder. Shows `doc()` snapshot.
+3. **Mutations: Five Change Types** — Text (`doc.name.insert`), counter (`doc.stars.increment`), sequence (`doc.tasks.push`), replace (`doc.settings.darkMode.set`), map (`doc.labels.set`), product bulk `.set()`
+4. **Working with Collections** — Lists: `.at(i)`, `.get(i)`, `.length`, iteration, `.insert()`, `.delete()`. Records: `.at(key)`, `.get(key)`, `.has()`, `.keys()`, `.size`
+5. **Sums and Nullables** — Discriminated union dispatch based on store discriminant (`doc.content.body()`). Nullable: set to value, read, set back to null.
+6. **Transactions with `change()`** — Library-level `change()` returns `PendingChange[]`. All five change types in one atomic transaction.
+7. **Observing Changes** — `subscribe(doc.stars, cb)` for leaf observation. `subscribeTree(doc.settings, cb)` for tree observation with relative paths. Unsubscribe.
+8. **The Round-Trip: `change` → `applyChanges`** — Capture ops on docA, apply to docB with `{ origin: "sync" }`. Assert deep equality. The sync story in 10 lines.
+9. **Batched Notification and Origin** — `applyChanges` delivers one `Changeset` per affected path (not per change). Subscribers see fully-applied state. Origin provenance flows through.
+10. **Portable Refs** — Pass refs to generic functions (`tag(ref, label)`, `ensureMinimum(counter, min)`). Template literal coercion via `[Symbol.toPrimitive]`.
+11. **Validation** — Same schema, no separate Zod definition. `validate()` narrows to `Plain<S>`. `tryValidate()` collects errors with human-readable paths. `SchemaValidationError` on first error.
+12. **The Composition Algebra** — Read-only documents by dropping layers. Fluent vs. manual composition. Referential identity. Namespace isolation. Symbol-keyed hooks.
+13. **Pure State Transitions with `step`** — `stepText`, `stepSequence`, `stepIncrement` — apply changes to plain values without any interpreter machinery.
+14. **Final Snapshot** — `doc()` returns the full plain object.
 
 ## Key Concepts
 
@@ -78,10 +99,10 @@ Uses the facade exactly like an application developer would:
 Every ref produced by the `readable` layer is a function: `ref()` returns the current plain value. This is the foundational read API — no `.get()` method needed.
 
 ```ts
-doc.name()           // "Hello" — current string value
+doc.name()           // "Schema Algebra" — current string value
 doc.stars()          // 42 — current number value
-doc.settings()       // { visibility: "public", ... } — deep plain snapshot
-doc.tasks.at(0)()    // { title: "...", done: false, ... }
+doc.settings()       // { darkMode: false, fontSize: 14 } — deep plain snapshot
+doc.tasks.at(0)()    // { title: "...", done: false, priority: 1 }
 ```
 
 ### Template Literal Coercion
@@ -89,42 +110,58 @@ doc.tasks.at(0)()    // { title: "...", done: false, ... }
 Leaf refs have `[Symbol.toPrimitive]`, so they work in template literals without calling `ref()`:
 
 ```ts
-`Project: ${doc.name}`   // "Project: Hello" — via toPrimitive
+`Project: ${doc.name}`   // "Project: Schema Algebra" — via toPrimitive
 `Stars: ${doc.stars}`    // "Stars: 42" — hint-aware coercion
 +doc.stars               // 42 — numeric coercion
 ```
 
 ### Transactions via `[TRANSACT]`
 
-Every ref carries a `[TRANSACT]` symbol referencing its `WritableContext`. The `change()` facade uses this to enter a transaction without re-interpretation:
+Every ref carries a `[TRANSACT]` symbol referencing its `WritableContext`. The library-level `change()` uses this to enter a transaction without re-interpretation:
 
 ```ts
-function change(doc, fn) {
-  const ctx = doc[TRANSACT]
+const ops = change(doc, d => {
+  d.name.insert(0, "✨ ")
+  d.stars.increment(10)
+})
+// ops: PendingChange[] — can be sent to another doc via applyChanges
+```
+
+Under the hood:
+
+```ts
+function change(ref, fn) {
+  const ctx = ref[TRANSACT]
   ctx.beginTransaction()
   try {
-    fn(doc)
-    ctx.commit()     // replay through dispatch → subscribers fire
+    fn(ref)
+    return ctx.commit()  // → PendingChange[]
   } catch (e) {
-    ctx.abort()      // discard buffered changes
+    ctx.abort()
     throw e
   }
 }
 ```
 
-### Compositional Tree Subscriptions
+### Observation via `subscribe` and `subscribeTree`
 
-Composite refs (products, sequences, maps) implement `ComposedChangefeed` with `subscribeTree`:
+Library-level functions — no raw `[CHANGEFEED]` access needed:
 
 ```ts
-doc.settings[CHANGEFEED].subscribeTree((event) => {
-  console.log(event.origin)  // [{type:"key", key:"darkMode"}]
-  console.log(event.change)  // {type:"replace", ...}
+// Node-level: fires only for changes at this exact ref
+const unsub = subscribe(doc.stars, (changeset) => {
+  console.log(changeset.changes, changeset.origin)
 })
-doc.settings.darkMode.set(true)  // fires tree subscriber with origin path
+
+// Tree-level: fires for changes anywhere in the subtree
+subscribeTree(doc.settings, (changeset) => {
+  for (const event of changeset.changes) {
+    console.log(event.path, event.change.type)
+  }
+})
 ```
 
-`subscribe` remains node-level (fires only for changes at that node). `subscribeTree` fires for all descendant changes with relative origin paths.
+`subscribe` is node-level (fires only for changes at that ref). `subscribeTree` fires for all descendant changes with relative paths. Both deliver `Changeset` — the protocol's unit of batched notification.
 
 ### Read-Only Documents
 
@@ -136,11 +173,12 @@ const doc = interpret(schema, ctx).with(readable).done()
 doc.name()         // ✓ reads work
 doc.name.insert    // undefined — no mutation methods
 hasChangefeed(doc) // false — no observation
+hasTransact(doc)   // false — no transactions
 ```
 
 ### Composition
 
-Reading is the foundational capability. Writing depends on reading. Observation depends on writing.
+The layers compose freely. Navigation is the foundational structural capability. Reading fills the `[CALL]` slot. Writing and observation are independent.
 
 ```ts
 // Read-only:
@@ -153,29 +191,40 @@ interpret(schema, ctx).with(readable).with(writable).done()
 interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 ```
 
+The `changefeed` layer accepts `RefContext` — it works on read-only stacks too, producing valid Moore machines (`.current` works, `.subscribe` never fires since there's no mutation source).
+
 ## Symbol-Keyed Composability Hooks
 
 | Symbol | Module | Purpose |
 |---|---|---|
-| `READ` (`kyneta:read`) | `bottom.ts` | Controls what `carrier()` does — `withReadable` fills it |
-| `INVALIDATE` (`kyneta:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — `withWritable` calls before dispatch |
+| `CALL` (`kyneta:call`) | `bottom.ts` | Controls what `carrier()` does — `withReadable` fills it |
+| `INVALIDATE` (`kyneta:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — prepare pipeline hook |
 | `TRANSACT` (`kyneta:transact`) | `writable.ts` | Context discovery — refs carry a reference to their `WritableContext` |
-| `CHANGEFEED` (`kyneta:changefeed`) | `changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it with `subscribeTree` |
+| `CHANGEFEED` (`kyneta:changefeed`) | `with-changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it with `subscribeTree` |
 
 ## The Point
 
-The developer never touches `interpret()`, `step()`, `Zero.structural()`, `CHANGEFEED`, `WritableContext`, or any of the algebra primitives. Those are implementation details of the facade. The developer sees:
+The developer sees a clean, high-level API — all library imports:
 
 ```
-Schema.doc({ ... })    →  define structure
-createDoc(schema)      →  get a live document
-doc.title()            →  read current value
-doc.title.insert(...)  →  mutate naturally
-`Title: ${doc.title}`  →  coerce in templates
-change(doc, fn)        →  batch mutations in a transaction
-subscribe(ref, cb)     →  observe changes
-validate(schema, data) →  validate & narrow types
-doc.toJSON()           →  snapshot
+LoroSchema.doc({ ... })      →  define structure
+Zero.overlay(seed, defaults)  →  derive initial state
+interpret(schema, ctx)
+  .with(readable)
+  .with(writable)
+  .with(changefeed)
+  .done()                     →  get a live document
+
+doc.name()                    →  read current value
+doc.name.insert(...)          →  mutate naturally
+`Name: ${doc.name}`           →  coerce in templates
+
+change(doc, fn)               →  batch mutations, get PendingChange[]
+applyChanges(doc, ops)        →  apply ops (from another doc, from sync, etc.)
+subscribe(ref, cb)            →  observe changes
+subscribeTree(ref, cb)        →  observe subtree changes
+validate(schema, data)        →  validate & narrow types
+doc()                         →  snapshot
 ```
 
 This is the same API shape as `@loro-extended/change` — but backed by the clean, mathematically rigorous schema algebra instead of 10+ parallel `switch` dispatch sites.
