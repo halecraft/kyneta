@@ -12,11 +12,12 @@
 //
 // withWritable is a pure extension — it has no bound on A and works with
 // any carrier. Mutation methods are bolted on; reading is not required.
-// Invalidate-before-dispatch: if the carrier has [INVALIDATE] (from
-// withCaching), the change is sent to the cache BEFORE dispatch, so
-// subscribers see consistent caches.
+// Cache invalidation is handled by the prepare pipeline — withCaching
+// hooks ctx.prepare to invalidate caches at the target path before store
+// mutation. Mutation methods simply construct the change and dispatch.
 //
 // See .plans/interpreter-decomposition.md §Phase 4.
+// See .plans/apply-changes.md §Phase 4.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import {
@@ -46,9 +47,6 @@ import {
   readByPath,
   applyChangeToStore,
 } from "../store.js"
-import {
-  INVALIDATE,
-} from "./with-caching.js"
 import type { RefContext, Plain } from "../interpreter-types.js"
 
 // Re-export store utilities for backward compatibility
@@ -432,12 +430,12 @@ export type Writable<S extends Schema> =
  * methods at leaf and collection cases, and passes through for purely
  * structural cases (product, sum).
  *
- * **Invalidate-before-dispatch:** For nodes that have `[INVALIDATE]`
- * (provided by `withCaching`), `withWritable` calls
- * `result[INVALIDATE](change)` BEFORE `ctx.dispatch(path, change)`.
- * This ensures caches are consistent when subscribers fire during
- * dispatch. When caching is absent (e.g. `withWritable(withReadable(
- * bottomInterpreter))`), the `INVALIDATE in result` guard skips it.
+ * Mutation methods construct the appropriate change and call
+ * `ctx.dispatch(path, change)`. Cache invalidation is handled by the
+ * `prepare` pipeline — `withCaching` hooks `ctx.prepare` to fire
+ * per-path invalidation handlers before store mutation. This means
+ * every change source (imperative mutation, `applyChanges`, etc.)
+ * gets automatic cache invalidation without manual `[INVALIDATE]` calls.
  *
  * ```ts
  * const interp = withWritable(withCaching(withReadable(bottomInterpreter)))
@@ -481,7 +479,6 @@ export function withWritable<A>(
 
       result.set = (value: unknown): void => {
         const change = replaceChange(value)
-        if (INVALIDATE in result) result[INVALIDATE](change)
         ctx.dispatch(path, change)
       }
 
@@ -503,7 +500,6 @@ export function withWritable<A>(
       Object.defineProperty(result, "set", {
         value: (value: unknown): void => {
           const change = replaceChange(value)
-          if (INVALIDATE in result) result[INVALIDATE](change)
           ctx.dispatch(path, change)
         },
         enumerable: false,
@@ -516,8 +512,6 @@ export function withWritable<A>(
 
     // --- Sequence -------------------------------------------------------------
     // Add .push(), .insert(), .delete() to the base sequence ref.
-    // Invalidate-before-dispatch: cache is updated BEFORE ctx.dispatch
-    // so subscribers see consistent state.
 
     sequence(
       ctx: WritableContext,
@@ -531,7 +525,6 @@ export function withWritable<A>(
         const arr = readByPath(ctx.store, path)
         const length = Array.isArray(arr) ? arr.length : 0
         const change = sequenceChange([{ retain: length }, { insert: items }])
-        if (INVALIDATE in result) result[INVALIDATE](change)
         ctx.dispatch(path, change)
       }
 
@@ -540,7 +533,6 @@ export function withWritable<A>(
           ...(index > 0 ? [{ retain: index }] : []),
           { insert: items },
         ])
-        if (INVALIDATE in result) result[INVALIDATE](change)
         ctx.dispatch(path, change)
       }
 
@@ -549,7 +541,6 @@ export function withWritable<A>(
           ...(index > 0 ? [{ retain: index }] : []),
           { delete: count },
         ])
-        if (INVALIDATE in result) result[INVALIDATE](change)
         ctx.dispatch(path, change)
       }
 
@@ -559,7 +550,6 @@ export function withWritable<A>(
 
     // --- Map ------------------------------------------------------------------
     // Attach .set(), .delete(), .clear() directly to the base map ref.
-    // Invalidate-before-dispatch for each mutation.
 
     map(
       ctx: WritableContext,
@@ -572,7 +562,6 @@ export function withWritable<A>(
       Object.defineProperty(result, "set", {
         value: (key: string, value: unknown): void => {
           const change = mapChange({ [key]: value })
-          if (INVALIDATE in result) result[INVALIDATE](change)
           ctx.dispatch(path, change)
         },
         enumerable: false,
@@ -582,7 +571,6 @@ export function withWritable<A>(
       Object.defineProperty(result, "delete", {
         value: (key: string): void => {
           const change = mapChange(undefined, [key])
-          if (INVALIDATE in result) result[INVALIDATE](change)
           ctx.dispatch(path, change)
         },
         enumerable: false,
@@ -596,7 +584,6 @@ export function withWritable<A>(
             const allKeys = Object.keys(obj as Record<string, unknown>)
             if (allKeys.length > 0) {
               const change = mapChange(undefined, allKeys)
-              if (INVALIDATE in result) result[INVALIDATE](change)
               ctx.dispatch(path, change)
             }
           }

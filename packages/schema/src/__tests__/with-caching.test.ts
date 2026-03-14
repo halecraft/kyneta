@@ -7,6 +7,8 @@ import {
   mapChange,
   replaceChange,
   plainInterpreter,
+  withWritable,
+  createWritableContext,
 } from "../index.js"
 import {
   bottomInterpreter,
@@ -594,6 +596,137 @@ describe("INVALIDATE symbol", () => {
   it("is stable across references (Symbol.for identity)", () => {
     const other = Symbol.for("kyneta:invalidate")
     expect(INVALIDATE).toBe(other)
+  })
+})
+
+// ===========================================================================
+// Prepare-pipeline invalidation (Phase 4 verification)
+//
+// These tests verify that cache invalidation fires via the prepare
+// pipeline — i.e. calling ctx.prepare(path, change) directly (without
+// going through mutation methods) invalidates caches. This is the key
+// behavioral contract introduced in Phase 4.
+// ===========================================================================
+
+describe("withCaching: prepare-pipeline invalidation", () => {
+  const fullInterpreter = withWritable(withCaching(withReadable(bottomInterpreter)))
+
+  const docSchema = Schema.doc({
+    settings: Schema.struct({
+      darkMode: Schema.boolean(),
+      fontSize: Schema.number(),
+    }),
+    messages: Schema.list(
+      Schema.struct({
+        author: Schema.string(),
+        body: Schema.string(),
+      }),
+    ),
+  })
+
+  function createFullDoc() {
+    const store = {
+      settings: { darkMode: false, fontSize: 14 },
+      messages: [
+        { author: "Alice", body: "Hello" },
+        { author: "Bob", body: "World" },
+      ],
+    }
+    const ctx = createWritableContext(store)
+    const doc = interpret(docSchema, fullInterpreter, ctx) as any
+    return { doc, store, ctx }
+  }
+
+  it("ctx.prepare + ctx.flush invalidates cache at target path (bypassing mutation methods)", () => {
+    // This is the RED test for the old code: before Phase 4, prepare was
+    // just applyChangeToStore — no invalidation. The cache would be stale.
+    const { doc, ctx } = createFullDoc()
+
+    // Populate the cache by reading
+    expect(doc.settings.darkMode()).toBe(false)
+
+    // Bypass mutation methods — call prepare + flush directly.
+    // This simulates what applyChanges will do in Phase 5.
+    const path = [
+      { type: "key" as const, key: "settings" },
+      { type: "key" as const, key: "darkMode" },
+    ]
+    ctx.prepare(path, replaceChange(true))
+    ctx.flush()
+
+    // The cache must be invalidated — reading should return the new value.
+    // Pre-Phase 4 this would return `false` (stale cache).
+    expect(doc.settings.darkMode()).toBe(true)
+  })
+
+  it("surgical invalidation: mutating one path preserves unrelated cached refs", () => {
+    const { doc } = createFullDoc()
+
+    // Populate caches at two unrelated paths
+    const msgRef0 = doc.messages.at(0)
+    expect(msgRef0.author()).toBe("Alice")
+    const settingsRef = doc.settings
+    expect(settingsRef.darkMode()).toBe(false)
+
+    // Mutate settings.darkMode — this should NOT affect messages cache
+    doc.settings.darkMode.set(true)
+
+    // settings cache was invalidated (darkMode returns new value)
+    expect(doc.settings.darkMode()).toBe(true)
+
+    // messages cache is untouched — same ref identity
+    expect(doc.messages.at(0)).toBe(msgRef0)
+    expect(doc.messages.at(0).author()).toBe("Alice")
+  })
+
+  it("ctx.prepare invalidates sequence cache (shift on insert)", () => {
+    const { doc, ctx } = createFullDoc()
+
+    // Populate sequence cache
+    const refAlice = doc.messages.at(0)
+    const refBob = doc.messages.at(1)
+    expect(refAlice.author()).toBe("Alice")
+    expect(refBob.author()).toBe("Bob")
+
+    // Insert at index 0 via prepare (bypassing mutation methods)
+    const path = [{ type: "key" as const, key: "messages" }]
+    ctx.prepare(path, sequenceChange([{ insert: [{ author: "Eve", body: "Hi" }] }]))
+    ctx.flush()
+
+    // Cache should be shifted: Alice moved from 0→1, Bob from 1→2
+    expect(doc.messages.at(0).author()).toBe("Eve") // new item
+    expect(doc.messages.at(1)).toBe(refAlice) // shifted, same ref
+    expect(doc.messages.at(2)).toBe(refBob) // shifted, same ref
+  })
+})
+
+describe("withCaching: read-only stack backward compatibility", () => {
+  it("withCaching(withReadable(bottom)) with plain RefContext still works", () => {
+    const readOnlyInterp = withCaching(withReadable(bottomInterpreter))
+    const store = {
+      settings: { darkMode: false, fontSize: 14 },
+    }
+    const ctx: RefContext = { store }
+    const schema = Schema.doc({
+      settings: Schema.struct({
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
+      }),
+    })
+    const doc = interpret(schema, readOnlyInterp, ctx) as any
+
+    // Reading works
+    expect(doc.settings.darkMode()).toBe(false)
+    // Caching works (identity preserved)
+    expect(doc.settings).toBe(doc.settings)
+    // [INVALIDATE] is still on refs (for direct use)
+    expect(INVALIDATE in doc.settings).toBe(true)
+    // Direct [INVALIDATE] clears memoized children — after store update
+    // and invalidation, re-reading returns the new value.
+    store.settings = { darkMode: true, fontSize: 24 }
+    doc.settings[INVALIDATE](replaceChange({ darkMode: true, fontSize: 24 }))
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.settings.fontSize()).toBe(24)
   })
 })
 

@@ -21,7 +21,16 @@
 // table-testable) and Imperative Shell (applyCacheOps — trivial Map
 // mutation).
 //
+// Pipeline integration: when composed in a writable stack, withCaching
+// hooks into the `prepare` phase via `ensureCacheWiring`. Each composite
+// node registers its invalidation handler by path during interpretation.
+// The `prepare` wrapper looks up the handler and calls it before
+// forwarding to the inner prepare (store mutation). This means
+// `withWritable` mutation methods don't need to call [INVALIDATE]
+// directly — the pipeline handles it.
+//
 // See .plans/interpreter-decomposition.md §Phase 3.
+// See .plans/apply-changes.md §Phase 4.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type {
@@ -36,6 +45,7 @@ import type { ChangeBase, SequenceChange, MapChange } from "../change.js"
 import { isSequenceChange, isMapChange, isReplaceChange } from "../change.js"
 import type { HasNavigation, HasCaching } from "./bottom.js"
 import type { RefContext } from "../interpreter-types.js"
+import { pathKey } from "../store.js"
 
 // ---------------------------------------------------------------------------
 // INVALIDATE symbol — composability hook for cache coordination
@@ -45,12 +55,15 @@ import type { RefContext } from "../interpreter-types.js"
  * Symbol for change-driven cache invalidation. Attached to product,
  * sequence, and map refs by `withCaching`.
  *
- * Called by `withWritable` before dispatching changes:
- *   `if (INVALIDATE in result) result[INVALIDATE](change)`
+ * Each composite ref still carries `[INVALIDATE]` as a public symbol
+ * for advanced direct use. However, in the standard writable stack,
+ * invalidation is driven by the `prepare` pipeline — `ensureCacheWiring`
+ * registers per-path handlers that fire automatically during
+ * `ctx.prepare(path, change)`, before store mutation.
  *
- * The new signature accepts a `ChangeBase` and interprets it
- * surgically — shifting indices, deleting keys, or clearing the
- * entire cache depending on the change type and node kind.
+ * The handler accepts a `ChangeBase` and interprets it surgically —
+ * shifting indices, deleting keys, or clearing the entire cache
+ * depending on the change type and node kind.
  *
  * Uses `Symbol.for` so multiple copies of this module share identity.
  */
@@ -245,6 +258,97 @@ export function applyCacheOps<K extends number | string>(
 }
 
 // ---------------------------------------------------------------------------
+// ensureCacheWiring — prepare-pipeline integration (per-context, idempotent)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-context state for the caching layer's prepare wrapping.
+ *
+ * - `handlers`: path-keyed map of invalidation handlers. Each composite
+ *   node registers its handler here during interpretation.
+ * - `originalPrepare`: the unwrapped prepare method, called after
+ *   the invalidation handler fires.
+ */
+interface CacheWiringState {
+  readonly handlers: Map<string, (change: ChangeBase) => void>
+  readonly originalPrepare: (path: Path, change: ChangeBase) => void
+}
+
+// WeakMap ensures a single prepare wrapper per context object,
+// shared across all nodes interpreted with that context.
+const cacheContextState = new WeakMap<object, CacheWiringState>()
+
+/**
+ * Returns `true` if `ctx` has a `prepare` method — i.e. it's a
+ * `WritableContext`, not a plain `RefContext`. This duck-type check
+ * allows `withCaching` to keep its `RefContext` type signature while
+ * participating in the prepare pipeline when composed inside
+ * `withWritable`.
+ */
+function hasPrepare(ctx: RefContext): ctx is RefContext & {
+  prepare: (path: Path, change: ChangeBase) => void
+} {
+  return "prepare" in ctx && typeof (ctx as any).prepare === "function"
+}
+
+/**
+ * Ensures the given context has its `prepare` wrapped for cache
+ * invalidation. Returns the shared handler map, or `null` if the
+ * context doesn't have `prepare` (read-only stack).
+ *
+ * - `prepare` wrapping: before forwarding to the inner prepare,
+ *   looks up an invalidation handler by `pathKey(path)` and calls it
+ *   if found. This invalidates the cache BEFORE store mutation, so
+ *   subsequent reads (e.g. during subscriber notification after flush)
+ *   see updated values.
+ *
+ * Uses the same structural pattern as `ensurePrepareWiring` in
+ * `withChangefeed` — WeakMap + idempotent wrapping + path-keyed map.
+ */
+function ensureCacheWiring(
+  ctx: RefContext,
+): Map<string, (change: ChangeBase) => void> | null {
+  if (!hasPrepare(ctx)) return null
+
+  let state = cacheContextState.get(ctx)
+  if (state) return state.handlers
+
+  const handlers = new Map<string, (change: ChangeBase) => void>()
+  const originalPrepare = ctx.prepare
+
+  // Wrapped prepare: invalidate cache at path, then forward.
+  const wrappedPrepare = (path: Path, change: ChangeBase): void => {
+    const key = pathKey(path)
+    const handler = handlers.get(key)
+    if (handler) handler(change)
+    originalPrepare(path, change)
+  }
+
+  ;(ctx as any).prepare = wrappedPrepare
+
+  state = { handlers, originalPrepare }
+  cacheContextState.set(ctx, state)
+  return handlers
+}
+
+/**
+ * Registers an invalidation handler at the given path.
+ *
+ * If `handlers` is null (read-only stack, no prepare pipeline),
+ * this is a no-op — invalidation will only happen via direct
+ * `ref[INVALIDATE](change)` calls.
+ */
+function registerCacheHandler(
+  handlers: Map<string, (change: ChangeBase) => void> | null,
+  path: Path,
+  handler: (change: ChangeBase) => void,
+): void {
+  if (handlers) {
+    handlers.set(pathKey(path), handler)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // withCaching — the interposition transformer
 // ---------------------------------------------------------------------------
 
@@ -261,6 +365,18 @@ export function applyCacheOps<K extends number | string>(
  * - `ref.title === ref.title` (product field identity)
  * - `seq.at(0) === seq.at(0)` (sequence child identity)
  * - `map.at("k") === map.at("k")` (map child identity)
+ *
+ * **Pipeline integration:** When composed inside `withWritable` (i.e.
+ * the context is a `WritableContext`), `withCaching` hooks into the
+ * `prepare` phase via `ensureCacheWiring`. Each composite node
+ * registers its invalidation handler by path. The `prepare` wrapper
+ * fires the handler before store mutation, so caches are invalidated
+ * automatically for every change — whether from imperative mutation
+ * methods or declarative `applyChanges`.
+ *
+ * In read-only stacks (`RefContext` without `prepare`), the pipeline
+ * hook is skipped. `[INVALIDATE]` remains on refs as a public symbol
+ * for direct use.
  *
  * ```ts
  * const cached = withCaching(withReadable(bottomInterpreter))
@@ -318,15 +434,22 @@ export function withCaching<A extends HasNavigation>(
         })
       }
 
-      // INVALIDATE: clear all field caches
-      result[INVALIDATE] = (change: ChangeBase): void => {
-        // Products always do a full clear (planCacheUpdate for product
-        // always returns [{ type: "clear" }] for any change type).
+      // INVALIDATE handler: clear all field caches.
+      // Products always do a full clear (planCacheUpdate for product
+      // always returns [{ type: "clear" }] for any change type).
+      const invalidateProduct = (change: ChangeBase): void => {
         for (const key of Object.keys(fieldState)) {
           fieldState[key]!.resolved = false
           fieldState[key]!.cached = undefined
         }
       }
+
+      // Attach [INVALIDATE] on the ref (public API, direct use)
+      result[INVALIDATE] = invalidateProduct
+
+      // Register in the prepare pipeline (writable stacks only)
+      const handlers = ensureCacheWiring(ctx)
+      registerCacheHandler(handlers, path, invalidateProduct)
 
       return result as A & HasCaching
     },
@@ -365,11 +488,18 @@ export function withCaching<A extends HasNavigation>(
         configurable: true,
       })
 
-      // INVALIDATE: surgical cache update
-      result[INVALIDATE] = (change: ChangeBase): void => {
+      // INVALIDATE handler: surgical cache update
+      const invalidateSequence = (change: ChangeBase): void => {
         const ops = planCacheUpdate(change, "sequence")
         applyCacheOps(childCache, ops as CacheOp<number>[])
       }
+
+      // Attach [INVALIDATE] on the ref (public API, direct use)
+      result[INVALIDATE] = invalidateSequence
+
+      // Register in the prepare pipeline (writable stacks only)
+      const handlers = ensureCacheWiring(ctx)
+      registerCacheHandler(handlers, path, invalidateSequence)
 
       return result as A & HasCaching
     },
@@ -407,11 +537,18 @@ export function withCaching<A extends HasNavigation>(
         configurable: true,
       })
 
-      // INVALIDATE: surgical cache update
-      result[INVALIDATE] = (change: ChangeBase): void => {
+      // INVALIDATE handler: surgical cache update
+      const invalidateMap = (change: ChangeBase): void => {
         const ops = planCacheUpdate(change, "map")
         applyCacheOps(childCache, ops as CacheOp<string>[])
       }
+
+      // Attach [INVALIDATE] on the ref (public API, direct use)
+      result[INVALIDATE] = invalidateMap
+
+      // Register in the prepare pipeline (writable stacks only)
+      const handlers = ensureCacheWiring(ctx)
+      registerCacheHandler(handlers, path, invalidateMap)
 
       return result as A & HasCaching
     },
