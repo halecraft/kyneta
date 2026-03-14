@@ -166,6 +166,7 @@ export type {
 export {
   withWritable,
   createWritableContext,
+  executeBatch,
   TRANSACT,
   hasTransact,
 } from "./interpreters/writable.js"

@@ -106,27 +106,43 @@ export function hasTransact(value: unknown): value is HasTransact {
  * at every level:
  *
  * - `store` — the root mutable store object (from `RefContext`)
- * - `dispatch` — sends a change to the store (applies via step)
+ * - `prepare` — apply a single change (invalidate caches + mutate store).
+ *   No notification. Must not be called during an active transaction.
+ * - `flush` — deliver accumulated notifications as a single Changeset
+ *   per subscriber. Must not be called during an active transaction.
+ * - `dispatch` — convenience: outside a transaction calls `executeBatch`
+ *   with one change; during a transaction buffers the change.
  * - `beginTransaction` / `commit` / `abort` — transaction lifecycle
  *
- * By default, `dispatch` applies changes immediately (auto-commit).
- * During a transaction, `dispatch` buffers changes internally until
- * `commit()` replays them through the normal dispatch path.
+ * The dispatch pipeline is phase-separated:
+ * - `prepare` is called N times (once per change in a batch)
+ * - `flush` is called once after all prepares complete
+ * - `executeBatch` composes these: prepare × N + flush × 1
+ *
+ * Layers like `withChangefeed` wrap `prepare` to accumulate notification
+ * entries and wrap `flush` to deliver `Changeset` batches. Layers like
+ * `withCaching` (future) wrap `prepare` to invalidate caches at the
+ * target path before store mutation.
  *
  * The "where am I" information comes from the catamorphism's `path`
  * parameter, not from the context. This means the context doesn't need
  * to be re-derived at each level — it's the same object throughout.
- *
- * **No observation infrastructure here.** Subscriber notification is
- * provided by the changefeed layer which wraps `dispatch` to add
- * notification after each change is applied.
  */
 export interface WritableContext extends RefContext {
+  /** Apply a single change: invalidate caches + mutate store. No notification.
+   *  Must not be called during an active transaction. */
+  readonly prepare: (path: Path, change: ChangeBase) => void
+  /** Deliver accumulated notifications as a single Changeset per subscriber.
+   *  Must not be called during an active transaction. */
+  readonly flush: (origin?: string) => void
+  /** Convenience: outside a transaction, calls executeBatch with one change.
+   *  During a transaction, buffers the change for later commit. */
   readonly dispatch: (path: Path, change: ChangeBase) => void
   /** Enter a transaction — dispatch buffers until commit/abort. */
   beginTransaction(): void
-  /** Replay buffered changes through dispatch, return the list. */
-  commit(): PendingChange[]
+  /** Apply buffered changes via executeBatch, return the list.
+   *  Accepts an optional origin for the emitted Changeset. */
+  commit(origin?: string): PendingChange[]
   /** Discard buffered changes without applying. */
   abort(): void
   readonly inTransaction: boolean
@@ -138,13 +154,59 @@ export interface PendingChange {
 }
 
 // ---------------------------------------------------------------------------
+// executeBatch — the single primitive for phase-separated dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * The single primitive that composes `prepare` and `flush`.
+ *
+ * Calls `ctx.prepare(path, change)` for each change in the batch
+ * (invalidate caches + mutate store + accumulate notification entries),
+ * then calls `ctx.flush(origin)` once to deliver all accumulated
+ * notifications as a single `Changeset` per subscriber.
+ *
+ * **Invariant:** Must not be called while `ctx.inTransaction` is true.
+ * Doing so would mutate the store while the transaction expects it
+ * unchanged. This guard prevents `applyChanges` from corrupting a
+ * half-built transaction.
+ *
+ * All entry points collapse to this primitive:
+ * - `dispatch(path, change)` = `executeBatch(ctx, [{ path, change }])`
+ * - `commit(origin?)` = copy+clear buffer, end transaction, `executeBatch`
+ * - `applyChanges(ref, ops, { origin })` = `executeBatch(ctx, ops, origin)`
+ */
+export function executeBatch(
+  ctx: WritableContext,
+  changes: readonly PendingChange[],
+  origin?: string,
+): void {
+  if (ctx.inTransaction) {
+    throw new Error(
+      "executeBatch must not be called during an active transaction. " +
+      "Commit or abort the transaction first.",
+    )
+  }
+  for (const { path, change } of changes) {
+    ctx.prepare(path, change)
+  }
+  ctx.flush(origin)
+}
+
+// ---------------------------------------------------------------------------
 // createWritableContext — factory for the root context
 // ---------------------------------------------------------------------------
 
 /**
  * Creates a root WritableContext for a given store.
  *
- * Dispatch applies changes to the store immediately by default.
+ * The context provides phase-separated dispatch:
+ * - `prepare(path, change)` — apply change to the store. No notification.
+ * - `flush(origin?)` — deliver accumulated notifications (no-op at this
+ *   layer; `withChangefeed` wraps it to deliver `Changeset` batches).
+ * - `dispatch(path, change)` — outside a transaction, calls `executeBatch`
+ *   with one change; during a transaction, buffers the change.
+ * - `executeBatch(ctx, changes, origin?)` — prepare × N + flush × 1.
+ *
  * Use `beginTransaction()` / `commit()` to buffer and atomically
  * apply a batch of changes.
  *
@@ -157,13 +219,34 @@ export interface PendingChange {
 export function createWritableContext(store: Store): WritableContext {
   const pending: PendingChange[] = []
   let inTransaction = false
-  let replaying = false
 
+  // Base prepare: just apply the change to the store.
+  // Layers like withChangefeed wrap this to accumulate notification
+  // entries; layers like withCaching (future) wrap this to invalidate
+  // caches at the target path.
+  const prepare = (path: Path, change: ChangeBase): void => {
+    applyChangeToStore(store, path, change)
+  }
+
+  // Base flush: no-op. The changefeed layer wraps this to deliver
+  // accumulated Changeset batches to subscribers.
+  const flush = (_origin?: string): void => {
+    // No-op at the base layer.
+  }
+
+  // Dispatch is transaction-aware:
+  // - Outside a transaction (auto-commit): calls executeBatch with one
+  //   change, which calls prepare + flush. Subscribers see a degenerate
+  //   Changeset of one change.
+  // - During a transaction: buffers the {path, change} pair. The store
+  //   is unchanged; caches are unchanged; subscribers are silent.
   const dispatch = (path: Path, change: ChangeBase): void => {
-    if (inTransaction && !replaying) {
+    if (inTransaction) {
       pending.push({ path, change })
     } else {
-      applyChangeToStore(store, path, change)
+      // Auto-commit: use executeBatch via the ctx object so that
+      // layers that wrapped prepare/flush are invoked.
+      executeBatch(ctx, [{ path, change }])
     }
   }
 
@@ -174,7 +257,13 @@ export function createWritableContext(store: Store): WritableContext {
     inTransaction = true
   }
 
-  const commit = (): PendingChange[] => {
+  // Commit: copy+clear the pending buffer, end the transaction,
+  // then apply all changes via executeBatch. This ensures:
+  // - prepare is called N times (store mutation + notification accumulation)
+  // - flush is called once (deliver Changeset batch to subscribers)
+  // The transaction must be ended BEFORE executeBatch because
+  // executeBatch guards against being called during a transaction.
+  const commit = (origin?: string): PendingChange[] => {
     if (!inTransaction) {
       throw new Error("No active transaction to commit")
     }
@@ -182,19 +271,7 @@ export function createWritableContext(store: Store): WritableContext {
     pending.length = 0
     inTransaction = false
 
-    // Replay through ctx.dispatch (the property on the returned object),
-    // NOT the closure-captured `dispatch` function. This is critical:
-    // layers like `withChangefeed` replace `ctx.dispatch` with a wrapper
-    // that adds notification. If we called the closure `dispatch` directly,
-    // we'd bypass those wrappers and subscribers would never fire.
-    replaying = true
-    try {
-      for (const { path, change } of flushed) {
-        ctx.dispatch(path, change)
-      }
-    } finally {
-      replaying = false
-    }
+    executeBatch(ctx, flushed, origin)
 
     return flushed
   }
@@ -209,6 +286,8 @@ export function createWritableContext(store: Store): WritableContext {
 
   const ctx: WritableContext = {
     store,
+    prepare,
+    flush,
     dispatch,
     beginTransaction,
     commit,

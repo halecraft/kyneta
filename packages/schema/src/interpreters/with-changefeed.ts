@@ -8,10 +8,15 @@
 // - Composite refs (product, sequence, map) get a ComposedChangefeed
 //   with subscribeTree for tree-level observation
 //
-// Notification flow: the transformer wraps ctx.dispatch at each node
-// so that when a change is dispatched at a path, the node's shallow
+// Notification flow: the transformer wraps ctx.prepare so that after
+// each change is applied to the store, the affected node's changefeed
 // subscribers fire. Tree notification propagates via subscription
 // composition (children → parent) without any flat subscriber map.
+//
+// Phase separation: `prepare` fires per-change notifications (degenerate
+// Changeset of one). In the future (PR 4), `prepare` will accumulate
+// and `flush` will deliver batched Changesets. The infrastructure for
+// both `prepare` and `flush` wrapping is in place.
 //
 // Compose: withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
 //
@@ -65,56 +70,61 @@ export function attachChangefeed(
 }
 
 // ---------------------------------------------------------------------------
-// Dispatch wrapping — per-context, idempotent
+// Prepare wrapping — per-context, idempotent
 // ---------------------------------------------------------------------------
 
-// WeakMap ensures a single dispatch wrapper per WritableContext, shared
+// WeakMap ensures a single prepare wrapper per WritableContext, shared
 // across all nodes interpreted with that context.
 const contextState = new WeakMap<
   WritableContext,
   {
     listeners: Map<string, Set<(change: ChangeBase) => void>>
-    originalDispatch: (path: Path, change: ChangeBase) => void
+    originalPrepare: (path: Path, change: ChangeBase) => void
   }
 >()
 
 /**
- * Ensures the given WritableContext has its dispatch wrapped to fire
+ * Ensures the given WritableContext has its `prepare` wrapped to fire
  * per-node listeners after each change is applied. Returns the shared
  * listener map.
  *
  * Each node registers its own shallow listener in this map. When
- * dispatch fires, the wrapper looks up exact-path listeners and
- * invokes them. This replaces the old flat subscriber map with a
- * still-flat notification mechanism, but each listener is owned by
- * a per-node changefeed (not a global map).
+ * `prepare` fires, the wrapper looks up exact-path listeners and
+ * invokes them with the change.
+ *
+ * Phase separation: currently, each `prepare` call fires a degenerate
+ * `Changeset` of one change immediately. In PR 4, `prepare` will
+ * accumulate notification entries and `flush` will deliver batched
+ * `Changeset` objects. The `flush` wrapping point is already in place.
+ *
+ * No `inTransaction` guard is needed — `prepare` is never called
+ * during a transaction. Transaction buffering lives in `dispatch`;
+ * `executeBatch` (which calls `prepare`) guards against being called
+ * during an active transaction.
  */
-function ensureDispatchWiring(
+function ensurePrepareWiring(
   ctx: WritableContext,
 ): Map<string, Set<(change: ChangeBase) => void>> {
   let state = contextState.get(ctx)
   if (state) return state.listeners
 
   const listeners = new Map<string, Set<(change: ChangeBase) => void>>()
-  const originalDispatch = ctx.dispatch
+  const originalPrepare = ctx.prepare
 
-  const wrappedDispatch = (path: Path, change: ChangeBase): void => {
-    originalDispatch(path, change)
-    // Only fire listeners when the change was actually applied to the
-    // store. During a transaction, dispatch buffers into pending — the
-    // store is unchanged, so subscribers must not see the change yet.
-    // On commit(), inTransaction is set to false before replay, so
-    // listeners fire correctly during the replay loop.
-    if (ctx.inTransaction) return
+  const wrappedPrepare = (path: Path, change: ChangeBase): void => {
+    originalPrepare(path, change)
+    // Fire per-change listeners immediately (degenerate Changeset of one).
+    // In PR 4, this will switch to accumulation — prepare accumulates,
+    // flush delivers batched Changesets.
     const key = pathKey(path)
     const set = listeners.get(key)
     if (set) {
       for (const cb of set) cb(change)
     }
   }
-  ;(ctx as any).dispatch = wrappedDispatch
+  ;(ctx as any).prepare = wrappedPrepare
 
-  state = { listeners, originalDispatch }
+  state = { listeners, originalPrepare }
   contextState.set(ctx, state)
   return listeners
 }
@@ -544,13 +554,15 @@ function createMapChangefeed(
  * Notification flows through the changefeed tree, not flat subscriber maps.
  * Each node's `subscribeTree` composes its children's changefeeds.
  *
- * **Dispatch wrapping:** The transformer wraps `ctx.dispatch` (once per
+ * **Prepare wrapping:** The transformer wraps `ctx.prepare` (once per
  * context, idempotently) so that after each change is applied to the store,
- * the affected node's changefeed subscribers fire.
+ * the affected node's changefeed subscribers fire. Currently fires a
+ * degenerate `Changeset` of one per prepare call. In PR 4, `prepare`
+ * will accumulate and `flush` will deliver batched `Changeset` objects.
  *
  * **Transaction compatibility:** During a transaction, `dispatch` buffers
- * changes. On `commit()`, changes replay through the wrapped `ctx.dispatch`,
- * so subscribers fire at commit time — not during buffering.
+ * changes. On `commit()`, `executeBatch` calls `prepare` N times then
+ * `flush` once, so subscribers fire at commit time — not during buffering.
  *
  * ```ts
  * const interp = withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
@@ -573,7 +585,7 @@ export function withChangefeed<A>(
       const result = base.scalar(ctx, path, schema)
 
       if (isPropertyHost(result)) {
-        const listeners = ensureDispatchWiring(ctx)
+        const listeners = ensurePrepareWiring(ctx)
         const cf = createLeafChangefeed(listeners, path, () =>
           readByPath(ctx.store, path),
         )
@@ -593,7 +605,7 @@ export function withChangefeed<A>(
       const result = base.product(ctx, path, schema, fields)
 
       if (isPropertyHost(result)) {
-        const listeners = ensureDispatchWiring(ctx)
+        const listeners = ensurePrepareWiring(ctx)
         const cf = createProductChangefeed(
           listeners,
           path,
@@ -620,7 +632,7 @@ export function withChangefeed<A>(
       const result = base.sequence(ctx, path, schema, item)
 
       if (isPropertyHost(result)) {
-        const listeners = ensureDispatchWiring(ctx)
+        const listeners = ensurePrepareWiring(ctx)
         const resultAny = result as any
 
         const cf = createSequenceChangefeed(
@@ -657,7 +669,7 @@ export function withChangefeed<A>(
       const result = base.map(ctx, path, schema, item)
 
       if (isPropertyHost(result)) {
-        const listeners = ensureDispatchWiring(ctx)
+        const listeners = ensurePrepareWiring(ctx)
         const resultAny = result as any
 
         const cf = createMapChangefeed(
@@ -710,7 +722,7 @@ export function withChangefeed<A>(
         case "counter": {
           // Leaf annotations — attach a leaf changefeed
           if (isPropertyHost(result)) {
-            const listeners = ensureDispatchWiring(ctx)
+            const listeners = ensurePrepareWiring(ctx)
             const cf = createLeafChangefeed(listeners, path, () =>
               readByPath(ctx.store, path),
             )
@@ -733,7 +745,7 @@ export function withChangefeed<A>(
             return result
           }
           if (isPropertyHost(result)) {
-            const listeners = ensureDispatchWiring(ctx)
+            const listeners = ensurePrepareWiring(ctx)
             const cf = createLeafChangefeed(listeners, path, () =>
               readByPath(ctx.store, path),
             )

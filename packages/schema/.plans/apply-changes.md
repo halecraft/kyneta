@@ -280,17 +280,20 @@ For `subscribeTree`, the flush delivers one `Changeset<TreeEvent>` containing al
 
 The `inTransaction` guard in the current changefeed wrapper is no longer needed — the phase separation inherently solves this. `prepare` accumulates but never notifies; `flush` delivers. During a transaction, neither is called (dispatch buffers instead). At commit time, `executeBatch` calls `prepare` N times (accumulating), then `flush` once (delivering).
 
-- Task: Add `prepare` and `flush` to `WritableContext` interface and `createWritableContext`. 🔴
-- Task: Implement `executeBatch(ctx, changes, origin?)` as the single primitive composing `prepare` × N + `flush`. Add a guard: throw if `ctx.inTransaction` is true. 🔴
-- Task: Redefine `dispatch` as `executeBatch(ctx, [{path, change}])` outside a transaction, or buffer during a transaction. 🔴
-- Task: Update `commit()` to copy+clear pending buffer, set `inTransaction = false`, then call `executeBatch(ctx, flushed, origin)`. 🔴
-- Task: Remove the `replaying` flag from `createWritableContext` — it is no longer needed since `commit` calls `executeBatch` (not `dispatch`). 🔴
-- Task: Implement `planNotifications` (Functional Core) — pure function that groups accumulated `{path, change}` pairs by pathKey and builds `TreeEvent` entries. 🔴
-- Task: Implement `deliverNotifications` (Imperative Shell) — builds `Changeset` objects from the plan and fires subscriber callbacks. 🔴
-- Task: Update `withChangefeed`'s dispatch wrapping: `prepare` hook accumulates `{path, change}` pairs; `flush` hook calls `planNotifications` then `deliverNotifications`. 🔴
-- Task: The `flush` hook accepts an optional `origin` parameter, attached to the emitted `Changeset`. 🔴
-- Task: Update all changefeed factories (`createLeafChangefeed`, `createProductChangefeed`, `createSequenceChangefeed`, `createMapChangefeed`) for the new accumulation/delivery model. 🔴
-- Task: Verify all existing tests pass — behavior is now truly atomic (one notification per batch). Update test assertions that assumed per-change notification counts during commit. 🔴
+- Task: Add `prepare` and `flush` to `WritableContext` interface and `createWritableContext`. 🟢 `prepare` = `applyChangeToStore`, `flush` = no-op at base layer. Layers wrap both.
+- Task: Implement `executeBatch(ctx, changes, origin?)` as the single primitive composing `prepare` × N + `flush`. Add a guard: throw if `ctx.inTransaction` is true. 🟢 Exported from `src/index.ts`.
+- Task: Redefine `dispatch` as `executeBatch(ctx, [{path, change}])` outside a transaction, or buffer during a transaction. 🟢
+- Task: Update `commit()` to copy+clear pending buffer, set `inTransaction = false`, then call `executeBatch(ctx, flushed, origin)`. 🟢 `commit` now accepts optional `origin` parameter.
+- Task: Remove the `replaying` flag from `createWritableContext` — it is no longer needed since `commit` calls `executeBatch` (not `dispatch`). 🟢
+- Task: Update `withChangefeed`'s dispatch wrapping to wrap `prepare` instead of `dispatch`. `ensureDispatchWiring` → `ensurePrepareWiring`. Fires degenerate `Changeset` of one per prepare call (behavior-preserving). 🟢
+- Task: Remove `inTransaction` guard from changefeed wrapper — structurally unnecessary with phase separation. 🟢
+- Task: Verify all existing tests pass (behavior unchanged — each prepare still fires a degenerate Changeset). 🟢 777/777 schema tests, 869/869 core tests.
+- Task: Implement `planNotifications` (Functional Core) — pure function that groups accumulated `{path, change}` pairs by pathKey and builds `TreeEvent` entries. 🔴 (PR 4)
+- Task: Implement `deliverNotifications` (Imperative Shell) — builds `Changeset` objects from the plan and fires subscriber callbacks. 🔴 (PR 4)
+- Task: Update `withChangefeed`'s `prepare` hook to accumulate `{path, change}` pairs instead of firing immediately; `flush` hook calls `planNotifications` then `deliverNotifications`. 🔴 (PR 4)
+- Task: The `flush` hook accepts an optional `origin` parameter, attached to the emitted `Changeset`. 🔴 (PR 4)
+- Task: Update all changefeed factories (`createLeafChangefeed`, `createProductChangefeed`, `createSequenceChangefeed`, `createMapChangefeed`) for the new accumulation/delivery model. 🔴 (PR 4)
+- Task: Update test assertions that assumed per-change notification counts during commit — behavior becomes truly atomic (one notification per batch). 🔴 (PR 4)
 
 **Key design constraint:** Auto-commit (`dispatch`) must produce a `Changeset` of exactly one change. The subscriber API is uniform — it always receives a `Changeset`, whether from a single mutation or a batched transaction.
 
@@ -531,10 +534,10 @@ All changefeed tests that assert per-change notification counts need updating:
 
 | Symbol | Module | Action |
 |---|---|---|
-| `INVALIDATE` import | `writable.ts` L49–51 | Remove — all 9 usage sites removed in Phase 4 |
-| `replaying` flag | `writable.ts` L160 | Remove — `commit` calls `executeBatch`, not `dispatch` |
-| `inTransaction` guard | `with-changefeed.ts` L116 | Remove — phase separation makes it structurally unnecessary |
-| ~4 stale comments | `writable.ts` L13–17, L69, L347–362, L438–442 | Update to describe new pipeline model |
+| `INVALIDATE` import | `writable.ts` L49–51 | Remove — all 8 usage sites removed in Phase 4 |
+| `replaying` flag | `writable.ts` L160 | ✅ Removed in PR 3 — `commit` calls `executeBatch`, not `dispatch` |
+| `inTransaction` guard | `with-changefeed.ts` L116 | ✅ Removed in PR 3 — phase separation makes it structurally unnecessary |
+| ~4 stale comments | `writable.ts` L13–17, L69, L347–362, L438–442 | ✅ Updated in PR 3 to describe new pipeline model |
 
 ## Resources for Implementation Context
 
@@ -648,7 +651,7 @@ Why one PR: the type changes are interdependent — you can't rename `TreeEvent.
 
 Reviewer sees: a coherent protocol upgrade. The `Changeset` type is introduced, every subscriber adapts, and the system behaves identically (degenerate changesets of one). The reviewer can verify: "every callback now receives a `Changeset`, every `TreeEvent` uses `.path`, all tests pass."
 
-### PR 3 — feat: `prepare`/`flush`/`executeBatch` phase separation in `WritableContext`
+### PR 3 — feat: `prepare`/`flush`/`executeBatch` phase separation in `WritableContext` 🟢
 
 **Phase 3, infrastructure half. Type: new abstraction (no behavior change to existing callers yet).**
 
