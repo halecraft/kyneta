@@ -75,7 +75,7 @@ The compiled runtime in `@kyneta/core` subscribes to refs via `ref[CHANGEFEED].s
 
 _Updated to reflect current state after Phases 1–2 completion and interpreter-decomposition plan completion._
 
-- ~~`withChangefeed` is an `enrich` decorator. It has no access to child changefeeds during construction. It cannot compose them.~~ Still true — the transitional `withChangefeed` in `with-changefeed.ts` remains an `enrich` decorator with flat subscriber maps. Phase 3 replaces it with an interpreter transformer.
+- ~~`withChangefeed` is an `enrich` decorator.~~ Replaced in Phase 3c/3d. `withChangefeed` is now an interpreter transformer with full compositional tree subscription support.
 - ~~`ChangefeedContext` carries two flat subscriber maps.~~ Removed in Phase 2. The transitional `withChangefeed` uses a module-level `WeakMap<WritableContext, ...>` instead.
 - ~~`WritableContext` has no transaction API.~~ Solved in Phase 2. `beginTransaction` / `commit` / `abort` are implemented and tested.
 - ~~`autoCommit`, `pending`, `flush`, and `changefeedFlush`~~ Removed in Phase 2.
@@ -85,7 +85,7 @@ _Updated to reflect current state after Phases 1–2 completion and interpreter-
 - The `interpret` API returns a result directly — no fluent builder.
 - No `InterpreterLayer` abstraction exists for fluent `.with()` chaining.
 - ~~`INVALIDATE` uses `Symbol.for("schema:invalidate")`~~ Renamed to `Symbol.for("kyneta:invalidate")` in Phase 3a.
-- The `enrich` combinator and `Decorator` type exist but have no remaining purpose once the new `withChangefeed` transformer replaces the old decorator.
+- ~~The `enrich` combinator and `Decorator` type exist.~~ Removed in Phase 3c. The remaining combinators (`product`, `overlay`, `firstDefined`) are unaffected.
 - `example/main.ts` is frozen in the pre-Phase-2 era — it imports removed symbols (`readableInterpreter`, `withMutation`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `ChangefeedContext`, `autoCommit`). It does not compile against the current barrel.
 
 ## Design Decisions
@@ -305,27 +305,30 @@ The core implementation. The new `withChangefeed` interpreter transformer replac
 - Task: In `withWritable`, attach `[TRANSACT]` as a non-enumerable symbol property on every ref produced: scalar, product, sequence, map, and annotated cases. Use `Object.defineProperty` (not assignment) to bypass Proxy `set` traps on map refs. The value is `ctx` (the `WritableContext`). 🟢
 - Task: Tests: `ref[TRANSACT] === ctx` for scalar, product, sequence, map, and annotated refs. `TRANSACT` does not appear in `Object.keys()`. Works on Proxy-backed map refs. 🟢
 
-#### Sub-phase 3c: Delete old `withChangefeed` decorator and `enrich` combinator 🔴
+#### Sub-phase 3c: Delete old `withChangefeed` decorator and `enrich` combinator 🟢
 
-- Task: Delete `src/interpreters/with-changefeed.ts` (the transitional `enrich`-based decorator). 🔴
-- Task: Remove `enrich` combinator and `Decorator` type from `combinators.ts`. The other combinators (`product`, `overlay`, `firstDefined`) remain. 🔴
-- Task: Remove old exports from `index.ts`: `withChangefeed` (from old path), `enrich`, `Decorator`. Remove any remaining old aliases (`withFeed`, `createFeedableContext`, `feedableFlush`, `FeedableContext`). 🔴
-- Task: Delete `src/__tests__/with-changefeed.test.ts` (tests the old decorator). Valid test scenarios are recreated in the new `changefeed.test.ts` in sub-phase 3d. 🔴
+- Task: Delete `src/interpreters/with-changefeed.ts` (the transitional `enrich`-based decorator). 🟢
+- Task: Remove `enrich` combinator and `Decorator` type from `combinators.ts`. The other combinators (`product`, `overlay`, `firstDefined`) remain. 🟢
+- Task: Remove old exports from `index.ts`: `withChangefeed` (from old path), `enrich`, `Decorator`. Remove any remaining old aliases (`withFeed`, `createFeedableContext`, `feedableFlush`, `FeedableContext`). 🟢
+- Task: Delete `src/__tests__/with-changefeed.test.ts` (tests the old decorator). Valid test scenarios are recreated in the new `changefeed.test.ts` in sub-phase 3d. 🟢
 
-#### Sub-phase 3d: New `withChangefeed` interpreter transformer 🔴
+#### Sub-phase 3d: New `withChangefeed` interpreter transformer 🟢
 
-- Task: Create `src/interpreters/with-changefeed.ts` (new file, same path — clean replacement). Implement `withChangefeed(base): Interpreter<WritableContext, unknown>`. This is the canonical `withChangefeed` going forward. 🔴
-- Task: **Utility: `attachChangefeed`** — define in the new `with-changefeed.ts` (or a shared `changefeed-utils.ts` if warranted). Non-enumerable `Object.defineProperty` for `[CHANGEFEED]`. 🔴
-- Task: **Scalar case**: Produce a `Changefeed` (not `ComposedChangefeed` — no children). `subscribe` fires on any change dispatched at this path. Attach `[CHANGEFEED]` as non-enumerable symbol property. 🔴
-- Task: **Product case**: Produce a `ComposedChangefeed`. `subscribe` fires on changes at this node's own path only (e.g., `product.set()`). `subscribeTree` subscribes to each child field's changefeed: if the child has `ComposedChangefeed`, subscribe to its `subscribeTree`; otherwise subscribe to its `subscribe`. Aggregate with origin path prefix. Attach `[CHANGEFEED]`. Children are accessed by forcing the field thunks — the product case receives `fields: Record<string, () => A>` from the catamorphism, so child changefeeds are available after forcing. 🔴
-- Task: **Sequence case**: Produce a `ComposedChangefeed`. `subscribe` fires on `SequenceChange` at this path. `subscribeTree` composes: subscribes to own `subscribe` stream (structural changes, re-emitted with `origin: []`) AND dynamically manages per-item subscriptions. The transformer maintains its own `Map<number, () => void>` of active per-item unsubscribe functions, independent of the readable layer's `childCache`. On `SequenceChange`: parse ops to determine inserts/deletes, unsubscribe from removed items, force-materialize new items via `.at(newIndex)` (store is already updated, cache already invalidated by `withWritable`), subscribe to their changefeeds, and shift tracking for retained items. Attach `[CHANGEFEED]`. 🔴
-- Task: **Map case**: Produce a `ComposedChangefeed`. Similar to sequence — maintains its own `Map<string, () => void>` of per-entry unsubscribe functions. `subscribe` fires on `MapChange` at this path. `subscribeTree` composes structural + per-entry content changes. On `MapChange`: subscribe to new keys (via `.at(key)`), unsubscribe from deleted keys. Attach `[CHANGEFEED]`. 🔴
-- Task: **Sum case**: Delegate to base. 🔴
-- Task: **Annotated case**: Dispatch on tag. `"text"`, `"counter"` → leaf, produce `Changefeed`. `"doc"`, `"movable"`, `"tree"` → delegate to inner (which handles composition). 🔴
-- Task: Notification wiring — the transformer wraps `ctx.dispatch` at each node to fire that node's shallow subscribers after the store is updated. Tree notification propagates via the subscription composition (children → parent) without any flat map. 🔴
-- Task: Export `withChangefeed` from `index.ts` (new path, same public name). 🔴
-- Task: Update `packages/core/src/compiler/integration/schema-ssr.test.ts` — migrate from `enrich(withWritable(...), oldWithChangefeed)` to `withChangefeed(withWritable(...))`. 🔴
-- Task: New test file `src/__tests__/changefeed.test.ts` covering all Phase 3 test scenarios (see Tests section). This replaces the old `with-changefeed.test.ts`. 🔴
+- Task: Create `src/interpreters/with-changefeed.ts` (new file, same path — clean replacement). Implement `withChangefeed(base): Interpreter<WritableContext, unknown>`. This is the canonical `withChangefeed` going forward. 🟢
+- Task: **Utility: `attachChangefeed`** — define in the new `with-changefeed.ts` (or a shared `changefeed-utils.ts` if warranted). Non-enumerable `Object.defineProperty` for `[CHANGEFEED]`. 🟢
+- Task: **Scalar case**: Produce a `Changefeed` (not `ComposedChangefeed` — no children). `subscribe` fires on any change dispatched at this path. Attach `[CHANGEFEED]` as non-enumerable symbol property. 🟢
+- Task: **Product case**: Produce a `ComposedChangefeed`. `subscribe` fires on changes at this node's own path only (e.g., `product.set()`). `subscribeTree` subscribes to each child field's changefeed: if the child has `ComposedChangefeed`, subscribe to its `subscribeTree`; otherwise subscribe to its `subscribe`. Aggregate with origin path prefix. Attach `[CHANGEFEED]`. Children are accessed by forcing the field thunks — the product case receives `fields: Record<string, () => A>` from the catamorphism, so child changefeeds are available after forcing. 🟢
+- Task: **Sequence case**: Produce a `ComposedChangefeed`. `subscribe` fires on `SequenceChange` at this path. `subscribeTree` composes: subscribes to own `subscribe` stream (structural changes, re-emitted with `origin: []`) AND dynamically manages per-item subscriptions. The transformer maintains its own `Map<number, () => void>` of active per-item unsubscribe functions, independent of the readable layer's `childCache`. On structural change: tear down all per-item subscriptions and rebuild for the new length. Attach `[CHANGEFEED]`. 🟢
+- Task: **Map case**: Produce a `ComposedChangefeed`. Similar to sequence — maintains its own `Map<string, () => void>` of per-entry unsubscribe functions. `subscribe` fires on `MapChange` at this path. `subscribeTree` composes structural + per-entry content changes. On structural change: tear down all per-entry subscriptions and rebuild for current keys. Attach `[CHANGEFEED]`. 🟢
+- Task: **Sum case**: Delegate to base. 🟢
+- Task: **Annotated case**: Dispatch on tag. `"text"`, `"counter"` → leaf, produce `Changefeed`. `"doc"`, `"movable"`, `"tree"` → delegate to inner (which handles composition). 🟢
+- Task: Notification wiring — the transformer wraps `ctx.dispatch` (once per context, idempotently) so that after each change is applied, per-node listeners fire. Tree notification propagates via subscription composition (children → parent) without any flat subscriber map. 🟢
+- Task: Export `withChangefeed` and `attachChangefeed` from `index.ts` (new path, same public name). 🟢
+- Task: Update `packages/core/src/compiler/integration/schema-ssr.test.ts` — migrate from `enrich(withWritable(...), oldWithChangefeed)` to `withChangefeed(withWritable(...))`. 🟢
+- Task: Update `src/__tests__/interpret.test.ts` — remove `enrich` combinator tests (the combinator no longer exists). 🟢
+- Task: Update `src/__tests__/readable.test.ts` — migrate composition test from `enrich(readableInterpreter, withChangefeed)` to `withChangefeed(withWritable(readableInterpreter))`. 🟢
+- Task: Update `src/__tests__/transaction.test.ts` — migrate dispatch wrappability test from `enrich(writableInterpreter, withChangefeed)` to `withChangefeed(writableInterpreter)`. 🟢
+- Task: New test file `src/__tests__/changefeed.test.ts` covering all Phase 3 test scenarios (see Tests section). This replaces the old `with-changefeed.test.ts`. 35 tests covering baseline behavior, compositional subscribeTree, dynamic sequence/map subscriptions, transaction integration, and edge cases. 🟢
 
 ### Phase 4: Fluent Interpret Builder 🔴
 
@@ -424,11 +427,11 @@ Phase 3a (done): `INVALIDATE` symbol string renamed from `"schema:invalidate"` t
 
 ### `interpreters/with-changefeed.ts`
 
-Phase 3c deletes the old transitional decorator file entirely. Phase 3d creates a new file at the same path containing the `withChangefeed` interpreter transformer. The public name `withChangefeed` is preserved — callers see a seamless upgrade from decorator to transformer.
+Phase 3c/3d (done): Old transitional decorator deleted and replaced with a new interpreter transformer at the same path. `withChangefeed(base)` takes an `Interpreter<WritableContext, A>` and returns `Interpreter<WritableContext, A>`. Leaf refs get plain `Changefeed`; composite refs (product, sequence, map) get `ComposedChangefeed` with `subscribeTree`. Notification uses per-context dispatch wrapping (idempotent via WeakMap) + per-node listener sets. No flat subscriber maps. Dynamic subscription management for sequences and maps (tear-down/rebuild on structural changes). `attachChangefeed` utility exported for external use.
 
 ### `combinators.ts`
 
-Phase 3c removes `enrich` and `Decorator`. The remaining combinators (`product`, `overlay`, `firstDefined`) are unaffected.
+Phase 3c (done): `enrich` and `Decorator` removed. The remaining combinators (`product`, `overlay`, `firstDefined`) are unaffected.
 
 ### `interpreters/readable.ts`
 

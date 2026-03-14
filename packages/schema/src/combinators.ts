@@ -1,7 +1,6 @@
 // Interpreter composition combinators.
 //
 // Given interpreters F and G, we can build:
-// - enrich(F, decorator)  — decorate each result with additional protocol
 // - product(F, G)         — pair two independent interpretations
 // - overlay(F, G)         — structural merge with fallback
 //
@@ -21,130 +20,6 @@ import type {
   SumSchema,
   AnnotatedSchema,
 } from "./schema.js"
-import { isPropertyHost } from "./guards.js"
-
-// ---------------------------------------------------------------------------
-// enrich — decorate each result with additional protocol
-// ---------------------------------------------------------------------------
-
-/**
- * A decorator function that takes an interpreted result and returns
- * additional protocol to merge into it. The decorator receives the
- * base result, the context, and the path.
- *
- * Decorators should return **symbol-keyed** properties only, to
- * preserve namespace isolation (string keys belong to the schema).
- */
-export type Decorator<Ctx, A, P> = (
-  result: A,
-  ctx: Ctx,
-  path: Path,
-) => P
-
-/**
- * Wraps an interpreter, running the base and then applying a decorator
- * to each result. The decorator adds protocol (typically symbol-keyed
- * properties) to the base interpretation.
- *
- * This is more appropriate than `product` when the added protocol
- * depends on the base result. Today's `TypedRef` is conceptually
- * `enrich(writable, withChangefeed)`.
- *
- * ```ts
- * const withChangefeed: Decorator<WritableContext, unknown, { [CHANGEFEED]: Changefeed }> =
- *   (result, ctx, path) => ({
- *     [CHANGEFEED]: getOrCreateChangefeed(result as object, () => createChangefeed(ctx, path)),
- *   })
- *
- * const enriched = enrich(withWritable(withCaching(withReadable(bottomInterpreter))), withChangefeed)
- * const doc = interpret(schema, enriched, ctx)
- * // doc.title has both writable methods AND [CHANGEFEED]
- * ```
- *
- * The merge strategy uses `Object.assign` — the decorator's properties
- * are shallow-merged onto the base result. For symbol-keyed protocol
- * this is safe; for string-keyed properties it would clobber base keys
- * (which is why decorators should use symbols).
- */
-export function enrich<Ctx, A, P>(
-  base: Interpreter<Ctx, A>,
-  decorator: Decorator<Ctx, A, P>,
-): Interpreter<Ctx, A & P> {
-  function decorate(result: A, ctx: Ctx, path: Path): A & P {
-    const protocol = decorator(result, ctx, path)
-    if (isPropertyHost(result)) {
-      return Object.assign(result as object, protocol as object) as A & P
-    }
-    // For primitive results, wrap in an object that carries both
-    // the value (via valueOf) and the protocol
-    return Object.assign(
-      Object.create(null) as object,
-      { valueOf: () => result },
-      protocol as object,
-    ) as unknown as A & P
-  }
-
-  return {
-    scalar(ctx: Ctx, path: Path, schema: ScalarSchema): A & P {
-      return decorate(base.scalar(ctx, path, schema), ctx, path)
-    },
-
-    product(
-      ctx: Ctx,
-      path: Path,
-      schema: ProductSchema,
-      fields: Readonly<Record<string, () => (A & P)>>,
-    ): A & P {
-      // The catamorphism builds thunks that produce A & P (because
-      // the interpreter is typed as Interpreter<Ctx, A & P>).
-      // The base interpreter expects thunks that produce A.
-      // We cast through — the thunks will return enriched values
-      // but the base only reads the A part.
-      const baseFields = fields as Readonly<Record<string, () => A>>
-      return decorate(base.product(ctx, path, schema, baseFields), ctx, path)
-    },
-
-    sequence(
-      ctx: Ctx,
-      path: Path,
-      schema: SequenceSchema,
-      item: (index: number) => A & P,
-    ): A & P {
-      const baseItem = item as (index: number) => A
-      return decorate(base.sequence(ctx, path, schema, baseItem), ctx, path)
-    },
-
-    map(
-      ctx: Ctx,
-      path: Path,
-      schema: MapSchema,
-      item: (key: string) => A & P,
-    ): A & P {
-      const baseItem = item as (key: string) => A
-      return decorate(base.map(ctx, path, schema, baseItem), ctx, path)
-    },
-
-    sum(
-      ctx: Ctx,
-      path: Path,
-      schema: SumSchema,
-      variants: SumVariants<A & P>,
-    ): A & P {
-      const baseVariants = variants as SumVariants<A>
-      return decorate(base.sum(ctx, path, schema, baseVariants), ctx, path)
-    },
-
-    annotated(
-      ctx: Ctx,
-      path: Path,
-      schema: AnnotatedSchema,
-      inner: (() => A & P) | undefined,
-    ): A & P {
-      const baseInner = inner as (() => A) | undefined
-      return decorate(base.annotated(ctx, path, schema, baseInner), ctx, path)
-    },
-  }
-}
 
 // ---------------------------------------------------------------------------
 // product — pair two independent interpretations

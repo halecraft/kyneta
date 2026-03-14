@@ -6,10 +6,6 @@ import {
   interpret,
   createInterpreter,
   plainInterpreter,
-  enrich,
-  CHANGEFEED,
-  hasChangefeed,
-  isNonNullObject,
 } from "../index.js"
 import type { Interpreter, Path } from "../index.js"
 
@@ -203,74 +199,6 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
   it("Schema.scalar('string') has no constraint (low-level)", () => {
     const s = Schema.scalar("string")
     expect(s.constraint).toBeUndefined()
-  })
-})
-
-describe("interpret: enrich combinator", () => {
-  // A minimal object-producing interpreter for testing enrich.
-  // Products force all thunks into a plain object; annotated nodes
-  // delegate to inner; everything else returns an empty object.
-  const objectInterpreter = createInterpreter<void, unknown>(
-    () => ({}),
-    {
-      product: (_ctx, _path, _schema, fields) => {
-        const r: Record<string, unknown> = {}
-        for (const [k, t] of Object.entries(fields)) r[k] = t()
-        return r
-      },
-      annotated: (_ctx, _path, _schema, inner) => inner ? inner() : ({}),
-    },
-  )
-
-  it("enrich adds [CHANGEFEED] to every object result", () => {
-    const CF_SYM = Symbol.for("kyneta:changefeed")
-
-    const withCf = (result: unknown, _ctx: unknown, _path: Path) => {
-      if (!isNonNullObject(result)) return {}
-      if (CF_SYM in result) return {}
-      return {
-        [CF_SYM]: {
-          get current() {
-            return result
-          },
-          subscribe: () => () => {},
-        },
-      }
-    }
-
-    const enriched = enrich(objectInterpreter, withCf)
-    const schema = Schema.doc({
-      title: Schema.string(),
-      settings: Schema.struct({
-        darkMode: Schema.boolean(),
-      }),
-    })
-
-    const result = interpret(schema, enriched, undefined)
-    expect(hasChangefeed(result)).toBe(true)
-  })
-
-  it("enrich preserves product-level results", () => {
-    const CF_SYM = Symbol.for("kyneta:changefeed")
-    const withMarker = (result: unknown, _ctx: unknown, _path: Path) => {
-      if (!isNonNullObject(result)) return {}
-      return { [CF_SYM]: { current: "marker" } }
-    }
-
-    const enriched = enrich(objectInterpreter, withMarker)
-    const schema = Schema.doc({
-      settings: Schema.struct({
-        darkMode: Schema.boolean(),
-      }),
-    })
-
-    const result = interpret(schema, enriched, undefined) as Record<string | symbol, unknown>
-    // The product result has the marker attached
-    expect((result as any)[CF_SYM]).toEqual({ current: "marker" })
-    // And the base values are preserved at the product level
-    const settings = result.settings as Record<string, unknown>
-    expect(settings).toBeDefined()
-    expect(typeof settings).toBe("object")
   })
 })
 

@@ -7,8 +7,8 @@ import {
   withReadable,
   withCaching,
   INVALIDATE,
-  enrich,
   withChangefeed,
+  withWritable,
   createWritableContext,
   hasChangefeed,
   replaceChange,
@@ -560,7 +560,7 @@ describe("readable: composability hooks", () => {
 // ===========================================================================
 
 describe("readable: composition with withChangefeed", () => {
-  it("enrich(readableInterpreter, withChangefeed) attaches [CHANGEFEED] to callable refs", () => {
+  it("withChangefeed(withWritable(readableInterpreter)) attaches [CHANGEFEED] to callable refs", () => {
     const store = { title: "Hello", count: 42 }
     const schema = LoroSchema.doc({
       title: LoroSchema.text(),
@@ -568,7 +568,7 @@ describe("readable: composition with withChangefeed", () => {
     })
     // withChangefeed needs WritableContext (extends RefContext)
     const ctx = createWritableContext(store)
-    const enriched = enrich(readableInterpreter, withChangefeed)
+    const enriched = withChangefeed(withWritable(readableInterpreter))
     const doc = interpret(schema, enriched, ctx) as any
 
     expect(hasChangefeed(doc)).toBe(true)

@@ -14,7 +14,7 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  enrich,
+
   bottomInterpreter,
   withReadable,
   withCaching,
@@ -80,7 +80,7 @@ function createDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   } as Record<string, unknown>
   const ctx = createWritableContext(store)
-  const enriched = enrich(writableInterpreter, withChangefeed)
+  const enriched = withChangefeed(writableInterpreter)
   const doc = interpret(todoSchema, enriched, ctx) as Readable<
     typeof todoSchema
   > &

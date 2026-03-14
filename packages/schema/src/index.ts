@@ -188,11 +188,12 @@ export {
 } from "./interpreters/validate.js"
 export type { ValidateContext } from "./interpreters/validate.js"
 
-// Changefeed decorator — transitional observation layer (Phase 5 removes this)
+// Changefeed interpreter transformer — compositional observation layer
 export {
   withChangefeed,
+  attachChangefeed,
 } from "./interpreters/with-changefeed.js"
 
 // Interpreter composition combinators
-export { enrich, product, overlay, firstDefined } from "./combinators.js"
-export type { Decorator, MergeFn } from "./combinators.js"
+export { product, overlay, firstDefined } from "./combinators.js"
+export type { MergeFn } from "./combinators.js"

@@ -8,7 +8,7 @@ import {
   withCaching,
   withWritable,
   createWritableContext,
-  enrich,
+
   withChangefeed,
   TRANSACT,
   hasTransact,
@@ -191,7 +191,7 @@ describe("transaction: commit replays through wrappable ctx.dispatch", () => {
   it("changefeed subscribers fire at commit time via dispatch replay", () => {
     const store = { x: 0, y: 0 }
     const ctx = createWritableContext(store)
-    const enriched = enrich(writableInterpreter, withChangefeed)
+    const enriched = withChangefeed(writableInterpreter)
     const doc = interpret(pointSchema, enriched, ctx) as unknown as Readable<
       typeof pointSchema
     > &
