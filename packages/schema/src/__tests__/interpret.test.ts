@@ -303,6 +303,63 @@ describe("interpret: LoroSchema constructors produce correct grammar nodes", () 
   })
 })
 
+describe("interpret: discriminatedUnion constructor validation", () => {
+  it("valid construction succeeds and builds variantMap", () => {
+    const s = Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+      Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+    ])
+    expect(s._kind).toBe("sum")
+    expect(s.discriminant).toBe("type")
+    expect(s.variants).toHaveLength(2)
+    expect(s.variantMap).toHaveProperty("text")
+    expect(s.variantMap).toHaveProperty("image")
+    expect(s.variantMap["text"]).toBe(s.variants[0])
+    expect(s.variantMap["image"]).toBe(s.variants[1])
+  })
+
+  it("throws if a variant lacks the discriminant field", () => {
+    expect(() =>
+      Schema.discriminatedUnion("type", [
+        Schema.struct({ body: Schema.string() }),
+      ]),
+    ).toThrow(/missing the discriminant field "type"/)
+  })
+
+  it("throws if discriminant field is not a constrained string scalar", () => {
+    expect(() =>
+      Schema.discriminatedUnion("type", [
+        Schema.struct({ type: Schema.string(), body: Schema.string() }),
+      ]),
+    ).toThrow(/must be a constrained string scalar/)
+  })
+
+  it("throws if discriminant field is a non-string scalar", () => {
+    expect(() =>
+      Schema.discriminatedUnion("type", [
+        Schema.struct({ type: Schema.number(1), body: Schema.string() }),
+      ]),
+    ).toThrow(/must be a constrained string scalar/)
+  })
+
+  it("throws on duplicate discriminant values", () => {
+    expect(() =>
+      Schema.discriminatedUnion("type", [
+        Schema.struct({ type: Schema.string("text"), a: Schema.string() }),
+        Schema.struct({ type: Schema.string("text"), b: Schema.string() }),
+      ]),
+    ).toThrow(/duplicate discriminant value "text"/)
+  })
+
+  it("single variant is valid", () => {
+    const s = Schema.discriminatedUnion("kind", [
+      Schema.struct({ kind: Schema.string("solo"), data: Schema.number() }),
+    ])
+    expect(s.variants).toHaveLength(1)
+    expect(s.variantMap).toHaveProperty("solo")
+  })
+})
+
 describe("interpret: LoroSchema plain round-trip with annotations", () => {
   it("reads a document with Loro annotations correctly", () => {
     const schema = LoroSchema.doc({

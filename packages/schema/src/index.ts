@@ -10,6 +10,7 @@ export {
   isAnnotated,
   isNullableSum,
   unwrapAnnotation,
+  buildVariantMap,
 } from "./schema.js"
 // LoroSchema — Loro-specific annotations + composition constraints
 export { LoroSchema } from "./loro-schema.js"

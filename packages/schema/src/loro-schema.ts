@@ -29,6 +29,7 @@ import {
   type PositionalSumSchema,
   type DiscriminatedSumSchema,
   type PlainSchema,
+  type PlainProductSchema,
 } from "./schema.js"
 
 import type { Schema as SchemaType } from "./schema.js"
@@ -163,15 +164,15 @@ const plain = {
   },
 
   /** Discriminated union of plain schemas.
-   *  Variants are constrained to `PlainSchema`. */
+   *  Each variant must be a plain product declaring the discriminant field. */
   discriminatedUnion<
     D extends string,
-    M extends Record<string, PlainSchema>,
+    V extends PlainProductSchema[],
   >(
     discriminant: D,
-    variantMap: M,
-  ): DiscriminatedSumSchema<D, M> {
-    return Schema.discriminatedUnion(discriminant, variantMap)
+    variants: [...V],
+  ): DiscriminatedSumSchema<D, V> {
+    return Schema.discriminatedUnion(discriminant, variants)
   },
 } as const
 

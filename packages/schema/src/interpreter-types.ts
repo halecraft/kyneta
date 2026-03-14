@@ -112,6 +112,6 @@ export type Plain<S extends Schema> =
             : // --- Sum ---
               S extends PositionalSumSchema<infer V>
               ? Plain<V[number]>
-              : S extends DiscriminatedSumSchema<infer D, infer M>
-                ? { [K in keyof M]: Plain<M[K]> & { [_ in D]: K } }[keyof M]
+              : S extends DiscriminatedSumSchema<infer _D, infer V>
+                ? Plain<V[number]>
                 : unknown

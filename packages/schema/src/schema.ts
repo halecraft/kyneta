@@ -108,7 +108,8 @@ export interface MapSchema<I extends Schema = Schema> {
  *
  * 1. **Positional** — `variants` is an array of schemas (simple union).
  * 2. **Discriminated** — `discriminant` names the key used to distinguish
- *    variants, and `variantMap` maps discriminant values to schemas.
+ *    variants. Each variant is a `ProductSchema` that declares the
+ *    discriminant as a constrained string scalar field (Zod-style).
  *
  * Both flavors share the `_kind: "sum"` discriminant. If `discriminant`
  * is present, the sum is discriminated.
@@ -123,12 +124,18 @@ export interface PositionalSumSchema<V extends readonly Schema[] = readonly Sche
 
 export interface DiscriminatedSumSchema<
   D extends string = string,
-  M extends Record<string, Schema> = Record<string, Schema>,
+  V extends readonly ProductSchema[] = readonly ProductSchema[],
 > {
   readonly _kind: "sum"
   readonly discriminant: D
-  readonly variantMap: Readonly<M>
-  readonly variants?: undefined
+  readonly variants: V
+  /**
+   * Derived lookup from discriminant value → variant ProductSchema.
+   * Built eagerly by the constructor from each variant's discriminant
+   * field constraint. Used by `dispatchSum`, `interpret`, `validate`,
+   * `describe`, etc.
+   */
+  readonly variantMap: Readonly<Record<string, ProductSchema>>
 }
 
 // --- Annotated ---------------------------------------------------------------
@@ -232,12 +239,12 @@ export interface PlainPositionalSumSchema<
  */
 export interface PlainDiscriminatedSumSchema<
   D extends string = string,
-  M extends Record<string, PlainSchema> = Record<string, PlainSchema>,
+  V extends readonly PlainProductSchema[] = readonly PlainProductSchema[],
 > {
   readonly _kind: "sum"
   readonly discriminant: D
-  readonly variantMap: Readonly<M>
-  readonly variants?: undefined
+  readonly variants: V
+  readonly variantMap: Readonly<Record<string, PlainProductSchema>>
 }
 
 // ---------------------------------------------------------------------------
@@ -275,14 +282,62 @@ function sum<V extends Schema[]>(variants: [...V]): PositionalSumSchema<V> {
   return { _kind: "sum", variants }
 }
 
+/**
+ * Build a variant lookup map from an array of product schemas.
+ *
+ * Each variant must have a field at `discriminant` whose schema is a
+ * constrained string scalar (e.g. `Schema.string("text")`). The first
+ * constraint value is used as the map key.
+ *
+ * @throws If any variant lacks the discriminant field.
+ * @throws If any variant's discriminant field is not a constrained string scalar.
+ * @throws If two variants share the same discriminant value.
+ */
+export function buildVariantMap<D extends string>(
+  discriminant: D,
+  variants: readonly ProductSchema[],
+): Record<string, ProductSchema> {
+  const map: Record<string, ProductSchema> = {}
+  for (let i = 0; i < variants.length; i++) {
+    const variant = variants[i]!
+    const fieldSchema = variant.fields[discriminant]
+    if (!fieldSchema) {
+      throw new Error(
+        `discriminatedUnion: variant ${i} is missing the discriminant field "${discriminant}".` +
+        ` Each variant must include a field like { ${discriminant}: Schema.string("value") }.`,
+      )
+    }
+    if (
+      fieldSchema._kind !== "scalar" ||
+      fieldSchema.scalarKind !== "string" ||
+      !fieldSchema.constraint ||
+      fieldSchema.constraint.length === 0
+    ) {
+      throw new Error(
+        `discriminatedUnion: variant ${i}'s "${discriminant}" field must be a constrained string scalar` +
+        ` (e.g. Schema.string("value")), got ${fieldSchema._kind}/${(fieldSchema as ScalarSchema).scalarKind ?? "?"}.`,
+      )
+    }
+    const discValue = fieldSchema.constraint[0] as string
+    if (discValue in map) {
+      throw new Error(
+        `discriminatedUnion: duplicate discriminant value "${discValue}" in variants ${Object.keys(map).indexOf(discValue)} and ${i}.`,
+      )
+    }
+    map[discValue] = variant
+  }
+  return map
+}
+
 function discriminatedSum<
   D extends string,
-  M extends Record<string, Schema>,
+  V extends ProductSchema[],
 >(
   discriminant: D,
-  variantMap: M,
-): DiscriminatedSumSchema<D, M> {
-  return { _kind: "sum", discriminant, variantMap }
+  variants: [...V],
+): DiscriminatedSumSchema<D, V> {
+  const variantMap = buildVariantMap(discriminant, variants)
+  return { _kind: "sum", discriminant, variants, variantMap }
 }
 
 function annotated<T extends string, S extends Schema | undefined = undefined>(
@@ -425,21 +480,28 @@ function union<V extends Schema[]>(...variants: [...V]): PositionalSumSchema<V> 
 }
 
 /**
- * Discriminated union — variants keyed by discriminant value.
- * Produces `discriminatedSum(discriminant, variantMap)`.
+ * Discriminated union — each variant declares the discriminant field.
+ *
+ * Follows the Zod/Valibot convention: every variant is a product
+ * (struct) that includes the discriminant as a constrained string
+ * scalar field. The discriminant value is the field's constraint.
  *
  * ```ts
- * Schema.discriminatedUnion("type", {
- *   text: Schema.struct({ body: Schema.string() }),
- *   image: Schema.struct({ url: Schema.string() }),
- * })
+ * Schema.discriminatedUnion("type", [
+ *   Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+ *   Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+ * ])
  * ```
+ *
+ * @throws If any variant lacks the discriminant field.
+ * @throws If any variant's discriminant field is not a constrained string scalar.
+ * @throws If two variants share the same discriminant value.
  */
-function discriminatedUnion<D extends string, M extends Record<string, Schema>>(
+function discriminatedUnion<D extends string, V extends ProductSchema[]>(
   discriminant: D,
-  variantMap: M,
-): DiscriminatedSumSchema<D, M> {
-  return discriminatedSum(discriminant, variantMap)
+  variants: [...V],
+): DiscriminatedSumSchema<D, V> {
+  return discriminatedSum(discriminant, variants)
 }
 
 /**

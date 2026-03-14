@@ -165,21 +165,26 @@ describe("type-level: sequence and map item type preservation", () => {
 
 describe("type-level: sum variant preservation", () => {
   it("Schema.discriminatedSum discriminant is a literal string", () => {
-    const s = Schema.discriminatedSum("kind", {
-      a: Schema.product({ x: Schema.scalar("string") }),
-    })
+    const s = Schema.discriminatedSum("kind", [
+      Schema.product({ kind: Schema.scalar("string", ["a"]), x: Schema.scalar("string") }),
+    ])
     expectTypeOf(s.discriminant).toEqualTypeOf<"kind">()
     // Should NOT be widened to string
     expectTypeOf(s.discriminant).not.toEqualTypeOf<string>()
   })
 
-  it("Schema.discriminatedSum variantMap keys are known", () => {
-    const s = Schema.discriminatedSum("type", {
-      text: Schema.product({ content: Schema.scalar("string") }),
-      image: Schema.product({ url: Schema.scalar("string") }),
-    })
-    expectTypeOf(s.variantMap).toHaveProperty("text")
-    expectTypeOf(s.variantMap).toHaveProperty("image")
+  it("Schema.discriminatedSum variants array preserves types", () => {
+    const s = Schema.discriminatedSum("type", [
+      Schema.product({ type: Schema.scalar("string", ["text"]), content: Schema.scalar("string") }),
+      Schema.product({ type: Schema.scalar("string", ["image"]), url: Schema.scalar("string") }),
+    ])
+    // variants is a tuple — length is known at the type level
+    expectTypeOf(s.variants).toEqualTypeOf<[
+      ProductSchema<{ type: ScalarSchema<"string", string>; content: ScalarSchema<"string", string> }>,
+      ProductSchema<{ type: ScalarSchema<"string", string>; url: ScalarSchema<"string", string> }>,
+    ]>()
+    // variantMap is derived at runtime — typed as Record<string, ProductSchema>
+    expectTypeOf(s.variantMap).toEqualTypeOf<Readonly<Record<string, ProductSchema>>>()
   })
 })
 
@@ -859,9 +864,9 @@ describe("type-level: PlainSchema accepts annotation-free schemas", () => {
   })
 
   it("PlainDiscriminatedSumSchema extends PlainSchema", () => {
-    type Disc = PlainDiscriminatedSumSchema<"type", {
-      a: PlainProductSchema<{ x: ScalarSchema<"string"> }>
-    }>
+    type Disc = PlainDiscriminatedSumSchema<"type", [
+      PlainProductSchema<{ type: ScalarSchema<"string", "a">; x: ScalarSchema<"string"> }>
+    ]>
     expectTypeOf<Disc>().toMatchTypeOf<PlainSchema>()
   })
 })
