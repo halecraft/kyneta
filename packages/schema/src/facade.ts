@@ -1,6 +1,6 @@
-// facade — library-level change capture and declarative change application.
+// facade — library-level change capture, declarative application, and observation.
 //
-// This module provides the two symmetric duals of the change protocol:
+// This module provides the three legs of the change protocol:
 //
 // - `change(ref, fn)` → `PendingChange[]`
 //   Imperative: run a mutation function inside a transaction, return
@@ -11,16 +11,26 @@
 //   the full prepare pipeline (cache invalidation + store mutation +
 //   notification accumulation) and flush (batched Changeset delivery).
 //
-// Both functions discover the `WritableContext` via the `[TRANSACT]`
-// symbol on the ref. Both use `executeBatch` as the underlying
-// primitive. The transaction API (`beginTransaction`/`commit`) is for
-// imperative buffering; `applyChanges` bypasses it because it already
-// has the full list of changes.
+// - `subscribe(ref, cb)` → `() => void`
+//   Observe: subscribe to changes at a ref's own path. Returns an
+//   unsubscribe function. Callback receives `Changeset`.
 //
-// See .plans/apply-changes.md §Phase 5.
+// - `subscribeTree(ref, cb)` → `() => void`
+//   Observe: subscribe to changes at a ref and all descendants.
+//   Only works on composite refs (products, sequences, maps).
+//   Callback receives `Changeset<TreeEvent>`.
+//
+// `change` and `applyChanges` discover the `WritableContext` via
+// `[TRANSACT]`. `subscribe` and `subscribeTree` discover the
+// changefeed via `[CHANGEFEED]`. All four functions follow the same
+// pattern: symbol discovery, error guard, delegation.
+//
+// See .plans/apply-changes.md §Phase 5, .plans/subscribe-facade.md.
 
 import type { PendingChange, WritableContext } from "./interpreters/writable.js"
 import { TRANSACT, hasTransact, executeBatch } from "./interpreters/writable.js"
+import type { Changeset, TreeEvent } from "./changefeed.js"
+import { CHANGEFEED, hasChangefeed, hasComposedChangefeed } from "./changefeed.js"
 
 // ---------------------------------------------------------------------------
 // ApplyChangesOptions
@@ -141,4 +151,95 @@ export function applyChanges(
 
   executeBatch(ctx, ops, options?.origin)
   return ops
+}
+
+// ---------------------------------------------------------------------------
+// subscribe — observe changes at a ref's own path
+// ---------------------------------------------------------------------------
+
+/**
+ * Subscribe to changes at a ref's own path.
+ *
+ * For leaf refs (scalars, text, counters), fires on any mutation.
+ * For composite refs (products, sequences, maps), fires only on
+ * node-level changes (e.g. product `.set()`, sequence `.push()`),
+ * NOT on child mutations — use `subscribeTree` for that.
+ *
+ * The callback receives a `Changeset` — the protocol's unit of
+ * batch delivery. Auto-commit delivers a degenerate changeset of
+ * one change; transactions and `applyChanges` deliver multi-change
+ * batches with optional `origin` provenance.
+ *
+ * ```ts
+ * const unsub = subscribe(doc.settings.darkMode, (changeset) => {
+ *   console.log(changeset.changes, changeset.origin)
+ * })
+ * ```
+ *
+ * @param ref - Any ref with a `[CHANGEFEED]` symbol (from `withChangefeed`).
+ * @param callback - Called with a `Changeset` on each notification.
+ * @returns An unsubscribe function.
+ *
+ * @throws If `ref` does not have a `[CHANGEFEED]` symbol.
+ */
+export function subscribe(
+  ref: unknown,
+  callback: (changeset: Changeset) => void,
+): () => void {
+  if (!hasChangefeed(ref)) {
+    throw new Error(
+      "subscribe() requires a ref with [CHANGEFEED]. " +
+      "Use a ref produced by interpret() with withChangefeed.",
+    )
+  }
+  return ref[CHANGEFEED].subscribe(callback)
+}
+
+// ---------------------------------------------------------------------------
+// subscribeTree — observe changes at a ref and all descendants
+// ---------------------------------------------------------------------------
+
+/**
+ * Subscribe to changes at a ref and all its descendants.
+ *
+ * Only works on composite refs (products, sequences, maps) — leaf
+ * refs do not have `subscribeTree`. Each `TreeEvent` in the changeset
+ * carries a `path` relative to the subscription point.
+ *
+ * `subscribeTree` is a strict superset of `subscribe` — tree
+ * subscribers also see own-path changes with `path: []`.
+ *
+ * ```ts
+ * const unsub = subscribeTree(doc.settings, (changeset) => {
+ *   for (const event of changeset.changes) {
+ *     console.log(event.path, event.change.type)
+ *   }
+ * })
+ * ```
+ *
+ * @param ref - A composite ref with a `[CHANGEFEED]` symbol that
+ *   includes `subscribeTree` (from `withChangefeed`).
+ * @param callback - Called with a `Changeset<TreeEvent>` on each notification.
+ * @returns An unsubscribe function.
+ *
+ * @throws If `ref` does not have a `[CHANGEFEED]` symbol.
+ * @throws If `ref` is a leaf (no `subscribeTree` — use `subscribe` instead).
+ */
+export function subscribeTree(
+  ref: unknown,
+  callback: (changeset: Changeset<TreeEvent>) => void,
+): () => void {
+  if (!hasChangefeed(ref)) {
+    throw new Error(
+      "subscribeTree() requires a ref with [CHANGEFEED]. " +
+      "Use a ref produced by interpret() with withChangefeed.",
+    )
+  }
+  if (!hasComposedChangefeed(ref)) {
+    throw new Error(
+      "subscribeTree() requires a composite ref (product, sequence, or map). " +
+      "Leaf refs only support subscribe(), not subscribeTree().",
+    )
+  }
+  return ref[CHANGEFEED].subscribeTree(callback)
 }
