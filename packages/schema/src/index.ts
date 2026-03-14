@@ -141,6 +141,7 @@ export {
 export type {
   HasCall,
   HasNavigation,
+  HasRead,
   HasCaching,
 } from "./interpreters/bottom.js"
 

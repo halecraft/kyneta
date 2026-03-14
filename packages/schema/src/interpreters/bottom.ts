@@ -13,6 +13,12 @@
 // composition safety:
 //
 //   HasCall  ←  HasNavigation  ←  HasCaching
+//                    ↑
+//                 HasRead
+//
+// HasRead and HasCaching both extend HasNavigation independently,
+// forming a diamond. HasRead means "the [CALL] slot has been filled
+// with a reader." HasCaching means "child caching + INVALIDATE."
 //
 // Each level is branded with a phantom symbol so TypeScript's structural
 // subtyping enforces valid transformer ordering.
@@ -107,6 +113,24 @@ export interface HasCall {
 export interface HasNavigation extends HasCall {
   /** @internal phantom brand — never set at runtime */
   readonly [NAVIGATION]: true
+}
+
+/**
+ * A carrier whose `[CALL]` slot has been filled with a reader — calling
+ * the carrier returns a meaningful value. Extends `HasNavigation`.
+ *
+ * This is a phantom brand only — no runtime symbol. The runtime slot
+ * is `[CALL]`. `HasRead` is produced by `withReadable` and means
+ * "this carrier can be called to read a value."
+ *
+ * Distinct from `HasCall` (which just means "has a `[CALL]` slot that
+ * may throw") and `HasNavigation` (which means "structural addressing
+ * is available but calling may still throw").
+ */
+declare const READ_BRAND: unique symbol
+export interface HasRead extends HasNavigation {
+  /** @internal phantom brand — never set at runtime */
+  readonly [READ_BRAND]: true
 }
 
 /**

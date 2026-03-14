@@ -12,6 +12,7 @@ import {
 import type {
   HasCall,
   HasNavigation,
+  HasRead,
 } from "../interpreters/bottom.js"
 import type { Interpreter } from "../interpret.js"
 
@@ -349,6 +350,25 @@ describe("type-level: capability lattice", () => {
   it("HasNavigation extends HasCall", () => {
     // If this compiles, HasNavigation is assignable to HasCall
     const _check: (n: HasNavigation) => HasCall = (n) => n
+    void _check
+  })
+
+  it("HasNavigation does NOT satisfy HasRead (negative test)", () => {
+    // HasRead requires READ_BRAND which HasNavigation lacks.
+    // @ts-expect-error — HasNavigation is not assignable to HasRead
+    const _negative: HasRead = {} as HasNavigation
+    void _negative
+  })
+
+  it("HasRead extends HasNavigation", () => {
+    // If this compiles, HasRead is assignable to HasNavigation
+    const _check: (r: HasRead) => HasNavigation = (r) => r
+    void _check
+  })
+
+  it("HasRead extends HasCall", () => {
+    // Transitivity: HasRead → HasNavigation → HasCall
+    const _check: (r: HasRead) => HasCall = (r) => r
     void _check
   })
 })

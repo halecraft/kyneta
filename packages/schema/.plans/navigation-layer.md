@@ -737,7 +737,7 @@ Pure symbol/type rename with zero behavior change. Every `READ` reference become
 
 ---
 
-### PR 2: `refactor: introduce HasRead phantom brand` 🔴
+### PR 2: `refactor: introduce HasRead phantom brand` 🟢
 
 **Type:** Prep — add new type, no callers yet
 
