@@ -58,6 +58,10 @@ Each hook is owned by one layer, consumed by another. The carrier is the communi
 
 Each transformer in the stack has distinct composition semantics:
 
+> **⚠️ Superseded.** See `.plans/navigation-layer.md` for the current 5-layer
+> stack (`bottom` → `withNavigation` → `withReadable` → `withCaching` → `withWritable`)
+> and the `READ` → `CALL` rename.
+
 | Layer | Morphism Class | What it does |
 |-------|---------------|--------------|
 | `bottomInterpreter` | **Foundation** | Creates callable carriers with a `READ` slot |
@@ -79,6 +83,7 @@ declare const NAVIGATION: unique symbol
 declare const CACHING: unique symbol
 
 // Capability interfaces — each extends its prerequisite
+// ⚠️ Superseded — see bottom.ts for current interfaces (HasCall, HasNavigation, HasRead, HasCaching)
 interface HasRead {
   readonly [READ]: (...args: unknown[]) => unknown
 }
@@ -252,7 +257,26 @@ interface HasRead {
 
 ### Capability Lattice via Structural Subtyping
 
+> **⚠️ Superseded.** The linear lattice below was replaced by a diamond-shaped
+> lattice in `.plans/navigation-layer.md`. Key changes:
+> - `READ` renamed to `CALL` (honest name: call delegation, not reading)
+> - `HasRead` (base) renamed to `HasCall`
+> - `HasNavigation` extracted from `withReadable` into standalone `withNavigation`
+> - New `HasRead` phantom brand means "the `[CALL]` slot has been filled with a reader"
+> - `HasRead` and `HasCaching` both extend `HasNavigation` independently (diamond)
+>
+> Current lattice:
+> ```
+> HasCall  (bottom — callable carrier with [CALL] slot)
+>   ↓
+> HasNavigation  (withNavigation — field getters, .at(), .keys(), sum dispatch)
+>   ↙         ↘
+> HasRead        HasCaching
+> ```
+
 The capability interfaces form a lattice enforced by TypeScript's structural type system:
+
+~~Original (superseded) linear lattice:~~
 
 ```
 HasRead                    (foundation — READ slot)

@@ -224,20 +224,21 @@ The generic catamorphism. `Interpreter<Ctx, A>` has one case per structural kind
 
 This single walker replaces the 10+ parallel `switch (shape._type)` dispatch sites in the current codebase.
 
-### Interpreters: The Four-Layer Decomposed Stack
+### Interpreters: The Five-Layer Decomposed Stack
 
-The interpreter system is built from four composable transformer layers that stack on a universal foundation. Each layer adds exactly one capability:
+The interpreter system is built from five composable transformer layers that stack on a universal foundation. Each layer adds exactly one capability:
 
 | Layer | Kind | Input → Output | Purpose |
 |---|---|---|---|
-| `bottomInterpreter` | Foundation | `Interpreter<unknown, HasRead>` | Callable function carriers with `[READ]` slot |
-| `withReadable(base)` | Refinement | `HasRead → HasNavigation` | Store reading + structural navigation |
+| `bottomInterpreter` | Foundation | `Interpreter<unknown, HasCall>` | Callable function carriers with `[CALL]` slot |
+| `withNavigation(base)` | Coalgebra | `HasCall → HasNavigation` | Structural addressing: field getters, `.at()`, `.keys()`, sum dispatch |
+| `withReadable(base)` | Refinement | `HasNavigation → HasRead` | Fills `[CALL]` slot with reading logic, adds `.get()`, `toPrimitive` |
 | `withCaching(base)` | Interposition | `HasNavigation → HasCaching` | Identity-preserving child memoization + `[INVALIDATE]` |
 | `withWritable(base)` | Extension | `A → A` | Mutation methods (`.set()`, `.insert()`, etc.) |
 
 The standard composition:
 ```ts
-const interp = withWritable(withCaching(withReadable(bottomInterpreter)))
+const interp = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
 ```
 
 Each layer is independently useful. Combinatorial stacks produce valid interpreters at every level:
@@ -245,25 +246,37 @@ Each layer is independently useful. Combinatorial stacks produce valid interpret
 | Stack | Capabilities | Use case |
 |---|---|---|
 | `bottomInterpreter` | Carriers only | Foundation for custom transformers |
-| `withReadable(bottom)` | Reading + navigation (no caching) | Throwaway reads, tests |
-| `withCaching(withReadable(bottom))` | Reading + navigation + caching | Read-only documents |
+| `withNavigation(bottom)` | Navigate only (ref() throws) | Structural addressing without reading |
+| `withReadable(withNavigation(bottom))` | Reading + navigation (no caching) | Throwaway reads, tests |
+| `withCaching(withReadable(withNavigation(bottom)))` | Reading + navigation + caching | Read-only documents |
 | `withWritable(bottom)` | Write-only (ref() throws) | Mutation dispatch without reading |
-| `withWritable(withReadable(bottom))` | Read + write (no caching) | Ephemeral documents |
-| `withWritable(withCaching(withReadable(bottom)))` | Full stack | Standard composition |
+| `withWritable(withNavigation(bottom))` | Navigate + write (no read) | Reach children via `.at()` and mutate, but `ref()` throws |
+| `withCaching(withNavigation(bottom))` | Navigate + cache (no read) | Memoized structural addressing without value observation |
+| `withWritable(withReadable(withNavigation(bottom)))` | Read + write (no caching) | Ephemeral documents |
+| `withWritable(withCaching(withReadable(withNavigation(bottom))))` | Full stack | Standard composition |
 
 #### Capability Lattice
 
-Compile-time composition safety is enforced via a capability lattice using phantom-branded interfaces:
+Compile-time composition safety is enforced via a diamond-shaped capability lattice using phantom-branded interfaces:
 
 ```
-HasRead  ←  HasNavigation  ←  HasCaching
+HasCall  (bottom — callable carrier with [CALL] slot)
+  ↓
+HasNavigation  (withNavigation — field getters, .at(), .keys(), sum dispatch)
+  ↙         ↘
+HasRead        HasCaching
+(withReadable   (withCaching —
+ — fills [CALL],  memoization,
+ toPrimitive,     INVALIDATE)
+ .get())
 ```
 
-- **`HasRead`** — has a `[READ]` slot. Produced by `bottomInterpreter`.
-- **`HasNavigation extends HasRead`** — has structural navigation (product getters, `.at()`, etc.). Branded with phantom `[NAVIGATION]: true`. Produced by `withReadable`.
+- **`HasCall`** — has a `[CALL]` slot. Produced by `bottomInterpreter`. Calling the carrier delegates to `carrier[CALL](...args)`.
+- **`HasNavigation extends HasCall`** — has structural navigation (product getters, `.at()`, `.keys()`, sum dispatch, etc.). Branded with phantom `[NAVIGATION]: true`. Produced by `withNavigation`.
+- **`HasRead extends HasNavigation`** — the `[CALL]` slot has been filled with a reader. Phantom brand only (no runtime symbol). Produced by `withReadable`.
 - **`HasCaching extends HasNavigation`** — has child caching and `[INVALIDATE]`. Branded with phantom `[CACHING]: true`. Produced by `withCaching`.
 
-TypeScript's structural subtyping enforces valid ordering: `withCaching` requires `HasNavigation` input, so `withCaching(bottomInterpreter)` is a compile error. `withWritable` has no bound on `A` — it works with any carrier.
+`HasRead` and `HasCaching` both extend `HasNavigation` independently, forming a diamond. TypeScript's structural subtyping enforces valid ordering: `withCaching` requires `HasNavigation` input, so `withCaching(bottomInterpreter)` is a compile error. `withReadable` requires `HasNavigation`, so `withReadable(bottomInterpreter)` is also a compile error. `withWritable` has no bound on `A` — it works with any carrier (mutation operates on paths, not navigation).
 
 #### Symbol-Keyed Composability Hooks
 
@@ -271,7 +284,7 @@ Cross-layer communication uses four well-known symbols:
 
 | Symbol | Module | Purpose |
 |---|---|---|
-| `READ` (`kyneta:read`) | `bottom.ts` | Controls what `carrier()` does — default throws, `withReadable` fills it |
+| `CALL` (`kyneta:call`) | `bottom.ts` | Controls what `carrier()` does — default throws, `withReadable` fills it with reading logic |
 | `INVALIDATE` (`kyneta:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — refs carry it for direct use; `prepare` pipeline fires it automatically |
 | `CHANGEFEED` (`kyneta:changefeed`) | `changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it |
 | `TRANSACT` (`kyneta:transact`) | `writable.ts` | Context discovery — refs carry a reference to their `WritableContext` |
@@ -280,21 +293,37 @@ All use `Symbol.for()` so multiple copies of the module share identity.
 
 #### Bottom Interpreter (`src/interpreters/bottom.ts`)
 
-The universal foundation. Every schema node produces a callable **function carrier** via `makeCarrier()`. The carrier delegates to its `[READ]` slot: `(...args) => carrier[READ](...args)`. By default, `READ` throws `"No reader configured"`.
+The universal foundation. Every schema node produces a callable **function carrier** via `makeCarrier()`. The carrier delegates to its `[CALL]` slot: `(...args) => carrier[CALL](...args)`. By default, `CALL` throws `"No call behavior configured"`.
 
-The carrier is a real `Function` object, so any layer can attach properties (navigation, caching, mutation methods) without replacing the carrier identity. This identity-preserving property is critical — `withReadable`, `withCaching`, and `withWritable` all mutate the same carrier object.
+The carrier is a real `Function` object, so any layer can attach properties (navigation, caching, mutation methods) without replacing the carrier identity. This identity-preserving property is critical — `withNavigation`, `withReadable`, `withCaching`, and `withWritable` all mutate the same carrier object.
 
 The `product`, `sequence`, `map`, and `sum` cases ignore their thunks/closures/variants — bottom produces inert carriers. The `annotated` case delegates to `inner()` when present.
 
+This module also defines the capability lattice interfaces (`HasCall`, `HasNavigation`, `HasRead`, `HasCaching`) and exports the `CALL` symbol.
+
+#### withNavigation (`src/interpreters/with-navigation.ts`)
+
+The coalgebraic structural addressing transformer. Takes any `HasCall`-producing interpreter and adds structural navigation — "give me a handle to the child at position X" — without reading any values:
+
+- **Product:** Enumerable lazy getters for each field. **No caching** — each access forces the thunk afresh.
+- **Sequence:** `.at(i)` returns a child carrier (bounds-checked via `storeArrayLength`). `.length` reflects the store array length. `[Symbol.iterator]` yields child carriers.
+- **Map:** `.at(key)` returns a child carrier (checked via `storeHasKey`). `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`.
+- **Sum:** Uses `dispatchSum(value, schema, variants)` from `store.ts` for store-driven variant resolution. This is structural addressing — "which child position is active?" — not value reading.
+- **Annotated:** `"doc"`/`"movable"`/`"tree"` → delegate to inner. `"text"`/`"counter"` → pass through to base (reading is `withReadable`'s job).
+
+Navigation is a coalgebra (`A → F(A)`): it reveals addressable child positions within a composite. The `[CALL]` slot is NOT filled — calling the carrier still throws after `withNavigation` alone.
+
+**Store inspection vs value reading.** Navigation uses `storeArrayLength`, `storeKeys`, `storeHasKey` (extracted into `store.ts`) to make structural decisions. These ask "what shape is here?" — not "what is the value?" This distinction keeps navigation independent from reading.
+
 #### withReadable (`src/interpreters/with-readable.ts`)
 
-The refinement transformer. Fills the `[READ]` slot and adds structural navigation:
+The refinement transformer. Requires `HasNavigation` input (structural navigation must already be installed). Fills the `[CALL]` slot so carriers return values:
 
-- **Scalar:** `READ` returns `readByPath(store, path)` (immutable primitive). Hint-aware `[Symbol.toPrimitive]`.
-- **Product:** `READ` folds child values through the carrier's property getters (`result[key]()` for each field), producing a **fresh plain object**. This composes with `withCaching`'s memoized getters — the fold reuses cached child refs but always produces a distinct snapshot. Enumerable lazy getters for each field. **No caching** — each access forces the thunk afresh.
-- **Sequence:** `READ` folds child values via the raw `item(i)()` closure (not `result.at()`), producing a **fresh array**. Uses `readByPath` for structure discovery (array length) but never returns the store array directly. The raw closure is used instead of the cached `.at()` because `withCaching`'s cache shifting can leave refs with stale paths after insert/delete. `.at(i)`, `.get(i)`, `.length`, `[Symbol.iterator]`.
-- **Map:** `READ` folds child values via the raw `item(key)()` closure, producing a **fresh record**. Same design as sequence — `readByPath` for key discovery, raw closure for values. `.at(key)`, `.get(key)`, `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`. All non-enumerable.
-- **Sum:** Uses `dispatchSum(value, schema, variants)` from `store.ts` for store-driven variant resolution.
+- **Scalar:** `CALL` returns `readByPath(store, path)` (immutable primitive). Hint-aware `[Symbol.toPrimitive]`.
+- **Product:** `CALL` folds child values through the carrier's property getters (`result[key]()` for each field), producing a **fresh plain object**. This composes with `withCaching`'s memoized getters — the fold reuses cached child refs but always produces a distinct snapshot.
+- **Sequence:** `CALL` folds child values via the raw `item(i)()` closure (not `result.at()`), producing a **fresh array**. Uses `storeArrayLength` for structure discovery but never returns the store array directly. The raw closure is used instead of the cached `.at()` because `withCaching`'s cache shifting can leave refs with stale paths after insert/delete. Adds `.get(i)` convenience (returns plain value, not ref).
+- **Map:** `CALL` folds child values via the raw `item(key)()` closure, producing a **fresh record**. Same design as sequence — `storeKeys` for key discovery, raw closure for values. Adds `.get(key)` convenience.
+- **Sum:** Pass-through — dispatch is already handled by `withNavigation`.
 - **Annotated:** `"text"` → string-coercing reader + toPrimitive. `"counter"` → number-coercing reader + hint-aware toPrimitive. `"doc"`/`"movable"`/`"tree"` → delegate to inner.
 
 **Snapshot isolation.** Composite `ref()` always returns a fresh plain object — mutating the returned value does not affect the store. `ref()` and `plainInterpreter` produce extensionally equal output for the same store state. Both are F-algebras over the schema functor; `ref()` folds through the carrier stack (benefiting from child ref caching), while `plainInterpreter` is a standalone eager fold with no carrier overhead.
@@ -341,11 +370,11 @@ Effective per-change order: **invalidate cache → store mutation → accumulate
 
 #### withWritable (`src/interpreters/writable.ts`)
 
-An extension transformer: `withWritable(base)` takes `Interpreter<RefContext, A>` and returns `Interpreter<WritableContext, A>`. It adds mutation methods at each case:
+An extension transformer: `withWritable(base)` takes `Interpreter<RefContext, A>` and returns `Interpreter<WritableContext, A>`. It adds mutation methods at each case. The type parameter `A` is **unconstrained** — `withWritable` works with any carrier because mutation operates on paths (via `ctx.dispatch`), not navigation:
 
 - **Scalar:** `.set(value)` — dispatches `ReplaceChange` at own path.
 - **Product:** `.set(plainObject)` — dispatches `ReplaceChange` at own path. Non-enumerable. Enables atomic subtree replacement.
-- **Text:** `.insert(index, content)`, `.delete(index, length)`, `.update(content)` — dispatches `TextChange`. `update()` reads current text via `ref()` (the callable read from the base) to compute the delete length.
+- **Text:** `.insert(index, content)`, `.delete(index, length)`, `.update(content)` — dispatches `TextChange`. `update()` reads current text via `readByPath(ctx.store, path)` (direct store inspection, not the carrier's `[CALL]` slot) so navigate+write stacks work without a reading layer.
 - **Counter:** `.increment(n?)`, `.decrement(n?)` — dispatches `IncrementChange`.
 - **Sequence:** `.push(...items)`, `.insert(index, ...items)`, `.delete(index, count?)` — dispatches `SequenceChange`.
 - **Map:** `.set(key, value)`, `.delete(key)`, `.clear()` — dispatches `MapChange`. All non-enumerable.
@@ -414,7 +443,11 @@ All four functions discover capabilities via symbols on refs (`[TRANSACT]` for `
 
 #### Changefeed Transformer (`src/interpreters/with-changefeed.ts`)
 
-An interpreter transformer that attaches `[CHANGEFEED]` to every node in the interpreted tree. For leaf refs, attaches a plain `Changefeed` with `subscribe`. For composite refs (product, sequence, map), attaches a `ComposedChangefeed` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition).
+An interpreter transformer that attaches `[CHANGEFEED]` to every node in the interpreted tree. Requires `HasRead` (the `[CALL]` slot must be filled) because `.current` reads values through the carrier. Context type is `RefContext` (not `WritableContext`) — it duck-types for `prepare`/`flush` via `hasPreparePipeline()`, enabling both writable and read-only stacks.
+
+For leaf refs, attaches a plain `Changefeed` with `subscribe`. For composite refs (product, sequence, map), attaches a `ComposedChangefeed` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition).
+
+**Read-only Moore machines.** A `Changefeed` defines a Moore machine: `.current` (output function) + `.subscribe` (transition observer). On read-only stacks (no `prepare`/`flush`), subscribers register but never fire — a valid static Moore machine. `.current` still works because it routes through the carrier's `[CALL]` slot.
 
 **Notification flow:** `withChangefeed` wraps `ctx.prepare` to accumulate `{path, change}` entries without firing subscribers. It wraps `ctx.flush` to group accumulated entries by `pathKey` (via `planNotifications` — pure FC) and deliver one `Changeset` per subscriber (via `deliverNotifications` — imperative shell). This follows the same FC/IS pattern as `planCacheUpdate`/`applyCacheOps` in `withCaching`.
 
@@ -486,21 +519,38 @@ This file contains **type-level definitions only** — the runtime implementatio
 
 Sequence iteration follows **Array** semantics (yields bare child refs), while map iteration follows **Map** semantics (yields `[key, ref]` entries).
 
-### Type-Level Interpretation: `Plain<S>`, `Readable<S>`, and `Writable<S>`
+### Type-Level Interpretation: `Plain<S>`, `Readable<S>`, `Writable<S>`, and `Ref<S>`
 
-Three recursive conditional types map schema types to their corresponding value types:
+Four recursive conditional types map schema types to their corresponding value types:
 
 **`Plain<S>`** — the plain JavaScript/JSON type. `Plain<ScalarSchema<"string", "a" | "b">>` = `"a" | "b"`. `Plain<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ x: number }`. Used for `toJSON()` return types, validation result types, and serialization boundaries.
 
-**`Readable<S>`** — the callable ref type. `Readable<ScalarSchema<"number">>` = `(() => number) & { [Symbol.toPrimitive]: ... }`. `Readable<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `(() => { x: number }) & { readonly x: Readable<ScalarSchema<"number">> }`. Used to type the result of interpretation with the composed readable stack.
+**`Readable<S>`** — the callable ref type for read-only stacks. `Readable<ScalarSchema<"number">>` = `(() => number) & { [Symbol.toPrimitive]: ... }`. Used to type refs from `withCaching(withReadable(withNavigation(bottomInterpreter)))` — navigation + reading, no mutation.
 
-**`Writable<S>`** — the mutation-only ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>` (just `.set()`). `Writable<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ readonly x: ScalarRef<number> } & ProductRef<{ x: number }>` (field refs + `.set()`). `Writable<AnnotatedSchema<"text">>` = `TextRef` (just `.insert()`, `.delete()`, `.update()`). Consumer code that composes both uses `Readable<S> & Writable<S>`.
+**`Writable<S>`** — the mutation-only ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>` (just `.set()`). `Writable<AnnotatedSchema<"text">>` = `TextRef` (just `.insert()`, `.delete()`, `.update()`). `SequenceRef` is mutation-only (`.push()`, `.insert()`, `.delete()`) — navigation lives in `NavigableSequenceRef` / `ReadableSequenceRef`.
 
-All three types account for constrained scalars: when `ScalarSchema<K, V>` has a narrowed `V`, `Plain` yields `V`, `Readable` yields `(() => V) & { toPrimitive }`, and `Writable` yields `ScalarRef<V>`.
+**`Ref<S>`** — the **primary user-facing type** for the full interpreter stack. Unifies navigation, reading, writing, and `HasTransact` in a single recursive type. Children are `Ref<Child>` — no `Readable<Child> & Writable<Child>` intersection needed. This eliminates the `.at()` overload conflict that plagued `Readable<S> & Writable<S>` on sequences and maps (where `ReadableSequenceRef.at()` returns `Readable<I>` but `SequenceRef.at()` returned `Writable<I>`).
+
+```ts
+type Doc = Ref<typeof mySchema>
+// doc()           → Plain<typeof mySchema>   (reading)
+// doc.title()     → string                   (reading)
+// doc.title.set("new")                       (writing)
+// doc.items.at(0) → Ref<ItemSchema>          (navigation — unified child type)
+// doc[TRANSACT]   → WritableContext           (transaction access)
+```
+
+The type hierarchy for collections:
+- `NavigableSequenceRef<T>` / `NavigableMapRef<T>` — pure structural addressing (`.at()`, `.length`, `.keys()`)
+- `ReadableSequenceRef<T, V> extends NavigableSequenceRef<T>` — adds call signature `(): V[]` and `.get()`
+- `SequenceRef` — mutation only (`.push()`, `.insert()`, `.delete()`) — no `.at()`, no type parameter
+- `Ref<SequenceSchema<I>>` = `ReadableSequenceRef<Ref<I>, Plain<I>> & SequenceRef & HasTransact`
+
+`Readable<S>` and `Writable<S>` remain for partial-stack scenarios (read-only documents, mutation-only code paths). All four types account for constrained scalars.
 
 ## Verified Properties
 
-The spike validates these properties via 835 schema tests + 869 core tests:
+The spike validates these properties via 929 schema tests + 869 core tests (zero `tsc` errors):
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: requires `withCaching` — `doc.title === doc.title`, `seq.at(0) === seq.at(0)`, `map.at("k") === map.at("k")`. Without `withCaching`, each access produces a new ref.
@@ -517,20 +567,24 @@ The spike validates these properties via 835 schema tests + 869 core tests:
 13. **Nullable dispatch**: the composed readable stack checks for `null`/`undefined` and dispatches to the correct positional variant.
 14. **Callable refs**: every ref produced by the composed stack is `typeof "function"` and returns its current plain value when called.
 15. **`toPrimitive` coercion**: `` `Stars: ${doc.count}` `` works via `[Symbol.toPrimitive]`; counter is hint-aware (number for default, string for string hint).
-16. **Read-only documents**: `interpret(schema, withCaching(withReadable(bottomInterpreter)), { store })` produces a fully navigable, callable document with no mutation methods.
+16. **Read-only documents**: `interpret(schema, withCaching(withReadable(withNavigation(bottomInterpreter))), { store })` produces a fully navigable, callable document with no mutation methods.
 17. **Change-driven cache invalidation**: `[INVALIDATE](change)` interprets the change surgically — sequence shifts, map key deletes, product clears. Verified via `planCacheUpdate` table tests (31 cases).
-18. **Navigate vs Read vocabulary**: map and sequence refs expose two access verbs — `.at(key|index)` for navigation (returns a ref) and `.get(key|index)` for reading (returns a plain value). `.get()` is symmetric with `.set()`. `JSON.stringify(mapRef.get("x"))` returns the serialized value (not `undefined`). Iteration yields refs (not values). Map refs also expose `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`; `.set(key, value)`, `.delete(key)`, `.clear()` for writes. No Proxy, no string index signature.
+18. **Navigate vs Read vocabulary**: map and sequence refs expose two access verbs — `.at(key|index)` for navigation (returns a ref) and `.get(key|index)` for reading (returns a plain value). `.get()` is symmetric with `.set()`. `JSON.stringify(mapRef.get("x"))` returns the serialized value (not `undefined`). Iteration yields refs (not values). Map refs also expose `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`; `.set(key, value)`, `.delete(key)`, `.clear()` for writes. No Proxy, no string index signature. Navigation is provided by `withNavigation`; reading (`.get()`) is provided by `withReadable`.
 19. **Sequence `.at()` / `.get()` bounds check**: `.at(100)` on a 2-item array returns `undefined`; `.at(-1)` returns `undefined`. `.get(100)` and `.get(-1)` also return `undefined`. Matches `Array.prototype.at()` semantics.
 20. **Capability composition**: `withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))` produces refs with all capabilities.
 21. **Self-path dispatch**: every mutation dispatches at its own path. Scalar `.set()` dispatches `ReplaceChange` at the scalar's path (not `MapChange` at the parent). Exact-path changefeed subscribers on scalars fire on `.set()`.
 22. **Product `.set()`**: `doc.settings.set({ darkMode: true, fontSize: 20 })` dispatches a single `ReplaceChange` at the product's path. The `.set()` method is non-enumerable. Individual field refs still work after product `.set()`. Transactions accumulate one `PendingChange`.
-23. **Compile-time composition safety**: `withCaching(bottomInterpreter)` is a compile error — `bottomInterpreter` produces `HasRead`, but `withCaching` requires `HasNavigation`. `withReadable(plainInterpreter)` is also a compile error.
+23. **Compile-time composition safety**: `withCaching(bottomInterpreter)` is a compile error — `bottomInterpreter` produces `HasCall`, but `withCaching` requires `HasNavigation`. `withReadable(bottomInterpreter)` is also a compile error (requires `HasNavigation`). `withReadable(plainInterpreter)` is also a compile error.
 24. **Prepare-pipeline cache invalidation**: `ctx.prepare(path, change)` triggers surgical cache invalidation at the target path via `withCaching`'s pipeline hook. After `push()` on a cached sequence, `.at(newIndex)` returns the correct ref immediately. Unrelated caches are preserved (path-keyed handlers only fire for affected paths).
 25. **Combinatorial stacks**: `withWritable(bottomInterpreter)` produces write-only carriers where `ref()` throws but `.set()` dispatches correctly. `withWritable(withReadable(bottomInterpreter))` produces uncached read+write refs.
 26. **`TRANSACT` symbol**: `hasTransact(ref)` returns true for refs produced by `withWritable`. The symbol is `Symbol.for("kyneta:transact")`.
 27. **Batched notification**: subscribers receive exactly one `Changeset` per flush cycle per affected path, never partially-applied state. Auto-commit wraps a single change in a degenerate `Changeset` of one. Transactions and `applyChanges` deliver multi-change batches.
 28. **Declarative change application round-trips with `change`**: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docA()` deep-equals `docB()`. Verified for text, sequence (push/insert/delete), counter, map, and mixed mutations.
 29. **`applyChanges` invariants**: throws on non-transactable ref; throws during active transaction; empty ops is a no-op (no subscribers fire); `{origin}` option flows to `Changeset.origin`.
+30. **Navigate + write without reading**: `withWritable(withNavigation(bottomInterpreter))` produces carriers where `.at()` reaches children and `.set()` mutates them, but `ref()` throws. Text `.update()` works because it reads the store directly via `readByPath`, not through the carrier's `[CALL]` slot.
+31. **Read-only changefeeds**: `withChangefeed(withCaching(withReadable(withNavigation(bottomInterpreter))))` with a plain `RefContext` (no `prepare`/`flush`) produces valid Moore machines — `.current` returns a value, `.subscribe` returns a no-op unsubscribe.
+32. **`Ref<S>` type correctness**: `Ref<SequenceSchema<ScalarSchema<"string">>>` has `.at(0)` returning `Ref<ScalarSchema>` with both `.set()` and `()` call signature — no overload conflict. `.push()`, `.insert()`, `.delete()` from `SequenceRef` (mutation-only, no `.at()`). `[TRANSACT]` present at every level.
+33. **`CALL` rename**: the carrier delegation slot is `Symbol.for("kyneta:call")`. The name honestly reflects the abstraction: call delegation, not reading.
 
 ## File Map
 
@@ -553,20 +607,24 @@ packages/schema/
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
 │   ├── interpreter-types.ts     # RefContext, Plain<S> — shared types across interpreters
 │   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore, pathKey, dispatchSum
+│   ├── ref.ts                   # Ref<S> unified recursive type + WithTransact<T> helper
 │   ├── interpreters/
-│   │   ├── bottom.ts            # bottomInterpreter, makeCarrier, READ symbol, capability lattice
-│   │   ├── with-readable.ts     # withReadable transformer — store reading + structural navigation
+│   │   ├── bottom.ts            # bottomInterpreter, makeCarrier, CALL symbol, capability lattice (HasCall/HasNavigation/HasRead/HasCaching)
+│   │   ├── navigable.ts         # Type-only: NavigableSequenceRef, NavigableMapRef
+│   │   ├── with-navigation.ts   # withNavigation transformer — coalgebraic structural addressing (no reading)
+│   │   ├── with-readable.ts     # withReadable transformer — fills [CALL] slot, adds .get(), toPrimitive
 │   │   ├── with-caching.ts      # withCaching transformer — caching + INVALIDATE + prepare-pipeline hooks
-│   │   ├── readable.ts          # Type-only: Readable<S>, ReadableSequenceRef, ReadableMapRef
-│   │   ├── writable.ts          # withWritable transformer + TRANSACT + WritableContext + executeBatch
+│   │   ├── readable.ts          # Type-only: Readable<S>, ReadableSequenceRef (extends NavigableSequenceRef), ReadableMapRef (extends NavigableMapRef)
+│   │   ├── writable.ts          # withWritable transformer + TRANSACT + WritableContext + executeBatch + SequenceRef (mutation-only)
 │   │   ├── plain.ts             # Read from plain JS object (eager deep snapshot)
-│   │   ├── with-changefeed.ts   # Changefeed transformer — compositional observation + batched notification
+│   │   ├── with-changefeed.ts   # Changefeed transformer — compositional observation + batched notification (RefContext, requires HasRead)
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate
 │   ├── __tests__/
-│   │   ├── types.test.ts        # Type-level tests (expectTypeOf)
+│   │   ├── types.test.ts        # Type-level tests (expectTypeOf) — Ref<S>, NavigableRef hierarchy, capability lattice
 │   │   ├── interpret.test.ts    # Catamorphism, constructors, LoroSchema
-│   │   ├── bottom.test.ts       # Bottom interpreter: carriers, READ symbol, capability types
-│   │   ├── with-readable.test.ts # withReadable: reading, navigation, no caching, sum dispatch
+│   │   ├── bottom.test.ts       # Bottom interpreter: carriers, CALL symbol, capability lattice types
+│   │   ├── with-navigation.test.ts # withNavigation: structural addressing, navigate+write, read-only changefeed, type-level
+│   │   ├── with-readable.test.ts # withReadable: reading (CALL filling), .get(), toPrimitive, no caching
 │   │   ├── with-caching.test.ts # withCaching: referential identity, INVALIDATE, prepare-pipeline
 │   │   ├── plan-cache-update.test.ts # planCacheUpdate: table-driven cache op tests
 │   │   ├── plan-notifications.test.ts # planNotifications: table-driven notification grouping tests
@@ -585,6 +643,9 @@ packages/schema/
 ├── example/
 │   ├── main.ts                  # Showcase of the full @kyneta/schema API surface (no local facade)
 │   └── README.md                # Example documentation
+├── .plans/
+│   ├── navigation-layer.md     # Navigation layer plan: CALL rename + withNavigation + Ref<S> (PR stack)
+│   └── interpreter-decomposition.md # Original decomposition plan (lattice superseded by navigation-layer.md)
 ├── package.json                 # No runtime deps
 ├── tsconfig.json
 ├── tsup.config.ts

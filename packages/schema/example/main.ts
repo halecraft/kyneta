@@ -371,11 +371,14 @@ log(`
 
 // Helper to create a fresh document from a seed
 function createFreshDoc(docSeed: Record<string, unknown> = {}) {
-	const d = Zero.structural(ProjectSchema) as Record<string, unknown>;
-	const i = Zero.overlay(docSeed, d, ProjectSchema) as Record<string, unknown>;
-	const s: Store = { ...i };
-	const c = createWritableContext(s);
-	return interpret(ProjectSchema, c)
+	const fallback = Zero.structural(ProjectSchema) as Record<string, unknown>;
+	const initial = Zero.overlay(docSeed, fallback, ProjectSchema) as Record<
+		string,
+		unknown
+	>;
+	const store: Store = { ...initial };
+	const context = createWritableContext(store);
+	return interpret(ProjectSchema, context)
 		.with(readable)
 		.with(writable)
 		.with(changefeed)

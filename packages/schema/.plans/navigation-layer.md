@@ -517,9 +517,9 @@ Replace `as any` with `as Ref<typeof ProjectSchema>`.
 
 Run `bun tsc --noEmit` and confirm zero errors across the entire project.
 
-## Phase 5: Documentation 🔴
+## Phase 5: Documentation 🟢
 
-### Task 5.1: Update `TECHNICAL.md` 🔴
+### Task 5.1: Update `TECHNICAL.md` 🟢
 
 - **Symbol-keyed composability hooks table**: `READ` → `CALL`. Update the description from "Controls what `carrier()` does" to reflect the rename.
 - **Capability lattice section**: replace the linear `HasRead → HasNavigation → HasCaching` chain with the new diamond:
@@ -542,7 +542,7 @@ Run `bun tsc --noEmit` and confirm zero errors across the entire project.
 - **File map**: add `with-navigation.ts`, `navigable.ts`, `with-navigation.test.ts`.
 - **Verified properties**: add properties for navigation-without-reading, `Ref<S>` type correctness, and `CALL` rename.
 
-### Task 5.2: Update plan status 🔴
+### Task 5.2: Update plan status 🟢
 
 Mark `interpreter-decomposition.md` notes as superseded where applicable (its lattice diagram is now outdated).
 
@@ -817,7 +817,7 @@ Replaces `as any` and `as unknown as Readable<S> & Writable<S>` with `as Ref<typ
 
 ---
 
-### PR 6: `docs: update TECHNICAL.md for navigation layer and CALL rename` 🔴
+### PR 6: `docs: update TECHNICAL.md for navigation layer and CALL rename` 🟢
 
 **Type:** Documentation
 
