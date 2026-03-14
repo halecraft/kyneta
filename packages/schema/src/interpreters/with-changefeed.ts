@@ -34,6 +34,7 @@ import {
   hasComposedChangefeed,
 } from "../changefeed.js"
 import type {
+  Changeset,
   Changefeed,
   ComposedChangefeed,
   TreeEvent,
@@ -149,6 +150,9 @@ function listenAtPath(
 /**
  * Creates a leaf Changefeed (no children, no subscribeTree).
  * `subscribe` fires on any change dispatched at this path.
+ *
+ * Each individual change is wrapped in a degenerate `Changeset` of one.
+ * Batched delivery (multi-change changesets) is added in Phase 3.
  */
 function createLeafChangefeed(
   listeners: Map<string, Set<(change: ChangeBase) => void>>,
@@ -159,8 +163,10 @@ function createLeafChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe(callback: (change: ChangeBase) => void): () => void {
-      return listenAtPath(listeners, path, callback)
+    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
+      return listenAtPath(listeners, path, (change) => {
+        callback({ changes: [change] })
+      })
     },
   }
 }
@@ -169,8 +175,11 @@ function createLeafChangefeed(
  * Creates a ComposedChangefeed for a product (struct) node.
  *
  * - `subscribe` fires only on changes at this node's own path.
- * - `subscribeTree` fires for all descendant changes with origin paths,
- *   PLUS own-path changes with origin [].
+ * - `subscribeTree` fires for all descendant changes with relative
+ *   paths, PLUS own-path changes with `path: []`.
+ *
+ * Each notification is wrapped in a degenerate `Changeset` of one.
+ * Batched delivery (multi-change changesets) is added in Phase 3.
  *
  * The product forces all child thunks eagerly to obtain their
  * changefeeds, then subscribes to each child for tree propagation.
@@ -181,18 +190,21 @@ function createProductChangefeed(
   readCurrent: () => unknown,
   fields: Readonly<Record<string, () => unknown>>,
 ): ComposedChangefeed<unknown, ChangeBase> {
-  // Per-node shallow subscribers (node-level)
-  const shallowSubs = new Set<(change: ChangeBase) => void>()
-  // Per-node tree subscribers
-  const treeSubs = new Set<(event: TreeEvent) => void>()
+  // Per-node shallow subscribers (node-level) — receive Changeset
+  const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
+  // Per-node tree subscribers — receive Changeset<TreeEvent>
+  const treeSubs = new Set<(changeset: Changeset<TreeEvent>) => void>()
 
   // Register in the dispatch listener map for own-path changes
   listenAtPath(listeners, path, (change: ChangeBase) => {
-    for (const cb of shallowSubs) cb(change)
-    // Tree subscribers also see own-path changes with origin []
+    if (shallowSubs.size > 0) {
+      const changeset: Changeset<ChangeBase> = { changes: [change] }
+      for (const cb of shallowSubs) cb(changeset)
+    }
+    // Tree subscribers also see own-path changes with path []
     if (treeSubs.size > 0) {
-      const event: TreeEvent = { origin: [], change }
-      for (const cb of treeSubs) cb(event)
+      const changeset: Changeset<TreeEvent> = { changes: [{ path: [], change }] }
+      for (const cb of treeSubs) cb(changeset)
     }
   })
 
@@ -210,21 +222,30 @@ function createProductChangefeed(
       const prefix: Path = [{ type: "key" as const, key }]
 
       if (hasComposedChangefeed(child)) {
-        // Composite child — subscribe to its tree
-        child[CHANGEFEED].subscribeTree((event: TreeEvent) => {
+        // Composite child — subscribe to its tree, re-prefix events
+        child[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
           if (treeSubs.size === 0) return
-          const propagated: TreeEvent = {
-            origin: [...prefix, ...event.origin],
-            change: event.change,
+          const propagated: Changeset<TreeEvent> = {
+            changes: changeset.changes.map(event => ({
+              path: [...prefix, ...event.path],
+              change: event.change,
+            })),
+            origin: changeset.origin,
           }
           for (const cb of treeSubs) cb(propagated)
         })
       } else {
         // Leaf child — subscribe to its shallow stream
-        child[CHANGEFEED].subscribe((change: ChangeBase) => {
+        child[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
           if (treeSubs.size === 0) return
-          const event: TreeEvent = { origin: prefix, change }
-          for (const cb of treeSubs) cb(event)
+          const propagated: Changeset<TreeEvent> = {
+            changes: changeset.changes.map(change => ({
+              path: prefix,
+              change,
+            })),
+            origin: changeset.origin,
+          }
+          for (const cb of treeSubs) cb(propagated)
         })
       }
     }
@@ -234,11 +255,11 @@ function createProductChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe(callback: (change: ChangeBase) => void): () => void {
+    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
       shallowSubs.add(callback)
       return () => { shallowSubs.delete(callback) }
     },
-    subscribeTree(callback: (event: TreeEvent) => void): () => void {
+    subscribeTree(callback: (changeset: Changeset<TreeEvent>) => void): () => void {
       wireChildren()
       treeSubs.add(callback)
       return () => { treeSubs.delete(callback) }
@@ -264,8 +285,8 @@ function createSequenceChangefeed(
   getItemRef: (index: number) => unknown,
   getLength: () => number,
 ): ComposedChangefeed<unknown, ChangeBase> {
-  const shallowSubs = new Set<(change: ChangeBase) => void>()
-  const treeSubs = new Set<(event: TreeEvent) => void>()
+  const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
+  const treeSubs = new Set<(changeset: Changeset<TreeEvent>) => void>()
 
   // Per-item unsubscribe functions, keyed by index
   const itemUnsubs = new Map<number, () => void>()
@@ -285,19 +306,28 @@ function createSequenceChangefeed(
 
     let unsub: () => void
     if (hasComposedChangefeed(child)) {
-      unsub = child[CHANGEFEED].subscribeTree((event: TreeEvent) => {
+      unsub = child[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
         if (treeSubs.size === 0) return
-        const propagated: TreeEvent = {
-          origin: [...prefix, ...event.origin],
-          change: event.change,
+        const propagated: Changeset<TreeEvent> = {
+          changes: changeset.changes.map(event => ({
+            path: [...prefix, ...event.path],
+            change: event.change,
+          })),
+          origin: changeset.origin,
         }
         for (const cb of treeSubs) cb(propagated)
       })
     } else {
-      unsub = child[CHANGEFEED].subscribe((change: ChangeBase) => {
+      unsub = child[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
         if (treeSubs.size === 0) return
-        const event: TreeEvent = { origin: prefix, change }
-        for (const cb of treeSubs) cb(event)
+        const propagated: Changeset<TreeEvent> = {
+          changes: changeset.changes.map(change => ({
+            path: prefix,
+            change,
+          })),
+          origin: changeset.origin,
+        }
+        for (const cb of treeSubs) cb(propagated)
       })
     }
     itemUnsubs.set(index, unsub)
@@ -335,12 +365,15 @@ function createSequenceChangefeed(
   // Register in the dispatch listener map for own-path changes
   listenAtPath(listeners, path, (change: ChangeBase) => {
     // Fire shallow subscribers
-    for (const cb of shallowSubs) cb(change)
+    if (shallowSubs.size > 0) {
+      const changeset: Changeset<ChangeBase> = { changes: [change] }
+      for (const cb of shallowSubs) cb(changeset)
+    }
 
-    // Tree subscribers see own-path structural changes with origin []
+    // Tree subscribers see own-path structural changes with path []
     if (treeSubs.size > 0) {
-      const event: TreeEvent = { origin: [], change }
-      for (const cb of treeSubs) cb(event)
+      const changeset: Changeset<TreeEvent> = { changes: [{ path: [], change }] }
+      for (const cb of treeSubs) cb(changeset)
     }
 
     // Rebuild item subscriptions after structural change
@@ -353,11 +386,11 @@ function createSequenceChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe(callback: (change: ChangeBase) => void): () => void {
+    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
       shallowSubs.add(callback)
       return () => { shallowSubs.delete(callback) }
     },
-    subscribeTree(callback: (event: TreeEvent) => void): () => void {
+    subscribeTree(callback: (changeset: Changeset<TreeEvent>) => void): () => void {
       if (!initialWiringDone) {
         initialWiringDone = true
         subscribeToAllItems()
@@ -389,8 +422,8 @@ function createMapChangefeed(
   getEntryRef: (key: string) => unknown,
   getKeys: () => string[],
 ): ComposedChangefeed<unknown, ChangeBase> {
-  const shallowSubs = new Set<(change: ChangeBase) => void>()
-  const treeSubs = new Set<(event: TreeEvent) => void>()
+  const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
+  const treeSubs = new Set<(changeset: Changeset<TreeEvent>) => void>()
 
   const entryUnsubs = new Map<string, () => void>()
 
@@ -408,19 +441,28 @@ function createMapChangefeed(
 
     let unsub: () => void
     if (hasComposedChangefeed(child)) {
-      unsub = child[CHANGEFEED].subscribeTree((event: TreeEvent) => {
+      unsub = child[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
         if (treeSubs.size === 0) return
-        const propagated: TreeEvent = {
-          origin: [...prefix, ...event.origin],
-          change: event.change,
+        const propagated: Changeset<TreeEvent> = {
+          changes: changeset.changes.map(event => ({
+            path: [...prefix, ...event.path],
+            change: event.change,
+          })),
+          origin: changeset.origin,
         }
         for (const cb of treeSubs) cb(propagated)
       })
     } else {
-      unsub = child[CHANGEFEED].subscribe((change: ChangeBase) => {
+      unsub = child[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
         if (treeSubs.size === 0) return
-        const event: TreeEvent = { origin: prefix, change }
-        for (const cb of treeSubs) cb(event)
+        const propagated: Changeset<TreeEvent> = {
+          changes: changeset.changes.map(change => ({
+            path: prefix,
+            change,
+          })),
+          origin: changeset.origin,
+        }
+        for (const cb of treeSubs) cb(propagated)
       })
     }
     entryUnsubs.set(key, unsub)
@@ -442,11 +484,14 @@ function createMapChangefeed(
 
   // Register in the dispatch listener map for own-path changes
   listenAtPath(listeners, path, (change: ChangeBase) => {
-    for (const cb of shallowSubs) cb(change)
+    if (shallowSubs.size > 0) {
+      const changeset: Changeset<ChangeBase> = { changes: [change] }
+      for (const cb of shallowSubs) cb(changeset)
+    }
 
     if (treeSubs.size > 0) {
-      const event: TreeEvent = { origin: [], change }
-      for (const cb of treeSubs) cb(event)
+      const changeset: Changeset<TreeEvent> = { changes: [{ path: [], change }] }
+      for (const cb of treeSubs) cb(changeset)
     }
 
     handleStructuralChange(change)
@@ -458,11 +503,11 @@ function createMapChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe(callback: (change: ChangeBase) => void): () => void {
+    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
       shallowSubs.add(callback)
       return () => { shallowSubs.delete(callback) }
     },
-    subscribeTree(callback: (event: TreeEvent) => void): () => void {
+    subscribeTree(callback: (changeset: Changeset<TreeEvent>) => void): () => void {
       if (!initialWiringDone) {
         initialWiringDone = true
         subscribeToAllEntries()
@@ -493,7 +538,7 @@ function createMapChangefeed(
  *
  * - **Composite refs** (product, sequence, map) get a `ComposedChangefeed`:
  *   `subscribe` fires only for changes at the node's own path (node-level).
- *   `subscribeTree` fires for all descendant changes with relative origin
+ *   `subscribeTree` fires for all descendant changes with relative
  *   paths (tree-level), making it a strict superset of `subscribe`.
  *
  * Notification flows through the changefeed tree, not flat subscriber maps.

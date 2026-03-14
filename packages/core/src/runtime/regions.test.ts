@@ -9,6 +9,7 @@
 import {
   CHANGEFEED,
   type ChangeBase,
+  type Changeset,
   type Changefeed,
   type SequenceChangeOp,
 } from "@kyneta/schema"
@@ -62,7 +63,7 @@ function createMockSequenceRef<T>(initialItems: T[]): {
   setItems: (items: T[]) => void
 } {
   let items = [...initialItems]
-  let callback: ((change: ChangeBase) => void) | null = null
+  let callback: ((changeset: Changeset<ChangeBase>) => void) | null = null
 
   const ref = {
     get length() {
@@ -75,7 +76,7 @@ function createMockSequenceRef<T>(initialItems: T[]): {
       get current(): T[] {
         return items
       },
-      subscribe(cb: (change: ChangeBase) => void): () => void {
+      subscribe(cb: (changeset: Changeset<ChangeBase>) => void): () => void {
         callback = cb
         return () => {
           callback = null
@@ -87,7 +88,7 @@ function createMockSequenceRef<T>(initialItems: T[]): {
   return {
     ref,
     emit: (change: ChangeBase) => {
-      callback?.(change)
+      callback?.({ changes: [change] })
     },
     setItems: (newItems: T[]) => {
       items = [...newItems]

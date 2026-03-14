@@ -11,6 +11,7 @@
 import {
   CHANGEFEED,
   type ChangeBase,
+  type Changeset,
   type Changefeed,
   type SequenceChangeOp,
   type TextChangeOp,
@@ -355,7 +356,7 @@ export function createMockTextRef(initial: string = ""): {
   value(): string
 } {
   let content = initial
-  const subscribers = new Set<(change: ChangeBase) => void>()
+  const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
 
   const ref = {
     insert(pos: number, text: string): void {
@@ -363,8 +364,12 @@ export function createMockTextRef(initial: string = ""): {
       const ops: TextChangeOp[] = []
       if (pos > 0) ops.push({ retain: pos })
       ops.push({ insert: text })
+      const changeset: Changeset<ChangeBase> = {
+        changes: [{ type: "text", ops } as ChangeBase],
+        origin: "local",
+      }
       for (const cb of subscribers) {
-        cb({ type: "text", ops, origin: "local" } as ChangeBase)
+        cb(changeset)
       }
     },
     delete(pos: number, len: number): void {
@@ -372,8 +377,12 @@ export function createMockTextRef(initial: string = ""): {
       const ops: TextChangeOp[] = []
       if (pos > 0) ops.push({ retain: pos })
       ops.push({ delete: len })
+      const changeset: Changeset<ChangeBase> = {
+        changes: [{ type: "text", ops } as ChangeBase],
+        origin: "local",
+      }
       for (const cb of subscribers) {
-        cb({ type: "text", ops, origin: "local" } as ChangeBase)
+        cb(changeset)
       }
     },
 
@@ -382,7 +391,7 @@ export function createMockTextRef(initial: string = ""): {
         get current(): string {
           return content
         },
-        subscribe(cb: (change: ChangeBase) => void): () => void {
+        subscribe(cb: (changeset: Changeset<ChangeBase>) => void): () => void {
           subscribers.add(cb)
           return () => {
             subscribers.delete(cb)
@@ -413,7 +422,7 @@ export function createMockCounterRef(initial: number = 0): {
   }
 } {
   let count = initial
-  const subscribers = new Set<(change: ChangeBase) => void>()
+  const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
 
   const ref = {
     get(): number {
@@ -422,8 +431,9 @@ export function createMockCounterRef(initial: number = 0): {
     increment(n: number): void {
       count += n
       const change = incrementChange(n) as ChangeBase
+      const changeset: Changeset<ChangeBase> = { changes: [change] }
       for (const cb of subscribers) {
-        cb(change)
+        cb(changeset)
       }
     },
     get [CHANGEFEED](): Changefeed<number, ChangeBase> {
@@ -431,7 +441,7 @@ export function createMockCounterRef(initial: number = 0): {
         get current(): number {
           return count
         },
-        subscribe(cb: (change: ChangeBase) => void): () => void {
+        subscribe(cb: (changeset: Changeset<ChangeBase>) => void): () => void {
           subscribers.add(cb)
           return () => {
             subscribers.delete(cb)
@@ -469,11 +479,12 @@ export function createMockSequenceRef<T>(initialItems: T[]): {
   setItems: (items: T[]) => void
 } {
   let items = [...initialItems]
-  const subscribers = new Set<(change: ChangeBase) => void>()
+  const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
 
   function emitChange(change: ChangeBase): void {
+    const changeset: Changeset<ChangeBase> = { changes: [change] }
     for (const cb of subscribers) {
-      cb(change)
+      cb(changeset)
     }
   }
 
@@ -536,7 +547,7 @@ export function createMockSequenceRef<T>(initialItems: T[]): {
         get current(): T[] {
           return items
         },
-        subscribe(cb: (change: ChangeBase) => void): () => void {
+        subscribe(cb: (changeset: Changeset<ChangeBase>) => void): () => void {
           subscribers.add(cb)
           return () => {
             subscribers.delete(cb)
@@ -565,7 +576,7 @@ export function createMockSequenceRef<T>(initialItems: T[]): {
 export function createMockDoc<T extends Record<string, { [CHANGEFEED]: Changefeed<unknown, ChangeBase> }>>(
   fields: T,
 ): T & { readonly [CHANGEFEED]: Changefeed<unknown, ChangeBase> } {
-  const subscribers = new Set<(change: ChangeBase) => void>()
+  const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
 
   return Object.assign(Object.create(null), fields, {
     get [CHANGEFEED](): Changefeed<unknown, ChangeBase> {
@@ -573,7 +584,7 @@ export function createMockDoc<T extends Record<string, { [CHANGEFEED]: Changefee
         get current(): unknown {
           return fields
         },
-        subscribe(cb: (change: ChangeBase) => void): () => void {
+        subscribe(cb: (changeset: Changeset<ChangeBase>) => void): () => void {
           subscribers.add(cb)
           return () => {
             subscribers.delete(cb)
@@ -598,7 +609,7 @@ export function createMockPlainRef<T>(initial: T): {
   }
 } {
   let value = initial
-  const subscribers = new Set<(change: ChangeBase) => void>()
+  const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
 
   const ref = {
     get(): T {
@@ -606,8 +617,9 @@ export function createMockPlainRef<T>(initial: T): {
     },
     set(v: T): void {
       value = v
+      const changeset: Changeset<ChangeBase> = { changes: [replaceChange(v) as ChangeBase] }
       for (const cb of subscribers) {
-        cb(replaceChange(v) as ChangeBase)
+        cb(changeset)
       }
     },
     get [CHANGEFEED](): Changefeed<T, ChangeBase> {
@@ -615,7 +627,7 @@ export function createMockPlainRef<T>(initial: T): {
         get current(): T {
           return value
         },
-        subscribe(cb: (change: ChangeBase) => void): () => void {
+        subscribe(cb: (changeset: Changeset<ChangeBase>) => void): () => void {
           subscribers.add(cb)
           return () => {
             subscribers.delete(cb)

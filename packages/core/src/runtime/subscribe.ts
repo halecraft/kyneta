@@ -15,6 +15,7 @@ import {
   CHANGEFEED,
   hasChangefeed,
   type ChangeBase,
+  type Changeset,
   type HasChangefeed,
 } from "@kyneta/schema"
 import type { Scope } from "./scope.js"
@@ -84,7 +85,7 @@ export function getActiveSubscriptionCount(): number {
  */
 export function subscribe(
   ref: unknown,
-  handler: (change: ChangeBase) => void,
+  handler: (change: ChangeBase, origin?: string) => void,
   scope: Scope,
 ): SubscriptionId {
   const id = ++subscriptionIdCounter
@@ -97,8 +98,14 @@ export function subscribe(
     )
   }
 
-  // Subscribe via the [CHANGEFEED] symbol
-  const unsubscribeFn = ref[CHANGEFEED].subscribe(handler)
+  // Subscribe via the [CHANGEFEED] symbol.
+  // The changefeed protocol delivers Changeset batches; unwrap them
+  // so callers receive individual ChangeBase objects.
+  const unsubscribeFn = ref[CHANGEFEED].subscribe((changeset: Changeset) => {
+    for (const change of changeset.changes) {
+      handler(change, changeset.origin)
+    }
+  })
 
   // Track the subscription
   activeSubscriptions.set(id, { ref, unsubscribe: unsubscribeFn })

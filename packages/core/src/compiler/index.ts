@@ -98,7 +98,7 @@ export {
   // Source span helpers
   getSpan,
   // Type analysis
-  isReactiveType,
+  isChangefeedType,
 } from "./analyze.js"
 
 // =============================================================================

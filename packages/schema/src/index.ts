@@ -80,6 +80,7 @@ export {
   staticChangefeed,
 } from "./changefeed.js"
 export type {
+  Changeset,
   Changefeed,
   ComposedChangefeed,
   HasChangefeed,

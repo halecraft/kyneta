@@ -5,7 +5,7 @@
  * primitive, replacing the old @loro-extended/reactive types.
  */
 
-import { CHANGEFEED, type ChangeBase } from "@kyneta/schema"
+import { CHANGEFEED, type ChangeBase, type Changeset } from "@kyneta/schema"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { state } from "../reactive/local-ref.js"
 import { resetScopeIdCounter, Scope } from "./scope.js"
@@ -359,13 +359,13 @@ describe("subscribe", () => {
   describe("custom reactive types", () => {
     it("should subscribe to custom changefeed type", () => {
       // Create a minimal custom changefeed type
-      const listeners = new Set<(change: ChangeBase) => void>()
+      const listeners = new Set<(changeset: Changeset) => void>()
       const customReactive = {
         [CHANGEFEED]: {
           get current() {
             return null
           },
-          subscribe(callback: (change: ChangeBase) => void): () => void {
+          subscribe(callback: (changeset: Changeset) => void): () => void {
             listeners.add(callback)
             return () => listeners.delete(callback)
           },
@@ -377,8 +377,8 @@ describe("subscribe", () => {
 
       subscribe(customReactive, change => received.push(change), scope)
 
-      // Emit a change manually
-      listeners.forEach(cb => cb({ type: "replace" }))
+      // Emit a changeset manually (subscribe unwraps for the handler)
+      listeners.forEach(cb => cb({ changes: [{ type: "replace" }] }))
 
       expect(received).toEqual([{ type: "replace" }])
 

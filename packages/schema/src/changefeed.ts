@@ -6,6 +6,12 @@
 //
 // The changefeed protocol is expressed through a single symbol: CHANGEFEED.
 // This replaces the previous two-symbol design (SNAPSHOT + REACTIVE).
+//
+// Changes are delivered as `Changeset<C>` — a batch of one or more
+// changes with optional provenance metadata. Auto-commit wraps a
+// single change in a degenerate changeset of one; transactions and
+// `applyChanges` deliver multi-change batches. The subscriber API
+// is uniform regardless of batch size.
 
 import type { ChangeBase } from "./change.js"
 import type { Path } from "./interpret.js"
@@ -25,6 +31,30 @@ import type { Path } from "./interpret.js"
 export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed") as any
 
 // ---------------------------------------------------------------------------
+// Changeset — the unit of batch delivery
+// ---------------------------------------------------------------------------
+
+/**
+ * A changeset is the unit of delivery through the changefeed protocol.
+ * It wraps one or more changes with optional batch-level metadata.
+ *
+ * - Auto-commit produces a degenerate changeset of one change.
+ * - Transactions and `applyChanges` produce multi-change batches.
+ * - `origin` carries provenance for the entire batch (e.g. "sync",
+ *   "undo", "local"). Individual changes do not carry provenance —
+ *   the batch does.
+ *
+ * The subscriber API always receives a `Changeset`, making it uniform
+ * regardless of how the changes were produced.
+ */
+export interface Changeset<C = ChangeBase> {
+  /** The individual changes in this batch. */
+  readonly changes: readonly C[]
+  /** Provenance of the batch (e.g. "sync", "undo", "local"). */
+  readonly origin?: string
+}
+
+// ---------------------------------------------------------------------------
 // Core interfaces
 // ---------------------------------------------------------------------------
 
@@ -36,6 +66,9 @@ export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed") as any
  * Properties:
  * - `current` is a getter — always returns the live current value
  * - `subscribe` returns an unsubscribe function
+ * - Subscribers receive a `Changeset<C>` — a batch of changes with
+ *   optional provenance. For auto-commit (single mutation), the
+ *   changeset contains exactly one change.
  * - Static (non-reactive) sources return a changefeed whose tail never emits:
  *   `{ current: value, subscribe: () => () => {} }`
  */
@@ -43,7 +76,7 @@ export interface Changefeed<S, C extends ChangeBase = ChangeBase> {
   /** The current value, always live (a getter). */
   readonly current: S
   /** Subscribe to future changes. Returns an unsubscribe function. */
-  subscribe(callback: (change: C) => void): () => void
+  subscribe(callback: (changeset: Changeset<C>) => void): () => void
 }
 
 /**
@@ -61,16 +94,22 @@ export interface HasChangefeed<S = unknown, A extends ChangeBase = ChangeBase> {
 // ---------------------------------------------------------------------------
 
 /**
- * A tree event carries a change together with its relative origin path.
+ * A tree event carries a change together with its relative path.
  *
- * When a `subscribeTree` subscriber receives a `TreeEvent`, `origin`
+ * When a `subscribeTree` subscriber receives a `TreeEvent`, `path`
  * is the path from the subscription point down to where the change
  * actually occurred. When the change is at the subscription point
- * itself, `origin` is `[]`.
+ * itself, `path` is `[]`.
+ *
+ * Note: this field was previously named `origin`, but was renamed to
+ * `path` to avoid collision with the provenance `origin` field on
+ * `Changeset`.
  */
-export interface TreeEvent {
-  readonly origin: Path
-  readonly change: ChangeBase
+export interface TreeEvent<C extends ChangeBase = ChangeBase> {
+  /** Relative path from subscription point to where the change occurred. */
+  readonly path: Path
+  /** The change that occurred. */
+  readonly change: C
 }
 
 /**
@@ -81,8 +120,12 @@ export interface TreeEvent {
  * for products).
  *
  * `subscribeTree` fires for all descendant changes with relative
- * origin paths, making it a strict superset of `subscribe` (tree
- * subscribers also see own-path changes with `origin: []`).
+ * paths, making it a strict superset of `subscribe` (tree
+ * subscribers also see own-path changes with `path: []`).
+ *
+ * Both `subscribe` and `subscribeTree` deliver `Changeset` batches.
+ * `subscribeTree` delivers `Changeset<TreeEvent<C>>` — each entry
+ * in the batch carries the relative path where the change occurred.
  *
  * Only composite refs (products, sequences, maps) implement this.
  * Leaf refs (scalars, text, counters) implement plain `Changefeed`.
@@ -90,7 +133,7 @@ export interface TreeEvent {
 export interface ComposedChangefeed<S, C extends ChangeBase = ChangeBase>
   extends Changefeed<S, C> {
   /** Subscribe to changes at this node and all descendants. */
-  subscribeTree(callback: (event: TreeEvent) => void): () => void
+  subscribeTree(callback: (changeset: Changeset<TreeEvent<C>>) => void): () => void
 }
 
 /**

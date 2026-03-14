@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   CHANGEFEED,
   hasChangefeed,
+  type Changeset,
   type ReplaceChange,
 } from "@kyneta/schema"
 import { state, isLocalRef } from "./local-ref.js"
@@ -126,7 +127,7 @@ describe("LocalRef", () => {
     })
 
     describe(".subscribe()", () => {
-      it("fires on set() with a ReplaceChange", () => {
+      it("fires on set() with a Changeset containing a ReplaceChange", () => {
         const ref = state(0)
         const handler = vi.fn()
         ref[CHANGEFEED].subscribe(handler)
@@ -134,7 +135,9 @@ describe("LocalRef", () => {
         ref.set(1)
 
         expect(handler).toHaveBeenCalledTimes(1)
-        const change: ReplaceChange<number> = handler.mock.calls[0][0]
+        const changeset: Changeset<ReplaceChange<number>> = handler.mock.calls[0][0]
+        expect(changeset.changes).toHaveLength(1)
+        const change = changeset.changes[0]!
         expect(change.type).toBe("replace")
         expect(change.value).toBe(1)
       })
@@ -149,9 +152,9 @@ describe("LocalRef", () => {
         ref.set(3)
 
         expect(handler).toHaveBeenCalledTimes(3)
-        expect(handler.mock.calls[0][0].value).toBe(1)
-        expect(handler.mock.calls[1][0].value).toBe(2)
-        expect(handler.mock.calls[2][0].value).toBe(3)
+        expect(handler.mock.calls[0][0].changes[0].value).toBe(1)
+        expect(handler.mock.calls[1][0].changes[0].value).toBe(2)
+        expect(handler.mock.calls[2][0].changes[0].value).toBe(3)
       })
 
       it("fires even when setting to the same value", () => {

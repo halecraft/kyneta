@@ -276,9 +276,7 @@ export function getSpan(node: Node): SourceSpan {
 // Type Analysis
 // =============================================================================
 
-// isChangefeedType is imported from ./reactive-detection.js.
-// Re-export under both names for backward compatibility.
-export { isChangefeedType, isChangefeedType as isReactiveType }
+export { isChangefeedType }
 
 /**
  * Check if an expression accesses a reactive ref.

@@ -56,6 +56,7 @@ import type {
   RefContext,
   WritableContext,
   ChangeBase,
+  Changeset,
   TreeEvent,
   TextRef,
   CounterRef,
@@ -164,6 +165,10 @@ function change<D extends object>(doc: D, fn: (draft: D) => void): D {
 /**
  * Subscribe to changes on any ref with a changefeed.
  *
+ * Unwraps the `Changeset` protocol so callers receive individual
+ * changes — a convenience for the example code. Production code
+ * should use the `Changeset` protocol directly.
+ *
  * ```ts
  * subscribe(doc.title, change => console.log("title changed:", change))
  * ```
@@ -179,7 +184,11 @@ function subscribe(
       "subscribe() requires a changefeed ref (created via createDoc)",
     )
   }
-  return ref[CHANGEFEED].subscribe(callback)
+  return ref[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
+    for (const change of changeset.changes) {
+      callback(change)
+    }
+  })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -610,13 +619,15 @@ log(`
     hasComposedChangefeed(doc.name) → ${hasComposedChangefeed(doc.name)}  (leaf — no tree)
 `)
 
-const treeEvents: { origin: string; type: string }[] = []
+const treeEvents: { path: string; type: string }[] = []
 const treeUnsub = doc.settings[CHANGEFEED].subscribeTree(
-  (event: TreeEvent) => {
-    treeEvents.push({
-      origin: formatPath(event.origin),
-      type: event.change.type,
-    })
+  (changeset: Changeset<TreeEvent>) => {
+    for (const event of changeset.changes) {
+      treeEvents.push({
+        path: formatPath(event.path),
+        type: event.change.type,
+      })
+    }
   },
 )
 
@@ -626,7 +637,7 @@ doc.settings.visibility.set("private")
 log(`
     After 2 leaf mutations (maxTasks, visibility):
       ${treeEvents.length} tree events received:
-      ${treeEvents.map(e => `  origin: ${e.origin}, type: ${e.type}`).join("\n      ")}
+      ${treeEvents.map(e => `  path: ${e.path}, type: ${e.type}`).join("\n      ")}
 `)
 
 // Contrast: product .set() dispatches at the product path, not at each leaf
@@ -636,10 +647,10 @@ const last = treeEvents[treeEvents.length - 1]!
 log(`
     After doc.settings.set({...}) — 1 product-level dispatch:
       ${treeEvents.length} total tree events (${treeEvents.length - 2} new):
-        origin: ${last.origin}, type: ${last.type}
+        path: ${last.path}, type: ${last.type}
 
-    Leaf .set() → origin includes the scalar segment (e.g. settings.maxTasks)
-    Product .set() → origin is [] (change is at the subscription point itself)
+    Leaf .set() → path includes the scalar segment (e.g. settings.maxTasks)
+    Product .set() → path is [] (change is at the subscription point itself)
 `)
 
 treeUnsub()
@@ -656,12 +667,14 @@ log(`
     once per change at commit time.
 `)
 
-const txEvents: { origin: string; type: string }[] = []
-doc.settings[CHANGEFEED].subscribeTree((event: TreeEvent) => {
-  txEvents.push({
-    origin: formatPath(event.origin),
-    type: event.change.type,
-  })
+const txEvents: { path: string; type: string }[] = []
+doc.settings[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
+  for (const event of changeset.changes) {
+    txEvents.push({
+      path: formatPath(event.path),
+      type: event.change.type,
+    })
+  }
 })
 
 // Use the transaction API directly (change() wraps this)

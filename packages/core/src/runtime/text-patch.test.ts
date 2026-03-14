@@ -11,6 +11,7 @@
 import {
   CHANGEFEED,
   type ChangeBase,
+  type Changeset,
   type Changefeed,
   type TextChange,
   type TextChangeOp,
@@ -49,18 +50,18 @@ global.HTMLTextAreaElement = dom.window.HTMLTextAreaElement
  */
 function createMockTextRef(initialValue: string): {
   ref: { [CHANGEFEED]: Changefeed<string, ChangeBase> }
-  emit: (change: ChangeBase) => void
+  emit: (change: ChangeBase, origin?: string) => void
   setValue: (value: string) => void
 } {
   let currentValue = initialValue
-  let callback: ((change: ChangeBase) => void) | null = null
+  let callback: ((changeset: Changeset<ChangeBase>) => void) | null = null
 
   const ref = {
     [CHANGEFEED]: {
       get current(): string {
         return currentValue
       },
-      subscribe(cb: (change: ChangeBase) => void): () => void {
+      subscribe(cb: (changeset: Changeset<ChangeBase>) => void): () => void {
         callback = cb
         return () => {
           callback = null
@@ -71,8 +72,8 @@ function createMockTextRef(initialValue: string): {
 
   return {
     ref,
-    emit: (change: ChangeBase) => {
-      callback?.(change)
+    emit: (change: ChangeBase, origin?: string) => {
+      callback?.({ changes: [change], origin })
     },
     setValue: (value: string) => {
       currentValue = value
@@ -784,8 +785,7 @@ describe("inputTextRegion", () => {
         emit({
           type: "text",
           ops: [{ insert: "XXX" }],
-          origin: "import",
-        } as TextChange & { origin: string })
+        } as TextChange, "import")
 
         // With preserve mode, cursor shifts right by the insert length
         expect(input.value).toBe("XXXHello")
@@ -806,8 +806,7 @@ describe("inputTextRegion", () => {
         emit({
           type: "text",
           ops: [{ retain: 5 }, { insert: " World" }],
-          origin: "import",
-        } as TextChange & { origin: string })
+        } as TextChange, "import")
 
         expect(input.value).toBe("Hello World")
 
@@ -827,8 +826,7 @@ describe("inputTextRegion", () => {
         emit({
           type: "text",
           ops: [{ delete: 6 }],
-          origin: "import",
-        } as TextChange & { origin: string })
+        } as TextChange, "import")
 
         expect(input.value).toBe("World")
 
@@ -848,8 +846,7 @@ describe("inputTextRegion", () => {
         emit({
           type: "text",
           ops: [{ insert: "Hi" }],
-          origin: "local",
-        } as TextChange & { origin: string })
+        } as TextChange, "local")
 
         expect(input.value).toBe("Hi")
 

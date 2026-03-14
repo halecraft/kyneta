@@ -71,12 +71,16 @@ function addBaseChangefeedTypes(project: Project) {
 
     export interface ChangeBase {
       readonly type: string
+    }
+
+    export interface Changeset<C = ChangeBase> {
+      readonly changes: readonly C[]
       readonly origin?: string
     }
 
     export interface Changefeed<S, C extends ChangeBase = ChangeBase> {
       readonly current: S
-      subscribe(callback: (change: C) => void): () => void
+      subscribe(callback: (changeset: Changeset<C>) => void): () => void
     }
 
     export interface HasChangefeed<S = unknown, C extends ChangeBase = ChangeBase> {
@@ -151,8 +155,7 @@ function addSchemaTypes(project: Project) {
   )
 }
 
-// Backward-compatible alias — many test beforeEach blocks call addLoroTypes
-const addLoroTypes = addSchemaTypes
+
 
 /**
  * Add reactive type definitions (LocalRef, etc.) to the project.
@@ -1917,7 +1920,7 @@ describe("isChangefeedType", () => {
 
   beforeEach(() => {
     project = createProject()
-    addLoroTypes(project)
+    addSchemaTypes(project)
   })
 
   it("detects TextRef as having changefeed", () => {

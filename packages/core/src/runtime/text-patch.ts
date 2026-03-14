@@ -186,7 +186,8 @@ export function patchInputValue(
  * 4. Fall back to full replacement for non-text deltas
  *
  * **Origin-driven selectMode dispatch:** The subscription dispatches
- * `setRangeText` selectMode based on `change.origin`:
+ * `setRangeText` selectMode based on `changeset.origin` (batch-level
+ * provenance from the `Changeset` protocol):
  * - `origin === "local"` → `"end"` (cursor advances past inserts, stays at
  *   delete point). Correct for local typing, undo, and redo.
  * - anything else (`"import"`, `undefined`) → `"preserve"` (cursor shifts
@@ -216,15 +217,17 @@ export function inputTextRegion(
   // Set initial value
   input.value = readValue()
 
-  // Subscribe to changes
+  // Subscribe to changes via the runtime subscribe() helper.
+  // The helper unwraps Changeset batches and passes each individual
+  // change to the handler, with changeset.origin as the second arg.
   subscribe(
     ref,
-    (change: ChangeBase) => {
+    (change: ChangeBase, origin?: string) => {
       if (isTextChange(change)) {
         // Origin-driven selectMode dispatch:
         // - local edits (typing, undo, redo) → "end" (cursor follows edit)
         // - remote/unknown edits → "preserve" (cursor stays relative)
-        const mode = change.origin === "local" ? "end" : "preserve"
+        const mode = origin === "local" ? "end" : "preserve"
         // Surgical update — O(k) where k is the edit size
         patchInputValue(
           input,

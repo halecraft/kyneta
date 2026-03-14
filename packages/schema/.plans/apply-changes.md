@@ -122,7 +122,7 @@ The `pathKey(path: Path) → string` function converts a `Path` to a stable `\0`
 - Task: Update `with-changefeed.ts` to import `pathKey` from the shared module instead of defining it locally. 🟢
 - Task: Verify all existing tests pass (pure refactor, no behavior change). 🟢 775/775 pass.
 
-### Phase 2: `Changeset` type and `TreeEvent.path` rename 🔴
+### Phase 2: `Changeset` type and `TreeEvent.path` rename 🟢
 
 > **Breaking change coordination.** This phase changes the `Changefeed` coalgebra's subscriber signature from `(change: C) => void` to `(changeset: Changeset<C>) => void`. The `@kyneta/core` compiler's `getDeltaKind` extracts the change type from this signature via a multi-hop TypeScript type walk. The new `Changeset<C>` wrapper adds an indirection layer that will break the compiler's type extraction. This must be verified and fixed as part of this phase.
 
@@ -131,7 +131,7 @@ Define `Changeset<C>` as the unit of batch delivery. Rename `TreeEvent.origin` �
 #### `Changeset` type
 
 ```ts
-interface Changeset<C extends ChangeBase = ChangeBase> {
+interface Changeset<C = ChangeBase> {
   /** The individual changes in this batch. */
   readonly changes: readonly C[]
   /** Provenance of the batch (e.g. "sync", "undo", "local"). */
@@ -164,17 +164,19 @@ interface ComposedChangefeed<S, C extends ChangeBase = ChangeBase>
 }
 ```
 
-- Task: Define `Changeset` in `src/changeset.ts` (or extend `src/changefeed.ts`). 🔴
-- Task: Remove `origin?: string` from `ChangeBase` in `src/change.ts`. 🔴
-- Task: Rename `TreeEvent.origin` to `TreeEvent.path` in `src/changefeed.ts`. 🔴
-- Task: Update `Changefeed.subscribe` signature to receive `Changeset<C>`. 🔴
-- Task: Update `ComposedChangefeed.subscribeTree` signature to receive `Changeset<TreeEvent<C>>`. 🔴
-- Task: Export `Changeset` from `src/index.ts`. 🔴
-- Task: Update all existing subscribers in tests and example code to use the new signatures. 🔴
-- Task: Update `@kyneta/core`'s `inputTextRegion` — it currently reads `change.origin`; it must read `changeset.origin` instead, with inner iteration over `changeset.changes`. Flag this as a downstream breaking change. 🔴
-- Task: Verify and update `@kyneta/core`'s compiler `getDeltaKind` type extraction — it walks the `subscribe` callback signature to extract the change type. The new `Changeset<C>` wrapper adds an indirection that changes what the compiler sees. 🔴
-- Task: Update mock infrastructure in `packages/core/src/compiler/integration/helpers.ts` — mocks that stamp `origin: "local"` onto change objects must instead wrap changes in `Changeset` with `origin: "local"`. 🔴
-- Task: Verify all existing tests pass after the type migration. 🔴
+- Task: Define `Changeset` in `src/changeset.ts` (or extend `src/changefeed.ts`). 🟢 Defined in `src/changefeed.ts` alongside `Changefeed`/`TreeEvent`. Type parameter relaxed to `C = ChangeBase` (not `C extends ChangeBase`) because `Changeset<TreeEvent>` requires it.
+- Task: Remove `origin?: string` from `ChangeBase` in `src/change.ts`. 🟢
+- Task: Rename `TreeEvent.origin` to `TreeEvent.path` in `src/changefeed.ts`. 🟢 `TreeEvent` also gained a type parameter `<C extends ChangeBase = ChangeBase>`.
+- Task: Update `Changefeed.subscribe` signature to receive `Changeset<C>`. 🟢
+- Task: Update `ComposedChangefeed.subscribeTree` signature to receive `Changeset<TreeEvent<C>>`. 🟢
+- Task: Export `Changeset` from `src/index.ts`. 🟢
+- Task: Update all existing subscribers in tests and example code to use the new signatures. 🟢 Updated `changefeed.test.ts` (~40 sites), `fluent.test.ts`, `transaction.test.ts`, `example/main.ts`. Added 2 new tests for degenerate changeset shape.
+- Task: Update `@kyneta/core`'s `inputTextRegion` — it currently reads `change.origin`; it must read `changeset.origin` instead, with inner iteration over `changeset.changes`. Flag this as a downstream breaking change. 🟢 Solved by extending the runtime `subscribe()` helper to pass `changeset.origin` as a second arg to the handler. `inputTextRegion` reads `origin` from the second parameter.
+- Task: Verify and update `@kyneta/core`'s compiler `getDeltaKind` type extraction — it walks the `subscribe` callback signature to extract the change type. The new `Changeset<C>` wrapper adds an indirection that changes what the compiler sees. 🟢 Added hops 7–8: extract `changes` property → get array element type → then existing `.type` extraction. Also removed dead `isReactiveType` alias, `"list"→"sequence"` legacy mapping, and `addLoroTypes` test alias.
+- Task: Update mock infrastructure in `packages/core/src/compiler/integration/helpers.ts` — mocks that stamp `origin: "local"` onto change objects must instead wrap changes in `Changeset` with `origin: "local"`. 🟢 Updated `createMockTextRef`, `createMockCounterRef`, `createMockSequenceRef`, `createMockDoc`, `createMockPlainRef`. Also updated mocks in `regions.test.ts`, `text-patch.test.ts`, `subscribe.test.ts`.
+- Task: Update `@kyneta/core`'s `local-ref.ts` — implements changefeed protocol directly with old subscriber signature. 🟢 Updated `state()` to deliver `Changeset<ReplaceChange<T>>` to subscribers. Updated `local-ref.test.ts` assertions.
+- Task: Update `@kyneta/core`'s `subscribe.ts` — unwraps `Changeset` for callers, passes `origin` as second arg. 🟢
+- Task: Verify all existing tests pass after the type migration. 🟢 777/777 schema tests, 869/869 core tests.
 
 **Note:** This phase changes the types but does not yet implement batched delivery. `withChangefeed` temporarily wraps each individual notification in a degenerate `Changeset` of one to satisfy the new signature. The actual batched delivery comes in Phase 3.
 

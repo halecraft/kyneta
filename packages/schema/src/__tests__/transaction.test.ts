@@ -198,19 +198,20 @@ describe("transaction: commit replays through wrappable ctx.dispatch", () => {
       Writable<typeof pointSchema>
 
     const CF_SYM = Symbol.for("kyneta:changefeed")
-    const xChanges: unknown[] = []
-    ;(doc.x as any)[CF_SYM].subscribe((c: unknown) => xChanges.push(c))
+    const xChangesets: unknown[] = []
+    ;(doc.x as any)[CF_SYM].subscribe((cs: unknown) => xChangesets.push(cs))
 
     ctx.beginTransaction()
     doc.x.set(10)
     // No notifications during buffering — store is unchanged
-    expect(xChanges).toHaveLength(0)
+    expect(xChangesets).toHaveLength(0)
 
     ctx.commit()
     // Commit replays through ctx.dispatch (the wrapped property),
     // so the changefeed notification wrapper fires
-    expect(xChanges.length).toBeGreaterThanOrEqual(1)
+    expect(xChangesets.length).toBeGreaterThanOrEqual(1)
     expect(store.x).toBe(10)
-    expect((xChanges[xChanges.length - 1] as { type: string }).type).toBe("replace")
+    const lastCs = xChangesets[xChangesets.length - 1] as { changes: { type: string }[] }
+    expect(lastCs.changes[lastCs.changes.length - 1]!.type).toBe("replace")
   })
 })

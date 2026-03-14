@@ -264,9 +264,7 @@ export function isChangefeedType(type: Type): boolean {
   return false
 }
 
-// Backward-compatible alias — analyze.ts re-exports this name.
-// The function is the same; CHANGEFEED subsumes both REACTIVE and SNAPSHOT.
-export { isChangefeedType as isReactiveType }
+
 
 /**
  * Get the delta kind for a type with a changefeed.
@@ -363,11 +361,29 @@ export function getDeltaKind(type: Type): DeltaKind {
       return "replace"
     }
 
-    // Hop 6: Get the change parameter type → C (the change type)
-    const changeParam = changeParams[0]
-    const changeType = checker.getTypeOfSymbol(changeParam)
+    // Hop 6: Get the changeset parameter type → Changeset<C>
+    // (Previously this was the change type C directly, but the
+    // Changefeed protocol now delivers Changeset<C> batches.)
+    const changesetParam = changeParams[0]
+    const changesetType = checker.getTypeOfSymbol(changesetParam)
 
-    // Hop 7: Extract the "type" property from the change type
+    // Hop 7: Get the `changes` property on Changeset<C> → readonly C[]
+    const changesProp = changesetType.getProperty("changes")
+    if (!changesProp) {
+      return "replace"
+    }
+
+    const changesArrayType = checker.getTypeOfSymbol(changesProp)
+
+    // Hop 8: Get the array element type → C
+    // The `changes` property is `readonly C[]`. We need to extract C
+    // by getting the number index type of the array.
+    const changeType = changesArrayType.getNumberIndexType?.()
+    if (!changeType) {
+      return "replace"
+    }
+
+    // Hop 9: Extract the "type" property from the change type C
     const typeProperty = changeType.getProperty("type")
     if (!typeProperty) {
       return "replace"
@@ -378,11 +394,6 @@ export function getDeltaKind(type: Type): DeltaKind {
     // Check if it's a string literal type
     if (typePropertyType.isStringLiteral()) {
       const value = typePropertyType.value as string
-      // Map legacy "list" → "sequence" for backward compatibility with
-      // existing type definitions that predate the vocabulary alignment.
-      if (value === "list") {
-        return "sequence"
-      }
       if (
         value === "replace" ||
         value === "text" ||

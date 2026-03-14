@@ -20,11 +20,11 @@
  * const count = state(0)
  * count()  // 0
  *
- * count[CHANGEFEED].subscribe((change) => {
- *   console.log("new value:", change.value)
+ * count[CHANGEFEED].subscribe((changeset) => {
+ *   console.log("new value:", changeset.changes[0].value)
  * })
  *
- * count.set(1)  // subscriber fires with { type: "replace", value: 1 }
+ * count.set(1)  // subscriber fires with { changes: [{ type: "replace", value: 1 }] }
  * count()       // 1
  * ```
  *
@@ -35,6 +35,7 @@ import {
   CHANGEFEED,
   getOrCreateChangefeed,
   type Changefeed,
+  type Changeset,
   type ReplaceChange,
   replaceChange,
 } from "@kyneta/schema"
@@ -100,7 +101,7 @@ export interface LocalRef<T> {
 export function state<T>(initial: T): LocalRef<T> {
   // Mutable state captured by closure
   let value: T = initial
-  const subscribers = new Set<(change: ReplaceChange<T>) => void>()
+  const subscribers = new Set<(changeset: Changeset<ReplaceChange<T>>) => void>()
 
   // The callable ref — arrow function that returns current value
   const ref: any = () => value
@@ -109,8 +110,9 @@ export function state<T>(initial: T): LocalRef<T> {
   ref.set = (newValue: T): void => {
     value = newValue
     const change = replaceChange(newValue)
+    const changeset: Changeset<ReplaceChange<T>> = { changes: [change] }
     for (const cb of subscribers) {
-      cb(change)
+      cb(changeset)
     }
   }
 
@@ -123,7 +125,7 @@ export function state<T>(initial: T): LocalRef<T> {
           return value
         },
         subscribe(
-          callback: (change: ReplaceChange<T>) => void,
+          callback: (changeset: Changeset<ReplaceChange<T>>) => void,
         ): () => void {
           subscribers.add(callback)
           return () => {

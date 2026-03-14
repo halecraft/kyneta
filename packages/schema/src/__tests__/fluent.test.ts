@@ -25,6 +25,7 @@ import type {
   InterpretBuilder,
   WritableContext,
   RefContext,
+  Changeset,
   TreeEvent,
   Interpreter,
 } from "../index.js"
@@ -136,10 +137,12 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
 
     // subscribeTree works
     const events: TreeEvent[] = []
-    doc.settings[CHANGEFEED].subscribeTree((e: TreeEvent) => events.push(e))
+    doc.settings[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
+      for (const event of changeset.changes) events.push(event)
+    })
     doc.settings.darkMode.set(true)
     expect(events.length).toBeGreaterThanOrEqual(1)
-    expect((events[0]!.origin[0] as { key: string }).key).toBe("darkMode")
+    expect((events[0]!.path[0] as { key: string }).key).toBe("darkMode")
   })
 })
 
