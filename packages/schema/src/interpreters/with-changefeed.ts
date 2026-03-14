@@ -39,7 +39,7 @@ import type {
   TreeEvent,
 } from "../changefeed.js"
 import type { WritableContext } from "./writable.js"
-import { readByPath } from "../store.js"
+import { readByPath, pathKey } from "../store.js"
 import { isPropertyHost } from "../guards.js"
 import { READ } from "./bottom.js"
 
@@ -76,15 +76,6 @@ const contextState = new WeakMap<
     originalDispatch: (path: Path, change: ChangeBase) => void
   }
 >()
-
-/**
- * Converts a Path to a stable string key for listener map lookup.
- */
-function pathKey(path: Path): string {
-  return path
-    .map(seg => (seg.type === "key" ? seg.key : String(seg.index)))
-    .join("\0")
-}
 
 /**
  * Ensures the given WritableContext has its dispatch wrapped to fire

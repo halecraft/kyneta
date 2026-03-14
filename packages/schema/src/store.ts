@@ -31,6 +31,21 @@ export type Store = Record<string, unknown>
 // ---------------------------------------------------------------------------
 
 /**
+ * Converts a `Path` to a stable string key for use as a `Map` key.
+ *
+ * Uses `\0` (null byte) as a delimiter — this character cannot appear
+ * in JSON property names, so the encoding is injection-free.
+ *
+ * Shared across interpreter layers (`withChangefeed`, `withCaching`)
+ * that maintain path-keyed handler maps.
+ */
+export function pathKey(path: Path): string {
+  return path
+    .map(seg => (seg.type === "key" ? seg.key : String(seg.index)))
+    .join("\0")
+}
+
+/**
  * Resolves a segment key for JS object access.
  * Key segments use the key directly; index segments use the numeric index
  * (which JS coerces to a string for object/array access).

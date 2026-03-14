@@ -123,6 +123,7 @@ export {
   writeByPath,
   applyChangeToStore,
   dispatchSum,
+  pathKey,
 } from "./store.js"
 export type { Store } from "./store.js"
 

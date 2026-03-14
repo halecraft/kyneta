@@ -113,14 +113,14 @@ Both `withChangefeed` and `withCaching` need to convert a `Path` to a stable str
 
 ## Phases
 
-### Phase 1: Extract `pathKey` to shared utility 🔴
+### Phase 1: Extract `pathKey` to shared utility 🟢
 
 The `pathKey(path: Path) → string` function converts a `Path` to a stable `\0`-delimited string for use as a `Map` key. Currently private in `with-changefeed.ts`. Extract to a shared module so both `withChangefeed` and `withCaching` can import it.
 
-- Task: Create `src/path-utils.ts` (or add to `src/store.ts`) with the `pathKey` function. 🔴
-- Task: Export `pathKey` from `src/index.ts`. 🔴
-- Task: Update `with-changefeed.ts` to import `pathKey` from the shared module instead of defining it locally. 🔴
-- Task: Verify all existing tests pass (pure refactor, no behavior change). 🔴
+- Task: Create `src/path-utils.ts` (or add to `src/store.ts`) with the `pathKey` function. 🟢 Added to `src/store.ts` (Path helpers section).
+- Task: Export `pathKey` from `src/index.ts`. 🟢
+- Task: Update `with-changefeed.ts` to import `pathKey` from the shared module instead of defining it locally. 🟢
+- Task: Verify all existing tests pass (pure refactor, no behavior change). 🟢 775/775 pass.
 
 ### Phase 2: `Changeset` type and `TreeEvent.path` rename 🔴
 
