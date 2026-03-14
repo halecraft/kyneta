@@ -16,8 +16,7 @@ import {
   TRANSACT,
 } from "../index.js"
 import type {
-  Readable,
-  Writable,
+  Ref,
   TreeEvent,
   Changeset,
   ChangeBase,
@@ -61,10 +60,7 @@ function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(chatDocSchema, fullInterpreter, ctx) as unknown as Readable<
-    typeof chatDocSchema
-  > &
-    Writable<typeof chatDocSchema>
+  const doc = interpret(chatDocSchema, fullInterpreter, ctx) as unknown as Ref<typeof chatDocSchema>
   return { store, ctx, doc }
 }
 
@@ -596,8 +592,7 @@ describe("changefeed: transaction integration", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
-      Writable<typeof schema>
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
@@ -665,8 +660,7 @@ describe("changefeed: transaction integration", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
-      Writable<typeof schema>
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
 
     ctx.beginTransaction()
     doc.x.set(10)
@@ -688,8 +682,7 @@ describe("changefeed: transaction integration", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
-      Writable<typeof schema>
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
@@ -755,8 +748,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
-      Writable<typeof schema>
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
@@ -782,8 +774,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
-      Writable<typeof schema>
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
 
     let observedX: unknown = undefined
     let observedY: unknown = undefined
@@ -822,8 +813,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
-      Writable<typeof schema>
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
@@ -870,8 +860,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
-      Writable<typeof schema>
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
 
     const xChangesets: Changeset[] = []
     const yChangesets: Changeset[] = []
@@ -900,8 +889,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
-      Writable<typeof schema>
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
 
     // Only subscribe to x, not y
     const xChangesets: Changeset[] = []

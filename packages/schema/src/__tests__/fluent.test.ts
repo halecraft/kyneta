@@ -22,6 +22,7 @@ import {
 import type {
   Readable,
   Writable,
+  Ref,
   InterpreterLayer,
   InterpretBuilder,
   WritableContext,
@@ -94,7 +95,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
     const doc = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
-      .done() as any
+      .done() as Ref<typeof pointSchema>
 
     doc.x.set(42)
     expect(store.x).toBe(42)
@@ -117,7 +118,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
       .with(readable)
       .with(writable)
       .with(changefeed)
-      .done() as any
+      .done() as Ref<typeof chatDocSchema>
 
     // Readable
     expect(doc.title()).toBe("Hello")
@@ -137,8 +138,8 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
     expect(hasComposedChangefeed(doc.messages)).toBe(true)
 
     // subscribeTree works
-    const events: TreeEvent[] = []
-    doc.settings[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
+    const events: TreeEvent[] = [];
+    (doc.settings as any)[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
       for (const event of changeset.changes) events.push(event)
     })
     doc.settings.darkMode.set(true)
@@ -159,13 +160,13 @@ describe("fluent: transactions", () => {
       .with(readable)
       .with(writable)
       .with(changefeed)
-      .done() as any
+      .done() as Ref<typeof pointSchema>
 
     // TRANSACT points to the correct context
     expect(doc.x[TRANSACT]).toBe(ctx)
 
-    const changes: unknown[] = []
-    doc.x[CHANGEFEED].subscribe((c: unknown) => changes.push(c))
+    const changes: unknown[] = [];
+    (doc.x as any)[CHANGEFEED].subscribe((c: unknown) => changes.push(c))
 
     ctx.beginTransaction()
     doc.x.set(10)
@@ -205,7 +206,7 @@ describe("fluent: builder branching", () => {
     const mutable = interpret(pointSchema, ctx2)
       .with(readable)
       .with(writable)
-      .done() as any
+      .done() as Ref<typeof pointSchema>
 
     // Read-only branch must NOT have gained .set() from the writable branch
     expect(readOnly.x.set).toBeUndefined()

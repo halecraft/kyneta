@@ -59,8 +59,8 @@ import {
 } from "../src/index.js";
 
 import type {
+	Ref,
 	Readable,
-	Writable,
 	Plain,
 	RefContext,
 	WritableContext,
@@ -144,7 +144,7 @@ const doc = interpret(ProjectSchema, ctx)
 	.with(readable)
 	.with(writable)
 	.with(changefeed)
-	.done() as any;
+	.done() as Ref<typeof ProjectSchema>;
 
 log(`
     const store = Zero.overlay(seed, Zero.structural(schema), schema)
@@ -379,7 +379,7 @@ function createFreshDoc(docSeed: Record<string, unknown> = {}) {
 		.with(readable)
 		.with(writable)
 		.with(changefeed)
-		.done() as any;
+		.done() as Ref<typeof ProjectSchema>;
 }
 
 const baseSeed = {

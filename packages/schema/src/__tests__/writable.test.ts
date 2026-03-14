@@ -15,6 +15,7 @@ import {
 import { INVALIDATE } from "../interpreters/with-caching.js"
 import type {
   WritableContext,
+  Ref,
   TextRef,
   CounterRef,
   ScalarRef,
@@ -62,7 +63,7 @@ function createStructuralDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(structuralDocSchema, fullInterpreter, ctx) as any
+  const doc = interpret(structuralDocSchema, fullInterpreter, ctx) as unknown as Ref<typeof structuralDocSchema>
   return { store, ctx, doc }
 }
 
@@ -84,7 +85,7 @@ describe("writable: product lazy getters", () => {
       metadata: { version: 1 },
     }
     const ctx = createWritableContext(store)
-    const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as any
+    const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as unknown as Ref<typeof structuralDocSchema>
 
     // Access settings — metadata should not be forced
     const settings = doc.settings
@@ -169,7 +170,7 @@ describe("writable: product .set()", () => {
       metadata: { version: 1 },
     }
     const ctx = createWritableContext(store)
-    const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as any
+    const doc = interpret(structuralDocSchema, writableInterpreter, ctx) as unknown as Ref<typeof structuralDocSchema>
 
     ctx.beginTransaction()
     doc.settings.set({ darkMode: true, fontSize: 20 })
@@ -283,7 +284,7 @@ describe("writable: transactions", () => {
       y: Schema.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as unknown as Ref<typeof schema>
 
     ctx.beginTransaction()
     doc.x.set(10)
@@ -304,7 +305,7 @@ describe("writable: transactions", () => {
     const store = { x: 0 }
     const schema = Schema.doc({ x: Schema.number() })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as unknown as Ref<typeof schema>
 
     doc.x.set(42)
     expect(store.x).toBe(42)
@@ -326,27 +327,27 @@ describe("writable: discriminated sum", () => {
   it("dispatches to the correct variant based on store discriminant", () => {
     const store = { item: { type: "image", url: "pic.png" } }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as unknown as Ref<typeof schema>
 
     // Should produce the "image" variant ref with a .url field
-    expect(doc.item.url()).toBe("pic.png")
+    expect((doc as any).item.url()).toBe("pic.png")
   })
 
   it("falls back to first variant when discriminant is missing", () => {
     const store = { item: {} }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as unknown as Ref<typeof schema>
 
     // First variant is "text" which has a .body field
-    expect(typeof doc.item.body).toBe("function")
+    expect(typeof (doc as any).item.body).toBe("function")
   })
 
   it("falls back to first variant when store value is not an object", () => {
     const store = { item: 42 }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as unknown as Ref<typeof schema>
 
-    expect(typeof doc.item.body).toBe("function")
+    expect(typeof (doc as any).item.body).toBe("function")
   })
 })
 
@@ -362,7 +363,7 @@ describe("writable: nullable (positional sum)", () => {
   it("null store value dispatches to the null variant", () => {
     const store = { bio: null }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as unknown as Ref<typeof schema>
 
     // The null variant is a scalar ref whose () returns null
     expect(doc.bio()).toBe(null)
@@ -371,7 +372,7 @@ describe("writable: nullable (positional sum)", () => {
   it("non-null store value dispatches to the inner variant", () => {
     const store = { bio: "Hello world" }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as unknown as Ref<typeof schema>
 
     expect(doc.bio()).toBe("Hello world")
   })
@@ -379,9 +380,9 @@ describe("writable: nullable (positional sum)", () => {
   it("mutation on the inner ref works", () => {
     const store = { bio: "old" }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, writableInterpreter, ctx) as any
+    const doc = interpret(schema, writableInterpreter, ctx) as unknown as Ref<typeof schema>
 
-    doc.bio.set("new")
+    ;(doc.bio as any).set("new")
     expect(store.bio).toBe("new")
   })
 })
@@ -420,7 +421,7 @@ function createLoroDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(loroDocSchema, fullInterpreter, ctx) as any
+  const doc = interpret(loroDocSchema, fullInterpreter, ctx) as unknown as Ref<typeof loroDocSchema>
   return { store, ctx, doc }
 }
 
@@ -582,20 +583,20 @@ describe("writable: invalidate-before-dispatch", () => {
   function createCachedListDoc(items: Array<{ name: string }>) {
     const store = { items }
     const ctx = createWritableContext(store)
-    const doc = interpret(listSchema, fullInterpreter, ctx) as any
+    const doc = interpret(listSchema, fullInterpreter, ctx) as unknown as Ref<typeof listSchema>
     return { doc, store, ctx }
   }
 
   it("after push(), .at(newIndex) returns correct child immediately", () => {
     const { doc } = createCachedListDoc([{ name: "a" }])
     // Populate cache
-    expect(doc.items.at(0).name()).toBe("a")
+    expect(doc.items.at(0)!.name()).toBe("a")
     // Push a new item
     doc.items.push({ name: "b" })
     // New index should be immediately accessible
-    expect(doc.items.at(1).name()).toBe("b")
+    expect(doc.items.at(1)!.name()).toBe("b")
     // Existing ref is preserved
-    expect(doc.items.at(0).name()).toBe("a")
+    expect(doc.items.at(0)!.name()).toBe("a")
   })
 
   it("after insert(1, item) on 3-item list, shifted indices are fresh", () => {
@@ -614,10 +615,10 @@ describe("writable: invalidate-before-dispatch", () => {
 
     // index 0: unchanged
     expect(doc.items.at(0)).toBe(refA)
-    expect(doc.items.at(0).name()).toBe("a")
+    expect(doc.items.at(0)!.name()).toBe("a")
     // index 1: new item (not the old refB)
     expect(doc.items.at(1)).not.toBe(refB)
-    expect(doc.items.at(1).name()).toBe("x")
+    expect(doc.items.at(1)!.name()).toBe("x")
     // index 2: shifted from old index 1 (refB)
     expect(doc.items.at(2)).toBe(refB)
     // index 3: shifted from old index 2 (refC)
@@ -660,7 +661,7 @@ describe("writable: cacheless stack", () => {
     })
     const store = { items: [{ name: "a" }] }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as any
+    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<typeof schema>
 
     doc.items.push({ name: "b" })
     expect((store.items as any[]).length).toBe(2)
@@ -671,7 +672,7 @@ describe("writable: cacheless stack", () => {
     const schema = Schema.doc({ meta: Schema.record(Schema.number()) })
     const store = { meta: { a: 1 } }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as any
+    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<typeof schema>
 
     doc.meta.set("b", 2)
     expect((store.meta as any).b).toBe(2)
@@ -681,7 +682,7 @@ describe("writable: cacheless stack", () => {
     const schema = Schema.doc({ n: Schema.number() })
     const store = { n: 0 }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as any
+    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<typeof schema>
 
     doc.n.set(42)
     expect(store.n).toBe(42)
@@ -853,7 +854,7 @@ describe("writable: TRANSACT attachment", () => {
     expect(doc.metadata[TRANSACT]).toBe(ctx)
     // Verify the map still works normally after TRANSACT attachment
     doc.metadata.set("newKey", "newValue")
-    expect(doc.metadata.at("newKey")()).toBe("newValue")
+    expect(doc.metadata.at("newKey")!()).toBe("newValue")
   })
 
   it("[TRANSACT] is present on cacheless stack refs", () => {
@@ -862,7 +863,7 @@ describe("writable: TRANSACT attachment", () => {
     })
     const store = { n: 0 }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as any
+    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<typeof schema>
     expect(doc.n[TRANSACT]).toBe(ctx)
     expect(doc[TRANSACT]).toBe(ctx)
   })

@@ -14,7 +14,7 @@ import {
   TRANSACT,
   hasTransact,
 } from "../index.js"
-import type { Readable, Writable } from "../index.js"
+import type { Ref } from "../index.js"
 
 const writableInterpreter = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
 
@@ -30,7 +30,7 @@ const pointSchema = Schema.doc({
 function createPointDoc(seed: Record<string, unknown> = { x: 0, y: 0 }) {
   const store = { ...seed }
   const ctx = createWritableContext(store)
-  const doc = interpret(pointSchema, writableInterpreter, ctx) as any
+  const doc = interpret(pointSchema, writableInterpreter, ctx) as unknown as Ref<typeof pointSchema>
   return { store, ctx, doc }
 }
 
@@ -193,10 +193,7 @@ describe("transaction: commit delivers batched changefeed notifications", () => 
     const store = { x: 0, y: 0 }
     const ctx = createWritableContext(store)
     const enriched = withChangefeed(writableInterpreter)
-    const doc = interpret(pointSchema, enriched, ctx) as unknown as Readable<
-      typeof pointSchema
-    > &
-      Writable<typeof pointSchema>
+    const doc = interpret(pointSchema, enriched, ctx) as unknown as Ref<typeof pointSchema>
 
     const CF_SYM = Symbol.for("kyneta:changefeed")
     const xChangesets: unknown[] = []

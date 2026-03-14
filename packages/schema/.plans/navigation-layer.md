@@ -477,43 +477,43 @@ In `src/__tests__/types.test.ts` (or a new file):
 - `Ref<S>` at all levels has `[TRANSACT]`
 - Audit existing `SequenceRef<T>` references in `types.test.ts` — update any `expectTypeOf` assertions that reference the removed type parameter
 
-## Phase 4: Migrate tests from `as any` to `Ref<S>` 🔴
+## Phase 4: Migrate tests from `as any` to `Ref<S>` 🟢
 
-### Task 4.1: Migrate `writable.test.ts` 🔴
+### Task 4.1: Migrate `writable.test.ts` 🟢
 
 Replace `as any` casts on full-stack `interpret()` results with `as Ref<typeof schema>`. This is the largest file (~26 `as any` casts on interpret results). Some `as any` casts are intentional (testing edge cases, write-only stacks, raw carriers) — those stay. Only full-stack results (where `fullInterpreter` or `writableInterpreter` is the composed stack) migrate.
 
-### Task 4.2: Migrate `changefeed.test.ts` 🔴
+### Task 4.2: Migrate `changefeed.test.ts` 🟢
 
 Replace `as unknown as Readable<S> & Writable<S>` with `as Ref<typeof schema>` (or just `Ref<typeof chatDocSchema>`). The 11 existing type errors should resolve. For tests that access `[TRANSACT]`, `Ref<S>` includes `HasTransact`.
 
 For tests that access `[CHANGEFEED]` (via `getChangefeed` helper), those use `(obj as any)[CF_SYM]` which already bypasses the type system. No change needed for the changefeed symbol access pattern itself.
 
-### Task 4.3: Migrate `facade.test.ts` 🔴
+### Task 4.3: Migrate `facade.test.ts` 🟢
 
 Replace `as unknown as Readable<S> & Writable<S>` with `as Ref<typeof schema>`.
 
-### Task 4.4: Migrate `transaction.test.ts` 🔴
+### Task 4.4: Migrate `transaction.test.ts` 🟢
 
 Replace the one `as unknown as Readable<S> & Writable<S>` cast with `Ref<S>`.
 
-### Task 4.5: Migrate `readable.test.ts` 🔴
+### Task 4.5: Migrate `readable.test.ts` 🟢
 
 These tests use `withCaching(withReadable(bottomInterpreter))` (no writable layer). They should use `Readable<S>` (unchanged). Update composition to `withCaching(withReadable(withNavigation(bottomInterpreter)))`.
 
-### Task 4.6: Migrate `with-caching.test.ts` and `with-readable.test.ts` 🔴
+### Task 4.6: Migrate `with-caching.test.ts` and `with-readable.test.ts` 🟢
 
 Update composition patterns. These tests operate at individual layer level and may legitimately use `as any` for testing internal behavior. Only migrate where the full composed stack is used.
 
-### Task 4.7: Migrate `fluent.test.ts` 🔴
+### Task 4.7: Migrate `fluent.test.ts` 🟢
 
 Update the fluent API tests to use `Ref<S>` where the full `.with(readable).with(writable)` stack is used.
 
-### Task 4.8: Migrate `example/main.ts` 🔴
+### Task 4.8: Migrate `example/main.ts` 🟢
 
 Replace `as any` with `as Ref<typeof ProjectSchema>`.
 
-### Task 4.9: Verify zero `tsc` errors 🔴
+### Task 4.9: Verify zero `tsc` errors 🟢
 
 Run `bun tsc --noEmit` and confirm zero errors across the entire project.
 
@@ -797,7 +797,7 @@ Introduces the type-level fix. Additive: new types are defined and exported, but
 
 ---
 
-### PR 5: `refactor: migrate tests from as-any to Ref<S>` 🔴
+### PR 5: `refactor: migrate tests from as-any to Ref<S>` 🟢
 
 **Type:** Call-site migration
 

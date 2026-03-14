@@ -22,8 +22,7 @@ import {
   incrementChange,
 } from "../index.js"
 import type {
-  Readable,
-  Writable,
+  Ref,
   Changeset,
   TreeEvent,
   ChangeBase,
@@ -71,10 +70,7 @@ function createSeed() {
 function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = { ...createSeed(), ...storeOverrides }
   const ctx = createWritableContext(store)
-  const doc = interpret(chatDocSchema, fullInterpreter, ctx) as unknown as Readable<
-    typeof chatDocSchema
-  > &
-    Writable<typeof chatDocSchema>
+  const doc = interpret(chatDocSchema, fullInterpreter, ctx) as unknown as Ref<typeof chatDocSchema>
   return { store, ctx, doc }
 }
 
