@@ -203,13 +203,13 @@ describe("transaction: commit replays through wrappable ctx.dispatch", () => {
 
     ctx.beginTransaction()
     doc.x.set(10)
-    // Transitional withChangefeed fires eagerly during buffer — record count
-    const countAfterBuffer = xChanges.length
+    // No notifications during buffering — store is unchanged
+    expect(xChanges).toHaveLength(0)
 
     ctx.commit()
     // Commit replays through ctx.dispatch (the wrapped property),
-    // so the changefeed notification wrapper fires again
-    expect(xChanges.length).toBeGreaterThan(countAfterBuffer)
+    // so the changefeed notification wrapper fires
+    expect(xChanges.length).toBeGreaterThanOrEqual(1)
     expect(store.x).toBe(10)
     expect((xChanges[xChanges.length - 1] as { type: string }).type).toBe("replace")
   })

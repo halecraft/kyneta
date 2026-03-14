@@ -650,10 +650,10 @@ doc.settings.maxTasks.set(100) // not observed
 section(12, "Transaction + Tree Subscription Integration")
 
 log(`
-    During a transaction, dispatch buffers changes in the store but
-    the changefeed dispatch wrapper still fires listeners eagerly.
-    On commit, changes replay through dispatch — so listeners fire
-    again. The key invariant: the store is unchanged until commit.
+    During a transaction, dispatch buffers changes — the store is
+    unchanged and changefeed subscribers do NOT fire. On commit,
+    changes replay through dispatch, so subscribers fire exactly
+    once per change at commit time.
 `)
 
 const txEvents: { origin: string; type: string }[] = []
@@ -669,19 +669,18 @@ const ctx = (doc as any)[TRANSACT] as WritableContext
 ctx.beginTransaction()
 doc.settings.visibility.set("private")
 doc.settings.maxTasks.set(42)
-const countDuringBuffer = txEvents.length
 
 log(`
     After 2 mutations inside transaction (before commit):
-      txEvents.length → ${txEvents.length}  (listeners fire eagerly)
-      doc.settings.visibility() → "${doc.settings.visibility()}"  (but store is unchanged!)
+      txEvents.length → ${txEvents.length}  (zero — notifications suppressed)
+      doc.settings.visibility() → "${doc.settings.visibility()}"  (store unchanged)
 `)
 
 const flushed = ctx.commit()
 
 log(`
     After commit:
-      txEvents.length → ${txEvents.length}  (replay fired ${txEvents.length - countDuringBuffer} more)
+      txEvents.length → ${txEvents.length}  (fired at commit time)
       flushed.length → ${flushed.length}
       doc.settings.visibility() → "${doc.settings.visibility()}"  (store updated)
       doc.settings.maxTasks() → ${doc.settings.maxTasks()}

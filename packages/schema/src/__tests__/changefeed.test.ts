@@ -536,6 +536,51 @@ describe("changefeed: TRANSACT preserved", () => {
 // ===========================================================================
 
 describe("changefeed: transaction integration", () => {
+  it("no subscriber notifications during transaction buffering", () => {
+    const store = { x: 0, y: 0 }
+    const schema = LoroSchema.doc({
+      x: LoroSchema.plain.number(),
+      y: LoroSchema.plain.number(),
+    })
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
+      Writable<typeof schema>
+
+    const xChanges: unknown[] = []
+    getChangefeed(doc.x).subscribe((c) => xChanges.push(c))
+
+    ctx.beginTransaction()
+    doc.x.set(10)
+    doc.x.set(20)
+
+    // The key invariant: ZERO notifications while buffering.
+    // Store is unchanged, so subscribers must not fire.
+    expect(store.x).toBe(0)
+    expect(xChanges).toHaveLength(0)
+
+    ctx.commit()
+    // After commit, notifications fire via dispatch replay
+    expect(store.x).toBe(20)
+    expect(xChanges.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it("no tree subscriber notifications during transaction buffering", () => {
+    const { ctx, doc } = createChatDoc()
+    const events: TreeEvent[] = []
+    getChangefeed(doc.settings).subscribeTree!((e) => events.push(e))
+
+    ctx.beginTransaction()
+    doc.settings.darkMode.set(true)
+    doc.settings.fontSize.set(18)
+
+    // ZERO tree events while buffering
+    expect(events).toHaveLength(0)
+
+    ctx.commit()
+    // After commit, both child changes propagate
+    expect(events.length).toBeGreaterThanOrEqual(2)
+  })
+
   it("store buffers changes during transaction until commit", () => {
     const store = { x: 0, y: 0 }
     const schema = LoroSchema.doc({
@@ -574,13 +619,12 @@ describe("changefeed: transaction integration", () => {
 
     ctx.beginTransaction()
     doc.x.set(10)
-    // During transaction, dispatch is buffered — the transitional
-    // notification wiring won't fire until commit replays
-    const countDuringBuffer = xChanges.length
+    // No notifications during buffering
+    expect(xChanges).toHaveLength(0)
 
     ctx.commit()
     // After commit, replay fires through the wrapped dispatch
-    expect(xChanges.length).toBeGreaterThan(countDuringBuffer)
+    expect(xChanges.length).toBeGreaterThanOrEqual(1)
     expect(store.x).toBe(10)
     expect((xChanges[xChanges.length - 1] as { type: string }).type).toBe("replace")
   })
@@ -593,11 +637,12 @@ describe("changefeed: transaction integration", () => {
     ctx.beginTransaction()
     doc.settings.darkMode.set(true)
     doc.settings.fontSize.set(18)
-    const countDuringBuffer = events.length
+    // No tree events during buffering
+    expect(events).toHaveLength(0)
 
     ctx.commit()
     // Both child changes should propagate up after commit
-    expect(events.length).toBeGreaterThan(countDuringBuffer)
+    expect(events.length).toBeGreaterThanOrEqual(2)
 
     const darkModeEvents = events.filter(
       (e) =>

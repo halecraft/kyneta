@@ -107,6 +107,12 @@ function ensureDispatchWiring(
 
   const wrappedDispatch = (path: Path, change: ChangeBase): void => {
     originalDispatch(path, change)
+    // Only fire listeners when the change was actually applied to the
+    // store. During a transaction, dispatch buffers into pending — the
+    // store is unchanged, so subscribers must not see the change yet.
+    // On commit(), inTransaction is set to false before replay, so
+    // listeners fire correctly during the replay loop.
+    if (ctx.inTransaction) return
     const key = pathKey(path)
     const set = listeners.get(key)
     if (set) {
