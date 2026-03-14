@@ -1,9 +1,9 @@
-// withReadable — fills the READ slot and adds structural navigation.
+// withReadable — fills the CALL slot and adds structural navigation.
 //
-// This transformer takes any interpreter that produces HasRead carriers
+// This transformer takes any interpreter that produces HasCall carriers
 // (i.e. bottomInterpreter or anything above it) and:
 //
-// 1. Fills the [READ] slot:
+// 1. Fills the [CALL] slot:
 //    - Leaf nodes (scalar, text, counter): `() => readByPath(store, path)`
 //    - Composite nodes (product, sequence, map): folds child values through
 //      the carrier's navigation surface to produce a fresh snapshot
@@ -30,8 +30,8 @@ import type {
 } from "../schema.js"
 import { readByPath, dispatchSum } from "../store.js"
 import { isNonNullObject } from "../guards.js"
-import { READ } from "./bottom.js"
-import type { HasRead, HasNavigation } from "./bottom.js"
+import { CALL } from "./bottom.js"
+import type { HasCall, HasNavigation } from "./bottom.js"
 import type { RefContext } from "../interpreter-types.js"
 
 // ---------------------------------------------------------------------------
@@ -39,9 +39,9 @@ import type { RefContext } from "../interpreter-types.js"
 // ---------------------------------------------------------------------------
 
 /**
- * Transformer that fills the `[READ]` slot and adds structural navigation.
+ * Transformer that fills the `[CALL]` slot and adds structural navigation.
  *
- * Takes an `Interpreter<RefContext, A extends HasRead>` and returns an
+ * Takes an `Interpreter<RefContext, A extends HasCall>` and returns an
  * `Interpreter<RefContext, A & HasNavigation>`. The carrier identity is
  * preserved — `withReadable` mutates the carrier produced by the base
  * interpreter, it does not replace it.
@@ -58,7 +58,7 @@ import type { RefContext } from "../interpreter-types.js"
  * doc.title !== doc.title  // true (no caching)
  * ```
  */
-export function withReadable<A extends HasRead>(
+export function withReadable<A extends HasCall>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasNavigation> {
   return {
@@ -70,8 +70,8 @@ export function withReadable<A extends HasRead>(
     ): A & HasNavigation {
       const result = base.scalar(ctx, path, schema) as any
 
-      // Fill READ slot
-      result[READ] = () => readByPath(ctx.store, path)
+      // Fill CALL slot
+      result[CALL] = () => readByPath(ctx.store, path)
 
       // Hint-aware toPrimitive for template literal coercion
       result[Symbol.toPrimitive] = (hint: string) => {
@@ -93,10 +93,10 @@ export function withReadable<A extends HasRead>(
       const baseFields = fields as Readonly<Record<string, () => A>>
       const result = base.product(ctx, path, schema, baseFields) as any
 
-      // Fill READ slot — fold child values through the carrier's navigation
+      // Fill CALL slot — fold child values through the carrier's navigation
       // surface (property getters) to produce a fresh snapshot. This goes
       // through withCaching's memoized getters when present.
-      result[READ] = () => {
+      result[CALL] = () => {
         const snapshot: Record<string, unknown> = {}
         for (const key of Object.keys(fields)) {
           const child = result[key]
@@ -133,12 +133,12 @@ export function withReadable<A extends HasRead>(
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem) as any
 
-      // Fill READ slot — fold child values to produce a fresh array
+      // Fill CALL slot — fold child values to produce a fresh array
       // snapshot. Uses the raw `item` closure (not result.at()) because
       // withCaching's cache shifting can leave refs with stale paths
       // after insert/delete. readByPath is still needed for structure
       // discovery (array length).
-      result[READ] = () => {
+      result[CALL] = () => {
         const arr = readByPath(ctx.store, path)
         const len = Array.isArray(arr) ? arr.length : 0
         const snapshot: unknown[] = []
@@ -205,12 +205,12 @@ export function withReadable<A extends HasRead>(
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem) as any
 
-      // Fill READ slot — fold child values to produce a fresh record
+      // Fill CALL slot — fold child values to produce a fresh record
       // snapshot. Uses the raw `item` closure (not result.at()) because
       // map keys can be dynamically added/removed and cached refs may
       // have stale state. readByPath is still needed for structure
       // discovery (object keys).
-      result[READ] = () => {
+      result[CALL] = () => {
         const obj = readByPath(ctx.store, path)
         const keys = isNonNullObject(obj) ? Object.keys(obj) : []
         const snapshot: Record<string, unknown> = {}
@@ -344,15 +344,15 @@ export function withReadable<A extends HasRead>(
       switch (schema.tag) {
         case "text": {
           // Text annotation: callable returning string, text-specific toPrimitive.
-          // We call the base to get a carrier, then fill READ.
+          // We call the base to get a carrier, then fill CALL.
           const baseInner = inner as (() => A) | undefined
           const result = base.annotated(ctx, path, schema, baseInner) as any
 
-          result[READ] = () => {
+          result[CALL] = () => {
             const v = readByPath(ctx.store, path)
             return typeof v === "string" ? v : String(v ?? "")
           }
-          result[Symbol.toPrimitive] = (_hint: string) => result[READ]()
+          result[Symbol.toPrimitive] = (_hint: string) => result[CALL]()
           return result as A & HasNavigation
         }
 
@@ -361,12 +361,12 @@ export function withReadable<A extends HasRead>(
           const baseInner = inner as (() => A) | undefined
           const result = base.annotated(ctx, path, schema, baseInner) as any
 
-          result[READ] = () => {
+          result[CALL] = () => {
             const v = readByPath(ctx.store, path)
             return typeof v === "number" ? v : 0
           }
           result[Symbol.toPrimitive] = (hint: string) => {
-            const v = result[READ]()
+            const v = result[CALL]()
             return hint === "string" ? String(v) : v
           }
           return result as A & HasNavigation

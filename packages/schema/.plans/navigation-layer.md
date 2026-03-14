@@ -68,9 +68,9 @@ Every test file except `changefeed.test.ts` and `facade.test.ts` casts `interpre
 
 The current architecture has no `withNavigation` layer — navigation lives inside `withReadable`. The `READ` symbol conflates call delegation with value reading. `HasRead` is used for the carrier base when it should mean "can read." There is no `Ref<S>` unified type. `SequenceRef` over-declares navigation members. Tests use `as any` pervasively.
 
-## Phase 1: Rename `READ` → `CALL` and split `HasRead` into `HasCall` + `HasRead` 🔴
+## Phase 1: Rename `READ` → `CALL` and split `HasRead` into `HasCall` + `HasRead` 🟢
 
-### Task 1.1: Rename the runtime symbol 🔴
+### Task 1.1: Rename the runtime symbol 🟢
 
 In `src/interpreters/bottom.ts`:
 
@@ -91,7 +91,7 @@ export function makeCarrier(): HasCall {
 }
 ```
 
-### Task 1.2: Split the capability interfaces 🔴
+### Task 1.2: Split the capability interfaces 🟢
 
 In `src/interpreters/bottom.ts`, replace the current `HasRead` / `HasNavigation` / `HasCaching` chain with:
 
@@ -129,11 +129,11 @@ Key changes from current:
 - `HasRead` is now a phantom brand extending `HasNavigation` — "the `[CALL]` slot has been filled with a reader." Produced by `withReadable`.
 - `HasCaching extends HasNavigation` (was `extends HasNavigation` — unchanged). Caching does not require reading.
 
-### Task 1.3: Update `bottomInterpreter` 🔴
+### Task 1.3: Update `bottomInterpreter` 🟢
 
 Change its type from `Interpreter<unknown, HasRead>` to `Interpreter<unknown, HasCall>`.
 
-### Task 1.4: Update all `READ` references across the codebase 🔴
+### Task 1.4: Update all `READ` references across the codebase 🟢
 
 Grep for `READ` (the symbol import/usage, not the word "read" in comments) across all files:
 
@@ -148,7 +148,7 @@ Grep for `READ` (the symbol import/usage, not the word "read" in comments) acros
 
 Deprecate the `READ` export with a comment pointing to `CALL`, or remove outright (no prod consumers).
 
-### Task 1.5: Tests for the rename 🔴
+### Task 1.5: Tests for the rename 🟢
 
 Update `src/__tests__/bottom.test.ts`:
 - `CALL in carrier` is true
@@ -712,7 +712,7 @@ Replace the symbol-property pattern with a formal `Map<symbol, Function>` regist
 
 The work is arranged as a dependency-ordered stack of 6 PRs. Each is individually buildable, testable, and reviewable. The stack follows an additive-first strategy: new APIs and types are introduced before anything is removed or migrated.
 
-### PR 1: `refactor: rename READ → CALL, HasRead → HasCall` 🔴
+### PR 1: `refactor: rename READ → CALL, HasRead → HasCall` 🟢
 
 **Type:** Mechanical refactor (rename)
 

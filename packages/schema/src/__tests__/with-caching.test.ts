@@ -14,7 +14,7 @@ import {
   bottomInterpreter,
 } from "../interpreters/bottom.js"
 import type {
-  HasRead,
+  HasCall,
   HasNavigation,
   HasCaching,
 } from "../interpreters/bottom.js"
@@ -735,9 +735,9 @@ describe("withCaching: read-only stack backward compatibility", () => {
 // ===========================================================================
 
 describe("type-level: withCaching", () => {
-  it("withCaching(withReadable(bottomInterpreter)) is Interpreter<RefContext, HasRead & HasNavigation & HasCaching>", () => {
+  it("withCaching(withReadable(bottomInterpreter)) is Interpreter<RefContext, HasCall & HasNavigation & HasCaching>", () => {
     const cached = withCaching(withReadable(bottomInterpreter))
-    const _check: Interpreter<RefContext, HasRead & HasNavigation & HasCaching> = cached
+    const _check: Interpreter<RefContext, HasCall & HasNavigation & HasCaching> = cached
     void _check
   })
 
@@ -749,18 +749,18 @@ describe("type-level: withCaching", () => {
     void _check
   })
 
-  it("result of cached interpreter also satisfies HasNavigation and HasRead", () => {
+  it("result of cached interpreter also satisfies HasNavigation and HasCall", () => {
     const cached = withCaching(withReadable(bottomInterpreter))
     const ctx: RefContext = { store: "test" as any }
     const result = interpret(Schema.string(), cached, ctx)
     const _checkNav: HasNavigation = result
-    const _checkRead: HasRead = result
+    const _checkRead: HasCall = result
     void _checkNav
     void _checkRead
   })
 
-  it("withCaching(bottomInterpreter) is a type error (bottom has HasRead, not HasNavigation)", () => {
-    // @ts-expect-error — bottomInterpreter produces HasRead, withCaching requires HasNavigation
+  it("withCaching(bottomInterpreter) is a type error (bottom has HasCall, not HasNavigation)", () => {
+    // @ts-expect-error — bottomInterpreter produces HasCall, withCaching requires HasNavigation
     const _bad = withCaching(bottomInterpreter)
     void _bad
   })

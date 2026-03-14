@@ -5,12 +5,12 @@ import {
   interpret,
 } from "../index.js"
 import {
-  READ,
+  CALL,
   makeCarrier,
   bottomInterpreter,
 } from "../interpreters/bottom.js"
 import type {
-  HasRead,
+  HasCall,
   HasNavigation,
 } from "../interpreters/bottom.js"
 import type { Interpreter } from "../interpret.js"
@@ -67,17 +67,17 @@ describe("makeCarrier", () => {
     expect(typeof carrier).toBe("function")
   })
 
-  it("has a [READ] symbol property", () => {
+  it("has a [CALL] symbol property", () => {
     const carrier = makeCarrier()
-    expect(READ in carrier).toBe(true)
-    expect(typeof carrier[READ]).toBe("function")
+    expect(CALL in carrier).toBe(true)
+    expect(typeof carrier[CALL]).toBe("function")
   })
 
-  it("calling the carrier delegates to [READ]", () => {
+  it("calling the carrier delegates to [CALL]", () => {
     const carrier = makeCarrier() as any
-    // Replace the READ slot with a spy
+    // Replace the CALL slot with a spy
     let called = false
-    carrier[READ] = (...args: unknown[]) => {
+    carrier[CALL] = (...args: unknown[]) => {
       called = true
       return args
     }
@@ -86,9 +86,9 @@ describe("makeCarrier", () => {
     expect(result).toEqual(["a", "b"])
   })
 
-  it("calling the carrier with default READ throws", () => {
+  it("calling the carrier with default CALL throws", () => {
     const carrier = makeCarrier() as any
-    expect(() => carrier()).toThrow("No reader configured")
+    expect(() => carrier()).toThrow("No call behavior configured")
   })
 
   it("carrier is a real function object — properties can be attached", () => {
@@ -102,9 +102,9 @@ describe("makeCarrier", () => {
     expect(carrier[sym]).toBe("hello")
   })
 
-  it("[READ] slot is writable", () => {
+  it("[CALL] slot is writable", () => {
     const carrier = makeCarrier() as any
-    carrier[READ] = () => "replaced"
+    carrier[CALL] = () => "replaced"
     expect(carrier()).toBe("replaced")
   })
 })
@@ -119,14 +119,14 @@ describe("bottom: scalar", () => {
     expect(typeof result).toBe("function")
   })
 
-  it("carrier has [READ] symbol", () => {
+  it("carrier has [CALL] symbol", () => {
     const result = interpretBottom(Schema.number()) as any
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 
-  it("calling the carrier throws (no reader configured)", () => {
+  it("calling the carrier throws (no call behavior configured)", () => {
     const result = interpretBottom(Schema.boolean()) as any
-    expect(() => result()).toThrow("No reader configured")
+    expect(() => result()).toThrow("No call behavior configured")
   })
 })
 
@@ -138,11 +138,11 @@ describe("bottom: product", () => {
     expect(typeof result).toBe("function")
   })
 
-  it("carrier has [READ] symbol", () => {
+  it("carrier has [CALL] symbol", () => {
     const result = interpretBottom(
       Schema.struct({ x: Schema.string() }),
     ) as any
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 
   it("field thunks are not eagerly forced", () => {
@@ -161,9 +161,9 @@ describe("bottom: sequence", () => {
     expect(typeof result).toBe("function")
   })
 
-  it("carrier has [READ] symbol", () => {
+  it("carrier has [CALL] symbol", () => {
     const result = interpretBottom(sequenceSchema) as any
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 })
 
@@ -173,9 +173,9 @@ describe("bottom: map", () => {
     expect(typeof result).toBe("function")
   })
 
-  it("carrier has [READ] symbol", () => {
+  it("carrier has [CALL] symbol", () => {
     const result = interpretBottom(mapSchema) as any
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 })
 
@@ -187,9 +187,9 @@ describe("bottom: sum (discriminated)", () => {
     expect(result.item).toBeUndefined()
   })
 
-  it("carrier has [READ] symbol", () => {
+  it("carrier has [CALL] symbol", () => {
     const result = interpretBottom(sumSchema) as any
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 })
 
@@ -210,20 +210,20 @@ describe("bottom: annotated", () => {
   it("text annotation produces a callable carrier", () => {
     const result = interpretBottom(LoroSchema.text()) as any
     expect(typeof result).toBe("function")
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 
   it("counter annotation produces a callable carrier", () => {
     const result = interpretBottom(LoroSchema.counter()) as any
     expect(typeof result).toBe("function")
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 
   it("doc annotation delegates to inner (product carrier)", () => {
     const result = interpretBottom(structuralDocSchema) as any
     // doc delegates to its inner product; bottom's product returns a carrier
     expect(typeof result).toBe("function")
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 
   it("movableList annotation delegates to inner (sequence carrier)", () => {
@@ -241,14 +241,14 @@ describe("bottom: annotated", () => {
     const schema = Schema.annotated("tree", Schema.string())
     const result = interpretBottom(schema) as any
     expect(typeof result).toBe("function")
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 
   it("unknown annotation with inner delegates to inner", () => {
     const schema = Schema.annotated("custom-thing", Schema.number())
     const result = interpretBottom(schema) as any
     expect(typeof result).toBe("function")
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 
   it("leaf annotation (no inner) produces its own carrier", () => {
@@ -256,7 +256,7 @@ describe("bottom: annotated", () => {
     const schema = Schema.annotated("leaf-marker", undefined as any)
     const result = interpretBottom(schema) as any
     expect(typeof result).toBe("function")
-    expect(READ in result).toBe(true)
+    expect(CALL in result).toBe(true)
   })
 })
 
@@ -268,9 +268,9 @@ describe("bottom: full document tree", () => {
   it("produces a carrier for a complex Loro doc schema", () => {
     const result = interpretBottom(loroDocSchema) as any
     expect(typeof result).toBe("function")
-    expect(READ in result).toBe(true)
-    // Calling throws since no reader is configured
-    expect(() => result()).toThrow("No reader configured")
+    expect(CALL in result).toBe(true)
+    // Calling throws since no call behavior is configured
+    expect(() => result()).toThrow("No call behavior configured")
   })
 
   it("every carrier in the tree is independently callable", () => {
@@ -286,30 +286,30 @@ describe("bottom: full document tree", () => {
 
     for (const carrier of [text, counter, list, record, struct, scalar]) {
       expect(typeof carrier).toBe("function")
-      expect(READ in carrier).toBe(true)
-      expect(() => carrier()).toThrow("No reader configured")
+      expect(CALL in carrier).toBe(true)
+      expect(() => carrier()).toThrow("No call behavior configured")
     }
   })
 })
 
 // ===========================================================================
-// READ symbol identity
+// CALL symbol identity
 // ===========================================================================
 
-describe("READ symbol", () => {
+describe("CALL symbol", () => {
   it("is stable across references (Symbol.for identity)", () => {
-    const other = Symbol.for("kyneta:read")
-    expect(READ).toBe(other)
+    const other = Symbol.for("kyneta:call")
+    expect(CALL).toBe(other)
   })
 
-  it("different carriers share the same READ symbol", () => {
+  it("different carriers share the same CALL symbol", () => {
     const a = makeCarrier()
     const b = makeCarrier()
-    expect(READ in a).toBe(true)
-    expect(READ in b).toBe(true)
+    expect(CALL in a).toBe(true)
+    expect(CALL in b).toBe(true)
     // Both use the same symbol key
-    expect(Object.getOwnPropertySymbols(a)).toContainEqual(READ)
-    expect(Object.getOwnPropertySymbols(b)).toContainEqual(READ)
+    expect(Object.getOwnPropertySymbols(a)).toContainEqual(CALL)
+    expect(Object.getOwnPropertySymbols(b)).toContainEqual(CALL)
   })
 })
 
@@ -318,37 +318,37 @@ describe("READ symbol", () => {
 // ===========================================================================
 
 describe("type-level: capability lattice", () => {
-  it("bottomInterpreter is Interpreter<unknown, HasRead>", () => {
+  it("bottomInterpreter is Interpreter<unknown, HasCall>", () => {
     // If this compiles, the type is correct
-    const _check: Interpreter<unknown, HasRead> = bottomInterpreter
+    const _check: Interpreter<unknown, HasCall> = bottomInterpreter
     void _check
   })
 
-  it("bottomInterpreter result satisfies HasRead", () => {
+  it("bottomInterpreter result satisfies HasCall", () => {
     const result = interpretBottom(Schema.string())
-    const _check: HasRead = result
+    const _check: HasCall = result
     void _check
   })
 
-  it("HasRead does NOT satisfy HasNavigation (negative test)", () => {
+  it("HasCall does NOT satisfy HasNavigation (negative test)", () => {
     // We can't directly test that a type does NOT extend another
     // in vitest without expectTypeOf. Instead, we verify that
-    // HasNavigation requires NAVIGATION brand which HasRead lacks.
+    // HasNavigation requires NAVIGATION brand which HasCall lacks.
     //
     // The following would be a compile error if uncommented:
     // const result = interpretBottom(Schema.string())
     // const _bad: HasNavigation = result
-    //               ^^^ Type 'HasRead' is not assignable to type 'HasNavigation'
+    //               ^^^ Type 'HasCall' is not assignable to type 'HasNavigation'
     //
     // We use @ts-expect-error to assert this IS an error:
-    // @ts-expect-error — HasRead is not assignable to HasNavigation
+    // @ts-expect-error — HasCall is not assignable to HasNavigation
     const _negative: HasNavigation = interpretBottom(Schema.string())
     void _negative
   })
 
-  it("HasNavigation extends HasRead", () => {
-    // If this compiles, HasNavigation is assignable to HasRead
-    const _check: (n: HasNavigation) => HasRead = (n) => n
+  it("HasNavigation extends HasCall", () => {
+    // If this compiles, HasNavigation is assignable to HasCall
+    const _check: (n: HasNavigation) => HasCall = (n) => n
     void _check
   })
 })

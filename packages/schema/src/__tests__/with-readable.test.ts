@@ -8,11 +8,11 @@ import {
   plainInterpreter,
 } from "../index.js"
 import {
-  READ,
+  CALL,
   bottomInterpreter,
 } from "../interpreters/bottom.js"
 import type {
-  HasRead,
+  HasCall,
   HasNavigation,
 } from "../interpreters/bottom.js"
 import { withReadable } from "../interpreters/with-readable.js"
@@ -76,12 +76,12 @@ describe("withReadable: scalar", () => {
     expect(doc.count()).toBe(42)
   })
 
-  it("[READ] slot is present and functional", () => {
+  it("[CALL] slot is present and functional", () => {
     const schema = Schema.string()
     const ctx: RefContext = { store: "hello" as any }
     const result = interpret(schema, readableInterp, ctx) as any
-    expect(READ in result).toBe(true)
-    expect(result[READ]()).toBe("hello")
+    expect(CALL in result).toBe(true)
+    expect(result[CALL]()).toBe("hello")
     expect(result()).toBe("hello")
   })
 
@@ -695,9 +695,9 @@ describe("dispatchSum", () => {
 // ===========================================================================
 
 describe("type-level: withReadable", () => {
-  it("withReadable(bottomInterpreter) is Interpreter<RefContext, HasRead & HasNavigation>", () => {
+  it("withReadable(bottomInterpreter) is Interpreter<RefContext, HasCall & HasNavigation>", () => {
     const readable = withReadable(bottomInterpreter)
-    const _check: Interpreter<RefContext, HasRead & HasNavigation> = readable
+    const _check: Interpreter<RefContext, HasCall & HasNavigation> = readable
     void _check
   })
 
@@ -709,16 +709,16 @@ describe("type-level: withReadable", () => {
     void _check
   })
 
-  it("result of withReadable(bottomInterpreter) also satisfies HasRead", () => {
+  it("result of withReadable(bottomInterpreter) also satisfies HasCall", () => {
     const readable = withReadable(bottomInterpreter)
     const ctx: RefContext = { store: "test" as any }
     const result = interpret(Schema.string(), readable, ctx)
-    const _check: HasRead = result
+    const _check: HasCall = result
     void _check
   })
 
-  it("withReadable(plainInterpreter) is a type error (plain has unknown, not HasRead)", () => {
-    // @ts-expect-error — plainInterpreter is Interpreter<unknown, unknown>, not HasRead
+  it("withReadable(plainInterpreter) is a type error (plain has unknown, not HasCall)", () => {
+    // @ts-expect-error — plainInterpreter is Interpreter<unknown, unknown>, not HasCall
     const _bad = withReadable(plainInterpreter)
     void _bad
   })

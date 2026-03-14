@@ -1,9 +1,9 @@
 // Bottom interpreter — the universal foundation of the interpreter stack.
 //
 // Produces callable function carriers at every schema node. Each carrier
-// delegates to a `[READ]` symbol slot which, by default, throws an
+// delegates to a `[CALL]` symbol slot which, by default, throws an
 // informative error. Upstream transformers (`withReadable`) fill the
-// `READ` slot to enable actual reading.
+// `CALL` slot to enable actual reading.
 //
 // The carrier is a real function object, so properties can be attached
 // by any layer in the stack. Identity is preserved through the entire
@@ -12,7 +12,7 @@
 // This module also defines the capability lattice used for compile-time
 // composition safety:
 //
-//   HasRead  ←  HasNavigation  ←  HasCaching
+//   HasCall  ←  HasNavigation  ←  HasCaching
 //
 // Each level is branded with a phantom symbol so TypeScript's structural
 // subtyping enforces valid transformer ordering.
@@ -57,7 +57,7 @@ export type INVALIDATE_TYPE = typeof INVALIDATE_SYMBOL
  *
  * Uses `Symbol.for` so multiple copies of this module share identity.
  */
-export const READ: unique symbol = Symbol.for("kyneta:read") as any
+export const CALL: unique symbol = Symbol.for("kyneta:call") as any
 
 // ---------------------------------------------------------------------------
 // Phantom brand symbols — compile-time only, zero runtime cost
@@ -88,23 +88,23 @@ export type { CACHING }
 // ---------------------------------------------------------------------------
 
 /**
- * A carrier that has a `[READ]` slot. This is the minimal capability
+ * A carrier that has a `[CALL]` slot. This is the minimal capability
  * produced by `bottomInterpreter`.
  */
-export interface HasRead {
-  readonly [READ]: (...args: unknown[]) => unknown
+export interface HasCall {
+  readonly [CALL]: (...args: unknown[]) => unknown
 }
 
 /**
  * A carrier that has structural navigation (product field access,
- * sequence/map `.at()`, etc.). Extends `HasRead`.
+ * sequence/map `.at()`, etc.). Extends `HasCall`.
  *
  * The `[NAVIGATION]` property is a phantom brand — it never exists
  * at runtime. Its purpose is to make `HasNavigation` structurally
- * distinct from `HasRead` so that `withCaching` can require it as
+ * distinct from `HasCall` so that `withCaching` can require it as
  * a precondition.
  */
-export interface HasNavigation extends HasRead {
+export interface HasNavigation extends HasCall {
   /** @internal phantom brand — never set at runtime */
   readonly [NAVIGATION]: true
 }
@@ -135,27 +135,27 @@ export interface HasCaching extends HasNavigation {
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a callable function carrier with a `[READ]` slot.
+ * Creates a callable function carrier with a `[CALL]` slot.
  *
- * The carrier is `(...args) => carrier[READ](...args)`. By default,
- * `READ` throws — compose with `withReadable` to enable reading.
+ * The carrier is `(...args) => carrier[CALL](...args)`. By default,
+ * `CALL` throws — compose with `withReadable` to enable reading.
  *
  * The carrier is a real `Function` object, so any layer can attach
  * properties (navigation, caching, mutation methods, etc.) without
  * replacing the carrier identity.
  */
-export function makeCarrier(): HasRead {
+export function makeCarrier(): HasCall {
   const carrier: any = function (this: any, ...args: unknown[]): unknown {
-    return carrier[READ](...args)
+    return carrier[CALL](...args)
   }
 
-  carrier[READ] = (): unknown => {
+  carrier[CALL] = (): unknown => {
     throw new Error(
-      "No reader configured — compose with withReadable to enable reading",
+      "No call behavior configured",
     )
   }
 
-  return carrier as HasRead
+  return carrier as HasCall
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ export function makeCarrier(): HasRead {
 
 /**
  * The bottom interpreter — produces callable function carriers at every
- * schema node. Each carrier's `[READ]` slot throws by default.
+ * schema node. Each carrier's `[CALL]` slot throws by default.
  *
  * This is the starting point for every interpreter stack:
  *
@@ -179,12 +179,12 @@ export function makeCarrier(): HasRead {
  * context (e.g. `withReadable` needs a store) narrow it in their own
  * type signatures.
  */
-export const bottomInterpreter: Interpreter<unknown, HasRead> = {
+export const bottomInterpreter: Interpreter<unknown, HasCall> = {
   scalar(
     _ctx: unknown,
     _path: Path,
     _schema: ScalarSchema,
-  ): HasRead {
+  ): HasCall {
     return makeCarrier()
   },
 
@@ -192,8 +192,8 @@ export const bottomInterpreter: Interpreter<unknown, HasRead> = {
     _ctx: unknown,
     _path: Path,
     _schema: ProductSchema,
-    _fields: Readonly<Record<string, () => HasRead>>,
-  ): HasRead {
+    _fields: Readonly<Record<string, () => HasCall>>,
+  ): HasCall {
     // Field thunks are intentionally ignored — bottom produces inert
     // carriers. `withReadable` / `withCaching` will use the thunks
     // to build navigation and caching.
@@ -204,8 +204,8 @@ export const bottomInterpreter: Interpreter<unknown, HasRead> = {
     _ctx: unknown,
     _path: Path,
     _schema: SequenceSchema,
-    _item: (index: number) => HasRead,
-  ): HasRead {
+    _item: (index: number) => HasCall,
+  ): HasCall {
     return makeCarrier()
   },
 
@@ -213,8 +213,8 @@ export const bottomInterpreter: Interpreter<unknown, HasRead> = {
     _ctx: unknown,
     _path: Path,
     _schema: MapSchema,
-    _item: (key: string) => HasRead,
-  ): HasRead {
+    _item: (key: string) => HasCall,
+  ): HasCall {
     return makeCarrier()
   },
 
@@ -222,8 +222,8 @@ export const bottomInterpreter: Interpreter<unknown, HasRead> = {
     _ctx: unknown,
     _path: Path,
     _schema: SumSchema,
-    _variants: SumVariants<HasRead>,
-  ): HasRead {
+    _variants: SumVariants<HasCall>,
+  ): HasCall {
     return makeCarrier()
   },
 
@@ -231,8 +231,8 @@ export const bottomInterpreter: Interpreter<unknown, HasRead> = {
     _ctx: unknown,
     _path: Path,
     _schema: AnnotatedSchema,
-    inner: (() => HasRead) | undefined,
-  ): HasRead {
+    inner: (() => HasCall) | undefined,
+  ): HasCall {
     // Annotated nodes with an inner schema delegate to the inner
     // interpretation. This matches the convention used by all other
     // interpreters — the annotation wrapper is transparent at the

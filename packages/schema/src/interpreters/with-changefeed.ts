@@ -54,7 +54,7 @@ import type {
 import type { WritableContext, PendingChange } from "./writable.js"
 import { readByPath, pathKey } from "../store.js"
 import { isPropertyHost } from "../guards.js"
-import { READ } from "./bottom.js"
+import { CALL } from "./bottom.js"
 
 // ---------------------------------------------------------------------------
 // Attach [CHANGEFEED] non-enumerably to any object
@@ -733,7 +733,7 @@ export function withChangefeed<A>(
         const cf = createProductChangefeed(
           listeners,
           path,
-          () => (result as any)[READ](),
+          () => (result as any)[CALL](),
           // The fields object contains thunks — forcing them yields
           // child refs with [CHANGEFEED] already attached (because
           // the catamorphism interprets children before parents, and
@@ -762,7 +762,7 @@ export function withChangefeed<A>(
         const cf = createSequenceChangefeed(
           listeners,
           path,
-          () => (result as any)[READ](),
+          () => (result as any)[CALL](),
           // Use the result's .at() method to get child refs —
           // this goes through the caching layer, so refs have
           // stable identity and [CHANGEFEED] attached.
@@ -799,7 +799,7 @@ export function withChangefeed<A>(
         const cf = createMapChangefeed(
           listeners,
           path,
-          () => (result as any)[READ](),
+          () => (result as any)[CALL](),
           (key: string) => {
             if (typeof resultAny.at === "function") {
               return resultAny.at(key)

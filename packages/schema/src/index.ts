@@ -134,12 +134,12 @@ export { plainInterpreter } from "./interpreters/plain.js"
 
 // Bottom interpreter — universal foundation and capability lattice
 export {
-  READ,
+  CALL,
   makeCarrier,
   bottomInterpreter,
 } from "./interpreters/bottom.js"
 export type {
-  HasRead,
+  HasCall,
   HasNavigation,
   HasCaching,
 } from "./interpreters/bottom.js"

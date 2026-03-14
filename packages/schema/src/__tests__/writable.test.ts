@@ -8,7 +8,6 @@ import {
   withCaching,
   withWritable,
   createWritableContext,
-  READ,
   TRANSACT,
   hasTransact,
 } from "../index.js"
@@ -717,13 +716,13 @@ describe("writable: write-only stack", () => {
     expect(dispatched[0].change.value).toBe(42)
   })
 
-  it("ref() throws (no reader configured)", () => {
+  it("ref() throws (no call behavior configured)", () => {
     const schema = Schema.number()
     const store = {} as any
     const ctx = createWritableContext(store)
     const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
 
-    expect(() => ref()).toThrow("No reader configured")
+    expect(() => ref()).toThrow("No call behavior configured")
   })
 })
 

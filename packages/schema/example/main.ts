@@ -634,7 +634,7 @@ log(`
 
 log(`
     Symbol-keyed composability hooks:
-      [READ]        — controls what carrier() does
+      [CALL]        — controls what carrier() does
       [INVALIDATE]  — change-driven cache invalidation
       [TRANSACT]    — context discovery from any ref
       [CHANGEFEED]  — observation coalgebra with subscribeTree
