@@ -43,10 +43,10 @@ const sequenceSchema = Schema.list(Schema.string())
 const mapSchema = Schema.record(Schema.number())
 
 const sumSchema = Schema.doc({
-  item: Schema.discriminatedUnion("type", {
-    text: Schema.struct({ body: Schema.string() }),
-    image: Schema.struct({ url: Schema.string() }),
-  }),
+  item: Schema.discriminatedUnion("type", [
+    Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+    Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+  ]),
 })
 
 const nullableSchema = Schema.doc({

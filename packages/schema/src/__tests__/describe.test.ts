@@ -172,16 +172,18 @@ testDescribe("describe: base grammar", () => {
     })
 
     it("describes a discriminated union", () => {
-      const s = Schema.discriminatedUnion("type", {
-        text: Schema.struct({ content: Schema.string() }),
-        image: Schema.struct({ url: Schema.string() }),
-      })
+      const s = Schema.discriminatedUnion("type", [
+        Schema.struct({ type: Schema.string("text"), content: Schema.string() }),
+        Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+      ])
       expect(describe(s)).toBe(
         [
           "union(type)",
           "  text:",
+          "    type: string(\"text\")",
           "    content: string",
           "  image:",
+          "    type: string(\"image\")",
           "    url: string",
         ].join("\n"),
       )
@@ -238,10 +240,10 @@ testDescribe("describe: base grammar", () => {
 
     it("describes doc with discriminated union field", () => {
       const s = Schema.doc({
-        content: Schema.discriminatedUnion("type", {
-          text: Schema.struct({ body: Schema.string() }),
-          image: Schema.struct({ url: Schema.string(), width: Schema.number() }),
-        }),
+        content: Schema.discriminatedUnion("type", [
+          Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+          Schema.struct({ type: Schema.string("image"), url: Schema.string(), width: Schema.number() }),
+        ]),
       })
 
       expect(describe(s)).toBe(
@@ -249,8 +251,10 @@ testDescribe("describe: base grammar", () => {
           "doc",
           "  content: union(type)",
           "    text:",
+          "      type: string(\"text\")",
           "      body: string",
           "    image:",
+          "      type: string(\"image\")",
           "      url: string",
           "      width: number",
         ].join("\n"),

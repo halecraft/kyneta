@@ -5,11 +5,13 @@ import { describe, expect, it, expectTypeOf } from "vitest"
 import {
   Schema,
   LoroSchema,
+  Zero,
   validate,
   tryValidate,
   SchemaValidationError,
   formatPath,
   interpret,
+  plainInterpreter,
   validateInterpreter,
 } from "../index.js"
 import type { ValidateContext } from "../index.js"
@@ -456,19 +458,19 @@ describe("validate: positional sum", () => {
 // ---------------------------------------------------------------------------
 
 describe("validate: discriminated sum", () => {
-  const s = Schema.discriminatedUnion("type", {
-    text: Schema.struct({ body: Schema.string() }),
-    image: Schema.struct({ url: Schema.string(), width: Schema.number() }),
-  })
+  const s = Schema.discriminatedUnion("type", [
+    Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+    Schema.struct({ type: Schema.string("image"), url: Schema.string(), width: Schema.number() }),
+  ])
 
   it("valid discriminant + valid body", () => {
     const result = validate(s, { type: "text", body: "hello" })
-    expect(result).toEqual({ body: "hello" })
+    expect(result).toEqual({ type: "text", body: "hello" })
   })
 
   it("valid discriminant + valid body (second variant)", () => {
     const result = validate(s, { type: "image", url: "pic.png", width: 100 })
-    expect(result).toEqual({ url: "pic.png", width: 100 })
+    expect(result).toEqual({ type: "image", url: "pic.png", width: 100 })
   })
 
   it("valid discriminant + invalid body", () => {
@@ -968,5 +970,39 @@ describe("validate: edge cases", () => {
     if (!result.ok) {
       expect(result.errors[0]!.path).toBe("root")
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Round-trip: discriminated sums survive Zero → validate and doc() → validate
+// ---------------------------------------------------------------------------
+
+describe("validate: discriminated sum round-trip", () => {
+  const schemaWithSum = Schema.doc({
+    name: Schema.string(),
+    content: Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+      Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+    ]),
+  })
+
+  it("Zero.structural → validate round-trips for discriminated sums", () => {
+    const zero = Zero.structural(schemaWithSum)
+    const result = validate(schemaWithSum, zero)
+    expect(result).toEqual(zero)
+  })
+
+  it("doc() → validate round-trips for discriminated sums", () => {
+    const store = {
+      name: "test",
+      content: { type: "image", url: "pic.png" },
+    }
+    const result = interpret(schemaWithSum, plainInterpreter, store)
+    // plainInterpreter now includes the discriminant field in its output
+    expect((result as any).content.type).toBe("image")
+    expect((result as any).content.url).toBe("pic.png")
+    // validate accepts the output — the round-trip closes
+    const validated = validate(schemaWithSum, result)
+    expect(validated).toEqual(result)
   })
 })

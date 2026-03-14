@@ -492,10 +492,10 @@ describe("withReadable: annotated", () => {
 
 describe("withReadable: discriminated sum", () => {
   const schema = Schema.doc({
-    item: Schema.discriminatedUnion("type", {
-      text: Schema.struct({ body: Schema.string() }),
-      image: Schema.struct({ url: Schema.string() }),
-    }),
+    item: Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+      Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+    ]),
   })
 
   it("dispatches to the correct variant based on store discriminant", () => {
@@ -581,10 +581,10 @@ describe("withReadable: full doc tree", () => {
 
 describe("dispatchSum", () => {
   it("discriminated: dispatches to correct variant for known discriminant", () => {
-    const schema = Schema.discriminatedUnion("type", {
-      text: Schema.struct({ body: Schema.string() }),
-      image: Schema.struct({ url: Schema.string() }),
-    })
+    const schema = Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+      Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+    ])
     let called: string | undefined
     const variants = {
       byKey: (key: string) => { called = key; return key },
@@ -594,10 +594,10 @@ describe("dispatchSum", () => {
   })
 
   it("discriminated: falls back to first variant for missing discriminant", () => {
-    const schema = Schema.discriminatedUnion("type", {
-      text: Schema.struct({ body: Schema.string() }),
-      image: Schema.struct({ url: Schema.string() }),
-    })
+    const schema = Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+      Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+    ])
     let called: string | undefined
     const variants = {
       byKey: (key: string) => { called = key; return key },
@@ -607,9 +607,9 @@ describe("dispatchSum", () => {
   })
 
   it("discriminated: falls back to first variant for non-object value", () => {
-    const schema = Schema.discriminatedUnion("type", {
-      text: Schema.struct({ body: Schema.string() }),
-    })
+    const schema = Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+    ])
     let called: string | undefined
     const variants = {
       byKey: (key: string) => { called = key; return key },
@@ -619,10 +619,10 @@ describe("dispatchSum", () => {
   })
 
   it("discriminated: falls back to first variant for unknown discriminant value", () => {
-    const schema = Schema.discriminatedUnion("type", {
-      text: Schema.struct({ body: Schema.string() }),
-      image: Schema.struct({ url: Schema.string() }),
-    })
+    const schema = Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+      Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+    ])
     let called: string | undefined
     const variants = {
       byKey: (key: string) => { called = key; return key },

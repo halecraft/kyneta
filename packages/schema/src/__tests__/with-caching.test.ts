@@ -541,10 +541,10 @@ describe("withCaching: leaf pass-through", () => {
 describe("withCaching: sum dispatch", () => {
   it("discriminated sum dispatches correctly", () => {
     const schema = Schema.doc({
-      item: Schema.discriminatedUnion("type", {
-        text: Schema.struct({ body: Schema.string() }),
-        image: Schema.struct({ url: Schema.string() }),
-      }),
+      item: Schema.discriminatedUnion("type", [
+        Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+        Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+      ]),
     })
     const { doc } = createDoc(schema, {
       item: { type: "image", url: "pic.png" },

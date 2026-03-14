@@ -120,20 +120,15 @@ function structural(schema: Schema): unknown {
 
     case "sum": {
       if (schema.discriminant !== undefined) {
-        // Discriminated sum — use the first variant
-        const entries = Object.entries(
-          (schema as DiscriminatedSumSchema).variantMap,
-        )
-        if (entries.length === 0) {
+        // Discriminated sum — use the first variant.
+        // Each variant is a ProductSchema that declares the discriminant
+        // as a constrained string scalar field, so walking its fields
+        // naturally produces the discriminant value (from the constraint).
+        const disc = schema as DiscriminatedSumSchema
+        if (disc.variants.length === 0) {
           return undefined
         }
-        const [firstKey, firstVariant] = entries[0]!
-        const inner = structural(firstVariant)
-        // If the variant produces an object, add the discriminant key
-        if (isNonNullObject(inner)) {
-          return { ...inner, [schema.discriminant]: firstKey }
-        }
-        return inner
+        return structural(disc.variants[0]!)
       }
       // Positional sum — use the first variant
       const variants = (schema as PositionalSumSchema).variants

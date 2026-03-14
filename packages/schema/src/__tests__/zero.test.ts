@@ -105,15 +105,15 @@ describe("Zero.structural: structural kinds", () => {
     expect(Zero.structural(Schema.sum([]))).toBe(undefined)
   })
 
-  it("discriminated sum → first variant with discriminant key injected", () => {
+  it("discriminated sum → first variant (discriminant field is part of product)", () => {
     expect(
       Zero.structural(
-        Schema.discriminatedSum("type", {
-          text: Schema.product({ content: Schema.scalar("string") }),
-          image: Schema.product({ url: Schema.scalar("string") }),
-        }),
+        Schema.discriminatedSum("type", [
+          Schema.product({ type: Schema.scalar("string", ["text"]), content: Schema.scalar("string") }),
+          Schema.product({ type: Schema.scalar("string", ["image"]), url: Schema.scalar("string") }),
+        ]),
       ),
-    ).toEqual({ content: "", type: "text" })
+    ).toEqual({ type: "text", content: "" })
   })
 })
 
