@@ -1,0 +1,2 @@
+- use `pnpm` as a package manager
+- use `bun` to run typescript files, especially on the CLI during investigatory sampling
