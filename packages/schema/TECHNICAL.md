@@ -171,7 +171,18 @@ Changes are an open protocol (`ChangeBase` with string `type` discriminant). Thi
 
 ### Changefeed (`src/changefeed.ts`)
 
-A changefeed is a coalgebra: `{ current: S, subscribe(cb: (change: C) => void): () => void }`. One symbol (`CHANGEFEED = Symbol.for("kyneta:changefeed")`) replaces the previous two-symbol `SNAPSHOT` + `REACTIVE` design. WeakMap-based caching preserves referential identity (`ref[CHANGEFEED] === ref[CHANGEFEED]`).
+A changefeed is a coalgebra: `{ current: S, subscribe(cb: (changeset: Changeset<C>) => void): () => void }`. One symbol (`CHANGEFEED = Symbol.for("kyneta:changefeed")`) replaces the previous two-symbol `SNAPSHOT` + `REACTIVE` design. WeakMap-based caching preserves referential identity (`ref[CHANGEFEED] === ref[CHANGEFEED]`).
+
+**`Changeset<C>` — the unit of batch delivery.** Subscribers always receive a `Changeset`, never an individual change. A changeset wraps one or more changes with optional batch-level metadata:
+
+- `changes: readonly C[]` — the individual changes in the batch.
+- `origin?: string` — provenance of the batch (e.g. `"sync"`, `"undo"`, `"local"`). Individual changes do not carry provenance — the batch does.
+
+Auto-commit (single mutation outside a transaction) delivers a degenerate `Changeset` of exactly one change. Transactions and `applyChanges` deliver multi-change batches. The subscriber API is uniform regardless of batch size.
+
+**`TreeEvent<C>` — relative path for tree observation.** Composite refs (products, sequences, maps) implement `ComposedChangefeed`, which adds `subscribeTree(cb: (changeset: Changeset<TreeEvent<C>>) => void)`. Each `TreeEvent` carries `{ path: Path, change: C }` — the path is relative from the subscription point to where the change occurred. `subscribeTree` is a strict superset of `subscribe` (tree subscribers also see own-path changes with `path: []`).
+
+**`Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` isomorphism.** When subscribing at the root, `TreeEvent.path` equals the absolute path. The output of `subscribeTree` can be round-tripped as input to `applyChanges` (modulo path relativity for subtree subscriptions). This is a powerful property for sync: capture tree events on one document, reconstruct `PendingChange[]`, apply to another. Note: tree subscribers receive one `Changeset<TreeEvent>` per affected child path (not one combined changeset per flush), so reconstruction uses `flatMap` across changesets.
 
 ### Step (`src/step.ts`)
 
@@ -250,7 +261,7 @@ Cross-layer communication uses four well-known symbols:
 | Symbol | Module | Purpose |
 |---|---|---|
 | `READ` (`kyneta:read`) | `bottom.ts` | Controls what `carrier()` does — default throws, `withReadable` fills it |
-| `INVALIDATE` (`kyneta:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — `withWritable` calls before dispatch |
+| `INVALIDATE` (`kyneta:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — refs carry it for direct use; `prepare` pipeline fires it automatically |
 | `CHANGEFEED` (`kyneta:changefeed`) | `changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it |
 | `TRANSACT` (`kyneta:transact`) | `writable.ts` | Context discovery — refs carry a reference to their `WritableContext` |
 
@@ -299,6 +310,24 @@ The invalidation logic is split into **Functional Core** (`planCacheUpdate` — 
 
 `CacheOp` is the instruction set: `clear` (drop all), `delete` (drop specific keys), `shift` (re-key numeric entries by delta).
 
+**Prepare-pipeline integration:** When composed inside `withWritable` (i.e. the context is a `WritableContext`), `withCaching` hooks into the `prepare` phase via `ensureCacheWiring`. Each composite node registers its invalidation handler by `pathKey(path)` during interpretation. The `prepare` wrapper fires the handler **before** forwarding to the inner prepare (store mutation), so caches are invalidated automatically for every change source — whether from imperative mutation methods or declarative `applyChanges`.
+
+The wiring uses the same structural pattern as `withChangefeed` — `WeakMap<object, State>` + idempotent wrapping + path-keyed handler map. The duck-typed `hasPrepare(ctx)` check allows `withCaching` to keep its `RefContext` type signature while participating in the pipeline when composed inside `withWritable`. In read-only stacks (`RefContext` without `prepare`), the pipeline hook is skipped — `[INVALIDATE]` remains on refs for direct use.
+
+The effective `prepare` pipeline ordering (showing nesting):
+
+```
+ctx.prepare(path, change)
+  → withChangefeed's wrapper (outermost):
+      calls inner prepare:
+        → withCaching's wrapper:
+            invalidate cache at path
+            calls original: applyChangeToStore(store, path, change)
+      accumulate {path, change} for notification
+```
+
+Effective per-change order: **invalidate cache → store mutation → accumulate notification**.
+
 #### withWritable (`src/interpreters/writable.ts`)
 
 An extension transformer: `withWritable(base)` takes `Interpreter<RefContext, A>` and returns `Interpreter<WritableContext, A>`. It adds mutation methods at each case:
@@ -311,11 +340,7 @@ An extension transformer: `withWritable(base)` takes `Interpreter<RefContext, A>
 - **Map:** `.set(key, value)`, `.delete(key)`, `.clear()` — dispatches `MapChange`. All non-enumerable.
 - **Sum:** pass-through — delegates to base.
 
-**Invalidate-before-dispatch:** For nodes that have `[INVALIDATE]` (from `withCaching`), `withWritable` calls `result[INVALIDATE](change)` **before** `ctx.dispatch(path, change)`. This ensures caches are consistent when subscribers fire during dispatch. When caching is absent (e.g. `withWritable(withReadable(bottom))`), the `INVALIDATE in result` guard skips it. The ordering is:
-
-1. Construct the change
-2. `if (INVALIDATE in result) result[INVALIDATE](change)` — cache updated
-3. `ctx.dispatch(path, change)` — store updated, subscribers fire with consistent cache
+Mutation methods simply construct the appropriate change and call `ctx.dispatch(path, change)`. Cache invalidation is handled by the `prepare` pipeline — `withCaching` hooks `ctx.prepare` to fire per-path invalidation handlers before store mutation. This means every change source (imperative mutation, `applyChanges`, direct `ctx.prepare` calls) gets automatic cache invalidation without manual `[INVALIDATE]` calls.
 
 **Why `withWritable` is not a `Decorator`:** The `Decorator<Ctx, A, P>` type receives `(result, ctx, path)` but no schema information. Mutation is tag-dependent (text gets `.insert()`, counter gets `.increment()`), so it needs `schema.tag` in the `annotated` case. This makes it an interpreter transformer (wraps the full 6-case interpreter) rather than a decorator.
 
@@ -328,35 +353,59 @@ This design gives developers two mutation granularities:
 - **Leaf `.set()`** for surgical edits — one scalar, one `ReplaceChange`, one notification at the leaf path.
 - **Product `.set()`** for bulk replacement — one struct, one `ReplaceChange`, one notification at the product path.
 
-#### WritableContext and Transactions
+#### WritableContext and Phase-Separated Dispatch
 
-`WritableContext` extends `RefContext` with mutation infrastructure and transaction support:
+`WritableContext` extends `RefContext` with phase-separated dispatch, mutation infrastructure, and transaction support:
 
 ```ts
 interface WritableContext extends RefContext {
+  readonly prepare: (path: Path, change: ChangeBase) => void
+  readonly flush: (origin?: string) => void
   readonly dispatch: (path: Path, change: ChangeBase) => void
   beginTransaction(): void
-  commit(): PendingChange[]
+  commit(origin?: string): PendingChange[]
   abort(): void
   readonly inTransaction: boolean
 }
 ```
 
-**Context hierarchy:** `RefContext { store }` → `WritableContext { dispatch, beginTransaction, commit, abort, inTransaction }`. Each layer adds only what it needs.
+**Context hierarchy:** `RefContext { store }` → `WritableContext { prepare, flush, dispatch, beginTransaction, commit, abort, inTransaction }`. Each layer adds only what it needs.
 
-By default, `dispatch` applies changes immediately (auto-commit). During a transaction, `dispatch` buffers changes internally until `commit()` replays them through the normal dispatch path. The replay goes through `ctx.dispatch` (the object property, not the closure), so layers like `withChangefeed` that wrap `ctx.dispatch` receive notifications at commit time.
+**Phase separation.** The dispatch pipeline splits into two phases:
 
-The `TRANSACT` symbol (`Symbol.for("kyneta:transact")`) and `HasTransact` interface enable context discovery from any ref — `change()` and other utilities can find the `WritableContext` without a WeakMap or re-interpretation.
+- **`prepare(path, change)`** — called N times (once per change). Invalidates caches (via `withCaching`'s hook), mutates the store, accumulates notification entries (via `withChangefeed`'s hook). No subscriber notification fires.
+- **`flush(origin?)`** — called once after all prepares. Plans notifications (grouping accumulated entries by path), delivers one `Changeset` per affected path to subscribers. Subscribers see fully-applied state.
 
-#### Changefeed Decorator (`src/interpreters/with-changefeed.ts`)
+**`executeBatch(ctx, changes, origin?)`** is the single primitive that composes the two phases: `prepare × N + flush × 1`. All entry points collapse to it:
 
-A decorator (via `enrich`) that attaches `[CHANGEFEED]` to interpreted results. For each object result, attaches a non-enumerable `[CHANGEFEED]` property containing a `Changefeed` whose `current` reads from the store and `subscribe` registers for changes at that path.
+- `dispatch(path, change)` — outside a transaction, calls `executeBatch` with one change (auto-commit). During a transaction, buffers the `{path, change}` pair.
+- `commit(origin?)` — copies+clears the buffer, ends the transaction, calls `executeBatch`.
+- `applyChanges(ref, ops, {origin})` — calls `executeBatch` directly (no transaction needed — the full list of changes is already known).
 
-The decorator manages its own module-level subscriber map keyed by path string. It wraps `ctx.dispatch` to fire exact-path notifications after each change is applied.
+**Invariant:** `executeBatch`, `prepare`, and `flush` must not be called during an active transaction. `executeBatch` throws if `ctx.inTransaction` is true — this prevents `applyChanges` from corrupting a half-built transaction.
 
-**Composition:** `enrich(withWritable(withCaching(withReadable(bottomInterpreter))), withChangefeed)`
+Layers like `withChangefeed` wrap `prepare` (to accumulate notification entries) and `flush` (to deliver `Changeset` batches). `withCaching` wraps `prepare` (to invalidate caches). Both use the `WeakMap` + idempotent wrapping pattern for per-context, exactly-once wiring.
 
-> **Note:** This is transitional scaffolding. The compositional-changefeeds plan replaces `withChangefeed` with `withCompositionalChangefeed` — an interpreter transformer with full access to children for tree-level observation.
+The `TRANSACT` symbol (`Symbol.for("kyneta:transact")`) and `HasTransact` interface enable context discovery from any ref — `change()` and `applyChanges()` find the `WritableContext` without a WeakMap or re-interpretation.
+
+#### Facade: `change` and `applyChanges` (`src/facade.ts`)
+
+The library-level API for change capture and declarative application:
+
+- **`change(ref, fn) → PendingChange[]`** — imperative mutation capture. Runs `fn` inside a transaction, returns the captured changes. Aborts on error.
+- **`applyChanges(ref, ops, {origin?}) → PendingChange[]`** — declarative application. Applies a list of changes via `executeBatch`, triggering the full prepare pipeline (cache invalidation + store mutation + notification accumulation) then flush (batched `Changeset` delivery). Empty ops is a no-op.
+
+These are symmetric duals: `change` produces `PendingChange[]`, `applyChanges` consumes them. Round-trip correctness is verified: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docA()` deep-equals `docB()`.
+
+#### Changefeed Transformer (`src/interpreters/with-changefeed.ts`)
+
+An interpreter transformer that attaches `[CHANGEFEED]` to every node in the interpreted tree. For leaf refs, attaches a plain `Changefeed` with `subscribe`. For composite refs (product, sequence, map), attaches a `ComposedChangefeed` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition).
+
+**Notification flow:** `withChangefeed` wraps `ctx.prepare` to accumulate `{path, change}` entries without firing subscribers. It wraps `ctx.flush` to group accumulated entries by `pathKey` (via `planNotifications` — pure FC) and deliver one `Changeset` per subscriber (via `deliverNotifications` — imperative shell). This follows the same FC/IS pattern as `planCacheUpdate`/`applyCacheOps` in `withCaching`.
+
+**Tree notification** propagates via subscription composition (children → parent), not a flat subscriber map. When a leaf's changefeed fires, its parent's `subscribeTree` callback re-prefixes the path and propagates upward. Each child path produces its own `Changeset<TreeEvent>` — so a transaction touching N different paths delivers N tree changesets to the parent (each with the correct relative path prefix).
+
+**Composition:** `withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))`
 
 ### Additional Interpreters
 
@@ -436,15 +485,15 @@ All three types account for constrained scalars: when `ScalarSchema<K, V>` has a
 
 ## Verified Properties
 
-The spike validates these properties via 718 tests:
+The spike validates these properties via 835 schema tests + 869 core tests:
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: requires `withCaching` — `doc.title === doc.title`, `seq.at(0) === seq.at(0)`, `map.at("k") === map.at("k")`. Without `withCaching`, each access produces a new ref.
 3. **Namespace isolation**: `Object.keys(doc)` returns only schema property names (even on function-shaped refs). `Object.keys(mapRef)` returns `[]` (methods are non-enumerable). `CHANGEFEED in doc` is true. `CHANGEFEED` is non-enumerable.
 4. **Portable refs**: `const ref = doc.settings.fontSize; bump(ref)` — works outside the tree because context is captured in closures.
 5. **Plain round-trip / snapshot isolation**: `interpret(schema, plainInterpreter, store)` produces the identical object tree. Calling `ref()` on any composite also produces a fresh, structurally equal plain object — mutating the returned value does not affect the store. `CHANGEFEED.current` on composites returns the same fresh snapshot (it delegates to `[READ]`). Leaf nodes return immutable primitives in both cases.
-6. **Changefeed subscription**: `doc.title[CHANGEFEED].subscribe(cb)` receives changes; unsubscribe stops notifications.
-7. **Transaction API**: `beginTransaction()` buffers changes; `commit()` replays through `ctx.dispatch` (enabling notification wrappers to fire); `abort()` discards. `ctx.inTransaction` reflects current state.
+6. **Changefeed subscription**: `doc.title[CHANGEFEED].subscribe(cb)` receives `Changeset` objects; unsubscribe stops notifications.
+7. **Transaction API**: `beginTransaction()` buffers changes; `commit()` calls `executeBatch` (which calls `prepare` N times + `flush` once, delivering batched `Changeset` to subscribers); `abort()` discards. `ctx.inTransaction` reflects current state.
 8. **Constrained scalar defaults**: `Zero.structural(Schema.string("a", "b"))` returns `"a"` (first constraint value).
 9. **Validation collects all errors**: `tryValidate` on a value with N type mismatches returns N errors (no short-circuit).
 10. **Positional sum rollback**: failed variant errors are discarded; successful variant produces zero spurious errors.
@@ -457,13 +506,16 @@ The spike validates these properties via 718 tests:
 17. **Change-driven cache invalidation**: `[INVALIDATE](change)` interprets the change surgically — sequence shifts, map key deletes, product clears. Verified via `planCacheUpdate` table tests (31 cases).
 18. **Navigate vs Read vocabulary**: map and sequence refs expose two access verbs — `.at(key|index)` for navigation (returns a ref) and `.get(key|index)` for reading (returns a plain value). `.get()` is symmetric with `.set()`. `JSON.stringify(mapRef.get("x"))` returns the serialized value (not `undefined`). Iteration yields refs (not values). Map refs also expose `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`; `.set(key, value)`, `.delete(key)`, `.clear()` for writes. No Proxy, no string index signature.
 19. **Sequence `.at()` / `.get()` bounds check**: `.at(100)` on a 2-item array returns `undefined`; `.at(-1)` returns `undefined`. `.get(100)` and `.get(-1)` also return `undefined`. Matches `Array.prototype.at()` semantics.
-20. **Capability composition**: `enrich(withWritable(withCaching(withReadable(bottomInterpreter))), withChangefeed)` produces refs with all capabilities.
+20. **Capability composition**: `withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))` produces refs with all capabilities.
 21. **Self-path dispatch**: every mutation dispatches at its own path. Scalar `.set()` dispatches `ReplaceChange` at the scalar's path (not `MapChange` at the parent). Exact-path changefeed subscribers on scalars fire on `.set()`.
 22. **Product `.set()`**: `doc.settings.set({ darkMode: true, fontSize: 20 })` dispatches a single `ReplaceChange` at the product's path. The `.set()` method is non-enumerable. Individual field refs still work after product `.set()`. Transactions accumulate one `PendingChange`.
 23. **Compile-time composition safety**: `withCaching(bottomInterpreter)` is a compile error — `bottomInterpreter` produces `HasRead`, but `withCaching` requires `HasNavigation`. `withReadable(plainInterpreter)` is also a compile error.
-24. **Invalidate-before-dispatch**: after `push()` on a cached sequence, `.at(newIndex)` returns the correct ref immediately because the cache was updated before dispatch. Subscribers see consistent caches when they fire.
+24. **Prepare-pipeline cache invalidation**: `ctx.prepare(path, change)` triggers surgical cache invalidation at the target path via `withCaching`'s pipeline hook. After `push()` on a cached sequence, `.at(newIndex)` returns the correct ref immediately. Unrelated caches are preserved (path-keyed handlers only fire for affected paths).
 25. **Combinatorial stacks**: `withWritable(bottomInterpreter)` produces write-only carriers where `ref()` throws but `.set()` dispatches correctly. `withWritable(withReadable(bottomInterpreter))` produces uncached read+write refs.
 26. **`TRANSACT` symbol**: `hasTransact(ref)` returns true for refs produced by `withWritable`. The symbol is `Symbol.for("kyneta:transact")`.
+27. **Batched notification**: subscribers receive exactly one `Changeset` per flush cycle per affected path, never partially-applied state. Auto-commit wraps a single change in a degenerate `Changeset` of one. Transactions and `applyChanges` deliver multi-change batches.
+28. **Declarative change application round-trips with `change`**: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docA()` deep-equals `docB()`. Verified for text, sequence (push/insert/delete), counter, map, and mixed mutations.
+29. **`applyChanges` invariants**: throws on non-transactable ref; throws during active transaction; empty ops is a no-op (no subscribers fire); `{origin}` option flows to `Changeset.origin`.
 
 ## File Map
 
@@ -475,43 +527,48 @@ packages/schema/
 │   ├── schema.ts                # Unified recursive type + constructors + ScalarPlain
 │   ├── loro-schema.ts           # LoroSchema namespace (Loro annotations + plain)
 │   ├── change.ts                # ChangeBase + built-in change types
-│   ├── changefeed.ts            # CHANGEFEED symbol, Changefeed/HasChangefeed, WeakMap cache
+│   ├── changefeed.ts            # CHANGEFEED symbol, Changeset, Changefeed/ComposedChangefeed, TreeEvent
 │   ├── step.ts                  # Pure (State, Change) → State transitions
 │   ├── zero.ts                  # Zero.structural, Zero.overlay
 │   ├── describe.ts              # Human-readable schema tree view
 │   ├── interpret.ts             # Interpreter interface + catamorphism + Path types
-│   ├── combinators.ts           # enrich, product, overlay, firstDefined
+│   ├── facade.ts                # Library-level change() and applyChanges()
+│   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition
+│   ├── combinators.ts           # product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
 │   ├── interpreter-types.ts     # RefContext, Plain<S> — shared types across interpreters
-│   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore, dispatchSum
+│   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore, pathKey, dispatchSum
 │   ├── interpreters/
 │   │   ├── bottom.ts            # bottomInterpreter, makeCarrier, READ symbol, capability lattice
 │   │   ├── with-readable.ts     # withReadable transformer — store reading + structural navigation
-│   │   ├── with-caching.ts      # withCaching transformer — identity-preserving caching + INVALIDATE
+│   │   ├── with-caching.ts      # withCaching transformer — caching + INVALIDATE + prepare-pipeline hooks
 │   │   ├── readable.ts          # Type-only: Readable<S>, ReadableSequenceRef, ReadableMapRef
-│   │   ├── writable.ts          # withWritable transformer + TRANSACT + WritableContext + Writable<S>
+│   │   ├── writable.ts          # withWritable transformer + TRANSACT + WritableContext + executeBatch
 │   │   ├── plain.ts             # Read from plain JS object (eager deep snapshot)
-│   │   ├── with-changefeed.ts   # Changefeed decorator (transitional observation layer)
+│   │   ├── with-changefeed.ts   # Changefeed transformer — compositional observation + batched notification
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate
 │   ├── __tests__/
 │   │   ├── types.test.ts        # Type-level tests (expectTypeOf)
 │   │   ├── interpret.test.ts    # Catamorphism, constructors, LoroSchema
 │   │   ├── bottom.test.ts       # Bottom interpreter: carriers, READ symbol, capability types
 │   │   ├── with-readable.test.ts # withReadable: reading, navigation, no caching, sum dispatch
-│   │   ├── with-caching.test.ts # withCaching: referential identity, INVALIDATE(change)
+│   │   ├── with-caching.test.ts # withCaching: referential identity, INVALIDATE, prepare-pipeline
 │   │   ├── plan-cache-update.test.ts # planCacheUpdate: table-driven cache op tests
+│   │   ├── plan-notifications.test.ts # planNotifications: table-driven notification grouping tests
 │   │   ├── readable.test.ts     # Composed stack: full read surface via composed interpreters
-│   │   ├── writable.test.ts     # withWritable: mutation, invalidate-before-dispatch, stacks
+│   │   ├── writable.test.ts     # withWritable: mutation, cache invalidation, stacks
 │   │   ├── transaction.test.ts  # Transaction lifecycle, inTransaction, TRANSACT symbol
+│   │   ├── changefeed.test.ts   # Changefeed: subscription, batched notification, tree, origin
+│   │   ├── facade.test.ts       # change/applyChanges: round-trip, notification, origin, errors
+│   │   ├── fluent.test.ts       # Fluent interpret builder API
 │   │   ├── guards.test.ts       # isPropertyHost, isNonNullObject, hasChangefeed
-│   │   ├── with-changefeed.test.ts # Changefeed subscription, transaction integration
 │   │   ├── zero.test.ts         # Zero.structural, Zero.overlay
 │   │   ├── describe.test.ts     # Schema tree view rendering
 │   │   ├── step.test.ts         # Pure state transitions
 │   │   └── validate.test.ts     # Validation: all kinds, errors, type narrowing
 │   └── index.ts                 # Barrel export
 ├── example/
-│   ├── main.ts                  # Self-contained mini-app (NOTE: currently stale)
+│   ├── main.ts                  # Self-contained mini-app with createDoc, change, subscribe
 │   └── README.md                # Example documentation
 ├── package.json                 # No runtime deps
 ├── tsconfig.json

@@ -403,19 +403,23 @@ Tests remaining (depend on Phase 4 `INVALIDATE` pipeline and/or Phase 5 `change`
 - Task: Test `applyChanges` during active transaction throws. 🟢 `facade.test.ts` "throws during active transaction"
 - Task: Test `Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` round-trip: the output of `subscribeTree` on docA can be used to reconstruct `PendingChange[]` input for `applyChanges` on docB (modulo absolute vs. relative paths). 🟢 `facade.test.ts` "tree events from docA can reconstruct PendingChange[] for docB" + "tree events from a subtree carry relative paths". Note: tree subscribers receive one Changeset<TreeEvent> per affected child path (not one combined changeset), so reconstruction uses `flatMap` across changesets.
 
-### Phase 7: Documentation 🔴
+### Phase 7: Documentation 🟢
 
-- Task: Update `TECHNICAL.md` §Changefeed to document the `Changeset` protocol — batched delivery, `origin` provenance, uniform API for single and batched mutations. 🔴
-- Task: Update `TECHNICAL.md` §Changefeed to document the `TreeEvent.path` rename (from `.origin`). 🔴
-- Task: Update `TECHNICAL.md` §withCaching to document the prepare-pipeline invalidation (prepare wrapping, path-keyed handler map, ordering guarantee). 🔴
-- Task: Update `TECHNICAL.md` §withWritable to document that mutation methods no longer call `[INVALIDATE]` directly. 🔴
-- Task: Update `TECHNICAL.md` §WritableContext to document the `prepare`/`flush` phase separation, and `applyChanges` as the declarative dual of `change`. 🔴
-- Task: Update `TECHNICAL.md` §Changefeed Decorator to remove stale `enrich` references — `withChangefeed` is now a proper interpreter transformer, not a decorator via `enrich`. 🔴
-- Task: Add to the Verified Properties section: "Batched notification: subscribers receive exactly one `Changeset` per transaction, never partially-applied state" and "Declarative change application round-trips with `change`" and "Prepare-pipeline invalidation: `ctx.prepare` triggers surgical cache invalidation at the target path." 🔴
-- Task: Update Verified Property #7 — `commit()` no longer replays through `ctx.dispatch`; it calls `executeBatch` which calls `prepare` N times + `flush` once. 🔴
-- Task: Document the `executeBatch` primitive and the invariant that `prepare`/`flush`/`executeBatch` must not be called during an active transaction. 🔴
-- Task: Document the `Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` isomorphism (up to path relativity) — this is a powerful property for sync use cases where the output of a tree subscription can be round-tripped as input to `applyChanges`. 🔴
-- Task: Update the recipe-book plan's Phase 1 to reference the library-level `applyChanges` instead of a custom `applyDelta` implementation. 🔴
+- Task: Update `TECHNICAL.md` §Changefeed to document the `Changeset` protocol — batched delivery, `origin` provenance, uniform API for single and batched mutations. 🟢
+- Task: Update `TECHNICAL.md` §Changefeed to document the `TreeEvent.path` rename (from `.origin`). 🟢
+- Task: Update `TECHNICAL.md` §withCaching to document the prepare-pipeline invalidation (prepare wrapping, path-keyed handler map, ordering guarantee). 🟢
+- Task: Update `TECHNICAL.md` §withWritable to document that mutation methods no longer call `[INVALIDATE]` directly. 🟢
+- Task: Update `TECHNICAL.md` §WritableContext to document the `prepare`/`flush` phase separation, and `applyChanges` as the declarative dual of `change`. 🟢
+- Task: Update `TECHNICAL.md` §Changefeed Decorator to remove stale `enrich` references — `withChangefeed` is now a proper interpreter transformer, not a decorator via `enrich`. 🟢 Renamed section to "Changefeed Transformer".
+- Task: Add to the Verified Properties section: "Batched notification: subscribers receive exactly one `Changeset` per transaction, never partially-applied state" and "Declarative change application round-trips with `change`" and "Prepare-pipeline invalidation: `ctx.prepare` triggers surgical cache invalidation at the target path." 🟢 Added as properties #27, #28, #29.
+- Task: Update Verified Property #7 — `commit()` no longer replays through `ctx.dispatch`; it calls `executeBatch` which calls `prepare` N times + `flush` once. 🟢
+- Task: Document the `executeBatch` primitive and the invariant that `prepare`/`flush`/`executeBatch` must not be called during an active transaction. 🟢
+- Task: Document the `Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` isomorphism (up to path relativity) — this is a powerful property for sync use cases where the output of a tree subscription can be round-tripped as input to `applyChanges`. 🟢
+- Task: Update the recipe-book plan's Phase 1 to reference the library-level `applyChanges` instead of a custom `applyDelta` implementation. 🟢
+- Task: Add Facade section (`change` and `applyChanges`) to TECHNICAL.md. 🟢
+- Task: Update File Map with new files (`facade.ts`, `layers.ts`, `facade.test.ts`, etc.). 🟢
+- Task: Update test count in Verified Properties header (835 schema + 869 core). 🟢
+- Task: Update Symbol-Keyed Composability Hooks table (INVALIDATE description). 🟢
 
 ## Tests
 
@@ -735,25 +739,27 @@ Introduces the two symmetric duals: imperative `change` (returns `PendingChange[
 
 Reviewer sees: the payoff — the public API that motivated the entire plan. The round-trip test is the crown jewel ("mutate docA, capture ops, apply to docB, assert equal"). The reviewer can verify: "the API surface is small, `executeBatch` does the heavy lifting, tests are comprehensive."
 
-### PR 7 — docs: TECHNICAL.md and plan updates
+### PR 7 — docs: TECHNICAL.md and plan updates 🟢
 
 **Phase 7. Type: documentation only.**
 
-- Update `TECHNICAL.md` §Changefeed (Changeset protocol, batched delivery, origin provenance)
-- Update `TECHNICAL.md` §Changefeed (TreeEvent.path rename)
-- Update `TECHNICAL.md` §withCaching (prepare-pipeline invalidation)
-- Update `TECHNICAL.md` §WritableContext (prepare/flush, executeBatch, applyChanges)
-- Update `TECHNICAL.md` §Changefeed Decorator (remove stale `enrich` references)
-- Update Verified Properties (#6, #7, #24 + 3 new)
-- Document `executeBatch` invariant and `Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` isomorphism
-- Update recipe-book plan
+- Update `TECHNICAL.md` §Changefeed (Changeset protocol, batched delivery, origin provenance, TreeEvent isomorphism) 🟢
+- Update `TECHNICAL.md` §withCaching (prepare-pipeline invalidation, ordering diagram) 🟢
+- Update `TECHNICAL.md` §withWritable (mutation methods no longer call INVALIDATE) 🟢
+- Update `TECHNICAL.md` §WritableContext → "WritableContext and Phase-Separated Dispatch" (prepare/flush, executeBatch, invariant) 🟢
+- Update `TECHNICAL.md` §Changefeed Decorator → "Changefeed Transformer" (remove stale `enrich` references) 🟢
+- Add `TECHNICAL.md` §Facade: change and applyChanges 🟢
+- Update Verified Properties (#6, #7, #20, #24 + new #27, #28, #29) 🟢
+- Update Symbol-Keyed Composability Hooks table 🟢
+- Update File Map (facade.ts, layers.ts, new test files) 🟢
+- Update recipe-book plan: `applyDelta` → `applyChanges`, composition style, Changeset.origin 🟢
 
-Reviewer sees: documentation catching up to the implementation. No code changes.
+Reviewer sees: documentation catching up to the implementation. No production code changes. 835/835 schema tests, 869/869 core tests.
 
 ### Stack visualization
 
 ```
-PR 7  docs: TECHNICAL.md and plan updates                                    🔴
+PR 7  docs: TECHNICAL.md and plan updates                                    🟢 ← done
   ↑
 PR 6  feat: library-level change/applyChanges + tests                        🟢
   ↑

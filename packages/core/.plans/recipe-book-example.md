@@ -51,7 +51,7 @@ The example demonstrates a principled decomposition of SSR data flows:
 
 This replaces the old two-payload approach (HTML + full state blob) with a parsimonious architecture where the SSR payload is the HTML plus a single integer. Full document state arrives via the sync protocol after the page is interactive.
 
-`@kyneta/schema` has its own `packages/schema/example/` with a 722-line `main.ts` demonstrating the schema algebra. It uses a "Facade + App" structure with numbered sections — a proven teaching format. The facade pattern (`createDoc`, `change`, `subscribe`) will be reused and extended with sync primitives (`version`, `delta`, `applyDelta`).
+`@kyneta/schema` has its own `packages/schema/example/` with a 722-line `main.ts` demonstrating the schema algebra. It uses a "Facade + App" structure with numbered sections — a proven teaching format. The facade pattern (`createDoc`, `change`, `subscribe`) will be reused and extended with sync primitives (`version`, `delta`, `applyChanges`). Note: the library-level `change` and `applyChanges` now exist in `@kyneta/schema/src/facade.ts` — the recipe-book facade can import them directly rather than reimplementing.
 
 The framework's distinctive capability is the **delta-kind spectrum**: the same CHANGEFEED protocol carries `text` (surgical character patches), `sequence` (O(k) list ops), `replace` (whole-value swap), and `increment` (counter delta), and the compiler maps each to the optimal DOM region automatically. No existing example demonstrates this spectrum or the natural division between schema-backed document state and local UI state via `state()`.
 
@@ -179,7 +179,7 @@ WebSocketServer on /ws:
     send { type: "delta", ops: [...], version: currentVersion }
     track client's version for future pushes
   on message from client:
-    applyDelta(doc, ops) → version increments
+    applyChanges(doc, ops, { origin: "sync" }) → version increments
     broadcast delta to all OTHER connected clients
   on local doc change (from another client):
     push delta to this client
@@ -199,7 +199,7 @@ The `sync` message is sent once on connection. The `delta` message flows in both
 ### Phase 1: Schema + Facade with Sync Primitives 🔴
 
 - **Task 1.1**: Create `src/schema.ts` — `RecipeBookSchema` exercising all delta kinds 🔴
-- **Task 1.2**: Create `src/facade.ts` — `createDoc`, `change`, `subscribe` + sync primitives (`version`, `delta`, `applyDelta`) 🔴
+- **Task 1.2**: Create `src/facade.ts` — `createDoc`, `subscribe` + sync primitives (`version`, `delta`). Import `change` and `applyChanges` from `@kyneta/schema`. 🔴
 - **Task 1.3**: Create `src/seed.ts` — shared initial data, imported by both server and client 🔴
 - **Task 1.4**: Create `src/types.ts` — typed document type alias 🔴
 
@@ -228,12 +228,18 @@ export const RecipeBookSchema = LoroSchema.doc({
 The Facade layer wraps schema algebra primitives into a developer-friendly API. This mirrors `packages/schema/example/main.ts` lines 66–192 and extends it with sync primitives. The facade composes:
 
 ```
-enrich(withMutation(readableInterpreter), withChangefeed)
+withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
 ```
 
-With context stack: `store → createWritableContext → createChangefeedContext`.
+Or via the fluent API:
 
-The facade implementation requires ~20 imports from `@kyneta/schema`: `Schema`, `LoroSchema`, `Zero`, `interpret`, `plainInterpreter`, `readableInterpreter`, `withMutation`, `createWritableContext`, `enrich`, `withChangefeed`, `createChangefeedContext`, `changefeedFlush`, `CHANGEFEED`, `hasChangefeed`, plus type imports (`Readable`, `Writable`, `Plain`, `AnnotatedSchema`, `ProductSchema`, `SchemaNode`, `ChangeBase`, `Store`, etc.). The public surface is ~6 functions; the implementation is ~100 lines.
+```
+interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
+```
+
+With context: `createWritableContext(store)`.
+
+The facade imports `change` and `applyChanges` directly from `@kyneta/schema` (they live in `src/facade.ts`). The recipe-book facade only needs to add `version`, `delta`, and `createDoc` on top. The public surface is ~5 functions; the implementation is ~80 lines.
 
 #### Sync Primitives
 
@@ -244,21 +250,21 @@ The facade extends the schema example's `createDoc`/`change`/`subscribe` with th
 version(doc)                    → number     // current version (monotonic integer)
 
 // Computing deltas
-delta(doc, fromVersion)         → Change[]   // operations since fromVersion
+delta(doc, fromVersion)         → PendingChange[]  // operations since fromVersion
 
-// Applying remote deltas
-applyDelta(doc, ops)            → void       // apply changes, advance version, notify subscribers
+// Applying remote deltas — uses library-level applyChanges from @kyneta/schema
+applyChanges(doc, ops, { origin: "sync" })  → PendingChange[]  // apply, invalidate caches, notify
 ```
 
 **Implementation**: The facade maintains two additional structures per document (stored alongside the existing `DOC_INTERNALS` symbol):
 
-1. **Version counter** (`number`, starts at 0) — incremented on each `changefeedFlush` call (both local mutations via `change()` and remote deltas via `applyDelta()`).
+1. **Version counter** (`number`, starts at 0) — incremented on each flush cycle (both local mutations via `change()` and remote deltas via `applyChanges()`).
 
-2. **Change log** (`Array<{ path: Path, change: ChangeBase }>`) — appended during each flush. The log entries are the same `Change` objects that flow through the CHANGEFEED protocol — `TextChange`, `SequenceChange`, `ReplaceChange`, `IncrementChange`.
+2. **Change log** (`Array<PendingChange>`) — appended during each flush. The log entries are `{ path: Path, change: ChangeBase }` — the same `PendingChange` type used by `change()` and `applyChanges()`.
 
 `delta(doc, fromVersion)` returns `log.slice(fromVersion)` — the suffix of operations the caller hasn't seen. This is O(1) to compute (array slice) and O(k) in payload size where k is the number of missed operations.
 
-`applyDelta(doc, ops)` applies each operation to the store via `applyChangeToStore(store, path, change)` (already exists in `@kyneta/schema/src/store.ts`), appends to the log, increments the version, and fires changefeed notifications. The `origin` field on each change is set to `"sync"` to distinguish remote changes from local edits — this flows through to the runtime's `inputTextRegion`, which uses origin for cursor management (local → move to end, remote → preserve position).
+Remote delta application uses the library-level `applyChanges(doc, ops, { origin: "sync" })` from `@kyneta/schema`. This calls `executeBatch` under the hood — `prepare` × N (cache invalidation + store mutation + notification accumulation) then `flush` × 1 (batched `Changeset` delivery to subscribers). The `origin: "sync"` option flows through to `Changeset.origin`, which the runtime's `inputTextRegion` uses for cursor management (local → move to end, remote → preserve position). The facade hooks into the flush cycle (via `subscribeTree` on the root) to append to the log and increment the version.
 
 #### Seed Data
 
@@ -359,8 +365,8 @@ ws.onopen = () => {
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
   if (msg.type === "delta" && msg.ops.length > 0) {
-    applyDelta(doc, msg.ops);
-    // CHANGEFEED fires → subscriptions fire → DOM patches surgically
+    applyChanges(doc, msg.ops, { origin: "sync" });
+    // Changeset fires → subscriptions fire → DOM patches surgically
   }
 };
 ```
@@ -422,7 +428,7 @@ The TECHNICAL.md additions document:
 ### Phase 4: Verification 🔴
 
 - **Task 4.1**: Add a lightweight integration test (`recipe-book.test.ts`) that imports schema + facade, creates a doc, performs mutations, and verifies changefeed notifications fire correctly 🔴
-- **Task 4.2**: Add sync primitive tests — `version()` increments, `delta()` returns correct suffix, `applyDelta()` reproduces state from seed 🔴
+- **Task 4.2**: Add sync primitive tests — `version()` increments, `delta()` returns correct suffix, `applyChanges()` reproduces state from seed 🔴
 - **Task 4.3**: Run full `packages/core` test suite to verify no regressions 🔴
 - **Task 4.4**: Manually verify `bun run dev` starts the server and the app renders in browser 🔴
 - **Task 4.5**: Manually verify two-tab sync — open two tabs, edit in one, see update in the other 🔴
@@ -447,9 +453,9 @@ import { describe, it, expect } from "vitest";
 // Test: version(doc) increments on each change() call
 // Test: delta(doc, 0) returns all operations since creation
 // Test: delta(doc, version(doc)) returns empty array (up to date)
-// Test: applyDelta on a fresh doc reproduces the state of the mutated doc
-// Test: applyDelta fires changefeed notifications with origin "sync"
-// Test: round-trip: create doc A from seed, mutate, delta(A, 0) → applyDelta on doc B → B matches A
+// Test: applyChanges on a fresh doc reproduces the state of the mutated doc
+// Test: applyChanges fires changefeed notifications with origin "sync"
+// Test: round-trip: create doc A from seed, mutate, delta(A, 0) → applyChanges on doc B → B matches A
 ```
 
 ## Transitive Effect Analysis
@@ -467,7 +473,7 @@ import { describe, it, expect } from "vitest";
 | Creating root `TECHNICAL.md`                                    | Documentation only                                                                     | No code impact; fills a gap (no root-level TECHNICAL.md currently exists)                                                                            |
 | Fixing `packages/schema/example/README.md`                      | Documentation only                                                                     | Corrects stale `@loro-extended/schema` references (4 occurrences)                                                                                    |
 | Facade maintains version counter + change log                   | New state per document                                                                 | Minimal memory overhead; log grows linearly with mutations. For a demo app this is negligible. Production apps would bound the log via snapshotting. |
-| `applyDelta` fires changefeed with `origin: "sync"`             | Existing `origin` field on `ChangeBase` is populated                                   | `inputTextRegion` already distinguishes local vs remote via `origin` for cursor management                                                           |
+| `applyChanges` with `{ origin: "sync" }` fires changefeed      | `Changeset.origin` is `"sync"` (provenance on batch, not individual changes)           | `inputTextRegion` already distinguishes local vs remote via `origin` for cursor management                                                           |
 
 ## Resources for Implementation Context
 
@@ -492,7 +498,8 @@ These files should be loaded when implementing each phase:
 - `packages/schema/src/interpreters/readable.ts` — `readableInterpreter`
 - `packages/schema/src/combinators.ts` — `enrich`
 - `packages/schema/src/zero.ts` — `Zero.structural`, `Zero.overlay`
-- `packages/schema/src/store.ts` — `applyChangeToStore` (used by `applyDelta`)
+- `packages/schema/src/store.ts` — `applyChangeToStore`, `pathKey` (used by prepare pipeline)
+- `packages/schema/src/facade.ts` — `change`, `applyChanges` (library-level API)
 - `packages/schema/src/step.ts` — `step(state, change)` pure state transitions
 - `packages/schema/src/change.ts` — `ChangeBase`, `TextChange`, `SequenceChange`, etc. (the `origin` field)
 
@@ -532,7 +539,7 @@ examples/recipe-book/
   src/
     schema.ts              — RecipeBookSchema definition (all delta kinds)
     seed.ts                — Shared initial data (imported by server + client)
-    facade.ts              — createDoc, change, subscribe + version, delta, applyDelta
+    facade.ts              — createDoc, subscribe + version, delta (imports change/applyChanges from @kyneta/schema)
     types.ts               — Typed document type alias
     app.ts                 — createApp(doc) factory with teaching comments
     main.ts                — Client entry: DOM adoption + WebSocket sync

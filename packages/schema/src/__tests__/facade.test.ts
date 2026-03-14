@@ -820,3 +820,145 @@ describe("change: changefeed integration", () => {
     expect(doc.count()).toBe(6)
   })
 })
+
+// ===========================================================================
+// Re-entrancy: subscriber-triggered mutations during notification
+// ===========================================================================
+//
+// The flush pipeline clears its pending accumulator BEFORE delivering
+// notifications. This means a subscriber can safely trigger new mutations
+// (auto-commit, change(), or applyChanges()) without corrupting the
+// outer notification cycle. These tests verify that invariant.
+
+describe("re-entrancy: mutation during notification", () => {
+  it("auto-commit inside subscriber does not corrupt outer notification", () => {
+    const { doc } = createChatDoc()
+
+    // Subscribe to darkMode. When it fires, auto-commit a fontSize mutation.
+    const fontSizeChangesets: Changeset[] = []
+    getChangefeed(doc.settings.fontSize).subscribe((cs) =>
+      fontSizeChangesets.push(cs),
+    )
+
+    getChangefeed(doc.settings.darkMode).subscribe(() => {
+      // Re-entrant auto-commit: triggers prepare + flush nested inside
+      // the outer flush's deliverNotifications loop.
+      doc.settings.fontSize.set(24)
+    })
+
+    // Trigger the outer notification
+    change(doc, (d) => {
+      d.settings.darkMode.set(true)
+    })
+
+    // Both mutations applied
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.settings.fontSize()).toBe(24)
+
+    // The nested auto-commit delivered its own notification
+    expect(fontSizeChangesets).toHaveLength(1)
+    expect(fontSizeChangesets[0]!.changes).toHaveLength(1)
+  })
+
+  it("change() inside subscriber does not corrupt outer notification", () => {
+    const { doc } = createChatDoc()
+
+    let nestedOps: PendingChange[] = []
+
+    getChangefeed(doc.settings.darkMode).subscribe(() => {
+      // Re-entrant change(): opens a transaction, mutates, commits —
+      // all nested inside the outer flush's delivery.
+      nestedOps = change(doc, (d) => {
+        d.settings.fontSize.set(20)
+        d.count.increment(5)
+      })
+    })
+
+    change(doc, (d) => {
+      d.settings.darkMode.set(true)
+    })
+
+    // Outer mutation applied
+    expect(doc.settings.darkMode()).toBe(true)
+
+    // Nested mutations applied and captured
+    expect(doc.settings.fontSize()).toBe(20)
+    expect(doc.count()).toBe(5)
+    expect(nestedOps).toHaveLength(2)
+  })
+
+  it("applyChanges() inside subscriber does not corrupt outer notification", () => {
+    const { doc } = createChatDoc()
+
+    const countChangesets: Changeset[] = []
+    getChangefeed(doc.count).subscribe((cs) => countChangesets.push(cs))
+
+    getChangefeed(doc.settings.darkMode).subscribe(() => {
+      // Re-entrant applyChanges: calls executeBatch nested inside
+      // the outer flush's delivery.
+      applyChanges(doc, [
+        {
+          path: [{ type: "key", key: "count" }],
+          change: incrementChange(10),
+        },
+      ])
+    })
+
+    change(doc, (d) => {
+      d.settings.darkMode.set(true)
+    })
+
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.count()).toBe(10)
+
+    // The nested applyChanges delivered its own notification to count
+    expect(countChangesets).toHaveLength(1)
+    expect(countChangesets[0]!.changes).toHaveLength(1)
+  })
+
+  it("chained re-entrancy: subscriber triggers mutation whose subscriber triggers another", () => {
+    const { doc } = createChatDoc()
+
+    // Chain: darkMode notification → fontSize mutation → count mutation
+    getChangefeed(doc.settings.fontSize).subscribe(() => {
+      doc.count.increment(1)
+    })
+
+    getChangefeed(doc.settings.darkMode).subscribe(() => {
+      doc.settings.fontSize.set(18)
+    })
+
+    change(doc, (d) => {
+      d.settings.darkMode.set(true)
+    })
+
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.settings.fontSize()).toBe(18)
+    expect(doc.count()).toBe(1)
+  })
+
+  it("re-entrant mutation does not duplicate notifications for the outer batch", () => {
+    const { doc } = createChatDoc()
+
+    // Track ALL darkMode notifications
+    const darkModeChangesets: Changeset[] = []
+    getChangefeed(doc.settings.darkMode).subscribe((cs) =>
+      darkModeChangesets.push(cs),
+    )
+
+    // A different subscriber triggers an unrelated mutation
+    getChangefeed(doc.settings.darkMode).subscribe(() => {
+      doc.count.increment(1)
+    })
+
+    change(doc, (d) => {
+      d.settings.darkMode.set(true)
+    })
+
+    // darkMode subscriber should have fired exactly once — the
+    // nested count mutation should not cause a second darkMode
+    // notification (the accumulator was already drained).
+    expect(darkModeChangesets).toHaveLength(1)
+    expect(darkModeChangesets[0]!.changes).toHaveLength(1)
+  })
+})
