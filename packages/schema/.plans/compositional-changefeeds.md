@@ -84,8 +84,8 @@ _Updated to reflect current state after Phases 1–3 completion._
 - ~~No `TRANSACT` symbol exists.~~ Defined in Phase 2.
 - ~~`INVALIDATE` uses `Symbol.for("schema:invalidate")`~~ Renamed to `Symbol.for("kyneta:invalidate")` in Phase 3a.
 - ~~The `enrich` combinator and `Decorator` type exist.~~ Removed in Phase 3c. The remaining combinators (`product`, `overlay`, `firstDefined`) are unaffected.
-- The `interpret` API returns a result directly — no fluent builder.
-- No `InterpreterLayer` abstraction exists for fluent `.with()` chaining.
+- ~~The `interpret` API returns a result directly — no fluent builder.~~ Solved in Phase 4. `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()`.
+- ~~No `InterpreterLayer` abstraction exists for fluent `.with()` chaining.~~ Defined in Phase 4. Pre-built layers in `src/layers.ts`.
 - `example/main.ts` is frozen in the pre-Phase-2 era — it imports removed symbols (`readableInterpreter`, `withMutation`, `createChangefeedContext`, `changefeedFlush`, `subscribeDeep`, `ChangefeedContext`, `autoCommit`). It does not compile against the current barrel.
 - `TECHNICAL.md` has several stale references: file map lists deleted `with-changefeed.test.ts` (should be `changefeed.test.ts`), describes `combinators.ts` as containing `enrich`, describes `with-changefeed.ts` as a "transitional" decorator, and the "Changefeed Decorator" section still documents the old `enrich`-based design.
 - `guards.ts` JSDoc mentions `enrich` (stale); `changefeed.ts` JSDoc mentions "enriched value" (stale).
@@ -336,16 +336,16 @@ The core implementation. The new `withChangefeed` interpreter transformer replac
 - Task: Update `src/__tests__/transaction.test.ts` — migrate dispatch wrappability test from `enrich(writableInterpreter, withChangefeed)` to `withChangefeed(writableInterpreter)`. 🟢
 - Task: New test file `src/__tests__/changefeed.test.ts` covering all Phase 3 test scenarios (see Tests section). This replaces the old `with-changefeed.test.ts`. 35 tests covering baseline behavior, compositional subscribeTree, dynamic sequence/map subscriptions, transaction integration, and edge cases. 🟢
 
-### Phase 4: Fluent Interpret Builder 🔴
+### Phase 4: Fluent Interpret Builder 🟢
 
-- Task: Define `InterpreterLayer` interface in `interpret.ts`. 🔴
-- Task: Define `InterpretBuilder` interface in `interpret.ts`. 🔴
-- Task: Implement `interpret(schema, ctx)` overload that returns an `InterpretBuilder`. The existing `interpret(schema, interpreter, ctx)` signature remains. Overload resolution: if the second argument is an `Interpreter`, use the existing path; if it's a context object (no interpreter methods), return a builder. 🔴
-- Task: Wrap `withCaching(withReadable(bottomInterpreter))` as `readable: InterpreterLayer`. 🔴
-- Task: Wrap `withWritable` as `writable: InterpreterLayer`. 🔴
-- Task: Wrap `withChangefeed` as `changefeed: InterpreterLayer`. 🔴
-- Task: Export layers and builder types from `index.ts`. 🔴
-- Task: Tests: fluent API produces refs identical to manual composition. Type-level tests verify accumulated types. 🔴
+- Task: Define `InterpreterLayer` interface in `interpret.ts`. `InterpreterLayer<InCtx, OutCtx>` with `name: string` and `transform(base): Interpreter`. 🟢
+- Task: Define `InterpretBuilder` interface in `interpret.ts`. `InterpretBuilder<Ctx, A>` with `.with(layer)` and `.done()`. Builder is immutable — each `.with()` creates a new snapshot. 🟢
+- Task: Implement `interpret(schema, ctx)` overload that returns an `InterpretBuilder`. The existing `interpret(schema, interpreter, ctx)` signature remains. Overload resolution via `isInterpreter()` — checks for all six case methods (`scalar`, `product`, `sequence`, `map`, `sum`, `annotated`). Builder starts from `bottomInterpreter` and applies layers left-to-right on `.done()`. 🟢
+- Task: Wrap `withCaching(withReadable(base))` as `readable: InterpreterLayer` in `src/layers.ts`. 🟢
+- Task: Wrap `withWritable` as `writable: InterpreterLayer` in `src/layers.ts`. 🟢
+- Task: Wrap `withChangefeed` as `changefeed: InterpreterLayer` in `src/layers.ts`. 🟢
+- Task: Export layers and builder types from `index.ts`. `InterpreterLayer`, `InterpretBuilder` (types), `readable`, `writable`, `changefeed` (runtime). 🟢
+- Task: Tests in `fluent.test.ts`: 24 tests covering basic functionality, equivalence with manual composition, transaction integration, error handling, layer identity, three-arg regression, caching identity, partial stacks, and type-level verification. 🟢
 
 ### Phase 5: Rewrite `example/main.ts` 🔴
 
@@ -360,7 +360,7 @@ Old changefeed infrastructure, `enrich`, and `Decorator` were already removed in
 
 ## Tests
 
-New test file `src/__tests__/transaction.test.ts` for context transactions (Phase 2) — ✅ done. New test file `src/__tests__/changefeed.test.ts` for compositional behavior (Phase 3) — ✅ done, replaces deleted `with-changefeed.test.ts`. New test file `src/__tests__/fluent.test.ts` for the builder API (Phase 4 — not yet created). All 756 tests pass as of Phase 3 completion.
+New test file `src/__tests__/transaction.test.ts` for context transactions (Phase 2) — ✅ done. New test file `src/__tests__/changefeed.test.ts` for compositional behavior (Phase 3) — ✅ done, replaces deleted `with-changefeed.test.ts`. New test file `src/__tests__/fluent.test.ts` for the builder API (Phase 4) — ✅ done, 11 tests (consolidated from 24 — removed low-value layer-name, trivial type-export, and redundant equivalence tests; added builder-branching and custom-layer tests). All 767 tests pass as of Phase 4 completion.
 
 ### Phase 2 Tests (in `transaction.test.ts`) 🟢
 
@@ -404,11 +404,18 @@ This test file replaces the old `with-changefeed.test.ts` and covers all composi
 - **Transaction dispatch replay**: `beginTransaction`, mutate, `commit` → verify changes go through `dispatch` (not raw `applyChangeToStore`) by confirming the compositional changefeed's dispatch wrapper fires.
 - **Coexistence**: exact `subscribe` and `subscribeTree` on the same ref both fire for a change at that node's own path.
 
-### Phase 4 Tests (in `fluent.test.ts`)
+### Phase 4 Tests (in `fluent.test.ts`) 🟢
 
-- Fluent API produces refs functionally equivalent to manual `withCompositionalChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))`.
-- `.done()` returns a typed result with all accumulated capabilities.
-- Existing `interpret(schema, interpreter, ctx)` still works (regression).
+11 tests after consolidation. Removed low-value tests (layer `.name` properties, `typeof .transform`, trivial type-export checks, redundant equivalence tests). Added two high-value tests (builder branching, custom layer). Focus on behavioral contracts over implementation details.
+
+- **Partial stacks with caching**: `readable`-only produces callable refs with caching identity (`doc.settings === doc.settings`), no `.set()`, no `TRANSACT`, no `CHANGEFEED`. `readable + writable` has `TRANSACT` but no `CHANGEFEED`. 🟢
+- **Full stack on complex schema**: read/write/observe surface on a schema with text, counter, sequence, product, map. `subscribeTree` fires with correct origin paths. 🟢
+- **Transaction integration**: `TRANSACT` points to correct context. Buffering, commit, and changefeed notification work through fluent-built refs. 🟢
+- **Builder branching**: Two branches from the same builder produce independent results — read-only branch doesn't gain `.set()` from a writable branch. Base builder reusable after `.done()`. 🟢
+- **Custom layer**: User-defined `InterpreterLayer` works with the builder — proves the extension point. 🟢
+- **Error handling**: `.done()` with no layers throws descriptive error. 🟢
+- **Three-arg regression**: `interpret(schema, interpreter, ctx)` and `interpret(schema, interpreter, ctx, path)` still work. 🟢
+- **Type-level**: Layer types constrain context flow (`readable: RefCtx→RefCtx`, `writable: RefCtx→WritableCtx`, `changefeed: WritableCtx→WritableCtx`). Two-arg `interpret` returns `InterpretBuilder`. 🟢
 
 ## Transitive Effect Analysis
 
@@ -418,9 +425,13 @@ _Updated to reflect Phases 1–3 completion._
 
 Gained `ComposedChangefeed`, `TreeEvent`, `HasComposedChangefeed`, `hasComposedChangefeed` in Phase 1. No changes to existing `Changefeed`, `HasChangefeed`, `CHANGEFEED`, `hasChangefeed`, `getOrCreateChangefeed`, `staticChangefeed`. Zero risk to existing consumers.
 
-### `interpret.ts`
+### `interpret.ts` 🟢
 
-Gains overloaded `interpret` signature (builder path) and `InterpreterLayer` / `InterpretBuilder` types in Phase 4. Existing `interpret(schema, interp, ctx)` signature unchanged. Existing callers unaffected.
+Phase 4 (done): Gained overloaded `interpret` signature (two-arg builder path), `InterpreterLayer` / `InterpretBuilder` interfaces, `isInterpreter()` discriminator, and `createBuilder()` factory. Existing `interpret(schema, interp, ctx)` three-arg signature unchanged. Existing callers unaffected. Internal `interpretImpl` extracted to avoid overload recursion. `bottomInterpreter` imported directly (safe — `bottom.ts` only has `import type` from `interpret.ts`).
+
+### `layers.ts` 🟢
+
+Phase 4 (done): New file. Pre-built `InterpreterLayer` instances: `readable` (wraps `withCaching(withReadable(base))`), `writable` (wraps `withWritable(base)`), `changefeed` (wraps `withChangefeed(base)`). Separated from `interpret.ts` to avoid circular runtime imports — `layers.ts` imports both `interpret.ts` (types) and `interpreters/*` (runtime values).
 
 ### `interpreters/writable.ts`
 
@@ -457,12 +468,12 @@ Updated in Phase 2 to use plain `WritableContext` (done). Updated in Phase 3d to
 
 **Zero changes required.** The compiler detects reactivity via the `[CHANGEFEED]` symbol property on types. `ComposedChangefeed extends Changefeed`, so it still has `[CHANGEFEED]`. The compiler's `getDeltaKind` 7-hop type walk reads the `subscribe` method's callback parameter type — unchanged. The compiler always emits node-level subscriptions, which is exactly `Changefeed.subscribe`.
 
-### `index.ts` barrel exports 🟢 (through Phase 3)
+### `index.ts` barrel exports 🟢 (through Phase 4)
 
 Phase 2 (done): removed `ChangefeedContext`, `createChangefeedContext`, `changefeedFlush`, `flush`, `subscribeDeep`, `DeepEvent`. Added `TRANSACT`, `HasTransact`, `hasTransact`.
 Phase 3c (done): removed `enrich`, `Decorator`, old `withChangefeed` export, remaining aliases.
 Phase 3d (done): added `withChangefeed` and `attachChangefeed` from new transformer path.
-Phase 4: will add `InterpreterLayer`, `InterpretBuilder`, `readable`, `writable`, `changefeed` layers.
+Phase 4 (done): added `InterpreterLayer`, `InterpretBuilder` (types) and `readable`, `writable`, `changefeed` (layers from `layers.ts`).
 
 ### `example/main.ts` 🔴
 
@@ -489,7 +500,8 @@ The transformer maintains its **own** `Map<number, () => void>` of per-item unsu
 | Writable interpreter | `src/interpreters/writable.ts` | `WritableContext`, `TRANSACT`, `withWritable` with `[TRANSACT]` attachment | ✅ Complete |
 | Caching transformer | `src/interpreters/with-caching.ts` | `INVALIDATE` symbol (`kyneta:invalidate`) | ✅ Complete |
 | Readable interpreter | `src/interpreters/readable.ts` | Base interpreter types; no modifications needed | ✅ No changes |
-| Catamorphism | `src/interpret.ts` | `Interpreter` interface, `interpret` function — add overload and builder in Phase 4 | Phase 4 |
+| Catamorphism | `src/interpret.ts` | `Interpreter` interface, `interpret` function, `InterpreterLayer`, `InterpretBuilder`, fluent overload | ✅ Complete |
+| Pre-built layers | `src/layers.ts` | `readable`, `writable`, `changefeed` — `InterpreterLayer` instances for fluent composition | ✅ Complete |
 | Combinators | `src/combinators.ts` | `product`, `overlay`, `firstDefined` (enrich/Decorator removed in Phase 3c) | ✅ Complete |
 | Change types | `src/change.ts` | `ChangeBase`, `SequenceChange`, `MapChange`, `ReplaceChange` | ✅ No changes |
 | Store utilities | `src/store.ts` | `applyChangeToStore`, `readByPath` | ✅ No changes |
@@ -497,6 +509,7 @@ The transformer maintains its **own** `Map<number, () => void>` of per-item unsu
 | Changefeed tests | `src/__tests__/changefeed.test.ts` | 35 tests covering compositional behavior; replaces old `with-changefeed.test.ts` | ✅ Complete |
 | Transaction tests | `src/__tests__/transaction.test.ts` | Transaction lifecycle, `inTransaction`, `TRANSACT` symbol, dispatch wrappability | ✅ Complete |
 | Writable tests | `src/__tests__/writable.test.ts` | `withWritable` mutation, `[TRANSACT]` attachment, invalidate-before-dispatch | ✅ Complete |
+| Fluent tests | `src/__tests__/fluent.test.ts` | 11 tests: partial stacks, full stack, transactions, builder branching, custom layer, error, regression, types | ✅ Complete |
 | Example facade | `example/main.ts` | **Non-functional** — imports deleted symbols; rewritten in Phase 5 | 🔴 Phase 5 |
 | Core runtime subscribe | `packages/core/src/runtime/subscribe.ts` | Consumes `[CHANGEFEED].subscribe` — verified no breakage | ✅ No changes |
 | Core runtime regions | `packages/core/src/runtime/regions.ts` | `listRegion` subscribes to list refs — node-level semantics preserved | ✅ No changes |

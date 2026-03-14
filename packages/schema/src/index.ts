@@ -104,10 +104,15 @@ export { Zero, scalarDefault } from "./zero.js"
 export { interpret, createInterpreter } from "./interpret.js"
 export type {
   Interpreter,
+  InterpreterLayer,
+  InterpretBuilder,
   Path,
   PathSegment,
   SumVariants,
 } from "./interpret.js"
+
+// Pre-built interpreter layers for fluent composition
+export { readable, writable, changefeed } from "./layers.js"
 
 // Guards — shared type-narrowing utilities
 export { isNonNullObject, isPropertyHost } from "./guards.js"
