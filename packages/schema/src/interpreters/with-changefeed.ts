@@ -8,19 +8,26 @@
 // - Composite refs (product, sequence, map) get a ComposedChangefeed
 //   with subscribeTree for tree-level observation
 //
-// Notification flow: the transformer wraps ctx.prepare so that after
-// each change is applied to the store, the affected node's changefeed
-// subscribers fire. Tree notification propagates via subscription
-// composition (children → parent) without any flat subscriber map.
+// Notification flow: the transformer wraps ctx.prepare to accumulate
+// {path, change} entries without firing subscribers. It wraps ctx.flush
+// to group accumulated entries by path and deliver one Changeset per
+// subscriber. Tree notification propagates via subscription composition
+// (children → parent) without any flat subscriber map.
 //
-// Phase separation: `prepare` fires per-change notifications (degenerate
-// Changeset of one). In the future (PR 4), `prepare` will accumulate
-// and `flush` will deliver batched Changesets. The infrastructure for
-// both `prepare` and `flush` wrapping is in place.
+// Phase separation:
+// - prepare: accumulate {path, change} pairs (no notification)
+// - flush: group by path, deliver Changeset per listener, clear accumulator
+//
+// This means:
+// - Auto-commit (single mutation) → executeBatch → 1 prepare + 1 flush
+//   → subscribers receive Changeset of exactly 1 change
+// - Transaction commit → executeBatch → N prepares + 1 flush
+//   → subscribers receive Changeset of N changes (batched)
+// - Subscribers never see partially-applied state
 //
 // Compose: withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
 //
-// See .plans/compositional-changefeeds.md §Phase 3d.
+// See .plans/apply-changes.md §Phase 3, PR 4.
 
 import type { ChangeBase } from "../change.js"
 import { isSequenceChange } from "../change.js"
@@ -44,7 +51,7 @@ import type {
   ComposedChangefeed,
   TreeEvent,
 } from "../changefeed.js"
-import type { WritableContext } from "./writable.js"
+import type { WritableContext, PendingChange } from "./writable.js"
 import { readByPath, pathKey } from "../store.js"
 import { isPropertyHost } from "../guards.js"
 import { READ } from "./bottom.js"
@@ -70,73 +77,171 @@ export function attachChangefeed(
 }
 
 // ---------------------------------------------------------------------------
-// Prepare wrapping — per-context, idempotent
+// Notification plan — Functional Core (pure, table-testable)
 // ---------------------------------------------------------------------------
 
-// WeakMap ensures a single prepare wrapper per WritableContext, shared
-// across all nodes interpreted with that context.
-const contextState = new WeakMap<
-  WritableContext,
-  {
-    listeners: Map<string, Set<(change: ChangeBase) => void>>
-    originalPrepare: (path: Path, change: ChangeBase) => void
-  }
->()
+/**
+ * A notification plan groups accumulated `{path, change}` pairs by
+ * `pathKey` so that each listener path receives exactly one `Changeset`
+ * per flush cycle.
+ *
+ * This is the Functional Core of the changefeed notification pipeline,
+ * following the same FC/IS pattern as `planCacheUpdate`/`applyCacheOps`
+ * in `withCaching`.
+ */
+export interface NotificationPlan {
+  /**
+   * Per-path grouped changes. Map key is `pathKey(path)`.
+   * Each entry is the array of `ChangeBase` objects dispatched at
+   * that path during this batch.
+   */
+  readonly grouped: ReadonlyMap<string, readonly ChangeBase[]>
+}
 
 /**
- * Ensures the given WritableContext has its `prepare` wrapped to fire
- * per-node listeners after each change is applied. Returns the shared
- * listener map.
+ * Given accumulated pending changes, group them by `pathKey`.
  *
- * Each node registers its own shallow listener in this map. When
- * `prepare` fires, the wrapper looks up exact-path listeners and
- * invokes them with the change.
+ * Pure function — no mutation, no side effects. Returns fresh data.
  *
- * Phase separation: currently, each `prepare` call fires a degenerate
- * `Changeset` of one change immediately. In PR 4, `prepare` will
- * accumulate notification entries and `flush` will deliver batched
- * `Changeset` objects. The `flush` wrapping point is already in place.
+ * This is table-testable: "given 3 changes at 2 paths, the plan
+ * produces 2 entries with the correct grouping."
  *
- * No `inTransaction` guard is needed — `prepare` is never called
- * during a transaction. Transaction buffering lives in `dispatch`;
- * `executeBatch` (which calls `prepare`) guards against being called
- * during an active transaction.
+ * @param pending - Accumulated `{path, change}` pairs from prepare calls.
+ * @returns A `NotificationPlan` with changes grouped by pathKey.
+ */
+export function planNotifications(
+  pending: readonly PendingChange[],
+): NotificationPlan {
+  const grouped = new Map<string, ChangeBase[]>()
+  for (const { path, change } of pending) {
+    const key = pathKey(path)
+    let arr = grouped.get(key)
+    if (!arr) {
+      arr = []
+      grouped.set(key, arr)
+    }
+    arr.push(change)
+  }
+  return { grouped }
+}
+
+/**
+ * Deliver notifications from a plan to listeners.
+ *
+ * Imperative Shell — trivial delivery. Builds one `Changeset` per path
+ * that has listeners and fires all registered callbacks.
+ *
+ * @param plan - The notification plan from `planNotifications`.
+ * @param listeners - The path-keyed listener map (from `ensurePrepareWiring`).
+ * @param origin - Optional provenance tag attached to each emitted `Changeset`.
+ */
+export function deliverNotifications(
+  plan: NotificationPlan,
+  listeners: ReadonlyMap<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
+  origin?: string,
+): void {
+  for (const [key, changes] of plan.grouped) {
+    const set = listeners.get(key)
+    if (set && set.size > 0) {
+      const changeset: Changeset<ChangeBase> = { changes, origin }
+      for (const cb of set) cb(changeset)
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Prepare/flush wrapping — per-context, idempotent
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-context state for the changefeed layer's prepare/flush wrapping.
+ *
+ * - `listeners`: path-keyed map of subscriber callbacks. Each changefeed
+ *   factory registers its own listener here via `listenAtPath`.
+ * - `pending`: accumulated `{path, change}` pairs from `prepare` calls,
+ *   drained by `flush`.
+ * - `originalPrepare` / `originalFlush`: the unwrapped methods, called
+ *   before/after the changefeed layer's logic.
+ */
+interface ContextWiringState {
+  readonly listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>
+  readonly pending: PendingChange[]
+  readonly originalPrepare: (path: Path, change: ChangeBase) => void
+  readonly originalFlush: (origin?: string) => void
+}
+
+// WeakMap ensures a single prepare/flush wrapper per WritableContext,
+// shared across all nodes interpreted with that context.
+const contextState = new WeakMap<WritableContext, ContextWiringState>()
+
+/**
+ * Ensures the given WritableContext has its `prepare` and `flush` wrapped
+ * for changefeed notification. Returns the shared listener map.
+ *
+ * - `prepare` wrapping: after the inner prepare (store mutation), appends
+ *   `{path, change}` to the pending accumulator. No notification fires.
+ * - `flush` wrapping: calls `planNotifications` (pure) to group changes
+ *   by path, then `deliverNotifications` (imperative) to fire listeners.
+ *   Clears the accumulator before firing for re-entrancy safety.
+ *   Calls the inner flush afterwards.
+ *
+ * No `inTransaction` guard is needed — `prepare` and `flush` are never
+ * called during a transaction. Transaction buffering lives in `dispatch`;
+ * `executeBatch` (which calls `prepare`/`flush`) guards against being
+ * called during an active transaction.
  */
 function ensurePrepareWiring(
   ctx: WritableContext,
-): Map<string, Set<(change: ChangeBase) => void>> {
+): Map<string, Set<(changeset: Changeset<ChangeBase>) => void>> {
   let state = contextState.get(ctx)
   if (state) return state.listeners
 
-  const listeners = new Map<string, Set<(change: ChangeBase) => void>>()
+  const listeners = new Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>()
+  const pending: PendingChange[] = []
   const originalPrepare = ctx.prepare
+  const originalFlush = ctx.flush
 
+  // Wrapped prepare: apply change to store, then accumulate for flush.
   const wrappedPrepare = (path: Path, change: ChangeBase): void => {
     originalPrepare(path, change)
-    // Fire per-change listeners immediately (degenerate Changeset of one).
-    // In PR 4, this will switch to accumulation — prepare accumulates,
-    // flush delivers batched Changesets.
-    const key = pathKey(path)
-    const set = listeners.get(key)
-    if (set) {
-      for (const cb of set) cb(change)
-    }
+    pending.push({ path, change })
   }
-  ;(ctx as any).prepare = wrappedPrepare
 
-  state = { listeners, originalPrepare }
+  // Wrapped flush: plan notifications (pure), deliver (imperative),
+  // then call inner flush.
+  const wrappedFlush = (origin?: string): void => {
+    if (pending.length > 0) {
+      const plan = planNotifications(pending)
+      // Clear accumulator before firing — re-entrancy safety
+      pending.length = 0
+      deliverNotifications(plan, listeners, origin)
+    }
+
+    // Call inner flush (base is no-op; future layers may wrap)
+    originalFlush(origin)
+  }
+
+  ;(ctx as any).prepare = wrappedPrepare
+  ;(ctx as any).flush = wrappedFlush
+
+  state = { listeners, pending, originalPrepare, originalFlush }
   contextState.set(ctx, state)
   return listeners
 }
 
 /**
- * Registers a listener for changes dispatched at a specific path.
+ * Registers a listener for changes at a specific path.
  * Returns an unsubscribe function.
+ *
+ * Listeners receive `Changeset<ChangeBase>` — a batch of one or more
+ * changes with optional origin. Auto-commit produces a degenerate
+ * changeset of one; transactions and `applyChanges` produce multi-change
+ * batches.
  */
 function listenAtPath(
-  listeners: Map<string, Set<(change: ChangeBase) => void>>,
+  listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
   path: Path,
-  callback: (change: ChangeBase) => void,
+  callback: (changeset: Changeset<ChangeBase>) => void,
 ): () => void {
   const key = pathKey(path)
   let set = listeners.get(key)
@@ -159,13 +264,13 @@ function listenAtPath(
 
 /**
  * Creates a leaf Changefeed (no children, no subscribeTree).
- * `subscribe` fires on any change dispatched at this path.
+ * `subscribe` fires on any change at this path.
  *
- * Each individual change is wrapped in a degenerate `Changeset` of one.
- * Batched delivery (multi-change changesets) is added in Phase 3.
+ * Subscribers receive batched `Changeset` objects directly from
+ * the flush cycle — no per-change wrapping needed.
  */
 function createLeafChangefeed(
-  listeners: Map<string, Set<(change: ChangeBase) => void>>,
+  listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
   path: Path,
   readCurrent: () => unknown,
 ): Changefeed<unknown, ChangeBase> {
@@ -174,9 +279,8 @@ function createLeafChangefeed(
       return readCurrent()
     },
     subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
-      return listenAtPath(listeners, path, (change) => {
-        callback({ changes: [change] })
-      })
+      // The listener receives Changeset directly from flush — pass through
+      return listenAtPath(listeners, path, callback)
     },
   }
 }
@@ -188,14 +292,16 @@ function createLeafChangefeed(
  * - `subscribeTree` fires for all descendant changes with relative
  *   paths, PLUS own-path changes with `path: []`.
  *
- * Each notification is wrapped in a degenerate `Changeset` of one.
- * Batched delivery (multi-change changesets) is added in Phase 3.
+ * Subscribers receive batched `Changeset` objects. A single flush
+ * cycle delivers one `Changeset` per affected path. Tree subscribers
+ * receive propagated changesets from children via subscription
+ * composition.
  *
  * The product forces all child thunks eagerly to obtain their
  * changefeeds, then subscribes to each child for tree propagation.
  */
 function createProductChangefeed(
-  listeners: Map<string, Set<(change: ChangeBase) => void>>,
+  listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
   path: Path,
   readCurrent: () => unknown,
   fields: Readonly<Record<string, () => unknown>>,
@@ -205,16 +311,19 @@ function createProductChangefeed(
   // Per-node tree subscribers — receive Changeset<TreeEvent>
   const treeSubs = new Set<(changeset: Changeset<TreeEvent>) => void>()
 
-  // Register in the dispatch listener map for own-path changes
-  listenAtPath(listeners, path, (change: ChangeBase) => {
+  // Register in the listener map for own-path changes.
+  // Receives a Changeset (possibly with multiple changes) from flush.
+  listenAtPath(listeners, path, (changeset: Changeset<ChangeBase>) => {
     if (shallowSubs.size > 0) {
-      const changeset: Changeset<ChangeBase> = { changes: [change] }
       for (const cb of shallowSubs) cb(changeset)
     }
     // Tree subscribers also see own-path changes with path []
     if (treeSubs.size > 0) {
-      const changeset: Changeset<TreeEvent> = { changes: [{ path: [], change }] }
-      for (const cb of treeSubs) cb(changeset)
+      const treeChangeset: Changeset<TreeEvent> = {
+        changes: changeset.changes.map(change => ({ path: [], change })),
+        origin: changeset.origin,
+      }
+      for (const cb of treeSubs) cb(treeChangeset)
     }
   })
 
@@ -281,15 +390,15 @@ function createProductChangefeed(
  * Creates a ComposedChangefeed for a sequence (list) node.
  *
  * - `subscribe` fires on SequenceChange at this path (structural changes).
- * - `subscribeTree` fires for structural changes (with origin []) AND
- *   per-item content changes (with origin [{type:"index",index},...]).
+ * - `subscribeTree` fires for structural changes (with path []) AND
+ *   per-item content changes (with path [{type:"index",index},...]).
  *
  * Dynamic subscription management: when items are inserted or deleted,
  * the transformer tears down old per-item subscriptions and establishes
  * new ones at the correct indices.
  */
 function createSequenceChangefeed(
-  listeners: Map<string, Set<(change: ChangeBase) => void>>,
+  listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
   path: Path,
   readCurrent: () => unknown,
   getItemRef: (index: number) => unknown,
@@ -350,8 +459,10 @@ function createSequenceChangefeed(
     }
   }
 
-  function handleStructuralChange(change: ChangeBase): void {
-    if (!isSequenceChange(change)) {
+  function handleStructuralChange(changeset: Changeset<ChangeBase>): void {
+    // Check if any change in the batch is a sequence change
+    const hasNonSequence = changeset.changes.some(c => !isSequenceChange(c))
+    if (hasNonSequence) {
       // ReplaceChange or unknown — tear down all, rebuild
       for (const unsub of itemUnsubs.values()) unsub()
       itemUnsubs.clear()
@@ -372,22 +483,25 @@ function createSequenceChangefeed(
     if (treeSubs.size > 0) subscribeToAllItems()
   }
 
-  // Register in the dispatch listener map for own-path changes
-  listenAtPath(listeners, path, (change: ChangeBase) => {
+  // Register in the listener map for own-path changes.
+  // Receives a Changeset (possibly with multiple changes) from flush.
+  listenAtPath(listeners, path, (changeset: Changeset<ChangeBase>) => {
     // Fire shallow subscribers
     if (shallowSubs.size > 0) {
-      const changeset: Changeset<ChangeBase> = { changes: [change] }
       for (const cb of shallowSubs) cb(changeset)
     }
 
     // Tree subscribers see own-path structural changes with path []
     if (treeSubs.size > 0) {
-      const changeset: Changeset<TreeEvent> = { changes: [{ path: [], change }] }
-      for (const cb of treeSubs) cb(changeset)
+      const treeChangeset: Changeset<TreeEvent> = {
+        changes: changeset.changes.map(change => ({ path: [], change })),
+        origin: changeset.origin,
+      }
+      for (const cb of treeSubs) cb(treeChangeset)
     }
 
     // Rebuild item subscriptions after structural change
-    handleStructuralChange(change)
+    handleStructuralChange(changeset)
   })
 
   let initialWiringDone = false
@@ -426,7 +540,7 @@ function createSequenceChangefeed(
  * Dynamic subscription management for map entries.
  */
 function createMapChangefeed(
-  listeners: Map<string, Set<(change: ChangeBase) => void>>,
+  listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
   path: Path,
   readCurrent: () => unknown,
   getEntryRef: (key: string) => unknown,
@@ -485,26 +599,29 @@ function createMapChangefeed(
     }
   }
 
-  function handleStructuralChange(_change: ChangeBase): void {
+  function handleStructuralChange(_changeset: Changeset<ChangeBase>): void {
     // Tear down all and rebuild for current keys
     for (const unsub of entryUnsubs.values()) unsub()
     entryUnsubs.clear()
     if (treeSubs.size > 0) subscribeToAllEntries()
   }
 
-  // Register in the dispatch listener map for own-path changes
-  listenAtPath(listeners, path, (change: ChangeBase) => {
+  // Register in the listener map for own-path changes.
+  // Receives a Changeset (possibly with multiple changes) from flush.
+  listenAtPath(listeners, path, (changeset: Changeset<ChangeBase>) => {
     if (shallowSubs.size > 0) {
-      const changeset: Changeset<ChangeBase> = { changes: [change] }
       for (const cb of shallowSubs) cb(changeset)
     }
 
     if (treeSubs.size > 0) {
-      const changeset: Changeset<TreeEvent> = { changes: [{ path: [], change }] }
-      for (const cb of treeSubs) cb(changeset)
+      const treeChangeset: Changeset<TreeEvent> = {
+        changes: changeset.changes.map(change => ({ path: [], change })),
+        origin: changeset.origin,
+      }
+      for (const cb of treeSubs) cb(treeChangeset)
     }
 
-    handleStructuralChange(change)
+    handleStructuralChange(changeset)
   })
 
   let initialWiringDone = false
@@ -554,11 +671,18 @@ function createMapChangefeed(
  * Notification flows through the changefeed tree, not flat subscriber maps.
  * Each node's `subscribeTree` composes its children's changefeeds.
  *
- * **Prepare wrapping:** The transformer wraps `ctx.prepare` (once per
- * context, idempotently) so that after each change is applied to the store,
- * the affected node's changefeed subscribers fire. Currently fires a
- * degenerate `Changeset` of one per prepare call. In PR 4, `prepare`
- * will accumulate and `flush` will deliver batched `Changeset` objects.
+ * **Prepare/flush wrapping:** The transformer wraps `ctx.prepare` to
+ * accumulate `{path, change}` entries after each store mutation (no
+ * notification fires). It wraps `ctx.flush` to group accumulated
+ * entries by path and deliver one `Changeset` per subscriber.
+ *
+ * This means:
+ * - Auto-commit (single mutation via `dispatch`): `executeBatch` calls
+ *   `prepare` once + `flush` once → subscribers receive a `Changeset`
+ *   with exactly 1 change.
+ * - Transaction commit: `executeBatch` calls `prepare` N times + `flush`
+ *   once → subscribers receive a `Changeset` with N changes. Subscribers
+ *   never see partially-applied state.
  *
  * **Transaction compatibility:** During a transaction, `dispatch` buffers
  * changes. On `commit()`, `executeBatch` calls `prepare` N times then

@@ -663,8 +663,8 @@ section(12, "Transaction + Tree Subscription Integration")
 log(`
     During a transaction, dispatch buffers changes — the store is
     unchanged and changefeed subscribers do NOT fire. On commit,
-    changes replay through dispatch, so subscribers fire exactly
-    once per change at commit time.
+    changes are applied via executeBatch (prepare × N + flush × 1),
+    so subscribers receive batched Changesets at commit time.
 `)
 
 const txEvents: { path: string; type: string }[] = []

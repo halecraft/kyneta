@@ -178,8 +178,8 @@ describe("fluent: transactions", () => {
     ctx.commit()
     expect(store.x).toBe(10)
     expect(store.y).toBe(20)
-    // Subscribers fire at commit time via dispatch replay
-    expect(changes.length).toBeGreaterThanOrEqual(1)
+    // Exactly 1 changeset delivered at commit time (batched)
+    expect(changes).toHaveLength(1)
   })
 })
 

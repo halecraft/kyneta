@@ -701,6 +701,8 @@ describe("writable: write-only stack", () => {
     const dispatched: Array<{ path: any; change: any }> = []
     const ctx: WritableContext = {
       store,
+      prepare: (path, change) => dispatched.push({ path, change }),
+      flush: () => {},
       dispatch: (path, change) => dispatched.push({ path, change }),
       beginTransaction: () => {},
       commit: () => [],
@@ -871,6 +873,8 @@ describe("writable: TRANSACT attachment", () => {
     const dispatched: unknown[] = []
     const ctx: WritableContext = {
       store,
+      prepare: (path, change) => dispatched.push({ path, change }),
+      flush: () => {},
       dispatch: (path, change) => dispatched.push({ path, change }),
       beginTransaction: () => { throw new Error("not implemented") },
       commit: () => { throw new Error("not implemented") },

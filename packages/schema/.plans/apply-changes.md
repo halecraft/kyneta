@@ -180,7 +180,7 @@ interface ComposedChangefeed<S, C extends ChangeBase = ChangeBase>
 
 **Note:** This phase changes the types but does not yet implement batched delivery. `withChangefeed` temporarily wraps each individual notification in a degenerate `Changeset` of one to satisfy the new signature. The actual batched delivery comes in Phase 3.
 
-### Phase 3: Phase-separated dispatch and batched notification 🔴
+### Phase 3: Phase-separated dispatch and batched notification 🟢
 
 Replace the monolithic `dispatch` with a two-phase `prepare`/`flush` model. This is the mechanism that enables batched changefeed notification and correct cache invalidation for both imperative and declarative paths.
 
@@ -288,12 +288,12 @@ The `inTransaction` guard in the current changefeed wrapper is no longer needed 
 - Task: Update `withChangefeed`'s dispatch wrapping to wrap `prepare` instead of `dispatch`. `ensureDispatchWiring` → `ensurePrepareWiring`. Fires degenerate `Changeset` of one per prepare call (behavior-preserving). 🟢
 - Task: Remove `inTransaction` guard from changefeed wrapper — structurally unnecessary with phase separation. 🟢
 - Task: Verify all existing tests pass (behavior unchanged — each prepare still fires a degenerate Changeset). 🟢 777/777 schema tests, 869/869 core tests.
-- Task: Implement `planNotifications` (Functional Core) — pure function that groups accumulated `{path, change}` pairs by pathKey and builds `TreeEvent` entries. 🔴 (PR 4)
-- Task: Implement `deliverNotifications` (Imperative Shell) — builds `Changeset` objects from the plan and fires subscriber callbacks. 🔴 (PR 4)
-- Task: Update `withChangefeed`'s `prepare` hook to accumulate `{path, change}` pairs instead of firing immediately; `flush` hook calls `planNotifications` then `deliverNotifications`. 🔴 (PR 4)
-- Task: The `flush` hook accepts an optional `origin` parameter, attached to the emitted `Changeset`. 🔴 (PR 4)
-- Task: Update all changefeed factories (`createLeafChangefeed`, `createProductChangefeed`, `createSequenceChangefeed`, `createMapChangefeed`) for the new accumulation/delivery model. 🔴 (PR 4)
-- Task: Update test assertions that assumed per-change notification counts during commit — behavior becomes truly atomic (one notification per batch). 🔴 (PR 4)
+- Task: Implement `planNotifications` (Functional Core) — pure function that groups accumulated `{path, change}` pairs by pathKey. 🟢 Exported from `with-changefeed.ts`. 12 table-driven unit tests in `plan-notifications.test.ts`.
+- Task: Implement `deliverNotifications` (Imperative Shell) — builds `Changeset` objects from the plan and fires subscriber callbacks. 🟢 Exported from `with-changefeed.ts`.
+- Task: Update `withChangefeed`'s `prepare` hook to accumulate `{path, change}` pairs instead of firing immediately; `flush` hook calls `planNotifications` then `deliverNotifications`. 🟢 Listener type changed from `(change: ChangeBase) => void` to `(changeset: Changeset<ChangeBase>) => void`.
+- Task: The `flush` hook accepts an optional `origin` parameter, attached to the emitted `Changeset`. 🟢
+- Task: Update all changefeed factories (`createLeafChangefeed`, `createProductChangefeed`, `createSequenceChangefeed`, `createMapChangefeed`) for the new accumulation/delivery model. 🟢 Factories receive `Changeset` directly from flush — no per-change wrapping.
+- Task: Update test assertions that assumed per-change notification counts during commit — behavior becomes truly atomic (one notification per batch). 🟢 Transaction tests now assert exactly 1 changeset with N changes. 8 new batched notification tests (origin tagging, no-partial-state, multi-path grouping). 797/797 schema tests, 869/869 core tests.
 
 **Key design constraint:** Auto-commit (`dispatch`) must produce a `Changeset` of exactly one change. The subscriber API is uniform — it always receives a `Changeset`, whether from a single mutation or a batched transaction.
 
@@ -371,23 +371,28 @@ No special invalidation logic needed — the `prepare` pipeline (from Phase 4) h
 
 Same as the example facade but returns `PendingChange[]` from `ctx.commit()` instead of the doc.
 
-### Phase 6: Tests 🔴
+### Phase 6: Tests 🟡
 
-- Task: Test that `applyChanges` applies changes to the store correctly (text, sequence, replace, increment). 🔴
-- Task: Test that `applyChanges` fires changefeed subscribers exactly **once** with a `Changeset` containing all changes (not once per change). 🔴
-- Task: Test that subscribers see fully-applied state when the `Changeset` arrives — no partially-applied intermediate states. 🔴
-- Task: Test that `applyChanges` with `origin` option produces a `Changeset` with `changeset.origin === "sync"`. 🔴
-- Task: Test round-trip: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docB()` matches `docA()`. 🔴
-- Task: Test that caches are surgically invalidated: after `applyChanges` modifies `doc.settings.darkMode`, `doc.settings.darkMode()` returns the new value, but `doc.messages.at(0)` still returns the same cached ref (not blown away). 🔴
-- Task: Test that `change` returns `PendingChange[]` with correct paths and change types. 🔴
-- Task: Test error handling: `applyChanges` on a non-transactable ref throws. 🔴
-- Task: Test that `applyChanges(doc, [])` is a no-op (returns empty array, no subscribers fire). 🔴
-- Task: Test auto-commit: a single mutation outside a transaction delivers a `Changeset` with exactly one change. 🔴
-- Task: Test `subscribeTree` receives one `Changeset<TreeEvent>` per batch, with `TreeEvent.path` (not `.origin`) for relative paths. 🔴
-- Task: Test cache invalidation via prepare pipeline (Phase 4 verification): directly call `ctx.prepare(path, change)` + `ctx.flush()` on a cached document. Assert the cache at that path is invalidated and subsequent reads return the new value. 🔴
-- Task: Test `applyChanges` during active transaction throws. 🔴
-- Task: Test `planNotifications` (Functional Core unit tests): given 3 changes at 2 paths, assert the plan groups them correctly into 2 shallow entries. Given a sequence of changes, assert `TreeEvent` entries have correct relative paths. 🔴
-- Task: Test `Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` round-trip: the output of `subscribeTree` on docA can be used to reconstruct `PendingChange[]` input for `applyChanges` on docB (modulo absolute vs. relative paths). 🔴
+Tests that were already implemented in PR 4 (batched notification infrastructure):
+
+- Task: Test that subscribers see fully-applied state when the `Changeset` arrives — no partially-applied intermediate states. 🟢 `changefeed.test.ts` "subscriber sees fully-applied state when Changeset arrives"
+- Task: Test auto-commit: a single mutation outside a transaction delivers a `Changeset` with exactly one change. 🟢 `changefeed.test.ts` "auto-commit (single mutation) delivers Changeset with exactly 1 change" + existing "changeset wraps a single change (degenerate changeset)"
+- Task: Test that `applyChanges` with `origin` option produces a `Changeset` with `changeset.origin === "sync"`. 🟢 (partial) `changefeed.test.ts` "origin tagging: commit(origin) attaches origin to emitted Changeset" — tests origin via `commit("sync")`, not yet via `applyChanges` (Phase 5).
+- Task: Test `subscribeTree` receives one `Changeset<TreeEvent>` per batch, with `TreeEvent.path` (not `.origin`) for relative paths. 🟢 `changefeed.test.ts` "origin tagging: tree subscribers receive origin from commit" + existing tree subscription tests assert `TreeEvent.path`.
+- Task: Test `planNotifications` (Functional Core unit tests): given 3 changes at 2 paths, assert the plan groups them correctly into 2 shallow entries. Given a sequence of changes, assert `TreeEvent` entries have correct relative paths. 🟢 12 table-driven tests in `plan-notifications.test.ts` covering grouping, ordering, immutability, and data integrity.
+
+Tests remaining (depend on Phase 4 `INVALIDATE` pipeline and/or Phase 5 `change`/`applyChanges`):
+
+- Task: Test that `applyChanges` applies changes to the store correctly (text, sequence, replace, increment). 🔴 (Phase 5)
+- Task: Test that `applyChanges` fires changefeed subscribers exactly **once** with a `Changeset` containing all changes (not once per change). 🔴 (Phase 5)
+- Task: Test round-trip: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docB()` matches `docA()`. 🔴 (Phase 5)
+- Task: Test that caches are surgically invalidated: after `applyChanges` modifies `doc.settings.darkMode`, `doc.settings.darkMode()` returns the new value, but `doc.messages.at(0)` still returns the same cached ref (not blown away). 🔴 (Phase 4 + Phase 5)
+- Task: Test that `change` returns `PendingChange[]` with correct paths and change types. 🔴 (Phase 5)
+- Task: Test error handling: `applyChanges` on a non-transactable ref throws. 🔴 (Phase 5)
+- Task: Test that `applyChanges(doc, [])` is a no-op (returns empty array, no subscribers fire). 🔴 (Phase 5)
+- Task: Test cache invalidation via prepare pipeline (Phase 4 verification): directly call `ctx.prepare(path, change)` + `ctx.flush()` on a cached document. Assert the cache at that path is invalidated and subsequent reads return the new value. 🔴 (Phase 4)
+- Task: Test `applyChanges` during active transaction throws. 🔴 (Phase 5)
+- Task: Test `Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` round-trip: the output of `subscribeTree` on docA can be used to reconstruct `PendingChange[]` input for `applyChanges` on docB (modulo absolute vs. relative paths). 🔴 (Phase 5)
 
 ### Phase 7: Documentation 🔴
 
@@ -612,7 +617,7 @@ Deep-clone each `PendingChange` before attaching the `origin` field.
 
 Seven PRs, ordered inside-out: foundational types and refactors first, behavior changes in the middle, public API and documentation last. Each PR builds, tests, and is independently reviewable.
 
-### PR 1 — refactor: extract `pathKey` to shared utility
+### PR 1 — refactor: extract `pathKey` to shared utility 🟢
 
 **Phase 1. Type: mechanical refactor.**
 
@@ -625,7 +630,7 @@ Pure code motion — no behavior change, no new tests needed beyond verifying ex
 
 Reviewer sees: a 5-line function moves from a private location to a shared module. Trivial to verify.
 
-### PR 2 — feat: `Changeset` type, `TreeEvent.path` rename, `ChangeBase.origin` removal
+### PR 2 — feat: `Changeset` type, `TreeEvent.path` rename, `ChangeBase.origin` removal 🟢
 
 **Phase 2. Type: API/contract change + call-site migration (single PR because the type changes are tightly coupled).**
 
@@ -671,19 +676,19 @@ This PR does NOT yet change `withChangefeed` to do batched delivery — `prepare
 
 Reviewer sees: the dispatch pipeline is factored into `prepare`/`flush` but observable behavior is identical. The `executeBatch` primitive is introduced and used by both `dispatch` and `commit`. The reviewer can verify: "all existing tests pass, the new code paths are equivalent."
 
-### PR 4 — feat: batched changefeed notification via `flush`
+### PR 4 — feat: batched changefeed notification via `flush` 🟢
 
 **Phase 3, notification half. Type: behavior change.**
 
 This is where notification semantics actually change. `withChangefeed`'s `prepare` hook switches from firing immediately to accumulating. `flush` drains the accumulator and delivers `Changeset` batches. Introduces `planNotifications` (Functional Core) and `deliverNotifications` (Imperative Shell).
 
-- Implement `planNotifications` (pure function — groups changes by pathKey, builds TreeEvent entries)
-- Implement `deliverNotifications` (imperative — builds Changeset objects, fires callbacks)
-- Update `withChangefeed` `prepare` hook: accumulate `{path, change}` instead of firing
-- Update `withChangefeed` `flush` hook: call `planNotifications` → `deliverNotifications`
-- Update changefeed factories for the accumulation/delivery model
-- Add unit tests for `planNotifications` (table-driven, like `planCacheUpdate`)
-- Update changefeed test assertions: transaction commit now fires 1 changeset with N changes (not N changesets of 1)
+- Implement `planNotifications` (pure function — groups changes by pathKey, builds TreeEvent entries) 🟢
+- Implement `deliverNotifications` (imperative — builds Changeset objects, fires callbacks) 🟢
+- Update `withChangefeed` `prepare` hook: accumulate `{path, change}` instead of firing 🟢
+- Update `withChangefeed` `flush` hook: call `planNotifications` → `deliverNotifications` 🟢
+- Update changefeed factories for the accumulation/delivery model 🟢
+- Add unit tests for `planNotifications` (table-driven, like `planCacheUpdate`) 🟢 12 tests
+- Update changefeed test assertions: transaction commit now fires 1 changeset with N changes (not N changesets of 1) 🟢 8 new batched notification tests
 
 Reviewer sees: the actual semantic change. Subscribers now receive batched `Changeset` objects. The FC/IS split mirrors the existing `planCacheUpdate`/`applyCacheOps` pattern. The reviewer can verify: "transaction tests now assert 1 event with N changes, `planNotifications` is table-tested."
 
@@ -733,19 +738,19 @@ Reviewer sees: documentation catching up to the implementation. No code changes.
 ### Stack visualization
 
 ```
-PR 7  docs: TECHNICAL.md and plan updates
+PR 7  docs: TECHNICAL.md and plan updates                                    🔴
   ↑
-PR 6  feat: library-level change/applyChanges + tests
+PR 6  feat: library-level change/applyChanges + tests                        🔴
   ↑
-PR 5  feat: INVALIDATE into prepare pipeline (atomic with withWritable cleanup)
+PR 5  feat: INVALIDATE into prepare pipeline (atomic with withWritable)      🔴
   ↑
-PR 4  feat: batched changefeed notification via flush
+PR 4  feat: batched changefeed notification via flush                        🟢 ← you are here
   ↑
-PR 3  feat: prepare/flush/executeBatch phase separation
+PR 3  feat: prepare/flush/executeBatch phase separation                      🟢
   ↑
-PR 2  feat: Changeset type, TreeEvent.path rename, subscriber protocol
+PR 2  feat: Changeset type, TreeEvent.path rename, subscriber protocol       🟢
   ↑
-PR 1  refactor: extract pathKey to shared utility
+PR 1  refactor: extract pathKey to shared utility                            🟢
 ```
 
 ### Risk profile

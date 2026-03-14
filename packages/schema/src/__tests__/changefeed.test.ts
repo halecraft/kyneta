@@ -611,28 +611,50 @@ describe("changefeed: transaction integration", () => {
     expect(xChangesets).toHaveLength(0)
 
     ctx.commit()
-    // After commit, notifications fire via dispatch replay
+    // After commit, exactly ONE changeset with both changes (batched)
     expect(store.x).toBe(20)
-    expect(xChangesets.length).toBeGreaterThanOrEqual(1)
+    expect(xChangesets).toHaveLength(1)
+    expect(xChangesets[0]!.changes).toHaveLength(2)
+    expect(xChangesets[0]!.changes[0]!.type).toBe("replace")
+    expect(xChangesets[0]!.changes[1]!.type).toBe("replace")
   })
 
   it("no tree subscriber notifications during transaction buffering", () => {
     const { ctx, doc } = createChatDoc()
-    const events: TreeEvent[] = []
+    const treeChangesets: Changeset<TreeEvent>[] = []
     getChangefeed(doc.settings).subscribeTree!((changeset) => {
-      for (const event of changeset.changes) events.push(event)
+      treeChangesets.push(changeset)
     })
 
     ctx.beginTransaction()
     doc.settings.darkMode.set(true)
     doc.settings.fontSize.set(18)
 
-    // ZERO tree events while buffering
-    expect(events).toHaveLength(0)
+    // ZERO tree changesets while buffering
+    expect(treeChangesets).toHaveLength(0)
 
     ctx.commit()
-    // After commit, both child changes propagate
-    expect(events.length).toBeGreaterThanOrEqual(2)
+    // After commit: each child path gets its own Changeset (1 change each)
+    // propagated via subscription composition from child → parent.
+    // darkMode and fontSize are at different paths, so 2 tree changesets.
+    expect(treeChangesets).toHaveLength(2)
+    const allEvents = treeChangesets.flatMap(cs => cs.changes)
+    expect(allEvents).toHaveLength(2)
+
+    const darkModeEvents = allEvents.filter(
+      (e) =>
+        e.path.length === 1 &&
+        e.path[0]!.type === "key" &&
+        (e.path[0] as { key: string }).key === "darkMode",
+    )
+    const fontSizeEvents = allEvents.filter(
+      (e) =>
+        e.path.length === 1 &&
+        e.path[0]!.type === "key" &&
+        (e.path[0] as { key: string }).key === "fontSize",
+    )
+    expect(darkModeEvents).toHaveLength(1)
+    expect(fontSizeEvents).toHaveLength(1)
   })
 
   it("store buffers changes during transaction until commit", () => {
@@ -658,7 +680,7 @@ describe("changefeed: transaction integration", () => {
     expect(flushed).toHaveLength(2)
   })
 
-  it("commit replays through ctx.dispatch so changefeed subscribers fire", () => {
+  it("commit delivers exactly one Changeset per affected path", () => {
     const store = { x: 0, y: 0 }
     const schema = LoroSchema.doc({
       x: LoroSchema.plain.number(),
@@ -677,44 +699,222 @@ describe("changefeed: transaction integration", () => {
     expect(xChangesets).toHaveLength(0)
 
     ctx.commit()
-    // After commit, replay fires through the wrapped dispatch
-    expect(xChangesets.length).toBeGreaterThanOrEqual(1)
+    // Exactly 1 changeset with 1 change (batched delivery)
+    expect(xChangesets).toHaveLength(1)
     expect(store.x).toBe(10)
-    const lastChangeset = xChangesets[xChangesets.length - 1]!
-    expect(lastChangeset.changes[lastChangeset.changes.length - 1]!.type).toBe("replace")
+    expect(xChangesets[0]!.changes).toHaveLength(1)
+    expect(xChangesets[0]!.changes[0]!.type).toBe("replace")
   })
 
   it("transaction + subscribeTree: tree subscribers fire at commit time", () => {
     const { ctx, doc } = createChatDoc()
-    const events: TreeEvent[] = []
+    const treeChangesets: Changeset<TreeEvent>[] = []
     getChangefeed(doc.settings).subscribeTree!((changeset) => {
-      for (const event of changeset.changes) events.push(event)
+      treeChangesets.push(changeset)
     })
 
     ctx.beginTransaction()
     doc.settings.darkMode.set(true)
     doc.settings.fontSize.set(18)
     // No tree events during buffering
-    expect(events).toHaveLength(0)
+    expect(treeChangesets).toHaveLength(0)
 
     ctx.commit()
-    // Both child changes should propagate up after commit
-    expect(events.length).toBeGreaterThanOrEqual(2)
+    // Tree changesets propagated from children — one per child path
+    expect(treeChangesets).toHaveLength(2)
+    const allEvents = treeChangesets.flatMap(cs => cs.changes)
+    expect(allEvents).toHaveLength(2)
 
-    const darkModeEvents = events.filter(
+    const darkModeEvents = allEvents.filter(
       (e) =>
         e.path.length === 1 &&
         e.path[0]!.type === "key" &&
         (e.path[0] as { key: string }).key === "darkMode",
     )
-    const fontSizeEvents = events.filter(
+    const fontSizeEvents = allEvents.filter(
       (e) =>
         e.path.length === 1 &&
         e.path[0]!.type === "key" &&
         (e.path[0] as { key: string }).key === "fontSize",
     )
-    expect(darkModeEvents.length).toBeGreaterThanOrEqual(1)
-    expect(fontSizeEvents.length).toBeGreaterThanOrEqual(1)
+    expect(darkModeEvents).toHaveLength(1)
+    expect(fontSizeEvents).toHaveLength(1)
+  })
+})
+
+// ===========================================================================
+// Batched notification — the key correctness tests for the Changeset protocol
+// ===========================================================================
+
+describe("changefeed: batched notification", () => {
+  it("transaction commit delivers one Changeset with N changes to same-path subscriber", () => {
+    const store = { x: 0, y: 0 }
+    const schema = LoroSchema.doc({
+      x: LoroSchema.plain.number(),
+      y: LoroSchema.plain.number(),
+    })
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
+      Writable<typeof schema>
+
+    const xChangesets: Changeset[] = []
+    getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
+
+    ctx.beginTransaction()
+    doc.x.set(1)
+    doc.x.set(2)
+    doc.x.set(3)
+
+    expect(xChangesets).toHaveLength(0)
+
+    ctx.commit()
+    // 3 mutations to the same path → 1 Changeset with 3 changes
+    expect(xChangesets).toHaveLength(1)
+    expect(xChangesets[0]!.changes).toHaveLength(3)
+    expect(store.x).toBe(3)
+  })
+
+  it("subscriber sees fully-applied state when Changeset arrives", () => {
+    const store = { x: 0, y: 0 }
+    const schema = LoroSchema.doc({
+      x: LoroSchema.plain.number(),
+      y: LoroSchema.plain.number(),
+    })
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
+      Writable<typeof schema>
+
+    let observedX: unknown = undefined
+    let observedY: unknown = undefined
+    getChangefeed(doc.x).subscribe(() => {
+      // When x's subscriber fires, BOTH x and y should be fully applied
+      observedX = store.x
+      observedY = store.y
+    })
+
+    ctx.beginTransaction()
+    doc.x.set(10)
+    doc.y.set(20)
+    ctx.commit()
+
+    // The subscriber saw the fully-applied state (both x=10 and y=20),
+    // not the partially-applied state (x=10, y=0)
+    expect(observedX).toBe(10)
+    expect(observedY).toBe(20)
+  })
+
+  it("auto-commit (single mutation) delivers Changeset with exactly 1 change", () => {
+    const { doc } = createChatDoc()
+    const changesets: Changeset[] = []
+    getChangefeed(doc.title).subscribe((cs) => changesets.push(cs))
+
+    doc.title.insert(0, "X")
+    expect(changesets).toHaveLength(1)
+    expect(changesets[0]!.changes).toHaveLength(1)
+    expect(changesets[0]!.origin).toBeUndefined()
+  })
+
+  it("origin tagging: commit(origin) attaches origin to emitted Changeset", () => {
+    const store = { x: 0, y: 0 }
+    const schema = LoroSchema.doc({
+      x: LoroSchema.plain.number(),
+      y: LoroSchema.plain.number(),
+    })
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
+      Writable<typeof schema>
+
+    const xChangesets: Changeset[] = []
+    getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
+
+    ctx.beginTransaction()
+    doc.x.set(42)
+    ctx.commit("sync")
+
+    expect(xChangesets).toHaveLength(1)
+    expect(xChangesets[0]!.origin).toBe("sync")
+    expect(xChangesets[0]!.changes).toHaveLength(1)
+  })
+
+  it("origin tagging: auto-commit has no origin", () => {
+    const { doc } = createChatDoc()
+    const changesets: Changeset[] = []
+    getChangefeed(doc.count).subscribe((cs) => changesets.push(cs))
+
+    doc.count.increment(5)
+    expect(changesets).toHaveLength(1)
+    expect(changesets[0]!.origin).toBeUndefined()
+  })
+
+  it("origin tagging: tree subscribers receive origin from commit", () => {
+    const { ctx, doc } = createChatDoc()
+    const treeChangesets: Changeset<TreeEvent>[] = []
+    getChangefeed(doc.settings).subscribeTree!((cs) => treeChangesets.push(cs))
+
+    ctx.beginTransaction()
+    doc.settings.darkMode.set(true)
+    ctx.commit("undo")
+
+    // Tree changeset propagated from child — should carry the origin
+    expect(treeChangesets).toHaveLength(1)
+    expect(treeChangesets[0]!.origin).toBe("undo")
+    expect(treeChangesets[0]!.changes).toHaveLength(1)
+    expect(treeChangesets[0]!.changes[0]!.path).toEqual([{ type: "key", key: "darkMode" }])
+  })
+
+  it("multiple paths in one transaction: each path gets its own Changeset", () => {
+    const store = { x: 0, y: 0 }
+    const schema = LoroSchema.doc({
+      x: LoroSchema.plain.number(),
+      y: LoroSchema.plain.number(),
+    })
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
+      Writable<typeof schema>
+
+    const xChangesets: Changeset[] = []
+    const yChangesets: Changeset[] = []
+    getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
+    getChangefeed(doc.y).subscribe((cs) => yChangesets.push(cs))
+
+    ctx.beginTransaction()
+    doc.x.set(10)
+    doc.y.set(20)
+    doc.x.set(30)
+    ctx.commit()
+
+    // x had 2 mutations → 1 changeset with 2 changes
+    expect(xChangesets).toHaveLength(1)
+    expect(xChangesets[0]!.changes).toHaveLength(2)
+
+    // y had 1 mutation → 1 changeset with 1 change
+    expect(yChangesets).toHaveLength(1)
+    expect(yChangesets[0]!.changes).toHaveLength(1)
+  })
+
+  it("no notification for paths without subscribers", () => {
+    const store = { x: 0, y: 0 }
+    const schema = LoroSchema.doc({
+      x: LoroSchema.plain.number(),
+      y: LoroSchema.plain.number(),
+    })
+    const ctx = createWritableContext(store)
+    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Readable<typeof schema> &
+      Writable<typeof schema>
+
+    // Only subscribe to x, not y
+    const xChangesets: Changeset[] = []
+    getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
+
+    ctx.beginTransaction()
+    doc.x.set(10)
+    doc.y.set(20)
+    ctx.commit()
+
+    // x subscriber fires, y has no subscriber so no changeset created for it
+    expect(xChangesets).toHaveLength(1)
+    expect(store.x).toBe(10)
+    expect(store.y).toBe(20)
   })
 })
 

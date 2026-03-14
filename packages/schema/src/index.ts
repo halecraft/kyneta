@@ -200,7 +200,10 @@ export type { ValidateContext } from "./interpreters/validate.js"
 export {
   withChangefeed,
   attachChangefeed,
+  planNotifications,
+  deliverNotifications,
 } from "./interpreters/with-changefeed.js"
+export type { NotificationPlan } from "./interpreters/with-changefeed.js"
 
 // Interpreter composition combinators
 export { product, overlay, firstDefined } from "./combinators.js"

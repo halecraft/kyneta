@@ -185,10 +185,10 @@ describe("transaction: TRANSACT symbol", () => {
 //
 // This invariant was a real bug during development — if commit() calls the
 // closure variable directly, subscribers silently stop receiving events at
-// commit time.
+// commit time. Now commit() uses executeBatch which calls prepare + flush.
 
-describe("transaction: commit replays through wrappable ctx.dispatch", () => {
-  it("changefeed subscribers fire at commit time via dispatch replay", () => {
+describe("transaction: commit delivers batched changefeed notifications", () => {
+  it("changefeed subscribers receive exactly one Changeset at commit time", () => {
     const store = { x: 0, y: 0 }
     const ctx = createWritableContext(store)
     const enriched = withChangefeed(writableInterpreter)
@@ -207,11 +207,11 @@ describe("transaction: commit replays through wrappable ctx.dispatch", () => {
     expect(xChangesets).toHaveLength(0)
 
     ctx.commit()
-    // Commit replays through ctx.dispatch (the wrapped property),
-    // so the changefeed notification wrapper fires
-    expect(xChangesets.length).toBeGreaterThanOrEqual(1)
+    // Exactly 1 changeset delivered at commit time (batched)
+    expect(xChangesets).toHaveLength(1)
     expect(store.x).toBe(10)
-    const lastCs = xChangesets[xChangesets.length - 1] as { changes: { type: string }[] }
-    expect(lastCs.changes[lastCs.changes.length - 1]!.type).toBe("replace")
+    const cs = xChangesets[0] as { changes: { type: string }[] }
+    expect(cs.changes).toHaveLength(1)
+    expect(cs.changes[0]!.type).toBe("replace")
   })
 })
