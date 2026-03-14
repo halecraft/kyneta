@@ -346,9 +346,9 @@ Update `src/__tests__/with-readable.test.ts`:
 
 Any test that calls `withReadable(bottomInterpreter)` directly must change to `withReadable(withNavigation(bottomInterpreter))`. Grep for `withReadable(bottom` to find all call sites. Also grep for `READ` imports and update to `CALL`.
 
-## Phase 3: Introduce `Ref<S>` unified type and slim `SequenceRef` 🔴
+## Phase 3: Introduce `Ref<S>` unified type and slim `SequenceRef` 🟢
 
-### Task 3.1: Create navigation-only type interfaces 🔴
+### Task 3.1: Create navigation-only type interfaces 🟢
 
 In a new file `src/interpreters/navigable.ts`, define:
 
@@ -386,7 +386,7 @@ export interface ReadableMapRef<T = unknown, V = unknown>
 }
 ```
 
-### Task 3.2: Slim `SequenceRef` to mutation-only 🔴
+### Task 3.2: Slim `SequenceRef` to mutation-only 🟢
 
 Remove `.at()`, `.length`, and `[Symbol.iterator]` from `SequenceRef`:
 
@@ -404,7 +404,7 @@ No type parameter needed — there are no child ref types in mutation-only opera
 - `Writable<SequenceSchema<I>>` currently returns `SequenceRef<Writable<I>>` — must change to `SequenceRef` (Task 3.4)
 - `types.test.ts` imports `SequenceRef` and may have `expectTypeOf` assertions on `SequenceRef<T>` — audit and update in Task 3.5
 
-### Task 3.3: Define `Ref<S>` unified recursive type 🔴
+### Task 3.3: Define `Ref<S>` unified recursive type 🟢
 
 `Ref<S>` is a single recursive conditional type that produces the full ref surface at every node. It unifies navigation, reading, writing, and `HasTransact` in one traversal so `.at()` returns `Ref<ChildSchema>`.
 
@@ -461,11 +461,11 @@ Key properties:
 
 **Implementation-time optimization:** The intersection `Readable<S> & Writable<S>` is sound at leaf nodes (scalar, text, counter) and product fields — there are no overlapping `.at()` declarations at these levels. `Ref<S>` could reuse `Readable<S> & Writable<S>` at those safe branches to reduce duplication between three nearly-isomorphic recursive types. The unsoundness only occurs at sequences and maps (where `.at()` child types diverge). Start with the standalone definition above for clarity; refactor leaf/product branches to reuse `Readable<S> & Writable<S>` if the duplication feels burdensome during implementation.
 
-### Task 3.4: Update `Writable<S>` to use slimmed `SequenceRef` 🔴
+### Task 3.4: Update `Writable<S>` to use slimmed `SequenceRef` 🟢
 
 `Writable<SequenceSchema<I>>` becomes `SequenceRef` (no type parameter). `Writable<MapSchema<I>>` stays `WritableMapRef<Plain<I>>`. `Writable<ProductSchema<F>>` drops `.at()` references if any leaked.
 
-### Task 3.5: Type-level tests for `Ref<S>` 🔴
+### Task 3.5: Type-level tests for `Ref<S>` 🟢
 
 In `src/__tests__/types.test.ts` (or a new file):
 
@@ -777,7 +777,7 @@ The core behavioral change. Creates `withNavigation` by moving navigation code o
 
 ---
 
-### PR 4: `feat: NavigableSequenceRef, NavigableMapRef, slim SequenceRef, Ref<S>` 🔴
+### PR 4: `feat: NavigableSequenceRef, NavigableMapRef, slim SequenceRef, Ref<S>` 🟢
 
 **Type:** Feature — new types, no test migration yet
 

@@ -148,6 +148,12 @@ export type {
   HasCaching,
 } from "./interpreters/bottom.js"
 
+// Navigable type interfaces — navigation-only collection refs
+export type {
+  NavigableSequenceRef,
+  NavigableMapRef,
+} from "./interpreters/navigable.js"
+
 // withNavigation — structural navigation (coalgebraic addressing, no reading)
 export { withNavigation } from "./interpreters/with-navigation.js"
 
@@ -190,6 +196,9 @@ export type {
   WritableMapRef,
   Writable,
 } from "./interpreters/writable.js"
+
+// Ref<S> — unified recursive type for fully-composed refs
+export type { Ref, WithTransact } from "./ref.js"
 
 // Shared interpreter types (canonical location)
 export type { RefContext, Plain } from "./interpreter-types.js"

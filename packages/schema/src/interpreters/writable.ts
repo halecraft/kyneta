@@ -317,13 +317,22 @@ export interface CounterRef {
   decrement: (n?: number) => void
 }
 
-export interface SequenceRef<T = unknown> {
-  at: (index: number) => T | undefined
+/**
+ * Mutation-only interface for sequence refs. Added by `withWritable`.
+ *
+ * Navigation (`.at()`, `.length`, `[Symbol.iterator]`) lives in
+ * `NavigableSequenceRef` (from the navigation layer). Reading (call
+ * signature, `.get()`) lives in `ReadableSequenceRef`. This interface
+ * provides only mutation: `.push()`, `.insert()`, `.delete()`.
+ *
+ * No type parameter — mutation methods take plain values (`unknown`),
+ * not child refs. The unified `Ref<S>` type intersects this with
+ * `ReadableSequenceRef<Ref<I>, Plain<I>>` to get the full surface.
+ */
+export interface SequenceRef {
   push: (...items: unknown[]) => void
   insert: (index: number, ...items: unknown[]) => void
   delete: (index: number, count?: number) => void
-  readonly length: number
-  [Symbol.iterator](): Iterator<T>
 }
 
 /**
@@ -387,7 +396,7 @@ export type Writable<S extends Schema> =
             : unknown
           : Tag extends "movable"
             ? Inner extends SequenceSchema<infer I>
-              ? SequenceRef<Writable<I>>
+              ? SequenceRef
               : unknown
             : Tag extends "tree"
               ? Inner extends Schema
@@ -405,7 +414,7 @@ export type Writable<S extends Schema> =
         ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
         : // --- Sequence ---
           S extends SequenceSchema<infer I>
-          ? SequenceRef<Writable<I>>
+          ? SequenceRef
           : // --- Map ---
             S extends MapSchema<infer I>
             ? WritableMapRef<Plain<I>>

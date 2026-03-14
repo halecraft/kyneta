@@ -12,6 +12,14 @@ import {
   type ScalarKind,
   type SchemaNode,
   type Writable,
+  type Readable,
+  type ReadableSequenceRef,
+  type ReadableMapRef,
+  type NavigableSequenceRef,
+  type NavigableMapRef,
+  type Ref,
+  type WithTransact,
+  type HasTransact,
   type Plain,
   type ScalarPlain,
   type ScalarRef,
@@ -26,6 +34,7 @@ import {
   type PlainMapSchema,
   type PlainPositionalSumSchema,
   type PlainDiscriminatedSumSchema,
+  TRANSACT,
 } from "../index.js"
 
 // ---------------------------------------------------------------------------
@@ -308,13 +317,13 @@ describe("type-level: Writable<S> for products and structs", () => {
 })
 
 describe("type-level: Writable<S> for sequences", () => {
-  it("Writable<list(plain.string())> = SequenceRef<ScalarRef<string>>", () => {
+  it("Writable<list(plain.string())> = SequenceRef (mutation-only, no type param)", () => {
     const s = Schema.list(Schema.string())
     type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<SequenceRef<ScalarRef<string>>>()
+    expectTypeOf<Result>().toEqualTypeOf<SequenceRef>()
   })
 
-  it("Writable<list(struct({...}))> has typed item refs", () => {
+  it("Writable<list(struct({...}))> = SequenceRef (mutation-only)", () => {
     const s = Schema.list(
       Schema.struct({
         name: Schema.string(),
@@ -322,14 +331,7 @@ describe("type-level: Writable<S> for sequences", () => {
       }),
     )
     type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<
-      SequenceRef<
-        {
-          readonly name: ScalarRef<string>
-          readonly active: ScalarRef<boolean>
-        } & ProductRef<{ name: string; active: boolean }>
-      >
-    >()
+    expectTypeOf<Result>().toEqualTypeOf<SequenceRef>()
   })
 })
 
@@ -382,15 +384,8 @@ describe("type-level: Writable<S> end-to-end structural schema", () => {
     expectTypeOf<Doc["title"]>().toEqualTypeOf<ScalarRef<string>>()
     expectTypeOf<Doc["count"]>().toEqualTypeOf<ScalarRef<number>>()
 
-    // Nested sequence of structs
-    expectTypeOf<Doc["messages"]>().toEqualTypeOf<
-      SequenceRef<
-        {
-          readonly author: ScalarRef<string>
-          readonly body: ScalarRef<string>
-        } & ProductRef<{ author: string; body: string }>
-      >
-    >()
+    // Nested sequence of structs — mutation-only (no type param)
+    expectTypeOf<Doc["messages"]>().toEqualTypeOf<SequenceRef>()
 
     // Nested struct
     expectTypeOf<Doc["settings"]>().toEqualTypeOf<
@@ -646,14 +641,7 @@ describe("type-level: Writable<S> end-to-end Loro schema", () => {
     expectTypeOf<Doc["title"]>().toEqualTypeOf<TextRef>()
     expectTypeOf<Doc["count"]>().toEqualTypeOf<CounterRef>()
 
-    expectTypeOf<Doc["messages"]>().toEqualTypeOf<
-      SequenceRef<
-        {
-          readonly author: ScalarRef<string>
-          readonly body: TextRef
-        } & ProductRef<{ author: string; body: string }>
-      >
-    >()
+    expectTypeOf<Doc["messages"]>().toEqualTypeOf<SequenceRef>()
 
     expectTypeOf<Doc["settings"]>().toEqualTypeOf<
       {
@@ -979,5 +967,292 @@ describe("type-level: LoroSchema.plain.* constructors enforce PlainSchema constr
         readonly active: ScalarRef<boolean>
       } & ProductRef<{ name: string; active: boolean }>
     >()
+  })
+})
+
+// ===========================================================================
+// NavigableSequenceRef / NavigableMapRef — Phase 3 type hierarchy
+// ===========================================================================
+
+describe("type-level: NavigableSequenceRef extends correctly", () => {
+  it("ReadableSequenceRef extends NavigableSequenceRef", () => {
+    expectTypeOf<ReadableSequenceRef<string, string>>().toMatchTypeOf<NavigableSequenceRef<string>>()
+  })
+
+  it("NavigableSequenceRef does NOT satisfy ReadableSequenceRef", () => {
+    // NavigableSequenceRef lacks call signature and .get()
+    expectTypeOf<NavigableSequenceRef<string>>().not.toMatchTypeOf<ReadableSequenceRef<string, string>>()
+  })
+})
+
+describe("type-level: NavigableMapRef extends correctly", () => {
+  it("ReadableMapRef extends NavigableMapRef", () => {
+    expectTypeOf<ReadableMapRef<string, string>>().toMatchTypeOf<NavigableMapRef<string>>()
+  })
+
+  it("NavigableMapRef does NOT satisfy ReadableMapRef", () => {
+    // NavigableMapRef lacks call signature and .get()
+    expectTypeOf<NavigableMapRef<string>>().not.toMatchTypeOf<ReadableMapRef<string, string>>()
+  })
+})
+
+describe("type-level: SequenceRef is mutation-only", () => {
+  it("SequenceRef has push, insert, delete", () => {
+    expectTypeOf<SequenceRef>().toHaveProperty("push")
+    expectTypeOf<SequenceRef>().toHaveProperty("insert")
+    expectTypeOf<SequenceRef>().toHaveProperty("delete")
+  })
+
+  it("SequenceRef does NOT have .at(), .length, or [Symbol.iterator]", () => {
+    expectTypeOf<SequenceRef>().not.toHaveProperty("at")
+    expectTypeOf<SequenceRef>().not.toHaveProperty("length")
+  })
+
+  it("SequenceRef does NOT satisfy NavigableSequenceRef", () => {
+    expectTypeOf<SequenceRef>().not.toMatchTypeOf<NavigableSequenceRef>()
+  })
+})
+
+// ===========================================================================
+// Ref<S> — unified recursive type (Phase 3, Task 3.3)
+// ===========================================================================
+
+describe("type-level: Ref<S> for scalars", () => {
+  it("Ref<string()> has .set() and () call signature", () => {
+    type Result = Ref<ReturnType<typeof Schema.string>>
+    // Has reading: callable
+    expectTypeOf<Result>().toBeCallableWith()
+    // Has mutation: .set()
+    expectTypeOf<Result>().toHaveProperty("set")
+    // Has TRANSACT
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
+  })
+
+  it("Ref<number()> has .set() and () call signature", () => {
+    type Result = Ref<ReturnType<typeof Schema.number>>
+    expectTypeOf<Result>().toBeCallableWith()
+    expectTypeOf<Result>().toHaveProperty("set")
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
+  })
+})
+
+describe("type-level: Ref<S> for products", () => {
+  it("Ref<ProductSchema<{ x: ScalarSchema }>> — .x has .set() AND () call", () => {
+    type Result = Ref<ProductSchema<{ x: ScalarSchema<"number"> }>>
+    // Product is callable (returns snapshot)
+    expectTypeOf<Result>().toBeCallableWith()
+    // Product has .set() (ProductRef)
+    expectTypeOf<Result>().toHaveProperty("set")
+    // Product has field access
+    expectTypeOf<Result>().toHaveProperty("x")
+    // Child field is callable
+    type Child = Result["x"]
+    expectTypeOf<Child>().toBeCallableWith()
+    // Child field has .set()
+    expectTypeOf<Child>().toHaveProperty("set")
+    // Child field has TRANSACT
+    expectTypeOf<Child>().toHaveProperty(TRANSACT)
+    // Product itself has TRANSACT
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
+  })
+})
+
+describe("type-level: Ref<S> for sequences", () => {
+  it("Ref<SequenceSchema<ScalarSchema>> — .at(0) returns ref with .set() AND ()", () => {
+    type Result = Ref<SequenceSchema<ScalarSchema<"string", string>>>
+    // Has reading: callable (returns array snapshot)
+    expectTypeOf<Result>().toBeCallableWith()
+    // Has navigation: .at()
+    expectTypeOf<Result>().toHaveProperty("at")
+    // Has reading: .get()
+    expectTypeOf<Result>().toHaveProperty("get")
+    // Has mutation: .push(), .insert(), .delete()
+    expectTypeOf<Result>().toHaveProperty("push")
+    expectTypeOf<Result>().toHaveProperty("insert")
+    expectTypeOf<Result>().toHaveProperty("delete")
+    // Has navigation: .length
+    expectTypeOf<Result>().toHaveProperty("length")
+    // Has TRANSACT
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
+  })
+
+  it("Ref sequence .at() returns Ref<child> with both read and write", () => {
+    type SeqRef = Ref<SequenceSchema<ScalarSchema<"string", string>>>
+    // .at() returns Ref<ScalarSchema> | undefined
+    type ChildOrUndef = ReturnType<SeqRef["at"]>
+    // Narrow away undefined
+    type Child = Exclude<ChildOrUndef, undefined>
+    // Child is callable (reading)
+    expectTypeOf<Child>().toBeCallableWith()
+    // Child has .set() (mutation)
+    expectTypeOf<Child>().toHaveProperty("set")
+    // Child has TRANSACT
+    expectTypeOf<Child>().toHaveProperty(TRANSACT)
+  })
+})
+
+describe("type-level: Ref<S> for maps", () => {
+  it("Ref<MapSchema<ScalarSchema>> — .at(key) returns ref with .set() AND ()", () => {
+    type Result = Ref<MapSchema<ScalarSchema<"number", number>>>
+    // Has reading: callable (returns record snapshot)
+    expectTypeOf<Result>().toBeCallableWith()
+    // Has navigation: .at(), .has(), .keys(), .size
+    expectTypeOf<Result>().toHaveProperty("at")
+    expectTypeOf<Result>().toHaveProperty("has")
+    expectTypeOf<Result>().toHaveProperty("keys")
+    expectTypeOf<Result>().toHaveProperty("size")
+    // Has reading: .get()
+    expectTypeOf<Result>().toHaveProperty("get")
+    // Has mutation: .set(), .delete(), .clear()
+    expectTypeOf<Result>().toHaveProperty("set")
+    expectTypeOf<Result>().toHaveProperty("delete")
+    expectTypeOf<Result>().toHaveProperty("clear")
+    // Has TRANSACT
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
+  })
+
+  it("Ref map .at() returns Ref<child> with both read and write", () => {
+    type MapRef = Ref<MapSchema<ScalarSchema<"number", number>>>
+    type ChildOrUndef = ReturnType<MapRef["at"]>
+    type Child = Exclude<ChildOrUndef, undefined>
+    // Child is callable (reading)
+    expectTypeOf<Child>().toBeCallableWith()
+    // Child has .set() (mutation)
+    expectTypeOf<Child>().toHaveProperty("set")
+    // Child has TRANSACT
+    expectTypeOf<Child>().toHaveProperty(TRANSACT)
+  })
+})
+
+describe("type-level: Ref<S> for annotated doc with text", () => {
+  it("Ref<doc({ title: text() })> — .title has .insert() AND () call", () => {
+    const s = Schema.doc({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+    })
+    type Doc = Ref<typeof s>
+    // Doc is callable
+    expectTypeOf<Doc>().toBeCallableWith()
+    // Doc has TRANSACT
+    expectTypeOf<Doc>().toHaveProperty(TRANSACT)
+    // Doc has .set() (ProductRef)
+    expectTypeOf<Doc>().toHaveProperty("set")
+    // .title: text — callable + TextRef mutation
+    type Title = Doc["title"]
+    expectTypeOf<Title>().toBeCallableWith()
+    expectTypeOf<Title>().toHaveProperty("insert")
+    expectTypeOf<Title>().toHaveProperty("delete")
+    expectTypeOf<Title>().toHaveProperty("update")
+    expectTypeOf<Title>().toHaveProperty(TRANSACT)
+    // .count: counter — callable + CounterRef mutation
+    type Count = Doc["count"]
+    expectTypeOf<Count>().toBeCallableWith()
+    expectTypeOf<Count>().toHaveProperty("increment")
+    expectTypeOf<Count>().toHaveProperty("decrement")
+    expectTypeOf<Count>().toHaveProperty(TRANSACT)
+  })
+})
+
+describe("type-level: Ref<S> end-to-end", () => {
+  it("full doc schema produces unified type with read + write + transact", () => {
+    const docSchema = Schema.doc({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+      messages: Schema.list(
+        Schema.struct({
+          author: Schema.string(),
+          body: LoroSchema.text(),
+        }),
+      ),
+      settings: Schema.struct({
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
+      }),
+      metadata: Schema.record(Schema.any()),
+    })
+
+    type Doc = Ref<typeof docSchema>
+
+    // Doc is callable
+    expectTypeOf<Doc>().toBeCallableWith()
+    // Doc has TRANSACT at top level
+    expectTypeOf<Doc>().toHaveProperty(TRANSACT)
+
+    // Leaf annotations: callable + mutation + TRANSACT
+    type Title = Doc["title"]
+    expectTypeOf<Title>().toBeCallableWith()
+    expectTypeOf<Title>().toHaveProperty("insert")
+    expectTypeOf<Title>().toHaveProperty(TRANSACT)
+
+    type Count = Doc["count"]
+    expectTypeOf<Count>().toBeCallableWith()
+    expectTypeOf<Count>().toHaveProperty("increment")
+    expectTypeOf<Count>().toHaveProperty(TRANSACT)
+
+    // Sequence: navigation + reading + mutation + TRANSACT
+    type Messages = Doc["messages"]
+    expectTypeOf<Messages>().toBeCallableWith()
+    expectTypeOf<Messages>().toHaveProperty("at")
+    expectTypeOf<Messages>().toHaveProperty("push")
+    expectTypeOf<Messages>().toHaveProperty("length")
+    expectTypeOf<Messages>().toHaveProperty(TRANSACT)
+
+    // Sequence child via .at(): Ref<struct> with read + write
+    type MsgOrUndef = ReturnType<Messages["at"]>
+    type Msg = Exclude<MsgOrUndef, undefined>
+    expectTypeOf<Msg>().toBeCallableWith()
+    expectTypeOf<Msg>().toHaveProperty("set") // ProductRef
+    expectTypeOf<Msg>().toHaveProperty(TRANSACT)
+    // Nested field access
+    type Author = Msg["author"]
+    expectTypeOf<Author>().toBeCallableWith()
+    expectTypeOf<Author>().toHaveProperty("set") // ScalarRef
+    type Body = Msg["body"]
+    expectTypeOf<Body>().toBeCallableWith()
+    expectTypeOf<Body>().toHaveProperty("insert") // TextRef
+
+    // Nested struct
+    type Settings = Doc["settings"]
+    expectTypeOf<Settings>().toBeCallableWith()
+    expectTypeOf<Settings>().toHaveProperty("set")
+    expectTypeOf<Settings>().toHaveProperty(TRANSACT)
+    type DarkMode = Settings["darkMode"]
+    expectTypeOf<DarkMode>().toBeCallableWith()
+    expectTypeOf<DarkMode>().toHaveProperty("set")
+
+    // Map: navigation + reading + mutation + TRANSACT
+    type Metadata = Doc["metadata"]
+    expectTypeOf<Metadata>().toBeCallableWith()
+    expectTypeOf<Metadata>().toHaveProperty("at")
+    expectTypeOf<Metadata>().toHaveProperty("has")
+    expectTypeOf<Metadata>().toHaveProperty("keys")
+    expectTypeOf<Metadata>().toHaveProperty("set")    // WritableMapRef
+    expectTypeOf<Metadata>().toHaveProperty("delete")
+    expectTypeOf<Metadata>().toHaveProperty("clear")
+    expectTypeOf<Metadata>().toHaveProperty(TRANSACT)
+  })
+})
+
+describe("type-level: Ref<S> no .at() overload conflict on sequences", () => {
+  it("ReadableSequenceRef & SequenceRef has no .at() conflict (SequenceRef has no .at())", () => {
+    // This is the core fix — ReadableSequenceRef provides .at() returning Ref<I>,
+    // and SequenceRef provides only push/insert/delete. No conflicting .at() signatures.
+    type Combined = ReadableSequenceRef<Ref<ScalarSchema<"string", string>>, string> & SequenceRef
+    expectTypeOf<Combined>().toHaveProperty("at")
+    expectTypeOf<Combined>().toHaveProperty("push")
+    expectTypeOf<Combined>().toHaveProperty("length")
+    // .at() returns Ref<Scalar> | undefined — no overload ambiguity
+    type Child = Exclude<ReturnType<Combined["at"]>, undefined>
+    expectTypeOf<Child>().toBeCallableWith()
+    expectTypeOf<Child>().toHaveProperty("set")
+  })
+})
+
+describe("type-level: WithTransact helper", () => {
+  it("WithTransact<T> adds HasTransact to T", () => {
+    type Base = { x: number }
+    type Result = WithTransact<Base>
+    expectTypeOf<Result>().toHaveProperty("x")
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
   })
 })

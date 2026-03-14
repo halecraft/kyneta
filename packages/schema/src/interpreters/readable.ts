@@ -19,6 +19,7 @@ import type {
   DiscriminatedSumSchema,
 } from "../schema.js"
 import type { Plain } from "../interpreter-types.js"
+import type { NavigableSequenceRef, NavigableMapRef } from "./navigable.js"
 
 // Re-export RefContext for consumers
 export type { RefContext } from "../interpreter-types.js"
@@ -29,46 +30,34 @@ export type { RefContext } from "../interpreter-types.js"
 
 /**
  * An interface for readable sequence refs: callable + navigation.
- * The call signature returns the plain array. `.at(i)` returns a
- * child ref or `undefined` for out-of-bounds indices.
- * `.length` reflects the store array length.
+ *
+ * Extends `NavigableSequenceRef<T>` (structural addressing: `.at()`,
+ * `.length`, `[Symbol.iterator]`) and adds reading concerns:
+ * - Call signature `(): V[]` returns a plain array snapshot
+ * - `.get(i)` returns the plain value at index (not a ref)
  */
-export interface ReadableSequenceRef<T = unknown, V = unknown> {
+export interface ReadableSequenceRef<T = unknown, V = unknown>
+  extends NavigableSequenceRef<T> {
   (): V[]
-  /** Navigate to a child ref by index. Returns undefined for out-of-bounds. */
-  at: (index: number) => T | undefined
   /** Read the plain value at index. Returns undefined for out-of-bounds. */
   get: (index: number) => V | undefined
-  readonly length: number
-  [Symbol.iterator](): Iterator<T>
 }
 
 /**
  * An interface for readable map refs: callable + Map-like navigation.
- * The call signature returns the plain record. `.at(key)` navigates to
- * a child ref or `undefined` for missing keys. `.has()`, `.keys()`,
- * `.size`, `.entries()`, `.values()`, `[Symbol.iterator]` provide
- * Map-like introspection.
+ *
+ * Extends `NavigableMapRef<T>` (structural addressing: `.at()`, `.has()`,
+ * `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`) and
+ * adds reading concerns:
+ * - Call signature `(): Record<string, V>` returns a plain record snapshot
+ * - `.get(key)` returns the plain value at key (not a ref)
  */
-export interface ReadableMapRef<T = unknown, V = unknown> {
+export interface ReadableMapRef<T = unknown, V = unknown>
+  extends NavigableMapRef<T> {
   /** Callable: returns a deep plain snapshot of the entire map. */
   (): Record<string, V>
-  /** Navigate to a child ref by key. Returns undefined if key is not in the store. */
-  at(key: string): T | undefined
   /** Read the plain value at key. Returns undefined if key is not in the store. Equivalent to `.at(key)?.()`. */
   get(key: string): V | undefined
-  /** Check if a key exists in the store. */
-  has(key: string): boolean
-  /** Return all current store keys. */
-  keys(): string[]
-  /** Number of entries in the store. */
-  readonly size: number
-  /** Iterate over [key, childRef] pairs. */
-  entries(): IterableIterator<[string, T]>
-  /** Iterate over child refs. */
-  values(): IterableIterator<T>
-  /** Iterate over [key, childRef] pairs. */
-  [Symbol.iterator](): IterableIterator<[string, T]>
 }
 
 /**
