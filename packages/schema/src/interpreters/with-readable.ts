@@ -3,7 +3,10 @@
 // This transformer takes any interpreter that produces HasRead carriers
 // (i.e. bottomInterpreter or anything above it) and:
 //
-// 1. Fills the [READ] slot with `() => readByPath(store, path)`
+// 1. Fills the [READ] slot:
+//    - Leaf nodes (scalar, text, counter): `() => readByPath(store, path)`
+//    - Composite nodes (product, sequence, map): folds child values through
+//      the carrier's navigation surface to produce a fresh snapshot
 // 2. Adds structural navigation:
 //    - Product: enumerable lazy getters (NO caching — thunk forced every access)
 //    - Sequence: .at(i), .get(i), .length, [Symbol.iterator]
@@ -90,8 +93,17 @@ export function withReadable<A extends HasRead>(
       const baseFields = fields as Readonly<Record<string, () => A>>
       const result = base.product(ctx, path, schema, baseFields) as any
 
-      // Fill READ slot
-      result[READ] = () => readByPath(ctx.store, path)
+      // Fill READ slot — fold child values through the carrier's navigation
+      // surface (property getters) to produce a fresh snapshot. This goes
+      // through withCaching's memoized getters when present.
+      result[READ] = () => {
+        const snapshot: Record<string, unknown> = {}
+        for (const key of Object.keys(fields)) {
+          const child = result[key]
+          snapshot[key] = typeof child === "function" ? child() : child
+        }
+        return snapshot
+      }
 
       // Define enumerable getters for each schema field.
       // NO caching — each access forces the thunk afresh.
@@ -121,8 +133,21 @@ export function withReadable<A extends HasRead>(
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem) as any
 
-      // Fill READ slot
-      result[READ] = () => readByPath(ctx.store, path)
+      // Fill READ slot — fold child values to produce a fresh array
+      // snapshot. Uses the raw `item` closure (not result.at()) because
+      // withCaching's cache shifting can leave refs with stale paths
+      // after insert/delete. readByPath is still needed for structure
+      // discovery (array length).
+      result[READ] = () => {
+        const arr = readByPath(ctx.store, path)
+        const len = Array.isArray(arr) ? arr.length : 0
+        const snapshot: unknown[] = []
+        for (let i = 0; i < len; i++) {
+          const child: unknown = item(i)
+          snapshot.push(typeof child === "function" ? (child as () => unknown)() : child)
+        }
+        return snapshot
+      }
 
       // .at(i) — NO caching. Calls item(i) fresh each time.
       // Bounds checking: negative or out-of-bounds returns undefined.
@@ -180,8 +205,21 @@ export function withReadable<A extends HasRead>(
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem) as any
 
-      // Fill READ slot
-      result[READ] = () => readByPath(ctx.store, path)
+      // Fill READ slot — fold child values to produce a fresh record
+      // snapshot. Uses the raw `item` closure (not result.at()) because
+      // map keys can be dynamically added/removed and cached refs may
+      // have stale state. readByPath is still needed for structure
+      // discovery (object keys).
+      result[READ] = () => {
+        const obj = readByPath(ctx.store, path)
+        const keys = isNonNullObject(obj) ? Object.keys(obj) : []
+        const snapshot: Record<string, unknown> = {}
+        for (const key of keys) {
+          const child: unknown = item(key)
+          snapshot[key] = typeof child === "function" ? (child as () => unknown)() : child
+        }
+        return snapshot
+      }
 
       // Helper: read store keys
       function storeKeys(): string[] {

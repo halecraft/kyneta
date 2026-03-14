@@ -58,35 +58,40 @@ Covers Phase 4. Separate review lens (prose/accuracy vs. code/correctness).
 
 ## Phases
 
-### Phase 1: Fix `[READ]` for composite nodes in `withReadable` 🔴
+### Phase 1: Fix `[READ]` for composite nodes in `withReadable` 🟢
 
-The product, sequence, and map cases in `withReadable` currently set `[READ]` to `readByPath`. Replace with a fold that forces child values through the carrier stack.
+The product, sequence, and map cases in `withReadable` previously set `[READ]` to `readByPath`. Replaced with a fold that forces child values to produce fresh snapshots.
 
-**Critical design constraint**: the fold must access children through the carrier's own navigation surface (`result[key]` for products, `result.at(i)` for sequences, `result.at(key)` for maps) — **not** through the raw `fields`/`item` closures. This ensures the fold composes with `withCaching`, which overrides those property getters and `.at()` methods with memoized versions. Using raw `fields[key]()` would bypass the cache and create fresh uncached carriers on every `ref()` call.
+**Design constraint (revised during implementation)**: products access children through the carrier's navigation surface (`result[key]`) to compose with `withCaching`. Sequences and maps use the raw `item` closure instead of `result.at()` because `withCaching`'s cache shifting can leave refs with stale paths after insert/delete operations. All three produce fresh snapshot objects.
 
-- Task: **Product `[READ]`** — change from `readByPath(ctx.store, path)` to a function that iterates `Object.keys(fields)` (for the key set), accesses each child via `result[key]` (the property getter, which goes through caching if present), calls `child()` (which invokes the child's `[READ]`), and assembles a fresh `Record<string, unknown>`. The `fields` parameter provides the key set; the `result` carrier provides the navigation surface. 🔴
-- Task: **Sequence `[READ]`** — change from `readByPath(ctx.store, path)` to a function that reads the array length from the store (via `readByPath` — still needed for structure discovery), then calls `result.at(i)()` for each index to produce a fresh array. The `result.at(i)` call goes through the caching layer if present; the trailing `()` invokes the child's `[READ]`. 🔴
-- Task: **Map `[READ]`** — change from `readByPath(ctx.store, path)` to a function that reads the keys from the store (via `readByPath` — still needed for structure discovery), then calls `result.at(key)()` for each key to produce a fresh record. Same caching composition as sequence. 🔴
-- Task: **Annotated composites** — the `"doc"`, `"movable"`, and `"tree"` annotation cases delegate to `inner()`, which already produces a composite ref. No change needed — the inner ref's `[READ]` will be the fixed version. Verify this holds for the `"doc"` case (root document). 🔴
+- Task: **Product `[READ]`** — iterates `Object.keys(fields)`, accesses each child via `result[key]` (the property getter, composing with caching), calls `child()`, and assembles a fresh `Record<string, unknown>`. 🟢
+- Task: **Sequence `[READ]`** — reads array length from the store via `readByPath` (structure discovery), then calls `item(i)()` for each index to produce a fresh array. Uses the raw `item` closure to avoid stale-path issues with cache shifting. 🟢
+- Task: **Map `[READ]`** — reads keys from the store via `readByPath` (structure discovery), then calls `item(key)()` for each key to produce a fresh record. Same raw-closure approach as sequence. 🟢
+- Task: **Annotated composites** — verified: `"doc"`, `"movable"`, and `"tree"` delegate to `inner()`, whose `[READ]` is the fixed version. No change needed. 🟢
 
-### Phase 2: Fix `CHANGEFEED.current` for composite nodes in `withChangefeed` 🔴
+### Phase 2: Fix `CHANGEFEED.current` for composite nodes in `withChangefeed` 🟢
 
-The changefeed factories (`createProductChangefeed`, `createSequenceChangefeed`, `createMapChangefeed`) receive a `readCurrent` closure that returns `readByPath(ctx.store, path)`. After Phase 1, the ref's `[READ]` already produces a safe snapshot, so the simplest fix is to use `ref[READ]()` instead of `readByPath` for the `readCurrent` closure passed to changefeed factories.
+The changefeed factories received a `readCurrent` closure returning `readByPath(ctx.store, path)`. After Phase 1, the ref's `[READ]` already produces a safe snapshot, so `readCurrent` now delegates to `ref[READ]()`.
 
-- Task: Add `import { READ } from "./bottom.js"` to `with-changefeed.ts`. The `READ` symbol is **not** currently imported — only `readByPath` (from `../store.js`) and `CHANGEFEED` (from `../changefeed.js`) are present. 🔴
-- Task: In `withChangefeed`'s product case (L560–569), change the `readCurrent` argument from `() => readByPath(ctx.store, path)` to `() => (result as any)[READ]()`, where `result` is the ref produced by the base interpreter (which `withReadable` already fixed in Phase 1). This works because the closure captures `result` by reference, and `result[READ]` is the fixed version by the time any `readCurrent()` call happens. 🔴
-- Task: Same change for the sequence case (L589–606). 🔴
-- Task: Same change for the map case (L626–643). 🔴
-- Task: Leaf changefeed factories (`createLeafChangefeed`) remain unchanged — `readByPath` is correct for scalars. 🔴
+- Task: Added `import { READ } from "./bottom.js"` to `with-changefeed.ts`. 🟢
+- Task: Product case — changed `readCurrent` from `() => readByPath(ctx.store, path)` to `() => (result as any)[READ]()`. 🟢
+- Task: Sequence case — same change. 🟢
+- Task: Map case — same change. 🟢
+- Task: Leaf changefeed factories (`createLeafChangefeed`) unchanged — `readByPath` is correct for scalars. 🟢
 
-### Phase 3: Tests 🔴
+### Phase 3: Tests 🟢
 
-- Task: Add a test that `ref()` on a product returns a fresh object each time and mutating it does not corrupt the store. This is the primary regression test — it would have caught the original bug. 🔴
-- Task: Add a test that `ref()` on a sequence returns a fresh array each time. 🔴
-- Task: Add a test that `ref()` on a map returns a fresh record each time. 🔴
-- Task: Add a test that `CHANGEFEED.current` on a composite returns a fresh snapshot. 🔴
-- Task: Verify existing `toEqual` tests still pass (they compare by value, not reference, so should be unaffected). 🔴
-- Task: Verify existing `toBe` identity tests on child refs still pass — these test navigation caching (`doc.settings === doc.settings`, `doc.messages.at(0) === doc.messages.at(0)`), not composite `[READ]`. They should be unaffected because the fix forces children through the cached navigation surface, not raw thunks. 🔴
+13 new snapshot isolation tests added across three test files. All 782 tests pass (769 original + 13 new).
+
+- Task: Product snapshot isolation — `with-readable.test.ts` and `readable.test.ts`. Mutating `doc.settings()` does not corrupt store. Distinct references each call. 🟢
+- Task: Sequence snapshot isolation — `with-readable.test.ts` and `readable.test.ts`. Pushing onto `doc.messages()` does not corrupt store. 🟢
+- Task: Map snapshot isolation — `with-readable.test.ts` and `readable.test.ts`. Adding key to `doc.metadata()` does not corrupt store. 🟢
+- Task: `CHANGEFEED.current` isolation — `changefeed.test.ts`. Product, sequence, and map `.current` returns fresh snapshots; mutation does not corrupt store. 🟢
+- Task: Nested fold correctness — `with-readable.test.ts` and `readable.test.ts`. `doc()` returns deeply fresh snapshot. 🟢
+- Task: Caching interaction — `readable.test.ts`. `withCaching` does not affect fold freshness. 🟢
+- Task: Scalar unchanged — `readable.test.ts`. Leaf reads still return correct primitives. 🟢
+- Task: Existing `toEqual` tests all pass unchanged. 🟢
+- Task: All ~26 existing `toBe` identity tests pass unchanged (they test child ref caching, not composite `[READ]` output). 🟢
 
 ### Phase 4: Documentation 🔴
 
@@ -152,21 +157,25 @@ Most tests use `toEqual` (deep value comparison), not `toBe` (reference identity
 
 ## Learnings
 
-### Product fold must go through the carrier's navigation surface, not raw thunks
+### Product fold goes through the carrier's navigation surface; sequence/map do not
 
-The `fields` parameter in the product case contains raw child thunks. But `withCaching` overrides the product's property getters with memoized versions. If the new `[READ]` calls `fields[key]()` directly, it **bypasses** the caching layer and creates fresh uncached carrier objects on every `ref()` call. The correct approach is `result[key]()` — access the child through the property getter (which `withCaching` may have wrapped), then invoke the child's `[READ]`. This principle applies uniformly:
+The `fields` parameter in the product case contains raw child thunks. But `withCaching` overrides the product's property getters with memoized versions. If the new `[READ]` calls `fields[key]()` directly, it **bypasses** the caching layer and creates fresh uncached carrier objects on every `ref()` call. The correct approach for products is `result[key]()` — access the child through the property getter (which `withCaching` may have wrapped), then invoke the child's `[READ]`.
 
-| Node type | Structure discovery | Child access (goes through cache) |
-|---|---|---|
-| Product | `Object.keys(fields)` | `result[key]()` |
-| Sequence | `readByPath` → array length | `result.at(i)()` |
-| Map | `readByPath` → `Object.keys(obj)` | `result.at(key)()` |
+There is no circular reference concern for products: `result[READ]` accesses `result[key]`, which returns a *child ref*, then `child()` invokes the *child's* `[READ]`. The tree is acyclic by construction.
 
-There is no circular reference concern: `result[READ]` accesses `result[key]`, which returns a *child ref*, then `child()` invokes the *child's* `[READ]`. The tree is acyclic by construction.
+**However**, this approach does NOT work for sequences and maps. During implementation we discovered that `withCaching`'s cache shifting (after insert/delete on sequences) leaves shifted refs with **stale paths** — a ref created for index 1 still reads `store.items[1]` even after being shifted to cache index 0. The old `readByPath`-based `[READ]` masked this because it read the whole array/object directly. The fold-through-cache approach exposed the stale-path issue, causing the `writable.test.ts` test `"after delete(0, 1), cache shifts preserve ref identity"` to fail: `doc.items()` returned `[{name:"c"}, {name:undefined}]` instead of `[{name:"b"}, {name:"c"}]`.
+
+The fix: sequences and maps use the raw `item` closure (`item(i)()` / `item(key)()`) which creates a fresh child ref at the correct current path. Products can safely go through the cache because product field keys are stable (never shifted).
+
+| Node type | Structure discovery | Child access | Why |
+|---|---|---|---|
+| Product | `Object.keys(fields)` | `result[key]()` (cached navigation) | Keys are stable — no shifting |
+| Sequence | `readByPath` → array length | `item(i)()` (raw closure) | Cache shifting leaves stale paths |
+| Map | `readByPath` → `Object.keys(obj)` | `item(key)()` (raw closure) | Keys can be dynamically added/removed |
 
 ### Sequence/map fold still needs `readByPath` for structure discovery
 
-Unlike products (where `fields` keys are schema-derived and statically known), sequences and maps must discover their runtime shape (array length / object keys) from the store. The fold still calls `readByPath` for this structure discovery — but only to learn *how many* children exist and *what keys* they have, never to extract their *values*. The actual values come from forcing child `[READ]` calls through `result.at(...)()`.
+Unlike products (where `fields` keys are schema-derived and statically known), sequences and maps must discover their runtime shape (array length / object keys) from the store. The fold still calls `readByPath` for this structure discovery — but only to learn *how many* children exist and *what keys* they have, never to extract their *values*. The actual values come from forcing child `[READ]` calls through `item(...)()`.
 
 ### `READ` is not currently imported in `with-changefeed.ts`
 

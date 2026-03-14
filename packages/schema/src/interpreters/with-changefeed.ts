@@ -41,6 +41,7 @@ import type {
 import type { WritableContext } from "./writable.js"
 import { readByPath } from "../store.js"
 import { isPropertyHost } from "../guards.js"
+import { READ } from "./bottom.js"
 
 // ---------------------------------------------------------------------------
 // Attach [CHANGEFEED] non-enumerably to any object
@@ -560,7 +561,7 @@ export function withChangefeed<A>(
         const cf = createProductChangefeed(
           listeners,
           path,
-          () => readByPath(ctx.store, path),
+          () => (result as any)[READ](),
           // The fields object contains thunks — forcing them yields
           // child refs with [CHANGEFEED] already attached (because
           // the catamorphism interprets children before parents, and
@@ -589,7 +590,7 @@ export function withChangefeed<A>(
         const cf = createSequenceChangefeed(
           listeners,
           path,
-          () => readByPath(ctx.store, path),
+          () => (result as any)[READ](),
           // Use the result's .at() method to get child refs —
           // this goes through the caching layer, so refs have
           // stable identity and [CHANGEFEED] attached.
@@ -626,7 +627,7 @@ export function withChangefeed<A>(
         const cf = createMapChangefeed(
           listeners,
           path,
-          () => readByPath(ctx.store, path),
+          () => (result as any)[READ](),
           (key: string) => {
             if (typeof resultAny.at === "function") {
               return resultAny.at(key)

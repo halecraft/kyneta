@@ -121,6 +121,32 @@ describe("changefeed: current value", () => {
 })
 
 // ---------------------------------------------------------------------------
+// CHANGEFEED.current snapshot isolation — composite nodes
+// ---------------------------------------------------------------------------
+
+describe("changefeed: composite current snapshot isolation", () => {
+  it("product CHANGEFEED.current returns a fresh snapshot — mutating it does not corrupt the store", () => {
+    const { doc, store } = createChatDoc()
+    const cf = getChangefeed(doc.settings)
+
+    const snap1 = cf.current as Record<string, unknown>
+    snap1.darkMode = true
+    snap1.fontSize = 99
+
+    // Store must be unaffected
+    expect((store.settings as any).darkMode).toBe(false)
+    expect((store.settings as any).fontSize).toBe(14)
+
+    // Second access returns a clean snapshot
+    const snap2 = cf.current as Record<string, unknown>
+    expect(snap2).toEqual({ darkMode: false, fontSize: 14 })
+
+    // Distinct references each access
+    expect(cf.current).not.toBe(cf.current)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Subscription lifecycle — subscribe, unsubscribe, multiple
 // ---------------------------------------------------------------------------
 

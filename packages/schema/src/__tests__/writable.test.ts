@@ -763,6 +763,21 @@ describe("writable: mutation + read integration", () => {
     expect(msg.author()).toBe("Bob")
   })
 
+  it("product ref() returns updated fresh snapshot after .set()", () => {
+    const { doc, store } = createStructuralDoc()
+    // Mutate via the writable API
+    doc.settings.set({ darkMode: true, fontSize: 20 })
+
+    // ref() returns the updated snapshot
+    const snap = doc.settings()
+    expect(snap).toEqual({ darkMode: true, fontSize: 20 })
+
+    // Snapshot is still isolated — mutating it does not corrupt the store
+    snap.darkMode = false
+    expect((store.settings as any).darkMode).toBe(true)
+    expect(doc.settings()).toEqual({ darkMode: true, fontSize: 20 })
+  })
+
   it("map mutation: .set(key, value) dispatches change", () => {
     const { store, doc } = createStructuralDoc()
     doc.metadata.set("newKey", "newValue")
