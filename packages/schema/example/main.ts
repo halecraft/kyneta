@@ -8,7 +8,7 @@
 //   The architecture decomposes into four composable interpreter layers:
 //     1. readable    — callable function-shaped refs with caching
 //     2. writable    — adds .set(), .insert(), .increment(), etc.
-//     3. changefeed  — adds observation via subscribe / subscribeTree
+//     3. changefeed  — adds observation via subscribe / subscribeNode
 //
 //   Compose them fluently:
 //     interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
@@ -32,7 +32,7 @@ import {
 	change,
 	applyChanges,
 	subscribe,
-	subscribeTree,
+	subscribeNode,
 	// Observation protocol
 	hasChangefeed,
 	hasComposedChangefeed,
@@ -308,19 +308,19 @@ log(`
 section(7, "Observing Changes");
 
 log(`
-    subscribe(ref, cb) — node-level observation.
-    subscribeTree(ref, cb) — tree-level, with relative paths.
+    subscribe(ref, cb) — tree-level observation, with relative paths (the default).
+    subscribeNode(ref, cb) — node-level observation.
     Both are library imports. Both preserve the Changefeed protocol.
 `);
 
 // Leaf subscription
 const starChangesets: Changeset[] = [];
-const unsub1 = subscribe(doc.stars, (cs) => starChangesets.push(cs));
+const unsub1 = subscribeNode(doc.stars, (cs) => starChangesets.push(cs));
 
 doc.stars.increment(5);
 
 log(`
-    subscribe(doc.stars, cb)
+    subscribeNode(doc.stars, cb)
     doc.stars.increment(5)
     → ${starChangesets.length} Changeset received
     → changeset.changes[0].type = "${starChangesets[0]!.changes[0]!.type}"
@@ -333,7 +333,7 @@ log(`    After unsub → ${starChangesets.length} total (delivery stopped)`);
 // Tree subscription — one subscription at the root captures mutations
 // anywhere in the document, with relative paths showing exactly where.
 const treeEvents: { path: string; type: string }[] = [];
-const unsub2 = subscribeTree(doc, (cs) => {
+const unsub2 = subscribe(doc, (cs) => {
 	for (const event of cs.changes) {
 		treeEvents.push({
 			path: formatPath(event.path),
@@ -347,7 +347,7 @@ doc.tasks.at(1)!.priority.set(3); // depth 2: tasks[1].priority
 doc.settings.fontSize.set(14); // depth 1: settings.fontSize
 
 log(`
-    subscribeTree(doc, cb)  ← one subscription on the root
+    subscribe(doc, cb)  ← one subscription on the root
     doc.tasks.at(2)!.done.set(true)
     doc.tasks.at(1)!.priority.set(3)
     doc.settings.fontSize.set(14)
@@ -380,7 +380,7 @@ const docB = createDoc(ProjectSchema, baseSeed);
 
 // Subscribe to docB BEFORE applying changes — see the origin
 const docBChangesets: Changeset[] = [];
-subscribe(docB.stars, (cs) => docBChangesets.push(cs));
+subscribeNode(docB.stars, (cs) => docBChangesets.push(cs));
 
 // Capture changes on docA
 const roundTripOps = change(docA, (d) => {
@@ -432,7 +432,7 @@ log(`
 		content: { type: "text", body: "" },
 	});
 	const changesets: Changeset[] = [];
-	subscribe(batchDoc.stars, (cs) => changesets.push(cs));
+	subscribeNode(batchDoc.stars, (cs) => changesets.push(cs));
 
 	// 3 counter increments applied as one batch
 	applyChanges(
@@ -625,10 +625,10 @@ log(`
       [CALL]        — controls what carrier() does
       [INVALIDATE]  — change-driven cache invalidation
       [TRANSACT]    — context discovery from any ref
-      [CHANGEFEED]  — observation coalgebra with subscribeTree
+      [CHANGEFEED]  — observation coalgebra with subscribe / subscribeNode
 
-    hasComposedChangefeed(doc.settings) → ${hasComposedChangefeed(doc.settings)} (product — has subscribeTree)
-    hasComposedChangefeed(doc.name) → ${hasComposedChangefeed(doc.name)} (leaf — subscribe only)
+    hasComposedChangefeed(doc.settings) → ${hasComposedChangefeed(doc.settings)} (product — has subscribe)
+    hasComposedChangefeed(doc.name) → ${hasComposedChangefeed(doc.name)} (leaf — subscribeNode only)
 `);
 
 // ═══════════════════════════════════════════════════════════════════════════
