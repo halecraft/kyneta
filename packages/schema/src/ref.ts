@@ -93,6 +93,38 @@ export type Wrap<T, M extends RefMode> =
 export type WithTransact<T> = Wrap<T, "rw">
 
 // ---------------------------------------------------------------------------
+// DiscriminantProductRef — hybrid product ref for discriminated union variants
+// ---------------------------------------------------------------------------
+
+/**
+ * Produces a hybrid product ref where the discriminant field `D` resolves to
+ * its `Plain<S>` value (a raw string literal), while all other fields remain
+ * full recursive `SchemaRef<S, M>` refs.
+ *
+ * This enables standard TypeScript discriminated union narrowing:
+ * ```ts
+ * if (ref.type === "text") { ref.body.set("hello") } // TS narrows
+ * ```
+ *
+ * TS homomorphic mapped types distribute over union type arguments, so
+ * `DiscriminantProductRef<V[number]["fields"], D, M>` correctly produces
+ * a union of per-variant product refs — a proper TS discriminated union.
+ */
+export type DiscriminantProductRef<
+  F extends Record<string, Schema>,
+  D extends string,
+  M extends RefMode,
+> = Wrap<
+  (() => { [K in keyof F]: Plain<F[K]> }) &
+  {
+    readonly [K in keyof F]:
+      K extends D ? Plain<F[K]> : SchemaRef<F[K], M>
+  } &
+  ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+  M
+>
+
+// ---------------------------------------------------------------------------
 // SchemaRef<S, M> — the parameterized recursive core
 // ---------------------------------------------------------------------------
 
@@ -190,8 +222,8 @@ export type SchemaRef<S extends Schema, M extends RefMode> =
                   >
                 : // General positional sum: distribute over variant union
                   SchemaRef<V[number], M>
-              : S extends DiscriminatedSumSchema<infer _D, infer V>
-                ? SchemaRef<V[number], M>
+              : S extends DiscriminatedSumSchema<infer D, infer V>
+                ? DiscriminantProductRef<V[number]["fields"], D, M>
                 : unknown
 
 // ---------------------------------------------------------------------------

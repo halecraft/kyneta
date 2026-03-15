@@ -49,6 +49,27 @@ import {
 } from "../store.js"
 import type { RefContext, Plain } from "../interpreter-types.js"
 
+// ---------------------------------------------------------------------------
+// WritableDiscriminantProductRef — hybrid product ref for discriminated unions
+// ---------------------------------------------------------------------------
+
+/**
+ * Produces a hybrid writable product ref where the discriminant field `D`
+ * resolves to its `Plain<S>` value (a raw string literal), while all other
+ * fields remain full recursive `Writable<S>` refs.
+ *
+ * Enables standard TypeScript discriminated union narrowing on writable refs.
+ * The discriminant field has no `.set()` — preventing store corruption from
+ * mutating the discriminant independently of the variant structure.
+ */
+type WritableDiscriminantProductRef<
+  F extends Record<string, Schema>,
+  D extends string,
+> = {
+    readonly [K in keyof F]:
+      K extends D ? Plain<F[K]> : Writable<F[K]>
+  } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
+
 // Re-export store utilities for backward compatibility
 export { type Store, readByPath, writeByPath, applyChangeToStore } from "../store.js"
 
@@ -423,8 +444,8 @@ export type Writable<S extends Schema> =
               ? V extends readonly [ScalarSchema<"null", any>, infer Inner extends Schema]
                 ? ScalarRef<Plain<Inner> | null>
                 : Writable<V[number]>
-              : S extends DiscriminatedSumSchema<infer _D, infer V>
-                ? Writable<V[number]>
+              : S extends DiscriminatedSumSchema<infer D, infer V>
+                ? WritableDiscriminantProductRef<V[number]["fields"], D>
                 : unknown
 
 // ---------------------------------------------------------------------------

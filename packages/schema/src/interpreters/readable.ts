@@ -21,6 +21,26 @@ import type {
 import type { Plain } from "../interpreter-types.js"
 import type { NavigableSequenceRef, NavigableMapRef } from "./navigable.js"
 
+// ---------------------------------------------------------------------------
+// ReadableDiscriminantProductRef — hybrid product ref for discriminated unions
+// ---------------------------------------------------------------------------
+
+/**
+ * Produces a hybrid readable product ref where the discriminant field `D`
+ * resolves to its `Plain<S>` value (a raw string literal), while all other
+ * fields remain full recursive `Readable<S>` refs.
+ *
+ * Enables standard TypeScript discriminated union narrowing on read-only refs.
+ */
+type ReadableDiscriminantProductRef<
+  F extends Record<string, Schema>,
+  D extends string,
+> = (() => { [K in keyof F]: Plain<F[K]> }) &
+  {
+    readonly [K in keyof F]:
+      K extends D ? Plain<F[K]> : Readable<F[K]>
+  }
+
 // Re-export RefContext for consumers
 export type { RefContext } from "../interpreter-types.js"
 
@@ -125,6 +145,6 @@ export type Readable<S extends Schema> =
               ? V extends readonly [ScalarSchema<"null", any>, infer Inner extends Schema]
                 ? (() => Plain<Inner> | null) & { [Symbol.toPrimitive](hint: string): Plain<Inner> | null | string }
                 : Readable<V[number]>
-              : S extends DiscriminatedSumSchema<infer _D, infer V>
-                ? Readable<V[number]>
+              : S extends DiscriminatedSumSchema<infer D, infer V>
+                ? ReadableDiscriminantProductRef<V[number]["fields"], D>
                 : unknown

@@ -85,6 +85,7 @@ export type ScalarPlain<K extends ScalarKind> =
 export interface ProductSchema<F extends Record<string, Schema> = Record<string, Schema>> {
   readonly _kind: "product"
   readonly fields: Readonly<F>
+  readonly discriminantKey?: string
 }
 
 // --- Sequence ----------------------------------------------------------------
@@ -205,6 +206,7 @@ export interface PlainProductSchema<
 > {
   readonly _kind: "product"
   readonly fields: Readonly<F>
+  readonly discriminantKey?: string
 }
 
 /**
@@ -337,6 +339,11 @@ function discriminatedSum<
   variants: [...V],
 ): DiscriminatedSumSchema<D, V> {
   const variantMap = buildVariantMap(discriminant, variants)
+  // Stamp each variant with the discriminant key so interpreter layers
+  // can identify and special-case the discriminant field at runtime.
+  for (const variant of variants) {
+    ;(variant as any).discriminantKey = discriminant
+  }
   return { _kind: "sum", discriminant, variants, variantMap }
 }
 

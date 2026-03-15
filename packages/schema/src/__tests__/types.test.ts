@@ -1717,18 +1717,55 @@ const _discUnionSchema = Schema.discriminatedUnion("type", [
 
 const _nullableStringSchema = Schema.nullable(Schema.string())
 
-describe("type-level: Ref<S> for discriminated sums", () => {
+describe("type-level: Ref<S> for discriminated sums (hybrid discriminant)", () => {
   it("Ref<DiscriminatedSumSchema> resolves to union of variant product refs (not unknown)", () => {
     type Result = Ref<typeof _discUnionSchema>
     // Should NOT be unknown — discriminated sums now resolve
     expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
   })
 
-  it("Ref<DiscriminatedSumSchema> variant union narrows via discriminant field", () => {
+  it("discriminant field is a raw string literal, not a ref", () => {
     type Result = Ref<typeof _discUnionSchema>
-    // The .type field should be accessible on the union (common to both variants)
+    // The .type field should be a plain string literal union, not a ScalarRef
     type TypeField = Result extends { readonly type: infer T } ? T : never
-    expectTypeOf<TypeField>().not.toEqualTypeOf<never>()
+    expectTypeOf<TypeField>().toEqualTypeOf<"text" | "image">()
+  })
+
+  it("discriminant field has no .set() — not writable", () => {
+    type Result = Ref<typeof _discUnionSchema>
+    type TypeField = Result extends { readonly type: infer T } ? T : never
+    // A raw string literal has no .set method
+    type HasSet = TypeField extends { set: any } ? true : false
+    expectTypeOf<HasSet>().toEqualTypeOf<false>()
+  })
+
+  it("narrowing via discriminant gives access to variant-specific fields", () => {
+    type Result = Ref<typeof _discUnionSchema>
+    // Extract the text variant by narrowing on the discriminant
+    type TextVariant = Extract<Result, { readonly type: "text" }>
+    // body should exist on the text variant and be a ref (not never)
+    type BodyField = TextVariant extends { readonly body: infer B } ? B : never
+    expectTypeOf<BodyField>().not.toEqualTypeOf<never>()
+    // body should be callable (it's a full ref)
+    type BodyReturn = BodyField extends (...args: any[]) => infer R ? R : never
+    expectTypeOf<BodyReturn>().toEqualTypeOf<string>()
+  })
+
+  it("narrowing excludes fields from other variants", () => {
+    type Result = Ref<typeof _discUnionSchema>
+    type TextVariant = Extract<Result, { readonly type: "text" }>
+    // url should NOT exist on the text variant
+    type HasUrl = TextVariant extends { readonly url: any } ? true : false
+    expectTypeOf<HasUrl>().toEqualTypeOf<false>()
+  })
+
+  it("switch exhaustiveness — default: never compiles", () => {
+    type Result = Ref<typeof _discUnionSchema>
+    // Verify that the discriminant union is exactly "text" | "image"
+    // so a switch with both cases + default: never would compile
+    type TypeField = Result extends { readonly type: infer T } ? T : never
+    type Remaining = Exclude<TypeField, "text" | "image">
+    expectTypeOf<Remaining>().toEqualTypeOf<never>()
   })
 })
 
@@ -1746,10 +1783,16 @@ describe("type-level: Ref<S> for nullable sums", () => {
   })
 })
 
-describe("type-level: RRef<S> for discriminated sums", () => {
+describe("type-level: RRef<S> for discriminated sums (hybrid discriminant)", () => {
   it("RRef<DiscriminatedSumSchema> resolves (not unknown)", () => {
     type Result = RRef<typeof _discUnionSchema>
     expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
+  })
+
+  it("RRef discriminant field is a raw string literal", () => {
+    type Result = RRef<typeof _discUnionSchema>
+    type TypeField = Result extends { readonly type: infer T } ? T : never
+    expectTypeOf<TypeField>().toEqualTypeOf<"text" | "image">()
   })
 
   it("RRef<nullable(string)> call signature returns string | null", () => {
@@ -1763,6 +1806,12 @@ describe("type-level: RWRef<S> for sums", () => {
   it("RWRef<DiscriminatedSumSchema> resolves (not unknown)", () => {
     type Result = RWRef<typeof _discUnionSchema>
     expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
+  })
+
+  it("RWRef discriminant field is a raw string literal", () => {
+    type Result = RWRef<typeof _discUnionSchema>
+    type TypeField = Result extends { readonly type: infer T } ? T : never
+    expectTypeOf<TypeField>().toEqualTypeOf<"text" | "image">()
   })
 
   it("RWRef<nullable(string)> has .set(string | null) — not never", () => {
@@ -1782,6 +1831,12 @@ describe("type-level: Writable<S> for sums", () => {
   it("Writable<DiscriminatedSumSchema> resolves (not unknown)", () => {
     type Result = Writable<typeof _discUnionSchema>
     expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
+  })
+
+  it("Writable discriminant field is a raw string literal, not a ScalarRef", () => {
+    type Result = Writable<typeof _discUnionSchema>
+    type TypeField = Result extends { readonly type: infer T } ? T : never
+    expectTypeOf<TypeField>().toEqualTypeOf<"text" | "image">()
   })
 })
 
@@ -1839,7 +1894,7 @@ describe("type-level: sums nested inside products (composition)", () => {
     expectTypeOf<SetParam>().toEqualTypeOf<string | null>()
   })
 
-  it("Ref<doc({ content: discriminatedUnion(...) })> — .content resolves", () => {
+  it("Ref<doc({ content: discriminatedUnion(...) })> — .content narrows via discriminant", () => {
     const s = Schema.doc({
       content: Schema.discriminatedUnion("type", [
         Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
@@ -1849,6 +1904,9 @@ describe("type-level: sums nested inside products (composition)", () => {
     type Doc = Ref<typeof s>
     type Content = Doc["content"]
     expectTypeOf<Content>().not.toEqualTypeOf<unknown>()
+    // Discriminant is a raw literal, enabling standard TS narrowing
+    type TypeField = Content extends { readonly type: infer T } ? T : never
+    expectTypeOf<TypeField>().toEqualTypeOf<"text" | "image">()
   })
 })
 
