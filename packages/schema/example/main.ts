@@ -54,11 +54,10 @@ import {
 import type {
 	Ref,
 	Schema as SchemaType,
+	AnnotatedSchema,
 	RefContext,
 	Changeset,
 	PendingChange,
-	TextRef,
-	CounterRef,
 	Store,
 } from "../src/index.js";
 
@@ -477,12 +476,12 @@ log(`
 `);
 
 // A generic "append tag" function — typed with Readable & Writable
-function tag(ref: (() => string) & TextRef, label: string) {
+function tag(ref: Ref<AnnotatedSchema<"text">>, label: string) {
 	ref.insert(ref().length, ` [${label}]`);
 }
 
 // A generic counter helper
-function ensureMinimum(ref: (() => number) & CounterRef, min: number) {
+function ensureMinimum(ref: Ref<AnnotatedSchema<"counter">>, min: number) {
 	const current = ref();
 	if (current < min) ref.increment(min - current);
 }

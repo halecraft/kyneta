@@ -199,7 +199,7 @@ Auto-commit (single mutation outside a transaction) delivers a degenerate `Chang
 
 **`TreeEvent<C>` — relative path for tree observation.** Composite refs (products, sequences, maps) implement `ComposedChangefeed`, which adds `subscribeTree(cb: (changeset: Changeset<TreeEvent<C>>) => void)`. Each `TreeEvent` carries `{ path: Path, change: C }` — the path is relative from the subscription point to where the change occurred. `subscribeTree` is a strict superset of `subscribe` (tree subscribers also see own-path changes with `path: []`).
 
-**`Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` isomorphism.** When subscribing at the root, `TreeEvent.path` equals the absolute path. The output of `subscribeTree` can be round-tripped as input to `applyChanges` (modulo path relativity for subtree subscriptions). This is a powerful property for sync: capture tree events on one document, reconstruct `PendingChange[]`, apply to another. Note: tree subscribers receive one `Changeset<TreeEvent>` per affected child path (not one combined changeset per flush), so reconstruction uses `flatMap` across changesets.
+**`Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` isomorphism.** When subscribing at the root, `TreeEvent.path` equals the absolute path. The output of tree-level observation (the facade's `subscribe`, which delegates to `ComposedChangefeed.subscribeTree`) can be round-tripped as input to `applyChanges` (modulo path relativity for subtree subscriptions). This is a powerful property for sync: capture tree events on one document, reconstruct `PendingChange[]`, apply to another. Note: tree subscribers receive one `Changeset<TreeEvent>` per affected child path (not one combined changeset per flush), so reconstruction uses `flatMap` across changesets.
 
 ### Step (`src/step.ts`)
 
@@ -477,12 +477,14 @@ The library-level API for change capture, declarative application, and observati
 
 - **`change(ref, fn) → PendingChange[]`** — imperative mutation capture. Runs `fn` inside a transaction, returns the captured changes. Aborts on error.
 - **`applyChanges(ref, ops, {origin?}) → PendingChange[]`** — declarative application. Applies a list of changes via `executeBatch`, triggering the full prepare pipeline (cache invalidation + store mutation + notification accumulation) then flush (batched `Changeset` delivery). Empty ops is a no-op.
-- **`subscribe(ref, cb) → () => void`** — node-level observation. Callback receives `Changeset`. For leaf refs, fires on any mutation. For composite refs, fires only on node-level changes (e.g. product `.set()`), not child mutations.
-- **`subscribeTree(ref, cb) → () => void`** — tree-level observation. Callback receives `Changeset<TreeEvent>` with relative paths. Only works on composite refs (products, sequences, maps). A strict superset of `subscribe` — tree subscribers also see own-path changes with `path: []`.
+- **`subscribe(ref, cb) → () => void`** — tree-level observation (the default). Callback receives `Changeset<TreeEvent>` with relative paths. Only works on composite refs (products, sequences, maps). A strict superset of `subscribeNode` — subscribers also see own-path changes with `path: []`. Delegates to `ref[CHANGEFEED].subscribeTree(cb)`.
+- **`subscribeNode(ref, cb) → () => void`** — node-level observation. Callback receives `Changeset`. For leaf refs, fires on any mutation. For composite refs, fires only on node-level changes (e.g. product `.set()`), not child mutations. Delegates to `ref[CHANGEFEED].subscribe(cb)`.
+
+**Facade vs. protocol naming.** The facade and the changefeed protocol use different vocabulary by design. The facade speaks the developer's language: `subscribe` is the unmarked default (deep/tree-level, the thing you reach for first), `subscribeNode` is the explicit opt-in for node-level observation. The protocol speaks its own language: `Changefeed.subscribe` is the universal Moore machine transition stream, `ComposedChangefeed.subscribeTree` is the tree-level composition extension. The facade translates: `subscribe` → `[CHANGEFEED].subscribeTree`, `subscribeNode` → `[CHANGEFEED].subscribe`. This follows the principle of least surprise and ecosystem precedent (Yjs `observeDeep`, Vue `{ deep: true }`, MobX deep-by-default). The name `subscribeNode` communicates positive intent ("I want events at this node") rather than degradation — the `@kyneta/core` runtime's `listRegion` legitimately needs node-level subscriptions for structural `SequenceChange` events, and that's the correct semantic.
 
 `change` and `applyChanges` are symmetric duals: `change` produces `PendingChange[]`, `applyChanges` consumes them. Round-trip correctness is verified: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docA()` deep-equals `docB()`.
 
-All four functions discover capabilities via symbols on refs (`[TRANSACT]` for `change`/`applyChanges`, `[CHANGEFEED]` for `subscribe`/`subscribeTree`). All throw clear errors when the ref lacks the required symbol.
+All four functions discover capabilities via symbols on refs (`[TRANSACT]` for `change`/`applyChanges`, `[CHANGEFEED]` for `subscribe`/`subscribeNode`). All throw clear errors when the ref lacks the required symbol.
 
 #### Changefeed Transformer (`src/interpreters/with-changefeed.ts`)
 
@@ -490,7 +492,7 @@ An interpreter transformer: `withChangefeed(base)` takes `Interpreter<RefContext
 
 Requires `HasRead` (the `[CALL]` slot must be filled) because `.current` reads values through the carrier. Context type is `RefContext` (not `WritableContext`) — it duck-types for `prepare`/`flush` via `hasPreparePipeline()`, enabling both writable and read-only stacks.
 
-For leaf refs, attaches a plain `Changefeed` with `subscribe`. For composite refs (product, sequence, map), attaches a `ComposedChangefeed` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition).
+For leaf refs, attaches a plain `Changefeed` with `subscribe` (node-level). For composite refs (product, sequence, map), attaches a `ComposedChangefeed` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition). Note: the facade exports `subscribe` (tree-level, delegates to `subscribeTree`) and `subscribeNode` (node-level, delegates to `subscribe`) — see §Facade above for the naming rationale.
 
 **Read-only Moore machines.** A `Changefeed` defines a Moore machine: `.current` (output function) + `.subscribe` (transition observer). On read-only stacks (no `prepare`/`flush`), subscribers register but never fire — a valid static Moore machine. `.current` still works because it routes through the carrier's `[CALL]` slot.
 
@@ -712,7 +714,7 @@ packages/schema/
 │   ├── zero.ts                  # Zero.structural, Zero.overlay
 │   ├── describe.ts              # Human-readable schema tree view
 │   ├── interpret.ts             # Interpreter interface + catamorphism + Path types + phantom brands (ReadableBrand, WritableBrand, ChangefeedBrand) + Resolve<S, Brands> + ResolveCarrier<S, A> + InterpretBuilder<S, Ctx, Brands>
-│   ├── facade.ts                # Library-level change, applyChanges, subscribe, subscribeTree
+│   ├── facade.ts                # Library-level change, applyChanges, subscribe, subscribeNode
 │   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition (readable → ReadableBrand, writable → WritableBrand, changefeed → ChangefeedBrand)
 │   ├── combinators.ts           # product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)

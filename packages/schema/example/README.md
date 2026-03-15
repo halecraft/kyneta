@@ -1,6 +1,6 @@
 # @kyneta/schema — Example Mini-App
 
-A self-contained example that exercises the full `@kyneta/schema` API surface using direct library imports — no local facade, no wrapper class. Every function used here (`change`, `applyChanges`, `subscribe`, `subscribeTree`, `validate`, etc.) is imported from the library barrel.
+A self-contained example that exercises the full `@kyneta/schema` API surface using direct library imports — no local facade, no wrapper class. Every function used here (`change`, `applyChanges`, `subscribe`, `subscribeNode`, `validate`, etc.) is imported from the library barrel.
 
 ## Architecture
 
@@ -12,7 +12,7 @@ The interpreter stack decomposes into **five composable layers**, each independe
 | `readable` | Fills the `[CALL]` slot — `ref()` returns the current plain value | `RefContext { store }` |
 | `caching` | Identity-preserving memoization — `doc.name === doc.name` | `RefContext { store }` |
 | `writable` | Mutation methods — `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` | `WritableContext { store, dispatch, … }` |
-| `changefeed` | Observation protocol — `[CHANGEFEED]`, `subscribe`, `subscribeTree` | `RefContext` (works on read-only stacks too) |
+| `changefeed` | Observation protocol — `[CHANGEFEED]`, `subscribe`, `subscribeNode` | `RefContext` (works on read-only stacks too) |
 
 The pre-built `readable` layer bundles navigation + reading + caching in one step. Most users compose with the pre-built layers:
 
@@ -73,8 +73,8 @@ The example uses four library-level functions from `facade.ts` — no local wrap
 
 - **`change(ref, fn)`** — Runs mutations inside a transaction, returns `PendingChange[]`. Discovers the `WritableContext` via `ref[TRANSACT]`.
 - **`applyChanges(ref, ops, options?)`** — Applies captured changes to a (potentially different) document. Triggers the full prepare/flush pipeline. Supports `{ origin }` provenance tagging.
-- **`subscribe(ref, cb)`** — Node-level observation. Callback receives a `Changeset`.
-- **`subscribeTree(ref, cb)`** — Tree-level observation for composites (products, sequences, maps). Callback receives `Changeset<TreeEvent>` with relative paths.
+- **`subscribe(ref, cb)`** — Tree-level observation (the default). Callback receives `Changeset<TreeEvent>` with relative paths. Only works on composite refs (products, sequences, maps). Delegates to `[CHANGEFEED].subscribeTree`.
+- **`subscribeNode(ref, cb)`** — Node-level observation. Callback receives a `Changeset`. Works on all refs (leaf and composite). Delegates to `[CHANGEFEED].subscribe`.
 
 ### The Sections (~600 lines)
 
@@ -86,7 +86,7 @@ The example is organized into 14 sections:
 4. **Working with Collections** — Lists: `.at(i)`, `.get(i)`, `.length`, iteration, `.insert()`, `.delete()`. Records: `.at(key)`, `.get(key)`, `.has()`, `.keys()`, `.size`
 5. **Sums and Nullables** — Discriminated union with native narrowing (`if (doc.content.type === "text") { doc.content.body() }`). Nullable: set to value, read, set back to null.
 6. **Transactions with `change()`** — Library-level `change()` returns `PendingChange[]`. All five change types in one atomic transaction.
-7. **Observing Changes** — `subscribe(doc.stars, cb)` for leaf observation. `subscribeTree(doc, cb)` for tree observation with multi-level relative paths (`tasks[2].done`, `settings.fontSize`). Unsubscribe.
+7. **Observing Changes** — `subscribeNode(doc.stars, cb)` for leaf observation. `subscribe(doc, cb)` for tree observation with multi-level relative paths (`tasks[2].done`, `settings.fontSize`). Unsubscribe.
 8. **The Round-Trip: `change` → `applyChanges`** — Capture ops on docA, apply to docB with `{ origin: "sync" }`. Assert deep equality. The sync story in 10 lines.
 9. **Batched Notification and Origin** — `applyChanges` delivers one `Changeset` per affected path (not per change). Subscribers see fully-applied state. Origin provenance flows through.
 10. **Portable Refs** — Pass refs to generic functions (`tag(ref, label)`, `ensureMinimum(counter, min)`). Template literal coercion via `[Symbol.toPrimitive]`.
@@ -146,25 +146,25 @@ function change(ref, fn) {
 }
 ```
 
-### Observation via `subscribe` and `subscribeTree`
+### Observation via `subscribe` and `subscribeNode`
 
 Library-level functions — no raw `[CHANGEFEED]` access needed:
 
 ```ts
-// Node-level: fires only for changes at this exact ref
-const unsub = subscribe(doc.stars, (changeset) => {
-  console.log(changeset.changes, changeset.origin)
-})
-
-// Tree-level: fires for changes anywhere in the subtree
-subscribeTree(doc.settings, (changeset) => {
+// Tree-level (the default): fires for changes anywhere in the subtree
+const unsub = subscribe(doc.settings, (changeset) => {
   for (const event of changeset.changes) {
     console.log(event.path, event.change.type)
   }
 })
+
+// Node-level: fires only for changes at this exact ref
+subscribeNode(doc.stars, (changeset) => {
+  console.log(changeset.changes, changeset.origin)
+})
 ```
 
-`subscribe` is node-level (fires only for changes at that ref). `subscribeTree` fires for all descendant changes with relative paths. Both deliver `Changeset` — the protocol's unit of batched notification.
+`subscribe` is tree-level — it fires for all descendant changes with relative paths (the default, the thing you reach for first). `subscribeNode` is node-level (fires only for changes at that ref). Both deliver `Changeset` — the protocol's unit of batched notification. The facade delegates to the protocol: `subscribe` → `[CHANGEFEED].subscribeTree`, `subscribeNode` → `[CHANGEFEED].subscribe`.
 
 ### Read-Only Documents
 
@@ -206,7 +206,7 @@ The `changefeed` layer accepts `RefContext` — it works on read-only stacks too
 | `CALL` (`kyneta:call`) | `bottom.ts` | Controls what `carrier()` does — `withReadable` fills it |
 | `INVALIDATE` (`kyneta:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — prepare pipeline hook |
 | `TRANSACT` (`kyneta:transact`) | `writable.ts` | Context discovery — refs carry a reference to their `WritableContext` |
-| `CHANGEFEED` (`kyneta:changefeed`) | `with-changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it with `subscribeTree` |
+| `CHANGEFEED` (`kyneta:changefeed`) | `with-changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it (protocol: `subscribe` + `subscribeTree`) |
 
 ## The Point
 
@@ -222,8 +222,8 @@ doc.name.insert(...)          →  mutate naturally
 
 change(doc, fn)               →  batch mutations, get PendingChange[]
 applyChanges(doc, ops)        →  apply ops (from another doc, from sync, etc.)
-subscribe(ref, cb)            →  observe changes
-subscribeTree(ref, cb)        →  observe subtree changes
+subscribe(ref, cb)            →  observe all changes (tree-level default)
+subscribeNode(ref, cb)        →  observe this node only
 validate(schema, data)        →  validate & narrow types
 doc()                         →  snapshot
 ```
