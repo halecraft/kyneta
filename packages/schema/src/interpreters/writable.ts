@@ -419,10 +419,12 @@ export type Writable<S extends Schema> =
             S extends MapSchema<infer I>
             ? WritableMapRef<Plain<I>>
             : // --- Sum ---
-              S extends PositionalSumSchema
-              ? unknown
-              : S extends DiscriminatedSumSchema
-                ? unknown
+              S extends PositionalSumSchema<infer V>
+              ? V extends readonly [ScalarSchema<"null", any>, infer Inner extends Schema]
+                ? ScalarRef<Plain<Inner> | null>
+                : Writable<V[number]>
+              : S extends DiscriminatedSumSchema<infer _D, infer V>
+                ? Writable<V[number]>
                 : unknown
 
 // ---------------------------------------------------------------------------

@@ -241,10 +241,18 @@ log(`
 
 section(5, "Sums and Nullables");
 
+// doc.content is a proper TypeScript discriminated union of variant ref types.
+// At runtime, the ref dispatches to the active variant based on the store's
+// discriminant value. At the type level, variant-specific fields like .body
+// require narrowing. Since refs use call signatures (.type() not .type),
+// standard TS control-flow narrowing doesn't apply — cast to the known variant:
+const textContent = doc.content as Extract<typeof doc.content, { readonly body: unknown }>;
+
 log(`
     Discriminated union — variant dispatch based on store discriminant:
       Store has content.type = "text", so doc.content resolves to the text variant.
-      doc.content.body() → "${doc.content.body()}"
+      doc.content.type() → "${doc.content.type()}"
+      textContent.body() → "${textContent.body()}"
 `);
 
 // Nullable — null by default, set to a value, read, set back

@@ -609,9 +609,27 @@ The type hierarchy for collections:
 
 `WithTransact<T>` is a deprecated alias for `Wrap<T, "rw">`, kept for backward compatibility.
 
+#### Sum Type Resolution
+
+All four type-level interpretations handle both sum flavors:
+
+**Discriminated sums** — `DiscriminatedSumSchema<D, V>` resolves via `V[number]` dispatch. `Plain<S>` produces `Plain<V[number]>` (union of variant plain types). `Readable<S>`, `Writable<S>`, and `SchemaRef<S, M>` produce their respective `Xxx<V[number]>`. The result is a standard TypeScript discriminated union — variant-specific fields require narrowing via the discriminant. Since refs use call signatures for reading (`ref.type()` not `ref.type`), standard TS control-flow narrowing doesn't apply; use `Extract` or type assertions to access variant-specific fields.
+
+**Nullable sums** — `Schema.nullable(inner)` produces `PositionalSumSchema<[ScalarSchema<"null">, S]>`. Without special handling, distributing over `V[number]` would produce `ScalarRef<null> | ScalarRef<string>`, making `.set()` accept `never` (contravariant parameter intersection). All three ref-producing types detect the nullable pattern at the type level and collapse to a single ref with a nullable value domain:
+
+| Type | Nullable result |
+|---|---|
+| `SchemaRef<S, M>` | `Wrap<(() => Plain<Inner> \| null) & toPrimitive & ScalarRef<Plain<Inner> \| null>, M>` |
+| `Readable<S>` | `(() => Plain<Inner> \| null) & toPrimitive` |
+| `Writable<S>` | `ScalarRef<Plain<Inner> \| null>` |
+
+The nullable pattern match is: `V extends readonly [ScalarSchema<"null", any>, infer Inner extends Schema]` — the same shape as the runtime `isNullableSum` check. This is a shallow structural match (not recursive), so it does not affect TS2589 depth thresholds.
+
+**General positional sums** — `Schema.union(a, b, ...)` where the pattern is not nullable distributes normally: `SchemaRef<V[number], M>`, `Readable<V[number]>`, `Writable<V[number]>`. This produces a union of variant ref types where `.set()` parameter types intersect (contravariant). This is correct — for heterogeneous unions like `union(string, struct)`, the distributed union accurately reflects that each variant has a different mutation surface.
+
 ## Verified Properties
 
-The spike validates these properties via 965 schema tests + 869 core tests (zero `tsc` errors):
+The spike validates these properties via 1958 tests across 38 test files (1 pre-existing `tsc` TS2589 error in `validate.test.ts`, unrelated to this work):
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: requires `withCaching` — `doc.title === doc.title`, `seq.at(0) === seq.at(0)`, `map.at("k") === map.at("k")`. Without `withCaching`, each access produces a new ref.
@@ -650,6 +668,10 @@ The spike validates these properties via 965 schema tests + 869 core tests (zero
 35. **Fluent `.done()` inference**: `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()` infers `Ref<S>` without cast. `.with(readable).with(writable).done()` infers `RWRef<S>`. `.with(readable).done()` infers `RRef<S>`.
 36. **Honest transformer returns**: `withWritable` contributes `HasTransact` to `A`. `withChangefeed` contributes `HasChangefeed` to `A`. These are compile-time-verified via `expectTypeOf` on the interpreter return types.
 37. **`change()` callback inference**: `change(doc, d => { ... })` infers `d` from the doc ref type — no `(d: any)` annotation needed when `doc` is typed as `Ref<S>` or `RWRef<S>`.
+38. **Discriminated sum type resolution**: `Ref<DiscriminatedSumSchema>`, `RRef<DiscriminatedSumSchema>`, `RWRef<DiscriminatedSumSchema>`, and `Writable<DiscriminatedSumSchema>` all resolve to the union of variant ref types (not `unknown`). Variant-specific fields require narrowing. `Plain<DiscriminatedSumSchema>` was already correct.
+39. **Nullable sum type resolution**: `Ref<nullable(string)>` has `.set(string | null)` (not `never`). Call signature returns `string | null`. Nullable composites also work: `Ref<nullable(struct({ x: string() }))>` has `.set({ x: string } | null)` and call returns `{ x: string } | null`. The collapse applies across all tiers: `RRef`, `RWRef`, `Writable`.
+40. **General positional sum distribution preserved**: `Ref<union(string, number)>` distributes correctly — the nullable collapse does not over-match. `.set()` parameter type is `never` (contravariant intersection of `string & number`), confirming distribution rather than collapse.
+41. **Sum composition through products**: `Ref<struct({ bio: nullable(string) })>` — the `.bio` field correctly has `.set(string | null)`. `Ref<doc({ content: discriminatedUnion(...) })>` — `.content` resolves to the variant union (not `unknown`).
 
 ## File Map
 

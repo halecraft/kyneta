@@ -1704,3 +1704,164 @@ describe("type-level: fluent results are accepted by facade functions", () => {
     expectTypeOf(subscribeTree).toBeCallableWith(doc, () => {})
   })
 })
+
+// ===========================================================================
+// Sum type resolution — discriminated sums, nullable, positional sums
+// ===========================================================================
+
+// Shared schema fixtures for sum type tests
+const _discUnionSchema = Schema.discriminatedUnion("type", [
+  Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+  Schema.struct({ type: Schema.string("image"), url: Schema.string(), caption: Schema.string() }),
+])
+
+const _nullableStringSchema = Schema.nullable(Schema.string())
+
+describe("type-level: Ref<S> for discriminated sums", () => {
+  it("Ref<DiscriminatedSumSchema> resolves to union of variant product refs (not unknown)", () => {
+    type Result = Ref<typeof _discUnionSchema>
+    // Should NOT be unknown — discriminated sums now resolve
+    expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
+  })
+
+  it("Ref<DiscriminatedSumSchema> variant union narrows via discriminant field", () => {
+    type Result = Ref<typeof _discUnionSchema>
+    // The .type field should be accessible on the union (common to both variants)
+    type TypeField = Result extends { readonly type: infer T } ? T : never
+    expectTypeOf<TypeField>().not.toEqualTypeOf<never>()
+  })
+})
+
+describe("type-level: Ref<S> for nullable sums", () => {
+  it("Ref<nullable(string)> has .set(string | null) — not never", () => {
+    type Result = Ref<typeof _nullableStringSchema>
+    type SetParam = Result extends { set: (value: infer P) => void } ? P : never
+    expectTypeOf<SetParam>().toEqualTypeOf<string | null>()
+  })
+
+  it("Ref<nullable(string)> call signature returns string | null", () => {
+    type Result = Ref<typeof _nullableStringSchema>
+    type CallReturn = Result extends (...args: any[]) => infer R ? R : never
+    expectTypeOf<CallReturn>().toEqualTypeOf<string | null>()
+  })
+})
+
+describe("type-level: RRef<S> for discriminated sums", () => {
+  it("RRef<DiscriminatedSumSchema> resolves (not unknown)", () => {
+    type Result = RRef<typeof _discUnionSchema>
+    expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
+  })
+
+  it("RRef<nullable(string)> call signature returns string | null", () => {
+    type Result = RRef<typeof _nullableStringSchema>
+    type CallReturn = Result extends (...args: any[]) => infer R ? R : never
+    expectTypeOf<CallReturn>().toEqualTypeOf<string | null>()
+  })
+})
+
+describe("type-level: RWRef<S> for sums", () => {
+  it("RWRef<DiscriminatedSumSchema> resolves (not unknown)", () => {
+    type Result = RWRef<typeof _discUnionSchema>
+    expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
+  })
+
+  it("RWRef<nullable(string)> has .set(string | null) — not never", () => {
+    type Result = RWRef<typeof _nullableStringSchema>
+    type SetParam = Result extends { set: (value: infer P) => void } ? P : never
+    expectTypeOf<SetParam>().toEqualTypeOf<string | null>()
+  })
+})
+
+describe("type-level: Writable<S> for sums", () => {
+  it("Writable<nullable(string)> has .set(string | null)", () => {
+    type Result = Writable<typeof _nullableStringSchema>
+    type SetParam = Result extends { set: (value: infer P) => void } ? P : never
+    expectTypeOf<SetParam>().toEqualTypeOf<string | null>()
+  })
+
+  it("Writable<DiscriminatedSumSchema> resolves (not unknown)", () => {
+    type Result = Writable<typeof _discUnionSchema>
+    expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
+  })
+})
+
+describe("type-level: general positional sums must NOT collapse (collapse boundary)", () => {
+  it("Ref<union(string, number)> distributes — not a single collapsed ref", () => {
+    const unionSchema = Schema.union(Schema.string(), Schema.number())
+    type Result = Ref<typeof unionSchema>
+    // Should distribute: SchemaRef<string> | SchemaRef<number>
+    // Each arm has its own .set() — the union of .set(string) | .set(number)
+    // does NOT collapse into .set(string | number)
+    type SetParam = Result extends { set: (value: infer P) => void } ? P : never
+    // Contravariant parameter intersection: string & number = never
+    // This confirms distribution happened (NOT collapsed like nullable)
+    expectTypeOf<SetParam>().toEqualTypeOf<never>()
+  })
+
+  it("Writable<union(string, number)> resolves (not unknown) and distributes", () => {
+    const unionSchema = Schema.union(Schema.string(), Schema.number())
+    type Result = Writable<typeof unionSchema>
+    // Should NOT be unknown — was unknown before the fix
+    expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
+    // Should distribute: ScalarRef<string> | ScalarRef<number>
+    type SetParam = Result extends { set: (value: infer P) => void } ? P : never
+    // Contravariant intersection confirms distribution
+    expectTypeOf<SetParam>().toEqualTypeOf<never>()
+  })
+})
+
+describe("type-level: nullable composite — inner is a product, not a scalar", () => {
+  const nullableStructSchema = Schema.nullable(Schema.struct({
+    x: Schema.string(),
+  }))
+
+  it("Ref<nullable(struct({ x: string() }))> call returns { x: string } | null", () => {
+    type Result = Ref<typeof nullableStructSchema>
+    type CallReturn = Result extends (...args: any[]) => infer R ? R : never
+    expectTypeOf<CallReturn>().toEqualTypeOf<{ x: string } | null>()
+  })
+
+  it("Ref<nullable(struct({ x: string() }))> has .set({ x: string } | null)", () => {
+    type Result = Ref<typeof nullableStructSchema>
+    type SetParam = Result extends { set: (value: infer P) => void } ? P : never
+    expectTypeOf<SetParam>().toEqualTypeOf<{ x: string } | null>()
+  })
+})
+
+describe("type-level: sums nested inside products (composition)", () => {
+  it("Ref<struct({ bio: nullable(string) })> — .bio has .set(string | null)", () => {
+    const s = Schema.struct({
+      bio: Schema.nullable(Schema.string()),
+    })
+    type Doc = Ref<typeof s>
+    type Bio = Doc["bio"]
+    type SetParam = Bio extends { set: (value: infer P) => void } ? P : never
+    expectTypeOf<SetParam>().toEqualTypeOf<string | null>()
+  })
+
+  it("Ref<doc({ content: discriminatedUnion(...) })> — .content resolves", () => {
+    const s = Schema.doc({
+      content: Schema.discriminatedUnion("type", [
+        Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+        Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+      ]),
+    })
+    type Doc = Ref<typeof s>
+    type Content = Doc["content"]
+    expectTypeOf<Content>().not.toEqualTypeOf<unknown>()
+  })
+})
+
+describe("type-level: Plain<S> regression guards for sums", () => {
+  it("Plain<nullable(string)> = string | null", () => {
+    type Result = Plain<typeof _nullableStringSchema>
+    expectTypeOf<Result>().toEqualTypeOf<string | null>()
+  })
+
+  it("Plain<DiscriminatedSumSchema> = union of variant plain types", () => {
+    type Result = Plain<typeof _discUnionSchema>
+    // Should be the union of the two variant product plains
+    type Expected = { type: "text"; body: string } | { type: "image"; url: string; caption: string }
+    expectTypeOf<Result>().toEqualTypeOf<Expected>()
+  })
+})

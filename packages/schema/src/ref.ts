@@ -180,9 +180,18 @@ export type SchemaRef<S extends Schema, M extends RefMode> =
               >
             : // --- Sum ---
               S extends PositionalSumSchema<infer V>
-              ? SchemaRef<V[number], M>
-              : S extends DiscriminatedSumSchema
-                ? unknown
+              ? V extends readonly [ScalarSchema<"null", any>, infer Inner extends Schema]
+                ? // Nullable sugar: collapse to a single ref with nullable value domain
+                  Wrap<
+                    (() => Plain<Inner> | null) &
+                    { [Symbol.toPrimitive](hint: string): Plain<Inner> | null | string } &
+                    ScalarRef<Plain<Inner> | null>,
+                    M
+                  >
+                : // General positional sum: distribute over variant union
+                  SchemaRef<V[number], M>
+              : S extends DiscriminatedSumSchema<infer _D, infer V>
+                ? SchemaRef<V[number], M>
                 : unknown
 
 // ---------------------------------------------------------------------------

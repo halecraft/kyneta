@@ -122,7 +122,9 @@ export type Readable<S extends Schema> =
             ? ReadableMapRef<Readable<I>, Plain<I>>
             : // --- Sum ---
               S extends PositionalSumSchema<infer V>
-              ? Readable<V[number]>
-              : S extends DiscriminatedSumSchema
-                ? unknown
+              ? V extends readonly [ScalarSchema<"null", any>, infer Inner extends Schema]
+                ? (() => Plain<Inner> | null) & { [Symbol.toPrimitive](hint: string): Plain<Inner> | null | string }
+                : Readable<V[number]>
+              : S extends DiscriminatedSumSchema<infer _D, infer V>
+                ? Readable<V[number]>
                 : unknown
