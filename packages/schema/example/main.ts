@@ -54,6 +54,7 @@ import {
 import type {
 	Ref,
 	RRef,
+	Seed,
 	Schema as SchemaType,
 	AnnotatedSchema,
 	Changeset,
@@ -113,8 +114,9 @@ section(2, "Create a Document");
 
 // Write createDoc once — use it with any schema.
 // (note: interface call signature avoids TS infinite recursion)
-// (note: seed is Record<string, unknown> rather than Partial<Plain<S>>
-//  because Plain<S> triggers TS2589 at call sites with complex schemas)
+// (note: seed is Record<string, unknown> because Seed<S> triggers TS2589
+//  as a generic parameter. Use `satisfies Seed<typeof MySchema>` at call
+//  sites for type-safe seeds — see baseSeed below for an example.)
 interface CreateDoc {
 	<S extends SchemaType>(schema: S, seed?: Record<string, unknown>): Ref<S>;
 }
@@ -372,8 +374,8 @@ log(`
 
 const baseSeed = {
 	name: "Shared Doc",
-	content: { type: "text", body: "" },
-};
+	content: { type: "text" as const, body: "" },
+} satisfies Seed<typeof ProjectSchema>;
 
 const docA = createDoc(ProjectSchema, baseSeed);
 const docB = createDoc(ProjectSchema, baseSeed);

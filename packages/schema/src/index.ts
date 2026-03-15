@@ -206,7 +206,7 @@ export type {
 export type { SchemaRef, RefMode, Wrap, RRef, RWRef, Ref, WithTransact } from "./ref.js"
 
 // Shared interpreter types (canonical location)
-export type { RefContext, Plain } from "./interpreter-types.js"
+export type { RefContext, Plain, Seed } from "./interpreter-types.js"
 
 // Validate interpreter — schema-driven validation with collecting errors
 export {

@@ -44,6 +44,7 @@ import {
   type HasCaching,
   type HasNavigation,
   type Plain,
+  type Seed,
   type ScalarPlain,
   type ScalarRef,
   type TextRef,
@@ -1921,5 +1922,169 @@ describe("type-level: Plain<S> regression guards for sums", () => {
     // Should be the union of the two variant product plains
     type Expected = { type: "text"; body: string } | { type: "image"; url: string; caption: string }
     expectTypeOf<Result>().toEqualTypeOf<Expected>()
+  })
+})
+
+// ===========================================================================
+// Seed<S> — deep-partial plain type for document seeds
+// ===========================================================================
+
+describe("type-level: Seed<S> for leaf annotations", () => {
+  it("Seed<text()> = string", () => {
+    type Result = Seed<ReturnType<typeof Schema.annotated<"text">>>
+    expectTypeOf<Result>().toEqualTypeOf<string>()
+  })
+
+  it("Seed<counter()> = number", () => {
+    type Result = Seed<ReturnType<typeof Schema.annotated<"counter">>>
+    expectTypeOf<Result>().toEqualTypeOf<number>()
+  })
+})
+
+describe("type-level: Seed<S> for scalars", () => {
+  it("Seed<string()> = string", () => {
+    type Result = Seed<ReturnType<typeof Schema.string>>
+    expectTypeOf<Result>().toEqualTypeOf<string>()
+  })
+
+  it("Seed<number(1,2,3)> = 1 | 2 | 3 (constrained scalar preserved)", () => {
+    const s = Schema.number(1, 2, 3)
+    type Result = Seed<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<1 | 2 | 3>()
+  })
+
+  it("Seed<boolean()> = boolean", () => {
+    type Result = Seed<ReturnType<typeof Schema.boolean>>
+    expectTypeOf<Result>().toEqualTypeOf<boolean>()
+  })
+})
+
+describe("type-level: Seed<S> for products (all keys optional)", () => {
+  it("Seed<struct({name: string(), active: boolean()})> has optional keys", () => {
+    const s = Schema.struct({
+      name: Schema.string(),
+      active: Schema.boolean(),
+    })
+    type Result = Seed<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{
+      name?: string
+      active?: boolean
+    }>()
+  })
+
+  it("Seed<doc({title: text(), count: counter()})> has optional keys", () => {
+    const s = Schema.doc({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
+    })
+    type Result = Seed<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{
+      title?: string
+      count?: number
+    }>()
+  })
+
+  it("nested products have optional keys at every level", () => {
+    const s = Schema.struct({
+      outer: Schema.struct({
+        inner: Schema.string(),
+      }),
+    })
+    type Result = Seed<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{
+      outer?: { inner?: string }
+    }>()
+  })
+})
+
+describe("type-level: Seed<S> for collections", () => {
+  it("Seed<list(string())> = string[] (atomic — not optional items)", () => {
+    const s = Schema.list(Schema.string())
+    type Result = Seed<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<string[]>()
+  })
+
+  it("Seed<record(number())> = { [key: string]: number }", () => {
+    const s = Schema.record(Schema.number())
+    type Result = Seed<typeof s>
+    expectTypeOf<Result>().toEqualTypeOf<{ [key: string]: number }>()
+  })
+})
+
+describe("type-level: Seed<S> for sums (delegates to Plain)", () => {
+  it("Seed<nullable(string())> = string | null", () => {
+    type Result = Seed<typeof _nullableStringSchema>
+    expectTypeOf<Result>().toEqualTypeOf<string | null>()
+  })
+
+  it("Seed<discriminatedUnion> = union of variant plain types", () => {
+    type Result = Seed<typeof _discUnionSchema>
+    type Expected = { type: "text"; body: string } | { type: "image"; url: string; caption: string }
+    expectTypeOf<Result>().toEqualTypeOf<Expected>()
+  })
+})
+
+describe("type-level: Seed<S> on complex schema (TS2589 regression)", () => {
+  // This is the schema that triggers TS2589 with Partial<Plain<S>>.
+  // If this block compiles, Seed<S> stays within the depth budget.
+  const complexSchema = Schema.doc({
+    name: Schema.annotated("text"),
+    stars: Schema.annotated("counter"),
+    tasks: Schema.list(
+      Schema.struct({
+        title: Schema.string(),
+        done: Schema.boolean(),
+        priority: Schema.number(1, 2, 3),
+      }),
+    ),
+    settings: Schema.struct({
+      darkMode: Schema.boolean(),
+      fontSize: Schema.number(),
+    }),
+    content: Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.annotated("text") }),
+      Schema.struct({
+        type: Schema.string("image"),
+        url: Schema.string(),
+        caption: Schema.annotated("text"),
+      }),
+    ]),
+    bio: Schema.nullable(Schema.string()),
+    labels: Schema.record(Schema.string()),
+  })
+
+  it("resolves to an object type without TS2589", () => {
+    type Result = Seed<typeof complexSchema>
+    // Force full evaluation — if TS2589 occurs, this line fails to compile
+    expectTypeOf<Result>().toBeObject()
+  })
+
+  it("top-level product keys are optional", () => {
+    type Result = Seed<typeof complexSchema>
+    expectTypeOf<Result>().toMatchTypeOf<{ name?: string; stars?: number }>()
+  })
+
+  it("nested product keys are optional", () => {
+    type Result = Seed<typeof complexSchema>
+    expectTypeOf<Result>().toMatchTypeOf<{ settings?: { darkMode?: boolean } }>()
+  })
+
+  // NOTE: Seed<S> triggers TS2589 when used as a generic function parameter
+  // (e.g. `function f<S>(schema: S, seed?: Seed<S>)`). This is the same
+  // limitation as Partial<Plain<S>>. Seed<S> is designed for direct type
+  // annotation and `satisfies` at call sites — not generic signatures.
+
+  it("catches excess properties via direct annotation", () => {
+    type Result = Seed<typeof complexSchema>
+    // { named: string } is not assignable — "named" is not a key in the schema
+    expectTypeOf<{ named: string }>().not.toMatchTypeOf<Result>()
+  })
+
+  it("catches wrong value types via direct annotation", () => {
+    type Result = Seed<typeof complexSchema>
+    // name must be string, not number
+    expectTypeOf<{ name: number }>().not.toMatchTypeOf<Result>()
+    // stars must be number, not string
+    expectTypeOf<{ stars: string }>().not.toMatchTypeOf<Result>()
   })
 })

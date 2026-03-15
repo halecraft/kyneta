@@ -574,6 +574,8 @@ Several recursive conditional types map schema types to their corresponding valu
 
 **`Plain<S>`** — the plain JavaScript/JSON type. `Plain<ScalarSchema<"string", "a" | "b">>` = `"a" | "b"`. `Plain<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ x: number }`. Used for `toJSON()` return types, validation result types, and serialization boundaries.
 
+**`Seed<S>`** — the deep-partial plain type for document seeds. `Seed<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ x?: number }`. Structurally equivalent to a recursive `DeepPartial<Plain<S>>` but decomposed into helper types (`SeedFields`, `SeedAnnotated`) to stay within TS's conditional type depth budget — `Partial<Plain<S>>` triggers TS2589 on complex schemas. Products have all keys optional; scalars and leaf annotations resolve to their `Plain` value type; sequences, maps, and sums delegate to `Plain<S>` (seeds at these positions are atomic — you provide the full value or omit it). Used for seed parameters via `satisfies Seed<typeof mySchema>` at call sites. **Limitation:** `Seed<S>` triggers TS2589 when used as a generic function parameter (e.g. `<S>(schema: S, seed?: Seed<S>)`) — use it for direct type annotations and `satisfies`, not in generic signatures.
+
 **`Readable<S>`** — the callable ref type for read-only stacks. `Readable<ScalarSchema<"number">>` = `(() => number) & { [Symbol.toPrimitive]: ... }`. Used to type refs from `withCaching(withReadable(withNavigation(bottomInterpreter)))` — navigation + reading, no mutation.
 
 **`Writable<S>`** — the mutation-only ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>` (just `.set()`). `Writable<AnnotatedSchema<"text">>` = `TextRef` (just `.insert()`, `.delete()`, `.update()`). `SequenceRef` is mutation-only (`.push()`, `.insert()`, `.delete()`) — navigation lives in `NavigableSequenceRef` / `ReadableSequenceRef`.
@@ -718,7 +720,7 @@ packages/schema/
 │   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition (readable → ReadableBrand, writable → WritableBrand, changefeed → ChangefeedBrand)
 │   ├── combinators.ts           # product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
-│   ├── interpreter-types.ts     # RefContext, Plain<S> — shared types across interpreters
+│   ├── interpreter-types.ts     # RefContext, Plain<S>, Seed<S> — shared types across interpreters
 │   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore, pathKey, dispatchSum
 │   ├── ref.ts                   # SchemaRef<S,M> parameterized core + RRef<S>, RWRef<S>, Ref<S> tier aliases + Wrap<T,M>, RefMode + WithTransact<T> (deprecated alias)
 │   ├── interpreters/
