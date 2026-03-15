@@ -228,4 +228,4 @@ validate(schema, data)        →  validate & narrow types
 doc()                         →  snapshot
 ```
 
-This is the same API shape as `@loro-extended/change` — but backed by the clean, mathematically rigorous schema algebra instead of 10+ parallel `switch` dispatch sites.
+This is the same API shape as the predecessor shape system — but backed by the clean, mathematically rigorous schema algebra instead of 10+ parallel `switch` dispatch sites.

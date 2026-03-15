@@ -3,7 +3,7 @@
 // Pure function over schema data. No interpreter machinery, no context,
 // no dependencies beyond the schema types themselves.
 //
-//   import { describe } from "@loro-extended/schema"
+//   import { describe } from "@kyneta/schema"
 //   console.log(describe(mySchema))
 //
 // Output example:

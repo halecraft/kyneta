@@ -258,6 +258,10 @@ This means you cannot currently run Kyneta code without compilation.
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Example App
+
+See [`examples/recipe-book/`](../../examples/recipe-book/) — a runnable example demonstrating SSR, hydration, multi-tab sync via WebSocket, and all four delta kinds (text, sequence, replace, increment).
+
 ## Running Tests
 
 ```bash
@@ -288,7 +292,7 @@ expect(scope.id).toBe(1)
 The reactive protocol has been unified from two symbols (`REACTIVE` + `SNAPSHOT`) to a single `CHANGEFEED` symbol from `@kyneta/schema`:
 
 ```typescript
-// Old (two-symbol design from @loro-extended/reactive)
+// Old (two-symbol design from the predecessor reactive package)
 ref[REACTIVE](ref, callback)   // subscribe
 ref[SNAPSHOT](ref)              // read current value
 

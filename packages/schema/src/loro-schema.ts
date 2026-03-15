@@ -7,7 +7,7 @@
 //
 // Loro developers import only LoroSchema — one namespace, one import:
 //
-//   import { LoroSchema } from "@loro-extended/schema"
+//   import { LoroSchema } from "@kyneta/schema"
 //
 //   LoroSchema.doc({
 //     title: LoroSchema.text(),

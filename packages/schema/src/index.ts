@@ -1,4 +1,4 @@
-// @loro-extended/schema — pure structure, pluggable interpretations
+// @kyneta/schema — pure structure, pluggable interpretations
 //
 // This barrel re-exports the three core modules that make up the
 // schema interpreter algebra spike.

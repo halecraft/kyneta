@@ -1451,7 +1451,86 @@ Delta regions compose naturally:
 │  │  │  └─────────────────────────────────┘    │  │   │
 │  │  └─────────────────────────────────────────┘  │   │
 │  └────────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────┘
 ```
+
+## Example Architecture
+
+The `examples/recipe-book/` app is the reference implementation for the patterns described above. It exercises all four delta kinds, three component complexity levels, and the full SSR → hydration → sync lifecycle.
+
+### Three-Flow SSR
+
+Traditional SSR ships rendered HTML plus the full serialized state for hydration. Kyneta's approach decomposes this into three independent flows:
+
+| # | Flow | Size | Delivery | Purpose |
+|---|------|------|----------|---------|
+| 1 | **Rendered HTML** | O(view) | Inline in response body | Immediate visual content — no JS execution needed |
+| 2 | **Frontier** | O(1) | `<meta name="kyneta-version" content="N">` | Version integer: what the server already rendered |
+| 3 | **Sync bootstrap** | O(missed ops) | WebSocket `{ type: "delta", ops, version }` | Operations since the frontier — async, post-hydration |
+
+The key insight: **Flow 2 decouples Flow 1 from Flow 3.** The client reads the frontier from the `<meta>` tag, sends it to the server as the starting point, and only receives operations that occurred *after* the SSR snapshot. If nothing changed between SSR and WebSocket connection, the delta is empty.
+
+This eliminates the "double data" problem (serialized state duplicating what's already in the HTML) and makes the SSR payload proportional to the *view*, not the *state*.
+
+### Frontier-Based Sync Model
+
+The recipe-book uses the degenerate single-peer case of a version vector:
+
+```
+version(doc) → number          Monotonic integer, increments on each flush cycle
+delta(doc, fromVersion) → ops  log.slice(fromVersion).flat() → PendingChange[]
+```
+
+Sync state is stored per-document via `WeakMap<object, SyncState>`:
+
+```typescript
+interface SyncState {
+  version: number
+  log: PendingChange[][]   // log[i] = batch from version i → i+1
+}
+```
+
+The version counter increments on every `subscribe(doc, ...)` delivery — both local `change()` calls and remote `applyChanges()` calls. This is correct for the single-server-authority model.
+
+**Upgrade path:** The integer becomes a version vector, `delta()` computes the set difference, and the wire format (`{ type, ops, version }`) remains compatible. The same `PendingChange` type (`{ path: PathSegment[], change: ChangeBase }`) carries operations regardless of the sync topology.
+
+### The `createApp(doc)` Factory Pattern
+
+The app factory is a pure builder function:
+
+```typescript
+function createApp(doc: RecipeBookDoc) {
+  const filterText = state("")       // local UI state
+  const veggieOnly = state(false)    // local UI state
+
+  return div({ class: "recipe-book" }, () => {
+    h1(doc.title)                    // textRegion (delta: text)
+    Toolbar({ doc, filterText, veggieOnly })
+    for (const recipe of doc.recipes) {  // listRegion (delta: sequence)
+      RecipeCard({ recipe, onRemove: ... })
+    }
+  })
+}
+```
+
+Key properties:
+
+- **Does not own the document lifecycle** — server and client both call it with their own doc instance
+- **Isomorphic** — the Kyneta compiler transforms the same source to DOM factories (client, via `target: "dom"`) or HTML accumulators (server, via `target: "html"` auto-detected from Vite's `transformOptions.ssr`)
+- **Does not know about transport** — mutations via `change()` are forwarded by the caller's sync wiring, not the app
+
+### Schema / Local-State Boundary
+
+The recipe-book demonstrates a motivated boundary between two kinds of reactive state:
+
+| Kind | Created by | Reactive? | Synced? | Example |
+|------|-----------|-----------|---------|---------|
+| **Document state** | `createDoc(schema, seed)` → `Ref<S>` | Yes (`[CHANGEFEED]`) | Yes (via `PendingChange[]`) | Recipe data, favorites counter |
+| **Local state** | `state(initial)` → `LocalRef<T>` | Yes (`[CHANGEFEED]`) | No | Search filter, veggie-only toggle |
+
+Both participate in the `[CHANGEFEED]` protocol, so the compiler treats them identically for reactive detection — the same `valueRegion`, `conditionalRegion`, etc. are emitted regardless of the state's provenance. The distinction is purely at the sync layer: `subscribe(doc, ...)` captures document mutations as `PendingChange[]` for WebSocket transport; `LocalRef` changes stay local.
+
+The boundary is domain-motivated: filter preferences are per-user-session (local), while recipe data is shared (document). This pattern generalizes to any app with collaborative + private state.
+
 
 Each region independently subscribes to its own reactive source. Parent disposal cascades to children via the `Scope` tree. Template cloning provides the static structure; delta regions fill in the dynamic holes.
