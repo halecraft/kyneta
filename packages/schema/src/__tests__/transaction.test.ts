@@ -3,20 +3,13 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  bottomInterpreter,
-  withReadable,
-  withNavigation,
-  withCaching,
-  withWritable,
   createWritableContext,
-
-  withChangefeed,
+  readable,
+  writable,
+  changefeed,
   TRANSACT,
   hasTransact,
 } from "../index.js"
-import type { Ref } from "../index.js"
-
-const writableInterpreter = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
 
 // ---------------------------------------------------------------------------
 // Shared fixture
@@ -30,7 +23,7 @@ const pointSchema = Schema.doc({
 function createPointDoc(seed: Record<string, unknown> = { x: 0, y: 0 }) {
   const store = { ...seed }
   const ctx = createWritableContext(store)
-  const doc = interpret(pointSchema, writableInterpreter, ctx) as unknown as Ref<typeof pointSchema>
+  const doc = interpret(pointSchema, ctx).with(readable).with(writable).done()
   return { store, ctx, doc }
 }
 
@@ -192,8 +185,7 @@ describe("transaction: commit delivers batched changefeed notifications", () => 
   it("changefeed subscribers receive exactly one Changeset at commit time", () => {
     const store = { x: 0, y: 0 }
     const ctx = createWritableContext(store)
-    const enriched = withChangefeed(writableInterpreter)
-    const doc = interpret(pointSchema, enriched, ctx) as unknown as Ref<typeof pointSchema>
+    const doc = interpret(pointSchema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const CF_SYM = Symbol.for("kyneta:changefeed")
     const xChangesets: unknown[] = []

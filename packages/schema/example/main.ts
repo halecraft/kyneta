@@ -59,8 +59,6 @@ import {
 } from "../src/index.js";
 
 import type {
-	Ref,
-	Readable,
 	Plain,
 	RefContext,
 	WritableContext,
@@ -144,7 +142,7 @@ const doc = interpret(ProjectSchema, ctx)
 	.with(readable)
 	.with(writable)
 	.with(changefeed)
-	.done() as Ref<typeof ProjectSchema>;
+	.done();
 
 log(`
     const store = Zero.overlay(seed, Zero.structural(schema), schema)
@@ -280,7 +278,7 @@ log(`
     All five change types in one atomic transaction:
 `);
 
-const ops = change(doc, (d: any) => {
+const ops = change(doc, (d) => {
 	d.name.insert(0, "✨ "); // text
 	d.stars.increment(10); // increment
 	d.tasks.push({ title: "Ship it!", done: false, priority: 3 }); // sequence
@@ -382,7 +380,7 @@ function createFreshDoc(docSeed: Record<string, unknown> = {}) {
 		.with(readable)
 		.with(writable)
 		.with(changefeed)
-		.done() as Ref<typeof ProjectSchema>;
+		.done();
 }
 
 const baseSeed = {
@@ -398,7 +396,7 @@ const docBChangesets: Changeset[] = [];
 subscribe(docB.stars, (cs) => docBChangesets.push(cs));
 
 // Capture changes on docA
-const roundTripOps = change(docA, (d: any) => {
+const roundTripOps = change(docA, (d) => {
 	d.name.insert(d.name().length, " v2");
 	d.stars.increment(100);
 	d.tasks.push({ title: "Review", done: false, priority: 1 });
@@ -608,7 +606,7 @@ log(`
 	const roCtx: RefContext = { store: roStore };
 	const roDoc = interpret(ProjectSchema, roCtx)
 		.with(readable)
-		.done() as Readable<typeof ProjectSchema>;
+		.done();
 
 	log(`
     Read-only — remove layers, not permissions:

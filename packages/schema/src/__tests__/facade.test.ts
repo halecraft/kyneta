@@ -3,12 +3,6 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  bottomInterpreter,
-  withReadable,
-  withNavigation,
-  withCaching,
-  withWritable,
-  withChangefeed,
   createWritableContext,
   change,
   applyChanges,
@@ -20,22 +14,16 @@ import {
   sequenceChange,
   textChange,
   incrementChange,
+  readable,
+  writable,
+  changefeed,
 } from "../index.js"
 import type {
-  Ref,
   Changeset,
   TreeEvent,
   ChangeBase,
   PendingChange,
 } from "../index.js"
-
-// ===========================================================================
-// Composed interpreter stack
-// ===========================================================================
-
-const fullInterpreter = withChangefeed(
-  withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))),
-)
 
 // ===========================================================================
 // Shared fixtures
@@ -70,7 +58,7 @@ function createSeed() {
 function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = { ...createSeed(), ...storeOverrides }
   const ctx = createWritableContext(store)
-  const doc = interpret(chatDocSchema, fullInterpreter, ctx) as unknown as Ref<typeof chatDocSchema>
+  const doc = interpret(chatDocSchema, ctx).with(readable).with(writable).with(changefeed).done()
   return { store, ctx, doc }
 }
 

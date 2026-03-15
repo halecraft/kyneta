@@ -22,7 +22,6 @@ import {
 import type {
   Readable,
   Writable,
-  Ref,
   InterpreterLayer,
   InterpretBuilder,
   WritableContext,
@@ -95,7 +94,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
     const doc = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
-      .done() as Ref<typeof pointSchema>
+      .done()
 
     doc.x.set(42)
     expect(store.x).toBe(42)
@@ -118,7 +117,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
       .with(readable)
       .with(writable)
       .with(changefeed)
-      .done() as Ref<typeof chatDocSchema>
+      .done()
 
     // Readable
     expect(doc.title()).toBe("Hello")
@@ -160,7 +159,7 @@ describe("fluent: transactions", () => {
       .with(readable)
       .with(writable)
       .with(changefeed)
-      .done() as Ref<typeof pointSchema>
+      .done()
 
     // TRANSACT points to the correct context
     expect(doc.x[TRANSACT]).toBe(ctx)
@@ -206,7 +205,7 @@ describe("fluent: builder branching", () => {
     const mutable = interpret(pointSchema, ctx2)
       .with(readable)
       .with(writable)
-      .done() as Ref<typeof pointSchema>
+      .done()
 
     // Read-only branch must NOT have gained .set() from the writable branch
     expect(readOnly.x.set).toBeUndefined()

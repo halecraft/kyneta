@@ -7,6 +7,9 @@ import {
   writable,
   changefeed,
   createWritableContext,
+  change,
+  subscribe,
+  subscribeTree,
   bottomInterpreter,
   withNavigation,
   withReadable,
@@ -272,7 +275,7 @@ describe("type-level: nested composition preserves types end-to-end", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Phase 2: Writable<S> — the type-level catamorphism
+// Writable<S> — the type-level catamorphism
 // ---------------------------------------------------------------------------
 
 describe("type-level: ScalarPlain maps scalar kinds to TS types", () => {
@@ -757,7 +760,7 @@ describe("type-level: Plain<S> end-to-end Loro schema", () => {
 })
 
 // ===========================================================================
-// Constrained scalar tests — Phase 2
+// Constrained scalar tests
 // ===========================================================================
 
 describe("type-level: Plain<S> for constrained scalars", () => {
@@ -1002,7 +1005,7 @@ describe("type-level: LoroSchema.plain.* constructors enforce PlainSchema constr
 })
 
 // ===========================================================================
-// NavigableSequenceRef / NavigableMapRef — Phase 3 type hierarchy
+// NavigableSequenceRef / NavigableMapRef type hierarchy
 // ===========================================================================
 
 describe("type-level: NavigableSequenceRef extends correctly", () => {
@@ -1045,7 +1048,7 @@ describe("type-level: SequenceRef is mutation-only", () => {
 })
 
 // ===========================================================================
-// Ref<S> — unified recursive type (Phase 3, Task 3.3)
+// Ref<S> — unified recursive type
 // ===========================================================================
 
 describe("type-level: Ref<S> for scalars", () => {
@@ -1614,5 +1617,90 @@ describe("type-level: InterpretBuilder<S, Ctx, Brands>", () => {
     const result = interpret(docSchema, ctx).with(readable).done()
     // RRef<S> = Readable<S> — should be callable
     expectTypeOf(result.title).toBeCallableWith()
+  })
+})
+
+// ===========================================================================
+// change() callback inference from fluent-built docs
+// ===========================================================================
+
+describe("type-level: change() callback infers draft type from fluent-built doc", () => {
+  const docSchema = LoroSchema.doc({
+    title: LoroSchema.text(),
+    count: LoroSchema.counter(),
+    items: Schema.list(Schema.struct({ name: Schema.string() })),
+    settings: LoroSchema.plain.struct({
+      darkMode: LoroSchema.plain.boolean(),
+    }),
+  })
+
+  it("full-stack .done() result is accepted by change() without cast", () => {
+    const ctx = createWritableContext({
+      title: "", count: 0, items: [], settings: { darkMode: false },
+    })
+    const doc = interpret(docSchema, ctx)
+      .with(readable).with(writable).with(changefeed).done()
+
+    // change() should accept doc without any cast — D is inferred as Ref<S>
+    expectTypeOf(change).toBeCallableWith(doc, () => {})
+  })
+
+  it("callback parameter d has typed field access (not any)", () => {
+    const ctx = createWritableContext({
+      title: "", count: 0, items: [], settings: { darkMode: false },
+    })
+    const doc = interpret(docSchema, ctx)
+      .with(readable).with(writable).with(changefeed).done()
+
+    // The callback d should have the same type as doc — verify typed methods exist.
+    // If d were `any`, these assertions would vacuously pass, so we also
+    // check that a non-existent field is NOT present.
+    change(doc, (d) => {
+      expectTypeOf(d.title.insert).toBeFunction()
+      expectTypeOf(d.count.increment).toBeFunction()
+      expectTypeOf(d.items.push).toBeFunction()
+      expectTypeOf(d.settings.darkMode.set).toBeFunction()
+      // d should NOT have arbitrary fields — proves it's not `any`
+      type HasBogus = typeof d extends { bogusField: any } ? true : false
+      expectTypeOf<HasBogus>().toEqualTypeOf<false>()
+    })
+  })
+
+  it("RWRef .done() result is accepted by change() (has HasTransact)", () => {
+    const ctx = createWritableContext({
+      title: "", count: 0, items: [], settings: { darkMode: false },
+    })
+    const doc = interpret(docSchema, ctx)
+      .with(readable).with(writable).done()
+
+    // RWRef<S> has HasTransact — change() should accept it
+    expectTypeOf(change).toBeCallableWith(doc, () => {})
+  })
+})
+
+// ===========================================================================
+// Fluent .done() results satisfy facade function signatures
+// ===========================================================================
+
+describe("type-level: fluent results are accepted by facade functions", () => {
+  const schema = Schema.doc({ x: Schema.number() })
+
+  it("subscribe() accepts Ref<S> field from full-stack .done()", () => {
+    const ctx = createWritableContext({ x: 0 })
+    const doc = interpret(schema, ctx)
+      .with(readable).with(writable).with(changefeed).done()
+
+    // subscribe requires HasChangefeed — Ref<S> children have it
+    expectTypeOf(subscribe).toBeCallableWith(doc.x, () => {})
+  })
+
+  it("subscribeTree() accepts Ref<S> from full-stack .done()", () => {
+    const ctx = createWritableContext({ x: 0 })
+    const doc = interpret(schema, ctx)
+      .with(readable).with(writable).with(changefeed).done()
+
+    // subscribeTree requires HasComposedChangefeed on composite refs
+    // doc is a product ref — should be accepted
+    expectTypeOf(subscribeTree).toBeCallableWith(doc, () => {})
   })
 })

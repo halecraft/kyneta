@@ -3,32 +3,20 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  bottomInterpreter,
-  withReadable,
-  withNavigation,
-  withCaching,
-  withWritable,
-  withChangefeed,
   createWritableContext,
   hasChangefeed,
   hasComposedChangefeed,
   CHANGEFEED,
   TRANSACT,
+  readable,
+  writable,
+  changefeed,
 } from "../index.js"
 import type {
-  Ref,
   TreeEvent,
   Changeset,
   ChangeBase,
 } from "../index.js"
-
-// ===========================================================================
-// Composed interpreter stack
-// ===========================================================================
-
-const fullInterpreter = withChangefeed(
-  withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))),
-)
 
 // ===========================================================================
 // Shared fixtures
@@ -60,7 +48,7 @@ function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = createWritableContext(store)
-  const doc = interpret(chatDocSchema, fullInterpreter, ctx) as unknown as Ref<typeof chatDocSchema>
+  const doc = interpret(chatDocSchema, ctx).with(readable).with(writable).with(changefeed).done()
   return { store, ctx, doc }
 }
 
@@ -592,7 +580,7 @@ describe("changefeed: transaction integration", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
@@ -660,7 +648,7 @@ describe("changefeed: transaction integration", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     ctx.beginTransaction()
     doc.x.set(10)
@@ -682,7 +670,7 @@ describe("changefeed: transaction integration", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
@@ -748,7 +736,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
@@ -774,7 +762,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     let observedX: unknown = undefined
     let observedY: unknown = undefined
@@ -813,7 +801,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe((cs) => xChangesets.push(cs))
@@ -860,7 +848,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
     const yChangesets: Changeset[] = []
@@ -889,7 +877,7 @@ describe("changefeed: batched notification", () => {
       y: LoroSchema.plain.number(),
     })
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     // Only subscribe to x, not y
     const xChangesets: Changeset[] = []
@@ -964,7 +952,7 @@ describe("changefeed: edge cases", () => {
     const schema = Schema.doc({ n: Schema.number() })
     const store = { n: 42 }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as any
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const changesets: Changeset[] = []
     getChangefeed(doc.n).subscribe((cs: Changeset) => changesets.push(cs))
@@ -980,7 +968,7 @@ describe("changefeed: edge cases", () => {
     })
     const store = { items: [] as string[] }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as any
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     expect(hasComposedChangefeed(doc.items)).toBe(true)
   })
@@ -991,7 +979,7 @@ describe("changefeed: edge cases", () => {
     })
     const store = { labels: {} }
     const ctx = createWritableContext(store)
-    const doc = interpret(schema, fullInterpreter, ctx) as any
+    const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     expect(hasComposedChangefeed(doc.labels)).toBe(true)
   })
