@@ -41,9 +41,8 @@ export interface SubstratePrepare {
   prepare(path: Path, change: ChangeBase): void
 
   /**
-   * Called once per flush cycle after all prepares and after changefeed
-   * notification delivery (since the changefeed wraps flush and calls
-   * originalFlush at the end).
+   * Called once per flush cycle after all prepares and before changefeed
+   * notification delivery (so subscribers see the updated version/log).
    *
    * For PlainSubstrate: bumps version, appends to operation log.
    */

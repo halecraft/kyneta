@@ -204,9 +204,10 @@ const contextState = new WeakMap<RefContext, ContextWiringState>()
  * - `prepare` wrapping: after the inner prepare (store mutation), appends
  *   `{path, change}` to the pending accumulator. No notification fires.
  * - `flush` wrapping: calls `planNotifications` (pure) to group changes
- *   by path, then `deliverNotifications` (imperative) to fire listeners.
- *   Clears the accumulator before firing for re-entrancy safety.
- *   Calls the inner flush afterwards.
+ *   by path, then calls the inner flush (so the substrate's version and
+ *   log are up-to-date), then `deliverNotifications` (imperative) to fire
+ *   listeners. Clears the accumulator before any side effects for
+ *   re-entrancy safety.
  */
 
 // WeakMap for read-only contexts: each gets its own orphaned listener
@@ -240,18 +241,24 @@ function ensurePrepareWiring(
     pending.push({ path, change })
   }
 
-  // Wrapped flush: plan notifications (pure), deliver (imperative),
-  // then call inner flush.
+  // Wrapped flush: plan notifications (pure), commit via inner flush
+  // (so substrate version/log are up-to-date), then deliver notifications.
+  // Order matters: subscribers may call version(doc) or delta(doc, ...)
+  // inside their callbacks, so the substrate must be committed first.
   const wrappedFlush = (origin?: string): void => {
     if (pending.length > 0) {
       const plan = planNotifications(pending)
-      // Clear accumulator before firing — re-entrancy safety
+      // Clear accumulator before any side effects — re-entrancy safety
       pending.length = 0
-      deliverNotifications(plan, listeners, origin)
-    }
 
-    // Call inner flush (base is no-op; future layers may wrap)
-    originalFlush(origin)
+      // Commit to the substrate first so version() and delta() reflect
+      // the just-flushed operations when subscribers read them.
+      originalFlush(origin)
+
+      deliverNotifications(plan, listeners, origin)
+    } else {
+      originalFlush(origin)
+    }
   }
 
   ctx.prepare = wrappedPrepare

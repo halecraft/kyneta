@@ -172,6 +172,55 @@ describe("PlainSubstrate lifecycle", () => {
     expect(substrate.frontier().value).toBe(0)
   })
 
+  it("frontier() is up-to-date inside a subscribe callback (notify-after-commit)", () => {
+    const substrate = plainSubstrateFactory.create(TestSchema, { title: "" })
+    const doc = interpretSubstrate(substrate)
+
+    expect(substrate.frontier().value).toBe(0)
+
+    // Track the frontier value observed inside the subscriber
+    const observedVersions: number[] = []
+    subscribe(doc, () => {
+      observedVersions.push(substrate.frontier().value)
+    })
+
+    change(doc, (d) => d.title.insert(0, "A"))
+    change(doc, (d) => d.count.increment(1))
+    change(doc, (d) => d.title.insert(1, "B"))
+
+    // Each subscriber call should see the version AFTER the flush,
+    // not the stale version from before. Without the fix, subscribers
+    // would see [0, 1, 2] instead of [1, 2, 3].
+    expect(observedVersions).toEqual([1, 2, 3])
+  })
+
+  it("delta() returns the just-flushed ops inside a subscribe callback", () => {
+    const substrate = plainSubstrateFactory.create(TestSchema, { title: "", count: 0 })
+    const doc = interpretSubstrate(substrate)
+
+    // Track ops retrieved via delta() inside the subscriber
+    const opsPerNotification: Op[][] = []
+    let prevVersion = 0
+    subscribe(doc, () => {
+      const currentVer = substrate.frontier().value
+      const payload = substrate.exportSince(new PlainFrontier(prevVersion))
+      if (payload) {
+        opsPerNotification.push(JSON.parse(payload.data as string) as Op[])
+      }
+      prevVersion = currentVer
+    })
+
+    change(doc, (d) => d.title.insert(0, "Hi"))
+    change(doc, (d) => d.count.increment(5))
+
+    // Each callback should have been able to retrieve the ops for its own flush cycle
+    expect(opsPerNotification).toHaveLength(2)
+    expect(opsPerNotification[0]!.length).toBeGreaterThan(0)
+    expect(opsPerNotification[0]![0]!.change.type).toBe("text")
+    expect(opsPerNotification[1]!.length).toBeGreaterThan(0)
+    expect(opsPerNotification[1]![0]!.change.type).toBe("increment")
+  })
+
   it("exportSnapshot() returns a JSON payload matching the current store state", () => {
     const seed = { title: "Test", count: 0, theme: "light" }
     const substrate = plainSubstrateFactory.create(TestSchema, seed)
