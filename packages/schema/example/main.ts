@@ -53,12 +53,11 @@ import {
 
 import type {
 	Ref,
+	RRef,
 	Schema as SchemaType,
 	AnnotatedSchema,
-	RefContext,
 	Changeset,
 	PendingChange,
-	Store,
 } from "../src/index.js";
 
 import { json, log, section } from "./helpers.js";
@@ -114,6 +113,8 @@ section(2, "Create a Document");
 
 // Write createDoc once — use it with any schema.
 // (note: interface call signature avoids TS infinite recursion)
+// (note: seed is Record<string, unknown> rather than Partial<Plain<S>>
+//  because Plain<S> triggers TS2589 at call sites with complex schemas)
 interface CreateDoc {
 	<S extends SchemaType>(schema: S, seed?: Record<string, unknown>): Ref<S>;
 }
@@ -123,7 +124,7 @@ const createDoc: CreateDoc = (schema, seed = {}) => {
 		string,
 		unknown
 	>;
-	const store: Store = { ...initial };
+	const store = { ...initial } as Record<string, unknown>;
 	const ctx = createWritableContext(store);
 	return interpret(schema, ctx)
 		.with(readable)
@@ -475,7 +476,7 @@ log(`
     Functions that know nothing about the document can read and mutate.
 `);
 
-// A generic "append tag" function — typed with Readable & Writable
+// A generic "append tag" function — typed with schema-derived Ref
 function tag(ref: Ref<AnnotatedSchema<"text">>, label: string) {
 	ref.insert(ref().length, ` [${label}]`);
 }
@@ -490,8 +491,8 @@ tag(doc.name, "released");
 ensureMinimum(doc.stars, 200);
 
 log(`
-    function tag(ref: TextRef, label: string) { ref.insert(end, " [label]") }
-    function ensureMinimum(ref: CounterRef, min: number) { ... }
+    function tag(ref: Ref<AnnotatedSchema<"text">>, label: string) { ref.insert(end, " [label]") }
+    function ensureMinimum(ref: Ref<AnnotatedSchema<"counter">>, min: number) { ... }
 
     tag(doc.name, "released") → "${doc.name()}"
     ensureMinimum(doc.stars, 200) → ${doc.stars()}
@@ -588,9 +589,9 @@ log(`
 
 // Read-only document: just drop the writable and changefeed layers
 {
-	const roStore: Store = doc() as Record<string, unknown>;
-	const roCtx: RefContext = { store: roStore };
-	const roDoc = interpret(ProjectSchema, roCtx)
+	const roStore = doc() as Record<string, unknown>;
+	const roCtx = { store: roStore };
+	const roDoc: RRef<typeof ProjectSchema> = interpret(ProjectSchema, roCtx)
 		.with(readable)
 		.done();
 
