@@ -17,9 +17,14 @@ import {
   type ReadableMapRef,
   type NavigableSequenceRef,
   type NavigableMapRef,
+  type SchemaRef,
+  type RRef,
+  type RWRef,
   type Ref,
+  type Wrap,
   type WithTransact,
   type HasTransact,
+  type HasChangefeed,
   type Plain,
   type ScalarPlain,
   type ScalarRef,
@@ -35,6 +40,7 @@ import {
   type PlainPositionalSumSchema,
   type PlainDiscriminatedSumSchema,
   TRANSACT,
+  CHANGEFEED,
 } from "../index.js"
 
 // ---------------------------------------------------------------------------
@@ -1254,5 +1260,118 @@ describe("type-level: WithTransact helper", () => {
     type Result = WithTransact<Base>
     expectTypeOf<Result>().toHaveProperty("x")
     expectTypeOf<Result>().toHaveProperty(TRANSACT)
+  })
+
+  it("WithTransact<T> is equivalent to Wrap<T, 'rw'>", () => {
+    type Base = { x: number }
+    expectTypeOf<WithTransact<Base>>().toEqualTypeOf<Wrap<Base, "rw">>()
+  })
+})
+
+// ===========================================================================
+// Ref tier differentiation: RRef, RWRef, Ref
+// ===========================================================================
+
+describe("type-level: RRef<S> is Readable<S>", () => {
+  it("RRef<ScalarSchema> equals Readable<ScalarSchema>", () => {
+    type S = ScalarSchema<"number">
+    expectTypeOf<RRef<S>>().toEqualTypeOf<Readable<S>>()
+  })
+
+  it("RRef<ProductSchema> equals Readable<ProductSchema>", () => {
+    type S = ProductSchema<{ x: ScalarSchema<"number"> }>
+    expectTypeOf<RRef<S>>().toEqualTypeOf<Readable<S>>()
+  })
+})
+
+describe("type-level: RWRef<S> has HasTransact but not HasChangefeed", () => {
+  it("RWRef<scalar> has set, call signature, and [TRANSACT]", () => {
+    type Result = RWRef<ScalarSchema<"number">>
+    expectTypeOf<Result>().toBeCallableWith()
+    expectTypeOf<Result>().toHaveProperty("set")
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
+  })
+
+  it("RWRef<scalar> does NOT have [CHANGEFEED]", () => {
+    type Result = RWRef<ScalarSchema<"number">>
+    // HasChangefeed requires [CHANGEFEED] property — RWRef should not have it
+    type HasCF = Result extends HasChangefeed ? true : false
+    expectTypeOf<HasCF>().toEqualTypeOf<false>()
+  })
+
+  it("RWRef<product> children also lack [CHANGEFEED]", () => {
+    type S = ProductSchema<{ x: ScalarSchema<"number"> }>
+    type Child = RWRef<S>["x"]
+    // Child has TRANSACT
+    expectTypeOf<Child>().toHaveProperty(TRANSACT)
+    // Child does NOT have CHANGEFEED
+    type ChildHasCF = Child extends HasChangefeed ? true : false
+    expectTypeOf<ChildHasCF>().toEqualTypeOf<false>()
+  })
+})
+
+describe("type-level: Ref<S> has HasTransact AND HasChangefeed", () => {
+  it("Ref<scalar> has set, call signature, [TRANSACT], and [CHANGEFEED]", () => {
+    type Result = Ref<ScalarSchema<"number">>
+    expectTypeOf<Result>().toBeCallableWith()
+    expectTypeOf<Result>().toHaveProperty("set")
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
+    expectTypeOf<Result>().toHaveProperty(CHANGEFEED)
+  })
+
+  it("Ref<scalar> extends HasChangefeed", () => {
+    type Result = Ref<ScalarSchema<"number">>
+    type HasCF = Result extends HasChangefeed ? true : false
+    expectTypeOf<HasCF>().toEqualTypeOf<true>()
+  })
+
+  it("Ref<product> children also have [CHANGEFEED] — recursive threading", () => {
+    type S = ProductSchema<{ x: ScalarSchema<"number"> }>
+    type Child = Ref<S>["x"]
+    expectTypeOf<Child>().toHaveProperty(TRANSACT)
+    expectTypeOf<Child>().toHaveProperty(CHANGEFEED)
+    type ChildHasCF = Child extends HasChangefeed ? true : false
+    expectTypeOf<ChildHasCF>().toEqualTypeOf<true>()
+  })
+
+  it("Ref<sequence> .at() result has [CHANGEFEED]", () => {
+    type S = SequenceSchema<ScalarSchema<"string", string>>
+    type AtResult = Exclude<ReturnType<Ref<S>["at"]>, undefined>
+    expectTypeOf<AtResult>().toHaveProperty(TRANSACT)
+    expectTypeOf<AtResult>().toHaveProperty(CHANGEFEED)
+  })
+
+  it("Ref<doc> with text field — child text ref has [CHANGEFEED]", () => {
+    const s = Schema.doc({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+    })
+    type Doc = Ref<typeof s>
+    expectTypeOf<Doc>().toHaveProperty(CHANGEFEED)
+    type Title = Doc["title"]
+    expectTypeOf<Title>().toHaveProperty(CHANGEFEED)
+    expectTypeOf<Title>().toHaveProperty("insert")
+    type Count = Doc["count"]
+    expectTypeOf<Count>().toHaveProperty(CHANGEFEED)
+    expectTypeOf<Count>().toHaveProperty("increment")
+  })
+})
+
+describe("type-level: Wrap<T, M> dispatches by mode", () => {
+  it("Wrap<T, 'rw'> has HasTransact but not HasChangefeed", () => {
+    type Base = { x: number }
+    type Result = Wrap<Base, "rw">
+    expectTypeOf<Result>().toHaveProperty("x")
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
+    type HasCF = Result extends HasChangefeed ? true : false
+    expectTypeOf<HasCF>().toEqualTypeOf<false>()
+  })
+
+  it("Wrap<T, 'rwc'> has HasTransact AND HasChangefeed", () => {
+    type Base = { x: number }
+    type Result = Wrap<Base, "rwc">
+    expectTypeOf<Result>().toHaveProperty("x")
+    expectTypeOf<Result>().toHaveProperty(TRANSACT)
+    expectTypeOf<Result>().toHaveProperty(CHANGEFEED)
   })
 })

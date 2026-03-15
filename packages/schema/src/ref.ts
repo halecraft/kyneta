@@ -1,19 +1,28 @@
-// Ref<S> — unified recursive type for fully-composed interpreter refs.
+// SchemaRef<S, M> — parameterized recursive type for composed interpreter refs.
 //
-// Ref<S> combines navigation, reading, writing, and HasTransact into a
-// single recursive conditional type. It replaces the unsound
-// `Readable<S> & Writable<S>` intersection by giving each schema node
-// a precise type where `.at()` returns `Ref<Child>` (not separate
+// SchemaRef<S, M> combines navigation, reading, writing, and mode-dependent
+// cross-cutting concerns into a single recursive conditional type. It replaces
+// the unsound `Readable<S> & Writable<S>` intersection by giving each schema
+// node a precise type where `.at()` returns `SchemaRef<Child, M>` (not separate
 // `Readable<Child>` / `Writable<Child>` with conflicting `.at()` types).
 //
+// The mode parameter `M extends RefMode` controls which cross-cutting concerns
+// are intersected at every node:
+//   - `"rw"`  → `HasTransact` only (read-write without changefeed)
+//   - `"rwc"` → `HasTransact` + `HasChangefeed` (full stack)
+//
+// Three named aliases provide the user-facing API:
+//   - `RRef<S>`  = `Readable<S>` — read-only tier (alias only, no new recursion)
+//   - `RWRef<S>` = `SchemaRef<S, "rw">` — read-write tier
+//   - `Ref<S>`   = `SchemaRef<S, "rwc">` — full-stack tier (the common case)
+//
 // Key design points:
-//   - Children are `Ref<Child>`, not `Readable<Child>` or `Writable<Child>`
-//   - Sequences use `ReadableSequenceRef<Ref<I>, Plain<I>> & SequenceRef`
+//   - Children are `SchemaRef<Child, M>`, preserving the mode recursively
+//   - Sequences use `ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> & SequenceRef`
 //     — navigation + reading from ReadableSequenceRef, mutation from
 //     SequenceRef (which has no `.at()`, so no overload conflict)
-//   - Maps use `ReadableMapRef<Ref<I>, Plain<I>> & WritableMapRef<Plain<I>>`
-//   - `WithTransact<T>` wraps every node (matches runtime `attachTransact`)
-//   - HasTransact is included at every level so `ref[TRANSACT]` works
+//   - Maps use `ReadableMapRef<SchemaRef<I, M>, Plain<I>> & WritableMapRef<Plain<I>>`
+//   - `Wrap<T, M>` intersects cross-cutting concerns per mode
 //
 // See .plans/navigation-layer.md §Phase 3, Task 3.3.
 
@@ -28,7 +37,7 @@ import type {
   DiscriminatedSumSchema,
 } from "./schema.js"
 import type { Plain } from "./interpreter-types.js"
-import type { ReadableSequenceRef, ReadableMapRef } from "./interpreters/readable.js"
+import type { Readable, ReadableSequenceRef, ReadableMapRef } from "./interpreters/readable.js"
 import type {
   HasTransact,
   ScalarRef,
@@ -38,34 +47,173 @@ import type {
   ProductRef,
   WritableMapRef,
 } from "./interpreters/writable.js"
+import type { HasChangefeed } from "./changefeed.js"
 
 // ---------------------------------------------------------------------------
-// WithTransact helper — single edit point for cross-cutting concerns
+// RefMode — the mode parameter for SchemaRef
 // ---------------------------------------------------------------------------
 
 /**
- * Intersects `T` with `HasTransact`. Every node in a fully-composed
- * interpreter stack carries `[TRANSACT]` pointing at its `WritableContext`.
+ * The mode parameter that controls which cross-cutting concerns are
+ * intersected at every node of a `SchemaRef<S, M>`.
  *
- * This helper provides a single edit point if additional cross-cutting
- * concerns (e.g. `HasChangefeed`) need to be woven in later.
+ * - `"rw"`  — read-write: `HasTransact` only
+ * - `"rwc"` — read-write-changefeed: `HasTransact` + `HasChangefeed`
  */
-export type WithTransact<T> = T & HasTransact
+export type RefMode = "rw" | "rwc"
 
 // ---------------------------------------------------------------------------
-// Ref<S> — the unified recursive type
+// Wrap<T, M> — mode-dispatched cross-cutting concern wrapper
 // ---------------------------------------------------------------------------
 
 /**
- * Computes the fully-composed ref type for a given schema type.
+ * Intersects `T` with the cross-cutting concerns appropriate for mode `M`.
  *
- * This is the user-facing type for refs produced by the full interpreter
- * stack (`withWritable(withChangefeed(withCaching(withReadable(
- * withNavigation(bottomInterpreter)))))`). Every node is:
+ * - `"rw"`  → `T & HasTransact`
+ * - `"rwc"` → `T & HasTransact & HasChangefeed`
+ *
+ * This is the single edit point for cross-cutting concerns. Every node in
+ * `SchemaRef` is wrapped through `Wrap<T, M>`, so adding a new concern
+ * here propagates recursively to all nodes.
+ */
+export type Wrap<T, M extends RefMode> =
+  M extends "rwc"
+    ? T & HasTransact & HasChangefeed
+    : T & HasTransact
+
+// ---------------------------------------------------------------------------
+// WithTransact<T> — backward-compatible alias
+// ---------------------------------------------------------------------------
+
+/**
+ * @deprecated Use `Wrap<T, "rw">` instead. Kept for backward compatibility.
+ *
+ * Equivalent to `Wrap<T, "rw">` — intersects `T` with `HasTransact` only.
+ */
+export type WithTransact<T> = Wrap<T, "rw">
+
+// ---------------------------------------------------------------------------
+// SchemaRef<S, M> — the parameterized recursive core
+// ---------------------------------------------------------------------------
+
+/**
+ * Computes the composed ref type for a given schema type and mode.
+ *
+ * This is the core recursive conditional type. User-facing aliases:
+ * - `Ref<S>`   = `SchemaRef<S, "rwc">` — full stack (common case)
+ * - `RWRef<S>` = `SchemaRef<S, "rw">` — read-write without changefeed
+ *
+ * Every node is:
  *   - Callable (reading: `ref()` → `Plain<S>`)
- *   - Navigable (`.at()` returns `Ref<Child>` for collections)
+ *   - Navigable (`.at()` returns `SchemaRef<Child, M>` for collections)
  *   - Writable (`.set()`, `.push()`, `.insert()`, `.delete()`, etc.)
  *   - Transactable (`ref[TRANSACT]` → `WritableContext`)
+ *   - Observable (if M = "rwc": `ref[CHANGEFEED]` → `Changefeed`)
+ */
+export type SchemaRef<S extends Schema, M extends RefMode> =
+  // --- Annotated: dispatch on tag ---
+  S extends AnnotatedSchema<infer Tag, infer Inner>
+    ? Tag extends "text"
+      ? Wrap<
+          (() => string) &
+          { [Symbol.toPrimitive](hint: string): string } &
+          TextRef,
+          M
+        >
+      : Tag extends "counter"
+        ? Wrap<
+            (() => number) &
+            { [Symbol.toPrimitive](hint: string): number | string } &
+            CounterRef,
+            M
+          >
+        : Tag extends "doc"
+          ? Inner extends ProductSchema<infer F>
+            ? Wrap<
+                (() => { [K in keyof F]: Plain<F[K]> }) &
+                { readonly [K in keyof F]: SchemaRef<F[K], M> } &
+                ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+                M
+              >
+            : unknown
+          : Tag extends "movable"
+            ? Inner extends SequenceSchema<infer I>
+              ? Wrap<
+                  ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> &
+                  SequenceRef,
+                  M
+                >
+              : unknown
+            : Tag extends "tree"
+              ? Inner extends Schema ? SchemaRef<Inner, M> : unknown
+              : // Unknown annotation with inner — delegate
+                Inner extends Schema ? SchemaRef<Inner, M> : unknown
+    : // --- Scalar ---
+      S extends ScalarSchema<infer _K, infer V>
+      ? Wrap<
+          (() => V) &
+          { [Symbol.toPrimitive](hint: string): V | string } &
+          ScalarRef<V>,
+          M
+        >
+      : // --- Product ---
+        S extends ProductSchema<infer F>
+        ? Wrap<
+            (() => { [K in keyof F]: Plain<F[K]> }) &
+            { readonly [K in keyof F]: SchemaRef<F[K], M> } &
+            ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+            M
+          >
+        : // --- Sequence ---
+          S extends SequenceSchema<infer I>
+          ? Wrap<
+              ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> &
+              SequenceRef,
+              M
+            >
+          : // --- Map ---
+            S extends MapSchema<infer I>
+            ? Wrap<
+                ReadableMapRef<SchemaRef<I, M>, Plain<I>> &
+                WritableMapRef<Plain<I>>,
+                M
+              >
+            : // --- Sum ---
+              S extends PositionalSumSchema<infer V>
+              ? SchemaRef<V[number], M>
+              : S extends DiscriminatedSumSchema
+                ? unknown
+                : unknown
+
+// ---------------------------------------------------------------------------
+// Tier aliases — the user-facing ref types
+// ---------------------------------------------------------------------------
+
+/**
+ * Read-only ref type. Alias for `Readable<S>`.
+ *
+ * Produced by `interpret(schema, ctx).with(readable).done()`.
+ * Callable + navigable, no mutation methods, no `[TRANSACT]`, no `[CHANGEFEED]`.
+ *
+ * `Readable<S>` is a separate recursive type (not a `SchemaRef` mode) because
+ * its structure is fundamentally different — no mutation interfaces are
+ * intersected, and children are `Readable<Child>` (not `SchemaRef<Child, M>`).
+ */
+export type RRef<S extends Schema> = Readable<S>
+
+/**
+ * Read-write ref type without changefeed observation.
+ *
+ * Produced by `interpret(schema, ctx).with(readable).with(writable).done()`.
+ * Callable + navigable + writable + `HasTransact`, but no `[CHANGEFEED]`.
+ */
+export type RWRef<S extends Schema> = SchemaRef<S, "rw">
+
+/**
+ * Full-stack ref type: read + write + transact + changefeed. The common case.
+ *
+ * Produced by `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()`.
+ * Every node is callable, navigable, writable, transactable, and observable.
  *
  * ```ts
  * const s = Schema.doc({
@@ -84,71 +232,7 @@ export type WithTransact<T> = T & HasTransact
  * // doc.items.at(0)?.name.set("updated")
  * // doc.items.push({ name: "new" })
  * // doc[TRANSACT]   → WritableContext
+ * // doc[CHANGEFEED] → Changefeed
  * ```
  */
-export type Ref<S extends Schema> =
-  // --- Annotated: dispatch on tag ---
-  S extends AnnotatedSchema<infer Tag, infer Inner>
-    ? Tag extends "text"
-      ? WithTransact<
-          (() => string) &
-          { [Symbol.toPrimitive](hint: string): string } &
-          TextRef
-        >
-      : Tag extends "counter"
-        ? WithTransact<
-            (() => number) &
-            { [Symbol.toPrimitive](hint: string): number | string } &
-            CounterRef
-          >
-        : Tag extends "doc"
-          ? Inner extends ProductSchema<infer F>
-            ? WithTransact<
-                (() => { [K in keyof F]: Plain<F[K]> }) &
-                { readonly [K in keyof F]: Ref<F[K]> } &
-                ProductRef<{ [K in keyof F]: Plain<F[K]> }>
-              >
-            : unknown
-          : Tag extends "movable"
-            ? Inner extends SequenceSchema<infer I>
-              ? WithTransact<
-                  ReadableSequenceRef<Ref<I>, Plain<I>> &
-                  SequenceRef
-                >
-              : unknown
-            : Tag extends "tree"
-              ? Inner extends Schema ? Ref<Inner> : unknown
-              : // Unknown annotation with inner — delegate
-                Inner extends Schema ? Ref<Inner> : unknown
-    : // --- Scalar ---
-      S extends ScalarSchema<infer _K, infer V>
-      ? WithTransact<
-          (() => V) &
-          { [Symbol.toPrimitive](hint: string): V | string } &
-          ScalarRef<V>
-        >
-      : // --- Product ---
-        S extends ProductSchema<infer F>
-        ? WithTransact<
-            (() => { [K in keyof F]: Plain<F[K]> }) &
-            { readonly [K in keyof F]: Ref<F[K]> } &
-            ProductRef<{ [K in keyof F]: Plain<F[K]> }>
-          >
-        : // --- Sequence ---
-          S extends SequenceSchema<infer I>
-          ? WithTransact<
-              ReadableSequenceRef<Ref<I>, Plain<I>> &
-              SequenceRef
-            >
-          : // --- Map ---
-            S extends MapSchema<infer I>
-            ? WithTransact<
-                ReadableMapRef<Ref<I>, Plain<I>> &
-                WritableMapRef<Plain<I>>
-              >
-            : // --- Sum ---
-              S extends PositionalSumSchema<infer V>
-              ? Ref<V[number]>
-              : S extends DiscriminatedSumSchema
-                ? unknown
-                : unknown
+export type Ref<S extends Schema> = SchemaRef<S, "rwc">
