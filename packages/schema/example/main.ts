@@ -20,7 +20,6 @@
 import {
 	// Schema constructors
 	Schema,
-	LoroSchema,
 	Zero,
 	describe,
 	// Interpreter machinery
@@ -53,10 +52,8 @@ import {
 } from "../src/index.js";
 
 import type {
-	Plain,
 	RefContext,
 	Changeset,
-	TreeEvent,
 	PendingChange,
 	TextRef,
 	CounterRef,
@@ -73,35 +70,35 @@ import { json, log, section } from "./helpers.js";
 
 section(1, "Define a Schema");
 
-const ProjectSchema = LoroSchema.doc({
-	name: LoroSchema.text(),
-	stars: LoroSchema.counter(),
+const ProjectSchema = Schema.doc({
+	name: Schema.annotated("text"),
+	stars: Schema.annotated("counter"),
 
 	tasks: Schema.list(
-		LoroSchema.plain.struct({
-			title: LoroSchema.plain.string(),
-			done: LoroSchema.plain.boolean(),
-			priority: LoroSchema.plain.number(1, 2, 3),
+		Schema.struct({
+			title: Schema.string(),
+			done: Schema.boolean(),
+			priority: Schema.number(1, 2, 3),
 		}),
 	),
 
-	settings: LoroSchema.plain.struct({
-		darkMode: LoroSchema.plain.boolean(),
-		fontSize: LoroSchema.plain.number(),
+	settings: Schema.struct({
+		darkMode: Schema.boolean(),
+		fontSize: Schema.number(),
 	}),
 
 	content: Schema.discriminatedUnion("type", [
-		Schema.struct({ type: Schema.string("text"), body: LoroSchema.text() }),
+		Schema.struct({ type: Schema.string("text"), body: Schema.annotated("text") }),
 		Schema.struct({
 			type: Schema.string("image"),
-			url: LoroSchema.plain.string(),
-			caption: LoroSchema.text(),
+			url: Schema.string(),
+			caption: Schema.annotated("text"),
 		}),
 	]),
 
-	bio: Schema.nullable(LoroSchema.plain.string()),
+	bio: Schema.nullable(Schema.string()),
 
-	labels: Schema.record(LoroSchema.plain.string()),
+	labels: Schema.record(Schema.string()),
 });
 
 log(describe(ProjectSchema));

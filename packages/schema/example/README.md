@@ -79,7 +79,7 @@ The example uses four library-level functions from `facade.ts` — no local wrap
 
 The example is organized into 14 sections:
 
-1. **Define a Schema** — `LoroSchema.doc({ ... })` with text, counter, list of struct, plain struct, discriminated union, nullable, record, constrained scalars
+1. **Define a Schema** — `Schema.doc({ ... })` with text, counter, list of struct, struct, discriminated union, nullable, record, constrained scalars
 2. **Create a Document** — Inline setup with `Zero.overlay`, `createWritableContext`, fluent builder. Shows `doc()` snapshot.
 3. **Mutations: Five Change Types** — Text (`doc.name.insert`), counter (`doc.stars.increment`), sequence (`doc.tasks.push`), replace (`doc.settings.darkMode.set`), map (`doc.labels.set`), product bulk `.set()`
 4. **Working with Collections** — Lists: `.at(i)`, `.get(i)`, `.length`, iteration, `.insert()`, `.delete()`. Records: `.at(key)`, `.get(key)`, `.has()`, `.keys()`, `.size`
@@ -212,7 +212,7 @@ The `changefeed` layer accepts `RefContext` — it works on read-only stacks too
 The developer sees a clean, high-level API — all library imports:
 
 ```
-LoroSchema.doc({ ... })      →  define structure
+Schema.doc({ ... })           →  define structure
 Zero.overlay(seed, defaults)  →  derive initial state
 interpret(schema, ctx)
   .with(readable)
