@@ -12,7 +12,6 @@ export default defineConfig({
     "unplugin/adapters/rolldown": "src/unplugin/adapters/rolldown.ts",
     "unplugin/adapters/esbuild": "src/unplugin/adapters/esbuild.ts",
     "vite/plugin": "src/vite/plugin.ts",
-    "server/index": "src/server/index.ts",
     "runtime/index": "src/runtime/index.ts",
     "testing/index": "src/testing/index.ts",
   },

@@ -63,11 +63,7 @@
 			"import": "./dist/vite/plugin.js",
 			"default": "./dist/vite/plugin.js"
 		},
-		"./server": {
-			"types": "./dist/server/index.d.ts",
-			"import": "./dist/server/index.js",
-			"default": "./dist/server/index.js"
-		},
+
 		"./runtime": {
 			"types": "./dist/runtime/index.d.ts",
 			"import": "./dist/runtime/index.js",
