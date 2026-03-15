@@ -24,7 +24,7 @@ import {
 	describe,
 	// Interpreter machinery
 	interpret,
-	createPlainSubstrate,
+	plainSubstrateFactory,
 	readable,
 	writable,
 	changefeed,
@@ -121,13 +121,7 @@ interface CreateDoc {
 	<S extends SchemaType>(schema: S, seed?: Record<string, unknown>): Ref<S>;
 }
 const createDoc: CreateDoc = (schema, seed = {}) => {
-	const defaults = Zero.structural(schema) as Record<string, unknown>;
-	const initial = Zero.overlay(seed, defaults, schema) as Record<
-		string,
-		unknown
-	>;
-	const store = { ...initial } as Record<string, unknown>;
-	const substrate = createPlainSubstrate(store);
+	const substrate = plainSubstrateFactory.create(schema, seed);
 	return interpret(schema, substrate.context())
 		.with(readable)
 		.with(writable)

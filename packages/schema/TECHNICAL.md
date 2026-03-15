@@ -1,6 +1,6 @@
 # @kyneta/schema — Technical Documentation
 
-This package is an **exploratory spike** validating the Schema Interpreter Algebra described in `theory/interpreter-algebra.md`. It has no runtime dependencies and no consumers — it exists to prove architectural primitives in isolation before integrating them into the production codebase.
+This package implements the Schema Interpreter Algebra described in `theory/interpreter-algebra.md`. It has no runtime dependencies and is consumed by `@kyneta/core` (compiler runtime) and `examples/recipe-book` (full-stack SSR demo). The architecture provides a composable interpreter stack for schema-driven reactive documents with pluggable backing stores via the Substrate abstraction.
 
 ## The Key Insight: Unified Schema Grammar
 
@@ -502,6 +502,39 @@ For leaf refs, attaches a plain `Changefeed` with `subscribe` (node-level). For 
 
 **Composition:** `withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))`
 
+### Substrate (`src/substrate.ts`, `src/substrates/`)
+
+The Substrate abstraction formalizes the boundary between three algebras:
+
+| Algebra | Domain | Currency |
+|---------|--------|----------|
+| **Application** (CHANGEFEED) | Reactive UI, compiler regions | `Op`, `Changeset` |
+| **State** (Substrate) | State management, merge semantics | Substrate-native (plain store or LoroDoc) |
+| **Replication** (Sync) | Peer-to-peer data transfer | `SubstratePayload` (opaque to the framework) |
+
+**Morphisms:**
+- **project: State → Application** — substrate mutations become `Changeset`s delivered through the CHANGEFEED. The changefeed layer wraps `ctx.prepare`/`ctx.flush` to implement this automatically.
+- **export: State → Replication** — `substrate.exportSnapshot()` (full state) or `substrate.exportSince(frontier)` (delta since a version).
+- **import: Replication → State** — `substrate.importDelta(payload)` applies deltas through the prepare/flush pipeline, triggering `project` automatically. `factory.fromSnapshot(payload, schema)` constructs a new substrate from a snapshot.
+
+**Commutativity law:** `snapshot(apply(state, M₁..Mₙ)) = fold(step, snapshot(state), project(M₁)..project(Mₙ))` — applying mutations then snapshotting equals stepping the snapshot through the projected changesets.
+
+**Key interfaces:**
+
+- **`Frontier`** — the external version marker. Serializable (for SSR embedding in HTML meta tags) and comparable (partial order — plain substrates are totally ordered, CRDT substrates may have concurrent frontiers). This is the single type parameter on `Substrate<F>`. Substrates may use richer internal version tracking; the Frontier is what crosses the substrate boundary.
+
+- **`SubstratePayload`** — an opaque blob with an encoding hint (`"json" | "binary"`). The meaning of a payload is determined by which method produced it and which method consumes it — `exportSnapshot()` → `factory.fromSnapshot()`, `exportSince()` → `substrate.importDelta()`. No `kind` discriminant; the method-level distinction is sufficient and substrate-universal (Loro's `import()` accepts both snapshots and updates through the same code path).
+
+- **`Substrate<F>`** extends `SubstratePrepare` — adds `frontier()`, `exportSnapshot()`, `exportSince()`, `importDelta()`, and `context()`. The `SubstratePrepare` interface (Phase 0) provides the ground floor of the prepare/flush pipeline: `store`, `prepare(path, change)`, `onFlush(origin?)`.
+
+- **`SubstrateFactory<F>`** — `create(schema, seed?)` for fresh substrates, `fromSnapshot(payload, schema)` for reconstruction from snapshots, `parseFrontier(serialized)` for frontier deserialization.
+
+**Epoch boundaries.** Within a single substrate lifetime, all state transitions are deltas delivered as `Changeset`s through the changefeed. `Changeset` is and remains delta-only. State replacement (snapshot import) is an **epoch boundary** — a new substrate is constructed via `factory.fromSnapshot()`, and the application layer swaps the doc reference. The old interpreter tree is GC'd. The invariant: within an epoch, all transitions are deltas; between epochs, there is no continuity.
+
+**`PlainSubstrate`** is the first concrete implementation. It wraps a plain JS object store (the degenerate case — no CRDT runtime, no native oplog). Version tracking uses a **shadow buffer**: `prepare` accumulates `{path, change}` entries alongside `applyChangeToStore`, and `onFlush` drains the buffer into the version log and increments the version counter. The changefeed layer independently accumulates the same entries for notification planning — both hold the same object references and are drained every flush cycle. `PlainFrontier` wraps a monotonic integer; `compare()` never returns `"concurrent"`.
+
+A future `LoroSubstrate` would wrap a `LoroDoc`, using `VersionVector` as its Frontier type (not Loro's `Frontiers`/`OpId[]`), delegating `exportSnapshot` to `doc.export({ mode: "snapshot" })`, `exportSince` to `doc.export({ mode: "update", from: vv })`, and `importDelta` to `doc.import(bytes)`.
+
 ### Additional Interpreters
 
 | Interpreter | Context | Result | Purpose |
@@ -721,6 +754,7 @@ packages/schema/
 │   ├── combinators.ts           # product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
 │   ├── interpreter-types.ts     # RefContext, Plain<S>, Seed<S> — shared types across interpreters
+│   ├── substrate.ts             # SubstratePrepare, Frontier, SubstratePayload, Substrate<F>, SubstrateFactory<F>
 │   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore, pathKey, dispatchSum
 │   ├── ref.ts                   # SchemaRef<S,M> parameterized core + RRef<S>, RWRef<S>, Ref<S> tier aliases + Wrap<T,M>, RefMode + WithTransact<T> (deprecated alias)
 │   ├── interpreters/
@@ -730,10 +764,12 @@ packages/schema/
 │   │   ├── with-readable.ts     # withReadable transformer — fills [CALL] slot, adds .get(), toPrimitive
 │   │   ├── with-caching.ts      # withCaching transformer — caching + INVALIDATE + prepare-pipeline hooks
 │   │   ├── readable.ts          # Type-only: Readable<S>, ReadableSequenceRef (extends NavigableSequenceRef), ReadableMapRef (extends NavigableMapRef)
-│   │   ├── writable.ts          # withWritable transformer (returns A & HasTransact) + TRANSACT + WritableContext + executeBatch + SequenceRef (mutation-only)
+│   │   ├── writable.ts          # withWritable transformer (returns A & HasTransact) + TRANSACT + WritableContext + executeBatch + buildWritableContext + SequenceRef (mutation-only)
 │   │   ├── plain.ts             # Read from plain JS object (eager deep snapshot)
 │   │   ├── with-changefeed.ts   # Changefeed transformer (returns A & HasChangefeed, attachChangefeed asserts narrowing) — compositional observation + batched notification (RefContext, requires HasRead)
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate
+│   ├── substrates/
+│   │   └── plain.ts             # PlainFrontier, createPlainSubstrate, plainContext, plainSubstrateFactory
 │   ├── __tests__/
 │   │   ├── types.test.ts        # Type-level tests (expectTypeOf) — Ref<S>, NavigableRef hierarchy, capability lattice
 │   │   ├── interpret.test.ts    # Catamorphism, constructors, LoroSchema
@@ -753,7 +789,8 @@ packages/schema/
 │   │   ├── zero.test.ts         # Zero.structural, Zero.overlay
 │   │   ├── describe.test.ts     # Schema tree view rendering
 │   │   ├── step.test.ts         # Pure state transitions
-│   │   └── validate.test.ts     # Validation: all kinds, errors, type narrowing
+│   │   ├── validate.test.ts     # Validation: all kinds, errors, type narrowing
+│   │   └── substrate.test.ts    # PlainFrontier, PlainSubstrate lifecycle, round-trip replication, epoch boundaries
 │   └── index.ts                 # Barrel export
 ├── example/
 │   ├── main.ts                  # Showcase of the full @kyneta/schema API surface (no local facade)

@@ -204,11 +204,17 @@ export type {
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
 export type { SchemaRef, RefMode, Wrap, RRef, RWRef, Ref, WithTransact } from "./ref.js"
 
-// Substrate — the minimal mutation contract
-export type { SubstratePrepare } from "./substrate.js"
+// Substrate — state management, versioning, and transfer semantics
+export type {
+  SubstratePrepare,
+  Frontier,
+  Substrate,
+  SubstratePayload,
+  SubstrateFactory,
+} from "./substrate.js"
 
-// Plain substrate — closure factory for plain JS object stores
-export { createPlainSubstrate, plainContext } from "./substrates/plain.js"
+// Plain substrate — plain JS object store with version tracking
+export { createPlainSubstrate, plainContext, PlainFrontier, plainSubstrateFactory } from "./substrates/plain.js"
 
 // Shared interpreter types (canonical location)
 export type { RefContext, Plain, Seed } from "./interpreter-types.js"
