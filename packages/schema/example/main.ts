@@ -114,8 +114,7 @@ log(describe(ProjectSchema));
 section(2, "Create a Document");
 
 // Write createDoc once — use it with any schema.
-// Interface call signature defers Ref<S> evaluation (same mechanism as
-// InterpretBuilder.done()) — avoids TS2589 on abstract SchemaNode.
+// (note: interface call signature avoids TS infinite recursion)
 interface CreateDoc {
 	<S extends SchemaType>(schema: S, seed?: Record<string, unknown>): Ref<S>;
 }
@@ -235,25 +234,26 @@ log(`
 
 // ═══════════════════════════════════════════════════════════════════════════
 //
-//   5. SUMS AND NULLABLES
+//   5. UNIONS AND NULLABLES
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-section(5, "Sums and Nullables");
+section(5, "Unions and Nullables");
 
 // doc.content is a proper TypeScript discriminated union of variant ref types.
-// At runtime, the ref dispatches to the active variant based on the store's
-// discriminant value. At the type level, variant-specific fields like .body
-// require narrowing. Since refs use call signatures (.type() not .type),
-// standard TS control-flow narrowing doesn't apply — cast to the known variant:
-const textContent = doc.content as Extract<typeof doc.content, { readonly body: unknown }>;
+// The discriminant field (.type) is a raw string literal — not a callable ref.
+// This means standard TS control-flow narrowing works natively:
+//   if (doc.content.type === "text") { doc.content.body() }  // TS narrows
+//   switch (doc.content.type) { case "text": ... }           // exhaustiveness
 
-log(`
-    Discriminated union — variant dispatch based on store discriminant:
-      Store has content.type = "text", so doc.content resolves to the text variant.
-      doc.content.type() → "${doc.content.type()}"
-      textContent.body() → "${textContent.body()}"
+if (doc.content.type === "text") {
+	log(`
+    Discriminated union — native narrowing via hybrid discriminant:
+      doc.content.type → "${doc.content.type}"  (raw string, not a ref)
+      typeof doc.content.type → "${typeof doc.content.type}"
+      doc.content.body() → "${doc.content.body()}"  (TS narrows — no cast needed)
 `);
+}
 
 // Nullable — null by default, set to a value, read, set back
 log(`    Nullable:
@@ -310,7 +310,7 @@ section(7, "Observing Changes");
 log(`
     subscribe(ref, cb) — node-level observation.
     subscribeTree(ref, cb) — tree-level, with relative paths.
-    Both are library imports. Both preserve the Changeset protocol.
+    Both are library imports. Both preserve the Changefeed protocol.
 `);
 
 // Leaf subscription

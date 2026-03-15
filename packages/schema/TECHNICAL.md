@@ -80,7 +80,7 @@ One recursive `Schema` type discriminated by `_kind`:
 | `_kind` | Constructor | Description |
 |---|---|---|
 | `scalar` | `Schema.scalar("string")` | Terminal value — `ScalarKind` is a string union, not a recursive type |
-| `product` | `Schema.product({ x: ..., y: ... })` | Fixed-key record |
+| `product` | `Schema.product({ x: ..., y: ... })` | Fixed-key record. Optional `discriminantKey?: string` — see below |
 | `sequence` | `Schema.sequence(item)` | Ordered collection |
 | `map` | `Schema.map(item)` | Dynamic-key collection |
 | `sum` | `Schema.sum([a, b])` | Positional or discriminated union |
@@ -108,6 +108,12 @@ Loro-specific annotation constructors live in `LoroSchema` (`src/loro-schema.ts`
 | `LoroSchema.counter()` | `annotated("counter")` |
 | `LoroSchema.movableList(item)` | `annotated("movable", sequence(item))` |
 | `LoroSchema.tree(nodeData)` | `annotated("tree", nodeData)` |
+
+### `ProductSchema.discriminantKey`
+
+`ProductSchema` has an optional `discriminantKey?: string` field. It is `undefined` for standalone products (structs, doc inners, etc.) and is set only by the `discriminatedSum` constructor, which stamps each variant with the discriminant key after `buildVariantMap` succeeds. This marker tells interpreter layers which field is the discriminant so they can special-case it at runtime (raw store read instead of a full ref — see [withNavigation](#withnavigation-srcinterpreterswith-navigationts) and [withCaching](#withcaching-srcinterpreterswith-cachingts)).
+
+Since `Schema.struct()` creates fresh objects, there is no risk of `discriminantKey` leaking into standalone products.
 
 ### Scalar Value-Domain Constraints
 
@@ -342,7 +348,7 @@ This module also defines the capability lattice interfaces (`HasCall`, `HasNavig
 
 The coalgebraic structural addressing transformer. Takes any `HasCall`-producing interpreter and adds structural navigation — "give me a handle to the child at position X" — without reading any values:
 
-- **Product:** Enumerable lazy getters for each field. **No caching** — each access forces the thunk afresh.
+- **Product:** Enumerable lazy getters for each field. **No caching** — each access forces the thunk afresh. **Discriminant short-circuit:** when `schema.discriminantKey` is set (i.e. this product is a variant of a discriminated union), the discriminant field's getter returns `readByPath(ctx.store, fieldPath)` directly — a raw string value from the store — instead of forcing the field thunk. This enables standard TS discriminated union narrowing (`if (ref.type === "text")`) and prevents discriminant mutation (no `.set()` on a plain string).
 - **Sequence:** `.at(i)` returns a child carrier (bounds-checked via `storeArrayLength`). `.length` reflects the store array length. `[Symbol.iterator]` yields child carriers.
 - **Map:** `.at(key)` returns a child carrier (checked via `storeHasKey`). `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`.
 - **Sum:** Uses `dispatchSum(value, schema, variants)` from `store.ts` for store-driven variant resolution. This is structural addressing — "which child position is active?" — not value reading.
@@ -371,7 +377,7 @@ The refinement transformer. Requires `HasNavigation` input (structural navigatio
 
 The interposition transformer. Wraps navigation with memoization:
 
-- **Product:** field getters use `resolved`/`cached` memoization pattern. `ref.title === ref.title`.
+- **Product:** field getters use `resolved`/`cached` memoization pattern. `ref.title === ref.title`. **Discriminant fields are excluded** — when `schema.discriminantKey` is set, both the `fieldState` initialization loop and the getter override loop skip the discriminant key. The `withNavigation` getter already returns a raw store read for the discriminant; memoizing it would cache a potentially stale value outside the normal invalidation pipeline. Skipping is both correct and simpler.
 - **Sequence:** `Map<number, A>` child cache wrapping `.at(i)`. `seq.at(0) === seq.at(0)`.
 - **Map:** `Map<string, A>` child cache wrapping `.at(key)`. `map.at("k") === map.at("k")`.
 - **Scalar, sum, annotated:** pass through (no caching needed at leaves).
@@ -613,7 +619,21 @@ The type hierarchy for collections:
 
 All four type-level interpretations handle both sum flavors:
 
-**Discriminated sums** — `DiscriminatedSumSchema<D, V>` resolves via `V[number]` dispatch. `Plain<S>` produces `Plain<V[number]>` (union of variant plain types). `Readable<S>`, `Writable<S>`, and `SchemaRef<S, M>` produce their respective `Xxx<V[number]>`. The result is a standard TypeScript discriminated union — variant-specific fields require narrowing via the discriminant. Since refs use call signatures for reading (`ref.type()` not `ref.type`), standard TS control-flow narrowing doesn't apply; use `Extract` or type assertions to access variant-specific fields.
+**Discriminated sums** — `DiscriminatedSumSchema<D, V>` resolves via `V[number]` dispatch with a **hybrid discriminant** design. `Plain<S>` produces `Plain<V[number]>` (union of variant plain types — already a proper TS discriminated union). The three ref-producing types — `Readable<S>`, `Writable<S>`, and `SchemaRef<S, M>` — use `DiscriminantProductRef` (and its per-tier analogs) to produce hybrid product refs where the discriminant field `D` resolves to `Plain<F[D]>` (a raw string literal), while all other fields remain full recursive refs. This enables standard TypeScript discriminated union narrowing:
+
+```ts
+if (doc.content.type === "text") {
+  doc.content.body()  // TS narrows — no cast needed
+}
+switch (doc.content.type) {
+  case "text": return doc.content.body()
+  case "image": return doc.content.url()  // exhaustiveness via never
+}
+```
+
+The discriminant is **not writable** — `ref.type` is a plain string with no `.set()` method. This prevents store corruption (changing the discriminant without replacing the entire variant). At runtime, `withNavigation` short-circuits the discriminant field with a raw `readByPath` store read (see [withNavigation](#withnavigation-srcinterpreterswith-navigationts)). The `ProductSchema.discriminantKey` marker tells each interpreter layer which field to special-case (see [`ProductSchema.discriminantKey`](#productschema-discriminantkey)).
+
+TS homomorphic mapped types distribute over union type arguments, so `DiscriminantProductRef<V[number]["fields"], D, M>` correctly produces a union of per-variant product refs — a proper TS discriminated union where each variant has its own field set.
 
 **Nullable sums** — `Schema.nullable(inner)` produces `PositionalSumSchema<[ScalarSchema<"null">, S]>`. Without special handling, distributing over `V[number]` would produce `ScalarRef<null> | ScalarRef<string>`, making `.set()` accept `never` (contravariant parameter intersection). All three ref-producing types detect the nullable pattern at the type level and collapse to a single ref with a nullable value domain:
 
@@ -629,7 +649,7 @@ The nullable pattern match is: `V extends readonly [ScalarSchema<"null", any>, i
 
 ## Verified Properties
 
-The spike validates these properties via 1958 tests across 38 test files (1 pre-existing `tsc` TS2589 error in `validate.test.ts`, unrelated to this work):
+The spike validates these properties via 2012 tests across 38 test files (1 pre-existing `tsc` TS2589 error in `validate.test.ts`, unrelated to this work):
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: requires `withCaching` — `doc.title === doc.title`, `seq.at(0) === seq.at(0)`, `map.at("k") === map.at("k")`. Without `withCaching`, each access produces a new ref.
@@ -668,10 +688,14 @@ The spike validates these properties via 1958 tests across 38 test files (1 pre-
 35. **Fluent `.done()` inference**: `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()` infers `Ref<S>` without cast. `.with(readable).with(writable).done()` infers `RWRef<S>`. `.with(readable).done()` infers `RRef<S>`.
 36. **Honest transformer returns**: `withWritable` contributes `HasTransact` to `A`. `withChangefeed` contributes `HasChangefeed` to `A`. These are compile-time-verified via `expectTypeOf` on the interpreter return types.
 37. **`change()` callback inference**: `change(doc, d => { ... })` infers `d` from the doc ref type — no `(d: any)` annotation needed when `doc` is typed as `Ref<S>` or `RWRef<S>`.
-38. **Discriminated sum type resolution**: `Ref<DiscriminatedSumSchema>`, `RRef<DiscriminatedSumSchema>`, `RWRef<DiscriminatedSumSchema>`, and `Writable<DiscriminatedSumSchema>` all resolve to the union of variant ref types (not `unknown`). Variant-specific fields require narrowing. `Plain<DiscriminatedSumSchema>` was already correct.
+38. **Discriminated sum type resolution**: `Ref<DiscriminatedSumSchema>`, `RRef<DiscriminatedSumSchema>`, `RWRef<DiscriminatedSumSchema>`, and `Writable<DiscriminatedSumSchema>` all resolve to the union of variant ref types (not `unknown`). The discriminant field is a raw string literal (`Plain<F[D]>`), enabling native TS narrowing — see properties 42–45. `Plain<DiscriminatedSumSchema>` was already correct.
 39. **Nullable sum type resolution**: `Ref<nullable(string)>` has `.set(string | null)` (not `never`). Call signature returns `string | null`. Nullable composites also work: `Ref<nullable(struct({ x: string() }))>` has `.set({ x: string } | null)` and call returns `{ x: string } | null`. The collapse applies across all tiers: `RRef`, `RWRef`, `Writable`.
 40. **General positional sum distribution preserved**: `Ref<union(string, number)>` distributes correctly — the nullable collapse does not over-match. `.set()` parameter type is `never` (contravariant intersection of `string & number`), confirming distribution rather than collapse.
 41. **Sum composition through products**: `Ref<struct({ bio: nullable(string) })>` — the `.bio` field correctly has `.set(string | null)`. `Ref<doc({ content: discriminatedUnion(...) })>` — `.content` resolves to the variant union (not `unknown`).
+42. **Hybrid discriminant narrowing**: `if (ref.type === "text") { ref.body }` narrows the variant union at the type level. `switch` with exhaustiveness via `default: never` compiles. Standard TS control-flow narrowing works because the discriminant field is a raw string literal, not a callable ref.
+43. **Discriminant immutability**: `ref.type.set` does not exist at the type level — the discriminant is `Plain<F[D]>` (a string literal), not a `ScalarRef`. At runtime, `ref.type` is a raw string with no `.set()` method. This prevents store corruption where the discriminant says one variant but the fields belong to another.
+44. **Discriminant runtime value**: `typeof ref.type === "string"` (not `"function"`). The value matches the store's discriminant field. After whole-product `.set()` with a different variant, the discriminant reflects the new value immediately (it re-reads from the store on every access).
+45. **Discriminant snapshot inclusion**: `ref()` snapshot includes the discriminant as a plain string value. The `withReadable` product snapshot builder handles this via its `typeof child === "function" ? child() : child` check — the raw string flows through as-is.
 
 ## File Map
 
