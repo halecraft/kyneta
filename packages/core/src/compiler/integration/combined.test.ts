@@ -1,5 +1,5 @@
 /**
- * Combined integration tests (Task 9.4).
+ * Combined integration tests.
  *
  * Compiler-only tests verify compiled output for complex patterns.
  * Runtime tests use mock refs instead of Loro documents.
@@ -16,7 +16,7 @@ import {
   resetTestState,
   Scope,
   subscribe,
-  subscribeWithValue,
+  valueRegion,
   transformSource,
   withTypes,
 } from "./helpers.js"
@@ -28,7 +28,7 @@ describe("compiler integration - combined scenarios", () => {
     resetTestState()
   })
 
-  describe("Task 9.4: All patterns working together", () => {
+  describe("All patterns working together", () => {
     it("should compile list with reactive content and conditionals", () => {
       const source = withTypes(`
         declare const doc: {
@@ -70,8 +70,7 @@ describe("compiler integration - combined scenarios", () => {
       expect(result.code).toContain("item.done")
     })
 
-    // NOTE: "should compile form with bindings and reactive display" test removed —
-    // bindTextValue and bindChecked no longer exist after Phase 4 binding removal.
+
 
     it("should compile nested lists with reactive items", () => {
       const source = withTypes(`
@@ -148,7 +147,7 @@ describe("compiler integration - combined scenarios", () => {
 
   })
 
-  describe("Task 9.4: Runtime execution of combined patterns", () => {
+  describe("Runtime execution of combined patterns", () => {
     it("should handle reactive updates across multiple features", () => {
       const { ref: title } = createMockTextRef("Initial Title")
       const { ref: showDetails } = createMockCounterRef(0)
@@ -163,8 +162,8 @@ describe("compiler integration - combined scenarios", () => {
       container.appendChild(h1)
 
       // Subscribe to title changes
-      subscribeWithValue(
-        title,
+      valueRegion(
+        [title],
         () => read(title),
         value => {
           titleText.textContent = value

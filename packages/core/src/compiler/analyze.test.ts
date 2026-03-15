@@ -1908,11 +1908,11 @@ describe("analyzeStatement - target labels", () => {
 })
 
 // =============================================================================
-// Phase 4: CHANGEFEED Protocol Compiler Tests
+// CHANGEFEED Protocol Compiler Tests
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// isChangefeedType Tests (replaces isSnapshotableType)
+// isChangefeedType Tests
 // -----------------------------------------------------------------------------
 
 describe("isChangefeedType", () => {

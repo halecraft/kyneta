@@ -84,8 +84,6 @@ export {
   listRegion,
   read,
   subscribe,
-  subscribeMultiple,
-  subscribeWithValue,
   unsubscribe,
   valueRegion,
   type SubscriptionId,

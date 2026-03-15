@@ -3,7 +3,7 @@
  * using the CHANGEFEED protocol from @kyneta/schema.
  *
  * LocalRef uses the callable pattern from schema's readable interpreter:
- * `ref()` returns the current value (replaces the old `.get()` method).
+ * `ref()` returns the current value.
  */
 
 import { describe, expect, it, vi } from "vitest"

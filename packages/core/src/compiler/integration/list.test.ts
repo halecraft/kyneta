@@ -19,7 +19,7 @@ describe("compiler integration - list regions", () => {
     resetTestState()
   })
 
-  describe("Task 6.1: for-of detection", () => {
+  describe("for-of detection", () => {
     it("should detect for-of loop and create ListRegionNode in IR", () => {
       const source = withTypes(`
         declare const items: ListRef<string>
@@ -84,7 +84,7 @@ describe("compiler integration - list regions", () => {
     })
   })
 
-  describe("Task 6.2: Generated listRegion call", () => {
+  describe("Generated listRegion call", () => {
     it("should generate listRegion call with correct parameters", () => {
       const source = withTypes(`
         declare const items: ListRef<string>
@@ -142,7 +142,7 @@ describe("compiler integration - list regions", () => {
     })
   })
 
-  describe("Task 6.3: Nested reactive content in list items", () => {
+  describe("Nested reactive content in list items", () => {
     it("should handle static content in list items", () => {
       const source = withTypes(`
         declare const items: ListRef<string>
@@ -161,7 +161,7 @@ describe("compiler integration - list regions", () => {
     })
   })
 
-  describe("Task 6.4: O(k) verification with runtime", () => {
+  describe("O(k) verification with runtime", () => {
     it("should render initial list items", () => {
       const { ref: items } = createMockSequenceRef<string>([])
       items.push("item1")

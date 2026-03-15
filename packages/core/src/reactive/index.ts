@@ -3,8 +3,7 @@
  *
  * This module provides `LocalRef` and `state()` — the local reactive
  * primitive for Kyneta components. These use the `CHANGEFEED` protocol
- * from `@kyneta/schema`, replacing the old `REACTIVE`+`SNAPSHOT` design
- * from `@loro-extended/reactive`.
+ * from `@kyneta/schema`.
  *
  * @packageDocumentation
  */

@@ -1,5 +1,5 @@
 /**
- * Static compilation integration tests (Phase 4).
+ * Static compilation integration tests.
  * No reactive dependencies — pure compilation and execution.
  */
 
@@ -19,7 +19,7 @@ describe("compiler integration - static compilation", () => {
     resetTestState()
   })
 
-  describe("Task 4.1: Basic static compilation", () => {
+  describe("Basic static compilation", () => {
     it("should compile and execute simple div with h1", () => {
       const source = `
         div(() => {
@@ -108,7 +108,7 @@ describe("compiler integration - static compilation", () => {
     })
   })
 
-  describe("Task 4.2: Nested static structures", () => {
+  describe("Nested static structures", () => {
     it("should compile deeply nested elements", () => {
       const source = `
         div(() => {
@@ -246,7 +246,7 @@ describe("compiler integration - static compilation", () => {
     })
   })
 
-  describe("Task 4.2: HTML output for nested structures", () => {
+  describe("HTML output for nested structures", () => {
     it("should generate correct HTML for nested elements", () => {
       const source = `
         div(() => {

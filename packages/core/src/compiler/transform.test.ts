@@ -30,10 +30,9 @@ import {
  * Inline type declarations for CHANGEFEED-based ref types.
  *
  * Transform tests use `transformSource()` which resolves modules from the real
- * filesystem. Since `@loro-extended/change` no longer exists, test source strings
- * must declare their types inline. This helper provides the type stubs that mirror
- * the schema's CHANGEFEED protocol with narrow change types for proper deltaKind
- * extraction.
+ * filesystem. Test source strings declare their types inline. This helper
+ * provides type stubs that mirror the schema's CHANGEFEED protocol with narrow
+ * change types for proper deltaKind extraction.
  *
  * Usage: prepend to test source strings that need reactive types.
  */
@@ -630,23 +629,6 @@ describe("collectRequiredImports", () => {
 
     const { runtime } = collectRequiredImports([builder])
 
-    expect(runtime.has("valueRegion")).toBe(true)
-  })
-
-  it("should NOT include subscribeMultiple for single-dependency content", () => {
-    const singleDepContent = {
-      kind: "content" as const,
-      source: "title()",
-      bindingTime: "reactive" as const,
-      dependencies: [dep("title")],
-      span,
-    }
-    const builder = createBuilder("span", [], [], [singleDepContent], span)
-    builder.isReactive = true
-
-    const { runtime } = collectRequiredImports([builder])
-
-    expect(runtime.has("subscribeMultiple")).toBe(false)
     expect(runtime.has("valueRegion")).toBe(true)
   })
 
@@ -1315,7 +1297,7 @@ describe("transformSourceInPlace - HTML target", () => {
 // =============================================================================
 
 describe("reactive type resolution from @kyneta/schema", () => {
-  it("should resolve CounterRef type from @loro-extended/change import", () => {
+  it("should resolve CounterRef type with CHANGEFEED protocol", () => {
     const source = `
       import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
       type IncrementChange = { readonly type: "increment"; readonly amount: number }
@@ -1529,7 +1511,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 })
 
 // =============================================================================
-// Phase 4: Bare Reactive Ref in Content Position Tests
+// Bare Reactive Ref in Content Position Tests
 // =============================================================================
 
 describe("bare reactive ref in content position", () => {
@@ -1576,12 +1558,12 @@ describe("bare reactive ref in content position", () => {
 })
 
 // =============================================================================
-// Phase 6: Dependency subsumption — child deps make parent deps redundant
+// Dependency subsumption — child deps make parent deps redundant
 // =============================================================================
 
 describe("dependency subsumption", () => {
-  it("doc.title template coercion with reactive TypedDoc produces valueRegion (not subscribeMultiple)", () => {
-    // After Phase 6: TypedDoc exposes [REACTIVE], so `doc` is reactive.
+  it("doc.title template coercion with reactive TypedDoc produces valueRegion (not multi-dep)", () => {
+    // TypedDoc exposes [CHANGEFEED], so `doc` is reactive.
     // Without subsumption, extractDependencies captures both:
     //   { source: "doc", deltaKind: "map" }
     //   { source: "doc.title", deltaKind: "text" }
@@ -1594,6 +1576,6 @@ describe("dependency subsumption", () => {
     `)
     const result = transformSource(source, { target: "dom" })
     expect(result.code).toContain("valueRegion")
-    expect(result.code).not.toContain("subscribeMultiple")
+
   })
 })

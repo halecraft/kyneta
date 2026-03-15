@@ -1,7 +1,6 @@
 /**
  * Tests for regions.ts — list and conditional region management.
  *
- * All tests use CHANGEFEED-based mocks instead of @loro-extended types.
  * List region tests use mock sequence refs with [CHANGEFEED] protocol.
  * Conditional region tests use LocalRef for condition state.
  */

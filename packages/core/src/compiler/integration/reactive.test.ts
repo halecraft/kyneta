@@ -9,7 +9,7 @@ import {
   resetTestState,
   Scope,
   subscribe,
-  subscribeWithValue,
+  valueRegion,
 } from "./helpers.js"
 
 installDOMGlobals()
@@ -59,8 +59,8 @@ describe("compiler integration - reactive expressions", () => {
     const lastNameNode = document.createTextNode("")
     const fullNameNode = document.createTextNode("")
 
-    subscribeWithValue(
-      firstName,
+    valueRegion(
+      [firstName],
       () => read(firstName),
       v => {
         firstNameNode.textContent = v
@@ -68,8 +68,8 @@ describe("compiler integration - reactive expressions", () => {
       scope,
     )
 
-    subscribeWithValue(
-      lastName,
+    valueRegion(
+      [lastName],
       () => read(lastName),
       v => {
         lastNameNode.textContent = v

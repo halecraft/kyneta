@@ -264,7 +264,7 @@ describe("generateDOM", () => {
   })
 
   describe("multi-dependency subscriptions", () => {
-    it("should generate subscribeMultiple for text content with multiple dependencies", () => {
+    it("should generate valueRegion for text content with multiple dependencies", () => {
       const reactiveExpr = createContent(
         "first.get() + ' ' + last.get()",
         "reactive",
@@ -285,8 +285,7 @@ describe("generateDOM", () => {
       expect(code).toContain("valueRegion(")
       expect(code).toContain("[first, last]")
       expect(code).toContain("textContent")
-      // valueRegion handles initialization, no separate initial set needed
-      expect(code).not.toContain("subscribeMultiple")
+
     })
   })
 
@@ -311,14 +310,13 @@ describe("generateDOM", () => {
 
       const code = generateDOM(builder)
 
-      // Should use textRegion instead of subscribeWithValue
+      // Should use textRegion instead of valueRegion
       expect(code).toContain("textRegion")
       expect(code).toContain("doc.title")
-      expect(code).not.toContain("subscribeWithValue")
       expect(code).not.toContain("textContent")
     })
 
-    it("should generate subscribeWithValue for non-direct TextRef read", () => {
+    it("should generate valueRegion for non-direct TextRef read", () => {
       // doc.title.get().toUpperCase() — directReadSource is undefined
       const nonDirectRead = createContent(
         "doc.title.get().toUpperCase()",
@@ -341,11 +339,10 @@ describe("generateDOM", () => {
       expect(code).toContain("valueRegion(")
       expect(code).toContain("textContent")
       expect(code).not.toContain("textRegion")
-      expect(code).not.toContain("subscribeWithValue")
     })
 
-    it("should generate subscribeMultiple for multi-dep expression with TextRef", () => {
-      // doc.title.get() + doc.subtitle.get() — two deps, uses subscribeMultiple
+    it("should generate valueRegion for multi-dep expression with TextRef", () => {
+      // doc.title.get() + doc.subtitle.get() — two deps, uses valueRegion
       const multiDepRead = createContent(
         "doc.title.get() + ' - ' + doc.subtitle.get()",
         "reactive",
@@ -367,10 +364,9 @@ describe("generateDOM", () => {
       expect(code).toContain("valueRegion(")
       expect(code).toContain("[doc.title, doc.subtitle]")
       expect(code).not.toContain("textRegion")
-      expect(code).not.toContain("subscribeMultiple")
     })
 
-    it("should generate subscribeWithValue for non-text deltaKind even with directReadSource", () => {
+    it("should generate valueRegion for non-text deltaKind even with directReadSource", () => {
       // Edge case: directReadSource is set but deltaKind is not "text"
       // This shouldn't happen in practice, but codegen should handle it safely
       const replaceRead = createContent(
@@ -393,7 +389,6 @@ describe("generateDOM", () => {
       // Should use valueRegion because deltaKind is not "text"
       expect(code).toContain("valueRegion(")
       expect(code).not.toContain("textRegion")
-      expect(code).not.toContain("subscribeWithValue")
     })
   })
 
@@ -1558,11 +1553,10 @@ describe("generateElementFactoryWithResult - dissolution on cloning path", () =>
     expect(result.code).toContain('"No"')
 
     // Should contain a subscription call for the reactive ternary
-    const hasSubscription =
+    expect(
       result.code.includes("subscribe(") ||
-      result.code.includes("subscribeWithValue(") ||
-      result.code.includes("valueRegion(")
-    expect(hasSubscription).toBe(true)
+      result.code.includes("valueRegion("),
+    ).toBe(true)
   })
 
   it("should still emit conditionalRegion on cloning path for non-dissolvable conditional", () => {

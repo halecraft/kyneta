@@ -18,7 +18,7 @@ describe("compiler integration - arbitrary statements", () => {
     resetTestState()
   })
 
-  describe("Task 4.1: Variable declaration in for-of body", () => {
+  describe("Variable declaration in for-of body", () => {
     it("should compile and execute variable declaration in reactive list", () => {
       const ref1 = createMockPlainRef("first")
       const ref2 = createMockPlainRef("second")
@@ -93,7 +93,7 @@ describe("compiler integration - arbitrary statements", () => {
     })
   })
 
-  describe("Task 4.2: Multiple statements in builder", () => {
+  describe("Multiple statements in builder", () => {
     it("should compile multiple statements in correct order (DOM)", () => {
       const source = `
         div(() => {
@@ -177,7 +177,7 @@ describe("compiler integration - arbitrary statements", () => {
     })
   })
 
-  describe("Task 4.3: Interleaved statements and elements", () => {
+  describe("Interleaved statements and elements", () => {
     it("should preserve interleaving order in generated code", () => {
       const source = withTypes(`
         declare const items: ListRef<{ get(): string }>
@@ -206,7 +206,7 @@ describe("compiler integration - arbitrary statements", () => {
     })
   })
 
-  describe("Task 4.4: Static loops", () => {
+  describe("Static loops", () => {
     it("should compile and execute static for-of loop (DOM)", () => {
       const source = `
         ul(() => {
@@ -262,7 +262,7 @@ describe("compiler integration - arbitrary statements", () => {
     })
   })
 
-  describe("Task 4.5: Static conditionals", () => {
+  describe("Static conditionals", () => {
     it("should compile and execute static if (true) (DOM)", () => {
       const source = `
         div(() => {
@@ -338,7 +338,7 @@ describe("compiler integration - arbitrary statements", () => {
     })
   })
 
-  describe("Task 4.5: Ref-based iteration pattern", () => {
+  describe("Ref-based iteration pattern", () => {
     it("should compile and execute itemRef.get() pattern in list region", () => {
       const ref1 = createMockPlainRef("first")
       const ref2 = createMockPlainRef("second")
@@ -443,7 +443,7 @@ describe("compiler integration - arbitrary statements", () => {
     })
   })
 
-  describe("Task 4.6: Return statement error", () => {
+  describe("Return statement error", () => {
     it("should throw compile-time error for return statement", () => {
       const source = `
         div(() => {

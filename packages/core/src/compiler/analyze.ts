@@ -465,7 +465,7 @@ export function extractDependencies(expr: Expression): Dependency[] {
   // remove any parent dependency whose source is a strict prefix (e.g., "doc").
   // This prevents a reactive TypedDoc from adding a redundant "doc" (map) dep
   // alongside "doc.title" (text), which would break the isTextRegionContent
-  // length-1 check and degrade from textRegion to subscribeMultiple.
+  // length-1 check and degrade from textRegion to valueRegion.
   if (deps.length > 1) {
     const sources = new Set(deps.map(d => d.source))
     return deps.filter(dep => {

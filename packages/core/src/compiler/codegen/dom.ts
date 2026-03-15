@@ -169,13 +169,11 @@ function indented(state: CodegenState): CodegenState {
  * both `generateChild` and `generateBodyWithReturn`. The caller is responsible
  * for creating the text node and handling placement (appendChild vs return).
  *
- * Handles three cases:
+ * Handles two cases:
  * 1. Direct TextRef read (node.directReadSource && deltaKind === "text"):
  *    → emit textRegion(textVar, directReadSource, scopeVar)
- * 2. Single dependency:
- *    → emit subscribeWithValue(dep, getter, setter, scopeVar)
- * 3. Multiple dependencies:
- *    → emit subscribeMultiple([deps], callback, scopeVar)
+ * 2. All other reactive content (single or multiple dependencies):
+ *    → emit valueRegion([deps], getter, setter, scopeVar)
  *
  * @param node - The reactive content node
  * @param textVar - The variable name of the text node

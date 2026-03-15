@@ -33,8 +33,6 @@ export { Scope } from "./scope.js"
 export {
   read,
   subscribe,
-  subscribeMultiple,
-  subscribeWithValue,
   unsubscribe,
   valueRegion,
   type SubscriptionId,

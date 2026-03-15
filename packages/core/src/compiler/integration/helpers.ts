@@ -27,8 +27,6 @@ import {
   listRegion,
   read,
   subscribe,
-  subscribeMultiple,
-  subscribeWithValue,
   textRegion,
   valueRegion,
   Scope,
@@ -67,8 +65,6 @@ export {
   listRegion,
   read,
   subscribe,
-  subscribeMultiple,
-  subscribeWithValue,
   textRegion,
   valueRegion,
   Scope,
@@ -112,10 +108,9 @@ export function installDOMGlobals(): void {
  * Inline type declarations for CHANGEFEED-based ref types.
  *
  * Integration tests use `transformSource()` which resolves modules from the
- * real filesystem. Since `@loro-extended/change` no longer exists, test source
- * strings must declare their types inline. This provides stubs that mirror
- * the schema's CHANGEFEED protocol with narrow change types for proper
- * deltaKind extraction.
+ * real filesystem. Test source strings declare their types inline. This
+ * provides stubs that mirror the schema's CHANGEFEED protocol with narrow
+ * change types for proper deltaKind extraction.
  */
 export const CHANGEFEED_TYPE_STUBS = `
 import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
@@ -270,8 +265,6 @@ export function wrapLastBuilder(source: string): string {
 export function getRuntimeDeps(): Record<string, unknown> {
   return {
     subscribe,
-    subscribeMultiple,
-    subscribeWithValue,
     valueRegion,
     read,
     listRegion,
@@ -341,8 +334,7 @@ export function resetTestState(): void {
  * A mock text ref with CHANGEFEED protocol.
  *
  * Provides `.insert()`, `.delete()`, `.toString()`, `.get()` and emits
- * text changes via CHANGEFEED. Replaces the old `createTypedDoc` + `Shape.text()`
- * pattern from `@loro-extended/change`.
+ * text changes via CHANGEFEED.
  */
 export function createMockTextRef(initial: string = ""): {
   ref: {

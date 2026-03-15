@@ -1,9 +1,8 @@
 /**
- * Conditional region compiler integration tests (Tasks 7.1–7.4).
+ * Conditional region compiler integration tests.
  *
- * Migrated from the monolithic integration.test.ts.
  * Compiler tests use withTypes() for type stubs; the runtime test uses
- * createMockCounterRef instead of the old Loro doc helpers.
+ * createMockCounterRef for reactive condition state.
  */
 
 import { beforeEach, describe, expect, it } from "vitest"
@@ -14,7 +13,7 @@ import {
   read,
   resetTestState,
   Scope,
-  subscribeWithValue,
+  valueRegion,
   transformSource,
   withTypes,
 } from "./helpers.js"
@@ -26,7 +25,7 @@ describe("compiler integration - conditional regions", () => {
     resetTestState()
   })
 
-  describe("Task 7.1: if detection", () => {
+  describe("if detection", () => {
     it("should detect if statement and create ConditionalNode in IR", () => {
       const source = withTypes(`
         declare const doc: { count: CounterRef }
@@ -97,7 +96,7 @@ describe("compiler integration - conditional regions", () => {
     })
   })
 
-  describe("Task 7.2: Generated conditionalRegion call", () => {
+  describe("Generated conditionalRegion call", () => {
     it("should generate conditionalRegion call with marker", () => {
       const source = withTypes(`
         declare const doc: { count: CounterRef }
@@ -160,7 +159,7 @@ describe("compiler integration - conditional regions", () => {
     })
   })
 
-  describe("Task 7.3: else/else-if chains", () => {
+  describe("else/else-if chains", () => {
     it("should handle if/else with two branches", () => {
       const source = withTypes(`
         declare const doc: { count: CounterRef }
@@ -244,7 +243,7 @@ describe("compiler integration - conditional regions", () => {
   // Note: Runtime behavior tests for conditionalRegion and __staticConditionalRegion
   // are in regions.test.ts. This section tests compiler integration only.
 
-  describe("Task 7.4: Compile-and-execute integration", () => {
+  describe("Compile-and-execute integration", () => {
     it("should compile and execute dissolved conditional reactively", () => {
       // This test verifies the full pipeline: source → IR → codegen → execute
       // With identical structure, the conditional should be dissolved
@@ -262,8 +261,8 @@ describe("compiler integration - conditional regions", () => {
       container.appendChild(p)
 
       // Subscribe to reactive content
-      subscribeWithValue(
-        count,
+      valueRegion(
+        [count],
         () => (read(count) > 0 ? "Has items" : "Empty"),
         v => {
           text.textContent = String(v)

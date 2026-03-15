@@ -1,11 +1,8 @@
 /**
- * Tests for text-patch.ts
+ * Tests for text-patch.ts — surgical text patching and subscription-aware DOM updates.
  *
- * Phase 1: Pure functions with zero DOM or subscription dependencies.
- * Phase 3: textRegion subscription-aware DOM updates.
- * Phase 4: patchInputValue and inputTextRegion for <input>/<textarea> elements.
- *
- * All tests use CHANGEFEED-based mocks instead of @loro-extended types.
+ * Covers planTextPatch (pure), patchText/patchInputValue (imperative),
+ * and textRegion/inputTextRegion (subscription-aware).
  */
 
 import {

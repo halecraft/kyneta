@@ -1,8 +1,7 @@
 /**
  * Tests for subscribe.ts — subscription management using CHANGEFEED protocol.
  *
- * These tests use LocalRef from src/reactive (Phase 2) as the reactive
- * primitive, replacing the old @loro-extended/reactive types.
+ * These tests use LocalRef from src/reactive as the reactive primitive.
  */
 
 import { CHANGEFEED, type ChangeBase, type Changeset } from "@kyneta/schema"

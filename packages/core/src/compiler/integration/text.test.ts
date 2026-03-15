@@ -12,8 +12,7 @@ import {
   resetTestState,
   Scope,
   subscribe,
-  subscribeMultiple,
-  subscribeWithValue,
+  valueRegion,
   inputTextRegion,
   textRegion,
   transformSource,
@@ -28,7 +27,7 @@ describe("compiler integration - text patching", () => {
     resetTestState()
   })
 
-  describe("Task 5.1: Direct TextRef read uses insertData for character insertion", () => {
+  describe("Direct TextRef read uses insertData for character insertion", () => {
     it("should use insertData for text insertion via textRegion", () => {
       const { ref: title } = createMockTextRef("Hello")
 
@@ -89,7 +88,7 @@ describe("compiler integration - text patching", () => {
     })
   })
 
-  describe("Task 5.2: Direct TextRef read uses deleteData for character deletion", () => {
+  describe("Direct TextRef read uses deleteData for character deletion", () => {
     it("should use deleteData for text deletion via textRegion", () => {
       const { ref: title } = createMockTextRef("Hello World")
 
@@ -146,7 +145,7 @@ describe("compiler integration - text patching", () => {
     })
   })
 
-  describe("Task 5.3: Non-direct read uses full replacement", () => {
+  describe("Non-direct read uses full replacement", () => {
     it("should use textContent replacement for transformed text", () => {
       const { ref: title } = createMockTextRef("hello")
 
@@ -184,9 +183,9 @@ describe("compiler integration - text patching", () => {
       })
 
       // Non-direct read: .toUpperCase() transformation
-      // Use subscribeWithValue (what codegen emits for non-direct reads)
-      subscribeWithValue(
-        title,
+      // Use valueRegion (what codegen emits for non-direct reads)
+      valueRegion(
+        [title],
         () => (read(title) as string).toUpperCase(),
         v => {
           textNode.textContent = String(v)
@@ -237,8 +236,8 @@ describe("compiler integration - text patching", () => {
       })
 
       // Template literal (non-direct read)
-      subscribeWithValue(
-        name,
+      valueRegion(
+        [name],
         () => `Hello, ${read(name)}!`,
         v => {
           textNode.textContent = String(v)
@@ -260,7 +259,7 @@ describe("compiler integration - text patching", () => {
     })
   })
 
-  describe("Task 5.4: Multi-dep text expression uses replace semantics", () => {
+  describe("Multi-dep text expression uses replace semantics", () => {
     it("should use textContent replacement for multi-dependency expressions", () => {
       const { ref: firstName } = createMockTextRef("John")
       const { ref: lastName } = createMockTextRef("Doe")
@@ -289,17 +288,17 @@ describe("compiler integration - text patching", () => {
         configurable: true,
       })
 
-      // Multi-dependency expression — uses subscribeMultiple
-      textNode.textContent = `${read(firstName)} ${read(lastName)}`
-      textContentSets = 0
-
-      subscribeMultiple(
+      // Multi-dependency expression — uses valueRegion
+      // valueRegion handles initial render, so reset counter after it runs
+      valueRegion(
         [firstName, lastName],
-        () => {
-          textNode.textContent = `${read(firstName)} ${read(lastName)}`
+        () => `${read(firstName)} ${read(lastName)}`,
+        v => {
+          textNode.textContent = v
         },
         scope,
       )
+      textContentSets = 0
 
       // Update first name
       firstName.delete(0, 4)
