@@ -28,6 +28,7 @@ import {
   subscribe,
   version,
   delta,
+  exportSnapshot,
 } from "./facade.js"
 import type { Changeset, Op } from "@kyneta/schema"
 import { parseServerMessage, toOps } from "./protocol.js"
@@ -78,16 +79,20 @@ async function start() {
         const renderFn = createApp(doc)
         const appHtml = typeof renderFn === "function" ? renderFn() : ""
 
-        // 4. Inject SSR content and frontier meta tag into the template.
-        //    The version integer is the frontier — the client reads it on
-        //    boot and sends it in the initial sync message so the server
-        //    knows what delta to push.
+        // 4. Inject SSR content, frontier meta tag, and substrate snapshot
+        //    into the template. The snapshot and frontier are captured
+        //    atomically (no await between them) so they're consistent.
         const currentVersion = version(doc)
+        const snapshot = exportSnapshot(doc)
         const html = template
           .replace("<!--ssr-->", appHtml)
           .replace(
             "</head>",
             `  <meta name="kyneta-version" content="${currentVersion}">\n</head>`,
+          )
+          .replace(
+            "</body>",
+            `  <script id="kyneta-state" type="application/json">${snapshot.data}</script>\n</body>`,
           )
 
         res.writeHead(200, { "Content-Type": "text/html" })

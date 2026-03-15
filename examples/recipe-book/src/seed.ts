@@ -2,11 +2,13 @@
 //
 //   Recipe Book — Seed Data
 //
-//   Shared initial state used by both server and client.
-//   Both call createDoc(RecipeBookSchema, SEED) to start from the same
-//   genesis state at version 0.
+//   Initial state used by the server to create the authoritative document.
+//   Clients connecting via SSR receive the server's current state as a
+//   substrate snapshot — they don't use SEED directly.
 //
 // ═══════════════════════════════════════════════════════════════════════════
+
+import type { RecipeBookSeed } from "./types.js"
 
 export const SEED = {
   title: "My Recipe Book",
@@ -35,4 +37,4 @@ export const SEED = {
     },
   ],
   favorites: 0,
-} satisfies Record<string, unknown>
+} satisfies RecipeBookSeed

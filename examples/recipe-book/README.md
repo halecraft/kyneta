@@ -65,10 +65,10 @@ The server delivers three distinct data flows on each page load:
 | # | Flow | Size | Mechanism | Purpose |
 |---|------|------|-----------|---------|
 | 1 | **Rendered HTML** | Proportional to view | `<!--ssr-->` placeholder in `index.html` | Immediate visual content — no JS needed to see the page |
-| 2 | **Frontier** | O(1) — one integer | `<meta name="kyneta-version">` tag | Tells the client what the server has already rendered |
-| 3 | **Sync bootstrap** | Proportional to missed ops | WebSocket `{ type: "delta", ops, version }` | Catches the client up to the server's current state |
+| 2 | **State + Frontier** | Proportional to state | `<script id="kyneta-state">` + `<meta name="kyneta-version">` | Client reconstructs equivalent substrate from snapshot |
+| 3 | **Sync bootstrap** | Proportional to missed ops | WebSocket `{ type: "delta", ops, version }` | Catches the client up to ops applied after SSR render |
 
-The client reads the frontier from the `<meta>` tag on boot, sends it to the server via WebSocket, and only receives operations that occurred *after* the SSR snapshot. This avoids re-transmitting state that's already visible.
+The client reads the embedded snapshot from `<script id="kyneta-state" type="application/json">` and reconstructs a `PlainSubstrate` via `createDocFromSnapshot()`. The frontier from `<meta name="kyneta-version">` is sent to the server via WebSocket so the client only receives operations that occurred *after* the SSR snapshot was captured. If no snapshot is present (e.g. direct JS load without SSR), the client falls back to creating a doc from `SEED`.
 
 ## Delta Kind Spectrum
 
@@ -108,7 +108,7 @@ examples/recipe-book/
 ├── package.json             Dependencies: @kyneta/core, @kyneta/schema, zod
 ├── vite.config.ts           Kyneta Vite plugin (auto-detects SSR target)
 ├── vitest.config.ts         Test runner config
-├── recipe-book.test.ts      12 integration tests (facade + sync primitives)
+├── recipe-book.test.ts      15 integration tests (facade + sync + SSR snapshot round-trip)
 └── src/
     ├── schema.ts            RecipeBookSchema — all 4 delta kinds
     ├── types.ts             RecipeBookDoc, RecipeBookSnapshot, RecipeBookSeed
@@ -143,9 +143,10 @@ Each tab creates its own local document from the same seed. The WebSocket sync p
 pnpm test
 ```
 
-Runs 12 integration tests covering:
+Runs 15 integration tests covering:
 - **Facade basics** (5 tests) — `createDoc`, text/list/counter/boolean mutations
 - **Sync primitives** (7 tests) — version tracking, delta computation, round-trip replication
+- **SSR snapshot round-trip** (3 tests) — `exportSnapshot` → `createDocFromSnapshot` → state equality, fresh epoch frontier, up-to-date delta
 
 ## Frontier-Based Sync Protocol
 

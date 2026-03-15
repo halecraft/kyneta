@@ -22,7 +22,6 @@ Key subsystems:
 - **Compiler** (`src/compiler/`) — static analysis, IR, dual-target codegen (DOM + HTML)
 - **Runtime** (`src/runtime/`) — mount, scope lifecycle, delta regions, hydration
 - **Unplugin** (`src/unplugin/`) — universal build plugin with adapters for Vite, Bun, Rollup, Rolldown, esbuild, Farm
-- **Server** (`src/server/`) — SSR rendering utilities (escape-hatch API; the compiler's HTML codegen is the primary SSR path)
 - **Reactive** (`src/reactive/`) — `state()` local reactive primitive (`LocalRef<T>`)
 
 860+ tests.

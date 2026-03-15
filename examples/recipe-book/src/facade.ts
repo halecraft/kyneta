@@ -2,38 +2,32 @@ import type {
 	SchemaNode as SchemaType,
 	Ref,
 	Op,
-	Changeset,
+	Substrate,
+	SubstratePayload,
 } from "@kyneta/schema";
 import {
-	Zero,
 	interpret,
-	createPlainSubstrate,
 	readable,
 	writable,
 	changefeed,
-	subscribe,
+	plainSubstrateFactory,
+	PlainFrontier,
 } from "@kyneta/schema";
 
 export { change, applyChanges, subscribe, subscribeNode } from "@kyneta/schema";
 
-// --- Sync state (per-document version tracking + change log) ---
+// --- Substrate tracking (per-document) ---
 
-interface SyncState {
-	version: number;
-	/** log[i] = batch of Ops from version i → i+1 */
-	log: Op[][];
-}
+const substrates = new WeakMap<object, Substrate<PlainFrontier>>();
 
-const syncStates = new WeakMap<object, SyncState>();
-
-function getSyncState(doc: object): SyncState {
-	const state = syncStates.get(doc);
-	if (!state) {
+function getSubstrate(doc: object): Substrate<PlainFrontier> {
+	const s = substrates.get(doc);
+	if (!s) {
 		throw new Error(
-			"version/delta called on an object without sync state. Use a doc created by createDoc().",
+			"version/delta/exportSnapshot called on an object without a substrate. Use a doc created by createDoc() or createDocFromSnapshot().",
 		);
 	}
-	return state;
+	return s;
 }
 
 // --- createDoc ---
@@ -46,48 +40,63 @@ interface CreateDoc {
 }
 
 export const createDoc: CreateDoc = (schema, seed = {}) => {
-	const defaults = Zero.structural(schema) as Record<string, unknown>;
-	const initial = Zero.overlay(seed, defaults, schema) as Record<
-		string,
-		unknown
-	>;
-	const store = { ...initial } as Record<string, unknown>;
-	const substrate = createPlainSubstrate(store);
-
-	// Cast to `any` to stay within TS's type-instantiation depth budget (TS2589).
+	const substrate = plainSubstrateFactory.create(schema, seed);
 	const doc: any = interpret(schema, substrate.context())
 		.with(readable)
 		.with(writable)
 		.with(changefeed)
 		.done();
+	substrates.set(doc, substrate);
+	return doc;
+};
 
-	const state: SyncState = { version: 0, log: [] };
-	syncStates.set(doc, state);
+// --- createDocFromSnapshot ---
 
-	// Each changefeed delivery = one flush cycle. Track versions by appending
-	// to the log so delta() can compute what a peer has missed.
-	subscribe(doc, (changeset: Changeset<Op>) => {
-		const batch: Op[] = changeset.changes.map((event) => ({
-			path: event.path,
-			change: event.change,
-		}));
-		state.log.push(batch);
-		state.version++;
-	});
+interface CreateDocFromSnapshot {
+	<S extends SchemaType>(schema: S, payload: SubstratePayload): Ref<S>;
+}
 
-	return doc as any;
+export const createDocFromSnapshot: CreateDocFromSnapshot = (
+	schema,
+	payload,
+) => {
+	const substrate = plainSubstrateFactory.fromSnapshot(payload, schema);
+	const doc: any = interpret(schema, substrate.context())
+		.with(readable)
+		.with(writable)
+		.with(changefeed)
+		.done();
+	substrates.set(doc, substrate);
+	return doc;
 };
 
 // --- Sync primitives ---
 
 /** Current frontier — monotonic integer, increments on each flush cycle. */
 export function version(doc: object): number {
-	return getSyncState(doc).version;
+	return getSubstrate(doc).frontier().value;
 }
 
-/** All ops applied since `fromVersion`. Returns [] if already up to date. */
+/**
+ * All ops applied since `fromVersion`. Returns [] if already up to date.
+ *
+ * This returns raw Op[] for wire compatibility — the live sync protocol
+ * uses Op-level granularity. For bulk transfers (SSR, reconnection),
+ * use exportSnapshot() instead.
+ */
 export function delta(doc: object, fromVersion: number): Op[] {
-	const state = getSyncState(doc);
-	if (fromVersion >= state.version) return [];
-	return state.log.slice(fromVersion).flat();
+	const substrate = getSubstrate(doc);
+	const since = new PlainFrontier(fromVersion);
+	const payload = substrate.exportSince(since);
+	if (!payload) return [];
+	const ops = JSON.parse(payload.data as string) as Op[];
+	return ops;
+}
+
+/**
+ * Export the full substrate snapshot — sufficient for a new peer to
+ * reconstruct an equivalent document via createDocFromSnapshot().
+ */
+export function exportSnapshot(doc: object): SubstratePayload {
+	return getSubstrate(doc).exportSnapshot();
 }

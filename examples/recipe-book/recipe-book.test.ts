@@ -16,11 +16,13 @@ import { RecipeBookSchema } from "./src/schema.js"
 import { SEED } from "./src/seed.js"
 import {
   createDoc,
+  createDocFromSnapshot,
   change,
   applyChanges,
   subscribe,
   version,
   delta,
+  exportSnapshot,
 } from "./src/facade.js"
 
 // ---------------------------------------------------------------------------
@@ -207,5 +209,57 @@ describe("sync primitives", () => {
     // At least one changeset should have origin "sync"
     const syncChangesets = received.filter((cs) => cs.origin === "sync")
     expect(syncChangesets.length).toBeGreaterThan(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SSR snapshot round-trip
+// ---------------------------------------------------------------------------
+
+describe("SSR snapshot round-trip", () => {
+  it("exportSnapshot → createDocFromSnapshot → snapshots match", () => {
+    const docA = makeDoc()
+
+    // Apply several mutations covering all delta kinds
+    change(docA, (d) => d.title.insert(0, "★ "))
+    change(docA, (d) => d.favorites.increment(3))
+    change(docA, (d) => {
+      d.recipes.push({
+        name: "Tacos",
+        vegetarian: true,
+        ingredients: ["tortillas", "beans"],
+      } as any)
+    })
+    change(docA, (d) => {
+      d.recipes.at(0)!.vegetarian.set(true)
+    })
+
+    // Export snapshot and reconstruct
+    const snapshot = exportSnapshot(docA)
+    const docB = createDocFromSnapshot(RecipeBookSchema, snapshot)
+
+    // Snapshots should be deeply equal
+    expect((docB as any)()).toEqual((docA as any)())
+  })
+
+  it("reconstructed doc starts at frontier 0 (fresh epoch)", () => {
+    const docA = makeDoc()
+    change(docA, (d) => d.favorites.increment(5))
+    change(docA, (d) => d.title.insert(0, "X"))
+    expect(version(docA)).toBe(2)
+
+    const snapshot = exportSnapshot(docA)
+    const docB = createDocFromSnapshot(RecipeBookSchema, snapshot)
+
+    // New substrate is a fresh epoch — frontier resets to 0
+    expect(version(docB)).toBe(0)
+  })
+
+  it("delta(doc, version(doc)) returns [] when up to date", () => {
+    const docA = makeDoc()
+    change(docA, (d) => d.favorites.increment(1))
+
+    const ops = delta(docA, version(docA))
+    expect(ops).toEqual([])
   })
 })
