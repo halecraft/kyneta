@@ -10,6 +10,8 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// <reference types="@kyneta/core/types/elements" />
+
 /**
  * Create the app element.
  *
@@ -33,9 +35,3 @@ export function createApp(_doc: unknown) {
   })
 }
 
-// Declare element factories so TypeScript doesn't complain about bare names.
-// These are never called at runtime — the Kyneta compiler replaces the
-// builder call expression before the code executes.
-declare function div(builder: () => void): any
-declare function h1(...args: any[]): any
-declare function p(...args: any[]): any

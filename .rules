@@ -1,3 +1,3 @@
 - use `pnpm` as a package manager
 - use `bun` to run typescript files, especially on the CLI during investigatory sampling
-  - check types with `bun exec "tsc --noEmit"`
+  - check types with `bunx tsc`
