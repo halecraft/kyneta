@@ -25,12 +25,6 @@ import {
 	describe,
 	// Interpreter machinery
 	interpret,
-	plainInterpreter,
-	bottomInterpreter,
-	withReadable,
-	withCaching,
-	withWritable,
-	withChangefeed,
 	createWritableContext,
 	readable,
 	writable,
@@ -61,7 +55,6 @@ import {
 import type {
 	Plain,
 	RefContext,
-	WritableContext,
 	Changeset,
 	TreeEvent,
 	PendingChange,
@@ -217,7 +210,7 @@ log(`
       doc.tasks.length → ${doc.tasks.length}
 
     Iteration (yields refs):
-    ${[...doc.tasks].map((t: any) => `  [${t.done() ? "✓" : " "}] ${t.title()} (priority: ${t.priority()})`).join("\n    ")}
+    ${[...doc.tasks].map((t) => `  [${t.done() ? "✓" : " "}] ${t.title()} (priority: ${t.priority()})`).join("\n    ")}
 `);
 
 doc.tasks.insert(0, { title: "Write tests", done: false, priority: 1 });
@@ -588,7 +581,7 @@ try {
 section(12, "The Composition Algebra");
 
 log(`
-    Four composable layers — each independently useful:
+    Five composable layers — each independently useful:
 
       interpret(schema, ctx)
         .with(readable)    → read-only callable refs
@@ -597,7 +590,7 @@ log(`
         .done()
 
     Manual composition (equivalent):
-      withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))
+      withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))))
 `);
 
 // Read-only document: just drop the writable and changefeed layers
