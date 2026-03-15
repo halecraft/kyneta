@@ -54,16 +54,17 @@ npx tsx example/main.ts
 Write `createDoc` once — use it everywhere:
 
 ```ts
-function createDoc(seed = {}) {
-  const defaults = Zero.structural(ProjectSchema)
-  const initial = Zero.overlay(seed, defaults, ProjectSchema)
+function createDoc<S extends SchemaNode>(schema: S, seed?: Record<string, unknown>): Ref<S>
+function createDoc(schema, seed = {}) {
+  const defaults = Zero.structural(schema)
+  const initial = Zero.overlay(seed, defaults, schema)
   const store = { ...initial }
   const ctx = createWritableContext(store)
-  return interpret(ProjectSchema, ctx)
+  return interpret(schema, ctx)
     .with(readable).with(writable).with(changefeed).done()
 }
 
-const doc = createDoc({ name: "Schema Algebra", ... })
+const doc = createDoc(ProjectSchema, { name: "Schema Algebra", ... })
 ```
 
 ### Library-Level Functions
@@ -213,7 +214,7 @@ The developer sees a clean, high-level API — all library imports:
 
 ```
 Schema.doc({ ... })           →  define structure
-createDoc(seed)               →  get a live document
+createDoc(schema, seed)       →  get a live document
 
 doc.name()                    →  read current value
 doc.name.insert(...)          →  mutate naturally

@@ -52,6 +52,8 @@ import {
 } from "../src/index.js";
 
 import type {
+	Ref,
+	Schema as SchemaType,
 	RefContext,
 	Changeset,
 	PendingChange,
@@ -111,29 +113,34 @@ log(describe(ProjectSchema));
 
 section(2, "Create a Document");
 
-// Write createDoc once — use it everywhere.
-function createDoc(seed: Record<string, unknown> = {}) {
-	const defaults = Zero.structural(ProjectSchema) as Record<string, unknown>;
-	const initial = Zero.overlay(seed, defaults, ProjectSchema) as Record<
+// Write createDoc once — use it with any schema.
+// Interface call signature defers Ref<S> evaluation (same mechanism as
+// InterpretBuilder.done()) — avoids TS2589 on abstract SchemaNode.
+interface CreateDoc {
+	<S extends SchemaType>(schema: S, seed?: Record<string, unknown>): Ref<S>;
+}
+const createDoc: CreateDoc = (schema, seed = {}) => {
+	const defaults = Zero.structural(schema) as Record<string, unknown>;
+	const initial = Zero.overlay(seed, defaults, schema) as Record<
 		string,
 		unknown
 	>;
 	const store: Store = { ...initial };
 	const ctx = createWritableContext(store);
-	return interpret(ProjectSchema, ctx)
+	return interpret(schema, ctx)
 		.with(readable)
 		.with(writable)
 		.with(changefeed)
-		.done();
-}
+		.done() as any;
+};
 
-const doc = createDoc({
+const doc = createDoc(ProjectSchema, {
 	name: "Schema Algebra",
 	content: { type: "text", body: "A unified recursive grammar" },
 });
 
 log(`
-    const doc = createDoc({ name: "Schema Algebra", ... })
+    const doc = createDoc(ProjectSchema, { name: "Schema Algebra", ... })
 
     doc() →
 ${json(doc())
@@ -357,8 +364,8 @@ const baseSeed = {
 	content: { type: "text", body: "" },
 };
 
-const docA = createDoc(baseSeed);
-const docB = createDoc(baseSeed);
+const docA = createDoc(ProjectSchema, baseSeed);
+const docB = createDoc(ProjectSchema, baseSeed);
 
 // Subscribe to docB BEFORE applying changes — see the origin
 const docBChangesets: Changeset[] = [];
@@ -409,7 +416,7 @@ log(`
 `);
 
 {
-	const batchDoc = createDoc({
+	const batchDoc = createDoc(ProjectSchema, {
 		name: "Batch",
 		content: { type: "text", body: "" },
 	});
