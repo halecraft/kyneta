@@ -7,7 +7,7 @@ import {
   change,
   applyChanges,
   subscribe,
-  subscribeTree,
+  subscribeNode,
   CHANGEFEED,
   TRANSACT,
   replaceChange,
@@ -954,12 +954,12 @@ describe("re-entrancy: mutation during notification", () => {
 // subscribe() — library-level node-level observation
 // ===========================================================================
 
-describe("subscribe: basic behavior", () => {
+describe("subscribeNode: basic behavior", () => {
   it("fires on leaf mutation with correct Changeset", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset[] = []
 
-    subscribe(doc.settings.darkMode, (cs) => changesets.push(cs))
+    subscribeNode(doc.settings.darkMode, (cs) => changesets.push(cs))
     doc.settings.darkMode.set(true)
 
     expect(changesets).toHaveLength(1)
@@ -967,11 +967,11 @@ describe("subscribe: basic behavior", () => {
     expect(changesets[0]!.changes[0]!.type).toBe("replace")
   })
 
-  it("composite subscribe fires on node-level change only (not child mutations)", () => {
+  it("composite subscribeNode fires on node-level change only (not child mutations)", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset[] = []
 
-    subscribe(doc.settings, (cs) => changesets.push(cs))
+    subscribeNode(doc.settings, (cs) => changesets.push(cs))
 
     // Child mutation — should NOT fire
     doc.settings.darkMode.set(true)
@@ -986,7 +986,7 @@ describe("subscribe: basic behavior", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset[] = []
 
-    const unsub = subscribe(doc.settings.darkMode, (cs) => changesets.push(cs))
+    const unsub = subscribeNode(doc.settings.darkMode, (cs) => changesets.push(cs))
     doc.settings.darkMode.set(true)
     expect(changesets).toHaveLength(1)
 
@@ -996,20 +996,20 @@ describe("subscribe: basic behavior", () => {
   })
 
   it("throws on non-changefeed ref", () => {
-    expect(() => subscribe({} as any, () => {})).toThrow("[CHANGEFEED]")
+    expect(() => subscribeNode({} as any, () => {})).toThrow("[CHANGEFEED]")
   })
 })
 
 // ===========================================================================
-// subscribeTree() — library-level tree-level observation
+// subscribe() — library-level tree-level observation (deep default)
 // ===========================================================================
 
-describe("subscribeTree: basic behavior", () => {
+describe("subscribe: basic behavior", () => {
   it("fires on child mutation with relative path", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset<TreeEvent>[] = []
 
-    subscribeTree(doc.settings, (cs) => changesets.push(cs))
+    subscribe(doc.settings, (cs) => changesets.push(cs))
     doc.settings.darkMode.set(true)
 
     expect(changesets).toHaveLength(1)
@@ -1023,7 +1023,7 @@ describe("subscribeTree: basic behavior", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset<TreeEvent>[] = []
 
-    subscribeTree(doc.settings, (cs) => changesets.push(cs))
+    subscribe(doc.settings, (cs) => changesets.push(cs))
     doc.settings.set({ darkMode: true, fontSize: 20 })
 
     expect(changesets).toHaveLength(1)
@@ -1035,7 +1035,7 @@ describe("subscribeTree: basic behavior", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset<TreeEvent>[] = []
 
-    const unsub = subscribeTree(doc.settings, (cs) => changesets.push(cs))
+    const unsub = subscribe(doc.settings, (cs) => changesets.push(cs))
     doc.settings.darkMode.set(true)
     expect(changesets).toHaveLength(1)
 
@@ -1045,12 +1045,12 @@ describe("subscribeTree: basic behavior", () => {
   })
 
   it("throws on non-changefeed ref", () => {
-    expect(() => subscribeTree({} as any, () => {})).toThrow("[CHANGEFEED]")
+    expect(() => subscribe({} as any, () => {})).toThrow("[CHANGEFEED]")
   })
 
-  it("throws on leaf ref (no subscribeTree)", () => {
+  it("throws on leaf ref (no subscribe — use subscribeNode)", () => {
     const { doc } = createChatDoc()
-    expect(() => subscribeTree(doc.settings.darkMode, () => {})).toThrow(
+    expect(() => subscribe(doc.settings.darkMode, () => {})).toThrow(
       "composite ref",
     )
   })
@@ -1061,12 +1061,12 @@ describe("subscribeTree: basic behavior", () => {
 // ===========================================================================
 
 describe("integration: library-only round-trip", () => {
-  it("subscribeTree on docA → reconstruct PendingChange[] → applyChanges on docB", () => {
+  it("subscribe on docA → reconstruct PendingChange[] → applyChanges on docB", () => {
     const docA = createChatDoc()
     const docB = createChatDoc()
 
     const treeChangesets: Changeset<TreeEvent>[] = []
-    subscribeTree(docA.doc, (cs) => treeChangesets.push(cs))
+    subscribe(docA.doc, (cs) => treeChangesets.push(cs))
 
     // Mutate docA via library-level change()
     change(docA.doc, (d) => {

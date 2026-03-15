@@ -9,7 +9,7 @@ import {
   createWritableContext,
   change,
   subscribe,
-  subscribeTree,
+  subscribeNode,
   bottomInterpreter,
   withNavigation,
   withReadable,
@@ -1685,23 +1685,23 @@ describe("type-level: change() callback infers draft type from fluent-built doc"
 describe("type-level: fluent results are accepted by facade functions", () => {
   const schema = Schema.doc({ x: Schema.number() })
 
-  it("subscribe() accepts Ref<S> field from full-stack .done()", () => {
+  it("subscribeNode() accepts Ref<S> field from full-stack .done()", () => {
     const ctx = createWritableContext({ x: 0 })
     const doc = interpret(schema, ctx)
       .with(readable).with(writable).with(changefeed).done()
 
-    // subscribe requires HasChangefeed — Ref<S> children have it
-    expectTypeOf(subscribe).toBeCallableWith(doc.x, () => {})
+    // subscribeNode requires HasChangefeed — Ref<S> children have it
+    expectTypeOf(subscribeNode).toBeCallableWith(doc.x, () => {})
   })
 
-  it("subscribeTree() accepts Ref<S> from full-stack .done()", () => {
+  it("subscribe() accepts Ref<S> from full-stack .done()", () => {
     const ctx = createWritableContext({ x: 0 })
     const doc = interpret(schema, ctx)
       .with(readable).with(writable).with(changefeed).done()
 
-    // subscribeTree requires HasComposedChangefeed on composite refs
+    // subscribe requires HasComposedChangefeed on composite refs
     // doc is a product ref — should be accepted
-    expectTypeOf(subscribeTree).toBeCallableWith(doc, () => {})
+    expectTypeOf(subscribe).toBeCallableWith(doc, () => {})
   })
 })
 
