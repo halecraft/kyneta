@@ -8,7 +8,7 @@ This monorepo contains the Kyneta framework: a compiled, delta-driven web framew
 
 Schema interpreter algebra — pure structure, pluggable interpretations.
 
-Defines a two-namespace grammar (`Schema` for backend-agnostic structure, `LoroSchema` for CRDT-annotated structure) and a fluent `interpret()` builder that composes a five-layer interpreter stack: bottom → navigation → readable → caching → writable → changefeed. The output is a typed `Ref<S>` handle — a callable, navigable, writable, observable document reference.
+Defines a two-namespace grammar (`Schema` for backend-agnostic structure, `LoroSchema` for CRDT-annotated structure) and a fluent `interpret()` builder that composes a five-layer interpreter stack: bottom → navigation → readable → caching → writable → changefeed. The output is a typed `Ref<S>` handle — a callable, navigable, writable, observable document reference. A `Substrate` interface abstracts state management and transfer semantics, enabling different backing stores (plain JS objects, CRDTs) behind the same interpreter stack.
 
 Zero runtime dependencies. 1000+ tests.
 
