@@ -267,6 +267,62 @@ describe("withCaching: map referential identity", () => {
 })
 
 // ===========================================================================
+// Hybrid discriminant: caching behavior
+// ===========================================================================
+
+describe("withCaching: hybrid discriminant", () => {
+  const schema = Schema.doc({
+    item: Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+      Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+    ]),
+  })
+
+  it("discriminant field returns a raw string, not a cached ref", () => {
+    const { doc } = createDoc(schema, {
+      item: { type: "text", body: "hello" },
+    })
+    expect(doc.item.type).toBe("text")
+    expect(typeof doc.item.type).toBe("string")
+  })
+
+  it("discriminant identity is stable (same string from store)", () => {
+    const { doc } = createDoc(schema, {
+      item: { type: "text", body: "hello" },
+    })
+    // String identity: same primitive value on repeated access
+    expect(doc.item.type).toBe(doc.item.type)
+  })
+
+  it("non-discriminant fields are still cached refs", () => {
+    const { doc } = createDoc(schema, {
+      item: { type: "text", body: "hello" },
+    })
+    // body is a cached ref — same identity on repeated access
+    expect(doc.item.body).toBe(doc.item.body)
+    expect(typeof doc.item.body).toBe("function")
+    expect(doc.item.body()).toBe("hello")
+  })
+
+  it("INVALIDATE clears non-discriminant caches but discriminant still reads from store", () => {
+    const { doc, store } = createDoc(schema, {
+      item: { type: "text", body: "hello" },
+    })
+    const bodyBefore = doc.item.body
+    expect(bodyBefore).toBe(doc.item.body) // cached
+
+    // Mutate store and invalidate
+    ;(store as any).item = { type: "image", url: "pic.png" }
+    doc.item[INVALIDATE](replaceChange({ type: "image", url: "pic.png" }))
+
+    // Discriminant reads live from store
+    expect(doc.item.type).toBe("image")
+    // Non-discriminant cache was cleared — fresh ref
+    expect(doc.item.url).not.toBe(bodyBefore)
+  })
+})
+
+// ===========================================================================
 // INVALIDATE: product
 // ===========================================================================
 

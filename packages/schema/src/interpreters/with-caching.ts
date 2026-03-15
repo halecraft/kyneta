@@ -411,14 +411,19 @@ export function withCaching<A extends HasNavigation>(
       const baseFields = fields as Readonly<Record<string, () => A>>
       const result = base.product(ctx, path, schema, baseFields) as any
 
-      // Build per-field memoization state
+      // Build per-field memoization state.
+      // Skip the discriminant field — it's a raw store read from
+      // withNavigation, not a ref thunk. No caching needed.
+      const discKey = schema.discriminantKey
       const fieldState: Record<string, { resolved: boolean; cached: unknown }> = {}
       for (const key of Object.keys(fields)) {
+        if (key === discKey) continue
         fieldState[key] = { resolved: false, cached: undefined }
       }
 
       // Override each field getter with memoization
       for (const key of Object.keys(fields)) {
+        if (key === discKey) continue
         const thunk = fields[key]!
         const state = fieldState[key]!
         Object.defineProperty(result, key, {

@@ -519,6 +519,80 @@ describe("withReadable: discriminated sum", () => {
   })
 })
 
+describe("withReadable: hybrid discriminant", () => {
+  const schema = Schema.doc({
+    item: Schema.discriminatedUnion("type", [
+      Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
+      Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
+    ]),
+  })
+
+  it("discriminant field returns a raw string, not a function ref", () => {
+    const { doc } = createDoc(schema, {
+      item: { type: "text", body: "hello" },
+    })
+    expect(doc.item.type).toBe("text")
+    expect(typeof doc.item.type).toBe("string")
+  })
+
+  it("discriminant field has no .set() method", () => {
+    const { doc } = createDoc(schema, {
+      item: { type: "text", body: "hello" },
+    })
+    expect(doc.item.type.set).toBeUndefined()
+  })
+
+  it("discriminant is NOT callable", () => {
+    const { doc } = createDoc(schema, {
+      item: { type: "text", body: "hello" },
+    })
+    expect(typeof doc.item.type).not.toBe("function")
+  })
+
+  it("snapshot includes the discriminant as a plain string value", () => {
+    const { doc } = createDoc(schema, {
+      item: { type: "image", url: "pic.png" },
+    })
+    const snap = doc.item()
+    expect(snap).toEqual({ type: "image", url: "pic.png" })
+    expect(typeof snap.type).toBe("string")
+  })
+
+  it("non-discriminant fields are still full callable refs", () => {
+    const { doc } = createDoc(schema, {
+      item: { type: "text", body: "hello" },
+    })
+    expect(typeof doc.item.body).toBe("function")
+    expect(doc.item.body()).toBe("hello")
+  })
+
+  it("discriminant reflects store changes after mutation", () => {
+    const { doc, store } = createDoc(schema, {
+      item: { type: "text", body: "hello" },
+    })
+    expect(doc.item.type).toBe("text")
+    // Simulate store mutation (as would happen via product .set())
+    ;(store as any).item = { type: "image", url: "pic.png" }
+    expect(doc.item.type).toBe("image")
+  })
+
+  it("non-discriminated products are unaffected", () => {
+    const plainSchema = Schema.doc({
+      settings: Schema.struct({
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
+      }),
+    })
+    const { doc } = createDoc(plainSchema, {
+      settings: { darkMode: true, fontSize: 14 },
+    })
+    // All fields are still function refs
+    expect(typeof doc.settings.darkMode).toBe("function")
+    expect(typeof doc.settings.fontSize).toBe("function")
+    expect(doc.settings.darkMode()).toBe(true)
+  })
+})
+
 describe("withReadable: nullable (positional sum)", () => {
   const schema = Schema.doc({
     bio: Schema.nullable(Schema.string()),

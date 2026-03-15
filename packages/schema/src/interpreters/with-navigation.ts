@@ -92,15 +92,30 @@ export function withNavigation<A extends HasCall>(
       // Define enumerable getters for each schema field.
       // NO caching — each access forces the thunk afresh.
       // withCaching will wrap these with memoization.
+      const discKey = schema.discriminantKey
       for (const key of Object.keys(fields)) {
-        const thunk = fields[key]!
-        Object.defineProperty(result, key, {
-          get() {
-            return thunk()
-          },
-          enumerable: true,
-          configurable: true,
-        })
+        if (key === discKey) {
+          // Discriminant field: return raw store value, not a ref.
+          // This enables standard TS discriminated union narrowing
+          // (ref.type === "text") and prevents discriminant mutation.
+          const fieldPath: Path = [...path, { type: "key", key }]
+          Object.defineProperty(result, key, {
+            get() {
+              return readByPath(ctx.store, fieldPath)
+            },
+            enumerable: true,
+            configurable: true,
+          })
+        } else {
+          const thunk = fields[key]!
+          Object.defineProperty(result, key, {
+            get() {
+              return thunk()
+            },
+            enumerable: true,
+            configurable: true,
+          })
+        }
       }
 
       return result as A & HasNavigation
