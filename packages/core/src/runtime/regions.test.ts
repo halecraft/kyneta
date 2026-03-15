@@ -652,6 +652,168 @@ describe("regions", () => {
   })
 
   // ===========================================================================
+  // listRegion — Comment-marker mount point (template-cloning path)
+  //
+  // The compiler's template-cloning codegen emits paired comment markers
+  // (<!--kyneta:list:N--><!--/kyneta:list-->) and passes the opening
+  // comment to listRegion as the mount point. These tests verify that
+  // listRegion correctly derives the parent from marker.parentNode and
+  // inserts items between the paired markers.
+  // ===========================================================================
+
+  describe("listRegion with comment-marker mount point", () => {
+    /**
+     * Create a container with paired list markers and optional trailing content,
+     * simulating the DOM structure produced by template cloning.
+     *
+     * Returns: <ul> <!--open--> <!--/close--> [<p>trailing</p>]? </ul>
+     */
+    function createMarkedContainer(options?: { trailingContent?: boolean }) {
+      const container = document.createElement("ul")
+      const openMarker = document.createComment("kyneta:list:0")
+      const closeMarker = document.createComment("/kyneta:list")
+      container.appendChild(openMarker)
+      container.appendChild(closeMarker)
+      if (options?.trailingContent) {
+        const trailing = document.createElement("p")
+        trailing.textContent = "after the list"
+        container.appendChild(trailing)
+      }
+      return { container, openMarker, closeMarker }
+    }
+
+    it("should render initial items between paired markers", () => {
+      const { ref } = createMockSequenceRef(["a", "b", "c"])
+      const scope = new Scope()
+      const { container, openMarker, closeMarker } = createMarkedContainer()
+
+      listRegion(
+        openMarker,
+        ref,
+        {
+          create: (item: string) => {
+            const li = document.createElement("li")
+            li.textContent = item
+            return li
+          },
+        },
+        scope,
+      )
+
+      // Items should appear between the markers
+      expect(container.childNodes.length).toBe(5) // open + 3 items + close
+      expect(container.childNodes[0]).toBe(openMarker)
+      expect((container.childNodes[1] as HTMLElement).textContent).toBe("a")
+      expect((container.childNodes[2] as HTMLElement).textContent).toBe("b")
+      expect((container.childNodes[3] as HTMLElement).textContent).toBe("c")
+      expect(container.childNodes[4]).toBe(closeMarker)
+
+      scope.dispose()
+    })
+
+    it("should insert pushed items before the closing marker", () => {
+      const { ref, emit, setItems } = createMockSequenceRef(["a"])
+      const scope = new Scope()
+      const { container, closeMarker } = createMarkedContainer()
+
+      listRegion(
+        container.firstChild as Comment, // the open marker
+        ref,
+        {
+          create: (item: string) => {
+            const li = document.createElement("li")
+            li.textContent = item
+            return li
+          },
+        },
+        scope,
+      )
+
+      expect(container.children.length).toBe(1)
+
+      // Push a new item
+      setItems(["a", "b"])
+      emit(sequenceChange([{ retain: 1 }, { insert: ["b"] }]))
+
+      expect(container.children.length).toBe(2)
+      expect(container.children[1].textContent).toBe("b")
+      // The closing marker should still be after all items
+      expect(container.lastChild).toBe(closeMarker)
+
+      scope.dispose()
+    })
+
+    it("should not displace sibling content after the closing marker", () => {
+      const { ref, emit, setItems } = createMockSequenceRef(["x"])
+      const scope = new Scope()
+      const { container, closeMarker } = createMarkedContainer({ trailingContent: true })
+      const trailing = container.lastChild as HTMLElement
+
+      listRegion(
+        container.firstChild as Comment,
+        ref,
+        {
+          create: (item: string) => {
+            const li = document.createElement("li")
+            li.textContent = item
+            return li
+          },
+        },
+        scope,
+      )
+
+      // Trailing <p> should remain at the end
+      expect(container.lastChild).toBe(trailing)
+      expect(trailing.textContent).toBe("after the list")
+
+      // Push more items — trailing content should stay put
+      setItems(["x", "y", "z"])
+      emit(sequenceChange([{ retain: 1 }, { insert: ["y", "z"] }]))
+
+      expect(container.children.length).toBe(4) // 3 <li> + 1 <p>
+      expect(container.lastChild).toBe(trailing)
+      // Close marker should be between the last item and the trailing content
+      expect(closeMarker.nextSibling).toBe(trailing)
+
+      scope.dispose()
+    })
+
+    it("should delete items correctly when using marker mount point", () => {
+      const { ref, emit, setItems } = createMockSequenceRef(["a", "b", "c"])
+      const scope = new Scope()
+      const { container, openMarker, closeMarker } = createMarkedContainer()
+
+      listRegion(
+        openMarker,
+        ref,
+        {
+          create: (item: string) => {
+            const li = document.createElement("li")
+            li.textContent = item
+            return li
+          },
+        },
+        scope,
+      )
+
+      expect(container.children.length).toBe(3)
+
+      // Delete the middle item
+      setItems(["a", "c"])
+      emit(sequenceChange([{ retain: 1 }, { delete: 1 }]))
+
+      expect(container.children.length).toBe(2)
+      expect(container.children[0].textContent).toBe("a")
+      expect(container.children[1].textContent).toBe("c")
+      // Markers should still bracket the items
+      expect(container.firstChild).toBe(openMarker)
+      expect(closeMarker.previousSibling).toBe(container.children[1])
+
+      scope.dispose()
+    })
+  })
+
+  // ===========================================================================
   // conditionalRegion — Integration Tests
   // ===========================================================================
 

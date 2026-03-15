@@ -233,6 +233,18 @@ interface ListRegionState<T> extends RegionStateBase {
   scopes: (Scope | null)[]
   /** The list ref for accessing items (needed for delta handling) */
   listRef: ListRefLike<T>
+  /**
+   * Closing marker for template-cloning path.
+   *
+   * When `listRegion` receives a comment node (the opening marker from
+   * template cloning), `endMarker` is the closing `<!--/kyneta:list-->`
+   * comment. Items are inserted *before* this marker so they stay between
+   * the opening and closing comments.
+   *
+   * When `listRegion` receives a container element (createElement path),
+   * `endMarker` is `null` — items append at the end of the container.
+   */
+  endMarker: Node | null
 }
 
 // =============================================================================
@@ -363,7 +375,7 @@ function executeOp<T>(
       ? existingResult.kind === "single"
         ? existingResult.node
         : existingResult.startMarker
-      : null
+      : state.endMarker
 
     // Handle DocumentFragment: use helper to get Slot
     const slot = claimSlot(parent, node, referenceNode, handlers.slotKind)
@@ -431,7 +443,7 @@ function executeOp<T>(
       ? existingResult.kind === "single"
         ? existingResult.node
         : existingResult.startMarker
-      : null
+      : state.endMarker
     parent.insertBefore(fragment, referenceNode)
 
     // Update state with single splice
@@ -532,11 +544,34 @@ function executeOps<T>(
  * @internal - Called by compiled code
  */
 export function listRegion<T>(
-  parent: Node,
+  mountPoint: Node,
   listRef: unknown,
   handlers: ListRegionHandlers<T>,
   scope: Scope,
 ): void {
+  // Resolve the mount point into (parent, endMarker).
+  //
+  // Two codegen paths produce different mount points:
+  //   - createElement path: mountPoint is the container element (e.g. <ul>).
+  //     Items append at the end → endMarker = null.
+  //   - Template-cloning path: mountPoint is the opening comment marker
+  //     (e.g. <!--kyneta:list:N-->). Its nextSibling is the closing marker
+  //     (<!--/kyneta:list-->). Items insert before the closing marker so
+  //     they stay between the paired comments.
+  //
+  // This is structurally identical to how conditionalRegion derives its
+  // parent from marker.parentNode — the same anchoring pattern for lists.
+  let parent: Node
+  let endMarker: Node | null
+
+  if (mountPoint.nodeType === Node.COMMENT_NODE) {
+    parent = mountPoint.parentNode!
+    endMarker = mountPoint.nextSibling // the <!--/kyneta:list--> closing marker
+  } else {
+    parent = mountPoint
+    endMarker = null
+  }
+
   // Cast to ListRefLike - the listRef must have .length and .at()
   const typedListRef = listRef as ListRefLike<T>
 
@@ -546,6 +581,7 @@ export function listRegion<T>(
     scopes: [],
     parentScope: scope,
     listRef: typedListRef,
+    endMarker,
   }
 
   // Plan and execute initial render
