@@ -14,7 +14,7 @@ import {
   plainInterpreter,
   validateInterpreter,
 } from "../index.js"
-import type { ValidateContext } from "../index.js"
+import type { ValidateContext, SchemaNode } from "../index.js"
 import type { Plain } from "../index.js"
 
 // Helper: run validation without triggering Plain<S> type resolution.
@@ -22,7 +22,7 @@ import type { Plain } from "../index.js"
 // where TypeScript eagerly resolves the generic return type even though the
 // value is discarded. This calls the same interpreter + error-check logic
 // that validate() uses, but with a non-generic signature.
-function validateUntyped(schema: Parameters<typeof validate>[0], value: unknown): unknown {
+function validateUntyped(schema: SchemaNode, value: unknown): unknown {
   const ctx: ValidateContext = { root: value, errors: [] }
   const result = interpret(schema, validateInterpreter, ctx)
   if (ctx.errors.length > 0) {

@@ -14,23 +14,16 @@ import {
   Schema,
   LoroSchema,
   interpret,
-
-  bottomInterpreter,
-  withReadable,
-  withCaching,
-  withWritable,
+  readable,
+  writable,
+  changefeed,
   createWritableContext,
-  withChangefeed,
   hasChangefeed,
   CHANGEFEED,
   Zero,
   isIncrementChange,
 } from "@kyneta/schema"
-import type {
-  Readable,
-  Writable,
-  ReadableSequenceRef,
-} from "@kyneta/schema"
+import type { Ref } from "@kyneta/schema"
 
 import {
   subscribe,
@@ -72,19 +65,15 @@ const todoSchema = LoroSchema.doc({
   ),
 })
 
-const writableInterpreter = withWritable(withCaching(withReadable(bottomInterpreter)))
-
-function createDoc(storeOverrides: Record<string, unknown> = {}) {
-  const store = {
-    ...Zero.structural(todoSchema),
-    ...storeOverrides,
-  } as Record<string, unknown>
+function createDoc(seed: Record<string, unknown> = {}) {
+  const defaults = Zero.structural(todoSchema) as Record<string, unknown>
+  const store = Zero.overlay(seed, defaults, todoSchema) as Record<string, unknown>
   const ctx = createWritableContext(store)
-  const enriched = withChangefeed(writableInterpreter)
-  const doc = interpret(todoSchema, enriched, ctx) as Readable<
-    typeof todoSchema
-  > &
-    Writable<typeof todoSchema>
+  const doc = interpret(todoSchema, ctx)
+    .with(readable)
+    .with(writable)
+    .with(changefeed)
+    .done()
   return { doc, store, ctx }
 }
 

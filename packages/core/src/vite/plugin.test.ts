@@ -6,12 +6,20 @@
  */
 
 import { describe, expect, it } from "vitest"
+import type { Plugin } from "vite"
 import kynetaPlugin, { type KynetaPluginOptions } from "./plugin.js"
+
+/** Narrow the plugin return (Vite 6 may return Plugin | Plugin[]) */
+function getPlugin(options?: KynetaPluginOptions): Plugin {
+  const result = kynetaPlugin(options)
+  if (Array.isArray(result)) return result[0]!
+  return result
+}
 
 describe("Vite Plugin", () => {
   describe("plugin creation", () => {
     it("should create a plugin with default options", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
 
       expect(plugin.name).toBe("kyneta")
       expect(plugin.transform).toBeDefined()
@@ -25,14 +33,14 @@ describe("Vite Plugin", () => {
         exclude: ["node_modules", "dist"],
       }
 
-      const plugin = kynetaPlugin(options)
+      const plugin = getPlugin(options)
       expect(plugin.name).toBe("kyneta")
     })
   })
 
   describe("file filtering", () => {
     it("should transform .ts/.tsx files with builder calls", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -52,7 +60,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should skip excluded files and non-matching extensions", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -73,7 +81,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should respect custom include/exclude patterns", () => {
-      const plugin = kynetaPlugin({
+      const plugin = getPlugin({
         include: ["src/components"],
         exclude: ["node_modules", "generated"],
       })
@@ -97,7 +105,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should respect custom extensions", () => {
-      const plugin = kynetaPlugin({
+      const plugin = getPlugin({
         extensions: [".kinetic.ts"],
       })
       const transform = plugin.transform as (
@@ -117,7 +125,7 @@ describe("Vite Plugin", () => {
 
   describe("in-place replacement", () => {
     it("should replace builder calls with compiled factory functions", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -141,7 +149,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should preserve non-builder code", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -173,7 +181,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should compile multiple builder calls in place", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -204,7 +212,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should not contain duplicate code (no append)", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -228,7 +236,7 @@ describe("Vite Plugin", () => {
 
   describe("import handling", () => {
     it("should add runtime imports when needed for list regions", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -256,7 +264,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should merge imports with existing kyneta imports", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -282,7 +290,7 @@ describe("Vite Plugin", () => {
     })
 
     it("should not add imports for static-only builders", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
@@ -308,7 +316,7 @@ describe("Vite Plugin", () => {
 
   describe("error handling", () => {
     it("should not crash on invalid syntax", () => {
-      const plugin = kynetaPlugin()
+      const plugin = getPlugin()
       const transform = plugin.transform as (
         code: string,
         id: string,
