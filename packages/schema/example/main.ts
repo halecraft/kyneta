@@ -111,34 +111,29 @@ log(describe(ProjectSchema));
 
 section(2, "Create a Document");
 
-// Derive defaults from the schema, overlay with a partial seed.
-// Then wire up the full interpreter stack via the fluent builder.
-// That's it — no wrapper class, no createDoc, no registration.
+// Write createDoc once — use it everywhere.
+function createDoc(seed: Record<string, unknown> = {}) {
+	const defaults = Zero.structural(ProjectSchema) as Record<string, unknown>;
+	const initial = Zero.overlay(seed, defaults, ProjectSchema) as Record<
+		string,
+		unknown
+	>;
+	const store: Store = { ...initial };
+	const ctx = createWritableContext(store);
+	return interpret(ProjectSchema, ctx)
+		.with(readable)
+		.with(writable)
+		.with(changefeed)
+		.done();
+}
 
-const seed = {
+const doc = createDoc({
 	name: "Schema Algebra",
 	content: { type: "text", body: "A unified recursive grammar" },
-};
-
-const defaults = Zero.structural(ProjectSchema) as Record<string, unknown>;
-const initial = Zero.overlay(seed, defaults, ProjectSchema) as Record<
-	string,
-	unknown
->;
-const store: Store = { ...initial };
-const ctx = createWritableContext(store);
-
-const doc = interpret(ProjectSchema, ctx)
-	.with(readable)
-	.with(writable)
-	.with(changefeed)
-	.done();
+});
 
 log(`
-    const store = Zero.overlay(seed, Zero.structural(schema), schema)
-    const ctx = createWritableContext(store)
-    const doc = interpret(schema, ctx)
-      .with(readable).with(writable).with(changefeed).done()
+    const doc = createDoc({ name: "Schema Algebra", ... })
 
     doc() →
 ${json(doc())
@@ -357,29 +352,13 @@ log(`
     apply them to a completely separate document.
 `);
 
-// Helper to create a fresh document from a seed
-function createFreshDoc(docSeed: Record<string, unknown> = {}) {
-	const fallback = Zero.structural(ProjectSchema) as Record<string, unknown>;
-	const initial = Zero.overlay(docSeed, fallback, ProjectSchema) as Record<
-		string,
-		unknown
-	>;
-	const store: Store = { ...initial };
-	const context = createWritableContext(store);
-	return interpret(ProjectSchema, context)
-		.with(readable)
-		.with(writable)
-		.with(changefeed)
-		.done();
-}
-
 const baseSeed = {
 	name: "Shared Doc",
 	content: { type: "text", body: "" },
 };
 
-const docA = createFreshDoc(baseSeed);
-const docB = createFreshDoc(baseSeed);
+const docA = createDoc(baseSeed);
+const docB = createDoc(baseSeed);
 
 // Subscribe to docB BEFORE applying changes — see the origin
 const docBChangesets: Changeset[] = [];
@@ -430,7 +409,7 @@ log(`
 `);
 
 {
-	const batchDoc = createFreshDoc({
+	const batchDoc = createDoc({
 		name: "Batch",
 		content: { type: "text", body: "" },
 	});
@@ -592,7 +571,7 @@ log(`
 
 // Read-only document: just drop the writable and changefeed layers
 {
-	const roStore: Store = { ...store };
+	const roStore: Store = doc() as Record<string, unknown>;
 	const roCtx: RefContext = { store: roStore };
 	const roDoc = interpret(ProjectSchema, roCtx)
 		.with(readable)

@@ -49,21 +49,21 @@ npx tsx example/main.ts
 
 ## Structure
 
-### Setup (~15 lines)
+### Setup
 
-Document creation is explicit — no `createDoc` wrapper:
+Write `createDoc` once — use it everywhere:
 
 ```ts
-const defaults = Zero.structural(ProjectSchema)
-const initial = Zero.overlay(seed, defaults, ProjectSchema)
-const store: Store = { ...initial }
-const ctx = createWritableContext(store)
+function createDoc(seed = {}) {
+  const defaults = Zero.structural(ProjectSchema)
+  const initial = Zero.overlay(seed, defaults, ProjectSchema)
+  const store = { ...initial }
+  const ctx = createWritableContext(store)
+  return interpret(ProjectSchema, ctx)
+    .with(readable).with(writable).with(changefeed).done()
+}
 
-const doc = interpret(ProjectSchema, ctx)
-  .with(readable)
-  .with(writable)
-  .with(changefeed)
-  .done()   // → Ref<typeof ProjectSchema>
+const doc = createDoc({ name: "Schema Algebra", ... })
 ```
 
 ### Library-Level Functions
@@ -213,12 +213,7 @@ The developer sees a clean, high-level API — all library imports:
 
 ```
 Schema.doc({ ... })           →  define structure
-Zero.overlay(seed, defaults)  →  derive initial state
-interpret(schema, ctx)
-  .with(readable)
-  .with(writable)
-  .with(changefeed)
-  .done()                     →  get a live document
+createDoc(seed)               →  get a live document
 
 doc.name()                    →  read current value
 doc.name.insert(...)          →  mutate naturally
