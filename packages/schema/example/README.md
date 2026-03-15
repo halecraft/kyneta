@@ -86,7 +86,7 @@ The example is organized into 14 sections:
 4. **Working with Collections** — Lists: `.at(i)`, `.get(i)`, `.length`, iteration, `.insert()`, `.delete()`. Records: `.at(key)`, `.get(key)`, `.has()`, `.keys()`, `.size`
 5. **Sums and Nullables** — Discriminated union with native narrowing (`if (doc.content.type === "text") { doc.content.body() }`). Nullable: set to value, read, set back to null.
 6. **Transactions with `change()`** — Library-level `change()` returns `PendingChange[]`. All five change types in one atomic transaction.
-7. **Observing Changes** — `subscribe(doc.stars, cb)` for leaf observation. `subscribeTree(doc.settings, cb)` for tree observation with relative paths. Unsubscribe.
+7. **Observing Changes** — `subscribe(doc.stars, cb)` for leaf observation. `subscribeTree(doc, cb)` for tree observation with multi-level relative paths (`tasks[2].done`, `settings.fontSize`). Unsubscribe.
 8. **The Round-Trip: `change` → `applyChanges`** — Capture ops on docA, apply to docB with `{ origin: "sync" }`. Assert deep equality. The sync story in 10 lines.
 9. **Batched Notification and Origin** — `applyChanges` delivers one `Changeset` per affected path (not per change). Subscribers see fully-applied state. Origin provenance flows through.
 10. **Portable Refs** — Pass refs to generic functions (`tag(ref, label)`, `ensureMinimum(counter, min)`). Template literal coercion via `[Symbol.toPrimitive]`.

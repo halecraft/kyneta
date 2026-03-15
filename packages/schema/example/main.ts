@@ -330,9 +330,10 @@ unsub1();
 doc.stars.increment(1); // not observed
 log(`    After unsub → ${starChangesets.length} total (delivery stopped)`);
 
-// Tree subscription
+// Tree subscription — one subscription at the root captures mutations
+// anywhere in the document, with relative paths showing exactly where.
 const treeEvents: { path: string; type: string }[] = [];
-const unsub2 = subscribeTree(doc.settings, (cs) => {
+const unsub2 = subscribeTree(doc, (cs) => {
 	for (const event of cs.changes) {
 		treeEvents.push({
 			path: formatPath(event.path),
@@ -341,12 +342,14 @@ const unsub2 = subscribeTree(doc.settings, (cs) => {
 	}
 });
 
-doc.settings.darkMode.set(false);
-doc.settings.fontSize.set(14);
+doc.tasks.at(2)!.done.set(true); // depth 2: tasks[2].done
+doc.tasks.at(1)!.priority.set(3); // depth 2: tasks[1].priority
+doc.settings.fontSize.set(14); // depth 1: settings.fontSize
 
 log(`
-    subscribeTree(doc.settings, cb)
-    doc.settings.darkMode.set(false)
+    subscribeTree(doc, cb)  ← one subscription on the root
+    doc.tasks.at(2)!.done.set(true)
+    doc.tasks.at(1)!.priority.set(3)
     doc.settings.fontSize.set(14)
     → ${treeEvents.length} tree events:
     ${treeEvents.map((e) => `  path: ${e.path}, type: ${e.type}`).join("\n    ")}
