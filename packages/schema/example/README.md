@@ -23,15 +23,17 @@ const doc = interpret(schema, ctx)
   .with(readable)
   .with(writable)
   .with(changefeed)
-  .done()
+  .done()   // → Ref<typeof schema>
 ```
 
 **Manual composition (equivalent):**
 
 ```ts
 const interp = withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))))
-const doc = interpret(schema, interp, ctx)
+const doc = interpret(schema, interp, ctx)   // carrier type A (use ResolveCarrier<S, A> for schema-level type)
 ```
+
+Both `interpret()` paths infer the correct ref type — `Ref<S>` for the full stack, `RWRef<S>` for read-write without changefeed, `RRef<S>` (≡ `Readable<S>`) for read-only. The fluent builder uses phantom brands; the three-arg form returns the raw carrier type `A` (honest with `HasTransact` and `HasChangefeed` from transformer return types).
 
 Each concern is independently useful — a read-only document needs only the `readable` layer and a bare `{ store }` context.
 
@@ -61,7 +63,7 @@ const doc = interpret(ProjectSchema, ctx)
   .with(readable)
   .with(writable)
   .with(changefeed)
-  .done() as Ref<typeof ProjectSchema>
+  .done()   // → Ref<typeof ProjectSchema>
 ```
 
 ### Library-Level Functions
@@ -169,7 +171,10 @@ The readable layer needs only a store — no dispatch, no mutation methods, no o
 
 ```ts
 const ctx: RefContext = { store }
-const doc = interpret(schema, ctx).with(readable).done()
+const doc = interpret(schema, ctx)
+  .with(readable)
+  .done()   // → RRef<typeof schema> (≡ Readable<typeof schema>)
+
 doc.name()         // ✓ reads work
 doc.name.insert    // undefined — no mutation methods
 hasChangefeed(doc) // false — no observation
@@ -181,13 +186,13 @@ hasTransact(doc)   // false — no transactions
 The layers compose freely. Navigation is the foundational structural capability. Reading fills the `[CALL]` slot. Writing and observation are independent.
 
 ```ts
-// Read-only:
+// Read-only → RRef<S>:
 interpret(schema, { store }).with(readable).done()
 
-// Read + write:
+// Read + write → RWRef<S>:
 interpret(schema, ctx).with(readable).with(writable).done()
 
-// Read + write + observe:
+// Read + write + observe → Ref<S>:
 interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 ```
 

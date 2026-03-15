@@ -215,14 +215,51 @@ Features:
 
 ### Interpret (`src/interpret.ts`)
 
-The generic catamorphism. `Interpreter<Ctx, A>` has one case per structural kind. The `interpret(schema, interpreter, ctx)` function walks the tree, building:
+The generic catamorphism. `Interpreter<Ctx, A>` has one case per structural kind. The `interpret()` function has two overloads:
+
+**Three-arg (direct):** `interpret(schema, interpreter, ctx)` walks the tree and returns the raw carrier type `A`. The walker builds:
 
 - **Thunks** (`() => A`) for product fields — laziness preserved
 - **Closures** (`(index) => A` / `(key) => A`) for sequence/map children
 - **Inner thunks** for annotated nodes
 - **Sum variants** via `SumVariants<A>` — `byIndex(i)` for positional, `byKey(k)` for discriminated
 
-This single walker replaces the 10+ parallel `switch (shape._type)` dispatch sites in the current codebase.
+**Two-arg (fluent builder):** `interpret(schema, ctx)` returns an `InterpretBuilder<S, Ctx, Brands>` that accumulates layers via `.with()` and runs the catamorphism on `.done()`.
+
+#### Type Inference
+
+Both overloads capture `S extends Schema` for type-level resolution.
+
+**Fluent builder path.** Each pre-built layer (`readable`, `writable`, `changefeed`) carries a phantom brand type parameter (`ReadableBrand`, `WritableBrand`, `ChangefeedBrand`). `.with(layer)` intersects the layer's brand into the builder's accumulated `Brands`. `.done()` returns `Resolve<S, Brands>`:
+
+| Brands | `.done()` returns |
+|---|---|
+| `ReadableBrand` | `RRef<S>` (≡ `Readable<S>`) |
+| `ReadableBrand & WritableBrand` | `RWRef<S>` |
+| `ReadableBrand & WritableBrand & ChangefeedBrand` | `Ref<S>` |
+| Anything else (custom/unbranded layers) | `unknown` |
+
+Standard usage needs no cast:
+
+```ts
+const doc = interpret(schema, ctx)
+  .with(readable)
+  .with(writable)
+  .with(changefeed)
+  .done()   // → Ref<typeof schema>
+```
+
+**Three-arg path.** The three-arg overload returns raw `A` (not a schema-level type). This is because `Ref<S>` / `RWRef<S>` are deeply recursive conditional types that cause TS2589 ("excessively deep") when placed in overload return positions with abstract `S extends Schema`.
+
+However, the carrier type `A` is now **honest** — `withWritable` returns `Interpreter<Ctx, A & HasTransact>` and `withChangefeed` returns `Interpreter<Ctx, A & HasChangefeed>`. These honest return types track contributed capabilities in `A`, so the carrier structurally satisfies the schema-level type. `ResolveCarrier<S, A>` is exported as a utility type for explicit annotations at call sites:
+
+| Carrier capabilities | `ResolveCarrier<S, A>` selects |
+|---|---|
+| `HasRead & HasTransact & HasChangefeed` | `Ref<S>` |
+| `HasRead & HasTransact` | `RWRef<S>` |
+| Otherwise | Raw `A` (fallback) |
+
+Both `Ref<S>` and `RWRef<S>` require `HasRead` — a carrier that can't read has no business being typed as a schema-level ref (which promises a call signature returning `Plain<S>`). Write-only and read-only stacks fall through to raw `A`.
 
 ### Interpreters: The Five-Layer Decomposed Stack
 
@@ -370,7 +407,7 @@ Effective per-change order: **invalidate cache → store mutation → accumulate
 
 #### withWritable (`src/interpreters/writable.ts`)
 
-An extension transformer: `withWritable(base)` takes `Interpreter<RefContext, A>` and returns `Interpreter<WritableContext, A>`. It adds mutation methods at each case. The type parameter `A` is **unconstrained** — `withWritable` works with any carrier because mutation operates on paths (via `ctx.dispatch`), not navigation:
+An extension transformer: `withWritable(base)` takes `Interpreter<RefContext, A>` and returns `Interpreter<WritableContext, A & HasTransact>`. The return type honestly declares that `[TRANSACT]` is attached to every carrier, enabling `ResolveCarrier` to detect `HasTransact` in the composed carrier type. The type parameter `A` is **unconstrained** — `withWritable` works with any carrier because mutation operates on paths (via `ctx.dispatch`), not navigation:
 
 - **Scalar:** `.set(value)` — dispatches `ReplaceChange` at own path.
 - **Product:** `.set(plainObject)` — dispatches `ReplaceChange` at own path. Non-enumerable. Enables atomic subtree replacement.
@@ -443,7 +480,9 @@ All four functions discover capabilities via symbols on refs (`[TRANSACT]` for `
 
 #### Changefeed Transformer (`src/interpreters/with-changefeed.ts`)
 
-An interpreter transformer that attaches `[CHANGEFEED]` to every node in the interpreted tree. Requires `HasRead` (the `[CALL]` slot must be filled) because `.current` reads values through the carrier. Context type is `RefContext` (not `WritableContext`) — it duck-types for `prepare`/`flush` via `hasPreparePipeline()`, enabling both writable and read-only stacks.
+An interpreter transformer: `withChangefeed(base)` takes `Interpreter<RefContext, A extends HasRead>` and returns `Interpreter<RefContext, A & HasChangefeed>`. The return type honestly declares that `[CHANGEFEED]` is attached to every carrier, enabling `ResolveCarrier` to detect `HasChangefeed` in the composed carrier type. `attachChangefeed` uses an `asserts target is HasChangefeed` signature for type narrowing — after the call, the target is known to have `[CHANGEFEED]`. The `sum` case has an explicit `as A & HasChangefeed` cast because assertion narrowing doesn't compose through conditional guards.
+
+Requires `HasRead` (the `[CALL]` slot must be filled) because `.current` reads values through the carrier. Context type is `RefContext` (not `WritableContext`) — it duck-types for `prepare`/`flush` via `hasPreparePipeline()`, enabling both writable and read-only stacks.
 
 For leaf refs, attaches a plain `Changefeed` with `subscribe`. For composite refs (product, sequence, map), attaches a `ComposedChangefeed` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition).
 
@@ -493,7 +532,9 @@ The interpreter always collects errors into a mutable `SchemaValidationError[]` 
 
 ### Readable Types (`src/interpreters/readable.ts`)
 
-This file contains **type-level definitions only** — the runtime implementation has been decomposed into `withReadable` and `withCaching`. The types that remain:
+This file contains **type-level definitions only** — the runtime implementation has been decomposed into `withReadable` and `withCaching`. `RRef<S>` is a naming-consistent alias for `Readable<S>`, exported from `ref.ts`. No behavioral difference — it exists so the three ref tiers have parallel naming: `RRef`, `RWRef`, `Ref`.
+
+The types that remain:
 
 **`ReadableSequenceRef<T, V>`** — callable + `.at(i)`, `.get(i)`, `.length`, `[Symbol.iterator]`. `T` is the ref type, `V` is the plain value type.
 
@@ -519,9 +560,9 @@ This file contains **type-level definitions only** — the runtime implementatio
 
 Sequence iteration follows **Array** semantics (yields bare child refs), while map iteration follows **Map** semantics (yields `[key, ref]` entries).
 
-### Type-Level Interpretation: `Plain<S>`, `Readable<S>`, `Writable<S>`, and `Ref<S>`
+### Type-Level Interpretation: `Plain<S>`, `Readable<S>`, `Writable<S>`, `SchemaRef<S, M>`, and the Ref Tiers
 
-Four recursive conditional types map schema types to their corresponding value types:
+Several recursive conditional types map schema types to their corresponding value types:
 
 **`Plain<S>`** — the plain JavaScript/JSON type. `Plain<ScalarSchema<"string", "a" | "b">>` = `"a" | "b"`. `Plain<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ x: number }`. Used for `toJSON()` return types, validation result types, and serialization boundaries.
 
@@ -529,7 +570,24 @@ Four recursive conditional types map schema types to their corresponding value t
 
 **`Writable<S>`** — the mutation-only ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>` (just `.set()`). `Writable<AnnotatedSchema<"text">>` = `TextRef` (just `.insert()`, `.delete()`, `.update()`). `SequenceRef` is mutation-only (`.push()`, `.insert()`, `.delete()`) — navigation lives in `NavigableSequenceRef` / `ReadableSequenceRef`.
 
-**`Ref<S>`** — the **primary user-facing type** for the full interpreter stack. Unifies navigation, reading, writing, and `HasTransact` in a single recursive type. Children are `Ref<Child>` — no `Readable<Child> & Writable<Child>` intersection needed. This eliminates the `.at()` overload conflict that plagued `Readable<S> & Writable<S>` on sequences and maps (where `ReadableSequenceRef.at()` returns `Readable<I>` but `SequenceRef.at()` returned `Writable<I>`).
+**`SchemaRef<S, M>`** — the parameterized recursive core for composed interpreter refs. The mode parameter `M extends RefMode` (`"rw" | "rwc"`) controls which cross-cutting concerns are intersected at every node via `Wrap<T, M>`:
+
+| Mode | `Wrap<T, M>` produces | Cross-cutting concerns |
+|---|---|---|
+| `"rw"` | `T & HasTransact` | Transaction access |
+| `"rwc"` | `T & HasTransact & HasChangefeed` | Transaction access + observation |
+
+Children recurse with the same mode: `SchemaRef<Child, M>` — the mode threads through the entire tree.
+
+Three named aliases provide the user-facing ref tiers:
+
+| Alias | Definition | Produced by |
+|---|---|---|
+| `RRef<S>` | `Readable<S>` | `.with(readable).done()` |
+| `RWRef<S>` | `SchemaRef<S, "rw">` | `.with(readable).with(writable).done()` |
+| `Ref<S>` | `SchemaRef<S, "rwc">` | `.with(readable).with(writable).with(changefeed).done()` |
+
+**`Ref<S>`** is the **primary user-facing type** for the full interpreter stack. Unifies navigation, reading, writing, `HasTransact`, and `HasChangefeed` in a single recursive type. Children are `Ref<Child>` — no `Readable<Child> & Writable<Child>` intersection needed. This eliminates the `.at()` overload conflict that plagued `Readable<S> & Writable<S>` on sequences and maps (where `ReadableSequenceRef.at()` returns `Readable<I>` but `SequenceRef.at()` returned `Writable<I>`).
 
 ```ts
 type Doc = Ref<typeof mySchema>
@@ -538,19 +596,22 @@ type Doc = Ref<typeof mySchema>
 // doc.title.set("new")                       (writing)
 // doc.items.at(0) → Ref<ItemSchema>          (navigation — unified child type)
 // doc[TRANSACT]   → WritableContext           (transaction access)
+// doc[CHANGEFEED] → Changefeed               (observation)
 ```
 
 The type hierarchy for collections:
 - `NavigableSequenceRef<T>` / `NavigableMapRef<T>` — pure structural addressing (`.at()`, `.length`, `.keys()`)
 - `ReadableSequenceRef<T, V> extends NavigableSequenceRef<T>` — adds call signature `(): V[]` and `.get()`
 - `SequenceRef` — mutation only (`.push()`, `.insert()`, `.delete()`) — no `.at()`, no type parameter
-- `Ref<SequenceSchema<I>>` = `ReadableSequenceRef<Ref<I>, Plain<I>> & SequenceRef & HasTransact`
+- `Ref<SequenceSchema<I>>` = `ReadableSequenceRef<Ref<I>, Plain<I>> & SequenceRef & HasTransact & HasChangefeed`
 
-`Readable<S>` and `Writable<S>` remain for partial-stack scenarios (read-only documents, mutation-only code paths). All four types account for constrained scalars.
+`RRef<S>` is a naming alias for `Readable<S>` — it is not a `SchemaRef` mode because read-only refs have a fundamentally different structure (no mutation interfaces, no `WithTransact`). `Readable<S>` and `Writable<S>` remain for partial-stack scenarios (read-only documents, mutation-only code paths). All types account for constrained scalars.
+
+`WithTransact<T>` is a deprecated alias for `Wrap<T, "rw">`, kept for backward compatibility.
 
 ## Verified Properties
 
-The spike validates these properties via 929 schema tests + 869 core tests (zero `tsc` errors):
+The spike validates these properties via 965 schema tests + 869 core tests (zero `tsc` errors):
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: requires `withCaching` — `doc.title === doc.title`, `seq.at(0) === seq.at(0)`, `map.at("k") === map.at("k")`. Without `withCaching`, each access produces a new ref.
@@ -583,8 +644,12 @@ The spike validates these properties via 929 schema tests + 869 core tests (zero
 29. **`applyChanges` invariants**: throws on non-transactable ref; throws during active transaction; empty ops is a no-op (no subscribers fire); `{origin}` option flows to `Changeset.origin`.
 30. **Navigate + write without reading**: `withWritable(withNavigation(bottomInterpreter))` produces carriers where `.at()` reaches children and `.set()` mutates them, but `ref()` throws. Text `.update()` works because it reads the store directly via `readByPath`, not through the carrier's `[CALL]` slot.
 31. **Read-only changefeeds**: `withChangefeed(withCaching(withReadable(withNavigation(bottomInterpreter))))` with a plain `RefContext` (no `prepare`/`flush`) produces valid Moore machines — `.current` returns a value, `.subscribe` returns a no-op unsubscribe.
-32. **`Ref<S>` type correctness**: `Ref<SequenceSchema<ScalarSchema<"string">>>` has `.at(0)` returning `Ref<ScalarSchema>` with both `.set()` and `()` call signature — no overload conflict. `.push()`, `.insert()`, `.delete()` from `SequenceRef` (mutation-only, no `.at()`). `[TRANSACT]` present at every level.
+32. **`Ref<S>` type correctness**: `Ref<SequenceSchema<ScalarSchema<"string">>>` has `.at(0)` returning `Ref<ScalarSchema>` with both `.set()` and `()` call signature — no overload conflict. `.push()`, `.insert()`, `.delete()` from `SequenceRef` (mutation-only, no `.at()`). `[TRANSACT]` and `[CHANGEFEED]` present at every level.
 33. **`CALL` rename**: the carrier delegation slot is `Symbol.for("kyneta:call")`. The name honestly reflects the abstraction: call delegation, not reading.
+34. **`RWRef<S>` type correctness**: `RWRef<S>` has `[TRANSACT]` but not `[CHANGEFEED]`. Children also lack `[CHANGEFEED]` — the mode threads recursively.
+35. **Fluent `.done()` inference**: `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()` infers `Ref<S>` without cast. `.with(readable).with(writable).done()` infers `RWRef<S>`. `.with(readable).done()` infers `RRef<S>`.
+36. **Honest transformer returns**: `withWritable` contributes `HasTransact` to `A`. `withChangefeed` contributes `HasChangefeed` to `A`. These are compile-time-verified via `expectTypeOf` on the interpreter return types.
+37. **`change()` callback inference**: `change(doc, d => { ... })` infers `d` from the doc ref type — no `(d: any)` annotation needed when `doc` is typed as `Ref<S>` or `RWRef<S>`.
 
 ## File Map
 
@@ -600,14 +665,14 @@ packages/schema/
 │   ├── step.ts                  # Pure (State, Change) → State transitions
 │   ├── zero.ts                  # Zero.structural, Zero.overlay
 │   ├── describe.ts              # Human-readable schema tree view
-│   ├── interpret.ts             # Interpreter interface + catamorphism + Path types
+│   ├── interpret.ts             # Interpreter interface + catamorphism + Path types + phantom brands (ReadableBrand, WritableBrand, ChangefeedBrand) + Resolve<S, Brands> + ResolveCarrier<S, A> + InterpretBuilder<S, Ctx, Brands>
 │   ├── facade.ts                # Library-level change, applyChanges, subscribe, subscribeTree
-│   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition
+│   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition (readable → ReadableBrand, writable → WritableBrand, changefeed → ChangefeedBrand)
 │   ├── combinators.ts           # product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
 │   ├── interpreter-types.ts     # RefContext, Plain<S> — shared types across interpreters
 │   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore, pathKey, dispatchSum
-│   ├── ref.ts                   # Ref<S> unified recursive type + WithTransact<T> helper
+│   ├── ref.ts                   # SchemaRef<S,M> parameterized core + RRef<S>, RWRef<S>, Ref<S> tier aliases + Wrap<T,M>, RefMode + WithTransact<T> (deprecated alias)
 │   ├── interpreters/
 │   │   ├── bottom.ts            # bottomInterpreter, makeCarrier, CALL symbol, capability lattice (HasCall/HasNavigation/HasRead/HasCaching)
 │   │   ├── navigable.ts         # Type-only: NavigableSequenceRef, NavigableMapRef
@@ -615,9 +680,9 @@ packages/schema/
 │   │   ├── with-readable.ts     # withReadable transformer — fills [CALL] slot, adds .get(), toPrimitive
 │   │   ├── with-caching.ts      # withCaching transformer — caching + INVALIDATE + prepare-pipeline hooks
 │   │   ├── readable.ts          # Type-only: Readable<S>, ReadableSequenceRef (extends NavigableSequenceRef), ReadableMapRef (extends NavigableMapRef)
-│   │   ├── writable.ts          # withWritable transformer + TRANSACT + WritableContext + executeBatch + SequenceRef (mutation-only)
+│   │   ├── writable.ts          # withWritable transformer (returns A & HasTransact) + TRANSACT + WritableContext + executeBatch + SequenceRef (mutation-only)
 │   │   ├── plain.ts             # Read from plain JS object (eager deep snapshot)
-│   │   ├── with-changefeed.ts   # Changefeed transformer — compositional observation + batched notification (RefContext, requires HasRead)
+│   │   ├── with-changefeed.ts   # Changefeed transformer (returns A & HasChangefeed, attachChangefeed asserts narrowing) — compositional observation + batched notification (RefContext, requires HasRead)
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate
 │   ├── __tests__/
 │   │   ├── types.test.ts        # Type-level tests (expectTypeOf) — Ref<S>, NavigableRef hierarchy, capability lattice
