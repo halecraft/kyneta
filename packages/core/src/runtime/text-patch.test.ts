@@ -46,19 +46,19 @@ global.HTMLTextAreaElement = dom.window.HTMLTextAreaElement
  * Allows manual triggering of changes to verify region behavior.
  */
 function createMockTextRef(initialValue: string): {
-  ref: { [CHANGEFEED]: Changefeed<string, ChangeBase> }
-  emit: (change: ChangeBase, origin?: string) => void
+  ref: { [CHANGEFEED]: Changefeed<string, TextChange> }
+  emit: <C extends ChangeBase>(change: C, origin?: string) => void
   setValue: (value: string) => void
 } {
   let currentValue = initialValue
-  let callback: ((changeset: Changeset<ChangeBase>) => void) | null = null
+  let callback: ((changeset: Changeset<TextChange>) => void) | null = null
 
   const ref = {
     [CHANGEFEED]: {
       get current(): string {
         return currentValue
       },
-      subscribe(cb: (changeset: Changeset<ChangeBase>) => void): () => void {
+      subscribe(cb: (changeset: Changeset<TextChange>) => void): () => void {
         callback = cb
         return () => {
           callback = null
@@ -69,8 +69,10 @@ function createMockTextRef(initialValue: string): {
 
   return {
     ref,
-    emit: (change: ChangeBase, origin?: string) => {
-      callback?.({ changes: [change], origin })
+    emit: <C extends ChangeBase>(change: C, origin?: string) => {
+      // Cast: emit is a test harness escape hatch that intentionally pushes
+      // non-TextChange values (e.g. { type: "replace" }) to test fallback paths.
+      callback?.({ changes: [change] as unknown as readonly TextChange[], origin })
     },
     setValue: (value: string) => {
       currentValue = value

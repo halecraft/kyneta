@@ -333,15 +333,12 @@ export function resetTestState(): void {
 /**
  * A mock text ref with CHANGEFEED protocol.
  *
- * Provides `.insert()`, `.delete()`, `.toString()`, `.get()` and emits
- * text changes via CHANGEFEED.
+ * Provides `.insert()`, `.delete()` and emits text changes via CHANGEFEED.
  */
 export function createMockTextRef(initial: string = ""): {
   ref: {
     insert(pos: number, text: string): void
     delete(pos: number, len: number): void
-    toString(): string
-    get(): string
     readonly [CHANGEFEED]: Changefeed<string, ChangeBase>
   }
   /** Access current value */
@@ -402,14 +399,13 @@ export function createMockTextRef(initial: string = ""): {
 /**
  * A mock counter ref with CHANGEFEED protocol.
  *
- * Provides `.get()`, `.increment()` and emits replace changes.
+ * Provides `.get()`, `.increment()` and emits increment changes.
  * Replaces the old `Shape.counter()` pattern.
  */
 export function createMockCounterRef(initial: number = 0): {
   ref: {
     get(): number
     increment(n: number): void
-    readonly value: number
     readonly [CHANGEFEED]: Changefeed<number, ChangeBase>
   }
 } {

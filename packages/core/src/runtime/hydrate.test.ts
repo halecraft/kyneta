@@ -304,7 +304,7 @@ describe("hydrate", () => {
     const container = document.createElement("div")
     container.innerHTML = "<p>Hello</p>"
 
-    const scope = new Scope("test")
+    const scope = new Scope()
     let hydratedNode: Node | null = null
 
     const result = hydrate(
@@ -322,7 +322,7 @@ describe("hydrate", () => {
 
   it("should return failure when container is empty", () => {
     const container = document.createElement("div")
-    const scope = new Scope("test")
+    const scope = new Scope()
 
     const result = hydrate(container, () => {}, scope)
 
@@ -334,7 +334,7 @@ describe("hydrate", () => {
     const container = document.createElement("div")
     container.innerHTML = "<p>Content</p>"
 
-    const scope = new Scope("test")
+    const scope = new Scope()
     const result = hydrate(container, () => {}, scope)
 
     expect(typeof result.dispose).toBe("function")
@@ -345,7 +345,7 @@ describe("hydrate", () => {
 
   it("should call onMismatch callback when mismatch occurs", () => {
     const container = document.createElement("div")
-    const scope = new Scope("test")
+    const scope = new Scope()
 
     const mismatches: HydrationMismatchError[] = []
     const _result = hydrate(container, () => {}, scope, {
@@ -358,7 +358,7 @@ describe("hydrate", () => {
 
   it("should throw in strict mode on mismatch", () => {
     const container = document.createElement("div")
-    const scope = new Scope("test")
+    const scope = new Scope()
 
     expect(() => hydrate(container, () => {}, scope, { strict: true })).toThrow(
       HydrationMismatchError,
@@ -375,7 +375,7 @@ describe("createHydratableMount", () => {
     const container = document.createElement("div")
     container.innerHTML = "<p>SSR Content</p>"
 
-    const scope = new Scope("test")
+    const scope = new Scope()
     let wasHydrated = false
     let wasFreshRender = false
 
@@ -398,7 +398,7 @@ describe("createHydratableMount", () => {
 
   it("should fresh render when container is empty", () => {
     const container = document.createElement("div")
-    const scope = new Scope("test")
+    const scope = new Scope()
     let wasHydrated = false
     let wasFreshRender = false
 
@@ -426,7 +426,7 @@ describe("createHydratableMount", () => {
   it("should return dispose function", () => {
     const container = document.createElement("div")
     container.innerHTML = "<p>Content</p>"
-    const scope = new Scope("test")
+    const scope = new Scope()
 
     const mount = createHydratableMount(
       () => document.createElement("p"),
@@ -440,7 +440,7 @@ describe("createHydratableMount", () => {
 
   it("should remove node on dispose for fresh render", () => {
     const container = document.createElement("div")
-    const scope = new Scope("test")
+    const scope = new Scope()
 
     const mount = createHydratableMount(
       () => {

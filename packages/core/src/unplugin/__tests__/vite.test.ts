@@ -13,8 +13,7 @@
  */
 
 import { describe, expect, it, afterAll } from "vitest"
-import { build } from "vite"
-import type { RollupOutput, OutputChunk } from "rollup"
+import { build, type Plugin, type Rollup } from "vite"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -25,6 +24,16 @@ import {
   NO_BUILDER_SOURCE_EXPORTED,
   BUILDER_SOURCE,
 } from "./fixtures.js"
+
+type RollupOutput = Rollup.RollupOutput
+type OutputChunk = Rollup.OutputChunk
+
+/** Narrow the plugin return (Vite 6 may return Plugin | Plugin[]) */
+function getPlugin(options?: Record<string, unknown>): Plugin {
+  const result = vitePlugin(options)
+  if (Array.isArray(result)) return result[0]!
+  return result
+}
 
 // ---------------------------------------------------------------------------
 // Temp directory management
@@ -165,13 +174,13 @@ describe("unplugin — Vite integration", () => {
 
   it("registers as enforce: pre", () => {
     // Verify the plugin metadata
-    const plugin = vitePlugin()
+    const plugin = getPlugin()
     expect(plugin.name).toBe("kyneta")
     expect(plugin.enforce).toBe("pre")
   })
 
   it("exposes Vite-specific hooks", () => {
-    const plugin = vitePlugin()
+    const plugin = getPlugin()
     // The Vite adapter should have these hooks from the vite: escape hatch
     expect(plugin.configResolved).toBeDefined()
     expect(plugin.handleHotUpdate).toBeDefined()

@@ -344,7 +344,7 @@ describe("regions", () => {
 
       // Batch insert should use O(1) insertBefore calls (one DocumentFragment)
       // The counting DOM tracks actual insertBefore calls
-      assertMaxMutations(counts, { insertBefore: 1 })
+      assertMaxMutations(counts, 1)
 
       scope.dispose()
     })

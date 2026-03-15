@@ -81,10 +81,10 @@ describe("HydrationMismatchError", () => {
 
 describe("ScopeDisposedError", () => {
   it("should create error with scope ID", () => {
-    const error = new ScopeDisposedError("scope-123")
+    const error = new ScopeDisposedError(123)
     expect(error.code).toBe(KynetaErrorCode.SCOPE_DISPOSED)
-    expect(error.scopeId).toBe("scope-123")
-    expect(error.message).toContain("scope-123")
+    expect(error.scopeId).toBe(123)
+    expect(error.message).toContain("123")
     expect(error.message).toContain("disposed")
     expect(error.name).toBe("ScopeDisposedError")
     expect(error).toBeInstanceOf(KynetaError)
