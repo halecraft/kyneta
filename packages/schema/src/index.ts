@@ -111,6 +111,11 @@ export type {
   Path,
   PathSegment,
   SumVariants,
+  ReadableBrand,
+  WritableBrand,
+  ChangefeedBrand,
+  Resolve,
+  ResolveCarrier,
 } from "./interpret.js"
 
 // Pre-built interpreter layers for fluent composition

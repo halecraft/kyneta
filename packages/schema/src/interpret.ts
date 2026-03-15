@@ -17,6 +17,10 @@
 // - Pre-built layers live in `./layers.ts` to avoid circular imports.
 
 import { bottomInterpreter } from "./interpreters/bottom.js"
+import type { HasRead } from "./interpreters/bottom.js"
+import type { HasTransact } from "./interpreters/writable.js"
+import type { HasChangefeed } from "./changefeed.js"
+import type { Ref, RWRef, RRef } from "./ref.js"
 import type {
   Schema,
   ScalarSchema,
@@ -128,17 +132,113 @@ export interface SumVariants<A> {
 }
 
 // ---------------------------------------------------------------------------
+// Phantom brands — for fluent builder type inference
+// ---------------------------------------------------------------------------
+
+/**
+ * Phantom brand symbols for the fluent builder path. Each pre-built layer
+ * carries a brand; `.with()` accumulates brands via intersection; `.done()`
+ * uses `Resolve<S, Brands>` to select the correct ref tier.
+ *
+ * These are type-only — zero runtime cost. The three-arg path uses
+ * structural checks on `A` (via `ResolveCarrier`) instead.
+ */
+declare const READABLE_BRAND: unique symbol
+declare const WRITABLE_BRAND: unique symbol
+declare const CHANGEFEED_BRAND: unique symbol
+
+export type ReadableBrand = { readonly [READABLE_BRAND]: true }
+export type WritableBrand = { readonly [WRITABLE_BRAND]: true }
+export type ChangefeedBrand = { readonly [CHANGEFEED_BRAND]: true }
+
+// ---------------------------------------------------------------------------
+// Resolve<S, Brands> — fluent builder tier selection
+// ---------------------------------------------------------------------------
+
+/**
+ * Selects the schema-level ref type based on accumulated phantom brands
+ * from the fluent builder's `.with()` chain.
+ *
+ * - `ReadableBrand & WritableBrand & ChangefeedBrand` → `Ref<S>` (full stack)
+ * - `ReadableBrand & WritableBrand` → `RWRef<S>` (read-write, no changefeed)
+ * - `ReadableBrand` → `RRef<S>` (read-only)
+ * - Otherwise → `unknown` (custom/unbranded layers — cast needed)
+ *
+ * Order matters — most specific first.
+ */
+export type Resolve<S extends Schema, Brands> =
+  Brands extends ReadableBrand & WritableBrand & ChangefeedBrand
+    ? Ref<S>
+    : Brands extends ReadableBrand & WritableBrand
+      ? RWRef<S>
+      : Brands extends ReadableBrand
+        ? RRef<S>
+        : unknown
+
+// ---------------------------------------------------------------------------
+// ResolveCarrier<S, A> — three-arg tier selection
+// ---------------------------------------------------------------------------
+
+/**
+ * Selects the schema-level ref type based on structural capabilities
+ * present in the carrier type `A` from the three-arg `interpret()` path.
+ *
+ * This works because transformer return types are now honest:
+ * - `withWritable` returns `Interpreter<Ctx, A & HasTransact>`
+ * - `withChangefeed` returns `Interpreter<Ctx, A & HasChangefeed>`
+ * - `withReadable` returns `Interpreter<Ctx, A & HasRead>` (already the case)
+ *
+ * Resolution tiers:
+ * - `HasRead & HasTransact & HasChangefeed` → `Ref<S>` (full stack)
+ * - `HasRead & HasTransact` (no changefeed) → `RWRef<S>` (read-write)
+ * - Otherwise → raw `A` (read-only or degraded stacks keep carrier brands)
+ *
+ * Both `Ref<S>` and `RWRef<S>` require `HasRead` — a carrier that can't
+ * read has no business being typed as a schema-level ref (which promises
+ * a call signature returning `Plain<S>`). Write-only stacks
+ * (`withWritable(bottom)`) fall through to raw `A`.
+ *
+ * Read-only stacks also fall through to `A` rather than resolving to
+ * `RRef<S>`. This preserves carrier brand types (`HasCaching`, `HasRead`,
+ * etc.) that internal tests verify. Users who want `Readable<S>` on a
+ * read-only stack should use the fluent builder path instead.
+ *
+ * **Usage**: `ResolveCarrier` cannot appear directly in an overload return
+ * type because `Ref<S>` / `RWRef<S>` are deeply recursive (~20 conditional
+ * levels) and TypeScript hits TS2589 when `S` is an abstract generic. The
+ * three-arg `interpret()` overload returns raw `A` instead. Use
+ * `ResolveCarrier` explicitly at call sites or in type annotations:
+ *
+ * ```ts
+ * const doc: ResolveCarrier<typeof schema, typeof interp extends Interpreter<any, infer A> ? A : never>
+ *   = interpret(schema, interp, ctx)
+ * // Or more commonly, just use the fluent builder which infers automatically.
+ * ```
+ */
+export type ResolveCarrier<S extends Schema, A> =
+  [A] extends [HasRead & HasTransact & HasChangefeed]
+    ? Ref<S>
+    : [A] extends [HasRead & HasTransact]
+      ? RWRef<S>
+      : A
+
+// ---------------------------------------------------------------------------
 // InterpreterLayer — typed wrapper for interpreter transformers
 // ---------------------------------------------------------------------------
 
 /**
  * An `InterpreterLayer` wraps an interpreter transformer function with
- * explicit input/output context types. Layers are the building blocks
- * of the fluent `InterpretBuilder` API.
+ * explicit input/output context types and an optional phantom brand.
+ * Layers are the building blocks of the fluent `InterpretBuilder` API.
  *
  * Each layer takes a base interpreter and returns an enhanced interpreter.
  * The context type may widen (e.g. `RefContext` → `WritableContext`) and
  * the result type may gain capabilities (e.g. `A & HasNavigation`).
+ *
+ * The `Brand` type parameter (default `unknown`) is a phantom type used
+ * by the fluent builder to accumulate capability information via `.with()`.
+ * Pre-built layers (`readable`, `writable`, `changefeed`) carry specific
+ * brands; custom/user-defined layers keep the default `unknown`.
  *
  * ```ts
  * import { readable, writable, changefeed } from "@kyneta/schema"
@@ -153,7 +253,7 @@ export interface SumVariants<A> {
  * Pre-built layers are exported from `./layers.ts` (and re-exported
  * from the barrel `index.ts`).
  */
-export interface InterpreterLayer<InCtx, OutCtx> {
+export interface InterpreterLayer<InCtx, OutCtx, Brand = unknown> {
   /** Human-readable name for debugging and toString(). */
   readonly name: string
   /**
@@ -171,35 +271,47 @@ export interface InterpreterLayer<InCtx, OutCtx> {
  * A fluent builder for composing interpreter layers before running the
  * catamorphism. Created by `interpret(schema, ctx)` (the two-arg overload).
  *
+ * The builder carries the schema type `S` (for tier resolution), the
+ * current context type `Ctx` (for layer compatibility), and accumulated
+ * `Brands` (for `.done()` return type selection via `Resolve<S, Brands>`).
+ *
  * ```ts
  * const doc = interpret(schema, ctx)
- *   .with(readable)
- *   .with(writable)
- *   .with(changefeed)
- *   .done()
+ *   .with(readable)    // Brands = unknown & ReadableBrand = ReadableBrand
+ *   .with(writable)    // Brands = ReadableBrand & WritableBrand
+ *   .with(changefeed)  // Brands = ReadableBrand & WritableBrand & ChangefeedBrand
+ *   .done()            // → Ref<typeof schema>
  * ```
  *
- * Each `.with(layer)` applies a transformer. `.done()` runs the single
- * catamorphism walk with the composed interpreter.
+ * Each `.with(layer)` applies a transformer and intersects the layer's brand.
+ * `.done()` runs the catamorphism and returns `Resolve<S, Brands>`.
  *
  * The builder accumulates layers — each `.with()` returns a new builder
  * with the layer appended.
  */
-export interface InterpretBuilder<Ctx, A> {
+export interface InterpretBuilder<S extends Schema, Ctx, Brands> {
   /**
    * Add a layer to the interpreter stack.
    *
    * The layer's `transform` receives the current interpreter and returns
-   * an enhanced interpreter. The context type may widen.
+   * an enhanced interpreter. The context type may widen. The layer's
+   * phantom brand `B` is intersected into the accumulated `Brands`.
    */
-  with<NewCtx>(
-    layer: InterpreterLayer<Ctx, NewCtx>,
-  ): InterpretBuilder<NewCtx, A>
+  with<NewCtx, B = unknown>(
+    layer: InterpreterLayer<Ctx, NewCtx, B>,
+  ): InterpretBuilder<S, NewCtx, Brands & B>
 
   /**
    * Run the catamorphism with the composed interpreter and return the result.
+   *
+   * Returns `Resolve<S, Brands>` — the schema-level ref type selected by
+   * the accumulated brands. For standard compositions:
+   * - `readable` → `RRef<S>`
+   * - `readable + writable` → `RWRef<S>`
+   * - `readable + writable + changefeed` → `Ref<S>`
+   * - Custom/unbranded → `unknown`
    */
-  done(): A
+  done(): Resolve<S, Brands>
 }
 
 // ---------------------------------------------------------------------------
@@ -231,29 +343,43 @@ export interface InterpretBuilder<Ctx, A> {
  * children are wrapped in closures, so the interpreter controls when
  * (and whether) children are actually evaluated.
  */
-export function interpret<Ctx, A>(
-  schema: Schema,
+// Three-arg overload: returns `A` (the raw carrier type).
+//
+// The carrier type is already honest — `withWritable` contributes
+// `& HasTransact`, `withChangefeed` contributes `& HasChangefeed` —
+// so `A` carries full capability information. Users who need a
+// schema-level type can use `ResolveCarrier<S, A>` explicitly, or
+// use the fluent builder path which infers automatically.
+//
+// We intentionally return `A` rather than `ResolveCarrier<S, A>` because
+// `Ref<S>` / `RWRef<S>` are deeply recursive conditional types that
+// cause TS2589 "excessively deep" when placed in overload return positions
+// with abstract `S extends Schema`.
+export function interpret<S extends Schema, Ctx, A>(
+  schema: S,
   interp: Interpreter<Ctx, A>,
   ctx: Ctx,
   path?: Path,
 ): A
-export function interpret<Ctx>(
-  schema: Schema,
+
+// Two-arg overload — fluent builder.
+export function interpret<S extends Schema, Ctx>(
+  schema: S,
   ctx: Ctx,
-): InterpretBuilder<Ctx, unknown>
-export function interpret<Ctx, A>(
+): InterpretBuilder<S, Ctx, unknown>
+export function interpret(
   schema: Schema,
-  interpOrCtx: Interpreter<Ctx, A> | Ctx,
-  ctx?: Ctx,
+  interpOrCtx: unknown,
+  ctx?: unknown,
   path?: Path,
-): A | InterpretBuilder<Ctx, unknown> {
+): any {
   // Overload resolution: if the second argument has all six interpreter
   // methods, it's an Interpreter. Otherwise it's a context object.
   if (isInterpreter(interpOrCtx)) {
-    return interpretImpl(schema, interpOrCtx as Interpreter<Ctx, A>, ctx!, path ?? [])
+    return interpretImpl(schema, interpOrCtx as Interpreter<any, any>, ctx!, path ?? [])
   }
   // Two-arg form: return a fluent builder
-  return createBuilder(schema, interpOrCtx as Ctx)
+  return createBuilder(schema, interpOrCtx)
 }
 
 /**
@@ -283,14 +409,14 @@ function isInterpreter(value: unknown): boolean {
  * Layers are captured as an immutable snapshot — each `.with()` creates a
  * new array rather than mutating a shared one, so branching builders is safe.
  */
-function createBuilder<Ctx>(
+function createBuilder(
   schema: Schema,
-  ctx: Ctx,
-  layers: ReadonlyArray<InterpreterLayer<any, any>> = [],
-): InterpretBuilder<Ctx, unknown> {
+  ctx: unknown,
+  layers: ReadonlyArray<InterpreterLayer<any, any, any>> = [],
+): { with(layer: InterpreterLayer<any, any, any>): any; done(): unknown } {
   return {
-    with<NewCtx>(layer: InterpreterLayer<Ctx, NewCtx>): InterpretBuilder<NewCtx, unknown> {
-      return createBuilder<NewCtx>(schema, ctx as unknown as NewCtx, [...layers, layer])
+    with(layer: InterpreterLayer<any, any, any>) {
+      return createBuilder(schema, ctx, [...layers, layer])
     },
     done(): unknown {
       if (layers.length === 0) {

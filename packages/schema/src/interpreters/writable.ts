@@ -456,7 +456,7 @@ export type Writable<S extends Schema> =
  */
 export function withWritable<A>(
   base: Interpreter<RefContext, A>,
-): Interpreter<WritableContext, A> {
+): Interpreter<WritableContext, A & HasTransact> {
   // Helper: attach [TRANSACT] as a non-enumerable symbol property.
   // Uses Object.defineProperty to bypass Proxy set traps on map refs.
   function attachTransact(result: unknown, ctx: WritableContext): void {
@@ -483,7 +483,7 @@ export function withWritable<A>(
       ctx: WritableContext,
       path: Path,
       schema: ScalarSchema,
-    ): A {
+    ): A & HasTransact {
       const result = base.scalar(ctx, path, schema) as any
 
       result.set = (value: unknown): void => {
@@ -503,7 +503,7 @@ export function withWritable<A>(
       path: Path,
       schema: ProductSchema,
       fields: Readonly<Record<string, () => A>>,
-    ): A {
+    ): A & HasTransact {
       const result = base.product(ctx, path, schema, fields) as any
 
       Object.defineProperty(result, "set", {
@@ -527,7 +527,7 @@ export function withWritable<A>(
       path: Path,
       schema: SequenceSchema,
       item: (index: number) => A,
-    ): A {
+    ): A & HasTransact {
       const result = base.sequence(ctx, path, schema, item) as any
 
       result.push = (...items: unknown[]): void => {
@@ -565,7 +565,7 @@ export function withWritable<A>(
       path: Path,
       schema: MapSchema,
       item: (key: string) => A,
-    ): A {
+    ): A & HasTransact {
       const result = base.map(ctx, path, schema, item) as any
 
       Object.defineProperty(result, "set", {
@@ -613,8 +613,12 @@ export function withWritable<A>(
       path: Path,
       schema: SumSchema,
       variants: SumVariants<A>,
-    ): A {
-      return base.sum(ctx, path, schema, variants)
+    ): A & HasTransact {
+      // Sum nodes are structurally transparent — the catamorphism dispatches
+      // variants through the full interpreter, so the resolved variant already
+      // has HasTransact attached. The base.sum() return type is A (without
+      // HasTransact) because the base interpreter doesn't know about our layer.
+      return base.sum(ctx, path, schema, variants) as A & HasTransact
     },
 
     // --- Annotated ------------------------------------------------------------
@@ -626,7 +630,7 @@ export function withWritable<A>(
       path: Path,
       schema: AnnotatedSchema,
       inner: (() => A) | undefined,
-    ): A {
+    ): A & HasTransact {
       const result = base.annotated(ctx, path, schema, inner) as any
 
       switch (schema.tag) {

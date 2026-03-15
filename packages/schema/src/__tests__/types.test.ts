@@ -2,6 +2,17 @@ import { describe, expectTypeOf, it } from "vitest"
 import {
   Schema,
   LoroSchema,
+  interpret,
+  readable,
+  writable,
+  changefeed,
+  createWritableContext,
+  bottomInterpreter,
+  withNavigation,
+  withReadable,
+  withCaching,
+  withWritable,
+  withChangefeed,
   type ScalarSchema,
   type ProductSchema,
   type SequenceSchema,
@@ -25,6 +36,10 @@ import {
   type WithTransact,
   type HasTransact,
   type HasChangefeed,
+  type HasCall,
+  type HasRead,
+  type HasCaching,
+  type HasNavigation,
   type Plain,
   type ScalarPlain,
   type ScalarRef,
@@ -39,6 +54,16 @@ import {
   type PlainMapSchema,
   type PlainPositionalSumSchema,
   type PlainDiscriminatedSumSchema,
+  type InterpreterLayer,
+  type Interpreter,
+  type InterpretBuilder,
+  type RefContext,
+  type WritableContext,
+  type ReadableBrand,
+  type WritableBrand,
+  type ChangefeedBrand,
+  type Resolve,
+  type ResolveCarrier,
   TRANSACT,
   CHANGEFEED,
 } from "../index.js"
@@ -1373,5 +1398,221 @@ describe("type-level: Wrap<T, M> dispatches by mode", () => {
     expectTypeOf<Result>().toHaveProperty("x")
     expectTypeOf<Result>().toHaveProperty(TRANSACT)
     expectTypeOf<Result>().toHaveProperty(CHANGEFEED)
+  })
+})
+
+// ===========================================================================
+// Fluent builder inference: Resolve<S, Brands>
+// ===========================================================================
+
+describe("type-level: Resolve<S, Brands> selects the correct tier", () => {
+  type S = ProductSchema<{ x: ScalarSchema<"number"> }>
+
+  it("ReadableBrand → RRef<S>", () => {
+    type Result = Resolve<S, ReadableBrand>
+    expectTypeOf<Result>().toEqualTypeOf<RRef<S>>()
+  })
+
+  it("ReadableBrand & WritableBrand → RWRef<S>", () => {
+    type Result = Resolve<S, ReadableBrand & WritableBrand>
+    expectTypeOf<Result>().toEqualTypeOf<RWRef<S>>()
+  })
+
+  it("ReadableBrand & WritableBrand & ChangefeedBrand → Ref<S>", () => {
+    type Result = Resolve<S, ReadableBrand & WritableBrand & ChangefeedBrand>
+    expectTypeOf<Result>().toEqualTypeOf<Ref<S>>()
+  })
+
+  it("unknown brands → unknown", () => {
+    type Result = Resolve<S, unknown>
+    expectTypeOf<Result>().toEqualTypeOf<unknown>()
+  })
+
+  it("WritableBrand alone (no readable) → unknown", () => {
+    type Result = Resolve<S, WritableBrand>
+    expectTypeOf<Result>().toEqualTypeOf<unknown>()
+  })
+
+  it("ChangefeedBrand alone (no readable or writable) → unknown", () => {
+    type Result = Resolve<S, ChangefeedBrand>
+    expectTypeOf<Result>().toEqualTypeOf<unknown>()
+  })
+
+  it("brand accumulation is order-independent", () => {
+    // writable & readable (reversed order) → same as readable & writable
+    type WR = Resolve<S, WritableBrand & ReadableBrand>
+    type RW = Resolve<S, ReadableBrand & WritableBrand>
+    expectTypeOf<WR>().toEqualTypeOf<RW>()
+    expectTypeOf<WR>().toEqualTypeOf<RWRef<S>>()
+
+    // changefeed & writable & readable (reversed) → same as canonical order
+    type CWR = Resolve<S, ChangefeedBrand & WritableBrand & ReadableBrand>
+    type RWC = Resolve<S, ReadableBrand & WritableBrand & ChangefeedBrand>
+    expectTypeOf<CWR>().toEqualTypeOf<RWC>()
+    expectTypeOf<CWR>().toEqualTypeOf<Ref<S>>()
+  })
+})
+
+// ===========================================================================
+// Fluent builder: .done() inference
+// ===========================================================================
+
+describe("type-level: fluent builder .done() infers correct tier", () => {
+  const pointSchema = Schema.doc({
+    x: Schema.number(),
+    y: Schema.number(),
+  })
+
+  it(".with(readable).done() → RRef<S>", () => {
+    const ctx: RefContext = { store: { x: 0, y: 0 } }
+    const result = interpret(pointSchema, ctx).with(readable).done()
+    expectTypeOf(result).toEqualTypeOf<RRef<typeof pointSchema>>()
+  })
+
+  it(".with(readable).with(writable).done() → RWRef<S>", () => {
+    const ctx = createWritableContext({ x: 0, y: 0 })
+    const result = interpret(pointSchema, ctx).with(readable).with(writable).done()
+    expectTypeOf(result).toEqualTypeOf<RWRef<typeof pointSchema>>()
+  })
+
+  it(".with(readable).with(writable).with(changefeed).done() → Ref<S>", () => {
+    const ctx = createWritableContext({ x: 0, y: 0 })
+    const result = interpret(pointSchema, ctx)
+      .with(readable)
+      .with(writable)
+      .with(changefeed)
+      .done()
+    expectTypeOf(result).toEqualTypeOf<Ref<typeof pointSchema>>()
+  })
+
+  it("full-stack result has [TRANSACT] and [CHANGEFEED]", () => {
+    const ctx = createWritableContext({ x: 0, y: 0 })
+    const result = interpret(pointSchema, ctx)
+      .with(readable)
+      .with(writable)
+      .with(changefeed)
+      .done()
+    expectTypeOf(result).toHaveProperty(TRANSACT)
+    expectTypeOf(result).toHaveProperty(CHANGEFEED)
+  })
+
+  it("read-only result does NOT have .set or [TRANSACT]", () => {
+    const ctx: RefContext = { store: { x: 0, y: 0 } }
+    const result = interpret(pointSchema, ctx).with(readable).done()
+    // RRef<S> = Readable<S> — no mutation, no transact
+    type HasSet = typeof result extends { set: any } ? true : false
+    expectTypeOf<HasSet>().toEqualTypeOf<false>()
+    type HasTx = typeof result extends HasTransact ? true : false
+    expectTypeOf<HasTx>().toEqualTypeOf<false>()
+  })
+
+  it("custom unbranded layer .done() → unknown", () => {
+    const tagging: InterpreterLayer<RefContext, RefContext> = {
+      name: "tagging",
+      transform(base: Interpreter<RefContext, any>) { return base },
+    }
+    const ctx: RefContext = { store: { x: 0, y: 0 } }
+    const result = interpret(pointSchema, ctx).with(tagging).done()
+    expectTypeOf(result).toEqualTypeOf<unknown>()
+  })
+})
+
+// ===========================================================================
+// ResolveCarrier<S, A> — structural dispatch on carrier capabilities
+// ===========================================================================
+
+describe("type-level: ResolveCarrier<S, A> selects the correct tier", () => {
+  type S = ProductSchema<{ x: ScalarSchema<"number"> }>
+
+  it("HasRead & HasTransact & HasChangefeed → Ref<S>", () => {
+    type Result = ResolveCarrier<S, HasRead & HasTransact & HasChangefeed>
+    expectTypeOf<Result>().toEqualTypeOf<Ref<S>>()
+  })
+
+  it("HasRead & HasCaching & HasTransact → RWRef<S>", () => {
+    type Result = ResolveCarrier<S, HasRead & HasCaching & HasTransact>
+    expectTypeOf<Result>().toEqualTypeOf<RWRef<S>>()
+  })
+
+  it("HasRead & HasTransact (no changefeed) → RWRef<S>", () => {
+    type Result = ResolveCarrier<S, HasRead & HasTransact>
+    expectTypeOf<Result>().toEqualTypeOf<RWRef<S>>()
+  })
+
+  it("HasCall & HasTransact (no HasRead) → raw A fallback (can't read → not a ref tier)", () => {
+    type A = HasCall & HasTransact
+    type Result = ResolveCarrier<S, A>
+    // HasTransact is present but HasRead is absent — a write-only carrier
+    // can't read, so it has no business being typed as RWRef<S> (which
+    // promises a call signature returning Plain<S>). Falls through to raw A.
+    type IsRWRef = Result extends RWRef<S> ? true : false
+    expectTypeOf<IsRWRef>().toEqualTypeOf<false>()
+    // Still has HasTransact (preserved from A)
+    expectTypeOf<Result>().toMatchTypeOf<HasTransact>()
+  })
+
+  it("HasRead & HasCaching (no HasTransact) → raw A fallback (preserves carrier brands)", () => {
+    type A = HasRead & HasCaching
+    type Result = ResolveCarrier<S, A>
+    // Read-only stacks fall through to raw A (preserves carrier brands)
+    type IsRWRef = Result extends RWRef<S> ? true : false
+    expectTypeOf<IsRWRef>().toEqualTypeOf<false>()
+    // Still has HasRead and HasCaching (preserved from A)
+    expectTypeOf<Result>().toMatchTypeOf<HasRead>()
+    expectTypeOf<Result>().toMatchTypeOf<HasCaching>()
+  })
+})
+
+// ===========================================================================
+// Three-arg interpret: honest transformer return types
+// ===========================================================================
+
+describe("type-level: withWritable contributes HasTransact to A", () => {
+  it("withWritable return type includes HasTransact", () => {
+    const interp = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
+    // The interpreter's A type should include HasTransact
+    expectTypeOf(interp).toMatchTypeOf<Interpreter<WritableContext, HasTransact>>()
+  })
+
+  it("withWritable(bottom) return type includes HasTransact", () => {
+    const interp = withWritable(bottomInterpreter)
+    expectTypeOf(interp).toMatchTypeOf<Interpreter<WritableContext, HasTransact>>()
+  })
+})
+
+describe("type-level: withChangefeed contributes HasChangefeed to A", () => {
+  it("withChangefeed return type includes HasChangefeed", () => {
+    const interp = withChangefeed(
+      withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))),
+    )
+    expectTypeOf(interp).toMatchTypeOf<Interpreter<RefContext, HasChangefeed>>()
+  })
+
+  it("full stack has HasTransact & HasChangefeed in carrier type", () => {
+    const interp = withChangefeed(
+      withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))),
+    )
+    expectTypeOf(interp).toMatchTypeOf<Interpreter<RefContext, HasTransact & HasChangefeed>>()
+  })
+})
+
+// ===========================================================================
+// InterpretBuilder carries schema type and brands
+// ===========================================================================
+
+describe("type-level: InterpretBuilder<S, Ctx, Brands>", () => {
+  it("two-arg interpret returns InterpretBuilder with schema type", () => {
+    const pointSchema = Schema.doc({ x: Schema.number(), y: Schema.number() })
+    const ctx: RefContext = { store: { x: 0, y: 0 } }
+    const builder = interpret(pointSchema, ctx)
+    expectTypeOf(builder).toMatchTypeOf<InterpretBuilder<typeof pointSchema, RefContext, unknown>>()
+  })
+
+  it("field access on inferred builder result is well-typed", () => {
+    const docSchema = Schema.doc({ title: Schema.string() })
+    const ctx: RefContext = { store: { title: "hi" } }
+    const result = interpret(docSchema, ctx).with(readable).done()
+    // RRef<S> = Readable<S> — should be callable
+    expectTypeOf(result.title).toBeCallableWith()
   })
 })

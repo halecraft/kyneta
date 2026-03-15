@@ -331,10 +331,5 @@ describe("fluent: type-level", () => {
     >()
   })
 
-  it("two-arg interpret returns InterpretBuilder", () => {
-    const store = { x: 0 }
-    const ctx: RefContext = { store }
-    const builder = interpret(pointSchema, ctx)
-    expectTypeOf(builder).toMatchTypeOf<InterpretBuilder<RefContext, unknown>>()
-  })
+
 })

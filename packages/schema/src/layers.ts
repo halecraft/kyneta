@@ -16,7 +16,7 @@
 //     .with(changefeed)
 //     .done()
 
-import type { InterpreterLayer } from "./interpret.js"
+import type { InterpreterLayer, ReadableBrand, WritableBrand, ChangefeedBrand } from "./interpret.js"
 import type { RefContext } from "./interpreter-types.js"
 import type { WritableContext } from "./interpreters/writable.js"
 
@@ -69,7 +69,7 @@ export const navigation: InterpreterLayer<RefContext, RefContext> = {
  * interpret(schema, withCaching(withReadable(withNavigation(bottomInterpreter))), ctx)
  * ```
  */
-export const readable: InterpreterLayer<RefContext, RefContext> = {
+export const readable: InterpreterLayer<RefContext, RefContext, ReadableBrand> = {
   name: "readable",
   transform(base) {
     return withCaching(withReadable(withNavigation(base)))
@@ -92,7 +92,7 @@ export const readable: InterpreterLayer<RefContext, RefContext> = {
  * interpret(schema, withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))), ctx)
  * ```
  */
-export const writable: InterpreterLayer<RefContext, WritableContext> = {
+export const writable: InterpreterLayer<RefContext, WritableContext, WritableBrand> = {
   name: "writable",
   transform(base) {
     return withWritable(base)
@@ -125,7 +125,7 @@ export const writable: InterpreterLayer<RefContext, WritableContext> = {
  * )
  * ```
  */
-export const changefeed: InterpreterLayer<RefContext, RefContext> = {
+export const changefeed: InterpreterLayer<RefContext, RefContext, ChangefeedBrand> = {
   name: "changefeed",
   transform(base) {
     return withChangefeed(base)

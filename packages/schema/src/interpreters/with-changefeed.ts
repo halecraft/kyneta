@@ -47,6 +47,7 @@ import type {
   Changeset,
   Changefeed,
   ComposedChangefeed,
+  HasChangefeed,
   TreeEvent,
 } from "../changefeed.js"
 import type { PendingChange } from "./writable.js"
@@ -67,7 +68,7 @@ import type { RefContext } from "../interpreter-types.js"
 export function attachChangefeed(
   target: object,
   cf: Changefeed<unknown, ChangeBase> | ComposedChangefeed<unknown, ChangeBase>,
-): void {
+): asserts target is HasChangefeed {
   Object.defineProperty(target, CHANGEFEED, {
     value: cf,
     enumerable: false,
@@ -737,14 +738,14 @@ function createMapChangefeed(
  */
 export function withChangefeed<A extends HasRead>(
   base: Interpreter<RefContext, A>,
-): Interpreter<RefContext, A> {
+): Interpreter<RefContext, A & HasChangefeed> {
   return {
     // --- Scalar ---------------------------------------------------------------
     scalar(
       ctx: RefContext,
       path: Path,
       schema: ScalarSchema,
-    ): A {
+    ): A & HasChangefeed {
       const result = base.scalar(ctx, path, schema)
 
       if (isPropertyHost(result)) {
@@ -753,9 +754,10 @@ export function withChangefeed<A extends HasRead>(
           (result as any)[CALL](),
         )
         attachChangefeed(result as object, cf)
+        return result as A & HasChangefeed
       }
 
-      return result
+      return result as A & HasChangefeed
     },
 
     // --- Product --------------------------------------------------------------
@@ -764,7 +766,7 @@ export function withChangefeed<A extends HasRead>(
       path: Path,
       schema: ProductSchema,
       fields: Readonly<Record<string, () => A>>,
-    ): A {
+    ): A & HasChangefeed {
       const result = base.product(ctx, path, schema, fields)
 
       if (isPropertyHost(result)) {
@@ -780,9 +782,10 @@ export function withChangefeed<A extends HasRead>(
           fields as Readonly<Record<string, () => unknown>>,
         )
         attachChangefeed(result as object, cf)
+        return result as A & HasChangefeed
       }
 
-      return result
+      return result as A & HasChangefeed
     },
 
     // --- Sequence -------------------------------------------------------------
@@ -791,7 +794,7 @@ export function withChangefeed<A extends HasRead>(
       path: Path,
       schema: SequenceSchema,
       item: (index: number) => A,
-    ): A {
+    ): A & HasChangefeed {
       const result = base.sequence(ctx, path, schema, item)
 
       if (isPropertyHost(result)) {
@@ -817,9 +820,10 @@ export function withChangefeed<A extends HasRead>(
           },
         )
         attachChangefeed(result as object, cf)
+        return result as A & HasChangefeed
       }
 
-      return result
+      return result as A & HasChangefeed
     },
 
     // --- Map ------------------------------------------------------------------
@@ -828,7 +832,7 @@ export function withChangefeed<A extends HasRead>(
       path: Path,
       schema: MapSchema,
       item: (key: string) => A,
-    ): A {
+    ): A & HasChangefeed {
       const result = base.map(ctx, path, schema, item)
 
       if (isPropertyHost(result)) {
@@ -854,9 +858,10 @@ export function withChangefeed<A extends HasRead>(
           },
         )
         attachChangefeed(result as object, cf)
+        return result as A & HasChangefeed
       }
 
-      return result
+      return result as A & HasChangefeed
     },
 
     // --- Sum ------------------------------------------------------------------
@@ -867,8 +872,12 @@ export function withChangefeed<A extends HasRead>(
       path: Path,
       schema: SumSchema,
       variants: SumVariants<A>,
-    ): A {
-      return base.sum(ctx, path, schema, variants)
+    ): A & HasChangefeed {
+      // Sum nodes are structurally transparent — the catamorphism dispatches
+      // variants through the full interpreter, so the resolved variant already
+      // has HasChangefeed attached. The base.sum() return type is A (without
+      // HasChangefeed) because the base interpreter doesn't know about our layer.
+      return base.sum(ctx, path, schema, variants) as A & HasChangefeed
     },
 
     // --- Annotated ------------------------------------------------------------
@@ -877,7 +886,7 @@ export function withChangefeed<A extends HasRead>(
       path: Path,
       schema: AnnotatedSchema,
       inner: (() => A) | undefined,
-    ): A {
+    ): A & HasChangefeed {
       const result = base.annotated(ctx, path, schema, inner)
 
       switch (schema.tag) {
@@ -890,8 +899,9 @@ export function withChangefeed<A extends HasRead>(
               (result as any)[CALL](),
             )
             attachChangefeed(result as object, cf)
+            return result as A & HasChangefeed
           }
-          return result
+          return result as A & HasChangefeed
         }
 
         case "doc":
@@ -899,13 +909,13 @@ export function withChangefeed<A extends HasRead>(
         case "tree":
           // Delegating annotations — the inner case (product, sequence,
           // etc.) already attached [CHANGEFEED] during recursion.
-          return result
+          return result as A & HasChangefeed
 
         default:
           // Unknown annotation — if inner was provided, the inner case
           // handled it. Otherwise treat as a leaf.
           if (inner !== undefined) {
-            return result
+            return result as A & HasChangefeed
           }
           if (isPropertyHost(result)) {
             const listeners = ensurePrepareWiring(ctx)
@@ -913,8 +923,9 @@ export function withChangefeed<A extends HasRead>(
               (result as any)[CALL](),
             )
             attachChangefeed(result as object, cf)
+            return result as A & HasChangefeed
           }
-          return result
+          return result as A & HasChangefeed
       }
     },
   }
