@@ -19,7 +19,7 @@ Reactive data sources that implement the `CHANGEFEED` protocol already know exac
 ```typescript
 // What you write (natural TypeScript)
 div(() => {
-  h1(doc.title)              // Bare reactive ref — no .get() needed
+  h1(doc.title)              // Bare reactive ref — no explicit call needed
   
   if (doc.items.length === 0) {
     p("No items yet")
@@ -39,13 +39,13 @@ div(() => {
 
 ### Bare Reactive Refs
 
-Kyneta supports passing reactive refs directly as children — no `.get()` or `.toString()` required:
+Kyneta supports passing reactive refs directly as children — no explicit call required:
 
 ```typescript
 // All three produce identical compiled output:
-p(doc.title)              // ← Preferred: bare ref
-p(doc.title.get())        // Also works: explicit .get()
-p(doc.title.toString())   // Also works: explicit .toString()
+p(doc.title)              // ← Preferred: bare ref (toPrimitive coercion)
+p(`${doc.title}`)         // Also works: template literal interpolation
+p(doc.title())            // Also works: explicit call
 ```
 
 The compiler detects that `doc.title` implements `CHANGEFEED` (reactive + observable), synthesizes the value read internally, and routes it to `textRegion` for O(k) surgical text patching. For non-text refs, the compiler synthesizes a value read and uses `valueRegion` for full-replacement updates.
@@ -123,12 +123,12 @@ import { state } from "@kyneta/core"
 const count = state(0)
 
 div(() => {
-  p(`Count: ${count.get()}`)
-  button({ onClick: () => count.set(count.get() + 1) }, "Increment")
+  p(`Count: ${count}`)
+  button({ onClick: () => count.set(count() + 1) }, "Increment")
 })
 ```
 
-`state()` returns a `LocalRef<T>` — a lightweight reactive primitive that implements the `CHANGEFEED` symbol from `@kyneta/schema`. The compiler detects it via the same type-level mechanism used for any Changefeed-bearing ref.
+`state()` returns a `LocalRef<T>` — a lightweight callable reactive primitive that implements the `CHANGEFEED` symbol from `@kyneta/schema`. Call `count()` to read the current value, or use `${count}` in template literals (refs implement `Symbol.toPrimitive`). The compiler detects it via the same type-level mechanism used for any Changefeed-bearing ref.
 
 ## Client & Server Code
 
@@ -140,7 +140,7 @@ return div(() => {
 
   client: {
     // Only runs in the browser — stripped from SSR output
-    setInterval(() => count.set(count.get() + 1), 1000)
+    setInterval(() => count.set(count() + 1), 1000)
   }
 
   server: {
@@ -148,7 +148,7 @@ return div(() => {
     console.log("Rendered at", new Date().toISOString())
   }
 
-  h1(count.get().toString())
+  h1(`${count}`)
 })
 ```
 

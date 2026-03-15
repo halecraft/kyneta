@@ -32,7 +32,7 @@ type BindingTime = "literal" | "render" | "reactive"
 
 - **literal**: Value known at compile time (string literals like `"Hello"`)
 - **render**: Value known at render time (static expressions like `42`, `someVar`)
-- **reactive**: Value varies at runtime (reactive expressions like `doc.count.get()`)
+- **reactive**: Value varies at runtime (reactive expressions like `doc.count`)
 
 This classification enables **binding-time promotion**: when branches diverge only in values, literals and render-time values can be promoted to reactive with ternary expressions.
 
@@ -136,7 +136,7 @@ When branches have identical structure but different values:
 
 ```typescript
 // Source:
-if (doc.count.get() > 0) {
+if (doc.count() > 0) {
   p("Yes")
 } else {
   p("No")
@@ -146,7 +146,7 @@ if (doc.count.get() > 0) {
 const _p0 = document.createElement("p")
 const _text1 = document.createTextNode("")
 _p0.appendChild(_text1)
-__subscribeWithValue(doc.count, () => doc.count.get() > 0 ? "Yes" : "No", (v) => {
+valueRegion([doc.count], () => read(doc.count) > 0 ? "Yes" : "No", (v) => {
   _text1.textContent = String(v)
 }, scope)
 ```
@@ -320,7 +320,7 @@ div(() => {
 
   client: {
     // Only runs in the browser — stripped from SSR output
-    requestAnimationFrame(() => count.set(count.get() + 1))
+    requestAnimationFrame(() => count.set(count() + 1))
   }
 
   server: {
@@ -328,7 +328,7 @@ div(() => {
     console.log("Rendered at", new Date().toISOString())
   }
 
-  h1(count.get().toString())  // both targets
+  h1(`${count}`)  // both targets
 })
 ```
 
@@ -572,7 +572,7 @@ readonly [CHANGEFEED]: Changefeed<string, ChangeBase>  // ← WRONG: silently br
 - **Union types need branch-level checking.** `LocalRef<T> | null` doesn't itself have a `[CHANGEFEED]` property, but the `LocalRef<T>` branch does.
 - **`links.nameType` is a TypeScript internal.** It has been stable across TS 4.x–6.x and is fundamental to computed property name handling, but layers 2 and 3 serve as fallbacks if it ever changes.
 - **Types are resolved from `dist/`, not source files.** `transformSource` uses `useInMemoryFileSystem: false` and resolves `@kyneta/schema` via `ts.resolveModuleName()`, which follows `package.json` exports to the built `dist/index.d.ts`. After changing type declarations (e.g., adding a `[CHANGEFEED]` property), you must rebuild `@kyneta/schema` (`pnpm run build`) before compiler tests will see the changes.
-- **`toContain` on generated code can give false positives.** Generated code includes import statements listing all runtime functions. `expect(code).toContain("subscribeWithValue")` will match the import `import { subscribeWithValue, textRegion } from ...` even when `subscribeWithValue` is never called. Use more specific patterns like `toContain("textRegion(")` or `not.toMatch(/subscribeWithValue\(title/)`.
+- **`toContain` on generated code can give false positives.** Generated code includes import statements listing all runtime functions. `expect(code).toContain("valueRegion")` will match the import `import { valueRegion, textRegion } from ...` even when `valueRegion` is never called. Use more specific patterns like `toContain("textRegion(")` or `not.toMatch(/valueRegion\(/)`.
 
 ### Changefeed-Native Expression Analysis
 
@@ -625,7 +625,7 @@ The `extractDependencies` visitor walks the expression AST and captures reactive
 
 Case 2 was added in Phase 4 to fix a pre-existing bug: when `doc` is not reactive but `doc.title` is, none of the other cases fired. The `depsMap` deduplication (keyed by source text) prevents double-capture when both the object and result are reactive.
 
-**Dependency subsumption:** After collecting all dependencies, `extractDependencies` applies a subsumption rule: any dependency whose source is a strict prefix of another dependency's source (at a dot boundary) is removed. For example, if both `"doc"` (deltaKind `"map"`) and `"doc.title"` (deltaKind `"text"`) are captured, `"doc"` is dropped because `"doc.title"` is more specific. The dot-boundary check ensures `"d"` is NOT subsumed by `"doc"` — the character after the prefix must be `"."`. This rule became necessary when a document type exposes `[CHANGEFEED]` on the root: without it, `doc.title.toString()` would produce two dependencies, breaking the `isTextRegionContent` check (`dependencies.length === 1 && deltaKind === "text"`) and degrading from `textRegion` (surgical DOM patching) to `subscribeMultiple` (full replacement).
+**Dependency subsumption:** After collecting all dependencies, `extractDependencies` applies a subsumption rule: any dependency whose source is a strict prefix of another dependency's source (at a dot boundary) is removed. For example, if both `"doc"` (deltaKind `"map"`) and `"doc.title"` (deltaKind `"text"`) are captured, `"doc"` is dropped because `"doc.title"` is more specific. The dot-boundary check ensures `"d"` is NOT subsumed by `"doc"` — the character after the prefix must be `"."`. This rule became necessary when a document type exposes `[CHANGEFEED]` on the root: without it, `doc.title.toString()` would produce two dependencies, breaking the `isTextRegionContent` check (`dependencies.length === 1 && deltaKind === "text"`) and degrading from `textRegion` (surgical DOM patching) to `valueRegion` (full replacement).
 
 ### Binding-Time Classification
 
@@ -747,47 +747,52 @@ The `Child` type union in `types.ts` accepts `HasChangefeed`, enabling bare reac
 
 ## Runtime Dependencies
 
-> **`CHANGEFEED` Protocol in the Runtime:** Both `textRegion` and `inputTextRegion` read initial state via `ref[CHANGEFEED].current`. The `subscribe()` function gates on the presence of `[CHANGEFEED]` at runtime. `listRegion` is the exception — it uses `ListRefLike<T>` because the functional-core planning functions need `{ length, at(i) }`.
+> **`CHANGEFEED` Protocol in the Runtime:** Both `textRegion` and `inputTextRegion` read initial state via the `read()` helper (`ref[CHANGEFEED].current`). The `subscribe()` function gates on the presence of `[CHANGEFEED]` at runtime. `listRegion` is the exception — it uses `ListRefLike<T>` because the functional-core planning functions need `{ length, at(i) }`.
 
 
 Generated code imports runtime functions from `@kyneta/core/runtime`:
 
-- `subscribe(ref, handler, scope)` — CHANGEFEED-based subscription (delta-aware)
-- `subscribeWithValue(ref, getter, callback, scope)` — Subscribe + immediate call with value
-- `subscribeMultiple(refs, callback, scope)` — Subscribe to multiple dependencies
-- `valueRegion(node, ref, getValue, onValue, scope)` — Replace-semantic updates for any Changefeed
+- `subscribe(ref, handler, scope)` — CHANGEFEED-based subscription (delta-aware, Changeset-unwrapping)
+- `valueRegion(refs, getValue, onValue, scope)` — Replace-semantic updates for any Changefeed(s)
 - `listRegion(parent, list, handlers, scope)` — Delta-driven list rendering
 - `conditionalRegion(marker, target, condition, handlers, scope)` — Reactive conditionals
 - `textRegion(textNode, ref, scope)` — Surgical text patching for direct text Changefeed reads
-- `inputTextRegion(input, ref, scope)` — Surgical `<input>`/`<textarea>` value patching
+- `inputTextRegion(input, ref, scope)` — Surgical `<input>`/`<textarea>` value patching via `setRangeText`
 - `read(ref)` — Universal value accessor: `ref[CHANGEFEED].current`
 
 All runtime functions accept a `scope` parameter for cleanup tracking.
 
 ### Delta-Aware Subscription
 
-The core `subscribe` function uses the `CHANGEFEED` symbol from `@kyneta/schema`:
+The core `subscribe` function uses the `CHANGEFEED` symbol from `@kyneta/schema`. The changefeed protocol delivers `Changeset` batches (one or more changes with optional provenance metadata), not individual changes. Core's `subscribe` **unwraps** these batches so handlers receive individual `ChangeBase` objects with the batch's `origin` propagated as a second argument:
 
 ```typescript
 function subscribe(
   ref: unknown,
-  handler: (change: ChangeBase) => void,
+  handler: (change: ChangeBase, origin?: string) => void,
   scope: Scope,
 ): SubscriptionId {
-  const changefeed = (ref as any)[CHANGEFEED]
-  if (!changefeed) {
+  if (!hasChangefeed(ref)) {
     throw new Error("subscribe called with non-reactive value")
   }
-  const unsubscribe = changefeed.subscribe(handler)
-  scope.onDispose(() => unsubscribe())
+  // Changefeed delivers Changeset batches; unwrap into individual changes
+  const unsubscribeFn = ref[CHANGEFEED].subscribe((changeset: Changeset) => {
+    for (const change of changeset.changes) {
+      handler(change, changeset.origin)
+    }
+  })
+  scope.onDispose(() => unsubscribeFn())
   return id
 }
 ```
 
-The handler receives a `ChangeBase` (or narrowed subtype) describing what changed. This enables:
+This unwrapping is why core's `subscribe` differs from schema's facade `subscribeNode` (which passes the raw `Changeset` to the callback). Core handlers receive individual `ChangeBase` objects, which enables pattern-matching on `change.type`:
+
 - **Sequence regions**: Extract `change.ops` for O(k) DOM updates
 - **Text regions**: Use `insertData`/`deleteData` for O(k) surgical text updates
 - **Fallback**: For `"replace"` changes or complex expressions, re-read the entire value
+
+The `origin` field propagates from `Changeset.origin` to the handler's second argument. Most handlers ignore it; `inputTextRegion` uses it for cursor-mode dispatch (see below).
 
 ### Backend-Agnostic Core Runtime
 
@@ -863,17 +868,17 @@ The `textRegion` function reads initial state via the `CHANGEFEED` protocol:
 
 ```typescript
 function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
-  const changefeed = ref[CHANGEFEED]
-  const readValue = () => changefeed.current
+  const changefeedRef = ref as HasChangefeed<string>
+  const readValue = () => read(changefeedRef)
 
-  textNode.textContent = readValue()  // Initial value via CHANGEFEED.current
+  textNode.textContent = readValue()  // Initial value via read() helper
 
   subscribe(ref, (change: ChangeBase) => {
-    if (change.type === "text") {
+    if (isTextChange(change)) {
       // O(k) surgical update
       patchText(textNode, change.ops)
     } else {
-      // Fallback for non-text changes
+      // Fallback for non-text changes (e.g., "replace")
       textNode.textContent = readValue()
     }
   }, scope)
@@ -894,20 +899,17 @@ The "cursor doesn't advance on delete" is critical — subsequent ops apply at t
 if (directReadSource && deps.length === 1 && deps[0].deltaKind === "text") {
   // Direct text Changefeed read — surgical patching
   emit: textRegion(textVar, directReadSource, scopeVar)
-} else if (deps.length === 1) {
-  // Single dep, non-direct — full replacement
-  emit: valueRegion(...)
 } else {
-  // Multi-dep — full replacement
-  emit: subscribeMultiple(...)
+  // Single or multi-dep — full replacement via valueRegion
+  emit: valueRegion(...)
 }
 ```
 
 **Key design decisions:**
-1. `CHANGEFEED` protocol keeps runtime backend-agnostic — `textRegion` reads `ref[CHANGEFEED].current` instead of ad-hoc interface casts. (`ListRefLike<T>` remains for `listRegion` because the planning functions need `{ length, at(i) }`.)
-2. Non-text changes (e.g., `"replace"` from `LocalRef`) trigger full `textContent` replacement via `CHANGEFEED.current`
-3. Multi-dep expressions always use `subscribeMultiple` — change describes one source, not output
-4. Bare refs (`p(doc.title)`) produce the same codegen as explicit reads (`p(doc.title.get())`) — the compiler synthesizes `read()` in the IR source, but `textRegion` reads initial state via `CHANGEFEED.current` internally
+1. `CHANGEFEED` protocol keeps runtime backend-agnostic — `textRegion` reads initial state via the `read()` helper (`ref[CHANGEFEED].current`) instead of ad-hoc interface casts. (`ListRefLike<T>` remains for `listRegion` because the planning functions need `{ length, at(i) }`.)
+2. Non-text changes (e.g., `"replace"` from `LocalRef`) trigger full `textContent` replacement via `read()`
+3. Multi-dep expressions use `valueRegion` with all deps in the `refs` array — change describes one source, not output
+4. Bare refs (`p(doc.title)`) produce the same codegen as explicit reads (`p(doc.title())`) — the compiler synthesizes `read()` in the IR source, but `textRegion` reads initial state via `read()` internally
 
 ### Input Text Region Architecture
 
@@ -931,19 +933,19 @@ Unlike `textRegion` which uses `insertData`/`deleteData` on Text nodes, input el
 
 **`setRangeText("preserve")` cursor caveat:** Per the HTML spec, `"preserve"` adjusts `selectionStart` only when it is *strictly greater than* the replacement range endpoints. When inserting at the cursor position (`start === end === selectionStart`), neither adjustment branch fires — the cursor stays put. This means typing "Hello" character by character produces "olleH" because each character is inserted at position 0 (the cursor never advances). `"preserve"` was designed for edits happening *elsewhere* in the text, not at the cursor.
 
-**Origin-driven selectMode dispatch:** `inputTextRegion` dispatches selectMode based on `change.origin`:
+**Origin-driven selectMode dispatch:** `inputTextRegion` dispatches selectMode based on the `origin` parameter — the second argument to the `subscribe` handler, propagated from `Changeset.origin` during batch unwrapping:
 
 - **`origin === "local"`** → `setRangeText(..., "end")` — cursor advances past inserts, stays at delete point. Correct for local typing, undo, and redo.
 - **anything else** (`"import"`, `undefined`) → `setRangeText(..., "preserve")` — cursor shifts relative to remote edits. Correct for remote collaborator edits.
 
-No active-edit flags, cursor arithmetic, or cross-module coordination needed. The `origin` field on `ChangeBase` (from `@kyneta/schema`) is the sole discriminant. Backend adapters (e.g., a future Loro adapter) forward provenance info into this field.
+No active-edit flags, cursor arithmetic, or cross-module coordination needed. The `origin` field on `Changeset` (from `@kyneta/schema`) is the sole discriminant — it arrives as the handler's second argument after batch unwrapping. Backend adapters (e.g., a future Loro adapter) forward provenance info into this field.
 
 **Functional Core** (shared with `textRegion`):
 - `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
 
 **Imperative Shell:**
 - `patchInputValue(input, ops, selectMode?)` — applies patches via `setRangeText(selectMode)` (default `"preserve"`)
-- `inputTextRegion(input, ref, scope)` — subscription-aware wrapper, dispatches selectMode on `change.origin`
+- `inputTextRegion(input, ref, scope)` — subscription-aware wrapper, dispatches selectMode on `origin` (from `Changeset.origin`)
 
 ```typescript
 function inputTextRegion(
@@ -951,17 +953,17 @@ function inputTextRegion(
   ref: unknown,
   scope: Scope,
 ): void {
-  const changefeed = ref[CHANGEFEED]
-  const readValue = () => changefeed.current
+  const changefeedRef = ref as HasChangefeed<string>
+  const readValue = () => read(changefeedRef)
 
-  input.value = readValue()  // Initial value via CHANGEFEED.current
+  input.value = readValue()  // Initial value via read() helper
 
-  subscribe(ref, (change: ChangeBase) => {
-    if (change.type === "text") {
-      const mode = change.origin === "local" ? "end" : "preserve"
+  subscribe(ref, (change: ChangeBase, origin?: string) => {
+    if (isTextChange(change)) {
+      const mode = origin === "local" ? "end" : "preserve"
       patchInputValue(input, change.ops, mode)  // O(k) surgical update
     } else {
-      input.value = readValue()       // Fallback via CHANGEFEED.current
+      input.value = readValue()       // Fallback via read()
     }
   }, scope)
 }
@@ -1410,11 +1412,11 @@ The `read()` runtime helper is the universal value accessor for Changefeeds in g
 
 ### Delta Provenance
 
-`ChangeBase` carries an optional `origin` field (`"local"` | `"import"` | undefined). Backend adapters forward provenance information into this field (e.g., a Loro adapter would map `LoroEventBatch.by` to `origin`). This is a **provenance dimension** of the delta algebra — it describes *who caused the change*, not just *what changed*.
+`Changeset` carries an optional `origin` field (`"local"` | `"import"` | undefined). Backend adapters forward provenance information into this field (e.g., a Loro adapter would map `LoroEventBatch.by` to `origin`). This is a **provenance dimension** of the delta algebra — it describes *who caused the change*, not just *what changed*.
 
 Most region types ignore provenance (Text nodes, lists, conditionals have no ephemeral local state affected by origin). The exception is `inputTextRegion`, where cursor management depends on whether the edit is local or remote. See **Input Text Region Architecture** above.
 
-**Design principle:** Provenance is metadata on the change, not a separate channel. This keeps the `subscribe` callback signature simple (`(change: C) => void`) and lets consumers opt in to origin-awareness by reading `change.origin`. Non-backend reactive types (e.g., `LocalRef`) omit the field — consumers treat `undefined` as "unknown origin" and fall back to safe defaults.
+**Design principle:** Provenance is batch-level metadata on the `Changeset`, not per-change metadata. Core's `subscribe` unwraps batches and passes `changeset.origin` as the handler's second argument: `(change: ChangeBase, origin?: string) => void`. This lets consumers opt in to origin-awareness via the second parameter. Non-backend reactive types (e.g., `LocalRef`) omit the field — consumers treat `undefined` as "unknown origin" and fall back to safe defaults.
 
 **Origin semantics:** `"local"` origin fires for both user input and local undo/redo operations. For `inputTextRegion`, this is correct — both user typing and local undo/redo want `"end"` selectMode (cursor follows the edit). Remote edits want `"preserve"` selectMode (cursor stays put relative to surrounding text).
 
