@@ -20,6 +20,7 @@
 // See .plans/apply-changes.md §Phase 4.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
+import type { SubstratePrepare } from "../substrate.js"
 import {
   isNullableSum,
   type Schema,
@@ -149,11 +150,11 @@ export function hasTransact(value: unknown): value is HasTransact {
  */
 export interface WritableContext extends RefContext {
   /** Apply a single change: invalidate caches + mutate store. No notification.
-   *  Must not be called during an active transaction. */
-  readonly prepare: (path: Path, change: ChangeBase) => void
+   *  Mutable — caching and changefeed layers wrap this at interpretation time. */
+  prepare: (path: Path, change: ChangeBase) => void
   /** Deliver accumulated notifications as a single Changeset per subscriber.
-   *  Must not be called during an active transaction. */
-  readonly flush: (origin?: string) => void
+   *  Mutable — the changefeed layer wraps this at interpretation time. */
+  flush: (origin?: string) => void
   /** Convenience: outside a transaction, calls executeBatch with one change.
    *  During a transaction, buffers the change for later commit. */
   readonly dispatch: (path: Path, change: ChangeBase) => void
@@ -212,45 +213,48 @@ export function executeBatch(
 }
 
 // ---------------------------------------------------------------------------
-// createWritableContext — factory for the root context
+// buildWritableContext — shared builder for substrate factories
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a root WritableContext for a given store.
+ * Builds a WritableContext around a substrate's mutation primitives.
  *
- * The context provides phase-separated dispatch:
- * - `prepare(path, change)` — apply change to the store. No notification.
- * - `flush(origin?)` — deliver accumulated notifications (no-op at this
- *   layer; `withChangefeed` wraps it to deliver `Changeset` batches).
- * - `dispatch(path, change)` — outside a transaction, calls `executeBatch`
- *   with one change; during a transaction, buffers the change.
- * - `executeBatch(ctx, changes, origin?)` — prepare × N + flush × 1.
+ * The substrate provides the ground floor of the prepare/flush pipeline:
+ * - `substrate.prepare(path, change)` — apply change to backing state
+ * - `substrate.onFlush(origin?)` — called after all prepares + notification
+ *   delivery (no-op for PlainSubstrate; version tracking in Phase 2)
  *
- * Use `beginTransaction()` / `commit()` to buffer and atomically
- * apply a batch of changes.
+ * The context adds transaction coordination on top:
+ * - `dispatch(path, change)` — auto-commit or buffer
+ * - `beginTransaction()` / `commit()` / `abort()` — transaction lifecycle
+ * - `executeBatch(ctx, changes, origin?)` — prepare × N + flush × 1
+ *
+ * Caching and changefeed layers wrap `ctx.prepare` and `ctx.flush` at
+ * interpretation time — the substrate never needs to know about them.
  *
  * ```ts
- * const store = { title: "", count: 0, items: [] }
- * const ctx = createWritableContext(store)
- * const doc = interpret(schema, withWritable(withCaching(withReadable(bottomInterpreter))), ctx)
+ * const substrate = createPlainSubstrate(store)
+ * const ctx = buildWritableContext(substrate)
+ * const doc = interpret(schema, ctx).with(readable).with(writable).done()
  * ```
  */
-export function createWritableContext(store: Store): WritableContext {
+export function buildWritableContext(substrate: SubstratePrepare): WritableContext {
   const pending: PendingChange[] = []
   let inTransaction = false
 
-  // Base prepare: just apply the change to the store.
+  // Base prepare: delegate to the substrate.
   // Layers like withChangefeed wrap this to accumulate notification
-  // entries; layers like withCaching (future) wrap this to invalidate
+  // entries; layers like withCaching wrap this to invalidate
   // caches at the target path.
   const prepare = (path: Path, change: ChangeBase): void => {
-    applyChangeToStore(store, path, change)
+    substrate.prepare(path, change)
   }
 
-  // Base flush: no-op. The changefeed layer wraps this to deliver
-  // accumulated Changeset batches to subscribers.
+  // Base flush: delegate to the substrate's onFlush.
+  // The changefeed layer wraps this to deliver accumulated Changeset
+  // batches to subscribers before calling through to the substrate.
   const flush = (_origin?: string): void => {
-    // No-op at the base layer.
+    substrate.onFlush(_origin)
   }
 
   // Dispatch is transaction-aware:
@@ -304,7 +308,7 @@ export function createWritableContext(store: Store): WritableContext {
   }
 
   const ctx: WritableContext = {
-    store,
+    store: substrate.store,
     prepare,
     flush,
     dispatch,
@@ -471,7 +475,7 @@ export type Writable<S extends Schema> =
  *
  * ```ts
  * const interp = withWritable(withCaching(withReadable(bottomInterpreter)))
- * const ctx = createWritableContext(store)
+ * const ctx = createPlainSubstrate(store).context()
  * const doc = interpret(schema, interp, ctx)
  * doc.title.insert(0, "Hello")   // mutation via withWritable
  * doc.title()                    // "Hello" via withReadable

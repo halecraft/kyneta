@@ -324,7 +324,7 @@ function ensureCacheWiring(
     originalPrepare(path, change)
   }
 
-  ;(ctx as any).prepare = wrappedPrepare
+  ctx.prepare = wrappedPrepare
 
   state = { handlers, originalPrepare }
   cacheContextState.set(ctx, state)

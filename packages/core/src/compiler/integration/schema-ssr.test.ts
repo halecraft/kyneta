@@ -17,7 +17,7 @@ import {
   readable,
   writable,
   changefeed,
-  createWritableContext,
+  plainContext,
   hasChangefeed,
   CHANGEFEED,
   Zero,
@@ -68,7 +68,7 @@ const todoSchema = LoroSchema.doc({
 function createDoc(seed: Record<string, unknown> = {}) {
   const defaults = Zero.structural(todoSchema) as Record<string, unknown>
   const store = Zero.overlay(seed, defaults, todoSchema) as Record<string, unknown>
-  const ctx = createWritableContext(store)
+  const ctx = plainContext(store)
   const doc = interpret(todoSchema, ctx)
     .with(readable)
     .with(writable)

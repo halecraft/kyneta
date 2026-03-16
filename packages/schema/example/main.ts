@@ -24,7 +24,7 @@ import {
 	describe,
 	// Interpreter machinery
 	interpret,
-	createWritableContext,
+	createPlainSubstrate,
 	readable,
 	writable,
 	changefeed,
@@ -127,8 +127,8 @@ const createDoc: CreateDoc = (schema, seed = {}) => {
 		unknown
 	>;
 	const store = { ...initial } as Record<string, unknown>;
-	const ctx = createWritableContext(store);
-	return interpret(schema, ctx)
+	const substrate = createPlainSubstrate(store);
+	return interpret(schema, substrate.context())
 		.with(readable)
 		.with(writable)
 		.with(changefeed)

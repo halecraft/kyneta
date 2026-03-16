@@ -184,7 +184,7 @@ export type {
 } from "./interpreters/readable.js"
 export {
   withWritable,
-  createWritableContext,
+  buildWritableContext,
   executeBatch,
   TRANSACT,
   hasTransact,
@@ -204,6 +204,12 @@ export type {
 
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
 export type { SchemaRef, RefMode, Wrap, RRef, RWRef, Ref, WithTransact } from "./ref.js"
+
+// Substrate — the minimal mutation contract
+export type { SubstratePrepare } from "./substrate.js"
+
+// Plain substrate — closure factory for plain JS object stores
+export { createPlainSubstrate, plainContext } from "./substrates/plain.js"
 
 // Shared interpreter types (canonical location)
 export type { RefContext, Plain, Seed } from "./interpreter-types.js"

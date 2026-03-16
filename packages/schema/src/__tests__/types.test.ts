@@ -6,7 +6,7 @@ import {
   readable,
   writable,
   changefeed,
-  createWritableContext,
+  plainContext,
   change,
   subscribe,
   subscribeNode,
@@ -1474,13 +1474,13 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
   })
 
   it(".with(readable).with(writable).done() → RWRef<S>", () => {
-    const ctx = createWritableContext({ x: 0, y: 0 })
+    const ctx = plainContext({ x: 0, y: 0 })
     const result = interpret(pointSchema, ctx).with(readable).with(writable).done()
     expectTypeOf(result).toEqualTypeOf<RWRef<typeof pointSchema>>()
   })
 
   it(".with(readable).with(writable).with(changefeed).done() → Ref<S>", () => {
-    const ctx = createWritableContext({ x: 0, y: 0 })
+    const ctx = plainContext({ x: 0, y: 0 })
     const result = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
@@ -1490,7 +1490,7 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
   })
 
   it("full-stack result has [TRANSACT] and [CHANGEFEED]", () => {
-    const ctx = createWritableContext({ x: 0, y: 0 })
+    const ctx = plainContext({ x: 0, y: 0 })
     const result = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
@@ -1636,7 +1636,7 @@ describe("type-level: change() callback infers draft type from fluent-built doc"
   })
 
   it("full-stack .done() result is accepted by change() without cast", () => {
-    const ctx = createWritableContext({
+    const ctx = plainContext({
       title: "", count: 0, items: [], settings: { darkMode: false },
     })
     const doc = interpret(docSchema, ctx)
@@ -1647,7 +1647,7 @@ describe("type-level: change() callback infers draft type from fluent-built doc"
   })
 
   it("callback parameter d has typed field access (not any)", () => {
-    const ctx = createWritableContext({
+    const ctx = plainContext({
       title: "", count: 0, items: [], settings: { darkMode: false },
     })
     const doc = interpret(docSchema, ctx)
@@ -1668,7 +1668,7 @@ describe("type-level: change() callback infers draft type from fluent-built doc"
   })
 
   it("RWRef .done() result is accepted by change() (has HasTransact)", () => {
-    const ctx = createWritableContext({
+    const ctx = plainContext({
       title: "", count: 0, items: [], settings: { darkMode: false },
     })
     const doc = interpret(docSchema, ctx)
@@ -1687,7 +1687,7 @@ describe("type-level: fluent results are accepted by facade functions", () => {
   const schema = Schema.doc({ x: Schema.number() })
 
   it("subscribeNode() accepts Ref<S> field from full-stack .done()", () => {
-    const ctx = createWritableContext({ x: 0 })
+    const ctx = plainContext({ x: 0 })
     const doc = interpret(schema, ctx)
       .with(readable).with(writable).with(changefeed).done()
 
@@ -1696,7 +1696,7 @@ describe("type-level: fluent results are accepted by facade functions", () => {
   })
 
   it("subscribe() accepts Ref<S> from full-stack .done()", () => {
-    const ctx = createWritableContext({ x: 0 })
+    const ctx = plainContext({ x: 0 })
     const doc = interpret(schema, ctx)
       .with(readable).with(writable).with(changefeed).done()
 

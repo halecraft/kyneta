@@ -3,7 +3,7 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  createWritableContext,
+  plainContext,
   change,
   applyChanges,
   subscribe,
@@ -57,7 +57,7 @@ function createSeed() {
 
 function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = { ...createSeed(), ...storeOverrides }
-  const ctx = createWritableContext(store)
+  const ctx = plainContext(store)
   const doc = interpret(chatDocSchema, ctx).with(readable).with(writable).with(changefeed).done()
   return { store, ctx, doc }
 }

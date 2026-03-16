@@ -59,8 +59,8 @@ function createDoc(schema, seed = {}) {
   const defaults = Zero.structural(schema)
   const initial = Zero.overlay(seed, defaults, schema)
   const store = { ...initial }
-  const ctx = createWritableContext(store)
-  return interpret(schema, ctx)
+  const substrate = createPlainSubstrate(store)
+  return interpret(schema, substrate.context())
     .with(readable).with(writable).with(changefeed).done()
 }
 
@@ -81,7 +81,7 @@ The example uses four library-level functions from `facade.ts` — no local wrap
 The example is organized into 14 sections:
 
 1. **Define a Schema** — `Schema.doc({ ... })` with text, counter, list of struct, struct, discriminated union, nullable, record, constrained scalars
-2. **Create a Document** — Inline setup with `Zero.overlay`, `createWritableContext`, fluent builder. Shows `doc()` snapshot.
+2. **Create a Document** — Inline setup with `Zero.overlay`, `createPlainSubstrate`, fluent builder. Shows `doc()` snapshot.
 3. **Mutations: Five Change Types** — Text (`doc.name.insert`), counter (`doc.stars.increment`), sequence (`doc.tasks.push`), replace (`doc.settings.darkMode.set`), map (`doc.labels.set`), product bulk `.set()`
 4. **Working with Collections** — Lists: `.at(i)`, `.get(i)`, `.length`, iteration, `.insert()`, `.delete()`. Records: `.at(key)`, `.get(key)`, `.has()`, `.keys()`, `.size`
 5. **Sums and Nullables** — Discriminated union with native narrowing (`if (doc.content.type === "text") { doc.content.body() }`). Nullable: set to value, read, set back to null.

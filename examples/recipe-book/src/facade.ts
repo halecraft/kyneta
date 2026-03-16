@@ -8,7 +8,7 @@ import type {
 import {
 	Zero,
 	interpret,
-	createWritableContext,
+	createPlainSubstrate,
 	readable,
 	writable,
 	changefeed,
@@ -53,10 +53,10 @@ export const createDoc: CreateDoc = (schema, seed = {}) => {
 		unknown
 	>;
 	const store = { ...initial } as Record<string, unknown>;
-	const ctx = createWritableContext(store);
+	const substrate = createPlainSubstrate(store);
 
 	// Cast to `any` to stay within TS's type-instantiation depth budget (TS2589).
-	const doc: any = interpret(schema, ctx)
+	const doc: any = interpret(schema, substrate.context())
 		.with(readable)
 		.with(writable)
 		.with(changefeed)

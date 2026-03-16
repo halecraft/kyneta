@@ -8,7 +8,7 @@ import {
   replaceChange,
   plainInterpreter,
   withWritable,
-  createWritableContext,
+  plainContext,
 } from "../index.js"
 import {
   bottomInterpreter,
@@ -689,7 +689,7 @@ describe("withCaching: prepare-pipeline invalidation", () => {
         { author: "Bob", body: "World" },
       ],
     }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(docSchema, fullInterpreter, ctx) as any
     return { doc, store, ctx }
   }

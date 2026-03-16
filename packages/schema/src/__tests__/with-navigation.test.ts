@@ -8,7 +8,7 @@ import {
   withReadable,
   withCaching,
   withChangefeed,
-  createWritableContext,
+  plainContext,
   hasChangefeed,
 } from "../index.js"
 import { withNavigation } from "../interpreters/with-navigation.js"
@@ -363,7 +363,7 @@ describe("withNavigation: navigate + write stack", () => {
       count: Schema.number(),
     })
     const store = { title: "hello", count: 0 }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     expect(Object.keys(doc)).toContain("title")
@@ -375,7 +375,7 @@ describe("withNavigation: navigate + write stack", () => {
       title: Schema.string(),
     })
     const store = { title: "hello" }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     expect(() => doc.title()).toThrow("No call behavior configured")
@@ -386,7 +386,7 @@ describe("withNavigation: navigate + write stack", () => {
       title: Schema.string(),
     })
     const store: Record<string, unknown> = { title: "hello" }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     doc.title.set("world")
@@ -400,7 +400,7 @@ describe("withNavigation: navigate + write stack", () => {
       ),
     })
     const store = { items: [{ name: "a" }, { name: "b" }] }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     expect(doc.items.length).toBe(2)
@@ -420,7 +420,7 @@ describe("withNavigation: navigate + write stack", () => {
       items: Schema.list(Schema.string()),
     })
     const store = { items: ["a", "b"] }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     doc.items.push("c")
@@ -432,7 +432,7 @@ describe("withNavigation: navigate + write stack", () => {
       title: LoroSchema.text(),
     })
     const store = { title: "hello" }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     doc.title.update("world")
@@ -444,7 +444,7 @@ describe("withNavigation: navigate + write stack", () => {
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: { color: "red" } }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     doc.labels.set("size", "large")

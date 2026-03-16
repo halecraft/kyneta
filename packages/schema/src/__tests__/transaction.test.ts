@@ -3,7 +3,7 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  createWritableContext,
+  plainContext,
   readable,
   writable,
   changefeed,
@@ -22,7 +22,7 @@ const pointSchema = Schema.doc({
 
 function createPointDoc(seed: Record<string, unknown> = { x: 0, y: 0 }) {
   const store = { ...seed }
-  const ctx = createWritableContext(store)
+  const ctx = plainContext(store)
   const doc = interpret(pointSchema, ctx).with(readable).with(writable).done()
   return { store, ctx, doc }
 }
@@ -184,7 +184,7 @@ describe("transaction: TRANSACT symbol", () => {
 describe("transaction: commit delivers batched changefeed notifications", () => {
   it("changefeed subscribers receive exactly one Changeset at commit time", () => {
     const store = { x: 0, y: 0 }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(pointSchema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const CF_SYM = Symbol.for("kyneta:changefeed")

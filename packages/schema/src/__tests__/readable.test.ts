@@ -10,7 +10,7 @@ import {
   INVALIDATE,
   withChangefeed,
   withWritable,
-  createWritableContext,
+  plainContext,
   hasChangefeed,
   replaceChange,
   sequenceChange,
@@ -635,7 +635,7 @@ describe("readable: composition with withChangefeed", () => {
       count: LoroSchema.counter(),
     })
     // withChangefeed needs WritableContext (extends RefContext)
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const enriched = withChangefeed(withWritable(readableInterpreter))
     const doc = interpret(schema, enriched, ctx) as any
 

@@ -3,7 +3,7 @@ import {
   Schema,
   LoroSchema,
   interpret,
-  createWritableContext,
+  plainContext,
   hasChangefeed,
   hasComposedChangefeed,
   CHANGEFEED,
@@ -47,7 +47,7 @@ function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx = createWritableContext(store)
+  const ctx = plainContext(store)
   const doc = interpret(chatDocSchema, ctx).with(readable).with(writable).with(changefeed).done()
   return { store, ctx, doc }
 }
@@ -579,7 +579,7 @@ describe("changefeed: transaction integration", () => {
       x: LoroSchema.plain.number(),
       y: LoroSchema.plain.number(),
     })
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
@@ -647,7 +647,7 @@ describe("changefeed: transaction integration", () => {
       x: LoroSchema.plain.number(),
       y: LoroSchema.plain.number(),
     })
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     ctx.beginTransaction()
@@ -669,7 +669,7 @@ describe("changefeed: transaction integration", () => {
       x: LoroSchema.plain.number(),
       y: LoroSchema.plain.number(),
     })
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
@@ -735,7 +735,7 @@ describe("changefeed: batched notification", () => {
       x: LoroSchema.plain.number(),
       y: LoroSchema.plain.number(),
     })
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
@@ -761,7 +761,7 @@ describe("changefeed: batched notification", () => {
       x: LoroSchema.plain.number(),
       y: LoroSchema.plain.number(),
     })
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     let observedX: unknown = undefined
@@ -800,7 +800,7 @@ describe("changefeed: batched notification", () => {
       x: LoroSchema.plain.number(),
       y: LoroSchema.plain.number(),
     })
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
@@ -847,7 +847,7 @@ describe("changefeed: batched notification", () => {
       x: LoroSchema.plain.number(),
       y: LoroSchema.plain.number(),
     })
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const xChangesets: Changeset[] = []
@@ -876,7 +876,7 @@ describe("changefeed: batched notification", () => {
       x: LoroSchema.plain.number(),
       y: LoroSchema.plain.number(),
     })
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     // Only subscribe to x, not y
@@ -951,7 +951,7 @@ describe("changefeed: edge cases", () => {
   it("subscribe on leaf ref at scalar path fires on set", () => {
     const schema = Schema.doc({ n: Schema.number() })
     const store = { n: 42 }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     const changesets: Changeset[] = []
@@ -967,7 +967,7 @@ describe("changefeed: edge cases", () => {
       items: Schema.list(Schema.string()),
     })
     const store = { items: [] as string[] }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     expect(hasComposedChangefeed(doc.items)).toBe(true)
@@ -978,7 +978,7 @@ describe("changefeed: edge cases", () => {
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: {} }
-    const ctx = createWritableContext(store)
+    const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()
 
     expect(hasComposedChangefeed(doc.labels)).toBe(true)

@@ -255,8 +255,8 @@ function ensurePrepareWiring(
     originalFlush(origin)
   }
 
-  ;(ctx as any).prepare = wrappedPrepare
-  ;(ctx as any).flush = wrappedFlush
+  ctx.prepare = wrappedPrepare
+  ctx.flush = wrappedFlush
 
   state = { listeners, pending, originalPrepare, originalFlush }
   contextState.set(ctx, state)
@@ -725,7 +725,7 @@ function createMapChangefeed(
  * ```ts
  * // Full stack (read + write + observe):
  * const interp = withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
- * const ctx = createWritableContext(store)
+ * const ctx = createPlainSubstrate(store).context()
  * const doc = interpret(schema, interp, ctx)
  * doc[CHANGEFEED].subscribe(cb)       // fires on mutation
  *
