@@ -27,7 +27,7 @@ import type {
   WritableContext,
   RefContext,
   Changeset,
-  TreeEvent,
+  Op,
   Interpreter,
 } from "../index.js"
 
@@ -137,8 +137,8 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
     expect(hasComposedChangefeed(doc.messages)).toBe(true)
 
     // subscribeTree works
-    const events: TreeEvent[] = [];
-    (doc.settings as any)[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
+    const events: Op[] = [];
+    (doc.settings as any)[CHANGEFEED].subscribeTree((changeset: Changeset<Op>) => {
       for (const event of changeset.changes) events.push(event)
     })
     doc.settings.darkMode.set(true)

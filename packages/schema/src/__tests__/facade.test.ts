@@ -20,9 +20,8 @@ import {
 } from "../index.js"
 import type {
   Changeset,
-  TreeEvent,
+  Op,
   ChangeBase,
-  PendingChange,
 } from "../index.js"
 
 // ===========================================================================
@@ -67,17 +66,17 @@ const CF_SYM = Symbol.for("kyneta:changefeed")
 function getChangefeed(obj: unknown): {
   current: unknown
   subscribe: (cb: (changeset: Changeset) => void) => () => void
-  subscribeTree?: (cb: (changeset: Changeset<TreeEvent>) => void) => () => void
+  subscribeTree?: (cb: (changeset: Changeset<Op>) => void) => () => void
 } {
   return (obj as any)[CF_SYM]
 }
 
 // ===========================================================================
-// change() — imperative mutation → PendingChange[]
+// change() — imperative mutation → Op[]
 // ===========================================================================
 
 describe("change: basic behavior", () => {
-  it("returns PendingChange[] with correct paths and change types", () => {
+  it("returns Op[] with correct paths and change types", () => {
     const { doc } = createChatDoc()
 
     const ops = change(doc, (d) => {
@@ -92,7 +91,7 @@ describe("change: basic behavior", () => {
     expect(ops[0]!.change).toEqual(replaceChange(true))
   })
 
-  it("captures multiple mutations as multiple PendingChange entries", () => {
+  it("captures multiple mutations as multiple Op entries", () => {
     const { doc } = createChatDoc()
 
     const ops = change(doc, (d) => {
@@ -174,14 +173,14 @@ describe("change: basic behavior", () => {
 })
 
 // ===========================================================================
-// applyChanges() — declarative PendingChange[] → store + notify
+// applyChanges() — declarative Op[] → store + notify
 // ===========================================================================
 
 describe("applyChanges: basic behavior", () => {
   it("applies replace changes to the store", () => {
     const { doc } = createChatDoc()
 
-    const ops: PendingChange[] = [
+    const ops: Op[] = [
       {
         path: [
           { type: "key", key: "settings" },
@@ -199,7 +198,7 @@ describe("applyChanges: basic behavior", () => {
   it("applies text changes to the store", () => {
     const { doc } = createChatDoc()
 
-    const ops: PendingChange[] = [
+    const ops: Op[] = [
       {
         path: [{ type: "key", key: "title" }],
         change: textChange([{ retain: 5 }, { insert: " World" }]),
@@ -214,7 +213,7 @@ describe("applyChanges: basic behavior", () => {
   it("applies sequence changes to the store", () => {
     const { doc } = createChatDoc()
 
-    const ops: PendingChange[] = [
+    const ops: Op[] = [
       {
         path: [{ type: "key", key: "messages" }],
         change: sequenceChange([
@@ -233,7 +232,7 @@ describe("applyChanges: basic behavior", () => {
   it("applies increment changes to the store", () => {
     const { doc } = createChatDoc()
 
-    const ops: PendingChange[] = [
+    const ops: Op[] = [
       {
         path: [{ type: "key", key: "count" }],
         change: incrementChange(5),
@@ -248,7 +247,7 @@ describe("applyChanges: basic behavior", () => {
   it("applies multiple changes atomically", () => {
     const { doc } = createChatDoc()
 
-    const ops: PendingChange[] = [
+    const ops: Op[] = [
       {
         path: [
           { type: "key", key: "settings" },
@@ -278,7 +277,7 @@ describe("applyChanges: basic behavior", () => {
 
   it("returns the ops array (pass-through)", () => {
     const { doc } = createChatDoc()
-    const ops: PendingChange[] = [
+    const ops: Op[] = [
       {
         path: [
           { type: "key", key: "settings" },
@@ -603,7 +602,7 @@ describe("applyChanges: origin tagging", () => {
   it("tree subscribers receive origin from applyChanges", () => {
     const { doc } = createChatDoc()
 
-    const treeChangesets: Changeset<TreeEvent>[] = []
+    const treeChangesets: Changeset<Op>[] = []
     getChangefeed(doc.settings).subscribeTree!((cs) =>
       treeChangesets.push(cs),
     )
@@ -686,16 +685,16 @@ describe("applyChanges: surgical cache invalidation", () => {
 })
 
 // ===========================================================================
-// Changeset<TreeEvent> ≅ (PendingChange[], origin) round-trip
+// Changeset<Op> ≅ (Op[], origin) round-trip
 // ===========================================================================
 
 describe("round-trip: subscribeTree output → applyChanges input", () => {
-  it("tree events from docA can reconstruct PendingChange[] for docB", () => {
+  it("tree events from docA can reconstruct Op[] for docB", () => {
     const docA = createChatDoc()
     const docB = createChatDoc()
 
     // Subscribe to tree events on the root of docA
-    const treeChangesets: Changeset<TreeEvent>[] = []
+    const treeChangesets: Changeset<Op>[] = []
     getChangefeed(docA.doc).subscribeTree!((cs) => treeChangesets.push(cs))
 
     // Mutate docA — two changes at different leaf paths
@@ -704,15 +703,15 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
       d.count.increment(5)
     })
 
-    // Tree subscribers receive one Changeset<TreeEvent> per affected
+    // Tree subscribers receive one Changeset<Op> per affected
     // child path (propagated independently through the tree). Two
     // different paths → two changesets.
     expect(treeChangesets).toHaveLength(2)
 
-    // Reconstruct PendingChange[] from all tree events.
-    // TreeEvent.path is relative to the subscription point (root in
+    // Reconstruct Op[] from all tree events.
+    // Op.path is relative to the subscription point (root in
     // this case), so it's the same as the absolute path.
-    const reconstructedOps: PendingChange[] = treeChangesets.flatMap((cs) =>
+    const reconstructedOps: Op[] = treeChangesets.flatMap((cs) =>
       cs.changes.map((te) => ({
         path: te.path,
         change: te.change,
@@ -730,7 +729,7 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
     const docB = createChatDoc()
 
     // Subscribe to tree events on docA.settings (subtree)
-    const treeChangesets: Changeset<TreeEvent>[] = []
+    const treeChangesets: Changeset<Op>[] = []
     getChangefeed(docA.doc.settings).subscribeTree!((cs) =>
       treeChangesets.push(cs),
     )
@@ -744,7 +743,7 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
     // Each leaf child propagates independently → two changesets
     expect(treeChangesets).toHaveLength(2)
 
-    // Each changeset has one TreeEvent with a relative path
+    // Each changeset has one Op with a relative path
     expect(treeChangesets[0]!.changes).toHaveLength(1)
     expect(treeChangesets[0]!.changes[0]!.path).toEqual([
       { type: "key", key: "darkMode" },
@@ -755,7 +754,7 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
     ])
 
     // To apply to docB, we need to prepend the "settings" prefix
-    const absoluteOps: PendingChange[] = treeChangesets.flatMap((cs) =>
+    const absoluteOps: Op[] = treeChangesets.flatMap((cs) =>
       cs.changes.map((te) => ({
         path: [{ type: "key" as const, key: "settings" }, ...te.path],
         change: te.change,
@@ -850,7 +849,7 @@ describe("re-entrancy: mutation during notification", () => {
   it("change() inside subscriber does not corrupt outer notification", () => {
     const { doc } = createChatDoc()
 
-    let nestedOps: PendingChange[] = []
+    let nestedOps: Op[] = []
 
     getChangefeed(doc.settings.darkMode).subscribe(() => {
       // Re-entrant change(): opens a transaction, mutates, commits —
@@ -1007,7 +1006,7 @@ describe("subscribeNode: basic behavior", () => {
 describe("subscribe: basic behavior", () => {
   it("fires on child mutation with relative path", () => {
     const { doc } = createChatDoc()
-    const changesets: Changeset<TreeEvent>[] = []
+    const changesets: Changeset<Op>[] = []
 
     subscribe(doc.settings, (cs) => changesets.push(cs))
     doc.settings.darkMode.set(true)
@@ -1021,7 +1020,7 @@ describe("subscribe: basic behavior", () => {
 
   it("fires on own-path change with path []", () => {
     const { doc } = createChatDoc()
-    const changesets: Changeset<TreeEvent>[] = []
+    const changesets: Changeset<Op>[] = []
 
     subscribe(doc.settings, (cs) => changesets.push(cs))
     doc.settings.set({ darkMode: true, fontSize: 20 })
@@ -1033,7 +1032,7 @@ describe("subscribe: basic behavior", () => {
 
   it("unsubscribe stops delivery", () => {
     const { doc } = createChatDoc()
-    const changesets: Changeset<TreeEvent>[] = []
+    const changesets: Changeset<Op>[] = []
 
     const unsub = subscribe(doc.settings, (cs) => changesets.push(cs))
     doc.settings.darkMode.set(true)
@@ -1061,11 +1060,11 @@ describe("subscribe: basic behavior", () => {
 // ===========================================================================
 
 describe("integration: library-only round-trip", () => {
-  it("subscribe on docA → reconstruct PendingChange[] → applyChanges on docB", () => {
+  it("subscribe on docA → reconstruct Op[] → applyChanges on docB", () => {
     const docA = createChatDoc()
     const docB = createChatDoc()
 
-    const treeChangesets: Changeset<TreeEvent>[] = []
+    const treeChangesets: Changeset<Op>[] = []
     subscribe(docA.doc, (cs) => treeChangesets.push(cs))
 
     // Mutate docA via library-level change()
@@ -1074,8 +1073,8 @@ describe("integration: library-only round-trip", () => {
       d.count.increment(5)
     })
 
-    // Reconstruct PendingChange[] from tree events
-    const ops: PendingChange[] = treeChangesets.flatMap((cs) =>
+    // Reconstruct Op[] from tree events
+    const ops: Op[] = treeChangesets.flatMap((cs) =>
       cs.changes.map((te) => ({
         path: te.path,
         change: te.change,

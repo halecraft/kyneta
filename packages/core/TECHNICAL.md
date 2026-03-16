@@ -45,10 +45,10 @@ type DeltaKind = "replace" | "text" | "sequence" | "map" | "tree" | "increment"
 
 // Named change types (each is one member of the BuiltinChange union)
 type ReplaceChange<T> = { type: "replace"; value: T }
-type TextChange = { type: "text"; ops: TextChangeOp[] }
-type SequenceChange<T> = { type: "sequence"; ops: SequenceChangeOp<T>[] }
+type TextChange = { type: "text"; instructions: TextInstruction[] }
+type SequenceChange<T> = { type: "sequence"; instructions: SequenceInstruction<T>[] }
 type MapChange = { type: "map"; set?: Record<string, unknown>; delete?: string[] }
-type TreeChange = { type: "tree"; ops: TreeChangeOp[] }
+type TreeChange = { type: "tree"; instructions: TreeInstruction[] }
 type IncrementChange = { type: "increment"; amount: number }
 ```
 
@@ -788,7 +788,7 @@ function subscribe(
 
 This unwrapping is why core's `subscribe` differs from schema's facade `subscribeNode` (which passes the raw `Changeset` to the callback). Core handlers receive individual `ChangeBase` objects, which enables pattern-matching on `change.type`:
 
-- **Sequence regions**: Extract `change.ops` for O(k) DOM updates
+- **Sequence regions**: Extract `change.instructions` for O(k) DOM updates
 - **Text regions**: Use `insertData`/`deleteData` for O(k) surgical text updates
 - **Fallback**: For `"replace"` changes or complex expressions, re-read the entire value
 
@@ -808,7 +808,7 @@ The `listRegion` runtime follows **Functional Core / Imperative Shell** pattern:
 
 **Functional Core** (pure, testable):
 - `planInitialRender(listRef)` → `ListRegionOp<T>[]`
-- `planDeltaOps(listRef, deltaOps: SequenceChangeOp<T>[])` → `ListRegionOp<T>[]`
+- `planDeltaOps(listRef, deltaOps: SequenceInstruction<T>[])` → `ListRegionOp<T>[]`
 
 **Imperative Shell** (DOM manipulation):
 - `executeOp(parent, state, handlers, op)` — applies single operation
@@ -819,7 +819,7 @@ The `listRegion` subscribe callback receives a change and dispatches:
 subscribe(listRef, (change: ChangeBase) => {
   if (change.type === "sequence") {
     // O(k) update where k = number of changed items
-    const ops = planDeltaOps(state.listRef, change.ops)
+    const ops = planDeltaOps(state.listRef, change.instructions)
     executeOps(parent, state, handlers, ops)
   } else {
     // Fallback: full re-render for "replace" or other change types
@@ -876,7 +876,7 @@ function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
   subscribe(ref, (change: ChangeBase) => {
     if (isTextChange(change)) {
       // O(k) surgical update
-      patchText(textNode, change.ops)
+      patchText(textNode, change.instructions)
     } else {
       // Fallback for non-text changes (e.g., "replace")
       textNode.textContent = readValue()
@@ -961,7 +961,7 @@ function inputTextRegion(
   subscribe(ref, (change: ChangeBase, origin?: string) => {
     if (isTextChange(change)) {
       const mode = origin === "local" ? "end" : "preserve"
-      patchInputValue(input, change.ops, mode)  // O(k) surgical update
+      patchInputValue(input, change.instructions, mode)  // O(k) surgical update
     } else {
       input.value = readValue()       // Fallback via read()
     }
@@ -1478,7 +1478,7 @@ The recipe-book uses the degenerate single-peer case of a version vector:
 
 ```
 version(doc) → number          Monotonic integer, increments on each flush cycle
-delta(doc, fromVersion) → ops  log.slice(fromVersion).flat() → PendingChange[]
+delta(doc, fromVersion) → ops  log.slice(fromVersion).flat() → Op[]
 ```
 
 Sync state is stored per-document via `WeakMap<object, SyncState>`:
@@ -1486,13 +1486,13 @@ Sync state is stored per-document via `WeakMap<object, SyncState>`:
 ```typescript
 interface SyncState {
   version: number
-  log: PendingChange[][]   // log[i] = batch from version i → i+1
+  log: Op[][]   // log[i] = batch from version i → i+1
 }
 ```
 
 The version counter increments on every `subscribe(doc, ...)` delivery — both local `change()` calls and remote `applyChanges()` calls. This is correct for the single-server-authority model.
 
-**Upgrade path:** The integer becomes a version vector, `delta()` computes the set difference, and the wire format (`{ type, ops, version }`) remains compatible. The same `PendingChange` type (`{ path: PathSegment[], change: ChangeBase }`) carries operations regardless of the sync topology.
+**Upgrade path:** The integer becomes a version vector, `delta()` computes the set difference, and the wire format (`{ type, ops, version }`) remains compatible. The same `Op` type (`{ path: PathSegment[], change: ChangeBase }`) carries operations regardless of the sync topology.
 
 ### The `createApp(doc)` Factory Pattern
 
@@ -1525,10 +1525,10 @@ The recipe-book demonstrates a motivated boundary between two kinds of reactive 
 
 | Kind | Created by | Reactive? | Synced? | Example |
 |------|-----------|-----------|---------|---------|
-| **Document state** | `createDoc(schema, seed)` → `Ref<S>` | Yes (`[CHANGEFEED]`) | Yes (via `PendingChange[]`) | Recipe data, favorites counter |
+| **Document state** | `createDoc(schema, seed)` → `Ref<S>` | Yes (`[CHANGEFEED]`) | Yes (via `Op[]`) | Recipe data, favorites counter |
 | **Local state** | `state(initial)` → `LocalRef<T>` | Yes (`[CHANGEFEED]`) | No | Search filter, veggie-only toggle |
 
-Both participate in the `[CHANGEFEED]` protocol, so the compiler treats them identically for reactive detection — the same `valueRegion`, `conditionalRegion`, etc. are emitted regardless of the state's provenance. The distinction is purely at the sync layer: `subscribe(doc, ...)` captures document mutations as `PendingChange[]` for WebSocket transport; `LocalRef` changes stay local.
+Both participate in the `[CHANGEFEED]` protocol, so the compiler treats them identically for reactive detection — the same `valueRegion`, `conditionalRegion`, etc. are emitted regardless of the state's provenance. The distinction is purely at the sync layer: `subscribe(doc, ...)` captures document mutations as `Op[]` for WebSocket transport; `LocalRef` changes stay local.
 
 The boundary is domain-motivated: filter preferences are per-user-session (local), while recipe data is shared (document). This pattern generalizes to any app with collaborative + private state.
 

@@ -10,7 +10,7 @@ import {
   type ChangeBase,
   type Changeset,
   type Changefeed,
-  type SequenceChangeOp,
+  type SequenceInstruction,
 } from "@kyneta/schema"
 import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
@@ -99,9 +99,9 @@ function createMockSequenceRef<T>(initialItems: T[]): {
  * Helper to emit a sequence change (insert/delete/retain ops).
  */
 function sequenceChange(
-  ops: SequenceChangeOp<unknown>[],
-): ChangeBase & { ops: SequenceChangeOp<unknown>[] } {
-  return { type: "sequence", ops }
+  instructions: SequenceInstruction<unknown>[],
+): ChangeBase & { instructions: SequenceInstruction<unknown>[] } {
+  return { type: "sequence", instructions }
 }
 
 describe("regions", () => {
@@ -1125,8 +1125,8 @@ describe("regions", () => {
         at: (i: number) => ({ index: i, isRef: true }),
       }
 
-      // SequenceChangeOp insert carries an array — length > 1 triggers batch
-      const deltaOps: SequenceChangeOp<unknown>[] = [
+      // SequenceInstruction insert carries an array — length > 1 triggers batch
+      const deltaOps: SequenceInstruction<unknown>[] = [
         { insert: ["a", "b"] },
       ]
 
@@ -1143,7 +1143,7 @@ describe("regions", () => {
       }
 
       // Single-element insert array
-      const deltaOps: SequenceChangeOp<unknown>[] = [{ insert: ["a"] }]
+      const deltaOps: SequenceInstruction<unknown>[] = [{ insert: ["a"] }]
 
       const ops = planDeltaOps(mockListRef, deltaOps)
 
@@ -1159,7 +1159,7 @@ describe("regions", () => {
         at: () => "remaining",
       }
 
-      const deltaOps: SequenceChangeOp<unknown>[] = [{ delete: 2 }]
+      const deltaOps: SequenceInstruction<unknown>[] = [{ delete: 2 }]
 
       const ops = planDeltaOps(mockListRef, deltaOps)
 
@@ -1173,7 +1173,7 @@ describe("regions", () => {
         at: () => "remaining",
       }
 
-      const deltaOps: SequenceChangeOp<unknown>[] = [{ delete: 1 }]
+      const deltaOps: SequenceInstruction<unknown>[] = [{ delete: 1 }]
 
       const ops = planDeltaOps(mockListRef, deltaOps)
 
@@ -1187,7 +1187,7 @@ describe("regions", () => {
       }
 
       // Retain 2, then insert 1 item
-      const deltaOps: SequenceChangeOp<unknown>[] = [
+      const deltaOps: SequenceInstruction<unknown>[] = [
         { retain: 2 },
         { insert: ["x"] },
       ]
@@ -1205,7 +1205,7 @@ describe("regions", () => {
       }
 
       // Retain 1, delete 1, insert 1
-      const deltaOps: SequenceChangeOp<unknown>[] = [
+      const deltaOps: SequenceInstruction<unknown>[] = [
         { retain: 1 },
         { delete: 1 },
         { insert: ["x"] },
@@ -1226,7 +1226,7 @@ describe("regions", () => {
       }
 
       // Retain 1, delete 2 (batch), insert 2 (batch)
-      const deltaOps: SequenceChangeOp<unknown>[] = [
+      const deltaOps: SequenceInstruction<unknown>[] = [
         { retain: 1 },
         { delete: 2 },
         { insert: ["x", "y"] },
@@ -1246,7 +1246,7 @@ describe("regions", () => {
         at: () => "item",
       }
 
-      const deltaOps: SequenceChangeOp<unknown>[] = []
+      const deltaOps: SequenceInstruction<unknown>[] = []
 
       const ops = planDeltaOps(mockListRef, deltaOps)
 

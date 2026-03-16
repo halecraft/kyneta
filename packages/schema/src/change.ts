@@ -32,28 +32,28 @@ export interface ChangeBase {
 // Text actions — cursor-based retain/insert/delete over characters
 // ---------------------------------------------------------------------------
 
-export type TextChangeOp =
+export type TextInstruction =
   | { readonly retain: number }
   | { readonly insert: string }
   | { readonly delete: number }
 
 export interface TextChange extends ChangeBase {
   readonly type: "text"
-  readonly ops: readonly TextChangeOp[]
+  readonly instructions: readonly TextInstruction[]
 }
 
 // ---------------------------------------------------------------------------
 // Sequence actions — cursor-based retain/insert/delete over items
 // ---------------------------------------------------------------------------
 
-export type SequenceChangeOp<T = unknown> =
+export type SequenceInstruction<T = unknown> =
   | { readonly retain: number }
   | { readonly insert: readonly T[] }
   | { readonly delete: number }
 
 export interface SequenceChange<T = unknown> extends ChangeBase {
   readonly type: "sequence"
-  readonly ops: readonly SequenceChangeOp<T>[]
+  readonly instructions: readonly SequenceInstruction<T>[]
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ export interface ReplaceChange<T = unknown> extends ChangeBase {
 // Tree actions — structural operations on hierarchical trees
 // ---------------------------------------------------------------------------
 
-export type TreeChangeOp =
+export type TreeInstruction =
   | { readonly action: "create"; readonly index: number }
   | { readonly action: "delete"; readonly index: number }
   | {
@@ -90,7 +90,7 @@ export type TreeChangeOp =
 
 export interface TreeChange extends ChangeBase {
   readonly type: "tree"
-  readonly ops: readonly TreeChangeOp[]
+  readonly instructions: readonly TreeInstruction[]
 }
 
 // ---------------------------------------------------------------------------
@@ -128,9 +128,7 @@ export function isTextChange(action: ChangeBase): action is TextChange {
   return action.type === "text"
 }
 
-export function isSequenceChange(
-  action: ChangeBase,
-): action is SequenceChange {
+export function isSequenceChange(action: ChangeBase): action is SequenceChange {
   return action.type === "sequence"
 }
 
@@ -156,14 +154,16 @@ export function isIncrementChange(
 // Action constructors — convenience factories
 // ---------------------------------------------------------------------------
 
-export function textChange(ops: readonly TextChangeOp[]): TextChange {
-  return { type: "text", ops }
+export function textChange(
+  instructions: readonly TextInstruction[],
+): TextChange {
+  return { type: "text", instructions }
 }
 
 export function sequenceChange<T>(
-  ops: readonly SequenceChangeOp<T>[],
+  instructions: readonly SequenceInstruction<T>[],
 ): SequenceChange<T> {
-  return { type: "sequence", ops }
+  return { type: "sequence", instructions }
 }
 
 export function mapChange(
@@ -177,8 +177,10 @@ export function replaceChange<T>(value: T): ReplaceChange<T> {
   return { type: "replace", value }
 }
 
-export function treeChange(ops: readonly TreeChangeOp[]): TreeChange {
-  return { type: "tree", ops }
+export function treeChange(
+  instructions: readonly TreeInstruction[],
+): TreeChange {
+  return { type: "tree", instructions }
 }
 
 export function incrementChange(amount: number): IncrementChange {

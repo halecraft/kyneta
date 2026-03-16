@@ -13,7 +13,7 @@ import {
   changefeed,
 } from "../index.js"
 import type {
-  TreeEvent,
+  Op,
   Changeset,
   ChangeBase,
 } from "../index.js"
@@ -57,7 +57,7 @@ const CF_SYM = Symbol.for("kyneta:changefeed")
 function getChangefeed(obj: unknown): {
   current: unknown
   subscribe: (cb: (changeset: Changeset) => void) => () => void
-  subscribeTree?: (cb: (changeset: Changeset<TreeEvent>) => void) => () => void
+  subscribeTree?: (cb: (changeset: Changeset<Op>) => void) => () => void
 } {
   return (obj as any)[CF_SYM]
 }
@@ -278,7 +278,7 @@ describe("changefeed: product subscribeTree", () => {
   it("fires for child mutations with correct path", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.settings)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -292,7 +292,7 @@ describe("changefeed: product subscribeTree", () => {
   it("fires for own-path changes with path []", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.settings)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -306,7 +306,7 @@ describe("changefeed: product subscribeTree", () => {
   it("nested tree composition — deep path", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -358,7 +358,7 @@ describe("changefeed: sequence subscribeTree", () => {
   it("fires for item content changes", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.messages)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -381,7 +381,7 @@ describe("changefeed: sequence subscribeTree", () => {
   it("fires for structural changes with path []", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.messages)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -396,7 +396,7 @@ describe("changefeed: sequence subscribeTree", () => {
   it("dynamic subscription: push then mutate new item fires tree event", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.messages)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -427,7 +427,7 @@ describe("changefeed: sequence subscribeTree", () => {
       ],
     })
     const cf = getChangefeed(doc.messages)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -453,7 +453,7 @@ describe("changefeed: map subscribeTree", () => {
   it("fires for entry value changes", () => {
     const { doc } = createChatDoc({ metadata: { color: "red", priority: 1 } })
     const cf = getChangefeed(doc.metadata)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -475,7 +475,7 @@ describe("changefeed: map subscribeTree", () => {
   it("fires for structural changes with path []", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.metadata)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -490,7 +490,7 @@ describe("changefeed: map subscribeTree", () => {
   it("dynamic subscription: set then mutate new entry fires tree event", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.metadata)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -515,7 +515,7 @@ describe("changefeed: unsubscribe cleanup", () => {
   it("unsubscribe from subscribeTree stops delivery", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.settings)
-    const events: TreeEvent[] = []
+    const events: Op[] = []
     const unsub = cf.subscribeTree!((changeset) => {
       for (const event of changeset.changes) events.push(event)
     })
@@ -538,7 +538,7 @@ describe("changefeed: coexistence of subscribe and subscribeTree", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.settings)
     const shallowChangesets: Changeset[] = []
-    const treeEvents: TreeEvent[] = []
+    const treeEvents: Op[] = []
 
     cf.subscribe((cs) => shallowChangesets.push(cs))
     cf.subscribeTree!((changeset) => {
@@ -605,7 +605,7 @@ describe("changefeed: transaction integration", () => {
 
   it("no tree subscriber notifications during transaction buffering", () => {
     const { ctx, doc } = createChatDoc()
-    const treeChangesets: Changeset<TreeEvent>[] = []
+    const treeChangesets: Changeset<Op>[] = []
     getChangefeed(doc.settings).subscribeTree!((changeset) => {
       treeChangesets.push(changeset)
     })
@@ -690,7 +690,7 @@ describe("changefeed: transaction integration", () => {
 
   it("transaction + subscribeTree: tree subscribers fire at commit time", () => {
     const { ctx, doc } = createChatDoc()
-    const treeChangesets: Changeset<TreeEvent>[] = []
+    const treeChangesets: Changeset<Op>[] = []
     getChangefeed(doc.settings).subscribeTree!((changeset) => {
       treeChangesets.push(changeset)
     })
@@ -827,7 +827,7 @@ describe("changefeed: batched notification", () => {
 
   it("origin tagging: tree subscribers receive origin from commit", () => {
     const { ctx, doc } = createChatDoc()
-    const treeChangesets: Changeset<TreeEvent>[] = []
+    const treeChangesets: Changeset<Op>[] = []
     getChangefeed(doc.settings).subscribeTree!((cs) => treeChangesets.push(cs))
 
     ctx.beginTransaction()
@@ -998,7 +998,7 @@ describe("changefeed: edge cases", () => {
 
   it("tree changeset wraps a single tree event (degenerate)", () => {
     const { doc } = createChatDoc()
-    const changesets: Changeset<TreeEvent>[] = []
+    const changesets: Changeset<Op>[] = []
     getChangefeed(doc.settings).subscribeTree!((cs) => changesets.push(cs))
 
     doc.settings.darkMode.set(true)

@@ -58,7 +58,7 @@ import type {
 	Schema as SchemaType,
 	AnnotatedSchema,
 	Changeset,
-	PendingChange,
+	Op,
 } from "../src/index.js";
 
 import { json, log, section } from "./helpers.js";
@@ -276,7 +276,7 @@ log(`      doc.bio.set(null) → ${doc.bio()}`);
 section(6, "Transactions with change()");
 
 log(`
-    The library-level change() captures mutations as PendingChange[].
+    The library-level change() captures mutations as Op[].
     All five change types in one atomic transaction:
 `);
 
@@ -298,7 +298,7 @@ log(`
     })
 
     ops.length → ${ops.length}
-    Change types: [${ops.map((o: PendingChange) => `"${o.change.type}"`).join(", ")}]
+    Change types: [${ops.map((o: Op) => `"${o.change.type}"`).join(", ")}]
 `);
 
 // ═══════════════════════════════════════════════════════════════════════════

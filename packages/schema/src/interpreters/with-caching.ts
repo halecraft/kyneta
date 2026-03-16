@@ -72,7 +72,7 @@ export const INVALIDATE: unique symbol = Symbol.for(
 ) as any
 
 // ---------------------------------------------------------------------------
-// CacheOp — the instruction set for cache updates
+// CacheInstruction — the instruction set for cache updates
 // ---------------------------------------------------------------------------
 
 /**
@@ -83,7 +83,7 @@ export const INVALIDATE: unique symbol = Symbol.for(
  * - `shift` — re-key numeric entries: all entries with key >= `from`
  *   get their key adjusted by `delta`
  */
-export type CacheOp<K = number | string> =
+export type CacheInstruction<K = number | string> =
   | { readonly type: "clear" }
   | { readonly type: "delete"; readonly keys: K[] }
   | { readonly type: "shift"; readonly from: K; readonly delta: number }
@@ -106,7 +106,7 @@ export type CacheOp<K = number | string> =
 export function planCacheUpdate(
   change: ChangeBase,
   kind: "sequence" | "map" | "product",
-): CacheOp<number | string>[] {
+): CacheInstruction<number | string>[] {
   // ReplaceChange always clears everything, regardless of node kind
   if (isReplaceChange(change)) {
     return [{ type: "clear" }]
@@ -138,11 +138,11 @@ export function planCacheUpdate(
  */
 function planSequenceCacheUpdate(
   change: SequenceChange,
-): CacheOp<number | string>[] {
-  const ops: CacheOp<number | string>[] = []
+): CacheInstruction<number | string>[] {
+  const ops: CacheInstruction<number | string>[] = []
   let cursor = 0
 
-  for (const op of change.ops) {
+  for (const op of change.instructions) {
     if ("retain" in op) {
       cursor += op.retain
     } else if ("insert" in op) {
@@ -180,8 +180,8 @@ function planSequenceCacheUpdate(
  */
 function planMapCacheUpdate(
   change: MapChange,
-): CacheOp<number | string>[] {
-  const ops: CacheOp<number | string>[] = []
+): CacheInstruction<number | string>[] {
+  const ops: CacheInstruction<number | string>[] = []
 
   // Delete entries for removed keys
   if (change.delete && change.delete.length > 0) {
@@ -216,7 +216,7 @@ function planMapCacheUpdate(
  */
 export function applyCacheOps<K extends number | string>(
   cache: Map<K, unknown>,
-  ops: CacheOp<K>[],
+  ops: CacheInstruction<K>[],
 ): void {
   for (const op of ops) {
     switch (op.type) {
@@ -496,7 +496,7 @@ export function withCaching<A extends HasNavigation>(
       // INVALIDATE handler: surgical cache update
       const invalidateSequence = (change: ChangeBase): void => {
         const ops = planCacheUpdate(change, "sequence")
-        applyCacheOps(childCache, ops as CacheOp<number>[])
+        applyCacheOps(childCache, ops as CacheInstruction<number>[])
       }
 
       // Attach [INVALIDATE] on the ref (public API, direct use)
@@ -545,7 +545,7 @@ export function withCaching<A extends HasNavigation>(
       // INVALIDATE handler: surgical cache update
       const invalidateMap = (change: ChangeBase): void => {
         const ops = planCacheUpdate(change, "map")
-        applyCacheOps(childCache, ops as CacheOp<string>[])
+        applyCacheOps(childCache, ops as CacheInstruction<string>[])
       }
 
       // Attach [INVALIDATE] on the ref (public API, direct use)

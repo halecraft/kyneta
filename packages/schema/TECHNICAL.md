@@ -177,8 +177,8 @@ The `formatPath(path)` utility (exported from `validate.ts`) converts a typed `P
 
 Changes are **interpretation-level** — the schema says "sequence," the backend picks the change vocabulary. Built-in change types use the retain/insert/delete cursor encoding:
 
-- `TextChange` — ops over characters
-- `SequenceChange<T>` — ops over array items
+- `TextChange` — instructions over characters
+- `SequenceChange<T>` — instructions over array items
 - `MapChange` — key-level set/delete
 - `ReplaceChange<T>` — wholesale scalar swap
 - `IncrementChange` — counter delta
@@ -197,9 +197,9 @@ A changefeed is a coalgebra: `{ current: S, subscribe(cb: (changeset: Changeset<
 
 Auto-commit (single mutation outside a transaction) delivers a degenerate `Changeset` of exactly one change. Transactions and `applyChanges` deliver multi-change batches. The subscriber API is uniform regardless of batch size.
 
-**`TreeEvent<C>` — relative path for tree observation.** Composite refs (products, sequences, maps) implement `ComposedChangefeed`, which adds `subscribeTree(cb: (changeset: Changeset<TreeEvent<C>>) => void)`. Each `TreeEvent` carries `{ path: Path, change: C }` — the path is relative from the subscription point to where the change occurred. `subscribeTree` is a strict superset of `subscribe` (tree subscribers also see own-path changes with `path: []`).
+**`Op<C>` — relative path for tree observation.** Composite refs (products, sequences, maps) implement `ComposedChangefeed`, which adds `subscribeTree(cb: (changeset: Changeset<Op<C>>) => void)`. Each `Op` carries `{ path: Path, change: C }` — the path is relative from the subscription point to where the change occurred. `subscribeTree` is a strict superset of `subscribe` (tree subscribers also see own-path changes with `path: []`).
 
-**`Changeset<TreeEvent>` ≅ `(PendingChange[], origin)` isomorphism.** When subscribing at the root, `TreeEvent.path` equals the absolute path. The output of tree-level observation (the facade's `subscribe`, which delegates to `ComposedChangefeed.subscribeTree`) can be round-tripped as input to `applyChanges` (modulo path relativity for subtree subscriptions). This is a powerful property for sync: capture tree events on one document, reconstruct `PendingChange[]`, apply to another. Note: tree subscribers receive one `Changeset<TreeEvent>` per affected child path (not one combined changeset per flush), so reconstruction uses `flatMap` across changesets.
+**`Changeset<Op>` ≅ `(Op[], origin)` isomorphism.** When subscribing at the root, `Op.path` equals the absolute path. The output of tree-level observation (the facade's `subscribe`, which delegates to `ComposedChangefeed.subscribeTree`) can be round-tripped as input to `applyChanges` (modulo path relativity for subtree subscriptions). This is a powerful property for sync: capture tree events on one document, reconstruct `Op[]`, apply to another. Note: tree subscribers receive one `Changeset<Op>` per affected child path (not one combined changeset per flush), so reconstruction uses `flatMap` across changesets.
 
 ### Step (`src/step.ts`)
 
@@ -391,7 +391,7 @@ The interposition transformer. Wraps navigation with memoization:
 
 The invalidation logic is split into **Functional Core** (`planCacheUpdate` — pure, table-testable) and **Imperative Shell** (`applyCacheOps` — trivial `Map` mutation). Both are exported for testing.
 
-`CacheOp` is the instruction set: `clear` (drop all), `delete` (drop specific keys), `shift` (re-key numeric entries by delta).
+`CacheInstruction` is the instruction set: `clear` (drop all), `delete` (drop specific keys), `shift` (re-key numeric entries by delta).
 
 **Prepare-pipeline integration:** When composed inside `withWritable` (i.e. the context is a `WritableContext`), `withCaching` hooks into the `prepare` phase via `ensureCacheWiring`. Each composite node registers its invalidation handler by `pathKey(path)` during interpretation. The `prepare` wrapper fires the handler **before** forwarding to the inner prepare (store mutation), so caches are invalidated automatically for every change source — whether from imperative mutation methods or declarative `applyChanges`.
 
@@ -446,7 +446,7 @@ interface WritableContext extends RefContext {
   readonly flush: (origin?: string) => void
   readonly dispatch: (path: Path, change: ChangeBase) => void
   beginTransaction(): void
-  commit(origin?: string): PendingChange[]
+  commit(origin?: string): Op[]
   abort(): void
   readonly inTransaction: boolean
 }
@@ -475,14 +475,14 @@ The `TRANSACT` symbol (`Symbol.for("kyneta:transact")`) and `HasTransact` interf
 
 The library-level API for change capture, declarative application, and observation:
 
-- **`change(ref, fn) → PendingChange[]`** — imperative mutation capture. Runs `fn` inside a transaction, returns the captured changes. Aborts on error.
-- **`applyChanges(ref, ops, {origin?}) → PendingChange[]`** — declarative application. Applies a list of changes via `executeBatch`, triggering the full prepare pipeline (cache invalidation + store mutation + notification accumulation) then flush (batched `Changeset` delivery). Empty ops is a no-op.
-- **`subscribe(ref, cb) → () => void`** — tree-level observation (the default). Callback receives `Changeset<TreeEvent>` with relative paths. Only works on composite refs (products, sequences, maps). A strict superset of `subscribeNode` — subscribers also see own-path changes with `path: []`. Delegates to `ref[CHANGEFEED].subscribeTree(cb)`.
+- **`change(ref, fn) → Op[]`** — imperative mutation capture. Runs `fn` inside a transaction, returns the captured changes. Aborts on error.
+- **`applyChanges(ref, ops, {origin?}) → Op[]`** — declarative application. Applies a list of changes via `executeBatch`, triggering the full prepare pipeline (cache invalidation + store mutation + notification accumulation) then flush (batched `Changeset` delivery). Empty ops is a no-op.
+- **`subscribe(ref, cb) → () => void`** — tree-level observation (the default). Callback receives `Changeset<Op>` with relative paths. Only works on composite refs (products, sequences, maps). A strict superset of `subscribeNode` — subscribers also see own-path changes with `path: []`. Delegates to `ref[CHANGEFEED].subscribeTree(cb)`.
 - **`subscribeNode(ref, cb) → () => void`** — node-level observation. Callback receives `Changeset`. For leaf refs, fires on any mutation. For composite refs, fires only on node-level changes (e.g. product `.set()`), not child mutations. Delegates to `ref[CHANGEFEED].subscribe(cb)`.
 
 **Facade vs. protocol naming.** The facade and the changefeed protocol use different vocabulary by design. The facade speaks the developer's language: `subscribe` is the unmarked default (deep/tree-level, the thing you reach for first), `subscribeNode` is the explicit opt-in for node-level observation. The protocol speaks its own language: `Changefeed.subscribe` is the universal Moore machine transition stream, `ComposedChangefeed.subscribeTree` is the tree-level composition extension. The facade translates: `subscribe` → `[CHANGEFEED].subscribeTree`, `subscribeNode` → `[CHANGEFEED].subscribe`. This follows the principle of least surprise and ecosystem precedent (Yjs `observeDeep`, Vue `{ deep: true }`, MobX deep-by-default). The name `subscribeNode` communicates positive intent ("I want events at this node") rather than degradation — the `@kyneta/core` runtime's `listRegion` legitimately needs node-level subscriptions for structural `SequenceChange` events, and that's the correct semantic.
 
-`change` and `applyChanges` are symmetric duals: `change` produces `PendingChange[]`, `applyChanges` consumes them. Round-trip correctness is verified: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docA()` deep-equals `docB()`.
+`change` and `applyChanges` are symmetric duals: `change` produces `Op[]`, `applyChanges` consumes them. Round-trip correctness is verified: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docA()` deep-equals `docB()`.
 
 All four functions discover capabilities via symbols on refs (`[TRANSACT]` for `change`/`applyChanges`, `[CHANGEFEED]` for `subscribe`/`subscribeNode`). All throw clear errors when the ref lacks the required symbol.
 
@@ -498,7 +498,7 @@ For leaf refs, attaches a plain `Changefeed` with `subscribe` (node-level). For 
 
 **Notification flow:** `withChangefeed` wraps `ctx.prepare` to accumulate `{path, change}` entries without firing subscribers. It wraps `ctx.flush` to group accumulated entries by `pathKey` (via `planNotifications` — pure FC) and deliver one `Changeset` per subscriber (via `deliverNotifications` — imperative shell). This follows the same FC/IS pattern as `planCacheUpdate`/`applyCacheOps` in `withCaching`.
 
-**Tree notification** propagates via subscription composition (children → parent), not a flat subscriber map. When a leaf's changefeed fires, its parent's `subscribeTree` callback re-prefixes the path and propagates upward. Each child path produces its own `Changeset<TreeEvent>` — so a transaction touching N different paths delivers N tree changesets to the parent (each with the correct relative path prefix).
+**Tree notification** propagates via subscription composition (children → parent), not a flat subscriber map. When a leaf's changefeed fires, its parent's `subscribeTree` callback re-prefixes the path and propagates upward. Each child path produces its own `Changeset<Op>` — so a transaction touching N different paths delivers N tree changesets to the parent (each with the correct relative path prefix).
 
 **Composition:** `withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))`
 
@@ -676,7 +676,7 @@ The spike validates these properties via 2012 tests across 38 test files (1 pre-
 19. **Sequence `.at()` / `.get()` bounds check**: `.at(100)` on a 2-item array returns `undefined`; `.at(-1)` returns `undefined`. `.get(100)` and `.get(-1)` also return `undefined`. Matches `Array.prototype.at()` semantics.
 20. **Capability composition**: `withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))` produces refs with all capabilities.
 21. **Self-path dispatch**: every mutation dispatches at its own path. Scalar `.set()` dispatches `ReplaceChange` at the scalar's path (not `MapChange` at the parent). Exact-path changefeed subscribers on scalars fire on `.set()`.
-22. **Product `.set()`**: `doc.settings.set({ darkMode: true, fontSize: 20 })` dispatches a single `ReplaceChange` at the product's path. The `.set()` method is non-enumerable. Individual field refs still work after product `.set()`. Transactions accumulate one `PendingChange`.
+22. **Product `.set()`**: `doc.settings.set({ darkMode: true, fontSize: 20 })` dispatches a single `ReplaceChange` at the product's path. The `.set()` method is non-enumerable. Individual field refs still work after product `.set()`. Transactions accumulate one `Op`.
 23. **Compile-time composition safety**: `withCaching(bottomInterpreter)` is a compile error — `bottomInterpreter` produces `HasCall`, but `withCaching` requires `HasNavigation`. `withReadable(bottomInterpreter)` is also a compile error (requires `HasNavigation`). `withReadable(plainInterpreter)` is also a compile error.
 24. **Prepare-pipeline cache invalidation**: `ctx.prepare(path, change)` triggers surgical cache invalidation at the target path via `withCaching`'s pipeline hook. After `push()` on a cached sequence, `.at(newIndex)` returns the correct ref immediately. Unrelated caches are preserved (path-keyed handlers only fire for affected paths).
 25. **Combinatorial stacks**: `withWritable(bottomInterpreter)` produces write-only carriers where `ref()` throws but `.set()` dispatches correctly. `withWritable(withReadable(bottomInterpreter))` produces uncached read+write refs.
@@ -711,7 +711,7 @@ packages/schema/
 │   ├── schema.ts                # Unified recursive type + constructors + ScalarPlain + buildVariantMap
 │   ├── loro-schema.ts           # LoroSchema namespace (Loro annotations + plain)
 │   ├── change.ts                # ChangeBase + built-in change types
-│   ├── changefeed.ts            # CHANGEFEED symbol, Changeset, Changefeed/ComposedChangefeed, TreeEvent
+│   ├── changefeed.ts            # CHANGEFEED symbol, Changeset, Changefeed/ComposedChangefeed, Op
 │   ├── step.ts                  # Pure (State, Change) → State transitions
 │   ├── zero.ts                  # Zero.structural, Zero.overlay
 │   ├── describe.ts              # Human-readable schema tree view

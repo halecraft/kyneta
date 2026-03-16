@@ -55,6 +55,22 @@ export interface Changeset<C = ChangeBase> {
 }
 
 // ---------------------------------------------------------------------------
+// Op — the atomic unit of the delta algebra
+// ---------------------------------------------------------------------------
+
+/**
+ * An addressed delta — the atomic unit of change in the delta algebra.
+ *
+ * Every mutation, notification, and sync payload decomposes into Ops.
+ * An Op is a (Path, Change) pair: the path addresses a node in the
+ * schema tree, the change describes the delta at that node.
+ */
+export interface Op<C extends ChangeBase = ChangeBase> {
+  readonly path: Path
+  readonly change: C
+}
+
+// ---------------------------------------------------------------------------
 // Core interfaces
 // ---------------------------------------------------------------------------
 
@@ -94,25 +110,6 @@ export interface HasChangefeed<S = unknown, A extends ChangeBase = ChangeBase> {
 // ---------------------------------------------------------------------------
 
 /**
- * A tree event carries a change together with its relative path.
- *
- * When a `subscribeTree` subscriber receives a `TreeEvent`, `path`
- * is the path from the subscription point down to where the change
- * actually occurred. When the change is at the subscription point
- * itself, `path` is `[]`.
- *
- * Note: this field was previously named `origin`, but was renamed to
- * `path` to avoid collision with the provenance `origin` field on
- * `Changeset`.
- */
-export interface TreeEvent<C extends ChangeBase = ChangeBase> {
-  /** Relative path from subscription point to where the change occurred. */
-  readonly path: Path
-  /** The change that occurred. */
-  readonly change: C
-}
-
-/**
  * Extension of `Changefeed` for tree-structured (composite) refs.
  *
  * `subscribe` remains node-level — it fires only for changes at this
@@ -124,7 +121,7 @@ export interface TreeEvent<C extends ChangeBase = ChangeBase> {
  * subscribers also see own-path changes with `path: []`).
  *
  * Both `subscribe` and `subscribeTree` deliver `Changeset` batches.
- * `subscribeTree` delivers `Changeset<TreeEvent<C>>` — each entry
+ * `subscribeTree` delivers `Changeset<Op<C>>` — each entry
  * in the batch carries the relative path where the change occurred.
  *
  * Only composite refs (products, sequences, maps) implement this.
@@ -133,7 +130,7 @@ export interface TreeEvent<C extends ChangeBase = ChangeBase> {
 export interface ComposedChangefeed<S, C extends ChangeBase = ChangeBase>
   extends Changefeed<S, C> {
   /** Subscribe to changes at this node and all descendants. */
-  subscribeTree(callback: (changeset: Changeset<TreeEvent<C>>) => void): () => void
+  subscribeTree(callback: (changeset: Changeset<Op<C>>) => void): () => void
 }
 
 /**

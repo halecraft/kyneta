@@ -20,6 +20,8 @@
 // See .plans/apply-changes.md §Phase 4.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
+import type { Op } from "../changefeed.js"
+export type { Op }
 import type { SubstratePrepare } from "../substrate.js"
 import {
   isNullableSum,
@@ -162,15 +164,10 @@ export interface WritableContext extends RefContext {
   beginTransaction(): void
   /** Apply buffered changes via executeBatch, return the list.
    *  Accepts an optional origin for the emitted Changeset. */
-  commit(origin?: string): PendingChange[]
+  commit(origin?: string): Op[]
   /** Discard buffered changes without applying. */
   abort(): void
   readonly inTransaction: boolean
-}
-
-export interface PendingChange {
-  readonly path: Path
-  readonly change: ChangeBase
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +194,7 @@ export interface PendingChange {
  */
 export function executeBatch(
   ctx: WritableContext,
-  changes: readonly PendingChange[],
+  changes: readonly Op[],
   origin?: string,
 ): void {
   if (ctx.inTransaction) {
@@ -239,7 +236,7 @@ export function executeBatch(
  * ```
  */
 export function buildWritableContext(substrate: SubstratePrepare): WritableContext {
-  const pending: PendingChange[] = []
+  const pending: Op[] = []
   let inTransaction = false
 
   // Base prepare: delegate to the substrate.
@@ -286,7 +283,7 @@ export function buildWritableContext(substrate: SubstratePrepare): WritableConte
   // - flush is called once (deliver Changeset batch to subscribers)
   // The transaction must be ended BEFORE executeBatch because
   // executeBatch guards against being called during a transaction.
-  const commit = (origin?: string): PendingChange[] => {
+  const commit = (origin?: string): Op[] => {
     if (!inTransaction) {
       throw new Error("No active transaction to commit")
     }

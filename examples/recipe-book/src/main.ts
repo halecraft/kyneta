@@ -1,10 +1,10 @@
 import { mount } from "@kyneta/core"
-import type { Changeset, TreeEvent, PendingChange } from "@kyneta/schema"
+import type { Changeset, Op } from "@kyneta/schema"
 
 import { RecipeBookSchema } from "./schema.js"
 import { SEED } from "./seed.js"
 import { createDoc, applyChanges, subscribe, version } from "./facade.js"
-import { parseClientMessage, toPendingChanges } from "./protocol.js"
+import { parseClientMessage, toOps } from "./protocol.js"
 import { createApp } from "./app.js"
 
 const doc = createDoc(RecipeBookSchema, { ...SEED })
@@ -31,17 +31,17 @@ ws.addEventListener("message", (event) => {
   const msg = parseClientMessage(event.data)
   if (msg?.type === "delta" && msg.ops.length > 0) {
     // origin: "sync" tells inputTextRegion to preserve cursor position
-    applyChanges(doc, toPendingChanges(msg.ops), { origin: "sync" })
+    applyChanges(doc, toOps(msg.ops), { origin: "sync" })
   }
 })
 
 // Forward local mutations to the server. Filter out sync-origin changes
 // to prevent echo loops (server sent it to us, we don't send it back).
-subscribe(doc, (changeset: Changeset<TreeEvent>) => {
+subscribe(doc, (changeset: Changeset<Op>) => {
   if (changeset.origin === "sync") return
   if (ws.readyState !== WebSocket.OPEN) return
 
-  const ops: PendingChange[] = changeset.changes.map((event) => ({
+  const ops: Op[] = changeset.changes.map((event) => ({
     path: event.path,
     change: event.change,
   }))

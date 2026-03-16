@@ -1,9 +1,8 @@
 import type {
 	SchemaNode as SchemaType,
 	Ref,
-	PendingChange,
+	Op,
 	Changeset,
-	TreeEvent,
 } from "@kyneta/schema";
 import {
 	Zero,
@@ -21,8 +20,8 @@ export { change, applyChanges, subscribe, subscribeNode } from "@kyneta/schema";
 
 interface SyncState {
 	version: number;
-	/** log[i] = batch of PendingChanges from version i → i+1 */
-	log: PendingChange[][];
+	/** log[i] = batch of Ops from version i → i+1 */
+	log: Op[][];
 }
 
 const syncStates = new WeakMap<object, SyncState>();
@@ -67,8 +66,8 @@ export const createDoc: CreateDoc = (schema, seed = {}) => {
 
 	// Each changefeed delivery = one flush cycle. Track versions by appending
 	// to the log so delta() can compute what a peer has missed.
-	subscribe(doc, (changeset: Changeset<TreeEvent>) => {
-		const batch: PendingChange[] = changeset.changes.map((event) => ({
+	subscribe(doc, (changeset: Changeset<Op>) => {
+		const batch: Op[] = changeset.changes.map((event) => ({
 			path: event.path,
 			change: event.change,
 		}));
@@ -87,7 +86,7 @@ export function version(doc: object): number {
 }
 
 /** All ops applied since `fromVersion`. Returns [] if already up to date. */
-export function delta(doc: object, fromVersion: number): PendingChange[] {
+export function delta(doc: object, fromVersion: number): Op[] {
 	const state = getSyncState(doc);
 	if (fromVersion >= state.version) return [];
 	return state.log.slice(fromVersion).flat();

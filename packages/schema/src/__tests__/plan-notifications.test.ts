@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { planNotifications } from "../index.js"
-import type { PendingChange } from "../index.js"
+import type { Op } from "../index.js"
 import { pathKey } from "../store.js"
 import type { Path } from "../interpret.js"
 
@@ -14,8 +14,8 @@ const key = (k: string): Path[number] => ({ type: "key" as const, key: k })
 /** Shorthand for an index path segment. */
 const idx = (i: number): Path[number] => ({ type: "index" as const, index: i })
 
-/** Build a PendingChange from a path and change type string. */
-function pc(path: Path, type: string): PendingChange {
+/** Build a Op from a path and change type string. */
+function pc(path: Path, type: string): Op {
   return { path, change: { type } }
 }
 
@@ -130,7 +130,7 @@ describe("planNotifications: grouping", () => {
 
   it("many changes to many paths group correctly", () => {
     const paths = Array.from({ length: 5 }, (_, i) => [key(`field${i}`)] as Path)
-    const pending: PendingChange[] = []
+    const pending: Op[] = []
     // 3 changes per path = 15 total
     for (let round = 0; round < 3; round++) {
       for (const path of paths) {
@@ -149,7 +149,7 @@ describe("planNotifications: grouping", () => {
 describe("planNotifications: immutability", () => {
   it("does not mutate the input array", () => {
     const path: Path = [key("x")]
-    const input: PendingChange[] = [pc(path, "replace")]
+    const input: Op[] = [pc(path, "replace")]
     const copy = [...input]
 
     planNotifications(input)

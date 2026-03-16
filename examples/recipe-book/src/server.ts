@@ -29,8 +29,8 @@ import {
   version,
   delta,
 } from "./facade.js"
-import type { Changeset, TreeEvent } from "@kyneta/schema"
-import { parseServerMessage, toPendingChanges } from "./protocol.js"
+import type { Changeset, Op } from "@kyneta/schema"
+import { parseServerMessage, toOps } from "./protocol.js"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dirname, "..")
@@ -148,7 +148,7 @@ async function start() {
   // Subscribe to the server doc's tree changefeed.
   // When any mutation is applied (from any client), push deltas to all
   // OTHER connected clients that haven't seen those changes yet.
-  subscribe(doc, (_changeset: Changeset<TreeEvent>) => {
+  subscribe(doc, (_changeset: Changeset<Op>) => {
     const currentVer = version(doc)
     for (const [ws, state] of clients) {
       if (state.knownVersion < currentVer && ws.readyState === 1 /* OPEN */) {
@@ -184,7 +184,7 @@ async function start() {
         // subscribe broadcast (above) skips this sender.
         const nextVersion = version(doc) + 1
         state.knownVersion = nextVersion
-        applyChanges(doc, toPendingChanges(msg.ops), { origin: "sync" })
+        applyChanges(doc, toOps(msg.ops), { origin: "sync" })
         console.log(`[ws] applied ${msg.ops.length} ops from client, now at v${version(doc)}`)
       }
     })

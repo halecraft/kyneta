@@ -1,5 +1,5 @@
 import { z } from "zod/v4"
-import type { PendingChange } from "@kyneta/schema"
+import type { Op } from "@kyneta/schema"
 
 // --- Wire schemas ---
 
@@ -10,7 +10,7 @@ const PathSegment = z.union([
 
 const Change = z.object({ type: z.string() }).passthrough()
 
-const PendingChangeSchema = z.object({
+const OpSchema = z.object({
   path: z.array(PathSegment),
   change: Change,
 })
@@ -24,7 +24,7 @@ export const SyncMessage = z.object({
 
 export const DeltaMessage = z.object({
   type: z.literal("delta"),
-  ops: z.array(PendingChangeSchema),
+  ops: z.array(OpSchema),
   version: z.number(),
 })
 
@@ -47,9 +47,9 @@ export function parseClientMessage(data: unknown): ClientMessage | null {
 }
 
 /**
- * Narrows a parsed DeltaMessage's ops to PendingChange[].
+ * Narrows a parsed DeltaMessage's ops to Op[].
  * The Zod schema validates structure; this cast bridges to the nominal type.
  */
-export function toPendingChanges(ops: z.infer<typeof PendingChangeSchema>[]): PendingChange[] {
-  return ops as unknown as PendingChange[]
+export function toOps(ops: z.infer<typeof OpSchema>[]): Op[] {
+  return ops as unknown as Op[]
 }

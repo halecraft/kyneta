@@ -13,8 +13,8 @@ import {
   type ChangeBase,
   type Changeset,
   type Changefeed,
-  type SequenceChangeOp,
-  type TextChangeOp,
+  type SequenceInstruction,
+  type TextInstruction,
   replaceChange,
   incrementChange,
 } from "@kyneta/schema"
@@ -55,8 +55,8 @@ export {
   CHANGEFEED,
   type ChangeBase,
   type Changefeed,
-  type SequenceChangeOp,
-  type TextChangeOp,
+  type SequenceInstruction,
+  type TextInstruction,
   replaceChange,
 }
 export {
@@ -115,10 +115,10 @@ export function installDOMGlobals(): void {
 export const CHANGEFEED_TYPE_STUBS = `
 import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
 
-type TextChange = { readonly type: "text"; readonly ops: readonly TextChangeOp[] }
-type TextChangeOp = { readonly retain: number } | { readonly insert: string } | { readonly delete: number }
-type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly SequenceChangeOp<T>[] }
-type SequenceChangeOp<T = unknown> = { readonly retain: number } | { readonly insert: readonly T[] } | { readonly delete: number }
+type TextChange = { readonly type: "text"; readonly instructions: readonly TextInstruction[] }
+type TextInstruction = { readonly retain: number } | { readonly insert: string } | { readonly delete: number }
+type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly instructions: readonly SequenceInstruction<T>[] }
+type SequenceInstruction<T = unknown> = { readonly retain: number } | { readonly insert: readonly T[] } | { readonly delete: number }
 type MapChange = { readonly type: "map"; readonly set?: Record<string, unknown>; readonly delete?: readonly string[] }
 type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
 type IncrementChange = { readonly type: "increment"; readonly amount: number }
@@ -350,11 +350,11 @@ export function createMockTextRef(initial: string = ""): {
   const ref = {
     insert(pos: number, text: string): void {
       content = content.slice(0, pos) + text + content.slice(pos)
-      const ops: TextChangeOp[] = []
-      if (pos > 0) ops.push({ retain: pos })
-      ops.push({ insert: text })
+      const instructions: TextInstruction[] = []
+      if (pos > 0) instructions.push({ retain: pos })
+      instructions.push({ insert: text })
       const changeset: Changeset<ChangeBase> = {
-        changes: [{ type: "text", ops } as ChangeBase],
+        changes: [{ type: "text", instructions } as ChangeBase],
         origin: "local",
       }
       for (const cb of subscribers) {
@@ -363,11 +363,11 @@ export function createMockTextRef(initial: string = ""): {
     },
     delete(pos: number, len: number): void {
       content = content.slice(0, pos) + content.slice(pos + len)
-      const ops: TextChangeOp[] = []
-      if (pos > 0) ops.push({ retain: pos })
-      ops.push({ delete: len })
+      const instructions: TextInstruction[] = []
+      if (pos > 0) instructions.push({ retain: pos })
+      instructions.push({ delete: len })
       const changeset: Changeset<ChangeBase> = {
-        changes: [{ type: "text", ops } as ChangeBase],
+        changes: [{ type: "text", instructions } as ChangeBase],
         origin: "local",
       }
       for (const cb of subscribers) {
@@ -492,24 +492,24 @@ export function createMockSequenceRef<T>(initialItems: T[]): {
     push(item: T): void {
       const index = items.length
       items.push(item)
-      const ops: SequenceChangeOp<T>[] = []
-      if (index > 0) ops.push({ retain: index })
-      ops.push({ insert: [item] })
-      emitChange({ type: "sequence", ops } as ChangeBase)
+      const instructions: SequenceInstruction<T>[] = []
+      if (index > 0) instructions.push({ retain: index })
+      instructions.push({ insert: [item] })
+      emitChange({ type: "sequence", instructions } as ChangeBase)
     },
     insert(index: number, item: T): void {
       items.splice(index, 0, item)
-      const ops: SequenceChangeOp<T>[] = []
-      if (index > 0) ops.push({ retain: index })
-      ops.push({ insert: [item] })
-      emitChange({ type: "sequence", ops } as ChangeBase)
+      const instructions: SequenceInstruction<T>[] = []
+      if (index > 0) instructions.push({ retain: index })
+      instructions.push({ insert: [item] })
+      emitChange({ type: "sequence", instructions } as ChangeBase)
     },
     delete(index: number, len: number = 1): void {
       items.splice(index, len)
-      const ops: SequenceChangeOp<T>[] = []
-      if (index > 0) ops.push({ retain: index })
-      ops.push({ delete: len })
-      emitChange({ type: "sequence", ops } as ChangeBase)
+      const instructions: SequenceInstruction<T>[] = []
+      if (index > 0) instructions.push({ retain: index })
+      instructions.push({ delete: len })
+      emitChange({ type: "sequence", instructions } as ChangeBase)
     },
     toArray(): T[] {
       return [...items]

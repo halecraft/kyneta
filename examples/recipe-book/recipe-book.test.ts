@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from "vitest"
 import { hasChangefeed } from "@kyneta/schema"
-import type { Changeset, TreeEvent } from "@kyneta/schema"
+import type { Changeset, Op } from "@kyneta/schema"
 
 import { RecipeBookSchema } from "./src/schema.js"
 import { SEED } from "./src/seed.js"
@@ -191,8 +191,8 @@ describe("sync primitives", () => {
     const docB = makeDoc()
 
     // Subscribe to docB's tree changefeed
-    const received: Changeset<TreeEvent>[] = []
-    subscribe(docB, (changeset: Changeset<TreeEvent>) => {
+    const received: Changeset<Op>[] = []
+    subscribe(docB, (changeset: Changeset<Op>) => {
       received.push(changeset)
     })
 

@@ -29,7 +29,7 @@
  * @packageDocumentation
  */
 
-import { isSequenceChange, type ChangeBase, type SequenceChange, type SequenceChangeOp } from "@kyneta/schema"
+import { isSequenceChange, type ChangeBase, type SequenceChange, type SequenceInstruction } from "@kyneta/schema"
 import type {
   ConditionalRegionHandlers,
   ConditionalRegionOp,
@@ -278,7 +278,7 @@ export function planInitialRender<T>(
 /**
  * Plan operations based on sequence change ops from a SequenceChange.
  *
- * Converts SequenceChangeOp<T>[] into ListRegionOp[] for DOM manipulation.
+ * Converts SequenceInstruction<T>[] into ListRegionOp[] for DOM manipulation.
  * For inserts, it uses `listRef.at(index)` to obtain refs from the live
  * ref tree — the plain values in the change ops are NOT passed to handlers.
  * This preserves the two-layer model: changes carry data (for step/pure
@@ -296,7 +296,7 @@ export function planInitialRender<T>(
  */
 export function planDeltaOps<T>(
   listRef: ListRefLike<T>,
-  deltaOps: readonly SequenceChangeOp<unknown>[],
+  deltaOps: readonly SequenceInstruction<unknown>[],
 ): ListRegionOp<T>[] {
   const ops: ListRegionOp<T>[] = []
   let index = 0
@@ -596,7 +596,7 @@ export function listRegion<T>(
       if (isSequenceChange(change)) {
         const regionOps = planDeltaOps(
           state.listRef,
-          change.ops,
+          change.instructions,
         )
         executeOps(parent, state, handlers, regionOps)
       } else {

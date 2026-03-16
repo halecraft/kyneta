@@ -152,6 +152,6 @@ Runs 12 integration tests covering:
 The sync model is the **degenerate single-peer case** of a version vector:
 
 - `version(doc)` → monotonic integer, increments on each flush cycle
-- `delta(doc, fromVersion)` → `log.slice(fromVersion).flat()` → `PendingChange[]`
+- `delta(doc, fromVersion)` → `log.slice(fromVersion).flat()` → `Op[]`
 
 The upgrade path to full CRDT sync preserves the same protocol shape — the integer becomes a version vector, and `delta()` computes the set difference. The wire format (`{ type, ops, version }`) remains compatible.

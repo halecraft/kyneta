@@ -11,7 +11,7 @@ import {
   type Changeset,
   type Changefeed,
   type TextChange,
-  type TextChangeOp,
+  type TextInstruction,
 } from "@kyneta/schema"
 import { JSDOM } from "jsdom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -86,21 +86,21 @@ function createMockTextRef(initialValue: string): {
 
 describe("planTextPatch", () => {
   it("converts retain + insert to offset-based insert op", () => {
-    const ops: TextChangeOp[] = [{ retain: 5 }, { insert: "X" }]
+    const ops: TextInstruction[] = [{ retain: 5 }, { insert: "X" }]
     const result = planTextPatch(ops)
     expect(result).toHaveLength(1)
     expect(result[0]).toEqual({ kind: "insert", offset: 5, text: "X" })
   })
 
   it("converts retain + delete to offset-based delete op", () => {
-    const ops: TextChangeOp[] = [{ retain: 2 }, { delete: 3 }]
+    const ops: TextInstruction[] = [{ retain: 2 }, { delete: 3 }]
     const result = planTextPatch(ops)
     expect(result).toHaveLength(1)
     expect(result[0]).toEqual({ kind: "delete", offset: 2, count: 3 })
   })
 
   it("handles insert at start (no retain)", () => {
-    const ops: TextChangeOp[] = [{ insert: "Hello" }]
+    const ops: TextInstruction[] = [{ insert: "Hello" }]
     const result = planTextPatch(ops)
     expect(result).toHaveLength(1)
     expect(result[0]).toEqual({ kind: "insert", offset: 0, text: "Hello" })
@@ -110,7 +110,7 @@ describe("planTextPatch", () => {
     // Starting from "Hello World":
     // retain 5, delete 1, insert "!"
     // → delete at offset 5, count 1, then insert "!" at offset 5
-    const ops: TextChangeOp[] = [
+    const ops: TextInstruction[] = [
       { retain: 5 },
       { delete: 1 },
       { insert: "!" },
@@ -123,20 +123,20 @@ describe("planTextPatch", () => {
   })
 
   it("handles empty ops", () => {
-    const ops: TextChangeOp[] = []
+    const ops: TextInstruction[] = []
     const result = planTextPatch(ops)
     expect(result).toHaveLength(0)
   })
 
   it("handles multiple retains", () => {
-    const ops: TextChangeOp[] = [{ retain: 3 }, { retain: 2 }, { insert: "X" }]
+    const ops: TextInstruction[] = [{ retain: 3 }, { retain: 2 }, { insert: "X" }]
     const result = planTextPatch(ops)
     expect(result).toHaveLength(1)
     expect(result[0]).toEqual({ kind: "insert", offset: 5, text: "X" })
   })
 
   it("handles consecutive inserts", () => {
-    const ops: TextChangeOp[] = [{ insert: "AB" }, { insert: "CD" }]
+    const ops: TextInstruction[] = [{ insert: "AB" }, { insert: "CD" }]
     const result = planTextPatch(ops)
     expect(result).toHaveLength(2)
     // First insert at 0, cursor advances to 2
@@ -147,7 +147,7 @@ describe("planTextPatch", () => {
 
   it("handles delete followed by insert at same position", () => {
     // "ABCDE" → delete 2 at offset 1, insert "XY" at offset 1
-    const ops: TextChangeOp[] = [
+    const ops: TextInstruction[] = [
       { retain: 1 },
       { delete: 2 },
       { insert: "XY" },
@@ -161,7 +161,7 @@ describe("planTextPatch", () => {
   })
 
   it("handles retain-only ops (no-op)", () => {
-    const ops: TextChangeOp[] = [{ retain: 10 }]
+    const ops: TextInstruction[] = [{ retain: 10 }]
     const result = planTextPatch(ops)
     expect(result).toHaveLength(0)
   })
@@ -450,7 +450,7 @@ describe("textRegion", () => {
 
       // Simulate text insert: "Hello" → "Hello World"
       setValue("Hello World")
-      emit({ type: "text", ops: [{ retain: 5 }, { insert: " World" }] })
+      emit({ type: "text", instructions: [{ retain: 5 }, { insert: " World" }] })
 
       expect(textNode.textContent).toBe("Hello World")
 
@@ -467,7 +467,7 @@ describe("textRegion", () => {
 
       // Simulate text delete: "Hello World" → "Hello"
       setValue("Hello")
-      emit({ type: "text", ops: [{ retain: 5 }, { delete: 6 }] })
+      emit({ type: "text", instructions: [{ retain: 5 }, { delete: 6 }] })
 
       expect(textNode.textContent).toBe("Hello")
 
@@ -517,17 +517,17 @@ describe("textRegion", () => {
 
       // First edit: "abc" → "abXc"
       setValue("abXc")
-      emit({ type: "text", ops: [{ retain: 2 }, { insert: "X" }] })
+      emit({ type: "text", instructions: [{ retain: 2 }, { insert: "X" }] })
       expect(textNode.textContent).toBe("abXc")
 
       // Second edit: "abXc" → "abXYc"
       setValue("abXYc")
-      emit({ type: "text", ops: [{ retain: 3 }, { insert: "Y" }] })
+      emit({ type: "text", instructions: [{ retain: 3 }, { insert: "Y" }] })
       expect(textNode.textContent).toBe("abXYc")
 
       // Third edit: "abXYc" → "aXYc" (delete 'b')
       setValue("aXYc")
-      emit({ type: "text", ops: [{ retain: 1 }, { delete: 1 }] })
+      emit({ type: "text", instructions: [{ retain: 1 }, { delete: 1 }] })
       expect(textNode.textContent).toBe("aXYc")
 
       scope.dispose()
@@ -556,11 +556,11 @@ describe("textRegion", () => {
       expect(textNode.textContent).toBe("")
 
       setValue("Hello")
-      emit({ type: "text", ops: [{ insert: "Hello" }] })
+      emit({ type: "text", instructions: [{ insert: "Hello" }] })
       expect(textNode.textContent).toBe("Hello")
 
       setValue("Hello World")
-      emit({ type: "text", ops: [{ retain: 5 }, { insert: " World" }] })
+      emit({ type: "text", instructions: [{ retain: 5 }, { insert: " World" }] })
       expect(textNode.textContent).toBe("Hello World")
 
       scope.dispose()
@@ -575,7 +575,7 @@ describe("textRegion", () => {
       expect(textNode.textContent).toBe("Hello World")
 
       setValue("Hello")
-      emit({ type: "text", ops: [{ retain: 5 }, { delete: 6 }] })
+      emit({ type: "text", instructions: [{ retain: 5 }, { delete: 6 }] })
       expect(textNode.textContent).toBe("Hello")
 
       scope.dispose()
@@ -595,7 +595,7 @@ describe("textRegion", () => {
 
       // Changes after dispose should not affect the text node
       setValue("changed")
-      emit({ type: "text", ops: [{ delete: 7 }, { insert: "changed" }] })
+      emit({ type: "text", instructions: [{ delete: 7 }, { insert: "changed" }] })
 
       // textNode should still show the last value before dispose
       expect(textNode.textContent).toBe("initial")
@@ -652,7 +652,7 @@ describe("inputTextRegion", () => {
       setValue("Hello World")
       emit({
         type: "text",
-        ops: [{ retain: 5 }, { insert: " World" }],
+        instructions: [{ retain: 5 }, { insert: " World" }],
       })
 
       expect(setRangeTextSpy).toHaveBeenCalled()
@@ -681,7 +681,7 @@ describe("inputTextRegion", () => {
       setValue("Hello")
       emit({
         type: "text",
-        ops: [{ retain: 5 }, { delete: 6 }],
+        instructions: [{ retain: 5 }, { delete: 6 }],
       })
 
       expect(setRangeTextSpy).toHaveBeenCalled()
@@ -741,15 +741,15 @@ describe("inputTextRegion", () => {
 
       // First edit
       setValue("abXc")
-      emit({ type: "text", ops: [{ retain: 2 }, { insert: "X" }] })
+      emit({ type: "text", instructions: [{ retain: 2 }, { insert: "X" }] })
 
       // Second edit
       setValue("abXYc")
-      emit({ type: "text", ops: [{ retain: 3 }, { insert: "Y" }] })
+      emit({ type: "text", instructions: [{ retain: 3 }, { insert: "Y" }] })
 
       // Third edit (delete)
       setValue("aXYc")
-      emit({ type: "text", ops: [{ retain: 1 }, { delete: 1 }] })
+      emit({ type: "text", instructions: [{ retain: 1 }, { delete: 1 }] })
 
       expect(setRangeTextSpy).toHaveBeenCalledTimes(3)
 
@@ -783,7 +783,7 @@ describe("inputTextRegion", () => {
         setValue("XXXHello")
         emit({
           type: "text",
-          ops: [{ insert: "XXX" }],
+          instructions: [{ insert: "XXX" }],
         } as TextChange, "import")
 
         // With preserve mode, cursor shifts right by the insert length
@@ -804,7 +804,7 @@ describe("inputTextRegion", () => {
         setValue("Hello World")
         emit({
           type: "text",
-          ops: [{ retain: 5 }, { insert: " World" }],
+          instructions: [{ retain: 5 }, { insert: " World" }],
         } as TextChange, "import")
 
         expect(input.value).toBe("Hello World")
@@ -824,7 +824,7 @@ describe("inputTextRegion", () => {
         setValue("World")
         emit({
           type: "text",
-          ops: [{ delete: 6 }],
+          instructions: [{ delete: 6 }],
         } as TextChange, "import")
 
         expect(input.value).toBe("World")
@@ -844,7 +844,7 @@ describe("inputTextRegion", () => {
         setValue("Hi")
         emit({
           type: "text",
-          ops: [{ insert: "Hi" }],
+          instructions: [{ insert: "Hi" }],
         } as TextChange, "local")
 
         expect(input.value).toBe("Hi")
@@ -864,7 +864,7 @@ describe("inputTextRegion", () => {
         setValue("Hi")
         emit({
           type: "text",
-          ops: [{ insert: "Hi" }],
+          instructions: [{ insert: "Hi" }],
         })
 
         expect(input.value).toBe("Hi")
@@ -896,7 +896,7 @@ describe("inputTextRegion", () => {
       expect(input.value).toBe("")
 
       setValue("Hello")
-      emit({ type: "text", ops: [{ insert: "Hello" }] })
+      emit({ type: "text", instructions: [{ insert: "Hello" }] })
 
       // The input value should be updated
       // (exact value depends on JSDOM's setRangeText behavior)

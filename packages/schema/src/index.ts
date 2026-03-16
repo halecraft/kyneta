@@ -45,13 +45,13 @@ export type {
   Change,
   BuiltinChange,
   TextChange,
-  TextChangeOp,
+  TextInstruction,
   SequenceChange,
-  SequenceChangeOp,
+  SequenceInstruction,
   MapChange,
   ReplaceChange,
   TreeChange,
-  TreeChangeOp,
+  TreeInstruction,
   IncrementChange,
 } from "./change.js"
 
@@ -81,12 +81,12 @@ export {
   staticChangefeed,
 } from "./changefeed.js"
 export type {
+  Op,
   Changeset,
   Changefeed,
   ComposedChangefeed,
   HasChangefeed,
   HasComposedChangefeed,
-  TreeEvent,
 } from "./changefeed.js"
 
 // Step — pure state transitions: (State, Change) → State
@@ -172,7 +172,7 @@ export {
   planCacheUpdate,
   applyCacheOps,
 } from "./interpreters/with-caching.js"
-export type { CacheOp } from "./interpreters/with-caching.js"
+export type { CacheInstruction } from "./interpreters/with-caching.js"
 
 // Readable types — type-level interpretation for readable refs
 // (The monolithic readableInterpreter is removed; use
@@ -192,7 +192,6 @@ export {
 export type {
   WritableContext,
   HasTransact,
-  PendingChange,
   ScalarRef,
   TextRef,
   CounterRef,

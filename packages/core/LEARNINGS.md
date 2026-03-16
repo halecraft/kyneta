@@ -52,10 +52,10 @@ region optimizations.
 pipeline, you need a compatibility mapping at the extraction point, not just at
 the definition point.
 
-### `SequenceChangeOp.insert` carries items, not a count
+### `SequenceInstruction.insert` carries items, not a count
 
 The old `ListDeltaOp.insert` was a `number` (count of inserted items). The new
-`SequenceChangeOp.insert` is `readonly T[]` (the actual items). The DOM
+`SequenceInstruction.insert` is `readonly T[]` (the actual items). The DOM
 runtime doesn't use these items — it reads `.insert.length` as the count and
 looks up refs from the live ref tree via `listRef.at(index)`. This is the
 "two-layer model":

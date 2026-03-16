@@ -3,7 +3,7 @@ import {
   planCacheUpdate,
   applyCacheOps,
 } from "../interpreters/with-caching.js"
-import type { CacheOp } from "../interpreters/with-caching.js"
+import type { CacheInstruction } from "../interpreters/with-caching.js"
 import {
   sequenceChange,
   mapChange,

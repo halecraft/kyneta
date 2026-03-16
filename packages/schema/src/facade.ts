@@ -2,11 +2,11 @@
 //
 // This module provides the three legs of the change protocol:
 //
-// - `change(ref, fn)` → `PendingChange[]`
+// - `change(ref, fn)` → `Op[]`
 //   Imperative: run a mutation function inside a transaction, return
 //   the captured changes without re-returning the ref.
 //
-// - `applyChanges(ref, ops, options?)` → `PendingChange[]`
+// - `applyChanges(ref, ops, options?)` → `Op[]`
 //   Declarative: apply a list of changes via `executeBatch`, triggering
 //   the full prepare pipeline (cache invalidation + store mutation +
 //   notification accumulation) and flush (batched Changeset delivery).
@@ -14,7 +14,7 @@
 // - `subscribe(ref, cb)` → `() => void`
 //   Observe: subscribe to changes at a ref and all descendants.
 //   Only works on composite refs (products, sequences, maps).
-//   Callback receives `Changeset<TreeEvent>`.
+//   Callback receives `Changeset<Op>`.
 //
 // - `subscribeNode(ref, cb)` → `() => void`
 //   Observe: subscribe to changes at a ref's own path only. Returns an
@@ -37,9 +37,9 @@
 //
 // See .plans/apply-changes.md §Phase 5, .plans/subscribe-facade.md.
 
-import type { PendingChange, WritableContext } from "./interpreters/writable.js"
+import type { WritableContext } from "./interpreters/writable.js"
 import { TRANSACT, hasTransact, executeBatch } from "./interpreters/writable.js"
-import type { Changeset, TreeEvent } from "./changefeed.js"
+import type { Op, Changeset } from "./changefeed.js"
 import { CHANGEFEED, hasChangefeed, hasComposedChangefeed } from "./changefeed.js"
 
 // ---------------------------------------------------------------------------
@@ -63,12 +63,12 @@ export interface ApplyChangesOptions {
 }
 
 // ---------------------------------------------------------------------------
-// change — imperative mutation → PendingChange[]
+// change — imperative mutation → Op[]
 // ---------------------------------------------------------------------------
 
 /**
  * Run a mutation function inside a transaction and return the captured
- * changes as `PendingChange[]`.
+ * changes as `Op[]`.
  *
  * This is the library-level version of the example facade's `change`.
  * The difference: the example returns the doc (for chaining); this
@@ -79,7 +79,7 @@ export interface ApplyChangesOptions {
  *   d.title.insert(0, "Hello")
  *   d.settings.darkMode.set(true)
  * })
- * // ops is PendingChange[] — can be sent to another doc via applyChanges
+ * // ops is Op[] — can be sent to another doc via applyChanges
  * ```
  *
  * @throws If `ref` does not have a `[TRANSACT]` symbol.
@@ -88,7 +88,7 @@ export interface ApplyChangesOptions {
 export function change<D extends object>(
   ref: D,
   fn: (draft: D) => void,
-): PendingChange[] {
+): Op[] {
   if (!hasTransact(ref)) {
     throw new Error(
       "change() requires a ref with [TRANSACT]. " +
@@ -107,7 +107,7 @@ export function change<D extends object>(
 }
 
 // ---------------------------------------------------------------------------
-// applyChanges — declarative PendingChange[] → store + notify
+// applyChanges — declarative Op[] → store + notify
 // ---------------------------------------------------------------------------
 
 /**
@@ -145,9 +145,9 @@ export function change<D extends object>(
  */
 export function applyChanges(
   ref: object,
-  ops: ReadonlyArray<PendingChange>,
+  ops: ReadonlyArray<Op>,
   options?: ApplyChangesOptions,
-): ReadonlyArray<PendingChange> {
+): ReadonlyArray<Op> {
   if (!hasTransact(ref)) {
     throw new Error(
       "applyChanges() requires a ref with [TRANSACT]. " +
@@ -172,8 +172,8 @@ export function applyChanges(
  *
  * This is the primary observation function — the thing you reach for
  * first. It observes all changes anywhere in the subtree, with each
- * `TreeEvent` carrying a relative `path` from the subscription point
- * to where the change occurred.
+ * `Op` carrying a relative `path` from the subscription point to
+ * where the change occurred.
  *
  * Only works on composite refs (products, sequences, maps) — leaf
  * refs do not support tree-level observation. For leaf observation,
@@ -192,7 +192,7 @@ export function applyChanges(
  *
  * @param ref - A composite ref with a `[CHANGEFEED]` symbol that
  *   includes `subscribeTree` (from `withChangefeed`).
- * @param callback - Called with a `Changeset<TreeEvent>` on each notification.
+ * @param callback - Called with a `Changeset<Op>` on each notification.
  * @returns An unsubscribe function.
  *
  * @throws If `ref` does not have a `[CHANGEFEED]` symbol.
@@ -200,7 +200,7 @@ export function applyChanges(
  */
 export function subscribe(
   ref: unknown,
-  callback: (changeset: Changeset<TreeEvent>) => void,
+  callback: (changeset: Changeset<Op>) => void,
 ): () => void {
   if (!hasChangefeed(ref)) {
     throw new Error(

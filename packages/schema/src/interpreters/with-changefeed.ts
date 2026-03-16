@@ -48,9 +48,8 @@ import type {
   Changefeed,
   ComposedChangefeed,
   HasChangefeed,
-  TreeEvent,
+  Op,
 } from "../changefeed.js"
-import type { PendingChange } from "./writable.js"
 import { readByPath, pathKey } from "../store.js"
 import { isPropertyHost } from "../guards.js"
 import { CALL } from "./bottom.js"
@@ -111,7 +110,7 @@ export interface NotificationPlan {
  * @returns A `NotificationPlan` with changes grouped by pathKey.
  */
 export function planNotifications(
-  pending: readonly PendingChange[],
+  pending: readonly Op[],
 ): NotificationPlan {
   const grouped = new Map<string, ChangeBase[]>()
   for (const { path, change } of pending) {
@@ -159,14 +158,14 @@ export function deliverNotifications(
  *
  * - `listeners`: path-keyed map of subscriber callbacks. Each changefeed
  *   factory registers its own listener here via `listenAtPath`.
- * - `pending`: accumulated `{path, change}` pairs from `prepare` calls,
+ * - `pending`: accumulated `Op` entries from `prepare` calls,
  *   drained by `flush`.
  * - `originalPrepare` / `originalFlush`: the unwrapped methods, called
  *   before/after the changefeed layer's logic.
  */
 interface ContextWiringState {
   readonly listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>
-  readonly pending: PendingChange[]
+  readonly pending: Op[]
   readonly originalPrepare: (path: Path, change: ChangeBase) => void
   readonly originalFlush: (origin?: string) => void
 }
@@ -231,7 +230,7 @@ function ensurePrepareWiring(
   if (state) return state.listeners
 
   const listeners = new Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>()
-  const pending: PendingChange[] = []
+  const pending: Op[] = []
   const originalPrepare = ctx.prepare
   const originalFlush = ctx.flush
 
@@ -342,8 +341,8 @@ function createProductChangefeed(
 ): ComposedChangefeed<unknown, ChangeBase> {
   // Per-node shallow subscribers (node-level) — receive Changeset
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
-  // Per-node tree subscribers — receive Changeset<TreeEvent>
-  const treeSubs = new Set<(changeset: Changeset<TreeEvent>) => void>()
+  // Per-node tree subscribers — receive Changeset<Op>
+  const treeSubs = new Set<(changeset: Changeset<Op>) => void>()
 
   // Register in the listener map for own-path changes.
   // Receives a Changeset (possibly with multiple changes) from flush.
@@ -353,7 +352,7 @@ function createProductChangefeed(
     }
     // Tree subscribers also see own-path changes with path []
     if (treeSubs.size > 0) {
-      const treeChangeset: Changeset<TreeEvent> = {
+      const treeChangeset: Changeset<Op> = {
         changes: changeset.changes.map(change => ({ path: [], change })),
         origin: changeset.origin,
       }
@@ -376,9 +375,9 @@ function createProductChangefeed(
 
       if (hasComposedChangefeed(child)) {
         // Composite child — subscribe to its tree, re-prefix events
-        child[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
+        child[CHANGEFEED].subscribeTree((changeset: Changeset<Op>) => {
           if (treeSubs.size === 0) return
-          const propagated: Changeset<TreeEvent> = {
+          const propagated: Changeset<Op> = {
             changes: changeset.changes.map(event => ({
               path: [...prefix, ...event.path],
               change: event.change,
@@ -391,7 +390,7 @@ function createProductChangefeed(
         // Leaf child — subscribe to its shallow stream
         child[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
           if (treeSubs.size === 0) return
-          const propagated: Changeset<TreeEvent> = {
+          const propagated: Changeset<Op> = {
             changes: changeset.changes.map(change => ({
               path: prefix,
               change,
@@ -412,7 +411,7 @@ function createProductChangefeed(
       shallowSubs.add(callback)
       return () => { shallowSubs.delete(callback) }
     },
-    subscribeTree(callback: (changeset: Changeset<TreeEvent>) => void): () => void {
+    subscribeTree(callback: (changeset: Changeset<Op>) => void): () => void {
       wireChildren()
       treeSubs.add(callback)
       return () => { treeSubs.delete(callback) }
@@ -439,7 +438,7 @@ function createSequenceChangefeed(
   getLength: () => number,
 ): ComposedChangefeed<unknown, ChangeBase> {
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
-  const treeSubs = new Set<(changeset: Changeset<TreeEvent>) => void>()
+  const treeSubs = new Set<(changeset: Changeset<Op>) => void>()
 
   // Per-item unsubscribe functions, keyed by index
   const itemUnsubs = new Map<number, () => void>()
@@ -459,9 +458,9 @@ function createSequenceChangefeed(
 
     let unsub: () => void
     if (hasComposedChangefeed(child)) {
-      unsub = child[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
+      unsub = child[CHANGEFEED].subscribeTree((changeset: Changeset<Op>) => {
         if (treeSubs.size === 0) return
-        const propagated: Changeset<TreeEvent> = {
+        const propagated: Changeset<Op> = {
           changes: changeset.changes.map(event => ({
             path: [...prefix, ...event.path],
             change: event.change,
@@ -473,7 +472,7 @@ function createSequenceChangefeed(
     } else {
       unsub = child[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
         if (treeSubs.size === 0) return
-        const propagated: Changeset<TreeEvent> = {
+        const propagated: Changeset<Op> = {
           changes: changeset.changes.map(change => ({
             path: prefix,
             change,
@@ -527,7 +526,7 @@ function createSequenceChangefeed(
 
     // Tree subscribers see own-path structural changes with path []
     if (treeSubs.size > 0) {
-      const treeChangeset: Changeset<TreeEvent> = {
+      const treeChangeset: Changeset<Op> = {
         changes: changeset.changes.map(change => ({ path: [], change })),
         origin: changeset.origin,
       }
@@ -548,7 +547,7 @@ function createSequenceChangefeed(
       shallowSubs.add(callback)
       return () => { shallowSubs.delete(callback) }
     },
-    subscribeTree(callback: (changeset: Changeset<TreeEvent>) => void): () => void {
+    subscribeTree(callback: (changeset: Changeset<Op>) => void): () => void {
       if (!initialWiringDone) {
         initialWiringDone = true
         subscribeToAllItems()
@@ -581,7 +580,7 @@ function createMapChangefeed(
   getKeys: () => string[],
 ): ComposedChangefeed<unknown, ChangeBase> {
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
-  const treeSubs = new Set<(changeset: Changeset<TreeEvent>) => void>()
+  const treeSubs = new Set<(changeset: Changeset<Op>) => void>()
 
   const entryUnsubs = new Map<string, () => void>()
 
@@ -599,9 +598,9 @@ function createMapChangefeed(
 
     let unsub: () => void
     if (hasComposedChangefeed(child)) {
-      unsub = child[CHANGEFEED].subscribeTree((changeset: Changeset<TreeEvent>) => {
+      unsub = child[CHANGEFEED].subscribeTree((changeset: Changeset<Op>) => {
         if (treeSubs.size === 0) return
-        const propagated: Changeset<TreeEvent> = {
+        const propagated: Changeset<Op> = {
           changes: changeset.changes.map(event => ({
             path: [...prefix, ...event.path],
             change: event.change,
@@ -613,7 +612,7 @@ function createMapChangefeed(
     } else {
       unsub = child[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
         if (treeSubs.size === 0) return
-        const propagated: Changeset<TreeEvent> = {
+        const propagated: Changeset<Op> = {
           changes: changeset.changes.map(change => ({
             path: prefix,
             change,
@@ -648,7 +647,7 @@ function createMapChangefeed(
     }
 
     if (treeSubs.size > 0) {
-      const treeChangeset: Changeset<TreeEvent> = {
+      const treeChangeset: Changeset<Op> = {
         changes: changeset.changes.map(change => ({ path: [], change })),
         origin: changeset.origin,
       }
@@ -668,7 +667,7 @@ function createMapChangefeed(
       shallowSubs.add(callback)
       return () => { shallowSubs.delete(callback) }
     },
-    subscribeTree(callback: (changeset: Changeset<TreeEvent>) => void): () => void {
+    subscribeTree(callback: (changeset: Changeset<Op>) => void): () => void {
       if (!initialWiringDone) {
         initialWiringDone = true
         subscribeToAllEntries()

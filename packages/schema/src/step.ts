@@ -10,9 +10,9 @@
 import type {
   ChangeBase,
   TextChange,
-  TextChangeOp,
+  TextInstruction,
   SequenceChange,
-  SequenceChangeOp,
+  SequenceInstruction,
   MapChange,
   ReplaceChange,
   IncrementChange,
@@ -37,7 +37,7 @@ export function stepText(state: string, action: TextChange): string {
   let cursor = 0
   let result = ""
 
-  for (const op of action.ops) {
+  for (const op of action.instructions) {
     if ("retain" in op) {
       result += state.slice(cursor, cursor + op.retain)
       cursor += op.retain
@@ -79,7 +79,7 @@ export function stepSequence<T>(
   let cursor = 0
   const result: T[] = []
 
-  for (const op of action.ops) {
+  for (const op of action.instructions) {
     if ("retain" in op) {
       for (let i = 0; i < (op as { retain: number }).retain; i++) {
         if (cursor < state.length) {
@@ -134,7 +134,7 @@ export function stepMap<T extends Record<string, unknown>>(
 
   if (action.set) {
     for (const [key, value] of Object.entries(action.set)) {
-      ;(result as Record<string, unknown>)[key] = value
+      (result as Record<string, unknown>)[key] = value
     }
   }
 
@@ -208,10 +208,7 @@ export function step<S>(state: S, action: ChangeBase): S {
       return stepText(state as string, action as TextChange) as S
 
     case "sequence":
-      return stepSequence(
-        state as unknown[],
-        action as SequenceChange,
-      ) as S
+      return stepSequence(state as unknown[], action as SequenceChange) as S
 
     case "map":
       return stepMap(
@@ -223,10 +220,7 @@ export function step<S>(state: S, action: ChangeBase): S {
       return stepReplace(state, action as ReplaceChange<S>)
 
     case "increment":
-      return stepIncrement(
-        state as number,
-        action as IncrementChange,
-      ) as S
+      return stepIncrement(state as number, action as IncrementChange) as S
 
     default:
       throw new Error(

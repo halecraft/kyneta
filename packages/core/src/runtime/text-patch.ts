@@ -22,7 +22,7 @@ import {
   isTextChange,
   type ChangeBase,
   type HasChangefeed,
-  type TextChangeOp,
+  type TextInstruction,
 } from "@kyneta/schema"
 import type { Scope } from "./scope.js"
 import { read, subscribe } from "./subscribe.js"
@@ -72,7 +72,7 @@ export type TextPatchOp =
  * // → [{ kind: "delete", offset: 2, count: 3 }]
  * ```
  */
-export function planTextPatch(ops: readonly TextChangeOp[]): TextPatchOp[] {
+export function planTextPatch(ops: readonly TextInstruction[]): TextPatchOp[] {
   const result: TextPatchOp[] = []
   let cursor = 0
 
@@ -115,7 +115,7 @@ export function planTextPatch(ops: readonly TextChangeOp[]): TextPatchOp[] {
  * // text.textContent === "Hello World"
  * ```
  */
-export function patchText(textNode: Text, ops: readonly TextChangeOp[]): void {
+export function patchText(textNode: Text, ops: readonly TextInstruction[]): void {
   const patchOps = planTextPatch(ops)
 
   for (const op of patchOps) {
@@ -157,7 +157,7 @@ export function patchText(textNode: Text, ops: readonly TextChangeOp[]): void {
  */
 export function patchInputValue(
   input: HTMLInputElement | HTMLTextAreaElement,
-  ops: readonly TextChangeOp[],
+  ops: readonly TextInstruction[],
   selectMode: "preserve" | "end" = "preserve",
 ): void {
   const patchOps = planTextPatch(ops)
@@ -231,7 +231,7 @@ export function inputTextRegion(
         // Surgical update — O(k) where k is the edit size
         patchInputValue(
           input,
-          change.ops,
+          change.instructions,
           mode,
         )
       } else {
@@ -282,7 +282,7 @@ export function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
     (change: ChangeBase) => {
       if (isTextChange(change)) {
         // Surgical update — O(k) where k is the edit size
-        patchText(textNode, change.ops)
+        patchText(textNode, change.instructions)
       } else {
         // Fallback for non-text changes (e.g., "replace") — O(n) full replacement
         textNode.textContent = readValue()
