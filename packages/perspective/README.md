@@ -1,4 +1,4 @@
-# Prism
+# Perspective
 
 **Convergent Constraint Systems — where constraints are truth and state is derived**
 
@@ -12,7 +12,7 @@ import {
   produceRoot, produceMapChild, produceSeqChild,
   exportDelta, importDelta, createStore, createAgent,
   getVersionVector,
-} from 'prism';
+} from '@kyneta/perspective';
 
 // 1. Bootstrap a reality — emits admin grant + default solver rules
 const { store, agent: alice, config } = createReality({ creator: 'alice' });

@@ -1,8 +1,8 @@
-# Prism Technical Documentation
+# Perspective Technical Documentation
 
 ## Overview
 
-Prism implements **Convergent Constraint Systems (CCS)** — a framework for collaborative state where constraints are the source of truth and state is derived through deterministic solving. The implementation follows the [Unified CCS Engine Specification](./theory/unified-engine.md).
+Perspective implements **Convergent Constraint Systems (CCS)** — a framework for collaborative state where constraints are the source of truth and state is derived through deterministic solving. The implementation follows the [Unified CCS Engine Specification](./theory/unified-engine.md).
 
 ## Engine Architecture
 

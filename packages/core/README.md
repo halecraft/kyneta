@@ -1,4 +1,4 @@
-# @loro-extended/kinetic
+# @kyneta/core
 
 > 🧪 **Prototype** — This package is an experimental exploration of compiled delta-driven UI. Not ready for production use.
 
@@ -55,7 +55,7 @@ The compiler detects that `doc.title` is a `TextRef` (reactive + snapshotable), 
 Kinetic supports server-side rendering with optional pretty-printing for development:
 
 ```typescript
-import { renderToDocument } from '@loro-extended/kinetic/server'
+import { renderToDocument } from '@kyneta/core/server'
 
 // Load compiled app (Vite plugin auto-compiles to HTML target for SSR)
 const { createApp } = await vite.ssrLoadModule('/src/app.ts')
@@ -90,7 +90,7 @@ const prettyHtml = renderToDocument(renderApp, doc, {
 Kinetic supports user-defined components via the `ComponentFactory` type. The compiler uses TypeScript's type system to detect component functions — no special syntax or naming conventions required.
 
 ```typescript
-import type { ComponentFactory } from "@loro-extended/kinetic"
+import type { ComponentFactory } from "@kyneta/core"
 
 // Define a component
 const Card: ComponentFactory<{ title: string }> = (props) => {
@@ -244,10 +244,10 @@ This means you cannot currently run Kinetic code without compilation.
 
 ```bash
 # Run all kinetic tests
-pnpm turbo run verify --filter=@loro-extended/kinetic -- logic
+pnpm turbo run verify --filter=@kyneta/core -- logic
 
 # Run specific test file
-pnpm turbo run verify --filter=@loro-extended/kinetic -- logic -- -t 'list region'
+pnpm turbo run verify --filter=@kyneta/core -- logic -- -t 'list region'
 ```
 
 ## Migration Notes
@@ -286,12 +286,6 @@ See `.plans/kinetic-delta-driven-ui.md` for the complete plan.
 | **Kinetic**        | ~*         | ✅    | ✅          | ✅       | ✅             | ✅               |
 
 \* Source is valid TypeScript (LSP works), but compilation required for execution
-
-## Related Packages
-
-- [@loro-extended/change](../change) - Schema-driven typed wrapper for Loro CRDTs
-- [@loro-extended/react](../react) - React integration (component re-render model)
-- [@loro-extended/repo](../repo) - Document synchronization
 
 ## License
 
