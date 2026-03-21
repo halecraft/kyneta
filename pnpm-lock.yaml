@@ -39,8 +39,30 @@ importers:
         specifier: ^8
         version: 8.19.0
 
+  packages/compiler:
+    dependencies:
+      '@kyneta/schema':
+        specifier: workspace:^
+        version: link:../schema
+      ts-morph:
+        specifier: ^25.0.0
+        version: 25.0.1
+    devDependencies:
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.17
+        version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
+
   packages/core:
     dependencies:
+      '@kyneta/compiler':
+        specifier: workspace:^
+        version: link:../compiler
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../schema

@@ -1,0 +1,36 @@
+{
+	"name": "@kyneta/compiler",
+	"version": "0.0.1",
+	"description": "Incremental view maintenance compiler for structured deltas",
+	"author": "Duane Johnson",
+	"license": "MIT",
+	"type": "module",
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"src"
+	],
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		},
+		"./src": "./src/index.ts",
+		"./src/*": "./src/*"
+	},
+	"scripts": {
+		"build": "tsup",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@kyneta/schema": "workspace:^",
+		"ts-morph": "^25.0.0"
+	},
+	"devDependencies": {
+		"tsup": "^8.5.0",
+		"typescript": "^5.9.2",
+		"vitest": "^4.0.17"
+	}
+}
