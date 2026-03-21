@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest"
 import {
   type AttributeNode,
   computeHasReactiveItems,
+  computeSlotKind,
+  createBinding,
   createBuilder,
   createConditional,
   createConditionalBranch,
@@ -25,7 +27,8 @@ import {
   createLabeledBlock,
   type Dependency,
   type DeltaKind,
-
+  isBindingNode,
+  isDOMProducing,
   isInputTextRegionAttribute,
   isTextRegionContent,
 } from "./ir.js"
@@ -754,5 +757,182 @@ describe("isInputTextRegionAttribute", () => {
       ),
     }
     expect(isInputTextRegionAttribute(attr)).toBe(false)
+  })
+})
+
+// =============================================================================
+// BindingNode Tests
+// =============================================================================
+
+describe("createBinding", () => {
+  it("produces correct structure", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+
+    expect(binding.kind).toBe("binding")
+    expect(binding.name).toBe("myVar")
+    expect(binding.value).toBe(value)
+    expect(binding.value.bindingTime).toBe("reactive")
+    expect(binding.value.dependencies).toHaveLength(1)
+    expect(binding.value.dependencies[0].source).toBe("x")
+  })
+
+  it("works with render-time initializer", () => {
+    const value = createContent("42", "render", [], span())
+    const binding = createBinding("count", value, span())
+
+    expect(binding.kind).toBe("binding")
+    expect(binding.name).toBe("count")
+    expect(binding.value.bindingTime).toBe("render")
+    expect(binding.value.dependencies).toHaveLength(0)
+  })
+})
+
+describe("isBindingNode", () => {
+  it("returns true for binding nodes", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    expect(isBindingNode(binding)).toBe(true)
+  })
+
+  it("returns false for other node kinds", () => {
+    expect(isBindingNode(createStatement("const x = 1", span()))).toBe(false)
+    expect(isBindingNode(createLiteral("hello", span()))).toBe(false)
+    expect(isBindingNode(createLabeledBlock("client", [], span()))).toBe(false)
+  })
+})
+
+describe("isDOMProducing", () => {
+  it("returns false for statement", () => {
+    expect(isDOMProducing(createStatement("console.log(1)", span()))).toBe(false)
+  })
+
+  it("returns false for binding", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    expect(isDOMProducing(binding)).toBe(false)
+  })
+
+  it("returns false for labeled-block", () => {
+    expect(isDOMProducing(createLabeledBlock("client", [], span()))).toBe(false)
+  })
+
+  it("returns true for element", () => {
+    const el = createElement("div", [], [], [], [], span())
+    expect(isDOMProducing(el)).toBe(true)
+  })
+
+  it("returns true for content", () => {
+    expect(isDOMProducing(createLiteral("hello", span()))).toBe(true)
+    expect(isDOMProducing(createContent("x", "render", [], span()))).toBe(true)
+    expect(isDOMProducing(createContent("x.get()", "reactive", [dep("x")], span()))).toBe(true)
+  })
+
+  it("returns true for loop", () => {
+    const loop = createLoop("items", "reactive", "item", null, [], [dep("items")], span())
+    expect(isDOMProducing(loop)).toBe(true)
+  })
+
+  it("returns true for conditional", () => {
+    const branch = createConditionalBranch(
+      createContent("true", "render", [], span()),
+      [createLiteral("yes", span())],
+      span(),
+    )
+    const cond = createConditional([branch], null, span())
+    expect(isDOMProducing(cond)).toBe(true)
+  })
+})
+
+describe("computeSlotKind with bindings", () => {
+  it("ignores bindings — single element + binding = single", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    const el = createElement("p", [], [], [], [], span())
+
+    expect(computeSlotKind([binding, el])).toBe("single")
+  })
+
+  it("ignores bindings — binding alone = range (no DOM nodes)", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+
+    expect(computeSlotKind([binding])).toBe("range")
+  })
+
+  it("ignores labeled-blocks — single element + labeled-block = single", () => {
+    const block = createLabeledBlock("client", [createStatement("console.log(1)", span())], span())
+    const el = createElement("p", [], [], [], [], span())
+
+    expect(computeSlotKind([block, el])).toBe("single")
+  })
+
+  it("ignores mix of non-DOM nodes — statement + binding + element = single", () => {
+    const stmt = createStatement("console.log(1)", span())
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    const el = createElement("p", [], [], [], [], span())
+
+    expect(computeSlotKind([stmt, binding, el])).toBe("single")
+  })
+})
+
+describe("computeHasReactiveItems with bindings", () => {
+  it("ignores bindings — binding with reactive value does not make body reactive", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+
+    expect(computeHasReactiveItems([binding])).toBe(false)
+  })
+
+  it("detects reactive content alongside bindings", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    const reactiveContent = createContent("y.get()", "reactive", [dep("y")], span())
+
+    expect(computeHasReactiveItems([binding, reactiveContent])).toBe(true)
+  })
+})
+
+describe("createBuilder - binding dependency collection", () => {
+  it("collects dependencies from binding values", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    const builder = createBuilder("div", [], [], [binding], span())
+
+    expect(builder.isReactive).toBe(true)
+    expect(hasDep(builder.allDependencies, "x")).toBe(true)
+  })
+
+  it("collects dependencies from multiple bindings", () => {
+    const value1 = createContent("a.get()", "reactive", [dep("a")], span())
+    const binding1 = createBinding("x", value1, span())
+    const value2 = createContent("b.get()", "reactive", [dep("b")], span())
+    const binding2 = createBinding("y", value2, span())
+    const builder = createBuilder("div", [], [], [binding1, binding2], span())
+
+    expect(builder.isReactive).toBe(true)
+    expect(hasDep(builder.allDependencies, "a")).toBe(true)
+    expect(hasDep(builder.allDependencies, "b")).toBe(true)
+  })
+
+  it("does not collect from render-time binding values", () => {
+    const value = createContent("42", "render", [], span())
+    const binding = createBinding("count", value, span())
+    const builder = createBuilder("div", [], [], [binding], span())
+
+    expect(builder.isReactive).toBe(false)
+    expect(builder.allDependencies).toHaveLength(0)
+  })
+
+  it("deduplicates binding deps with other deps", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    const content = createContent("x.get() + 1", "reactive", [dep("x")], span())
+    const builder = createBuilder("div", [], [], [binding, content], span())
+
+    expect(builder.isReactive).toBe(true)
+    const xDeps = builder.allDependencies.filter(d => d.source === "x")
+    expect(xDeps).toHaveLength(1)
   })
 })

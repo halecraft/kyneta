@@ -29,6 +29,7 @@ import {
   extractTemplate,
   generateTemplateDeclaration,
   generateWalkCode,
+  isDOMProducing,
   isInputTextRegionAttribute,
   isTextRegionContent,
   planWalk,
@@ -526,6 +527,13 @@ function generateChild(
 
 
 
+    case "binding": {
+      // Emit as a const declaration — the binding's value.source is the
+      // analyzed expression (may contain synthesized read() calls)
+      lines.push(`${ind}const ${node.name} = ${node.value.source}`)
+      break
+    }
+
     case "statement": {
       // Emit statement source verbatim
       // Statements don't produce DOM nodes, they just execute
@@ -574,11 +582,11 @@ function generateBodyWithReturn(
   const canOptimize = checkCanOptimizeDirectReturn(body)
 
   if (canOptimize) {
-    const { leadingStatements, domNode } = canOptimize
+    const { leadingNonDOM, domNode } = canOptimize
 
-    // Emit leading statements first
-    for (const stmt of leadingStatements) {
-      lines.push(`${ind}${stmt.source}`)
+    // Emit leading non-DOM nodes (statements, bindings) via generateChild
+    for (const node of leadingNonDOM) {
+      lines.push(...generateChild(node, "", state).code)
     }
 
     if (domNode.kind === "element") {
@@ -630,7 +638,7 @@ function generateBodyWithReturn(
  * 2. All statements come before the DOM node (no interleaving)
  */
 function checkCanOptimizeDirectReturn(body: ChildNode[]): {
-  leadingStatements: StatementNode[]
+  leadingNonDOM: ChildNode[]
   domNode: ElementNode | ContentNode
 } | null {
   // Use computeSlotKind to determine if body produces single node
@@ -639,16 +647,16 @@ function checkCanOptimizeDirectReturn(body: ChildNode[]): {
   }
 
   // Find the single DOM-producing node and verify no interleaving
-  const leadingStatements: StatementNode[] = []
+  const leadingNonDOM: ChildNode[] = []
   let domNode: ChildNode | null = null
 
   for (const child of body) {
-    if (child.kind === "statement") {
+    if (!isDOMProducing(child)) {
       if (domNode) {
-        // Statement after DOM node - interleaving detected
+        // Non-DOM node after DOM node - interleaving detected
         return null
       }
-      leadingStatements.push(child)
+      leadingNonDOM.push(child)
     } else {
       // This is the DOM node (computeSlotKind guarantees only one)
       domNode = child
@@ -657,7 +665,7 @@ function checkCanOptimizeDirectReturn(body: ChildNode[]): {
 
   // computeSlotKind returned "single" so domNode must exist
   return {
-    leadingStatements,
+    leadingNonDOM,
     domNode: domNode as ElementNode | ContentNode,
   }
 }
@@ -1086,8 +1094,8 @@ function generateDOMWithCloning(
   // hole expressions (e.g., `const x = 1` before `p(String(x))`),
   // so they must appear before the hole setup code.
   for (const child of node.children) {
-    if (child.kind === "statement") {
-      lines.push(`${ind}${child.source}`)
+    if (!isDOMProducing(child)) {
+      lines.push(...generateChild(child, "", state).code)
     }
   }
 

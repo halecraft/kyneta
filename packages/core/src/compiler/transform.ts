@@ -181,6 +181,11 @@ export function collectRequiredImports(ir: BuilderNode[]): {
         }
         // Recurse into element children
         collectFromChildren(child.children)
+      } else if (child.kind === "binding") {
+        // Check if the binding's value needs runtime imports
+        if (child.value.directReadSource) {
+          runtime.add("read")
+        }
       } else if (child.kind === "content") {
         if (isTextRegionContent(child)) {
           runtime.add("textRegion")

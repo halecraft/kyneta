@@ -50,6 +50,7 @@ import type {
   SourceSpan,
 } from "./ir.js"
 import {
+  createBinding,
   createBuilder,
   createConditional,
   createConditionalBranch,
@@ -61,6 +62,7 @@ import {
   createSpan,
   createStatement,
 } from "./ir.js"
+import { createBindingScope, type BindingScope } from "./binding-scope.js"
 
 // =============================================================================
 // Constants
@@ -284,7 +286,18 @@ export { isChangefeedType }
  * This uses the TypeScript type checker to determine if any part of
  * the expression has a Loro ref type.
  */
-export function expressionIsReactive(expr: Expression): boolean {
+export function expressionIsReactive(expr: Expression, scope?: BindingScope): boolean {
+  // For identifiers, first check the BindingScope (if provided)
+  // This must come before the type-system check because the type of a
+  // binding like `const nameMatch = reactive.includes(filter())` is
+  // `boolean` — not a Changefeed — so the type check would miss it.
+  if (expr.getKind() === SyntaxKind.Identifier && scope) {
+    const binding = scope.lookup(expr.getText())
+    if (binding && binding.bindingTime === "reactive") {
+      return true
+    }
+  }
+
   // Get the type of the expression
   const type = expr.getType()
 
@@ -301,7 +314,7 @@ export function expressionIsReactive(expr: Expression): boolean {
       return true
     }
     // Recursively check the object expression
-    return expressionIsReactive(propAccess.getExpression())
+    return expressionIsReactive(propAccess.getExpression(), scope)
   }
 
   // For call expressions, check the callee and arguments
@@ -329,7 +342,7 @@ export function expressionIsReactive(expr: Expression): boolean {
       // number (not reactive), but x itself is a callable ref
       // which IS reactive. Without this, chained expressions like
       // x().toString() are misclassified as render-time.
-      if (expressionIsReactive(propAccess.getExpression())) {
+      if (expressionIsReactive(propAccess.getExpression(), scope)) {
         return true
       }
     }
@@ -337,7 +350,7 @@ export function expressionIsReactive(expr: Expression): boolean {
     // Check arguments
     const callArgs = call.getArguments() as Expression[]
     for (const arg of callArgs) {
-      if (expressionIsReactive(arg)) {
+      if (expressionIsReactive(arg, scope)) {
         return true
       }
     }
@@ -349,7 +362,7 @@ export function expressionIsReactive(expr: Expression): boolean {
     const spans = templateExpr.getTemplateSpans()
     for (const span of spans) {
       const spanExpr = span.getExpression()
-      if (expressionIsReactive(spanExpr)) {
+      if (expressionIsReactive(spanExpr, scope)) {
         return true
       }
     }
@@ -359,7 +372,7 @@ export function expressionIsReactive(expr: Expression): boolean {
   if (expr.getKind() === SyntaxKind.BinaryExpression) {
     const children = expr.getChildren()
     for (const child of children) {
-      if (Node.isExpression(child) && expressionIsReactive(child)) {
+      if (Node.isExpression(child) && expressionIsReactive(child, scope)) {
         return true
       }
     }
@@ -387,7 +400,7 @@ export function expressionIsReactive(expr: Expression): boolean {
  *
  * Returns an array of dependencies, each with source text and delta kind.
  */
-export function extractDependencies(expr: Expression): Dependency[] {
+export function extractDependencies(expr: Expression, scope?: BindingScope): Dependency[] {
   // Use a Map to deduplicate by source, keeping the first occurrence
   const depsMap = new Map<string, Dependency>()
 
@@ -401,6 +414,33 @@ export function extractDependencies(expr: Expression): Dependency[] {
   }
 
   function visit(node: Node): void {
+    // Identifier that resolves to a binding — use the binding's dependencies.
+    // Must come before other checks so that a bound name like `nameMatch`
+    // contributes its transitive deps rather than being analyzed as a bare
+    // identifier with a non-reactive type.
+    //
+    // Exception: if the binding has zero dependencies but the identifier's
+    // ts-morph type IS a Changefeed, fall through to the normal type check.
+    // This handles `const x = state(0)` where the initializer creates a new
+    // reactive ref (no upstream deps) but `x` itself is the dependency that
+    // downstream expressions like `x().toString()` need to subscribe to.
+    if (node.getKind() === SyntaxKind.Identifier && scope) {
+      const binding = scope.lookup(node.getText())
+      if (binding && binding.dependencies.length > 0) {
+        for (const dep of binding.dependencies) {
+          // Insert directly into depsMap — binding deps are already classified
+          // Dependency objects with source and deltaKind, so we bypass addDep()
+          // which requires a ts-morph Type for getDeltaKind().
+          if (!depsMap.has(dep.source)) {
+            depsMap.set(dep.source, dep)
+          }
+        }
+        return // Don't recurse into children — binding deps are already complete
+      }
+      // binding with zero deps: fall through to let the ts-morph type check
+      // handle it (the identifier itself may be a Changefeed)
+    }
+
     // Property access on a reactive type
     if (node.getKind() === SyntaxKind.PropertyAccessExpression) {
       const propAccess = node as PropertyAccessExpression
@@ -626,7 +666,7 @@ export function detectImplicitRead(expr: Expression): string | undefined {
  * - `source` = user's expression verbatim
  * - Codegen emits `valueRegion` with replace semantics
  */
-export function analyzeExpression(expr: Expression): ContentNode {
+export function analyzeExpression(expr: Expression, scope?: BindingScope): ContentNode {
   const span = getSpan(expr)
   const source = expr.getText()
 
@@ -645,8 +685,8 @@ export function analyzeExpression(expr: Expression): ContentNode {
   }
 
   // Check if reactive
-  if (expressionIsReactive(expr)) {
-    const deps = extractDependencies(expr)
+  if (expressionIsReactive(expr, scope)) {
+    const deps = extractDependencies(expr, scope)
 
     // Changefeed-native check: is this expression itself a Changefeed?
     // If yes, the user passed the coalgebra — we can dispatch on delta kind.
@@ -676,7 +716,7 @@ export function analyzeExpression(expr: Expression): ContentNode {
 /**
  * Analyze props object literal.
  */
-export function analyzeProps(obj: ObjectLiteralExpression): {
+export function analyzeProps(obj: ObjectLiteralExpression, scope?: BindingScope): {
   attributes: AttributeNode[]
   eventHandlers: EventHandlerNode[]
 } {
@@ -709,7 +749,7 @@ export function analyzeProps(obj: ObjectLiteralExpression): {
         })
       } else {
         // Regular attribute
-        const value = analyzeExpression(valueNode)
+        const value = analyzeExpression(valueNode, scope)
         attributes.push({ name, value })
       }
     }
@@ -732,7 +772,7 @@ export function analyzeProps(obj: ObjectLiteralExpression): {
 /**
  * Analyze a for..of statement.
  */
-export function analyzeForOfStatement(stmt: ForOfStatement): ChildNode | null {
+export function analyzeForOfStatement(stmt: ForOfStatement, scope?: BindingScope): ChildNode | null {
   const span = getSpan(stmt)
 
   // Get the initializer (the variable declaration)
@@ -779,12 +819,13 @@ export function analyzeForOfStatement(stmt: ForOfStatement): ChildNode | null {
   const iterExpr = stmt.getExpression()
   const listSource = iterExpr.getText()
 
-  // Analyze the body
+  // Analyze the body with a child scope (loop body is a new block scope)
   const body = stmt.getStatement()
-  const bodyChildren = analyzeStatementBody(body)
+  const bodyScope = scope?.child()
+  const bodyChildren = analyzeStatementBody(body, bodyScope)
 
   // Determine binding time from reactivity analysis
-  const isReactive = expressionIsReactive(iterExpr)
+  const isReactive = expressionIsReactive(iterExpr, scope)
 
   // Extract dependencies with delta kind for reactive loops
   const dependencies: Dependency[] = isReactive
@@ -811,12 +852,12 @@ export function analyzeForOfStatement(stmt: ForOfStatement): ChildNode | null {
  *
  * Else-if chains are flattened into the branches array (not nested).
  */
-export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
+export function analyzeIfStatement(stmt: IfStatement, scope?: BindingScope): ChildNode | null {
   const span = getSpan(stmt)
 
-  // Analyze the condition
+  // Analyze the condition (with scope so bindings in predicates are resolved)
   const condExpr = stmt.getExpression()
-  const condition = analyzeExpression(condExpr)
+  const condition = analyzeExpression(condExpr, scope)
 
   // Extract subscription target for reactive conditions
   let subscriptionTarget: Dependency | null = null
@@ -827,9 +868,10 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
     subscriptionTarget = condition.dependencies[0]
   }
 
-  // Analyze then branch
+  // Analyze then branch (const is block-scoped, so use child scope)
   const thenStmt = stmt.getThenStatement()
-  const thenBody = analyzeStatementBody(thenStmt)
+  const thenScope = scope?.child()
+  const thenBody = analyzeStatementBody(thenStmt, thenScope)
 
   // Build branches array - always use flat structure
   const branches: ConditionalBranch[] = [
@@ -842,7 +884,7 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
   if (elseStmt) {
     // else if -> recurse and flatten
     if (elseStmt.getKind() === SyntaxKind.IfStatement) {
-      const nestedIf = analyzeIfStatement(elseStmt as IfStatement)
+      const nestedIf = analyzeIfStatement(elseStmt as IfStatement, scope)
       if (nestedIf && nestedIf.kind === "conditional") {
         // Flatten: merge nested branches into this conditional
         branches.push(...nestedIf.branches)
@@ -853,7 +895,8 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
       }
     } else {
       // else -> analyze body and add as final branch with null condition
-      const elseBody = analyzeStatementBody(elseStmt)
+      const elseScope = scope?.child()
+      const elseBody = analyzeStatementBody(elseStmt, elseScope)
       branches.push(createConditionalBranch(null, elseBody, getSpan(elseStmt)))
     }
   }
@@ -864,19 +907,19 @@ export function analyzeIfStatement(stmt: IfStatement): ChildNode | null {
 /**
  * Analyze statements within a block or single statement.
  */
-export function analyzeStatementBody(stmt: Statement): ChildNode[] {
+export function analyzeStatementBody(stmt: Statement, scope?: BindingScope): ChildNode[] {
   const children: ChildNode[] = []
 
   if (stmt.getKind() === SyntaxKind.Block) {
     const block = stmt as Block
     for (const innerStmt of block.getStatements()) {
-      const child = analyzeStatement(innerStmt)
+      const child = analyzeStatement(innerStmt, scope)
       if (child) {
         children.push(...child)
       }
     }
   } else {
-    const child = analyzeStatement(stmt)
+    const child = analyzeStatement(stmt, scope)
     if (child) {
       children.push(...child)
     }
@@ -894,7 +937,7 @@ export function analyzeStatementBody(stmt: Statement): ChildNode[] {
  * Statements that aren't UI-specific (element calls, control flow) are
  * captured as StatementNode to preserve them in the generated code.
  */
-export function analyzeStatement(stmt: Statement): ChildNode[] | null {
+export function analyzeStatement(stmt: Statement, scope?: BindingScope): ChildNode[] | null {
   const span = getSpan(stmt)
 
   // Return statement - not supported in builder functions
@@ -918,7 +961,7 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
     // Check for element factory call
     if (expr.getKind() === SyntaxKind.CallExpression) {
       const call = expr as CallExpression
-      const element = analyzeElementCall(call)
+      const element = analyzeElementCall(call, scope)
       if (element) {
         return [element]
       }
@@ -931,7 +974,7 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
 
   // For..of statement
   if (stmt.getKind() === SyntaxKind.ForOfStatement) {
-    const region = analyzeForOfStatement(stmt as ForOfStatement)
+    const region = analyzeForOfStatement(stmt as ForOfStatement, scope)
     if (region) {
       return [region]
     }
@@ -941,7 +984,7 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
 
   // If statement
   if (stmt.getKind() === SyntaxKind.IfStatement) {
-    const region = analyzeIfStatement(stmt as IfStatement)
+    const region = analyzeIfStatement(stmt as IfStatement, scope)
     if (region) {
       return [region]
     }
@@ -961,14 +1004,14 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
       if (body.getKind() === SyntaxKind.Block) {
         const block = body as Block
         for (const innerStmt of block.getStatements()) {
-          const result = analyzeStatement(innerStmt)
+          const result = analyzeStatement(innerStmt, scope)
           if (result) {
             children.push(...result)
           }
         }
       } else {
         // Single statement body (e.g., `client: console.log("hi")`)
-        const result = analyzeStatement(body as Statement)
+        const result = analyzeStatement(body as Statement, scope)
         if (result) {
           children.push(...result)
         }
@@ -986,7 +1029,7 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
     const block = stmt as Block
     const children: ChildNode[] = []
     for (const innerStmt of block.getStatements()) {
-      const result = analyzeStatement(innerStmt)
+      const result = analyzeStatement(innerStmt, scope)
       if (result) {
         children.push(...result)
       }
@@ -996,7 +1039,37 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
 
   // Variable declaration (const x = ..., let y = ...)
   if (stmt.getKind() === SyntaxKind.VariableStatement) {
-    return [createStatement(stmt.getText(), span)]
+    const varStmt = stmt as any // VariableStatement
+    const declarations = varStmt.getDeclarationList().getDeclarations()
+    const declarationKind = varStmt.getDeclarationList().getDeclarationKind() as string
+
+    // Reject mutable bindings with instructive error
+    if (declarationKind === "let" || declarationKind === "var") {
+      const line = stmt.getStartLineNumber()
+      throw new Error(
+        `Kyneta Compiler Error: Mutable binding \`${declarationKind}\` in builder body at line ${line}.\n` +
+        `Builder bodies require \`const\` bindings for dependency tracking. ` +
+        `If you need mutable state, use \`state(initialValue)\` to create a reactive ref.`,
+      )
+    }
+
+    const results: ChildNode[] = []
+    for (const decl of declarations) {
+      const name = decl.getName()
+      const initializer = decl.getInitializer()
+      // Simple named bindings — destructuring is deferred (kept as StatementNode)
+      if (initializer && Node.isExpression(initializer) && decl.getNameNode().getKind() === SyntaxKind.Identifier) {
+        const value = analyzeExpression(initializer, scope)
+        if (scope) {
+          scope.bind(name, value)
+        }
+        results.push(createBinding(name, value, getSpan(decl)))
+      } else {
+        // Destructuring or no initializer — keep as statement
+        results.push(createStatement(stmt.getText(), span))
+      }
+    }
+    return results
   }
 
   // Any other statement - capture verbatim to preserve in output
@@ -1017,7 +1090,7 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
  * - div("text", span("nested"))  - children only
  * - div({ class: "x" }, "text")  - props + children
  */
-export function analyzeElementCall(call: CallExpression): ChildNode | null {
+export function analyzeElementCall(call: CallExpression, scope?: BindingScope): ChildNode | null {
   // Check if this is an HTML element or component call
   const info = checkElementOrComponent(call)
   if (!info.isElementOrComponent) {
@@ -1049,7 +1122,7 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
   // Check if first argument is props object
   const firstArg = args[0]
   if (firstArg.getKind() === SyntaxKind.ObjectLiteralExpression) {
-    const propsResult = analyzeProps(firstArg as ObjectLiteralExpression)
+    const propsResult = analyzeProps(firstArg as ObjectLiteralExpression, scope)
     props = propsResult.attributes
     eventHandlers = propsResult.eventHandlers
     startIndex = 1
@@ -1066,23 +1139,24 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
     ) {
       const builderChildren = analyzeBuilderFunction(
         arg as ArrowFunction | FunctionExpression,
+        scope,
       )
       children.push(...builderChildren)
     }
     // Nested element call: span("text")
     else if (arg.getKind() === SyntaxKind.CallExpression) {
-      const nestedElement = analyzeElementCall(arg as CallExpression)
+      const nestedElement = analyzeElementCall(arg as CallExpression, scope)
       if (nestedElement) {
         children.push(nestedElement)
       } else {
         // Not an element call - treat as expression (e.g., count.get())
-        const content = analyzeExpression(arg)
+        const content = analyzeExpression(arg, scope)
         children.push(content)
       }
     }
     // String or expression
     else {
-      const content = analyzeExpression(arg)
+      const content = analyzeExpression(arg, scope)
       children.push(content)
     }
   }
@@ -1103,6 +1177,7 @@ export function analyzeElementCall(call: CallExpression): ChildNode | null {
  */
 export function analyzeBuilderFunction(
   fn: ArrowFunction | FunctionExpression,
+  scope?: BindingScope,
 ): ChildNode[] {
   const body = fn.getBody()
   if (!body) return []
@@ -1111,13 +1186,13 @@ export function analyzeBuilderFunction(
   if (body.getKind() !== SyntaxKind.Block) {
     // Body is an expression
     if (body.getKind() === SyntaxKind.CallExpression) {
-      const element = analyzeElementCall(body as CallExpression)
+      const element = analyzeElementCall(body as CallExpression, scope)
       if (element) {
         return [element]
       }
     }
     if (Node.isExpression(body)) {
-      const content = analyzeExpression(body)
+      const content = analyzeExpression(body, scope)
       return [content]
     }
     return []
@@ -1127,7 +1202,7 @@ export function analyzeBuilderFunction(
   const block = body as Block
   const children: ChildNode[] = []
   for (const stmt of block.getStatements()) {
-    const result = analyzeStatement(stmt)
+    const result = analyzeStatement(stmt, scope)
     if (result) {
       children.push(...result)
     }
@@ -1217,6 +1292,11 @@ function isNestedBuilderCall(call: CallExpression): boolean {
  * Supports both HTML elements and ComponentFactory-typed functions.
  */
 export function analyzeBuilder(call: CallExpression): BuilderNode | null {
+  // Create a root BindingScope for this builder — bindings registered during
+  // analysis of the builder function body are looked up when downstream
+  // expressions reference bound names.
+  const scope = createBindingScope()
+
   // Use two-tier detection: HTML elements OR ComponentFactory types
   const info = checkElementOrComponent(call)
   if (!info.isElementOrComponent) {
@@ -1238,7 +1318,7 @@ export function analyzeBuilder(call: CallExpression): BuilderNode | null {
   // Check if first argument is props object
   const firstArg = args[0]
   if (firstArg.getKind() === SyntaxKind.ObjectLiteralExpression) {
-    const propsResult = analyzeProps(firstArg as ObjectLiteralExpression)
+    const propsResult = analyzeProps(firstArg as ObjectLiteralExpression, scope)
     props = propsResult.attributes
     eventHandlers = propsResult.eventHandlers
     startIndex = 1
@@ -1255,15 +1335,16 @@ export function analyzeBuilder(call: CallExpression): BuilderNode | null {
     ) {
       const builderChildren = analyzeBuilderFunction(
         arg as ArrowFunction | FunctionExpression,
+        scope,
       )
       children.push(...builderChildren)
     } else if (arg.getKind() === SyntaxKind.CallExpression) {
-      const nestedElement = analyzeElementCall(arg as CallExpression)
+      const nestedElement = analyzeElementCall(arg as CallExpression, scope)
       if (nestedElement) {
         children.push(nestedElement)
       }
     } else {
-      const content = analyzeExpression(arg)
+      const content = analyzeExpression(arg, scope)
       children.push(content)
     }
   }

@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  createBinding,
   createBuilder,
   createConditional,
   createConditionalBranch,
@@ -20,6 +21,7 @@ import {
   createSpan,
   createStatement,
   createLabeledBlock,
+  type BindingNode,
   type Dependency,
   type DeltaKind,
 } from "@kyneta/compiler"
@@ -908,5 +910,123 @@ describe("dissolveConditionals", () => {
     const branches = (dissolved.children[0] as { branches: Array<{ body: Array<{ kind: string }> }> }).branches
     expect(branches[0].body).toHaveLength(1)
     expect(branches[0].body[0].kind).toBe("content")
+  })
+})
+
+// =============================================================================
+// BindingNode Pass-Through Tests
+// =============================================================================
+
+describe("filterTargetBlocks - BindingNode pass-through", () => {
+  it("should pass through bindings at top level", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    const h1 = createElement("h1", [], [], [], [createLiteral("Title", span())], span())
+    const builder = createBuilder("div", [], [], [binding, h1], span())
+
+    const filtered = filterTargetBlocks(builder, "dom")
+
+    expect(filtered.children).toHaveLength(2)
+    expect(filtered.children[0].kind).toBe("binding")
+    const b = filtered.children[0] as BindingNode
+    expect(b.name).toBe("myVar")
+    expect(b.value.source).toBe("x.get()")
+  })
+
+  it("should pass through bindings inside element children", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    const p = createElement("p", [], [], [], [createLiteral("text", span())], span())
+    const section = createElement("section", [], [], [], [binding, p], span())
+    const builder = createBuilder("div", [], [], [section], span())
+
+    const filtered = filterTargetBlocks(builder, "dom")
+
+    const filteredSection = filtered.children[0]
+    expect(filteredSection.kind).toBe("element")
+    if (filteredSection.kind === "element") {
+      expect(filteredSection.children).toHaveLength(2)
+      expect(filteredSection.children[0].kind).toBe("binding")
+    }
+  })
+
+  it("should pass through bindings inside loop body", () => {
+    const value = createContent("item.get()", "reactive", [dep("item")], span())
+    const binding = createBinding("val", value, span())
+    const li = createElement("li", [], [], [], [createLiteral("item", span())], span())
+    const loop = createLoop("items", "reactive", "item", null, [binding, li], [dep("items")], span())
+    const builder = createBuilder("ul", [], [], [loop], span())
+
+    const filtered = filterTargetBlocks(builder, "dom")
+
+    const filteredLoop = filtered.children[0]
+    expect(filteredLoop.kind).toBe("loop")
+    if (filteredLoop.kind === "loop") {
+      expect(filteredLoop.body).toHaveLength(2)
+      expect(filteredLoop.body[0].kind).toBe("binding")
+    }
+  })
+
+  it("should pass through bindings inside conditional branches", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+    const p = createElement("p", [], [], [], [createLiteral("yes", span())], span())
+    const branch = createConditionalBranch(
+      createContent("cond", "reactive", [dep("cond")], span()),
+      [binding, p],
+      span(),
+    )
+    const cond = createConditional([branch], dep("cond"), span())
+    const builder = createBuilder("div", [], [], [cond], span())
+
+    const filtered = filterTargetBlocks(builder, "dom")
+
+    const filteredCond = filtered.children[0]
+    expect(filteredCond.kind).toBe("conditional")
+    if (filteredCond.kind === "conditional") {
+      expect(filteredCond.branches[0].body).toHaveLength(2)
+      expect(filteredCond.branches[0].body[0].kind).toBe("binding")
+    }
+  })
+})
+
+describe("dissolveConditionals - BindingNode pass-through", () => {
+  it("should pass through bindings at top level alongside a non-dissolvable conditional", () => {
+    const value = createContent("x.get()", "reactive", [dep("x")], span())
+    const binding = createBinding("myVar", value, span())
+
+    // A non-dissolvable conditional (no else branch)
+    const branch = createConditionalBranch(
+      createContent("cond", "reactive", [dep("cond")], span()),
+      [createElement("p", [], [], [], [createLiteral("yes", span())], span())],
+      span(),
+    )
+    const cond = createConditional([branch], dep("cond"), span())
+    const builder = createBuilder("div", [], [], [binding, cond], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    expect(dissolved.children).toHaveLength(2)
+    expect(dissolved.children[0].kind).toBe("binding")
+    expect(dissolved.children[1].kind).toBe("conditional")
+  })
+
+  it("should pass through bindings inside loop body during dissolution", () => {
+    const value = createContent("item.name()", "reactive", [dep("item.name")], span())
+    const binding = createBinding("name", value, span())
+    const li = createElement("li", [], [], [], [createLiteral("text", span())], span())
+    const loop = createLoop("items", "reactive", "item", null, [binding, li], [dep("items")], span())
+    const builder = createBuilder("ul", [], [], [loop], span())
+
+    const dissolved = dissolveConditionals(builder)
+
+    const loopNode = dissolved.children[0]
+    expect(loopNode.kind).toBe("loop")
+    if (loopNode.kind === "loop") {
+      expect(loopNode.body).toHaveLength(2)
+      expect(loopNode.body[0].kind).toBe("binding")
+      const b = loopNode.body[0] as BindingNode
+      expect(b.name).toBe("name")
+    }
   })
 })

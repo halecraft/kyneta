@@ -199,6 +199,9 @@ function emitChild(
     case "statement":
       return [`${indent}${node.source}`]
 
+    case "binding":
+      return [`${indent}const ${node.name} = ${node.value.source}`]
+
     case "element":
       return emitElement(node, state, indent)
 

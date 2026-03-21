@@ -40,6 +40,7 @@ export type IRNodeKind =
   | "content"
   | "loop"
   | "conditional"
+  | "binding"
   | "statement"
   | "labeled-block"
 
@@ -528,6 +529,44 @@ export interface StatementNode extends IRNodeBase {
 }
 
 /**
+ * A named binding whose initializer is fully analyzed.
+ *
+ * Replaces StatementNode for `const` variable declarations inside builder
+ * bodies. The initializer is analyzed via analyzeExpression(), preserving
+ * full reactive dependency information through the binding boundary.
+ *
+ * Bindings don't produce DOM nodes — they define named values that
+ * downstream expressions can reference. The BindingScope tracks these
+ * mappings so that identifier lookups resolve to the analyzed ContentNode.
+ *
+ * ```typescript
+ * // Source:
+ * const nameMatch = recipe.name().toLowerCase().includes(filter())
+ *
+ * // IR:
+ * BindingNode {
+ *   kind: "binding",
+ *   name: "nameMatch",
+ *   value: ContentNode {
+ *     source: "recipe.name().toLowerCase().includes(filter())",
+ *     bindingTime: "reactive",
+ *     dependencies: [
+ *       { source: "recipe.name", deltaKind: "text" },
+ *       { source: "filter", deltaKind: "replace" }
+ *     ]
+ *   }
+ * }
+ * ```
+ */
+export interface BindingNode extends IRNodeBase {
+  kind: "binding"
+  /** The binding name (e.g., "nameMatch") */
+  name: string
+  /** Analyzed initializer with full dependency tracking */
+  value: ContentNode
+}
+
+/**
  * A labeled block.
  *
  * Used for `client: { ... }` and `server: { ... }` blocks inside
@@ -565,6 +604,7 @@ export type ChildNode =
   | ContentValue
   | LoopNode
   | ConditionalNode
+  | BindingNode
   | StatementNode
   | LabeledBlockNode
 
@@ -659,10 +699,33 @@ export function isStatementNode(node: ChildNode): node is StatementNode {
 }
 
 /**
+ * Check if a node is a binding.
+ */
+export function isBindingNode(node: ChildNode): node is BindingNode {
+  return node.kind === "binding"
+}
+
+/**
  * Check if a node is a labeled block node.
  */
 export function isLabeledBlockNode(node: ChildNode): node is LabeledBlockNode {
   return node.kind === "labeled-block"
+}
+
+/**
+ * Whether a child node produces DOM output.
+ *
+ * This is the fundamental partition of ChildNode:
+ * - DOM-producing: element, content, loop, conditional
+ * - Non-DOM-producing: statement, binding, labeled-block
+ *
+ * Non-DOM nodes emit JS statements (variable declarations, side-effects,
+ * target blocks) but don't create DOM nodes, text nodes, or region markers.
+ * Every site that counts, filters, or skips children based on DOM production
+ * must use this predicate instead of ad-hoc kind checks.
+ */
+export function isDOMProducing(node: ChildNode): boolean {
+  return node.kind !== "statement" && node.kind !== "binding" && node.kind !== "labeled-block"
 }
 
 /**
@@ -725,8 +788,8 @@ export function isInputTextRegionAttribute(attr: AttributeNode): boolean {
  * a single node, we can avoid fragment overhead and marker comments.
  */
 export function computeSlotKind(body: ChildNode[]): SlotKind {
-  // Filter out statements (they don't produce DOM nodes)
-  const domProducingNodes = body.filter(node => node.kind !== "statement")
+  // Filter out non-DOM-producing nodes (statements, bindings, labeled blocks)
+  const domProducingNodes = body.filter(isDOMProducing)
 
   // Empty or multiple DOM-producing nodes -> range
   if (domProducingNodes.length !== 1) {
@@ -1264,6 +1327,21 @@ export function createElement(
 }
 
 /**
+ * Create a binding node.
+ *
+ * @param name - The binding name (e.g., "nameMatch")
+ * @param value - The analyzed initializer with full dependency tracking
+ * @param span - Source location
+ */
+export function createBinding(
+  name: string,
+  value: ContentNode,
+  span: SourceSpan,
+): BindingNode {
+  return { kind: "binding", name, value, span }
+}
+
+/**
  * Create a statement node.
  */
 export function createStatement(
@@ -1410,6 +1488,12 @@ export function createBuilder(
             }
           }
           collectDependencies(branch.body)
+        }
+      } else if (node.kind === "binding") {
+        if (isReactiveContent(node.value)) {
+          for (const dep of node.value.dependencies) {
+            addDep(dep)
+          }
         }
       } else if (node.kind === "labeled-block") {
         // Recurse into labeled block children regardless of label —

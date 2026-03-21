@@ -1292,10 +1292,11 @@ describe("analyzeStatement - arbitrary statements", () => {
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(2)
 
-    // First child should be a statement
-    expect(builder?.children[0].kind).toBe("statement")
-    if (builder?.children[0].kind === "statement") {
-      expect(builder.children[0].source).toContain("const x = 1")
+    // First child should be a binding (const declarations are now BindingNode)
+    expect(builder?.children[0].kind).toBe("binding")
+    if (builder?.children[0].kind === "binding") {
+      expect(builder.children[0].name).toBe("x")
+      expect(builder.children[0].value.source).toBe("1")
     }
 
     // Second child should be the element
@@ -1354,12 +1355,11 @@ describe("analyzeStatement - arbitrary statements", () => {
       expect(listRegion.iterableBindingTime).toBe("reactive")
       expect(listRegion.body.length).toBe(2)
 
-      // First should be statement
-      expect(listRegion.body[0].kind).toBe("statement")
-      if (listRegion.body[0].kind === "statement") {
-        expect(listRegion.body[0].source).toContain(
-          "const item = itemRef.name",
-        )
+      // First should be binding (const declarations are now BindingNode)
+      expect(listRegion.body[0].kind).toBe("binding")
+      if (listRegion.body[0].kind === "binding") {
+        expect(listRegion.body[0].name).toBe("item")
+        expect(listRegion.body[0].value.source).toBe("itemRef.name")
       }
 
       // Second should be element
@@ -1395,10 +1395,11 @@ describe("analyzeStatement - arbitrary statements", () => {
       const thenBranch = conditional.branches[0]
       expect(thenBranch.body.length).toBe(2)
 
-      // First should be statement
-      expect(thenBranch.body[0].kind).toBe("statement")
-      if (thenBranch.body[0].kind === "statement") {
-        expect(thenBranch.body[0].source).toContain('const msg = "has items"')
+      // First should be binding (const declarations are now BindingNode)
+      expect(thenBranch.body[0].kind).toBe("binding")
+      if (thenBranch.body[0].kind === "binding") {
+        expect(thenBranch.body[0].name).toBe("msg")
+        expect(thenBranch.body[0].value.source).toBe('"has items"')
       }
 
       // Second should be element
@@ -1426,11 +1427,11 @@ describe("analyzeStatement - arbitrary statements", () => {
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(5)
 
-    expect(builder?.children[0].kind).toBe("statement")
-    expect(builder?.children[1].kind).toBe("statement")
-    expect(builder?.children[2].kind).toBe("element")
-    expect(builder?.children[3].kind).toBe("statement")
-    expect(builder?.children[4].kind).toBe("statement")
+    expect(builder?.children[0].kind).toBe("binding")  // const a = 1
+    expect(builder?.children[1].kind).toBe("statement") // console.log("first")
+    expect(builder?.children[2].kind).toBe("element")   // p("element")
+    expect(builder?.children[3].kind).toBe("binding")  // const b = 2
+    expect(builder?.children[4].kind).toBe("statement") // console.log("second")
   })
 
   it("should still recursively analyze block statements", () => {
@@ -1452,7 +1453,7 @@ describe("analyzeStatement - arbitrary statements", () => {
     expect(builder).not.toBeNull()
     // Block contents should be flattened
     expect(builder?.children.length).toBe(2)
-    expect(builder?.children[0].kind).toBe("statement")
+    expect(builder?.children[0].kind).toBe("binding")  // const x = 1
     expect(builder?.children[1].kind).toBe("element")
   })
 
@@ -1801,10 +1802,11 @@ describe("analyzeStatement - labeled blocks", () => {
       expect(block.label).toBe("client")
       expect(block.children.length).toBe(2)
 
-      // First child: statement (const x = 1)
-      expect(block.children[0].kind).toBe("statement")
-      if (block.children[0].kind === "statement") {
-        expect(block.children[0].source).toContain("const x = 1")
+      // First child: binding (const x = 1)
+      expect(block.children[0].kind).toBe("binding")
+      if (block.children[0].kind === "binding") {
+        expect(block.children[0].name).toBe("x")
+        expect(block.children[0].value.source).toBe("1")
       }
 
       // Second child: element (p)

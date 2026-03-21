@@ -113,6 +113,7 @@ function filterChildNode(
     // Leaf nodes — no children to recurse into
     case "content":
     case "statement":
+    case "binding":
       return node
 
     // labeled-block is already handled by filterChildren before this function
@@ -221,6 +222,7 @@ function dissolveChildNode(node: ChildNode): ChildNode {
     // Leaf nodes — no children to recurse into
     case "content":
     case "statement":
+    case "binding":
       return node
 
     // labeled-block children are recursed into (dissolution may run

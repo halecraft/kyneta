@@ -17,15 +17,16 @@
  * @packageDocumentation
  */
 
-import type {
-  AttributeNode,
-  BuilderNode,
-  ChildNode,
-  ConditionalNode,
-  ContentNode,
-  ElementNode,
-  EventHandlerNode,
-  LoopNode,
+import {
+  isDOMProducing,
+  type AttributeNode,
+  type BuilderNode,
+  type ChildNode,
+  type ConditionalNode,
+  type ContentNode,
+  type ElementNode,
+  type EventHandlerNode,
+  type LoopNode,
 } from "./ir.js"
 import { escapeHtml, VOID_ELEMENTS } from "./html-constants.js"
 
@@ -251,8 +252,8 @@ function* walkBuilder(
   let domIndex = 0
   for (let i = 0; i < node.children.length; i++) {
     const child = node.children[i]
-    if (child.kind === "statement" || child.kind === "labeled-block") {
-      continue // Statements don't produce DOM nodes — skip
+    if (!isDOMProducing(child)) {
+      continue // Non-DOM nodes don't produce DOM — skip
     }
     pathStack.push(domIndex)
     yield* walkChild(child, pathStack)
@@ -329,8 +330,8 @@ function* walkElement(
   let domIndex = 0
   for (let i = 0; i < node.children.length; i++) {
     const child = node.children[i]
-    if (child.kind === "statement" || child.kind === "labeled-block") {
-      continue // Statements don't produce DOM nodes — skip
+    if (!isDOMProducing(child)) {
+      continue // Non-DOM nodes don't produce DOM — skip
     }
     pathStack.push(domIndex)
     yield* walkChild(child, pathStack)
@@ -401,8 +402,9 @@ function* walkChild(
       break
 
     case "statement":
-      // Statements don't produce walk events - they're handled
-      // specially by consumers that need to preserve them
+    case "binding":
+      // Statements and bindings don't produce walk events — they're
+      // handled specially by consumers that need to preserve them
       break
   }
 }

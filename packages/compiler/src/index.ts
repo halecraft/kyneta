@@ -19,6 +19,7 @@
 
 export type {
   AttributeNode,
+  BindingNode,
   BindingTime,
   BuilderNode,
   ChildNode,
@@ -49,6 +50,7 @@ export type {
 // =============================================================================
 
 export {
+  createBinding,
   createBuilder,
   createConditional,
   createConditionalBranch,
@@ -66,8 +68,10 @@ export {
 // =============================================================================
 
 export {
+  isBindingNode,
   isConditionalNode,
   isContentNode,
+  isDOMProducing,
   isElementNode,
   isInputTextRegionAttribute,
   isLiteralContent,
@@ -198,3 +202,9 @@ export {
   parseSource,
   resetProject,
 } from "./project.js"
+
+// =============================================================================
+// Binding Scope
+// =============================================================================
+
+export { createBindingScope, type BindingScope } from "./binding-scope.js"
