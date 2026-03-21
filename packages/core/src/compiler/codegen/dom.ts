@@ -26,16 +26,14 @@ import type {
 } from "@kyneta/compiler"
 import {
   computeSlotKind,
-  isInputTextRegionAttribute,
-  isTextRegionContent,
-} from "@kyneta/compiler"
-import {
   extractTemplate,
   generateTemplateDeclaration,
   generateWalkCode,
+  isInputTextRegionAttribute,
+  isTextRegionContent,
   planWalk,
   simpleHash,
-} from "../template.js"
+} from "@kyneta/compiler"
 
 // =============================================================================
 // Code Generation Result

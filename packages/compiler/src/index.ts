@@ -38,7 +38,7 @@ export type {
   SlotKind,
   SourceSpan,
   StatementNode,
-  TargetBlockNode,
+  LabeledBlockNode,
   TemplateHole,
   TemplateHoleKind,
   TemplateNode,
@@ -58,7 +58,7 @@ export {
   createLoop,
   createSpan,
   createStatement,
-  createTargetBlock,
+  createLabeledBlock,
 } from "./ir.js"
 
 // =============================================================================
@@ -74,7 +74,7 @@ export {
   isLoopNode,
   isReactiveContent,
   isStatementNode,
-  isTargetBlockNode,
+  isLabeledBlockNode,
   isTextRegionContent,
 } from "./ir.js"
 
@@ -107,3 +107,94 @@ export {
 } from "./html-constants.js"
 
 export type { RegionMarkerType, RegionMarkers } from "./html-constants.js"
+
+// =============================================================================
+// Reactive Detection
+// =============================================================================
+
+export {
+  getDeltaKind,
+  isChangefeedType,
+  isComponentFactoryType,
+  resolveAndAddModule,
+  resolveReactiveImports,
+} from "./reactive-detection.js"
+
+// =============================================================================
+// Analysis
+// =============================================================================
+
+export {
+  analyzeBuilder,
+  analyzeBuilderFunction,
+  analyzeElementCall,
+  analyzeExpression,
+  analyzeForOfStatement,
+  analyzeIfStatement,
+  analyzeProps,
+  analyzeSourceFile,
+  analyzeStatement,
+  analyzeStatementBody,
+  detectDirectRead,
+  detectImplicitRead,
+  ELEMENT_FACTORIES,
+  expressionIsReactive,
+  extractDependencies,
+  findBuilderCalls,
+  getSpan,
+} from "./analyze.js"
+
+// =============================================================================
+// IR Walker
+// =============================================================================
+
+export {
+  collectEvents,
+  countEventTypes,
+  eventsWithPaths,
+  walkBranchBody,
+  walkIR,
+  walkLoopBody,
+} from "./walk.js"
+
+export type {
+  ComponentPlaceholderEvent,
+  DynamicAttributeEvent,
+  DynamicContentEvent,
+  ElementEndEvent,
+  ElementStartEvent,
+  EventHandlerEvent,
+  RegionPlaceholderEvent,
+  StaticAttributeEvent,
+  StaticTextEvent,
+  WalkEvent,
+} from "./walk.js"
+
+// =============================================================================
+// Template Extraction
+// =============================================================================
+
+export {
+  countHolesByKind,
+  extractTemplate,
+  generateTemplateDeclaration,
+  generateWalkCode,
+  getHolesByKind,
+  hasHoles,
+  isStatic,
+  planWalk,
+  simpleHash,
+} from "./template.js"
+
+export type { NavOp } from "./template.js"
+
+// =============================================================================
+// Project Management & Pipeline
+// =============================================================================
+
+export {
+  analyzeAllBuilders,
+  hasBuilderCalls,
+  parseSource,
+  resetProject,
+} from "./project.js"

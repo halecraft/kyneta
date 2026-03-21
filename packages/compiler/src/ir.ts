@@ -41,7 +41,7 @@ export type IRNodeKind =
   | "loop"
   | "conditional"
   | "statement"
-  | "target-block"
+  | "labeled-block"
 
 /**
  * Base interface for all IR nodes.
@@ -528,7 +528,7 @@ export interface StatementNode extends IRNodeBase {
 }
 
 /**
- * A labeled block that targets a specific compilation target.
+ * A labeled block.
  *
  * Used for `client: { ... }` and `server: { ... }` blocks inside
  * builder functions. The filter-before-codegen architecture strips
@@ -543,11 +543,11 @@ export interface StatementNode extends IRNodeBase {
  * })
  * ```
  */
-export interface TargetBlockNode extends IRNodeBase {
-  kind: "target-block"
+export interface LabeledBlockNode extends IRNodeBase {
+  kind: "labeled-block"
 
-  /** Which compilation target this block is for */
-  target: string
+  /** The label from the source code (e.g. 'client', 'server') */
+  label: string
 
   /** The analyzed children inside the labeled block */
   children: ChildNode[]
@@ -566,7 +566,7 @@ export type ChildNode =
   | LoopNode
   | ConditionalNode
   | StatementNode
-  | TargetBlockNode
+  | LabeledBlockNode
 
 // =============================================================================
 // Root Types
@@ -659,10 +659,10 @@ export function isStatementNode(node: ChildNode): node is StatementNode {
 }
 
 /**
- * Check if a node is a target block.
+ * Check if a node is a labeled block node.
  */
-export function isTargetBlockNode(node: ChildNode): node is TargetBlockNode {
-  return node.kind === "target-block"
+export function isLabeledBlockNode(node: ChildNode): node is LabeledBlockNode {
+  return node.kind === "labeled-block"
 }
 
 /**
@@ -1278,20 +1278,20 @@ export function createStatement(
 }
 
 /**
- * Create a target block node.
+ * Create a labeled block node.
  *
- * @param target - The compilation target this block is for ("dom" for client:, "html" for server:)
+ * @param label - The label from the source code (e.g. 'client', 'server')
  * @param children - The analyzed children inside the labeled block
  * @param span - Source location
  */
-export function createTargetBlock(
-  target: string,
+export function createLabeledBlock(
+  label: string,
   children: ChildNode[],
   span: SourceSpan,
-): TargetBlockNode {
+): LabeledBlockNode {
   return {
-    kind: "target-block",
-    target,
+    kind: "labeled-block",
+    label,
     children,
     span,
   }
@@ -1411,8 +1411,8 @@ export function createBuilder(
           }
           collectDependencies(branch.body)
         }
-      } else if (node.kind === "target-block") {
-        // Recurse into target block children regardless of target —
+      } else if (node.kind === "labeled-block") {
+        // Recurse into labeled block children regardless of label —
         // dependencies from both client: and server: blocks inform
         // subscription setup even if one target's code is stripped later.
         collectDependencies(node.children)

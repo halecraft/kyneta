@@ -39,7 +39,7 @@ export type {
   SlotKind,
   SourceSpan,
   StatementNode,
-  TargetBlockNode,
+  LabeledBlockNode,
   TemplateHole,
   TemplateHoleKind,
   TemplateNode,
@@ -59,7 +59,7 @@ export {
   createLoop,
   createSpan,
   createStatement,
-  createTargetBlock,
+  createLabeledBlock,
   // Type guards
   isConditionalNode,
   isContentNode,
@@ -69,7 +69,7 @@ export {
   isLoopNode,
   isReactiveContent,
   isStatementNode,
-  isTargetBlockNode,
+  isLabeledBlockNode,
   isTextRegionContent,
   // Tree merge
   mergeConditionalBodies,
@@ -129,7 +129,7 @@ export {
   getSpan,
   // Type analysis
   isChangefeedType,
-} from "./analyze.js"
+} from "@kyneta/compiler"
 
 // =============================================================================
 // Code Generation - DOM

@@ -22,7 +22,7 @@ import {
   isComponentFactoryType,
   resolveReactiveImports,
 } from "./reactive-detection.js"
-import type { ContentValue } from "@kyneta/compiler"
+import type { ContentValue } from "./ir.js"
 
 // =============================================================================
 // Test Helpers
@@ -1706,7 +1706,7 @@ describe("integration: complex builder analysis", () => {
 // Target Label Detection Tests
 // =============================================================================
 
-describe("analyzeStatement - target labels", () => {
+describe("analyzeStatement - labeled blocks", () => {
   let project: Project
 
   beforeEach(() => {
@@ -1714,7 +1714,7 @@ describe("analyzeStatement - target labels", () => {
     addSchemaTypes(project)
   })
 
-  it("should produce TargetBlockNode for client: label", () => {
+  it("should produce LabeledBlockNode for client: label", () => {
     const sourceFile = createSourceFile(
       project,
       `
@@ -1733,10 +1733,10 @@ describe("analyzeStatement - target labels", () => {
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(2)
 
-    // First child should be a target block targeting "dom"
-    expect(builder?.children[0].kind).toBe("target-block")
-    if (builder?.children[0].kind === "target-block") {
-      expect(builder.children[0].target).toBe("dom")
+    // First child should be a labeled block with label "client"
+    expect(builder?.children[0].kind).toBe("labeled-block")
+    if (builder?.children[0].kind === "labeled-block") {
+      expect(builder.children[0].label).toBe("client")
       expect(builder.children[0].children.length).toBe(1)
       expect(builder.children[0].children[0].kind).toBe("statement")
     }
@@ -1745,7 +1745,7 @@ describe("analyzeStatement - target labels", () => {
     expect(builder?.children[1].kind).toBe("element")
   })
 
-  it("should produce TargetBlockNode for server: label", () => {
+  it("should produce LabeledBlockNode for server: label", () => {
     const sourceFile = createSourceFile(
       project,
       `
@@ -1764,10 +1764,10 @@ describe("analyzeStatement - target labels", () => {
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(2)
 
-    // First child should be a target block targeting "html"
-    expect(builder?.children[0].kind).toBe("target-block")
-    if (builder?.children[0].kind === "target-block") {
-      expect(builder.children[0].target).toBe("html")
+    // First child should be a labeled block with label "server"
+    expect(builder?.children[0].kind).toBe("labeled-block")
+    if (builder?.children[0].kind === "labeled-block") {
+      expect(builder.children[0].label).toBe("server")
       expect(builder.children[0].children.length).toBe(1)
       expect(builder.children[0].children[0].kind).toBe("statement")
     }
@@ -1794,11 +1794,11 @@ describe("analyzeStatement - target labels", () => {
 
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(1)
-    expect(builder?.children[0].kind).toBe("target-block")
+    expect(builder?.children[0].kind).toBe("labeled-block")
 
-    if (builder?.children[0].kind === "target-block") {
+    if (builder?.children[0].kind === "labeled-block") {
       const block = builder.children[0]
-      expect(block.target).toBe("dom")
+      expect(block.label).toBe("client")
       expect(block.children.length).toBe(2)
 
       // First child: statement (const x = 1)
@@ -1860,11 +1860,11 @@ describe("analyzeStatement - target labels", () => {
 
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(1)
-    expect(builder?.children[0].kind).toBe("target-block")
+    expect(builder?.children[0].kind).toBe("labeled-block")
 
-    if (builder?.children[0].kind === "target-block") {
+    if (builder?.children[0].kind === "labeled-block") {
       const block = builder.children[0]
-      expect(block.target).toBe("html")
+      expect(block.label).toBe("server")
       // The header() call should be analyzed as a nested element
       expect(block.children.length).toBe(1)
       expect(block.children[0].kind).toBe("element")
@@ -1893,16 +1893,16 @@ describe("analyzeStatement - target labels", () => {
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(3)
 
-    expect(builder?.children[0].kind).toBe("target-block")
-    if (builder?.children[0].kind === "target-block") {
-      expect(builder.children[0].target).toBe("dom")
+    expect(builder?.children[0].kind).toBe("labeled-block")
+    if (builder?.children[0].kind === "labeled-block") {
+      expect(builder.children[0].label).toBe("client")
     }
 
     expect(builder?.children[1].kind).toBe("element")
 
-    expect(builder?.children[2].kind).toBe("target-block")
-    if (builder?.children[2].kind === "target-block") {
-      expect(builder.children[2].target).toBe("html")
+    expect(builder?.children[2].kind).toBe("labeled-block")
+    if (builder?.children[2].kind === "labeled-block") {
+      expect(builder.children[2].label).toBe("server")
     }
   })
 })

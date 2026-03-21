@@ -14,10 +14,8 @@
  * @packageDocumentation
  */
 
-import { type CallExpression, Project, type SourceFile, ts } from "ts-morph"
-import { resolveReactiveImports } from "./reactive-detection.js"
+import { type CallExpression, type SourceFile } from "ts-morph"
 import { CompilerError, KynetaErrorCode } from "../errors.js"
-import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
 import {
   generateElementFactory,
   generateElementFactoryWithResult,
@@ -32,8 +30,11 @@ import {
   filterTargetBlocks,
 } from "./ir-transforms.js"
 import {
+  analyzeAllBuilders,
   isInputTextRegionAttribute,
   isTextRegionContent,
+  parseSource,
+  resetProject,
 } from "@kyneta/compiler"
 import type { BuilderNode, ChildNode } from "@kyneta/compiler"
 
@@ -122,89 +123,10 @@ export interface TransformInPlaceResult {
 }
 
 // =============================================================================
-// Project Management
+// Project Management (delegated to @kyneta/compiler)
 // =============================================================================
-
-/**
- * Shared ts-morph project for parsing.
- * Lazily initialized on first use.
- */
-let sharedProject: Project | null = null
-
-/**
- * Get or create the shared ts-morph project.
- *
- * The project uses the real filesystem so that imports from node_modules
- * resolve naturally — no type stubs needed. The Vite plugin passes the
- * file's real absolute path, enabling ts-morph's module resolution to
- * find @kyneta/schema, @kyneta/core, etc. via pnpm workspace symlinks.
- *
- * Key configuration:
- * - moduleResolution: Bundler (100) for pnpm compatibility
- * - skipFileDependencyResolution: true — we manually resolve external
- *   packages to avoid loading all of node_modules. This is necessary
- *   because TypeScript needs the .d.ts files to properly analyze types
- *   from external packages (like detecting [CHANGEFEED] properties).
- *
- * Do NOT use tsConfigFilePath — it's 500ms+ due to loading all files.
- */
-function getProject(): Project {
-  if (!sharedProject) {
-    sharedProject = new Project({
-      useInMemoryFileSystem: false,
-      skipFileDependencyResolution: true, // We manually resolve needed modules
-      compilerOptions: {
-        target: ts.ScriptTarget.ESNext,
-        module: ts.ModuleKind.ESNext,
-        moduleResolution: ts.ModuleResolutionKind.Bundler,
-        strict: true,
-        esModuleInterop: true,
-        skipLibCheck: true,
-      },
-    })
-  }
-  return sharedProject
-}
-
-/**
- * Reset the shared project (for testing).
- * @internal
- */
-export function resetProject(): void {
-  sharedProject = null
-}
-
-// =============================================================================
-// Source File Handling
-// =============================================================================
-
-/**
- * Parse source code into a ts-morph SourceFile.
- *
- * After creating the source file, this resolves any @kyneta imports
- * so that TypeScript can fully analyze changefeed types (detecting
- * [CHANGEFEED] properties, etc.).
- */
-function parseSource(source: string, filename: string): SourceFile {
-  const project = getProject()
-
-  // Remove existing file if present (for re-parsing).
-  // With real filesystem, ts-morph may auto-discover files from disk,
-  // so we must remove before re-creating with new source content.
-  const existing = project.getSourceFile(filename)
-  if (existing) {
-    project.removeSourceFile(existing)
-  }
-
-  const sourceFile = project.createSourceFile(filename, source, {
-    overwrite: true,
-  })
-
-  // Resolve @kyneta imports so TypeScript can analyze changefeed types
-  resolveReactiveImports(project, sourceFile)
-
-  return sourceFile
-}
+// getProject, resetProject, parseSource, hasBuilderCalls, and analyzeAllBuilders
+// are imported from @kyneta/compiler. See packages/compiler/src/project.ts.
 
 // =============================================================================
 // Import Collection (Functional Core)
@@ -397,32 +319,7 @@ export function mergeImports(
  * @param filename - Filename for error messages
  * @returns Array of { call, ir } pairs
  */
-function analyzeAllBuilders(
-  sourceFile: SourceFile,
-  filename: string,
-): Array<{ call: CallExpression; ir: BuilderNode }> {
-  const calls = findBuilderCalls(sourceFile)
-  const results: Array<{ call: CallExpression; ir: BuilderNode }> = []
 
-  for (const call of calls) {
-    try {
-      const builder = analyzeBuilder(call)
-      if (builder) {
-        results.push({ call, ir: builder })
-      }
-    } catch (e) {
-      const line = call.getStartLineNumber()
-      const col = call.getStart() - call.getStartLinePos()
-      throw new CompilerError(
-        KynetaErrorCode.COMPILER_TRANSFORM_ERROR,
-        `Failed to analyze builder call: ${e instanceof Error ? e.message : String(e)}`,
-        { file: filename, line, column: col },
-      )
-    }
-  }
-
-  return results
-}
 
 // =============================================================================
 // In-Place Transformation (Imperative Shell)
@@ -674,34 +571,4 @@ export function transformFile(
  * @param source - Source code to check
  * @returns true if the source contains builder calls
  */
-export function hasBuilderCalls(source: string): boolean {
-  // Quick regex check for common element names with function syntax
-  // This is a heuristic - false positives are OK (will just parse and find nothing)
-  const quickCheck =
-    /\b(div|span|p|h[1-6]|ul|ol|li|a|button|input|form|table|section|article|header|footer|nav|main|aside)\s*\(/
-  if (!quickCheck.test(source)) {
-    return false
-  }
-
-  // Full parse to confirm
-  try {
-    const sourceFile = parseSource(source, "check.ts")
-    const calls = findBuilderCalls(sourceFile)
-    return calls.length > 0
-  } catch {
-    return false
-  } finally {
-    // Remove the temporary file to prevent duplicate type declarations
-    // from interfering with subsequent transformSourceInPlace calls
-    // that use the same shared project.
-    try {
-      const project = getProject()
-      const checkFile = project.getSourceFile("check.ts")
-      if (checkFile) {
-        project.removeSourceFile(checkFile)
-      }
-    } catch {
-      // ignore cleanup errors
-    }
-  }
-}
+export { hasBuilderCalls, resetProject } from "@kyneta/compiler"

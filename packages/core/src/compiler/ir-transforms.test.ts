@@ -19,7 +19,7 @@ import {
   createLoop,
   createSpan,
   createStatement,
-  createTargetBlock,
+  createLabeledBlock,
   type Dependency,
   type DeltaKind,
 } from "@kyneta/compiler"
@@ -44,7 +44,7 @@ function span() {
 describe("filterTargetBlocks", () => {
   it("should strip client: blocks when target is html", () => {
     const stmt = createStatement('console.log("client")', span())
-    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const clientBlock = createLabeledBlock("client", [stmt], span())
     const h1 = createElement(
       "h1",
       [],
@@ -63,7 +63,7 @@ describe("filterTargetBlocks", () => {
 
   it("should unwrap client: blocks when target is dom", () => {
     const stmt = createStatement('console.log("client")', span())
-    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const clientBlock = createLabeledBlock("client", [stmt], span())
     const h1 = createElement(
       "h1",
       [],
@@ -86,7 +86,7 @@ describe("filterTargetBlocks", () => {
 
   it("should strip server: blocks when target is dom", () => {
     const stmt = createStatement('console.log("server")', span())
-    const serverBlock = createTargetBlock("html", [stmt], span())
+    const serverBlock = createLabeledBlock("server", [stmt], span())
     const h1 = createElement(
       "h1",
       [],
@@ -105,7 +105,7 @@ describe("filterTargetBlocks", () => {
 
   it("should unwrap server: blocks when target is html", () => {
     const stmt = createStatement('console.log("server")', span())
-    const serverBlock = createTargetBlock("html", [stmt], span())
+    const serverBlock = createLabeledBlock("server", [stmt], span())
     const h1 = createElement(
       "h1",
       [],
@@ -125,7 +125,7 @@ describe("filterTargetBlocks", () => {
 
   it("should recurse into element children", () => {
     const stmt = createStatement('console.log("client")', span())
-    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const clientBlock = createLabeledBlock("client", [stmt], span())
     const inner = createElement("section", [], [], [], [clientBlock], span())
     const builder = createBuilder("div", [], [], [inner], span())
 
@@ -147,7 +147,7 @@ describe("filterTargetBlocks", () => {
 
   it("should recurse into loop bodies", () => {
     const stmt = createStatement('console.log("server")', span())
-    const serverBlock = createTargetBlock("html", [stmt], span())
+    const serverBlock = createLabeledBlock("server", [stmt], span())
     const li = createElement(
       "li",
       [],
@@ -184,7 +184,7 @@ describe("filterTargetBlocks", () => {
 
   it("should recurse into conditional branches", () => {
     const stmt = createStatement('console.log("client")', span())
-    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const clientBlock = createLabeledBlock("client", [stmt], span())
     const p = createElement(
       "p",
       [],
@@ -221,8 +221,8 @@ describe("filterTargetBlocks", () => {
 
   it("should handle nested target blocks (target block inside target block)", () => {
     const innerStmt = createStatement("const x = 1", span())
-    const innerBlock = createTargetBlock("dom", [innerStmt], span())
-    const outerBlock = createTargetBlock("dom", [innerBlock], span())
+    const innerBlock = createLabeledBlock("client", [innerStmt], span())
+    const outerBlock = createLabeledBlock("client", [innerBlock], span())
     const builder = createBuilder("div", [], [], [outerBlock], span())
 
     // DOM target: both layers unwrap
@@ -237,7 +237,7 @@ describe("filterTargetBlocks", () => {
 
   it("should handle deeply nested: target block inside element inside loop", () => {
     const stmt = createStatement('console.log("deep")', span())
-    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const clientBlock = createLabeledBlock("client", [stmt], span())
     const li = createElement("li", [], [], [], [clientBlock], span())
     const loop = createLoop(
       "items",
@@ -273,7 +273,7 @@ describe("filterTargetBlocks", () => {
       [createLiteral("Hello", span())],
       span(),
     )
-    const clientBlock = createTargetBlock("dom", [stmt1, stmt2, h1], span())
+    const clientBlock = createLabeledBlock("client", [stmt1, stmt2, h1], span())
     const builder = createBuilder("div", [], [], [clientBlock], span())
 
     const filtered = filterTargetBlocks(builder, "dom")
@@ -287,14 +287,14 @@ describe("filterTargetBlocks", () => {
 
   it("should not mutate the original builder", () => {
     const stmt = createStatement('console.log("client")', span())
-    const clientBlock = createTargetBlock("dom", [stmt], span())
+    const clientBlock = createLabeledBlock("client", [stmt], span())
     const builder = createBuilder("div", [], [], [clientBlock], span())
 
     const filtered = filterTargetBlocks(builder, "html")
 
     // Original unchanged
     expect(builder.children).toHaveLength(1)
-    expect(builder.children[0].kind).toBe("target-block")
+    expect(builder.children[0].kind).toBe("labeled-block")
 
     // Filtered has it stripped
     expect(filtered.children).toHaveLength(0)

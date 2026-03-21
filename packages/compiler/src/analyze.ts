@@ -48,19 +48,19 @@ import type {
   Dependency,
   EventHandlerNode,
   SourceSpan,
-} from "@kyneta/compiler"
+} from "./ir.js"
 import {
   createBuilder,
   createConditional,
   createConditionalBranch,
   createContent,
   createElement,
+  createLabeledBlock,
   createLiteral,
   createLoop,
   createSpan,
   createStatement,
-  createTargetBlock,
-} from "@kyneta/compiler"
+} from "./ir.js"
 
 // =============================================================================
 // Constants
@@ -974,9 +974,7 @@ export function analyzeStatement(stmt: Statement): ChildNode[] | null {
         }
       }
 
-      // client: → target "dom", server: → target "html"
-      const target = label === "client" ? "dom" : "html"
-      return [createTargetBlock(target as "dom" | "html", children, span)]
+      return [createLabeledBlock(label, children, span)]
     }
 
     // Unknown label — fall through to verbatim statement capture

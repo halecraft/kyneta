@@ -25,13 +25,21 @@ import { mergeConditionalBodies } from "@kyneta/compiler"
 // =============================================================================
 
 /**
+ * Maps raw block labels (as authored in source) to compilation targets.
+ */
+const LABEL_TARGET_MAP: Record<string, string> = {
+  client: "dom",
+  server: "html",
+}
+
+/**
  * Filter target blocks from an IR tree before codegen.
  *
  * This is a pure function that recursively walks the IR tree and:
- * - **Strips** `TargetBlockNode` nodes whose target doesn't match (removes them entirely)
- * - **Unwraps** `TargetBlockNode` nodes whose target matches (splices in their children)
+ * - **Strips** `LabeledBlockNode` nodes whose target doesn't match (removes them entirely)
+ * - **Unwraps** `LabeledBlockNode` nodes whose target matches (splices in their children)
  *
- * After filtering, the returned `BuilderNode` contains no `TargetBlockNode` nodes
+ * After filtering, the returned `BuilderNode` contains no `LabeledBlockNode` nodes
  * anywhere in the tree. Codegens, walkers, and template extraction never see them.
  *
  * @param node - The builder node to filter
@@ -58,8 +66,8 @@ function filterChildren(
   const result: ChildNode[] = []
 
   for (const child of children) {
-    if (child.kind === "target-block") {
-      if (child.target === target) {
+    if (child.kind === "labeled-block") {
+      if (LABEL_TARGET_MAP[child.label] === target) {
         // Matching target — unwrap: splice in the filtered children
         result.push(...filterChildren(child.children, target))
       }
@@ -74,7 +82,7 @@ function filterChildren(
 }
 
 /**
- * Recursively filter target blocks inside a single non-target-block child node.
+ * Recursively filter target blocks inside a single non-labeled-block child node.
  */
 function filterChildNode(
   node: ChildNode,
@@ -107,9 +115,9 @@ function filterChildNode(
     case "statement":
       return node
 
-    // target-block is already handled by filterChildren before this function
+    // labeled-block is already handled by filterChildren before this function
     // is called, so this case should never be reached.
-    case "target-block":
+    case "labeled-block":
       return node
   }
 }
@@ -215,9 +223,9 @@ function dissolveChildNode(node: ChildNode): ChildNode {
     case "statement":
       return node
 
-    // target-block children are recursed into (dissolution may run
+    // labeled-block children are recursed into (dissolution may run
     // before or after filterTargetBlocks in the pipeline).
-    case "target-block":
+    case "labeled-block":
       return {
         ...node,
         children: dissolveChildren(node.children),

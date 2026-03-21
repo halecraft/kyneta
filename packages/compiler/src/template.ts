@@ -25,8 +25,8 @@ import type {
   LoopNode,
   TemplateHole,
   TemplateNode,
-} from "@kyneta/compiler"
-import { generateRegionMarkers } from "@kyneta/compiler"
+} from "./ir.js"
+import { generateRegionMarkers } from "./html-constants.js"
 import { walkIR, type WalkEvent } from "./walk.js"
 
 // =============================================================================

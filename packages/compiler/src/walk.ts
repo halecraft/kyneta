@@ -26,8 +26,8 @@ import type {
   ElementNode,
   EventHandlerNode,
   LoopNode,
-} from "@kyneta/compiler"
-import { escapeHtml, VOID_ELEMENTS } from "@kyneta/compiler"
+} from "./ir.js"
+import { escapeHtml, VOID_ELEMENTS } from "./html-constants.js"
 
 // =============================================================================
 // Event Types
@@ -251,7 +251,7 @@ function* walkBuilder(
   let domIndex = 0
   for (let i = 0; i < node.children.length; i++) {
     const child = node.children[i]
-    if (child.kind === "statement" || child.kind === "target-block") {
+    if (child.kind === "statement" || child.kind === "labeled-block") {
       continue // Statements don't produce DOM nodes — skip
     }
     pathStack.push(domIndex)
@@ -329,7 +329,7 @@ function* walkElement(
   let domIndex = 0
   for (let i = 0; i < node.children.length; i++) {
     const child = node.children[i]
-    if (child.kind === "statement" || child.kind === "target-block") {
+    if (child.kind === "statement" || child.kind === "labeled-block") {
       continue // Statements don't produce DOM nodes — skip
     }
     pathStack.push(domIndex)

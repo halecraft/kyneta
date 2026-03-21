@@ -2,7 +2,7 @@
  * Tests for the generator-based IR walker.
  */
 
-import type { ChildNode } from "@kyneta/compiler"
+import type { ChildNode } from "./ir.js"
 import { describe, expect, it } from "vitest"
 import {
   collectEvents,
@@ -21,7 +21,7 @@ import {
   createSpan,
   type BuilderNode,
   type ElementNode,
-} from "@kyneta/compiler"
+} from "./ir.js"
 
 // =============================================================================
 // Test Helpers

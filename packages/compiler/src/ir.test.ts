@@ -22,7 +22,7 @@ import {
   createLoop,
   createSpan,
   createStatement,
-  createTargetBlock,
+  createLabeledBlock,
   type Dependency,
   type DeltaKind,
 
@@ -567,7 +567,7 @@ describe("createBuilder - target block dependency collection", () => {
       [dep("count")],
       span(),
     )
-    const targetBlock = createTargetBlock("dom", [reactiveExpr], span())
+    const targetBlock = createLabeledBlock("client", [reactiveExpr], span())
     const builder = createBuilder("div", [], [], [targetBlock], span())
 
     expect(hasDep(builder.allDependencies, "count")).toBe(true)
@@ -581,7 +581,7 @@ describe("createBuilder - target block dependency collection", () => {
       [dep("doc.title", "text")],
       span(),
     )
-    const targetBlock = createTargetBlock("html", [reactiveExpr], span())
+    const targetBlock = createLabeledBlock("server", [reactiveExpr], span())
     const builder = createBuilder("div", [], [], [targetBlock], span())
 
     expect(hasDep(builder.allDependencies, "doc.title")).toBe(true)
@@ -601,8 +601,8 @@ describe("createBuilder - target block dependency collection", () => {
       [dep("serverRef")],
       span(),
     )
-    const clientBlock = createTargetBlock("dom", [clientExpr], span())
-    const serverBlock = createTargetBlock("html", [serverExpr], span())
+    const clientBlock = createLabeledBlock("client", [clientExpr], span())
+    const serverBlock = createLabeledBlock("server", [serverExpr], span())
     const builder = createBuilder(
       "div",
       [],
@@ -631,7 +631,7 @@ describe("createBuilder - target block dependency collection", () => {
       ],
       span(),
     )
-    const targetBlock = createTargetBlock("dom", [reactiveP], span())
+    const targetBlock = createLabeledBlock("client", [reactiveP], span())
     const builder = createBuilder("div", [], [], [targetBlock], span())
 
     expect(hasDep(builder.allDependencies, "doc.message")).toBe(true)
