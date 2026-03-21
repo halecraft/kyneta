@@ -76,10 +76,10 @@ This example exercises every delta kind the framework supports:
 
 | Delta Kind | Schema Construct | UI Element | Runtime Region |
 |------------|-----------------|------------|----------------|
-| **text** | `LoroSchema.text()` | Recipe book title, recipe names | `textRegion` — surgical `insertData`/`deleteData` on DOM text nodes |
+| **text** | `Schema.annotated("text")` | Recipe book title, recipe names | `textRegion` — surgical `insertData`/`deleteData` on DOM text nodes |
 | **sequence** | `Schema.list(...)` | Recipe list, ingredient lists | `listRegion` — O(k) `insertBefore`/`removeChild` per operation |
-| **replace** | `LoroSchema.plain.boolean()` | Vegetarian badge toggle | `conditionalRegion` — branch swap on value change |
-| **increment** | `LoroSchema.counter()` | Favorites counter | `valueRegion` — re-read and update on each delta |
+| **replace** | `Schema.boolean()` | Vegetarian badge toggle | `conditionalRegion` — branch swap on value change |
+| **increment** | `Schema.annotated("counter")` | Favorites counter | `valueRegion` — re-read and update on each delta |
 
 ## Component Architecture
 
@@ -87,7 +87,7 @@ Three `ComponentFactory`-style components at increasing complexity levels:
 
 | Component | Props | Demonstrates |
 |-----------|-------|-------------|
-| `IngredientItem` | Plain values (`text: string`) | Leaf component — parent reads refs, child is pure |
+| `IngredientItem` | Plain values + callbacks (`value: string`, `onEdit`) | Leaf component with inline editing — parent reads refs and handles mutations via callbacks |
 | `RecipeCard` | Schema ref (`recipe: RecipeRef`) | Nested regions: `textRegion` + `listRegion` + `conditionalRegion` |
 | `Toolbar` | Doc ref + `LocalRef`s | Schema/local-state boundary: synced favorites vs. local filter |
 
@@ -99,6 +99,8 @@ The app demonstrates a motivated boundary between document state and local UI st
 - **Local state** (`state()` → `LocalRef<T>`) — per-tab, not synced. Search filter text, veggie-only toggle.
 
 Both participate in the `[CHANGEFEED]` protocol, so the compiler treats them identically for reactive detection.
+
+Ingredients use `.set()` (replace semantics — whole-value swap) while recipe names use `.update()` (text change semantics — produces a text delta). Both follow the same UI pattern: `input({ value: ref() })` with an `onInput` handler that calls the appropriate mutation method inside `change()`. The difference in mutation method is the pedagogical point — `.set()` for scalar values, `.update()` for text values.
 
 ## Styling
 
@@ -122,7 +124,7 @@ examples/recipe-book/
 ├── package.json             Dependencies: @kyneta/core, @kyneta/schema, zod
 ├── vite.config.ts           Kyneta Vite plugin (auto-detects SSR target)
 ├── vitest.config.ts         Test runner config
-├── recipe-book.test.ts      15 integration tests (facade + sync + SSR snapshot round-trip)
+├── recipe-book.test.ts      18 integration tests (facade + sync + SSR snapshot round-trip)
 └── src/
     ├── schema.ts            RecipeBookSchema — all 4 delta kinds
     ├── types.ts             RecipeBookDoc, RecipeBookSnapshot, RecipeBookSeed
@@ -157,8 +159,8 @@ Each tab creates its own local document from the same seed. The WebSocket sync p
 pnpm test
 ```
 
-Runs 15 integration tests covering:
-- **Facade basics** (5 tests) — `createDoc`, text/list/counter/boolean mutations
+Runs 18 integration tests covering:
+- **Facade basics** (8 tests) — `createDoc`, text/list/counter/boolean mutations, ingredient `.set()` round-trip, ingredient push with empty string, recipe name `.update()` round-trip
 - **Sync primitives** (7 tests) — version tracking, delta computation, round-trip replication
 - **SSR snapshot round-trip** (3 tests) — `exportSnapshot` → `createDocFromSnapshot` → state equality, fresh epoch frontier, up-to-date delta
 

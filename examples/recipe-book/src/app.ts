@@ -90,7 +90,7 @@ export function createApp(doc: RecipeBookDoc) {
 
   return div({ class: "recipe-book" }, () => {
     // ─── App Header ────────────────────────────────────────────────
-    // doc.title is a LoroSchema.text() ref. Placing it as a child of
+    // doc.title is a Schema.annotated("text") ref. Placing it as a child of
     // h1 triggers the compiler's reactive detection: it sees
     // [CHANGEFEED] with deltaKind "text" and emits textRegion, which
     // applies surgical insertData/deleteData on the DOM text node.

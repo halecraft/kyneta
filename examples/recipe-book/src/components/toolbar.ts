@@ -111,7 +111,7 @@ export const Toolbar = (props: ToolbarProps): Element => {
     })
 
     // ─── Favorites Counter (document state, synced) ──────────────
-    // doc.favorites is a LoroSchema.counter() ref. The compiler
+    // doc.favorites is a Schema.annotated("counter") ref. The compiler
     // detects [CHANGEFEED] with deltaKind "increment" and emits
     // valueRegion. When any tab increments the counter, all tabs
     // see the updated value via WebSocket sync.

@@ -36,13 +36,7 @@ import { IngredientItem } from "./ingredient-item.js"
 // Extract the struct schema from the list's element type.
 // RecipeBookSchema.fields.recipes is Schema.list(Schema.struct({ ... })),
 // so we need the inner item schema. We define it manually to match:
-import { Schema, LoroSchema } from "@kyneta/schema"
-
-const RecipeSchema = Schema.struct({
-  name: LoroSchema.text(),
-  vegetarian: LoroSchema.plain.boolean(),
-  ingredients: Schema.list(LoroSchema.plain.string()),
-})
+import { RecipeSchema } from "../schema.js"
 
 // The ref type for a single recipe in the list.
 type RecipeRef = Ref<typeof RecipeSchema>
@@ -66,7 +60,7 @@ type RecipeCardProps = {
  * A recipe card showing name, vegetarian status, and ingredients.
  *
  * Demonstrates three delta kinds in one component:
- *   1. `recipe.name` (LoroSchema.text) → the compiler detects [CHANGEFEED]
+ *   1. `recipe.name` (Schema.annotated("text")) → the compiler detects [CHANGEFEED]
  *      with deltaKind "text" and emits textRegion for surgical character
  *      updates in the DOM.
  *   2. `for...of recipe.ingredients` → the compiler detects the sequence
@@ -91,12 +85,22 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
 
   return article({ class: "recipe-card" }, () => {
     // ─── Recipe Header ───────────────────────────────────────────────
-    // The recipe name is a LoroSchema.text() ref. Placing it as a child
-    // of h2 triggers the compiler's reactive detection: it sees
-    // [CHANGEFEED] with deltaKind "text" and emits textRegion, which
-    // applies surgical insertData/deleteData on the DOM text node.
+    // The recipe name is rendered as an editable input. We read the
+    // current value with recipe.name() (valueRegion) and update it
+    // on input via recipe.name.update(). Using the read value (a
+    // string) avoids triggering inputTextRegion and the cursor bug
+    // that comes with passing a bare text ref to an input element.
     header({ class: "recipe-header" }, () => {
-      h2(recipe.name)
+      input({
+        type: "text",
+        class: "recipe-name-input",
+        value: recipe.name(),
+        onInput: (e: InputEvent) => {
+          change(recipe, () => {
+            recipe.name.update((e.target as HTMLInputElement).value)
+          })
+        },
+      })
 
       // ─── Vegetarian Badge (delta: replace → conditionalRegion) ───
       // The compiler detects that recipe.vegetarian has [CHANGEFEED]
@@ -116,12 +120,16 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
     h3("Ingredients")
     ul({ class: "ingredient-list" }, () => {
       for (const ingredient of recipe.ingredients) {
-        // Each ingredient is a LoroSchema.plain.string() ref.
-        // We read its value and pass the plain string to IngredientItem.
-        // The IngredientItem component is a leaf — it receives plain
-        // values and doesn't need to know about the reactive system.
+        // Each ingredient is a Schema.string() ref.
+        // We read its value and pass the plain string to IngredientItem,
+        // along with an onEdit callback to update the ref on input.
         IngredientItem({
-          text: ingredient(),
+          value: ingredient(),
+          onEdit: (newValue) => {
+            change(recipe, () => {
+              ingredient.set(newValue)
+            })
+          },
           onRemove: () => {
             // Remove this ingredient from the recipe's ingredient list.
             // Find the index of this ingredient ref in the list.
@@ -143,7 +151,7 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
           class: "add-btn",
           onClick: () => {
             change(recipe, () => {
-              recipe.ingredients.push("new ingredient")
+              recipe.ingredients.push("")
             })
           },
         },

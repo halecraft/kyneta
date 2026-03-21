@@ -291,13 +291,22 @@ button {
   margin-bottom: 12px;
 }
 
-.recipe-header h2 {
+.recipe-name-input {
   flex: 1;
+  min-width: 0;
   margin: 0;
   font-size: 1.25rem;
   font-weight: 600;
   color: #2c1810;
-  min-width: 0; /* allow text truncation in flex */
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  padding: 0;
+}
+
+.recipe-name-input:focus {
+  border-bottom: 2px solid #b5563f;
 }
 
 /* Vegetarian badge — inline pill */
@@ -352,6 +361,23 @@ button {
 .ingredient-item > span {
   flex: 1;
   min-width: 0;
+}
+
+/* Ingredient inline edit input */
+.ingredient-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 0.9375rem;
+  font-family: inherit;
+  color: #2c1810;
+  padding: 0;
+}
+
+.ingredient-input:focus {
+  border-bottom: 1px solid #b5563f;
 }
 
 /* ---------------------------------------------------------------------------

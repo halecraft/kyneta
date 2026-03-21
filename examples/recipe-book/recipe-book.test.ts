@@ -106,6 +106,50 @@ describe("facade basics", () => {
     expect(ops[0].change.type).toBe("replace")
     expect((recipe.vegetarian as any)()).toBe(true)
   })
+
+  it("ingredient .set() round-trip via change()", () => {
+    const doc = makeDoc()
+    const recipe = doc.recipes.at(0)!
+    const ingredient = [...recipe.ingredients][0]!
+    expect(ingredient()).toBeDefined()
+
+    const ops = change(doc, () => {
+      ingredient.set("updated")
+    })
+
+    expect(ops.length).toBeGreaterThan(0)
+    expect(ops[0].change.type).toBe("replace")
+    expect(ingredient()).toBe("updated")
+  })
+
+  it("ingredient push with empty string", () => {
+    const doc = makeDoc()
+    const recipe = doc.recipes.at(0)!
+    const originalLength = recipe.ingredients.length
+
+    change(doc, () => {
+      recipe.ingredients.push("")
+    })
+
+    expect(recipe.ingredients.length).toBe(originalLength + 1)
+    // Get the last ingredient (the newly pushed one)
+    const ingredients = [...recipe.ingredients]
+    const lastIngredient = ingredients[ingredients.length - 1]!
+    expect(lastIngredient()).toBe("")
+  })
+
+  it("recipe name .update() round-trip via change()", () => {
+    const doc = makeDoc()
+    const recipe = doc.recipes.at(0)!
+
+    const ops = change(doc, () => {
+      recipe.name.update("New Name")
+    })
+
+    expect(ops.length).toBeGreaterThan(0)
+    expect(ops[0].change.type).toBe("text")
+    expect((recipe.name as any)()).toBe("New Name")
+  })
 })
 
 // ---------------------------------------------------------------------------
