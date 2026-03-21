@@ -48,7 +48,7 @@ import type {
   Dependency,
   EventHandlerNode,
   SourceSpan,
-} from "./ir.js"
+} from "@kyneta/compiler"
 import {
   createBuilder,
   createConditional,
@@ -60,7 +60,7 @@ import {
   createSpan,
   createStatement,
   createTargetBlock,
-} from "./ir.js"
+} from "@kyneta/compiler"
 
 // =============================================================================
 // Constants

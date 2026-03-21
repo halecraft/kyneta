@@ -26,8 +26,8 @@ import type {
   ElementNode,
   EventHandlerNode,
   LoopNode,
-} from "./ir.js"
-import { escapeHtml, VOID_ELEMENTS } from "./html-constants.js"
+} from "@kyneta/compiler"
+import { escapeHtml, VOID_ELEMENTS } from "@kyneta/compiler"
 
 // =============================================================================
 // Event Types

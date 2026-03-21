@@ -13,7 +13,7 @@ import {
   createSpan,
   type Dependency,
   type DeltaKind,
-} from "./ir.js"
+} from "@kyneta/compiler"
 import {
   collectRequiredImports,
   hasBuilderCalls,

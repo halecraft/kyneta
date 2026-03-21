@@ -26,7 +26,7 @@ import {
   type BuilderNode,
   type ChildNode,
   type ElementNode,
-} from "./ir.js"
+} from "@kyneta/compiler"
 
 // =============================================================================
 // Test Helpers

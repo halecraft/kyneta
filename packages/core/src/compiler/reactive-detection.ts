@@ -28,7 +28,7 @@
  */
 
 import { type Project, type SourceFile, ts, type Type } from "ts-morph"
-import type { DeltaKind } from "./ir.js"
+import type { DeltaKind } from "@kyneta/compiler"
 
 // =============================================================================
 // Module Resolution

@@ -30,19 +30,24 @@ import {
 import {
   dissolveConditionals,
   filterTargetBlocks,
+} from "./ir-transforms.js"
+import {
   isInputTextRegionAttribute,
   isTextRegionContent,
-  type CompileTarget,
-} from "./ir.js"
-import type { BuilderNode, ChildNode } from "./ir.js"
+} from "@kyneta/compiler"
+import type { BuilderNode, ChildNode } from "@kyneta/compiler"
 
 // =============================================================================
 // Types
 // =============================================================================
 
-// CompileTarget is defined in ir.ts to avoid circular dependencies.
-// Re-export it here for backwards compatibility.
-export type { CompileTarget } from "./ir.js"
+/**
+ * Compilation target for the web rendering package.
+ *
+ * - "dom": Generate DOM manipulation code (for client)
+ * - "html": Generate HTML string code (for SSR)
+ */
+export type CompileTarget = "dom" | "html"
 
 /**
  * Options for transformation.

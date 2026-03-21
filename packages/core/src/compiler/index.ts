@@ -15,7 +15,7 @@
  */
 
 // =============================================================================
-// IR Types
+// IR Types (re-exported from @kyneta/compiler)
 // =============================================================================
 
 export type {
@@ -23,11 +23,12 @@ export type {
   BindingTime,
   BuilderNode,
   ChildNode,
-  CompileTarget,
   ConditionalBranch,
   ConditionalNode,
   ContentNode,
   ContentValue,
+  DeltaKind,
+  Dependency,
   ElementNode,
   EventHandlerNode,
   IRNodeBase,
@@ -37,8 +38,12 @@ export type {
   MergeResult,
   SlotKind,
   SourceSpan,
+  StatementNode,
   TargetBlockNode,
-} from "./ir.js"
+  TemplateHole,
+  TemplateHoleKind,
+  TemplateNode,
+} from "@kyneta/compiler"
 
 export {
   // Slot computation
@@ -53,22 +58,47 @@ export {
   createLiteral,
   createLoop,
   createSpan,
+  createStatement,
   createTargetBlock,
-  // Target block filtering
-  filterTargetBlocks,
   // Type guards
   isConditionalNode,
   isContentNode,
   isElementNode,
+  isInputTextRegionAttribute,
   isLiteralContent,
   isLoopNode,
   isReactiveContent,
+  isStatementNode,
   isTargetBlockNode,
+  isTextRegionContent,
   // Tree merge
   mergeConditionalBodies,
   mergeContentValue,
   mergeNode,
-} from "./ir.js"
+} from "@kyneta/compiler"
+
+// =============================================================================
+// HTML Constants (re-exported from @kyneta/compiler)
+// =============================================================================
+
+export {
+  escapeHtml,
+  generateMarkerId,
+  generateRegionMarkers,
+  isVoidElement,
+  VOID_ELEMENTS,
+} from "@kyneta/compiler"
+
+export type { RegionMarkerType, RegionMarkers } from "@kyneta/compiler"
+
+// =============================================================================
+// IR Transforms (consumer-side pipeline transforms)
+// =============================================================================
+
+export {
+  dissolveConditionals,
+  filterTargetBlocks,
+} from "./ir-transforms.js"
 
 // =============================================================================
 // Analysis
@@ -131,6 +161,8 @@ export {
   resetProject,
   // Import handling
   collectRequiredImports,
+  // CompileTarget type (web-specific narrowing)
+  type CompileTarget,
   // Functions
   hasBuilderCalls,
   mergeImports,

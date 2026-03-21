@@ -23,12 +23,12 @@ import type {
   LoopNode,
   StatementNode,
   TemplateHole,
-} from "../ir.js"
+} from "@kyneta/compiler"
 import {
   computeSlotKind,
   isInputTextRegionAttribute,
   isTextRegionContent,
-} from "../ir.js"
+} from "@kyneta/compiler"
 import {
   extractTemplate,
   generateTemplateDeclaration,

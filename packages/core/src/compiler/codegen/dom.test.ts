@@ -20,8 +20,8 @@ import {
   type Dependency,
   type DeltaKind,
   type EventHandlerNode,
-  dissolveConditionals,
-} from "../ir.js"
+} from "@kyneta/compiler"
+import { dissolveConditionals } from "../ir-transforms.js"
 import {
   generateDOM,
   generateElementFactory,

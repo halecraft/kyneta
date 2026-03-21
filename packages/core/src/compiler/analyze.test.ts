@@ -22,7 +22,7 @@ import {
   isComponentFactoryType,
   resolveReactiveImports,
 } from "./reactive-detection.js"
-import type { ContentValue } from "./ir.js"
+import type { ContentValue } from "@kyneta/compiler"
 
 // =============================================================================
 // Test Helpers

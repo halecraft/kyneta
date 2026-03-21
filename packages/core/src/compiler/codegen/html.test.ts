@@ -23,7 +23,7 @@ import {
   createStatement,
   type Dependency,
   type DeltaKind,
-} from "../ir.js"
+} from "@kyneta/compiler"
 import { generateHTML, generateRenderFunction } from "./html.js"
 
 // =============================================================================
