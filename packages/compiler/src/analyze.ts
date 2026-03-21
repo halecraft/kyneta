@@ -63,6 +63,7 @@ import {
   createStatement,
 } from "./ir.js"
 import { createBindingScope, type BindingScope } from "./binding-scope.js"
+import { detectFilterPattern } from "./patterns.js"
 
 // =============================================================================
 // Constants
@@ -832,7 +833,7 @@ export function analyzeForOfStatement(stmt: ForOfStatement, scope?: BindingScope
     ? [{ source: listSource, deltaKind: getDeltaKind(iterExpr.getType()) }]
     : []
 
-  return createLoop(
+  let loopNode = createLoop(
     listSource,
     isReactive ? "reactive" : "render",
     itemVariable,
@@ -841,6 +842,23 @@ export function analyzeForOfStatement(stmt: ForOfStatement, scope?: BindingScope
     dependencies,
     span,
   )
+
+  // Stage 3: detect filter pattern and annotate with classified metadata
+  const filter = detectFilterPattern(loopNode)
+  if (filter) {
+    loopNode = createLoop(
+      loopNode.iterableSource,
+      loopNode.iterableBindingTime,
+      loopNode.itemVariable,
+      loopNode.indexVariable,
+      loopNode.body,
+      loopNode.dependencies,
+      loopNode.span,
+      filter,
+    )
+  }
+
+  return loopNode
 }
 
 /**

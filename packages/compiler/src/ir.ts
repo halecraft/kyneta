@@ -13,6 +13,8 @@
  * @packageDocumentation
  */
 
+import type { ClassifiedDependency } from "./classify.js"
+
 // =============================================================================
 // Base Types
 // =============================================================================
@@ -396,6 +398,29 @@ export interface ElementNode extends IRNodeBase {
 // =============================================================================
 
 /**
+ * Filter metadata for a loop node.
+ *
+ * Populated by the pattern recognition stage when the loop body
+ * matches the filter pattern: all DOM-producing content is wrapped
+ * in a single `if` with no `else` branch.
+ *
+ * The rendering target uses this metadata to emit optimized code:
+ * - Subscribe to each external dep once (shared across all items)
+ * - Subscribe to each item dep per-item (precise, not firehose)
+ * - When an external dep changes: re-evaluate predicate for all items O(n)
+ * - When an item dep changes: re-evaluate predicate for that item O(1)
+ * - When the collection changes structurally: evaluate predicate for new items O(k)
+ */
+export interface FilterMetadata {
+  /** The full predicate expression (the condition of the wrapping `if`) */
+  predicate: ContentNode
+  /** Dependencies that navigate from the loop variable — per-item subscriptions */
+  itemDeps: ClassifiedDependency[]
+  /** Dependencies that are free variables — one shared subscription each */
+  externalDeps: ClassifiedDependency[]
+}
+
+/**
  * A loop node — unified representation for both render-time and reactive loops.
  *
  * Replaces the former `StaticLoopNode` (render-time) and `ListRegionNode` (reactive).
@@ -447,6 +472,18 @@ export interface LoopNode extends IRNodeBase {
    * Empty array for render-time loops.
    */
   dependencies: Dependency[]
+
+  /**
+   * Filter metadata — populated by pattern recognition (Stage 3).
+   *
+   * When present, the loop body has the filter pattern: all DOM content
+   * is wrapped in a single `if` with no `else`. The rendering target
+   * may emit `filteredListRegion` instead of `listRegion + conditionalRegion`.
+   *
+   * When undefined, the loop has no recognized filter pattern — codegen
+   * emits the standard `listRegion` with inline control flow.
+   */
+  filter?: FilterMetadata
 }
 
 /**
@@ -1386,6 +1423,7 @@ export function createLoop(
   body: ChildNode[],
   dependencies: Dependency[],
   span: SourceSpan,
+  filter?: FilterMetadata,
 ): LoopNode {
   return {
     kind: "loop",
@@ -1398,6 +1436,7 @@ export function createLoop(
     bodySlotKind: computeSlotKind(body),
     dependencies,
     span,
+    ...(filter !== undefined && { filter }),
   }
 }
 

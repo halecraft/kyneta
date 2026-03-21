@@ -33,6 +33,7 @@ export type {
   EventHandlerNode,
   IRNodeBase,
   IRNodeKind,
+  FilterMetadata,
   LoopNode,
   MergeFailureReason,
   MergeResult,
@@ -208,3 +209,19 @@ export {
 // =============================================================================
 
 export { createBindingScope, type BindingScope } from "./binding-scope.js"
+
+// =============================================================================
+// Dependency Classification
+// =============================================================================
+
+export {
+  classifyDependencies,
+  type ClassifiedDependency,
+  type DependencyClassification,
+} from "./classify.js"
+
+// =============================================================================
+// Pattern Recognition
+// =============================================================================
+
+export { detectFilterPattern } from "./patterns.js"
