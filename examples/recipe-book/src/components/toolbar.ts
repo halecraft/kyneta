@@ -24,7 +24,7 @@
 
 /// <reference types="@kyneta/core/types/elements" />
 
-import type { ComponentFactory, Element, LocalRef } from "@kyneta/core"
+import type { Element, LocalRef } from "@kyneta/core"
 import type { RecipeBookDoc } from "../types.js"
 import { change } from "../facade.js"
 
@@ -92,19 +92,22 @@ export const Toolbar = (props: ToolbarProps): Element => {
     // the Toolbar (provides the toggle button) and createApp (uses
     // the value to filter the recipe list).
     div({ class: "toolbar-section filter" }, () => {
-      button({
-        class: "toggle-btn",
-        onClick: () => veggieOnly.set(!veggieOnly()),
-      }, () => {
-        // Dynamic button text reacts to the LocalRef value.
-        // The compiler detects veggieOnly has [CHANGEFEED] and
-        // emits the appropriate reactive region.
-        if (veggieOnly()) {
-          span("🌱 Veggie Only: ON")
-        } else {
-          span("🌱 Veggie Only: OFF")
-        }
-      })
+      button(
+        {
+          class: "toggle-btn",
+          onClick: () => veggieOnly.set(!veggieOnly()),
+        },
+        () => {
+          // Dynamic button text reacts to the LocalRef value.
+          // The compiler detects veggieOnly has [CHANGEFEED] and
+          // emits the appropriate reactive region.
+          if (veggieOnly()) {
+            span("🌱 Veggie Only: ON")
+          } else {
+            span("🌱 Veggie Only: OFF")
+          }
+        },
+      )
     })
 
     // ─── Favorites Counter (document state, synced) ──────────────
@@ -116,23 +119,31 @@ export const Toolbar = (props: ToolbarProps): Element => {
       span("❤️ Favorites: ")
       span(doc.favorites)
 
-      button({
-        class: "fav-btn",
-        onClick: () => {
-          change(doc, () => {
-            doc.favorites.increment(1)
-          })
+      button(
+        {
+          class: "fav-btn",
+          "aria-label": "Increment favorites",
+          onClick: () => {
+            change(doc, () => {
+              doc.favorites.increment(1)
+            })
+          },
         },
-      }, "+")
+        "+",
+      )
 
-      button({
-        class: "fav-btn",
-        onClick: () => {
-          change(doc, () => {
-            doc.favorites.increment(-1)
-          })
+      button(
+        {
+          class: "fav-btn",
+          "aria-label": "Decrement favorites",
+          onClick: () => {
+            change(doc, () => {
+              doc.favorites.increment(-1)
+            })
+          },
         },
-      }, "−")
+        "−",
+      )
     })
 
     // ─── Add Recipe Button (document state, synced) ──────────────
@@ -140,18 +151,21 @@ export const Toolbar = (props: ToolbarProps): Element => {
     // doc.recipes. The subscription-based sync in main.ts forwards
     // this change to other tabs automatically.
     div({ class: "toolbar-section actions" }, () => {
-      button({
-        class: "add-btn",
-        onClick: () => {
-          change(doc, () => {
-            doc.recipes.push({
-              name: "New Recipe",
-              vegetarian: false,
-              ingredients: ["ingredient 1"],
-            } as any)
-          })
+      button(
+        {
+          class: "add-btn",
+          onClick: () => {
+            change(doc, () => {
+              doc.recipes.push({
+                name: "New Recipe",
+                vegetarian: false,
+                ingredients: ["ingredient 1"],
+              })
+            })
+          },
         },
-      }, "+ New Recipe")
+        "+ New Recipe",
+      )
     })
   })
 }

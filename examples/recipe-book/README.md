@@ -100,11 +100,25 @@ The app demonstrates a motivated boundary between document state and local UI st
 
 Both participate in the `[CHANGEFEED]` protocol, so the compiler treats them identically for reactive detection.
 
+## Styling
+
+A single static `style.css` file provides all visual design — no build step, no preprocessor, no CSS-in-JS. The stylesheet targets the semantic class names already emitted by the compiled component output (`.recipe-card`, `.ingredient-item`, `.toolbar-section`, etc.), demonstrating that Kyneta's compiled HTML is designer-friendly: stable class names, no framework-specific selectors.
+
+Key design patterns:
+
+- **Four-tier button hierarchy** — `.add-btn` (primary, filled accent), `.toggle-btn` (secondary, outlined), `.remove-btn` (destructive, icon-only circle), `.fav-btn` (stepper, small outlined square)
+- **Flexbox label+action rows** — ingredient items and recipe headers use flex with the label growing and the action button pinned right, eliminating ragged edges
+- **Responsive layout** — toolbar sections stack vertically below 600px, cards reduce padding, footer buttons go full-width
+- **Kitchen-friendly touch targets** — all interactive elements meet the 44px minimum for use on mobile devices
+
+The CSS is linked from `index.html` as a static asset, so it works with SSR (the page is styled before JavaScript loads).
+
 ## File Walkthrough
 
 ```
 examples/recipe-book/
 ├── index.html               HTML shell with <!--ssr--> placeholder
+├── style.css                Kitchen-friendly stylesheet (static, no build step)
 ├── package.json             Dependencies: @kyneta/core, @kyneta/schema, zod
 ├── vite.config.ts           Kyneta Vite plugin (auto-detects SSR target)
 ├── vitest.config.ts         Test runner config

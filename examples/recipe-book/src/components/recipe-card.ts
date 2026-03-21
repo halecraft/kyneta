@@ -24,9 +24,8 @@
 
 /// <reference types="@kyneta/core/types/elements" />
 
-import type { ComponentFactory, Element } from "@kyneta/core"
+import type { Element } from "@kyneta/core"
 import type { Ref } from "@kyneta/schema"
-import type { RecipeBookSchema } from "../schema.js"
 import { change } from "../facade.js"
 import { IngredientItem } from "./ingredient-item.js"
 
@@ -107,7 +106,7 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
         span({ class: "badge vegetarian" }, "🌱 Vegetarian")
       }
 
-      button({ class: "remove-btn", onClick: onRemove }, "✕")
+      button({ class: "remove-btn", "aria-label": "Remove recipe", onClick: onRemove }, "×")
     })
 
     // ─── Ingredients List (delta: sequence → listRegion) ──────────
@@ -139,30 +138,36 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
 
     // ─── Ingredient Controls ──────────────────────────────────────
     footer({ class: "recipe-footer" }, () => {
-      button({
-        class: "add-btn",
-        onClick: () => {
-          change(recipe, () => {
-            recipe.ingredients.push("new ingredient")
-          })
+      button(
+        {
+          class: "add-btn",
+          onClick: () => {
+            change(recipe, () => {
+              recipe.ingredients.push("new ingredient")
+            })
+          },
         },
-      }, "+ Ingredient")
+        "+ Ingredient",
+      )
 
-      button({
-        class: "toggle-btn",
-        onClick: () => {
-          change(recipe, () => {
-            recipe.vegetarian.set(!recipe.vegetarian())
-          })
+      button(
+        {
+          class: "toggle-btn",
+          onClick: () => {
+            change(recipe, () => {
+              recipe.vegetarian.set(!recipe.vegetarian())
+            })
+          },
         },
-      }, () => {
-        // Dynamic button text based on current vegetarian state
-        if (recipe.vegetarian()) {
-          span("Mark Non-Vegetarian")
-        } else {
-          span("Mark Vegetarian")
-        }
-      })
+        () => {
+          // Dynamic button text based on current vegetarian state
+          if (recipe.vegetarian()) {
+            span("Mark Non-Vegetarian")
+          } else {
+            span("Mark Vegetarian")
+          }
+        },
+      )
     })
   })
 }

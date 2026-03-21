@@ -54,6 +54,6 @@ type IngredientItemProps = {
 export const IngredientItem = (props: IngredientItemProps): Element => {
   return li({ class: "ingredient-item" }, () => {
     span(props.text)
-    button({ class: "remove-btn", onClick: props.onRemove }, "×")
+    button({ class: "remove-btn", "aria-label": "Remove ingredient", onClick: props.onRemove }, "×")
   })
 }
