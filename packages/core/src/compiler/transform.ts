@@ -28,7 +28,7 @@ import {
 import {
   dissolveConditionals,
   filterTargetBlocks,
-} from "./ir-transforms.js"
+} from "@kyneta/compiler/transforms"
 import {
   analyzeAllBuilders,
   isInputTextRegionAttribute,

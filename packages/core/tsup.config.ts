@@ -3,7 +3,6 @@ import { defineConfig } from "tsup"
 export default defineConfig({
   entry: {
     index: "src/index.ts",
-    "compiler/index": "src/compiler/index.ts",
     "unplugin/index": "src/unplugin/index.ts",
     "unplugin/adapters/vite": "src/unplugin/adapters/vite.ts",
     "unplugin/adapters/bun": "src/unplugin/adapters/bun.ts",

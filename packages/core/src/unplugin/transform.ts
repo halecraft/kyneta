@@ -7,11 +7,11 @@
  * @packageDocumentation
  */
 
+import { hasBuilderCalls } from "@kyneta/compiler"
 import {
-  hasBuilderCalls,
   mergeImports,
   transformSourceInPlace,
-} from "../compiler/index.js"
+} from "../compiler/transform.js"
 
 /**
  * Transform source code by replacing builder calls with compiled code in-place.

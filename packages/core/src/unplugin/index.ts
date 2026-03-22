@@ -20,7 +20,7 @@
 import type { UnpluginFactory } from "unplugin"
 import { createUnplugin } from "unplugin"
 
-import { hasBuilderCalls } from "../compiler/index.js"
+import { hasBuilderCalls } from "@kyneta/compiler"
 import { shouldTransform } from "./filter.js"
 import { transformKynetaSource } from "./transform.js"
 

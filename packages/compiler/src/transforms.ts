@@ -17,8 +17,8 @@ import type {
   BuilderNode,
   ChildNode,
   ConditionalBranch,
-} from "@kyneta/compiler"
-import { mergeConditionalBodies } from "@kyneta/compiler"
+} from "./ir.js"
+import { mergeConditionalBodies } from "./ir.js"
 
 // =============================================================================
 // Target Block Filtering

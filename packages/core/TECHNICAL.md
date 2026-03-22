@@ -710,26 +710,28 @@ Users don't need to know this distinction — both "just work" with natural Type
 
 ## File Structure
 
+`@kyneta/core` is a web rendering target that consumes compiler IR — it does not produce IR. Analysis, IR types, reactive detection, walker, template extraction, binding scope, dependency classification, and pattern recognition all live in `@kyneta/compiler`. IR→IR pipeline transforms (`dissolveConditionals`, `filterTargetBlocks`) are provided by `@kyneta/compiler/transforms`.
+
 ```
 packages/core/src/compiler/
-├── analyze.ts               # AST → IR analysis (imports isReactiveType)
-├── analyze.test.ts          # Analysis unit tests
-├── reactive-detection.ts    # Reactive type + ComponentFactory detection
-├── html-constants.ts        # Shared HTML constants (VOID_ELEMENTS, escapeHtml)
-├── ir.ts                    # IR types, factories, predicates, and IR→IR transforms
-├── ir.test.ts               # IR unit tests (includes predicate + dissolution tests)
-├── walk.ts                  # Generator-based IR walker (WalkEvent stream)
-├── walk.test.ts             # Walker unit tests
-├── template.ts              # Template extraction + walk planning (NavOp)
-├── template.test.ts         # Template extraction tests
 ├── transform.ts             # Orchestrates analysis + codegen + import collection
-├── transform.test.ts        # Transform tests
-├── integration.test.ts      # End-to-end compilation tests
-└── codegen/
-    ├── dom.ts               # DOM code generation (template cloning + createElement)
-    ├── dom.test.ts          # DOM codegen tests
-    ├── html.ts              # HTML code generation (SSR)
-    └── html.test.ts         # HTML codegen tests
+├── transform.test.ts        # Transform pipeline tests
+├── codegen/
+│   ├── dom.ts               # DOM code generation (template cloning + createElement)
+│   ├── dom.test.ts          # DOM codegen tests
+│   ├── html.ts              # HTML code generation (SSR)
+│   └── html.test.ts         # HTML codegen tests
+└── integration/
+    ├── helpers.ts            # JSDOM setup, compile-and-execute utilities
+    ├── combined.test.ts      # Combined feature integration tests
+    ├── components.test.ts    # Component model integration tests
+    ├── conditional.test.ts   # Conditional region integration tests
+    ├── list.test.ts          # List region integration tests
+    ├── reactive.test.ts      # Reactive subscription integration tests
+    ├── schema-ssr.test.ts    # Schema-driven SSR integration tests
+    ├── statements.test.ts    # Statement preservation integration tests
+    ├── static.test.ts        # Static rendering integration tests
+    └── text.test.ts          # Text region integration tests
 ```
 
 ### Child Type
@@ -738,11 +740,12 @@ The `Child` type union in `types.ts` accepts `HasChangefeed`, enabling bare reac
 
 ### Cross-Package Dependencies
 
-
 ```
-@kyneta/schema       # CHANGEFEED symbol, Changefeed interface, change types
+@kyneta/schema       # CHANGEFEED protocol, delta types
     ↑
-    └── @kyneta/core # Compiler detects [CHANGEFEED]; runtime subscribes via it
+@kyneta/compiler     # AST → IR analysis, IR transforms (/transforms)
+    ↑
+@kyneta/core         # IR → DOM/HTML codegen, runtime, build plugins
 ```
 
 ## Runtime Dependencies

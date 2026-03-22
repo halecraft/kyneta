@@ -12,19 +12,35 @@ Defines a two-namespace grammar (`Schema` for backend-agnostic structure, `LoroS
 
 Zero runtime dependencies. 1000+ tests.
 
-### `@kyneta/core`
+### `@kyneta/compiler`
 
-Compiled delta-driven web framework.
+Target-agnostic incremental view maintenance compiler.
 
-A multi-phase compiler (analyze → IR → codegen) transforms natural TypeScript builder patterns into direct DOM manipulation or HTML string generation. The compiler detects reactive refs via the `[CHANGEFEED]` protocol and emits delta-aware runtime regions (`textRegion`, `listRegion`, `conditionalRegion`, `valueRegion`) that perform O(k) DOM updates where k is the number of operations in a delta.
+Takes TypeScript source with builder patterns over Changefeed-emitting state and produces a classified IR annotated with incremental strategies. Does not generate code for any specific rendering target — rendering targets (`@kyneta/core`, future `@kyneta/native`, etc.) consume the IR and produce target-specific output.
 
 Key subsystems:
-- **Compiler** (`src/compiler/`) — static analysis, IR, dual-target codegen (DOM + HTML)
+- **Analysis** (`analyze.ts`) — AST → IR via ts-morph, reactive detection, expression classification
+- **IR** (`ir.ts`) — types, factories, guards, merge algebra, slot computation
+- **Walker & Template** (`walk.ts`, `template.ts`) — generator-based IR walker, template extraction + walk planning
+- **Binding Scope** (`binding-scope.ts`) — dependency-tracked variable bindings
+- **Classification** (`classify.ts`, `patterns.ts`) — dependency classification, filter pattern recognition
+- **Transforms** (`transforms.ts`, optional `./transforms` subpath) — IR→IR pipeline transforms for rendering targets: `dissolveConditionals` (merge structurally-identical conditional branches into ternaries) and `filterTargetBlocks` (strip/unwrap labeled blocks by target)
+
+330+ tests.
+
+### `@kyneta/core`
+
+Web rendering target — compiled delta-driven web framework.
+
+Consumes annotated IR from `@kyneta/compiler` and produces DOM manipulation or HTML string generation. The compiler detects reactive refs via the `[CHANGEFEED]` protocol and the runtime emits delta-aware regions (`textRegion`, `listRegion`, `conditionalRegion`, `valueRegion`) that perform O(k) DOM updates where k is the number of operations in a delta.
+
+Key subsystems:
+- **Codegen** (`src/compiler/`) — IR → DOM/HTML code generation, transform orchestration
 - **Runtime** (`src/runtime/`) — mount, scope lifecycle, delta regions, hydration
 - **Unplugin** (`src/unplugin/`) — universal build plugin with adapters for Vite, Bun, Rollup, Rolldown, esbuild, Farm
 - **Reactive** (`src/reactive/`) — `state()` local reactive primitive (`LocalRef<T>`)
 
-860+ tests.
+560+ tests.
 
 ### `@kyneta/perspective`
 
@@ -33,16 +49,18 @@ Convergent Constraint Systems — a constraint-based approach to CRDTs. Research
 ## Cross-Package Dependencies
 
 ```
-@kyneta/schema          (no dependencies)
+@kyneta/schema              (no dependencies)
     │
-    ├──► @kyneta/core   (compiler, runtime, unplugin)
+    ├──► @kyneta/compiler   (AST → IR analysis, IR transforms)
     │        │
-    │        └──► examples/recipe-book
+    │        └──► @kyneta/core   (IR → DOM/HTML codegen, runtime, unplugin)
+    │                 │
+    │                 └──► examples/recipe-book
     │
     └──► @kyneta/perspective
 ```
 
-`@kyneta/schema` is the foundation — it defines the CHANGEFEED protocol, delta types, and the interpreter algebra that both `core` and `perspective` build upon.
+`@kyneta/schema` is the foundation — it defines the CHANGEFEED protocol, delta types, and the interpreter algebra that `compiler`, `core`, and `perspective` build upon. `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/core` is the web rendering target that consumes compiler IR and produces DOM/HTML output. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
 
 ## Key Concepts
 
@@ -102,7 +120,8 @@ pnpm -C packages/core build     # core depends on schema
 ```sh
 # Per-package
 cd packages/schema && pnpm test        # 1000+ tests
-cd packages/core && npx vitest run     # 860+ tests
+cd packages/compiler && pnpm test      # 330+ tests
+cd packages/core && npx vitest run     # 560+ tests
 cd examples/recipe-book && pnpm test   # 12 integration tests
 ```
 
@@ -112,6 +131,7 @@ cd examples/recipe-book && pnpm test   # 12 integration tests
 kyneta/
 ├── packages/
 │   ├── schema/       @kyneta/schema
+│   ├── compiler/     @kyneta/compiler
 │   ├── core/         @kyneta/core
 │   └── perspective/  @kyneta/perspective
 ├── examples/

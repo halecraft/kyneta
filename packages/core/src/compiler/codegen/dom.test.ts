@@ -21,7 +21,7 @@ import {
   type DeltaKind,
   type EventHandlerNode,
 } from "@kyneta/compiler"
-import { dissolveConditionals } from "../ir-transforms.js"
+import { dissolveConditionals } from "@kyneta/compiler/transforms"
 import {
   generateDOM,
   generateElementFactory,

@@ -17,6 +17,10 @@
 			"import": "./dist/index.js",
 			"types": "./dist/index.d.ts"
 		},
+		"./transforms": {
+			"import": "./dist/transforms.js",
+			"types": "./dist/transforms.d.ts"
+		},
 		"./src": "./src/index.ts",
 		"./src/*": "./src/*"
 	},

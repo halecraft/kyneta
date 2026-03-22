@@ -24,8 +24,8 @@ import {
   type BindingNode,
   type Dependency,
   type DeltaKind,
-} from "@kyneta/compiler"
-import { dissolveConditionals, filterTargetBlocks } from "./ir-transforms.js"
+} from "./ir.js"
+import { dissolveConditionals, filterTargetBlocks } from "./transforms.js"
 
 // =============================================================================
 // Test Helpers
