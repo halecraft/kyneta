@@ -91,7 +91,7 @@ describe("compiler integration - conditional regions", () => {
       ) as any
 
       expect(conditionalRegion.branches[0].condition.source).toBe(
-        "doc.count.get() > 0",
+        "doc.count() > 0",
       )
     })
   })
@@ -207,10 +207,10 @@ describe("compiler integration - conditional regions", () => {
 
       expect(conditionalRegion.branches.length).toBe(3)
       expect(conditionalRegion.branches[0].condition?.source).toBe(
-        "doc.count.get() > 10",
+        "doc.count() > 10",
       )
       expect(conditionalRegion.branches[1].condition?.source).toBe(
-        "doc.count.get() > 0",
+        "doc.count() > 0",
       )
       expect(conditionalRegion.branches[2].condition).toBeNull() // else branch
     })

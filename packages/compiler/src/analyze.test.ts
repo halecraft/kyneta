@@ -13,8 +13,6 @@ import {
   analyzeExpression,
   analyzeProps,
   ELEMENT_FACTORIES,
-  expressionIsReactive,
-  extractDependencies,
   findBuilderCalls,
 } from "./analyze.js"
 import {
@@ -563,285 +561,11 @@ describe("symbol-based reactive detection", () => {
 })
 
 // =============================================================================
-// expressionIsReactive Tests
+// NOTE: expressionIsReactive and extractDependencies tests have been removed.
+// These functions have been replaced by ExpressionIR's isReactive() and
+// extractDeps() — see expression-ir.test.ts and expression-build.test.ts
+// for comprehensive tests of the new structural approach.
 // =============================================================================
-
-describe("expressionIsReactive", () => {
-  let project: Project
-
-  beforeEach(() => {
-    project = createProject()
-    addSchemaTypes(project)
-  })
-
-  it("should detect direct ref access as reactive", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { CounterRef, read } from "./schema-types"
-      declare const count: CounterRef
-      read(count)
-    `,
-    )
-
-    const callExpr = sourceFile.getDescendantsOfKind(213)[0] // CallExpression
-    expect(callExpr).toBeDefined()
-    expect(expressionIsReactive(callExpr)).toBe(true)
-  })
-
-  it("should detect template literal with ref as reactive", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { CounterRef } from "./schema-types"
-      declare const count: CounterRef
-      const x = \`Count: \${count}\`
-    `,
-    )
-
-    const templateExpr = sourceFile.getDescendantsOfKind(228)[0] // TemplateExpression
-    expect(templateExpr).toBeDefined()
-    expect(expressionIsReactive(templateExpr)).toBe(true)
-  })
-
-  it("should detect static string literal as not reactive", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      const x = "Hello, World!"
-    `,
-    )
-
-    const stringLiteral = sourceFile.getDescendantsOfKind(11)[0] // StringLiteral
-    expect(stringLiteral).toBeDefined()
-    expect(expressionIsReactive(stringLiteral)).toBe(false)
-  })
-
-  it("should detect static number as not reactive", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      const x = 42
-    `,
-    )
-
-    const numLiteral = sourceFile.getDescendantsOfKind(9)[0] // NumericLiteral
-    expect(numLiteral).toBeDefined()
-    expect(expressionIsReactive(numLiteral)).toBe(false)
-  })
-
-  it("should detect chained method call on reactive ref as reactive", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { CounterRef, read } from "./schema-types"
-      declare const count: CounterRef
-      read(count).toString()
-    `,
-    )
-
-    // Find the outermost call expression: read(count).toString()
-    const callExprs = sourceFile.getDescendantsOfKind(213) // CallExpression
-    const chained = callExprs.find(c => c.getText() === "read(count).toString()")
-    expect(chained).toBeDefined()
-    expect(expressionIsReactive(chained!)).toBe(true)
-  })
-
-  it("should detect deeply chained method call on reactive ref as reactive", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { CounterRef, read } from "./schema-types"
-      declare const count: CounterRef
-      read(count).toFixed(2).trim()
-    `,
-    )
-
-    const callExprs = sourceFile.getDescendantsOfKind(213)
-    const chained = callExprs.find(
-      c => c.getText() === "read(count).toFixed(2).trim()",
-    )
-    expect(chained).toBeDefined()
-    expect(expressionIsReactive(chained!)).toBe(true)
-  })
-
-  it("should detect chained method call on LocalRef as reactive", () => {
-    addReactiveTypes(project)
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { LocalRef } from "./reactive-types"
-      declare const x: LocalRef<number>
-      x().toString()
-    `,
-    )
-
-    // LocalRef is now callable — x() reads, x().toString() chains.
-    // expressionIsReactive must detect that x (the callee of the inner
-    // call) has a Changefeed type, making the whole expression reactive.
-    const callExprs = sourceFile.getDescendantsOfKind(213)
-    const chained = callExprs.find(c => c.getText() === "x().toString()")
-    expect(chained).toBeDefined()
-    // The inner call x() has callee x whose type is LocalRef<number>
-    // (a Changefeed type). expressionIsReactive should recurse into it.
-    expect(expressionIsReactive(chained!)).toBe(true)
-  })
-
-  it("should not detect chained call on non-reactive as reactive", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      const x = 42
-      x.toString().trim()
-    `,
-    )
-
-    const callExprs = sourceFile.getDescendantsOfKind(213)
-    const chained = callExprs.find(c => c.getText() === "x.toString().trim()")
-    expect(chained).toBeDefined()
-    expect(expressionIsReactive(chained!)).toBe(false)
-  })
-})
-
-// =============================================================================
-// extractDependencies Tests
-// =============================================================================
-
-describe("extractDependencies", () => {
-  let project: Project
-
-  beforeEach(() => {
-    project = createProject()
-    addSchemaTypes(project)
-  })
-
-  it("should extract single dependency from method call", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { CounterRef, read } from "./schema-types"
-      declare const count: CounterRef
-      read(count)
-    `,
-    )
-
-    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
-    expect(callExpr).toBeDefined()
-
-    const deps = extractDependencies(callExpr)
-    expect(deps.some(d => d.source === "count")).toBe(true)
-  })
-
-  it("should extract dependency from nested property access", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { StructRef, TextRef, read } from "./schema-types"
-      declare const doc: StructRef<{ title: TextRef }>
-      read(doc)
-    `,
-    )
-
-    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
-    expect(callExpr).toBeDefined()
-
-    const deps = extractDependencies(callExpr)
-    expect(deps.length).toBeGreaterThan(0)
-  })
-
-  it("should return empty array for static expressions", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      const x = "Hello"
-    `,
-    )
-
-    const stringLiteral = sourceFile.getDescendantsOfKind(11)[0]
-    expect(stringLiteral).toBeDefined()
-
-    const deps = extractDependencies(stringLiteral)
-    expect(deps).toHaveLength(0)
-  })
-
-  it("TextRef dependency has deltaKind 'text'", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { TextRef, read } from "./schema-types"
-      declare const title: TextRef
-      read(title)
-    `,
-    )
-
-    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
-    expect(callExpr).toBeDefined()
-
-    const deps = extractDependencies(callExpr)
-    expect(deps.length).toBe(1)
-    expect(deps[0].source).toBe("title")
-    expect(deps[0].deltaKind).toBe("text")
-  })
-
-  it("ListRef dependency has deltaKind 'sequence'", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { ListRef } from "./schema-types"
-      declare const items: ListRef<string>
-      items.length
-    `,
-    )
-
-    const propAccess = sourceFile.getDescendantsOfKind(211)[0]
-    expect(propAccess).toBeDefined()
-
-    const deps = extractDependencies(propAccess)
-    expect(deps.length).toBe(1)
-    expect(deps[0].source).toBe("items")
-    expect(deps[0].deltaKind).toBe("sequence")
-  })
-
-  it("LocalRef dependency has deltaKind 'replace'", () => {
-    // Use local stub instead of real module for reliable type resolution
-    addReactiveTypes(project)
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { LocalRef } from "./reactive-types"
-      declare const isOpen: LocalRef<boolean>
-      isOpen()
-    `,
-    )
-
-    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
-    expect(callExpr).toBeDefined()
-
-    const deps = extractDependencies(callExpr)
-    expect(deps.length).toBe(1)
-    expect(deps[0].source).toBe("isOpen")
-    expect(deps[0].deltaKind).toBe("replace")
-  })
-
-  it("CounterRef dependency has deltaKind 'increment'", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { CounterRef, read } from "./schema-types"
-      declare const count: CounterRef
-      read(count)
-    `,
-    )
-
-    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
-    expect(callExpr).toBeDefined()
-
-    const deps = extractDependencies(callExpr)
-    expect(deps.length).toBe(1)
-    expect(deps[0].source).toBe("count")
-    expect(deps[0].deltaKind).toBe("increment")
-  })
-})
 
 // =============================================================================
 // analyzeExpression Tests
@@ -898,13 +622,13 @@ describe("analyzeExpression", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef, read } from "./schema-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
-      read(count)
+      count()
     `,
     )
 
-    const callExpr = sourceFile.getDescendantsOfKind(213)[0]
+    const callExpr = sourceFile.getDescendantsOfKind(213)[0] // CallExpression
     expect(callExpr).toBeDefined()
 
     const result = analyzeExpression(callExpr) as ContentValue
@@ -1079,11 +803,11 @@ describe("analyzeBuilder", () => {
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef, read } from "./schema-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
 
       div(() => {
-        p(read(count).toString())
+        p(count().toString())
       })
     `,
     )
@@ -1194,16 +918,16 @@ describe("analyzeBuilder", () => {
   })
 
   it("should analyze non-element CallExpression arguments as expressions", () => {
-    // This tests the bug fix: read(count) is a CallExpression but NOT an element factory.
-    // Before the fix, these were silently dropped. Now they're treated as expressions.
+    // count() is an explicit snapshot (CallExpression on a changefeed).
+    // The ExpressionIR builder produces a SnapshotNode → reactive content.
     const sourceFile = createSourceFile(
       project,
       `
-      import { CounterRef, read } from "./schema-types"
+      import { CounterRef } from "./schema-types"
       declare const count: CounterRef
 
       div(() => {
-        p(read(count))
+        p(count())
       })
     `,
     )
@@ -1224,12 +948,12 @@ describe("analyzeBuilder", () => {
       const pElement = builder.children[0]
       expect(pElement.tag).toBe("p")
 
-      // The p element should have read(count) as a child expression
+      // The p element should have count() as a reactive child expression
       expect(pElement.children).toHaveLength(1)
       expect(pElement.children[0].kind).toBe("content")
 
       if (pElement.children[0].kind === "content") {
-        expect(pElement.children[0].source).toBe("read(count)")
+        expect(pElement.children[0].source).toBe("count()")
         expect(pElement.children[0].bindingTime).toBe("reactive")
         expect(
           pElement.children[0].dependencies.some(d => d.source === "count"),
@@ -2058,9 +1782,9 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     const result = analyzeExpression(expr as any) as ContentValue
     expect(result.kind).toBe("content")
     expect(result.bindingTime).toBe("reactive")
-    // Source is synthesized as read() since title IS a Changefeed
-    expect(result.source).toBe("read(title)")
-    // directReadSource is the bare ref
+    // Auto-read: bare changefeed in content position → title()
+    expect(result.source).toBe("title()")
+    // directReadSource is the bare ref path (without the ())
     expect(result.directReadSource).toBe("title")
   })
 
@@ -2080,11 +1804,17 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     const result = analyzeExpression(expr as any) as ContentValue
     expect(result.kind).toBe("content")
     expect(result.bindingTime).toBe("reactive")
-    expect(result.source).toBe("read(count)")
+    // Auto-read: bare changefeed in content position → count()
+    expect(result.source).toBe("count()")
     expect(result.directReadSource).toBe("count")
   })
 
-  it("read(title) returns string, not a Changefeed — no directReadSource", () => {
+  it("read(title) is reactive — changefeed arg is auto-read", () => {
+    // The read() function is the OLD calling convention, but even with
+    // auto-read insertion, read(title) becomes read(title()) — the
+    // changefeed argument is auto-read, making the expression reactive.
+    // The preferred new conventions are bare ref (`title` in content
+    // position) or explicit snapshot (`title()`).
     const sourceFile = createSourceFile(
       project,
       `
@@ -2099,10 +1829,10 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
 
     const result = analyzeExpression(callExpr) as ContentValue
     expect(result.kind).toBe("content")
+    // The changefeed arg `title` is auto-read → read(title()) is reactive
     expect(result.bindingTime).toBe("reactive")
-    // read(title) returns string, NOT a Changefeed — directReadSource should not be set
-    expect(result.directReadSource).toBeUndefined()
-    expect(result.source).toBe("read(title)")
+    // Source contains auto-read: read(title())
+    expect(result.source).toBe("read(title())")
   })
 
   it("template literal with bare ref interpolation is reactive", () => {
@@ -2141,8 +1871,8 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     const result = analyzeExpression(expr as any) as ContentValue
     expect(result.kind).toBe("content")
     expect(result.bindingTime).toBe("reactive")
-    // doc.title IS a Changefeed (TextRef), so source uses read() and directReadSource is set
-    expect(result.source).toBe("read(doc.title)")
+    // doc.title IS a Changefeed (TextRef) — auto-read produces doc.title()
+    expect(result.source).toBe("doc.title()")
     expect(result.directReadSource).toBe("doc.title")
   })
 })
@@ -2151,96 +1881,18 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
 // extractDependencies fix for reactive-typed property access
 // -----------------------------------------------------------------------------
 
-describe("extractDependencies fix for reactive-typed property access", () => {
-  let project: Project
-
-  beforeEach(() => {
-    project = createProject()
-    addSchemaTypes(project)
-  })
-
-  it("captures doc.title as dependency when doc is not reactive but doc.title is TextRef", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { TextRef } from "./schema-types"
-      declare const doc: { title: TextRef }
-      doc.title
-    `,
-    )
-
-    const exprStmt = sourceFile.getStatements().at(-1)!
-    const expr = exprStmt.getChildAtIndex(0)
-
-    const deps = extractDependencies(expr as any)
-    expect(deps).toHaveLength(1)
-    expect(deps[0].source).toBe("doc.title")
-    expect(deps[0].deltaKind).toBe("text")
-  })
-
-  it("captures doc.title from read(doc.title) call", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { TextRef, read } from "./schema-types"
-      declare const doc: { title: TextRef }
-      read(doc.title)
-    `,
-    )
-
-    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
-    expect(callExpr).toBeDefined()
-
-    const deps = extractDependencies(callExpr)
-    expect(deps).toHaveLength(1)
-    expect(deps[0].source).toBe("doc.title")
-    expect(deps[0].deltaKind).toBe("text")
-  })
-
-  it("captures CounterRef dependency from bare property access", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { CounterRef } from "./schema-types"
-      declare const doc: { count: CounterRef }
-      doc.count
-    `,
-    )
-
-    const exprStmt = sourceFile.getStatements().at(-1)!
-    const expr = exprStmt.getChildAtIndex(0)
-
-    const deps = extractDependencies(expr as any)
-    expect(deps).toHaveLength(1)
-    expect(deps[0].source).toBe("doc.count")
-    expect(deps[0].deltaKind).toBe("increment")
-  })
-
-  it("deduplicates when property access result already captured by object check", () => {
-    // When the object IS reactive and the result IS reactive,
-    // we should only get one dependency (deduplication via depsMap)
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { TextRef, read } from "./schema-types"
-      declare const title: TextRef
-      read(title)
-    `,
-    )
-
-    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
-    expect(callExpr).toBeDefined()
-
-    const deps = extractDependencies(callExpr)
-    // Should be exactly 1 dep for "title", not duplicated
-    expect(deps).toHaveLength(1)
-    expect(deps[0].source).toBe("title")
-  })
-})
+// NOTE: extractDependencies tests have been removed.
+// Dependency extraction is now a fold over the ExpressionIR tree
+// (see extractDeps in expression-ir.ts). The equivalent tests are in
+// expression-ir.test.ts and expression-build.test.ts.
 
 // -----------------------------------------------------------------------------
 // Dependency subsumption — child deps make parent deps redundant
 // -----------------------------------------------------------------------------
+
+// NOTE: dependency subsumption tests for extractDependencies have been removed.
+// Subsumption logic now lives in extractDeps (expression-ir.ts) and is tested
+// in expression-ir.test.ts. The isChangefeedType tests below are retained.
 
 describe("dependency subsumption", () => {
   let project: Project
@@ -2248,66 +1900,6 @@ describe("dependency subsumption", () => {
   beforeEach(() => {
     project = createProject()
     addSchemaTypes(project)
-  })
-
-  it("read(doc.title) with reactive TypedDoc produces only doc.title dep (subsumes doc)", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { TextRef, TypedDoc, read } from "./schema-types"
-      declare const doc: TypedDoc<{ title: TextRef }>
-      read(doc.title)
-    `,
-    )
-
-    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
-    expect(callExpr).toBeDefined()
-
-    const deps = extractDependencies(callExpr)
-    // Subsumption: "doc" (map) is dropped because "doc.title" (text) is more specific
-    expect(deps).toHaveLength(1)
-    expect(deps[0].source).toBe("doc.title")
-    expect(deps[0].deltaKind).toBe("text")
-  })
-
-  it("bare doc.title with reactive TypedDoc produces only doc.title dep", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { TextRef, TypedDoc } from "./schema-types"
-      declare const doc: TypedDoc<{ title: TextRef }>
-      doc.title
-    `,
-    )
-
-    const exprStmt = sourceFile.getStatements().at(-1)!
-    const expr = exprStmt.getChildAtIndex(0)
-
-    const deps = extractDependencies(expr as any)
-    expect(deps).toHaveLength(1)
-    expect(deps[0].source).toBe("doc.title")
-    expect(deps[0].deltaKind).toBe("text")
-  })
-
-  it("does not subsume unrelated deps", () => {
-    const sourceFile = createSourceFile(
-      project,
-      `
-      import { CHANGEFEED, Changefeed, HasChangefeed, ChangeBase } from "./changefeed-base"
-      type ReplaceChange<T> = { readonly type: "replace"; readonly value: T }
-      declare function read<T>(ref: HasChangefeed<T>): T
-      declare const a: HasChangefeed<number, ReplaceChange<number>> & { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; (): number }
-      declare const b: HasChangefeed<number, ReplaceChange<number>> & { readonly [CHANGEFEED]: Changefeed<number, ReplaceChange<number>>; (): number }
-      read(a) + read(b)
-    `,
-    )
-
-    const exprStmt = sourceFile.getStatements().at(-1)!
-    const expr = exprStmt.getChildAtIndex(0)
-
-    const deps = extractDependencies(expr as any)
-    // "a" and "b" are not prefixes of each other — both should remain
-    expect(deps).toHaveLength(2)
   })
 
   it("isChangefeedType detects TypedDoc as changefeed", () => {

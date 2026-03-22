@@ -14,6 +14,7 @@
  */
 
 import type { ClassifiedDependency } from "./classify.js"
+import type { ExpressionIR } from "./expression-ir.js"
 
 // =============================================================================
 // Base Types
@@ -154,6 +155,21 @@ export interface ContentValue extends IRNodeBase {
    * `ref.get() + other.get()`, template literals).
    */
   directReadSource?: string
+
+  /**
+   * Structured expression tree (ExpressionIR) for this content value.
+   *
+   * When present, this is the authoritative representation of the expression.
+   * The `source` field is derived from `renderExpression(expression, { expandBindings: false })`.
+   * Dependencies are derived from `extractDeps(expression)`.
+   *
+   * During the bridge period (Phase 5), both `source` and `expression` are
+   * populated. Codegen can read either — `.source` for backward compatibility,
+   * `.expression` for binding expansion and auto-read rendering.
+   *
+   * Undefined for literal content and expressions the builder doesn't handle.
+   */
+  expression?: ExpressionIR
 }
 
 // =============================================================================
@@ -1294,6 +1310,7 @@ export function createContent(
   dependencies: Dependency[],
   span: SourceSpan,
   directReadSource?: string,
+  expression?: ExpressionIR,
 ): ContentValue {
   const result: ContentValue = {
     kind: "content",
@@ -1304,6 +1321,9 @@ export function createContent(
   }
   if (directReadSource !== undefined) {
     result.directReadSource = directReadSource
+  }
+  if (expression !== undefined) {
+    result.expression = expression
   }
   return result
 }

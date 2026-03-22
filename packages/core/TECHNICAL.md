@@ -574,58 +574,46 @@ readonly [CHANGEFEED]: Changefeed<string, ChangeBase>  // ← WRONG: silently br
 - **Types are resolved from `dist/`, not source files.** `transformSource` uses `useInMemoryFileSystem: false` and resolves `@kyneta/schema` via `ts.resolveModuleName()`, which follows `package.json` exports to the built `dist/index.d.ts`. After changing type declarations (e.g., adding a `[CHANGEFEED]` property), you must rebuild `@kyneta/schema` (`pnpm run build`) before compiler tests will see the changes.
 - **`toContain` on generated code can give false positives.** Generated code includes import statements listing all runtime functions. `expect(code).toContain("valueRegion")` will match the import `import { valueRegion, textRegion } from ...` even when `valueRegion` is never called. Use more specific patterns like `toContain("textRegion(")` or `not.toMatch(/valueRegion\(/)`.
 
-### Changefeed-Native Expression Analysis
+### ExpressionIR and Auto-Read Insertion
 
-The compiler determines whether an expression qualifies for surgical delta patching via a single type-level question: **"is this expression itself a Changefeed?"**
+The compiler represents reactive expressions as typed `ExpressionIR` trees (see `@kyneta/compiler` TECHNICAL.md for the full tree model). This enables three key capabilities in the codegen layer:
 
-**The user controls the boundary** between surgical deltas and replace semantics:
+1. **Auto-read insertion**: `RefReadNode` renders as `source()` — the observation morphism. The developer writes `recipe.name.toLowerCase()` and the compiler emits `recipe.name().toLowerCase()`.
+2. **Binding expansion**: `BindingRefNode` carries a binding's full expression tree. In reactive closures (getter functions for `valueRegion`, `conditionalRegion`), the codegen renders with `expandBindings: true`, producing self-contained closures that re-evaluate from live refs. This solves the stale-binding problem.
+3. **Dependency derivation**: `extractDeps` is a fold over the tree — no separate heuristic walk.
 
-| User writes | Expression type | Compiler emits | Semantics |
+**The `()` snapshot convention**: The developer can write `recipe.name()` to explicitly read a ref (producing a `SnapshotNode`). This renders identically to auto-read but is semantically distinct — the developer chose this. It's the opt-out from bare-ref style when needed (e.g., passing a value to a non-reactive prop).
+
+**Reactive view type augmentations** (`@kyneta/core/types/reactive-view`): Module augmentations that widen schema ref types so they expose value-type methods:
+- `TextRef extends String` — gives `.toLowerCase()`, `.includes()`, `.trim()`, etc.
+- `CounterRef extends Number` — gives `.toFixed()`, `.toString()`, etc.
+- `LocalRef<T> = Widen<T> & LocalRefBase<T>` — intersection gives `T`'s methods
+
+These are compile-time illusions. At runtime, refs don't have these methods — the compiler inserts `()` reads at the ref/value boundary before the code runs. Opt-in via `/// <reference types="@kyneta/core/types/reactive-view" />`.
+
+**DOM codegen rendering contexts**: Two `RenderContext` constants control binding expansion:
+- `INITIAL_RENDER = { expandBindings: false }` — `BindingRefNode` emits the binding name (the `const` is in scope)
+- `REACTIVE_CLOSURE = { expandBindings: true }` — `BindingRefNode` recursively renders its expression tree
+
+`getReactiveSource(node)` and `getReactiveDeps(node)` are helpers that render from `ExpressionIR` when available (with binding expansion for closures), falling back to `.source`/`.dependencies` when not.
+
+**Bare changefeed in content position**: When a bare changefeed appears as the entire expression (e.g., `h1(doc.title)` or `span(doc.favorites)`), the compiler wraps it in a `RefReadNode` and produces `directReadSource` for surgical delta dispatch. A bare `TextRef` in content position → `textRegion` (surgical O(k)). An explicit `doc.title()` snapshot → `valueRegion` (replace).
+
+| Developer writes | ExpressionIR | Rendered source | Region type |
 |---|---|---|---|
-| `doc.title` | Has `[CHANGEFEED]` with `TextChange` | `textRegion(node, doc.title, scope)` | Surgical O(k) |
-| `doc.title()` | `string` | `valueRegion(...)` | Replace O(n) |
-| `doc.title.get()` | `string` | `valueRegion(...)` | Replace O(n) |
-| `doc.title.get().toUpperCase()` | `string` | `valueRegion(...)` | Replace O(n) |
-| `doc.items` | Has `[CHANGEFEED]` with `SequenceChange` | `listRegion(...)` | Surgical O(k) |
-| `doc.count` | Has `[CHANGEFEED]` with `IncrementChange` | `valueRegion(...)` | Replace (no surgical counter region) |
+| `doc.title` (bare TextRef in content) | `RefRead(PropertyAccess(...))` | `doc.title()` | `textRegion` (surgical) |
+| `doc.title()` (explicit snapshot) | `Snapshot(PropertyAccess(...))` | `doc.title()` | `valueRegion` (replace) |
+| `recipe.name.toLowerCase()` | `MethodCall(RefRead(...), "toLowerCase")` | `recipe.name().toLowerCase()` | `valueRegion` |
+| `!veggieOnly` | `Unary("!", RefRead(Identifier))` | `!veggieOnly()` | `conditionalRegion` |
+| `nameMatch && veggieMatch` (bindings) | `Binary(BindingRef, "&&", BindingRef)` | expanded expression in closure | `conditionalRegion` |
 
-This is **explicit and predictable** — pass the Changefeed itself for delta support, or extract a value for replace. No heuristics, no method-name recognition, no peeking into expressions.
+### Dependency Extraction
 
-**Detection algorithm** (implemented in `analyzeExpression`):
-1. Check `expressionIsReactive(expr)` — does any part of the expression depend on a Changefeed?
-2. If reactive, extract dependencies via `extractDependencies(expr)`
-3. Check `isChangefeedType(expr.getType())` — is this expression *itself* a Changefeed?
-4. If yes: set `directReadSource = expr.getText()`, synthesize `source = "read(expr.getText())"`
-5. If no: `directReadSource` is not set, `source = expr.getText()` (user's expression as-is)
+Dependency extraction is now a fold over the `ExpressionIR` tree via `extractDeps(expr)`. The function collects all `RefReadNode` and `SnapshotNode` entries as `Dependency` objects with `source` (the ref path) and `deltaKind`.
 
-**The `read()` helper:** When the expression IS a Changefeed, the compiler synthesizes `read(ref)` instead of the bare ref. The `read` function is the observation morphism of the coalgebra — it extracts `ref[CHANGEFEED].current`. This avoids embedding the `[CHANGEFEED]` symbol access in generated code (which would require importing the symbol).
+**Transitive expansion**: `BindingRefNode` contributes its binding's expression tree's deps (not the binding name itself). This enables the compound filter pattern: `nameMatch && veggieMatch` expands to all leaf deps from both bindings.
 
-**Examples:**
-| Expression | `isChangefeedType`? | `directReadSource` | `source` |
-|---|---|---|---|
-| `doc.title` (text ref) | ✅ Yes | `"doc.title"` | `"read(doc.title)"` |
-| `count` (counter ref) | ✅ Yes | `"count"` | `"read(count)"` |
-| `doc.title()` | ❌ No (returns `string`) | not set | `"doc.title()"` |
-| `doc.title.get()` | ❌ No (returns `string`) | not set | `"doc.title.get()"` |
-| `count > 0` | ❌ No (returns `boolean`) | not set | `"count > 0"` |
-| `` `Hello ${doc.title}` `` | ❌ No (returns `string`) | not set | `` "`Hello ${doc.title}`" `` |
-
-**Why this replaces the old `detectDirectRead`:** The old approach recognized `.get()` and `.toString()` as "direct reads" via AST pattern matching — a syntactic heuristic pretending to be a semantic question. It couldn't recognize `ref()` (callable refs from `@kyneta/schema`), and it created a hidden coupling between the compiler and specific ref method names. The new approach asks the correct algebraic question: is this expression a coalgebra (Changefeed), or has the user already extracted a value?
-
-**Behavioral change from the old approach:** `doc.title.get()` previously triggered `textRegion` (via `detectDirectRead`). Now it triggers `valueRegion` (because the expression returns `string`, not a Changefeed). This is intentionally correct — for `LocalRef`, `textRegion`'s surgical path was never invoked anyway (`LocalRef` emits `ReplaceChange`, which hits the `else` fallback). For schema text refs, the user writes bare `doc.title` to get surgical support.
-
-### Dependency Extraction (`extractDependencies`)
-
-The `extractDependencies` visitor walks the expression AST and captures reactive dependencies. It has four cases:
-
-1. **PropertyAccess on reactive object** — `doc.title.get()` → captures `doc.title` (the object has `[CHANGEFEED]`)
-2. **PropertyAccess whose result type is reactive** — `doc.title` where `doc` is not a Changefeed but `doc.title` is → captures `doc.title`
-3. **Call on reactive object** — captures the callee's receiver
-4. **Identifier that is reactive** — captures itself (skips identifiers that are property names in a PropertyAccess)
-
-Case 2 was added in Phase 4 to fix a pre-existing bug: when `doc` is not reactive but `doc.title` is, none of the other cases fired. The `depsMap` deduplication (keyed by source text) prevents double-capture when both the object and result are reactive.
-
-**Dependency subsumption:** After collecting all dependencies, `extractDependencies` applies a subsumption rule: any dependency whose source is a strict prefix of another dependency's source (at a dot boundary) is removed. For example, if both `"doc"` (deltaKind `"map"`) and `"doc.title"` (deltaKind `"text"`) are captured, `"doc"` is dropped because `"doc.title"` is more specific. The dot-boundary check ensures `"d"` is NOT subsumed by `"doc"` — the character after the prefix must be `"."`. This rule became necessary when a document type exposes `[CHANGEFEED]` on the root: without it, `doc.title.toString()` would produce two dependencies, breaking the `isTextRegionContent` check (`dependencies.length === 1 && deltaKind === "text"`) and degrading from `textRegion` (surgical DOM patching) to `valueRegion` (full replacement).
+**Subsumption**: When a child dependency exists (e.g., `"doc.title"`), any parent dependency whose source is a strict prefix at a dot boundary (e.g., `"doc"`) is removed. This prevents redundant subscriptions and preserves the `isTextRegionContent` single-dep check for `textRegion` dispatch.
 
 ### Binding-Time Classification
 

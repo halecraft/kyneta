@@ -198,11 +198,11 @@ describe("Binding analysis — algebraic properties", () => {
       const builder = analyzeFirst(
         project,
         `
-        import { CounterRef, read } from "./schema-types"
+        import { CounterRef } from "./schema-types"
         declare const count: CounterRef
 
         div(() => {
-          const isPositive = read(count) > 0
+          const isPositive = count() > 0
           if (isPositive) {
             p("positive")
           }
@@ -255,12 +255,12 @@ describe("Binding analysis — algebraic properties", () => {
       const builder = analyzeFirst(
         project,
         `
-        import { CounterRef, TextRef, read } from "./schema-types"
+        import { CounterRef, TextRef } from "./schema-types"
         declare const count: CounterRef
         declare const title: TextRef
 
         div(() => {
-          const combined = read(count) + title().length
+          const combined = count() + title().length
           p("placeholder")
         })
       `,
@@ -442,12 +442,12 @@ describe("Binding analysis — algebraic properties", () => {
       const builder = analyzeFirst(
         project,
         `
-        import { CounterRef, TextRef, read } from "./schema-types"
+        import { CounterRef, TextRef } from "./schema-types"
         declare const count: CounterRef
         declare const title: TextRef
 
         div(() => {
-          const a = read(count) > 0
+          const a = count() > 0
           const b = title().length > 0
           if (a && b) {
             p("both")
@@ -534,11 +534,11 @@ describe("Binding analysis — algebraic properties", () => {
       const builder = analyzeFirst(
         project,
         `
-        import { CounterRef, read } from "./schema-types"
+        import { CounterRef } from "./schema-types"
         declare const count: CounterRef
 
         div(() => {
-          const value = read(count)
+          const value = count()
           const doubled = value * 2
           p(String(doubled))
         })
@@ -629,12 +629,12 @@ describe("Binding analysis — algebraic properties", () => {
       const builder = analyzeFirst(
         project,
         `
-        import { CounterRef, TextRef, read } from "./schema-types"
+        import { CounterRef, TextRef } from "./schema-types"
         declare const count: CounterRef
         declare const title: TextRef
 
         div(() => {
-          const a = read(count)
+          const a = count()
           const b = title()
           p("static")
         })

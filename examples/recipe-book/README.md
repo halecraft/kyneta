@@ -1,6 +1,6 @@
 # Recipe Book
 
-A best-practices example for **@kyneta/core** — demonstrating SSR, hydration, multi-tab sync via WebSocket, and all four delta kinds in a single application.
+A best-practices example for **@kyneta/core** — demonstrating SSR, hydration, multi-tab sync via WebSocket, all four delta kinds, and the **bare-ref developer experience** with compiler auto-read insertion.
 
 ## Quick Start
 
@@ -91,6 +91,28 @@ Three `ComponentFactory`-style components at increasing complexity levels:
 | `RecipeCard` | Schema ref (`recipe: RecipeRef`) | Nested regions: `textRegion` + `listRegion` + `conditionalRegion` |
 | `Toolbar` | Doc ref + `LocalRef`s | Schema/local-state boundary: synced favorites vs. local filter |
 
+### Bare-Ref Style and Auto-Read Insertion
+
+The recipe-book uses the **bare-ref developer experience** — developers write ref access without explicit `()` calls, and the Kyneta compiler auto-inserts reads at the ref/value boundary:
+
+```typescript
+// What the developer writes (bare-ref style):
+const nameMatch = recipe.name.toLowerCase().includes(filterText.toLowerCase())
+const veggieMatch = !veggieOnly || recipe.vegetarian
+
+// What the compiler emits (auto-read inserted):
+const nameMatch = recipe.name().toLowerCase().includes(filterText().toLowerCase())
+const veggieMatch = !veggieOnly() || recipe.vegetarian()
+```
+
+This works via the `ExpressionIR` tree — the compiler detects changefeed sub-expressions consumed in value contexts and wraps them in `RefReadNode`, which renders as `source()`. The `reactive-view` type augmentations (`/// <reference types="@kyneta/core/types/reactive-view" />`) widen `TextRef extends String` so that `.toLowerCase()`, `.includes()`, etc. are visible at the type level.
+
+**Explicit snapshots** are used where bare-ref style is not appropriate:
+- `recipe.name()` in `value: recipe.name()` — intentional snapshot to avoid `inputTextRegion` cursor positioning issues; the explicit `()` produces a `SnapshotNode` → `valueRegion` instead of `textRegion`
+- `ingredient()` in `value: ingredient()` — crosses component boundary to `IngredientItem`'s `string`-typed prop
+
+**Mutation calls** stay unchanged — `.set()`, `.update()`, `.insert()`, `.push()`, `.delete()`, `.increment()` are ref methods, not value methods, so the compiler does not auto-read their receivers.
+
 ### Schema vs. Local State
 
 The app demonstrates a motivated boundary between document state and local UI state:
@@ -98,7 +120,7 @@ The app demonstrates a motivated boundary between document state and local UI st
 - **Document state** (`Ref<S>` via `createDoc`) — synced across tabs via WebSocket. Recipe data, favorites count.
 - **Local state** (`state()` → `LocalRef<T>`) — per-tab, not synced. Search filter text, veggie-only toggle.
 
-Both participate in the `[CHANGEFEED]` protocol, so the compiler treats them identically for reactive detection.
+Both participate in the `[CHANGEFEED]` protocol, so the compiler treats them identically for reactive detection and auto-read insertion. The filter pattern in `app.ts` demonstrates both kinds: `recipe.name` (schema `TextRef`) and `filterText` (local `LocalRef<string>`) are both bare refs that the compiler auto-reads.
 
 Ingredients use `.set()` (replace semantics — whole-value swap) while recipe names use `.update()` (text change semantics — produces a text delta). Both follow the same UI pattern: `input({ value: ref() })` with an `onInput` handler that calls the appropriate mutation method inside `change()`. The difference in mutation method is the pedagogical point — `.set()` for scalar values, `.update()` for text values.
 

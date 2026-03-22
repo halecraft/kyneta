@@ -23,6 +23,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// <reference types="@kyneta/core/types/elements" />
+/// <reference types="@kyneta/core/types/reactive-view" />
 
 import type { Element, LocalRef } from "@kyneta/core"
 import type { RecipeBookDoc } from "../types.js"
@@ -100,8 +101,9 @@ export const Toolbar = (props: ToolbarProps): Element => {
         () => {
           // Dynamic button text reacts to the LocalRef value.
           // The compiler detects veggieOnly has [CHANGEFEED] and
-          // emits the appropriate reactive region.
-          if (veggieOnly()) {
+          // emits the appropriate reactive region. Bare ref access —
+          // the compiler auto-inserts `()` reads.
+          if (veggieOnly) {
             span("🌱 Veggie Only: ON")
           } else {
             span("🌱 Veggie Only: OFF")

@@ -26,6 +26,7 @@ import type {
 } from "@kyneta/compiler"
 import {
   computeSlotKind,
+  extractDeps,
   extractTemplate,
   generateTemplateDeclaration,
   generateWalkCode,
@@ -33,7 +34,9 @@ import {
   isInputTextRegionAttribute,
   isTextRegionContent,
   planWalk,
+  renderExpression,
   simpleHash,
+  type RenderContext,
 } from "@kyneta/compiler"
 
 // =============================================================================
@@ -158,6 +161,44 @@ function indented(state: CodegenState): CodegenState {
 }
 
 // =============================================================================
+// ExpressionIR Rendering Helpers
+// =============================================================================
+
+/** Render context for initial render (bindings emit their name). */
+const INITIAL_RENDER: RenderContext = { expandBindings: false }
+
+/** Render context for reactive closures (bindings expand to their expression tree). */
+const REACTIVE_CLOSURE: RenderContext = { expandBindings: true }
+
+/**
+ * Get the source string for a reactive getter closure.
+ *
+ * When the content node has an ExpressionIR, renders it with binding expansion
+ * (so reactive closures are self-contained and re-evaluate from live refs).
+ * Falls back to `.source` when no ExpressionIR is available.
+ */
+function getReactiveSource(node: ContentNode): string {
+  if (node.expression) {
+    return renderExpression(node.expression, REACTIVE_CLOSURE)
+  }
+  return node.source
+}
+
+/**
+ * Get the dependency source strings for subscription arrays.
+ *
+ * When the content node has an ExpressionIR, derives deps from the tree
+ * (which includes transitive deps through binding expansion).
+ * Falls back to `.dependencies` when no ExpressionIR is available.
+ */
+function getReactiveDeps(node: ContentNode): string[] {
+  if (node.expression) {
+    return extractDeps(node.expression).map(d => d.source)
+  }
+  return node.dependencies.map(d => d.source)
+}
+
+// =============================================================================
 // Reactive Content Subscription Helper
 // =============================================================================
 
@@ -200,9 +241,12 @@ function generateReactiveContentSubscription(
   } else {
     // Use valueRegion — the terminal object in the delta region algebra.
     // Unifies single-dep and multi-dep into one path.
-    const depSources = node.dependencies.map(d => d.source).join(", ")
+    // When ExpressionIR is available, use binding expansion for self-contained
+    // re-evaluation closures (solves the stale-binding problem).
+    const depSources = getReactiveDeps(node).join(", ")
+    const source = getReactiveSource(node)
     lines.push(
-      `${ind}valueRegion([${depSources}], () => ${node.source}, (v) => {`,
+      `${ind}valueRegion([${depSources}], () => ${source}, (v) => {`,
     )
     lines.push(`${ind}${state.indent}${textVar}.textContent = String(v)`)
     lines.push(`${ind}}, ${state.scopeVar})`)
@@ -340,10 +384,12 @@ function generateAttributeSubscription(
   // Use valueRegion with getter/setter split.
   // The getter evaluates the user's expression; the setter applies the value
   // to the DOM via generateAttributeUpdateCode with a parameterized value.
-  const depSources = deps.map(d => d.source).join(", ")
+  // When ExpressionIR is available, use binding expansion for self-contained closures.
+  const depSources = getReactiveDeps(attr.value).join(", ")
+  const source = getReactiveSource(attr.value)
   const updateCode = generateAttributeUpdateCode(elementVar, attr.name, "v")
   lines.push(
-    `${ind}valueRegion([${depSources}], () => ${attr.value.source}, (v) => {`,
+    `${ind}valueRegion([${depSources}], () => ${source}, (v) => {`,
   )
   lines.push(`${ind}${state.indent}${updateCode}`)
   lines.push(`${ind}}, ${state.scopeVar})`)
@@ -811,11 +857,14 @@ function generateConditionalRegionCall(
   const innerInd = getIndent(innerState)
 
   // Emit all condition dependencies as an array (mirrors valueRegion's multi-ref pattern).
-  // Uses condition.dependencies (the full list) instead of node.subscriptionTarget (single).
-  const depSources = conditionExpr.dependencies.map(d => d.source).join(", ")
+  // When ExpressionIR is available, derive deps from the tree (includes transitive
+  // deps through binding expansion). The getter closure uses binding expansion so
+  // it's self-contained — re-evaluates from live refs, solving the stale-binding problem.
+  const depSources = getReactiveDeps(conditionExpr).join(", ")
+  const conditionSource = getReactiveSource(conditionExpr)
 
   lines.push(
-    `${ind}conditionalRegion(${markerVar}, [${depSources}], () => ${conditionExpr.source}, {`,
+    `${ind}conditionalRegion(${markerVar}, [${depSources}], () => ${conditionSource}, {`,
   )
 
   // Generate whenTrue handler
@@ -1011,12 +1060,13 @@ function generateHoleSetup(
         )
       } else if (contentNode.bindingTime === "reactive") {
         // Reactive - needs subscription
-        const deps = contentNode.dependencies
-        if (deps.length > 0) {
-          const depSources = deps.map(d => d.source).join(", ")
+        // Use ExpressionIR-based rendering when available for binding expansion
+        const depSources = getReactiveDeps(contentNode).join(", ")
+        const source = getReactiveSource(contentNode)
+        if (depSources.length > 0) {
           const updateCode = generateAttributeUpdateCode(nodeRef, attrName, "v")
           lines.push(
-            `${ind}valueRegion([${depSources}], () => ${contentNode.source}, (v) => {`,
+            `${ind}valueRegion([${depSources}], () => ${source}, (v) => {`,
           )
           lines.push(`${ind}${state.indent}${updateCode}`)
           lines.push(`${ind}}, ${state.scopeVar})`)

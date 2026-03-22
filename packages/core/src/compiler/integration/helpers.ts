@@ -148,6 +148,7 @@ interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {
   push(item: T): void
   insert(index: number, item: T): void
   delete(index: number, len?: number): void
+  entries(): IterableIterator<[number, T]>
   [Symbol.iterator](): Iterator<T>
 }
 

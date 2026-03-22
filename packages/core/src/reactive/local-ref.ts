@@ -55,15 +55,14 @@ const LOCAL_REF_BRAND: unique symbol = Symbol("LocalRef")
 // ---------------------------------------------------------------------------
 
 /**
- * A local reactive value. Implements the `CHANGEFEED` protocol so it
- * can be subscribed to by the Kyneta runtime (and any other consumer
- * that understands `[CHANGEFEED]`).
+ * The ref-specific members of a `LocalRef<T>` (excluding the value type `T`).
  *
- * The ref is callable — `ref()` returns the current value (like
- * schema's readable interpreter). `.set(value)` writes a new value
- * and notifies subscribers with a `ReplaceChange<T>`.
+ * Separated from `LocalRef<T>` so that the intersection `T & LocalRefBase<T>`
+ * gives `LocalRef<T>` the methods of `T` (e.g., `LocalRef<string>` gains
+ * `.toLowerCase()`, `.includes()`, etc.) while preserving the callable and
+ * reactive protocol members.
  */
-export interface LocalRef<T> {
+export interface LocalRefBase<T> {
   /** Read the current value. */
   (): T
 
@@ -76,6 +75,53 @@ export interface LocalRef<T> {
   /** @internal Brand for isLocalRef detection. */
   readonly [LOCAL_REF_BRAND]: true
 }
+
+/**
+ * Widen a type from literal/nullable to its base type for intersection.
+ *
+ * Without widening, `LocalRef<0>` = `0 & LocalRefBase<0>` which constrains
+ * `.set()` to only accept `0`. And `LocalRef<null>` = `null & ...` = `never`.
+ *
+ * This maps:
+ * - String literals (`"hello"`) → `string`
+ * - Number literals (`42`) → `number`
+ * - Boolean literals (`true`) → `boolean`
+ * - `null` / `undefined` → `{}` (empty object — intersection with `{}` is a no-op for objects)
+ * - Object types → unchanged
+ *
+ * The widened type is ONLY used for the `T &` intersection that exposes
+ * value-type methods. The `LocalRefBase<T>` still uses the original `T`
+ * for `(): T` and `set(value: T)`.
+ */
+type Widen<T> =
+  T extends string ? string :
+  T extends number ? number :
+  T extends boolean ? boolean :
+  T extends bigint ? bigint :
+  T extends symbol ? symbol :
+  T extends null | undefined ? {} :
+  T
+
+/**
+ * A local reactive value. Implements the `CHANGEFEED` protocol so it
+ * can be subscribed to by the Kyneta runtime (and any other consumer
+ * that understands `[CHANGEFEED]`).
+ *
+ * The ref is callable — `ref()` returns the current value (like
+ * schema's readable interpreter). `.set(value)` writes a new value
+ * and notifies subscribers with a `ReplaceChange<T>`.
+ *
+ * The `Widen<T> &` intersection gives `LocalRef<T>` all of `T`'s methods.
+ * For example, `LocalRef<string>` has `.toLowerCase()`, `.includes()`,
+ * etc. At runtime the ref doesn't have these methods — the Kyneta
+ * compiler inserts `()` reads at the ref/value boundary before the
+ * code runs.
+ *
+ * `Widen<T>` maps literal types to base types (e.g., `"hello"` → `string`,
+ * `42` → `number`) and `null`/`undefined` to `{}` to prevent the
+ * intersection from collapsing to `never`.
+ */
+export type LocalRef<T> = Widen<T> & LocalRefBase<T>
 
 // ---------------------------------------------------------------------------
 // Factory

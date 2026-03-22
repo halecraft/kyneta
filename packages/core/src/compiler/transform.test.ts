@@ -1236,11 +1236,12 @@ describe("transformSourceInPlace - HTML target", () => {
     const code = result.sourceFile.getFullText()
 
     // Should produce a ternary for the conditional
-    expect(code).toContain("count > 0")
+    // ExpressionIR auto-read inserts () on the CounterRef
+    expect(code).toContain("count() > 0")
     expect(code).toContain("Has items")
     expect(code).toContain("Empty")
     // Dissolution produces inline ternary — no hydration markers needed
-    expect(code).toContain('count > 0 ? "Has items" : "Empty"')
+    expect(code).toContain('count() > 0 ? "Has items" : "Empty"')
     expect(code).not.toContain("kyneta:if")
   })
 
@@ -1515,7 +1516,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 // =============================================================================
 
 describe("bare reactive ref in content position", () => {
-  it("compiles bare CounterRef to valueRegion with read()", () => {
+  it("compiles bare CounterRef to valueRegion with auto-read", () => {
     const source = withTypes(`
       declare const doc: { count: CounterRef }
       div(() => {
@@ -1524,21 +1525,24 @@ describe("bare reactive ref in content position", () => {
     `)
     const result = transformSource(source, { target: "dom" })
     expect(result.code).toContain("valueRegion(")
-    expect(result.code).toContain("read(doc.count)")
+    // Auto-read: bare changefeed in content position → doc.count()
+    expect(result.code).toContain("doc.count()")
   })
 
-  it("still supports explicit String() coercion", () => {
+  it("still supports explicit String() coercion with snapshot", () => {
     const source = `
       import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
       interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { (): string; readonly [CHANGEFEED]: Changefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }>; [Symbol.toPrimitive](hint: string): string }
       declare const doc: { title: TextRef }
       div(() => {
-        p(String(doc.title))
+        p(String(doc.title()))
       })
     `
     const result = transformSource(source, { target: "dom" })
-    // String() wraps the reactive ref — no directReadSource → valueRegion
+    // String() wraps an explicit snapshot — the developer writes doc.title()
+    // to read the value before passing to String(). No directReadSource → valueRegion.
     expect(result.code).toContain("valueRegion(")
+    expect(result.code).toContain("String(doc.title())")
   })
 
   it("bare ref inside expression is not an implicit read", () => {

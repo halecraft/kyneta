@@ -25,6 +25,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// <reference types="@kyneta/core/types/elements" />
+/// <reference types="@kyneta/core/types/reactive-view" />
 
 // ─── 1. Imports & Doc Type ───────────────────────────────────────────────
 //
@@ -113,20 +114,22 @@ export function createApp(doc: RecipeBookDoc) {
     // codegen. Each push/insert/delete on the list ref produces
     // O(1) DOM mutations per operation.
     //
-    // The filter logic uses the local state refs: filterText() and
-    // veggieOnly() are read (callable refs) to get current values.
-    // When these LocalRefs change, the compiler's reactive detection
-    // ensures the list re-evaluates the filter condition.
+    // The filter logic uses the local state refs as bare refs:
+    // filterText and veggieOnly are used directly (without `()`).
+    // The compiler's ExpressionIR auto-inserts `()` reads at the
+    // ref/value boundary, and reactive detection ensures the list
+    // re-evaluates the filter condition when either ref changes.
     main({ class: "recipe-list" }, () => {
       for (const recipe of doc.recipes) {
         // ─── Filter Logic ────────────────────────────────────────
         // Filter by name (case-insensitive substring match) and
-        // by vegetarian status. Both filterText and veggieOnly are
-        // LocalRef<T> values — calling them reads the current value.
-        const nameMatch = recipe.name().toLowerCase().includes(
-          filterText().toLowerCase(),
+        // by vegetarian status. Bare ref access — the compiler's
+        // ExpressionIR inserts `()` reads automatically where
+        // changefeed values cross into the value world.
+        const nameMatch = recipe.name.toLowerCase().includes(
+          filterText.toLowerCase(),
         )
-        const veggieMatch = !veggieOnly() || recipe.vegetarian()
+        const veggieMatch = !veggieOnly || recipe.vegetarian
 
         if (nameMatch && veggieMatch) {
           // Each RecipeCard receives the recipe struct ref and an

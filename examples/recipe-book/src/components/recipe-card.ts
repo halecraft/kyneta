@@ -23,6 +23,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// <reference types="@kyneta/core/types/elements" />
+/// <reference types="@kyneta/core/types/reactive-view" />
 
 import type { Element } from "@kyneta/core"
 import type { Ref } from "@kyneta/schema"
@@ -65,8 +66,9 @@ type RecipeCardProps = {
  *      updates in the DOM.
  *   2. `for...of recipe.ingredients` → the compiler detects the sequence
  *      ref and emits listRegion for O(k) list mutations.
- *   3. `if (recipe.vegetarian())` → the compiler detects the boolean ref
- *      and emits conditionalRegion for branch swapping.
+ *   3. `if (recipe.vegetarian)` → bare ref access; the compiler detects
+ *      the boolean ref, auto-inserts `()`, and emits conditionalRegion
+ *      for branch swapping.
  *
  * The compiler recognizes this as a ComponentFactory via type-level
  * analysis (it checks that the return type is `Element`, i.e.
@@ -85,11 +87,11 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
 
   return article({ class: "recipe-card" }, () => {
     // ─── Recipe Header ───────────────────────────────────────────────
-    // The recipe name is rendered as an editable input. We read the
-    // current value with recipe.name() (valueRegion) and update it
-    // on input via recipe.name.update(). Using the read value (a
-    // string) avoids triggering inputTextRegion and the cursor bug
-    // that comes with passing a bare text ref to an input element.
+    // The recipe name is rendered as an editable input. We explicitly
+    // snapshot with recipe.name() rather than using bare-ref style
+    // here, because passing a bare TextRef to `value:` would trigger
+    // inputTextRegion and the cursor bug. The explicit `()` produces
+    // a SnapshotNode → valueRegion instead.
     header({ class: "recipe-header" }, () => {
       input({
         type: "text",
@@ -103,10 +105,10 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
       })
 
       // ─── Vegetarian Badge (delta: replace → conditionalRegion) ───
-      // The compiler detects that recipe.vegetarian has [CHANGEFEED]
-      // and emits conditionalRegion. When the boolean value changes,
-      // the badge element is inserted or removed from the DOM.
-      if (recipe.vegetarian()) {
+      // Bare ref access — the compiler detects that recipe.vegetarian
+      // has [CHANGEFEED], auto-inserts `()`, and emits conditionalRegion.
+      // When the boolean value changes, the badge is inserted or removed.
+      if (recipe.vegetarian) {
         span({ class: "badge vegetarian" }, "🌱 Vegetarian")
       }
 
@@ -168,8 +170,9 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
           },
         },
         () => {
-          // Dynamic button text based on current vegetarian state
-          if (recipe.vegetarian()) {
+          // Dynamic button text based on current vegetarian state.
+          // Bare ref access — the compiler auto-inserts `()`.
+          if (recipe.vegetarian) {
             span("Mark Non-Vegetarian")
           } else {
             span("Mark Vegetarian")

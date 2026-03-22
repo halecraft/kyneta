@@ -21,13 +21,17 @@ TypeScript source
 │  analyzeBuilder / analyzeElement │  Expression classification,
 │  analyzeExpression               │  dependency extraction,
 │  reactive-detection.ts           │  reactive type detection
+│                                  │
+│  expression-build.ts             │  AST → ExpressionIR tree
+│  buildExpressionIR               │  (single-pass structural analysis)
 └──────────────┬───────────────────┘
                │
                ▼
 ┌──────────────────────────────────┐
-│  ir.ts                           │  Annotated IR
+│  ir.ts + expression-ir.ts        │  Annotated IR
 │  BuilderNode, ElementNode, etc.  │  Types, factories, guards,
-│  mergeConditionalBodies          │  merge algebra, slot computation
+│  ExpressionIR tree nodes         │  merge algebra, slot computation,
+│  extractDeps / renderExpression  │  auto-read rendering
 └──────────────┬───────────────────┘
                │
                ▼
@@ -70,6 +74,53 @@ Factory functions (`createBuilder`, `createElement`, `createContent`, etc.) enfo
 
 **Slot computation**: `computeSlotKind` determines the update strategy for a content slot (`"static"`, `"reactive-replace"`, `"reactive-text"`, etc.) based on its `ContentValue`'s binding time and delta kind.
 
+### ExpressionIR — Structured Expression Trees (`expression-ir.ts`)
+
+Instead of carrying pre-baked source strings, the compiler represents reactive expressions as typed trees. This enables auto-read insertion, binding expansion, and dependency derivation as structural properties of the tree — no string surgery, no heuristics, no hard-coded method lists.
+
+**Node types:**
+
+| Node | Purpose | Rendering |
+|------|---------|-----------|
+| `RefReadNode` | Reading a changefeed value (the observation morphism) | `source()` — auto-inserted `()` |
+| `SnapshotNode` | Explicit `ref()` call by the developer | `source()` — same output, distinct semantics |
+| `BindingRefNode` | Reference to a reactive `const` binding | Name or expanded expression (context-dependent) |
+| `MethodCallNode` | `receiver.method(args)` | Standard method call |
+| `PropertyAccessNode` | `object.property` | Dot access |
+| `CallNode` | `callee(args)` (non-method calls) | Function call |
+| `BinaryNode` | `left op right` | Binary operation |
+| `UnaryNode` | `op operand` (prefix/postfix) | Unary operation |
+| `TemplateNode` | `` `text${expr}text` `` | Template literal |
+| `LiteralNode` | String, number, boolean, null | Verbatim value |
+| `IdentifierNode` | Plain identifier (non-reactive) | Variable name |
+| `RawNode` | Passthrough (expressions the compiler doesn't transform) | Verbatim source |
+
+Factory functions (`refRead`, `snapshot`, `bindingRef`, `methodCall`, etc.) create each node. Type guards (`isRefRead`, `isSnapshot`, etc.) enable safe narrowing.
+
+**Auto-read insertion**: When the `ExpressionIR` builder detects a changefeed sub-expression consumed in a value context (e.g., as a binary operand, method receiver, or template hole), it wraps it in a `RefReadNode`. The renderer then emits `source()` — the observation morphism. This is the mechanism that makes `recipe.name.toLowerCase()` compile to `recipe.name().toLowerCase()`.
+
+**Binding expansion**: `BindingRefNode` carries the binding's full expression tree. The `RenderContext.expandBindings` flag controls rendering:
+- `false` (initial render) → emit the binding name (e.g., `"nameMatch"`) — the `const` is in scope
+- `true` (reactive closure) → recursively render the binding's expression tree with auto-reads — the closure must be self-contained for re-evaluation from live refs
+
+**Derived properties**:
+- `extractDeps(expr)` — fold over the tree collecting `RefReadNode` and `SnapshotNode` entries as `Dependency[]`. Includes subsumption logic (child deps subsume parent deps at dot boundaries). Replaces the old `extractDependencies` AST walk.
+- `isReactive(expr)` — returns `true` if the tree contains any `RefReadNode`, `SnapshotNode`, or `BindingRefNode`. Replaces the old `expressionIsReactive` heuristic.
+- `renderExpression(expr, ctx)` — renders the tree to a JavaScript source string. Auto-read insertion and binding expansion happen here.
+- `renderRefSource(expr)` — renders the ref expression WITHOUT the `()` call, for subscription arrays.
+
+### ExpressionIR Builder (`expression-build.ts`)
+
+`buildExpressionIR(expr, scope?)` walks a TypeScript AST expression (via ts-morph) and produces an `ExpressionIR` tree in a single pass. This replaces the separate `expressionIsReactive` + `extractDependencies` two-pass approach.
+
+The builder's auto-read determination is **type-driven**:
+- Property access on changefeed where result is NOT a changefeed → value consumption → `RefRead` wrapping. Example: `recipe.name.toLowerCase()` — `recipe.name` is `TextRef`, `.toLowerCase` returns `string` → `RefRead(recipe.name)`.
+- Property access where both object and result are changefeeds → structural navigation, no read. Example: `doc.recipes` where both are reactive.
+- Call on changefeed → `SnapshotNode` (explicit `()` read by the developer).
+- Method on changefeed receiver → checked against `KNOWN_REF_METHODS` set to distinguish ref methods (mutation: `insert`, `set`, `push`, etc.) from value methods (`.toLowerCase()`, `.includes()`, etc.). Unknowns default to value method (auto-read inserted — the safe direction).
+
+**`ExpressionScope` interface**: `lookupExpression(name): ExpressionIR | undefined`. When the builder encounters an identifier that resolves to a reactive binding, it produces a `BindingRefNode` carrying the binding's expression tree. The `BindingScope` from `binding-scope.ts` implements this interface.
+
 ### Analysis Pipeline (`analyze.ts`)
 
 The main entry points:
@@ -82,7 +133,13 @@ The main entry points:
 
 The analysis walks the TypeScript AST via ts-morph, classifying each expression as `"static"` or `"reactive"` based on whether its type (or any transitive dependency's type) implements the `[CHANGEFEED]` protocol.
 
-**Dependency extraction** (`extractDependencies`): Walks an expression tree and collects all reactive leaf dependencies as `Dependency` objects with `source` (the expression text) and `deltaKind` (the change granularity: `"replace"`, `"text"`, `"sequence"`, `"increment"`).
+**Expression analysis flow** (`analyzeExpression`):
+1. Build `ExpressionIR` tree via `buildExpressionIR(expr, scope)`
+2. If `isReactive(exprIR)`: derive `dependencies` via `extractDeps`, `source` via `renderExpression`, `directReadSource` from `RefReadNode` root. Store the `ExpressionIR` on the `ContentNode`.
+3. If the expression's type is a bare changefeed (e.g., `doc.title` in content position): wrap in `RefReadNode` and treat as reactive — the compiler auto-reads bare changefeeds in content position.
+4. Otherwise: non-reactive, render source from ExpressionIR.
+
+**Dependency extraction**: Implemented as `extractDeps` — a fold over the `ExpressionIR` tree that collects all `RefReadNode` and `SnapshotNode` entries as `Dependency` objects with `source` and `deltaKind`. Includes subsumption logic (child dep `doc.title` subsumes parent dep `doc`).
 
 ### Reactive Detection (`reactive-detection.ts`)
 
@@ -204,6 +261,10 @@ packages/compiler/src/
 ├── analyze.ts                  # AST → IR analysis pipeline
 ├── analyze.test.ts             # Analysis unit tests
 ├── reactive-detection.ts       # CHANGEFEED type detection, delta kind extraction
+├── expression-ir.ts            # ExpressionIR types, factories, guards, rendering
+├── expression-ir.test.ts       # ExpressionIR unit tests (rendering, deps, reactivity)
+├── expression-build.ts         # AST → ExpressionIR builder (single-pass)
+├── expression-build.test.ts    # ExpressionIR builder unit tests
 ├── binding-scope.ts            # Dependency-tracked variable binding scopes
 ├── binding-scope.test.ts       # Binding scope unit tests
 ├── binding-analysis.test.ts    # Binding → dependency resolution integration tests
@@ -243,3 +304,7 @@ The compiler depends only on `@kyneta/schema` (for the `CHANGEFEED` symbol and c
 3. **Transforms as optional consumer-side operations**: `dissolveConditionals` and `filterTargetBlocks` are structurally part of the rendering pipeline, not the analysis pipeline. They transform IR that has already been produced. A rendering target that doesn't want dissolution or target-block filtering simply doesn't call them.
 
 4. **Flattened dependencies**: By the time dependencies reach the IR, all bindings have been resolved to leaf sources. This simplifies all downstream consumers — classification is string-prefix matching, not scope walking.
+
+5. **Structural auto-read**: The `()` observation morphism is a rendering property of `RefReadNode`, not a string transformation. The ExpressionIR tree captures where changefeed values cross into the value world; the renderer emits `()` at those boundaries. This is principled — auto-read insertion, binding expansion, and dependency derivation are all folds over the same tree structure.
+
+6. **Bare-ref developer experience**: Developers write `recipe.name.toLowerCase()` and the compiler handles the rest. The `ExpressionIR` builder detects that `recipe.name` is a `TextRef` and `.toLowerCase()` returns `string` (not a changefeed), wrapping the receiver in `RefReadNode`. The rendered output is `recipe.name().toLowerCase()`. Explicit `()` calls produce `SnapshotNode` — semantically distinct (developer intent) but identical rendering.

@@ -18,6 +18,15 @@ import {
   isChangefeedType,
   isComponentFactoryType,
 } from "./reactive-detection.js"
+import { buildExpressionIR } from "./expression-build.js"
+import {
+  extractDeps,
+  isReactive as exprIsReactive,
+  renderExpression,
+  renderRefSource,
+  isRefRead,
+  refRead,
+} from "./expression-ir.js"
 import {
   type ArrayBindingPattern,
   type ArrowFunction,
@@ -35,7 +44,6 @@ import {
   type SourceFile,
   type Statement,
   SyntaxKind,
-  type TemplateExpression,
   type Type,
 } from "ts-morph"
 
@@ -281,252 +289,10 @@ export function getSpan(node: Node): SourceSpan {
 
 export { isChangefeedType }
 
-/**
- * Check if an expression accesses a reactive ref.
- *
- * This uses the TypeScript type checker to determine if any part of
- * the expression has a Loro ref type.
- */
-export function expressionIsReactive(expr: Expression, scope?: BindingScope): boolean {
-  // For identifiers, first check the BindingScope (if provided)
-  // This must come before the type-system check because the type of a
-  // binding like `const nameMatch = reactive.includes(filter())` is
-  // `boolean` — not a Changefeed — so the type check would miss it.
-  if (expr.getKind() === SyntaxKind.Identifier && scope) {
-    const binding = scope.lookup(expr.getText())
-    if (binding && binding.bindingTime === "reactive") {
-      return true
-    }
-  }
-
-  // Get the type of the expression
-  const type = expr.getType()
-
-  // Check if the result type has a changefeed
-  if (isChangefeedType(type)) {
-    return true
-  }
-
-  // For property access chains, check each part
-  if (expr.getKind() === SyntaxKind.PropertyAccessExpression) {
-    const propAccess = expr as PropertyAccessExpression
-    const objType = propAccess.getExpression().getType()
-    if (isChangefeedType(objType)) {
-      return true
-    }
-    // Recursively check the object expression
-    return expressionIsReactive(propAccess.getExpression(), scope)
-  }
-
-  // For call expressions, check the callee and arguments
-  if (expr.getKind() === SyntaxKind.CallExpression) {
-    const call = expr as CallExpression
-    const calleeExpr = call.getExpression()
-
-    // Check if the callee itself is a Changefeed type (callable ref pattern).
-    // e.g., x() where x is a LocalRef<T> — the callee `x` has a Changefeed
-    // type, so calling it (reading the value) is reactive.
-    const calleeType = calleeExpr.getType()
-    if (isChangefeedType(calleeType)) {
-      return true
-    }
-
-    // Check if calling a method on a reactive type
-    if (calleeExpr.getKind() === SyntaxKind.PropertyAccessExpression) {
-      const propAccess = calleeExpr as PropertyAccessExpression
-      const objType = propAccess.getExpression().getType()
-      if (isChangefeedType(objType)) {
-        return true
-      }
-      // Recursively check the callee's object expression for deeper chains.
-      // e.g., x().toString() — the immediate object x() returns
-      // number (not reactive), but x itself is a callable ref
-      // which IS reactive. Without this, chained expressions like
-      // x().toString() are misclassified as render-time.
-      if (expressionIsReactive(propAccess.getExpression(), scope)) {
-        return true
-      }
-    }
-
-    // Check arguments
-    const callArgs = call.getArguments() as Expression[]
-    for (const arg of callArgs) {
-      if (expressionIsReactive(arg, scope)) {
-        return true
-      }
-    }
-  }
-
-  // For template literals, check embedded expressions
-  if (expr.getKind() === SyntaxKind.TemplateExpression) {
-    const templateExpr = expr as TemplateExpression
-    const spans = templateExpr.getTemplateSpans()
-    for (const span of spans) {
-      const spanExpr = span.getExpression()
-      if (expressionIsReactive(spanExpr, scope)) {
-        return true
-      }
-    }
-  }
-
-  // For binary expressions, check both sides
-  if (expr.getKind() === SyntaxKind.BinaryExpression) {
-    const children = expr.getChildren()
-    for (const child of children) {
-      if (Node.isExpression(child) && expressionIsReactive(child, scope)) {
-        return true
-      }
-    }
-  }
-
-  // For identifiers, check what they reference
-  if (expr.getKind() === SyntaxKind.Identifier) {
-    const symbol = expr.getSymbol()
-    if (symbol) {
-      const decls = symbol.getDeclarations()
-      for (const decl of decls) {
-        const declType = decl.getType()
-        if (isChangefeedType(declType)) {
-          return true
-        }
-      }
-    }
-  }
-
-  return false
-}
-
-/**
- * Extract the reactive dependencies from an expression.
- *
- * Returns an array of dependencies, each with source text and delta kind.
- */
-export function extractDependencies(expr: Expression, scope?: BindingScope): Dependency[] {
-  // Use a Map to deduplicate by source, keeping the first occurrence
-  const depsMap = new Map<string, Dependency>()
-
-  function addDep(source: string, type: Type): void {
-    if (!depsMap.has(source)) {
-      depsMap.set(source, {
-        source,
-        deltaKind: getDeltaKind(type),
-      })
-    }
-  }
-
-  function visit(node: Node): void {
-    // Identifier that resolves to a binding — use the binding's dependencies.
-    // Must come before other checks so that a bound name like `nameMatch`
-    // contributes its transitive deps rather than being analyzed as a bare
-    // identifier with a non-reactive type.
-    //
-    // Exception: if the binding has zero dependencies but the identifier's
-    // ts-morph type IS a Changefeed, fall through to the normal type check.
-    // This handles `const x = state(0)` where the initializer creates a new
-    // reactive ref (no upstream deps) but `x` itself is the dependency that
-    // downstream expressions like `x().toString()` need to subscribe to.
-    if (node.getKind() === SyntaxKind.Identifier && scope) {
-      const binding = scope.lookup(node.getText())
-      if (binding && binding.dependencies.length > 0) {
-        for (const dep of binding.dependencies) {
-          // Insert directly into depsMap — binding deps are already classified
-          // Dependency objects with source and deltaKind, so we bypass addDep()
-          // which requires a ts-morph Type for getDeltaKind().
-          if (!depsMap.has(dep.source)) {
-            depsMap.set(dep.source, dep)
-          }
-        }
-        return // Don't recurse into children — binding deps are already complete
-      }
-      // binding with zero deps: fall through to let the ts-morph type check
-      // handle it (the identifier itself may be a Changefeed)
-    }
-
-    // Property access on a reactive type
-    if (node.getKind() === SyntaxKind.PropertyAccessExpression) {
-      const propAccess = node as PropertyAccessExpression
-      const objExpr = propAccess.getExpression()
-      const objType = objExpr.getType()
-      if (isChangefeedType(objType)) {
-        addDep(objExpr.getText(), objType)
-      }
-
-      // Also check if the *result* of the property access has a changefeed.
-      // This captures cases like `doc.title` where `doc` (TypedDoc) is not
-      // reactive but `doc.title` (TextRef) is. Without this, the dependency
-      // would be missed entirely. The depsMap deduplication ensures no
-      // double-capture when the expression is already captured above.
-      const resultType = propAccess.getType()
-      if (isChangefeedType(resultType)) {
-        addDep(propAccess.getText(), resultType)
-      }
-    }
-
-    // Call expression on a reactive type
-    if (node.getKind() === SyntaxKind.CallExpression) {
-      const call = node as CallExpression
-      const calleeExpr = call.getExpression()
-
-      if (calleeExpr.getKind() === SyntaxKind.PropertyAccessExpression) {
-        const propAccess = calleeExpr as PropertyAccessExpression
-        const objExpr = propAccess.getExpression()
-        const objType = objExpr.getType()
-        if (isChangefeedType(objType)) {
-          addDep(objExpr.getText(), objType)
-        }
-      }
-    }
-
-    // Identifier that is a reactive type
-    // Skip identifiers that are property names within a PropertyAccessExpression
-    // (e.g., skip "title" in "doc.title" — we already captured "doc.title" above)
-    if (node.getKind() === SyntaxKind.Identifier) {
-      const parent = node.getParent()
-      const isPropertyName =
-        parent?.getKind() === SyntaxKind.PropertyAccessExpression &&
-        (parent as PropertyAccessExpression).getName() === node.getText()
-
-      if (!isPropertyName) {
-        const type = (node as Expression).getType()
-        if (isChangefeedType(type)) {
-          addDep(node.getText(), type)
-        }
-      }
-    }
-
-    // Recurse into children
-    node.forEachChild(visit)
-  }
-
-  visit(expr)
-
-  const deps = Array.from(depsMap.values())
-
-  // Dependency subsumption: when a child dependency exists (e.g., "doc.title"),
-  // remove any parent dependency whose source is a strict prefix (e.g., "doc").
-  // This prevents a reactive TypedDoc from adding a redundant "doc" (map) dep
-  // alongside "doc.title" (text), which would break the isTextRegionContent
-  // length-1 check and degrade from textRegion to valueRegion.
-  if (deps.length > 1) {
-    const sources = new Set(deps.map(d => d.source))
-    return deps.filter(dep => {
-      for (const other of sources) {
-        // Check if `dep.source` is a strict prefix of `other` at a dot boundary.
-        // "doc" is subsumed by "doc.title", but "d" is NOT subsumed by "doc".
-        if (
-          other !== dep.source &&
-          other.startsWith(dep.source) &&
-          other[dep.source.length] === "."
-        ) {
-          return false // This dep is subsumed by a more specific child dep
-        }
-      }
-      return true
-    })
-  }
-
-  return deps
-}
+// NOTE: `expressionIsReactive` and `extractDependencies` have been removed.
+// Reactivity detection is now a structural property of the ExpressionIR tree
+// (see `isReactive` in expression-ir.ts). Dependency extraction is now a fold
+// over the ExpressionIR tree (see `extractDeps` in expression-ir.ts).
 
 // =============================================================================
 // Direct-Read Detection
@@ -669,43 +435,62 @@ export function detectImplicitRead(expr: Expression): string | undefined {
  */
 export function analyzeExpression(expr: Expression, scope?: BindingScope): ContentNode {
   const span = getSpan(expr)
-  const source = expr.getText()
+  const rawSource = expr.getText()
 
-  // String literal -> literal content
+  // String literal -> literal content (no ExpressionIR needed)
   if (expr.getKind() === SyntaxKind.StringLiteral) {
-    // Strip quotes
-    const value = source.slice(1, -1)
+    const value = rawSource.slice(1, -1)
     return createLiteral(value, span)
   }
 
   // No substitution template literal -> literal content
   if (expr.getKind() === SyntaxKind.NoSubstitutionTemplateLiteral) {
-    // Strip backticks
-    const value = source.slice(1, -1)
+    const value = rawSource.slice(1, -1)
     return createLiteral(value, span)
   }
 
-  // Check if reactive
-  if (expressionIsReactive(expr, scope)) {
-    const deps = extractDependencies(expr, scope)
+  // Build the ExpressionIR tree — single-pass structural analysis
+  const exprIR = buildExpressionIR(expr, scope)
 
-    // Changefeed-native check: is this expression itself a Changefeed?
-    // If yes, the user passed the coalgebra — we can dispatch on delta kind.
-    // If no, the user extracted a value — replace semantics.
-    const exprType = expr.getType()
-    if (isChangefeedType(exprType)) {
-      // Expression IS a Changefeed — set directReadSource and synthesize read()
-      const directReadSource = source
-      const synthesizedSource = `read(${source})`
-      return createContent(synthesizedSource, "reactive", deps, span, directReadSource)
+  // Derive reactivity and dependencies from the tree
+  if (exprIsReactive(exprIR)) {
+    const deps = extractDeps(exprIR)
+
+    // Derive source from the expression tree (with auto-read insertion)
+    const source = renderExpression(exprIR, { expandBindings: false })
+
+    // Derive directReadSource: when the root is a RefReadNode or the
+    // expression itself is a bare changefeed (the observation morphism).
+    // This enables surgical text patching via textRegion.
+    let directReadSource: string | undefined
+    if (isRefRead(exprIR)) {
+      // Auto-read: the whole expression is a single ref read
+      // directReadSource is the ref path without the ()
+      directReadSource = renderRefSource(exprIR.ref)
     }
 
-    // Expression is NOT a Changefeed but depends on one(s) — use as-is
-    return createContent(source, "reactive", deps, span)
+    return createContent(source, "reactive", deps, span, directReadSource, exprIR)
   }
 
-  // Render-time expression
-  return createContent(source, "render", [], span)
+  // Bare changefeed in content position: the ExpressionIR builder doesn't
+  // wrap bare identifiers/property-accesses in RefRead (that's the consumer's
+  // job — binary, unary, method-call builders do the wrapping). But when a
+  // bare changefeed appears as the entire expression in content position
+  // (e.g., `h1(doc.title)` or `span(doc.favorites)`), the compiler must
+  // auto-read it. Detect this case via the AST type and promote to reactive.
+  const exprType = expr.getType()
+  if (isChangefeedType(exprType)) {
+    const deltaKind = getDeltaKind(exprType)
+    const autoReadIR = refRead(exprIR, deltaKind)
+    const deps = extractDeps(autoReadIR)
+    const source = renderExpression(autoReadIR, { expandBindings: false })
+    const directReadSource = renderRefSource(exprIR)
+    return createContent(source, "reactive", deps, span, directReadSource, autoReadIR)
+  }
+
+  // Non-reactive expression — render-time evaluation
+  const source = renderExpression(exprIR, { expandBindings: false })
+  return createContent(source, "render", [], span, undefined, exprIR)
 }
 
 // =============================================================================
@@ -825,8 +610,35 @@ export function analyzeForOfStatement(stmt: ForOfStatement, scope?: BindingScope
   const bodyScope = scope?.child()
   const bodyChildren = analyzeStatementBody(body, bodyScope)
 
-  // Determine binding time from reactivity analysis
-  const isReactive = expressionIsReactive(iterExpr, scope)
+  // Determine binding time: is the iterable a changefeed (reactive list)?
+  // Check the iterable's own type first. If that's not a changefeed, also
+  // check parent objects in property access chains and method call receivers.
+  // This handles patterns like:
+  //   - `doc.items` where `doc` is a TypedDoc (HasChangefeed) but `items`
+  //     itself may be typed as `any` from a shape mock
+  //   - `items.entries()` where `items` is a ListRef (changefeed) but the
+  //     return type of `.entries()` is `IterableIterator` (not changefeed)
+  let isReactive = isChangefeedType(iterExpr.getType())
+  if (!isReactive && iterExpr.getKind() === SyntaxKind.PropertyAccessExpression) {
+    const propAccess = iterExpr as PropertyAccessExpression
+    const objType = propAccess.getExpression().getType()
+    if (isChangefeedType(objType)) {
+      isReactive = true
+    }
+  }
+  if (!isReactive && iterExpr.getKind() === SyntaxKind.CallExpression) {
+    const call = iterExpr as CallExpression
+    const calleeExpr = call.getExpression()
+    // Check if the callee is a method on a changefeed receiver:
+    // e.g., `items.entries()` where `items` is a ListRef
+    if (calleeExpr.getKind() === SyntaxKind.PropertyAccessExpression) {
+      const propAccess = calleeExpr as PropertyAccessExpression
+      const receiverType = propAccess.getExpression().getType()
+      if (isChangefeedType(receiverType)) {
+        isReactive = true
+      }
+    }
+  }
 
   // Extract dependencies with delta kind for reactive loops
   const dependencies: Dependency[] = isReactive
@@ -1080,6 +892,12 @@ export function analyzeStatement(stmt: Statement, scope?: BindingScope): ChildNo
         const value = analyzeExpression(initializer, scope)
         if (scope) {
           scope.bind(name, value)
+          // Only store ExpressionIR for reactive bindings — non-reactive bindings
+          // (like `const x = 1`) should NOT produce BindingRefNodes, because
+          // BindingRefNode is always classified as reactive by isReactive().
+          if (value.expression && value.bindingTime === "reactive") {
+            scope.bindExpression(name, value.expression)
+          }
         }
         results.push(createBinding(name, value, getSpan(decl)))
       } else {

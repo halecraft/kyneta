@@ -47,6 +47,87 @@ export type {
 } from "./ir.js"
 
 // =============================================================================
+// Expression IR Types
+// =============================================================================
+
+export type {
+  ExpressionIR,
+  RefReadNode,
+  SnapshotNode,
+  BindingRefNode,
+  MethodCallNode,
+  PropertyAccessNode,
+  CallNode,
+  BinaryNode,
+  UnaryNode,
+  TemplateNode as ExprTemplateNode,
+  LiteralNode,
+  IdentifierNode,
+  RawNode,
+} from "./expression-ir.js"
+
+// =============================================================================
+// Expression IR Factory Functions
+// =============================================================================
+
+export {
+  refRead,
+  snapshot,
+  bindingRef,
+  methodCall,
+  propertyAccess,
+  call,
+  binary,
+  unary,
+  template as exprTemplate,
+  literal,
+  identifier,
+  raw,
+} from "./expression-ir.js"
+
+// =============================================================================
+// Expression IR Type Guards
+// =============================================================================
+
+export {
+  isRefRead,
+  isSnapshot,
+  isBindingRef,
+  isMethodCall,
+  isPropertyAccess,
+  isCall,
+  isBinary,
+  isUnary,
+  isTemplate as isExprTemplate,
+  isLiteral,
+  isIdentifier,
+  isRaw,
+} from "./expression-ir.js"
+
+// =============================================================================
+// Expression IR Rendering
+// =============================================================================
+
+export { renderExpression, type RenderContext } from "./expression-ir.js"
+
+// =============================================================================
+// Expression IR Derived Properties
+// =============================================================================
+
+export {
+  extractDeps,
+  isReactive,
+  renderRefSource,
+} from "./expression-ir.js"
+
+// =============================================================================
+// Expression IR Builder
+// =============================================================================
+
+export { buildExpressionIR } from "./expression-build.js"
+export type { ExpressionScope } from "./expression-build.js"
+
+// =============================================================================
 // IR Factory Functions
 // =============================================================================
 
@@ -143,8 +224,6 @@ export {
   detectDirectRead,
   detectImplicitRead,
   ELEMENT_FACTORIES,
-  expressionIsReactive,
-  extractDependencies,
   findBuilderCalls,
   getSpan,
 } from "./analyze.js"

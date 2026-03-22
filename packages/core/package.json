@@ -72,6 +72,9 @@
 		"./types/elements": {
 			"types": "./src/types/elements.d.ts"
 		},
+		"./types/reactive-view": {
+			"types": "./src/types/reactive-view.d.ts"
+		},
 		"./src": "./src/index.ts",
 		"./src/*": "./src/*"
 	},
