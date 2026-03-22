@@ -347,7 +347,7 @@ describe("schema-driven integration tests", () => {
 
       conditionalRegion(
         marker,
-        doc.count,
+        [doc.count],
         () => (read(doc.count as any) as number) > 0,
         {
           whenTrue: () => {

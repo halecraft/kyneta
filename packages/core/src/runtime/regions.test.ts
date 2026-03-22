@@ -827,7 +827,7 @@ describe("regions", () => {
 
       conditionalRegion(
         marker,
-        condRef,
+        [condRef],
         () => condRef() > 0,
         {
           whenTrue: () => {
@@ -859,7 +859,7 @@ describe("regions", () => {
 
       conditionalRegion(
         marker,
-        condRef,
+        [condRef],
         () => condRef() > 0,
         {
           whenTrue: () => {
@@ -891,7 +891,7 @@ describe("regions", () => {
 
       conditionalRegion(
         marker,
-        condRef,
+        [condRef],
         () => condRef() > 0,
         {
           whenTrue: () => {
@@ -918,7 +918,7 @@ describe("regions", () => {
 
       conditionalRegion(
         marker,
-        condRef,
+        [condRef],
         () => condRef() > 0,
         {
           whenTrue: () => {
@@ -962,7 +962,7 @@ describe("regions", () => {
 
       conditionalRegion(
         marker,
-        condRef,
+        [condRef],
         () => condRef() > 0,
         {
           whenTrue: () => {
@@ -1000,7 +1000,7 @@ describe("regions", () => {
 
       conditionalRegion(
         marker,
-        condRef,
+        [condRef],
         () => condRef() > 0,
         {
           whenTrue: () => {
@@ -1028,7 +1028,7 @@ describe("regions", () => {
 
       conditionalRegion(
         marker,
-        condRef,
+        [condRef],
         () => condRef() > 0,
         {
           whenTrue: () => {
@@ -1066,6 +1066,88 @@ describe("regions", () => {
 
       scope.dispose()
     })
+
+    describe("conditionalRegion — multi-ref", () => {
+      it("should re-evaluate when any of multiple condition refs change", () => {
+        const refA = state(1)
+        const refB = state(true)
+        const scope = new Scope()
+        const container = document.createElement("div")
+        const marker = document.createComment("if")
+        container.appendChild(marker)
+
+        conditionalRegion(
+          marker,
+          [refA, refB],
+          () => refA() > 0 && refB(),
+          {
+            whenTrue: () => {
+              const p = document.createElement("p")
+              p.textContent = "visible"
+              return p
+            },
+          },
+          scope,
+        )
+
+        // Initial: both truthy → visible
+        expect(container.children.length).toBe(1)
+        expect(container.children[0].textContent).toBe("visible")
+
+        // Change refB to false → condition becomes false → hidden
+        refB.set(false)
+        expect(container.children.length).toBe(0)
+
+        // Change refB back to true → condition becomes true → visible
+        refB.set(true)
+        expect(container.children.length).toBe(1)
+        expect(container.children[0].textContent).toBe("visible")
+
+        // Change refA to 0 → condition becomes false → hidden
+        refA.set(0)
+        expect(container.children.length).toBe(0)
+
+        // Change refA back to positive → condition becomes true → visible
+        refA.set(5)
+        expect(container.children.length).toBe(1)
+        expect(container.children[0].textContent).toBe("visible")
+
+        scope.dispose()
+      })
+
+      it("should clean up all subscriptions from multiple refs", () => {
+        const refA = state(1)
+        const refB = state(true)
+        const scope = new Scope()
+        const container = document.createElement("div")
+        const marker = document.createComment("if")
+        container.appendChild(marker)
+
+        const before = getActiveSubscriptionCount()
+
+        conditionalRegion(
+          marker,
+          [refA, refB],
+          () => refA() > 0 && refB(),
+          {
+            whenTrue: () => {
+              const p = document.createElement("p")
+              p.textContent = "visible"
+              return p
+            },
+          },
+          scope,
+        )
+
+        // Two subscriptions — one per ref
+        expect(getActiveSubscriptionCount()).toBe(before + 2)
+
+        scope.dispose()
+
+        expect(getActiveSubscriptionCount()).toBe(before)
+      })
+    })
+
   })
 
   // ===========================================================================

@@ -311,9 +311,10 @@ export interface ConditionalHydrationHandler {
   getCondition: () => boolean
 
   /**
-   * The ref to subscribe to for condition changes.
+   * The refs to subscribe to for condition changes.
+   * Array of reactive values that the condition depends on.
    */
-  conditionRef: unknown
+  conditionRefs: unknown[]
 
   /**
    * Hydrate the "true" branch content.
@@ -380,16 +381,18 @@ export function hydrateConditionalRegion(
     handler.hydrateFalse(contentNode, scope)
   }
 
-  // Subscribe to condition changes
-  subscribe(
-    handler.conditionRef,
-    () => {
-      // On condition change, the region needs to swap content
-      // This is handled by the conditional region runtime
-      // The hydration just sets up the initial state
-    },
-    scope,
-  )
+  // Subscribe to all condition refs (mirrors conditionalRegion's multi-ref pattern)
+  for (const ref of handler.conditionRefs) {
+    subscribe(
+      ref,
+      () => {
+        // On condition change, the region needs to swap content
+        // This is handled by the conditional region runtime
+        // The hydration just sets up the initial state
+      },
+      scope,
+    )
+  }
 }
 
 // =============================================================================

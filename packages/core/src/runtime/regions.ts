@@ -759,10 +759,13 @@ function executeConditionalOp(
 /**
  * Create a conditional region.
  *
- * This subscribes to a condition and swaps DOM content when it changes.
+ * This subscribes to one or more reactive refs and swaps DOM content
+ * when the condition changes. Mirrors `valueRegion`'s multi-ref pattern:
+ * each ref in the array gets its own subscription, and any change from
+ * any ref triggers re-evaluation of `getCondition()`.
  *
  * @param marker - A comment node marking the position
- * @param conditionRef - A ref that provides the condition value
+ * @param conditionRefs - Array of reactive refs that the condition depends on
  * @param getCondition - Function to evaluate the condition
  * @param handlers - Callbacks for creating branches
  * @param scope - The scope that owns this region
@@ -771,7 +774,7 @@ function executeConditionalOp(
  */
 export function conditionalRegion(
   marker: Comment,
-  conditionRef: unknown,
+  conditionRefs: unknown[],
   getCondition: () => boolean,
   handlers: ConditionalRegionHandlers,
   scope: Scope,
@@ -791,14 +794,16 @@ export function conditionalRegion(
   // Evaluate and render initial state
   updateConditionalRegion(parent, marker, state, getCondition, handlers)
 
-  // Subscribe to changes
-  subscribe(
-    conditionRef,
-    () => {
-      updateConditionalRegion(parent, marker, state, getCondition, handlers)
-    },
-    scope,
-  )
+  // Subscribe to all condition refs (mirrors valueRegion's multi-ref pattern)
+  for (const ref of conditionRefs) {
+    subscribe(
+      ref,
+      () => {
+        updateConditionalRegion(parent, marker, state, getCondition, handlers)
+      },
+      scope,
+    )
+  }
 }
 
 /**

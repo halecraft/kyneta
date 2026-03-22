@@ -177,7 +177,7 @@ describe("compiler integration - combined scenarios", () => {
 
       conditionalRegion(
         marker,
-        showDetails,
+        [showDetails],
         () => read(showDetails) > 0,
         {
           whenTrue: () => {

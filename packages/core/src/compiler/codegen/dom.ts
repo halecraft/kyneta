@@ -810,8 +810,12 @@ function generateConditionalRegionCall(
   const innerState = indented(state)
   const innerInd = getIndent(innerState)
 
+  // Emit all condition dependencies as an array (mirrors valueRegion's multi-ref pattern).
+  // Uses condition.dependencies (the full list) instead of node.subscriptionTarget (single).
+  const depSources = conditionExpr.dependencies.map(d => d.source).join(", ")
+
   lines.push(
-    `${ind}conditionalRegion(${markerVar}, ${node.subscriptionTarget?.source}, () => ${conditionExpr.source}, {`,
+    `${ind}conditionalRegion(${markerVar}, [${depSources}], () => ${conditionExpr.source}, {`,
   )
 
   // Generate whenTrue handler

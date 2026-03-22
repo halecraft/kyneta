@@ -305,4 +305,26 @@ describe("compiler integration - conditional regions", () => {
       scope.dispose()
     })
   })
+
+  describe("Multi-dep conditional codegen", () => {
+    it("should emit dependency array for condition with multiple reactive deps", () => {
+      const source = withTypes(`
+        declare const doc: { count: CounterRef; title: TextRef }
+
+        div(() => {
+          if (doc.count.get() > 0 && doc.title.toString().length > 0) {
+            p("Both present")
+          }
+        })
+      `)
+
+      const result = transformSource(source, { target: "dom" })
+
+      // Non-dissolvable (no else branch) → should emit conditionalRegion
+      expect(result.code).toContain("conditionalRegion")
+
+      // Should emit array syntax with both deps
+      expect(result.code).toContain("[doc.count, doc.title]")
+    })
+  })
 })

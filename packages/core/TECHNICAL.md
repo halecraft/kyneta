@@ -758,7 +758,7 @@ Generated code imports runtime functions from `@kyneta/core/runtime`:
 - `subscribe(ref, handler, scope)` — CHANGEFEED-based subscription (delta-aware, Changeset-unwrapping)
 - `valueRegion(refs, getValue, onValue, scope)` — Replace-semantic updates for any Changefeed(s)
 - `listRegion(parent, list, handlers, scope)` — Delta-driven list rendering
-- `conditionalRegion(marker, target, condition, handlers, scope)` — Reactive conditionals
+- `conditionalRegion(marker, conditionRefs, condition, handlers, scope)` — Reactive conditionals (subscribes to all refs in the array)
 - `textRegion(textNode, ref, scope)` — Surgical text patching for direct text Changefeed reads
 - `inputTextRegion(input, ref, scope)` — Surgical `<input>`/`<textarea>` value patching via `setRangeText`
 - `read(ref)` — Universal value accessor: `ref[CHANGEFEED].current`
@@ -1406,10 +1406,12 @@ Every delta region has three phases:
 | Text | `planTextPatch(ops)` | `patchText(node, ops)` | `"text"` | Text node |
 | Input Text | `planTextPatch(ops)` | `patchInputValue(input, ops)` | `"text"` | `<input>` / `<textarea>` value |
 | Sequence | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"sequence"` | Parent element children |
-| Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition ref | Branch swap |
+| Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition refs (array) | Branch swap |
 | Value | — | `onValue(getValue())` | any (re-read) | Text node, attribute, etc. |
 
 `valueRegion` is the **terminal object** in the delta region algebra — a region whose delta dispatch strategy is always "replace." It re-reads via `getValue()` and applies via `onValue()` on every change from any subscribed ref. It unifies the previous `subscribeWithValue` (single ref) and `subscribeMultiple` + manual init (multiple refs) into one function with a uniform three-phase pattern. All Changefeed → DOM wiring functions are now named as "regions."
+
+`conditionalRegion` accepts an **array** of condition refs (like `valueRegion`). The codegen emits all dependencies from the condition expression — not just the first. Each ref gets its own subscription; any change from any ref triggers `getCondition()` re-evaluation and potential branch swap. This is essential for derived conditions like `if (nameMatch && veggieMatch)` where the predicate depends on multiple reactive sources (e.g., item properties *and* external filter state).
 
 The `read()` runtime helper is the universal value accessor for Changefeeds in generated code: `read(ref)` returns `ref[CHANGEFEED].current`. It keeps the `CHANGEFEED` symbol internal to the runtime, avoiding a cross-package import in every compiled component.
 
@@ -1430,7 +1432,7 @@ Each region type handles its matching delta surgically:
 - **Text deltas** → `insertData` / `deleteData` on Text nodes (character-level)
 - **Input text deltas** → `patchInputValue` via `setRangeText` with origin-driven selectMode: `"end"` for local edits (cursor follows edit), `"preserve"` for remote edits (cursor preserves position)
 - **Sequence deltas** → `insertBefore` / `removeChild` on parent (element-level)
-- **Condition changes** → `replaceChild` for branch swapping
+- **Condition changes** → `replaceChild` for branch swapping (subscribes to all condition dependencies)
 
 When a delta type doesn't match the region type (e.g., a "replace" delta arrives at a sequence region), the region falls back to full re-render — clear all items and re-create from scratch.
 
