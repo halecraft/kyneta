@@ -6,11 +6,14 @@
  */
 
 import {
+  type ClassifiedDependency,
   createBuilder,
+  createContent,
   createLoop,
   createSpan,
   type DeltaKind,
   type Dependency,
+  type FilterMetadata,
 } from "@kyneta/compiler"
 import { Project } from "ts-morph"
 import { describe, expect, it } from "vitest"
@@ -476,6 +479,37 @@ describe("collectRequiredImports", () => {
     const { runtime } = collectRequiredImports([builder])
 
     expect(runtime.has("listRegion")).toBe(true)
+  })
+
+  it("should include filteredListRegion instead of listRegion for loops with filter metadata", () => {
+    const filter: FilterMetadata = {
+      predicate: createContent(
+        "recipe.vegetarian()",
+        "reactive",
+        [dep("recipe.vegetarian")],
+        span,
+      ),
+      itemDeps: [
+        { source: "recipe.vegetarian", deltaKind: "replace", classification: "item" } satisfies ClassifiedDependency,
+      ],
+      externalDeps: [],
+    }
+    const loop = createLoop(
+      "doc.recipes",
+      "reactive",
+      "recipe",
+      null,
+      [],
+      [dep("doc.recipes")],
+      span,
+      filter,
+    )
+    const builder = createBuilder("div", [], [], [loop], span)
+
+    const { runtime } = collectRequiredImports([builder])
+
+    expect(runtime.has("filteredListRegion")).toBe(true)
+    expect(runtime.has("listRegion")).toBe(false)
   })
 
   it("should include conditionalRegion for reactive conditionals", () => {

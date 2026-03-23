@@ -20,6 +20,7 @@ import type {
   ContentNode,
   ElementNode,
   EventHandlerNode,
+  FilterMetadata,
   LoopNode,
   TemplateHole,
 } from "@kyneta/compiler"
@@ -748,6 +749,11 @@ function generateReactiveLoopBody(
   mountVar: string,
   state: CodegenState,
 ): string[] {
+  // Dispatch to filtered loop codegen when FilterMetadata is present
+  if (node.filter) {
+    return generateFilteredLoopBody(node, node.filter, mountVar, state)
+  }
+
   const lines: string[] = []
   const ind = getIndent(state)
   const innerState = indented(state)
@@ -773,6 +779,160 @@ function generateReactiveLoopBody(
 
   // Emit isReactive from compile-time analysis — skips scope allocation for static items
   lines.push(`${innerInd}isReactive: ${node.hasReactiveItems},`)
+
+  lines.push(`${ind}}, ${state.scopeVar})`)
+
+  return lines
+}
+
+// =============================================================================
+// Filtered Loop Codegen
+// =============================================================================
+
+/**
+ * Extract the innermost then-branch body from a (possibly chained) filter
+ * conditional. For `if (A) { if (B) { ...DOM... } }`, returns the `...DOM...`
+ * body array from the innermost conditional's first branch.
+ *
+ * Also collects leading bindings from each level's body.
+ *
+ * @internal
+ */
+function extractFilterBody(body: ChildNode[]): {
+  leadingBindings: ChildNode[]
+  domBody: ChildNode[]
+} {
+  const leadingBindings: ChildNode[] = []
+  let currentBody = body
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    // Collect non-DOM-producing nodes (bindings, statements) and find the conditional
+    let conditional: ConditionalNode | null = null
+    for (const child of currentBody) {
+      if (child.kind === "conditional") {
+        conditional = child
+      } else if (!isDOMProducing(child)) {
+        leadingBindings.push(child)
+      }
+    }
+
+    // If the conditional's then-branch body is itself a filter-shaped conditional
+    // (bindings + one if-no-else wrapping all DOM), peel into it
+    if (
+      conditional &&
+      conditional.branches.length === 1 &&
+      conditional.branches[0].condition !== null
+    ) {
+      const innerBody = conditional.branches[0].body
+      // Check if the inner body is also a chained filter
+      const innerConditional = innerBody.find(
+        (c): c is ConditionalNode =>
+          c.kind === "conditional" &&
+          c.branches.length === 1 &&
+          c.branches[0].condition !== null &&
+          c.subscriptionTarget !== null,
+      )
+      if (
+        innerConditional &&
+        !innerBody.some(c => isDOMProducing(c) && c.kind !== "conditional")
+      ) {
+        // Chained filter — peel into it
+        currentBody = innerBody
+        continue
+      }
+      // Not chained — the then-branch body IS the DOM content
+      return { leadingBindings, domBody: innerBody }
+    }
+
+    // Shouldn't reach here if FilterMetadata was correctly detected,
+    // but fall back to the full body
+    return { leadingBindings, domBody: currentBody }
+  }
+}
+
+/**
+ * Generate code for a filtered list region.
+ *
+ * Emits a `filteredListRegion(...)` call that separates external subscriptions
+ * (one shared, re-evaluates all items) from item subscriptions (per-item,
+ * O(1) re-evaluation). Consumes the `FilterMetadata` populated by the
+ * compiler's pattern recognition stage.
+ *
+ * @param node - The loop node with filter metadata
+ * @param filter - The filter metadata from pattern recognition
+ * @param mountVar - Variable name for the mount point (container or marker)
+ * @param state - The codegen state
+ * @returns Array of code lines
+ *
+ * @internal
+ */
+function generateFilteredLoopBody(
+  node: LoopNode,
+  filter: FilterMetadata,
+  mountVar: string,
+  state: CodegenState,
+): string[] {
+  const lines: string[] = []
+  const ind = getIndent(state)
+  const innerState = indented(state)
+  const innerInd = getIndent(innerState)
+
+  lines.push(
+    `${ind}filteredListRegion(${mountVar}, ${node.iterableSource}, {`,
+  )
+
+  // Generate create handler — uses the innermost then-branch body
+  const params = node.indexVariable
+    ? `(${node.itemVariable}, ${node.indexVariable})`
+    : `(${node.itemVariable}, _index)`
+
+  // Extract the DOM body from the filter conditional (peel through chains)
+  const { leadingBindings, domBody } = extractFilterBody(node.body)
+
+  lines.push(`${innerInd}create: ${params} => {`)
+
+  const bodyState = indented(innerState)
+  const bodyInd = getIndent(bodyState)
+
+  // Emit leading bindings first (they may be used by the create body)
+  for (const binding of leadingBindings) {
+    lines.push(...generateChild(binding, "", bodyState).code)
+  }
+
+  // Generate the DOM body using the shared helper
+  lines.push(...generateBodyWithReturn(domBody, bodyState))
+  lines.push(`${innerInd}},`)
+
+  // Generate predicate closure — rendered with binding expansion for
+  // self-contained re-evaluation from live refs
+  const predicateSource = getReactiveSource(filter.predicate)
+  lines.push(`${innerInd}predicate: ${params} => {`)
+  // Emit bindings inside the predicate closure too (they may be needed
+  // for evaluating the predicate expression)
+  for (const binding of leadingBindings) {
+    lines.push(...generateChild(binding, "", bodyState).code)
+  }
+  lines.push(`${bodyInd}return ${predicateSource}`)
+  lines.push(`${innerInd}},`)
+
+  // Generate externalRefs array
+  const externalSources = filter.externalDeps.map(d => d.source).join(", ")
+  lines.push(`${innerInd}externalRefs: [${externalSources}],`)
+
+  // Generate itemRefs accessor
+  const itemSources = filter.itemDeps.map(d => d.source).join(", ")
+  lines.push(
+    `${innerInd}itemRefs: (${node.itemVariable}) => [${itemSources}],`,
+  )
+
+  // Emit slotKind — compute from the DOM body (not the full loop body)
+  const filterSlotKind = computeSlotKind(domBody)
+  lines.push(`${innerInd}slotKind: ${JSON.stringify(filterSlotKind)},`)
+
+  // Emit isReactive — items in a filtered list always have reactive content
+  // (the filter predicate itself is reactive, so items need scopes)
+  lines.push(`${innerInd}isReactive: true,`)
 
   lines.push(`${ind}}, ${state.scopeVar})`)
 

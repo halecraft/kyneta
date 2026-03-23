@@ -7,6 +7,7 @@
 
 import {
   type AttributeNode,
+  type ClassifiedDependency,
   createBuilder,
   createConditional,
   createConditionalBranch,
@@ -19,6 +20,7 @@ import {
   type DeltaKind,
   type Dependency,
   type EventHandlerNode,
+  type FilterMetadata,
 } from "@kyneta/compiler"
 import { dissolveConditionals } from "@kyneta/compiler/transforms"
 import { describe, expect, it } from "vitest"
@@ -1584,4 +1586,147 @@ describe("generateElementFactoryWithResult - dissolution on cloning path", () =>
     )
     expect(hasMarker).toBe(true)
   })
+})
+
+// =============================================================================
+// generateDOM - filtered list regions
+// =============================================================================
+
+describe("generateDOM - filtered list regions", () => {
+  /**
+   * Helper to create a ClassifiedDependency.
+   */
+  function classifiedDep(
+    source: string,
+    classification: "item" | "external" | "structural",
+    deltaKind: DeltaKind = "replace",
+  ): ClassifiedDependency {
+    return { source, deltaKind, classification }
+  }
+
+  it("should generate filteredListRegion call when filter metadata is present", () => {
+    // Build a loop body that matches the filter pattern:
+    //   for (const recipe of doc.recipes) {
+    //     if (recipe.vegetarian()) { p("veggie") }
+    //   }
+    const pElement = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("veggie", span(4, 6, 4, 14))],
+      span(4, 4, 4, 16),
+    )
+    const branch = createConditionalBranch(
+      createContent("recipe.vegetarian()", "reactive", [dep("recipe.vegetarian")], span(3, 8, 3, 30)),
+      [pElement],
+      span(3, 4, 5, 5),
+    )
+    const conditional = createConditional(
+      [branch],
+      dep("recipe.vegetarian"),
+      span(3, 4, 5, 5),
+    )
+
+    const filter: FilterMetadata = {
+      predicate: createContent(
+        "recipe.vegetarian()",
+        "reactive",
+        [dep("recipe.vegetarian")],
+        span(3, 8, 3, 30),
+      ),
+      itemDeps: [classifiedDep("recipe.vegetarian", "item")],
+      externalDeps: [],
+    }
+
+    const loop = createLoop(
+      "doc.recipes",
+      "reactive",
+      "recipe",
+      null,
+      [conditional],
+      [dep("doc.recipes")],
+      span(2, 2, 6, 3),
+      filter,
+    )
+    const builder = createBuilder("div", [], [], [loop], span(1, 0, 7, 1))
+
+    const code = generateDOM(builder)
+
+    // Should use filteredListRegion, NOT listRegion
+    expect(code).toContain("filteredListRegion")
+    expect(code).not.toContain("listRegion(")
+    // Should NOT contain conditionalRegion (the filter conditional is handled internally)
+    expect(code).not.toContain("conditionalRegion")
+
+    // Should contain the expected handler properties
+    expect(code).toContain("create:")
+    expect(code).toContain("predicate:")
+    expect(code).toContain("externalRefs:")
+    expect(code).toContain("itemRefs:")
+    expect(code).toContain("slotKind:")
+    expect(code).toContain("isReactive: true")
+
+    // itemRefs should reference recipe.vegetarian
+    expect(code).toContain("recipe.vegetarian")
+  })
+
+  it("should generate filteredListRegion with external deps", () => {
+    // Build a loop body with mixed deps:
+    //   for (const recipe of doc.recipes) {
+    //     const nameMatch = recipe.name().toLowerCase().includes(filterText().toLowerCase())
+    //     if (nameMatch) { p("match") }
+    //   }
+    const pElement = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("match", span(5, 6, 5, 13))],
+      span(5, 4, 5, 15),
+    )
+    const branch = createConditionalBranch(
+      createContent("nameMatch", "reactive", [dep("recipe.name"), dep("filterText")], span(4, 8, 4, 18)),
+      [pElement],
+      span(4, 4, 6, 5),
+    )
+    const conditional = createConditional(
+      [branch],
+      dep("recipe.name"),
+      span(4, 4, 6, 5),
+    )
+
+    const filter: FilterMetadata = {
+      predicate: createContent(
+        "recipe.name().toLowerCase().includes(filterText().toLowerCase())",
+        "reactive",
+        [dep("recipe.name"), dep("filterText")],
+        span(3, 8, 3, 70),
+      ),
+      itemDeps: [classifiedDep("recipe.name", "item")],
+      externalDeps: [classifiedDep("filterText", "external")],
+    }
+
+    const loop = createLoop(
+      "doc.recipes",
+      "reactive",
+      "recipe",
+      null,
+      [conditional],
+      [dep("doc.recipes")],
+      span(2, 2, 7, 3),
+      filter,
+    )
+    const builder = createBuilder("div", [], [], [loop], span(1, 0, 8, 1))
+
+    const code = generateDOM(builder)
+
+    expect(code).toContain("filteredListRegion")
+    // externalRefs should contain filterText
+    expect(code).toContain("externalRefs: [filterText]")
+    // itemRefs should contain recipe.name
+    expect(code).toContain("recipe.name")
+    expect(code).toContain("itemRefs:")
+  })
+
 })

@@ -37,12 +37,42 @@ import {
 import type {
   ConditionalRegionHandlers,
   ConditionalRegionOp,
+  FilteredListRegionHandlers,
+  FilterUpdateOp,
   ListRegionHandlers,
   ListRegionOp,
   Slot,
 } from "../types.js"
 import type { Scope } from "./scope.js"
 import { subscribe } from "./subscribe.js"
+
+// =============================================================================
+// Anchor-Based Parent Resolution
+// =============================================================================
+
+/**
+ * Resolve the current parent node from an anchor (comment marker).
+ *
+ * Tree-structural regions (list, conditional) must never cache a `parent`
+ * reference across async boundaries (subscription callbacks). A comment
+ * marker that starts inside a DocumentFragment will move to the real DOM
+ * when the fragment is consumed by `insertBefore`. The marker's
+ * `parentNode` is a live property that always reflects the current tree
+ * state, so resolving it at operation time gives the correct parent.
+ *
+ * @param anchor - A comment marker node that serves as the region's anchor
+ * @returns The current parent node of the anchor
+ * @throws Error if the anchor has been detached (indicates a lifecycle bug)
+ *
+ * @internal
+ */
+function resolveParent(anchor: Node): Node {
+  const parent = anchor.parentNode
+  if (!parent) {
+    throw new Error("Region anchor has been detached from the DOM")
+  }
+  return parent
+}
 
 // =============================================================================
 // Fragment Handling Helper
@@ -249,6 +279,28 @@ interface ListRegionState<T> extends RegionStateBase {
    * `endMarker` is `null` — items append at the end of the container.
    */
   endMarker: Node | null
+  /**
+   * Anchor node for lazy parent resolution in marker mode.
+   *
+   * In marker mode (comment or auto-promoted fragment mount point),
+   * `anchor` is the opening comment marker. The parent is resolved
+   * lazily via `resolveParent(anchor)` at each operation point, which
+   * is essential when the marker starts inside a DocumentFragment.
+   *
+   * In container mode (element mount point), `anchor` is `null` — the
+   * container element IS the stable parent and never becomes stale.
+   */
+  anchor: Node | null
+  /**
+   * Stable parent for container mode.
+   *
+   * In container mode (element mount point), `containerParent` is the
+   * element itself. It is stable and never becomes stale.
+   *
+   * In marker mode, `containerParent` is `null` — the parent is resolved
+   * lazily from `anchor` via `resolveParent()`.
+   */
+  containerParent: Node | null
 }
 
 // =============================================================================
@@ -338,6 +390,45 @@ export function planDeltaOps<T>(
     }
   }
 
+  return ops
+}
+
+// =============================================================================
+// Filtered List Region - Functional Core (Pure Planning Function)
+// =============================================================================
+
+/**
+ * Plan filter visibility updates by comparing current visibility against
+ * the predicate for each item.
+ *
+ * This is a pure function that returns show/hide operations for items
+ * whose visibility has changed. It follows the FC/IS pattern:
+ * - This function (planFilterUpdate) is the Functional Core
+ * - The caller applies the ops to the DOM (Imperative Shell)
+ *
+ * @param visibility - Current visibility state (index-aligned with listRef)
+ * @param predicate - The filter predicate to evaluate
+ * @param listRef - The list ref for accessing items
+ * @returns Array of show/hide operations for items that changed
+ *
+ * @internal - Exported for testing
+ */
+export function planFilterUpdate<T>(
+  visibility: boolean[],
+  predicate: (item: T, index: number) => boolean,
+  listRef: ListRefLike<T>,
+): FilterUpdateOp[] {
+  const ops: FilterUpdateOp[] = []
+  for (let i = 0; i < listRef.length; i++) {
+    const item = listRef.at(i)
+    if (item === undefined) continue
+    const shouldBeVisible = predicate(item, i)
+    if (shouldBeVisible && !visibility[i]) {
+      ops.push({ kind: "show", index: i })
+    } else if (!shouldBeVisible && visibility[i]) {
+      ops.push({ kind: "hide", index: i })
+    }
+  }
   return ops
 }
 
@@ -553,26 +644,55 @@ export function listRegion<T>(
   handlers: ListRegionHandlers<T>,
   scope: Scope,
 ): void {
-  // Resolve the mount point into (parent, endMarker).
+  // Resolve the mount point into (anchor | containerParent, endMarker).
   //
-  // Two codegen paths produce different mount points:
-  //   - createElement path: mountPoint is the container element (e.g. <ul>).
-  //     Items append at the end → endMarker = null.
-  //   - Template-cloning path: mountPoint is the opening comment marker
-  //     (e.g. <!--kyneta:list:N-->). Its nextSibling is the closing marker
-  //     (<!--/kyneta:list-->). Items insert before the closing marker so
-  //     they stay between the paired comments.
+  // Three codegen paths produce different mount points:
   //
-  // This is structurally identical to how conditionalRegion derives its
-  // parent from marker.parentNode — the same anchoring pattern for lists.
-  let parent: Node
+  //   1. **Container mode** (createElement path): mountPoint is the container
+  //      element (e.g. <ul>). Items append at the end. The element is a
+  //      stable parent — it never moves between DOM trees.
+  //
+  //   2. **Marker mode** (template-cloning path): mountPoint is the opening
+  //      comment marker (e.g. <!--kyneta:list:N-->). Its nextSibling is the
+  //      closing marker (<!--/kyneta:list-->). Items insert before the
+  //      closing marker so they stay between the paired comments.
+  //      Parent is resolved lazily via resolveParent(anchor).
+  //
+  //   3. **Fragment auto-promotion** (new): mountPoint is a DocumentFragment.
+  //      This happens when a listRegion is emitted inside a handler body
+  //      that uses generateBodyWithFragment (e.g., a list inside a list's
+  //      create callback). Auto-create paired comment markers inside the
+  //      fragment and proceed in marker mode. After fragment consumption,
+  //      the markers (and items) move to the real parent.
+  //
+  // The anchor-based resolution principle: tree-structural regions must
+  // resolve `parent` from their anchor node at operation time, never at
+  // construction time. This is essential for DocumentFragment safety.
+  let anchor: Node | null
+  let containerParent: Node | null
   let endMarker: Node | null
 
-  if (mountPoint.nodeType === Node.COMMENT_NODE) {
-    parent = mountPoint.parentNode!
+  if (mountPoint.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+    // Fragment auto-promotion: create paired markers inside the fragment
+    // and switch to marker mode. After the fragment is consumed by
+    // insertBefore, the markers move to the real DOM parent.
+    const openMarker = document.createComment("kyneta:list")
+    const closeMarker = document.createComment("/kyneta:list")
+    mountPoint.appendChild(openMarker)
+    mountPoint.appendChild(closeMarker)
+    anchor = openMarker
+    containerParent = null
+    endMarker = closeMarker
+  } else if (mountPoint.nodeType === Node.COMMENT_NODE) {
+    // Marker mode: the opening marker is the anchor. Parent is resolved
+    // lazily via resolveParent(anchor) at each operation point.
+    anchor = mountPoint
+    containerParent = null
     endMarker = mountPoint.nextSibling // the <!--/kyneta:list--> closing marker
   } else {
-    parent = mountPoint
+    // Container mode: the element IS the stable parent. No anchor needed.
+    anchor = null
+    containerParent = mountPoint
     endMarker = null
   }
 
@@ -586,16 +706,28 @@ export function listRegion<T>(
     parentScope: scope,
     listRef: typedListRef,
     endMarker,
+    anchor,
+    containerParent,
+  }
+
+  // Resolve the parent for the current operation. In container mode this
+  // is the stable element; in marker mode it's resolved lazily from the
+  // anchor (which may be in a fragment at initial render time, and in the
+  // real DOM at subscription callback time).
+  const resolveListParent = (): Node => {
+    if (state.containerParent) return state.containerParent
+    return resolveParent(state.anchor!)
   }
 
   // Plan and execute initial render
   const initialOps = planInitialRender(typedListRef)
-  executeOps(parent, state, handlers, initialOps)
+  executeOps(resolveListParent(), state, handlers, initialOps)
 
   // Subscribe to changes
   subscribe(
     listRef,
     (change: ChangeBase) => {
+      const parent = resolveListParent()
       // Only process sequence changes — other change types trigger full re-render
       if (isSequenceChange(change)) {
         const regionOps = planDeltaOps(state.listRef, change.instructions)
@@ -618,6 +750,423 @@ export function listRegion<T>(
     },
     scope,
   )
+}
+
+// =============================================================================
+// Filtered List Region
+// =============================================================================
+
+/**
+ * State for a filtered list region.
+ *
+ * Extends the base list region concept with a parallel `visibility` array
+ * that tracks which items pass the filter predicate. All arrays are
+ * index-aligned with the list ref — `slots[i]`, `scopes[i]`, and
+ * `visibility[i]` all correspond to `listRef.at(i)`.
+ *
+ * Items that fail the predicate have `slots[i] = null` and `scopes[i] = null`
+ * but still occupy their index position, keeping alignment intact.
+ *
+ * @internal
+ */
+interface FilteredListState<T> extends RegionStateBase {
+  /** Slots for each item (null when item is hidden by filter) */
+  slots: (Slot | null)[]
+  /** Scopes for each item (null when hidden or when isReactive is false) */
+  scopes: (Scope | null)[]
+  /** The list ref for accessing items */
+  listRef: ListRefLike<T>
+  /** Closing marker for the list region */
+  endMarker: Node | null
+  /** Anchor node for lazy parent resolution (marker mode) */
+  anchor: Node | null
+  /** Stable parent for container mode */
+  containerParent: Node | null
+  /** Whether each item passes the filter predicate (index-aligned with listRef) */
+  visibility: boolean[]
+  /**
+   * Per-item subscription cleanup functions.
+   * `itemUnsubs[i]` is the array of unsubscribe functions for the item deps
+   * of source item `i`. When the item is deleted, these are called to clean up.
+   * Managed separately from `scopes` because item subscriptions may exist
+   * even when the item is hidden (we still need to know when to show it).
+   */
+  itemUnsubs: (() => void)[][]
+}
+
+/**
+ * Find the reference node for inserting content at source index `i`.
+ *
+ * Scans forward from index `i` through the slots array to find the next
+ * visible item's DOM anchor. Returns the endMarker if no visible item
+ * exists after index `i`.
+ *
+ * @internal
+ */
+function findReferenceNode(
+  state: FilteredListState<unknown>,
+  sourceIndex: number,
+): Node | null {
+  for (let j = sourceIndex + 1; j < state.slots.length; j++) {
+    const slot = state.slots[j]
+    if (slot) {
+      return slot.kind === "single" ? slot.node : slot.startMarker
+    }
+  }
+  return state.endMarker
+}
+
+/**
+ * Resolve the parent node for a filtered list region.
+ *
+ * @internal
+ */
+function resolveFilteredListParent(state: FilteredListState<unknown>): Node {
+  if (state.containerParent) return state.containerParent
+  return resolveParent(state.anchor!)
+}
+
+/**
+ * Show an item that was previously hidden (or newly inserted as visible).
+ *
+ * Calls the create handler, inserts the content into the DOM at the correct
+ * position (before the next visible item or endMarker), and updates state.
+ *
+ * @internal
+ */
+function showItem<T>(
+  parent: Node,
+  state: FilteredListState<T>,
+  handlers: FilteredListRegionHandlers<T>,
+  index: number,
+): void {
+  const item = state.listRef.at(index)
+  if (item === undefined) return
+
+  const needsScope = handlers.isReactive !== false
+  const itemScope = needsScope ? state.parentScope.createChild() : null
+  const node = handlers.create(item, index)
+
+  const referenceNode = findReferenceNode(state, index)
+  const slot = claimSlot(parent, node, referenceNode, handlers.slotKind)
+
+  state.slots[index] = slot
+  state.scopes[index] = itemScope
+  state.visibility[index] = true
+}
+
+/**
+ * Hide an item that was previously visible.
+ *
+ * Removes the content from the DOM and disposes its scope, but keeps
+ * the index position occupied (slots[i] = null, visibility[i] = false).
+ *
+ * @internal
+ */
+function hideItem<T>(
+  parent: Node,
+  state: FilteredListState<T>,
+  index: number,
+): void {
+  const slot = state.slots[index]
+  if (slot) {
+    releaseSlot(parent, slot)
+  }
+  const scope = state.scopes[index]
+  if (scope) {
+    scope.dispose()
+  }
+  state.slots[index] = null
+  state.scopes[index] = null
+  state.visibility[index] = false
+}
+
+/**
+ * Execute filter update operations (show/hide) against the DOM.
+ *
+ * @internal
+ */
+function executeFilterOps<T>(
+  parent: Node,
+  state: FilteredListState<T>,
+  handlers: FilteredListRegionHandlers<T>,
+  ops: FilterUpdateOp[],
+): void {
+  for (const op of ops) {
+    if (op.kind === "show") {
+      showItem(parent, state, handlers, op.index)
+    } else {
+      hideItem(parent, state, op.index)
+    }
+  }
+}
+
+/**
+ * Set up per-item subscriptions for a single item's deps.
+ *
+ * Subscribes to each ref returned by `handlers.itemRefs(item)`. When any
+ * item dep fires, re-evaluates the predicate for this item only and
+ * shows/hides it if visibility changed.
+ *
+ * Returns an array of unsubscribe functions for cleanup when the item
+ * is deleted from the list.
+ *
+ * @internal
+ */
+function setupItemSubscriptions<T>(
+  state: FilteredListState<T>,
+  handlers: FilteredListRegionHandlers<T>,
+  sourceIndex: number,
+  scope: Scope,
+): (() => void)[] {
+  const item = state.listRef.at(sourceIndex)
+  if (item === undefined) return []
+
+  const refs = handlers.itemRefs(item)
+  const unsubs: (() => void)[] = []
+
+  for (const ref of refs) {
+    // We use scope.onDispose to track these, but also return unsub functions
+    // so we can clean up when the item is deleted (before scope disposal).
+    // Using a child scope per item so disposal is scoped correctly.
+    const itemScope = state.scopes[sourceIndex]
+    const targetScope = itemScope ?? scope
+
+    subscribe(
+      ref,
+      () => {
+        // The sourceIndex is captured by closure. We need to verify it's still
+        // valid (the item hasn't been deleted and re-inserted at a different index).
+        // For now, the closure captures the correct index at subscription time.
+        const currentItem = state.listRef.at(sourceIndex)
+        if (currentItem === undefined) return
+
+        const shouldBeVisible = handlers.predicate(currentItem, sourceIndex)
+        const isVisible = state.visibility[sourceIndex]
+
+        if (shouldBeVisible && !isVisible) {
+          const parent = resolveFilteredListParent(state)
+          showItem(parent, state, handlers, sourceIndex)
+        } else if (!shouldBeVisible && isVisible) {
+          const parent = resolveFilteredListParent(state)
+          hideItem(parent, state, sourceIndex)
+        }
+      },
+      targetScope,
+    )
+  }
+
+  return unsubs
+}
+
+/**
+ * Create a filtered list region.
+ *
+ * This is an optimized variant of `listRegion` for the filter pattern:
+ * a reactive loop whose body is a single `if` with no `else`, wrapping
+ * all DOM content. Instead of nesting `conditionalRegion` inside
+ * `listRegion` (which has the fragment parent problem and fires N
+ * subscription callbacks per external dep change), this function
+ * separates three subscription layers:
+ *
+ * 1. **Structural**: subscribes to the list ref for insert/delete/replace.
+ * 2. **External**: one subscription per external dep. On change,
+ *    re-evaluates the predicate for ALL items (O(n)).
+ * 3. **Item**: per-item subscriptions to leaf refs. On change,
+ *    re-evaluates the predicate for THAT item only (O(1)).
+ *
+ * @param mountPoint - Container element, comment marker, or DocumentFragment
+ * @param listRef - The reactive list ref to iterate
+ * @param handlers - Handlers with predicate, create, externalRefs, itemRefs
+ * @param scope - The scope that owns this region
+ *
+ * @internal - Called by compiled code
+ */
+export function filteredListRegion<T>(
+  mountPoint: Node,
+  listRef: unknown,
+  handlers: FilteredListRegionHandlers<T>,
+  scope: Scope,
+): void {
+  // Resolve mount point using the same three-mode pattern as listRegion
+  let anchor: Node | null
+  let containerParent: Node | null
+  let endMarker: Node | null
+
+  if (mountPoint.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+    const openMarker = document.createComment("kyneta:list")
+    const closeMarker = document.createComment("/kyneta:list")
+    mountPoint.appendChild(openMarker)
+    mountPoint.appendChild(closeMarker)
+    anchor = openMarker
+    containerParent = null
+    endMarker = closeMarker
+  } else if (mountPoint.nodeType === Node.COMMENT_NODE) {
+    anchor = mountPoint
+    containerParent = null
+    endMarker = mountPoint.nextSibling
+  } else {
+    anchor = null
+    containerParent = mountPoint
+    endMarker = null
+  }
+
+  const typedListRef = listRef as ListRefLike<T>
+
+  const state: FilteredListState<T> = {
+    slots: [],
+    scopes: [],
+    parentScope: scope,
+    listRef: typedListRef,
+    endMarker,
+    anchor,
+    containerParent,
+    visibility: [],
+    itemUnsubs: [],
+  }
+
+  // --- Initial render ---
+  // Evaluate predicate for each item and render only visible ones.
+  const parent = resolveFilteredListParent(state)
+  for (let i = 0; i < typedListRef.length; i++) {
+    const item = typedListRef.at(i)
+    if (item === undefined) continue
+
+    const visible = handlers.predicate(item, i)
+    state.visibility.push(visible)
+
+    if (visible) {
+      showItem(parent, state, handlers, i)
+    } else {
+      state.slots.push(null)
+      state.scopes.push(null)
+    }
+
+    // Set up per-item subscriptions (even for hidden items — we need to
+    // know when they become visible)
+    state.itemUnsubs.push(
+      setupItemSubscriptions(state, handlers, i, scope),
+    )
+  }
+
+  // --- Structural subscription (Layer 1) ---
+  subscribe(
+    listRef,
+    (change: ChangeBase) => {
+      const parent = resolveFilteredListParent(state)
+
+      if (isSequenceChange(change)) {
+        // Process structural delta ops. We handle insert/delete manually
+        // rather than delegating to executeOps, because we need to evaluate
+        // the predicate for new items and manage visibility state.
+        let index = 0
+        for (const delta of change.instructions) {
+          if ("retain" in delta) {
+            index += delta.retain
+          } else if ("delete" in delta) {
+            const count = delta.delete
+            for (let d = 0; d < count; d++) {
+              // Clean up item subscriptions
+              const unsubs = state.itemUnsubs[index]
+              if (unsubs) {
+                for (const unsub of unsubs) unsub()
+              }
+              // If visible, remove from DOM
+              if (state.visibility[index]) {
+                hideItem(parent, state, index)
+              }
+              // Remove from all state arrays
+              state.slots.splice(index, 1)
+              state.scopes.splice(index, 1)
+              state.visibility.splice(index, 1)
+              state.itemUnsubs.splice(index, 1)
+              // Don't advance index — next item slides into this position
+            }
+          } else if ("insert" in delta) {
+            const insertCount = delta.insert.length
+            for (let ins = 0; ins < insertCount; ins++) {
+              const insertIndex = index + ins
+              const item = state.listRef.at(insertIndex)
+              if (item === undefined) continue
+
+              const visible = handlers.predicate(item, insertIndex)
+
+              // Splice into state arrays at the correct position
+              state.visibility.splice(insertIndex, 0, visible)
+              state.slots.splice(insertIndex, 0, null)
+              state.scopes.splice(insertIndex, 0, null)
+              state.itemUnsubs.splice(
+                insertIndex,
+                0,
+                setupItemSubscriptions(state, handlers, insertIndex, scope),
+              )
+
+              if (visible) {
+                showItem(parent, state, handlers, insertIndex)
+              }
+            }
+            index += insertCount
+          }
+        }
+      } else {
+        // Fallback: non-sequence change — full re-render
+        // Clean up everything
+        for (let i = state.slots.length - 1; i >= 0; i--) {
+          const unsubs = state.itemUnsubs[i]
+          if (unsubs) {
+            for (const unsub of unsubs) unsub()
+          }
+          if (state.visibility[i]) {
+            hideItem(parent, state, i)
+          }
+        }
+        state.slots = []
+        state.scopes = []
+        state.visibility = []
+        state.itemUnsubs = []
+
+        // Re-render all items with predicate evaluation
+        for (let i = 0; i < state.listRef.length; i++) {
+          const item = state.listRef.at(i)
+          if (item === undefined) continue
+
+          const visible = handlers.predicate(item, i)
+          state.visibility.push(visible)
+
+          if (visible) {
+            showItem(parent, state, handlers, i)
+          } else {
+            state.slots.push(null)
+            state.scopes.push(null)
+          }
+
+          state.itemUnsubs.push(
+            setupItemSubscriptions(state, handlers, i, scope),
+          )
+        }
+      }
+    },
+    scope,
+  )
+
+  // --- External subscription (Layer 2) ---
+  // One subscription per external dep, owned by the parent scope.
+  // When any external ref changes, re-evaluate predicate for ALL items.
+  for (const ref of handlers.externalRefs) {
+    subscribe(
+      ref,
+      () => {
+        const parent = resolveFilteredListParent(state)
+        const ops = planFilterUpdate(
+          state.visibility,
+          handlers.predicate,
+          state.listRef,
+        )
+        executeFilterOps(parent, state, handlers, ops)
+      },
+      scope,
+    )
+  }
 }
 
 // =============================================================================
@@ -780,8 +1329,14 @@ export function conditionalRegion(
   handlers: ConditionalRegionHandlers,
   scope: Scope,
 ): void {
-  const parent = marker.parentNode
-  if (!parent) {
+  // Validate that the marker has a parent at construction time.
+  // We do NOT cache the parent — it is resolved lazily from the marker
+  // at each operation point via resolveParent(). This is essential when
+  // the marker starts inside a DocumentFragment (e.g., inside a list
+  // create handler's fragment body): after fragment consumption, the
+  // marker moves to the real DOM parent, and the cached reference would
+  // be stale.
+  if (!marker.parentNode) {
     throw new Error("Conditional region marker must have a parent node")
   }
 
@@ -793,14 +1348,18 @@ export function conditionalRegion(
   }
 
   // Evaluate and render initial state
-  updateConditionalRegion(parent, marker, state, getCondition, handlers)
+  // At this point the marker may be in a fragment — resolveParent gives
+  // the fragment, which is correct for building initial content inside it.
+  updateConditionalRegion(marker, state, getCondition, handlers)
 
   // Subscribe to all condition refs (mirrors valueRegion's multi-ref pattern)
   for (const ref of conditionRefs) {
     subscribe(
       ref,
       () => {
-        updateConditionalRegion(parent, marker, state, getCondition, handlers)
+        // At subscription callback time, the marker has been moved to the
+        // real DOM (fragment consumed). resolveParent gives the real parent.
+        updateConditionalRegion(marker, state, getCondition, handlers)
       },
       scope,
     )
@@ -811,19 +1370,20 @@ export function conditionalRegion(
  * Update a conditional region based on current condition.
  *
  * This function orchestrates the FC/IS pattern:
- * 1. Evaluates the condition
- * 2. Plans the update (pure)
- * 3. Executes the operation (imperative)
+ * 1. Resolves the current parent from the anchor (lazy, never cached)
+ * 2. Evaluates the condition
+ * 3. Plans the update (pure)
+ * 4. Executes the operation (imperative)
  *
  * @internal
  */
 function updateConditionalRegion(
-  parent: Node,
   marker: Comment,
   state: ConditionalRegionState,
   getCondition: () => boolean,
   handlers: ConditionalRegionHandlers,
 ): void {
+  const parent = resolveParent(marker)
   const condition = getCondition()
 
   // Plan the update (pure) - currentBranch is already "true" | "false" | null

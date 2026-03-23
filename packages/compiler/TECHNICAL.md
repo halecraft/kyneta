@@ -184,6 +184,14 @@ Returns `FilterMetadata` (with classified dependencies and the conditional refer
 
 Chained filters (e.g., `if (a) { if (b) { ... } }`) are automatically flattened: the function looks through single-child-conditional chains and merges their condition dependencies.
 
+**Codegen consumption:** When `LoopNode.filter` is present, the DOM codegen (`@kyneta/core/compiler/codegen/dom.ts`) emits a `filteredListRegion(...)` call instead of the standard `listRegion + conditionalRegion` composition. The codegen extracts:
+- `predicate` closure from `filter.predicate` (rendered with binding expansion for self-contained re-evaluation)
+- `externalRefs` array from `filter.externalDeps[].source`
+- `itemRefs` accessor from `filter.itemDeps[].source`
+- `create` handler from the innermost then-branch body (after peeling through chained filter conditionals)
+
+The `collectRequiredImports` function in `transform.ts` detects `LoopNode` with `filter` and adds `filteredListRegion` to the runtime import set (instead of `listRegion`).
+
 ### Walker (`walk.ts`)
 
 Generator-based IR walker that produces a stream of `WalkEvent` objects:

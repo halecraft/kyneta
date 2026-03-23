@@ -278,6 +278,42 @@ export interface ListRegionHandlers<T> {
 }
 
 // =============================================================================
+// Filtered List Region Handlers
+// =============================================================================
+
+/**
+ * Handlers for filtered list region processing.
+ *
+ * Extends `ListRegionHandlers` with filter-specific metadata that enables
+ * the runtime to separate external subscriptions (one shared, re-evaluates
+ * all items) from item subscriptions (per-item, O(1) re-evaluation).
+ *
+ * @internal
+ */
+export interface FilteredListRegionHandlers<T> extends ListRegionHandlers<T> {
+  /**
+   * Evaluate the filter predicate for an item at a given index.
+   * Returns true if the item should be visible (rendered), false if hidden.
+   */
+  predicate: (item: T, index: number) => boolean
+
+  /**
+   * External reactive refs (one shared subscription each).
+   * When any external ref changes, the predicate is re-evaluated for ALL items.
+   * These are deps like `filterText`, `veggieOnly` — not derived from the loop variable.
+   */
+  externalRefs: unknown[]
+
+  /**
+   * Per-item reactive ref accessor.
+   * Given the item ref, returns the leaf refs to subscribe to for that item.
+   * When any item ref changes, the predicate is re-evaluated for THAT item only.
+   * These are deps like `recipe.name`, `recipe.vegetarian` — derived from the loop variable.
+   */
+  itemRefs: (item: T) => unknown[]
+}
+
+// =============================================================================
 // List Region Operations (Functional Core)
 // =============================================================================
 
@@ -292,6 +328,18 @@ export type ListRegionOp<T> =
   | { kind: "delete"; index: number }
   | { kind: "batch-insert"; index: number; count: number }
   | { kind: "batch-delete"; index: number; count: number }
+
+/**
+ * Operations for filter visibility updates.
+ *
+ * Output of `planFilterUpdate()` (pure planning function), input to
+ * the imperative shell that shows/hides items in the DOM.
+ *
+ * @internal - Used by filtered list region runtime
+ */
+export type FilterUpdateOp =
+  | { kind: "show"; index: number }
+  | { kind: "hide"; index: number }
 
 // =============================================================================
 // Insertion Result (Trackability Invariant)

@@ -300,4 +300,99 @@ describe("compiler integration - list regions", () => {
       scope.dispose()
     })
   })
+
+  describe("filter pattern end-to-end", () => {
+    it("should detect filter pattern and emit filteredListRegion in codegen", () => {
+      const source = withTypes(`
+        interface RecipeRef {
+          name: TextRef
+          vegetarian: BooleanRef
+        }
+
+        interface BooleanRef extends HasChangefeed<boolean, ReplaceChange<boolean>> {
+          (): boolean
+          readonly [CHANGEFEED]: Changefeed<boolean, ReplaceChange<boolean>>
+        }
+
+        type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
+
+        interface LocalRef<T> extends HasChangefeed<T, ReplaceChange<T>> {
+          (): T
+          readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
+        }
+
+        declare const doc: { recipes: ListRef<RecipeRef> }
+        declare const filterText: LocalRef<string>
+        declare const veggieOnly: LocalRef<boolean>
+
+        div(() => {
+          for (const recipe of doc.recipes) {
+            const nameMatch = recipe.name().toLowerCase().includes(
+              filterText().toLowerCase(),
+            )
+            const veggieMatch = !veggieOnly() || recipe.vegetarian()
+            if (nameMatch && veggieMatch) {
+              p("RecipeCard")
+            }
+          }
+        })
+      `)
+
+      const result = transformSource(source, { target: "dom" })
+
+      // The loop should have filter metadata in the IR
+      expect(result.ir).toHaveLength(1)
+      const loop = result.ir[0].children[0] as any
+      expect(loop.kind).toBe("loop")
+      expect(loop.filter).toBeDefined()
+
+      if (loop.filter) {
+        // Item deps should include recipe.name and recipe.vegetarian
+        const itemSources = loop.filter.itemDeps.map((d: any) => d.source).sort()
+        expect(itemSources).toContain("recipe.name")
+        expect(itemSources).toContain("recipe.vegetarian")
+
+        // External deps should include filterText and veggieOnly
+        const extSources = loop.filter.externalDeps.map((d: any) => d.source).sort()
+        expect(extSources).toContain("filterText")
+        expect(extSources).toContain("veggieOnly")
+      }
+
+      // Generated code should use filteredListRegion, not listRegion
+      expect(result.code).toContain("filteredListRegion")
+      expect(result.code).not.toMatch(/\blistRegion\(/)
+
+      // Should contain the expected handler properties
+      expect(result.code).toContain("create:")
+      expect(result.code).toContain("predicate:")
+      expect(result.code).toContain("externalRefs:")
+      expect(result.code).toContain("itemRefs:")
+
+      // Should import filteredListRegion (not listRegion) from runtime
+      expect(result.code).toContain("filteredListRegion")
+    })
+
+    it("should still emit listRegion for non-filter loops", () => {
+      const source = withTypes(`
+        declare const items: ListRef<string>
+
+        ul(() => {
+          for (const item of items) {
+            li(item)
+          }
+        })
+      `)
+
+      const result = transformSource(source, { target: "dom" })
+
+      // No filter metadata
+      const loop = result.ir[0].children[0] as any
+      expect(loop.kind).toBe("loop")
+      expect(loop.filter).toBeUndefined()
+
+      // Should use listRegion, not filteredListRegion
+      expect(result.code).toContain("listRegion")
+      expect(result.code).not.toContain("filteredListRegion")
+    })
+  })
 })

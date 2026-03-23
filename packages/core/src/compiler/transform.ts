@@ -150,10 +150,21 @@ export function collectRequiredImports(ir: BuilderNode[]): {
     for (const child of children) {
       if (child.kind === "loop") {
         if (child.iterableBindingTime === "reactive") {
-          runtime.add("listRegion")
+          if (child.filter) {
+            // Filter pattern detected — use filteredListRegion instead of
+            // listRegion + conditionalRegion. The filter conditional is
+            // handled internally by filteredListRegion, so we don't need
+            // to recurse into it for conditionalRegion imports.
+            runtime.add("filteredListRegion")
+          } else {
+            runtime.add("listRegion")
+          }
         }
         // Always recurse into loop body (fixes latent bug where
-        // static-loop bodies were not recursed for imports)
+        // static-loop bodies were not recursed for imports).
+        // For filtered loops, this still recurses to pick up imports
+        // from the DOM content inside the filter conditional's then-branch
+        // (e.g., component calls, nested regions, reactive attributes).
         collectFromChildren(child.body)
       } else if (child.kind === "conditional") {
         // Only add conditionalRegion for reactive conditionals

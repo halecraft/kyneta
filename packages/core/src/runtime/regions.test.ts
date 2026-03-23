@@ -22,10 +22,12 @@ import {
 import {
   claimSlot,
   conditionalRegion,
+  filteredListRegion,
   type ListRefLike,
   listRegion,
   planConditionalUpdate,
   planDeltaOps,
+  planFilterUpdate,
   planInitialRender,
   releaseSlot,
 } from "./regions.js"
@@ -1509,6 +1511,678 @@ describe("regions", () => {
       expect(receivedItems[0]).toBe(newRefs[0])
 
       scope.dispose()
+    })
+  })
+
+  // ===========================================================================
+  // Nested Region Tests — Anchor-Based Parent Resolution
+  // ===========================================================================
+
+  describe("nested regions — anchor-based parent resolution", () => {
+    // -------------------------------------------------------------------------
+    // 1.4 — Conditional inside list create handler (fragment parent)
+    // -------------------------------------------------------------------------
+    describe("conditional inside list create handler (fragment parent)", () => {
+      it("should toggle conditional content via shared external ref after fragment consumption", () => {
+        const condRef = state(true)
+        const { ref } = createMockSequenceRef(["a", "b"])
+        const scope = new Scope()
+        const container = document.createElement("div")
+
+        listRegion<string>(
+          container,
+          ref,
+          {
+            create: (item: string) => {
+              // Simulate generateBodyWithFragment: return a DocumentFragment
+              // containing a comment marker and conditionalRegion wired to it.
+              const frag = document.createDocumentFragment()
+              const marker = document.createComment("kyneta:if")
+              frag.appendChild(marker)
+
+              conditionalRegion(
+                marker,
+                [condRef],
+                () => condRef(),
+                {
+                  whenTrue: () => {
+                    const span = document.createElement("span")
+                    span.textContent = item
+                    return span
+                  },
+                },
+                scope,
+              )
+
+              return frag
+            },
+            slotKind: "range",
+            isReactive: true,
+          },
+          scope,
+        )
+
+        // Both items should render their conditional content (initial = true)
+        expect(container.querySelectorAll("span").length).toBe(2)
+        expect(container.querySelectorAll("span")[0].textContent).toBe("a")
+        expect(container.querySelectorAll("span")[1].textContent).toBe("b")
+
+        // Toggle condition to false — content should be removed from real DOM
+        condRef.set(false)
+        expect(container.querySelectorAll("span").length).toBe(0)
+
+        // Toggle back to true — content should reappear in real DOM
+        condRef.set(true)
+        expect(container.querySelectorAll("span").length).toBe(2)
+
+        scope.dispose()
+      })
+    })
+
+    // -------------------------------------------------------------------------
+    // Conditional swap inside list (if/else in fragment)
+    // -------------------------------------------------------------------------
+    describe("conditional swap inside list (if/else in fragment)", () => {
+      it("should swap branches correctly when condition changes", () => {
+        const condRef = state(true)
+        const { ref } = createMockSequenceRef(["x"])
+        const scope = new Scope()
+        const container = document.createElement("div")
+
+        listRegion<string>(
+          container,
+          ref,
+          {
+            create: (item: string) => {
+              const frag = document.createDocumentFragment()
+              const marker = document.createComment("kyneta:if")
+              frag.appendChild(marker)
+
+              conditionalRegion(
+                marker,
+                [condRef],
+                () => condRef(),
+                {
+                  whenTrue: () => {
+                    const p = document.createElement("p")
+                    p.textContent = `${item}-true`
+                    return p
+                  },
+                  whenFalse: () => {
+                    const p = document.createElement("p")
+                    p.textContent = `${item}-false`
+                    return p
+                  },
+                },
+                scope,
+              )
+
+              return frag
+            },
+            slotKind: "range",
+            isReactive: true,
+          },
+          scope,
+        )
+
+        // Initially true branch
+        expect(container.querySelector("p")?.textContent).toBe("x-true")
+
+        // Swap to false branch
+        condRef.set(false)
+        expect(container.querySelector("p")?.textContent).toBe("x-false")
+
+        // Swap back to true branch
+        condRef.set(true)
+        expect(container.querySelector("p")?.textContent).toBe("x-true")
+
+        scope.dispose()
+      })
+    })
+
+    // -------------------------------------------------------------------------
+    // listRegion inside a DocumentFragment mount point
+    // -------------------------------------------------------------------------
+    describe("listRegion with DocumentFragment mount point", () => {
+      it("should render initial items and transfer them to real DOM", () => {
+        const { ref } = createMockSequenceRef(["a", "b"])
+        const scope = new Scope()
+
+        // Create a fragment as the mount point (simulates the latent bug)
+        const frag = document.createDocumentFragment()
+
+        listRegion<string>(
+          frag,
+          ref,
+          {
+            create: (item: string) => {
+              const li = document.createElement("li")
+              li.textContent = item
+              return li
+            },
+          },
+          scope,
+        )
+
+        // Items are initially inside the fragment (with auto-promoted markers)
+        // The fragment should contain: <!--kyneta:list--> <li>a</li> <li>b</li> <!--/kyneta:list-->
+        expect(frag.childNodes.length).toBe(4) // 2 markers + 2 items
+
+        // Now consume the fragment into a real DOM container
+        const container = document.createElement("ul")
+        container.appendChild(frag)
+
+        // Items should now be in the real DOM
+        expect(container.querySelectorAll("li").length).toBe(2)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("a")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("b")
+
+        scope.dispose()
+      })
+
+      it("should insert items into real DOM after fragment consumption", () => {
+        const { ref, emit, setItems } = createMockSequenceRef(["a"])
+        const scope = new Scope()
+
+        const frag = document.createDocumentFragment()
+
+        listRegion<string>(
+          frag,
+          ref,
+          {
+            create: (item: string) => {
+              const li = document.createElement("li")
+              li.textContent = item
+              return li
+            },
+          },
+          scope,
+        )
+
+        // Consume the fragment into a real container
+        const container = document.createElement("ul")
+        container.appendChild(frag)
+
+        expect(container.querySelectorAll("li").length).toBe(1)
+
+        // Now insert a new item via sequence change — this should go into
+        // the real DOM (via lazy parent resolution), not the stale fragment
+        setItems(["a", "b"])
+        emit(sequenceChange([{ retain: 1 }, { insert: ["b"] }]))
+
+        expect(container.querySelectorAll("li").length).toBe(2)
+        expect(container.querySelectorAll("li")[1].textContent).toBe("b")
+
+        scope.dispose()
+      })
+
+      it("should delete items from real DOM after fragment consumption", () => {
+        const { ref, emit, setItems } = createMockSequenceRef(["a", "b"])
+        const scope = new Scope()
+
+        const frag = document.createDocumentFragment()
+
+        listRegion<string>(
+          frag,
+          ref,
+          {
+            create: (item: string) => {
+              const li = document.createElement("li")
+              li.textContent = item
+              return li
+            },
+          },
+          scope,
+        )
+
+        // Consume into real DOM
+        const container = document.createElement("ul")
+        container.appendChild(frag)
+
+        expect(container.querySelectorAll("li").length).toBe(2)
+
+        // Delete second item
+        setItems(["a"])
+        emit(sequenceChange([{ retain: 1 }, { delete: 1 }]))
+
+        expect(container.querySelectorAll("li").length).toBe(1)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("a")
+
+        scope.dispose()
+      })
+    })
+  })
+
+  // ===========================================================================
+  // planFilterUpdate — Pure Function Tests
+  // ===========================================================================
+
+  describe("planFilterUpdate", () => {
+    it("should emit show ops for items that become visible", () => {
+      const mockListRef: ListRefLike<number> = {
+        length: 3,
+        at: (i: number) => [10, 20, 30][i],
+      }
+      // All currently hidden
+      const visibility = [false, false, false]
+      // Predicate: show items > 15
+      const ops = planFilterUpdate(
+        visibility,
+        (item: number) => item > 15,
+        mockListRef,
+      )
+      expect(ops).toEqual([
+        { kind: "show", index: 1 },
+        { kind: "show", index: 2 },
+      ])
+    })
+
+    it("should emit hide ops for items that become hidden", () => {
+      const mockListRef: ListRefLike<number> = {
+        length: 3,
+        at: (i: number) => [10, 20, 30][i],
+      }
+      // All currently visible
+      const visibility = [true, true, true]
+      // Predicate: show items > 25
+      const ops = planFilterUpdate(
+        visibility,
+        (item: number) => item > 25,
+        mockListRef,
+      )
+      expect(ops).toEqual([
+        { kind: "hide", index: 0 },
+        { kind: "hide", index: 1 },
+      ])
+    })
+
+    it("should return empty array when nothing changes", () => {
+      const mockListRef: ListRefLike<number> = {
+        length: 3,
+        at: (i: number) => [10, 20, 30][i],
+      }
+      const visibility = [false, true, true]
+      // Predicate matches current visibility
+      const ops = planFilterUpdate(
+        visibility,
+        (item: number) => item > 15,
+        mockListRef,
+      )
+      expect(ops).toEqual([])
+    })
+
+    it("should handle empty list", () => {
+      const mockListRef: ListRefLike<number> = {
+        length: 0,
+        at: () => undefined,
+      }
+      const ops = planFilterUpdate([], () => true, mockListRef)
+      expect(ops).toEqual([])
+    })
+
+    it("should emit mixed show and hide ops", () => {
+      const mockListRef: ListRefLike<number> = {
+        length: 4,
+        at: (i: number) => [10, 20, 30, 40][i],
+      }
+      // Items 0,2 visible; 1,3 hidden
+      const visibility = [true, false, true, false]
+      // show items > 15:
+      // 10→hide, 20→show, 30→noop, 40→show
+      const ops = planFilterUpdate(
+        visibility,
+        (item: number) => item > 15,
+        mockListRef,
+      )
+      expect(ops).toEqual([
+        { kind: "hide", index: 0 },
+        { kind: "show", index: 1 },
+        { kind: "show", index: 3 },
+      ])
+    })
+  })
+
+  // ===========================================================================
+  // filteredListRegion — Runtime Tests
+  // ===========================================================================
+
+  describe("filteredListRegion", () => {
+    describe("with external dep", () => {
+      it("should show/hide items when external ref changes", () => {
+        const threshold = state(15)
+        const items = [10, 20, 30]
+        const { ref } = createMockSequenceRef(items)
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        filteredListRegion<number>(
+          container,
+          ref,
+          {
+            create: (item: number) => {
+              const li = document.createElement("li")
+              li.textContent = String(item)
+              return li
+            },
+            predicate: (item: number) => item > threshold(),
+            externalRefs: [threshold],
+            itemRefs: () => [],
+          },
+          scope,
+        )
+
+        // Initially: 20 and 30 visible (> 15), 10 hidden
+        expect(container.querySelectorAll("li").length).toBe(2)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("20")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("30")
+
+        // Change threshold to 25 → only 30 visible
+        threshold.set(25)
+        expect(container.querySelectorAll("li").length).toBe(1)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("30")
+
+        // Change threshold to 5 → all visible
+        threshold.set(5)
+        expect(container.querySelectorAll("li").length).toBe(3)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("10")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("20")
+        expect(container.querySelectorAll("li")[2].textContent).toBe("30")
+
+        scope.dispose()
+      })
+    })
+
+    describe("with item dep", () => {
+      it("should show/hide individual items when item ref changes", () => {
+        // Each item has a reactive "score" field
+        const item0Score = state(10)
+        const item1Score = state(20)
+        const item2Score = state(30)
+
+        type ScoredItem = {
+          name: string
+          score: ReturnType<typeof state<number>>
+        }
+        const items: ScoredItem[] = [
+          { name: "a", score: item0Score },
+          { name: "b", score: item1Score },
+          { name: "c", score: item2Score },
+        ]
+        const { ref } = createMockSequenceRef(items)
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        filteredListRegion<ScoredItem>(
+          container,
+          ref,
+          {
+            create: (item: ScoredItem) => {
+              const li = document.createElement("li")
+              li.textContent = item.name
+              return li
+            },
+            predicate: (item: ScoredItem) => item.score() > 15,
+            externalRefs: [],
+            itemRefs: (item: ScoredItem) => [item.score],
+          },
+          scope,
+        )
+
+        // Initially: b (20) and c (30) visible, a (10) hidden
+        expect(container.querySelectorAll("li").length).toBe(2)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("b")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("c")
+
+        // Change item 0's score to 20 → a becomes visible
+        item0Score.set(20)
+        expect(container.querySelectorAll("li").length).toBe(3)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("a")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("b")
+        expect(container.querySelectorAll("li")[2].textContent).toBe("c")
+
+        // Change item 1's score to 5 → b becomes hidden
+        item1Score.set(5)
+        expect(container.querySelectorAll("li").length).toBe(2)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("a")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("c")
+
+        scope.dispose()
+      })
+    })
+
+    describe("structural changes with active filter", () => {
+      it("should not render inserted item that fails predicate", () => {
+        const threshold = state(15)
+        const { ref, emit, setItems } = createMockSequenceRef([20, 30])
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        filteredListRegion<number>(
+          container,
+          ref,
+          {
+            create: (item: number) => {
+              const li = document.createElement("li")
+              li.textContent = String(item)
+              return li
+            },
+            predicate: (item: number) => item > threshold(),
+            externalRefs: [threshold],
+            itemRefs: () => [],
+          },
+          scope,
+        )
+
+        // Both visible initially
+        expect(container.querySelectorAll("li").length).toBe(2)
+
+        // Insert item 5 at position 0 — fails predicate (5 < 15)
+        setItems([5, 20, 30])
+        emit(sequenceChange([{ insert: [5] }]))
+
+        // Item 5 should NOT be rendered
+        expect(container.querySelectorAll("li").length).toBe(2)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("20")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("30")
+
+        scope.dispose()
+      })
+
+      it("should render inserted item that passes predicate", () => {
+        const threshold = state(15)
+        const { ref, emit, setItems } = createMockSequenceRef([20, 30])
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        filteredListRegion<number>(
+          container,
+          ref,
+          {
+            create: (item: number) => {
+              const li = document.createElement("li")
+              li.textContent = String(item)
+              return li
+            },
+            predicate: (item: number) => item > threshold(),
+            externalRefs: [threshold],
+            itemRefs: () => [],
+          },
+          scope,
+        )
+
+        expect(container.querySelectorAll("li").length).toBe(2)
+
+        // Insert item 25 at end — passes predicate (25 > 15)
+        setItems([20, 30, 25])
+        emit(sequenceChange([{ retain: 2 }, { insert: [25] }]))
+
+        expect(container.querySelectorAll("li").length).toBe(3)
+        expect(container.querySelectorAll("li")[2].textContent).toBe("25")
+
+        scope.dispose()
+      })
+
+      it("should correctly delete a visible item", () => {
+        const threshold = state(15)
+        const { ref, emit, setItems } = createMockSequenceRef([20, 30])
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        filteredListRegion<number>(
+          container,
+          ref,
+          {
+            create: (item: number) => {
+              const li = document.createElement("li")
+              li.textContent = String(item)
+              return li
+            },
+            predicate: (item: number) => item > threshold(),
+            externalRefs: [threshold],
+            itemRefs: () => [],
+          },
+          scope,
+        )
+
+        expect(container.querySelectorAll("li").length).toBe(2)
+
+        // Delete first item (20)
+        setItems([30])
+        emit(sequenceChange([{ delete: 1 }]))
+
+        expect(container.querySelectorAll("li").length).toBe(1)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("30")
+
+        scope.dispose()
+      })
+
+      it("should correctly delete a hidden item", () => {
+        const threshold = state(15)
+        const { ref, emit, setItems } = createMockSequenceRef([10, 20, 30])
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        filteredListRegion<number>(
+          container,
+          ref,
+          {
+            create: (item: number) => {
+              const li = document.createElement("li")
+              li.textContent = String(item)
+              return li
+            },
+            predicate: (item: number) => item > threshold(),
+            externalRefs: [threshold],
+            itemRefs: () => [],
+          },
+          scope,
+        )
+
+        // 10 hidden, 20 and 30 visible
+        expect(container.querySelectorAll("li").length).toBe(2)
+
+        // Delete first item (10, which is hidden)
+        setItems([20, 30])
+        emit(sequenceChange([{ delete: 1 }]))
+
+        // Should still have 2 visible items
+        expect(container.querySelectorAll("li").length).toBe(2)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("20")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("30")
+
+        scope.dispose()
+      })
+
+      it("should keep visibility aligned after insert then external dep change", () => {
+        // This tests the hardest invariant: after a structural mutation
+        // (insert), the visibility array must stay index-aligned so that
+        // a subsequent external dep change correctly shows/hides items.
+        const threshold = state(15)
+        const { ref, emit, setItems } = createMockSequenceRef([20, 30])
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        filteredListRegion<number>(
+          container,
+          ref,
+          {
+            create: (item: number) => {
+              const li = document.createElement("li")
+              li.textContent = String(item)
+              return li
+            },
+            predicate: (item: number) => item > threshold(),
+            externalRefs: [threshold],
+            itemRefs: () => [],
+          },
+          scope,
+        )
+
+        // Initially: [20, 30] both visible (> 15)
+        expect(container.querySelectorAll("li").length).toBe(2)
+
+        // Insert hidden item 5 at front → source is now [5, 20, 30]
+        setItems([5, 20, 30])
+        emit(sequenceChange([{ insert: [5] }]))
+        expect(container.querySelectorAll("li").length).toBe(2) // 5 is hidden
+
+        // Now change threshold to 25 — visibility must re-evaluate ALL 3 items:
+        // 5 > 25? no (was hidden → still hidden)
+        // 20 > 25? no (was visible → hide)
+        // 30 > 25? yes (was visible → still visible)
+        threshold.set(25)
+        expect(container.querySelectorAll("li").length).toBe(1)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("30")
+
+        // Change threshold to 0 — all 3 should appear in correct order
+        threshold.set(0)
+        expect(container.querySelectorAll("li").length).toBe(3)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("5")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("20")
+        expect(container.querySelectorAll("li")[2].textContent).toBe("30")
+
+        scope.dispose()
+      })
+
+      it("should insert a newly-shown item at the correct DOM position between visible siblings", () => {
+        // Tests findReferenceNode: when item at index 1 (hidden) becomes visible,
+        // it must appear between index 0 (visible) and index 2 (visible).
+        const threshold = state(15)
+        const items = [20, 10, 30]
+        const { ref } = createMockSequenceRef(items)
+        const scope = new Scope()
+        const container = document.createElement("ul")
+
+        filteredListRegion<number>(
+          container,
+          ref,
+          {
+            create: (item: number) => {
+              const li = document.createElement("li")
+              li.textContent = String(item)
+              return li
+            },
+            predicate: (item: number) => item > threshold(),
+            externalRefs: [threshold],
+            itemRefs: () => [],
+          },
+          scope,
+        )
+
+        // Initially: [20, 10, 30] → 20 and 30 visible, 10 hidden
+        expect(container.querySelectorAll("li").length).toBe(2)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("20")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("30")
+
+        // Lower threshold to 5 → 10 becomes visible, must appear BETWEEN 20 and 30
+        threshold.set(5)
+        expect(container.querySelectorAll("li").length).toBe(3)
+        expect(container.querySelectorAll("li")[0].textContent).toBe("20")
+        expect(container.querySelectorAll("li")[1].textContent).toBe("10")
+        expect(container.querySelectorAll("li")[2].textContent).toBe("30")
+
+        scope.dispose()
+      })
     })
   })
 })

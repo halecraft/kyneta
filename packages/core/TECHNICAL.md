@@ -966,6 +966,43 @@ function inputTextRegion(
 
 All region types (list, conditional) share a common algebraic structure based on three principles:
 
+#### The Anchor-Based Resolution Principle
+
+Tree-structural regions (`listRegion`, `conditionalRegion`, `filteredListRegion`) modify parent-child relationships via `insertBefore`/`removeChild`. They require a parent reference — but that reference must never be cached across async boundaries (subscription callbacks).
+
+**The DocumentFragment lifecycle problem:** A `DocumentFragment` is an ephemeral container — inserting it into the DOM moves all its children to the real parent, leaving the fragment empty. When a region's create handler returns a fragment (e.g., bindings + conditional in a list body), the codegen's `generateBodyWithFragment` wraps content in a fragment. Any comment marker inside the fragment moves to the real DOM when the fragment is consumed. A cached `parent` reference pointing to the stale fragment causes:
+
+- **Deletes** to silently no-op (`node.parentNode === parent` is false)
+- **Inserts** to throw `insertBefore` errors (marker's sibling is in the real DOM, but `parent` is the empty fragment)
+
+**The principle:** Comment markers are perfect anchors — they have no visual presence and participate in all DOM tree mutations. `Node.parentNode` is a live property that always reflects the current tree state. Therefore:
+
+> **Tree-structural regions must resolve `parent` from their anchor node at operation time, never at construction time.**
+
+This is implemented via the shared `resolveParent()` helper:
+
+```typescript
+function resolveParent(anchor: Node): Node {
+  const parent = anchor.parentNode
+  if (!parent) {
+    throw new Error("Region anchor has been detached from the DOM")
+  }
+  return parent
+}
+```
+
+Both `conditionalRegion` and `listRegion` (in marker mode) call `resolveParent()` at each operation point. At initial render time, the anchor may be in a fragment — `resolveParent` returns the fragment (correct for building content). At subscription callback time, the anchor has moved to the real DOM — `resolveParent` returns the real parent (correct for updates).
+
+**`listRegion` mount-point modes:**
+
+| Mount point type | Mode | Parent resolution |
+|---|---|---|
+| Element | Container mode | `parent = mountPoint` (stable, never moves) |
+| Comment | Marker mode | `parent = resolveParent(anchor)` (lazy) |
+| DocumentFragment | Auto-promoted marker | Creates `<!--kyneta:list-->` / `<!--/kyneta:list-->` markers, proceeds in marker mode |
+
+The fragment auto-promotion is transparent to callers — no codegen changes needed.
+
 #### The Trackability Invariant
 
 Every node inserted into the DOM must remain trackable for removal. This is enforced through the `Slot` type:
@@ -1013,7 +1050,7 @@ type ConditionalRegionOp =
 
 #### Unified State Types
 
-Both region types extend `RegionStateBase`:
+All region types extend `RegionStateBase`:
 
 ```typescript
 interface RegionStateBase {
@@ -1022,8 +1059,11 @@ interface RegionStateBase {
 
 interface ListRegionState<T> extends RegionStateBase {
   slots: Slot[]
-  scopes: Scope[]
+  scopes: (Scope | null)[]
   listRef: ListRefLike<T>
+  endMarker: Node | null
+  anchor: Node | null        // For lazy parent resolution (marker mode)
+  containerParent: Node | null // For stable parent (container mode)
 }
 
 interface ConditionalRegionState extends RegionStateBase {
@@ -1031,7 +1071,19 @@ interface ConditionalRegionState extends RegionStateBase {
   currentSlot: Slot | null
   currentScope: Scope | null
 }
+
+interface FilteredListState<T> extends RegionStateBase {
+  slots: (Slot | null)[]     // null when item is hidden by filter
+  scopes: (Scope | null)[]
+  listRef: ListRefLike<T>
+  visibility: boolean[]       // Index-aligned with listRef
+  itemUnsubs: (() => void)[][] // Per-item subscription cleanup
+}
 ```
+
+`ListRegionState` includes `anchor` and `containerParent` to support the anchor-based resolution principle. In container mode, `containerParent` is the stable element. In marker mode, `anchor` is the comment marker and `resolveParent(anchor)` gives the current parent.
+
+`FilteredListState` extends the concept with a `visibility` array that tracks which items pass the filter predicate. All arrays are index-aligned — `slots[i]`, `scopes[i]`, and `visibility[i]` all correspond to `listRef.at(i)`. Items that fail the predicate have `slots[i] = null` but still occupy their index position.
 
 This unified structure makes the region system easier to understand, test, and extend.
 
@@ -1379,7 +1431,7 @@ This optimization is most valuable for large static lists — e.g., rendering 10
 
 ## Delta Region Algebra
 
-Text patching, input text patching, list regions, and conditional regions all follow the same **Functional Core / Imperative Shell** pattern, forming a unified "delta region" algebra.
+Text patching, input text patching, list regions, conditional regions, and filtered list regions all follow the same **Functional Core / Imperative Shell** pattern, forming a unified "delta region" algebra.
 
 ### The Pattern
 
@@ -1394,6 +1446,7 @@ Every delta region has three phases:
 | Text | `planTextPatch(ops)` | `patchText(node, ops)` | `"text"` | Text node |
 | Input Text | `planTextPatch(ops)` | `patchInputValue(input, ops)` | `"text"` | `<input>` / `<textarea>` value |
 | Sequence | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"sequence"` | Parent element children |
+| Filtered Sequence | `planFilterUpdate(...)` | `showItem()`/`hideItem()` | via item+external refs | Filtered children |
 | Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition refs (array) | Branch swap |
 | Value | — | `onValue(getValue())` | any (re-read) | Text node, attribute, etc. |
 
@@ -1424,27 +1477,39 @@ Each region type handles its matching delta surgically:
 
 When a delta type doesn't match the region type (e.g., a "replace" delta arrives at a sequence region), the region falls back to full re-render — clear all items and re-create from scratch.
 
+### Filtered List Region
+
+`filteredListRegion` is an optimized variant of `listRegion` for the filter pattern: a reactive loop whose body is a single `if` with no `else`, wrapping all DOM content. The compiler detects this pattern via `detectFilterPattern()` and annotates `LoopNode.filter` with `FilterMetadata` containing classified `itemDeps` and `externalDeps`.
+
+Instead of nesting `conditionalRegion` inside `listRegion` (which fires N subscription callbacks per external dep change), `filteredListRegion` separates three subscription layers:
+
+1. **Structural** (Layer 1): Subscribes to the list ref for insert/delete/replace. Evaluates the predicate for new items to determine initial visibility.
+2. **External** (Layer 2): One `subscribe()` per external dep (e.g., `filterText`, `veggieOnly`), owned by the parent scope. On change, calls `planFilterUpdate()` to re-evaluate the predicate for ALL items (O(n)).
+3. **Item** (Layer 3): Per-item `subscribe()` for each item dep (e.g., `recipe.name`, `recipe.vegetarian`), owned by the item scope. On change, re-evaluates the predicate for THAT item only (O(1)).
+
+The `visibility` array invariant ensures all state arrays stay index-aligned with the list ref. Items hidden by the filter have `slots[i] = null` but retain their index position.
+
 ### Composability
 
 Delta regions compose naturally:
 
 ```
-┌─ div (template clone) ─────────────────────────────┐
-│  ┌─ h1 ─────────────────────────────────────────┐   │
-│  │  textRegion(doc.title)  ← text deltas        │   │
-│  └───────────────────────────────────────────────┘   │
-│  ┌─ input ───────────────────────────────────────┐   │
-│  │  inputTextRegion(doc.search) ← text deltas    │   │
-│  │  onBeforeInput: editText(doc.search) → CRDT   │   │
-│  └───────────────────────────────────────────────┘   │
-│  ┌─ conditionalRegion(doc.showDetails) ──────────┐   │
-│  │  ┌─ listRegion(doc.items) ─────────────────┐  │   │
-│  │  │  ┌─ li ────────────────────────────┐    │  │   │
-│  │  │  │  textRegion(item.text)          │    │  │   │
-│  │  │  └─────────────────────────────────┘    │  │   │
-│  │  └─────────────────────────────────────────┘  │   │
-│  └────────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────────────────┘
+┌─ div (template clone) ─────────────────────────────────────┐
+│  ┌─ h1 ─────────────────────────────────────────┐          │
+│  │  textRegion(doc.title)  ← text deltas        │          │
+│  └───────────────────────────────────────────────┘          │
+│  ┌─ input ───────────────────────────────────────┐          │
+│  │  inputTextRegion(doc.search) ← text deltas    │          │
+│  │  onBeforeInput: editText(doc.search) → CRDT   │          │
+│  └───────────────────────────────────────────────┘          │
+│  ┌─ filteredListRegion(doc.recipes) ─────────────────────┐  │
+│  │  external: [filterText, veggieOnly]  ← re-filter all  │  │
+│  │  itemRefs: [recipe.name, recipe.vegetarian]  ← O(1)   │  │
+│  │  ┌─ RecipeCard ──────────────────────────────┐        │  │
+│  │  │  textRegion(recipe.name)                  │        │  │
+│  │  └───────────────────────────────────────────┘        │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## Example Architecture

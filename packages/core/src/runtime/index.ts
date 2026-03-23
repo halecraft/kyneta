@@ -30,7 +30,12 @@ export { Scope } from "./scope.js"
 // Compiler Runtime API (for generated code)
 // =============================================================================
 
-export { conditionalRegion, listRegion } from "./regions.js"
+export {
+  conditionalRegion,
+  filteredListRegion,
+  listRegion,
+  planFilterUpdate,
+} from "./regions.js"
 export {
   read,
   type SubscriptionId,

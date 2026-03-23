@@ -32,7 +32,7 @@ Key subsystems:
 
 Web rendering target — compiled delta-driven web framework.
 
-Consumes annotated IR from `@kyneta/compiler` and produces DOM manipulation or HTML string generation. The compiler detects reactive refs via the `[CHANGEFEED]` protocol and the runtime emits delta-aware regions (`textRegion`, `listRegion`, `conditionalRegion`, `valueRegion`) that perform O(k) DOM updates where k is the number of operations in a delta.
+Consumes annotated IR from `@kyneta/compiler` and produces DOM manipulation or HTML string generation. The compiler detects reactive refs via the `[CHANGEFEED]` protocol and the runtime emits delta-aware regions (`textRegion`, `listRegion`, `filteredListRegion`, `conditionalRegion`, `valueRegion`) that perform O(k) DOM updates where k is the number of operations in a delta.
 
 Key subsystems:
 - **Codegen** (`src/compiler/`) — IR → DOM/HTML code generation, transform orchestration
@@ -91,6 +91,7 @@ Four categories of structured change, each with a specialized runtime region:
 |------------|------------|----------------|-------------|
 | **text** | `TextChange` (retain/insert/delete ops) | `textRegion` | Surgical `insertData`/`deleteData` on text nodes |
 | **sequence** | `SequenceChange` (retain/insert/delete ops) | `listRegion` | O(1) `insertBefore`/`removeChild` per op |
+| **sequence (filtered)** | `SequenceChange` + item/external refs | `filteredListRegion` | Separated subscription layers: external O(n), item O(1) |
 | **replace** | `ReplaceChange` (whole-value swap) | `valueRegion` / `conditionalRegion` | Re-read and apply, or swap DOM branches |
 | **increment** | `IncrementChange` (counter delta) | `valueRegion` | Re-read and apply |
 
@@ -154,7 +155,7 @@ Each step depends on the previous: types won't run if format fails, logic won't 
 |---------|-------|-------|
 | `@kyneta/schema` | 1050+ | Interpreter algebra, changefeeds, substrates |
 | `@kyneta/compiler` | 504 | AST analysis, ExpressionIR, reactive detection |
-| `@kyneta/core` | 609 | Codegen, runtime regions, integration tests |
+| `@kyneta/core` | 632 | Codegen, runtime regions, integration tests |
 | `examples/recipe-book` | 18 | Full-stack SSR + sync integration |
 | `@kyneta/perspective` | 1374 | CCS kernel, Datalog evaluator, incremental pipeline |
 
