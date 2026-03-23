@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest"
 import {
-  stepText,
-  stepSequence,
-  stepMap,
-  stepReplace,
-  stepIncrement,
-  step,
-  textChange,
-  sequenceChange,
+  incrementChange,
   mapChange,
   replaceChange,
-  incrementChange,
+  sequenceChange,
+  step,
+  stepIncrement,
+  stepMap,
+  stepReplace,
+  stepSequence,
+  stepText,
+  textChange,
 } from "../index.js"
 
 describe("stepText", () => {
@@ -62,9 +62,9 @@ describe("stepText", () => {
 
 describe("stepSequence", () => {
   it("inserts at the beginning", () => {
-    expect(
-      stepSequence([1, 2, 3], sequenceChange([{ insert: [0] }])),
-    ).toEqual([0, 1, 2, 3])
+    expect(stepSequence([1, 2, 3], sequenceChange([{ insert: [0] }]))).toEqual([
+      0, 1, 2, 3,
+    ])
   })
 
   it("retains then inserts", () => {
@@ -78,10 +78,7 @@ describe("stepSequence", () => {
 
   it("retains then deletes", () => {
     expect(
-      stepSequence(
-        [1, 2, 3],
-        sequenceChange([{ retain: 1 }, { delete: 1 }]),
-      ),
+      stepSequence([1, 2, 3], sequenceChange([{ retain: 1 }, { delete: 1 }])),
     ).toEqual([1, 3])
   })
 
@@ -95,9 +92,10 @@ describe("stepSequence", () => {
   })
 
   it("handles empty array", () => {
-    expect(
-      stepSequence([], sequenceChange([{ insert: ["a", "b"] }])),
-    ).toEqual(["a", "b"])
+    expect(stepSequence([], sequenceChange([{ insert: ["a", "b"] }]))).toEqual([
+      "a",
+      "b",
+    ])
   })
 
   it("handles empty ops (passthrough)", () => {
@@ -105,9 +103,9 @@ describe("stepSequence", () => {
   })
 
   it("appends remaining items after last op", () => {
-    expect(
-      stepSequence([1, 2, 3, 4], sequenceChange([{ retain: 2 }])),
-    ).toEqual([1, 2, 3, 4])
+    expect(stepSequence([1, 2, 3, 4], sequenceChange([{ retain: 2 }]))).toEqual(
+      [1, 2, 3, 4],
+    )
   })
 })
 
@@ -175,9 +173,7 @@ describe("step (generic dispatcher)", () => {
   })
 
   it("dispatches sequence actions", () => {
-    expect(step([1, 2], sequenceChange([{ insert: [0] }]))).toEqual([
-      0, 1, 2,
-    ])
+    expect(step([1, 2], sequenceChange([{ insert: [0] }]))).toEqual([0, 1, 2])
   })
 
   it("dispatches map actions", () => {

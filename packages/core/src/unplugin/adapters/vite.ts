@@ -15,7 +15,7 @@
  */
 
 import { createVitePlugin } from "unplugin"
-import { unpluginFactory, type KynetaPluginOptions } from "../index.js"
+import { type KynetaPluginOptions, unpluginFactory } from "../index.js"
 
 export default createVitePlugin(unpluginFactory)
 

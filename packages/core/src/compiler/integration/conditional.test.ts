@@ -7,14 +7,13 @@
 
 import { beforeEach, describe, expect, it } from "vitest"
 import {
-  conditionalRegion,
   createMockCounterRef,
   installDOMGlobals,
   read,
   resetTestState,
   Scope,
-  valueRegion,
   transformSource,
+  valueRegion,
   withTypes,
 } from "./helpers.js"
 

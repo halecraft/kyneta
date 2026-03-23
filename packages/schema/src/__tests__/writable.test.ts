@@ -1,46 +1,40 @@
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
+import type { Ref, WritableContext } from "../index.js"
 import {
-  Schema,
-  LoroSchema,
-  interpret,
   bottomInterpreter,
-  withReadable,
-  withNavigation,
-  withCaching,
-  withWritable,
+  hasTransact,
+  interpret,
+  LoroSchema,
   plainContext,
   readable,
-  writable,
+  Schema,
   TRANSACT,
-  hasTransact,
+  withCaching,
+  withNavigation,
+  withReadable,
+  withWritable,
+  writable,
 } from "../index.js"
-import { INVALIDATE } from "../interpreters/with-caching.js"
-import type {
-  WritableContext,
-  Ref,
-  TextRef,
-  CounterRef,
-  ScalarRef,
-  SequenceRef,
-  Writable,
-} from "../index.js"
-import type { RefContext } from "../interpreter-types.js"
 
 // ===========================================================================
 // Composed stacks
 // ===========================================================================
 
 // Full stack: readable + caching + writable (the standard composition)
-const fullInterpreter = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
+const fullInterpreter = withWritable(
+  withCaching(withReadable(withNavigation(bottomInterpreter))),
+)
 
 // Cacheless stack: readable + writable (no caching layer)
-const cachelessInterpreter = withWritable(withReadable(withNavigation(bottomInterpreter)))
+const cachelessInterpreter = withWritable(
+  withReadable(withNavigation(bottomInterpreter)),
+)
 
 // Write-only stack: writable on bare carriers (ref() throws)
 const writeOnlyInterpreter = withWritable(bottomInterpreter)
 
 // Backward compat alias used by most tests
-const writableInterpreter = fullInterpreter
+const _writableInterpreter = fullInterpreter
 
 // ===========================================================================
 // Base grammar tests — Schema only, no Loro annotations
@@ -65,7 +59,10 @@ function createStructuralDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = plainContext(store)
-  const doc = interpret(structuralDocSchema, ctx).with(readable).with(writable).done()
+  const doc = interpret(structuralDocSchema, ctx)
+    .with(readable)
+    .with(writable)
+    .done()
   return { store, ctx, doc }
 }
 
@@ -87,7 +84,10 @@ describe("writable: product lazy getters", () => {
       metadata: { version: 1 },
     }
     const ctx = plainContext(store)
-    const doc = interpret(structuralDocSchema, ctx).with(readable).with(writable).done()
+    const doc = interpret(structuralDocSchema, ctx)
+      .with(readable)
+      .with(writable)
+      .done()
 
     // Access settings — metadata should not be forced
     const settings = doc.settings
@@ -172,7 +172,10 @@ describe("writable: product .set()", () => {
       metadata: { version: 1 },
     }
     const ctx = plainContext(store)
-    const doc = interpret(structuralDocSchema, ctx).with(readable).with(writable).done()
+    const doc = interpret(structuralDocSchema, ctx)
+      .with(readable)
+      .with(writable)
+      .done()
 
     ctx.beginTransaction()
     doc.settings.set({ darkMode: true, fontSize: 20 })
@@ -210,7 +213,7 @@ describe("writable: map ref", () => {
   it(".at(key) returns a callable child ref", () => {
     const { doc } = createStructuralDoc()
     const versionRef = doc.metadata.at("version")
-    expect(versionRef!()).toBe(1)
+    expect(versionRef?.()).toBe(1)
   })
 
   it(".keys() returns the store's dynamic keys", () => {
@@ -249,7 +252,7 @@ describe("writable: map ref", () => {
   it("after .set(), .at() returns the new value", () => {
     const { doc } = createStructuralDoc()
     doc.metadata.set("color", "red")
-    expect(doc.metadata.at("color")!()).toBe("red")
+    expect(doc.metadata.at("color")?.()).toBe("red")
   })
 
   it(".get() and .set() are symmetric: .set(k, v) then .get(k) returns v", () => {
@@ -592,13 +595,13 @@ describe("writable: invalidate-before-dispatch", () => {
   it("after push(), .at(newIndex) returns correct child immediately", () => {
     const { doc } = createCachedListDoc([{ name: "a" }])
     // Populate cache
-    expect(doc.items.at(0)!.name()).toBe("a")
+    expect(doc.items.at(0)?.name()).toBe("a")
     // Push a new item
     doc.items.push({ name: "b" })
     // New index should be immediately accessible
-    expect(doc.items.at(1)!.name()).toBe("b")
+    expect(doc.items.at(1)?.name()).toBe("b")
     // Existing ref is preserved
-    expect(doc.items.at(0)!.name()).toBe("a")
+    expect(doc.items.at(0)?.name()).toBe("a")
   })
 
   it("after insert(1, item) on 3-item list, shifted indices are fresh", () => {
@@ -617,10 +620,10 @@ describe("writable: invalidate-before-dispatch", () => {
 
     // index 0: unchanged
     expect(doc.items.at(0)).toBe(refA)
-    expect(doc.items.at(0)!.name()).toBe("a")
+    expect(doc.items.at(0)?.name()).toBe("a")
     // index 1: new item (not the old refB)
     expect(doc.items.at(1)).not.toBe(refB)
-    expect(doc.items.at(1)!.name()).toBe("x")
+    expect(doc.items.at(1)?.name()).toBe("x")
     // index 2: shifted from old index 1 (refB)
     expect(doc.items.at(2)).toBe(refB)
     // index 3: shifted from old index 2 (refC)
@@ -634,7 +637,7 @@ describe("writable: invalidate-before-dispatch", () => {
       { name: "c" },
     ])
     // Populate cache
-    const refA = doc.items.at(0)
+    const _refA = doc.items.at(0)
     const refB = doc.items.at(1)
     const refC = doc.items.at(2)
 
@@ -663,7 +666,9 @@ describe("writable: cacheless stack", () => {
     })
     const store = { items: [{ name: "a" }] }
     const ctx = plainContext(store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
+      typeof schema
+    >
 
     doc.items.push({ name: "b" })
     expect((store.items as any[]).length).toBe(2)
@@ -674,7 +679,9 @@ describe("writable: cacheless stack", () => {
     const schema = Schema.doc({ meta: Schema.record(Schema.number()) })
     const store = { meta: { a: 1 } }
     const ctx = plainContext(store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
+      typeof schema
+    >
 
     doc.meta.set("b", 2)
     expect((store.meta as any).b).toBe(2)
@@ -684,7 +691,9 @@ describe("writable: cacheless stack", () => {
     const schema = Schema.doc({ n: Schema.number() })
     const store = { n: 0 }
     const ctx = plainContext(store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
+      typeof schema
+    >
 
     doc.n.set(42)
     expect(store.n).toBe(42)
@@ -856,7 +865,7 @@ describe("writable: TRANSACT attachment", () => {
     expect(doc.metadata[TRANSACT]).toBe(ctx)
     // Verify the map still works normally after TRANSACT attachment
     doc.metadata.set("newKey", "newValue")
-    expect(doc.metadata.at("newKey")!()).toBe("newValue")
+    expect(doc.metadata.at("newKey")?.()).toBe("newValue")
   })
 
   it("[TRANSACT] is present on cacheless stack refs", () => {
@@ -865,7 +874,9 @@ describe("writable: TRANSACT attachment", () => {
     })
     const store = { n: 0 }
     const ctx = plainContext(store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<typeof schema>
+    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
+      typeof schema
+    >
     expect(doc.n[TRANSACT]).toBe(ctx)
     expect(doc[TRANSACT]).toBe(ctx)
   })
@@ -879,9 +890,15 @@ describe("writable: TRANSACT attachment", () => {
       prepare: (path, change) => dispatched.push({ path, change }),
       flush: () => {},
       dispatch: (path, change) => dispatched.push({ path, change }),
-      beginTransaction: () => { throw new Error("not implemented") },
-      commit: () => { throw new Error("not implemented") },
-      abort: () => { throw new Error("not implemented") },
+      beginTransaction: () => {
+        throw new Error("not implemented")
+      },
+      commit: () => {
+        throw new Error("not implemented")
+      },
+      abort: () => {
+        throw new Error("not implemented")
+      },
       inTransaction: false,
     }
     const ref = interpret(schema, writeOnlyInterpreter, ctx) as any

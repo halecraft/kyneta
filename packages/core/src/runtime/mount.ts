@@ -9,7 +9,7 @@
 
 import { InvalidMountTargetError } from "../errors.js"
 import type { MountOptions, MountResult, ScopeInterface } from "../types.js"
-import { setRootScope, Scope } from "./scope.js"
+import { Scope, setRootScope } from "./scope.js"
 
 /**
  * Mount a Kyneta element to a DOM container.

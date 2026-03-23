@@ -6,15 +6,14 @@
  * `ref()` returns the current value.
  */
 
-import { describe, expect, it, vi } from "vitest"
 import {
   CHANGEFEED,
-  hasChangefeed,
   type Changeset,
+  hasChangefeed,
   type ReplaceChange,
 } from "@kyneta/schema"
-import { state, isLocalRef } from "./local-ref.js"
-import type { LocalRef } from "./local-ref.js"
+import { describe, expect, it, vi } from "vitest"
+import { isLocalRef, state } from "./local-ref.js"
 
 describe("LocalRef", () => {
   describe("state() factory", () => {
@@ -135,7 +134,8 @@ describe("LocalRef", () => {
         ref.set(1)
 
         expect(handler).toHaveBeenCalledTimes(1)
-        const changeset: Changeset<ReplaceChange<number>> = handler.mock.calls[0][0]
+        const changeset: Changeset<ReplaceChange<number>> =
+          handler.mock.calls[0][0]
         expect(changeset.changes).toHaveLength(1)
         const change = changeset.changes[0]!
         expect(change.type).toBe("replace")

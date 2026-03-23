@@ -1,34 +1,30 @@
-import { describe, expect, it, expectTypeOf } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
+import type {
+  Changeset,
+  Interpreter,
+  InterpreterLayer,
+  Op,
+  RefContext,
+  WritableContext,
+} from "../index.js"
 import {
-  Schema,
-  LoroSchema,
-  interpret,
   bottomInterpreter,
-  withReadable,
-  withCaching,
-  withWritable,
-  withNavigation,
-  withChangefeed,
-  plainContext,
-  readable,
-  writable,
+  CHANGEFEED,
   changefeed,
   hasChangefeed,
   hasComposedChangefeed,
-  CHANGEFEED,
-  TRANSACT,
   hasTransact,
-} from "../index.js"
-import type {
-  Readable,
-  Writable,
-  InterpreterLayer,
-  InterpretBuilder,
-  WritableContext,
-  RefContext,
-  Changeset,
-  Op,
-  Interpreter,
+  interpret,
+  LoroSchema,
+  plainContext,
+  readable,
+  Schema,
+  TRANSACT,
+  withCaching,
+  withNavigation,
+  withReadable,
+  withWritable,
+  writable,
 } from "../index.js"
 
 // ===========================================================================
@@ -70,9 +66,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
       metadata: {},
     }
     const ctx: RefContext = { store }
-    const doc = interpret(chatDocSchema, ctx)
-      .with(readable)
-      .done() as any
+    const doc = interpret(chatDocSchema, ctx).with(readable).done() as any
 
     // Callable
     expect(doc.title()).toBe("Hello")
@@ -91,10 +85,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
   it("readable + writable produces mutable refs without observation", () => {
     const store = { x: 0, y: 0 }
     const ctx = plainContext(store)
-    const doc = interpret(pointSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .done()
+    const doc = interpret(pointSchema, ctx).with(readable).with(writable).done()
 
     doc.x.set(42)
     expect(store.x).toBe(42)
@@ -137,13 +128,15 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
     expect(hasComposedChangefeed(doc.messages)).toBe(true)
 
     // subscribeTree works
-    const events: Op[] = [];
-    (doc.settings as any)[CHANGEFEED].subscribeTree((changeset: Changeset<Op>) => {
-      for (const event of changeset.changes) events.push(event)
-    })
+    const events: Op[] = []
+    ;(doc.settings as any)[CHANGEFEED].subscribeTree(
+      (changeset: Changeset<Op>) => {
+        for (const event of changeset.changes) events.push(event)
+      },
+    )
     doc.settings.darkMode.set(true)
     expect(events.length).toBeGreaterThanOrEqual(1)
-    expect((events[0]!.path[0] as { key: string }).key).toBe("darkMode")
+    expect((events[0]?.path[0] as { key: string }).key).toBe("darkMode")
   })
 })
 
@@ -164,8 +157,8 @@ describe("fluent: transactions", () => {
     // TRANSACT points to the correct context
     expect(doc.x[TRANSACT]).toBe(ctx)
 
-    const changes: unknown[] = [];
-    (doc.x as any)[CHANGEFEED].subscribe((c: unknown) => changes.push(c))
+    const changes: unknown[] = []
+    ;(doc.x as any)[CHANGEFEED].subscribe((c: unknown) => changes.push(c))
 
     ctx.beginTransaction()
     doc.x.set(10)
@@ -233,14 +226,21 @@ describe("fluent: custom layer", () => {
 
     const tagging: InterpreterLayer<RefContext, RefContext> = {
       name: "tagging",
-      transform(base: Interpreter<RefContext, any>): Interpreter<RefContext, any> {
+      transform(
+        base: Interpreter<RefContext, any>,
+      ): Interpreter<RefContext, any> {
         return {
           ...base,
           scalar(ctx, path, schema) {
             const result = base.scalar(ctx, path, schema)
-            if (result && typeof result === "object" || typeof result === "function") {
+            if (
+              (result && typeof result === "object") ||
+              typeof result === "function"
+            ) {
               Object.defineProperty(result, TAG, {
-                value: path.map(s => s.type === "key" ? s.key : String(s.index)).join("."),
+                value: path
+                  .map(s => (s.type === "key" ? s.key : String(s.index)))
+                  .join("."),
                 enumerable: false,
               })
             }
@@ -291,7 +291,9 @@ describe("fluent: three-arg interpret regression", () => {
   it("interpret(schema, interpreter, ctx) still works", () => {
     const store = { x: 10, y: 20 }
     const ctx = plainContext(store)
-    const interp = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
+    const interp = withWritable(
+      withCaching(withReadable(withNavigation(bottomInterpreter))),
+    )
     const doc = interpret(pointSchema, interp, ctx) as any
 
     expect(doc.x()).toBe(10)
@@ -321,14 +323,16 @@ describe("fluent: three-arg interpret regression", () => {
 describe("fluent: type-level", () => {
   it("layer types constrain context flow", () => {
     // readable: RefContext → RefContext
-    expectTypeOf(readable).toMatchTypeOf<InterpreterLayer<RefContext, RefContext>>()
+    expectTypeOf(readable).toMatchTypeOf<
+      InterpreterLayer<RefContext, RefContext>
+    >()
     // writable: RefContext → WritableContext (widens)
-    expectTypeOf(writable).toMatchTypeOf<InterpreterLayer<RefContext, WritableContext>>()
+    expectTypeOf(writable).toMatchTypeOf<
+      InterpreterLayer<RefContext, WritableContext>
+    >()
     // changefeed: WritableContext → WritableContext (requires writable first)
     expectTypeOf(changefeed).toMatchTypeOf<
       InterpreterLayer<WritableContext, WritableContext>
     >()
   })
-
-
 })

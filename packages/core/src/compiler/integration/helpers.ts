@@ -11,12 +11,12 @@
 import {
   CHANGEFEED,
   type ChangeBase,
-  type Changeset,
   type Changefeed,
+  type Changeset,
+  incrementChange,
+  replaceChange,
   type SequenceInstruction,
   type TextInstruction,
-  replaceChange,
-  incrementChange,
 } from "@kyneta/schema"
 import { JSDOM } from "jsdom"
 import ts from "typescript"
@@ -26,60 +26,58 @@ import {
   inputTextRegion,
   listRegion,
   read,
+  Scope,
   subscribe,
   textRegion,
   valueRegion,
-  Scope,
 } from "../../runtime/index.js"
+import type { ListRefLike } from "../../runtime/regions.js"
 import {
   activeSubscriptions,
-  getActiveSubscriptionCount,
-  resetSubscriptionIdCounter,
-  resetScopeIdCounter,
-  setRootScope,
   assertMaxMutations,
   createCountingContainer,
+  getActiveSubscriptionCount,
+  resetScopeIdCounter,
+  resetSubscriptionIdCounter,
+  setRootScope,
 } from "../../testing/index.js"
 import {
   mergeImports,
   transformSource,
   transformSourceInPlace,
 } from "../transform.js"
-import type { ListRefLike } from "../../runtime/regions.js"
 
 // =============================================================================
 // Re-exports for test convenience
 // =============================================================================
 
+export type { ListRefLike }
 export {
+  activeSubscriptions,
+  assertMaxMutations,
   CHANGEFEED,
   type ChangeBase,
   type Changefeed,
-  type SequenceInstruction,
-  type TextInstruction,
-  replaceChange,
-}
-export {
   conditionalRegion,
+  createCountingContainer,
+  getActiveSubscriptionCount,
   inputTextRegion,
   listRegion,
+  mergeImports,
   read,
-  subscribe,
-  textRegion,
-  valueRegion,
-  Scope,
-}
-export {
-  activeSubscriptions,
-  getActiveSubscriptionCount,
-  resetSubscriptionIdCounter,
+  replaceChange,
   resetScopeIdCounter,
+  resetSubscriptionIdCounter,
+  Scope,
+  type SequenceInstruction,
   setRootScope,
-  assertMaxMutations,
-  createCountingContainer,
+  subscribe,
+  type TextInstruction,
+  textRegion,
+  transformSource,
+  transformSourceInPlace,
+  valueRegion,
 }
-export { mergeImports, transformSource, transformSourceInPlace }
-export type { ListRefLike }
 
 // =============================================================================
 // DOM Setup
@@ -163,7 +161,7 @@ interface StructRef<T> extends HasChangefeed<T, MapChange> {
  * Use when a test source string needs TextRef, CounterRef, ListRef, etc.
  */
 export function withTypes(source: string): string {
-  return CHANGEFEED_TYPE_STUBS + "\n" + source
+  return `${CHANGEFEED_TYPE_STUBS}\n${source}`
 }
 
 // =============================================================================
@@ -252,7 +250,7 @@ export function wrapLastBuilder(source: string): string {
     const trimmed = lines[i].trimStart()
     if (/^[a-z]\w*\s*\(\s*(\{[^}]*\}\s*,\s*)?\(\)\s*=>\s*\{/.test(trimmed)) {
       const indent = lines[i].length - trimmed.length
-      lines[i] = " ".repeat(indent) + "const __lastBuilder = " + trimmed
+      lines[i] = `${" ".repeat(indent)}const __lastBuilder = ${trimmed}`
       return lines.join("\n")
     }
   }
@@ -286,9 +284,10 @@ export function getRuntimeDepValues(): unknown[] {
 /**
  * Compile source in-place and execute the last builder factory.
  */
-export function compileAndExecuteComponent(
-  source: string,
-): { node: Node; scope: Scope } {
+export function compileAndExecuteComponent(source: string): {
+  node: Node
+  scope: Scope
+} {
   const wrapped = wrapLastBuilder(source)
   const js = compileInPlace(wrapped)
 
@@ -562,9 +561,9 @@ export function createMockSequenceRef<T>(initialItems: T[]): {
  * This replaces the old `createTypedDoc(schema)` pattern. Each field is
  * a mock ref; the doc itself has [CHANGEFEED] so the compiler can detect it.
  */
-export function createMockDoc<T extends Record<string, { [CHANGEFEED]: Changefeed<unknown, ChangeBase> }>>(
-  fields: T,
-): T & { readonly [CHANGEFEED]: Changefeed<unknown, ChangeBase> } {
+export function createMockDoc<
+  T extends Record<string, { [CHANGEFEED]: Changefeed<unknown, ChangeBase> }>,
+>(fields: T): T & { readonly [CHANGEFEED]: Changefeed<unknown, ChangeBase> } {
   const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
 
   return Object.assign(Object.create(null), fields, {
@@ -606,7 +605,9 @@ export function createMockPlainRef<T>(initial: T): {
     },
     set(v: T): void {
       value = v
-      const changeset: Changeset<ChangeBase> = { changes: [replaceChange(v) as ChangeBase] }
+      const changeset: Changeset<ChangeBase> = {
+        changes: [replaceChange(v) as ChangeBase],
+      }
       for (const cb of subscribers) {
         cb(changeset)
       }

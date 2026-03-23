@@ -6,17 +6,17 @@
 // of annotation. This corresponds to today's `toJSON()` / `value()`
 // functionality.
 
+import { isNonNullObject } from "../guards.js"
 import type { Interpreter, Path } from "../interpret.js"
 import type {
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
   AnnotatedSchema,
+  MapSchema,
+  ProductSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SumSchema,
 } from "../schema.js"
 import { readByPath } from "../store.js"
-import { isNonNullObject } from "../guards.js"
 
 // ---------------------------------------------------------------------------
 // Plain interpreter
@@ -101,7 +101,10 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     ctx: unknown,
     path: Path,
     schema: SumSchema,
-    variants: { byIndex?: (index: number) => unknown; byKey?: (key: string) => unknown },
+    variants: {
+      byIndex?: (index: number) => unknown
+      byKey?: (key: string) => unknown
+    },
   ): unknown {
     // For discriminated sums, read the discriminant from the value
     // and interpret through the matching variant.

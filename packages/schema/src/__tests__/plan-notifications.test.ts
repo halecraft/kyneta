@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { planNotifications } from "../index.js"
 import type { Op } from "../index.js"
-import { pathKey } from "../store.js"
+import { planNotifications } from "../index.js"
 import type { Path } from "../interpret.js"
+import { pathKey } from "../store.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,17 +40,14 @@ describe("planNotifications: grouping", () => {
 
   it("two changes at the same path → single group with 2 entries", () => {
     const path: Path = [key("x")]
-    const plan = planNotifications([
-      pc(path, "replace"),
-      pc(path, "replace"),
-    ])
+    const plan = planNotifications([pc(path, "replace"), pc(path, "replace")])
 
     expect(plan.grouped.size).toBe(1)
     const k = pathKey(path)
     const changes = plan.grouped.get(k)!
     expect(changes).toHaveLength(2)
-    expect(changes[0]!.type).toBe("replace")
-    expect(changes[1]!.type).toBe("replace")
+    expect(changes[0]?.type).toBe("replace")
+    expect(changes[1]?.type).toBe("replace")
   })
 
   it("three changes at two paths → two groups", () => {
@@ -77,9 +74,9 @@ describe("planNotifications: grouping", () => {
 
     const changes = plan.grouped.get(pathKey(path))!
     expect(changes).toHaveLength(3)
-    expect(changes[0]!.type).toBe("increment")
-    expect(changes[1]!.type).toBe("replace")
-    expect(changes[2]!.type).toBe("increment")
+    expect(changes[0]?.type).toBe("increment")
+    expect(changes[1]?.type).toBe("replace")
+    expect(changes[2]?.type).toBe("increment")
   })
 
   it("nested paths are grouped independently", () => {
@@ -129,7 +126,10 @@ describe("planNotifications: grouping", () => {
   })
 
   it("many changes to many paths group correctly", () => {
-    const paths = Array.from({ length: 5 }, (_, i) => [key(`field${i}`)] as Path)
+    const paths = Array.from(
+      { length: 5 },
+      (_, i) => [key(`field${i}`)] as Path,
+    )
     const pending: Op[] = []
     // 3 changes per path = 15 total
     for (let round = 0; round < 3; round++) {

@@ -1,23 +1,18 @@
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
+import type { Changeset, Op, Substrate, SubstratePayload } from "../index.js"
 import {
-  Schema,
-  LoroSchema,
-  interpret,
-  readable,
-  writable,
-  changefeed,
-  change,
   applyChanges,
-  subscribe,
-  Zero,
+  change,
+  changefeed,
+  interpret,
+  LoroSchema,
   PlainFrontier,
   plainSubstrateFactory,
-} from "../index.js"
-import type {
-  Changeset,
-  Op,
-  Substrate,
-  SubstratePayload,
+  readable,
+  Schema,
+  subscribe,
+  writable,
+  Zero,
 } from "../index.js"
 
 // ===========================================================================
@@ -86,7 +81,9 @@ describe("PlainFrontier", () => {
 
   it("round-trip: parseFrontier(f.serialize()) compares equal to f", () => {
     const original = new PlainFrontier(7)
-    const roundTripped = plainSubstrateFactory.parseFrontier(original.serialize())
+    const roundTripped = plainSubstrateFactory.parseFrontier(
+      original.serialize(),
+    )
     expect(roundTripped.compare(original)).toBe("equal")
     expect(original.compare(roundTripped)).toBe("equal")
     expect(roundTripped.value).toBe(7)
@@ -115,7 +112,10 @@ describe("PlainSubstrate lifecycle", () => {
     const substrate = plainSubstrateFactory.create(TestSchema, seed)
 
     const defaults = Zero.structural(TestSchema) as Record<string, unknown>
-    const expected = Zero.overlay(seed, defaults, TestSchema) as Record<string, unknown>
+    const expected = Zero.overlay(seed, defaults, TestSchema) as Record<
+      string,
+      unknown
+    >
 
     // Store should match the overlay result
     expect(substrate.store).toEqual(expected)
@@ -147,14 +147,14 @@ describe("PlainSubstrate lifecycle", () => {
     expect(substrate.frontier().value).toBe(0)
 
     // Each change() call triggers one flush cycle → one version bump
-    change(doc, (d) => d.title.insert(0, "Hi"))
+    change(doc, d => d.title.insert(0, "Hi"))
     expect(substrate.frontier().value).toBe(1)
 
-    change(doc, (d) => d.count.increment(5))
+    change(doc, d => d.count.increment(5))
     expect(substrate.frontier().value).toBe(2)
 
     // A multi-op transaction is a single flush cycle → one version bump
-    change(doc, (d) => {
+    change(doc, d => {
       d.title.insert(2, " there")
       d.count.increment(3)
     })
@@ -184,9 +184,9 @@ describe("PlainSubstrate lifecycle", () => {
       observedVersions.push(substrate.frontier().value)
     })
 
-    change(doc, (d) => d.title.insert(0, "A"))
-    change(doc, (d) => d.count.increment(1))
-    change(doc, (d) => d.title.insert(1, "B"))
+    change(doc, d => d.title.insert(0, "A"))
+    change(doc, d => d.count.increment(1))
+    change(doc, d => d.title.insert(1, "B"))
 
     // Each subscriber call should see the version AFTER the flush,
     // not the stale version from before. Without the fix, subscribers
@@ -195,7 +195,10 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("delta() returns the just-flushed ops inside a subscribe callback", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema, { title: "", count: 0 })
+    const substrate = plainSubstrateFactory.create(TestSchema, {
+      title: "",
+      count: 0,
+    })
     const doc = interpretSubstrate(substrate)
 
     // Track ops retrieved via delta() inside the subscriber
@@ -210,15 +213,15 @@ describe("PlainSubstrate lifecycle", () => {
       prevVersion = currentVer
     })
 
-    change(doc, (d) => d.title.insert(0, "Hi"))
-    change(doc, (d) => d.count.increment(5))
+    change(doc, d => d.title.insert(0, "Hi"))
+    change(doc, d => d.count.increment(5))
 
     // Each callback should have been able to retrieve the ops for its own flush cycle
     expect(opsPerNotification).toHaveLength(2)
-    expect(opsPerNotification[0]!.length).toBeGreaterThan(0)
-    expect(opsPerNotification[0]![0]!.change.type).toBe("text")
-    expect(opsPerNotification[1]!.length).toBeGreaterThan(0)
-    expect(opsPerNotification[1]![0]!.change.type).toBe("increment")
+    expect(opsPerNotification[0]?.length).toBeGreaterThan(0)
+    expect(opsPerNotification[0]?.[0]?.change.type).toBe("text")
+    expect(opsPerNotification[1]?.length).toBeGreaterThan(0)
+    expect(opsPerNotification[1]?.[0]?.change.type).toBe("increment")
   })
 
   it("exportSnapshot() returns a JSON payload matching the current store state", () => {
@@ -227,7 +230,7 @@ describe("PlainSubstrate lifecycle", () => {
     const doc = interpretSubstrate(substrate)
 
     // Mutate the doc
-    change(doc, (d) => {
+    change(doc, d => {
       d.title.insert(4, "!")
       d.count.increment(10)
     })
@@ -252,11 +255,11 @@ describe("PlainSubstrate lifecycle", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    change(doc, (d) => d.count.increment(1))
+    change(doc, d => d.count.increment(1))
 
     const payload = substrate.exportSince(substrate.frontier())
     expect(payload).not.toBeNull()
-    const ops = JSON.parse(payload!.data as string)
+    const ops = JSON.parse(payload?.data as string)
     expect(ops).toEqual([])
   })
 
@@ -265,18 +268,18 @@ describe("PlainSubstrate lifecycle", () => {
     const doc = interpretSubstrate(substrate)
 
     const f0 = substrate.frontier()
-    change(doc, (d) => d.title.insert(0, "A"))
-    change(doc, (d) => d.count.increment(1))
+    change(doc, d => d.title.insert(0, "A"))
+    change(doc, d => d.count.increment(1))
 
     const payload = substrate.exportSince(f0)
     expect(payload).not.toBeNull()
-    expect(payload!.encoding).toBe("json")
+    expect(payload?.encoding).toBe("json")
 
-    const ops = JSON.parse(payload!.data as string) as Op[]
+    const ops = JSON.parse(payload?.data as string) as Op[]
     expect(ops.length).toBeGreaterThanOrEqual(2)
 
     // Should contain both a text change and an increment change
-    const types = ops.map((op) => op.change.type)
+    const types = ops.map(op => op.change.type)
     expect(types).toContain("text")
     expect(types).toContain("increment")
   })
@@ -285,18 +288,18 @@ describe("PlainSubstrate lifecycle", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    change(doc, (d) => d.title.insert(0, "A"))
+    change(doc, d => d.title.insert(0, "A"))
     const f1 = substrate.frontier()
     expect(f1.value).toBe(1)
 
-    change(doc, (d) => d.count.increment(1))
+    change(doc, d => d.count.increment(1))
     expect(substrate.frontier().value).toBe(2)
 
     // exportSince(f1) should only contain the second mutation
     const payload = substrate.exportSince(f1)!
     const ops = JSON.parse(payload.data as string) as Op[]
     expect(ops.length).toBe(1)
-    expect(ops[0]!.change.type).toBe("increment")
+    expect(ops[0]?.change.type).toBe("increment")
   })
 })
 
@@ -313,7 +316,7 @@ describe("Round-trip replication", () => {
     const docA = interpretSubstrate(substrateA)
 
     // Apply some mutations
-    change(docA, (d) => {
+    change(docA, d => {
       d.title.insert(8, " Title")
       d.count.increment(42)
       d.items.push({ name: "Item 1", done: false })
@@ -326,21 +329,25 @@ describe("Round-trip replication", () => {
     expect(substrateB.store).toEqual(substrateA.store)
     expect(substrateB.store.title).toBe("Original Title")
     expect(substrateB.store.count).toBe(42)
-    expect((substrateB.store.items as unknown[])).toHaveLength(1)
+    expect(substrateB.store.items as unknown[]).toHaveLength(1)
   })
 
   it("delta round-trip: exportSince → importDelta → stores are equal", () => {
-    const substrateA = plainSubstrateFactory.create(TestSchema, { title: "Shared" })
+    const substrateA = plainSubstrateFactory.create(TestSchema, {
+      title: "Shared",
+    })
     const docA = interpretSubstrate(substrateA)
 
     // Both substrates start from the same seed
-    const substrateB = plainSubstrateFactory.create(TestSchema, { title: "Shared" })
-    const docB = interpretSubstrate(substrateB)
+    const substrateB = plainSubstrateFactory.create(TestSchema, {
+      title: "Shared",
+    })
+    const _docB = interpretSubstrate(substrateB)
 
     const f0 = substrateA.frontier()
 
     // Mutate A
-    change(docA, (d) => {
+    change(docA, d => {
       d.title.insert(6, "!")
       d.count.increment(10)
       d.items.push({ name: "New item", done: true })
@@ -366,11 +373,11 @@ describe("Round-trip replication", () => {
     const f0 = substrateA.frontier()
 
     // Mutate A
-    change(docA, (d) => d.title.insert(0, "Hello"))
+    change(docA, d => d.title.insert(0, "Hello"))
 
     // Subscribe to B's changefeed before importing
     const received: Changeset<Op>[] = []
-    subscribe(docB, (cs) => received.push(cs))
+    subscribe(docB, cs => received.push(cs))
 
     // Import into B
     const delta = substrateA.exportSince(f0)!
@@ -392,8 +399,8 @@ describe("Round-trip replication", () => {
 
     const f0 = substrateA.frontier()
 
-    change(docA, (d) => d.count.increment(1))
-    change(docA, (d) => d.count.increment(2))
+    change(docA, d => d.count.increment(1))
+    change(docA, d => d.count.increment(2))
 
     expect(substrateB.frontier().value).toBe(0)
 
@@ -429,9 +436,9 @@ describe("Epoch boundaries", () => {
     const docA = interpretSubstrate(substrateA)
 
     // Apply several mutations to advance the frontier
-    change(docA, (d) => d.title.insert(7, " v2"))
-    change(docA, (d) => d.count.increment(100))
-    change(docA, (d) => d.items.push({ name: "Task", done: false }))
+    change(docA, d => d.title.insert(7, " v2"))
+    change(docA, d => d.count.increment(100))
+    change(docA, d => d.items.push({ name: "Task", done: false }))
 
     expect(substrateA.frontier().value).toBe(3)
 
@@ -446,13 +453,15 @@ describe("Epoch boundaries", () => {
     expect(substrateB.store).toEqual(substrateA.store)
     expect(substrateB.store.title).toBe("Genesis v2")
     expect(substrateB.store.count).toBe(100)
-    expect((substrateB.store.items as unknown[])).toHaveLength(1)
+    expect(substrateB.store.items as unknown[]).toHaveLength(1)
   })
 
   it("new epoch substrate is fully functional: can mutate, version, export", () => {
-    const substrateA = plainSubstrateFactory.create(TestSchema, { title: "Source" })
+    const substrateA = plainSubstrateFactory.create(TestSchema, {
+      title: "Source",
+    })
     const docA = interpretSubstrate(substrateA)
-    change(docA, (d) => d.count.increment(50))
+    change(docA, d => d.count.increment(50))
 
     // Create new substrate from snapshot
     const snapshot = substrateA.exportSnapshot()
@@ -460,7 +469,7 @@ describe("Epoch boundaries", () => {
     const docB = interpretSubstrate(substrateB)
 
     // Mutate the new substrate
-    change(docB, (d) => d.title.insert(6, "!"))
+    change(docB, d => d.title.insert(6, "!"))
     expect(substrateB.frontier().value).toBe(1)
     expect(substrateB.store.title).toBe("Source!")
 
@@ -471,13 +480,15 @@ describe("Epoch boundaries", () => {
     const delta = substrateB.exportSince(new PlainFrontier(0))!
     const ops = JSON.parse(delta.data as string) as Op[]
     expect(ops.length).toBe(1)
-    expect(ops[0]!.change.type).toBe("text")
+    expect(ops[0]?.change.type).toBe("text")
   })
 
   it("old and new epoch substrates are independent", () => {
-    const substrateA = plainSubstrateFactory.create(TestSchema, { title: "Shared" })
+    const substrateA = plainSubstrateFactory.create(TestSchema, {
+      title: "Shared",
+    })
     const docA = interpretSubstrate(substrateA)
-    change(docA, (d) => d.count.increment(10))
+    change(docA, d => d.count.increment(10))
 
     // Snapshot and create B
     const snapshot = substrateA.exportSnapshot()
@@ -485,12 +496,12 @@ describe("Epoch boundaries", () => {
     const docB = interpretSubstrate(substrateB)
 
     // Mutate A — should not affect B
-    change(docA, (d) => d.title.insert(6, " from A"))
+    change(docA, d => d.title.insert(6, " from A"))
     expect(substrateA.store.title).toBe("Shared from A")
     expect(substrateB.store.title).toBe("Shared")
 
     // Mutate B — should not affect A
-    change(docB, (d) => d.title.insert(6, " from B"))
+    change(docB, d => d.title.insert(6, " from B"))
     expect(substrateB.store.title).toBe("Shared from B")
     expect(substrateA.store.title).toBe("Shared from A")
   })

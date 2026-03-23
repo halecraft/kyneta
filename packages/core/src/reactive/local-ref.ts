@@ -33,9 +33,9 @@
 
 import {
   CHANGEFEED,
-  getOrCreateChangefeed,
   type Changefeed,
   type Changeset,
+  getOrCreateChangefeed,
   type ReplaceChange,
   replaceChange,
 } from "@kyneta/schema"
@@ -93,14 +93,20 @@ export interface LocalRefBase<T> {
  * value-type methods. The `LocalRefBase<T>` still uses the original `T`
  * for `(): T` and `set(value: T)`.
  */
-type Widen<T> =
-  T extends string ? string :
-  T extends number ? number :
-  T extends boolean ? boolean :
-  T extends bigint ? bigint :
-  T extends symbol ? symbol :
-  T extends null | undefined ? {} :
-  T
+type Widen<T> = T extends string
+  ? string
+  : T extends number
+    ? number
+    : T extends boolean
+      ? boolean
+      : T extends bigint
+        ? bigint
+        : T extends symbol
+          ? symbol
+          : T extends null | undefined
+            ? // biome-ignore lint/complexity/noBannedTypes: fallback for null/undefined primitives
+              {}
+            : T
 
 /**
  * A local reactive value. Implements the `CHANGEFEED` protocol so it
@@ -147,7 +153,9 @@ export type LocalRef<T> = Widen<T> & LocalRefBase<T>
 export function state<T>(initial: T): LocalRef<T> {
   // Mutable state captured by closure
   let value: T = initial
-  const subscribers = new Set<(changeset: Changeset<ReplaceChange<T>>) => void>()
+  const subscribers = new Set<
+    (changeset: Changeset<ReplaceChange<T>>) => void
+  >()
 
   // The callable ref — arrow function that returns current value
   const ref: any = () => value
@@ -201,8 +209,5 @@ export function state<T>(initial: T): LocalRef<T> {
  * a function-object created by `state()`, not a class instance.
  */
 export function isLocalRef(value: unknown): value is LocalRef<unknown> {
-  return (
-    typeof value === "function" &&
-    (value as any)[LOCAL_REF_BRAND] === true
-  )
+  return typeof value === "function" && (value as any)[LOCAL_REF_BRAND] === true
 }

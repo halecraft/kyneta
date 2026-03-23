@@ -4,18 +4,8 @@
 
 import { describe, expect, it } from "vitest"
 import {
-  extractTemplate,
-  hasHoles,
-  isStatic,
-  getHolesByKind,
-  countHolesByKind,
-  planWalk,
-  generateWalkCode,
-  generateTemplateDeclaration,
-  simpleHash,
-  type NavOp,
-} from "./template.js"
-import {
+  type BuilderNode,
+  type ChildNode,
   createBuilder,
   createConditional,
   createConditionalBranch,
@@ -23,10 +13,20 @@ import {
   createLiteral,
   createLoop,
   createSpan,
-  type BuilderNode,
-  type ChildNode,
   type ElementNode,
 } from "./ir.js"
+import {
+  countHolesByKind,
+  extractTemplate,
+  generateTemplateDeclaration,
+  generateWalkCode,
+  getHolesByKind,
+  hasHoles,
+  isStatic,
+  type NavOp,
+  planWalk,
+  simpleHash,
+} from "./template.js"
 
 // =============================================================================
 // Test Helpers
@@ -273,11 +273,10 @@ describe("extractTemplate", () => {
 
       const eventHole = template.holes.find(h => h.kind === "event")
       expect(eventHole).toBeDefined()
-      expect(eventHole!.handlerSource).toBe("handleClick")
-      expect(eventHole!.eventName).toBe("click")
-      expect(eventHole!.path).toEqual([0])
+      expect(eventHole?.handlerSource).toBe("handleClick")
+      expect(eventHole?.eventName).toBe("click")
+      expect(eventHole?.path).toEqual([0])
     })
-
   })
 
   // =============================================================================
@@ -488,7 +487,7 @@ describe("extractTemplate", () => {
           path: [0],
         })
         expect(template.holes[0].elementNode).toBeDefined()
-        expect(template.holes[0].elementNode!.factorySource).toBe("Avatar")
+        expect(template.holes[0].elementNode?.factorySource).toBe("Avatar")
       })
 
       it("should handle component between static elements", () => {
@@ -536,8 +535,8 @@ describe("extractTemplate", () => {
 
         const hole = template.holes.find(h => h.kind === "component")
         expect(hole).toBeDefined()
-        expect(hole!.elementNode!.attributes).toHaveLength(2)
-        expect(hole!.elementNode!.tag).toBe("Card")
+        expect(hole?.elementNode?.attributes).toHaveLength(2)
+        expect(hole?.elementNode?.tag).toBe("Card")
       })
     })
 

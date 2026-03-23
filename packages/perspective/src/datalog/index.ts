@@ -1,119 +1,110 @@
 // === Datalog Module Public API ===
 // Re-exports the public surface of the Datalog evaluator.
 
-// --- Types ---
-export type {
-  Value,
-  CnId,
-  Term,
-  ConstTerm,
-  VarTerm,
-  WildcardTerm,
-  Atom,
-  AggregationFn,
-  AggregationClause,
-  GuardOp,
-  GuardElement,
-  BodyElement,
-  AtomElement,
-  NegationElement,
-  AggregationElement,
-  Rule,
-  FactTuple,
-  Fact,
-  Substitution,
-  ReadonlyDatabase,
-  Result,
-  StratificationError,
-  CyclicNegationError,
-} from './types.js';
-
-// --- Type constructors & utilities ---
+// --- Aggregation ---
 export {
-  ok,
-  err,
-  constTerm,
-  varTerm,
-  wildcard,
-  _ ,
-  atom,
-  positiveAtom,
-  negation,
-  aggregation,
-  eq,
-  neq,
-  lt,
-  gt,
-  lte,
-  gte,
-  rule,
-  fact,
-  Relation,
-  Database,
-  serializeValue,
-  factKey,
-  compareValues,
-  valuesEqual,
-  evaluateGuardOp,
-} from './types.js';
-
-// --- Unification ---
+  evaluateAggregation,
+  evaluateAggregationForSubs,
+} from "./aggregate.js"
+// --- Evaluation Core (rule-level functions) ---
+export type { WeightedFact } from "./evaluate.js"
 export {
-  EMPTY_SUBSTITUTION,
-  extendSubstitution,
-  resolveTerm,
-  unifyTermWithValue,
-  matchAtomWithTuple,
-  groundAtom,
-  matchAtomAgainstRelation,
-  evaluateGuard,
-} from './unify.js';
-
+  evaluateAggregationElement,
+  evaluateDifferentialNegation,
+  evaluateGuardElement,
+  evaluateNaive,
+  evaluateNegation,
+  evaluatePositiveAtom,
+  evaluateRule,
+  evaluateRuleDelta,
+  evaluateRuleSemiNaive,
+  getNegationAtomIndices,
+  getPositiveAtomIndices,
+  groundHead,
+} from "./evaluate.js"
+// --- Unified Evaluator (Plan 006.1) ---
+export type { Evaluator, EvaluatorStepResult } from "./evaluator.js"
+export {
+  createEvaluator,
+  evaluatePositiveUnified as evaluatePositive,
+  evaluateStratumFromDelta,
+  evaluateUnified as evaluate,
+} from "./evaluator.js"
 // --- Stratification ---
 export type {
   DependencyEdge,
   DependencyGraph,
   Stratum,
-} from './stratify.js';
-
+} from "./stratify.js"
 export {
+  bodyPredicates,
   buildDependencyGraph,
   computeSCCs,
-  stratify,
-  bodyPredicates,
   headPredicates,
-} from './stratify.js';
-
-// --- Aggregation ---
+  stratify,
+} from "./stratify.js"
+// --- Types ---
+export type {
+  AggregationClause,
+  AggregationElement,
+  AggregationFn,
+  Atom,
+  AtomElement,
+  BodyElement,
+  CnId,
+  ConstTerm,
+  CyclicNegationError,
+  Fact,
+  FactTuple,
+  GuardElement,
+  GuardOp,
+  NegationElement,
+  ReadonlyDatabase,
+  Result,
+  Rule,
+  StratificationError,
+  Substitution,
+  Term,
+  Value,
+  VarTerm,
+  WildcardTerm,
+} from "./types.js"
+// --- Type constructors & utilities ---
 export {
-  evaluateAggregation,
-  evaluateAggregationForSubs,
-} from './aggregate.js';
-
-// --- Evaluation Core (rule-level functions) ---
-export type { WeightedFact } from './evaluate.js';
-
+  _,
+  aggregation,
+  atom,
+  compareValues,
+  constTerm,
+  Database,
+  eq,
+  err,
+  evaluateGuardOp,
+  fact,
+  factKey,
+  gt,
+  gte,
+  lt,
+  lte,
+  negation,
+  neq,
+  ok,
+  positiveAtom,
+  Relation,
+  rule,
+  serializeValue,
+  valuesEqual,
+  varTerm,
+  wildcard,
+} from "./types.js"
+// --- Unification ---
 export {
-  evaluateNaive,
-  evaluateRule,
-  evaluateRuleSemiNaive,
-  evaluateRuleDelta,
-  evaluatePositiveAtom,
-  evaluateNegation,
-  evaluateDifferentialNegation,
-  evaluateGuardElement,
-  evaluateAggregationElement,
-  groundHead,
-  getPositiveAtomIndices,
-  getNegationAtomIndices,
-} from './evaluate.js';
-
-// --- Unified Evaluator (Plan 006.1) ---
-export type { Evaluator, EvaluatorStepResult } from './evaluator.js';
-
-export {
-  createEvaluator,
-  evaluateUnified as evaluate,
-  evaluatePositiveUnified as evaluatePositive,
-  evaluateStratumFromDelta,
-} from './evaluator.js';
+  EMPTY_SUBSTITUTION,
+  evaluateGuard,
+  extendSubstitution,
+  groundAtom,
+  matchAtomAgainstRelation,
+  matchAtomWithTuple,
+  resolveTerm,
+  unifyTermWithValue,
+} from "./unify.js"

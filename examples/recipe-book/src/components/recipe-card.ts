@@ -37,7 +37,7 @@ import { IngredientItem } from "./ingredient-item.js"
 // Extract the struct schema from the list's element type.
 // RecipeBookSchema.fields.recipes is Schema.list(Schema.struct({ ... })),
 // so we need the inner item schema. We define it manually to match:
-import { RecipeSchema } from "../schema.js"
+import type { RecipeSchema } from "../schema.js"
 
 // The ref type for a single recipe in the list.
 type RecipeRef = Ref<typeof RecipeSchema>
@@ -112,7 +112,14 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
         span({ class: "badge vegetarian" }, "🌱 Vegetarian")
       }
 
-      button({ class: "remove-btn", "aria-label": "Remove recipe", onClick: onRemove }, "×")
+      button(
+        {
+          class: "remove-btn",
+          "aria-label": "Remove recipe",
+          onClick: onRemove,
+        },
+        "×",
+      )
     })
 
     // ─── Ingredients List (delta: sequence → listRegion) ──────────
@@ -127,7 +134,7 @@ export const RecipeCard = (props: RecipeCardProps): Element => {
         // along with an onEdit callback to update the ref on input.
         IngredientItem({
           value: ingredient(),
-          onEdit: (newValue) => {
+          onEdit: newValue => {
             change(recipe, () => {
               ingredient.set(newValue)
             })

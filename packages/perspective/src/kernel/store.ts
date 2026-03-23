@@ -12,26 +12,26 @@
 //
 // See unified-engine.md §4, §B.2.
 
+import { cnIdKey } from "./cnid.js"
+import { verify } from "./signature.js"
 import type {
-  Constraint,
   CnId,
+  Constraint,
   InsertError,
+  Lamport,
+  MutableVersionVector,
   Result,
   VersionVector,
-  MutableVersionVector,
-  Lamport,
-} from './types.js';
-import { ok, err, isSafeUint } from './types.js';
-import { cnIdKey } from './cnid.js';
-import { verify } from './signature.js';
+} from "./types.js"
+import { err, isSafeUint, ok } from "./types.js"
 import {
   createVersionVector,
   vvClone,
-  vvExtend,
-  vvMergeInto,
   vvDiff,
+  vvExtend,
   vvGet,
-} from './version-vector.js';
+  vvMergeInto,
+} from "./version-vector.js"
 
 // ---------------------------------------------------------------------------
 // Store Type
@@ -50,13 +50,13 @@ import {
  */
 export interface ConstraintStore {
   /** All constraints by their CnId key string. */
-  readonly constraints: ReadonlyMap<string, Constraint>;
+  readonly constraints: ReadonlyMap<string, Constraint>
 
   /** Version vector tracking what we've seen. */
-  readonly versionVector: VersionVector;
+  readonly versionVector: VersionVector
 
   /** Current maximum Lamport value observed. */
-  readonly lamport: Lamport;
+  readonly lamport: Lamport
 
   /**
    * Generation counter — monotonically increasing on every mutation.
@@ -64,7 +64,7 @@ export interface ConstraintStore {
    * Used for cache invalidation: if the generation hasn't changed,
    * cached solved values are still valid.
    */
-  readonly generation: number;
+  readonly generation: number
 }
 
 /**
@@ -75,10 +75,10 @@ export interface ConstraintStore {
  * only this module's functions cast to MutableConstraintStore to mutate.
  */
 interface MutableConstraintStore {
-  constraints: Map<string, Constraint>;
-  versionVector: MutableVersionVector;
-  lamport: Lamport;
-  generation: number;
+  constraints: Map<string, Constraint>
+  versionVector: MutableVersionVector
+  lamport: Lamport
+  generation: number
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ export function createStore(): ConstraintStore {
     versionVector: createVersionVector(),
     lamport: 0,
     generation: 0,
-  };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ export function createStore(): ConstraintStore {
  * MutableConstraintStore values.
  */
 function asMutable(store: ConstraintStore): MutableConstraintStore {
-  return store as MutableConstraintStore;
+  return store as MutableConstraintStore
 }
 
 /**
@@ -120,29 +120,29 @@ function asMutable(store: ConstraintStore): MutableConstraintStore {
 function validateConstraint(constraint: Constraint): InsertError | null {
   if (!isSafeUint(constraint.id.counter)) {
     return {
-      kind: 'outOfRange',
-      field: 'id.counter',
+      kind: "outOfRange",
+      field: "id.counter",
       value: constraint.id.counter,
-    };
+    }
   }
 
   if (!isSafeUint(constraint.lamport)) {
     return {
-      kind: 'outOfRange',
-      field: 'lamport',
+      kind: "outOfRange",
+      field: "lamport",
       value: constraint.lamport,
-    };
+    }
   }
 
   // Validate signature (stub: always passes)
   if (!verify(new Uint8Array(0), constraint.sig, new Uint8Array(0))) {
     return {
-      kind: 'invalidSignature',
+      kind: "invalidSignature",
       constraintId: constraint.id,
-    };
+    }
   }
 
-  return null;
+  return null
 }
 
 /**
@@ -155,21 +155,21 @@ function applyConstraint(
   mutable: MutableConstraintStore,
   constraint: Constraint,
 ): boolean {
-  const key = cnIdKey(constraint.id);
+  const key = cnIdKey(constraint.id)
 
   // Deduplication — idempotent
   if (mutable.constraints.has(key)) {
-    return false;
+    return false
   }
 
-  mutable.constraints.set(key, constraint);
-  vvExtend(mutable.versionVector, constraint.id.peer, constraint.id.counter);
+  mutable.constraints.set(key, constraint)
+  vvExtend(mutable.versionVector, constraint.id.peer, constraint.id.counter)
 
   if (constraint.lamport > mutable.lamport) {
-    mutable.lamport = constraint.lamport;
+    mutable.lamport = constraint.lamport
   }
 
-  return true;
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -199,17 +199,17 @@ export function insert(
   store: ConstraintStore,
   constraint: Constraint,
 ): Result<void, InsertError> {
-  const error = validateConstraint(constraint);
+  const error = validateConstraint(constraint)
   if (error !== null) {
-    return err(error);
+    return err(error)
   }
 
-  const mutable = asMutable(store);
+  const mutable = asMutable(store)
   if (applyConstraint(mutable, constraint)) {
-    mutable.generation += 1;
+    mutable.generation += 1
   }
 
-  return ok(undefined);
+  return ok(undefined)
 }
 
 /**
@@ -227,32 +227,32 @@ export function insertMany(
   constraints: readonly Constraint[],
 ): Result<void, InsertError> {
   if (constraints.length === 0) {
-    return ok(undefined);
+    return ok(undefined)
   }
 
   // Validate all constraints first (fail fast — no partial mutation)
   for (const constraint of constraints) {
-    const error = validateConstraint(constraint);
+    const error = validateConstraint(constraint)
     if (error !== null) {
-      return err(error);
+      return err(error)
     }
   }
 
   // Apply all valid constraints
-  const mutable = asMutable(store);
-  let anyNew = false;
+  const mutable = asMutable(store)
+  let anyNew = false
 
   for (const constraint of constraints) {
     if (applyConstraint(mutable, constraint)) {
-      anyNew = true;
+      anyNew = true
     }
   }
 
   if (anyNew) {
-    mutable.generation += 1;
+    mutable.generation += 1
   }
 
-  return ok(undefined);
+  return ok(undefined)
 }
 
 // ---------------------------------------------------------------------------
@@ -266,44 +266,44 @@ export function getConstraint(
   store: ConstraintStore,
   id: CnId,
 ): Constraint | undefined {
-  return store.constraints.get(cnIdKey(id));
+  return store.constraints.get(cnIdKey(id))
 }
 
 /**
  * Check if a constraint exists in the store.
  */
 export function hasConstraint(store: ConstraintStore, id: CnId): boolean {
-  return store.constraints.has(cnIdKey(id));
+  return store.constraints.has(cnIdKey(id))
 }
 
 /**
  * Get the total number of constraints in the store.
  */
 export function constraintCount(store: ConstraintStore): number {
-  return store.constraints.size;
+  return store.constraints.size
 }
 
 /**
  * Iterate over all constraints in the store.
  */
 export function allConstraints(store: ConstraintStore): Constraint[] {
-  return Array.from(store.constraints.values());
+  return Array.from(store.constraints.values())
 }
 
 /**
  * Filter constraints by type.
  */
-export function constraintsByType<T extends Constraint['type']>(
+export function constraintsByType<T extends Constraint["type"]>(
   store: ConstraintStore,
   type: T,
 ): Extract<Constraint, { type: T }>[] {
-  const result: Extract<Constraint, { type: T }>[] = [];
+  const result: Extract<Constraint, { type: T }>[] = []
   for (const c of store.constraints.values()) {
     if (c.type === type) {
-      result.push(c as Extract<Constraint, { type: T }>);
+      result.push(c as Extract<Constraint, { type: T }>)
     }
   }
-  return result;
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -331,22 +331,24 @@ export function mergeStores(
 ): ConstraintStore {
   // Optimize: copy larger, then add smaller's unique entries
   const [larger, smaller] =
-    a.constraints.size >= b.constraints.size ? [a, b] : [b, a];
+    a.constraints.size >= b.constraints.size ? [a, b] : [b, a]
 
   // Check if smaller has anything new
-  let hasNew = false;
+  let hasNew = false
   for (const key of smaller.constraints.keys()) {
     if (!larger.constraints.has(key)) {
-      hasNew = true;
-      break;
+      hasNew = true
+      break
     }
   }
 
   if (!hasNew) {
     // No new constraints from smaller. Check if VV/lamport differ.
-    if (vvEquals(larger.versionVector, smaller.versionVector) &&
-        larger.lamport >= smaller.lamport) {
-      return larger;
+    if (
+      vvEquals(larger.versionVector, smaller.versionVector) &&
+      larger.lamport >= smaller.lamport
+    ) {
+      return larger
     }
   }
 
@@ -356,23 +358,23 @@ export function mergeStores(
     versionVector: vvClone(larger.versionVector),
     lamport: larger.lamport,
     generation: larger.generation + 1,
-  };
+  }
 
   for (const [key, constraint] of smaller.constraints) {
     if (!merged.constraints.has(key)) {
-      merged.constraints.set(key, constraint);
+      merged.constraints.set(key, constraint)
     }
   }
 
   // Merge version vectors
-  vvMergeInto(merged.versionVector, smaller.versionVector);
+  vvMergeInto(merged.versionVector, smaller.versionVector)
 
   // Take max Lamport
   if (smaller.lamport > merged.lamport) {
-    merged.lamport = smaller.lamport;
+    merged.lamport = smaller.lamport
   }
 
-  return merged as ConstraintStore;
+  return merged as ConstraintStore
 }
 
 // ---------------------------------------------------------------------------
@@ -384,10 +386,10 @@ export function mergeStores(
  */
 export interface ConstraintDelta {
   /** Constraints to send. */
-  readonly constraints: readonly Constraint[];
+  readonly constraints: readonly Constraint[]
 
   /** Version vector of the sender at time of export. */
-  readonly fromVV: VersionVector;
+  readonly fromVV: VersionVector
 }
 
 /**
@@ -401,8 +403,8 @@ export function exportDelta(
   store: ConstraintStore,
   theirVV: VersionVector,
 ): ConstraintDelta {
-  const diff = vvDiff(store.versionVector, theirVV);
-  const constraints: Constraint[] = [];
+  const diff = vvDiff(store.versionVector, theirVV)
+  const constraints: Constraint[] = []
 
   for (const [peer, range] of diff) {
     for (const constraint of store.constraints.values()) {
@@ -411,7 +413,7 @@ export function exportDelta(
         constraint.id.counter >= range.start &&
         constraint.id.counter < range.end
       ) {
-        constraints.push(constraint);
+        constraints.push(constraint)
       }
     }
   }
@@ -419,7 +421,7 @@ export function exportDelta(
   return {
     constraints,
     fromVV: vvClone(store.versionVector),
-  };
+  }
 }
 
 /**
@@ -433,7 +435,7 @@ export function importDelta(
   store: ConstraintStore,
   delta: ConstraintDelta,
 ): Result<void, InsertError> {
-  return insertMany(store, delta.constraints);
+  return insertMany(store, delta.constraints)
 }
 
 // ---------------------------------------------------------------------------
@@ -444,21 +446,21 @@ export function importDelta(
  * Get the current version vector.
  */
 export function getVersionVector(store: ConstraintStore): VersionVector {
-  return store.versionVector;
+  return store.versionVector
 }
 
 /**
  * Get the current Lamport high-water mark.
  */
 export function getLamport(store: ConstraintStore): Lamport {
-  return store.lamport;
+  return store.lamport
 }
 
 /**
  * Get the generation counter (for cache invalidation).
  */
 export function getGeneration(store: ConstraintStore): number {
-  return store.generation;
+  return store.generation
 }
 
 // ---------------------------------------------------------------------------
@@ -469,9 +471,9 @@ export function getGeneration(store: ConstraintStore): number {
  * Check equality of two version vectors (used internally by mergeStores).
  */
 function vvEquals(a: VersionVector, b: VersionVector): boolean {
-  if (a.size !== b.size) return false;
+  if (a.size !== b.size) return false
   for (const [peer, counterA] of a) {
-    if (vvGet(b, peer) !== counterA) return false;
+    if (vvGet(b, peer) !== counterA) return false
   }
-  return true;
+  return true
 }

@@ -10,7 +10,7 @@
 //
 // See unified-engine.md §1.
 
-import type { Lamport } from './types.js';
+import type { Lamport } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Lamport Clock State
@@ -24,7 +24,7 @@ import type { Lamport } from './types.js';
  */
 export interface LamportClock {
   /** Current Lamport timestamp. */
-  value: Lamport;
+  value: Lamport
 }
 
 // ---------------------------------------------------------------------------
@@ -35,14 +35,14 @@ export interface LamportClock {
  * Create a new Lamport clock starting at 0.
  */
 export function createLamportClock(): LamportClock {
-  return { value: 0 };
+  return { value: 0 }
 }
 
 /**
  * Create a Lamport clock starting at a specific value.
  */
 export function createLamportClockAt(value: Lamport): LamportClock {
-  return { value };
+  return { value }
 }
 
 // ---------------------------------------------------------------------------
@@ -56,8 +56,8 @@ export function createLamportClockAt(value: Lamport): LamportClock {
  * The returned value is the timestamp to assign to the new event.
  */
 export function tick(clock: LamportClock): Lamport {
-  clock.value += 1;
-  return clock.value;
+  clock.value += 1
+  return clock.value
 }
 
 /**
@@ -68,8 +68,8 @@ export function tick(clock: LamportClock): Lamport {
  * value and any received timestamp.
  */
 export function merge(clock: LamportClock, received: Lamport): Lamport {
-  clock.value = Math.max(clock.value, received) + 1;
-  return clock.value;
+  clock.value = Math.max(clock.value, received) + 1
+  return clock.value
 }
 
 /**
@@ -81,13 +81,13 @@ export function merge(clock: LamportClock, received: Lamport): Lamport {
  * a new one (e.g., during store merge/import).
  */
 export function observe(clock: LamportClock, received: Lamport): Lamport {
-  clock.value = Math.max(clock.value, received);
-  return clock.value;
+  clock.value = Math.max(clock.value, received)
+  return clock.value
 }
 
 /**
  * Get the current clock value without modifying it.
  */
 export function current(clock: LamportClock): Lamport {
-  return clock.value;
+  return clock.value
 }

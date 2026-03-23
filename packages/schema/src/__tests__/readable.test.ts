@@ -1,26 +1,28 @@
 import { describe, expect, it } from "vitest"
+import type { Readable, RefContext } from "../index.js"
 import {
-  Schema,
-  LoroSchema,
-  interpret,
   bottomInterpreter,
-  withReadable,
-  withCaching,
-  withNavigation,
-  INVALIDATE,
-  withChangefeed,
-  withWritable,
-  plainContext,
   hasChangefeed,
-  replaceChange,
-  sequenceChange,
+  INVALIDATE,
+  interpret,
+  LoroSchema,
   mapChange,
+  plainContext,
+  replaceChange,
+  Schema,
+  sequenceChange,
+  withCaching,
+  withChangefeed,
+  withNavigation,
+  withReadable,
+  withWritable,
 } from "../index.js"
-import type { RefContext, Readable, ReadableMapRef } from "../index.js"
 
 // Composed interpreter stack — functionally equivalent to the removed
 // monolithic readableInterpreter.
-const readableInterpreter = withCaching(withReadable(withNavigation(bottomInterpreter)))
+const readableInterpreter = withCaching(
+  withReadable(withNavigation(bottomInterpreter)),
+)
 
 // ===========================================================================
 // Shared fixtures
@@ -395,7 +397,7 @@ describe("readable: map ref", () => {
     const { doc } = createReadOnlyDoc()
     const versionRef = doc.metadata.at("version")
     expect(typeof versionRef).toBe("function")
-    expect(versionRef!()).toBe(1)
+    expect(versionRef?.()).toBe(1)
   })
 
   it(".at(key) returns undefined for missing key", () => {
@@ -438,9 +440,9 @@ describe("readable: map ref", () => {
     const { doc } = createReadOnlyDoc({ metadata: { a: 1, b: 2 } })
     const entries = [...doc.metadata.entries()]
     expect(entries.length).toBe(2)
-    expect(entries[0]![0]).toBe("a")
-    expect(typeof entries[0]![1]).toBe("function")
-    expect(entries[0]![1]()).toBe(1)
+    expect(entries[0]?.[0]).toBe("a")
+    expect(typeof entries[0]?.[1]).toBe("function")
+    expect(entries[0]?.[1]()).toBe(1)
   })
 
   it(".values() yields child refs", () => {
@@ -458,8 +460,8 @@ describe("readable: map ref", () => {
       pairs.push(entry)
     }
     expect(pairs.length).toBe(2)
-    expect(pairs[0]![0]).toBe("x")
-    expect(typeof pairs[0]![1]).toBe("function")
+    expect(pairs[0]?.[0]).toBe("x")
+    expect(typeof pairs[0]?.[1]).toBe("function")
   })
 
   it(".at(key) caches child refs (referential identity)", () => {
@@ -595,7 +597,7 @@ describe("readable: composability hooks", () => {
         { author: "Bob", body: "Hey" },
       ],
     })
-    const first = doc.messages.at(0)!
+    const _first = doc.messages.at(0)!
     const second = doc.messages.at(1)!
     // Delete index 0: [{ retain: 0 }, { delete: 1 }]
     // This removes index 0 and shifts index 1 → index 0
@@ -656,22 +658,22 @@ describe("type-level: Readable<S>", () => {
   it("Readable<text()> has call signature returning string", () => {
     type Result = Readable<ReturnType<typeof LoroSchema.text>>
     // If this compiles, the type has a call signature
-    const _check: (r: Result) => string = (r) => r()
+    const _check: (r: Result) => string = r => r()
   })
 
   it("Readable<counter()> has call signature returning number", () => {
     type Result = Readable<ReturnType<typeof LoroSchema.counter>>
-    const _check: (r: Result) => number = (r) => r()
+    const _check: (r: Result) => number = r => r()
   })
 
   it("Readable<string()> has call signature returning string", () => {
     type Result = Readable<ReturnType<typeof Schema.string>>
-    const _check: (r: Result) => string = (r) => r()
+    const _check: (r: Result) => string = r => r()
   })
 
   it("Readable<number()> has call signature returning number", () => {
     type Result = Readable<ReturnType<typeof Schema.number>>
-    const _check: (r: Result) => number = (r) => r()
+    const _check: (r: Result) => number = r => r()
   })
 
   it("Readable<struct({...})> has typed child navigation", () => {
@@ -681,8 +683,12 @@ describe("type-level: Readable<S>", () => {
     })
     type Result = Readable<typeof s>
     // Children should be Readable
-    const _checkName: (r: Result) => Readable<ReturnType<typeof Schema.string>> = (r) => r.name
-    const _checkActive: (r: Result) => Readable<ReturnType<typeof Schema.boolean>> = (r) => r.active
+    const _checkName: (
+      r: Result,
+    ) => Readable<ReturnType<typeof Schema.string>> = r => r.name
+    const _checkActive: (
+      r: Result,
+    ) => Readable<ReturnType<typeof Schema.boolean>> = r => r.active
   })
 
   it("Readable<doc({...})> has call signature and child navigation", () => {
@@ -691,22 +697,26 @@ describe("type-level: Readable<S>", () => {
     })
     type Result = Readable<typeof s>
     // Callable
-    const _checkCall: (r: Result) => { title: string } = (r) => r()
+    const _checkCall: (r: Result) => { title: string } = r => r()
     // Navigation
-    const _checkChild: (r: Result) => Readable<ReturnType<typeof Schema.string>> = (r) => r.title
+    const _checkChild: (
+      r: Result,
+    ) => Readable<ReturnType<typeof Schema.string>> = r => r.title
   })
 
   it("Readable<record(string())>: .at() returns ref, .get() returns plain value", () => {
     const s = Schema.record(Schema.string())
     type Result = Readable<typeof s>
     // .at() returns Readable ref
-    const _checkAt: (r: Result) => Readable<ReturnType<typeof Schema.string>> | undefined = (r) => r.at("x")
+    const _checkAt: (
+      r: Result,
+    ) => Readable<ReturnType<typeof Schema.string>> | undefined = r => r.at("x")
     // .get() returns plain string
-    const _checkGet: (r: Result) => string | undefined = (r) => r.get("x")
-    const _checkHas: (r: Result) => boolean = (r) => r.has("x")
-    const _checkKeys: (r: Result) => string[] = (r) => r.keys()
-    const _checkSize: (r: Result) => number = (r) => r.size
-    const _checkCall: (r: Result) => Record<string, string> = (r) => r()
+    const _checkGet: (r: Result) => string | undefined = r => r.get("x")
+    const _checkHas: (r: Result) => boolean = r => r.has("x")
+    const _checkKeys: (r: Result) => string[] = r => r.keys()
+    const _checkSize: (r: Result) => number = r => r.size
+    const _checkCall: (r: Result) => Record<string, string> = r => r()
   })
 
   it("Readable<record(struct({...}))>: .get() returns plain struct", () => {
@@ -717,9 +727,12 @@ describe("type-level: Readable<S>", () => {
     const s = Schema.record(itemSchema)
     type Result = Readable<typeof s>
     // .get() returns the plain struct type
-    const _checkGet: (r: Result) => { color: string; priority: number } | undefined = (r) => r.get("x")
+    const _checkGet: (
+      r: Result,
+    ) => { color: string; priority: number } | undefined = r => r.get("x")
     // .at() returns the readable ref (callable, with navigation)
-    const _checkAt: (r: Result) => Readable<typeof itemSchema> | undefined = (r) => r.at("x")
+    const _checkAt: (r: Result) => Readable<typeof itemSchema> | undefined =
+      r => r.at("x")
   })
 
   it("Readable<list(struct({...}))>: .get() returns plain struct", () => {
@@ -730,8 +743,11 @@ describe("type-level: Readable<S>", () => {
     const s = Schema.list(itemSchema)
     type Result = Readable<typeof s>
     // .get() returns the plain struct type
-    const _checkGet: (r: Result) => { title: string; done: boolean } | undefined = (r) => r.get(0)
+    const _checkGet: (
+      r: Result,
+    ) => { title: string; done: boolean } | undefined = r => r.get(0)
     // .at() returns the readable ref (callable, with navigation)
-    const _checkAt: (r: Result) => Readable<typeof itemSchema> | undefined = (r) => r.at(0)
+    const _checkAt: (r: Result) => Readable<typeof itemSchema> | undefined =
+      r => r.at(0)
   })
 })

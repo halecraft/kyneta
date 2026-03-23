@@ -12,17 +12,16 @@
  * because Vite's library-mode entry resolution requires real file paths.
  */
 
-import { describe, expect, it, afterAll } from "vitest"
-import { build, type Plugin, type Rollup } from "vite"
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
-import { join } from "node:path"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { build, type Plugin, type Rollup } from "vite"
+import { afterAll, describe, expect, it } from "vitest"
 import vitePlugin from "../adapters/vite.js"
 import {
   BUILDER_SOURCE_EXPORTED,
   MULTI_BUILDER_SOURCE_EXPORTED,
   NO_BUILDER_SOURCE_EXPORTED,
-  BUILDER_SOURCE,
 } from "./fixtures.js"
 
 type RollupOutput = Rollup.RollupOutput
@@ -98,10 +97,7 @@ async function buildWithVite(
       minify: false,
       // Externalize runtime imports that the compiler injects
       rollupOptions: {
-        external: [
-          /^@kyneta\//,
-          /^node:/,
-        ],
+        external: [/^@kyneta\//, /^node:/],
       },
     },
   })
@@ -163,7 +159,9 @@ describe("unplugin — Vite integration", () => {
   it("respects the target option", async () => {
     // When target is "html", the compiler should produce SSR output
     // (HTML string concatenation) instead of DOM createElement calls
-    const code = await buildWithVite(BUILDER_SOURCE_EXPORTED, { target: "html" })
+    const code = await buildWithVite(BUILDER_SOURCE_EXPORTED, {
+      target: "html",
+    })
 
     // SSR output uses string concatenation for HTML
     expect(code).toContain("<div>")

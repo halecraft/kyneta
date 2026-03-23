@@ -13,7 +13,6 @@
 import { Project } from "ts-morph"
 import { beforeEach, describe, expect, it } from "vitest"
 import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
-import type { LoopNode } from "./ir.js"
 
 // =============================================================================
 // Test Helpers
@@ -207,12 +206,12 @@ describe("Filter pattern integration", () => {
 
       if (loop.filter) {
         // Item deps: recipe.name, recipe.vegetarian
-        const itemSources = loop.filter.itemDeps.map((d) => d.source).sort()
+        const itemSources = loop.filter.itemDeps.map(d => d.source).sort()
         expect(itemSources).toContain("recipe.name")
         expect(itemSources).toContain("recipe.vegetarian")
 
         // External deps: filterText, veggieOnly
-        const extSources = loop.filter.externalDeps.map((d) => d.source).sort()
+        const extSources = loop.filter.externalDeps.map(d => d.source).sort()
         expect(extSources).toContain("filterText")
         expect(extSources).toContain("veggieOnly")
 
@@ -287,7 +286,7 @@ describe("Filter pattern integration", () => {
 
       // But the loop body still contains the conditional —
       // the body is not transformed, just annotated
-      expect(loop.body.some((c) => c.kind === "conditional")).toBe(true)
+      expect(loop.body.some(c => c.kind === "conditional")).toBe(true)
 
       // iterableSource, hasReactiveItems, bodySlotKind etc. are unchanged
       expect(loop.iterableSource).toBe("doc.recipes")
@@ -326,7 +325,7 @@ describe("Filter pattern integration", () => {
       expect(loop.filter).toBeUndefined()
 
       // The conditional is still in the body (existing behavior)
-      const conditional = loop.body.find((c) => c.kind === "conditional")
+      const conditional = loop.body.find(c => c.kind === "conditional")
       expect(conditional).toBeDefined()
 
       if (conditional?.kind === "conditional") {

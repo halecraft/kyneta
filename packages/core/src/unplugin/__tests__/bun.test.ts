@@ -10,12 +10,12 @@
  * the Bun runtime, not in Node.js / vitest.
  */
 
-import { describe, expect, it } from "vitest"
 import { execSync } from "node:child_process"
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs"
-import { join, resolve, dirname } from "node:path"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { describe, expect, it } from "vitest"
 import { BUILDER_SOURCE, NO_BUILDER_SOURCE_EXPORTED } from "./fixtures.js"
 
 // ---------------------------------------------------------------------------

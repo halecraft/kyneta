@@ -1,27 +1,20 @@
 import { describe, expect, it } from "vitest"
 import {
-  Schema,
-  LoroSchema,
-  interpret,
   bottomInterpreter,
-  withWritable,
-  withReadable,
+  hasChangefeed,
+  interpret,
+  LoroSchema,
+  plainContext,
+  Schema,
   withCaching,
   withChangefeed,
-  plainContext,
-  hasChangefeed,
+  withReadable,
+  withWritable,
 } from "../index.js"
-import { withNavigation } from "../interpreters/with-navigation.js"
-import {
-  CALL,
-} from "../interpreters/bottom.js"
-import type {
-  HasCall,
-  HasNavigation,
-  HasRead,
-} from "../interpreters/bottom.js"
 import type { Interpreter } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
+import type { HasCall, HasNavigation, HasRead } from "../interpreters/bottom.js"
+import { withNavigation } from "../interpreters/with-navigation.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -35,7 +28,7 @@ const structuralDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-const loroDocSchema = LoroSchema.doc({
+const _loroDocSchema = LoroSchema.doc({
   title: LoroSchema.text(),
   count: LoroSchema.counter(),
   messages: Schema.list(
@@ -48,9 +41,7 @@ const loroDocSchema = LoroSchema.doc({
 
 const navInterp = withNavigation(bottomInterpreter)
 
-function createNavDoc(
-  storeOverrides: Record<string, unknown> = {},
-) {
+function createNavDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = {
     settings: { darkMode: false, fontSize: 14 },
     metadata: { version: 1 },
@@ -217,10 +208,10 @@ describe("withNavigation: map navigation", () => {
     const { result } = createMapDoc({ x: 1, y: 2 })
     const entries = [...result.entries()]
     expect(entries).toHaveLength(2)
-    expect(entries[0]![0]).toBe("x")
-    expect(typeof entries[0]![1]).toBe("function")
-    expect(entries[1]![0]).toBe("y")
-    expect(typeof entries[1]![1]).toBe("function")
+    expect(entries[0]?.[0]).toBe("x")
+    expect(typeof entries[0]?.[1]).toBe("function")
+    expect(entries[1]?.[0]).toBe("y")
+    expect(typeof entries[1]?.[1]).toBe("function")
   })
 
   it(".values() yields carriers", () => {
@@ -234,8 +225,8 @@ describe("withNavigation: map navigation", () => {
     const { result } = createMapDoc({ x: 1 })
     const entries = [...result]
     expect(entries).toHaveLength(1)
-    expect(entries[0]![0]).toBe("x")
-    expect(typeof entries[0]![1]).toBe("function")
+    expect(entries[0]?.[0]).toBe("x")
+    expect(typeof entries[0]?.[1]).toBe("function")
   })
 })
 
@@ -395,9 +386,7 @@ describe("withNavigation: navigate + write stack", () => {
 
   it("sequence .at(i) returns a navigable+writable ref", () => {
     const schema = Schema.doc({
-      items: Schema.list(
-        Schema.struct({ name: Schema.string() }),
-      ),
+      items: Schema.list(Schema.struct({ name: Schema.string() })),
     })
     const store = { items: [{ name: "a" }, { name: "b" }] }
     const ctx = plainContext(store)

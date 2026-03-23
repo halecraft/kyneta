@@ -23,18 +23,18 @@
 // See .plans/navigation-layer.md §Phase 2, Task 2.2.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
+import type { RefContext } from "../interpreter-types.js"
 import type {
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
   AnnotatedSchema,
+  MapSchema,
+  ProductSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SumSchema,
 } from "../schema.js"
 import { readByPath, storeArrayLength, storeKeys } from "../store.js"
-import { CALL } from "./bottom.js"
 import type { HasNavigation, HasRead } from "./bottom.js"
-import type { RefContext } from "../interpreter-types.js"
+import { CALL } from "./bottom.js"
 
 // ---------------------------------------------------------------------------
 // withReadable — the reading transformer
@@ -69,11 +69,7 @@ export function withReadable<A extends HasNavigation>(
 ): Interpreter<RefContext, A & HasRead> {
   return {
     // --- Scalar ---------------------------------------------------------------
-    scalar(
-      ctx: RefContext,
-      path: Path,
-      schema: ScalarSchema,
-    ): A & HasRead {
+    scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A & HasRead {
       const result = base.scalar(ctx, path, schema) as any
 
       // Fill CALL slot
@@ -93,7 +89,7 @@ export function withReadable<A extends HasNavigation>(
       ctx: RefContext,
       path: Path,
       schema: ProductSchema,
-      fields: Readonly<Record<string, () => (A & HasRead)>>,
+      fields: Readonly<Record<string, () => A & HasRead>>,
     ): A & HasRead {
       // Downcast thunks for the base interpreter
       const baseFields = fields as Readonly<Record<string, () => A>>
@@ -119,7 +115,7 @@ export function withReadable<A extends HasNavigation>(
       ctx: RefContext,
       path: Path,
       schema: SequenceSchema,
-      item: (index: number) => (A & HasRead),
+      item: (index: number) => A & HasRead,
     ): A & HasRead {
       // Downcast for base
       const baseItem = item as (index: number) => A
@@ -135,7 +131,9 @@ export function withReadable<A extends HasNavigation>(
         const snapshot: unknown[] = []
         for (let i = 0; i < len; i++) {
           const child: unknown = item(i)
-          snapshot.push(typeof child === "function" ? (child as () => unknown)() : child)
+          snapshot.push(
+            typeof child === "function" ? (child as () => unknown)() : child,
+          )
         }
         return snapshot
       }
@@ -158,7 +156,7 @@ export function withReadable<A extends HasNavigation>(
       ctx: RefContext,
       path: Path,
       schema: MapSchema,
-      item: (key: string) => (A & HasRead),
+      item: (key: string) => A & HasRead,
     ): A & HasRead {
       // Downcast for base
       const baseItem = item as (key: string) => A
@@ -173,7 +171,8 @@ export function withReadable<A extends HasNavigation>(
         const snapshot: Record<string, unknown> = {}
         for (const key of keys) {
           const child: unknown = item(key)
-          snapshot[key] = typeof child === "function" ? (child as () => unknown)() : child
+          snapshot[key] =
+            typeof child === "function" ? (child as () => unknown)() : child
         }
         return snapshot
       }
@@ -208,7 +207,7 @@ export function withReadable<A extends HasNavigation>(
       ctx: RefContext,
       path: Path,
       schema: AnnotatedSchema,
-      inner: (() => (A & HasRead)) | undefined,
+      inner: (() => A & HasRead) | undefined,
     ): A & HasRead {
       switch (schema.tag) {
         case "text": {
@@ -249,9 +248,7 @@ export function withReadable<A extends HasNavigation>(
             return inner()
           }
           // No inner — produce a bare carrier
-          return base.annotated(
-            ctx, path, schema, undefined,
-          ) as A & HasRead
+          return base.annotated(ctx, path, schema, undefined) as A & HasRead
 
         default:
           // Unknown annotation — delegate to inner if present

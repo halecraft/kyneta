@@ -18,46 +18,39 @@
 // See DBSP (Budiu & McSherry, 2023) §3.2 (Z-set joins), §4–5.
 // See theory/incremental.md §9.
 
-import type {
-  Rule,
-  BodyElement,
-  Term,
-  Fact,
-  Result,
-  StratificationError,
-} from './types.js';
+import type { ZSet } from "../base/zset.js"
 import {
-  ok,
-  err,
-  Database,
-  Relation,
-  factKey,
-} from './types.js';
-import type { ReadonlyDatabase } from './types.js';
+  zsetAdd,
+  zsetEmpty,
+  zsetForEach,
+  zsetIsEmpty,
+  zsetSingleton,
+} from "../base/zset.js"
+import type { FugueBeforePair, ResolvedWinner } from "../kernel/resolve.js"
+import { fuguePairKey } from "../kernel/resolve.js"
+import type { WeightedFact } from "./evaluate.js"
 import {
   evaluateRule,
   evaluateRuleDelta,
-  getPositiveAtomIndices,
   getNegationAtomIndices,
-} from './evaluate.js';
-import type { WeightedFact } from './evaluate.js';
+  getPositiveAtomIndices,
+} from "./evaluate.js"
 import {
-  stratify,
-  type Stratum,
   bodyPredicates,
   headPredicates,
-} from './stratify.js';
-import type { ZSet } from '../base/zset.js';
-import {
-  zsetEmpty,
-  zsetSingleton,
-  zsetAdd,
-  zsetIsEmpty,
-  zsetForEach,
-  zsetMap,
-} from '../base/zset.js';
-import type { ResolvedWinner, FugueBeforePair } from '../kernel/resolve.js';
-import { fuguePairKey } from '../kernel/resolve.js';
+  type Stratum,
+  stratify,
+} from "./stratify.js"
+import type {
+  BodyElement,
+  Fact,
+  ReadonlyDatabase,
+  Result,
+  Rule,
+  StratificationError,
+  Term,
+} from "./types.js"
+import { Database, err, factKey, ok, type Relation } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Dirty Map — tracks facts modified during stratum evaluation
@@ -72,12 +65,12 @@ import { fuguePairKey } from '../kernel/resolve.js';
  * reveals which facts crossed zero (the output delta).
  */
 interface DirtyEntry {
-  readonly fact: Fact;
-  readonly preWeight: number;
+  readonly fact: Fact
+  readonly preWeight: number
 }
 
 /** The dirty map type: factKey → DirtyEntry. */
-type DirtyMap = Map<string, DirtyEntry>;
+type DirtyMap = Map<string, DirtyEntry>
 
 // ---------------------------------------------------------------------------
 // Dirty-map helpers
@@ -95,13 +88,13 @@ function touchFact(
   f: Fact,
   weightDelta: number,
 ): number {
-  const key = factKey(f);
+  const key = factKey(f)
   if (!dirty.has(key)) {
     // First touch — record pre-weight before mutation.
-    const preWeight = db.getRelation(f.predicate).getWeight(f.values);
-    dirty.set(key, { fact: f, preWeight });
+    const preWeight = db.getRelation(f.predicate).getWeight(f.values)
+    dirty.set(key, { fact: f, preWeight })
   }
-  return db.addWeightedFact(f, weightDelta);
+  return db.addWeightedFact(f, weightDelta)
 }
 
 /**
@@ -124,19 +117,19 @@ function touchFact(
  * See DBSP (Budiu & McSherry, 2023) §5 (nested streams, distinct operator).
  */
 function applyDistinct(db: Database, dirty: DirtyMap): boolean {
-  let clamped = false;
+  let clamped = false
   for (const { fact } of dirty.values()) {
-    const rel = db.getRelation(fact.predicate);
-    const w = rel.getWeight(fact.values);
+    const rel = db.getRelation(fact.predicate)
+    const w = rel.getWeight(fact.values)
     if (w < 0) {
       // Floor to 0: add (-w) to reach 0, which prunes the entry.
-      rel.addWeighted(fact.values, -w);
-      clamped = true;
+      rel.addWeighted(fact.values, -w)
+      clamped = true
     }
     // weight >= 0: no action. True multiplicity (weight > 1) is preserved.
     // clampedWeight is already correct from eager update in addWeighted.
   }
-  return clamped;
+  return clamped
 }
 
 /**
@@ -150,21 +143,21 @@ function applyDistinct(db: Database, dirty: DirtyMap): boolean {
  * The delta Database contains facts with weight +1 or −1 only.
  */
 function extractDelta(db: Database, dirty: DirtyMap): Database {
-  const delta = new Database();
+  const delta = new Database()
   for (const { fact, preWeight } of dirty.values()) {
-    const currentWeight = db.getRelation(fact.predicate).getWeight(fact.values);
-    const wasPresentBefore = preWeight > 0;
-    const isPresentNow = currentWeight > 0;
+    const currentWeight = db.getRelation(fact.predicate).getWeight(fact.values)
+    const wasPresentBefore = preWeight > 0
+    const isPresentNow = currentWeight > 0
 
     if (!wasPresentBefore && isPresentNow) {
       // Newly derived: emit +1.
-      delta.addWeightedFact(fact, 1);
+      delta.addWeightedFact(fact, 1)
     } else if (wasPresentBefore && !isPresentNow) {
       // Retracted: emit −1.
-      delta.addWeightedFact(fact, -1);
+      delta.addWeightedFact(fact, -1)
     }
   }
-  return delta;
+  return delta
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +165,7 @@ function extractDelta(db: Database, dirty: DirtyMap): Database {
 // ---------------------------------------------------------------------------
 
 /** Safety bound to prevent infinite loops. */
-const MAX_ITERATIONS = 100_000;
+const MAX_ITERATIONS = 100_000
 
 /**
  * Check if a stratum has aggregation body elements.
@@ -185,9 +178,7 @@ const MAX_ITERATIONS = 100_000;
  * See Plan 006.2, Phase 2, Task 2.6.
  */
 function stratumHasAggregation(rules: readonly Rule[]): boolean {
-  return rules.some((r) =>
-    r.body.some((b) => b.kind === 'aggregation'),
-  );
+  return rules.some(r => r.body.some(b => b.kind === "aggregation"))
 }
 
 /**
@@ -211,7 +202,7 @@ function stratumHasAggregation(rules: readonly Rule[]): boolean {
  * See Plan 007, Phase 1.5, Task 1.5.2.
  */
 export class DatabaseView implements ReadonlyDatabase {
-  private readonly _cache: Map<string, Relation> = new Map();
+  private readonly _cache: Map<string, Relation> = new Map()
 
   constructor(
     private readonly _base: Database,
@@ -220,27 +211,27 @@ export class DatabaseView implements ReadonlyDatabase {
 
   getRelation(predicate: string): Relation {
     // Fast path: check cache first (for repeated access to the same predicate).
-    const cached = this._cache.get(predicate);
-    if (cached !== undefined) return cached;
+    const cached = this._cache.get(predicate)
+    if (cached !== undefined) return cached
 
-    const baseRel = this._base.getRelation(predicate);
-    const deltaRel = this._delta.getRelation(predicate);
+    const baseRel = this._base.getRelation(predicate)
+    const deltaRel = this._delta.getRelation(predicate)
 
     // No delta entries for this predicate — share the base relation directly.
-    if (deltaRel.allEntryCount === 0) return baseRel;
+    if (deltaRel.allEntryCount === 0) return baseRel
 
     // Materialize P_old for this predicate: base − delta.
-    const result = baseRel.subtract(deltaRel);
-    this._cache.set(predicate, result);
-    return result;
+    const result = baseRel.subtract(deltaRel)
+    this._cache.set(predicate, result)
+    return result
   }
 
   predicates(): Iterable<string> {
-    return this._base.predicates();
+    return this._base.predicates()
   }
 
   hasFact(f: Fact): boolean {
-    return this.getRelation(f.predicate).has(f.values);
+    return this.getRelation(f.predicate).has(f.values)
   }
 }
 
@@ -284,10 +275,10 @@ export function evaluateStratumFromDelta(
 ): Database {
   // Aggregation strata: wipe-and-recompute (scoped limitation).
   if (stratumHasAggregation(rules)) {
-    return recomputeAggregationStratum(rules, db);
+    return recomputeAggregationStratum(rules, db)
   }
 
-  const dirty: DirtyMap = new Map();
+  const dirty: DirtyMap = new Map()
 
   // --- Seed phase (asymmetric join) ---
   //
@@ -300,38 +291,43 @@ export function evaluateStratumFromDelta(
   // exactly once: positions after deltaIdx use P_old (the view),
   // positions before deltaIdx use P_new (= db).
 
-  const dbOld: ReadonlyDatabase = new DatabaseView(db, inputDelta);
+  const dbOld: ReadonlyDatabase = new DatabaseView(db, inputDelta)
 
   // Collect all seed-derived facts without applying them yet.
-  const seedDerived: WeightedFact[] = [];
+  const seedDerived: WeightedFact[] = []
 
   for (const rule of rules) {
-    const positiveAtomIndices = getPositiveAtomIndices(rule.body);
-    const negationAtomIndices = getNegationAtomIndices(rule.body);
+    const positiveAtomIndices = getPositiveAtomIndices(rule.body)
+    const negationAtomIndices = getNegationAtomIndices(rule.body)
 
     if (positiveAtomIndices.length === 0 && negationAtomIndices.length === 0) {
       // Rule with no positive or negation atoms (empty body or only guards).
       // Evaluate against db (P_new) — these fire unconditionally.
-      const derived = evaluateRule(rule, db, db);
+      const derived = evaluateRule(rule, db, db)
       for (const wf of derived) {
-        seedDerived.push(wf);
+        seedDerived.push(wf)
       }
     } else if (inputDelta.hasAnyEntries()) {
       // Positive atom delta sources.
       for (const deltaIdx of positiveAtomIndices) {
-        const derived = evaluateRuleDelta(rule, dbOld, db, inputDelta, deltaIdx);
+        const derived = evaluateRuleDelta(rule, dbOld, db, inputDelta, deltaIdx)
         for (const wf of derived) {
-          seedDerived.push(wf);
+          seedDerived.push(wf)
         }
       }
 
       // Negation atom delta sources (differential negation).
       for (const negIdx of negationAtomIndices) {
-        const negAtom = (rule.body[negIdx]! as { kind: 'negation'; atom: { predicate: string } }).atom;
+        const negAtom = (
+          rule.body[negIdx]! as {
+            kind: "negation"
+            atom: { predicate: string }
+          }
+        ).atom
         if (inputDelta.getRelation(negAtom.predicate).allEntryCount > 0) {
-          const derived = evaluateRuleDelta(rule, dbOld, db, inputDelta, negIdx);
+          const derived = evaluateRuleDelta(rule, dbOld, db, inputDelta, negIdx)
           for (const wf of derived) {
-            seedDerived.push(wf);
+            seedDerived.push(wf)
           }
         }
       }
@@ -340,7 +336,7 @@ export function evaluateStratumFromDelta(
 
   if (!inputDelta.hasAnyEntries() && seedDerived.length === 0) {
     // No input delta and no unconditional derivations — nothing to do.
-    return extractDelta(db, dirty);
+    return extractDelta(db, dirty)
   }
 
   // Apply seed-derived facts to db and detect zero-crossings.
@@ -348,53 +344,70 @@ export function evaluateStratumFromDelta(
   // are input facts owned by lower strata or ground facts, not derived
   // facts owned by this stratum. The dirty map only tracks facts that
   // this stratum derives (touched by applyDerivedFact / touchFact).
-  let currentDelta = new Database();
+  let currentDelta = new Database()
   for (const wf of seedDerived) {
-    applyDerivedFact(wf, db, dirty, currentDelta);
+    applyDerivedFact(wf, db, dirty, currentDelta)
   }
 
-  applyDistinct(db, dirty);
+  applyDistinct(db, dirty)
 
   // --- Iteration phase (asymmetric join with derived deltas) ---
-  let iterations = 0;
+  let iterations = 0
   while (currentDelta.hasAnyEntries() && iterations < MAX_ITERATIONS) {
-    iterations++;
+    iterations++
 
     // Construct a lazy view for P_old: db - currentDelta.
     // This is needed for the asymmetric join on self-join predicates.
     // The view materializes only predicates accessed by rule bodies.
-    const dbOldIter: ReadonlyDatabase = new DatabaseView(db, currentDelta);
+    const dbOldIter: ReadonlyDatabase = new DatabaseView(db, currentDelta)
 
-    const nextDelta = new Database();
+    const nextDelta = new Database()
 
     for (const rule of rules) {
       // Positive atom delta sources (asymmetric semi-naive).
-      const positiveAtomIndices = getPositiveAtomIndices(rule.body);
+      const positiveAtomIndices = getPositiveAtomIndices(rule.body)
       for (const deltaIdx of positiveAtomIndices) {
-        const derived = evaluateRuleDelta(rule, dbOldIter, db, currentDelta, deltaIdx);
+        const derived = evaluateRuleDelta(
+          rule,
+          dbOldIter,
+          db,
+          currentDelta,
+          deltaIdx,
+        )
         for (const wf of derived) {
-          applyDerivedFact(wf, db, dirty, nextDelta);
+          applyDerivedFact(wf, db, dirty, nextDelta)
         }
       }
 
       // Negation atom delta sources (differential negation).
-      const negationAtomIndices = getNegationAtomIndices(rule.body);
+      const negationAtomIndices = getNegationAtomIndices(rule.body)
       for (const negIdx of negationAtomIndices) {
-        const negAtom = (rule.body[negIdx]! as { kind: 'negation'; atom: { predicate: string } }).atom;
+        const negAtom = (
+          rule.body[negIdx]! as {
+            kind: "negation"
+            atom: { predicate: string }
+          }
+        ).atom
         if (currentDelta.getRelation(negAtom.predicate).allEntryCount > 0) {
-          const derived = evaluateRuleDelta(rule, dbOldIter, db, currentDelta, negIdx);
+          const derived = evaluateRuleDelta(
+            rule,
+            dbOldIter,
+            db,
+            currentDelta,
+            negIdx,
+          )
           for (const wf of derived) {
-            applyDerivedFact(wf, db, dirty, nextDelta);
+            applyDerivedFact(wf, db, dirty, nextDelta)
           }
         }
       }
     }
 
-    applyDistinct(db, dirty);
-    currentDelta = nextDelta;
+    applyDistinct(db, dirty)
+    currentDelta = nextDelta
   }
 
-  return extractDelta(db, dirty);
+  return extractDelta(db, dirty)
 }
 
 /**
@@ -411,46 +424,49 @@ function recomputeAggregationStratum(
   rules: readonly Rule[],
   db: Database,
 ): Database {
-  const dirty: DirtyMap = new Map();
+  const dirty: DirtyMap = new Map()
 
   // Determine which predicates this stratum derives.
-  const derivedPreds = headPredicates(rules);
+  const derivedPreds = headPredicates(rules)
 
   // Record pre-wipe weights in the dirty map and delete all derived facts.
   for (const pred of derivedPreds) {
-    const tuples = db.getRelation(pred).tuples(); // snapshot weight > 0
+    const tuples = db.getRelation(pred).tuples() // snapshot weight > 0
     for (const tuple of tuples) {
-      const f: Fact = { predicate: pred, values: tuple };
-      const key = factKey(f);
+      const f: Fact = { predicate: pred, values: tuple }
+      const key = factKey(f)
       if (!dirty.has(key)) {
-        dirty.set(key, { fact: f, preWeight: db.getRelation(pred).getWeight(tuple) });
+        dirty.set(key, {
+          fact: f,
+          preWeight: db.getRelation(pred).getWeight(tuple),
+        })
       }
-      db.removeFact(f);
+      db.removeFact(f)
     }
   }
 
   // Naive iteration: re-derive all facts.
-  let changed = true;
-  let iterations = 0;
+  let changed = true
+  let iterations = 0
   while (changed && iterations < MAX_ITERATIONS) {
-    changed = false;
-    iterations++;
+    changed = false
+    iterations++
     for (const rule of rules) {
-      const derived = evaluateRule(rule, db, db);
+      const derived = evaluateRule(rule, db, db)
       for (const wf of derived) {
         if (wf.weight > 0 && !db.hasFact(wf.fact)) {
-          const key = factKey(wf.fact);
+          const key = factKey(wf.fact)
           if (!dirty.has(key)) {
-            dirty.set(key, { fact: wf.fact, preWeight: 0 });
+            dirty.set(key, { fact: wf.fact, preWeight: 0 })
           }
-          db.addFact(wf.fact);
-          changed = true;
+          db.addFact(wf.fact)
+          changed = true
         }
       }
     }
   }
 
-  return extractDelta(db, dirty);
+  return extractDelta(db, dirty)
 }
 
 /**
@@ -475,20 +491,20 @@ function applyDerivedFact(
   dirty: DirtyMap,
   delta: Database,
 ): void {
-  if (wf.weight === 0) return;
+  if (wf.weight === 0) return
 
-  const prevWeight = db.getRelation(wf.fact.predicate).getWeight(wf.fact.values);
-  const newWeight = touchFact(db, dirty, wf.fact, wf.weight);
+  const prevWeight = db.getRelation(wf.fact.predicate).getWeight(wf.fact.values)
+  const newWeight = touchFact(db, dirty, wf.fact, wf.weight)
 
-  const wasPresentBefore = prevWeight > 0;
-  const isPresentNow = newWeight > 0;
+  const wasPresentBefore = prevWeight > 0
+  const isPresentNow = newWeight > 0
 
   if (!wasPresentBefore && isPresentNow) {
     // Newly derived — seed the next semi-naive iteration with +1.
-    delta.addFact(wf.fact);
+    delta.addFact(wf.fact)
   } else if (wasPresentBefore && !isPresentNow) {
     // Retracted — seed the next semi-naive iteration with −1.
-    delta.addWeightedFact(wf.fact, -1);
+    delta.addWeightedFact(wf.fact, -1)
   }
 }
 
@@ -504,23 +520,23 @@ function applyDerivedFact(
 function buildPredicateToAffectedStrata(
   strata: readonly Stratum[],
 ): Map<string, Set<number>> {
-  const result = new Map<string, Set<number>>();
+  const result = new Map<string, Set<number>>()
 
   for (const stratum of strata) {
     for (const rule of stratum.rules) {
-      const preds = bodyPredicates(rule.body);
+      const preds = bodyPredicates(rule.body)
       for (const pred of preds) {
-        let set = result.get(pred);
+        let set = result.get(pred)
         if (set === undefined) {
-          set = new Set();
-          result.set(pred, set);
+          set = new Set()
+          result.set(pred, set)
         }
-        set.add(stratum.index);
+        set.add(stratum.index)
       }
     }
   }
 
-  return result;
+  return result
 }
 
 /**
@@ -534,33 +550,33 @@ function computeAffectedStrata(
   strata: readonly Stratum[],
   predToStrata: ReadonlyMap<string, ReadonlySet<number>>,
 ): number[] {
-  const affected = new Set<number>();
-  const visited = new Set<string>(changedPredicates);
+  const affected = new Set<number>()
+  const visited = new Set<string>(changedPredicates)
 
   // Collect all head predicates per stratum for propagation.
-  const stratumHeads = new Map<number, Set<string>>();
+  const stratumHeads = new Map<number, Set<string>>()
   for (const stratum of strata) {
-    const heads = headPredicates(stratum.rules);
-    stratumHeads.set(stratum.index, heads);
+    const heads = headPredicates(stratum.rules)
+    stratumHeads.set(stratum.index, heads)
   }
 
   // BFS: when a stratum is affected, its head predicates may affect
   // higher strata.
-  const predQueue = [...changedPredicates];
+  const predQueue = [...changedPredicates]
   while (predQueue.length > 0) {
-    const pred = predQueue.pop()!;
-    const affectedByPred = predToStrata.get(pred);
-    if (affectedByPred === undefined) continue;
+    const pred = predQueue.pop()!
+    const affectedByPred = predToStrata.get(pred)
+    if (affectedByPred === undefined) continue
 
     for (const stratumIdx of affectedByPred) {
       if (!affected.has(stratumIdx)) {
-        affected.add(stratumIdx);
-        const heads = stratumHeads.get(stratumIdx);
+        affected.add(stratumIdx)
+        const heads = stratumHeads.get(stratumIdx)
         if (heads !== undefined) {
           for (const head of heads) {
             if (!visited.has(head)) {
-              visited.add(head);
-              predQueue.push(head);
+              visited.add(head)
+              predQueue.push(head)
             }
           }
         }
@@ -569,7 +585,7 @@ function computeAffectedStrata(
   }
 
   // Return in ascending order (bottom-up evaluation).
-  return [...affected].sort((a, b) => a - b);
+  return [...affected].sort((a, b) => a - b)
 }
 
 // ---------------------------------------------------------------------------
@@ -580,7 +596,7 @@ function computeAffectedStrata(
  * Get the set of head predicates for a stratum (the "derived" predicates).
  */
 function stratumDerivedPredicates(stratum: Stratum): Set<string> {
-  return headPredicates(stratum.rules);
+  return headPredicates(stratum.rules)
 }
 
 // ---------------------------------------------------------------------------
@@ -592,29 +608,32 @@ function stratumDerivedPredicates(stratum: Stratum): Set<string> {
  * Structural identity — same head/body shape → same key.
  */
 function ruleIdentity(r: Rule): string {
-  const headPart = `${r.head.predicate}(${r.head.terms.map(termId).join(',')})`;
-  const bodyParts = r.body.map(bodyElementId).join(';');
-  return `${headPart}:-${bodyParts}`;
+  const headPart = `${r.head.predicate}(${r.head.terms.map(termId).join(",")})`
+  const bodyParts = r.body.map(bodyElementId).join(";")
+  return `${headPart}:-${bodyParts}`
 }
 
 function termId(t: Term): string {
   switch (t.kind) {
-    case 'const': return `c:${String(t.value)}`;
-    case 'var': return `v:${t.name}`;
-    case 'wildcard': return '_';
+    case "const":
+      return `c:${String(t.value)}`
+    case "var":
+      return `v:${t.name}`
+    case "wildcard":
+      return "_"
   }
 }
 
 function bodyElementId(b: BodyElement): string {
   switch (b.kind) {
-    case 'atom':
-      return `+${b.atom.predicate}(${b.atom.terms.map(termId).join(',')})`;
-    case 'negation':
-      return `-${b.atom.predicate}(${b.atom.terms.map(termId).join(',')})`;
-    case 'guard':
-      return `g:${b.op}(${termId(b.left)},${termId(b.right)})`;
-    case 'aggregation':
-      return `a:${b.agg.fn}`;
+    case "atom":
+      return `+${b.atom.predicate}(${b.atom.terms.map(termId).join(",")})`
+    case "negation":
+      return `-${b.atom.predicate}(${b.atom.terms.map(termId).join(",")})`
+    case "guard":
+      return `g:${b.op}(${termId(b.left)},${termId(b.right)})`
+    case "aggregation":
+      return `a:${b.agg.fn}`
   }
 }
 
@@ -637,57 +656,58 @@ function bodyElementId(b: BodyElement): string {
  * This matches the skeleton's expectation and the native LWW solver's
  * delta contract.
  */
-function winnerFactsToResolution(
-  deltaDb: Database,
-): ZSet<ResolvedWinner> {
-  const rel = deltaDb.getRelation('winner');
-  const entries = rel.allWeightedTuples();
+function winnerFactsToResolution(deltaDb: Database): ZSet<ResolvedWinner> {
+  const rel = deltaDb.getRelation("winner")
+  const entries = rel.allWeightedTuples()
 
   if (entries.length === 0) {
-    return zsetEmpty<ResolvedWinner>();
+    return zsetEmpty<ResolvedWinner>()
   }
 
   // Group by slotId for replacement semantics.
-  const bySlot = new Map<string, { plus: ResolvedWinner | null; minus: ResolvedWinner | null }>();
+  const bySlot = new Map<
+    string,
+    { plus: ResolvedWinner | null; minus: ResolvedWinner | null }
+  >()
 
   for (const { tuple, weight } of entries) {
-    const slotId = tuple[0] as string;
+    const slotId = tuple[0] as string
     const winner: ResolvedWinner = {
       slotId,
       winnerCnIdKey: tuple[1] as string,
       content: tuple[2]!,
-    };
+    }
 
-    let slot = bySlot.get(slotId);
+    let slot = bySlot.get(slotId)
     if (slot === undefined) {
-      slot = { plus: null, minus: null };
-      bySlot.set(slotId, slot);
+      slot = { plus: null, minus: null }
+      bySlot.set(slotId, slot)
     }
 
     if (weight > 0) {
-      slot.plus = winner;
+      slot.plus = winner
     } else if (weight < 0) {
-      slot.minus = winner;
+      slot.minus = winner
     }
   }
 
   // Produce resolution delta with replacement semantics.
-  let result = zsetEmpty<ResolvedWinner>();
+  let result = zsetEmpty<ResolvedWinner>()
 
   for (const [slotId, slot] of bySlot) {
     if (slot.plus !== null && slot.minus !== null) {
       // Replacement: emit only +1 for the new winner.
-      result = zsetAdd(result, zsetSingleton(slotId, slot.plus, 1));
+      result = zsetAdd(result, zsetSingleton(slotId, slot.plus, 1))
     } else if (slot.plus !== null) {
       // New winner: emit +1.
-      result = zsetAdd(result, zsetSingleton(slotId, slot.plus, 1));
+      result = zsetAdd(result, zsetSingleton(slotId, slot.plus, 1))
     } else if (slot.minus !== null) {
       // Winner removed: emit −1.
-      result = zsetAdd(result, zsetSingleton(slotId, slot.minus, -1));
+      result = zsetAdd(result, zsetSingleton(slotId, slot.minus, -1))
     }
   }
 
-  return result;
+  return result
 }
 
 /**
@@ -696,29 +716,27 @@ function winnerFactsToResolution(
  *
  * Fugue before fact schema: `fugue_before(Parent, A, B)`
  */
-function fuguePairFactsToResolution(
-  deltaDb: Database,
-): ZSet<FugueBeforePair> {
-  const rel = deltaDb.getRelation('fugue_before');
-  const entries = rel.allWeightedTuples();
+function fuguePairFactsToResolution(deltaDb: Database): ZSet<FugueBeforePair> {
+  const rel = deltaDb.getRelation("fugue_before")
+  const entries = rel.allWeightedTuples()
 
   if (entries.length === 0) {
-    return zsetEmpty<FugueBeforePair>();
+    return zsetEmpty<FugueBeforePair>()
   }
 
-  let result = zsetEmpty<FugueBeforePair>();
+  let result = zsetEmpty<FugueBeforePair>()
 
   for (const { tuple, weight } of entries) {
     const pair: FugueBeforePair = {
       parentKey: tuple[0] as string,
       a: tuple[1] as string,
       b: tuple[2] as string,
-    };
-    const key = fuguePairKey(pair);
-    result = zsetAdd(result, zsetSingleton(key, pair, weight > 0 ? 1 : -1));
+    }
+    const key = fuguePairKey(pair)
+    result = zsetAdd(result, zsetSingleton(key, pair, weight > 0 ? 1 : -1))
   }
 
-  return result;
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -730,11 +748,11 @@ function fuguePairFactsToResolution(
  */
 export interface EvaluatorStepResult {
   /** Resolution deltas for the skeleton stage. */
-  readonly deltaResolved: ZSet<ResolvedWinner>;
+  readonly deltaResolved: ZSet<ResolvedWinner>
   /** Fugue pair deltas for the skeleton stage. */
-  readonly deltaFuguePairs: ZSet<FugueBeforePair>;
+  readonly deltaFuguePairs: ZSet<FugueBeforePair>
   /** All derived fact deltas (for downstream consumers). */
-  readonly deltaDerived: ZSet<Fact>;
+  readonly deltaDerived: ZSet<Fact>
 }
 
 /**
@@ -755,24 +773,21 @@ export interface Evaluator {
    *   Empty on most insertions.
    * @returns Resolution deltas and derived fact deltas.
    */
-  step(
-    deltaFacts: ZSet<Fact>,
-    deltaRules: ZSet<Rule>,
-  ): EvaluatorStepResult;
+  step(deltaFacts: ZSet<Fact>, deltaRules: ZSet<Rule>): EvaluatorStepResult
 
   /** The full accumulated Database (ground + derived facts). */
-  currentDatabase(): Database;
+  currentDatabase(): Database
 
   /**
    * Extract the current resolution from the accumulated Database.
    */
   currentResolution(): {
-    winners: ReadonlyMap<string, ResolvedWinner>;
-    fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>;
-  };
+    winners: ReadonlyMap<string, ResolvedWinner>
+    fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>
+  }
 
   /** Reset to empty state. */
-  reset(): void;
+  reset(): void
 }
 
 // ---------------------------------------------------------------------------
@@ -790,68 +805,66 @@ export interface Evaluator {
  * @param initialRules - The initial set of rules.
  * @returns An Evaluator instance with empty state.
  */
-export function createEvaluator(
-  initialRules: readonly Rule[],
-): Evaluator {
+export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
   // --- Mutable state ---
 
   /** Accumulated database: ground + derived facts. */
-  let db = new Database();
+  let db = new Database()
 
   /** Current rules. */
-  let rules: Rule[] = [...initialRules];
+  let rules: Rule[] = [...initialRules]
 
   /** Current stratification (recomputed on rule changes). */
-  let strata: readonly Stratum[] = [];
+  let strata: readonly Stratum[] = []
 
   /** Map from stratum index → Stratum for O(1) lookup. */
-  let strataByIndex: Map<number, Stratum> = new Map();
+  let strataByIndex: Map<number, Stratum> = new Map()
 
   /** Map from predicate → affected stratum indices. */
-  let predToStrata: Map<string, Set<number>> = new Map();
+  let predToStrata: Map<string, Set<number>> = new Map()
 
   /** All derived predicates across all strata. */
-  let allDerivedPreds: Set<string> = new Set();
+  let allDerivedPreds: Set<string> = new Set()
 
   /** Accumulated ground facts for rule-change replay. */
-  let accumulatedGroundFacts: Map<string, Fact> = new Map();
+  let accumulatedGroundFacts: Map<string, Fact> = new Map()
 
   /** Whether step() has ever been called. Used by batch wrappers to
    *  ensure strata are evaluated even with zero ground facts (rules
    *  with empty bodies must still fire on first invocation). */
-  let hasBeenStepped = false;
+  let hasBeenStepped = false
 
   // Initialize stratification.
-  restratify();
+  restratify()
 
   // --- Internal helpers ---
 
   function restratify(): void {
     if (rules.length === 0) {
-      strata = [];
-      strataByIndex = new Map();
-      predToStrata = new Map();
-      allDerivedPreds = new Set();
-      return;
+      strata = []
+      strataByIndex = new Map()
+      predToStrata = new Map()
+      allDerivedPreds = new Set()
+      return
     }
 
-    const result = stratify(rules);
+    const result = stratify(rules)
     if (!result.ok) {
       // Cyclic negation — clear strata.
-      strata = [];
-      strataByIndex = new Map();
-      predToStrata = new Map();
-      allDerivedPreds = new Set();
-      return;
+      strata = []
+      strataByIndex = new Map()
+      predToStrata = new Map()
+      allDerivedPreds = new Set()
+      return
     }
 
-    strata = result.value;
-    strataByIndex = new Map();
+    strata = result.value
+    strataByIndex = new Map()
     for (const s of strata) {
-      strataByIndex.set(s.index, s);
+      strataByIndex.set(s.index, s)
     }
-    predToStrata = buildPredicateToAffectedStrata(strata);
-    allDerivedPreds = headPredicates(rules);
+    predToStrata = buildPredicateToAffectedStrata(strata)
+    allDerivedPreds = headPredicates(rules)
   }
 
   /**
@@ -863,14 +876,14 @@ export function createEvaluator(
     after: Database,
     derivedPreds: ReadonlySet<string>,
   ): ZSet<Fact> {
-    let delta = zsetEmpty<Fact>();
+    let delta = zsetEmpty<Fact>()
 
     // Facts added (in after but not before).
     for (const pred of derivedPreds) {
       for (const tuple of after.getRelation(pred).tuples()) {
-        const f: Fact = { predicate: pred, values: tuple };
+        const f: Fact = { predicate: pred, values: tuple }
         if (!before.hasFact(f)) {
-          delta = zsetAdd(delta, zsetSingleton(factKey(f), f, 1));
+          delta = zsetAdd(delta, zsetSingleton(factKey(f), f, 1))
         }
       }
     }
@@ -878,14 +891,14 @@ export function createEvaluator(
     // Facts removed (in before but not after).
     for (const pred of derivedPreds) {
       for (const tuple of before.getRelation(pred).tuples()) {
-        const f: Fact = { predicate: pred, values: tuple };
+        const f: Fact = { predicate: pred, values: tuple }
         if (!after.hasFact(f)) {
-          delta = zsetAdd(delta, zsetSingleton(factKey(f), f, -1));
+          delta = zsetAdd(delta, zsetSingleton(factKey(f), f, -1))
         }
       }
     }
 
-    return delta;
+    return delta
   }
 
   // --- Public interface ---
@@ -898,207 +911,238 @@ export function createEvaluator(
       deltaResolved: zsetEmpty<ResolvedWinner>(),
       deltaFuguePairs: zsetEmpty<FugueBeforePair>(),
       deltaDerived: zsetEmpty<Fact>(),
-    };
+    }
 
     // --- Handle rule changes ---
     if (!zsetIsEmpty(deltaRules)) {
       // Apply rule changes.
-      zsetForEach(deltaRules, (entry) => {
+      zsetForEach(deltaRules, entry => {
         if (entry.weight > 0) {
-          rules.push(entry.element);
+          rules.push(entry.element)
         } else if (entry.weight < 0) {
-          const rKey = ruleIdentity(entry.element);
-          const idx = rules.findIndex((r) => ruleIdentity(r) === rKey);
+          const rKey = ruleIdentity(entry.element)
+          const idx = rules.findIndex(r => ruleIdentity(r) === rKey)
           if (idx !== -1) {
-            rules.splice(idx, 1);
+            rules.splice(idx, 1)
           }
         }
-      });
+      })
 
       // Track all derived preds (old + new) for complete snapshot.
-      const oldDerivedPreds = new Set(allDerivedPreds);
+      const oldDerivedPreds = new Set(allDerivedPreds)
 
       // Restratify with new rules.
-      restratify();
+      restratify()
 
       // Union of old and new derived preds for snapshot scope.
-      const allRelevantPreds = new Set([...oldDerivedPreds, ...allDerivedPreds]);
+      const allRelevantPreds = new Set([...oldDerivedPreds, ...allDerivedPreds])
 
       // Snapshot derived facts before wipe.
-      const beforeSnapshot = new Database();
+      const beforeSnapshot = new Database()
       for (const pred of allRelevantPreds) {
         for (const { tuple, weight } of db.getRelation(pred).weightedTuples()) {
-          beforeSnapshot.addWeightedFact({ predicate: pred, values: tuple }, weight);
+          beforeSnapshot.addWeightedFact(
+            { predicate: pred, values: tuple },
+            weight,
+          )
         }
       }
 
       // Wipe all derived facts.
       for (const pred of allRelevantPreds) {
         for (const tuple of db.getRelation(pred).tuples()) {
-          db.removeFact({ predicate: pred, values: tuple });
+          db.removeFact({ predicate: pred, values: tuple })
         }
       }
 
       // Apply ground fact delta first (if any).
       if (!zsetIsEmpty(deltaFacts)) {
-        zsetForEach(deltaFacts, (entry) => {
-          const key = factKey(entry.element);
+        zsetForEach(deltaFacts, entry => {
+          const key = factKey(entry.element)
           if (entry.weight > 0) {
-            accumulatedGroundFacts.set(key, entry.element);
+            accumulatedGroundFacts.set(key, entry.element)
           } else if (entry.weight < 0) {
-            accumulatedGroundFacts.delete(key);
+            accumulatedGroundFacts.delete(key)
           }
-          db.addWeightedFact(entry.element, entry.weight);
-        });
+          db.addWeightedFact(entry.element, entry.weight)
+        })
       }
 
       // Replay all strata from scratch.
       for (const stratum of strata) {
-        if (stratum.rules.length === 0) continue;
+        if (stratum.rules.length === 0) continue
 
         // For full replay, seed with all ground facts that are inputs
         // to this stratum.
-        const inputDelta = new Database();
+        const inputDelta = new Database()
         for (const pred of db.predicates()) {
           if (!allDerivedPreds.has(pred)) {
             // Ground predicate — include all facts as input delta.
             for (const tuple of db.getRelation(pred).tuples()) {
-              inputDelta.addFact({ predicate: pred, values: tuple });
+              inputDelta.addFact({ predicate: pred, values: tuple })
             }
           }
         }
         // Also include derived facts from lower strata (already computed).
         for (const s of strata) {
-          if (s.index >= stratum.index) break;
+          if (s.index >= stratum.index) break
           for (const pred of stratumDerivedPredicates(s)) {
             for (const tuple of db.getRelation(pred).tuples()) {
-              inputDelta.addFact({ predicate: pred, values: tuple });
+              inputDelta.addFact({ predicate: pred, values: tuple })
             }
           }
         }
 
-        evaluateStratumFromDelta(stratum.rules, db, inputDelta);
+        evaluateStratumFromDelta(stratum.rules, db, inputDelta)
       }
 
       // Snapshot derived facts after replay.
-      const afterSnapshot = new Database();
+      const afterSnapshot = new Database()
       for (const pred of allRelevantPreds) {
         for (const { tuple, weight } of db.getRelation(pred).weightedTuples()) {
-          afterSnapshot.addWeightedFact({ predicate: pred, values: tuple }, weight);
+          afterSnapshot.addWeightedFact(
+            { predicate: pred, values: tuple },
+            weight,
+          )
         }
       }
 
       // Diff snapshots to produce derived delta.
-      const deltaDerived = diffDerivedSnapshots(beforeSnapshot, afterSnapshot, allRelevantPreds);
+      const deltaDerived = diffDerivedSnapshots(
+        beforeSnapshot,
+        afterSnapshot,
+        allRelevantPreds,
+      )
 
-      if (zsetIsEmpty(deltaDerived)) return emptyResult;
+      if (zsetIsEmpty(deltaDerived)) return emptyResult
 
       // Build a delta Database from deltaDerived for resolution extraction.
-      const deltaDb = new Database();
-      zsetForEach(deltaDerived, (entry) => {
-        deltaDb.addWeightedFact(entry.element, entry.weight);
-      });
+      const deltaDb = new Database()
+      zsetForEach(deltaDerived, entry => {
+        deltaDb.addWeightedFact(entry.element, entry.weight)
+      })
 
-      const deltaResolved = winnerFactsToResolution(deltaDb);
-      const deltaFuguePairs = fuguePairFactsToResolution(deltaDb);
+      const deltaResolved = winnerFactsToResolution(deltaDb)
+      const deltaFuguePairs = fuguePairFactsToResolution(deltaDb)
 
-      return { deltaResolved, deltaFuguePairs, deltaDerived };
+      return { deltaResolved, deltaFuguePairs, deltaDerived }
     }
 
     // --- No rule change — incremental evaluation ---
 
     if (zsetIsEmpty(deltaFacts)) {
-      if (hasBeenStepped) return emptyResult;
+      if (hasBeenStepped) return emptyResult
       // First invocation with no facts — still need to evaluate strata
       // for rules with empty bodies (e.g., axiom(42) :- .).
-      hasBeenStepped = true;
-      if (strata.length === 0) return emptyResult;
+      hasBeenStepped = true
+      if (strata.length === 0) return emptyResult
 
       // Evaluate all strata with empty input delta.
-      const outputDelta = new Database();
+      const outputDelta = new Database()
       for (const stratum of strata) {
-        if (stratum.rules.length === 0) continue;
+        if (stratum.rules.length === 0) continue
         const stratumDelta = evaluateStratumFromDelta(
-          stratum.rules, db, new Database(),
-        );
+          stratum.rules,
+          db,
+          new Database(),
+        )
         for (const pred of stratumDelta.predicates()) {
-          for (const { tuple, weight } of stratumDelta.getRelation(pred).allWeightedTuples()) {
-            outputDelta.addWeightedFact({ predicate: pred, values: tuple }, weight);
+          for (const { tuple, weight } of stratumDelta
+            .getRelation(pred)
+            .allWeightedTuples()) {
+            outputDelta.addWeightedFact(
+              { predicate: pred, values: tuple },
+              weight,
+            )
           }
         }
       }
 
-      let outputHasEntries = false;
+      let outputHasEntries = false
       for (const pred of outputDelta.predicates()) {
         if (outputDelta.getRelation(pred).allEntryCount > 0) {
-          outputHasEntries = true;
-          break;
+          outputHasEntries = true
+          break
         }
       }
-      if (!outputHasEntries) return emptyResult;
+      if (!outputHasEntries) return emptyResult
 
-      const deltaResolved = winnerFactsToResolution(outputDelta);
-      const deltaFuguePairs = fuguePairFactsToResolution(outputDelta);
-      let deltaDerived = zsetEmpty<Fact>();
+      const deltaResolved = winnerFactsToResolution(outputDelta)
+      const deltaFuguePairs = fuguePairFactsToResolution(outputDelta)
+      let deltaDerived = zsetEmpty<Fact>()
       for (const pred of outputDelta.predicates()) {
-        for (const { tuple, weight } of outputDelta.getRelation(pred).allWeightedTuples()) {
-          const f: Fact = { predicate: pred, values: tuple };
-          deltaDerived = zsetAdd(deltaDerived, zsetSingleton(factKey(f), f, weight > 0 ? 1 : -1));
+        for (const { tuple, weight } of outputDelta
+          .getRelation(pred)
+          .allWeightedTuples()) {
+          const f: Fact = { predicate: pred, values: tuple }
+          deltaDerived = zsetAdd(
+            deltaDerived,
+            zsetSingleton(factKey(f), f, weight > 0 ? 1 : -1),
+          )
         }
       }
-      return { deltaResolved, deltaFuguePairs, deltaDerived };
+      return { deltaResolved, deltaFuguePairs, deltaDerived }
     }
 
-    hasBeenStepped = true;
+    hasBeenStepped = true
 
     // 1. Track ground facts and apply weighted delta to accumulated db.
-    const changedPreds = new Set<string>();
-    zsetForEach(deltaFacts, (entry) => {
-      const key = factKey(entry.element);
+    const changedPreds = new Set<string>()
+    zsetForEach(deltaFacts, entry => {
+      const key = factKey(entry.element)
       if (entry.weight > 0) {
-        accumulatedGroundFacts.set(key, entry.element);
+        accumulatedGroundFacts.set(key, entry.element)
       } else if (entry.weight < 0) {
-        accumulatedGroundFacts.delete(key);
+        accumulatedGroundFacts.delete(key)
       }
-      db.addWeightedFact(entry.element, entry.weight);
-      changedPreds.add(entry.element.predicate);
-    });
+      db.addWeightedFact(entry.element, entry.weight)
+      changedPreds.add(entry.element.predicate)
+    })
 
     // 2. Determine affected strata.
-    const affectedIndices = computeAffectedStrata(changedPreds, strata, predToStrata);
+    const affectedIndices = computeAffectedStrata(
+      changedPreds,
+      strata,
+      predToStrata,
+    )
 
     if (affectedIndices.length === 0) {
-      return emptyResult;
+      return emptyResult
     }
 
     // 3. Build initial input delta from ground fact changes.
-    let currentInputDelta = new Database();
-    zsetForEach(deltaFacts, (entry) => {
-      currentInputDelta.addWeightedFact(entry.element, entry.weight);
-    });
+    const currentInputDelta = new Database()
+    zsetForEach(deltaFacts, entry => {
+      currentInputDelta.addWeightedFact(entry.element, entry.weight)
+    })
 
     // 4. Evaluate affected strata bottom-up.
     // Each stratum's output delta feeds the next stratum's input.
     // The unified loop handles all stratum types (positive, negation,
     // mixed) uniformly — no retractionsPresent flag needed.
-    const outputDelta = new Database();
+    const outputDelta = new Database()
 
     for (const stratumIdx of affectedIndices) {
-      const stratum = strataByIndex.get(stratumIdx);
-      if (stratum === undefined || stratum.rules.length === 0) continue;
+      const stratum = strataByIndex.get(stratumIdx)
+      if (stratum === undefined || stratum.rules.length === 0) continue
 
       const stratumDelta = evaluateStratumFromDelta(
         stratum.rules,
         db,
         currentInputDelta,
-      );
+      )
 
       // Merge stratum output into the cumulative output delta.
       // Use allWeightedTuples() because delta databases contain both
       // +1 (new) and -1 (retracted) entries.
       for (const pred of stratumDelta.predicates()) {
-        for (const { tuple, weight } of stratumDelta.getRelation(pred).allWeightedTuples()) {
-          outputDelta.addWeightedFact({ predicate: pred, values: tuple }, weight);
+        for (const { tuple, weight } of stratumDelta
+          .getRelation(pred)
+          .allWeightedTuples()) {
+          outputDelta.addWeightedFact(
+            { predicate: pred, values: tuple },
+            weight,
+          )
         }
       }
 
@@ -1106,8 +1150,13 @@ export function createEvaluator(
       // Merge it into currentInputDelta so higher strata see changes
       // from both ground facts and lower-stratum derivations.
       for (const pred of stratumDelta.predicates()) {
-        for (const { tuple, weight } of stratumDelta.getRelation(pred).allWeightedTuples()) {
-          currentInputDelta.addWeightedFact({ predicate: pred, values: tuple }, weight);
+        for (const { tuple, weight } of stratumDelta
+          .getRelation(pred)
+          .allWeightedTuples()) {
+          currentInputDelta.addWeightedFact(
+            { predicate: pred, values: tuple },
+            weight,
+          )
         }
       }
     }
@@ -1115,84 +1164,86 @@ export function createEvaluator(
     // 6. Extract resolution deltas from the collected output delta.
     // Check allEntryCount (not size) because delta databases contain
     // negative-weight entries that size would miss.
-    let outputHasEntries = false;
+    let outputHasEntries = false
     for (const pred of outputDelta.predicates()) {
       if (outputDelta.getRelation(pred).allEntryCount > 0) {
-        outputHasEntries = true;
-        break;
+        outputHasEntries = true
+        break
       }
     }
     if (!outputHasEntries) {
-      return emptyResult;
+      return emptyResult
     }
 
-    const deltaResolved = winnerFactsToResolution(outputDelta);
-    const deltaFuguePairs = fuguePairFactsToResolution(outputDelta);
+    const deltaResolved = winnerFactsToResolution(outputDelta)
+    const deltaFuguePairs = fuguePairFactsToResolution(outputDelta)
 
     // 7. Build deltaDerived ZSet from the output delta Database.
     // Use allWeightedTuples() to include negative-weight (retracted) entries.
-    let deltaDerived = zsetEmpty<Fact>();
+    let deltaDerived = zsetEmpty<Fact>()
     for (const pred of outputDelta.predicates()) {
-      for (const { tuple, weight } of outputDelta.getRelation(pred).allWeightedTuples()) {
-        const f: Fact = { predicate: pred, values: tuple };
+      for (const { tuple, weight } of outputDelta
+        .getRelation(pred)
+        .allWeightedTuples()) {
+        const f: Fact = { predicate: pred, values: tuple }
         deltaDerived = zsetAdd(
           deltaDerived,
           zsetSingleton(factKey(f), f, weight > 0 ? 1 : -1),
-        );
+        )
       }
     }
 
-    return { deltaResolved, deltaFuguePairs, deltaDerived };
+    return { deltaResolved, deltaFuguePairs, deltaDerived }
   }
 
   function currentDatabase(): Database {
-    return db;
+    return db
   }
 
   function currentResolution(): {
-    winners: ReadonlyMap<string, ResolvedWinner>;
-    fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>;
+    winners: ReadonlyMap<string, ResolvedWinner>
+    fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>
   } {
     // Extract winners from the winner relation.
-    const winners = new Map<string, ResolvedWinner>();
-    for (const tuple of db.getRelation('winner').tuples()) {
-      const slotId = tuple[0] as string;
-      const winnerCnIdKey = tuple[1] as string;
-      const content = tuple[2]!;
-      winners.set(slotId, { slotId, winnerCnIdKey, content });
+    const winners = new Map<string, ResolvedWinner>()
+    for (const tuple of db.getRelation("winner").tuples()) {
+      const slotId = tuple[0] as string
+      const winnerCnIdKey = tuple[1] as string
+      const content = tuple[2]!
+      winners.set(slotId, { slotId, winnerCnIdKey, content })
     }
 
     // Extract fugue pairs from the fugue_before relation.
-    const fuguePairs = new Map<string, FugueBeforePair[]>();
-    for (const tuple of db.getRelation('fugue_before').tuples()) {
-      const parentKey = tuple[0] as string;
-      const a = tuple[1] as string;
-      const b = tuple[2] as string;
-      const pair: FugueBeforePair = { parentKey, a, b };
+    const fuguePairs = new Map<string, FugueBeforePair[]>()
+    for (const tuple of db.getRelation("fugue_before").tuples()) {
+      const parentKey = tuple[0] as string
+      const a = tuple[1] as string
+      const b = tuple[2] as string
+      const pair: FugueBeforePair = { parentKey, a, b }
 
-      let existing = fuguePairs.get(parentKey);
+      let existing = fuguePairs.get(parentKey)
       if (existing === undefined) {
-        existing = [];
-        fuguePairs.set(parentKey, existing);
+        existing = []
+        fuguePairs.set(parentKey, existing)
       }
-      existing.push(pair);
+      existing.push(pair)
     }
 
-    return { winners, fuguePairs };
+    return { winners, fuguePairs }
   }
 
   function reset(): void {
-    db = new Database();
-    rules = [];
-    strata = [];
-    strataByIndex = new Map();
-    predToStrata = new Map();
-    allDerivedPreds = new Set();
-    accumulatedGroundFacts = new Map();
-    hasBeenStepped = false;
+    db = new Database()
+    rules = []
+    strata = []
+    strataByIndex = new Map()
+    predToStrata = new Map()
+    allDerivedPreds = new Set()
+    accumulatedGroundFacts = new Map()
+    hasBeenStepped = false
   }
 
-  return { step, currentDatabase, currentResolution, reset };
+  return { step, currentDatabase, currentResolution, reset }
 }
 
 // ---------------------------------------------------------------------------
@@ -1218,30 +1269,30 @@ export function evaluateUnified(
 ): Result<Database, StratificationError> {
   // Validate stratification upfront for the error path.
   if (rules.length > 0) {
-    const stratResult = stratify(rules);
+    const stratResult = stratify(rules)
     if (!stratResult.ok) {
-      return err(stratResult.error);
+      return err(stratResult.error)
     }
   }
 
-  const db = new Database();
+  const db = new Database()
   for (const f of facts) {
-    db.addFact(f);
+    db.addFact(f)
   }
 
   if (rules.length === 0) {
-    return ok(db);
+    return ok(db)
   }
 
   // Create evaluator and step with all facts.
-  const evaluator = createEvaluator(rules);
-  let factsZSet = zsetEmpty<Fact>();
+  const evaluator = createEvaluator(rules)
+  let factsZSet = zsetEmpty<Fact>()
   for (const f of facts) {
-    factsZSet = zsetAdd(factsZSet, zsetSingleton(factKey(f), f, 1));
+    factsZSet = zsetAdd(factsZSet, zsetSingleton(factKey(f), f, 1))
   }
-  evaluator.step(factsZSet, zsetEmpty());
+  evaluator.step(factsZSet, zsetEmpty())
 
-  return ok(evaluator.currentDatabase());
+  return ok(evaluator.currentDatabase())
 }
 
 /**
@@ -1256,21 +1307,21 @@ export function evaluatePositiveUnified(
   rules: readonly Rule[],
   facts: readonly Fact[],
 ): Database {
-  const db = new Database();
+  const db = new Database()
   for (const f of facts) {
-    db.addFact(f);
+    db.addFact(f)
   }
 
   if (rules.length === 0) {
-    return db;
+    return db
   }
 
-  const evaluator = createEvaluator(rules);
-  let factsZSet = zsetEmpty<Fact>();
+  const evaluator = createEvaluator(rules)
+  let factsZSet = zsetEmpty<Fact>()
   for (const f of facts) {
-    factsZSet = zsetAdd(factsZSet, zsetSingleton(factKey(f), f, 1));
+    factsZSet = zsetAdd(factsZSet, zsetSingleton(factKey(f), f, 1))
   }
-  evaluator.step(factsZSet, zsetEmpty());
+  evaluator.step(factsZSet, zsetEmpty())
 
-  return evaluator.currentDatabase();
+  return evaluator.currentDatabase()
 }

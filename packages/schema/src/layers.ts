@@ -16,15 +16,19 @@
 //     .with(changefeed)
 //     .done()
 
-import type { InterpreterLayer, ReadableBrand, WritableBrand, ChangefeedBrand } from "./interpret.js"
+import type {
+  ChangefeedBrand,
+  InterpreterLayer,
+  ReadableBrand,
+  WritableBrand,
+} from "./interpret.js"
 import type { RefContext } from "./interpreter-types.js"
-import type { WritableContext } from "./interpreters/writable.js"
-
+import { withCaching } from "./interpreters/with-caching.js"
+import { withChangefeed } from "./interpreters/with-changefeed.js"
 import { withNavigation } from "./interpreters/with-navigation.js"
 import { withReadable } from "./interpreters/with-readable.js"
-import { withCaching } from "./interpreters/with-caching.js"
+import type { WritableContext } from "./interpreters/writable.js"
 import { withWritable } from "./interpreters/writable.js"
-import { withChangefeed } from "./interpreters/with-changefeed.js"
 
 // ---------------------------------------------------------------------------
 // navigation — structural addressing only
@@ -69,12 +73,13 @@ export const navigation: InterpreterLayer<RefContext, RefContext> = {
  * interpret(schema, withCaching(withReadable(withNavigation(bottomInterpreter))), ctx)
  * ```
  */
-export const readable: InterpreterLayer<RefContext, RefContext, ReadableBrand> = {
-  name: "readable",
-  transform(base) {
-    return withCaching(withReadable(withNavigation(base)))
-  },
-}
+export const readable: InterpreterLayer<RefContext, RefContext, ReadableBrand> =
+  {
+    name: "readable",
+    transform(base) {
+      return withCaching(withReadable(withNavigation(base)))
+    },
+  }
 
 // ---------------------------------------------------------------------------
 // writable — mutation methods
@@ -92,7 +97,11 @@ export const readable: InterpreterLayer<RefContext, RefContext, ReadableBrand> =
  * interpret(schema, withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))), ctx)
  * ```
  */
-export const writable: InterpreterLayer<RefContext, WritableContext, WritableBrand> = {
+export const writable: InterpreterLayer<
+  RefContext,
+  WritableContext,
+  WritableBrand
+> = {
   name: "writable",
   transform(base) {
     return withWritable(base)
@@ -125,7 +134,11 @@ export const writable: InterpreterLayer<RefContext, WritableContext, WritableBra
  * )
  * ```
  */
-export const changefeed: InterpreterLayer<RefContext, RefContext, ChangefeedBrand> = {
+export const changefeed: InterpreterLayer<
+  RefContext,
+  RefContext,
+  ChangefeedBrand
+> = {
   name: "changefeed",
   transform(base) {
     return withChangefeed(base)

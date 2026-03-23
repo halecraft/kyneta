@@ -20,13 +20,13 @@ import {
   createConditionalBranch,
   createContent,
   createElement,
+  createLabeledBlock,
   createLiteral,
   createLoop,
   createSpan,
   createStatement,
-  createLabeledBlock,
-  type Dependency,
   type DeltaKind,
+  type Dependency,
   isBindingNode,
   isDOMProducing,
   isInputTextRegionAttribute,
@@ -689,12 +689,7 @@ describe("isTextRegionContent", () => {
   })
 
   it("returns false for non-reactive binding time", () => {
-    const node = createContent(
-      '"Hello"',
-      "literal",
-      [],
-      span(),
-    )
+    const node = createContent('"Hello"', "literal", [], span())
     expect(isTextRegionContent(node)).toBe(false)
   })
 })
@@ -804,7 +799,9 @@ describe("isBindingNode", () => {
 
 describe("isDOMProducing", () => {
   it("returns false for statement", () => {
-    expect(isDOMProducing(createStatement("console.log(1)", span()))).toBe(false)
+    expect(isDOMProducing(createStatement("console.log(1)", span()))).toBe(
+      false,
+    )
   })
 
   it("returns false for binding", () => {
@@ -825,11 +822,21 @@ describe("isDOMProducing", () => {
   it("returns true for content", () => {
     expect(isDOMProducing(createLiteral("hello", span()))).toBe(true)
     expect(isDOMProducing(createContent("x", "render", [], span()))).toBe(true)
-    expect(isDOMProducing(createContent("x.get()", "reactive", [dep("x")], span()))).toBe(true)
+    expect(
+      isDOMProducing(createContent("x.get()", "reactive", [dep("x")], span())),
+    ).toBe(true)
   })
 
   it("returns true for loop", () => {
-    const loop = createLoop("items", "reactive", "item", null, [], [dep("items")], span())
+    const loop = createLoop(
+      "items",
+      "reactive",
+      "item",
+      null,
+      [],
+      [dep("items")],
+      span(),
+    )
     expect(isDOMProducing(loop)).toBe(true)
   })
 
@@ -861,7 +868,11 @@ describe("computeSlotKind with bindings", () => {
   })
 
   it("ignores labeled-blocks — single element + labeled-block = single", () => {
-    const block = createLabeledBlock("client", [createStatement("console.log(1)", span())], span())
+    const block = createLabeledBlock(
+      "client",
+      [createStatement("console.log(1)", span())],
+      span(),
+    )
     const el = createElement("p", [], [], [], [], span())
 
     expect(computeSlotKind([block, el])).toBe("single")
@@ -888,7 +899,12 @@ describe("computeHasReactiveItems with bindings", () => {
   it("detects reactive content alongside bindings", () => {
     const value = createContent("x.get()", "reactive", [dep("x")], span())
     const binding = createBinding("myVar", value, span())
-    const reactiveContent = createContent("y.get()", "reactive", [dep("y")], span())
+    const reactiveContent = createContent(
+      "y.get()",
+      "reactive",
+      [dep("y")],
+      span(),
+    )
 
     expect(computeHasReactiveItems([binding, reactiveContent])).toBe(true)
   })

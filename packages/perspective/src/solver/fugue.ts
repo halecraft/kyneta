@@ -20,12 +20,8 @@
 //
 // See unified-engine.md §8.2, §B.4, §B.7.
 
-import type {
-  CnId,
-  StructureConstraint,
-  PeerID,
-} from '../kernel/types.js';
-import { cnIdKey, cnIdCompare } from '../kernel/cnid.js';
+import { cnIdKey } from "../kernel/cnid.js"
+import type { CnId, PeerID, StructureConstraint } from "../kernel/types.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,30 +32,30 @@ import { cnIdKey, cnIdCompare } from '../kernel/cnid.js';
  */
 export interface FugueNode {
   /** The structure constraint's CnId (unique element identity). */
-  readonly id: CnId;
+  readonly id: CnId
 
   /** CnId key string for Map lookups. */
-  readonly idKey: string;
+  readonly idKey: string
 
   /** CnId of the parent seq container. */
-  readonly parent: CnId;
+  readonly parent: CnId
 
   /** Element to the left at insertion time (null = start of sequence). */
-  readonly originLeft: CnId | null;
+  readonly originLeft: CnId | null
 
   /** Element to the right at insertion time (null = end of sequence). */
-  readonly originRight: CnId | null;
+  readonly originRight: CnId | null
 
   /** Peer ID of the asserting agent. */
-  readonly peer: PeerID;
+  readonly peer: PeerID
 }
 
 /**
  * Internal tree node used during construction.
  */
 interface TreeNode {
-  readonly node: FugueNode;
-  readonly children: TreeNode[];
+  readonly node: FugueNode
+  readonly children: TreeNode[]
 }
 
 /**
@@ -67,10 +63,10 @@ interface TreeNode {
  */
 export interface FugueOrderResult {
   /** Parent container CnId. */
-  readonly parent: CnId;
+  readonly parent: CnId
 
   /** Ordered array of FugueNodes (total order for the sequence). */
-  readonly ordered: readonly FugueNode[];
+  readonly ordered: readonly FugueNode[]
 }
 
 // ---------------------------------------------------------------------------
@@ -86,10 +82,10 @@ export interface FugueOrderResult {
 export function buildFugueNodes(
   seqConstraints: Iterable<StructureConstraint>,
 ): FugueNode[] {
-  const nodes: FugueNode[] = [];
+  const nodes: FugueNode[] = []
 
   for (const sc of seqConstraints) {
-    if (sc.payload.kind !== 'seq') continue;
+    if (sc.payload.kind !== "seq") continue
 
     nodes.push({
       id: sc.id,
@@ -98,10 +94,10 @@ export function buildFugueNodes(
       originLeft: sc.payload.originLeft,
       originRight: sc.payload.originRight,
       peer: sc.id.peer,
-    });
+    })
   }
 
-  return nodes;
+  return nodes
 }
 
 // ---------------------------------------------------------------------------
@@ -120,44 +116,46 @@ export function buildFugueNodes(
  * @param nodes - FugueNodes to order (all sharing the same parent container).
  * @returns Ordered array of FugueNodes.
  */
-export function orderFugueNodes(nodes: readonly FugueNode[]): readonly FugueNode[] {
-  if (nodes.length === 0) return [];
-  if (nodes.length === 1) return nodes;
+export function orderFugueNodes(
+  nodes: readonly FugueNode[],
+): readonly FugueNode[] {
+  if (nodes.length === 0) return []
+  if (nodes.length === 1) return nodes
 
   // Build lookup map.
-  const nodeMap = new Map<string, FugueNode>();
+  const nodeMap = new Map<string, FugueNode>()
   for (const n of nodes) {
-    nodeMap.set(n.idKey, n);
+    nodeMap.set(n.idKey, n)
   }
 
   // Build tree: group children by originLeft.
-  const rootChildren: TreeNode[] = [];
-  const childrenMap = new Map<string, TreeNode[]>();
+  const rootChildren: TreeNode[] = []
+  const childrenMap = new Map<string, TreeNode[]>()
 
   for (const node of nodes) {
-    const treeNode: TreeNode = { node, children: [] };
+    const treeNode: TreeNode = { node, children: [] }
 
     if (node.originLeft === null) {
       // Child of virtual root (beginning of sequence).
-      rootChildren.push(treeNode);
+      rootChildren.push(treeNode)
     } else {
-      const parentKey = cnIdKey(node.originLeft);
-      let siblings = childrenMap.get(parentKey);
+      const parentKey = cnIdKey(node.originLeft)
+      let siblings = childrenMap.get(parentKey)
       if (siblings === undefined) {
-        siblings = [];
-        childrenMap.set(parentKey, siblings);
+        siblings = []
+        childrenMap.set(parentKey, siblings)
       }
-      siblings.push(treeNode);
+      siblings.push(treeNode)
     }
   }
 
   // Sort siblings at each level and traverse.
-  sortSiblings(rootChildren, nodeMap);
+  sortSiblings(rootChildren, nodeMap)
 
-  const result: FugueNode[] = [];
-  traverse(rootChildren, childrenMap, nodeMap, result);
+  const result: FugueNode[] = []
+  traverse(rootChildren, childrenMap, nodeMap, result)
 
-  return result;
+  return result
 }
 
 /**
@@ -172,9 +170,9 @@ export function computeFugueOrder(
   seqConstraints: Iterable<StructureConstraint>,
   parent: CnId,
 ): FugueOrderResult {
-  const nodes = buildFugueNodes(seqConstraints);
-  const ordered = orderFugueNodes(nodes);
-  return { parent, ordered };
+  const nodes = buildFugueNodes(seqConstraints)
+  const ordered = orderFugueNodes(nodes)
+  return { parent, ordered }
 }
 
 // ---------------------------------------------------------------------------
@@ -196,14 +194,14 @@ function sortSiblings(
   siblings: TreeNode[],
   nodeMap: ReadonlyMap<string, FugueNode>,
 ): void {
-  if (siblings.length <= 1) return;
+  if (siblings.length <= 1) return
 
   // Build preliminary position map for originRight comparisons.
-  const positionMap = buildPositionMap(siblings, nodeMap);
+  const positionMap = buildPositionMap(siblings, nodeMap)
 
   siblings.sort((a, b) =>
     compareFugueNodes(a.node, b.node, nodeMap, positionMap),
-  );
+  )
 }
 
 /**
@@ -217,53 +215,54 @@ function buildPositionMap(
   siblings: TreeNode[],
   nodeMap: ReadonlyMap<string, FugueNode>,
 ): Map<string, number> {
-  const posMap = new Map<string, number>();
+  const posMap = new Map<string, number>()
 
   // Sort by preliminary rules to assign positions.
   const preliminary = [...siblings].sort((a, b) => {
-    const an = a.node;
-    const bn = b.node;
+    const an = a.node
+    const bn = b.node
 
     // Same originRight → lower peer goes first.
     if (cnIdNullableEquals(an.originRight, bn.originRight)) {
       if (an.peer !== bn.peer) {
-        return an.peer < bn.peer ? -1 : 1;
+        return an.peer < bn.peer ? -1 : 1
       }
-      return an.id.counter - bn.id.counter;
+      return an.id.counter - bn.id.counter
     }
 
     // null originRight = end of list → goes after non-null.
-    if (an.originRight === null) return 1;
-    if (bn.originRight === null) return -1;
+    if (an.originRight === null) return 1
+    if (bn.originRight === null) return -1
 
     // Compare originRight positions.
-    const aRight = nodeMap.get(cnIdKey(an.originRight));
-    const bRight = nodeMap.get(cnIdKey(bn.originRight));
+    const aRight = nodeMap.get(cnIdKey(an.originRight))
+    const bRight = nodeMap.get(cnIdKey(bn.originRight))
 
     if (aRight !== undefined && bRight !== undefined) {
       // Same peer originRight: lower counter = further left.
       if (aRight.peer === bRight.peer) {
         if (aRight.id.counter !== bRight.id.counter) {
-          return aRight.id.counter - bRight.id.counter;
+          return aRight.id.counter - bRight.id.counter
         }
       } else {
         // Different peers: use peer ID as stable tiebreaker.
-        return aRight.peer < bRight.peer ? -1 : 1;
+        return aRight.peer < bRight.peer ? -1 : 1
       }
     }
 
     // Fall back to element's own identity.
     if (an.peer !== bn.peer) {
-      return an.peer < bn.peer ? -1 : 1;
+      return an.peer < bn.peer ? -1 : 1
     }
-    return an.id.counter - bn.id.counter;
-  });
+    return an.id.counter - bn.id.counter
+  })
 
   for (let i = 0; i < preliminary.length; i++) {
-    posMap.set(preliminary[i]!.node.idKey, i);
+    // biome-ignore lint/style/noNonNullAssertion: index is within bounds of the array we're iterating
+    posMap.set(preliminary[i]!.node.idKey, i)
   }
 
-  return posMap;
+  return posMap
 }
 
 /**
@@ -281,32 +280,32 @@ function compareFugueNodes(
   positionMap: Map<string, number>,
 ): number {
   // Same element.
-  if (a.idKey === b.idKey) return 0;
+  if (a.idKey === b.idKey) return 0
 
   // Same originRight → lower peer ID goes left.
   if (cnIdNullableEquals(a.originRight, b.originRight)) {
     if (a.peer !== b.peer) {
-      return a.peer < b.peer ? -1 : 1;
+      return a.peer < b.peer ? -1 : 1
     }
-    return a.id.counter - b.id.counter;
+    return a.id.counter - b.id.counter
   }
 
   // Different originRight → compare their positions.
-  if (a.originRight === null) return 1;
-  if (b.originRight === null) return -1;
+  if (a.originRight === null) return 1
+  if (b.originRight === null) return -1
 
-  const posA = getOriginRightPosition(a.originRight, nodeMap, positionMap);
-  const posB = getOriginRightPosition(b.originRight, nodeMap, positionMap);
+  const posA = getOriginRightPosition(a.originRight, nodeMap, positionMap)
+  const posB = getOriginRightPosition(b.originRight, nodeMap, positionMap)
 
   if (posA !== posB) {
-    return posA - posB;
+    return posA - posB
   }
 
   // Same position — fall back to identity.
   if (a.peer !== b.peer) {
-    return a.peer < b.peer ? -1 : 1;
+    return a.peer < b.peer ? -1 : 1
   }
-  return a.id.counter - b.id.counter;
+  return a.id.counter - b.id.counter
 }
 
 /**
@@ -320,25 +319,25 @@ function getOriginRightPosition(
   nodeMap: ReadonlyMap<string, FugueNode>,
   positionMap: Map<string, number>,
 ): number {
-  const idStr = cnIdKey(id);
+  const idStr = cnIdKey(id)
 
   // Check if it's a sibling.
-  const siblingPos = positionMap.get(idStr);
-  if (siblingPos !== undefined) return siblingPos;
+  const siblingPos = positionMap.get(idStr)
+  if (siblingPos !== undefined) return siblingPos
 
   // Not a sibling — use depth + counter heuristic.
-  const node = nodeMap.get(idStr);
-  if (node === undefined) return Number.MAX_SAFE_INTEGER;
+  const node = nodeMap.get(idStr)
+  if (node === undefined) return Number.MAX_SAFE_INTEGER
 
-  let depth = 0;
-  let current: FugueNode | undefined = node;
+  let depth = 0
+  let current: FugueNode | undefined = node
   while (current !== undefined && current.originLeft !== null) {
-    depth++;
-    current = nodeMap.get(cnIdKey(current.originLeft));
-    if (depth > 10000) break; // Safety bound.
+    depth++
+    current = nodeMap.get(cnIdKey(current.originLeft))
+    if (depth > 10000) break // Safety bound.
   }
 
-  return -1000000 + depth * 10000 + node.id.counter;
+  return -1000000 + depth * 10000 + node.id.counter
 }
 
 // ---------------------------------------------------------------------------
@@ -356,13 +355,13 @@ function traverse(
 ): void {
   for (const treeNode of nodes) {
     // Add this node.
-    result.push(treeNode.node);
+    result.push(treeNode.node)
 
     // Recursively process children (elements whose originLeft is this node).
-    const children = childrenMap.get(treeNode.node.idKey);
+    const children = childrenMap.get(treeNode.node.idKey)
     if (children !== undefined && children.length > 0) {
-      sortSiblings(children, nodeMap);
-      traverse(children, childrenMap, nodeMap, result);
+      sortSiblings(children, nodeMap)
+      traverse(children, childrenMap, nodeMap, result)
     }
   }
 }
@@ -375,7 +374,7 @@ function traverse(
  * Check if two nullable CnIds are equal.
  */
 function cnIdNullableEquals(a: CnId | null, b: CnId | null): boolean {
-  if (a === null && b === null) return true;
-  if (a === null || b === null) return false;
-  return a.peer === b.peer && a.counter === b.counter;
+  if (a === null && b === null) return true
+  if (a === null || b === null) return false
+  return a.peer === b.peer && a.counter === b.counter
 }

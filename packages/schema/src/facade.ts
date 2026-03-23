@@ -37,10 +37,14 @@
 //
 // See .plans/apply-changes.md §Phase 5, .plans/subscribe-facade.md.
 
+import type { Changeset, Op } from "./changefeed.js"
+import {
+  CHANGEFEED,
+  hasChangefeed,
+  hasComposedChangefeed,
+} from "./changefeed.js"
 import type { WritableContext } from "./interpreters/writable.js"
-import { TRANSACT, hasTransact, executeBatch } from "./interpreters/writable.js"
-import type { Op, Changeset } from "./changefeed.js"
-import { CHANGEFEED, hasChangefeed, hasComposedChangefeed } from "./changefeed.js"
+import { executeBatch, hasTransact, TRANSACT } from "./interpreters/writable.js"
 
 // ---------------------------------------------------------------------------
 // ApplyChangesOptions
@@ -85,14 +89,11 @@ export interface ApplyChangesOptions {
  * @throws If `ref` does not have a `[TRANSACT]` symbol.
  * @throws If a transaction is already active on this context.
  */
-export function change<D extends object>(
-  ref: D,
-  fn: (draft: D) => void,
-): Op[] {
+export function change<D extends object>(ref: D, fn: (draft: D) => void): Op[] {
   if (!hasTransact(ref)) {
     throw new Error(
       "change() requires a ref with [TRANSACT]. " +
-      "Use a ref produced by interpret() with withWritable.",
+        "Use a ref produced by interpret() with withWritable.",
     )
   }
   const ctx: WritableContext = (ref as any)[TRANSACT]
@@ -151,7 +152,7 @@ export function applyChanges(
   if (!hasTransact(ref)) {
     throw new Error(
       "applyChanges() requires a ref with [TRANSACT]. " +
-      "Use a ref produced by interpret() with withWritable.",
+        "Use a ref produced by interpret() with withWritable.",
     )
   }
   const ctx: WritableContext = (ref as any)[TRANSACT]
@@ -205,13 +206,13 @@ export function subscribe(
   if (!hasChangefeed(ref)) {
     throw new Error(
       "subscribe() requires a ref with [CHANGEFEED]. " +
-      "Use a ref produced by interpret() with withChangefeed.",
+        "Use a ref produced by interpret() with withChangefeed.",
     )
   }
   if (!hasComposedChangefeed(ref)) {
     throw new Error(
       "subscribe() requires a composite ref (product, sequence, or map). " +
-      "Leaf refs only support subscribeNode(), not subscribe().",
+        "Leaf refs only support subscribeNode(), not subscribe().",
     )
   }
   return ref[CHANGEFEED].subscribeTree(callback)
@@ -253,7 +254,7 @@ export function subscribeNode(
   if (!hasChangefeed(ref)) {
     throw new Error(
       "subscribeNode() requires a ref with [CHANGEFEED]. " +
-      "Use a ref produced by interpret() with withChangefeed.",
+        "Use a ref produced by interpret() with withChangefeed.",
     )
   }
   return ref[CHANGEFEED].subscribe(callback)

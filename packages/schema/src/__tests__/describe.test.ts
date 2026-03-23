@@ -1,5 +1,5 @@
-import { describe as testDescribe, expect, it } from "vitest"
-import { Schema, LoroSchema, describe } from "../index.js"
+import { expect, it, describe as testDescribe } from "vitest"
+import { describe, LoroSchema, Schema } from "../index.js"
 
 // ===========================================================================
 // Base grammar tests — Schema only, no Loro annotations
@@ -40,11 +40,7 @@ testDescribe("describe: base grammar", () => {
         active: Schema.boolean(),
       })
       expect(describe(s)).toBe(
-        [
-          "name: string",
-          "age: number",
-          "active: boolean",
-        ].join("\n"),
+        ["name: string", "age: number", "active: boolean"].join("\n"),
       )
     })
 
@@ -54,12 +50,7 @@ testDescribe("describe: base grammar", () => {
           inner: Schema.number(),
         }),
       })
-      expect(describe(s)).toBe(
-        [
-          "outer:",
-          "  inner: number",
-        ].join("\n"),
-      )
+      expect(describe(s)).toBe(["outer:", "  inner: number"].join("\n"))
     })
 
     it("describes a labeled empty product", () => {
@@ -83,11 +74,7 @@ testDescribe("describe: base grammar", () => {
         }),
       )
       expect(describe(s)).toBe(
-        [
-          "list",
-          "  title: string",
-          "  done: boolean",
-        ].join("\n"),
+        ["list", "  title: string", "  done: boolean"].join("\n"),
       )
     })
 
@@ -106,12 +93,7 @@ testDescribe("describe: base grammar", () => {
           }),
         ),
       })
-      expect(describe(s)).toBe(
-        [
-          "items: list",
-          "  id: number",
-        ].join("\n"),
-      )
+      expect(describe(s)).toBe(["items: list", "  id: number"].join("\n"))
     })
 
     it("describes nested list<list<string>> inline", () => {
@@ -123,9 +105,7 @@ testDescribe("describe: base grammar", () => {
 
   testDescribe("maps", () => {
     it("describes record with inline scalar item", () => {
-      expect(describe(Schema.record(Schema.string()))).toBe(
-        "record<string>",
-      )
+      expect(describe(Schema.record(Schema.string()))).toBe("record<string>")
     })
 
     it("describes record with complex item on indented lines", () => {
@@ -134,12 +114,7 @@ testDescribe("describe: base grammar", () => {
           value: Schema.number(),
         }),
       )
-      expect(describe(s)).toBe(
-        [
-          "record",
-          "  value: number",
-        ].join("\n"),
-      )
+      expect(describe(s)).toBe(["record", "  value: number"].join("\n"))
     })
 
     it("describes labeled record inline", () => {
@@ -150,40 +125,36 @@ testDescribe("describe: base grammar", () => {
     })
 
     it("describes record<list<number>> inline", () => {
-      expect(
-        describe(Schema.record(Schema.list(Schema.number()))),
-      ).toBe("record<list<number>>")
+      expect(describe(Schema.record(Schema.list(Schema.number())))).toBe(
+        "record<list<number>>",
+      )
     })
   })
 
   testDescribe("sums", () => {
     it("describes a positional union", () => {
-      const s = Schema.union(
-        Schema.string(),
-        Schema.number(),
-      )
+      const s = Schema.union(Schema.string(), Schema.number())
       expect(describe(s)).toBe(
-        [
-          "union",
-          "  0: string",
-          "  1: number",
-        ].join("\n"),
+        ["union", "  0: string", "  1: number"].join("\n"),
       )
     })
 
     it("describes a discriminated union", () => {
       const s = Schema.discriminatedUnion("type", [
-        Schema.struct({ type: Schema.string("text"), content: Schema.string() }),
+        Schema.struct({
+          type: Schema.string("text"),
+          content: Schema.string(),
+        }),
         Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
       ])
       expect(describe(s)).toBe(
         [
           "union(type)",
           "  text:",
-          "    type: string(\"text\")",
+          '    type: string("text")',
           "    content: string",
           "  image:",
-          "    type: string(\"image\")",
+          '    type: string("image")',
           "    url: string",
         ].join("\n"),
       )
@@ -197,11 +168,7 @@ testDescribe("describe: base grammar", () => {
         count: Schema.number(),
       })
       expect(describe(s)).toBe(
-        [
-          "doc",
-          "  name: string",
-          "  count: number",
-        ].join("\n"),
+        ["doc", "  name: string", "  count: number"].join("\n"),
       )
     })
 
@@ -242,7 +209,11 @@ testDescribe("describe: base grammar", () => {
       const s = Schema.doc({
         content: Schema.discriminatedUnion("type", [
           Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
-          Schema.struct({ type: Schema.string("image"), url: Schema.string(), width: Schema.number() }),
+          Schema.struct({
+            type: Schema.string("image"),
+            url: Schema.string(),
+            width: Schema.number(),
+          }),
         ]),
       })
 
@@ -251,10 +222,10 @@ testDescribe("describe: base grammar", () => {
           "doc",
           "  content: union(type)",
           "    text:",
-          "      type: string(\"text\")",
+          '      type: string("text")',
           "      body: string",
           "    image:",
-          "      type: string(\"image\")",
+          '      type: string("image")',
           "      url: string",
           "      width: number",
         ].join("\n"),
@@ -281,11 +252,7 @@ testDescribe("describe: base grammar", () => {
         }),
       )
       expect(describe(s)).toBe(
-        [
-          "@versioned",
-          "  value: string",
-          "  version: number",
-        ].join("\n"),
+        ["@versioned", "  value: string", "  version: number"].join("\n"),
       )
     })
   })
@@ -295,12 +262,7 @@ testDescribe("describe: base grammar", () => {
       const s = Schema.struct({
         nested: Schema.struct({ x: Schema.number() }),
       })
-      expect(describe(s)).toBe(
-        [
-          "nested:",
-          "  x: number",
-        ].join("\n"),
-      )
+      expect(describe(s)).toBe(["nested:", "  x: number"].join("\n"))
     })
   })
 })
@@ -333,12 +295,7 @@ testDescribe("describe: LoroSchema annotations", () => {
           name: LoroSchema.plain.string(),
         }),
       )
-      expect(describe(s)).toBe(
-        [
-          "movable-list",
-          "  name: string",
-        ].join("\n"),
-      )
+      expect(describe(s)).toBe(["movable-list", "  name: string"].join("\n"))
     })
   })
 
@@ -351,11 +308,7 @@ testDescribe("describe: LoroSchema annotations", () => {
         }),
       )
       expect(describe(s)).toBe(
-        [
-          "tree",
-          "  label: string",
-          "  weight: number",
-        ].join("\n"),
+        ["tree", "  label: string", "  weight: number"].join("\n"),
       )
     })
   })
@@ -486,15 +439,11 @@ testDescribe("describe: LoroSchema annotations", () => {
     })
 
     it("describes a constrained number", () => {
-      expect(describe(Schema.number(1, 2, 3))).toBe(
-        "number(1 | 2 | 3)",
-      )
+      expect(describe(Schema.number(1, 2, 3))).toBe("number(1 | 2 | 3)")
     })
 
     it("describes a constrained boolean", () => {
-      expect(describe(Schema.boolean(true))).toBe(
-        "boolean(true)",
-      )
+      expect(describe(Schema.boolean(true))).toBe("boolean(true)")
     })
 
     it("unconstrained scalar renders without parens", () => {
@@ -513,10 +462,9 @@ testDescribe("describe: LoroSchema annotations", () => {
         count: Schema.number(),
       })
       expect(describe(s)).toBe(
-        [
-          'visibility: string("public" | "private")',
-          "count: number",
-        ].join("\n"),
+        ['visibility: string("public" | "private")', "count: number"].join(
+          "\n",
+        ),
       )
     })
   })
@@ -542,11 +490,7 @@ testDescribe("describe: LoroSchema annotations", () => {
         }),
       )
       expect(describe(s)).toBe(
-        [
-          "nullable",
-          "  name: string",
-          "  age: number",
-        ].join("\n"),
+        ["nullable", "  name: string", "  age: number"].join("\n"),
       )
     })
 
@@ -557,36 +501,23 @@ testDescribe("describe: LoroSchema annotations", () => {
     })
 
     it("non-nullable union with 3 variants renders as union", () => {
-      const s = Schema.union(
-        Schema.null(),
-        Schema.string(),
-        Schema.number(),
-      )
+      const s = Schema.union(Schema.null(), Schema.string(), Schema.number())
       expect(describe(s)).toBe(
-        [
-          "union",
-          "  0: null",
-          "  1: string",
-          "  2: number",
-        ].join("\n"),
+        ["union", "  0: null", "  1: string", "  2: number"].join("\n"),
       )
     })
 
     it("non-nullable 2-variant union (no null first) renders as union", () => {
       const s = Schema.union(Schema.string(), Schema.number())
       expect(describe(s)).toBe(
-        [
-          "union",
-          "  0: string",
-          "  1: number",
-        ].join("\n"),
+        ["union", "  0: string", "  1: number"].join("\n"),
       )
     })
 
     it("nullable with constrained inner", () => {
-      expect(
-        describe(Schema.nullable(Schema.string("a", "b"))),
-      ).toBe('nullable<string("a" | "b")>')
+      expect(describe(Schema.nullable(Schema.string("a", "b")))).toBe(
+        'nullable<string("a" | "b")>',
+      )
     })
 
     it("nullable field in doc", () => {
@@ -595,11 +526,7 @@ testDescribe("describe: LoroSchema annotations", () => {
         bio: Schema.nullable(Schema.string()),
       })
       expect(describe(s)).toBe(
-        [
-          "doc",
-          "  name: string",
-          "  bio: nullable<string>",
-        ].join("\n"),
+        ["doc", "  name: string", "  bio: nullable<string>"].join("\n"),
       )
     })
   })

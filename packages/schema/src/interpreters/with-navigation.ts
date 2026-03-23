@@ -17,23 +17,23 @@
 // See .plans/navigation-layer.md §Phase 2, Task 2.1.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
+import type { RefContext } from "../interpreter-types.js"
 import type {
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
   AnnotatedSchema,
+  MapSchema,
+  ProductSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SumSchema,
 } from "../schema.js"
 import {
-  readByPath,
   dispatchSum,
+  readByPath,
   storeArrayLength,
-  storeKeys,
   storeHasKey,
+  storeKeys,
 } from "../store.js"
 import type { HasCall, HasNavigation } from "./bottom.js"
-import type { RefContext } from "../interpreter-types.js"
 
 // ---------------------------------------------------------------------------
 // withNavigation — the coalgebraic structural addressing transformer
@@ -83,7 +83,7 @@ export function withNavigation<A extends HasCall>(
       ctx: RefContext,
       path: Path,
       schema: ProductSchema,
-      fields: Readonly<Record<string, () => (A & HasNavigation)>>,
+      fields: Readonly<Record<string, () => A & HasNavigation>>,
     ): A & HasNavigation {
       // Downcast thunks for the base interpreter
       const baseFields = fields as Readonly<Record<string, () => A>>
@@ -127,7 +127,7 @@ export function withNavigation<A extends HasCall>(
       ctx: RefContext,
       path: Path,
       schema: SequenceSchema,
-      item: (index: number) => (A & HasNavigation),
+      item: (index: number) => A & HasNavigation,
     ): A & HasNavigation {
       // Downcast for base
       const baseItem = item as (index: number) => A
@@ -172,7 +172,7 @@ export function withNavigation<A extends HasCall>(
       ctx: RefContext,
       path: Path,
       schema: MapSchema,
-      item: (key: string) => (A & HasNavigation),
+      item: (key: string) => A & HasNavigation,
     ): A & HasNavigation {
       // Downcast for base
       const baseItem = item as (key: string) => A
@@ -279,7 +279,7 @@ export function withNavigation<A extends HasCall>(
       ctx: RefContext,
       path: Path,
       schema: AnnotatedSchema,
-      inner: (() => (A & HasNavigation)) | undefined,
+      inner: (() => A & HasNavigation) | undefined,
     ): A & HasNavigation {
       switch (schema.tag) {
         case "text":
@@ -287,7 +287,9 @@ export function withNavigation<A extends HasCall>(
           // Leaf annotations — pass through to base. withReadable will
           // fill [CALL] and add toPrimitive later.
           return base.annotated(
-            ctx, path, schema,
+            ctx,
+            path,
+            schema,
             inner as (() => A) | undefined,
           ) as A & HasNavigation
 
@@ -299,9 +301,8 @@ export function withNavigation<A extends HasCall>(
             return inner()
           }
           // No inner — produce a bare carrier
-          return base.annotated(
-            ctx, path, schema, undefined,
-          ) as A & HasNavigation
+          return base.annotated(ctx, path, schema, undefined) as A &
+            HasNavigation
 
         default:
           // Unknown annotation — delegate to inner if present

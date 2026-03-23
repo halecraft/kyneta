@@ -10,21 +10,18 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import {
-	Schema,
-} from "../src/index.js";
-
 import type {
-	Schema as SchemaType,
-	AnnotatedSchema,
-	ScalarSchema,
-	ProductSchema,
-	SequenceSchema,
-	MapSchema,
-	PositionalSumSchema,
-	DiscriminatedSumSchema,
-	Plain,
-} from "../src/index.js";
+  AnnotatedSchema,
+  DiscriminatedSumSchema,
+  MapSchema,
+  Plain,
+  PositionalSumSchema,
+  ProductSchema,
+  ScalarSchema,
+  Schema as SchemaType,
+  SequenceSchema,
+} from "../src/index.js"
+import { Schema } from "../src/index.js"
 
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -41,45 +38,45 @@ import type {
 // ---------------------------------------------------------------------------
 
 type SeedA<S extends SchemaType> =
-	// --- Annotated: dispatch on tag ---
-	S extends AnnotatedSchema<infer Tag, infer Inner>
-		? Tag extends "text"
-			? string
-			: Tag extends "counter"
-				? number
-				: Tag extends "doc"
-					? Inner extends ProductSchema<infer F>
-						? { [K in keyof F]?: SeedA<F[K]> }
-						: unknown
-					: Tag extends "movable"
-						? Inner extends SequenceSchema<infer I>
-							? Plain<I>[]
-							: unknown
-						: Tag extends "tree"
-							? Inner extends SchemaType
-								? SeedA<Inner>
-								: unknown
-							: Inner extends SchemaType
-								? SeedA<Inner>
-								: unknown
-		: // --- Scalar ---
-			S extends ScalarSchema<infer _K, infer V>
-			? V
-			: // --- Product ---
-				S extends ProductSchema<infer F>
-				? { [K in keyof F]?: SeedA<F[K]> }
-				: // --- Sequence ---
-					S extends SequenceSchema<infer I>
-					? Plain<I>[]
-					: // --- Map ---
-						S extends MapSchema<infer I>
-						? { [key: string]: Plain<I> }
-						: // --- Sum ---
-							S extends PositionalSumSchema<infer V>
-							? Plain<V[number]>
-							: S extends DiscriminatedSumSchema<infer _D, infer V>
-								? Plain<V[number]>
-								: unknown
+  // --- Annotated: dispatch on tag ---
+  S extends AnnotatedSchema<infer Tag, infer Inner>
+    ? Tag extends "text"
+      ? string
+      : Tag extends "counter"
+        ? number
+        : Tag extends "doc"
+          ? Inner extends ProductSchema<infer F>
+            ? { [K in keyof F]?: SeedA<F[K]> }
+            : unknown
+          : Tag extends "movable"
+            ? Inner extends SequenceSchema<infer I>
+              ? Plain<I>[]
+              : unknown
+            : Tag extends "tree"
+              ? Inner extends SchemaType
+                ? SeedA<Inner>
+                : unknown
+              : Inner extends SchemaType
+                ? SeedA<Inner>
+                : unknown
+    : // --- Scalar ---
+      S extends ScalarSchema<infer _K, infer V>
+      ? V
+      : // --- Product ---
+        S extends ProductSchema<infer F>
+        ? { [K in keyof F]?: SeedA<F[K]> }
+        : // --- Sequence ---
+          S extends SequenceSchema<infer I>
+          ? Plain<I>[]
+          : // --- Map ---
+            S extends MapSchema<infer I>
+            ? { [key: string]: Plain<I> }
+            : // --- Sum ---
+              S extends PositionalSumSchema<infer V>
+              ? Plain<V[number]>
+              : S extends DiscriminatedSumSchema<infer _D, infer V>
+                ? Plain<V[number]>
+                : unknown
 
 // ---------------------------------------------------------------------------
 // Approach B: Flattened conditional dispatch
@@ -94,42 +91,43 @@ type SeedA<S extends SchemaType> =
 // (text, counter) to resolve as `unknown` instead of `string`/`number`.
 // ---------------------------------------------------------------------------
 
-type AnnotatedLeafValue<Tag extends string> =
-	Tag extends "text" ? string
-	: Tag extends "counter" ? number
-	: never
+type AnnotatedLeafValue<Tag extends string> = Tag extends "text"
+  ? string
+  : Tag extends "counter"
+    ? number
+    : never
 
 type SeedB<S extends SchemaType> =
-	// Fast path: annotated leaf (text, counter) — no inner schema
-	S extends AnnotatedSchema<infer Tag, undefined>
-		? AnnotatedLeafValue<Tag>
-	// Annotated structural: unwrap and dispatch on inner
-	: S extends AnnotatedSchema<"doc", ProductSchema<infer F>>
-		? { [K in keyof F]?: SeedB<F[K]> }
-	: S extends AnnotatedSchema<"movable", SequenceSchema<infer I>>
-		? Plain<I>[]
-	: S extends AnnotatedSchema<"tree", infer Inner extends SchemaType>
-		? SeedB<Inner>
-	: S extends AnnotatedSchema<string, infer Inner extends SchemaType>
-		? SeedB<Inner>
-	// Scalar — terminal, cheap
-	: S extends ScalarSchema<infer _K, infer V>
-		? V
-	// Product — partial keys, recurse
-	: S extends ProductSchema<infer F>
-		? { [K in keyof F]?: SeedB<F[K]> }
-	// Sequence — use Plain for items
-	: S extends SequenceSchema<infer I>
-		? Plain<I>[]
-	// Map
-	: S extends MapSchema<infer I>
-		? { [key: string]: Plain<I> }
-	// Sum — delegate to Plain
-	: S extends PositionalSumSchema<infer V>
-		? Plain<V[number]>
-	: S extends DiscriminatedSumSchema<infer _D, infer V>
-		? Plain<V[number]>
-	: unknown
+  // Fast path: annotated leaf (text, counter) — no inner schema
+  S extends AnnotatedSchema<infer Tag, undefined>
+    ? AnnotatedLeafValue<Tag>
+    : // Annotated structural: unwrap and dispatch on inner
+      S extends AnnotatedSchema<"doc", ProductSchema<infer F>>
+      ? { [K in keyof F]?: SeedB<F[K]> }
+      : S extends AnnotatedSchema<"movable", SequenceSchema<infer I>>
+        ? Plain<I>[]
+        : S extends AnnotatedSchema<"tree", infer Inner extends SchemaType>
+          ? SeedB<Inner>
+          : S extends AnnotatedSchema<string, infer Inner extends SchemaType>
+            ? SeedB<Inner>
+            : // Scalar — terminal, cheap
+              S extends ScalarSchema<infer _K, infer V>
+              ? V
+              : // Product — partial keys, recurse
+                S extends ProductSchema<infer F>
+                ? { [K in keyof F]?: SeedB<F[K]> }
+                : // Sequence — use Plain for items
+                  S extends SequenceSchema<infer I>
+                  ? Plain<I>[]
+                  : // Map
+                    S extends MapSchema<infer I>
+                    ? { [key: string]: Plain<I> }
+                    : // Sum — delegate to Plain
+                      S extends PositionalSumSchema<infer V>
+                      ? Plain<V[number]>
+                      : S extends DiscriminatedSumSchema<infer _D, infer V>
+                        ? Plain<V[number]>
+                        : unknown
 
 // ---------------------------------------------------------------------------
 // Approach C: Match AnnotatedSchema broadly, dispatch on Tag first
@@ -145,39 +143,45 @@ type SeedB<S extends SchemaType> =
 // ---------------------------------------------------------------------------
 
 type SeedC<S extends SchemaType> =
-	// --- Annotated: single match, then dispatch on tag ---
-	S extends AnnotatedSchema<infer Tag, infer Inner>
-		? Tag extends "text" ? string
-		: Tag extends "counter" ? number
-		: Tag extends "doc"
-			? Inner extends ProductSchema<infer F>
-				? { [K in keyof F]?: SeedC<F[K]> }
-				: unknown
-		: Tag extends "movable"
-			? Inner extends SequenceSchema<infer I>
-				? Plain<I>[]
-				: unknown
-		: Tag extends "tree"
-			? Inner extends SchemaType ? SeedC<Inner> : unknown
-		: Inner extends SchemaType ? SeedC<Inner> : unknown
-	// --- Scalar ---
-	: S extends ScalarSchema<infer _K, infer V>
-		? V
-	// --- Product ---
-	: S extends ProductSchema<infer F>
-		? { [K in keyof F]?: SeedC<F[K]> }
-	// --- Sequence ---
-	: S extends SequenceSchema<infer I>
-		? Plain<I>[]
-	// --- Map ---
-	: S extends MapSchema<infer I>
-		? { [key: string]: Plain<I> }
-	// --- Sum (delegate to Plain — same depth, only reached for actual sums) ---
-	: S extends PositionalSumSchema<infer V>
-		? Plain<V[number]>
-	: S extends DiscriminatedSumSchema<infer _D, infer V>
-		? Plain<V[number]>
-	: unknown
+  // --- Annotated: single match, then dispatch on tag ---
+  S extends AnnotatedSchema<infer Tag, infer Inner>
+    ? Tag extends "text"
+      ? string
+      : Tag extends "counter"
+        ? number
+        : Tag extends "doc"
+          ? Inner extends ProductSchema<infer F>
+            ? { [K in keyof F]?: SeedC<F[K]> }
+            : unknown
+          : Tag extends "movable"
+            ? Inner extends SequenceSchema<infer I>
+              ? Plain<I>[]
+              : unknown
+            : Tag extends "tree"
+              ? Inner extends SchemaType
+                ? SeedC<Inner>
+                : unknown
+              : Inner extends SchemaType
+                ? SeedC<Inner>
+                : unknown
+    : // --- Scalar ---
+      S extends ScalarSchema<infer _K, infer V>
+      ? V
+      : // --- Product ---
+        S extends ProductSchema<infer F>
+        ? { [K in keyof F]?: SeedC<F[K]> }
+        : // --- Sequence ---
+          S extends SequenceSchema<infer I>
+          ? Plain<I>[]
+          : // --- Map ---
+            S extends MapSchema<infer I>
+            ? { [key: string]: Plain<I> }
+            : // --- Sum (delegate to Plain — same depth, only reached for actual sums) ---
+              S extends PositionalSumSchema<infer V>
+              ? Plain<V[number]>
+              : S extends DiscriminatedSumSchema<infer _D, infer V>
+                ? Plain<V[number]>
+                : unknown
 
 // ---------------------------------------------------------------------------
 // Approach D: Indexed access on S["tag"] — no conditional inference for annotations
@@ -202,42 +206,56 @@ type SeedC<S extends SchemaType> =
 // ---------------------------------------------------------------------------
 
 // Helper: resolve product fields with optional keys — isolates the mapped type
-type SeedFields<F extends Record<string, SchemaType>> = { [K in keyof F]?: SeedD<F[K]> }
+type SeedFields<F extends Record<string, SchemaType>> = {
+  [K in keyof F]?: SeedD<F[K]>
+}
 
 // Helper: resolve an annotated schema given its tag and the full annotated node
-type SeedAnnotated<Tag extends string, S extends AnnotatedSchema> =
-	Tag extends "text" ? string
-	: Tag extends "counter" ? number
-	: Tag extends "doc"
-		? S extends AnnotatedSchema<any, ProductSchema<infer F>> ? SeedFields<F> : unknown
-	: Tag extends "movable"
-		? S extends AnnotatedSchema<any, SequenceSchema<infer I>> ? Plain<I>[] : unknown
-	: Tag extends "tree"
-		? S extends AnnotatedSchema<any, infer Inner extends SchemaType> ? SeedD<Inner> : unknown
-	: S extends AnnotatedSchema<any, infer Inner extends SchemaType> ? SeedD<Inner> : unknown
+type SeedAnnotated<
+  Tag extends string,
+  S extends AnnotatedSchema,
+> = Tag extends "text"
+  ? string
+  : Tag extends "counter"
+    ? number
+    : Tag extends "doc"
+      ? S extends AnnotatedSchema<any, ProductSchema<infer F>>
+        ? SeedFields<F>
+        : unknown
+      : Tag extends "movable"
+        ? S extends AnnotatedSchema<any, SequenceSchema<infer I>>
+          ? Plain<I>[]
+          : unknown
+        : Tag extends "tree"
+          ? S extends AnnotatedSchema<any, infer Inner extends SchemaType>
+            ? SeedD<Inner>
+            : unknown
+          : S extends AnnotatedSchema<any, infer Inner extends SchemaType>
+            ? SeedD<Inner>
+            : unknown
 
 type SeedD<S extends SchemaType> =
-	// --- Annotated: indexed access on tag, delegate to helper ---
-	S extends AnnotatedSchema
-		? SeedAnnotated<S["tag"], S>
-	// --- Scalar ---
-	: S extends ScalarSchema<infer _K, infer V>
-		? V
-	// --- Product ---
-	: S extends ProductSchema<infer F>
-		? SeedFields<F>
-	// --- Sequence ---
-	: S extends SequenceSchema<infer I>
-		? Plain<I>[]
-	// --- Map ---
-	: S extends MapSchema<infer I>
-		? { [key: string]: Plain<I> }
-	// --- Sum (delegate to Plain) ---
-	: S extends PositionalSumSchema<infer V>
-		? Plain<V[number]>
-	: S extends DiscriminatedSumSchema<infer _D, infer V>
-		? Plain<V[number]>
-	: unknown
+  // --- Annotated: indexed access on tag, delegate to helper ---
+  S extends AnnotatedSchema
+    ? SeedAnnotated<S["tag"], S>
+    : // --- Scalar ---
+      S extends ScalarSchema<infer _K, infer V>
+      ? V
+      : // --- Product ---
+        S extends ProductSchema<infer F>
+        ? SeedFields<F>
+        : // --- Sequence ---
+          S extends SequenceSchema<infer I>
+          ? Plain<I>[]
+          : // --- Map ---
+            S extends MapSchema<infer I>
+            ? { [key: string]: Plain<I> }
+            : // --- Sum (delegate to Plain) ---
+              S extends PositionalSumSchema<infer V>
+              ? Plain<V[number]>
+              : S extends DiscriminatedSumSchema<infer _D, infer V>
+                ? Plain<V[number]>
+                : unknown
 
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -248,11 +266,13 @@ type SeedD<S extends SchemaType> =
 type _TextSchema = ReturnType<typeof Schema.annotated<"text">>
 
 // Does it match AnnotatedSchema<Tag, undefined>?
-type _MatchUndefined = _TextSchema extends AnnotatedSchema<infer Tag, undefined> ? Tag : "no-match"
+type _MatchUndefined =
+  _TextSchema extends AnnotatedSchema<infer Tag, undefined> ? Tag : "no-match"
 // Does it match AnnotatedSchema<Tag, infer Inner>?
-type _MatchInfer = _TextSchema extends AnnotatedSchema<infer Tag, infer Inner>
-	? [tag: Tag, inner: Inner]
-	: "no-match"
+type _MatchInfer =
+  _TextSchema extends AnnotatedSchema<infer Tag, infer Inner>
+    ? [tag: Tag, inner: Inner]
+    : "no-match"
 
 // Force evaluation (hover in IDE to inspect resolved types)
 declare const _d1: _MatchUndefined
@@ -265,35 +285,38 @@ declare const _d2: _MatchInfer
 // ═══════════════════════════════════════════════════════════════════════════
 
 const TestSchema = Schema.doc({
-	name: Schema.annotated("text"),
-	stars: Schema.annotated("counter"),
+  name: Schema.annotated("text"),
+  stars: Schema.annotated("counter"),
 
-	tasks: Schema.list(
-		Schema.struct({
-			title: Schema.string(),
-			done: Schema.boolean(),
-			priority: Schema.number(1, 2, 3),
-		}),
-	),
+  tasks: Schema.list(
+    Schema.struct({
+      title: Schema.string(),
+      done: Schema.boolean(),
+      priority: Schema.number(1, 2, 3),
+    }),
+  ),
 
-	settings: Schema.struct({
-		darkMode: Schema.boolean(),
-		fontSize: Schema.number(),
-	}),
+  settings: Schema.struct({
+    darkMode: Schema.boolean(),
+    fontSize: Schema.number(),
+  }),
 
-	content: Schema.discriminatedUnion("type", [
-		Schema.struct({ type: Schema.string("text"), body: Schema.annotated("text") }),
-		Schema.struct({
-			type: Schema.string("image"),
-			url: Schema.string(),
-			caption: Schema.annotated("text"),
-		}),
-	]),
+  content: Schema.discriminatedUnion("type", [
+    Schema.struct({
+      type: Schema.string("text"),
+      body: Schema.annotated("text"),
+    }),
+    Schema.struct({
+      type: Schema.string("image"),
+      url: Schema.string(),
+      caption: Schema.annotated("text"),
+    }),
+  ]),
 
-	bio: Schema.nullable(Schema.string()),
+  bio: Schema.nullable(Schema.string()),
 
-	labels: Schema.record(Schema.string()),
-});
+  labels: Schema.record(Schema.string()),
+})
 
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -310,60 +333,72 @@ const TestSchema = Schema.doc({
 type TestSeedA = SeedA<typeof TestSchema>
 
 const seedA1: TestSeedA = { name: "Hello" }
-const seedA2: TestSeedA = { name: "Hello", content: { type: "text" as const, body: "" } }
-const seedA3: TestSeedA = {}
-const seedA4: TestSeedA = { settings: { darkMode: true } }
-const seedA5: TestSeedA = { stars: 42, bio: null }
+const _seedA2: TestSeedA = {
+  name: "Hello",
+  content: { type: "text" as const, body: "" },
+}
+const _seedA3: TestSeedA = {}
+const _seedA4: TestSeedA = { settings: { darkMode: true } }
+const _seedA5: TestSeedA = { stars: 42, bio: null }
 
 // Should NOT compile:
-const seedA_bad1: TestSeedA = { named: "typo" }           // ← excess property
-const seedA_bad2: TestSeedA = { name: 123 }               // ← wrong type
-const seedA_bad3: TestSeedA = { stars: "not a number" }   // ← wrong type
+const seedA_bad1: TestSeedA = { named: "typo" } // ← excess property
+const _seedA_bad2: TestSeedA = { name: 123 } // ← wrong type
+const _seedA_bad3: TestSeedA = { stars: "not a number" } // ← wrong type
 
 // --- Approach B ---
 
 type TestSeedB = SeedB<typeof TestSchema>
 
 const seedB1: TestSeedB = { name: "Hello" }
-const seedB2: TestSeedB = { name: "Hello", content: { type: "text" as const, body: "" } }
-const seedB3: TestSeedB = {}
-const seedB4: TestSeedB = { settings: { darkMode: true } }
-const seedB5: TestSeedB = { stars: 42, bio: null }
+const _seedB2: TestSeedB = {
+  name: "Hello",
+  content: { type: "text" as const, body: "" },
+}
+const _seedB3: TestSeedB = {}
+const _seedB4: TestSeedB = { settings: { darkMode: true } }
+const _seedB5: TestSeedB = { stars: 42, bio: null }
 
 // Should NOT compile:
-const seedB_bad1: TestSeedB = { named: "typo" }           // ← excess property
-const seedB_bad2: TestSeedB = { name: 123 }               // ← wrong type (BUT: may pass if name resolves to unknown)
-const seedB_bad3: TestSeedB = { stars: "not a number" }   // ← wrong type (BUT: may pass if stars resolves to unknown)
+const seedB_bad1: TestSeedB = { named: "typo" } // ← excess property
+const _seedB_bad2: TestSeedB = { name: 123 } // ← wrong type (BUT: may pass if name resolves to unknown)
+const _seedB_bad3: TestSeedB = { stars: "not a number" } // ← wrong type (BUT: may pass if stars resolves to unknown)
 
 // --- Approach C ---
 
 type TestSeedC = SeedC<typeof TestSchema>
 
 const seedC1: TestSeedC = { name: "Hello" }
-const seedC2: TestSeedC = { name: "Hello", content: { type: "text" as const, body: "" } }
-const seedC3: TestSeedC = {}
-const seedC4: TestSeedC = { settings: { darkMode: true } }
-const seedC5: TestSeedC = { stars: 42, bio: null }
+const _seedC2: TestSeedC = {
+  name: "Hello",
+  content: { type: "text" as const, body: "" },
+}
+const _seedC3: TestSeedC = {}
+const _seedC4: TestSeedC = { settings: { darkMode: true } }
+const _seedC5: TestSeedC = { stars: 42, bio: null }
 
 // Should NOT compile:
-const seedC_bad1: TestSeedC = { named: "typo" }           // ← excess property
-const seedC_bad2: TestSeedC = { name: 123 }               // ← wrong type
-const seedC_bad3: TestSeedC = { stars: "not a number" }   // ← wrong type
+const seedC_bad1: TestSeedC = { named: "typo" } // ← excess property
+const _seedC_bad2: TestSeedC = { name: 123 } // ← wrong type
+const _seedC_bad3: TestSeedC = { stars: "not a number" } // ← wrong type
 
 // --- Approach D ---
 
 type TestSeedD = SeedD<typeof TestSchema>
 
 const seedD1: TestSeedD = { name: "Hello" }
-const seedD2: TestSeedD = { name: "Hello", content: { type: "text" as const, body: "" } }
-const seedD3: TestSeedD = {}
-const seedD4: TestSeedD = { settings: { darkMode: true } }
-const seedD5: TestSeedD = { stars: 42, bio: null }
+const _seedD2: TestSeedD = {
+  name: "Hello",
+  content: { type: "text" as const, body: "" },
+}
+const _seedD3: TestSeedD = {}
+const _seedD4: TestSeedD = { settings: { darkMode: true } }
+const _seedD5: TestSeedD = { stars: 42, bio: null }
 
 // Should NOT compile:
-const seedD_bad1: TestSeedD = { named: "typo" }           // ← excess property
-const seedD_bad2: TestSeedD = { name: 123 }               // ← wrong type
-const seedD_bad3: TestSeedD = { stars: "not a number" }   // ← wrong type
+const seedD_bad1: TestSeedD = { named: "typo" } // ← excess property
+const _seedD_bad2: TestSeedD = { name: 123 } // ← wrong type
+const _seedD_bad3: TestSeedD = { stars: "not a number" } // ← wrong type
 
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -374,56 +409,56 @@ const seedD_bad3: TestSeedD = { stars: "not a number" }   // ← wrong type
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-function createDocA<S extends SchemaType>(
-	_schema: S,
-	_seed?: SeedA<S>,
-): void {}
+function createDocA<S extends SchemaType>(_schema: S, _seed?: SeedA<S>): void {}
 
-function createDocB<S extends SchemaType>(
-	_schema: S,
-	_seed?: SeedB<S>,
-): void {}
+function createDocB<S extends SchemaType>(_schema: S, _seed?: SeedB<S>): void {}
 
-function createDocC<S extends SchemaType>(
-	_schema: S,
-	_seed?: SeedC<S>,
-): void {}
+function createDocC<S extends SchemaType>(_schema: S, _seed?: SeedC<S>): void {}
 
-function createDocD<S extends SchemaType>(
-	_schema: S,
-	_seed?: SeedD<S>,
-): void {}
+function createDocD<S extends SchemaType>(_schema: S, _seed?: SeedD<S>): void {}
 
 // --- Should compile ---
 createDocA(TestSchema, { name: "ok" })
-createDocA(TestSchema, { name: "ok", content: { type: "text" as const, body: "" } })
+createDocA(TestSchema, {
+  name: "ok",
+  content: { type: "text" as const, body: "" },
+})
 createDocA(TestSchema, {})
 createDocA(TestSchema)
 
 createDocB(TestSchema, { name: "ok" })
-createDocB(TestSchema, { name: "ok", content: { type: "text" as const, body: "" } })
+createDocB(TestSchema, {
+  name: "ok",
+  content: { type: "text" as const, body: "" },
+})
 createDocB(TestSchema, {})
 createDocB(TestSchema)
 
 createDocC(TestSchema, { name: "ok" })
-createDocC(TestSchema, { name: "ok", content: { type: "text" as const, body: "" } })
+createDocC(TestSchema, {
+  name: "ok",
+  content: { type: "text" as const, body: "" },
+})
 createDocC(TestSchema, {})
 createDocC(TestSchema)
 
 createDocD(TestSchema, { name: "ok" })
-createDocD(TestSchema, { name: "ok", content: { type: "text" as const, body: "" } })
+createDocD(TestSchema, {
+  name: "ok",
+  content: { type: "text" as const, body: "" },
+})
 createDocD(TestSchema, {})
 createDocD(TestSchema)
 
 // --- Should NOT compile ---
-createDocA(TestSchema, { named: "typo" })    // ← excess property
-createDocB(TestSchema, { named: "typo" })    // ← excess property
-createDocC(TestSchema, { named: "typo" })    // ← excess property
-createDocD(TestSchema, { named: "typo" })    // ← excess property
-createDocA(TestSchema, { name: 123 })         // ← wrong type
-createDocB(TestSchema, { name: 123 })         // ← wrong type
-createDocC(TestSchema, { name: 123 })         // ← wrong type
-createDocD(TestSchema, { name: 123 })         // ← wrong type
+createDocA(TestSchema, { named: "typo" }) // ← excess property
+createDocB(TestSchema, { named: "typo" }) // ← excess property
+createDocC(TestSchema, { named: "typo" }) // ← excess property
+createDocD(TestSchema, { named: "typo" }) // ← excess property
+createDocA(TestSchema, { name: 123 }) // ← wrong type
+createDocB(TestSchema, { name: 123 }) // ← wrong type
+createDocC(TestSchema, { name: 123 }) // ← wrong type
+createDocD(TestSchema, { name: 123 }) // ← wrong type
 
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -438,11 +473,11 @@ console.log("  Approach C (SeedC): broad match + tag dispatch first")
 console.log("  Approach D (SeedD): indexed access S['tag'] + helper types")
 
 // Suppress unused variable warnings
-void seedA1, seedA2, seedA3, seedA4, seedA5
-void seedB1, seedB2, seedB3, seedB4, seedB5
-void seedC1, seedC2, seedC3, seedC4, seedC5
-void seedD1, seedD2, seedD3, seedD4, seedD5
-void seedA_bad1, seedA_bad2, seedA_bad3
-void seedB_bad1, seedB_bad2, seedB_bad3
-void seedC_bad1, seedC_bad2, seedC_bad3
-void seedD_bad1, seedD_bad2, seedD_bad3
+void seedA1, _seedA2, _seedA3, _seedA4, _seedA5
+void seedB1, _seedB2, _seedB3, _seedB4, _seedB5
+void seedC1, _seedC2, _seedC3, _seedC4, _seedC5
+void seedD1, _seedD2, _seedD3, _seedD4, _seedD5
+void seedA_bad1, _seedA_bad2, _seedA_bad3
+void seedB_bad1, _seedB_bad2, _seedB_bad3
+void seedC_bad1, _seedC_bad2, _seedC_bad3
+void seedD_bad1, _seedD_bad2, _seedD_bad3

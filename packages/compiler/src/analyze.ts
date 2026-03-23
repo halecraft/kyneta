@@ -14,20 +14,6 @@
  */
 
 import {
-  getDeltaKind,
-  isChangefeedType,
-  isComponentFactoryType,
-} from "./reactive-detection.js"
-import { buildExpressionIR } from "./expression-build.js"
-import {
-  extractDeps,
-  isReactive as exprIsReactive,
-  renderExpression,
-  renderRefSource,
-  isRefRead,
-  refRead,
-} from "./expression-ir.js"
-import {
   type ArrayBindingPattern,
   type ArrowFunction,
   type Block,
@@ -44,8 +30,17 @@ import {
   type SourceFile,
   type Statement,
   SyntaxKind,
-  type Type,
 } from "ts-morph"
+import { type BindingScope, createBindingScope } from "./binding-scope.js"
+import { buildExpressionIR } from "./expression-build.js"
+import {
+  isReactive as exprIsReactive,
+  extractDeps,
+  isRefRead,
+  refRead,
+  renderExpression,
+  renderRefSource,
+} from "./expression-ir.js"
 
 import type {
   AttributeNode,
@@ -70,8 +65,12 @@ import {
   createSpan,
   createStatement,
 } from "./ir.js"
-import { createBindingScope, type BindingScope } from "./binding-scope.js"
 import { detectFilterPattern } from "./patterns.js"
+import {
+  getDeltaKind,
+  isChangefeedType,
+  isComponentFactoryType,
+} from "./reactive-detection.js"
 
 // =============================================================================
 // Constants
@@ -433,7 +432,10 @@ export function detectImplicitRead(expr: Expression): string | undefined {
  * - `source` = user's expression verbatim
  * - Codegen emits `valueRegion` with replace semantics
  */
-export function analyzeExpression(expr: Expression, scope?: BindingScope): ContentNode {
+export function analyzeExpression(
+  expr: Expression,
+  scope?: BindingScope,
+): ContentNode {
   const span = getSpan(expr)
   const rawSource = expr.getText()
 
@@ -469,7 +471,14 @@ export function analyzeExpression(expr: Expression, scope?: BindingScope): Conte
       directReadSource = renderRefSource(exprIR.ref)
     }
 
-    return createContent(source, "reactive", deps, span, directReadSource, exprIR)
+    return createContent(
+      source,
+      "reactive",
+      deps,
+      span,
+      directReadSource,
+      exprIR,
+    )
   }
 
   // Bare changefeed in content position: the ExpressionIR builder doesn't
@@ -485,7 +494,14 @@ export function analyzeExpression(expr: Expression, scope?: BindingScope): Conte
     const deps = extractDeps(autoReadIR)
     const source = renderExpression(autoReadIR, { expandBindings: false })
     const directReadSource = renderRefSource(exprIR)
-    return createContent(source, "reactive", deps, span, directReadSource, autoReadIR)
+    return createContent(
+      source,
+      "reactive",
+      deps,
+      span,
+      directReadSource,
+      autoReadIR,
+    )
   }
 
   // Non-reactive expression — render-time evaluation
@@ -497,12 +513,13 @@ export function analyzeExpression(expr: Expression, scope?: BindingScope): Conte
 // Props Analysis
 // =============================================================================
 
-
-
 /**
  * Analyze props object literal.
  */
-export function analyzeProps(obj: ObjectLiteralExpression, scope?: BindingScope): {
+export function analyzeProps(
+  obj: ObjectLiteralExpression,
+  scope?: BindingScope,
+): {
   attributes: AttributeNode[]
   eventHandlers: EventHandlerNode[]
 } {
@@ -558,7 +575,10 @@ export function analyzeProps(obj: ObjectLiteralExpression, scope?: BindingScope)
 /**
  * Analyze a for..of statement.
  */
-export function analyzeForOfStatement(stmt: ForOfStatement, scope?: BindingScope): ChildNode | null {
+export function analyzeForOfStatement(
+  stmt: ForOfStatement,
+  scope?: BindingScope,
+): ChildNode | null {
   const span = getSpan(stmt)
 
   // Get the initializer (the variable declaration)
@@ -619,7 +639,10 @@ export function analyzeForOfStatement(stmt: ForOfStatement, scope?: BindingScope
   //   - `items.entries()` where `items` is a ListRef (changefeed) but the
   //     return type of `.entries()` is `IterableIterator` (not changefeed)
   let isReactive = isChangefeedType(iterExpr.getType())
-  if (!isReactive && iterExpr.getKind() === SyntaxKind.PropertyAccessExpression) {
+  if (
+    !isReactive &&
+    iterExpr.getKind() === SyntaxKind.PropertyAccessExpression
+  ) {
     const propAccess = iterExpr as PropertyAccessExpression
     const objType = propAccess.getExpression().getType()
     if (isChangefeedType(objType)) {
@@ -682,7 +705,10 @@ export function analyzeForOfStatement(stmt: ForOfStatement, scope?: BindingScope
  *
  * Else-if chains are flattened into the branches array (not nested).
  */
-export function analyzeIfStatement(stmt: IfStatement, scope?: BindingScope): ChildNode | null {
+export function analyzeIfStatement(
+  stmt: IfStatement,
+  scope?: BindingScope,
+): ChildNode | null {
   const span = getSpan(stmt)
 
   // Analyze the condition (with scope so bindings in predicates are resolved)
@@ -737,7 +763,10 @@ export function analyzeIfStatement(stmt: IfStatement, scope?: BindingScope): Chi
 /**
  * Analyze statements within a block or single statement.
  */
-export function analyzeStatementBody(stmt: Statement, scope?: BindingScope): ChildNode[] {
+export function analyzeStatementBody(
+  stmt: Statement,
+  scope?: BindingScope,
+): ChildNode[] {
   const children: ChildNode[] = []
 
   if (stmt.getKind() === SyntaxKind.Block) {
@@ -767,7 +796,10 @@ export function analyzeStatementBody(stmt: Statement, scope?: BindingScope): Chi
  * Statements that aren't UI-specific (element calls, control flow) are
  * captured as StatementNode to preserve them in the generated code.
  */
-export function analyzeStatement(stmt: Statement, scope?: BindingScope): ChildNode[] | null {
+export function analyzeStatement(
+  stmt: Statement,
+  scope?: BindingScope,
+): ChildNode[] | null {
   const span = getSpan(stmt)
 
   // Return statement - not supported in builder functions
@@ -871,15 +903,17 @@ export function analyzeStatement(stmt: Statement, scope?: BindingScope): ChildNo
   if (stmt.getKind() === SyntaxKind.VariableStatement) {
     const varStmt = stmt as any // VariableStatement
     const declarations = varStmt.getDeclarationList().getDeclarations()
-    const declarationKind = varStmt.getDeclarationList().getDeclarationKind() as string
+    const declarationKind = varStmt
+      .getDeclarationList()
+      .getDeclarationKind() as string
 
     // Reject mutable bindings with instructive error
     if (declarationKind === "let" || declarationKind === "var") {
       const line = stmt.getStartLineNumber()
       throw new Error(
         `Kyneta Compiler Error: Mutable binding \`${declarationKind}\` in builder body at line ${line}.\n` +
-        `Builder bodies require \`const\` bindings for dependency tracking. ` +
-        `If you need mutable state, use \`state(initialValue)\` to create a reactive ref.`,
+          `Builder bodies require \`const\` bindings for dependency tracking. ` +
+          `If you need mutable state, use \`state(initialValue)\` to create a reactive ref.`,
       )
     }
 
@@ -888,7 +922,11 @@ export function analyzeStatement(stmt: Statement, scope?: BindingScope): ChildNo
       const name = decl.getName()
       const initializer = decl.getInitializer()
       // Simple named bindings — destructuring is deferred (kept as StatementNode)
-      if (initializer && Node.isExpression(initializer) && decl.getNameNode().getKind() === SyntaxKind.Identifier) {
+      if (
+        initializer &&
+        Node.isExpression(initializer) &&
+        decl.getNameNode().getKind() === SyntaxKind.Identifier
+      ) {
         const value = analyzeExpression(initializer, scope)
         if (scope) {
           scope.bind(name, value)
@@ -926,7 +964,10 @@ export function analyzeStatement(stmt: Statement, scope?: BindingScope): ChildNo
  * - div("text", span("nested"))  - children only
  * - div({ class: "x" }, "text")  - props + children
  */
-export function analyzeElementCall(call: CallExpression, scope?: BindingScope): ChildNode | null {
+export function analyzeElementCall(
+  call: CallExpression,
+  scope?: BindingScope,
+): ChildNode | null {
   // Check if this is an HTML element or component call
   const info = checkElementOrComponent(call)
   if (!info.isElementOrComponent) {

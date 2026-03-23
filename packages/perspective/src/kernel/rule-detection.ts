@@ -10,18 +10,15 @@
 // See unified-engine.md §B.4 (default solver rules), §B.7 (native solver
 // optimization), §14 (stratification layers).
 
-import type {
-  Constraint,
-  RuleConstraint,
-} from './types.js';
-import type { Rule } from '../datalog/types.js';
+import type { Rule } from "../datalog/types.js"
+import type { Constraint, RuleConstraint } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Resolution Strategy
 // ---------------------------------------------------------------------------
 
 /** The resolution path the pipeline should use. */
-export type ResolutionStrategy = 'native' | 'datalog';
+export type ResolutionStrategy = "native" | "datalog"
 
 /**
  * Select the resolution strategy based on config and active rules.
@@ -42,23 +39,23 @@ export function selectResolutionStrategy(
   activeConstraints: readonly Constraint[],
 ): ResolutionStrategy {
   if (!enableDatalog) {
-    return 'native';
+    return "native"
   }
 
   if (rules.length === 0) {
     // No rules in the store — use native solvers.
     // This is the case before bootstrap injects rules.
-    return 'native';
+    return "native"
   }
 
   if (isDefaultRulesOnly(rules, activeConstraints)) {
     // Rules match the known default LWW + Fugue patterns and no
     // custom Layer 2+ rules exist — native fast path (§B.7).
-    return 'native';
+    return "native"
   }
 
   // Custom or modified rules — use Datalog evaluation (primary path).
-  return 'datalog';
+  return "datalog"
 }
 
 // ---------------------------------------------------------------------------
@@ -74,21 +71,21 @@ export function selectResolutionStrategy(
  * Rules are sorted by layer to ensure deterministic evaluation order.
  */
 export function extractRules(activeConstraints: readonly Constraint[]): Rule[] {
-  const ruleConstraints: RuleConstraint[] = [];
+  const ruleConstraints: RuleConstraint[] = []
 
   for (const c of activeConstraints) {
-    if (c.type === 'rule') {
-      ruleConstraints.push(c);
+    if (c.type === "rule") {
+      ruleConstraints.push(c)
     }
   }
 
   // Sort by layer (lower layers first) for predictable evaluation.
-  ruleConstraints.sort((a, b) => a.payload.layer - b.payload.layer);
+  ruleConstraints.sort((a, b) => a.payload.layer - b.payload.layer)
 
-  return ruleConstraints.map((rc) => ({
+  return ruleConstraints.map(rc => ({
     head: rc.payload.head,
     body: rc.payload.body,
-  }));
+  }))
 }
 
 // ---------------------------------------------------------------------------
@@ -119,13 +116,13 @@ export function isDefaultRulesOnly(
   // The presence of Layer 2+ rules means custom/configurable rules exist,
   // which might interact with the defaults — use Datalog to be safe.
   for (const c of activeConstraints) {
-    if (c.type === 'rule' && c.payload.layer >= 2) {
-      return false;
+    if (c.type === "rule" && c.payload.layer >= 2) {
+      return false
     }
   }
 
   // Check if the rules structurally match the default LWW + Fugue patterns.
-  return hasDefaultLWWRules(rules) && hasDefaultFugueRules(rules);
+  return hasDefaultLWWRules(rules) && hasDefaultFugueRules(rules)
 }
 
 /**
@@ -141,33 +138,33 @@ export function isDefaultRulesOnly(
  *   - A head predicate 'winner' with a negation of 'superseded' in body
  */
 export function hasDefaultLWWRules(rules: readonly Rule[]): boolean {
-  let hasSuperseded = false;
-  let hasWinner = false;
+  let hasSuperseded = false
+  let hasWinner = false
 
   for (const r of rules) {
-    if (r.head.predicate === 'superseded') {
+    if (r.head.predicate === "superseded") {
       const hasActiveValue = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'active_value',
-      );
+        b => b.kind === "atom" && b.atom.predicate === "active_value",
+      )
       if (hasActiveValue) {
-        hasSuperseded = true;
+        hasSuperseded = true
       }
     }
 
-    if (r.head.predicate === 'winner') {
+    if (r.head.predicate === "winner") {
       const hasActiveValue = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'active_value',
-      );
+        b => b.kind === "atom" && b.atom.predicate === "active_value",
+      )
       const negatesSuperseded = r.body.some(
-        (b) => b.kind === 'negation' && b.atom.predicate === 'superseded',
-      );
+        b => b.kind === "negation" && b.atom.predicate === "superseded",
+      )
       if (hasActiveValue && negatesSuperseded) {
-        hasWinner = true;
+        hasWinner = true
       }
     }
   }
 
-  return hasSuperseded && hasWinner;
+  return hasSuperseded && hasWinner
 }
 
 /**
@@ -179,28 +176,28 @@ export function hasDefaultLWWRules(rules: readonly Rule[]): boolean {
  *   - A head predicate 'fugue_before' reading from 'fugue_child'
  */
 export function hasDefaultFugueRules(rules: readonly Rule[]): boolean {
-  let hasFugueChild = false;
-  let hasFugueBefore = false;
+  let hasFugueChild = false
+  let hasFugueBefore = false
 
   for (const r of rules) {
-    if (r.head.predicate === 'fugue_child') {
+    if (r.head.predicate === "fugue_child") {
       const hasSeqStructure = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'active_structure_seq',
-      );
+        b => b.kind === "atom" && b.atom.predicate === "active_structure_seq",
+      )
       if (hasSeqStructure) {
-        hasFugueChild = true;
+        hasFugueChild = true
       }
     }
 
-    if (r.head.predicate === 'fugue_before') {
+    if (r.head.predicate === "fugue_before") {
       const hasFugueChildBody = r.body.some(
-        (b) => b.kind === 'atom' && b.atom.predicate === 'fugue_child',
-      );
+        b => b.kind === "atom" && b.atom.predicate === "fugue_child",
+      )
       if (hasFugueChildBody) {
-        hasFugueBefore = true;
+        hasFugueBefore = true
       }
     }
   }
 
-  return hasFugueChild && hasFugueBefore;
+  return hasFugueChild && hasFugueBefore
 }

@@ -8,8 +8,8 @@
 import {
   CHANGEFEED,
   type ChangeBase,
-  type Changeset,
   type Changefeed,
+  type Changeset,
   type SequenceInstruction,
 } from "@kyneta/schema"
 import { JSDOM } from "jsdom"
@@ -20,10 +20,10 @@ import {
   createCountingContainer,
 } from "../testing/counting-dom.js"
 import {
-  conditionalRegion,
-  listRegion,
   claimSlot,
+  conditionalRegion,
   type ListRefLike,
+  listRegion,
   planConditionalUpdate,
   planDeltaOps,
   planInitialRender,
@@ -203,10 +203,7 @@ describe("regions", () => {
     })
 
     it("should insert items at specific index", () => {
-      const { ref, emit, setItems } = createMockSequenceRef([
-        "first",
-        "third",
-      ])
+      const { ref, emit, setItems } = createMockSequenceRef(["first", "third"])
       const scope = new Scope()
       const container = document.createElement("ul")
 
@@ -355,7 +352,11 @@ describe("regions", () => {
         items.push(`item${i}`)
       }
 
-      const { container, counts, reset } = createCountingContainer("ul")
+      const {
+        container,
+        counts: _counts,
+        reset,
+      } = createCountingContainer("ul")
       const { ref, emit, setItems } = createMockSequenceRef(items)
       const scope = new Scope()
 
@@ -585,11 +586,7 @@ describe("regions", () => {
       })
 
       it("should safely delete items when isReactive is false (no scopes to dispose)", () => {
-        const { ref, emit, setItems } = createMockSequenceRef([
-          "a",
-          "b",
-          "c",
-        ])
+        const { ref, emit, setItems } = createMockSequenceRef(["a", "b", "c"])
         const scope = new Scope()
         const container = document.createElement("ul")
 
@@ -746,7 +743,9 @@ describe("regions", () => {
     it("should not displace sibling content after the closing marker", () => {
       const { ref, emit, setItems } = createMockSequenceRef(["x"])
       const scope = new Scope()
-      const { container, closeMarker } = createMarkedContainer({ trailingContent: true })
+      const { container, closeMarker } = createMarkedContainer({
+        trailingContent: true,
+      })
       const trailing = container.lastChild as HTMLElement
 
       listRegion(
@@ -1147,7 +1146,6 @@ describe("regions", () => {
         expect(getActiveSubscriptionCount()).toBe(before)
       })
     })
-
   })
 
   // ===========================================================================
@@ -1208,9 +1206,7 @@ describe("regions", () => {
       }
 
       // SequenceInstruction insert carries an array — length > 1 triggers batch
-      const deltaOps: SequenceInstruction<unknown>[] = [
-        { insert: ["a", "b"] },
-      ]
+      const deltaOps: SequenceInstruction<unknown>[] = [{ insert: ["a", "b"] }]
 
       const ops = planDeltaOps(mockListRef, deltaOps)
 

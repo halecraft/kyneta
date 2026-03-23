@@ -16,8 +16,8 @@
 // See theory/incremental.md §10 for the theoretical foundation.
 // See .plans/005-incremental-kernel-pipeline.md § Operator Conventions.
 
-import type { Value, RealityNode } from '../types.js';
-import type { SlotGroup } from '../structure-index.js';
+import type { SlotGroup } from "../structure-index.js"
+import type { RealityNode, Value } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Structure Index Delta
@@ -44,9 +44,9 @@ import type { SlotGroup } from '../structure-index.js';
  */
 export interface StructureIndexDelta {
   /** Slot groups that were created or modified in this step, keyed by slotId. */
-  readonly updates: ReadonlyMap<string, SlotGroup>;
+  readonly updates: ReadonlyMap<string, SlotGroup>
   /** True if nothing changed. */
-  readonly isEmpty: boolean;
+  readonly isEmpty: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ export interface StructureIndexDelta {
 const EMPTY_STRUCTURE_INDEX_DELTA: StructureIndexDelta = {
   updates: new Map(),
   isEmpty: true,
-};
+}
 
 /**
  * Create an empty StructureIndexDelta (no changes).
@@ -65,7 +65,7 @@ const EMPTY_STRUCTURE_INDEX_DELTA: StructureIndexDelta = {
  * Returns a shared singleton — safe because the type is readonly.
  */
 export function structureIndexDeltaEmpty(): StructureIndexDelta {
-  return EMPTY_STRUCTURE_INDEX_DELTA;
+  return EMPTY_STRUCTURE_INDEX_DELTA
 }
 
 /**
@@ -76,8 +76,8 @@ export function structureIndexDeltaEmpty(): StructureIndexDelta {
 export function structureIndexDeltaFrom(
   updates: ReadonlyMap<string, SlotGroup>,
 ): StructureIndexDelta {
-  if (updates.size === 0) return EMPTY_STRUCTURE_INDEX_DELTA;
-  return { updates, isEmpty: false };
+  if (updates.size === 0) return EMPTY_STRUCTURE_INDEX_DELTA
+  return { updates, isEmpty: false }
 }
 
 // ---------------------------------------------------------------------------
@@ -96,39 +96,39 @@ export function structureIndexDeltaFrom(
  */
 export type NodeDelta =
   | {
-      readonly kind: 'nodeAdded';
-      readonly path: readonly string[];
-      readonly node: RealityNode;
+      readonly kind: "nodeAdded"
+      readonly path: readonly string[]
+      readonly node: RealityNode
     }
   | {
-      readonly kind: 'nodeRemoved';
-      readonly path: readonly string[];
+      readonly kind: "nodeRemoved"
+      readonly path: readonly string[]
     }
   | {
-      readonly kind: 'valueChanged';
-      readonly path: readonly string[];
-      readonly oldValue: Value | undefined;
-      readonly newValue: Value | undefined;
+      readonly kind: "valueChanged"
+      readonly path: readonly string[]
+      readonly oldValue: Value | undefined
+      readonly newValue: Value | undefined
     }
   | {
-      readonly kind: 'childAdded';
-      readonly path: readonly string[];
-      readonly key: string;
-      readonly child: RealityNode;
+      readonly kind: "childAdded"
+      readonly path: readonly string[]
+      readonly key: string
+      readonly child: RealityNode
     }
   | {
-      readonly kind: 'childRemoved';
-      readonly path: readonly string[];
-      readonly key: string;
+      readonly kind: "childRemoved"
+      readonly path: readonly string[]
+      readonly key: string
     }
   | {
-      readonly kind: 'childrenReordered';
-      readonly path: readonly string[];
-      readonly keys: readonly string[];
-    };
+      readonly kind: "childrenReordered"
+      readonly path: readonly string[]
+      readonly keys: readonly string[]
+    }
 
 /** All possible NodeDelta kind discriminants. */
-export type NodeDeltaKind = NodeDelta['kind'];
+export type NodeDeltaKind = NodeDelta["kind"]
 
 // ---------------------------------------------------------------------------
 // Reality Delta
@@ -143,10 +143,10 @@ export type NodeDeltaKind = NodeDelta['kind'];
  */
 export interface RealityDelta {
   /** The individual changes, in the order they were applied. */
-  readonly changes: readonly NodeDelta[];
+  readonly changes: readonly NodeDelta[]
 
   /** True if no changes occurred (the insertion was a no-op). */
-  readonly isEmpty: boolean;
+  readonly isEmpty: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ export interface RealityDelta {
 const EMPTY_DELTA: RealityDelta = {
   changes: [],
   isEmpty: true,
-};
+}
 
 /**
  * Create an empty RealityDelta (no changes).
@@ -165,7 +165,7 @@ const EMPTY_DELTA: RealityDelta = {
  * Returns a shared singleton — safe because the type is readonly.
  */
 export function realityDeltaEmpty(): RealityDelta {
-  return EMPTY_DELTA;
+  return EMPTY_DELTA
 }
 
 /**
@@ -174,9 +174,9 @@ export function realityDeltaEmpty(): RealityDelta {
  * If the array is empty, returns the shared empty delta.
  */
 export function realityDeltaFrom(changes: readonly NodeDelta[]): RealityDelta {
-  if (changes.length === 0) return EMPTY_DELTA;
+  if (changes.length === 0) return EMPTY_DELTA
   return {
     changes,
     isEmpty: false,
-  };
+  }
 }

@@ -13,8 +13,8 @@ import {
   createLiteral,
   createSpan,
   createStatement,
-  type Dependency,
   type DeltaKind,
+  type Dependency,
   mergeConditionalBodies,
   mergeContentValue,
   mergeNode,
@@ -297,7 +297,14 @@ describe("mergeNode", () => {
     const a = createElement(
       "button",
       [],
-      [{ event: "click", propName: "onClick", handlerSource: "() => a()", span: span() }],
+      [
+        {
+          event: "click",
+          propName: "onClick",
+          handlerSource: "() => a()",
+          span: span(),
+        },
+      ],
       [],
       [],
       span(),
@@ -305,7 +312,14 @@ describe("mergeNode", () => {
     const b = createElement(
       "button",
       [],
-      [{ event: "click", propName: "onClick", handlerSource: "() => b()", span: span() }],
+      [
+        {
+          event: "click",
+          propName: "onClick",
+          handlerSource: "() => b()",
+          span: span(),
+        },
+      ],
       [],
       [],
       span(),

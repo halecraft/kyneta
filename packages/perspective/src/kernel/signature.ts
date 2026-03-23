@@ -19,7 +19,7 @@
  * The stub uses an empty array to make it obvious in debugging that
  * signatures are not yet real.
  */
-export const STUB_SIGNATURE: Uint8Array = new Uint8Array(0);
+export const STUB_SIGNATURE: Uint8Array = new Uint8Array(0)
 
 // ---------------------------------------------------------------------------
 // Sign
@@ -38,7 +38,7 @@ export const STUB_SIGNATURE: Uint8Array = new Uint8Array(0);
  * @returns The signature bytes.
  */
 export function sign(_data: Uint8Array, _privateKey: Uint8Array): Uint8Array {
-  return STUB_SIGNATURE;
+  return STUB_SIGNATURE
 }
 
 // ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ export function verify(
   _signature: Uint8Array,
   _publicKey: Uint8Array,
 ): boolean {
-  return true;
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ export function verify(
  *
  * Real implementation: 32-byte ed25519 private key.
  */
-export const STUB_PRIVATE_KEY: Uint8Array = new Uint8Array(0);
+export const STUB_PRIVATE_KEY: Uint8Array = new Uint8Array(0)
 
 /**
  * Generate a keypair.
@@ -86,11 +86,11 @@ export const STUB_PRIVATE_KEY: Uint8Array = new Uint8Array(0);
  * @returns Object with `publicKey` and `privateKey`.
  */
 export function generateKeypair(): {
-  publicKey: Uint8Array;
-  privateKey: Uint8Array;
+  publicKey: Uint8Array
+  privateKey: Uint8Array
 } {
   return {
     publicKey: new Uint8Array(0),
     privateKey: new Uint8Array(0),
-  };
+  }
 }

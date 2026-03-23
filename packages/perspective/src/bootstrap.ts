@@ -13,35 +13,34 @@
 //
 // See unified-engine.md §B.4, §B.8, §14 (Layer 1).
 
+import type { Rule } from "./datalog/types.js"
+import {
+  _,
+  atom,
+  constTerm,
+  eq,
+  gt,
+  lt,
+  negation,
+  neq,
+  positiveAtom,
+  rule,
+  varTerm,
+} from "./datalog/types.js"
+import { type Agent, createAgent } from "./kernel/agent.js"
+import { createCnId } from "./kernel/cnid.js"
+import type { PipelineConfig } from "./kernel/pipeline.js"
+import type { RetractionConfig } from "./kernel/retraction.js"
+import { STUB_SIGNATURE } from "./kernel/signature.js"
+import { type ConstraintStore, createStore, insert } from "./kernel/store.js"
 import type {
-  PeerID,
+  AuthorityConstraint,
   CnId,
   Constraint,
-  StructureConstraint,
-  AuthorityConstraint,
-  RuleConstraint,
   ConstraintBase,
-} from './kernel/types.js';
-import { createCnId } from './kernel/cnid.js';
-import { STUB_SIGNATURE } from './kernel/signature.js';
-import { createStore, insert, type ConstraintStore } from './kernel/store.js';
-import { createAgent, type Agent } from './kernel/agent.js';
-import type { Rule } from './datalog/types.js';
-import {
-  atom,
-  varTerm,
-  constTerm,
-  positiveAtom,
-  negation,
-  rule,
-  neq,
-  eq,
-  lt,
-  gt,
-  _,
-} from './datalog/types.js';
-import type { RetractionConfig } from './kernel/retraction.js';
-import type { PipelineConfig } from './kernel/pipeline.js';
+  PeerID,
+  RuleConstraint,
+} from "./kernel/types.js"
 
 // ---------------------------------------------------------------------------
 // Default LWW Rules (§B.4)
@@ -74,61 +73,79 @@ export function buildDefaultLWWRules(): Rule[] {
   // superseded(CnId, Slot) :- active_value(CnId, Slot, _, L1, _),
   //   active_value(CnId2, Slot, _, L2, _), CnId ≠ CnId2, L2 > L1.
   const supersededByLamport: Rule = rule(
-    atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
+    atom("superseded", [varTerm("CnId"), varTerm("Slot")]),
     [
       positiveAtom(
-        atom('active_value', [
-          varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), _,
+        atom("active_value", [
+          varTerm("CnId"),
+          varTerm("Slot"),
+          _,
+          varTerm("L1"),
+          _,
         ]),
       ),
       positiveAtom(
-        atom('active_value', [
-          varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), _,
+        atom("active_value", [
+          varTerm("CnId2"),
+          varTerm("Slot"),
+          _,
+          varTerm("L2"),
+          _,
         ]),
       ),
-      neq(varTerm('CnId'), varTerm('CnId2')),
-      gt(varTerm('L2'), varTerm('L1')),
+      neq(varTerm("CnId"), varTerm("CnId2")),
+      gt(varTerm("L2"), varTerm("L1")),
     ],
-  );
+  )
 
   // superseded(CnId, Slot) :- active_value(CnId, Slot, _, L1, P1),
   //   active_value(CnId2, Slot, _, L2, P2), CnId ≠ CnId2, L2 == L1, P2 > P1.
   const supersededByPeer: Rule = rule(
-    atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
+    atom("superseded", [varTerm("CnId"), varTerm("Slot")]),
     [
       positiveAtom(
-        atom('active_value', [
-          varTerm('CnId'), varTerm('Slot'), _, varTerm('L1'), varTerm('P1'),
+        atom("active_value", [
+          varTerm("CnId"),
+          varTerm("Slot"),
+          _,
+          varTerm("L1"),
+          varTerm("P1"),
         ]),
       ),
       positiveAtom(
-        atom('active_value', [
-          varTerm('CnId2'), varTerm('Slot'), _, varTerm('L2'), varTerm('P2'),
+        atom("active_value", [
+          varTerm("CnId2"),
+          varTerm("Slot"),
+          _,
+          varTerm("L2"),
+          varTerm("P2"),
         ]),
       ),
-      neq(varTerm('CnId'), varTerm('CnId2')),
-      eq(varTerm('L2'), varTerm('L1')),
-      gt(varTerm('P2'), varTerm('P1')),
+      neq(varTerm("CnId"), varTerm("CnId2")),
+      eq(varTerm("L2"), varTerm("L1")),
+      gt(varTerm("P2"), varTerm("P1")),
     ],
-  );
+  )
 
   // winner(Slot, CnId, Value) :- active_value(CnId, Slot, Value, _, _),
   //   not superseded(CnId, Slot).
   const winnerRule: Rule = rule(
-    atom('winner', [varTerm('Slot'), varTerm('CnId'), varTerm('Value')]),
+    atom("winner", [varTerm("Slot"), varTerm("CnId"), varTerm("Value")]),
     [
       positiveAtom(
-        atom('active_value', [
-          varTerm('CnId'), varTerm('Slot'), varTerm('Value'), _, _,
+        atom("active_value", [
+          varTerm("CnId"),
+          varTerm("Slot"),
+          varTerm("Value"),
+          _,
+          _,
         ]),
       ),
-      negation(
-        atom('superseded', [varTerm('CnId'), varTerm('Slot')]),
-      ),
+      negation(atom("superseded", [varTerm("CnId"), varTerm("Slot")])),
     ],
-  );
+  )
 
-  return [supersededByLamport, supersededByPeer, winnerRule];
+  return [supersededByLamport, supersededByPeer, winnerRule]
 }
 
 // ---------------------------------------------------------------------------
@@ -161,79 +178,93 @@ export function buildDefaultFugueRules(): Rule[] {
   //   active_structure_seq(CnId, Parent, OriginLeft, OriginRight),
   //   constraint_peer(CnId, Peer).
   const fugueChild: Rule = rule(
-    atom('fugue_child', [
-      varTerm('Parent'),
-      varTerm('CnId'),
-      varTerm('OriginLeft'),
-      varTerm('OriginRight'),
-      varTerm('Peer'),
+    atom("fugue_child", [
+      varTerm("Parent"),
+      varTerm("CnId"),
+      varTerm("OriginLeft"),
+      varTerm("OriginRight"),
+      varTerm("Peer"),
     ]),
     [
       positiveAtom(
-        atom('active_structure_seq', [
-          varTerm('CnId'),
-          varTerm('Parent'),
-          varTerm('OriginLeft'),
-          varTerm('OriginRight'),
+        atom("active_structure_seq", [
+          varTerm("CnId"),
+          varTerm("Parent"),
+          varTerm("OriginLeft"),
+          varTerm("OriginRight"),
         ]),
       ),
-      positiveAtom(
-        atom('constraint_peer', [varTerm('CnId'), varTerm('Peer')]),
-      ),
+      positiveAtom(atom("constraint_peer", [varTerm("CnId"), varTerm("Peer")])),
     ],
-  );
+  )
 
   // Rule 2a: fugue_descendant(Parent, Child, TreeParent) :-
   //   fugue_child(Parent, Child, TreeParent, _, _), TreeParent ≠ null.
   const fugueDescendantBase: Rule = rule(
-    atom('fugue_descendant', [
-      varTerm('Parent'), varTerm('Child'), varTerm('TreeParent'),
+    atom("fugue_descendant", [
+      varTerm("Parent"),
+      varTerm("Child"),
+      varTerm("TreeParent"),
     ]),
     [
       positiveAtom(
-        atom('fugue_child', [
-          varTerm('Parent'), varTerm('Child'), varTerm('TreeParent'), _, _,
+        atom("fugue_child", [
+          varTerm("Parent"),
+          varTerm("Child"),
+          varTerm("TreeParent"),
+          _,
+          _,
         ]),
       ),
-      neq(varTerm('TreeParent'), constTerm(null)),
+      neq(varTerm("TreeParent"), constTerm(null)),
     ],
-  );
+  )
 
   // Rule 2b: fugue_descendant(Parent, Desc, Anc) :-
   //   fugue_descendant(Parent, Desc, Mid),
   //   fugue_descendant(Parent, Mid, Anc).
   const fugueDescendantTransitive: Rule = rule(
-    atom('fugue_descendant', [
-      varTerm('Parent'), varTerm('Desc'), varTerm('Anc'),
+    atom("fugue_descendant", [
+      varTerm("Parent"),
+      varTerm("Desc"),
+      varTerm("Anc"),
     ]),
     [
       positiveAtom(
-        atom('fugue_descendant', [
-          varTerm('Parent'), varTerm('Desc'), varTerm('Mid'),
+        atom("fugue_descendant", [
+          varTerm("Parent"),
+          varTerm("Desc"),
+          varTerm("Mid"),
         ]),
       ),
       positiveAtom(
-        atom('fugue_descendant', [
-          varTerm('Parent'), varTerm('Mid'), varTerm('Anc'),
+        atom("fugue_descendant", [
+          varTerm("Parent"),
+          varTerm("Mid"),
+          varTerm("Anc"),
         ]),
       ),
     ],
-  );
+  )
 
   // Rule 3: fugue_before(Parent, A, B) :-
   //   fugue_child(Parent, B, A, _, _), A ≠ null.
   // Parent-before-child: in DFS, a node is visited before all its children.
   const fugueBeforeParentChild: Rule = rule(
-    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
+    atom("fugue_before", [varTerm("Parent"), varTerm("A"), varTerm("B")]),
     [
       positiveAtom(
-        atom('fugue_child', [
-          varTerm('Parent'), varTerm('B'), varTerm('A'), _, _,
+        atom("fugue_child", [
+          varTerm("Parent"),
+          varTerm("B"),
+          varTerm("A"),
+          _,
+          _,
         ]),
       ),
-      neq(varTerm('A'), constTerm(null)),
+      neq(varTerm("A"), constTerm(null)),
     ],
-  );
+  )
 
   // Rule 4a: fugue_before(Parent, A, B) :-
   //   fugue_child(Parent, A, OriginLeft, _, PeerA),
@@ -241,24 +272,30 @@ export function buildDefaultFugueRules(): Rule[] {
   //   A ≠ B, PeerA < PeerB.
   // Siblings with same originLeft: lower peer goes first.
   const fugueBeforeSiblingByPeer: Rule = rule(
-    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
+    atom("fugue_before", [varTerm("Parent"), varTerm("A"), varTerm("B")]),
     [
       positiveAtom(
-        atom('fugue_child', [
-          varTerm('Parent'), varTerm('A'), varTerm('OriginLeft'),
-          _, varTerm('PeerA'),
+        atom("fugue_child", [
+          varTerm("Parent"),
+          varTerm("A"),
+          varTerm("OriginLeft"),
+          _,
+          varTerm("PeerA"),
         ]),
       ),
       positiveAtom(
-        atom('fugue_child', [
-          varTerm('Parent'), varTerm('B'), varTerm('OriginLeft'),
-          _, varTerm('PeerB'),
+        atom("fugue_child", [
+          varTerm("Parent"),
+          varTerm("B"),
+          varTerm("OriginLeft"),
+          _,
+          varTerm("PeerB"),
         ]),
       ),
-      neq(varTerm('A'), varTerm('B')),
-      lt(varTerm('PeerA'), varTerm('PeerB')),
+      neq(varTerm("A"), varTerm("B")),
+      lt(varTerm("PeerA"), varTerm("PeerB")),
     ],
-  );
+  )
 
   // Rule 4b: fugue_before(Parent, A, B) :-
   //   fugue_child(Parent, A, OriginLeft, _, Peer),
@@ -266,24 +303,30 @@ export function buildDefaultFugueRules(): Rule[] {
   //   A ≠ B, A < B.
   // Same peer, same originLeft: lower CnId key goes first.
   const fugueBeforeSiblingByCnId: Rule = rule(
-    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
+    atom("fugue_before", [varTerm("Parent"), varTerm("A"), varTerm("B")]),
     [
       positiveAtom(
-        atom('fugue_child', [
-          varTerm('Parent'), varTerm('A'), varTerm('OriginLeft'),
-          _, varTerm('Peer'),
+        atom("fugue_child", [
+          varTerm("Parent"),
+          varTerm("A"),
+          varTerm("OriginLeft"),
+          _,
+          varTerm("Peer"),
         ]),
       ),
       positiveAtom(
-        atom('fugue_child', [
-          varTerm('Parent'), varTerm('B'), varTerm('OriginLeft'),
-          _, varTerm('Peer'),
+        atom("fugue_child", [
+          varTerm("Parent"),
+          varTerm("B"),
+          varTerm("OriginLeft"),
+          _,
+          varTerm("Peer"),
         ]),
       ),
-      neq(varTerm('A'), varTerm('B')),
-      lt(varTerm('A'), varTerm('B')),
+      neq(varTerm("A"), varTerm("B")),
+      lt(varTerm("A"), varTerm("B")),
     ],
-  );
+  )
 
   // Rule 5: fugue_before(Parent, A, B) :-
   //   fugue_child(Parent, A, X, _, _), X ≠ null,
@@ -291,27 +334,31 @@ export function buildDefaultFugueRules(): Rule[] {
   //   not fugue_descendant(Parent, B, X).
   // Subtree propagation with descendant negation guard.
   const fugueBeforeSubtreeProp: Rule = rule(
-    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('B')]),
+    atom("fugue_before", [varTerm("Parent"), varTerm("A"), varTerm("B")]),
     [
       positiveAtom(
-        atom('fugue_child', [
-          varTerm('Parent'), varTerm('A'), varTerm('X'), _, _,
+        atom("fugue_child", [
+          varTerm("Parent"),
+          varTerm("A"),
+          varTerm("X"),
+          _,
+          _,
         ]),
       ),
-      neq(varTerm('X'), constTerm(null)),
+      neq(varTerm("X"), constTerm(null)),
       positiveAtom(
-        atom('fugue_before', [
-          varTerm('Parent'), varTerm('X'), varTerm('B'),
-        ]),
+        atom("fugue_before", [varTerm("Parent"), varTerm("X"), varTerm("B")]),
       ),
-      neq(varTerm('A'), varTerm('B')),
+      neq(varTerm("A"), varTerm("B")),
       negation(
-        atom('fugue_descendant', [
-          varTerm('Parent'), varTerm('B'), varTerm('X'),
+        atom("fugue_descendant", [
+          varTerm("Parent"),
+          varTerm("B"),
+          varTerm("X"),
         ]),
       ),
     ],
-  );
+  )
 
   // Rule 6: fugue_before(Parent, A, C) :-
   //   fugue_before(Parent, A, B),
@@ -319,21 +366,17 @@ export function buildDefaultFugueRules(): Rule[] {
   //   A ≠ C.
   // Transitive closure.
   const fugueBeforeTransitive: Rule = rule(
-    atom('fugue_before', [varTerm('Parent'), varTerm('A'), varTerm('C')]),
+    atom("fugue_before", [varTerm("Parent"), varTerm("A"), varTerm("C")]),
     [
       positiveAtom(
-        atom('fugue_before', [
-          varTerm('Parent'), varTerm('A'), varTerm('B'),
-        ]),
+        atom("fugue_before", [varTerm("Parent"), varTerm("A"), varTerm("B")]),
       ),
       positiveAtom(
-        atom('fugue_before', [
-          varTerm('Parent'), varTerm('B'), varTerm('C'),
-        ]),
+        atom("fugue_before", [varTerm("Parent"), varTerm("B"), varTerm("C")]),
       ),
-      neq(varTerm('A'), varTerm('C')),
+      neq(varTerm("A"), varTerm("C")),
     ],
-  );
+  )
 
   return [
     fugueChild,
@@ -344,14 +387,14 @@ export function buildDefaultFugueRules(): Rule[] {
     fugueBeforeSiblingByCnId,
     fugueBeforeSubtreeProp,
     fugueBeforeTransitive,
-  ];
+  ]
 }
 
 /**
  * Build all default solver rules (LWW + Fugue).
  */
 export function buildDefaultRules(): Rule[] {
-  return [...buildDefaultLWWRules(), ...buildDefaultFugueRules()];
+  return [...buildDefaultLWWRules(), ...buildDefaultFugueRules()]
 }
 
 // ---------------------------------------------------------------------------
@@ -366,13 +409,13 @@ export interface BootstrapConfig {
    * PeerID of the creating agent. This peer receives implicit Admin
    * and all bootstrap constraints are attributed to this peer.
    */
-  readonly creator: PeerID;
+  readonly creator: PeerID
 
   /**
    * Maximum retraction chain depth. Default: 2 (undo + redo).
    * See §6.4.
    */
-  readonly retractionDepth?: number;
+  readonly retractionDepth?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -386,24 +429,24 @@ export interface BootstrapResult {
   /**
    * The constraint store pre-populated with bootstrap constraints.
    */
-  readonly store: ConstraintStore;
+  readonly store: ConstraintStore
 
   /**
    * The creator's Agent, already initialized with correct counter
    * and lamport values reflecting the bootstrap constraints.
    */
-  readonly agent: Agent;
+  readonly agent: Agent
 
   /**
    * The pipeline configuration derived from bootstrap settings.
    */
-  readonly config: PipelineConfig;
+  readonly config: PipelineConfig
 
   /**
    * The bootstrap constraints that were inserted into the store.
    * Useful for inspection and testing.
    */
-  readonly constraints: readonly Constraint[];
+  readonly constraints: readonly Constraint[]
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +456,7 @@ export interface BootstrapResult {
 /**
  * The default retraction depth (undo + redo). See §6.4, §B.8.
  */
-export const DEFAULT_RETRACTION_DEPTH = 2;
+export const DEFAULT_RETRACTION_DEPTH = 2
 
 /**
  * Create a new reality.
@@ -432,8 +475,8 @@ export const DEFAULT_RETRACTION_DEPTH = 2;
  * @returns BootstrapResult with store, agent, and pipeline config.
  */
 export function createReality(config: BootstrapConfig): BootstrapResult {
-  const { creator } = config;
-  const retractionDepth = config.retractionDepth ?? DEFAULT_RETRACTION_DEPTH;
+  const { creator } = config
+  const retractionDepth = config.retractionDepth ?? DEFAULT_RETRACTION_DEPTH
 
   // We construct bootstrap constraints directly (not through the Agent's
   // produceRule) because Layer 0-1 rules are kernel-reserved. The Agent's
@@ -441,19 +484,19 @@ export function createReality(config: BootstrapConfig): BootstrapResult {
   // correct for normal operation. Bootstrap is the kernel itself setting
   // up the initial state, so it bypasses that check.
 
-  const constraints: Constraint[] = [];
-  let counter = 0;
-  let lamport = 0;
+  const constraints: Constraint[] = []
+  let counter = 0
+  let lamport = 0
 
   /**
    * Allocate the next CnId and lamport for a bootstrap constraint.
    */
   function nextId(): { id: CnId; lamport: number; counter: number } {
-    const id = createCnId(creator, counter);
-    const l = lamport;
-    counter += 1;
-    lamport += 1;
-    return { id, lamport: l, counter: l };
+    const id = createCnId(creator, counter)
+    const l = lamport
+    counter += 1
+    lamport += 1
+    return { id, lamport: l, counter: l }
   }
 
   /**
@@ -461,14 +504,17 @@ export function createReality(config: BootstrapConfig): BootstrapResult {
    * Bootstrap constraints have no refs (they are the first constraints)
    * and use the stub signature.
    */
-  function baseFields(): Pick<ConstraintBase, 'id' | 'lamport' | 'refs' | 'sig'> {
-    const { id, lamport: l } = nextId();
+  function baseFields(): Pick<
+    ConstraintBase,
+    "id" | "lamport" | "refs" | "sig"
+  > {
+    const { id, lamport: l } = nextId()
     return {
       id,
       lamport: l,
       refs: [],
       sig: STUB_SIGNATURE,
-    };
+    }
   }
 
   // --- 1. Admin grant to creator (§2.5, §B.8) ---
@@ -478,56 +524,56 @@ export function createReality(config: BootstrapConfig): BootstrapResult {
   // derive from this grant.
   const adminGrant: AuthorityConstraint = {
     ...baseFields(),
-    type: 'authority',
+    type: "authority",
     payload: {
       targetPeer: creator,
-      action: 'grant',
-      capability: { kind: 'admin' },
+      action: "grant",
+      capability: { kind: "admin" },
     },
-  };
-  constraints.push(adminGrant);
+  }
+  constraints.push(adminGrant)
 
   // --- 2. Default LWW rules (§B.4) ---
-  const lwwRules = buildDefaultLWWRules();
+  const lwwRules = buildDefaultLWWRules()
   for (const r of lwwRules) {
     const ruleConstraint: RuleConstraint = {
       ...baseFields(),
-      type: 'rule',
+      type: "rule",
       payload: {
         layer: 1,
         head: r.head,
         body: r.body,
       },
-    };
-    constraints.push(ruleConstraint);
+    }
+    constraints.push(ruleConstraint)
   }
 
   // --- 3. Default Fugue rules (§B.4, complete) ---
-  const fugueRules = buildDefaultFugueRules();
+  const fugueRules = buildDefaultFugueRules()
   for (const r of fugueRules) {
     const ruleConstraint: RuleConstraint = {
       ...baseFields(),
-      type: 'rule',
+      type: "rule",
       payload: {
         layer: 1,
         head: r.head,
         body: r.body,
       },
-    };
-    constraints.push(ruleConstraint);
+    }
+    constraints.push(ruleConstraint)
   }
 
   // --- 4. Populate the store ---
-  const store = createStore();
+  const store = createStore()
   for (const c of constraints) {
-    const result = insert(store, c);
+    const result = insert(store, c)
     if (!result.ok) {
       // Bootstrap constraints are internally constructed and should
       // never fail validation. If they do, it's a bug in bootstrap.
       throw new Error(
         `Bootstrap constraint insertion failed: ${JSON.stringify(result.error)}. ` +
-        `This is a bug in bootstrap.ts.`,
-      );
+          `This is a bug in bootstrap.ts.`,
+      )
     }
   }
 
@@ -537,26 +583,26 @@ export function createReality(config: BootstrapConfig): BootstrapResult {
   // bootstrap constraints, so it doesn't collide with them.
   // It also observes all bootstrap constraints so its version vector
   // and lamport clock are up to date.
-  const agent = createAgent(creator, undefined, counter, lamport);
-  agent.observeMany(constraints);
+  const agent = createAgent(creator, undefined, counter, lamport)
+  agent.observeMany(constraints)
 
   // --- 6. Build pipeline configuration ---
   const retractionConfig: RetractionConfig = {
     maxDepth: retractionDepth,
-  };
+  }
 
   const pipelineConfig: PipelineConfig = {
     creator,
     retractionConfig,
     enableDatalogEvaluation: true,
-  };
+  }
 
   return {
     store,
     agent,
     config: pipelineConfig,
     constraints,
-  };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -568,4 +614,4 @@ export function createReality(config: BootstrapConfig): BootstrapResult {
  *
  * 1 admin grant + 3 LWW rules + 8 Fugue rules = 12.
  */
-export const BOOTSTRAP_CONSTRAINT_COUNT = 12;
+export const BOOTSTRAP_CONSTRAINT_COUNT = 12

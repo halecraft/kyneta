@@ -17,8 +17,8 @@
  * @packageDocumentation
  */
 
+import { escapeHtml, VOID_ELEMENTS } from "./html-constants.js"
 import {
-  isDOMProducing,
   type AttributeNode,
   type BuilderNode,
   type ChildNode,
@@ -26,9 +26,9 @@ import {
   type ContentNode,
   type ElementNode,
   type EventHandlerNode,
+  isDOMProducing,
   type LoopNode,
 } from "./ir.js"
-import { escapeHtml, VOID_ELEMENTS } from "./html-constants.js"
 
 // =============================================================================
 // Event Types
@@ -147,8 +147,6 @@ export interface ComponentPlaceholderEvent {
   /** Path to this component position */
   path: number[]
 }
-
-
 
 /**
  * Union of all walk events.

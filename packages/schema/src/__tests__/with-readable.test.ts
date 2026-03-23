@@ -1,25 +1,17 @@
 import { describe, expect, it } from "vitest"
 import {
-  Schema,
-  LoroSchema,
-  interpret,
-  readByPath,
   dispatchSum,
+  interpret,
+  LoroSchema,
   plainInterpreter,
+  Schema,
 } from "../index.js"
-import {
-  CALL,
-  bottomInterpreter,
-} from "../interpreters/bottom.js"
-import type {
-  HasCall,
-  HasNavigation,
-  HasRead,
-} from "../interpreters/bottom.js"
-import { withReadable } from "../interpreters/with-readable.js"
-import { withNavigation } from "../interpreters/with-navigation.js"
 import type { Interpreter } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
+import type { HasCall, HasNavigation, HasRead } from "../interpreters/bottom.js"
+import { bottomInterpreter, CALL } from "../interpreters/bottom.js"
+import { withNavigation } from "../interpreters/with-navigation.js"
+import { withReadable } from "../interpreters/with-readable.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -61,18 +53,16 @@ function createDoc(
 
 describe("withReadable: scalar", () => {
   it("ref() returns the current store value", () => {
-    const { doc } = createDoc(
-      Schema.doc({ name: Schema.string() }),
-      { name: "Alice" },
-    )
+    const { doc } = createDoc(Schema.doc({ name: Schema.string() }), {
+      name: "Alice",
+    })
     expect(doc.name()).toBe("Alice")
   })
 
   it("ref() reflects live store mutations", () => {
-    const { doc, store } = createDoc(
-      Schema.doc({ count: Schema.number() }),
-      { count: 10 },
-    )
+    const { doc, store } = createDoc(Schema.doc({ count: Schema.number() }), {
+      count: 10,
+    })
     expect(doc.count()).toBe(10)
     store.count = 42
     expect(doc.count()).toBe(42)
@@ -88,34 +78,22 @@ describe("withReadable: scalar", () => {
   })
 
   it("toPrimitive with 'string' hint returns String(value)", () => {
-    const { doc } = createDoc(
-      Schema.doc({ n: Schema.number() }),
-      { n: 14 },
-    )
+    const { doc } = createDoc(Schema.doc({ n: Schema.number() }), { n: 14 })
     expect(doc.n[Symbol.toPrimitive]("string")).toBe("14")
   })
 
   it("toPrimitive with 'number' hint returns raw value", () => {
-    const { doc } = createDoc(
-      Schema.doc({ n: Schema.number() }),
-      { n: 14 },
-    )
+    const { doc } = createDoc(Schema.doc({ n: Schema.number() }), { n: 14 })
     expect(doc.n[Symbol.toPrimitive]("number")).toBe(14)
   })
 
   it("toPrimitive with 'default' hint returns raw value", () => {
-    const { doc } = createDoc(
-      Schema.doc({ n: Schema.number() }),
-      { n: 14 },
-    )
+    const { doc } = createDoc(Schema.doc({ n: Schema.number() }), { n: 14 })
     expect(doc.n[Symbol.toPrimitive]("default")).toBe(14)
   })
 
   it("scalar ref works in template literal", () => {
-    const { doc } = createDoc(
-      Schema.doc({ n: Schema.number() }),
-      { n: 14 },
-    )
+    const { doc } = createDoc(Schema.doc({ n: Schema.number() }), { n: 14 })
     expect(`value: ${doc.n}`).toBe("value: 14")
   })
 })
@@ -404,61 +382,54 @@ describe("withReadable: map", () => {
 
 describe("withReadable: annotated", () => {
   it("text ref returns current string when called", () => {
-    const { doc } = createDoc(
-      LoroSchema.doc({ title: LoroSchema.text() }),
-      { title: "Hello" },
-    )
+    const { doc } = createDoc(LoroSchema.doc({ title: LoroSchema.text() }), {
+      title: "Hello",
+    })
     expect(doc.title()).toBe("Hello")
   })
 
   it("text ref returns empty string when store value is null", () => {
-    const { doc } = createDoc(
-      LoroSchema.doc({ title: LoroSchema.text() }),
-      { title: null },
-    )
+    const { doc } = createDoc(LoroSchema.doc({ title: LoroSchema.text() }), {
+      title: null,
+    })
     expect(doc.title()).toBe("")
   })
 
   it("text ref toPrimitive produces string", () => {
-    const { doc } = createDoc(
-      LoroSchema.doc({ title: LoroSchema.text() }),
-      { title: "Hello" },
-    )
+    const { doc } = createDoc(LoroSchema.doc({ title: LoroSchema.text() }), {
+      title: "Hello",
+    })
     expect(`Title: ${doc.title}`).toBe("Title: Hello")
     expect(String(doc.title)).toBe("Hello")
   })
 
   it("counter ref returns current number when called", () => {
-    const { doc } = createDoc(
-      LoroSchema.doc({ count: LoroSchema.counter() }),
-      { count: 42 },
-    )
+    const { doc } = createDoc(LoroSchema.doc({ count: LoroSchema.counter() }), {
+      count: 42,
+    })
     expect(doc.count()).toBe(42)
   })
 
   it("counter ref returns 0 when store value is not a number", () => {
-    const { doc } = createDoc(
-      LoroSchema.doc({ count: LoroSchema.counter() }),
-      { count: "oops" },
-    )
+    const { doc } = createDoc(LoroSchema.doc({ count: LoroSchema.counter() }), {
+      count: "oops",
+    })
     expect(doc.count()).toBe(0)
   })
 
   it("counter ref toPrimitive is hint-aware", () => {
-    const { doc } = createDoc(
-      LoroSchema.doc({ count: LoroSchema.counter() }),
-      { count: 42 },
-    )
+    const { doc } = createDoc(LoroSchema.doc({ count: LoroSchema.counter() }), {
+      count: 42,
+    })
     expect(doc.count[Symbol.toPrimitive]("string")).toBe("42")
     expect(doc.count[Symbol.toPrimitive]("number")).toBe(42)
     expect(doc.count[Symbol.toPrimitive]("default")).toBe(42)
   })
 
   it("counter ref works in template literal", () => {
-    const { doc } = createDoc(
-      LoroSchema.doc({ count: LoroSchema.counter() }),
-      { count: 7 },
-    )
+    const { doc } = createDoc(LoroSchema.doc({ count: LoroSchema.counter() }), {
+      count: 7,
+    })
     expect(`Stars: ${doc.count}`).toBe("Stars: 7")
   })
 
@@ -663,7 +634,10 @@ describe("dispatchSum", () => {
     ])
     let called: string | undefined
     const variants = {
-      byKey: (key: string) => { called = key; return key },
+      byKey: (key: string) => {
+        called = key
+        return key
+      },
     }
     dispatchSum({ type: "image" }, schema, variants)
     expect(called).toBe("image")
@@ -676,7 +650,10 @@ describe("dispatchSum", () => {
     ])
     let called: string | undefined
     const variants = {
-      byKey: (key: string) => { called = key; return key },
+      byKey: (key: string) => {
+        called = key
+        return key
+      },
     }
     dispatchSum({}, schema, variants)
     expect(called).toBe("text")
@@ -688,7 +665,10 @@ describe("dispatchSum", () => {
     ])
     let called: string | undefined
     const variants = {
-      byKey: (key: string) => { called = key; return key },
+      byKey: (key: string) => {
+        called = key
+        return key
+      },
     }
     dispatchSum(42, schema, variants)
     expect(called).toBe("text")
@@ -701,7 +681,10 @@ describe("dispatchSum", () => {
     ])
     let called: string | undefined
     const variants = {
-      byKey: (key: string) => { called = key; return key },
+      byKey: (key: string) => {
+        called = key
+        return key
+      },
     }
     dispatchSum({ type: "video" }, schema, variants)
     expect(called).toBe("text")
@@ -711,7 +694,10 @@ describe("dispatchSum", () => {
     const schema = Schema.nullable(Schema.string())
     let calledIndex: number | undefined
     const variants = {
-      byIndex: (index: number) => { calledIndex = index; return index },
+      byIndex: (index: number) => {
+        calledIndex = index
+        return index
+      },
     }
     dispatchSum(null, schema, variants)
     expect(calledIndex).toBe(0)
@@ -721,7 +707,10 @@ describe("dispatchSum", () => {
     const schema = Schema.nullable(Schema.string())
     let calledIndex: number | undefined
     const variants = {
-      byIndex: (index: number) => { calledIndex = index; return index },
+      byIndex: (index: number) => {
+        calledIndex = index
+        return index
+      },
     }
     dispatchSum(undefined, schema, variants)
     expect(calledIndex).toBe(0)
@@ -731,7 +720,10 @@ describe("dispatchSum", () => {
     const schema = Schema.nullable(Schema.string())
     let calledIndex: number | undefined
     const variants = {
-      byIndex: (index: number) => { calledIndex = index; return index },
+      byIndex: (index: number) => {
+        calledIndex = index
+        return index
+      },
     }
     dispatchSum("hello", schema, variants)
     expect(calledIndex).toBe(1)
@@ -748,7 +740,10 @@ describe("dispatchSum", () => {
     }
     let calledIndex: number | undefined
     const variants = {
-      byIndex: (index: number) => { calledIndex = index; return index },
+      byIndex: (index: number) => {
+        calledIndex = index
+        return index
+      },
     }
     dispatchSum("anything", schema, variants)
     expect(calledIndex).toBe(0)
@@ -761,7 +756,7 @@ describe("dispatchSum", () => {
       discriminant: "type",
       variantMap: {},
     }
-    const result = dispatchSum({}, schema, { byKey: (k) => k })
+    const result = dispatchSum({}, schema, { byKey: k => k })
     expect(result).toBeUndefined()
   })
 })
@@ -773,7 +768,8 @@ describe("dispatchSum", () => {
 describe("type-level: withReadable", () => {
   it("withReadable(withNavigation(bottomInterpreter)) produces HasRead", () => {
     const readable = withReadable(withNavigation(bottomInterpreter))
-    const _check: Interpreter<RefContext, HasCall & HasNavigation & HasRead> = readable
+    const _check: Interpreter<RefContext, HasCall & HasNavigation & HasRead> =
+      readable
     void _check
   })
 

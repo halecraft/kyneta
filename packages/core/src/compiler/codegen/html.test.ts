@@ -10,7 +10,6 @@
  * with IIFEs.
  */
 
-import { describe, expect, it } from "vitest"
 import {
   createBuilder,
   createConditional,
@@ -21,9 +20,10 @@ import {
   createLoop,
   createSpan,
   createStatement,
-  type Dependency,
   type DeltaKind,
+  type Dependency,
 } from "@kyneta/compiler"
+import { describe, expect, it } from "vitest"
 import { generateHTML, generateRenderFunction } from "./html.js"
 
 // =============================================================================
@@ -53,9 +53,7 @@ function dep(source: string, deltaKind: DeltaKind = "replace"): Dependency {
 /**
  * Join generateHTML's string[] output into a single string for assertions.
  */
-function htmlLines(
-  ...args: Parameters<typeof generateHTML>
-): string {
+function htmlLines(...args: Parameters<typeof generateHTML>): string {
   return generateHTML(...args).join("; ")
 }
 
@@ -193,13 +191,7 @@ describe("generateHTML - top-level statements", () => {
       span(2, 4, 2, 15),
     )
     const stmt = createStatement("console.log('done')", span(3, 4, 3, 23))
-    const builder = createBuilder(
-      "div",
-      [],
-      [],
-      [h1, stmt],
-      span(1, 0, 4, 1),
-    )
+    const builder = createBuilder("div", [], [], [h1, stmt], span(1, 0, 4, 1))
 
     const code = htmlLines(builder)
 
@@ -265,14 +257,7 @@ describe("generateHTML - nested element statements", () => {
       span(5, 6, 5, 15),
     )
     const p = createElement("p", [], [], [], [stmt, span1], span(3, 4, 6, 5))
-    const section = createElement(
-      "section",
-      [],
-      [],
-      [],
-      [p],
-      span(2, 2, 7, 3),
-    )
+    const section = createElement("section", [], [], [], [p], span(2, 2, 7, 3))
     const builder = createBuilder("div", [], [], [section], span(1, 0, 8, 1))
 
     const code = htmlLines(builder)
@@ -772,13 +757,7 @@ describe("generateRenderFunction", () => {
       [createLiteral("x", span(3, 6, 3, 9))],
       span(3, 4, 3, 11),
     )
-    const builder = createBuilder(
-      "div",
-      [],
-      [],
-      [stmt, h1],
-      span(1, 0, 4, 1),
-    )
+    const builder = createBuilder("div", [], [], [stmt, h1], span(1, 0, 4, 1))
 
     const code = generateRenderFunction(builder)
 
@@ -864,20 +843,11 @@ describe("generateHTML - reactive conditionals", () => {
       span(3, 4, 3, 15),
     )
     const branch = createConditionalBranch(
-      createContent(
-        "visible",
-        "reactive",
-        [dep("visible")],
-        span(2, 4, 2, 11),
-      ),
+      createContent("visible", "reactive", [dep("visible")], span(2, 4, 2, 11)),
       [pElement],
       span(2, 2, 4, 3),
     )
-    const cond = createConditional(
-      [branch],
-      dep("visible"),
-      span(2, 2, 4, 3),
-    )
+    const cond = createConditional([branch], dep("visible"), span(2, 2, 4, 3))
     const builder = createBuilder("div", [], [], [cond], span(1, 0, 5, 1))
 
     const code = htmlLines(builder)
@@ -934,13 +904,7 @@ describe("generateHTML - components", () => {
       span(2, 2, 2, 40),
       "Avatar",
     )
-    const builder = createBuilder(
-      "div",
-      [],
-      [],
-      [component],
-      span(1, 0, 3, 1),
-    )
+    const builder = createBuilder("div", [], [], [component], span(1, 0, 3, 1))
 
     const code = htmlLines(builder)
 
@@ -964,13 +928,7 @@ describe("generateHTML - components", () => {
       span(2, 2, 2, 12),
       "Spacer",
     )
-    const builder = createBuilder(
-      "div",
-      [],
-      [],
-      [component],
-      span(1, 0, 3, 1),
-    )
+    const builder = createBuilder("div", [], [], [component], span(1, 0, 3, 1))
 
     const code = htmlLines(builder)
 

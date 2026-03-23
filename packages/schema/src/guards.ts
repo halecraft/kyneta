@@ -15,7 +15,9 @@
  * properties to a result (which may be a function object), use
  * `isPropertyHost` instead.
  */
-export function isNonNullObject(value: unknown): value is Record<string, unknown> {
+export function isNonNullObject(
+  value: unknown,
+): value is Record<string, unknown> {
   return value !== null && value !== undefined && typeof value === "object"
 }
 

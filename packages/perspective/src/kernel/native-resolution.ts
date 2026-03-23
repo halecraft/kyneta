@@ -6,23 +6,22 @@
 //
 // See unified-engine.md §B.7 (native solver optimization).
 
+import { buildFugueNodes, orderFugueNodes } from "../solver/fugue.js"
+import { resolveLWW } from "../solver/lww.js"
+import { cnIdKey } from "./cnid.js"
+import {
+  allPairsFromOrdered,
+  type FugueBeforePair,
+  nativeResolution,
+  type ResolutionResult,
+  type ResolvedWinner,
+} from "./resolve.js"
+import type { StructureIndex } from "./structure-index.js"
 import type {
   Constraint,
   StructureConstraint,
   ValueConstraint,
-} from './types.js';
-import { cnIdKey } from './cnid.js';
-import type { StructureIndex } from './structure-index.js';
-import {
-  nativeResolution,
-  allPairsFromOrdered,
-  type ResolvedWinner,
-  type FugueBeforePair,
-  type ResolutionResult,
-} from './resolve.js';
-import { resolveLWW } from '../solver/lww.js';
-import { buildFugueNodes, orderFugueNodes } from '../solver/fugue.js';
-
+} from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Native Resolution
@@ -45,23 +44,23 @@ export function buildNativeResolution(
 ): ResolutionResult {
   // Native LWW: resolve all value constraints.
   const valueConstraints = activeConstraints.filter(
-    (c): c is ValueConstraint => c.type === 'value',
-  );
-  const lwwResult = resolveLWW(valueConstraints, structureIndex);
+    (c): c is ValueConstraint => c.type === "value",
+  )
+  const lwwResult = resolveLWW(valueConstraints, structureIndex)
 
-  const winners = new Map<string, ResolvedWinner>();
+  const winners = new Map<string, ResolvedWinner>()
   for (const [slotId, winner] of lwwResult.winners) {
     winners.set(slotId, {
       slotId,
       winnerCnIdKey: cnIdKey(winner.winnerId),
       content: winner.content,
-    });
+    })
   }
 
   // Native Fugue: compute ordering for all seq parents.
-  const fuguePairs = buildNativeFuguePairs(activeConstraints, structureIndex);
+  const fuguePairs = buildNativeFuguePairs(activeConstraints, structureIndex)
 
-  return nativeResolution(winners, fuguePairs);
+  return nativeResolution(winners, fuguePairs)
 }
 
 /**
@@ -83,32 +82,32 @@ export function buildNativeFuguePairs(
   activeConstraints: readonly Constraint[],
   _structureIndex: StructureIndex,
 ): ReadonlyMap<string, FugueBeforePair[]> {
-  const pairs = new Map<string, FugueBeforePair[]>();
+  const pairs = new Map<string, FugueBeforePair[]>()
 
   // Group seq constraints by parent.
-  const seqByParent = new Map<string, StructureConstraint[]>();
+  const seqByParent = new Map<string, StructureConstraint[]>()
   for (const c of activeConstraints) {
-    if (c.type !== 'structure') continue;
-    if (c.payload.kind !== 'seq') continue;
-    const parentKey = cnIdKey(c.payload.parent);
-    let group = seqByParent.get(parentKey);
+    if (c.type !== "structure") continue
+    if (c.payload.kind !== "seq") continue
+    const parentKey = cnIdKey(c.payload.parent)
+    let group = seqByParent.get(parentKey)
     if (group === undefined) {
-      group = [];
-      seqByParent.set(parentKey, group);
+      group = []
+      seqByParent.set(parentKey, group)
     }
-    group.push(c);
+    group.push(c)
   }
 
   // For each parent, compute native Fugue ordering and emit before-pairs.
   for (const [parentKey, constraints] of seqByParent) {
-    const nodes = buildFugueNodes(constraints);
-    const ordered = orderFugueNodes(nodes);
+    const nodes = buildFugueNodes(constraints)
+    const ordered = orderFugueNodes(nodes)
 
-    const parentPairs = allPairsFromOrdered(parentKey, ordered);
+    const parentPairs = allPairsFromOrdered(parentKey, ordered)
     if (parentPairs.length > 0) {
-      pairs.set(parentKey, parentPairs);
+      pairs.set(parentKey, parentPairs)
     }
   }
 
-  return pairs;
+  return pairs
 }

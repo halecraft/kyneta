@@ -20,22 +20,13 @@
 //   weight > 0 entries from the weighted Relation).
 
 import type {
-  Value,
-  Atom,
   AggregationClause,
-  FactTuple,
+  ReadonlyDatabase,
   Substitution,
-} from './types.js';
-import {
-  serializeValue,
-  compareValues,
-} from './types.js';
-import type { ReadonlyDatabase } from './types.js';
-import {
-  matchAtomWithTuple,
-  EMPTY_SUBSTITUTION,
-  resolveTerm,
-} from './unify.js';
+  Value,
+} from "./types.js"
+import { compareValues, serializeValue } from "./types.js"
+import { matchAtomWithTuple } from "./unify.js"
 
 // ---------------------------------------------------------------------------
 // Group key computation
@@ -49,32 +40,29 @@ function groupKey(
   groupBy: readonly string[],
   sub: Substitution,
 ): string | null {
-  const parts: string[] = [];
+  const parts: string[] = []
   for (const varName of groupBy) {
-    const val = sub.bindings.get(varName);
+    const val = sub.bindings.get(varName)
     if (val === undefined && !sub.bindings.has(varName)) {
       // Unbound grouping variable — can't form a group
-      return null;
+      return null
     }
     // val may be null (bound to null) which is fine
-    parts.push(serializeValue(val === undefined ? null : val));
+    parts.push(serializeValue(val === undefined ? null : val))
   }
-  return parts.join('|');
+  return parts.join("|")
 }
 
 /**
  * Extract the bound values for grouping variables from a substitution.
  */
-function groupValues(
-  groupBy: readonly string[],
-  sub: Substitution,
-): Value[] {
-  const values: Value[] = [];
+function groupValues(groupBy: readonly string[], sub: Substitution): Value[] {
+  const values: Value[] = []
   for (const varName of groupBy) {
-    const val = sub.bindings.get(varName);
-    values.push(val === undefined ? null : val);
+    const val = sub.bindings.get(varName)
+    values.push(val === undefined ? null : val)
   }
-  return values;
+  return values
 }
 
 // ---------------------------------------------------------------------------
@@ -83,9 +71,9 @@ function groupValues(
 
 interface AggregationGroup {
   /** The bound values for groupBy variables. */
-  readonly groupVals: Value[];
+  readonly groupVals: Value[]
   /** All values of the `over` variable in this group. */
-  readonly overValues: Value[];
+  readonly overValues: Value[]
 }
 
 // ---------------------------------------------------------------------------
@@ -117,62 +105,62 @@ export function evaluateAggregation(
   db: ReadonlyDatabase,
   baseSub: Substitution,
 ): Substitution[] {
-  const relation = db.getRelation(agg.source.predicate);
-  const tuples = relation.tuples();
+  const relation = db.getRelation(agg.source.predicate)
+  const tuples = relation.tuples()
 
   // Step 1: Match source atom against all tuples, collecting groups.
-  const groups = new Map<string, AggregationGroup>();
+  const groups = new Map<string, AggregationGroup>()
 
   for (const tuple of tuples) {
-    const matched = matchAtomWithTuple(agg.source, tuple, baseSub);
-    if (matched === null) continue;
+    const matched = matchAtomWithTuple(agg.source, tuple, baseSub)
+    if (matched === null) continue
 
     // Extract grouping key
-    const key = groupKey(agg.groupBy, matched);
-    if (key === null) continue;
+    const key = groupKey(agg.groupBy, matched)
+    if (key === null) continue
 
     // Extract the `over` variable value
-    const overVal = matched.bindings.get(agg.over);
+    const overVal = matched.bindings.get(agg.over)
     if (overVal === undefined && !matched.bindings.has(agg.over)) {
       // The `over` variable is unbound — skip this tuple
-      continue;
+      continue
     }
-    const resolvedOver: Value = overVal === undefined ? null : overVal;
+    const resolvedOver: Value = overVal === undefined ? null : overVal
 
-    let group = groups.get(key);
+    let group = groups.get(key)
     if (group === undefined) {
       group = {
         groupVals: groupValues(agg.groupBy, matched),
         overValues: [],
-      };
-      groups.set(key, group);
+      }
+      groups.set(key, group)
     }
     // Mutable push — we own the array
-    (group.overValues as Value[]).push(resolvedOver);
+    ;(group.overValues as Value[]).push(resolvedOver)
   }
 
   // Step 2: Compute aggregate for each group and produce substitutions.
-  const results: Substitution[] = [];
+  const results: Substitution[] = []
 
   for (const group of groups.values()) {
-    const aggResult = computeAggregate(agg.fn, group.overValues);
+    const aggResult = computeAggregate(agg.fn, group.overValues)
     if (aggResult === undefined) {
       // Type error in aggregation (e.g., mixed number/bigint in sum)
       // Skip this group — it produces no result.
-      continue;
+      continue
     }
 
     // Build substitution: baseSub bindings + groupBy bindings + result binding.
     // Output weight = 1 (aggregation is a group-by boundary).
-    const sub = new Map(baseSub.bindings);
+    const sub = new Map(baseSub.bindings)
     for (let i = 0; i < agg.groupBy.length; i++) {
-      sub.set(agg.groupBy[i]!, group.groupVals[i]!);
+      sub.set(agg.groupBy[i]!, group.groupVals[i]!)
     }
-    sub.set(agg.result, aggResult);
-    results.push({ bindings: sub, weight: 1 });
+    sub.set(agg.result, aggResult)
+    results.push({ bindings: sub, weight: 1 })
   }
 
-  return results;
+  return results
 }
 
 // ---------------------------------------------------------------------------
@@ -192,96 +180,96 @@ export function evaluateAggregation(
  *   comparable type. Mixed types → undefined.
  */
 function computeAggregate(
-  fn: 'min' | 'max' | 'count' | 'sum',
+  fn: "min" | "max" | "count" | "sum",
   values: readonly Value[],
 ): Value | undefined {
   switch (fn) {
-    case 'count':
-      return computeCount(values);
-    case 'sum':
-      return computeSum(values);
-    case 'min':
-      return computeMin(values);
-    case 'max':
-      return computeMax(values);
+    case "count":
+      return computeCount(values)
+    case "sum":
+      return computeSum(values)
+    case "min":
+      return computeMin(values)
+    case "max":
+      return computeMax(values)
   }
 }
 
 function computeCount(values: readonly Value[]): Value {
-  return values.length;
+  return values.length
 }
 
 function computeSum(values: readonly Value[]): Value | undefined {
-  if (values.length === 0) return 0;
+  if (values.length === 0) return 0
 
   // Determine the type of the first numeric value
-  let hasNumber = false;
-  let hasBigint = false;
+  let hasNumber = false
+  let hasBigint = false
 
   for (const v of values) {
-    if (typeof v === 'number') hasNumber = true;
-    else if (typeof v === 'bigint') hasBigint = true;
+    if (typeof v === "number") hasNumber = true
+    else if (typeof v === "bigint") hasBigint = true
     else {
       // Non-numeric value in sum — type error
-      return undefined;
+      return undefined
     }
   }
 
   if (hasNumber && hasBigint) {
     // Mixed types — type error
-    return undefined;
+    return undefined
   }
 
   if (hasBigint) {
-    let total = 0n;
+    let total = 0n
     for (const v of values) {
-      total += v as bigint;
+      total += v as bigint
     }
-    return total;
+    return total
   }
 
   // All numbers
-  let total = 0;
+  let total = 0
   for (const v of values) {
-    total += v as number;
+    total += v as number
   }
-  return total;
+  return total
 }
 
 function computeMin(values: readonly Value[]): Value | undefined {
-  if (values.length === 0) return undefined;
+  if (values.length === 0) return undefined
 
-  let best: Value = values[0]!;
+  let best: Value = values[0]!
   for (let i = 1; i < values.length; i++) {
-    const v = values[i]!;
-    const cmp = compareValues(v, best);
+    const v = values[i]!
+    const cmp = compareValues(v, best)
     if (Number.isNaN(cmp)) {
       // Incompatible types — type error
-      return undefined;
+      return undefined
     }
     if (cmp < 0) {
-      best = v;
+      best = v
     }
   }
-  return best;
+  return best
 }
 
 function computeMax(values: readonly Value[]): Value | undefined {
-  if (values.length === 0) return undefined;
+  if (values.length === 0) return undefined
 
-  let best: Value = values[0]!;
+  let best: Value = values[0]!
   for (let i = 1; i < values.length; i++) {
-    const v = values[i]!;
-    const cmp = compareValues(v, best);
+    const v = values[i]!
+    const cmp = compareValues(v, best)
     if (Number.isNaN(cmp)) {
       // Incompatible types — type error
-      return undefined;
+      return undefined
     }
     if (cmp > 0) {
-      best = v;
+      best = v
     }
   }
-  return best;
+  return best
 }
 
 // ---------------------------------------------------------------------------
@@ -308,12 +296,12 @@ export function evaluateAggregationForSubs(
   db: ReadonlyDatabase,
   subs: readonly Substitution[],
 ): Substitution[] {
-  const results: Substitution[] = [];
+  const results: Substitution[] = []
   for (const sub of subs) {
-    const extended = evaluateAggregation(agg, db, sub);
+    const extended = evaluateAggregation(agg, db, sub)
     for (const s of extended) {
-      results.push(s);
+      results.push(s)
     }
   }
-  return results;
+  return results
 }

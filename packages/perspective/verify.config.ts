@@ -9,7 +9,7 @@ export default defineConfig({
     },
     {
       key: "types",
-      run: "tsgo --noEmit --skipLibCheck",
+      run: "tsgo --noEmit",
       parser: parsers.tsc,
       reportingDependsOn: ["format"],
     },

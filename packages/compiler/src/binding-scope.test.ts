@@ -20,7 +20,12 @@ function span() {
 
 /** Helper to create a reactive ContentNode with given source */
 function reactive(source: string) {
-  return createContent(source, "reactive", [{ source, deltaKind: "replace" }], span())
+  return createContent(
+    source,
+    "reactive",
+    [{ source, deltaKind: "replace" }],
+    span(),
+  )
 }
 
 /** Helper to create a render-time ContentNode with given source */

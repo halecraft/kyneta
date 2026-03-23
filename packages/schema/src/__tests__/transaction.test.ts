@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest"
 import {
-  Schema,
-  LoroSchema,
+  changefeed,
+  hasTransact,
   interpret,
   plainContext,
   readable,
-  writable,
-  changefeed,
+  Schema,
   TRANSACT,
-  hasTransact,
+  writable,
 } from "../index.js"
 
 // ---------------------------------------------------------------------------
@@ -55,7 +54,7 @@ describe("transaction: lifecycle", () => {
     expect(store.x).toBe(10)
     expect(store.y).toBe(20)
     expect(flushed).toHaveLength(2)
-    expect(flushed[0]!.change.type).toBe("replace")
+    expect(flushed[0]?.change.type).toBe("replace")
   })
 
   it("abort discards buffered changes", () => {
@@ -185,7 +184,11 @@ describe("transaction: commit delivers batched changefeed notifications", () => 
   it("changefeed subscribers receive exactly one Changeset at commit time", () => {
     const store = { x: 0, y: 0 }
     const ctx = plainContext(store)
-    const doc = interpret(pointSchema, ctx).with(readable).with(writable).with(changefeed).done()
+    const doc = interpret(pointSchema, ctx)
+      .with(readable)
+      .with(writable)
+      .with(changefeed)
+      .done()
 
     const CF_SYM = Symbol.for("kyneta:changefeed")
     const xChangesets: unknown[] = []
@@ -202,6 +205,6 @@ describe("transaction: commit delivers batched changefeed notifications", () => 
     expect(store.x).toBe(10)
     const cs = xChangesets[0] as { changes: { type: string }[] }
     expect(cs.changes).toHaveLength(1)
-    expect(cs.changes[0]!.type).toBe("replace")
+    expect(cs.changes[0]?.type).toBe("replace")
   })
 })

@@ -9,10 +9,10 @@
  * (e.g. in a minimal CI environment), the suite is skipped gracefully.
  */
 
-import { describe, expect, it, afterAll } from "vitest"
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs"
-import { join } from "node:path"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterAll, describe, expect, it } from "vitest"
 import farmPlugin from "../adapters/farm.js"
 import {
   BUILDER_SOURCE_EXPORTED,

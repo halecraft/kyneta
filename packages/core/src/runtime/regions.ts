@@ -29,7 +29,11 @@
  * @packageDocumentation
  */
 
-import { isSequenceChange, type ChangeBase, type SequenceChange, type SequenceInstruction } from "@kyneta/schema"
+import {
+  type ChangeBase,
+  isSequenceChange,
+  type SequenceInstruction,
+} from "@kyneta/schema"
 import type {
   ConditionalRegionHandlers,
   ConditionalRegionOp,
@@ -594,10 +598,7 @@ export function listRegion<T>(
     (change: ChangeBase) => {
       // Only process sequence changes — other change types trigger full re-render
       if (isSequenceChange(change)) {
-        const regionOps = planDeltaOps(
-          state.listRef,
-          change.instructions,
-        )
+        const regionOps = planDeltaOps(state.listRef, change.instructions)
         executeOps(parent, state, handlers, regionOps)
       } else {
         // Fallback: non-sequence change (e.g., "replace") — full re-render

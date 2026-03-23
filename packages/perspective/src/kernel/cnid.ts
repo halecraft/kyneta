@@ -4,7 +4,7 @@
 // A CnId uniquely identifies a constraint as the pair (peer, counter).
 // See unified-engine.md §1.
 
-import type { CnId, PeerID, Counter } from './types.js';
+import type { CnId, Counter, PeerID } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -14,7 +14,7 @@ import type { CnId, PeerID, Counter } from './types.js';
  * Create a CnId from a peer and counter.
  */
 export function createCnId(peer: PeerID, counter: Counter): CnId {
-  return { peer, counter };
+  return { peer, counter }
 }
 
 // ---------------------------------------------------------------------------
@@ -25,16 +25,16 @@ export function createCnId(peer: PeerID, counter: Counter): CnId {
  * Check if two CnIds are equal (same peer and counter).
  */
 export function cnIdEquals(a: CnId, b: CnId): boolean {
-  return a.peer === b.peer && a.counter === b.counter;
+  return a.peer === b.peer && a.counter === b.counter
 }
 
 /**
  * Check if two nullable CnIds are equal.
  */
 export function cnIdNullableEquals(a: CnId | null, b: CnId | null): boolean {
-  if (a === null && b === null) return true;
-  if (a === null || b === null) return false;
-  return cnIdEquals(a, b);
+  if (a === null && b === null) return true
+  if (a === null || b === null) return false
+  return cnIdEquals(a, b)
 }
 
 // ---------------------------------------------------------------------------
@@ -53,9 +53,9 @@ export function cnIdNullableEquals(a: CnId | null, b: CnId | null): boolean {
  */
 export function cnIdCompare(a: CnId, b: CnId): number {
   if (a.peer !== b.peer) {
-    return a.peer < b.peer ? -1 : 1;
+    return a.peer < b.peer ? -1 : 1
   }
-  return a.counter - b.counter;
+  return a.counter - b.counter
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ export function cnIdCompare(a: CnId, b: CnId): number {
  * Used as Map/Set keys throughout the kernel.
  */
 export function cnIdToString(id: CnId): string {
-  return `${id.peer}@${id.counter}`;
+  return `${id.peer}@${id.counter}`
 }
 
 /**
@@ -78,16 +78,16 @@ export function cnIdToString(id: CnId): string {
  * @throws Error if the string is not in valid "peer@counter" format.
  */
 export function cnIdFromString(str: string): CnId {
-  const atIndex = str.lastIndexOf('@');
+  const atIndex = str.lastIndexOf("@")
   if (atIndex === -1) {
-    throw new Error(`Invalid CnId string: ${str}`);
+    throw new Error(`Invalid CnId string: ${str}`)
   }
-  const peer = str.slice(0, atIndex);
-  const counter = parseInt(str.slice(atIndex + 1), 10);
-  if (isNaN(counter)) {
-    throw new Error(`Invalid CnId counter in: ${str}`);
+  const peer = str.slice(0, atIndex)
+  const counter = parseInt(str.slice(atIndex + 1), 10)
+  if (Number.isNaN(counter)) {
+    throw new Error(`Invalid CnId counter in: ${str}`)
   }
-  return createCnId(peer, counter);
+  return createCnId(peer, counter)
 }
 
 /**
@@ -95,5 +95,5 @@ export function cnIdFromString(str: string): CnId {
  * Map key. This is the same as `cnIdToString` but named to clarify intent.
  */
 export function cnIdKey(id: CnId): string {
-  return cnIdToString(id);
+  return cnIdToString(id)
 }

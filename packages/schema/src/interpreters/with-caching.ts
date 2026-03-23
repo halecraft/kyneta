@@ -32,20 +32,20 @@
 // See .plans/interpreter-decomposition.md §Phase 3.
 // See .plans/apply-changes.md §Phase 4.
 
+import type { ChangeBase, MapChange, SequenceChange } from "../change.js"
+import { isMapChange, isReplaceChange, isSequenceChange } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
-import type {
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
-  AnnotatedSchema,
-} from "../schema.js"
-import type { ChangeBase, SequenceChange, MapChange } from "../change.js"
-import { isSequenceChange, isMapChange, isReplaceChange } from "../change.js"
-import type { HasNavigation, HasCaching } from "./bottom.js"
 import type { RefContext } from "../interpreter-types.js"
+import type {
+  AnnotatedSchema,
+  MapSchema,
+  ProductSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SumSchema,
+} from "../schema.js"
 import { pathKey } from "../store.js"
+import type { HasCaching, HasNavigation } from "./bottom.js"
 
 // ---------------------------------------------------------------------------
 // INVALIDATE symbol — composability hook for cache coordination
@@ -67,9 +67,7 @@ import { pathKey } from "../store.js"
  *
  * Uses `Symbol.for` so multiple copies of this module share identity.
  */
-export const INVALIDATE: unique symbol = Symbol.for(
-  "kyneta:invalidate",
-) as any
+export const INVALIDATE: unique symbol = Symbol.for("kyneta:invalidate") as any
 
 // ---------------------------------------------------------------------------
 // CacheInstruction — the instruction set for cache updates
@@ -391,11 +389,7 @@ export function withCaching<A extends HasNavigation>(
   return {
     // --- Scalar ---------------------------------------------------------------
     // No caching needed for scalars — pass through.
-    scalar(
-      ctx: RefContext,
-      path: Path,
-      schema: ScalarSchema,
-    ): A & HasCaching {
+    scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A & HasCaching {
       return base.scalar(ctx, path, schema) as A & HasCaching
     },
 
@@ -405,7 +399,7 @@ export function withCaching<A extends HasNavigation>(
       ctx: RefContext,
       path: Path,
       schema: ProductSchema,
-      fields: Readonly<Record<string, () => (A & HasCaching)>>,
+      fields: Readonly<Record<string, () => A & HasCaching>>,
     ): A & HasCaching {
       // Downcast thunks for the base interpreter
       const baseFields = fields as Readonly<Record<string, () => A>>
@@ -415,7 +409,8 @@ export function withCaching<A extends HasNavigation>(
       // Skip the discriminant field — it's a raw store read from
       // withNavigation, not a ref thunk. No caching needed.
       const discKey = schema.discriminantKey
-      const fieldState: Record<string, { resolved: boolean; cached: unknown }> = {}
+      const fieldState: Record<string, { resolved: boolean; cached: unknown }> =
+        {}
       for (const key of Object.keys(fields)) {
         if (key === discKey) continue
         fieldState[key] = { resolved: false, cached: undefined }
@@ -442,7 +437,7 @@ export function withCaching<A extends HasNavigation>(
       // INVALIDATE handler: clear all field caches.
       // Products always do a full clear (planCacheUpdate for product
       // always returns [{ type: "clear" }] for any change type).
-      const invalidateProduct = (change: ChangeBase): void => {
+      const invalidateProduct = (_change: ChangeBase): void => {
         for (const key of Object.keys(fieldState)) {
           fieldState[key]!.resolved = false
           fieldState[key]!.cached = undefined
@@ -465,7 +460,7 @@ export function withCaching<A extends HasNavigation>(
       ctx: RefContext,
       path: Path,
       schema: SequenceSchema,
-      item: (index: number) => (A & HasCaching),
+      item: (index: number) => A & HasCaching,
     ): A & HasCaching {
       // Downcast for base
       const baseItem = item as (index: number) => A
@@ -515,7 +510,7 @@ export function withCaching<A extends HasNavigation>(
       ctx: RefContext,
       path: Path,
       schema: MapSchema,
-      item: (key: string) => (A & HasCaching),
+      item: (key: string) => A & HasCaching,
     ): A & HasCaching {
       // Downcast for base
       const baseItem = item as (key: string) => A
@@ -576,7 +571,7 @@ export function withCaching<A extends HasNavigation>(
       ctx: RefContext,
       path: Path,
       schema: AnnotatedSchema,
-      inner: (() => (A & HasCaching)) | undefined,
+      inner: (() => A & HasCaching) | undefined,
     ): A & HasCaching {
       const baseInner = inner as (() => A) | undefined
       return base.annotated(ctx, path, schema, baseInner) as A & HasCaching

@@ -10,17 +10,12 @@
 // performs a deep structural merge aware of structural kinds.
 
 import type {
-  Schema,
+  DiscriminatedSumSchema,
+  PositionalSumSchema,
   ScalarKind,
   ScalarSchema,
-  AnnotatedSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  PositionalSumSchema,
-  DiscriminatedSumSchema,
+  Schema,
 } from "./schema.js"
-import { isNonNullObject } from "./guards.js"
 
 // ---------------------------------------------------------------------------
 // Scalar defaults
@@ -205,11 +200,7 @@ function partial<T>(_schema: Schema, value: T): T {
  * recurses through products so that a partial primary can have its
  * gaps filled by the fallback.
  */
-function overlay(
-  primary: unknown,
-  fallback: unknown,
-  schema: Schema,
-): unknown {
+function overlay(primary: unknown, fallback: unknown, schema: Schema): unknown {
   // If primary is nullish, use fallback entirely
   if (primary === undefined || primary === null) {
     return fallback

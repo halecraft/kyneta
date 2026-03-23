@@ -1,21 +1,20 @@
 // Validate interpreter tests — covers every schema kind, error collection,
 // type narrowing, and the two public wrappers (validate / tryValidate).
 
-import { describe, expect, it, expectTypeOf } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
+import type { SchemaNode, ValidateContext } from "../index.js"
 import {
-  Schema,
-  LoroSchema,
-  Zero,
-  validate,
-  tryValidate,
-  SchemaValidationError,
   formatPath,
   interpret,
+  LoroSchema,
   plainInterpreter,
+  Schema,
+  SchemaValidationError,
+  tryValidate,
+  validate,
   validateInterpreter,
+  Zero,
 } from "../index.js"
-import type { ValidateContext, SchemaNode } from "../index.js"
-import type { Plain } from "../index.js"
 
 // Helper: run validation without triggering Plain<S> type resolution.
 // Avoids TS2589 ("excessively deep") when used inside expect(() => ...).toThrow()
@@ -154,7 +153,9 @@ describe("validate: scalar", () => {
   })
 
   it("null — rejects undefined", () => {
-    expect(() => validateUntyped(sNull, undefined)).toThrow(SchemaValidationError)
+    expect(() => validateUntyped(sNull, undefined)).toThrow(
+      SchemaValidationError,
+    )
   })
 
   it("null — rejects object", () => {
@@ -175,11 +176,15 @@ describe("validate: scalar", () => {
   })
 
   it("bytes — rejects plain array", () => {
-    expect(() => validateUntyped(sBytes, [1, 2, 3])).toThrow(SchemaValidationError)
+    expect(() => validateUntyped(sBytes, [1, 2, 3])).toThrow(
+      SchemaValidationError,
+    )
   })
 
   it("bytes — rejects string", () => {
-    expect(() => validateUntyped(sBytes, "binary")).toThrow(SchemaValidationError)
+    expect(() => validateUntyped(sBytes, "binary")).toThrow(
+      SchemaValidationError,
+    )
   })
 
   it("any — accepts string", () => {
@@ -221,8 +226,8 @@ describe("validate: constrained scalar", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.expected).toContain('"public"')
-      expect(result.errors[0]!.expected).toContain('"private"')
+      expect(result.errors[0]?.expected).toContain('"public"')
+      expect(result.errors[0]?.expected).toContain('"private"')
     }
   })
 
@@ -232,7 +237,7 @@ describe("validate: constrained scalar", () => {
     const result = tryValidate(s, 42)
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.expected).toBe("string")
+      expect(result.errors[0]?.expected).toBe("string")
     }
   })
 
@@ -291,8 +296,8 @@ describe("validate: product", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("age")
-      expect(result.errors[0]!.expected).toBe("number")
+      expect(result.errors[0]?.path).toBe("age")
+      expect(result.errors[0]?.expected).toBe("number")
     }
   })
 
@@ -306,7 +311,7 @@ describe("validate: product", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(2)
-      const paths = result.errors.map((e) => e.path)
+      const paths = result.errors.map(e => e.path)
       expect(paths).toContain("name")
       expect(paths).toContain("age")
     }
@@ -343,7 +348,7 @@ describe("validate: sequence", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("[1]")
+      expect(result.errors[0]?.path).toBe("[1]")
     }
   })
 
@@ -352,8 +357,8 @@ describe("validate: sequence", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(2)
-      expect(result.errors[0]!.path).toBe("[1]")
-      expect(result.errors[1]!.path).toBe("[2]")
+      expect(result.errors[0]?.path).toBe("[1]")
+      expect(result.errors[1]?.path).toBe("[2]")
     }
   })
 })
@@ -390,7 +395,7 @@ describe("validate: map", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("y")
+      expect(result.errors[0]?.path).toBe("y")
     }
   })
 })
@@ -415,16 +420,12 @@ describe("validate: positional sum", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.expected).toContain("union variants")
+      expect(result.errors[0]?.expected).toContain("union variants")
     }
   })
 
   it("three-way union", () => {
-    const s3 = Schema.union(
-      Schema.string(),
-      Schema.number(),
-      Schema.boolean(),
-    )
+    const s3 = Schema.union(Schema.string(), Schema.number(), Schema.boolean())
     expect(validate(s3, "a")).toBe("a")
     expect(validate(s3, 1)).toBe(1)
     expect(validate(s3, true)).toBe(true)
@@ -460,7 +461,11 @@ describe("validate: positional sum", () => {
 describe("validate: discriminated sum", () => {
   const s = Schema.discriminatedUnion("type", [
     Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
-    Schema.struct({ type: Schema.string("image"), url: Schema.string(), width: Schema.number() }),
+    Schema.struct({
+      type: Schema.string("image"),
+      url: Schema.string(),
+      width: Schema.number(),
+    }),
   ])
 
   it("valid discriminant + valid body", () => {
@@ -478,8 +483,8 @@ describe("validate: discriminated sum", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("body")
-      expect(result.errors[0]!.expected).toBe("string")
+      expect(result.errors[0]?.path).toBe("body")
+      expect(result.errors[0]?.expected).toBe("string")
     }
   })
 
@@ -488,9 +493,9 @@ describe("validate: discriminated sum", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("type")
-      expect(result.errors[0]!.expected).toContain("text")
-      expect(result.errors[0]!.expected).toContain("image")
+      expect(result.errors[0]?.path).toBe("type")
+      expect(result.errors[0]?.expected).toContain("text")
+      expect(result.errors[0]?.expected).toContain("image")
     }
   })
 
@@ -499,8 +504,8 @@ describe("validate: discriminated sum", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("type")
-      expect(result.errors[0]!.expected).toContain("discriminant")
+      expect(result.errors[0]?.path).toBe("type")
+      expect(result.errors[0]?.expected).toContain("discriminant")
     }
   })
 
@@ -509,7 +514,7 @@ describe("validate: discriminated sum", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.expected).toBe("object")
+      expect(result.errors[0]?.expected).toBe("object")
     }
   })
 
@@ -538,8 +543,8 @@ describe("validate: nullable", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.expected).toContain("nullable")
-      expect(result.errors[0]!.expected).toContain("string")
+      expect(result.errors[0]?.expected).toContain("nullable")
+      expect(result.errors[0]?.expected).toContain("string")
     }
   })
 
@@ -557,7 +562,7 @@ describe("validate: nullable", () => {
     const result = tryValidate(ss, "nope")
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.expected).toContain("nullable")
+      expect(result.errors[0]?.expected).toContain("nullable")
     }
   })
 })
@@ -575,7 +580,7 @@ describe("validate: annotated", () => {
     const result = tryValidate(LoroSchema.text(), 42)
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.expected).toContain("text")
+      expect(result.errors[0]?.expected).toContain("text")
     }
   })
 
@@ -587,7 +592,7 @@ describe("validate: annotated", () => {
     const result = tryValidate(LoroSchema.counter(), "nope")
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.expected).toContain("counter")
+      expect(result.errors[0]?.expected).toContain("counter")
     }
   })
 
@@ -607,7 +612,7 @@ describe("validate: annotated", () => {
     const result = tryValidate(s, { title: 42 })
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.path).toBe("title")
+      expect(result.errors[0]?.path).toBe("title")
     }
   })
 
@@ -626,14 +631,12 @@ describe("validate: annotated", () => {
     const result = tryValidate(s, ["a", 42])
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.path).toBe("[1]")
+      expect(result.errors[0]?.path).toBe("[1]")
     }
   })
 
   it("tree — delegates to inner", () => {
-    const s = LoroSchema.tree(
-      Schema.struct({ label: Schema.string() }),
-    )
+    const s = LoroSchema.tree(Schema.struct({ label: Schema.string() }))
     expect(validate(s, { label: "root" })).toEqual({ label: "root" })
   })
 
@@ -707,8 +710,8 @@ describe("validate: nested realistic schema", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("tasks[1].done")
-      expect(result.errors[0]!.expected).toBe("boolean")
+      expect(result.errors[0]?.path).toBe("tasks[1].done")
+      expect(result.errors[0]?.expected).toBe("boolean")
     }
   })
 
@@ -721,10 +724,10 @@ describe("validate: nested realistic schema", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("tasks[0].priority")
-      expect(result.errors[0]!.expected).toContain("1")
-      expect(result.errors[0]!.expected).toContain("2")
-      expect(result.errors[0]!.expected).toContain("3")
+      expect(result.errors[0]?.path).toBe("tasks[0].priority")
+      expect(result.errors[0]?.expected).toContain("1")
+      expect(result.errors[0]?.expected).toContain("2")
+      expect(result.errors[0]?.expected).toContain("3")
     }
   })
 
@@ -736,7 +739,7 @@ describe("validate: nested realistic schema", () => {
     const result = tryValidate(ProjectSchema, bad)
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.path).toBe("settings.visibility")
+      expect(result.errors[0]?.path).toBe("settings.visibility")
     }
   })
 
@@ -745,8 +748,8 @@ describe("validate: nested realistic schema", () => {
     const result = tryValidate(ProjectSchema, bad)
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.path).toBe("bio")
-      expect(result.errors[0]!.expected).toContain("nullable")
+      expect(result.errors[0]?.path).toBe("bio")
+      expect(result.errors[0]?.expected).toContain("nullable")
     }
   })
 })
@@ -766,7 +769,7 @@ describe("tryValidate: multi-error collection", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(3)
-      const paths = result.errors.map((e) => e.path).sort()
+      const paths = result.errors.map(e => e.path).sort()
       expect(paths).toEqual(["a", "b", "c"])
     }
   })
@@ -782,7 +785,7 @@ describe("tryValidate: multi-error collection", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(2)
-      expect(result.errors.map((e) => e.path).sort()).toEqual([
+      expect(result.errors.map(e => e.path).sort()).toEqual([
         "inner.x",
         "inner.y",
       ])
@@ -798,7 +801,7 @@ describe("tryValidate: multi-error collection", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(3) // name + items[1] + items[3]
-      const paths = result.errors.map((e) => e.path)
+      const paths = result.errors.map(e => e.path)
       expect(paths).toContain("name")
       expect(paths).toContain("items[1]")
       expect(paths).toContain("items[3]")
@@ -932,7 +935,7 @@ describe("validate: edge cases", () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.path).toBe("a.b[0].c.key")
+      expect(result.errors[0]?.path).toBe("a.b[0].c.key")
     }
   })
 
@@ -942,7 +945,7 @@ describe("validate: edge cases", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("[1].x")
+      expect(result.errors[0]?.path).toBe("[1].x")
     }
   })
 
@@ -952,7 +955,7 @@ describe("validate: edge cases", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]!.path).toBe("b.v")
+      expect(result.errors[0]?.path).toBe("b.v")
     }
   })
 
@@ -960,7 +963,7 @@ describe("validate: edge cases", () => {
     const result = tryValidate(Schema.string(), 42)
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.path).toBe("root")
+      expect(result.errors[0]?.path).toBe("root")
     }
   })
 
@@ -968,7 +971,7 @@ describe("validate: edge cases", () => {
     const result = tryValidate(Schema.struct({ x: Schema.number() }), "nope")
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.errors[0]!.path).toBe("root")
+      expect(result.errors[0]?.path).toBe("root")
     }
   })
 })

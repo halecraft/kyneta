@@ -10,14 +10,12 @@
  * @packageDocumentation
  */
 
+/** @deprecated Use kynetaPlugin instead */
 export {
   default,
   default as kynetaPlugin,
+  default as kineticPlugin,
   type KynetaPluginOptions,
 } from "../unplugin/adapters/vite.js"
-
 /** @deprecated Use KynetaPluginOptions instead */
 export type { KynetaPluginOptions as KineticPluginOptions } from "../unplugin/index.js"
-
-/** @deprecated Use kynetaPlugin instead */
-export { default as kineticPlugin } from "../unplugin/adapters/vite.js"

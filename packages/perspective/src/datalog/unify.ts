@@ -12,22 +12,24 @@
 // at a higher level (evaluatePositiveAtom), not here.
 
 import type {
-  Value,
-  Term,
   Atom,
   FactTuple,
-  Substitution,
-  GuardOp,
   GuardElement,
-} from './types.js';
-import { valuesEqual, evaluateGuardOp } from './types.js';
+  Substitution,
+  Term,
+  Value,
+} from "./types.js"
+import { evaluateGuardOp, valuesEqual } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Substitution helpers
 // ---------------------------------------------------------------------------
 
 /** The empty substitution — no variables bound, weight 1. */
-export const EMPTY_SUBSTITUTION: Substitution = { bindings: new Map(), weight: 1 };
+export const EMPTY_SUBSTITUTION: Substitution = {
+  bindings: new Map(),
+  weight: 1,
+}
 
 /**
  * Extend a substitution with a new binding.
@@ -39,9 +41,9 @@ export function extendSubstitution(
   varName: string,
   value: Value,
 ): Substitution {
-  const next = new Map(sub.bindings);
-  next.set(varName, value);
-  return { bindings: next, weight: sub.weight };
+  const next = new Map(sub.bindings)
+  next.set(varName, value)
+  return { bindings: next, weight: sub.weight }
 }
 
 // ---------------------------------------------------------------------------
@@ -57,14 +59,14 @@ export function extendSubstitution(
  * - If the term is a wildcard, returns `undefined` (wildcards never bind).
  */
 export function resolveTerm(term: Term, sub: Substitution): Value | undefined {
-  if (term.kind === 'const') {
-    return term.value;
+  if (term.kind === "const") {
+    return term.value
   }
-  if (term.kind === 'wildcard') {
-    return undefined;
+  if (term.kind === "wildcard") {
+    return undefined
   }
   // Variable — look it up
-  return sub.bindings.get(term.name);
+  return sub.bindings.get(term.name)
 }
 
 // ---------------------------------------------------------------------------
@@ -89,20 +91,20 @@ export function unifyTermWithValue(
   value: Value,
   sub: Substitution,
 ): Substitution | null {
-  if (term.kind === 'const') {
-    return valuesEqual(term.value, value) ? sub : null;
+  if (term.kind === "const") {
+    return valuesEqual(term.value, value) ? sub : null
   }
 
-  if (term.kind === 'wildcard') {
+  if (term.kind === "wildcard") {
     // Wildcard always matches, never binds
-    return sub;
+    return sub
   }
 
   // Variable
-  const bound = sub.bindings.get(term.name);
+  const bound = sub.bindings.get(term.name)
   if (bound !== undefined) {
     // Already bound — check consistency
-    return valuesEqual(bound, value) ? sub : null;
+    return valuesEqual(bound, value) ? sub : null
   }
 
   // Unbound variable — bind it
@@ -111,10 +113,10 @@ export function unifyTermWithValue(
   // "bound to null" from "unbound".
   if (sub.bindings.has(term.name)) {
     // Bound to null — check consistency
-    return value === null ? sub : null;
+    return value === null ? sub : null
   }
 
-  return extendSubstitution(sub, term.name, value);
+  return extendSubstitution(sub, term.name, value)
 }
 
 // ---------------------------------------------------------------------------
@@ -136,17 +138,17 @@ export function matchAtomWithTuple(
   sub: Substitution,
 ): Substitution | null {
   if (a.terms.length !== tuple.length) {
-    return null;
+    return null
   }
 
-  let current: Substitution | null = sub;
+  let current: Substitution | null = sub
   for (let i = 0; i < a.terms.length; i++) {
-    current = unifyTermWithValue(a.terms[i]!, tuple[i]!, current);
+    current = unifyTermWithValue(a.terms[i]!, tuple[i]!, current)
     if (current === null) {
-      return null;
+      return null
     }
   }
-  return current;
+  return current
 }
 
 // ---------------------------------------------------------------------------
@@ -162,34 +164,31 @@ export function matchAtomWithTuple(
  *
  * Returns `null` if any variable is unbound or a wildcard is present.
  */
-export function groundAtom(
-  a: Atom,
-  sub: Substitution,
-): FactTuple | null {
-  const values: Value[] = [];
+export function groundAtom(a: Atom, sub: Substitution): FactTuple | null {
+  const values: Value[] = []
   for (const term of a.terms) {
-    if (term.kind === 'wildcard') {
+    if (term.kind === "wildcard") {
       // Wildcards cannot appear in grounded atoms (head position)
-      return null;
+      return null
     }
-    const resolved = resolveTerm(term, sub);
+    const resolved = resolveTerm(term, sub)
     if (resolved === undefined) {
       // Check if the variable is bound to null (undefined means unbound here)
-      if (term.kind === 'var' && sub.bindings.has(term.name)) {
+      if (term.kind === "var" && sub.bindings.has(term.name)) {
         // The variable is bound to null (since sub.bindings.get returned undefined
         // but sub.bindings.has returned true is impossible — Map stores null as a value
         // and get returns null, not undefined). Actually, if the value IS null,
         // sub.bindings.get returns null which is not undefined, so this branch should
         // not be reachable for null-bound vars. This is a safety fallback.
-        values.push(null);
+        values.push(null)
       } else {
-        return null; // Unbound variable
+        return null // Unbound variable
       }
     } else {
-      values.push(resolved);
+      values.push(resolved)
     }
   }
-  return values;
+  return values
 }
 
 // ---------------------------------------------------------------------------
@@ -210,14 +209,14 @@ export function matchAtomAgainstRelation(
   tuples: readonly FactTuple[],
   baseSub: Substitution,
 ): Substitution[] {
-  const results: Substitution[] = [];
+  const results: Substitution[] = []
   for (const tuple of tuples) {
-    const extended = matchAtomWithTuple(a, tuple, baseSub);
+    const extended = matchAtomWithTuple(a, tuple, baseSub)
     if (extended !== null) {
-      results.push(extended);
+      results.push(extended)
     }
   }
-  return results;
+  return results
 }
 
 // ---------------------------------------------------------------------------
@@ -242,13 +241,13 @@ export function evaluateGuard(
   guard: GuardElement,
   sub: Substitution,
 ): Substitution | null {
-  const left = resolveGuardTerm(guard.left, sub);
-  if (left === undefined) return null;
+  const left = resolveGuardTerm(guard.left, sub)
+  if (left === undefined) return null
 
-  const right = resolveGuardTerm(guard.right, sub);
-  if (right === undefined) return null;
+  const right = resolveGuardTerm(guard.right, sub)
+  if (right === undefined) return null
 
-  return evaluateGuardOp(guard.op, left, right) ? sub : null;
+  return evaluateGuardOp(guard.op, left, right) ? sub : null
 }
 
 /**
@@ -258,22 +257,22 @@ export function evaluateGuard(
  * Returns the resolved Value, or `undefined` if unresolvable.
  */
 function resolveGuardTerm(term: Term, sub: Substitution): Value | undefined {
-  if (term.kind === 'const') {
-    return term.value;
+  if (term.kind === "const") {
+    return term.value
   }
-  if (term.kind === 'wildcard') {
+  if (term.kind === "wildcard") {
     // Wildcards have no value — can't be used in guards
-    return undefined;
+    return undefined
   }
   // Variable
-  const val = sub.bindings.get(term.name);
+  const val = sub.bindings.get(term.name)
   if (val !== undefined) {
-    return val;
+    return val
   }
   // Could be bound to null — check with has
   if (sub.bindings.has(term.name)) {
-    return null;
+    return null
   }
   // Unbound
-  return undefined;
+  return undefined
 }

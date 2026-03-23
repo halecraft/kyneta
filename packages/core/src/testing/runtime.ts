@@ -24,18 +24,16 @@
  * @packageDocumentation
  */
 
+// Re-export resetProject from compiler (if tests need it)
+export { resetProject } from "../compiler/transform.js"
 // Re-export testing utilities from their source modules
 export {
   resetScopeIdCounter,
   setRootScope,
 } from "../runtime/scope.js"
-
 export {
   activeSubscriptions,
   getActiveSubscriptionCount,
   getActiveSubscriptions,
   resetSubscriptionIdCounter,
 } from "../runtime/subscribe.js"
-
-// Re-export resetProject from compiler (if tests need it)
-export { resetProject } from "../compiler/transform.js"

@@ -4,11 +4,18 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "pnpm -r build"
+    "build": "turbo build",
+    "test": "turbo test --filter='!@kyneta/perspective'",
+    "verify": "turbo verify --filter='!@kyneta/perspective'"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@10.9.0"
+  "packageManager": "pnpm@10.9.0",
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.8",
+    "@halecraft/verify": "^1.2.0",
+    "@typescript/native-preview": "7.0.0-dev.20260322.1",
+    "turbo": "^2.8.20"
+  }
 }

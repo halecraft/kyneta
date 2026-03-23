@@ -22,19 +22,19 @@
 //
 // Context: jj:wmyomqzw (Phase 0), jj:wqoqzzpp (Phase 2)
 
-import { type Store, applyChangeToStore } from "../store.js"
-import type { Path } from "../interpret.js"
 import type { ChangeBase } from "../change.js"
+import type { Op } from "../changefeed.js"
+import type { Path } from "../interpret.js"
+import type { WritableContext } from "../interpreters/writable.js"
+import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
 import type { Schema as SchemaNode } from "../schema.js"
+import { applyChangeToStore, type Store } from "../store.js"
 import type {
   Frontier,
   Substrate,
-  SubstratePayload,
   SubstrateFactory,
+  SubstratePayload,
 } from "../substrate.js"
-import type { WritableContext } from "../interpreters/writable.js"
-import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
-import type { Op } from "../changefeed.js"
 import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,9 @@ export class PlainFrontier implements Frontier {
 
   compare(other: Frontier): "behind" | "equal" | "ahead" | "concurrent" {
     if (!(other instanceof PlainFrontier)) {
-      throw new Error("PlainFrontier can only be compared with another PlainFrontier")
+      throw new Error(
+        "PlainFrontier can only be compared with another PlainFrontier",
+      )
     }
     const otherValue = other.#value
     if (this.#value < otherValue) return "behind"
@@ -149,7 +151,9 @@ export function createPlainSubstrate(store: Store): Substrate<PlainFrontier> {
 
     importDelta(payload: SubstratePayload, origin?: string): void {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
-        throw new Error("PlainSubstrate.importDelta only supports JSON-encoded payloads")
+        throw new Error(
+          "PlainSubstrate.importDelta only supports JSON-encoded payloads",
+        )
       }
       const ops = JSON.parse(payload.data) as Op[]
       if (ops.length === 0) return
@@ -195,16 +199,27 @@ export function plainContext(store: Store): WritableContext {
  * - `parseFrontier(serialized)` — deserialize a PlainFrontier.
  */
 export const plainSubstrateFactory: SubstrateFactory<PlainFrontier> = {
-  create(schema: SchemaNode, seed: Record<string, unknown> = {}): Substrate<PlainFrontier> {
+  create(
+    schema: SchemaNode,
+    seed: Record<string, unknown> = {},
+  ): Substrate<PlainFrontier> {
     const defaults = Zero.structural(schema) as Record<string, unknown>
-    const initial = Zero.overlay(seed, defaults, schema) as Record<string, unknown>
+    const initial = Zero.overlay(seed, defaults, schema) as Record<
+      string,
+      unknown
+    >
     const store = { ...initial } as Store
     return createPlainSubstrate(store)
   },
 
-  fromSnapshot(payload: SubstratePayload, schema: SchemaNode): Substrate<PlainFrontier> {
+  fromSnapshot(
+    payload: SubstratePayload,
+    schema: SchemaNode,
+  ): Substrate<PlainFrontier> {
     if (payload.encoding !== "json" || typeof payload.data !== "string") {
-      throw new Error("PlainSubstrateFactory.fromSnapshot only supports JSON-encoded payloads")
+      throw new Error(
+        "PlainSubstrateFactory.fromSnapshot only supports JSON-encoded payloads",
+      )
     }
     const snapshotState = JSON.parse(payload.data) as Record<string, unknown>
     // Use the snapshot state as the seed — Zero.overlay will fill any

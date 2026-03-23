@@ -29,32 +29,32 @@
 
 import type { ChangeBase } from "../change.js"
 import { isSequenceChange } from "../change.js"
-import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type {
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
-  AnnotatedSchema,
-} from "../schema.js"
+  Changefeed,
+  Changeset,
+  ComposedChangefeed,
+  HasChangefeed,
+  Op,
+} from "../changefeed.js"
 import {
   CHANGEFEED,
   hasChangefeed,
   hasComposedChangefeed,
 } from "../changefeed.js"
-import type {
-  Changeset,
-  Changefeed,
-  ComposedChangefeed,
-  HasChangefeed,
-  Op,
-} from "../changefeed.js"
-import { readByPath, pathKey } from "../store.js"
 import { isPropertyHost } from "../guards.js"
-import { CALL } from "./bottom.js"
-import type { HasRead } from "./bottom.js"
+import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
+import type {
+  AnnotatedSchema,
+  MapSchema,
+  ProductSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SumSchema,
+} from "../schema.js"
+import { pathKey, readByPath } from "../store.js"
+import type { HasRead } from "./bottom.js"
+import { CALL } from "./bottom.js"
 
 // ---------------------------------------------------------------------------
 // Attach [CHANGEFEED] non-enumerably to any object
@@ -109,9 +109,7 @@ export interface NotificationPlan {
  * @param pending - Accumulated `{path, change}` pairs from prepare calls.
  * @returns A `NotificationPlan` with changes grouped by pathKey.
  */
-export function planNotifications(
-  pending: readonly Op[],
-): NotificationPlan {
+export function planNotifications(pending: readonly Op[]): NotificationPlan {
   const grouped = new Map<string, ChangeBase[]>()
   for (const { path, change } of pending) {
     const key = pathKey(path)
@@ -137,7 +135,10 @@ export function planNotifications(
  */
 export function deliverNotifications(
   plan: NotificationPlan,
-  listeners: ReadonlyMap<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
+  listeners: ReadonlyMap<
+    string,
+    Set<(changeset: Changeset<ChangeBase>) => void>
+  >,
   origin?: string,
 ): void {
   for (const [key, changes] of plan.grouped) {
@@ -164,7 +165,10 @@ export function deliverNotifications(
  *   before/after the changefeed layer's logic.
  */
 interface ContextWiringState {
-  readonly listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>
+  readonly listeners: Map<
+    string,
+    Set<(changeset: Changeset<ChangeBase>) => void>
+  >
   readonly pending: Op[]
   readonly originalPrepare: (path: Path, change: ChangeBase) => void
   readonly originalFlush: (origin?: string) => void
@@ -181,8 +185,10 @@ function hasPreparePipeline(ctx: RefContext): ctx is RefContext & {
   flush: (origin?: string) => void
 } {
   return (
-    "prepare" in ctx && typeof (ctx as any).prepare === "function" &&
-    "flush" in ctx && typeof (ctx as any).flush === "function"
+    "prepare" in ctx &&
+    typeof (ctx as any).prepare === "function" &&
+    "flush" in ctx &&
+    typeof (ctx as any).flush === "function"
   )
 }
 
@@ -213,24 +219,30 @@ const contextState = new WeakMap<RefContext, ContextWiringState>()
 // WeakMap for read-only contexts: each gets its own orphaned listener
 // map. Subscribers register but nothing feeds into it — valid static
 // Moore machine. Separate per-context to avoid cross-contamination.
-const readOnlyState = new WeakMap<RefContext, Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>>()
+const readOnlyState = new WeakMap<
+  RefContext,
+  Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>
+>()
 
 function ensurePrepareWiring(
- ctx: RefContext,
+  ctx: RefContext,
 ): Map<string, Set<(changeset: Changeset<ChangeBase>) => void>> {
- if (!hasPreparePipeline(ctx)) {
-   let listeners = readOnlyState.get(ctx)
-   if (!listeners) {
-     listeners = new Map()
-     readOnlyState.set(ctx, listeners)
-   }
-   return listeners
- }
+  if (!hasPreparePipeline(ctx)) {
+    let listeners = readOnlyState.get(ctx)
+    if (!listeners) {
+      listeners = new Map()
+      readOnlyState.set(ctx, listeners)
+    }
+    return listeners
+  }
 
   let state = contextState.get(ctx)
   if (state) return state.listeners
 
-  const listeners = new Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>()
+  const listeners = new Map<
+    string,
+    Set<(changeset: Changeset<ChangeBase>) => void>
+  >()
   const pending: Op[] = []
   const originalPrepare = ctx.prepare
   const originalFlush = ctx.flush
@@ -291,8 +303,8 @@ function listenAtPath(
   }
   set.add(callback)
   return () => {
-    set!.delete(callback)
-    if (set!.size === 0) {
+    set?.delete(callback)
+    if (set?.size === 0) {
       listeners.delete(key)
     }
   }
@@ -318,7 +330,9 @@ function createLeafChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
+    subscribe(
+      callback: (changeset: Changeset<ChangeBase>) => void,
+    ): () => void {
       // The listener receives Changeset directly from flush — pass through
       return listenAtPath(listeners, path, callback)
     },
@@ -375,7 +389,7 @@ function createProductChangefeed(
     childWiringDone = true
 
     for (const key of Object.keys(fields)) {
-      const child = fields[key]!()
+      const child = fields[key]?.()
       if (!hasChangefeed(child)) continue
 
       const prefix: Path = [{ type: "key" as const, key }]
@@ -414,14 +428,20 @@ function createProductChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
+    subscribe(
+      callback: (changeset: Changeset<ChangeBase>) => void,
+    ): () => void {
       shallowSubs.add(callback)
-      return () => { shallowSubs.delete(callback) }
+      return () => {
+        shallowSubs.delete(callback)
+      }
     },
     subscribeTree(callback: (changeset: Changeset<Op>) => void): () => void {
       wireChildren()
       treeSubs.add(callback)
-      return () => { treeSubs.delete(callback) }
+      return () => {
+        treeSubs.delete(callback)
+      }
     },
   }
 }
@@ -477,17 +497,19 @@ function createSequenceChangefeed(
         for (const cb of treeSubs) cb(propagated)
       })
     } else {
-      unsub = child[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
-        if (treeSubs.size === 0) return
-        const propagated: Changeset<Op> = {
-          changes: changeset.changes.map(change => ({
-            path: prefix,
-            change,
-          })),
-          origin: changeset.origin,
-        }
-        for (const cb of treeSubs) cb(propagated)
-      })
+      unsub = child[CHANGEFEED].subscribe(
+        (changeset: Changeset<ChangeBase>) => {
+          if (treeSubs.size === 0) return
+          const propagated: Changeset<Op> = {
+            changes: changeset.changes.map(change => ({
+              path: prefix,
+              change,
+            })),
+            origin: changeset.origin,
+          }
+          for (const cb of treeSubs) cb(propagated)
+        },
+      )
     }
     itemUnsubs.set(index, unsub)
   }
@@ -550,9 +572,13 @@ function createSequenceChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
+    subscribe(
+      callback: (changeset: Changeset<ChangeBase>) => void,
+    ): () => void {
       shallowSubs.add(callback)
-      return () => { shallowSubs.delete(callback) }
+      return () => {
+        shallowSubs.delete(callback)
+      }
     },
     subscribeTree(callback: (changeset: Changeset<Op>) => void): () => void {
       if (!initialWiringDone) {
@@ -617,17 +643,19 @@ function createMapChangefeed(
         for (const cb of treeSubs) cb(propagated)
       })
     } else {
-      unsub = child[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
-        if (treeSubs.size === 0) return
-        const propagated: Changeset<Op> = {
-          changes: changeset.changes.map(change => ({
-            path: prefix,
-            change,
-          })),
-          origin: changeset.origin,
-        }
-        for (const cb of treeSubs) cb(propagated)
-      })
+      unsub = child[CHANGEFEED].subscribe(
+        (changeset: Changeset<ChangeBase>) => {
+          if (treeSubs.size === 0) return
+          const propagated: Changeset<Op> = {
+            changes: changeset.changes.map(change => ({
+              path: prefix,
+              change,
+            })),
+            origin: changeset.origin,
+          }
+          for (const cb of treeSubs) cb(propagated)
+        },
+      )
     }
     entryUnsubs.set(key, unsub)
   }
@@ -670,9 +698,13 @@ function createMapChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
+    subscribe(
+      callback: (changeset: Changeset<ChangeBase>) => void,
+    ): () => void {
       shallowSubs.add(callback)
-      return () => { shallowSubs.delete(callback) }
+      return () => {
+        shallowSubs.delete(callback)
+      }
     },
     subscribeTree(callback: (changeset: Changeset<Op>) => void): () => void {
       if (!initialWiringDone) {

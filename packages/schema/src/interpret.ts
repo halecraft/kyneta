@@ -16,21 +16,21 @@
 //   the catamorphism: `interpret(schema, ctx).with(readable).with(writable).done()`
 // - Pre-built layers live in `./layers.ts` to avoid circular imports.
 
-import { bottomInterpreter } from "./interpreters/bottom.js"
-import type { HasRead } from "./interpreters/bottom.js"
-import type { HasTransact } from "./interpreters/writable.js"
 import type { HasChangefeed } from "./changefeed.js"
-import type { Ref, RWRef, RRef } from "./ref.js"
+import type { HasRead } from "./interpreters/bottom.js"
+import { bottomInterpreter } from "./interpreters/bottom.js"
+import type { HasTransact } from "./interpreters/writable.js"
+import type { Ref, RRef, RWRef } from "./ref.js"
 import type {
-  Schema,
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
   AnnotatedSchema,
-  PositionalSumSchema,
   DiscriminatedSumSchema,
+  MapSchema,
+  PositionalSumSchema,
+  ProductSchema,
+  ScalarSchema,
+  Schema,
+  SequenceSchema,
+  SumSchema,
 } from "./schema.js"
 
 // ---------------------------------------------------------------------------
@@ -96,19 +96,9 @@ export interface Interpreter<Ctx, A> {
     item: (index: number) => A,
   ): A
 
-  map(
-    ctx: Ctx,
-    path: Path,
-    schema: MapSchema,
-    item: (key: string) => A,
-  ): A
+  map(ctx: Ctx, path: Path, schema: MapSchema, item: (key: string) => A): A
 
-  sum(
-    ctx: Ctx,
-    path: Path,
-    schema: SumSchema,
-    variants: SumVariants<A>,
-  ): A
+  sum(ctx: Ctx, path: Path, schema: SumSchema, variants: SumVariants<A>): A
 
   annotated(
     ctx: Ctx,
@@ -166,14 +156,15 @@ export type ChangefeedBrand = { readonly [CHANGEFEED_BRAND]: true }
  *
  * Order matters — most specific first.
  */
-export type Resolve<S extends Schema, Brands> =
-  Brands extends ReadableBrand & WritableBrand & ChangefeedBrand
-    ? Ref<S>
-    : Brands extends ReadableBrand & WritableBrand
-      ? RWRef<S>
-      : Brands extends ReadableBrand
-        ? RRef<S>
-        : unknown
+export type Resolve<S extends Schema, Brands> = Brands extends ReadableBrand &
+  WritableBrand &
+  ChangefeedBrand
+  ? Ref<S>
+  : Brands extends ReadableBrand & WritableBrand
+    ? RWRef<S>
+    : Brands extends ReadableBrand
+      ? RRef<S>
+      : unknown
 
 // ---------------------------------------------------------------------------
 // ResolveCarrier<S, A> — three-arg tier selection
@@ -215,12 +206,13 @@ export type Resolve<S extends Schema, Brands> =
  * // Or more commonly, just use the fluent builder which infers automatically.
  * ```
  */
-export type ResolveCarrier<S extends Schema, A> =
-  [A] extends [HasRead & HasTransact & HasChangefeed]
-    ? Ref<S>
-    : [A] extends [HasRead & HasTransact]
-      ? RWRef<S>
-      : A
+export type ResolveCarrier<S extends Schema, A> = [A] extends [
+  HasRead & HasTransact & HasChangefeed,
+]
+  ? Ref<S>
+  : [A] extends [HasRead & HasTransact]
+    ? RWRef<S>
+    : A
 
 // ---------------------------------------------------------------------------
 // InterpreterLayer — typed wrapper for interpreter transformers
@@ -253,14 +245,16 @@ export type ResolveCarrier<S extends Schema, A> =
  * Pre-built layers are exported from `./layers.ts` (and re-exported
  * from the barrel `index.ts`).
  */
-export interface InterpreterLayer<InCtx, OutCtx, Brand = unknown> {
+export interface InterpreterLayer<InCtx, OutCtx, _Brand = unknown> {
   /** Human-readable name for debugging and toString(). */
   readonly name: string
   /**
    * Transforms a base interpreter into an enhanced interpreter.
    * May widen the context type (InCtx → OutCtx).
    */
-  readonly transform: (base: Interpreter<InCtx, any>) => Interpreter<OutCtx, any>
+  readonly transform: (
+    base: Interpreter<InCtx, any>,
+  ) => Interpreter<OutCtx, any>
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +370,12 @@ export function interpret(
   // Overload resolution: if the second argument has all six interpreter
   // methods, it's an Interpreter. Otherwise it's a context object.
   if (isInterpreter(interpOrCtx)) {
-    return interpretImpl(schema, interpOrCtx as Interpreter<any, any>, ctx!, path ?? [])
+    return interpretImpl(
+      schema,
+      interpOrCtx as Interpreter<any, any>,
+      ctx!,
+      path ?? [],
+    )
   }
   // Two-arg form: return a fluent builder
   return createBuilder(schema, interpOrCtx)
@@ -386,7 +385,8 @@ export function interpret(
  * Returns true if `value` looks like an Interpreter (has all six case methods).
  */
 function isInterpreter(value: unknown): boolean {
-  if (value === null || value === undefined || typeof value !== "object") return false
+  if (value === null || value === undefined || typeof value !== "object")
+    return false
   const obj = value as Record<string, unknown>
   return (
     typeof obj.scalar === "function" &&
@@ -457,7 +457,8 @@ function interpretImpl<Ctx, A>(
         const fieldSchema = schema.fields[key]!
         const fieldPath: Path = [...path, { type: "key", key }]
         // Each thunk captures its own key and path
-        fieldThunks[key] = () => interpretImpl(fieldSchema, interp, ctx, fieldPath)
+        fieldThunks[key] = () =>
+          interpretImpl(fieldSchema, interp, ctx, fieldPath)
       }
       return interp.product(ctx, path, schema, fieldThunks)
     }
@@ -550,8 +551,7 @@ export function createInterpreter<Ctx, A>(
 ): Interpreter<Ctx, A> {
   return {
     scalar:
-      overrides.scalar ??
-      ((ctx, path, schema) => fallback(ctx, path, schema)),
+      overrides.scalar ?? ((ctx, path, schema) => fallback(ctx, path, schema)),
     product:
       overrides.product ??
       ((ctx, path, schema, _fields) => fallback(ctx, path, schema)),

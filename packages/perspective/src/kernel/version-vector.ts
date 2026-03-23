@@ -10,13 +10,13 @@
 // See unified-engine.md §1, §4, §7.1.
 
 import type {
-  PeerID,
-  Counter,
   CnId,
-  VersionVector,
-  MutableVersionVector,
   Constraint,
-} from './types.js';
+  Counter,
+  MutableVersionVector,
+  PeerID,
+  VersionVector,
+} from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -26,7 +26,7 @@ import type {
  * Create an empty version vector.
  */
 export function createVersionVector(): MutableVersionVector {
-  return new Map();
+  return new Map()
 }
 
 /**
@@ -37,14 +37,14 @@ export function createVersionVector(): MutableVersionVector {
 export function vvFromObject(
   obj: Record<PeerID, Counter>,
 ): MutableVersionVector {
-  return new Map(Object.entries(obj));
+  return new Map(Object.entries(obj))
 }
 
 /**
  * Clone a version vector (shallow copy).
  */
 export function vvClone(vv: VersionVector): MutableVersionVector {
-  return new Map(vv);
+  return new Map(vv)
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ export function vvClone(vv: VersionVector): MutableVersionVector {
  * Get the next expected counter for a peer (0 if unseen).
  */
 export function vvGet(vv: VersionVector, peer: PeerID): Counter {
-  return vv.get(peer) ?? 0;
+  return vv.get(peer) ?? 0
 }
 
 /**
@@ -68,14 +68,14 @@ export function vvHasSeen(
   peer: PeerID,
   counter: Counter,
 ): boolean {
-  return counter < vvGet(vv, peer);
+  return counter < vvGet(vv, peer)
 }
 
 /**
  * Check if a version vector has seen a specific CnId.
  */
 export function vvHasSeenCnId(vv: VersionVector, id: CnId): boolean {
-  return vvHasSeen(vv, id.peer, id.counter);
+  return vvHasSeen(vv, id.peer, id.counter)
 }
 
 // ---------------------------------------------------------------------------
@@ -92,10 +92,10 @@ export function vvExtend(
   peer: PeerID,
   counter: Counter,
 ): void {
-  const current = vvGet(vv, peer);
-  const next = counter + 1;
+  const current = vvGet(vv, peer)
+  const next = counter + 1
   if (next > current) {
-    vv.set(peer, next);
+    vv.set(peer, next)
   }
 }
 
@@ -103,7 +103,7 @@ export function vvExtend(
  * Extend the version vector to include a CnId.
  */
 export function vvExtendCnId(vv: MutableVersionVector, id: CnId): void {
-  vvExtend(vv, id.peer, id.counter);
+  vvExtend(vv, id.peer, id.counter)
 }
 
 // ---------------------------------------------------------------------------
@@ -114,10 +114,10 @@ export function vvExtendCnId(vv: MutableVersionVector, id: CnId): void {
  * Comparison result between two version vectors.
  */
 export type VVCompareResult =
-  | 'equal'      // Identical
-  | 'less'       // a < b (a is ancestor of b)
-  | 'greater'    // a > b (b is ancestor of a)
-  | 'concurrent'; // Neither is ancestor of the other
+  | "equal" // Identical
+  | "less" // a < b (a is ancestor of b)
+  | "greater" // a > b (b is ancestor of a)
+  | "concurrent" // Neither is ancestor of the other
 
 /**
  * Compare two version vectors.
@@ -129,26 +129,26 @@ export type VVCompareResult =
  * - "concurrent" if neither is an ancestor of the other
  */
 export function vvCompare(a: VersionVector, b: VersionVector): VVCompareResult {
-  let aHasMore = false;
-  let bHasMore = false;
+  let aHasMore = false
+  let bHasMore = false
 
   for (const [peer, counterA] of a) {
-    const counterB = vvGet(b, peer);
-    if (counterA > counterB) aHasMore = true;
-    if (counterB > counterA) bHasMore = true;
+    const counterB = vvGet(b, peer)
+    if (counterA > counterB) aHasMore = true
+    if (counterB > counterA) bHasMore = true
   }
 
   // Check peers only in b (not in a)
   for (const [peer] of b) {
     if (!a.has(peer)) {
-      bHasMore = true;
+      bHasMore = true
     }
   }
 
-  if (!aHasMore && !bHasMore) return 'equal';
-  if (aHasMore && !bHasMore) return 'greater';
-  if (!aHasMore && bHasMore) return 'less';
-  return 'concurrent';
+  if (!aHasMore && !bHasMore) return "equal"
+  if (aHasMore && !bHasMore) return "greater"
+  if (!aHasMore && bHasMore) return "less"
+  return "concurrent"
 }
 
 /**
@@ -156,20 +156,20 @@ export function vvCompare(a: VersionVector, b: VersionVector): VVCompareResult {
  */
 export function vvIncludes(a: VersionVector, b: VersionVector): boolean {
   for (const [peer, counterB] of b) {
-    if (vvGet(a, peer) < counterB) return false;
+    if (vvGet(a, peer) < counterB) return false
   }
-  return true;
+  return true
 }
 
 /**
  * Check if two version vectors are equal.
  */
 export function vvEquals(a: VersionVector, b: VersionVector): boolean {
-  if (a.size !== b.size) return false;
+  if (a.size !== b.size) return false
   for (const [peer, counterA] of a) {
-    if (vvGet(b, peer) !== counterA) return false;
+    if (vvGet(b, peer) !== counterA) return false
   }
-  return true;
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -185,14 +185,14 @@ export function vvMerge(
   a: VersionVector,
   b: VersionVector,
 ): MutableVersionVector {
-  const result = vvClone(a);
+  const result = vvClone(a)
   for (const [peer, counterB] of b) {
-    const counterA = vvGet(result, peer);
+    const counterA = vvGet(result, peer)
     if (counterB > counterA) {
-      result.set(peer, counterB);
+      result.set(peer, counterB)
     }
   }
-  return result;
+  return result
 }
 
 /**
@@ -200,9 +200,9 @@ export function vvMerge(
  */
 export function vvMergeInto(a: MutableVersionVector, b: VersionVector): void {
   for (const [peer, counterB] of b) {
-    const counterA = vvGet(a, peer);
+    const counterA = vvGet(a, peer)
     if (counterB > counterA) {
-      a.set(peer, counterB);
+      a.set(peer, counterB)
     }
   }
 }
@@ -225,13 +225,13 @@ export function filterByVersion<C extends Constraint>(
   constraints: Iterable<C>,
   version: VersionVector,
 ): C[] {
-  const result: C[] = [];
+  const result: C[] = []
   for (const c of constraints) {
     if (vvHasSeenCnId(version, c.id)) {
-      result.push(c);
+      result.push(c)
     }
   }
-  return result;
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -248,16 +248,16 @@ export function vvDiff(
   current: VersionVector,
   other: VersionVector,
 ): Map<PeerID, { start: Counter; end: Counter }> {
-  const diff = new Map<PeerID, { start: Counter; end: Counter }>();
+  const diff = new Map<PeerID, { start: Counter; end: Counter }>()
 
   for (const [peer, currentCounter] of current) {
-    const otherCounter = vvGet(other, peer);
+    const otherCounter = vvGet(other, peer)
     if (currentCounter > otherCounter) {
-      diff.set(peer, { start: otherCounter, end: currentCounter });
+      diff.set(peer, { start: otherCounter, end: currentCounter })
     }
   }
 
-  return diff;
+  return diff
 }
 
 // ---------------------------------------------------------------------------
@@ -268,25 +268,25 @@ export function vvDiff(
  * Convert a version vector to a plain object.
  */
 export function vvToObject(vv: VersionVector): Record<PeerID, Counter> {
-  const obj: Record<PeerID, Counter> = {};
+  const obj: Record<PeerID, Counter> = {}
   for (const [peer, counter] of vv) {
-    obj[peer] = counter;
+    obj[peer] = counter
   }
-  return obj;
+  return obj
 }
 
 /**
  * Human-readable string representation.
  */
 export function vvToString(vv: VersionVector): string {
-  if (vv.size === 0) return '{}';
+  if (vv.size === 0) return "{}"
 
   const entries = Array.from(vv.entries())
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([peer, counter]) => `${peer}:${counter}`)
-    .join(', ');
+    .join(", ")
 
-  return `{${entries}}`;
+  return `{${entries}}`
 }
 
 // ---------------------------------------------------------------------------
@@ -297,25 +297,25 @@ export function vvToString(vv: VersionVector): string {
  * Get all peers in a version vector.
  */
 export function vvPeers(vv: VersionVector): PeerID[] {
-  return Array.from(vv.keys());
+  return Array.from(vv.keys())
 }
 
 /**
  * Check if a version vector is empty.
  */
 export function vvIsEmpty(vv: VersionVector): boolean {
-  return vv.size === 0;
+  return vv.size === 0
 }
 
 /**
  * Get the total number of operations represented by a version vector.
  */
 export function vvTotalOps(vv: VersionVector): number {
-  let total = 0;
+  let total = 0
   for (const counter of vv.values()) {
-    total += counter;
+    total += counter
   }
-  return total;
+  return total
 }
 
 // ---------------------------------------------------------------------------
@@ -333,30 +333,30 @@ export function vvTotalOps(vv: VersionVector): number {
  * Empty input returns an empty VV.
  */
 export function vvMin(vvs: readonly VersionVector[]): MutableVersionVector {
-  if (vvs.length === 0) return createVersionVector();
+  if (vvs.length === 0) return createVersionVector()
 
-  const result = createVersionVector();
+  const result = createVersionVector()
 
   // Start with the peers from the first VV
-  const first = vvs[0]!;
+  const first = vvs[0]!
   for (const [peer, counter] of first) {
-    let min = counter;
-    let presentInAll = true;
+    let min = counter
+    let presentInAll = true
     for (let i = 1; i < vvs.length; i++) {
-      const vv = vvs[i]!;
+      const vv = vvs[i]!
       if (!vv.has(peer)) {
-        presentInAll = false;
-        break;
+        presentInAll = false
+        break
       }
-      const c = vv.get(peer)!;
-      if (c < min) min = c;
+      const c = vv.get(peer)!
+      if (c < min) min = c
     }
     if (presentInAll && min > 0) {
-      result.set(peer, min);
+      result.set(peer, min)
     }
   }
 
-  return result;
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -373,5 +373,5 @@ export function isConstraintBelowFrontier(
   c: Constraint,
   frontier: VersionVector,
 ): boolean {
-  return vvHasSeenCnId(frontier, c.id);
+  return vvHasSeenCnId(frontier, c.id)
 }

@@ -28,23 +28,16 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 7.
 // See theory/incremental.md §5.7.
 
-import type {
-  CnId,
-  Value,
-  Policy,
-  RealityNode,
-  Reality,
-} from '../types.js';
-import { cnIdKey, createCnId } from '../cnid.js';
-import type { SlotGroup, StructureIndex } from '../structure-index.js';
-import { getChildrenOfSlotGroup } from '../structure-index.js';
-import type { ResolvedWinner, FugueBeforePair } from '../resolve.js';
-import { topologicalOrderFromPairs } from '../resolve.js';
-import type { ZSet } from '../../base/zset.js';
-import { zsetForEach } from '../../base/zset.js';
-import type { StructureIndexDelta } from './types.js';
-import type { NodeDelta, RealityDelta } from './types.js';
-import { realityDeltaFrom, realityDeltaEmpty } from './types.js';
+import type { ZSet } from "../../base/zset.js"
+import { zsetForEach } from "../../base/zset.js"
+import { cnIdKey, createCnId } from "../cnid.js"
+import type { FugueBeforePair, ResolvedWinner } from "../resolve.js"
+import { topologicalOrderFromPairs } from "../resolve.js"
+import type { SlotGroup, StructureIndex } from "../structure-index.js"
+import { getChildrenOfSlotGroup } from "../structure-index.js"
+import type { CnId, Policy, Reality, RealityNode, Value } from "../types.js"
+import type { NodeDelta, RealityDelta, StructureIndexDelta } from "./types.js"
+import { realityDeltaEmpty, realityDeltaFrom } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Incremental Skeleton Stage
@@ -79,17 +72,17 @@ export interface IncrementalSkeleton {
     deltaResolved: ZSet<ResolvedWinner>,
     deltaFuguePairs: ZSet<FugueBeforePair>,
     deltaIndex: StructureIndexDelta,
-  ): RealityDelta;
+  ): RealityDelta
 
   /**
    * Return the current accumulated Reality tree.
    */
-  current(): Reality;
+  current(): Reality
 
   /**
    * Reset to empty state.
    */
-  reset(): void;
+  reset(): void
 }
 
 // ---------------------------------------------------------------------------
@@ -101,15 +94,15 @@ export interface IncrementalSkeleton {
  * Exposed as readonly RealityNode via snapshot().
  */
 interface MutableNode {
-  id: CnId;
-  policy: Policy;
+  id: CnId
+  policy: Policy
   /** For map parents: keyed by childKey. For seq parents: keyed by positional index string. */
-  children: Map<string, MutableNode>;
-  value: Value | undefined;
+  children: Map<string, MutableNode>
+  value: Value | undefined
   /** The slot identity this node represents. */
-  slotId: string;
+  slotId: string
   /** Path from synthetic root (array of child keys). */
-  path: readonly string[];
+  path: readonly string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -128,56 +121,56 @@ export function createIncrementalSkeleton(
   // --- Persistent state ---
 
   // The synthetic root node.
-  let syntheticRoot: MutableNode = makeSyntheticRoot();
+  let syntheticRoot: MutableNode = makeSyntheticRoot()
 
   // Index: slotId → MutableNode for O(1) lookup.
-  let nodeBySlot = new Map<string, MutableNode>();
+  let nodeBySlot = new Map<string, MutableNode>()
 
   // Index: slotId → parent MutableNode for O(1) parent lookup.
-  let parentBySlot = new Map<string, MutableNode>();
+  let parentBySlot = new Map<string, MutableNode>()
 
   // Accumulated winners: slotId → ResolvedWinner.
-  let accWinners = new Map<string, ResolvedWinner>();
+  let accWinners = new Map<string, ResolvedWinner>()
 
   // Accumulated fugue pairs: parentKey → FugueBeforePair[].
-  let accFuguePairs = new Map<string, FugueBeforePair[]>();
+  let accFuguePairs = new Map<string, FugueBeforePair[]>()
 
   // Set of parentKeys whose seq ordering needs recomputation.
   // Collected during pair processing, applied after all deltas.
-  let seqParentsToReorder = new Set<string>();
+  let seqParentsToReorder = new Set<string>()
 
   // Track which slots have been added as nodes. This differs from
   // nodeBySlot because a slot's node may not yet exist if its
   // parent hasn't arrived.
-  let slotGroupsSeen = new Set<string>();
+  let slotGroupsSeen = new Set<string>()
 
   // --- Internal helpers ---
 
   function makeSyntheticRoot(): MutableNode {
     return {
-      id: createCnId('__reality__', 0),
-      policy: 'map',
+      id: createCnId("__reality__", 0),
+      policy: "map",
       children: new Map(),
       value: undefined,
-      slotId: '__root__',
+      slotId: "__root__",
       path: [],
-    };
+    }
   }
 
   /**
    * Snapshot a mutable node tree into a readonly RealityNode tree.
    */
   function snapshot(node: MutableNode): RealityNode {
-    const children = new Map<string, RealityNode>();
+    const children = new Map<string, RealityNode>()
     for (const [key, child] of node.children) {
-      children.set(key, snapshot(child));
+      children.set(key, snapshot(child))
     }
     return {
       id: node.id,
       policy: node.policy,
       children,
       value: node.value,
-    };
+    }
   }
 
   /**
@@ -190,13 +183,13 @@ export function createIncrementalSkeleton(
     changes: NodeDelta[],
   ): MutableNode | null {
     // Already exists?
-    const existing = nodeBySlot.get(group.slotId);
-    if (existing !== undefined) return existing;
+    const existing = nodeBySlot.get(group.slotId)
+    if (existing !== undefined) return existing
 
-    const representative = group.structures[0]!;
-    const payload = representative.payload;
+    const representative = group.structures[0]!
+    const payload = representative.payload
 
-    if (payload.kind === 'root') {
+    if (payload.kind === "root") {
       // Root node — parent is the synthetic root.
       const node: MutableNode = {
         id: representative.id,
@@ -205,51 +198,51 @@ export function createIncrementalSkeleton(
         value: undefined,
         slotId: group.slotId,
         path: [payload.containerId],
-      };
+      }
 
-      nodeBySlot.set(group.slotId, node);
-      parentBySlot.set(group.slotId, syntheticRoot);
-      syntheticRoot.children.set(payload.containerId, node);
+      nodeBySlot.set(group.slotId, node)
+      parentBySlot.set(group.slotId, syntheticRoot)
+      syntheticRoot.children.set(payload.containerId, node)
 
       // Emit nodeAdded for the root container
       changes.push({
-        kind: 'nodeAdded',
+        kind: "nodeAdded",
         path: node.path,
         node: snapshot(node),
-      });
+      })
 
       // Check for deferred children
-      attachDeferredChildren(node, group, changes);
+      attachDeferredChildren(node, group, changes)
 
-      return node;
+      return node
     }
 
     // Map or seq child — find the parent node.
-    const parentKey = cnIdKey(payload.parent);
-    const index = getIndex();
+    const parentKey = cnIdKey(payload.parent)
+    const index = getIndex()
 
     // The parent is a structure CnId. We need to find which slot
     // it belongs to, then find the node for that slot.
-    const parentSlotId = index.structureToSlot.get(parentKey);
+    const parentSlotId = index.structureToSlot.get(parentKey)
     if (parentSlotId === undefined) {
       // Parent structure not yet in the index — defer.
-      return null;
+      return null
     }
 
-    const parentNode = nodeBySlot.get(parentSlotId);
+    const parentNode = nodeBySlot.get(parentSlotId)
     if (parentNode === undefined) {
       // Parent slot is known but its node doesn't exist yet — defer.
-      return null;
+      return null
     }
 
     // Create the node.
-    const childKeyStr = group.childKey;
-    const parentPath = parentNode.path;
+    const childKeyStr = group.childKey
+    const parentPath = parentNode.path
 
-    let node: MutableNode;
+    let node: MutableNode
 
-    if (payload.kind === 'map') {
-      const nodePath = [...parentPath, childKeyStr];
+    if (payload.kind === "map") {
+      const nodePath = [...parentPath, childKeyStr]
       node = {
         id: representative.id,
         policy: group.policy,
@@ -257,15 +250,15 @@ export function createIncrementalSkeleton(
         value: undefined,
         slotId: group.slotId,
         path: nodePath,
-      };
+      }
 
-      nodeBySlot.set(group.slotId, node);
-      parentBySlot.set(group.slotId, parentNode);
+      nodeBySlot.set(group.slotId, node)
+      parentBySlot.set(group.slotId, parentNode)
 
       // Apply winner if one exists for this slot.
-      const winner = accWinners.get(group.slotId);
+      const winner = accWinners.get(group.slotId)
       if (winner !== undefined) {
-        node.value = winner.content;
+        node.value = winner.content
       }
 
       // For map children: only exclude when value is null AND no children.
@@ -273,25 +266,25 @@ export function createIncrementalSkeleton(
       //   if (node.value === null && node.children.size === 0) continue;
       // A node with value === undefined (no value set yet) is still visible.
       if (!(node.value === null && node.children.size === 0)) {
-        parentNode.children.set(childKeyStr, node);
+        parentNode.children.set(childKeyStr, node)
         changes.push({
-          kind: 'childAdded',
+          kind: "childAdded",
           path: parentPath,
           key: childKeyStr,
           child: snapshot(node),
-        });
+        })
       }
 
       // Check for deferred children
-      attachDeferredChildren(node, group, changes);
+      attachDeferredChildren(node, group, changes)
 
-      return node;
+      return node
     }
 
     // Seq child — don't add to parent's children map directly here.
     // Seq children are managed by reorderSeqChildren which handles
     // positional indexing and tombstone filtering.
-    const seqNodePath = [...parentPath, '__seq_pending__'];
+    const seqNodePath = [...parentPath, "__seq_pending__"]
     node = {
       id: representative.id,
       policy: group.policy,
@@ -299,30 +292,30 @@ export function createIncrementalSkeleton(
       value: undefined,
       slotId: group.slotId,
       path: seqNodePath,
-    };
+    }
 
-    nodeBySlot.set(group.slotId, node);
-    parentBySlot.set(group.slotId, parentNode);
+    nodeBySlot.set(group.slotId, node)
+    parentBySlot.set(group.slotId, parentNode)
 
     // Apply winner if one exists for this slot.
-    const winner = accWinners.get(group.slotId);
+    const winner = accWinners.get(group.slotId)
     if (winner !== undefined) {
-      node.value = winner.content;
+      node.value = winner.content
     }
 
     // Mark the seq parent for reordering.
     // We need the parent's structure CnId key(s) to look up pairs.
-    const parentGroup = index.slotGroups.get(parentSlotId);
+    const parentGroup = index.slotGroups.get(parentSlotId)
     if (parentGroup !== undefined) {
       for (const psc of parentGroup.structures) {
-        seqParentsToReorder.add(cnIdKey(psc.id));
+        seqParentsToReorder.add(cnIdKey(psc.id))
       }
     }
 
     // Check for deferred children of THIS seq element
-    attachDeferredChildren(node, group, changes);
+    attachDeferredChildren(node, group, changes)
 
-    return node;
+    return node
   }
 
   /**
@@ -335,53 +328,53 @@ export function createIncrementalSkeleton(
     parentGroup: SlotGroup,
     changes: NodeDelta[],
   ): void {
-    const index = getIndex();
-    const childSlotGroups = getChildrenOfSlotGroup(index, parentGroup);
+    const index = getIndex()
+    const childSlotGroups = getChildrenOfSlotGroup(index, parentGroup)
 
-    if (childSlotGroups.size === 0) return;
+    if (childSlotGroups.size === 0) return
 
     // Determine child kind from first child.
-    const firstChild = childSlotGroups.values().next().value!;
-    const childKind = firstChild.structures[0]!.payload.kind;
+    const firstChild = childSlotGroups.values().next().value!
+    const childKind = firstChild.structures[0]?.payload.kind
 
-    if (childKind === 'seq') {
+    if (childKind === "seq") {
       // For seq children, collect all and mark for reordering.
       for (const childGroup of childSlotGroups.values()) {
         if (!nodeBySlot.has(childGroup.slotId)) {
           // Create the node (but don't add to parent — reorder handles it).
-          const childRep = childGroup.structures[0]!;
+          const childRep = childGroup.structures[0]!
           const childNode: MutableNode = {
             id: childRep.id,
             policy: childGroup.policy,
             children: new Map(),
             value: undefined,
             slotId: childGroup.slotId,
-            path: [...parentNode.path, '__seq_pending__'],
-          };
+            path: [...parentNode.path, "__seq_pending__"],
+          }
 
-          nodeBySlot.set(childGroup.slotId, childNode);
-          parentBySlot.set(childGroup.slotId, parentNode);
+          nodeBySlot.set(childGroup.slotId, childNode)
+          parentBySlot.set(childGroup.slotId, parentNode)
 
           // Apply winner if exists.
-          const winner = accWinners.get(childGroup.slotId);
+          const winner = accWinners.get(childGroup.slotId)
           if (winner !== undefined) {
-            childNode.value = winner.content;
+            childNode.value = winner.content
           }
 
           // Recursively check for deferred children of this child.
-          attachDeferredChildren(childNode, childGroup, changes);
+          attachDeferredChildren(childNode, childGroup, changes)
         }
       }
 
       // Mark for reordering.
       for (const psc of parentGroup.structures) {
-        seqParentsToReorder.add(cnIdKey(psc.id));
+        seqParentsToReorder.add(cnIdKey(psc.id))
       }
     } else {
       // Map children — create each one.
       for (const childGroup of childSlotGroups.values()) {
         if (!nodeBySlot.has(childGroup.slotId)) {
-          ensureNode(childGroup, changes);
+          ensureNode(childGroup, changes)
         }
       }
     }
@@ -396,109 +389,109 @@ export function createIncrementalSkeleton(
     parentStructureKey: string,
     changes: NodeDelta[],
   ): void {
-    const index = getIndex();
+    const index = getIndex()
 
     // Find the parent slot.
-    const parentSlotId = index.structureToSlot.get(parentStructureKey);
-    if (parentSlotId === undefined) return;
+    const parentSlotId = index.structureToSlot.get(parentStructureKey)
+    if (parentSlotId === undefined) return
 
-    const parentNode = nodeBySlot.get(parentSlotId);
-    if (parentNode === undefined) return;
+    const parentNode = nodeBySlot.get(parentSlotId)
+    if (parentNode === undefined) return
 
-    const parentGroup = index.slotGroups.get(parentSlotId);
-    if (parentGroup === undefined) return;
+    const parentGroup = index.slotGroups.get(parentSlotId)
+    if (parentGroup === undefined) return
 
     // Collect all seq child slot groups.
-    const childSlotGroups = getChildrenOfSlotGroup(index, parentGroup);
-    if (childSlotGroups.size === 0) return;
+    const childSlotGroups = getChildrenOfSlotGroup(index, parentGroup)
+    if (childSlotGroups.size === 0) return
 
     // Collect all seq element keys and their slot groups.
-    const allElementKeys: string[] = [];
-    const groupByIdKey = new Map<string, SlotGroup>();
+    const allElementKeys: string[] = []
+    const groupByIdKey = new Map<string, SlotGroup>()
 
     for (const cg of childSlotGroups.values()) {
       for (const sc of cg.structures) {
-        const idKey = cnIdKey(sc.id);
-        allElementKeys.push(idKey);
-        groupByIdKey.set(idKey, cg);
+        const idKey = cnIdKey(sc.id)
+        allElementKeys.push(idKey)
+        groupByIdKey.set(idKey, cg)
       }
     }
 
-    if (allElementKeys.length === 0) return;
+    if (allElementKeys.length === 0) return
 
     // Get accumulated pairs for this parent.
-    const pairs = accFuguePairs.get(parentStructureKey) ?? [];
+    const pairs = accFuguePairs.get(parentStructureKey) ?? []
 
     // Compute ordering via topological sort.
-    const orderedKeys = topologicalOrderFromPairs(pairs, allElementKeys);
+    const orderedKeys = topologicalOrderFromPairs(pairs, allElementKeys)
 
     // Snapshot old children keys for diff.
-    const oldChildKeys = Array.from(parentNode.children.keys());
-    const oldChildByKey = new Map(parentNode.children);
+    const oldChildKeys = Array.from(parentNode.children.keys())
+    const oldChildByKey = new Map(parentNode.children)
 
     // Build new children map — only include non-tombstone elements.
-    const newChildren = new Map<string, MutableNode>();
-    let posIndex = 0;
+    const newChildren = new Map<string, MutableNode>()
+    let posIndex = 0
 
     for (const idKey of orderedKeys) {
-      const cg = groupByIdKey.get(idKey);
-      if (cg === undefined) continue;
+      const cg = groupByIdKey.get(idKey)
+      if (cg === undefined) continue
 
-      const childNode = nodeBySlot.get(cg.slotId);
-      if (childNode === undefined) continue;
+      const childNode = nodeBySlot.get(cg.slotId)
+      if (childNode === undefined) continue
 
       // Tombstone check: seq elements without a value are excluded.
-      const winner = accWinners.get(cg.slotId);
-      if (winner === undefined) continue;
-      if (childNode.value === undefined) continue;
+      const winner = accWinners.get(cg.slotId)
+      if (winner === undefined) continue
+      if (childNode.value === undefined) continue
 
-      const posKey = String(posIndex);
-      const newPath = [...parentNode.path, posKey];
+      const posKey = String(posIndex)
+      const newPath = [...parentNode.path, posKey]
 
       // Update the child's path.
-      updatePaths(childNode, newPath);
+      updatePaths(childNode, newPath)
 
-      newChildren.set(posKey, childNode);
-      posIndex++;
+      newChildren.set(posKey, childNode)
+      posIndex++
     }
 
     // Compute deltas by comparing old and new.
-    const newChildKeys = Array.from(newChildren.keys());
+    const newChildKeys = Array.from(newChildren.keys())
 
     // Find removed children.
     for (const [oldKey, oldChild] of oldChildByKey) {
-      let stillPresent = false;
+      let stillPresent = false
       for (const [_newKey, newChild] of newChildren) {
         if (newChild.slotId === oldChild.slotId) {
-          stillPresent = true;
-          break;
+          stillPresent = true
+          break
         }
       }
       if (!stillPresent) {
         changes.push({
-          kind: 'childRemoved',
+          kind: "childRemoved",
           path: parentNode.path,
           key: oldKey,
-        });
+        })
       }
     }
 
     // Find added children.
     for (const [newKey, newChild] of newChildren) {
-      let wasPresent = false;
+      let wasPresent = false
       for (const [_oldKey, oldChild] of oldChildByKey) {
         if (oldChild.slotId === newChild.slotId) {
-          wasPresent = true;
-          break;
+          wasPresent = true
+          break
         }
       }
       if (!wasPresent) {
         changes.push({
-          kind: 'childAdded',
+          kind: "childAdded",
           path: parentNode.path,
           key: newKey,
           child: snapshot(newChild),
-        });
+        })
       }
     }
 
@@ -509,36 +502,36 @@ export function createIncrementalSkeleton(
     ) {
       // Build old slot order and new slot order.
       const oldSlotOrder = oldChildKeys
-        .map((k) => oldChildByKey.get(k)?.slotId)
-        .filter(Boolean);
+        .map(k => oldChildByKey.get(k)?.slotId)
+        .filter(Boolean)
       const newSlotOrder = newChildKeys
-        .map((k) => newChildren.get(k)?.slotId)
-        .filter(Boolean);
+        .map(k => newChildren.get(k)?.slotId)
+        .filter(Boolean)
 
       const orderChanged =
         oldSlotOrder.length === newSlotOrder.length &&
-        oldSlotOrder.some((s, i) => s !== newSlotOrder[i]);
+        oldSlotOrder.some((s, i) => s !== newSlotOrder[i])
 
       if (orderChanged) {
         changes.push({
-          kind: 'childrenReordered',
+          kind: "childrenReordered",
           path: parentNode.path,
           keys: newChildKeys,
-        });
+        })
       }
     }
 
     // Replace parent's children.
-    parentNode.children = newChildren;
+    parentNode.children = newChildren
   }
 
   /**
    * Recursively update paths for a node and all its descendants.
    */
   function updatePaths(node: MutableNode, newPath: readonly string[]): void {
-    node.path = newPath;
+    node.path = newPath
     for (const [key, child] of node.children) {
-      updatePaths(child, [...newPath, key]);
+      updatePaths(child, [...newPath, key])
     }
   }
 
@@ -550,34 +543,34 @@ export function createIncrementalSkeleton(
     newWinner: ResolvedWinner | undefined,
     changes: NodeDelta[],
   ): void {
-    const node = nodeBySlot.get(slotId);
-    if (node === undefined) return;
+    const node = nodeBySlot.get(slotId)
+    if (node === undefined) return
 
-    const oldValue = node.value;
-    const newValue = newWinner !== undefined ? newWinner.content : undefined;
+    const oldValue = node.value
+    const newValue = newWinner !== undefined ? newWinner.content : undefined
 
     // No actual change?
-    if (oldValue === newValue) return;
+    if (oldValue === newValue) return
 
     // For seq nodes, tombstone/untombstone is handled by reorderSeqChildren.
     // Just update the value here; the parent reorder will handle visibility.
-    const parentNode = parentBySlot.get(slotId);
+    const parentNode = parentBySlot.get(slotId)
 
     // Determine if this is a seq child.
-    const index = getIndex();
-    const group = index.slotGroups.get(slotId);
+    const index = getIndex()
+    const group = index.slotGroups.get(slotId)
     const isSeqChild =
-      group !== undefined &&
-      group.structures[0]!.payload.kind === 'seq';
+      group !== undefined && group.structures[0]?.payload.kind === "seq"
 
-    node.value = newValue;
+    node.value = newValue
 
     if (isSeqChild) {
       // Mark the seq parent for reordering (handles visibility).
       if (parentNode !== undefined && group !== undefined) {
-        const parentPayload = group.structures[0]!.payload;
-        if (parentPayload.kind === 'seq') {
-          seqParentsToReorder.add(cnIdKey(parentPayload.parent));
+        // biome-ignore lint/style/noNonNullAssertion: group is non-empty when parentNode is defined
+        const parentPayload = group.structures[0]!.payload
+        if (parentPayload.kind === "seq") {
+          seqParentsToReorder.add(cnIdKey(parentPayload.parent))
         }
       }
     } else {
@@ -586,50 +579,51 @@ export function createIncrementalSkeleton(
       if (node.path.length > 0) {
         // Check if this is a map child that should be added/removed from parent.
         if (parentNode !== undefined && group !== undefined) {
-          const childKeyStr = group.childKey;
-          const isInParent = parentNode.children.has(childKeyStr);
+          const childKeyStr = group.childKey
+          const isInParent = parentNode.children.has(childKeyStr)
           // Match batch buildMapChildren: only exclude when
           // value === null AND no children. value === undefined
           // (no value set yet) is still visible.
-          const shouldBeInParent =
-            !(newValue === null && node.children.size === 0);
+          const shouldBeInParent = !(
+            newValue === null && node.children.size === 0
+          )
 
           if (isInParent && !shouldBeInParent) {
             // Remove from parent.
-            parentNode.children.delete(childKeyStr);
+            parentNode.children.delete(childKeyStr)
             changes.push({
-              kind: 'childRemoved',
+              kind: "childRemoved",
               path: parentNode.path,
               key: childKeyStr,
-            });
-            return;
+            })
+            return
           } else if (!isInParent && shouldBeInParent) {
             // Add to parent.
-            parentNode.children.set(childKeyStr, node);
+            parentNode.children.set(childKeyStr, node)
             changes.push({
-              kind: 'childAdded',
+              kind: "childAdded",
               path: parentNode.path,
               key: childKeyStr,
               child: snapshot(node),
-            });
-            return;
+            })
+            return
           }
         }
 
         changes.push({
-          kind: 'valueChanged',
+          kind: "valueChanged",
           path: node.path,
           oldValue,
           newValue,
-        });
+        })
       } else {
         // Synthetic root or root container — just emit valueChanged.
         changes.push({
-          kind: 'valueChanged',
+          kind: "valueChanged",
           path: node.path,
           oldValue,
           newValue,
-        });
+        })
       }
     }
   }
@@ -641,18 +635,18 @@ export function createIncrementalSkeleton(
     deltaFuguePairs: ZSet<FugueBeforePair>,
     deltaIndex: StructureIndexDelta,
   ): RealityDelta {
-    const changes: NodeDelta[] = [];
+    const changes: NodeDelta[] = []
 
     // Clear reorder set for this step.
-    seqParentsToReorder = new Set();
+    seqParentsToReorder = new Set()
 
     // --- Phase 1: Process structure index delta ---
     // New/modified slot groups may create new nodes in the tree.
 
     if (!deltaIndex.isEmpty) {
       for (const group of deltaIndex.updates.values()) {
-        slotGroupsSeen.add(group.slotId);
-        ensureNode(group, changes);
+        slotGroupsSeen.add(group.slotId)
+        ensureNode(group, changes)
       }
     }
 
@@ -660,77 +654,80 @@ export function createIncrementalSkeleton(
     // Update accumulated winners and apply to existing nodes.
 
     zsetForEach(deltaResolved, (entry, _key) => {
-      const winner = entry.element;
-      const weight = entry.weight;
+      const winner = entry.element
+      const weight = entry.weight
 
       if (weight > 0) {
         // New or changed winner.
-        accWinners.set(winner.slotId, winner);
-        applyWinnerChange(winner.slotId, winner, changes);
+        accWinners.set(winner.slotId, winner)
+        applyWinnerChange(winner.slotId, winner, changes)
       } else if (weight < 0) {
         // Removed winner (retraction).
-        accWinners.delete(winner.slotId);
-        applyWinnerChange(winner.slotId, undefined, changes);
+        accWinners.delete(winner.slotId)
+        applyWinnerChange(winner.slotId, undefined, changes)
       }
-    });
+    })
 
     // --- Phase 3: Process fugue pair deltas ---
     // Update accumulated pairs and mark affected parents for reordering.
 
     zsetForEach(deltaFuguePairs, (entry, _key) => {
-      const pair = entry.element;
-      const weight = entry.weight;
+      const pair = entry.element
+      const weight = entry.weight
 
       if (weight > 0) {
         // New pair.
-        let pairs = accFuguePairs.get(pair.parentKey);
+        let pairs = accFuguePairs.get(pair.parentKey)
         if (pairs === undefined) {
-          pairs = [];
-          accFuguePairs.set(pair.parentKey, pairs);
+          pairs = []
+          accFuguePairs.set(pair.parentKey, pairs)
         }
-        pairs.push(pair);
-        seqParentsToReorder.add(pair.parentKey);
+        pairs.push(pair)
+        seqParentsToReorder.add(pair.parentKey)
       } else if (weight < 0) {
         // Removed pair.
-        const pairs = accFuguePairs.get(pair.parentKey);
+        const pairs = accFuguePairs.get(pair.parentKey)
         if (pairs !== undefined) {
           const idx = pairs.findIndex(
-            (p) => p.a === pair.a && p.b === pair.b && p.parentKey === pair.parentKey,
-          );
+            p =>
+              p.a === pair.a &&
+              p.b === pair.b &&
+              p.parentKey === pair.parentKey,
+          )
           if (idx !== -1) {
-            pairs.splice(idx, 1);
+            pairs.splice(idx, 1)
             if (pairs.length === 0) {
-              accFuguePairs.delete(pair.parentKey);
+              accFuguePairs.delete(pair.parentKey)
             }
           }
-          seqParentsToReorder.add(pair.parentKey);
+          seqParentsToReorder.add(pair.parentKey)
         }
       }
-    });
+    })
 
     // --- Phase 4: Reorder seq children for affected parents ---
 
     for (const parentKey of seqParentsToReorder) {
-      reorderSeqChildren(parentKey, changes);
+      reorderSeqChildren(parentKey, changes)
     }
 
-    if (changes.length === 0) return realityDeltaEmpty();
-    return realityDeltaFrom(changes);
+    if (changes.length === 0) return realityDeltaEmpty()
+    return realityDeltaFrom(changes)
   }
 
   function current(): Reality {
-    return { root: snapshot(syntheticRoot) };
+    return { root: snapshot(syntheticRoot) }
   }
 
   function reset(): void {
-    syntheticRoot = makeSyntheticRoot();
-    nodeBySlot = new Map();
-    parentBySlot = new Map();
-    accWinners = new Map();
-    accFuguePairs = new Map();
-    seqParentsToReorder = new Set();
-    slotGroupsSeen = new Set();
+    syntheticRoot = makeSyntheticRoot()
+    nodeBySlot = new Map()
+    parentBySlot = new Map()
+    accWinners = new Map()
+    accFuguePairs = new Map()
+    seqParentsToReorder = new Set()
+    slotGroupsSeen = new Set()
   }
 
-  return { step, current, reset };
+  return { step, current, reset }
 }

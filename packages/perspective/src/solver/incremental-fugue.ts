@@ -21,24 +21,19 @@
 // See Plan 006, Phase 3.
 // See theory/incremental.md §9.7.
 
-import type { Fact } from '../datalog/types.js';
-import type { FugueBeforePair } from '../kernel/resolve.js';
+import type { ZSet } from "../base/zset.js"
+import { zsetAdd, zsetEmpty, zsetForEach, zsetSingleton } from "../base/zset.js"
+import type { Fact } from "../datalog/types.js"
+import { cnIdFromString } from "../kernel/cnid.js"
+import { ACTIVE_STRUCTURE_SEQ, CONSTRAINT_PEER } from "../kernel/projection.js"
+import type { FugueBeforePair } from "../kernel/resolve.js"
 import {
-  parseSeqStructureFact,
   allPairsFromOrdered,
   fuguePairKey,
   type ParsedSeqStructureFact,
-} from '../kernel/resolve.js';
-import { cnIdFromString, cnIdKey } from '../kernel/cnid.js';
-import { orderFugueNodes, type FugueNode } from './fugue.js';
-import { ACTIVE_STRUCTURE_SEQ, CONSTRAINT_PEER } from '../kernel/projection.js';
-import type { ZSet } from '../base/zset.js';
-import {
-  zsetEmpty,
-  zsetSingleton,
-  zsetAdd,
-  zsetForEach,
-} from '../base/zset.js';
+  parseSeqStructureFact,
+} from "../kernel/resolve.js"
+import { type FugueNode, orderFugueNodes } from "./fugue.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,9 +42,9 @@ import {
 /** Per-parent state: all nodes and accumulated pairs. */
 interface ParentState {
   /** All FugueNodes for this parent, keyed by element cnIdKey. */
-  readonly nodes: Map<string, FugueNode>;
+  readonly nodes: Map<string, FugueNode>
   /** Accumulated pairs grouped by parent key (single-entry map for diffing). */
-  readonly pairs: Map<string, FugueBeforePair>;
+  readonly pairs: Map<string, FugueBeforePair>
 }
 
 /**
@@ -68,13 +63,13 @@ export interface IncrementalFugue {
    * Consumes `active_structure_seq` and `constraint_peer` facts.
    * Other predicates are ignored.
    */
-  step(deltaFacts: ZSet<Fact>): ZSet<FugueBeforePair>;
+  step(deltaFacts: ZSet<Fact>): ZSet<FugueBeforePair>
 
   /** Current fugue pairs by parent. */
-  current(): ReadonlyMap<string, readonly FugueBeforePair[]>;
+  current(): ReadonlyMap<string, readonly FugueBeforePair[]>
 
   /** Reset to empty state. */
-  reset(): void;
+  reset(): void
 }
 
 // ---------------------------------------------------------------------------
@@ -88,26 +83,26 @@ export interface IncrementalFugue {
  */
 export function createIncrementalFugue(): IncrementalFugue {
   // Per-parent state: parentKey → ParentState
-  let parents = new Map<string, ParentState>();
+  let parents = new Map<string, ParentState>()
 
   // Pending structure facts waiting for their peer fact.
   // Keyed by element cnIdKey.
-  let pendingStructures = new Map<string, ParsedSeqStructureFact>();
+  let pendingStructures = new Map<string, ParsedSeqStructureFact>()
 
   // Pending peer facts waiting for their structure fact.
   // Keyed by element cnIdKey → peer string.
-  let pendingPeers = new Map<string, string>();
+  let pendingPeers = new Map<string, string>()
 
   // Track which parents were affected in this step (for batch recomputation).
-  let affectedParents: Set<string> | null = null;
+  let affectedParents: Set<string> | null = null
 
   function getOrCreateParent(parentKey: string): ParentState {
-    let state = parents.get(parentKey);
+    let state = parents.get(parentKey)
     if (state === undefined) {
-      state = { nodes: new Map(), pairs: new Map() };
-      parents.set(parentKey, state);
+      state = { nodes: new Map(), pairs: new Map() }
+      parents.set(parentKey, state)
     }
-    return state;
+    return state
   }
 
   /**
@@ -115,42 +110,44 @@ export function createIncrementalFugue(): IncrementalFugue {
    * If both are available, build the FugueNode and add to the parent.
    */
   function tryCompleteNode(elementKey: string): void {
-    const structure = pendingStructures.get(elementKey);
-    const peer = pendingPeers.get(elementKey);
+    const structure = pendingStructures.get(elementKey)
+    const peer = pendingPeers.get(elementKey)
 
     if (structure === undefined || peer === undefined) {
       // Still waiting for the other half.
-      return;
+      return
     }
 
     // Both available — build FugueNode
-    pendingStructures.delete(elementKey);
-    pendingPeers.delete(elementKey);
+    pendingStructures.delete(elementKey)
+    pendingPeers.delete(elementKey)
 
-    const id = cnIdFromString(elementKey);
+    const id = cnIdFromString(elementKey)
     const node: FugueNode = {
       id,
       idKey: elementKey,
       parent: cnIdFromString(structure.parentKey),
-      originLeft: structure.originLeft !== null
-        ? cnIdFromString(structure.originLeft)
-        : null,
-      originRight: structure.originRight !== null
-        ? cnIdFromString(structure.originRight)
-        : null,
+      originLeft:
+        structure.originLeft !== null
+          ? cnIdFromString(structure.originLeft)
+          : null,
+      originRight:
+        structure.originRight !== null
+          ? cnIdFromString(structure.originRight)
+          : null,
       peer,
-    };
+    }
 
-    const parentState = getOrCreateParent(structure.parentKey);
+    const parentState = getOrCreateParent(structure.parentKey)
 
     // Skip duplicates (same element inserted twice)
-    if (parentState.nodes.has(elementKey)) return;
+    if (parentState.nodes.has(elementKey)) return
 
-    parentState.nodes.set(elementKey, node);
+    parentState.nodes.set(elementKey, node)
 
     // Mark this parent as affected for recomputation
     if (affectedParents !== null) {
-      affectedParents.add(structure.parentKey);
+      affectedParents.add(structure.parentKey)
     }
   }
 
@@ -159,101 +156,101 @@ export function createIncrementalFugue(): IncrementalFugue {
    * Returns the Z-set delta for this parent's pairs.
    */
   function recomputeParent(parentKey: string): ZSet<FugueBeforePair> {
-    const state = parents.get(parentKey);
-    if (state === undefined) return zsetEmpty();
+    const state = parents.get(parentKey)
+    if (state === undefined) return zsetEmpty()
 
     // Build ordered nodes using existing Fugue solver
-    const nodes = Array.from(state.nodes.values());
-    const ordered = orderFugueNodes(nodes);
+    const nodes = Array.from(state.nodes.values())
+    const ordered = orderFugueNodes(nodes)
 
     // Compute new pairs
-    const newPairsList = allPairsFromOrdered(parentKey, ordered);
+    const newPairsList = allPairsFromOrdered(parentKey, ordered)
 
     // Build new pairs map
-    const newPairs = new Map<string, FugueBeforePair>();
+    const newPairs = new Map<string, FugueBeforePair>()
     for (const p of newPairsList) {
-      newPairs.set(fuguePairKey(p), p);
+      newPairs.set(fuguePairKey(p), p)
     }
 
     // Diff against old pairs
-    let delta = zsetEmpty<FugueBeforePair>();
+    let delta = zsetEmpty<FugueBeforePair>()
 
     // New pairs (in new but not old)
     for (const [key, p] of newPairs) {
       if (!state.pairs.has(key)) {
-        delta = zsetAdd(delta, zsetSingleton(key, p, 1));
+        delta = zsetAdd(delta, zsetSingleton(key, p, 1))
       }
     }
 
     // Removed pairs (in old but not new)
     for (const [key, p] of state.pairs) {
       if (!newPairs.has(key)) {
-        delta = zsetAdd(delta, zsetSingleton(key, p, -1));
+        delta = zsetAdd(delta, zsetSingleton(key, p, -1))
       }
     }
 
     // Update accumulated pairs
     // We need to mutate the state's pairs map — replace it
-    state.pairs.clear();
+    state.pairs.clear()
     for (const [key, p] of newPairs) {
-      state.pairs.set(key, p);
+      state.pairs.set(key, p)
     }
 
-    return delta;
+    return delta
   }
 
   function step(deltaFacts: ZSet<Fact>): ZSet<FugueBeforePair> {
-    affectedParents = new Set();
+    affectedParents = new Set()
 
     // Phase 1: Process all facts in the delta, collecting pending halves
     zsetForEach(deltaFacts, (entry, _key) => {
-      const f = entry.element;
-      const weight = entry.weight;
+      const f = entry.element
+      const weight = entry.weight
 
       // Structure constraints are permanent — ignore retractions
-      if (weight < 0) return;
+      if (weight < 0) return
 
       if (f.predicate === ACTIVE_STRUCTURE_SEQ.predicate) {
-        const parsed = parseSeqStructureFact(f);
-        pendingStructures.set(parsed.cnIdKey, parsed);
-        tryCompleteNode(parsed.cnIdKey);
+        const parsed = parseSeqStructureFact(f)
+        pendingStructures.set(parsed.cnIdKey, parsed)
+        tryCompleteNode(parsed.cnIdKey)
       } else if (f.predicate === CONSTRAINT_PEER.predicate) {
-        const elementKey = f.values[CONSTRAINT_PEER.CNID] as string;
-        const peer = f.values[CONSTRAINT_PEER.PEER] as string;
-        pendingPeers.set(elementKey, peer);
-        tryCompleteNode(elementKey);
+        const elementKey = f.values[CONSTRAINT_PEER.CNID] as string
+        const peer = f.values[CONSTRAINT_PEER.PEER] as string
+        pendingPeers.set(elementKey, peer)
+        tryCompleteNode(elementKey)
       }
       // Other predicates are silently ignored
-    });
+    })
 
     // Phase 2: Recompute ordering for all affected parents
-    let delta = zsetEmpty<FugueBeforePair>();
+    let delta = zsetEmpty<FugueBeforePair>()
     for (const parentKey of affectedParents) {
-      const parentDelta = recomputeParent(parentKey);
-      delta = zsetAdd(delta, parentDelta);
+      const parentDelta = recomputeParent(parentKey)
+      delta = zsetAdd(delta, parentDelta)
     }
 
-    affectedParents = null;
-    return delta;
+    affectedParents = null
+    return delta
   }
 
   function current(): ReadonlyMap<string, readonly FugueBeforePair[]> {
-    const result = new Map<string, FugueBeforePair[]>();
+    const result = new Map<string, FugueBeforePair[]>()
     for (const [parentKey, state] of parents) {
-      const pairs = Array.from(state.pairs.values());
+      const pairs = Array.from(state.pairs.values())
       if (pairs.length > 0) {
-        result.set(parentKey, pairs);
+        result.set(parentKey, pairs)
       }
     }
-    return result;
+    return result
   }
 
   function reset(): void {
-    parents = new Map();
-    pendingStructures = new Map();
-    pendingPeers = new Map();
-    affectedParents = null;
+    parents = new Map()
+    pendingStructures = new Map()
+    pendingPeers = new Map()
+    affectedParents = null
   }
 
-  return { step, current, reset };
+  return { step, current, reset }
 }

@@ -9,17 +9,17 @@
 // Previously RefContext lived in writable.ts (and was re-exported by readable.ts)
 // and Plain<S> lived in writable.ts (forcing readable.ts to duplicate it as ReadablePlain<S>).
 
-import type { Store } from "./store.js"
 import type {
-  Schema,
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
   AnnotatedSchema,
-  PositionalSumSchema,
   DiscriminatedSumSchema,
+  MapSchema,
+  PositionalSumSchema,
+  ProductSchema,
+  ScalarSchema,
+  Schema,
+  SequenceSchema,
 } from "./schema.js"
+import type { Store } from "./store.js"
 
 // ---------------------------------------------------------------------------
 // RefContext — minimal context for read-only interpretation
@@ -154,36 +154,50 @@ export type Seed<S extends Schema> =
   // --- Annotated: indexed access on tag, delegate to helper ---
   S extends AnnotatedSchema
     ? SeedAnnotated<S["tag"], S>
-  // --- Scalar ---
-  : S extends ScalarSchema<infer _K, infer V>
-    ? V
-  // --- Product ---
-  : S extends ProductSchema<infer F>
-    ? SeedFields<F>
-  // --- Sequence ---
-  : S extends SequenceSchema<infer I>
-    ? Plain<I>[]
-  // --- Map ---
-  : S extends MapSchema<infer I>
-    ? { [key: string]: Plain<I> }
-  // --- Sum (delegate to Plain) ---
-  : S extends PositionalSumSchema<infer V>
-    ? Plain<V[number]>
-  : S extends DiscriminatedSumSchema<infer _D, infer V>
-    ? Plain<V[number]>
-  : unknown
+    : // --- Scalar ---
+      S extends ScalarSchema<infer _K, infer V>
+      ? V
+      : // --- Product ---
+        S extends ProductSchema<infer F>
+        ? SeedFields<F>
+        : // --- Sequence ---
+          S extends SequenceSchema<infer I>
+          ? Plain<I>[]
+          : // --- Map ---
+            S extends MapSchema<infer I>
+            ? { [key: string]: Plain<I> }
+            : // --- Sum (delegate to Plain) ---
+              S extends PositionalSumSchema<infer V>
+              ? Plain<V[number]>
+              : S extends DiscriminatedSumSchema<infer _D, infer V>
+                ? Plain<V[number]>
+                : unknown
 
 // Helper: resolve product fields with optional keys — isolates the mapped type
-type SeedFields<F extends Record<string, Schema>> = { [K in keyof F]?: Seed<F[K]> }
+type SeedFields<F extends Record<string, Schema>> = {
+  [K in keyof F]?: Seed<F[K]>
+}
 
 // Helper: resolve an annotated schema given its tag and the full annotated node
-type SeedAnnotated<Tag extends string, S extends AnnotatedSchema> =
-  Tag extends "text" ? string
-  : Tag extends "counter" ? number
-  : Tag extends "doc"
-    ? S extends AnnotatedSchema<any, ProductSchema<infer F>> ? SeedFields<F> : unknown
-  : Tag extends "movable"
-    ? S extends AnnotatedSchema<any, SequenceSchema<infer I>> ? Plain<I>[] : unknown
-  : Tag extends "tree"
-    ? S extends AnnotatedSchema<any, infer Inner extends Schema> ? Seed<Inner> : unknown
-  : S extends AnnotatedSchema<any, infer Inner extends Schema> ? Seed<Inner> : unknown
+type SeedAnnotated<
+  Tag extends string,
+  S extends AnnotatedSchema,
+> = Tag extends "text"
+  ? string
+  : Tag extends "counter"
+    ? number
+    : Tag extends "doc"
+      ? S extends AnnotatedSchema<any, ProductSchema<infer F>>
+        ? SeedFields<F>
+        : unknown
+      : Tag extends "movable"
+        ? S extends AnnotatedSchema<any, SequenceSchema<infer I>>
+          ? Plain<I>[]
+          : unknown
+        : Tag extends "tree"
+          ? S extends AnnotatedSchema<any, infer Inner extends Schema>
+            ? Seed<Inner>
+            : unknown
+          : S extends AnnotatedSchema<any, infer Inner extends Schema>
+            ? Seed<Inner>
+            : unknown

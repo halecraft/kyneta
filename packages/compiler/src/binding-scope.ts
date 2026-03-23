@@ -19,9 +19,9 @@
  * @packageDocumentation
  */
 
-import type { ContentNode } from "./ir.js"
-import type { ExpressionIR } from "./expression-ir.js"
 import type { ExpressionScope } from "./expression-build.js"
+import type { ExpressionIR } from "./expression-ir.js"
+import type { ContentNode } from "./ir.js"
 
 export interface BindingScope extends ExpressionScope {
   /** Look up a binding by name, traversing the parent chain. */

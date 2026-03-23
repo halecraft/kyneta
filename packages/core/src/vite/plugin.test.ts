@@ -5,8 +5,8 @@
  * Updated for in-place builder replacement behavior.
  */
 
-import { describe, expect, it } from "vitest"
 import type { Plugin } from "vite"
+import { describe, expect, it } from "vitest"
 import kynetaPlugin, { type KynetaPluginOptions } from "./plugin.js"
 
 /** Narrow the plugin return (Vite 6 may return Plugin | Plugin[]) */

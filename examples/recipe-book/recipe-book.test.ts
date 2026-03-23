@@ -8,22 +8,21 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { describe, it, expect } from "vitest"
-import { hasChangefeed } from "@kyneta/schema"
 import type { Changeset, Op } from "@kyneta/schema"
-
-import { RecipeBookSchema } from "./src/schema.js"
-import { SEED } from "./src/seed.js"
+import { hasChangefeed } from "@kyneta/schema"
+import { describe, expect, it } from "vitest"
 import {
+  applyChanges,
+  change,
   createDoc,
   createDocFromSnapshot,
-  change,
-  applyChanges,
-  subscribe,
-  version,
   delta,
   exportSnapshot,
+  subscribe,
+  version,
 } from "./src/facade.js"
+import { RecipeBookSchema } from "./src/schema.js"
+import { SEED } from "./src/seed.js"
 
 // ---------------------------------------------------------------------------
 // Helper: create a doc from the shared seed
@@ -57,7 +56,7 @@ describe("facade basics", () => {
 
   it("text mutation via change() captures ops", () => {
     const doc = makeDoc()
-    const ops = change(doc, (d) => {
+    const ops = change(doc, d => {
       d.title.insert(0, "★ ")
     })
 
@@ -69,7 +68,7 @@ describe("facade basics", () => {
 
   it("list push via change() captures ops", () => {
     const doc = makeDoc()
-    const ops = change(doc, (d) => {
+    const ops = change(doc, d => {
       d.recipes.push({
         name: "New Recipe",
         vegetarian: false,
@@ -84,7 +83,7 @@ describe("facade basics", () => {
 
   it("counter increment via change() captures ops", () => {
     const doc = makeDoc()
-    const ops = change(doc, (d) => {
+    const ops = change(doc, d => {
       d.favorites.increment(1)
     })
 
@@ -166,13 +165,15 @@ describe("sync primitives", () => {
     const doc = makeDoc()
     expect(version(doc)).toBe(0)
 
-    change(doc, (d) => d.title.insert(0, "A"))
+    change(doc, d => d.title.insert(0, "A"))
     expect(version(doc)).toBe(1)
 
-    change(doc, (d) => d.favorites.increment(1))
+    change(doc, d => d.favorites.increment(1))
     expect(version(doc)).toBe(2)
 
-    change(doc, (d) => d.recipes.push({ name: "X", vegetarian: false, ingredients: [] } as any))
+    change(doc, d =>
+      d.recipes.push({ name: "X", vegetarian: false, ingredients: [] } as any),
+    )
     expect(version(doc)).toBe(3)
   })
 
@@ -180,7 +181,7 @@ describe("sync primitives", () => {
     const docA = makeDoc()
     const docB = makeDoc()
 
-    const ops = change(docA, (d) => d.title.insert(0, "Hi "))
+    const ops = change(docA, d => d.title.insert(0, "Hi "))
     expect(version(docA)).toBe(1)
 
     applyChanges(docB, ops)
@@ -190,13 +191,13 @@ describe("sync primitives", () => {
   it("delta(doc, 0) returns all operations since creation", () => {
     const doc = makeDoc()
 
-    change(doc, (d) => d.title.insert(0, "A"))
-    change(doc, (d) => d.favorites.increment(1))
+    change(doc, d => d.title.insert(0, "A"))
+    change(doc, d => d.favorites.increment(1))
 
     const allOps = delta(doc, 0)
     expect(allOps.length).toBeGreaterThanOrEqual(2)
     // Should contain both a text change and an increment change
-    const types = allOps.map((op) => op.change.type)
+    const types = allOps.map(op => op.change.type)
     expect(types).toContain("text")
     expect(types).toContain("increment")
   })
@@ -204,8 +205,8 @@ describe("sync primitives", () => {
   it("delta(doc, version(doc)) returns [] (up to date)", () => {
     const doc = makeDoc()
 
-    change(doc, (d) => d.title.insert(0, "A"))
-    change(doc, (d) => d.favorites.increment(1))
+    change(doc, d => d.title.insert(0, "A"))
+    change(doc, d => d.favorites.increment(1))
 
     const noOps = delta(doc, version(doc))
     expect(noOps).toEqual([])
@@ -216,10 +217,10 @@ describe("sync primitives", () => {
     const docB = makeDoc()
 
     // Perform several mutations on docA
-    change(docA, (d) => d.title.insert(0, "★ "))
-    change(docA, (d) => d.favorites.increment(3))
-    change(docA, (d) => {
-      d.recipes.at(0)!.vegetarian.set(true)
+    change(docA, d => d.title.insert(0, "★ "))
+    change(docA, d => d.favorites.increment(3))
+    change(docA, d => {
+      d.recipes.at(0)?.vegetarian.set(true)
     })
 
     // Get all ops and apply to docB
@@ -243,7 +244,7 @@ describe("sync primitives", () => {
     })
 
     // Mutate docA and get ops
-    const ops = change(docA, (d) => d.title.insert(0, "Hi "))
+    const ops = change(docA, d => d.title.insert(0, "Hi "))
 
     // Apply to docB with origin "sync"
     applyChanges(docB, ops, { origin: "sync" })
@@ -251,7 +252,7 @@ describe("sync primitives", () => {
     // Verify notifications fired with correct origin
     expect(received.length).toBeGreaterThan(0)
     // At least one changeset should have origin "sync"
-    const syncChangesets = received.filter((cs) => cs.origin === "sync")
+    const syncChangesets = received.filter(cs => cs.origin === "sync")
     expect(syncChangesets.length).toBeGreaterThan(0)
   })
 })
@@ -265,17 +266,17 @@ describe("SSR snapshot round-trip", () => {
     const docA = makeDoc()
 
     // Apply several mutations covering all delta kinds
-    change(docA, (d) => d.title.insert(0, "★ "))
-    change(docA, (d) => d.favorites.increment(3))
-    change(docA, (d) => {
+    change(docA, d => d.title.insert(0, "★ "))
+    change(docA, d => d.favorites.increment(3))
+    change(docA, d => {
       d.recipes.push({
         name: "Tacos",
         vegetarian: true,
         ingredients: ["tortillas", "beans"],
       } as any)
     })
-    change(docA, (d) => {
-      d.recipes.at(0)!.vegetarian.set(true)
+    change(docA, d => {
+      d.recipes.at(0)?.vegetarian.set(true)
     })
 
     // Export snapshot and reconstruct
@@ -288,8 +289,8 @@ describe("SSR snapshot round-trip", () => {
 
   it("reconstructed doc starts at frontier 0 (fresh epoch)", () => {
     const docA = makeDoc()
-    change(docA, (d) => d.favorites.increment(5))
-    change(docA, (d) => d.title.insert(0, "X"))
+    change(docA, d => d.favorites.increment(5))
+    change(docA, d => d.title.insert(0, "X"))
     expect(version(docA)).toBe(2)
 
     const snapshot = exportSnapshot(docA)
@@ -301,7 +302,7 @@ describe("SSR snapshot round-trip", () => {
 
   it("delta(doc, version(doc)) returns [] when up to date", () => {
     const docA = makeDoc()
-    change(docA, (d) => d.favorites.increment(1))
+    change(docA, d => d.favorites.increment(1))
 
     const ops = delta(docA, version(docA))
     expect(ops).toEqual([])

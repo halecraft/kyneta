@@ -13,11 +13,7 @@
  * @packageDocumentation
  */
 
-import type {
-  BuilderNode,
-  ChildNode,
-  ConditionalBranch,
-} from "./ir.js"
+import type { BuilderNode, ChildNode, ConditionalBranch } from "./ir.js"
 import { mergeConditionalBodies } from "./ir.js"
 
 // =============================================================================
@@ -59,10 +55,7 @@ export function filterTargetBlocks(
 /**
  * Recursively filter target blocks from a list of child nodes.
  */
-function filterChildren(
-  children: ChildNode[],
-  target: string,
-): ChildNode[] {
+function filterChildren(children: ChildNode[], target: string): ChildNode[] {
   const result: ChildNode[] = []
 
   for (const child of children) {
@@ -84,10 +77,7 @@ function filterChildren(
 /**
  * Recursively filter target blocks inside a single non-labeled-block child node.
  */
-function filterChildNode(
-  node: ChildNode,
-  target: string,
-): ChildNode {
+function filterChildNode(node: ChildNode, target: string): ChildNode {
   switch (node.kind) {
     case "element":
       return {

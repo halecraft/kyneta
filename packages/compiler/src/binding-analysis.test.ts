@@ -17,10 +17,7 @@
 
 import { Project } from "ts-morph"
 import { beforeEach, describe, expect, it } from "vitest"
-import {
-  analyzeBuilder,
-  findBuilderCalls,
-} from "./analyze.js"
+import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
 
 // =============================================================================
 // Test Helpers

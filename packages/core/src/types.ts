@@ -151,6 +151,7 @@ export type Builder = () => void
  * }
  * ```
  */
+// biome-ignore lint/complexity/noBannedTypes: {} is intentional as the default empty-props type
 export type ComponentFactory<P extends Record<string, unknown> = {}> =
   | ((props: P, builder: Builder) => Element)
   | ((props: P) => Element)

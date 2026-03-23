@@ -12,14 +12,14 @@
  * Uses the same ts-morph in-memory project pattern as `analyze.test.ts`.
  */
 
-import { Project, SyntaxKind, type Expression } from "ts-morph"
+import { type Expression, Project, SyntaxKind } from "ts-morph"
 import { beforeEach, describe, expect, it } from "vitest"
 import { buildExpressionIR, type ExpressionScope } from "./expression-build.js"
 import {
+  type ExpressionIR,
   extractDeps,
   isReactive,
   renderExpression,
-  type ExpressionIR,
 } from "./expression-ir.js"
 
 // =============================================================================
@@ -222,9 +222,7 @@ function buildFromSource(
 /**
  * Create a simple ExpressionScope for testing.
  */
-function createScope(
-  bindings: Record<string, ExpressionIR>,
-): ExpressionScope {
+function createScope(bindings: Record<string, ExpressionIR>): ExpressionScope {
   return {
     lookupExpression(name: string): ExpressionIR | undefined {
       return bindings[name]
@@ -274,11 +272,7 @@ describe("buildExpressionIR", () => {
     })
 
     it("builds a plain identifier", () => {
-      const ir = buildFromSource(
-        project,
-        `x`,
-        `declare const x: number`,
-      )
+      const ir = buildFromSource(project, `x`, `declare const x: number`)
       expect(ir.kind).toBe("identifier")
       if (ir.kind === "identifier") {
         expect(ir.name).toBe("x")
@@ -511,11 +505,7 @@ describe("buildExpressionIR", () => {
     })
 
     it("non-reactive function call", () => {
-      const ir = buildFromSource(
-        project,
-        `parseInt("42")`,
-        ``,
-      )
+      const ir = buildFromSource(project, `parseInt("42")`, ``)
       expect(ir.kind).toBe("call")
       if (ir.kind === "call") {
         expect(ir.callee.kind).toBe("identifier")
@@ -656,6 +646,7 @@ describe("buildExpressionIR", () => {
     it("non-reactive template literal", () => {
       const ir = buildFromSource(
         project,
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional template literal source text for parsing
         "`Hello ${name}!`",
         `declare const name: string`,
       )
@@ -674,6 +665,7 @@ describe("buildExpressionIR", () => {
     it("template with changefeed hole → auto-read wrapping", () => {
       const ir = buildFromSource(
         project,
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional template literal source text for parsing
         "`Title: ${doc.title}`",
         `declare const doc: RecipeBookDoc`,
       )
@@ -691,6 +683,7 @@ describe("buildExpressionIR", () => {
     it("template with multiple changefeed holes", () => {
       const ir = buildFromSource(
         project,
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional template literal source text for parsing
         "`${doc.title}: ${doc.favorites} stars`",
         `declare const doc: RecipeBookDoc`,
       )
@@ -890,10 +883,7 @@ describe("buildExpressionIR", () => {
 
   describe("Parenthesized expressions", () => {
     it("unwraps parentheses", () => {
-      const ir = buildFromSource(
-        project,
-        `(42)`,
-      )
+      const ir = buildFromSource(project, `(42)`)
       expect(ir.kind).toBe("literal")
     })
 
@@ -1167,7 +1157,11 @@ describe("buildExpressionIR", () => {
         kind: "method-call",
         receiver: {
           kind: "ref-read",
-          ref: { kind: "property-access", object: { kind: "identifier", name: "recipe" }, property: "name" },
+          ref: {
+            kind: "property-access",
+            object: { kind: "identifier", name: "recipe" },
+            property: "name",
+          },
           deltaKind: "text",
         },
         method: "toLowerCase",
@@ -1175,7 +1169,11 @@ describe("buildExpressionIR", () => {
       }
       const veggieMatchExpr: ExpressionIR = {
         kind: "ref-read",
-        ref: { kind: "property-access", object: { kind: "identifier", name: "recipe" }, property: "vegetarian" },
+        ref: {
+          kind: "property-access",
+          object: { kind: "identifier", name: "recipe" },
+          property: "vegetarian",
+        },
         deltaKind: "replace",
       }
       const scope = createScope({
@@ -1197,10 +1195,7 @@ describe("buildExpressionIR", () => {
     })
 
     it("non-reactive expression → 0 deps", () => {
-      const ir = buildFromSource(
-        project,
-        `"hello".toLowerCase()`,
-      )
+      const ir = buildFromSource(project, `"hello".toLowerCase()`)
       const deps = extractDeps(ir)
       expect(deps).toHaveLength(0)
     })
@@ -1257,10 +1252,7 @@ describe("buildExpressionIR", () => {
     })
 
     it("non-reactive expression is not reactive", () => {
-      const ir = buildFromSource(
-        project,
-        `"hello".toLowerCase()`,
-      )
+      const ir = buildFromSource(project, `"hello".toLowerCase()`)
       expect(isReactive(ir)).toBe(false)
     })
 

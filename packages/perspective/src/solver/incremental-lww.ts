@@ -17,19 +17,14 @@
 // See Plan 005 Learnings: Resolution Diffing Must Not Emit Opposing Weights
 // on the Same Key.
 
-import type { Fact } from '../datalog/types.js';
-import type { ResolvedWinner } from '../kernel/resolve.js';
-import { parseLWWFact } from '../kernel/resolve.js';
-import { cnIdKey } from '../kernel/cnid.js';
-import { lwwCompare, type LWWEntry } from './lww.js';
-import { ACTIVE_VALUE } from '../kernel/projection.js';
-import type { ZSet } from '../base/zset.js';
-import {
-  zsetEmpty,
-  zsetSingleton,
-  zsetAdd,
-  zsetForEach,
-} from '../base/zset.js';
+import type { ZSet } from "../base/zset.js"
+import { zsetAdd, zsetEmpty, zsetForEach, zsetSingleton } from "../base/zset.js"
+import type { Fact } from "../datalog/types.js"
+import { cnIdKey } from "../kernel/cnid.js"
+import { ACTIVE_VALUE } from "../kernel/projection.js"
+import type { ResolvedWinner } from "../kernel/resolve.js"
+import { parseLWWFact } from "../kernel/resolve.js"
+import { type LWWEntry, lwwCompare } from "./lww.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,9 +33,9 @@ import {
 /** Per-slot state: all competing entries and the current winner. */
 interface SlotState {
   /** All active entries for this slot, keyed by cnIdKey. */
-  readonly entries: Map<string, LWWEntry>;
+  readonly entries: Map<string, LWWEntry>
   /** The current winner, or null if no entries. */
-  winner: LWWEntry | null;
+  winner: LWWEntry | null
 }
 
 /**
@@ -54,13 +49,13 @@ interface SlotState {
  */
 export interface IncrementalLWW {
   /** Process active_value fact deltas, return winner deltas. */
-  step(deltaFacts: ZSet<Fact>): ZSet<ResolvedWinner>;
+  step(deltaFacts: ZSet<Fact>): ZSet<ResolvedWinner>
 
   /** Current winners map (slotId → ResolvedWinner). */
-  current(): ReadonlyMap<string, ResolvedWinner>;
+  current(): ReadonlyMap<string, ResolvedWinner>
 
   /** Reset to empty state. */
-  reset(): void;
+  reset(): void
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +68,7 @@ function entryToWinner(entry: LWWEntry): ResolvedWinner {
     slotId: entry.slotId,
     winnerCnIdKey: cnIdKey(entry.id),
     content: entry.content,
-  };
+  }
 }
 
 /**
@@ -81,13 +76,13 @@ function entryToWinner(entry: LWWEntry): ResolvedWinner {
  * Returns null if the entries map is empty.
  */
 function findWinner(entries: ReadonlyMap<string, LWWEntry>): LWWEntry | null {
-  let best: LWWEntry | null = null;
+  let best: LWWEntry | null = null
   for (const entry of entries.values()) {
     if (best === null || lwwCompare(entry, best) > 0) {
-      best = entry;
+      best = entry
     }
   }
-  return best;
+  return best
 }
 
 /** Check if two winners are the same (by CnId key and content). */
@@ -95,9 +90,9 @@ function winnersEqual(
   a: ResolvedWinner | null,
   b: ResolvedWinner | null,
 ): boolean {
-  if (a === null && b === null) return true;
-  if (a === null || b === null) return false;
-  return a.winnerCnIdKey === b.winnerCnIdKey && a.content === b.content;
+  if (a === null && b === null) return true
+  if (a === null || b === null) return false
+  return a.winnerCnIdKey === b.winnerCnIdKey && a.content === b.content
 }
 
 // ---------------------------------------------------------------------------
@@ -111,88 +106,84 @@ function winnersEqual(
  */
 export function createIncrementalLWW(): IncrementalLWW {
   // Per-slot state: slotId → SlotState
-  let slots = new Map<string, SlotState>();
+  let slots = new Map<string, SlotState>()
 
   function getOrCreateSlot(slotId: string): SlotState {
-    let slot = slots.get(slotId);
+    let slot = slots.get(slotId)
     if (slot === undefined) {
-      slot = { entries: new Map(), winner: null };
-      slots.set(slotId, slot);
+      slot = { entries: new Map(), winner: null }
+      slots.set(slotId, slot)
     }
-    return slot;
+    return slot
   }
 
   function step(deltaFacts: ZSet<Fact>): ZSet<ResolvedWinner> {
-    let delta = zsetEmpty<ResolvedWinner>();
+    let delta = zsetEmpty<ResolvedWinner>()
 
     zsetForEach(deltaFacts, (entry, _key) => {
-      const f = entry.element;
-      const weight = entry.weight;
+      const f = entry.element
+      const weight = entry.weight
 
       // Only process active_value facts
-      if (f.predicate !== ACTIVE_VALUE.predicate) return;
+      if (f.predicate !== ACTIVE_VALUE.predicate) return
 
-      const lwwEntry = parseLWWFact(f);
-      const slotId = lwwEntry.slotId;
-      const entryKey = cnIdKey(lwwEntry.id);
-      const slot = getOrCreateSlot(slotId);
+      const lwwEntry = parseLWWFact(f)
+      const slotId = lwwEntry.slotId
+      const entryKey = cnIdKey(lwwEntry.id)
+      const slot = getOrCreateSlot(slotId)
 
       // Capture old winner for comparison
-      const oldWinner = slot.winner !== null
-        ? entryToWinner(slot.winner)
-        : null;
+      const oldWinner = slot.winner !== null ? entryToWinner(slot.winner) : null
 
       if (weight > 0) {
         // --- Insertion ---
-        slot.entries.set(entryKey, lwwEntry);
+        slot.entries.set(entryKey, lwwEntry)
 
         // Compare against current winner
         if (slot.winner === null || lwwCompare(lwwEntry, slot.winner) > 0) {
-          slot.winner = lwwEntry;
+          slot.winner = lwwEntry
         }
       } else if (weight < 0) {
         // --- Retraction ---
-        slot.entries.delete(entryKey);
+        slot.entries.delete(entryKey)
 
         if (slot.winner !== null && cnIdKey(slot.winner.id) === entryKey) {
           // The winner was retracted — recompute from remaining entries
-          slot.winner = findWinner(slot.entries);
+          slot.winner = findWinner(slot.entries)
         }
       }
 
       // Compute new winner
-      const newWinner = slot.winner !== null
-        ? entryToWinner(slot.winner)
-        : null;
+      const newWinner = slot.winner !== null ? entryToWinner(slot.winner) : null
 
       // Emit delta if winner changed
       if (!winnersEqual(oldWinner, newWinner)) {
         if (newWinner !== null) {
           // New or changed winner: emit +1 only (skeleton handles replacement)
-          delta = zsetAdd(delta, zsetSingleton(slotId, newWinner, 1));
+          delta = zsetAdd(delta, zsetSingleton(slotId, newWinner, 1))
         } else {
           // Winner removed entirely: emit −1 with the old winner
-          delta = zsetAdd(delta, zsetSingleton(slotId, oldWinner!, -1));
+          delta = zsetAdd(delta, zsetSingleton(slotId, oldWinner!, -1))
         }
       }
-    });
+    })
 
-    return delta;
+    return delta
   }
 
   function current(): ReadonlyMap<string, ResolvedWinner> {
-    const winners = new Map<string, ResolvedWinner>();
+    const winners = new Map<string, ResolvedWinner>()
     for (const [slotId, slot] of slots) {
       if (slot.winner !== null) {
-        winners.set(slotId, entryToWinner(slot.winner));
+        winners.set(slotId, entryToWinner(slot.winner))
       }
     }
-    return winners;
+    return winners
   }
 
   function reset(): void {
-    slots = new Map();
+    slots = new Map()
   }
 
-  return { step, current, reset };
+  return { step, current, reset }
 }

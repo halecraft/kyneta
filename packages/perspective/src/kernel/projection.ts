@@ -18,16 +18,15 @@
 //
 // See unified-engine.md §7.2, §8, §B.4.
 
+import type { Fact } from "../datalog/types.js"
+import { fact } from "../datalog/types.js"
+import { cnIdKey } from "./cnid.js"
+import type { StructureIndex } from "./structure-index.js"
 import type {
-  CnId,
   Constraint,
-  ValueConstraint,
   StructureConstraint,
-} from './types.js';
-import { cnIdKey } from './cnid.js';
-import type { Fact } from '../datalog/types.js';
-import { fact } from '../datalog/types.js';
-import type { StructureIndex } from './structure-index.js';
+  ValueConstraint,
+} from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Projected Relation Schemas
@@ -57,33 +56,33 @@ import type { StructureIndex } from './structure-index.js';
  * Column positions for the `active_value` relation.
  */
 export const ACTIVE_VALUE = {
-  predicate: 'active_value',
+  predicate: "active_value",
   CNID: 0,
   SLOT: 1,
   CONTENT: 2,
   LAMPORT: 3,
   PEER: 4,
-} as const;
+} as const
 
 /**
  * Column positions for the `active_structure_seq` relation.
  */
 export const ACTIVE_STRUCTURE_SEQ = {
-  predicate: 'active_structure_seq',
+  predicate: "active_structure_seq",
   CNID: 0,
   PARENT: 1,
   ORIGIN_LEFT: 2,
   ORIGIN_RIGHT: 3,
-} as const;
+} as const
 
 /**
  * Column positions for the `constraint_peer` relation.
  */
 export const CONSTRAINT_PEER = {
-  predicate: 'constraint_peer',
+  predicate: "constraint_peer",
   CNID: 0,
   PEER: 1,
-} as const;
+} as const
 
 // ---------------------------------------------------------------------------
 // Projection Result
@@ -94,13 +93,13 @@ export const CONSTRAINT_PEER = {
  */
 export interface ProjectionResult {
   /** All projected ground facts, ready for the Datalog evaluator. */
-  readonly facts: readonly Fact[];
+  readonly facts: readonly Fact[]
 
   /**
    * Value constraints that were excluded because their target CnId
    * does not appear in the structure index (orphaned values).
    */
-  readonly orphanedValues: readonly ValueConstraint[];
+  readonly orphanedValues: readonly ValueConstraint[]
 }
 
 // ---------------------------------------------------------------------------
@@ -133,24 +132,24 @@ export function projectToFacts(
   activeConstraints: Iterable<Constraint>,
   structureIndex: StructureIndex,
 ): ProjectionResult {
-  const facts: Fact[] = [];
-  const orphanedValues: ValueConstraint[] = [];
+  const facts: Fact[] = []
+  const orphanedValues: ValueConstraint[] = []
 
   for (const c of activeConstraints) {
     switch (c.type) {
-      case 'value':
-        projectValue(c, structureIndex, facts, orphanedValues);
-        break;
-      case 'structure':
-        projectStructure(c, facts);
-        break;
+      case "value":
+        projectValue(c, structureIndex, facts, orphanedValues)
+        break
+      case "structure":
+        projectStructure(c, facts)
+        break
       // Other constraint types (retract, rule, authority, bookmark)
       // are not projected into Datalog ground facts. They have already
       // been processed by the validity and retraction filters.
     }
   }
 
-  return { facts, orphanedValues };
+  return { facts, orphanedValues }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,24 +169,26 @@ function projectValue(
   facts: Fact[],
   orphaned: ValueConstraint[],
 ): void {
-  const targetKey = cnIdKey(vc.payload.target);
-  const sid = index.structureToSlot.get(targetKey);
+  const targetKey = cnIdKey(vc.payload.target)
+  const sid = index.structureToSlot.get(targetKey)
 
   if (sid === undefined) {
     // Target structure not found — this value is orphaned.
     // It may have been retracted or never existed.
-    orphaned.push(vc);
-    return;
+    orphaned.push(vc)
+    return
   }
 
   // Emit: active_value(CnId, Slot, Content, Lamport, Peer)
-  facts.push(fact(ACTIVE_VALUE.predicate, [
-    cnIdKey(vc.id),
-    sid,
-    vc.payload.content,
-    vc.lamport,
-    vc.id.peer,
-  ]));
+  facts.push(
+    fact(ACTIVE_VALUE.predicate, [
+      cnIdKey(vc.id),
+      sid,
+      vc.payload.content,
+      vc.lamport,
+      vc.id.peer,
+    ]),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -201,26 +202,22 @@ function projectValue(
  * Root and map structures are consumed directly by the skeleton builder,
  * not by Datalog rules.
  */
-function projectStructure(
-  sc: StructureConstraint,
-  facts: Fact[],
-): void {
-  const payload = sc.payload;
+function projectStructure(sc: StructureConstraint, facts: Fact[]): void {
+  const payload = sc.payload
 
-  if (payload.kind === 'seq') {
+  if (payload.kind === "seq") {
     // Emit: active_structure_seq(CnId, Parent, OriginLeft, OriginRight)
-    facts.push(fact(ACTIVE_STRUCTURE_SEQ.predicate, [
-      cnIdKey(sc.id),
-      cnIdKey(payload.parent),
-      payload.originLeft !== null ? cnIdKey(payload.originLeft) : null,
-      payload.originRight !== null ? cnIdKey(payload.originRight) : null,
-    ]));
+    facts.push(
+      fact(ACTIVE_STRUCTURE_SEQ.predicate, [
+        cnIdKey(sc.id),
+        cnIdKey(payload.parent),
+        payload.originLeft !== null ? cnIdKey(payload.originLeft) : null,
+        payload.originRight !== null ? cnIdKey(payload.originRight) : null,
+      ]),
+    )
 
     // Emit: constraint_peer(CnId, Peer)
-    facts.push(fact(CONSTRAINT_PEER.predicate, [
-      cnIdKey(sc.id),
-      sc.id.peer,
-    ]));
+    facts.push(fact(CONSTRAINT_PEER.predicate, [cnIdKey(sc.id), sc.id.peer]))
   }
 }
 
@@ -235,7 +232,7 @@ const CONSTRAINT_KEY_PREDICATES: ReadonlySet<string> = new Set([
   ACTIVE_VALUE.predicate,
   ACTIVE_STRUCTURE_SEQ.predicate,
   CONSTRAINT_PEER.predicate,
-]);
+])
 
 /**
  * Extract the constraint key (CnIdKey) from position 0 of a projected fact,
@@ -246,11 +243,11 @@ const CONSTRAINT_KEY_PREDICATES: ReadonlySet<string> = new Set([
  */
 export function constraintKeyFromFact(f: Fact): string | null {
   if (!CONSTRAINT_KEY_PREDICATES.has(f.predicate)) {
-    return null;
+    return null
   }
-  const v = f.values[0];
-  if (typeof v !== 'string') {
-    return null;
+  const v = f.values[0]
+  if (typeof v !== "string") {
+    return null
   }
-  return v;
+  return v
 }

@@ -1,75 +1,70 @@
 import { describe, expectTypeOf, it } from "vitest"
 import {
-  Schema,
-  LoroSchema,
-  interpret,
-  readable,
-  writable,
-  changefeed,
-  plainContext,
-  change,
-  subscribe,
-  subscribeNode,
-  bottomInterpreter,
-  withNavigation,
-  withReadable,
-  withCaching,
-  withWritable,
-  withChangefeed,
-  type ScalarSchema,
-  type ProductSchema,
-  type SequenceSchema,
-  type MapSchema,
   type AnnotatedSchema,
-  type PositionalSumSchema,
-  type DiscriminatedSumSchema,
-  type ScalarKind,
-  type SchemaNode,
-  type Writable,
-  type Readable,
-  type ReadableSequenceRef,
-  type ReadableMapRef,
-  type NavigableSequenceRef,
-  type NavigableMapRef,
-  type SchemaRef,
-  type RRef,
-  type RWRef,
-  type Ref,
-  type Wrap,
-  type WithTransact,
-  type HasTransact,
-  type HasChangefeed,
-  type HasCall,
-  type HasRead,
-  type HasCaching,
-  type HasNavigation,
-  type Plain,
-  type Seed,
-  type ScalarPlain,
-  type ScalarRef,
-  type TextRef,
+  bottomInterpreter,
+  CHANGEFEED,
+  type ChangefeedBrand,
   type CounterRef,
-  type SequenceRef,
-  type ProductRef,
-  type WritableMapRef,
-  type PlainSchema,
-  type PlainProductSchema,
-  type PlainSequenceSchema,
+  change,
+  changefeed,
+  type HasCaching,
+  type HasCall,
+  type HasChangefeed,
+  type HasRead,
+  type HasTransact,
+  type InterpretBuilder,
+  type Interpreter,
+  type InterpreterLayer,
+  interpret,
+  LoroSchema,
+  type MapSchema,
+  type NavigableMapRef,
+  type NavigableSequenceRef,
+  type Plain,
+  type PlainDiscriminatedSumSchema,
   type PlainMapSchema,
   type PlainPositionalSumSchema,
-  type PlainDiscriminatedSumSchema,
-  type InterpreterLayer,
-  type Interpreter,
-  type InterpretBuilder,
-  type RefContext,
-  type WritableContext,
+  type PlainProductSchema,
+  type PlainSchema,
+  type PlainSequenceSchema,
+  type ProductRef,
+  type ProductSchema,
+  plainContext,
+  type Readable,
   type ReadableBrand,
-  type WritableBrand,
-  type ChangefeedBrand,
+  type ReadableMapRef,
+  type ReadableSequenceRef,
+  type Ref,
+  type RefContext,
   type Resolve,
   type ResolveCarrier,
+  type RRef,
+  type RWRef,
+  readable,
+  type ScalarPlain,
+  type ScalarRef,
+  type ScalarSchema,
+  Schema,
+  type SchemaNode,
+  type Seed,
+  type SequenceRef,
+  type SequenceSchema,
+  subscribe,
+  subscribeNode,
+  type TextRef,
   TRANSACT,
-  CHANGEFEED,
+  type WithTransact,
+  type Wrap,
+  type Writable,
+  type WritableBrand,
+  type WritableContext,
+  type WritableMapRef,
+  withCaching,
+  withChangefeed,
+  withNavigation,
+  withReadable,
+  withWritable,
+  writable,
 } from "../index.js"
 
 // ---------------------------------------------------------------------------
@@ -210,7 +205,10 @@ describe("type-level: sequence and map item type preservation", () => {
 describe("type-level: sum variant preservation", () => {
   it("Schema.discriminatedSum discriminant is a literal string", () => {
     const s = Schema.discriminatedSum("kind", [
-      Schema.product({ kind: Schema.scalar("string", ["a"]), x: Schema.scalar("string") }),
+      Schema.product({
+        kind: Schema.scalar("string", ["a"]),
+        x: Schema.scalar("string"),
+      }),
     ])
     expectTypeOf(s.discriminant).toEqualTypeOf<"kind">()
     // Should NOT be widened to string
@@ -219,16 +217,32 @@ describe("type-level: sum variant preservation", () => {
 
   it("Schema.discriminatedSum variants array preserves types", () => {
     const s = Schema.discriminatedSum("type", [
-      Schema.product({ type: Schema.scalar("string", ["text"]), content: Schema.scalar("string") }),
-      Schema.product({ type: Schema.scalar("string", ["image"]), url: Schema.scalar("string") }),
+      Schema.product({
+        type: Schema.scalar("string", ["text"]),
+        content: Schema.scalar("string"),
+      }),
+      Schema.product({
+        type: Schema.scalar("string", ["image"]),
+        url: Schema.scalar("string"),
+      }),
     ])
     // variants is a tuple — length is known at the type level
-    expectTypeOf(s.variants).toEqualTypeOf<[
-      ProductSchema<{ type: ScalarSchema<"string", string>; content: ScalarSchema<"string", string> }>,
-      ProductSchema<{ type: ScalarSchema<"string", string>; url: ScalarSchema<"string", string> }>,
-    ]>()
+    expectTypeOf(s.variants).toEqualTypeOf<
+      [
+        ProductSchema<{
+          type: ScalarSchema<"string", string>
+          content: ScalarSchema<"string", string>
+        }>,
+        ProductSchema<{
+          type: ScalarSchema<"string", string>
+          url: ScalarSchema<"string", string>
+        }>,
+      ]
+    >()
     // variantMap is derived at runtime — typed as Record<string, ProductSchema>
-    expectTypeOf(s.variantMap).toEqualTypeOf<Readonly<Record<string, ProductSchema>>>()
+    expectTypeOf(s.variantMap).toEqualTypeOf<
+      Readonly<Record<string, ProductSchema>>
+    >()
   })
 })
 
@@ -309,8 +323,6 @@ describe("type-level: ScalarPlain maps scalar kinds to TS types", () => {
   })
 })
 
-
-
 describe("type-level: Writable<S> for scalars", () => {
   it("Writable<string()> = ScalarRef<string>", () => {
     type Result = Writable<ReturnType<typeof Schema.string>>
@@ -347,7 +359,9 @@ describe("type-level: Writable<S> for products and structs", () => {
     type Result = Writable<ProductSchema<{ x: ScalarSchema<"number"> }>>
     expectTypeOf<Result>().toHaveProperty("set")
     expectTypeOf<Result["set"]>().toBeFunction()
-    expectTypeOf<Result["set"]>().toEqualTypeOf<(value: { x: number }) => void>()
+    expectTypeOf<Result["set"]>().toEqualTypeOf<
+      (value: { x: number }) => void
+    >()
   })
 })
 
@@ -439,8 +453,6 @@ describe("type-level: Writable<S> end-to-end structural schema", () => {
 // Plain<S> — the type-level catamorphism for plain JS types
 // ---------------------------------------------------------------------------
 
-
-
 describe("type-level: Plain<S> for scalars", () => {
   it("Plain<string()> = string", () => {
     type Result = Plain<ReturnType<typeof Schema.string>>
@@ -519,9 +531,7 @@ describe("type-level: Plain<S> for sequences", () => {
       }),
     )
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<
-      { name: string; body: string }[]
-    >()
+    expectTypeOf<Result>().toEqualTypeOf<{ name: string; body: string }[]>()
   })
 })
 
@@ -624,7 +634,9 @@ describe("type-level: LoroSchema annotation tag literal preservation", () => {
   })
 
   it("LoroSchema.tree() → tag is literal 'tree'", () => {
-    const s = LoroSchema.tree(LoroSchema.plain.struct({ label: LoroSchema.plain.string() }))
+    const s = LoroSchema.tree(
+      LoroSchema.plain.struct({ label: LoroSchema.plain.string() }),
+    )
     expectTypeOf(s.tag).toEqualTypeOf<"tree">()
   })
 })
@@ -646,10 +658,12 @@ describe("type-level: Writable<S> for Loro leaf annotations", () => {
       count: LoroSchema.counter(),
     })
     type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{
-      readonly title: TextRef
-      readonly count: CounterRef
-    } & ProductRef<{ title: string; count: number }>>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      {
+        readonly title: TextRef
+        readonly count: CounterRef
+      } & ProductRef<{ title: string; count: number }>
+    >()
   })
 })
 
@@ -716,9 +730,7 @@ describe("type-level: Plain<S> for Loro movable list", () => {
       }),
     )
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<
-      { id: number; label: string }[]
-    >()
+    expectTypeOf<Result>().toEqualTypeOf<{ id: number; label: string }[]>()
   })
 })
 
@@ -836,7 +848,9 @@ describe("type-level: Writable<S> for constrained scalars", () => {
 describe("type-level: ScalarSchema constraint type parameter", () => {
   it("Schema.string('x', 'y') has constraint field typed as readonly ('x' | 'y')[]", () => {
     const s = Schema.string("x", "y")
-    expectTypeOf(s.constraint).toEqualTypeOf<readonly ("x" | "y")[] | undefined>()
+    expectTypeOf(s.constraint).toEqualTypeOf<
+      readonly ("x" | "y")[] | undefined
+    >()
   })
 
   it("Schema.string() has no constraint at runtime", () => {
@@ -863,15 +877,21 @@ describe("type-level: PlainSchema accepts annotation-free schemas", () => {
   })
 
   it("PlainProductSchema extends PlainSchema", () => {
-    expectTypeOf<PlainProductSchema<{ x: ScalarSchema<"string"> }>>().toMatchTypeOf<PlainSchema>()
+    expectTypeOf<
+      PlainProductSchema<{ x: ScalarSchema<"string"> }>
+    >().toMatchTypeOf<PlainSchema>()
   })
 
   it("PlainSequenceSchema extends PlainSchema", () => {
-    expectTypeOf<PlainSequenceSchema<ScalarSchema<"string">>>().toMatchTypeOf<PlainSchema>()
+    expectTypeOf<
+      PlainSequenceSchema<ScalarSchema<"string">>
+    >().toMatchTypeOf<PlainSchema>()
   })
 
   it("PlainMapSchema extends PlainSchema", () => {
-    expectTypeOf<PlainMapSchema<ScalarSchema<"number">>>().toMatchTypeOf<PlainSchema>()
+    expectTypeOf<
+      PlainMapSchema<ScalarSchema<"number">>
+    >().toMatchTypeOf<PlainSchema>()
   })
 
   it("nested plain product of sequence of scalars extends PlainSchema", () => {
@@ -882,29 +902,43 @@ describe("type-level: PlainSchema accepts annotation-free schemas", () => {
   })
 
   it("PlainPositionalSumSchema extends PlainSchema", () => {
-    type NullableString = PlainPositionalSumSchema<[ScalarSchema<"null">, ScalarSchema<"string">]>
+    type NullableString = PlainPositionalSumSchema<
+      [ScalarSchema<"null">, ScalarSchema<"string">]
+    >
     expectTypeOf<NullableString>().toMatchTypeOf<PlainSchema>()
   })
 
   it("PlainDiscriminatedSumSchema extends PlainSchema", () => {
-    type Disc = PlainDiscriminatedSumSchema<"type", [
-      PlainProductSchema<{ type: ScalarSchema<"string", "a">; x: ScalarSchema<"string"> }>
-    ]>
+    type Disc = PlainDiscriminatedSumSchema<
+      "type",
+      [
+        PlainProductSchema<{
+          type: ScalarSchema<"string", "a">
+          x: ScalarSchema<"string">
+        }>,
+      ]
+    >
     expectTypeOf<Disc>().toMatchTypeOf<PlainSchema>()
   })
 })
 
 describe("type-level: PlainSchema is a subtype of Schema", () => {
   it("PlainProductSchema extends Schema", () => {
-    expectTypeOf<PlainProductSchema<{ x: ScalarSchema<"string"> }>>().toMatchTypeOf<SchemaNode>()
+    expectTypeOf<
+      PlainProductSchema<{ x: ScalarSchema<"string"> }>
+    >().toMatchTypeOf<SchemaNode>()
   })
 
   it("PlainSequenceSchema extends Schema", () => {
-    expectTypeOf<PlainSequenceSchema<ScalarSchema<"string">>>().toMatchTypeOf<SchemaNode>()
+    expectTypeOf<
+      PlainSequenceSchema<ScalarSchema<"string">>
+    >().toMatchTypeOf<SchemaNode>()
   })
 
   it("PlainMapSchema extends Schema", () => {
-    expectTypeOf<PlainMapSchema<ScalarSchema<"number">>>().toMatchTypeOf<SchemaNode>()
+    expectTypeOf<
+      PlainMapSchema<ScalarSchema<"number">>
+    >().toMatchTypeOf<SchemaNode>()
   })
 })
 
@@ -918,11 +952,15 @@ describe("type-level: PlainSchema rejects annotated schemas", () => {
   })
 
   it("AnnotatedSchema<'movable', SequenceSchema> does NOT extend PlainSchema", () => {
-    expectTypeOf<AnnotatedSchema<"movable", SequenceSchema<ScalarSchema<"string">>>>().not.toMatchTypeOf<PlainSchema>()
+    expectTypeOf<
+      AnnotatedSchema<"movable", SequenceSchema<ScalarSchema<"string">>>
+    >().not.toMatchTypeOf<PlainSchema>()
   })
 
   it("AnnotatedSchema<'doc', ProductSchema> does NOT extend PlainSchema", () => {
-    expectTypeOf<AnnotatedSchema<"doc", ProductSchema>>().not.toMatchTypeOf<PlainSchema>()
+    expectTypeOf<
+      AnnotatedSchema<"doc", ProductSchema>
+    >().not.toMatchTypeOf<PlainSchema>()
   })
 
   it("ProductSchema containing AnnotatedSchema does NOT extend PlainProductSchema", () => {
@@ -1011,23 +1049,31 @@ describe("type-level: LoroSchema.plain.* constructors enforce PlainSchema constr
 
 describe("type-level: NavigableSequenceRef extends correctly", () => {
   it("ReadableSequenceRef extends NavigableSequenceRef", () => {
-    expectTypeOf<ReadableSequenceRef<string, string>>().toMatchTypeOf<NavigableSequenceRef<string>>()
+    expectTypeOf<ReadableSequenceRef<string, string>>().toMatchTypeOf<
+      NavigableSequenceRef<string>
+    >()
   })
 
   it("NavigableSequenceRef does NOT satisfy ReadableSequenceRef", () => {
     // NavigableSequenceRef lacks call signature and .get()
-    expectTypeOf<NavigableSequenceRef<string>>().not.toMatchTypeOf<ReadableSequenceRef<string, string>>()
+    expectTypeOf<NavigableSequenceRef<string>>().not.toMatchTypeOf<
+      ReadableSequenceRef<string, string>
+    >()
   })
 })
 
 describe("type-level: NavigableMapRef extends correctly", () => {
   it("ReadableMapRef extends NavigableMapRef", () => {
-    expectTypeOf<ReadableMapRef<string, string>>().toMatchTypeOf<NavigableMapRef<string>>()
+    expectTypeOf<ReadableMapRef<string, string>>().toMatchTypeOf<
+      NavigableMapRef<string>
+    >()
   })
 
   it("NavigableMapRef does NOT satisfy ReadableMapRef", () => {
     // NavigableMapRef lacks call signature and .get()
-    expectTypeOf<NavigableMapRef<string>>().not.toMatchTypeOf<ReadableMapRef<string, string>>()
+    expectTypeOf<NavigableMapRef<string>>().not.toMatchTypeOf<
+      ReadableMapRef<string, string>
+    >()
   })
 })
 
@@ -1261,7 +1307,7 @@ describe("type-level: Ref<S> end-to-end", () => {
     expectTypeOf<Metadata>().toHaveProperty("at")
     expectTypeOf<Metadata>().toHaveProperty("has")
     expectTypeOf<Metadata>().toHaveProperty("keys")
-    expectTypeOf<Metadata>().toHaveProperty("set")    // WritableMapRef
+    expectTypeOf<Metadata>().toHaveProperty("set") // WritableMapRef
     expectTypeOf<Metadata>().toHaveProperty("delete")
     expectTypeOf<Metadata>().toHaveProperty("clear")
     expectTypeOf<Metadata>().toHaveProperty(TRANSACT)
@@ -1272,7 +1318,11 @@ describe("type-level: Ref<S> no .at() overload conflict on sequences", () => {
   it("ReadableSequenceRef & SequenceRef has no .at() conflict (SequenceRef has no .at())", () => {
     // This is the core fix — ReadableSequenceRef provides .at() returning Ref<I>,
     // and SequenceRef provides only push/insert/delete. No conflicting .at() signatures.
-    type Combined = ReadableSequenceRef<Ref<ScalarSchema<"string", string>>, string> & SequenceRef
+    type Combined = ReadableSequenceRef<
+      Ref<ScalarSchema<"string", string>>,
+      string
+    > &
+      SequenceRef
     expectTypeOf<Combined>().toHaveProperty("at")
     expectTypeOf<Combined>().toHaveProperty("push")
     expectTypeOf<Combined>().toHaveProperty("length")
@@ -1475,7 +1525,10 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
 
   it(".with(readable).with(writable).done() → RWRef<S>", () => {
     const ctx = plainContext({ x: 0, y: 0 })
-    const result = interpret(pointSchema, ctx).with(readable).with(writable).done()
+    const result = interpret(pointSchema, ctx)
+      .with(readable)
+      .with(writable)
+      .done()
     expectTypeOf(result).toEqualTypeOf<RWRef<typeof pointSchema>>()
   })
 
@@ -1513,7 +1566,9 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
   it("custom unbranded layer .done() → unknown", () => {
     const tagging: InterpreterLayer<RefContext, RefContext> = {
       name: "tagging",
-      transform(base: Interpreter<RefContext, any>) { return base },
+      transform(base: Interpreter<RefContext, any>) {
+        return base
+      },
     }
     const ctx: RefContext = { store: { x: 0, y: 0 } }
     const result = interpret(pointSchema, ctx).with(tagging).done()
@@ -1573,30 +1628,42 @@ describe("type-level: ResolveCarrier<S, A> selects the correct tier", () => {
 
 describe("type-level: withWritable contributes HasTransact to A", () => {
   it("withWritable return type includes HasTransact", () => {
-    const interp = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
+    const interp = withWritable(
+      withCaching(withReadable(withNavigation(bottomInterpreter))),
+    )
     // The interpreter's A type should include HasTransact
-    expectTypeOf(interp).toMatchTypeOf<Interpreter<WritableContext, HasTransact>>()
+    expectTypeOf(interp).toMatchTypeOf<
+      Interpreter<WritableContext, HasTransact>
+    >()
   })
 
   it("withWritable(bottom) return type includes HasTransact", () => {
     const interp = withWritable(bottomInterpreter)
-    expectTypeOf(interp).toMatchTypeOf<Interpreter<WritableContext, HasTransact>>()
+    expectTypeOf(interp).toMatchTypeOf<
+      Interpreter<WritableContext, HasTransact>
+    >()
   })
 })
 
 describe("type-level: withChangefeed contributes HasChangefeed to A", () => {
   it("withChangefeed return type includes HasChangefeed", () => {
     const interp = withChangefeed(
-      withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))),
+      withWritable(
+        withCaching(withReadable(withNavigation(bottomInterpreter))),
+      ),
     )
     expectTypeOf(interp).toMatchTypeOf<Interpreter<RefContext, HasChangefeed>>()
   })
 
   it("full stack has HasTransact & HasChangefeed in carrier type", () => {
     const interp = withChangefeed(
-      withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))),
+      withWritable(
+        withCaching(withReadable(withNavigation(bottomInterpreter))),
+      ),
     )
-    expectTypeOf(interp).toMatchTypeOf<Interpreter<RefContext, HasTransact & HasChangefeed>>()
+    expectTypeOf(interp).toMatchTypeOf<
+      Interpreter<RefContext, HasTransact & HasChangefeed>
+    >()
   })
 })
 
@@ -1609,7 +1676,9 @@ describe("type-level: InterpretBuilder<S, Ctx, Brands>", () => {
     const pointSchema = Schema.doc({ x: Schema.number(), y: Schema.number() })
     const ctx: RefContext = { store: { x: 0, y: 0 } }
     const builder = interpret(pointSchema, ctx)
-    expectTypeOf(builder).toMatchTypeOf<InterpretBuilder<typeof pointSchema, RefContext, unknown>>()
+    expectTypeOf(builder).toMatchTypeOf<
+      InterpretBuilder<typeof pointSchema, RefContext, unknown>
+    >()
   })
 
   it("field access on inferred builder result is well-typed", () => {
@@ -1637,10 +1706,16 @@ describe("type-level: change() callback infers draft type from fluent-built doc"
 
   it("full-stack .done() result is accepted by change() without cast", () => {
     const ctx = plainContext({
-      title: "", count: 0, items: [], settings: { darkMode: false },
+      title: "",
+      count: 0,
+      items: [],
+      settings: { darkMode: false },
     })
     const doc = interpret(docSchema, ctx)
-      .with(readable).with(writable).with(changefeed).done()
+      .with(readable)
+      .with(writable)
+      .with(changefeed)
+      .done()
 
     // change() should accept doc without any cast — D is inferred as Ref<S>
     expectTypeOf(change).toBeCallableWith(doc, () => {})
@@ -1648,15 +1723,21 @@ describe("type-level: change() callback infers draft type from fluent-built doc"
 
   it("callback parameter d has typed field access (not any)", () => {
     const ctx = plainContext({
-      title: "", count: 0, items: [], settings: { darkMode: false },
+      title: "",
+      count: 0,
+      items: [],
+      settings: { darkMode: false },
     })
     const doc = interpret(docSchema, ctx)
-      .with(readable).with(writable).with(changefeed).done()
+      .with(readable)
+      .with(writable)
+      .with(changefeed)
+      .done()
 
     // The callback d should have the same type as doc — verify typed methods exist.
     // If d were `any`, these assertions would vacuously pass, so we also
     // check that a non-existent field is NOT present.
-    change(doc, (d) => {
+    change(doc, d => {
       expectTypeOf(d.title.insert).toBeFunction()
       expectTypeOf(d.count.increment).toBeFunction()
       expectTypeOf(d.items.push).toBeFunction()
@@ -1669,10 +1750,12 @@ describe("type-level: change() callback infers draft type from fluent-built doc"
 
   it("RWRef .done() result is accepted by change() (has HasTransact)", () => {
     const ctx = plainContext({
-      title: "", count: 0, items: [], settings: { darkMode: false },
+      title: "",
+      count: 0,
+      items: [],
+      settings: { darkMode: false },
     })
-    const doc = interpret(docSchema, ctx)
-      .with(readable).with(writable).done()
+    const doc = interpret(docSchema, ctx).with(readable).with(writable).done()
 
     // RWRef<S> has HasTransact — change() should accept it
     expectTypeOf(change).toBeCallableWith(doc, () => {})
@@ -1689,7 +1772,10 @@ describe("type-level: fluent results are accepted by facade functions", () => {
   it("subscribeNode() accepts Ref<S> field from full-stack .done()", () => {
     const ctx = plainContext({ x: 0 })
     const doc = interpret(schema, ctx)
-      .with(readable).with(writable).with(changefeed).done()
+      .with(readable)
+      .with(writable)
+      .with(changefeed)
+      .done()
 
     // subscribeNode requires HasChangefeed — Ref<S> children have it
     expectTypeOf(subscribeNode).toBeCallableWith(doc.x, () => {})
@@ -1698,7 +1784,10 @@ describe("type-level: fluent results are accepted by facade functions", () => {
   it("subscribe() accepts Ref<S> from full-stack .done()", () => {
     const ctx = plainContext({ x: 0 })
     const doc = interpret(schema, ctx)
-      .with(readable).with(writable).with(changefeed).done()
+      .with(readable)
+      .with(writable)
+      .with(changefeed)
+      .done()
 
     // subscribe requires HasComposedChangefeed on composite refs
     // doc is a product ref — should be accepted
@@ -1713,7 +1802,11 @@ describe("type-level: fluent results are accepted by facade functions", () => {
 // Shared schema fixtures for sum type tests
 const _discUnionSchema = Schema.discriminatedUnion("type", [
   Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
-  Schema.struct({ type: Schema.string("image"), url: Schema.string(), caption: Schema.string() }),
+  Schema.struct({
+    type: Schema.string("image"),
+    url: Schema.string(),
+    caption: Schema.string(),
+  }),
 ])
 
 const _nullableStringSchema = Schema.nullable(Schema.string())
@@ -1867,9 +1960,11 @@ describe("type-level: general positional sums must NOT collapse (collapse bounda
 })
 
 describe("type-level: nullable composite — inner is a product, not a scalar", () => {
-  const nullableStructSchema = Schema.nullable(Schema.struct({
-    x: Schema.string(),
-  }))
+  const nullableStructSchema = Schema.nullable(
+    Schema.struct({
+      x: Schema.string(),
+    }),
+  )
 
   it("Ref<nullable(struct({ x: string() }))> call returns { x: string } | null", () => {
     type Result = Ref<typeof nullableStructSchema>
@@ -1920,7 +2015,9 @@ describe("type-level: Plain<S> regression guards for sums", () => {
   it("Plain<DiscriminatedSumSchema> = union of variant plain types", () => {
     type Result = Plain<typeof _discUnionSchema>
     // Should be the union of the two variant product plains
-    type Expected = { type: "text"; body: string } | { type: "image"; url: string; caption: string }
+    type Expected =
+      | { type: "text"; body: string }
+      | { type: "image"; url: string; caption: string }
     expectTypeOf<Result>().toEqualTypeOf<Expected>()
   })
 })
@@ -2019,7 +2116,9 @@ describe("type-level: Seed<S> for sums (delegates to Plain)", () => {
 
   it("Seed<discriminatedUnion> = union of variant plain types", () => {
     type Result = Seed<typeof _discUnionSchema>
-    type Expected = { type: "text"; body: string } | { type: "image"; url: string; caption: string }
+    type Expected =
+      | { type: "text"; body: string }
+      | { type: "image"; url: string; caption: string }
     expectTypeOf<Result>().toEqualTypeOf<Expected>()
   })
 })
@@ -2042,7 +2141,10 @@ describe("type-level: Seed<S> on complex schema (TS2589 regression)", () => {
       fontSize: Schema.number(),
     }),
     content: Schema.discriminatedUnion("type", [
-      Schema.struct({ type: Schema.string("text"), body: Schema.annotated("text") }),
+      Schema.struct({
+        type: Schema.string("text"),
+        body: Schema.annotated("text"),
+      }),
       Schema.struct({
         type: Schema.string("image"),
         url: Schema.string(),
@@ -2066,7 +2168,9 @@ describe("type-level: Seed<S> on complex schema (TS2589 regression)", () => {
 
   it("nested product keys are optional", () => {
     type Result = Seed<typeof complexSchema>
-    expectTypeOf<Result>().toMatchTypeOf<{ settings?: { darkMode?: boolean } }>()
+    expectTypeOf<Result>().toMatchTypeOf<{
+      settings?: { darkMode?: boolean }
+    }>()
   })
 
   // NOTE: Seed<S> triggers TS2589 when used as a generic function parameter

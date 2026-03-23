@@ -29,8 +29,8 @@
  * +1 = present/inserted, −1 = removed/retracted, 0 = not stored.
  */
 export interface ZSetEntry<T> {
-  readonly element: T;
-  readonly weight: number;
+  readonly element: T
+  readonly weight: number
 }
 
 /**
@@ -42,20 +42,20 @@ export interface ZSetEntry<T> {
  * The Map key is a string identity derived from the element by the caller.
  * Two semantically identical elements must produce the same key.
  */
-export type ZSet<T> = ReadonlyMap<string, ZSetEntry<T>>;
+export type ZSet<T> = ReadonlyMap<string, ZSetEntry<T>>
 
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
 
 /** The empty Z-set (shared singleton — safe because it's readonly). */
-const EMPTY: ZSet<never> = new Map();
+const EMPTY: ZSet<never> = new Map()
 
 /**
  * Create an empty Z-set.
  */
 export function zsetEmpty<T>(): ZSet<T> {
-  return EMPTY as ZSet<T>;
+  return EMPTY as ZSet<T>
 }
 
 /**
@@ -70,10 +70,10 @@ export function zsetSingleton<T>(
   element: T,
   weight: number = 1,
 ): ZSet<T> {
-  if (weight === 0) return zsetEmpty();
-  const map = new Map<string, ZSetEntry<T>>();
-  map.set(key, { element, weight });
-  return map;
+  if (weight === 0) return zsetEmpty()
+  const map = new Map<string, ZSetEntry<T>>()
+  map.set(key, { element, weight })
+  return map
 }
 
 /**
@@ -86,26 +86,26 @@ export function zsetSingleton<T>(
 export function zsetFromEntries<T>(
   entries: Iterable<[string, ZSetEntry<T>]>,
 ): ZSet<T> {
-  const map = new Map<string, ZSetEntry<T>>();
+  const map = new Map<string, ZSetEntry<T>>()
 
   for (const [key, entry] of entries) {
-    const existing = map.get(key);
+    const existing = map.get(key)
     if (existing !== undefined) {
-      const newWeight = existing.weight + entry.weight;
+      const newWeight = existing.weight + entry.weight
       if (newWeight === 0) {
-        map.delete(key);
+        map.delete(key)
       } else {
-        map.set(key, { element: entry.element, weight: newWeight });
+        map.set(key, { element: entry.element, weight: newWeight })
       }
     } else {
       if (entry.weight !== 0) {
-        map.set(key, entry);
+        map.set(key, entry)
       }
     }
   }
 
-  if (map.size === 0) return zsetEmpty();
-  return map;
+  if (map.size === 0) return zsetEmpty()
+  return map
 }
 
 // ---------------------------------------------------------------------------
@@ -131,33 +131,33 @@ export function zsetFromEntries<T>(
  */
 export function zsetAdd<T>(a: ZSet<T>, b: ZSet<T>): ZSet<T> {
   // Fast paths
-  if (a.size === 0) return b;
-  if (b.size === 0) return a;
+  if (a.size === 0) return b
+  if (b.size === 0) return a
 
   // Copy the larger, iterate the smaller for efficiency
   const [larger, smaller, smallerIsB] =
-    a.size >= b.size ? [a, b, true] : [b, a, false];
+    a.size >= b.size ? [a, b, true] : [b, a, false]
 
-  const result = new Map<string, ZSetEntry<T>>(larger);
+  const result = new Map<string, ZSetEntry<T>>(larger)
 
   for (const [key, smallEntry] of smaller) {
-    const largeEntry = result.get(key);
+    const largeEntry = result.get(key)
     if (largeEntry !== undefined) {
-      const newWeight = largeEntry.weight + smallEntry.weight;
+      const newWeight = largeEntry.weight + smallEntry.weight
       if (newWeight === 0) {
-        result.delete(key);
+        result.delete(key)
       } else {
         // Prefer the element from the "b" argument (the delta/newer value)
-        const element = smallerIsB ? smallEntry.element : largeEntry.element;
-        result.set(key, { element, weight: newWeight });
+        const element = smallerIsB ? smallEntry.element : largeEntry.element
+        result.set(key, { element, weight: newWeight })
       }
     } else {
-      result.set(key, smallEntry);
+      result.set(key, smallEntry)
     }
   }
 
-  if (result.size === 0) return zsetEmpty();
-  return result;
+  if (result.size === 0) return zsetEmpty()
+  return result
 }
 
 /**
@@ -171,13 +171,13 @@ export function zsetAdd<T>(a: ZSet<T>, b: ZSet<T>): ZSet<T> {
  * - negate(empty) = empty
  */
 export function zsetNegate<T>(a: ZSet<T>): ZSet<T> {
-  if (a.size === 0) return a;
+  if (a.size === 0) return a
 
-  const result = new Map<string, ZSetEntry<T>>();
+  const result = new Map<string, ZSetEntry<T>>()
   for (const [key, entry] of a) {
-    result.set(key, { element: entry.element, weight: -entry.weight });
+    result.set(key, { element: entry.element, weight: -entry.weight })
   }
-  return result;
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -188,31 +188,28 @@ export function zsetNegate<T>(a: ZSet<T>): ZSet<T> {
  * Check if a Z-set is empty (has no entries).
  */
 export function zsetIsEmpty<T>(zs: ZSet<T>): boolean {
-  return zs.size === 0;
+  return zs.size === 0
 }
 
 /**
  * Get the number of entries in a Z-set (regardless of weight sign).
  */
 export function zsetSize<T>(zs: ZSet<T>): number {
-  return zs.size;
+  return zs.size
 }
 
 /**
  * Look up an entry by key.
  */
-export function zsetGet<T>(
-  zs: ZSet<T>,
-  key: string,
-): ZSetEntry<T> | undefined {
-  return zs.get(key);
+export function zsetGet<T>(zs: ZSet<T>, key: string): ZSetEntry<T> | undefined {
+  return zs.get(key)
 }
 
 /**
  * Check if a key exists in the Z-set.
  */
 export function zsetHas<T>(zs: ZSet<T>, key: string): boolean {
-  return zs.has(key);
+  return zs.has(key)
 }
 
 /**
@@ -221,17 +218,17 @@ export function zsetHas<T>(zs: ZSet<T>, key: string): boolean {
  * Represents the "insertions" or "present elements" in the Z-set.
  */
 export function zsetPositive<T>(zs: ZSet<T>): ZSet<T> {
-  if (zs.size === 0) return zs;
+  if (zs.size === 0) return zs
 
-  const result = new Map<string, ZSetEntry<T>>();
+  const result = new Map<string, ZSetEntry<T>>()
   for (const [key, entry] of zs) {
     if (entry.weight > 0) {
-      result.set(key, entry);
+      result.set(key, entry)
     }
   }
 
-  if (result.size === 0) return zsetEmpty();
-  return result;
+  if (result.size === 0) return zsetEmpty()
+  return result
 }
 
 /**
@@ -240,17 +237,17 @@ export function zsetPositive<T>(zs: ZSet<T>): ZSet<T> {
  * Represents the "deletions" or "anti-data" in the Z-set.
  */
 export function zsetNegative<T>(zs: ZSet<T>): ZSet<T> {
-  if (zs.size === 0) return zs;
+  if (zs.size === 0) return zs
 
-  const result = new Map<string, ZSetEntry<T>>();
+  const result = new Map<string, ZSetEntry<T>>()
   for (const [key, entry] of zs) {
     if (entry.weight < 0) {
-      result.set(key, entry);
+      result.set(key, entry)
     }
   }
 
-  if (result.size === 0) return zsetEmpty();
-  return result;
+  if (result.size === 0) return zsetEmpty()
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +262,7 @@ export function zsetForEach<T>(
   fn: (entry: ZSetEntry<T>, key: string) => void,
 ): void {
   for (const [key, entry] of zs) {
-    fn(entry, key);
+    fn(entry, key)
   }
 }
 
@@ -286,29 +283,29 @@ export function zsetMap<T, U>(
   keyFn: (e: U) => string,
   mapFn: (e: T) => U,
 ): ZSet<U> {
-  if (zs.size === 0) return zsetEmpty();
+  if (zs.size === 0) return zsetEmpty()
 
-  const result = new Map<string, ZSetEntry<U>>();
+  const result = new Map<string, ZSetEntry<U>>()
 
   for (const [_key, entry] of zs) {
-    const newElement = mapFn(entry.element);
-    const newKey = keyFn(newElement);
-    const existing = result.get(newKey);
+    const newElement = mapFn(entry.element)
+    const newKey = keyFn(newElement)
+    const existing = result.get(newKey)
 
     if (existing !== undefined) {
-      const newWeight = existing.weight + entry.weight;
+      const newWeight = existing.weight + entry.weight
       if (newWeight === 0) {
-        result.delete(newKey);
+        result.delete(newKey)
       } else {
-        result.set(newKey, { element: newElement, weight: newWeight });
+        result.set(newKey, { element: newElement, weight: newWeight })
       }
     } else {
-      result.set(newKey, { element: newElement, weight: entry.weight });
+      result.set(newKey, { element: newElement, weight: entry.weight })
     }
   }
 
-  if (result.size === 0) return zsetEmpty();
-  return result;
+  if (result.size === 0) return zsetEmpty()
+  return result
 }
 
 /**
@@ -321,18 +318,18 @@ export function zsetFilter<T>(
   zs: ZSet<T>,
   predicate: (entry: ZSetEntry<T>, key: string) => boolean,
 ): ZSet<T> {
-  if (zs.size === 0) return zs;
+  if (zs.size === 0) return zs
 
-  const result = new Map<string, ZSetEntry<T>>();
+  const result = new Map<string, ZSetEntry<T>>()
   for (const [key, entry] of zs) {
     if (predicate(entry, key)) {
-      result.set(key, entry);
+      result.set(key, entry)
     }
   }
 
-  if (result.size === 0) return zsetEmpty();
-  if (result.size === zs.size) return zs; // no entries removed
-  return result;
+  if (result.size === 0) return zsetEmpty()
+  if (result.size === zs.size) return zs // no entries removed
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -346,16 +343,16 @@ export function zsetFilter<T>(
  * weights are +1 (e.g., the accumulated active constraint set).
  */
 export function zsetElements<T>(zs: ZSet<T>): T[] {
-  const result: T[] = [];
+  const result: T[] = []
   for (const entry of zs.values()) {
-    result.push(entry.element);
+    result.push(entry.element)
   }
-  return result;
+  return result
 }
 
 /**
  * Collect the keys of a Z-set into an array.
  */
 export function zsetKeys<T>(zs: ZSet<T>): string[] {
-  return Array.from(zs.keys());
+  return Array.from(zs.keys())
 }

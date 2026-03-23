@@ -23,12 +23,11 @@
 //     labels: record<string>
 
 import {
-  isNullableSum,
-  type Schema,
-  type ScalarSchema,
-  type AnnotatedSchema,
   type DiscriminatedSumSchema,
+  isNullableSum,
   type PositionalSumSchema,
+  type ScalarSchema,
+  type Schema,
 } from "./schema.js"
 
 // ---------------------------------------------------------------------------
@@ -93,7 +92,7 @@ function walk(
     case "scalar": {
       const s = schema as ScalarSchema
       if (s.constraint !== undefined && s.constraint.length > 0) {
-        const vals = s.constraint.map((v) => JSON.stringify(v)).join(" | ")
+        const vals = s.constraint.map(v => JSON.stringify(v)).join(" | ")
         lines.push(`${prefix}${lbl}${schema.scalarKind}(${vals})`)
       } else {
         lines.push(`${prefix}${lbl}${schema.scalarKind}`)
@@ -247,7 +246,7 @@ function inlineOrNull(schema: Schema): string | null {
     case "scalar": {
       const s = schema as ScalarSchema
       if (s.constraint !== undefined && s.constraint.length > 0) {
-        const vals = s.constraint.map((v) => JSON.stringify(v)).join(" | ")
+        const vals = s.constraint.map(v => JSON.stringify(v)).join(" | ")
         return `${schema.scalarKind}(${vals})`
       }
       return schema.scalarKind
@@ -287,11 +286,7 @@ function inlineOrNull(schema: Schema): string | null {
  * Renders the children of a schema node. For products, this means each
  * field on its own line. For other nodes, a single unlabeled child.
  */
-function walkChildren(
-  schema: Schema,
-  lines: string[],
-  depth: number,
-): void {
+function walkChildren(schema: Schema, lines: string[], depth: number): void {
   if (schema._kind === "product") {
     for (const key of Object.keys(schema.fields)) {
       walk(schema.fields[key]!, lines, depth, key)

@@ -1,8 +1,13 @@
-import type { LoopNode, ConditionalNode, ContentNode, ChildNode } from "./ir.js"
-import type { FilterMetadata } from "./ir.js"
-import { isDOMProducing } from "./ir.js"
 import { classifyDependencies } from "./classify.js"
-import type { Dependency } from "./ir.js"
+import type {
+  ChildNode,
+  ConditionalNode,
+  ContentNode,
+  Dependency,
+  FilterMetadata,
+  LoopNode,
+} from "./ir.js"
+import { isDOMProducing } from "./ir.js"
 
 /**
  * Detect if a reactive LoopNode body represents a filter pattern.
@@ -24,9 +29,7 @@ import type { Dependency } from "./ir.js"
  * Returning null is always safe — the fallback (listRegion + conditionalRegion)
  * produces correct behavior, just without the subscription precision optimization.
  */
-export function detectFilterPattern(
-  loop: LoopNode,
-): FilterMetadata | null {
+export function detectFilterPattern(loop: LoopNode): FilterMetadata | null {
   // 1. Static loops can't be filters — no reactive subscriptions to optimize
   if (loop.iterableBindingTime !== "reactive") {
     return null
@@ -59,8 +62,8 @@ export function detectFilterPattern(
     loop.iterableSource,
   )
 
-  const itemDeps = classified.filter((d) => d.classification === "item")
-  const externalDeps = classified.filter((d) => d.classification === "external")
+  const itemDeps = classified.filter(d => d.classification === "item")
+  const externalDeps = classified.filter(d => d.classification === "external")
 
   // Must have at least one item-dependent dep — pure external filters
   // have no per-item optimization benefit
@@ -128,7 +131,7 @@ function flattenChainedFilters(conditional: ConditionalNode): ContentNode {
   }
 
   // Build the conjunctive predicate
-  const source = conditions.map((c) => `(${c.source})`).join(" && ")
+  const source = conditions.map(c => `(${c.source})`).join(" && ")
   const depsMap = new Map<string, Dependency>()
   for (const cond of conditions) {
     for (const dep of cond.dependencies) {

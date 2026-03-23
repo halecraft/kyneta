@@ -27,7 +27,7 @@
  * @packageDocumentation
  */
 
-import { type Project, type SourceFile, ts, type Type } from "ts-morph"
+import { type Project, type SourceFile, type Type, ts } from "ts-morph"
 import type { DeltaKind } from "./ir.js"
 
 // =============================================================================
@@ -263,8 +263,6 @@ export function isChangefeedType(type: Type): boolean {
 
   return false
 }
-
-
 
 /**
  * Get the delta kind for a type with a changefeed.

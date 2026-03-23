@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
+  CHANGEFEED,
+  hasChangefeed,
   isNonNullObject,
   isPropertyHost,
-  hasChangefeed,
-  CHANGEFEED,
 } from "../index.js"
 
 // ===========================================================================
@@ -22,7 +22,7 @@ describe("isPropertyHost", () => {
   })
 
   it("returns true for regular functions", () => {
-    expect(isPropertyHost(function () {})).toBe(true)
+    expect(isPropertyHost(() => {})).toBe(true)
   })
 
   it("returns true for arrow functions", () => {
@@ -88,7 +88,7 @@ describe("isNonNullObject (unchanged)", () => {
 
   it("returns false for functions", () => {
     expect(isNonNullObject(() => {})).toBe(false)
-    expect(isNonNullObject(function () {})).toBe(false)
+    expect(isNonNullObject(() => {})).toBe(false)
   })
 
   it("returns false for null", () => {

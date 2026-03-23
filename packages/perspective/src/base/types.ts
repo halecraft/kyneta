@@ -19,7 +19,7 @@
  * In production this is a public key. For testing we use human-readable
  * strings like "alice", "bob".
  */
-export type PeerID = string;
+export type PeerID = string
 
 /**
  * Monotonically increasing per-peer operation counter.
@@ -27,7 +27,7 @@ export type PeerID = string;
  * Must satisfy: `Number.isSafeInteger(x) && x >= 0`.
  * Enforced at Agent construction and store insertion boundaries.
  */
-export type Counter = number;
+export type Counter = number
 
 /**
  * Lamport timestamp for causal ordering.
@@ -35,7 +35,7 @@ export type Counter = number;
  * Must satisfy: `Number.isSafeInteger(x) && x >= 0`.
  * Enforced at Agent construction and store insertion boundaries.
  */
-export type Lamport = number;
+export type Lamport = number
 
 /**
  * Constraint Id — globally unique identifier for a constraint.
@@ -44,8 +44,8 @@ export type Lamport = number;
  * maintains a monotonically increasing counter.
  */
 export interface CnId {
-  readonly peer: PeerID;
-  readonly counter: Counter;
+  readonly peer: PeerID
+  readonly counter: Counter
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ export interface CnId {
  * See unified-engine.md §1 for rationale.
  */
 export function isSafeUint(x: number): boolean {
-  return Number.isSafeInteger(x) && x >= 0;
+  return Number.isSafeInteger(x) && x >= 0
 }
 
 // ---------------------------------------------------------------------------
@@ -88,4 +88,4 @@ export type Value =
   | bigint
   | string
   | Uint8Array
-  | { readonly ref: CnId };
+  | { readonly ref: CnId }

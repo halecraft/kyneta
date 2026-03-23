@@ -29,29 +29,27 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 6.
 // See theory/incremental.md §5.2.
 
-import type {
-  PeerID,
-  Constraint,
-  AuthorityConstraint,
-  Capability,
-  ValidationError,
-} from '../types.js';
-import { cnIdKey } from '../cnid.js';
-import { verify } from '../signature.js';
+import type { ZSet } from "../../base/zset.js"
 import {
+  zsetAdd,
+  zsetEmpty,
+  zsetForEach,
+  zsetSingleton,
+} from "../../base/zset.js"
+import {
+  type AuthorityState,
   computeAuthority,
   hasCapability,
   requiredCapability,
-  capabilityKey,
-  type AuthorityState,
-} from '../authority.js';
-import type { ZSet } from '../../base/zset.js';
-import {
-  zsetEmpty,
-  zsetSingleton,
-  zsetAdd,
-  zsetForEach,
-} from '../../base/zset.js';
+} from "../authority.js"
+import { cnIdKey } from "../cnid.js"
+import { verify } from "../signature.js"
+import type {
+  AuthorityConstraint,
+  Constraint,
+  PeerID,
+  ValidationError,
+} from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Incremental Validity Stage
@@ -82,18 +80,18 @@ export interface IncrementalValidity {
    * - weight +1: constraint became valid
    * - weight −1: constraint became invalid (e.g., authority revocation)
    */
-  step(delta: ZSet<Constraint>): ZSet<Constraint>;
+  step(delta: ZSet<Constraint>): ZSet<Constraint>
 
   /**
    * Return the current accumulated valid constraint set.
    * Equal to computeValid(all constraints seen so far, creator).valid.
    */
-  current(): Constraint[];
+  current(): Constraint[]
 
   /**
    * Reset to empty state.
    */
-  reset(): void;
+  reset(): void
 }
 
 // ---------------------------------------------------------------------------
@@ -111,23 +109,23 @@ export function createIncrementalValidity(
   // --- Persistent state ---
 
   // All constraints seen so far, keyed by CnId key string.
-  let allByKey = new Map<string, Constraint>();
+  let allByKey = new Map<string, Constraint>()
 
   // Accumulated authority constraints (for full replay).
-  let authorityConstraints: AuthorityConstraint[] = [];
+  let authorityConstraints: AuthorityConstraint[] = []
 
   // Current authority state (cached; updated on authority constraint arrival).
-  let authorityState: AuthorityState = computeAuthority([], creator);
+  let authorityState: AuthorityState = computeAuthority([], creator)
 
   // Valid constraint keys.
-  let validKeys = new Set<string>();
+  let validKeys = new Set<string>()
 
   // Invalid constraint keys.
-  let invalidKeys = new Set<string>();
+  let invalidKeys = new Set<string>()
 
   // Per-peer constraint index: PeerID → Set<CnId key>.
   // Tracks all constraints (both valid and invalid) by their asserting peer.
-  let peerIndex = new Map<PeerID, Set<string>>();
+  let peerIndex = new Map<PeerID, Set<string>>()
 
   // --- Internal helpers ---
 
@@ -136,7 +134,7 @@ export function createIncrementalValidity(
    * Stub: always returns true (mirrors batch validity.ts).
    */
   function verifySignature(c: Constraint): boolean {
-    return verify(new Uint8Array(0), c.sig, new Uint8Array(0));
+    return verify(new Uint8Array(0), c.sig, new Uint8Array(0))
   }
 
   /**
@@ -145,53 +143,51 @@ export function createIncrementalValidity(
    *
    * Mirrors the batch `validateConstraint()` in validity.ts.
    */
-  function validateConstraint(
-    c: Constraint,
-  ): ValidationError | null {
+  function validateConstraint(c: Constraint): ValidationError | null {
     // Check 1: Signature verification (stub: always passes)
     if (!verifySignature(c)) {
-      return { kind: 'invalidSignature', constraintId: c.id };
+      return { kind: "invalidSignature", constraintId: c.id }
     }
 
     // Check 2: Capability check
-    const required = requiredCapability(c);
+    const required = requiredCapability(c)
 
     // Some constraint types require no capability (e.g., bookmarks)
     if (required === null) {
-      return null;
+      return null
     }
 
     // Check if the asserting peer has the required capability
     if (!hasCapability(authorityState, c.id.peer, required)) {
-      return { kind: 'missingCapability', constraintId: c.id, required };
+      return { kind: "missingCapability", constraintId: c.id, required }
     }
 
-    return null;
+    return null
   }
 
   /**
    * Add a constraint to the per-peer index.
    */
   function addToPeerIndex(c: Constraint): void {
-    const peer = c.id.peer;
-    let keys = peerIndex.get(peer);
+    const peer = c.id.peer
+    let keys = peerIndex.get(peer)
     if (keys === undefined) {
-      keys = new Set();
-      peerIndex.set(peer, keys);
+      keys = new Set()
+      peerIndex.set(peer, keys)
     }
-    keys.add(cnIdKey(c.id));
+    keys.add(cnIdKey(c.id))
   }
 
   /**
    * Remove a constraint from the per-peer index.
    */
   function removeFromPeerIndex(c: Constraint): void {
-    const peer = c.id.peer;
-    const keys = peerIndex.get(peer);
+    const peer = c.id.peer
+    const keys = peerIndex.get(peer)
     if (keys !== undefined) {
-      keys.delete(cnIdKey(c.id));
+      keys.delete(cnIdKey(c.id))
       if (keys.size === 0) {
-        peerIndex.delete(peer);
+        peerIndex.delete(peer)
       }
     }
   }
@@ -209,29 +205,29 @@ export function createIncrementalValidity(
     oldState: AuthorityState,
     newState: AuthorityState,
   ): Set<PeerID> {
-    const affected = new Set<PeerID>();
+    const affected = new Set<PeerID>()
 
     // Check all peers in the new state
     for (const [peer, newCaps] of newState.effectiveCapabilities) {
-      if (peer === creator) continue; // creator's Admin never changes
+      if (peer === creator) continue // creator's Admin never changes
 
-      const oldCaps = oldState.effectiveCapabilities.get(peer);
+      const oldCaps = oldState.effectiveCapabilities.get(peer)
 
       if (oldCaps === undefined) {
         // Peer is new in the authority state — they might have gained caps
         if (newCaps.size > 0) {
           // But we need to check if it's just the default empty set
           // Actually, if they have caps, they're affected
-          affected.add(peer);
+          affected.add(peer)
         }
-        continue;
+        continue
       }
 
       // Check for added capabilities
       for (const capKey of newCaps) {
         if (!oldCaps.has(capKey)) {
-          affected.add(peer);
-          break;
+          affected.add(peer)
+          break
         }
       }
 
@@ -239,8 +235,8 @@ export function createIncrementalValidity(
       if (!affected.has(peer)) {
         for (const capKey of oldCaps) {
           if (!newCaps.has(capKey)) {
-            affected.add(peer);
-            break;
+            affected.add(peer)
+            break
           }
         }
       }
@@ -249,16 +245,16 @@ export function createIncrementalValidity(
     // Check peers who were in old state but not in new state
     // (they may have lost all capabilities)
     for (const [peer, oldCaps] of oldState.effectiveCapabilities) {
-      if (peer === creator) continue;
-      if (affected.has(peer)) continue;
+      if (peer === creator) continue
+      if (affected.has(peer)) continue
 
-      const newCaps = newState.effectiveCapabilities.get(peer);
+      const newCaps = newState.effectiveCapabilities.get(peer)
       if (newCaps === undefined && oldCaps.size > 0) {
-        affected.add(peer);
+        affected.add(peer)
       }
     }
 
-    return affected;
+    return affected
   }
 
   /**
@@ -266,81 +262,81 @@ export function createIncrementalValidity(
    * Returns a Z-set delta of validity changes.
    */
   function recheckPeers(affectedPeers: Set<PeerID>): ZSet<Constraint> {
-    let delta = zsetEmpty<Constraint>();
+    let delta = zsetEmpty<Constraint>()
 
     for (const peer of affectedPeers) {
-      const keys = peerIndex.get(peer);
-      if (keys === undefined) continue;
+      const keys = peerIndex.get(peer)
+      if (keys === undefined) continue
 
       for (const key of keys) {
-        const c = allByKey.get(key);
-        if (c === undefined) continue;
+        const c = allByKey.get(key)
+        if (c === undefined) continue
 
-        const wasValid = validKeys.has(key);
-        const error = validateConstraint(c);
-        const isNowValid = error === null;
+        const wasValid = validKeys.has(key)
+        const error = validateConstraint(c)
+        const isNowValid = error === null
 
         if (wasValid && !isNowValid) {
           // Was valid, now invalid → emit −1
-          validKeys.delete(key);
-          invalidKeys.add(key);
-          delta = zsetAdd(delta, zsetSingleton(key, c, -1));
+          validKeys.delete(key)
+          invalidKeys.add(key)
+          delta = zsetAdd(delta, zsetSingleton(key, c, -1))
         } else if (!wasValid && isNowValid) {
           // Was invalid, now valid → emit +1
-          invalidKeys.delete(key);
-          validKeys.add(key);
-          delta = zsetAdd(delta, zsetSingleton(key, c, 1));
+          invalidKeys.delete(key)
+          validKeys.add(key)
+          delta = zsetAdd(delta, zsetSingleton(key, c, 1))
         }
         // If status unchanged, no delta
       }
     }
 
-    return delta;
+    return delta
   }
 
   // --- Public interface ---
 
   function step(delta: ZSet<Constraint>): ZSet<Constraint> {
-    if (delta.size === 0) return zsetEmpty();
+    if (delta.size === 0) return zsetEmpty()
 
     // Separate into additions (+1) and removals (−1).
     // Within additions, separate authority from non-authority
     // for two-pass processing.
-    const additionsNonAuthority: Constraint[] = [];
-    const additionsAuthority: AuthorityConstraint[] = [];
-    const removals: Constraint[] = [];
+    const additionsNonAuthority: Constraint[] = []
+    const additionsAuthority: AuthorityConstraint[] = []
+    const removals: Constraint[] = []
 
     zsetForEach(delta, (entry, _key) => {
       if (entry.weight > 0) {
-        if (entry.element.type === 'authority') {
-          additionsAuthority.push(entry.element as AuthorityConstraint);
+        if (entry.element.type === "authority") {
+          additionsAuthority.push(entry.element as AuthorityConstraint)
         } else {
-          additionsNonAuthority.push(entry.element);
+          additionsNonAuthority.push(entry.element)
         }
       } else if (entry.weight < 0) {
-        removals.push(entry.element);
+        removals.push(entry.element)
       }
-    });
+    })
 
-    let result = zsetEmpty<Constraint>();
+    let result = zsetEmpty<Constraint>()
 
     // --- Pass 1: Process non-authority additions ---
     // Validate each against the current (pre-authority-update) state.
     // If an authority constraint arrives in the same delta, we'll
     // recheck these in pass 2.
     for (const c of additionsNonAuthority) {
-      const key = cnIdKey(c.id);
-      if (allByKey.has(key)) continue; // dedup
+      const key = cnIdKey(c.id)
+      if (allByKey.has(key)) continue // dedup
 
-      allByKey.set(key, c);
-      addToPeerIndex(c);
+      allByKey.set(key, c)
+      addToPeerIndex(c)
 
-      const error = validateConstraint(c);
+      const error = validateConstraint(c)
       if (error === null) {
-        validKeys.add(key);
-        result = zsetAdd(result, zsetSingleton(key, c, 1));
+        validKeys.add(key)
+        result = zsetAdd(result, zsetSingleton(key, c, 1))
       } else {
-        invalidKeys.add(key);
+        invalidKeys.add(key)
         // Invalid — no delta emitted (constraint is held in invalid set)
       }
     }
@@ -351,105 +347,105 @@ export function createIncrementalValidity(
     if (additionsAuthority.length > 0) {
       // Add all authority constraints to the accumulated list and index
       for (const ac of additionsAuthority) {
-        const key = cnIdKey(ac.id);
-        if (allByKey.has(key)) continue; // dedup
+        const key = cnIdKey(ac.id)
+        if (allByKey.has(key)) continue // dedup
 
-        allByKey.set(key, ac);
-        addToPeerIndex(ac);
-        authorityConstraints.push(ac);
+        allByKey.set(key, ac)
+        addToPeerIndex(ac)
+        authorityConstraints.push(ac)
       }
 
       // Replay authority state from all accumulated authority constraints
-      const oldState = authorityState;
-      authorityState = computeAuthority(authorityConstraints, creator);
+      const oldState = authorityState
+      authorityState = computeAuthority(authorityConstraints, creator)
 
       // Validate the authority constraints themselves against the NEW state.
       // Authority constraints need Authority(C) capability to be valid.
       for (const ac of additionsAuthority) {
-        const key = cnIdKey(ac.id);
+        const key = cnIdKey(ac.id)
         // Skip if already indexed (dedup case above)
-        if (validKeys.has(key) || invalidKeys.has(key)) continue;
+        if (validKeys.has(key) || invalidKeys.has(key)) continue
 
-        const error = validateConstraint(ac);
+        const error = validateConstraint(ac)
         if (error === null) {
-          validKeys.add(key);
-          result = zsetAdd(result, zsetSingleton(key, ac, 1));
+          validKeys.add(key)
+          result = zsetAdd(result, zsetSingleton(key, ac, 1))
         } else {
-          invalidKeys.add(key);
+          invalidKeys.add(key)
         }
       }
 
       // Diff old vs new authority state to find affected peers
-      const affectedPeers = diffAuthorityStates(oldState, authorityState);
+      const affectedPeers = diffAuthorityStates(oldState, authorityState)
 
       // Re-check all constraints for affected peers.
       // This also re-checks non-authority constraints we added in pass 1
       // that might now have different validity due to the authority change.
       if (affectedPeers.size > 0) {
-        const recheckDelta = recheckPeers(affectedPeers);
-        result = zsetAdd(result, recheckDelta);
+        const recheckDelta = recheckPeers(affectedPeers)
+        result = zsetAdd(result, recheckDelta)
       }
     }
 
     // --- Pass 3: Process removals (weight −1) ---
     for (const c of removals) {
-      const key = cnIdKey(c.id);
-      if (!allByKey.has(key)) continue; // not present
+      const key = cnIdKey(c.id)
+      if (!allByKey.has(key)) continue // not present
 
-      const wasValid = validKeys.has(key);
+      const wasValid = validKeys.has(key)
 
       // Remove from all indexes
-      allByKey.delete(key);
-      removeFromPeerIndex(c);
-      validKeys.delete(key);
-      invalidKeys.delete(key);
+      allByKey.delete(key)
+      removeFromPeerIndex(c)
+      validKeys.delete(key)
+      invalidKeys.delete(key)
 
       // If it was an authority constraint, remove from authority list
       // and replay
-      if (c.type === 'authority') {
+      if (c.type === "authority") {
         authorityConstraints = authorityConstraints.filter(
-          (ac) => cnIdKey(ac.id) !== key,
-        );
+          ac => cnIdKey(ac.id) !== key,
+        )
 
-        const oldState = authorityState;
-        authorityState = computeAuthority(authorityConstraints, creator);
+        const oldState = authorityState
+        authorityState = computeAuthority(authorityConstraints, creator)
 
         // Diff and recheck
-        const affectedPeers = diffAuthorityStates(oldState, authorityState);
+        const affectedPeers = diffAuthorityStates(oldState, authorityState)
         if (affectedPeers.size > 0) {
-          const recheckDelta = recheckPeers(affectedPeers);
-          result = zsetAdd(result, recheckDelta);
+          const recheckDelta = recheckPeers(affectedPeers)
+          result = zsetAdd(result, recheckDelta)
         }
       }
 
       // If it was valid, emit −1
       if (wasValid) {
-        result = zsetAdd(result, zsetSingleton(key, c, -1));
+        result = zsetAdd(result, zsetSingleton(key, c, -1))
       }
     }
 
-    return result;
+    return result
   }
 
   function current(): Constraint[] {
-    const result: Constraint[] = [];
+    const result: Constraint[] = []
     for (const key of validKeys) {
-      const c = allByKey.get(key);
+      const c = allByKey.get(key)
       if (c !== undefined) {
-        result.push(c);
+        result.push(c)
       }
     }
-    return result;
+    return result
   }
 
   function reset(): void {
-    allByKey = new Map();
-    authorityConstraints = [];
-    authorityState = computeAuthority([], creator);
-    validKeys = new Set();
-    invalidKeys = new Set();
-    peerIndex = new Map();
+    allByKey = new Map()
+    authorityConstraints = []
+    authorityState = computeAuthority([], creator)
+    validKeys = new Set()
+    invalidKeys = new Set()
+    peerIndex = new Map()
   }
 
-  return { step, current, reset };
+  return { step, current, reset }
 }

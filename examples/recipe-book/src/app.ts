@@ -34,11 +34,11 @@
 // Module organization mirrors a real app: schema types, facade functions,
 // framework primitives, and component modules each have their own import.
 
-import type { RecipeBookDoc } from "./types.js"
 import { state } from "@kyneta/core"
-import { change } from "./facade.js"
 import { RecipeCard } from "./components/recipe-card.js"
 import { Toolbar } from "./components/toolbar.js"
+import { change } from "./facade.js"
+import type { RecipeBookDoc } from "./types.js"
 
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -126,9 +126,9 @@ export function createApp(doc: RecipeBookDoc) {
         // by vegetarian status. Bare ref access — the compiler's
         // ExpressionIR inserts `()` reads automatically where
         // changefeed values cross into the value world.
-        const nameMatch = recipe.name.toLowerCase().includes(
-          filterText.toLowerCase(),
-        )
+        const nameMatch = recipe.name
+          .toLowerCase()
+          .includes(filterText.toLowerCase())
         const veggieMatch = !veggieOnly || recipe.vegetarian
 
         if (nameMatch && veggieMatch) {
@@ -158,7 +158,10 @@ export function createApp(doc: RecipeBookDoc) {
       // a helpful message. The compiler detects the reactive condition
       // and emits conditionalRegion.
       if (doc.recipes.length === 0) {
-        p({ class: "empty-state" }, "No recipes yet. Click \"+ New Recipe\" to get started!")
+        p(
+          { class: "empty-state" },
+          'No recipes yet. Click "+ New Recipe" to get started!',
+        )
       }
     })
   })

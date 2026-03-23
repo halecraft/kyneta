@@ -3,75 +3,45 @@
 // This barrel re-exports the three core modules that make up the
 // schema interpreter algebra spike.
 
-// Schema — unified recursive grammar (backend-agnostic)
-export {
-  Schema,
-  structuralKind,
-  isAnnotated,
-  isNullableSum,
-  unwrapAnnotation,
-  buildVariantMap,
-} from "./schema.js"
-// LoroSchema — Loro-specific annotations + composition constraints
-export { LoroSchema } from "./loro-schema.js"
-export { describe } from "./describe.js"
-export type {
-  // The recursive union
-  Schema as SchemaNode,
-  // Structural kinds
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
-  PositionalSumSchema,
-  DiscriminatedSumSchema,
-  AnnotatedSchema,
-  // Plain subset (no annotations) — used by LoroSchema.plain.* constraints
-  PlainSchema,
-  PlainProductSchema,
-  PlainSequenceSchema,
-  PlainMapSchema,
-  PlainPositionalSumSchema,
-  PlainDiscriminatedSumSchema,
-  // Scalar kinds
-  ScalarKind,
-  ScalarPlain,
-} from "./schema.js"
-
 // Change types — the universal currency of change
 export type {
-  ChangeBase,
-  Change,
   BuiltinChange,
-  TextChange,
-  TextInstruction,
-  SequenceChange,
-  SequenceInstruction,
+  Change,
+  ChangeBase,
+  IncrementChange,
   MapChange,
   ReplaceChange,
+  SequenceChange,
+  SequenceInstruction,
+  TextChange,
+  TextInstruction,
   TreeChange,
   TreeInstruction,
-  IncrementChange,
 } from "./change.js"
-
 export {
-  // Type guards
-  isTextChange,
-  isSequenceChange,
+  incrementChange,
+  isIncrementChange,
   isMapChange,
   isReplaceChange,
+  isSequenceChange,
+  // Type guards
+  isTextChange,
   isTreeChange,
-  isIncrementChange,
-  // Constructors
-  textChange,
-  sequenceChange,
   mapChange,
   replaceChange,
+  sequenceChange,
+  // Constructors
+  textChange,
   treeChange,
-  incrementChange,
 } from "./change.js"
-
+export type {
+  Changefeed,
+  Changeset,
+  ComposedChangefeed,
+  HasChangefeed,
+  HasComposedChangefeed,
+  Op,
+} from "./changefeed.js"
 // Changefeed — the unified reactive protocol
 export {
   CHANGEFEED,
@@ -80,168 +50,188 @@ export {
   hasComposedChangefeed,
   staticChangefeed,
 } from "./changefeed.js"
-export type {
-  Op,
-  Changeset,
-  Changefeed,
-  ComposedChangefeed,
-  HasChangefeed,
-  HasComposedChangefeed,
-} from "./changefeed.js"
-
-// Step — pure state transitions: (State, Change) → State
-export {
-  step,
-  stepText,
-  stepSequence,
-  stepMap,
-  stepReplace,
-  stepIncrement,
-} from "./step.js"
-
-// Zero — default values separated from the schema
-export { Zero, scalarDefault } from "./zero.js"
-
-// interpret — the generic catamorphism over the schema functor
-export { interpret, createInterpreter } from "./interpret.js"
-export type {
-  Interpreter,
-  InterpreterLayer,
-  InterpretBuilder,
-  Path,
-  PathSegment,
-  SumVariants,
-  ReadableBrand,
-  WritableBrand,
-  ChangefeedBrand,
-  Resolve,
-  ResolveCarrier,
-} from "./interpret.js"
-
-// Pre-built interpreter layers for fluent composition
-export { navigation, readable, writable, changefeed } from "./layers.js"
-
+export type { MergeFn } from "./combinators.js"
+// Interpreter composition combinators
+export { firstDefined, overlay, product } from "./combinators.js"
+export { describe } from "./describe.js"
+export type { ApplyChangesOptions } from "./facade.js"
+// Facade — library-level change capture and declarative application
+export { applyChanges, change, subscribe, subscribeNode } from "./facade.js"
 // Guards — shared type-narrowing utilities
 export { isNonNullObject, isPropertyHost } from "./guards.js"
-
-// Store — shared utilities for reading/writing plain JS object stores
-export {
-  readByPath,
-  writeByPath,
-  applyChangeToStore,
-  dispatchSum,
-  pathKey,
-  storeArrayLength,
-  storeKeys,
-  storeHasKey,
-} from "./store.js"
-export type { Store } from "./store.js"
-
-// Built-in interpreters
-export { plainInterpreter } from "./interpreters/plain.js"
-
-// Bottom interpreter — universal foundation and capability lattice
-export {
-  CALL,
-  makeCarrier,
-  bottomInterpreter,
-} from "./interpreters/bottom.js"
 export type {
+  ChangefeedBrand,
+  InterpretBuilder,
+  Interpreter,
+  InterpreterLayer,
+  Path,
+  PathSegment,
+  ReadableBrand,
+  Resolve,
+  ResolveCarrier,
+  SumVariants,
+  WritableBrand,
+} from "./interpret.js"
+// interpret — the generic catamorphism over the schema functor
+export { createInterpreter, interpret } from "./interpret.js"
+// Shared interpreter types (canonical location)
+export type { Plain, RefContext, Seed } from "./interpreter-types.js"
+export type {
+  HasCaching,
   HasCall,
   HasNavigation,
   HasRead,
-  HasCaching,
 } from "./interpreters/bottom.js"
-
+// Bottom interpreter — universal foundation and capability lattice
+export {
+  bottomInterpreter,
+  CALL,
+  makeCarrier,
+} from "./interpreters/bottom.js"
 // Navigable type interfaces — navigation-only collection refs
 export type {
-  NavigableSequenceRef,
   NavigableMapRef,
+  NavigableSequenceRef,
 } from "./interpreters/navigable.js"
 
-// withNavigation — structural navigation (coalgebraic addressing, no reading)
-export { withNavigation } from "./interpreters/with-navigation.js"
-
-// withReadable — refinement transformer (reading only, requires navigation)
-export { withReadable } from "./interpreters/with-readable.js"
-
-// withCaching — interposition transformer (identity-preserving caching + INVALIDATE)
-export {
-  withCaching,
-  INVALIDATE,
-  planCacheUpdate,
-  applyCacheOps,
-} from "./interpreters/with-caching.js"
-export type { CacheInstruction } from "./interpreters/with-caching.js"
-
+// Built-in interpreters
+export { plainInterpreter } from "./interpreters/plain.js"
 // Readable types — type-level interpretation for readable refs
 // (The monolithic readableInterpreter is removed; use
 // withCaching(withReadable(bottomInterpreter)) instead.)
 export type {
   Readable,
-  ReadableSequenceRef,
   ReadableMapRef,
+  ReadableSequenceRef,
 } from "./interpreters/readable.js"
-export {
-  withWritable,
-  buildWritableContext,
-  executeBatch,
-  TRANSACT,
-  hasTransact,
-} from "./interpreters/writable.js"
-export type {
-  WritableContext,
-  HasTransact,
-  ScalarRef,
-  TextRef,
-  CounterRef,
-  SequenceRef,
-  ProductRef,
-  WritableMapRef,
-  Writable,
-} from "./interpreters/writable.js"
-
-// Ref tier types — parameterized recursive refs for composed interpreter stacks
-export type { SchemaRef, RefMode, Wrap, RRef, RWRef, Ref, WithTransact } from "./ref.js"
-
-// Substrate — state management, versioning, and transfer semantics
-export type {
-  SubstratePrepare,
-  Frontier,
-  Substrate,
-  SubstratePayload,
-  SubstrateFactory,
-} from "./substrate.js"
-
-// Plain substrate — plain JS object store with version tracking
-export { createPlainSubstrate, plainContext, PlainFrontier, plainSubstrateFactory } from "./substrates/plain.js"
-
-// Shared interpreter types (canonical location)
-export type { RefContext, Plain, Seed } from "./interpreter-types.js"
-
+export type { ValidateContext } from "./interpreters/validate.js"
 // Validate interpreter — schema-driven validation with collecting errors
 export {
-  validateInterpreter,
-  validate,
-  tryValidate,
-  SchemaValidationError,
   formatPath,
+  SchemaValidationError,
+  tryValidate,
+  validate,
+  validateInterpreter,
 } from "./interpreters/validate.js"
-export type { ValidateContext } from "./interpreters/validate.js"
-
+export type { CacheInstruction } from "./interpreters/with-caching.js"
+// withCaching — interposition transformer (identity-preserving caching + INVALIDATE)
+export {
+  applyCacheOps,
+  INVALIDATE,
+  planCacheUpdate,
+  withCaching,
+} from "./interpreters/with-caching.js"
+export type { NotificationPlan } from "./interpreters/with-changefeed.js"
 // Changefeed interpreter transformer — compositional observation layer
 export {
-  withChangefeed,
   attachChangefeed,
-  planNotifications,
   deliverNotifications,
+  planNotifications,
+  withChangefeed,
 } from "./interpreters/with-changefeed.js"
-export type { NotificationPlan } from "./interpreters/with-changefeed.js"
-
-// Facade — library-level change capture and declarative application
-export { change, applyChanges, subscribe, subscribeNode } from "./facade.js"
-export type { ApplyChangesOptions } from "./facade.js"
-
-// Interpreter composition combinators
-export { product, overlay, firstDefined } from "./combinators.js"
-export type { MergeFn } from "./combinators.js"
+// withNavigation — structural navigation (coalgebraic addressing, no reading)
+export { withNavigation } from "./interpreters/with-navigation.js"
+// withReadable — refinement transformer (reading only, requires navigation)
+export { withReadable } from "./interpreters/with-readable.js"
+export type {
+  CounterRef,
+  HasTransact,
+  ProductRef,
+  ScalarRef,
+  SequenceRef,
+  TextRef,
+  Writable,
+  WritableContext,
+  WritableMapRef,
+} from "./interpreters/writable.js"
+export {
+  buildWritableContext,
+  executeBatch,
+  hasTransact,
+  TRANSACT,
+  withWritable,
+} from "./interpreters/writable.js"
+// Pre-built interpreter layers for fluent composition
+export { changefeed, navigation, readable, writable } from "./layers.js"
+// LoroSchema — Loro-specific annotations + composition constraints
+export { LoroSchema } from "./loro-schema.js"
+// Ref tier types — parameterized recursive refs for composed interpreter stacks
+export type {
+  Ref,
+  RefMode,
+  RRef,
+  RWRef,
+  SchemaRef,
+  WithTransact,
+  Wrap,
+} from "./ref.js"
+export type {
+  AnnotatedSchema,
+  DiscriminatedSumSchema,
+  MapSchema,
+  PlainDiscriminatedSumSchema,
+  PlainMapSchema,
+  PlainPositionalSumSchema,
+  PlainProductSchema,
+  // Plain subset (no annotations) — used by LoroSchema.plain.* constraints
+  PlainSchema,
+  PlainSequenceSchema,
+  PositionalSumSchema,
+  ProductSchema,
+  // Scalar kinds
+  ScalarKind,
+  ScalarPlain,
+  // Structural kinds
+  ScalarSchema,
+  // The recursive union
+  Schema as SchemaNode,
+  SequenceSchema,
+  SumSchema,
+} from "./schema.js"
+// Schema — unified recursive grammar (backend-agnostic)
+export {
+  buildVariantMap,
+  isAnnotated,
+  isNullableSum,
+  Schema,
+  structuralKind,
+  unwrapAnnotation,
+} from "./schema.js"
+// Step — pure state transitions: (State, Change) → State
+export {
+  step,
+  stepIncrement,
+  stepMap,
+  stepReplace,
+  stepSequence,
+  stepText,
+} from "./step.js"
+export type { Store } from "./store.js"
+// Store — shared utilities for reading/writing plain JS object stores
+export {
+  applyChangeToStore,
+  dispatchSum,
+  pathKey,
+  readByPath,
+  storeArrayLength,
+  storeHasKey,
+  storeKeys,
+  writeByPath,
+} from "./store.js"
+// Substrate — state management, versioning, and transfer semantics
+export type {
+  Frontier,
+  Substrate,
+  SubstrateFactory,
+  SubstratePayload,
+  SubstratePrepare,
+} from "./substrate.js"
+// Plain substrate — plain JS object store with version tracking
+export {
+  createPlainSubstrate,
+  PlainFrontier,
+  plainContext,
+  plainSubstrateFactory,
+} from "./substrates/plain.js"
+// Zero — default values separated from the schema
+export { scalarDefault, Zero } from "./zero.js"

@@ -14,7 +14,18 @@
  * @packageDocumentation
  */
 
-import { type CallExpression, type SourceFile } from "ts-morph"
+import type { BuilderNode, ChildNode } from "@kyneta/compiler"
+import {
+  analyzeAllBuilders,
+  isInputTextRegionAttribute,
+  isTextRegionContent,
+  parseSource,
+} from "@kyneta/compiler"
+import {
+  dissolveConditionals,
+  filterTargetBlocks,
+} from "@kyneta/compiler/transforms"
+import type { SourceFile } from "ts-morph"
 import { CompilerError, KynetaErrorCode } from "../errors.js"
 import {
   generateElementFactory,
@@ -25,18 +36,6 @@ import {
   generateHTML,
   generateRenderFunction,
 } from "./codegen/html.js"
-import {
-  dissolveConditionals,
-  filterTargetBlocks,
-} from "@kyneta/compiler/transforms"
-import {
-  analyzeAllBuilders,
-  isInputTextRegionAttribute,
-  isTextRegionContent,
-  parseSource,
-  resetProject,
-} from "@kyneta/compiler"
-import type { BuilderNode, ChildNode } from "@kyneta/compiler"
 
 // =============================================================================
 // Types
@@ -189,7 +188,10 @@ export function collectRequiredImports(ir: BuilderNode[]): {
       } else if (child.kind === "content") {
         if (isTextRegionContent(child)) {
           runtime.add("textRegion")
-        } else if (child.bindingTime === "reactive" && child.dependencies.length > 0) {
+        } else if (
+          child.bindingTime === "reactive" &&
+          child.dependencies.length > 0
+        ) {
           // Non-textRegion reactive content uses valueRegion
           runtime.add("valueRegion")
         }
@@ -324,7 +326,6 @@ export function mergeImports(
  * @param filename - Filename for error messages
  * @returns Array of { call, ir } pairs
  */
-
 
 // =============================================================================
 // In-Place Transformation (Imperative Shell)

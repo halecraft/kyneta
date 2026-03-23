@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { detectFilterPattern } from "./patterns.js"
-import type { ChildNode, ConditionalNode, Dependency, LoopNode, SourceSpan } from "./ir.js"
+import type {
+  ChildNode,
+  ConditionalNode,
+  Dependency,
+  LoopNode,
+  SourceSpan,
+} from "./ir.js"
 import {
   createBinding,
   createConditional,
@@ -11,6 +16,7 @@ import {
   createLoop,
   createSpan,
 } from "./ir.js"
+import { detectFilterPattern } from "./patterns.js"
 
 // =============================================================================
 // Helpers
@@ -20,7 +26,10 @@ function span(): SourceSpan {
   return createSpan(1, 1, 1, 1)
 }
 
-function dep(source: string, deltaKind: Dependency["deltaKind"] = "replace"): Dependency {
+function dep(
+  source: string,
+  deltaKind: Dependency["deltaKind"] = "replace",
+): Dependency {
   return { source, deltaKind }
 }
 
@@ -34,10 +43,7 @@ function reactiveCond(
   return createConditional([branch], deps[0] ?? dep("unknown"), span())
 }
 
-function renderCond(
-  source: string,
-  body: ChildNode[],
-): ConditionalNode {
+function renderCond(source: string, body: ChildNode[]): ConditionalNode {
   const condition = createContent(source, "render", [], span())
   const branch = createConditionalBranch(condition, body, span())
   return createConditional([branch], null, span())
@@ -58,7 +64,7 @@ function reactiveCondWithElse(
 function reactiveCondElseIf(
   conditions: Array<{ source: string; deps: Dependency[]; body: ChildNode[] }>,
 ): ConditionalNode {
-  const branches = conditions.map((c) =>
+  const branches = conditions.map(c =>
     createConditionalBranch(
       c.source === "__else__"
         ? null
@@ -73,7 +79,7 @@ function reactiveCondElseIf(
 
 /** A simple DOM element for use as loop body content */
 function li(...textArgs: string[]): ChildNode {
-  const children: ChildNode[] = textArgs.map((t) => createLiteral(t, span()))
+  const children: ChildNode[] = textArgs.map(t => createLiteral(t, span()))
   return createElement("li", [], [], children, [], span())
 }
 
@@ -84,7 +90,15 @@ function reactiveLoop(
   loopDeps?: Dependency[],
 ): LoopNode {
   const deps = loopDeps ?? [dep(iterableSource, "sequence")]
-  return createLoop(iterableSource, "reactive", itemVariable, null, body, deps, span())
+  return createLoop(
+    iterableSource,
+    "reactive",
+    itemVariable,
+    null,
+    body,
+    deps,
+    span(),
+  )
 }
 
 function renderLoop(
@@ -92,11 +106,28 @@ function renderLoop(
   itemVariable: string,
   body: ChildNode[],
 ): LoopNode {
-  return createLoop(iterableSource, "render", itemVariable, null, body, [], span())
+  return createLoop(
+    iterableSource,
+    "render",
+    itemVariable,
+    null,
+    body,
+    [],
+    span(),
+  )
 }
 
 function binding(name: string, source: string, deps: Dependency[]): ChildNode {
-  return createBinding(name, createContent(source, deps.length > 0 ? "reactive" : "render", deps, span()), span())
+  return createBinding(
+    name,
+    createContent(
+      source,
+      deps.length > 0 ? "reactive" : "render",
+      deps,
+      span(),
+    ),
+    span(),
+  )
 }
 
 // =============================================================================
@@ -112,16 +143,20 @@ describe("detectFilterPattern", () => {
     it("Test 1 — simple filter detected", () => {
       // for (const item of list) { if (item.active()) { li(item.name()) } }
       const loop = reactiveLoop("list", "item", [
-        reactiveCond("item.active()", [dep("item.active")], [li("item.name()")]),
+        reactiveCond(
+          "item.active()",
+          [dep("item.active")],
+          [li("item.name()")],
+        ),
       ])
 
       const result = detectFilterPattern(loop)
 
       expect(result).not.toBeNull()
-      expect(result!.itemDeps).toHaveLength(1)
-      expect(result!.itemDeps[0].source).toBe("item.active")
-      expect(result!.itemDeps[0].classification).toBe("item")
-      expect(result!.externalDeps).toHaveLength(0)
+      expect(result?.itemDeps).toHaveLength(1)
+      expect(result?.itemDeps[0].source).toBe("item.active")
+      expect(result?.itemDeps[0].classification).toBe("item")
+      expect(result?.externalDeps).toHaveLength(0)
     })
 
     it("Test 2 — filter with external dep detected", () => {
@@ -137,10 +172,10 @@ describe("detectFilterPattern", () => {
       const result = detectFilterPattern(loop)
 
       expect(result).not.toBeNull()
-      expect(result!.itemDeps).toHaveLength(1)
-      expect(result!.itemDeps[0].source).toBe("item.name")
-      expect(result!.externalDeps).toHaveLength(1)
-      expect(result!.externalDeps[0].source).toBe("search")
+      expect(result?.itemDeps).toHaveLength(1)
+      expect(result?.itemDeps[0].source).toBe("item.name")
+      expect(result?.externalDeps).toHaveLength(1)
+      expect(result?.externalDeps[0].source).toBe("search")
     })
 
     it("Test 3 — filter with bindings detected", () => {
@@ -150,7 +185,10 @@ describe("detectFilterPattern", () => {
       // }
       // After analysis, the condition's deps are already [item.name, search] (flattened)
       const loop = reactiveLoop("list", "item", [
-        binding("match", "item.name().includes(search())", [dep("item.name", "text"), dep("search", "text")]),
+        binding("match", "item.name().includes(search())", [
+          dep("item.name", "text"),
+          dep("search", "text"),
+        ]),
         reactiveCond(
           "match",
           [dep("item.name", "text"), dep("search", "text")],
@@ -161,10 +199,10 @@ describe("detectFilterPattern", () => {
       const result = detectFilterPattern(loop)
 
       expect(result).not.toBeNull()
-      expect(result!.itemDeps).toHaveLength(1)
-      expect(result!.itemDeps[0].source).toBe("item.name")
-      expect(result!.externalDeps).toHaveLength(1)
-      expect(result!.externalDeps[0].source).toBe("search")
+      expect(result?.itemDeps).toHaveLength(1)
+      expect(result?.itemDeps[0].source).toBe("item.name")
+      expect(result?.externalDeps).toHaveLength(1)
+      expect(result?.externalDeps[0].source).toBe("search")
     })
 
     it("Test 4 — chained filters flatten to single predicate", () => {
@@ -198,14 +236,18 @@ describe("detectFilterPattern", () => {
 
       expect(result).not.toBeNull()
       // Predicate is conjunction of all three
-      expect(result!.predicate.source).toBe(
+      expect(result?.predicate.source).toBe(
         "(recipe.name().includes(searchText())) && (!veggieOnly() || recipe.vegetarian()) && (recipe.ingredients.length > 0)",
       )
       // Item deps
-      const itemSources = result!.itemDeps.map((d) => d.source).sort()
-      expect(itemSources).toEqual(["recipe.ingredients", "recipe.name", "recipe.vegetarian"])
+      const itemSources = result?.itemDeps.map(d => d.source).sort()
+      expect(itemSources).toEqual([
+        "recipe.ingredients",
+        "recipe.name",
+        "recipe.vegetarian",
+      ])
       // External deps
-      const extSources = result!.externalDeps.map((d) => d.source).sort()
+      const extSources = result?.externalDeps.map(d => d.source).sort()
       expect(extSources).toEqual(["searchText", "veggieOnly"])
     })
 
@@ -224,10 +266,10 @@ describe("detectFilterPattern", () => {
       const result = detectFilterPattern(loop)
 
       expect(result).not.toBeNull()
-      expect(result!.itemDeps).toHaveLength(1)
-      expect(result!.itemDeps[0].source).toBe("recipe.id")
-      expect(result!.externalDeps).toHaveLength(1)
-      expect(result!.externalDeps[0].source).toBe("doc.favorites")
+      expect(result?.itemDeps).toHaveLength(1)
+      expect(result?.itemDeps[0].source).toBe("recipe.id")
+      expect(result?.externalDeps).toHaveLength(1)
+      expect(result?.externalDeps[0].source).toBe("doc.favorites")
     })
 
     it("Test 6 — self-mutation pattern", () => {
@@ -245,9 +287,9 @@ describe("detectFilterPattern", () => {
       const result = detectFilterPattern(loop)
 
       expect(result).not.toBeNull()
-      expect(result!.itemDeps).toHaveLength(1)
-      expect(result!.itemDeps[0].source).toBe("task.completed")
-      expect(result!.externalDeps).toHaveLength(0)
+      expect(result?.itemDeps).toHaveLength(1)
+      expect(result?.itemDeps[0].source).toBe("task.completed")
+      expect(result?.externalDeps).toHaveLength(0)
     })
   })
 
@@ -279,8 +321,19 @@ describe("detectFilterPattern", () => {
       //   if (pred) { li(...) }
       // }
       const loop = reactiveLoop("list", "item", [
-        createElement("p", [], [], [createLiteral("header", span())], [], span()),
-        reactiveCond("item.active()", [dep("item.active")], [li("item.name()")]),
+        createElement(
+          "p",
+          [],
+          [],
+          [createLiteral("header", span())],
+          [],
+          span(),
+        ),
+        reactiveCond(
+          "item.active()",
+          [dep("item.active")],
+          [li("item.name()")],
+        ),
       ])
 
       const result = detectFilterPattern(loop)
@@ -360,21 +413,39 @@ describe("detectFilterPattern", () => {
       // }
       // After analysis: condition deps are [recipe.name, filterText] (flattened through binding)
       const loop = reactiveLoop("doc.recipes", "recipe", [
-        binding("displayName", "recipe.name().toUpperCase()", [dep("recipe.name", "text")]),
+        binding("displayName", "recipe.name().toUpperCase()", [
+          dep("recipe.name", "text"),
+        ]),
         reactiveCond(
           "displayName.includes(filterText().toUpperCase())",
           [dep("recipe.name", "text"), dep("filterText", "text")],
-          [createElement("p", [], [], [createContent("displayName", "reactive", [dep("recipe.name", "text")], span())], [], span())],
+          [
+            createElement(
+              "p",
+              [],
+              [],
+              [
+                createContent(
+                  "displayName",
+                  "reactive",
+                  [dep("recipe.name", "text")],
+                  span(),
+                ),
+              ],
+              [],
+              span(),
+            ),
+          ],
         ),
       ])
 
       const result = detectFilterPattern(loop)
 
       expect(result).not.toBeNull()
-      expect(result!.itemDeps).toHaveLength(1)
-      expect(result!.itemDeps[0].source).toBe("recipe.name")
-      expect(result!.externalDeps).toHaveLength(1)
-      expect(result!.externalDeps[0].source).toBe("filterText")
+      expect(result?.itemDeps).toHaveLength(1)
+      expect(result?.itemDeps[0].source).toBe("recipe.name")
+      expect(result?.externalDeps).toHaveLength(1)
+      expect(result?.externalDeps[0].source).toBe("filterText")
     })
 
     it("Test 14 — recipe-book compound filter (the motivating example)", () => {
@@ -385,17 +456,23 @@ describe("detectFilterPattern", () => {
       // }
       // After analysis: condition deps are [recipe.name, filterText, veggieOnly, recipe.vegetarian]
       const loop = reactiveLoop("doc.recipes", "recipe", [
-        binding("nameMatch", "recipe.name().toLowerCase().includes(filterText().toLowerCase())", [
-          dep("recipe.name", "text"),
-          dep("filterText", "text"),
-        ]),
+        binding(
+          "nameMatch",
+          "recipe.name().toLowerCase().includes(filterText().toLowerCase())",
+          [dep("recipe.name", "text"), dep("filterText", "text")],
+        ),
         binding("veggieMatch", "!veggieOnly() || recipe.vegetarian()", [
           dep("veggieOnly"),
           dep("recipe.vegetarian"),
         ]),
         reactiveCond(
           "nameMatch && veggieMatch",
-          [dep("recipe.name", "text"), dep("filterText", "text"), dep("veggieOnly"), dep("recipe.vegetarian")],
+          [
+            dep("recipe.name", "text"),
+            dep("filterText", "text"),
+            dep("veggieOnly"),
+            dep("recipe.vegetarian"),
+          ],
           [li("RecipeCard")],
         ),
       ])
@@ -404,10 +481,10 @@ describe("detectFilterPattern", () => {
 
       expect(result).not.toBeNull()
 
-      const itemSources = result!.itemDeps.map((d) => d.source).sort()
+      const itemSources = result?.itemDeps.map(d => d.source).sort()
       expect(itemSources).toEqual(["recipe.name", "recipe.vegetarian"])
 
-      const extSources = result!.externalDeps.map((d) => d.source).sort()
+      const extSources = result?.externalDeps.map(d => d.source).sort()
       expect(extSources).toEqual(["filterText", "veggieOnly"])
     })
   })
@@ -445,7 +522,7 @@ describe("detectFilterPattern", () => {
       const result = detectFilterPattern(loop)
 
       expect(result).not.toBeNull()
-      expect(result!.predicate.bindingTime).toBe("reactive")
+      expect(result?.predicate.bindingTime).toBe("reactive")
     })
 
     it("chained filter deduplicates dependencies", () => {
@@ -467,10 +544,12 @@ describe("detectFilterPattern", () => {
       expect(result).not.toBeNull()
       // recipe.name should appear only once (deduplicated)
       const allSources = [
-        ...result!.itemDeps.map((d) => d.source),
-        ...result!.externalDeps.map((d) => d.source),
+        // biome-ignore lint/style/noNonNullAssertion: asserted non-null above
+        ...result!.itemDeps.map(d => d.source),
+        // biome-ignore lint/style/noNonNullAssertion: asserted non-null above
+        ...result!.externalDeps.map(d => d.source),
       ]
-      const recipeName = allSources.filter((s) => s === "recipe.name")
+      const recipeName = allSources.filter(s => s === "recipe.name")
       expect(recipeName).toHaveLength(1)
     })
 
@@ -487,9 +566,9 @@ describe("detectFilterPattern", () => {
       const result = detectFilterPattern(loop)
 
       expect(result).not.toBeNull()
-      expect(result!.itemDeps).toHaveLength(1)
-      expect(result!.itemDeps[0].source).toBe("recipe.active")
-      expect(result!.externalDeps).toHaveLength(0)
+      expect(result?.itemDeps).toHaveLength(1)
+      expect(result?.itemDeps[0].source).toBe("recipe.active")
+      expect(result?.externalDeps).toHaveLength(0)
       // structural deps are classified but not in itemDeps or externalDeps
     })
   })

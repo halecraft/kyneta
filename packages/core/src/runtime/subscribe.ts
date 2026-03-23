@@ -13,10 +13,10 @@
 
 import {
   CHANGEFEED,
-  hasChangefeed,
   type ChangeBase,
   type Changeset,
   type HasChangefeed,
+  hasChangefeed,
 } from "@kyneta/schema"
 import type { Scope } from "./scope.js"
 

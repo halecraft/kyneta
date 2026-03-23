@@ -26,28 +26,32 @@
 //
 // See .plans/navigation-layer.md §Phase 3, Task 3.3.
 
-import type {
-  Schema,
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  AnnotatedSchema,
-  PositionalSumSchema,
-  DiscriminatedSumSchema,
-} from "./schema.js"
+import type { HasChangefeed } from "./changefeed.js"
 import type { Plain } from "./interpreter-types.js"
-import type { Readable, ReadableSequenceRef, ReadableMapRef } from "./interpreters/readable.js"
 import type {
-  HasTransact,
-  ScalarRef,
-  TextRef,
+  Readable,
+  ReadableMapRef,
+  ReadableSequenceRef,
+} from "./interpreters/readable.js"
+import type {
   CounterRef,
-  SequenceRef,
+  HasTransact,
   ProductRef,
+  ScalarRef,
+  SequenceRef,
+  TextRef,
   WritableMapRef,
 } from "./interpreters/writable.js"
-import type { HasChangefeed } from "./changefeed.js"
+import type {
+  AnnotatedSchema,
+  DiscriminatedSumSchema,
+  MapSchema,
+  PositionalSumSchema,
+  ProductSchema,
+  ScalarSchema,
+  Schema,
+  SequenceSchema,
+} from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // RefMode — the mode parameter for SchemaRef
@@ -76,10 +80,9 @@ export type RefMode = "rw" | "rwc"
  * `SchemaRef` is wrapped through `Wrap<T, M>`, so adding a new concern
  * here propagates recursively to all nodes.
  */
-export type Wrap<T, M extends RefMode> =
-  M extends "rwc"
-    ? T & HasTransact & HasChangefeed
-    : T & HasTransact
+export type Wrap<T, M extends RefMode> = M extends "rwc"
+  ? T & HasTransact & HasChangefeed
+  : T & HasTransact
 
 // ---------------------------------------------------------------------------
 // WithTransact<T> — backward-compatible alias
@@ -115,12 +118,9 @@ export type DiscriminantProductRef<
   D extends string,
   M extends RefMode,
 > = Wrap<
-  (() => { [K in keyof F]: Plain<F[K]> }) &
-  {
-    readonly [K in keyof F]:
-      K extends D ? Plain<F[K]> : SchemaRef<F[K], M>
-  } &
-  ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+  (() => { [K in keyof F]: Plain<F[K]> }) & {
+    readonly [K in keyof F]: K extends D ? Plain<F[K]> : SchemaRef<F[K], M>
+  } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
   M
 >
 
@@ -147,77 +147,84 @@ export type SchemaRef<S extends Schema, M extends RefMode> =
   S extends AnnotatedSchema<infer Tag, infer Inner>
     ? Tag extends "text"
       ? Wrap<
-          (() => string) &
-          { [Symbol.toPrimitive](hint: string): string } &
-          TextRef,
+          (() => string) & {
+            [Symbol.toPrimitive](hint: string): string
+          } & TextRef,
           M
         >
       : Tag extends "counter"
         ? Wrap<
-            (() => number) &
-            { [Symbol.toPrimitive](hint: string): number | string } &
-            CounterRef,
+            (() => number) & {
+              [Symbol.toPrimitive](hint: string): number | string
+            } & CounterRef,
             M
           >
         : Tag extends "doc"
           ? Inner extends ProductSchema<infer F>
             ? Wrap<
-                (() => { [K in keyof F]: Plain<F[K]> }) &
-                { readonly [K in keyof F]: SchemaRef<F[K], M> } &
-                ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+                (() => { [K in keyof F]: Plain<F[K]> }) & {
+                  readonly [K in keyof F]: SchemaRef<F[K], M>
+                } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
                 M
               >
             : unknown
           : Tag extends "movable"
             ? Inner extends SequenceSchema<infer I>
               ? Wrap<
-                  ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> &
-                  SequenceRef,
+                  ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> & SequenceRef,
                   M
                 >
               : unknown
             : Tag extends "tree"
-              ? Inner extends Schema ? SchemaRef<Inner, M> : unknown
+              ? Inner extends Schema
+                ? SchemaRef<Inner, M>
+                : unknown
               : // Unknown annotation with inner — delegate
-                Inner extends Schema ? SchemaRef<Inner, M> : unknown
+                Inner extends Schema
+                ? SchemaRef<Inner, M>
+                : unknown
     : // --- Scalar ---
       S extends ScalarSchema<infer _K, infer V>
       ? Wrap<
-          (() => V) &
-          { [Symbol.toPrimitive](hint: string): V | string } &
-          ScalarRef<V>,
+          (() => V) & {
+            [Symbol.toPrimitive](hint: string): V | string
+          } & ScalarRef<V>,
           M
         >
       : // --- Product ---
         S extends ProductSchema<infer F>
         ? Wrap<
-            (() => { [K in keyof F]: Plain<F[K]> }) &
-            { readonly [K in keyof F]: SchemaRef<F[K], M> } &
-            ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+            (() => { [K in keyof F]: Plain<F[K]> }) & {
+              readonly [K in keyof F]: SchemaRef<F[K], M>
+            } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
             M
           >
         : // --- Sequence ---
           S extends SequenceSchema<infer I>
           ? Wrap<
-              ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> &
-              SequenceRef,
+              ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> & SequenceRef,
               M
             >
           : // --- Map ---
             S extends MapSchema<infer I>
             ? Wrap<
                 ReadableMapRef<SchemaRef<I, M>, Plain<I>> &
-                WritableMapRef<Plain<I>>,
+                  WritableMapRef<Plain<I>>,
                 M
               >
             : // --- Sum ---
               S extends PositionalSumSchema<infer V>
-              ? V extends readonly [ScalarSchema<"null", any>, infer Inner extends Schema]
+              ? V extends readonly [
+                  ScalarSchema<"null", any>,
+                  infer Inner extends Schema,
+                ]
                 ? // Nullable sugar: collapse to a single ref with nullable value domain
                   Wrap<
-                    (() => Plain<Inner> | null) &
-                    { [Symbol.toPrimitive](hint: string): Plain<Inner> | null | string } &
-                    ScalarRef<Plain<Inner> | null>,
+                    (() => Plain<Inner> | null) & {
+                      [Symbol.toPrimitive](
+                        hint: string,
+                      ): Plain<Inner> | null | string
+                    } & ScalarRef<Plain<Inner> | null>,
                     M
                   >
                 : // General positional sum: distribute over variant union

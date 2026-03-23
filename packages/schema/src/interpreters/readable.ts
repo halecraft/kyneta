@@ -8,18 +8,18 @@
 //   withReadable (src/interpreters/with-readable.ts) — reading + navigation
 //   withCaching  (src/interpreters/with-caching.ts)  — identity-preserving caching
 
-import type {
-  Schema,
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  AnnotatedSchema,
-  PositionalSumSchema,
-  DiscriminatedSumSchema,
-} from "../schema.js"
 import type { Plain } from "../interpreter-types.js"
-import type { NavigableSequenceRef, NavigableMapRef } from "./navigable.js"
+import type {
+  AnnotatedSchema,
+  DiscriminatedSumSchema,
+  MapSchema,
+  PositionalSumSchema,
+  ProductSchema,
+  ScalarSchema,
+  Schema,
+  SequenceSchema,
+} from "../schema.js"
+import type { NavigableMapRef, NavigableSequenceRef } from "./navigable.js"
 
 // ---------------------------------------------------------------------------
 // ReadableDiscriminantProductRef — hybrid product ref for discriminated unions
@@ -35,11 +35,9 @@ import type { NavigableSequenceRef, NavigableMapRef } from "./navigable.js"
 type ReadableDiscriminantProductRef<
   F extends Record<string, Schema>,
   D extends string,
-> = (() => { [K in keyof F]: Plain<F[K]> }) &
-  {
-    readonly [K in keyof F]:
-      K extends D ? Plain<F[K]> : Readable<F[K]>
-  }
+> = (() => { [K in keyof F]: Plain<F[K]> }) & {
+  readonly [K in keyof F]: K extends D ? Plain<F[K]> : Readable<F[K]>
+}
 
 // Re-export RefContext for consumers
 export type { RefContext } from "../interpreter-types.js"
@@ -142,8 +140,15 @@ export type Readable<S extends Schema> =
             ? ReadableMapRef<Readable<I>, Plain<I>>
             : // --- Sum ---
               S extends PositionalSumSchema<infer V>
-              ? V extends readonly [ScalarSchema<"null", any>, infer Inner extends Schema]
-                ? (() => Plain<Inner> | null) & { [Symbol.toPrimitive](hint: string): Plain<Inner> | null | string }
+              ? V extends readonly [
+                  ScalarSchema<"null", any>,
+                  infer Inner extends Schema,
+                ]
+                ? (() => Plain<Inner> | null) & {
+                    [Symbol.toPrimitive](
+                      hint: string,
+                    ): Plain<Inner> | null | string
+                  }
                 : Readable<V[number]>
               : S extends DiscriminatedSumSchema<infer D, infer V>
                 ? ReadableDiscriminantProductRef<V[number]["fields"], D>

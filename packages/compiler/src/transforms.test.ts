@@ -10,20 +10,20 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  type BindingNode,
   createBinding,
   createBuilder,
   createConditional,
   createConditionalBranch,
   createContent,
   createElement,
+  createLabeledBlock,
   createLiteral,
   createLoop,
   createSpan,
   createStatement,
-  createLabeledBlock,
-  type BindingNode,
-  type Dependency,
   type DeltaKind,
+  type Dependency,
 } from "./ir.js"
 import { dissolveConditionals, filterTargetBlocks } from "./transforms.js"
 
@@ -143,7 +143,7 @@ describe("filterTargetBlocks", () => {
     expect(sectionDom.kind).toBe("element")
     expect((sectionDom as { children: unknown[] }).children).toHaveLength(1)
     expect(
-      ((sectionDom as { children: Array<{ kind: string }> }).children[0]).kind,
+      (sectionDom as { children: Array<{ kind: string }> }).children[0].kind,
     ).toBe("statement")
   })
 
@@ -175,7 +175,7 @@ describe("filterTargetBlocks", () => {
     expect(filteredLoop.kind).toBe("loop")
     expect((filteredLoop as { body: unknown[] }).body).toHaveLength(1)
     expect(
-      ((filteredLoop as { body: Array<{ kind: string }> }).body[0]).kind,
+      (filteredLoop as { body: Array<{ kind: string }> }).body[0].kind,
     ).toBe("element")
 
     // HTML target: server: block unwrapped in loop body
@@ -215,9 +215,8 @@ describe("filterTargetBlocks", () => {
     // DOM target: client: block unwrapped in conditional branch
     const filteredDom = filterTargetBlocks(builder, "dom")
     const domCond = filteredDom.children[0]
-    const domBranches = (
-      domCond as { branches: Array<{ body: unknown[] }> }
-    ).branches
+    const domBranches = (domCond as { branches: Array<{ body: unknown[] }> })
+      .branches
     expect(domBranches[0].body).toHaveLength(2)
   })
 
@@ -241,25 +240,21 @@ describe("filterTargetBlocks", () => {
     const stmt = createStatement('console.log("deep")', span())
     const clientBlock = createLabeledBlock("client", [stmt], span())
     const li = createElement("li", [], [], [], [clientBlock], span())
-    const loop = createLoop(
-      "items",
-      "render",
-      "item",
-      null,
-      [li],
-      [],
-      span(),
-    )
+    const loop = createLoop("items", "render", "item", null, [li], [], span())
     const builder = createBuilder("ul", [], [], [loop], span())
 
     // HTML target: statement stripped from deep inside
     const filtered = filterTargetBlocks(builder, "html")
-    const filteredLoop = filtered.children[0] as { body: Array<{ children: unknown[] }> }
+    const filteredLoop = filtered.children[0] as {
+      body: Array<{ children: unknown[] }>
+    }
     expect(filteredLoop.body[0].children).toHaveLength(0)
 
     // DOM target: statement preserved deep inside
     const filteredDom = filterTargetBlocks(builder, "dom")
-    const domLoop = filteredDom.children[0] as { body: Array<{ children: Array<{ kind: string }> }> }
+    const domLoop = filteredDom.children[0] as {
+      body: Array<{ children: Array<{ kind: string }> }>
+    }
     expect(domLoop.body[0].children).toHaveLength(1)
     expect(domLoop.body[0].children[0].kind).toBe("statement")
   })
@@ -315,30 +310,12 @@ describe("dissolveConditionals", () => {
   it("should dissolve two-branch conditional with same-tag elements and different literal text", () => {
     const trueBranch = createConditionalBranch(
       createContent("count.get() > 0", "reactive", [dep("count")], span()),
-      [
-        createElement(
-          "p",
-          [],
-          [],
-          [],
-          [createLiteral("Yes", span())],
-          span(),
-        ),
-      ],
+      [createElement("p", [], [], [], [createLiteral("Yes", span())], span())],
       span(),
     )
     const falseBranch = createConditionalBranch(
       null,
-      [
-        createElement(
-          "p",
-          [],
-          [],
-          [],
-          [createLiteral("No", span())],
-          span(),
-        ),
-      ],
+      [createElement("p", [], [], [], [createLiteral("No", span())], span())],
       span(),
     )
     const cond = createConditional(
@@ -354,7 +331,11 @@ describe("dissolveConditionals", () => {
     expect(dissolved.children).toHaveLength(1)
     expect(dissolved.children[0].kind).toBe("element")
 
-    const element = dissolved.children[0] as { kind: string; tag: string; children: Array<{ kind: string; source: string; bindingTime: string }> }
+    const element = dissolved.children[0] as {
+      kind: string
+      tag: string
+      children: Array<{ kind: string; source: string; bindingTime: string }>
+    }
     expect(element.tag).toBe("p")
     expect(element.children).toHaveLength(1)
 
@@ -398,7 +379,14 @@ describe("dissolveConditionals", () => {
     expect(dissolved.children).toHaveLength(1)
     expect(dissolved.children[0].kind).toBe("element")
 
-    const element = dissolved.children[0] as { kind: string; tag: string; attributes: Array<{ name: string; value: { source: string; bindingTime: string } }> }
+    const element = dissolved.children[0] as {
+      kind: string
+      tag: string
+      attributes: Array<{
+        name: string
+        value: { source: string; bindingTime: string }
+      }>
+    }
     expect(element.tag).toBe("div")
     expect(element.attributes).toHaveLength(1)
 
@@ -466,7 +454,11 @@ describe("dissolveConditionals", () => {
     expect(dissolved.children).toHaveLength(1)
     expect(dissolved.children[0].kind).toBe("element")
 
-    const element = dissolved.children[0] as { kind: string; tag: string; children: Array<{ kind: string; source: string; bindingTime: string }> }
+    const element = dissolved.children[0] as {
+      kind: string
+      tag: string
+      children: Array<{ kind: string; source: string; bindingTime: string }>
+    }
     expect(element.tag).toBe("span")
 
     // The text should be a nested ternary
@@ -504,13 +496,21 @@ describe("dissolveConditionals", () => {
     // The outer div should still be there
     expect(dissolved.children).toHaveLength(1)
     expect(dissolved.children[0].kind).toBe("element")
-    const div = dissolved.children[0] as { kind: string; tag: string; children: Array<{ kind: string }> }
+    const div = dissolved.children[0] as {
+      kind: string
+      tag: string
+      children: Array<{ kind: string }>
+    }
     expect(div.tag).toBe("div")
 
     // The conditional inside should be dissolved into content
     expect(div.children).toHaveLength(1)
     expect(div.children[0].kind).toBe("content")
-    const content = div.children[0] as { kind: string; source: string; bindingTime: string }
+    const content = div.children[0] as {
+      kind: string
+      source: string
+      bindingTime: string
+    }
     expect(content.bindingTime).toBe("reactive")
     expect(content.source).toContain("?")
   })
@@ -565,7 +565,10 @@ describe("dissolveConditionals", () => {
     // Loop should still be there
     expect(dissolved.children).toHaveLength(1)
     expect(dissolved.children[0].kind).toBe("loop")
-    const loopNode = dissolved.children[0] as { kind: string; body: Array<{ kind: string; tag: string }> }
+    const loopNode = dissolved.children[0] as {
+      kind: string
+      body: Array<{ kind: string; tag: string }>
+    }
 
     // The conditional inside the loop should be dissolved into a <b> element
     expect(loopNode.body).toHaveLength(1)
@@ -687,37 +690,14 @@ describe("dissolveConditionals", () => {
   it("should preserve conditional with different child counts in branches", () => {
     const trueBranch = createConditionalBranch(
       createContent("flag.get()", "reactive", [dep("flag")], span()),
-      [
-        createElement(
-          "p",
-          [],
-          [],
-          [],
-          [createLiteral("One", span())],
-          span(),
-        ),
-      ],
+      [createElement("p", [], [], [], [createLiteral("One", span())], span())],
       span(),
     )
     const falseBranch = createConditionalBranch(
       null,
       [
-        createElement(
-          "p",
-          [],
-          [],
-          [],
-          [createLiteral("A", span())],
-          span(),
-        ),
-        createElement(
-          "p",
-          [],
-          [],
-          [],
-          [createLiteral("B", span())],
-          span(),
-        ),
+        createElement("p", [], [], [], [createLiteral("A", span())], span()),
+        createElement("p", [], [], [], [createLiteral("B", span())], span()),
       ],
       span(),
     )
@@ -743,30 +723,12 @@ describe("dissolveConditionals", () => {
     // Dissolvable: same tags, different text
     const dissolvableTrueBranch = createConditionalBranch(
       createContent("a.get()", "reactive", [dep("a")], span()),
-      [
-        createElement(
-          "p",
-          [],
-          [],
-          [],
-          [createLiteral("Yes", span())],
-          span(),
-        ),
-      ],
+      [createElement("p", [], [], [], [createLiteral("Yes", span())], span())],
       span(),
     )
     const dissolvableFalseBranch = createConditionalBranch(
       null,
-      [
-        createElement(
-          "p",
-          [],
-          [],
-          [],
-          [createLiteral("No", span())],
-          span(),
-        ),
-      ],
+      [createElement("p", [], [], [], [createLiteral("No", span())], span())],
       span(),
     )
     const dissolvableCond = createConditional(
@@ -838,11 +800,7 @@ describe("dissolveConditionals", () => {
       [createLiteral("B", span())],
       span(),
     )
-    const cond = createConditional(
-      [trueBranch, falseBranch],
-      dep("x"),
-      span(),
-    )
+    const cond = createConditional([trueBranch, falseBranch], dep("x"), span())
     const builder = createBuilder("div", [], [], [cond], span())
 
     const dissolved = dissolveConditionals(builder)
@@ -907,7 +865,11 @@ describe("dissolveConditionals", () => {
     expect(dissolved.children[0].kind).toBe("conditional")
 
     // But inner conditional inside the branch body was dissolved
-    const branches = (dissolved.children[0] as { branches: Array<{ body: Array<{ kind: string }> }> }).branches
+    const branches = (
+      dissolved.children[0] as {
+        branches: Array<{ body: Array<{ kind: string }> }>
+      }
+    ).branches
     expect(branches[0].body).toHaveLength(1)
     expect(branches[0].body[0].kind).toBe("content")
   })
@@ -921,7 +883,14 @@ describe("filterTargetBlocks - BindingNode pass-through", () => {
   it("should pass through bindings at top level", () => {
     const value = createContent("x.get()", "reactive", [dep("x")], span())
     const binding = createBinding("myVar", value, span())
-    const h1 = createElement("h1", [], [], [], [createLiteral("Title", span())], span())
+    const h1 = createElement(
+      "h1",
+      [],
+      [],
+      [],
+      [createLiteral("Title", span())],
+      span(),
+    )
     const builder = createBuilder("div", [], [], [binding, h1], span())
 
     const filtered = filterTargetBlocks(builder, "dom")
@@ -936,7 +905,14 @@ describe("filterTargetBlocks - BindingNode pass-through", () => {
   it("should pass through bindings inside element children", () => {
     const value = createContent("x.get()", "reactive", [dep("x")], span())
     const binding = createBinding("myVar", value, span())
-    const p = createElement("p", [], [], [], [createLiteral("text", span())], span())
+    const p = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("text", span())],
+      span(),
+    )
     const section = createElement("section", [], [], [], [binding, p], span())
     const builder = createBuilder("div", [], [], [section], span())
 
@@ -953,8 +929,23 @@ describe("filterTargetBlocks - BindingNode pass-through", () => {
   it("should pass through bindings inside loop body", () => {
     const value = createContent("item.get()", "reactive", [dep("item")], span())
     const binding = createBinding("val", value, span())
-    const li = createElement("li", [], [], [], [createLiteral("item", span())], span())
-    const loop = createLoop("items", "reactive", "item", null, [binding, li], [dep("items")], span())
+    const li = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createLiteral("item", span())],
+      span(),
+    )
+    const loop = createLoop(
+      "items",
+      "reactive",
+      "item",
+      null,
+      [binding, li],
+      [dep("items")],
+      span(),
+    )
     const builder = createBuilder("ul", [], [], [loop], span())
 
     const filtered = filterTargetBlocks(builder, "dom")
@@ -970,7 +961,14 @@ describe("filterTargetBlocks - BindingNode pass-through", () => {
   it("should pass through bindings inside conditional branches", () => {
     const value = createContent("x.get()", "reactive", [dep("x")], span())
     const binding = createBinding("myVar", value, span())
-    const p = createElement("p", [], [], [], [createLiteral("yes", span())], span())
+    const p = createElement(
+      "p",
+      [],
+      [],
+      [],
+      [createLiteral("yes", span())],
+      span(),
+    )
     const branch = createConditionalBranch(
       createContent("cond", "reactive", [dep("cond")], span()),
       [binding, p],
@@ -1012,10 +1010,30 @@ describe("dissolveConditionals - BindingNode pass-through", () => {
   })
 
   it("should pass through bindings inside loop body during dissolution", () => {
-    const value = createContent("item.name()", "reactive", [dep("item.name")], span())
+    const value = createContent(
+      "item.name()",
+      "reactive",
+      [dep("item.name")],
+      span(),
+    )
     const binding = createBinding("name", value, span())
-    const li = createElement("li", [], [], [], [createLiteral("text", span())], span())
-    const loop = createLoop("items", "reactive", "item", null, [binding, li], [dep("items")], span())
+    const li = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [createLiteral("text", span())],
+      span(),
+    )
+    const loop = createLoop(
+      "items",
+      "reactive",
+      "item",
+      null,
+      [binding, li],
+      [dep("items")],
+      span(),
+    )
     const builder = createBuilder("ul", [], [], [loop], span())
 
     const dissolved = dissolveConditionals(builder)

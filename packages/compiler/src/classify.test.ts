@@ -34,7 +34,7 @@ describe("classifyDependencies", () => {
     })
 
     // Verify partition property: each classification appears exactly once
-    const classifications = result.map((d) => d.classification)
+    const classifications = result.map(d => d.classification)
     expect(classifications).toContain("item")
     expect(classifications).toContain("external")
     expect(classifications).toContain("structural")
@@ -102,9 +102,7 @@ describe("classifyDependencies", () => {
   // ---------------------------------------------------------------------------
 
   it("classifies the iterable source as structural", () => {
-    const deps: Dependency[] = [
-      { source: "doc.items", deltaKind: "sequence" },
-    ]
+    const deps: Dependency[] = [{ source: "doc.items", deltaKind: "sequence" }]
 
     const result = classifyDependencies(deps, "item", "doc.items")
 
@@ -114,9 +112,7 @@ describe("classifyDependencies", () => {
   it("classifies bare loop variable as item-dependent", () => {
     // Edge case: the loop variable itself appears as a dep
     // (e.g., iterating a list of refs where each item IS a Changefeed)
-    const deps: Dependency[] = [
-      { source: "item", deltaKind: "replace" },
-    ]
+    const deps: Dependency[] = [{ source: "item", deltaKind: "replace" }]
 
     const result = classifyDependencies(deps, "item", "doc.items")
 

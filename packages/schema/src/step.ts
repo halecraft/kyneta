@@ -9,13 +9,11 @@
 
 import type {
   ChangeBase,
-  TextChange,
-  TextInstruction,
-  SequenceChange,
-  SequenceInstruction,
+  IncrementChange,
   MapChange,
   ReplaceChange,
-  IncrementChange,
+  SequenceChange,
+  TextChange,
 } from "./change.js"
 
 // ---------------------------------------------------------------------------
@@ -134,7 +132,7 @@ export function stepMap<T extends Record<string, unknown>>(
 
   if (action.set) {
     for (const [key, value] of Object.entries(action.set)) {
-      (result as Record<string, unknown>)[key] = value
+      ;(result as Record<string, unknown>)[key] = value
     }
   }
 
@@ -211,10 +209,7 @@ export function step<S>(state: S, action: ChangeBase): S {
       return stepSequence(state as unknown[], action as SequenceChange) as S
 
     case "map":
-      return stepMap(
-        state as Record<string, unknown>,
-        action as MapChange,
-      ) as S
+      return stepMap(state as Record<string, unknown>, action as MapChange) as S
 
     case "replace":
       return stepReplace(state, action as ReplaceChange<S>)

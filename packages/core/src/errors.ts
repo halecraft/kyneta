@@ -131,6 +131,5 @@ export class BindingError extends KynetaError {
 }
 
 /** @deprecated Use KynetaErrorCode instead */
-export { KynetaErrorCode as KineticErrorCode }
 /** @deprecated Use KynetaError instead */
-export { KynetaError as KineticError }
+export { KynetaError as KineticError, KynetaErrorCode as KineticErrorCode }

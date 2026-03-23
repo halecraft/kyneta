@@ -1,22 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
-  compileAndExecute,
-  compileInPlace,
   createMockTextRef,
-  createMockCounterRef,
-  dom,
   getActiveSubscriptionCount,
+  inputTextRegion,
   installDOMGlobals,
   read,
   resetTestState,
   Scope,
-  subscribe,
-  valueRegion,
-  inputTextRegion,
   textRegion,
   transformSource,
   transformSourceInPlace,
+  valueRegion,
   withTypes,
 } from "./helpers.js"
 
@@ -630,7 +625,7 @@ describe("compiler integration - text patching", () => {
 
       // DOM: client block unwrapped — statement and element both present
       expect(resultDom.code).toContain("const x = 1")
-      expect(resultDom.code).toContain("createElement(\"p\")")
+      expect(resultDom.code).toContain('createElement("p")')
 
       const resultHtml = transformSource(source, { target: "html" })
 
@@ -729,12 +724,7 @@ describe("compiler integration - text patching", () => {
       // The generated code has template declarations at the top and
       // the factory function assigned to a variable. We eval the whole
       // thing and then call the last assigned factory.
-      // biome-ignore lint/security/noGlobalEval: test utility
-      const fn = new Function(
-        "document",
-        "scope",
-        `${code}\nreturn app(scope)`,
-      )
+      const fn = new Function("document", "scope", `${code}\nreturn app(scope)`)
       const scope = new Scope()
       const node = fn(document, scope)
       return { node, scope }
@@ -806,7 +796,7 @@ describe("compiler integration - text patching", () => {
       `
 
       const result = transformSourceInPlace(source, { target: "dom" })
-      const code = result.sourceFile.getFullText()
+      const _code = result.sourceFile.getFullText()
 
       const { node, scope } = compileInPlaceAndExecute(source)
       expect((node as Element).querySelector("h1")?.textContent).toBe("First")

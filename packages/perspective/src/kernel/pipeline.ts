@@ -17,36 +17,24 @@
 //
 // See unified-engine.md §7.1, §7.2, §B.1, §B.4, §B.7.
 
-import type {
-  Constraint,
-  PeerID,
-  VersionVector,
-  Reality,
-} from './types.js';
-import type { ConstraintStore } from './store.js';
-import { allConstraints } from './store.js';
-import { filterByVersion } from './version-vector.js';
-import { computeValid, type ValidityResult } from './validity.js';
+import { evaluateUnified as evaluate } from "../datalog/evaluator.js"
+import { buildNativeResolution } from "./native-resolution.js"
+import { type ProjectionResult, projectToFacts } from "./projection.js"
+import { extractResolution, type ResolutionResult } from "./resolve.js"
 import {
   computeActive,
-  type RetractionConfig,
   DEFAULT_RETRACTION_CONFIG,
+  type RetractionConfig,
   type RetractionResult,
-} from './retraction.js';
-import { buildStructureIndex, type StructureIndex } from './structure-index.js';
-import { projectToFacts, type ProjectionResult } from './projection.js';
-import {
-  extractResolution,
-  type ResolutionResult,
-} from './resolve.js';
-import { buildSkeleton } from './skeleton.js';
-import { evaluateUnified as evaluate } from '../datalog/evaluator.js';
-import type { Rule } from '../datalog/types.js';
-import {
-  extractRules,
-  selectResolutionStrategy,
-} from './rule-detection.js';
-import { buildNativeResolution } from './native-resolution.js';
+} from "./retraction.js"
+import { extractRules, selectResolutionStrategy } from "./rule-detection.js"
+import { buildSkeleton } from "./skeleton.js"
+import type { ConstraintStore } from "./store.js"
+import { allConstraints } from "./store.js"
+import { buildStructureIndex, type StructureIndex } from "./structure-index.js"
+import type { Constraint, PeerID, Reality, VersionVector } from "./types.js"
+import { computeValid, type ValidityResult } from "./validity.js"
+import { filterByVersion } from "./version-vector.js"
 
 // ---------------------------------------------------------------------------
 // Pipeline Configuration
@@ -57,10 +45,10 @@ import { buildNativeResolution } from './native-resolution.js';
  */
 export interface PipelineConfig {
   /** The PeerID of the reality creator (holds implicit Admin). */
-  readonly creator: PeerID;
+  readonly creator: PeerID
 
   /** Retraction depth configuration. Defaults to depth 2. */
-  readonly retractionConfig?: RetractionConfig;
+  readonly retractionConfig?: RetractionConfig
 
   /**
    * Whether to enable Datalog evaluation for resolution.
@@ -74,7 +62,7 @@ export interface PipelineConfig {
    * system entirely — useful for testing or benchmarking, but does NOT
    * respect rules-as-data (custom rules are ignored).
    */
-  readonly enableDatalogEvaluation?: boolean;
+  readonly enableDatalogEvaluation?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -87,29 +75,29 @@ export interface PipelineConfig {
  */
 export interface PipelineResult {
   /** The final reality tree. */
-  readonly reality: Reality;
+  readonly reality: Reality
 
   /** Intermediate: constraints after version filtering (S_V). */
-  readonly versionFiltered: readonly Constraint[];
+  readonly versionFiltered: readonly Constraint[]
 
   /** Intermediate: validity result (valid + invalid sets, authority state). */
-  readonly validityResult: ValidityResult;
+  readonly validityResult: ValidityResult
 
   /** Intermediate: retraction result (active + dominated sets). */
-  readonly retractionResult: RetractionResult;
+  readonly retractionResult: RetractionResult
 
   /** Intermediate: the structure index built from valid structure constraints. */
-  readonly structureIndex: StructureIndex;
+  readonly structureIndex: StructureIndex
 
   /** Intermediate: the projection result (facts + orphaned values). */
-  readonly projectionResult: ProjectionResult;
+  readonly projectionResult: ProjectionResult
 
   /**
    * The resolution result used to build the skeleton.
    * Contains LWW winners and Fugue ordering, plus metadata about
    * which resolution path was used.
    */
-  readonly resolutionResult: ResolutionResult;
+  readonly resolutionResult: ResolutionResult
 
   /**
    * Whether the native solver fast path was used.
@@ -118,7 +106,7 @@ export interface PipelineResult {
    * false = Datalog evaluation (primary path — rules are custom or absent)
    * null  = Datalog was disabled via config (testing/benchmark mode)
    */
-  readonly nativeFastPath: boolean | null;
+  readonly nativeFastPath: boolean | null
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +138,7 @@ export function solve(
   config: PipelineConfig,
   version?: VersionVector,
 ): Reality {
-  return solveFull(store, config, version).reality;
+  return solveFull(store, config, version).reality
 }
 
 /**
@@ -164,17 +152,16 @@ export function solveFull(
   config: PipelineConfig,
   version?: VersionVector,
 ): PipelineResult {
-  const retractionConfig = config.retractionConfig ?? DEFAULT_RETRACTION_CONFIG;
-  const enableDatalog = config.enableDatalogEvaluation ?? true;
+  const retractionConfig = config.retractionConfig ?? DEFAULT_RETRACTION_CONFIG
+  const enableDatalog = config.enableDatalogEvaluation ?? true
 
   // Step 1: Version filter (§7.1).
-  const all = allConstraints(store);
-  const versionFiltered: Constraint[] = version !== undefined
-    ? filterByVersion(all, version)
-    : all;
+  const all = allConstraints(store)
+  const versionFiltered: Constraint[] =
+    version !== undefined ? filterByVersion(all, version) : all
 
   // Step 2: Validity (§5).
-  const validityResult = computeValid(versionFiltered, config.creator, version);
+  const validityResult = computeValid(versionFiltered, config.creator, version)
 
   // Step 3: Structure index (§7.2 — AllStructure(Valid(S_V))).
   // The spec's pipeline forks at Valid(S_V): one branch takes ALL valid
@@ -182,39 +169,56 @@ export function solveFull(
   // for value resolution. Structure constraints are immune to retraction,
   // so AllStructure(Valid(S_V)) == AllStructure(Active(Valid(S_V))) in
   // practice — but we build from the valid set to match the spec.
-  const structureIndex = buildStructureIndex(validityResult.valid);
+  const structureIndex = buildStructureIndex(validityResult.valid)
 
   // Step 4: Retraction (§6).
-  const retractionResult = computeActive(validityResult.valid, retractionConfig);
+  const retractionResult = computeActive(validityResult.valid, retractionConfig)
 
   // Step 5: Projection — convert active constraints to Datalog ground facts.
-  const projectionResult = projectToFacts(retractionResult.active, structureIndex);
+  const projectionResult = projectToFacts(
+    retractionResult.active,
+    structureIndex,
+  )
 
   // Step 6: Resolution — Datalog primary, native fast path optional.
-  let resolutionResult: ResolutionResult;
-  let nativeFastPath: boolean | null;
+  let resolutionResult: ResolutionResult
+  let nativeFastPath: boolean | null
 
-  const rules = extractRules(retractionResult.active);
-  const strategy = selectResolutionStrategy(enableDatalog, rules, retractionResult.active);
+  const rules = extractRules(retractionResult.active)
+  const strategy = selectResolutionStrategy(
+    enableDatalog,
+    rules,
+    retractionResult.active,
+  )
 
-  if (strategy === 'native') {
-    resolutionResult = buildNativeResolution(retractionResult.active, structureIndex);
-    nativeFastPath = enableDatalog ? true : null;
+  if (strategy === "native") {
+    resolutionResult = buildNativeResolution(
+      retractionResult.active,
+      structureIndex,
+    )
+    nativeFastPath = enableDatalog ? true : null
   } else {
     // Custom or modified rules — use Datalog evaluation (primary path).
-    const evalResult = evaluate(rules, projectionResult.facts);
+    const evalResult = evaluate(rules, projectionResult.facts)
     if (evalResult.ok) {
-      resolutionResult = extractResolution(evalResult.value);
+      resolutionResult = extractResolution(evalResult.value)
     } else {
       // Datalog evaluation failed (e.g., cyclic negation).
       // Fall back to native solvers as graceful degradation.
-      resolutionResult = buildNativeResolution(retractionResult.active, structureIndex);
+      resolutionResult = buildNativeResolution(
+        retractionResult.active,
+        structureIndex,
+      )
     }
-    nativeFastPath = false;
+    nativeFastPath = false
   }
 
   // Step 7: Skeleton — build the reality tree from resolution result.
-  const reality = buildSkeleton(structureIndex, retractionResult.active, resolutionResult);
+  const reality = buildSkeleton(
+    structureIndex,
+    retractionResult.active,
+    resolutionResult,
+  )
 
   return {
     reality,
@@ -225,6 +229,5 @@ export function solveFull(
     projectionResult,
     resolutionResult,
     nativeFastPath,
-  };
+  }
 }
-

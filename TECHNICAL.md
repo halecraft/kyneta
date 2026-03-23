@@ -118,22 +118,45 @@ This separation enables testing without a DOM and ensures the planning logic is 
 
 ## Development
 
-### Build Order
+### Build & Verification
+
+The monorepo uses **Turborepo** for cross-package task orchestration with content-hash caching, and **@halecraft/verify** for intra-package verification pipelines.
 
 ```sh
-pnpm -C packages/schema build   # schema first (no deps)
-pnpm -C packages/core build     # core depends on schema
+# Build all packages in dependency order (schema → compiler → core)
+pnpm build                              # alias for: turbo build
+
+# Verify all main packages (format → types → logic)
+pnpm verify                             # alias for: turbo verify --filter='!@kyneta/perspective'
+
+# Test a single package (auto-builds upstream deps if stale)
+npx turbo test --filter=@kyneta/core    # builds schema + compiler first, then runs core tests
+
+# Verify perspective separately (opt-in, not in default pipeline)
+npx turbo verify --filter=@kyneta/perspective
 ```
 
-### Test Commands
+**Turbo tasks** (`turbo.json`):
+- `build` — depends on `^build` (upstream builds), caches `dist/**`
+- `verify` — depends on `^build`, runs the package's `verify` script
+- `test` — depends on `^build`, runs the package's `test` script (which calls `verify logic`)
 
-```sh
-# Per-package
-cd packages/schema && pnpm test        # 1000+ tests
-cd packages/compiler && pnpm test      # 330+ tests
-cd packages/core && npx vitest run     # 560+ tests
-cd examples/recipe-book && pnpm test   # 12 integration tests
-```
+**Verify pipeline** (`verify.config.ts` in each package):
+1. **format** — `biome check --write .` (auto-fixes formatting, reports lint issues)
+2. **types** — `tsgo --noEmit --skipLibCheck` (fast Rust-based type checking)
+3. **logic** — `vitest run` (unit + integration tests)
+
+Each step depends on the previous: types won't run if format fails, logic won't run if types fail.
+
+**Per-package test counts:**
+
+| Package | Tests | Notes |
+|---------|-------|-------|
+| `@kyneta/schema` | 1050+ | Interpreter algebra, changefeeds, substrates |
+| `@kyneta/compiler` | 504 | AST analysis, ExpressionIR, reactive detection |
+| `@kyneta/core` | 609 | Codegen, runtime regions, integration tests |
+| `examples/recipe-book` | 18 | Full-stack SSR + sync integration |
+| `@kyneta/perspective` | 1374 | CCS kernel, Datalog evaluator, incremental pipeline |
 
 ### Workspace Structure
 
@@ -151,6 +174,10 @@ kyneta/
 ```
 
 Package manager: **pnpm** with workspace protocol (`workspace:^`).
+Task runner: **Turborepo** for cross-package build/test orchestration.
+Verification: **@halecraft/verify** for intra-package format → types → logic pipelines.
+Linter/Formatter: **Biome** (root `biome.json`, 2-space indent, no semicolons).
+Type checker: **tsgo** (`@typescript/native-preview`) — Rust-based TypeScript compiler for fast verification.
 Runtime: **Bun** for scripts and CLI; **Vite** for dev server and build.
 VCS: **jj** (Jujutsu).
 

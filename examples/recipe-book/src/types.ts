@@ -7,7 +7,7 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type { Ref, Plain, Seed } from "@kyneta/schema"
+import type { Plain, Ref, Seed } from "@kyneta/schema"
 import type { RecipeBookSchema } from "./schema.js"
 
 /** Full-stack ref type: read + write + transact + changefeed. */

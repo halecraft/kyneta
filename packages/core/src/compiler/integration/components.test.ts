@@ -5,13 +5,12 @@
 
 import { beforeEach, describe, expect, it } from "vitest"
 import {
+  COMPONENT_PREAMBLE,
   compileAndExecuteComponent,
   compileInPlace,
-  COMPONENT_PREAMBLE,
   dom,
   installDOMGlobals,
   resetTestState,
-  Scope,
 } from "./helpers.js"
 
 installDOMGlobals()
@@ -67,15 +66,17 @@ describe("Component compilation", () => {
 
     // Provide handleClick in eval scope
     let clicked = false
-    ;(globalThis as any).handleClick = () => { clicked = true }
+    ;(globalThis as any).handleClick = () => {
+      clicked = true
+    }
 
     const { node, scope } = compileAndExecuteComponent(source)
 
     const btn = (node as HTMLElement).querySelector("button")
     expect(btn).not.toBeNull()
-    expect(btn!.textContent).toBe("Press me")
+    expect(btn?.textContent).toBe("Press me")
 
-    btn!.click()
+    btn?.click()
     expect(clicked).toBe(true)
 
     delete (globalThis as any).handleClick
@@ -98,7 +99,9 @@ describe("Component compilation", () => {
     `
 
     let keyPressed = ""
-    ;(globalThis as any).handleKeyDown = (e: any) => { keyPressed = e.key }
+    ;(globalThis as any).handleKeyDown = (e: any) => {
+      keyPressed = e.key
+    }
 
     const { node, scope } = compileAndExecuteComponent(source)
 
@@ -107,7 +110,7 @@ describe("Component compilation", () => {
 
     // Simulate keydown event
     const event = new dom.window.KeyboardEvent("keydown", { key: "Enter" })
-    inputEl!.dispatchEvent(event)
+    inputEl?.dispatchEvent(event)
     expect(keyPressed).toBe("Enter")
 
     delete (globalThis as any).handleKeyDown
@@ -158,7 +161,7 @@ describe("Component compilation", () => {
       })
     `
 
-    const { node, scope } = compileAndExecuteComponent(source)
+    const { node: _node, scope } = compileAndExecuteComponent(source)
 
     // The component creates a child scope via scope.createChild()
     expect(scope.childCount).toBe(1)

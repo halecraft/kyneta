@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { Schema, LoroSchema, Zero } from "../index.js"
+import { LoroSchema, Schema, Zero } from "../index.js"
 
 // ===========================================================================
 // Base grammar tests — Schema only, no Loro annotations
@@ -109,8 +109,14 @@ describe("Zero.structural: structural kinds", () => {
     expect(
       Zero.structural(
         Schema.discriminatedSum("type", [
-          Schema.product({ type: Schema.scalar("string", ["text"]), content: Schema.scalar("string") }),
-          Schema.product({ type: Schema.scalar("string", ["image"]), url: Schema.scalar("string") }),
+          Schema.product({
+            type: Schema.scalar("string", ["text"]),
+            content: Schema.scalar("string"),
+          }),
+          Schema.product({
+            type: Schema.scalar("string", ["image"]),
+            url: Schema.scalar("string"),
+          }),
         ]),
       ),
     ).toEqual({ type: "text", content: "" })

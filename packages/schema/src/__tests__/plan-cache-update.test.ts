@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest"
-import {
-  planCacheUpdate,
-  applyCacheOps,
-} from "../interpreters/with-caching.js"
-import type { CacheInstruction } from "../interpreters/with-caching.js"
-import {
-  sequenceChange,
-  mapChange,
-  replaceChange,
-} from "../change.js"
+import { mapChange, replaceChange, sequenceChange } from "../change.js"
+import { applyCacheOps, planCacheUpdate } from "../interpreters/with-caching.js"
 
 // ===========================================================================
 // planCacheUpdate — table-driven tests

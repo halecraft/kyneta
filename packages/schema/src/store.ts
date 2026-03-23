@@ -5,16 +5,16 @@
 // (writable, plain, validate, changefeed). Extracted from writable.ts
 // to eliminate cross-module coupling.
 
-import type { Path, SumVariants } from "./interpret.js"
 import type { ChangeBase } from "./change.js"
+import { isNonNullObject } from "./guards.js"
+import type { Path, SumVariants } from "./interpret.js"
 import {
-  isNullableSum,
-  type SumSchema,
   type DiscriminatedSumSchema,
+  isNullableSum,
   type PositionalSumSchema,
+  type SumSchema,
 } from "./schema.js"
 import { step } from "./step.js"
-import { isNonNullObject } from "./guards.js"
 
 // ---------------------------------------------------------------------------
 // Store type
@@ -173,10 +173,7 @@ export function dispatchSum<A>(
 
     if (isNonNullObject(value)) {
       const discValue = value[schema.discriminant]
-      if (
-        typeof discValue === "string" &&
-        discValue in discSchema.variantMap
-      ) {
+      if (typeof discValue === "string" && discValue in discSchema.variantMap) {
         return variants.byKey(discValue)
       }
     }

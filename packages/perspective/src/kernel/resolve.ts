@@ -15,11 +15,11 @@
 //
 // See unified-engine.md §7.2, §B.4, §B.7.
 
-import type { Value, CnId } from './types.js';
-import { cnIdFromString, cnIdKey } from './cnid.js';
-import type { Database, Fact } from '../datalog/types.js';
-import { ACTIVE_VALUE, ACTIVE_STRUCTURE_SEQ } from './projection.js';
-import type { LWWEntry } from '../solver/lww.js';
+import type { Database, Fact } from "../datalog/types.js"
+import type { LWWEntry } from "../solver/lww.js"
+import { cnIdFromString } from "./cnid.js"
+import { ACTIVE_STRUCTURE_SEQ, ACTIVE_VALUE } from "./projection.js"
+import type { Value } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Resolution Result
@@ -30,11 +30,11 @@ import type { LWWEntry } from '../solver/lww.js';
  */
 export interface ResolvedWinner {
   /** The slot identity string. */
-  readonly slotId: string;
+  readonly slotId: string
   /** The winning value constraint's CnId key string. */
-  readonly winnerCnIdKey: string;
+  readonly winnerCnIdKey: string
   /** The resolved content value. */
-  readonly content: Value;
+  readonly content: Value
 }
 
 /**
@@ -43,11 +43,11 @@ export interface ResolvedWinner {
  */
 export interface FugueBeforePair {
   /** Parent container CnId key string. */
-  readonly parentKey: string;
+  readonly parentKey: string
   /** CnId key string of the element that comes first. */
-  readonly a: string;
+  readonly a: string
   /** CnId key string of the element that comes second. */
-  readonly b: string;
+  readonly b: string
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ export interface FugueBeforePair {
  * extraction.
  */
 export function fuguePairKey(p: FugueBeforePair): string {
-  return `${p.parentKey}|${p.a}|${p.b}`;
+  return `${p.parentKey}|${p.a}|${p.b}`
 }
 
 /**
@@ -82,19 +82,21 @@ export function allPairsFromOrdered(
   parentKey: string,
   ordered: readonly { readonly idKey: string }[],
 ): FugueBeforePair[] {
-  if (ordered.length <= 1) return [];
+  if (ordered.length <= 1) return []
 
-  const pairs: FugueBeforePair[] = [];
+  const pairs: FugueBeforePair[] = []
   for (let i = 0; i < ordered.length; i++) {
     for (let j = i + 1; j < ordered.length; j++) {
       pairs.push({
         parentKey,
+        // biome-ignore lint/style/noNonNullAssertion: ordered[i] is guaranteed to exist within loop bounds
         a: ordered[i]!.idKey,
+        // biome-ignore lint/style/noNonNullAssertion: ordered[j] is guaranteed to exist within loop bounds
         b: ordered[j]!.idKey,
-      });
+      })
     }
   }
-  return pairs;
+  return pairs
 }
 
 /**
@@ -109,7 +111,7 @@ export interface ResolutionResult {
    * One winner per slot (the Datalog `winner` relation guarantees uniqueness
    * via stratified negation over `superseded`).
    */
-  readonly winners: ReadonlyMap<string, ResolvedWinner>;
+  readonly winners: ReadonlyMap<string, ResolvedWinner>
 
   /**
    * Fugue ordering pairs grouped by parent container CnId key.
@@ -117,13 +119,13 @@ export interface ResolutionResult {
    * The skeleton builder uses these to produce a total order via
    * topological sort.
    */
-  readonly fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>;
+  readonly fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>
 
   /**
    * Whether this resolution was produced from Datalog evaluation
    * (true) or from native solvers (false).
    */
-  readonly fromDatalog: boolean;
+  readonly fromDatalog: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -147,12 +149,12 @@ export interface ResolutionResult {
  * @returns The parsed LWWEntry.
  */
 export function parseLWWFact(f: Fact): LWWEntry {
-  const values = f.values;
-  const cnIdKeyStr = values[ACTIVE_VALUE.CNID] as string;
-  const slotId = values[ACTIVE_VALUE.SLOT] as string;
-  const content = values[ACTIVE_VALUE.CONTENT] as Value;
-  const lamport = values[ACTIVE_VALUE.LAMPORT] as number;
-  const peer = values[ACTIVE_VALUE.PEER] as string;
+  const values = f.values
+  const cnIdKeyStr = values[ACTIVE_VALUE.CNID] as string
+  const slotId = values[ACTIVE_VALUE.SLOT] as string
+  const content = values[ACTIVE_VALUE.CONTENT] as Value
+  const lamport = values[ACTIVE_VALUE.LAMPORT] as number
+  const peer = values[ACTIVE_VALUE.PEER] as string
 
   return {
     id: cnIdFromString(cnIdKeyStr),
@@ -160,7 +162,7 @@ export function parseLWWFact(f: Fact): LWWEntry {
     content,
     lamport,
     peer,
-  };
+  }
 }
 
 /**
@@ -171,13 +173,13 @@ export function parseLWWFact(f: Fact): LWWEntry {
  */
 export interface ParsedSeqStructureFact {
   /** CnId key string of the seq structure constraint. */
-  readonly cnIdKey: string;
+  readonly cnIdKey: string
   /** CnId key string of the parent container. */
-  readonly parentKey: string;
+  readonly parentKey: string
   /** CnId key string of the origin-left element, or null. */
-  readonly originLeft: string | null;
+  readonly originLeft: string | null
   /** CnId key string of the origin-right element, or null. */
-  readonly originRight: string | null;
+  readonly originRight: string | null
 }
 
 /**
@@ -192,13 +194,13 @@ export interface ParsedSeqStructureFact {
  * @returns The parsed structure fields.
  */
 export function parseSeqStructureFact(f: Fact): ParsedSeqStructureFact {
-  const values = f.values;
+  const values = f.values
   return {
     cnIdKey: values[ACTIVE_STRUCTURE_SEQ.CNID] as string,
     parentKey: values[ACTIVE_STRUCTURE_SEQ.PARENT] as string,
-    originLeft: (values[ACTIVE_STRUCTURE_SEQ.ORIGIN_LEFT] as string | null),
-    originRight: (values[ACTIVE_STRUCTURE_SEQ.ORIGIN_RIGHT] as string | null),
-  };
+    originLeft: values[ACTIVE_STRUCTURE_SEQ.ORIGIN_LEFT] as string | null,
+    originRight: values[ACTIVE_STRUCTURE_SEQ.ORIGIN_RIGHT] as string | null,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -222,18 +224,18 @@ export function parseSeqStructureFact(f: Fact): ParsedSeqStructureFact {
 export function extractWinners(
   db: Database,
 ): ReadonlyMap<string, ResolvedWinner> {
-  const winners = new Map<string, ResolvedWinner>();
-  const winnerRelation = db.getRelation('winner');
+  const winners = new Map<string, ResolvedWinner>()
+  const winnerRelation = db.getRelation("winner")
 
   for (const tuple of winnerRelation.tuples()) {
-    const slotId = tuple[0] as string;
-    const winnerCnIdKey = tuple[1] as string;
-    const content = tuple[2] as Value;
+    const slotId = tuple[0] as string
+    const winnerCnIdKey = tuple[1] as string
+    const content = tuple[2] as Value
 
-    winners.set(slotId, { slotId, winnerCnIdKey, content });
+    winners.set(slotId, { slotId, winnerCnIdKey, content })
   }
 
-  return winners;
+  return winners
 }
 
 /**
@@ -253,25 +255,25 @@ export function extractWinners(
 export function extractFugueOrdering(
   db: Database,
 ): ReadonlyMap<string, FugueBeforePair[]> {
-  const pairs = new Map<string, FugueBeforePair[]>();
-  const beforeRelation = db.getRelation('fugue_before');
+  const pairs = new Map<string, FugueBeforePair[]>()
+  const beforeRelation = db.getRelation("fugue_before")
 
   for (const tuple of beforeRelation.tuples()) {
-    const parentKey = tuple[0] as string;
-    const a = tuple[1] as string;
-    const b = tuple[2] as string;
+    const parentKey = tuple[0] as string
+    const a = tuple[1] as string
+    const b = tuple[2] as string
 
-    const pair: FugueBeforePair = { parentKey, a, b };
+    const pair: FugueBeforePair = { parentKey, a, b }
 
-    let existing = pairs.get(parentKey);
+    let existing = pairs.get(parentKey)
     if (existing === undefined) {
-      existing = [];
-      pairs.set(parentKey, existing);
+      existing = []
+      pairs.set(parentKey, existing)
     }
-    existing.push(pair);
+    existing.push(pair)
   }
 
-  return pairs;
+  return pairs
 }
 
 /**
@@ -289,7 +291,7 @@ export function extractResolution(db: Database): ResolutionResult {
     winners: extractWinners(db),
     fuguePairs: extractFugueOrdering(db),
     fromDatalog: true,
-  };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +317,7 @@ export function nativeResolution(
     winners,
     fuguePairs,
     fromDatalog: false,
-  };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -339,52 +341,52 @@ export function topologicalOrderFromPairs(
   pairs: readonly FugueBeforePair[],
   allElementKeys: readonly string[],
 ): string[] {
-  if (allElementKeys.length === 0) return [];
-  if (allElementKeys.length === 1) return [allElementKeys[0]!];
+  if (allElementKeys.length === 0) return []
+  if (allElementKeys.length === 1) return [allElementKeys[0]!]
 
   // Build adjacency list and in-degree count.
-  const adj = new Map<string, string[]>();
-  const inDegree = new Map<string, number>();
+  const adj = new Map<string, string[]>()
+  const inDegree = new Map<string, number>()
 
   // Initialize all elements.
   for (const key of allElementKeys) {
-    adj.set(key, []);
-    inDegree.set(key, 0);
+    adj.set(key, [])
+    inDegree.set(key, 0)
   }
 
   // Add edges from before-pairs.
   for (const pair of pairs) {
     // Only include edges for elements that are in our set.
-    if (!inDegree.has(pair.a) || !inDegree.has(pair.b)) continue;
+    if (!inDegree.has(pair.a) || !inDegree.has(pair.b)) continue
 
-    adj.get(pair.a)!.push(pair.b);
-    inDegree.set(pair.b, inDegree.get(pair.b)! + 1);
+    adj.get(pair.a)?.push(pair.b)
+    inDegree.set(pair.b, inDegree.get(pair.b)! + 1)
   }
 
   // Kahn's algorithm with deterministic tie-breaking (sort by key).
-  const queue: string[] = [];
+  const queue: string[] = []
   for (const [key, deg] of inDegree) {
     if (deg === 0) {
-      queue.push(key);
+      queue.push(key)
     }
   }
   // Sort for determinism — lexicographic by CnId key.
-  queue.sort();
+  queue.sort()
 
-  const result: string[] = [];
+  const result: string[] = []
 
   while (queue.length > 0) {
-    const current = queue.shift()!;
-    result.push(current);
+    const current = queue.shift()!
+    result.push(current)
 
-    const neighbors = adj.get(current);
+    const neighbors = adj.get(current)
     if (neighbors !== undefined) {
       for (const neighbor of neighbors) {
-        const newDeg = inDegree.get(neighbor)! - 1;
-        inDegree.set(neighbor, newDeg);
+        const newDeg = inDegree.get(neighbor)! - 1
+        inDegree.set(neighbor, newDeg)
         if (newDeg === 0) {
           // Insert in sorted position for determinism.
-          insertSorted(queue, neighbor);
+          insertSorted(queue, neighbor)
         }
       }
     }
@@ -393,29 +395,27 @@ export function topologicalOrderFromPairs(
   // If there are elements not reached (cycle — shouldn't happen with
   // valid Fugue data), append them sorted for determinism.
   if (result.length < allElementKeys.length) {
-    const resultSet = new Set(result);
-    const remaining = allElementKeys
-      .filter((k) => !resultSet.has(k))
-      .sort();
-    result.push(...remaining);
+    const resultSet = new Set(result)
+    const remaining = allElementKeys.filter(k => !resultSet.has(k)).sort()
+    result.push(...remaining)
   }
 
-  return result;
+  return result
 }
 
 /**
  * Insert a string into a sorted array maintaining sort order.
  */
 function insertSorted(arr: string[], value: string): void {
-  let lo = 0;
-  let hi = arr.length;
+  let lo = 0
+  let hi = arr.length
   while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
+    const mid = (lo + hi) >>> 1
     if (arr[mid]! < value) {
-      lo = mid + 1;
+      lo = mid + 1
     } else {
-      hi = mid;
+      hi = mid
     }
   }
-  arr.splice(lo, 0, value);
+  arr.splice(lo, 0, value)
 }

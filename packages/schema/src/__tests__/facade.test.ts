@@ -1,27 +1,21 @@
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
+import type { Changeset, Op } from "../index.js"
 import {
-  Schema,
-  LoroSchema,
-  interpret,
-  plainContext,
-  change,
   applyChanges,
+  change,
+  changefeed,
+  incrementChange,
+  interpret,
+  LoroSchema,
+  plainContext,
+  readable,
+  replaceChange,
+  Schema,
+  sequenceChange,
   subscribe,
   subscribeNode,
-  CHANGEFEED,
-  TRANSACT,
-  replaceChange,
-  sequenceChange,
   textChange,
-  incrementChange,
-  readable,
   writable,
-  changefeed,
-} from "../index.js"
-import type {
-  Changeset,
-  Op,
-  ChangeBase,
 } from "../index.js"
 
 // ===========================================================================
@@ -57,7 +51,11 @@ function createSeed() {
 function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = { ...createSeed(), ...storeOverrides }
   const ctx = plainContext(store)
-  const doc = interpret(chatDocSchema, ctx).with(readable).with(writable).with(changefeed).done()
+  const doc = interpret(chatDocSchema, ctx)
+    .with(readable)
+    .with(writable)
+    .with(changefeed)
+    .done()
   return { store, ctx, doc }
 }
 
@@ -79,22 +77,22 @@ describe("change: basic behavior", () => {
   it("returns Op[] with correct paths and change types", () => {
     const { doc } = createChatDoc()
 
-    const ops = change(doc, (d) => {
+    const ops = change(doc, d => {
       d.settings.darkMode.set(true)
     })
 
     expect(ops).toHaveLength(1)
-    expect(ops[0]!.path).toEqual([
+    expect(ops[0]?.path).toEqual([
       { type: "key", key: "settings" },
       { type: "key", key: "darkMode" },
     ])
-    expect(ops[0]!.change).toEqual(replaceChange(true))
+    expect(ops[0]?.change).toEqual(replaceChange(true))
   })
 
   it("captures multiple mutations as multiple Op entries", () => {
     const { doc } = createChatDoc()
 
-    const ops = change(doc, (d) => {
+    const ops = change(doc, d => {
       d.settings.darkMode.set(true)
       d.settings.fontSize.set(18)
       d.messages.push({ author: "Bob", body: "Hey" })
@@ -102,30 +100,28 @@ describe("change: basic behavior", () => {
 
     expect(ops).toHaveLength(3)
     // First: darkMode set
-    expect(ops[0]!.path).toEqual([
+    expect(ops[0]?.path).toEqual([
       { type: "key", key: "settings" },
       { type: "key", key: "darkMode" },
     ])
     // Second: fontSize set
-    expect(ops[1]!.path).toEqual([
+    expect(ops[1]?.path).toEqual([
       { type: "key", key: "settings" },
       { type: "key", key: "fontSize" },
     ])
     // Third: messages push
-    expect(ops[2]!.path).toEqual([
-      { type: "key", key: "messages" },
-    ])
+    expect(ops[2]?.path).toEqual([{ type: "key", key: "messages" }])
   })
 
   it("captures text mutations", () => {
     const { doc } = createChatDoc()
 
-    const ops = change(doc, (d) => {
+    const ops = change(doc, d => {
       d.title.insert(5, " World")
     })
 
     expect(ops).toHaveLength(1)
-    expect(ops[0]!.change).toEqual(
+    expect(ops[0]?.change).toEqual(
       textChange([{ retain: 5 }, { insert: " World" }]),
     )
   })
@@ -133,18 +129,18 @@ describe("change: basic behavior", () => {
   it("captures counter mutations", () => {
     const { doc } = createChatDoc()
 
-    const ops = change(doc, (d) => {
+    const ops = change(doc, d => {
       d.count.increment(3)
     })
 
     expect(ops).toHaveLength(1)
-    expect(ops[0]!.change).toEqual(incrementChange(3))
+    expect(ops[0]?.change).toEqual(incrementChange(3))
   })
 
   it("applies mutations to the store", () => {
     const { doc, store } = createChatDoc()
 
-    change(doc, (d) => {
+    change(doc, d => {
       d.settings.darkMode.set(true)
     })
 
@@ -160,7 +156,7 @@ describe("change: basic behavior", () => {
     const { doc, store } = createChatDoc()
 
     expect(() =>
-      change(doc, (d) => {
+      change(doc, d => {
         d.settings.darkMode.set(true)
         throw new Error("oops")
       }),
@@ -226,7 +222,7 @@ describe("applyChanges: basic behavior", () => {
     applyChanges(doc, ops)
 
     expect(doc.messages.length).toBe(2)
-    expect(doc.messages.at(1)!.author()).toBe("Bob")
+    expect(doc.messages.at(1)?.author()).toBe("Bob")
   })
 
   it("applies increment changes to the store", () => {
@@ -298,7 +294,7 @@ describe("applyChanges: basic behavior", () => {
   it("empty ops is a no-op (no subscribers fire)", () => {
     const { doc } = createChatDoc()
     const events: Changeset[] = []
-    getChangefeed(doc.settings.darkMode).subscribe((cs) => events.push(cs))
+    getChangefeed(doc.settings.darkMode).subscribe(cs => events.push(cs))
 
     const result = applyChanges(doc, [])
 
@@ -335,7 +331,7 @@ describe("round-trip: change → applyChanges", () => {
     const docA = createChatDoc()
     const docB = createChatDoc()
 
-    const ops = change(docA.doc, (d) => {
+    const ops = change(docA.doc, d => {
       d.title.insert(5, " World")
       d.settings.darkMode.set(true)
       d.settings.fontSize.set(20)
@@ -350,7 +346,7 @@ describe("round-trip: change → applyChanges", () => {
     const docA = createChatDoc()
     const docB = createChatDoc()
 
-    const ops = change(docA.doc, (d) => {
+    const ops = change(docA.doc, d => {
       d.messages.push({ author: "Bob", body: "Hey" })
     })
 
@@ -363,7 +359,7 @@ describe("round-trip: change → applyChanges", () => {
     const docA = createChatDoc()
     const docB = createChatDoc()
 
-    const ops = change(docA.doc, (d) => {
+    const ops = change(docA.doc, d => {
       d.count.increment(7)
     })
 
@@ -376,7 +372,7 @@ describe("round-trip: change → applyChanges", () => {
     const docA = createChatDoc()
     const docB = createChatDoc()
 
-    const ops = change(docA.doc, (d) => {
+    const ops = change(docA.doc, d => {
       d.title.insert(5, " World")
       d.count.increment(3)
       d.messages.push({ author: "Bob", body: "Hey" })
@@ -393,15 +389,15 @@ describe("round-trip: change → applyChanges", () => {
     const docA = createChatDoc()
     const docB = createChatDoc()
 
-    const ops = change(docA.doc, (d) => {
+    const ops = change(docA.doc, d => {
       d.messages.insert(0, { author: "Eve", body: "First!" })
     })
 
     applyChanges(docB.doc, ops)
 
     expect(docB.doc()).toEqual(docA.doc())
-    expect(docB.doc.messages.at(0)!.author()).toBe("Eve")
-    expect(docB.doc.messages.at(1)!.author()).toBe("Alice")
+    expect(docB.doc.messages.at(0)?.author()).toBe("Eve")
+    expect(docB.doc.messages.at(1)?.author()).toBe("Alice")
   })
 
   it("sequence delete round-trips correctly", () => {
@@ -415,7 +411,7 @@ describe("round-trip: change → applyChanges", () => {
     const docA = createChatDoc(storeOverrides)
     const docB = createChatDoc(storeOverrides)
 
-    const ops = change(docA.doc, (d) => {
+    const ops = change(docA.doc, d => {
       d.messages.delete(1, 1)
     })
 
@@ -423,8 +419,8 @@ describe("round-trip: change → applyChanges", () => {
 
     expect(docB.doc()).toEqual(docA.doc())
     expect(docB.doc.messages.length).toBe(2)
-    expect(docB.doc.messages.at(0)!.author()).toBe("Alice")
-    expect(docB.doc.messages.at(1)!.author()).toBe("Carol")
+    expect(docB.doc.messages.at(0)?.author()).toBe("Alice")
+    expect(docB.doc.messages.at(1)?.author()).toBe("Carol")
   })
 })
 
@@ -437,7 +433,7 @@ describe("applyChanges: batched notification", () => {
     const { doc } = createChatDoc()
 
     const changesets: Changeset[] = []
-    getChangefeed(doc.settings).subscribe((cs) => changesets.push(cs))
+    getChangefeed(doc.settings).subscribe(cs => changesets.push(cs))
 
     applyChanges(doc, [
       {
@@ -463,8 +459,8 @@ describe("applyChanges: batched notification", () => {
     // Check leaf subscribers
     const dmChangesets: Changeset[] = []
     const fsChangesets: Changeset[] = []
-    getChangefeed(doc.settings.darkMode).subscribe((cs) => dmChangesets.push(cs))
-    getChangefeed(doc.settings.fontSize).subscribe((cs) => fsChangesets.push(cs))
+    getChangefeed(doc.settings.darkMode).subscribe(cs => dmChangesets.push(cs))
+    getChangefeed(doc.settings.fontSize).subscribe(cs => fsChangesets.push(cs))
 
     applyChanges(doc, [
       {
@@ -484,9 +480,9 @@ describe("applyChanges: batched notification", () => {
     ])
 
     expect(dmChangesets).toHaveLength(1)
-    expect(dmChangesets[0]!.changes).toHaveLength(1)
+    expect(dmChangesets[0]?.changes).toHaveLength(1)
     expect(fsChangesets).toHaveLength(1)
-    expect(fsChangesets[0]!.changes).toHaveLength(1)
+    expect(fsChangesets[0]?.changes).toHaveLength(1)
   })
 
   it("subscriber sees fully-applied state (not partially-applied)", () => {
@@ -526,7 +522,7 @@ describe("applyChanges: batched notification", () => {
     const { doc } = createChatDoc()
 
     const changesets: Changeset[] = []
-    getChangefeed(doc.count).subscribe((cs) => changesets.push(cs))
+    getChangefeed(doc.count).subscribe(cs => changesets.push(cs))
 
     applyChanges(doc, [
       {
@@ -545,7 +541,7 @@ describe("applyChanges: batched notification", () => {
 
     // One Changeset with 3 changes
     expect(changesets).toHaveLength(1)
-    expect(changesets[0]!.changes).toHaveLength(3)
+    expect(changesets[0]?.changes).toHaveLength(3)
     expect(doc.count()).toBe(6)
   })
 })
@@ -559,7 +555,7 @@ describe("applyChanges: origin tagging", () => {
     const { doc } = createChatDoc()
 
     const changesets: Changeset[] = []
-    getChangefeed(doc.settings.darkMode).subscribe((cs) => changesets.push(cs))
+    getChangefeed(doc.settings.darkMode).subscribe(cs => changesets.push(cs))
 
     applyChanges(
       doc,
@@ -576,14 +572,14 @@ describe("applyChanges: origin tagging", () => {
     )
 
     expect(changesets).toHaveLength(1)
-    expect(changesets[0]!.origin).toBe("sync")
+    expect(changesets[0]?.origin).toBe("sync")
   })
 
   it("origin is undefined when not specified", () => {
     const { doc } = createChatDoc()
 
     const changesets: Changeset[] = []
-    getChangefeed(doc.settings.darkMode).subscribe((cs) => changesets.push(cs))
+    getChangefeed(doc.settings.darkMode).subscribe(cs => changesets.push(cs))
 
     applyChanges(doc, [
       {
@@ -596,16 +592,14 @@ describe("applyChanges: origin tagging", () => {
     ])
 
     expect(changesets).toHaveLength(1)
-    expect(changesets[0]!.origin).toBeUndefined()
+    expect(changesets[0]?.origin).toBeUndefined()
   })
 
   it("tree subscribers receive origin from applyChanges", () => {
     const { doc } = createChatDoc()
 
     const treeChangesets: Changeset<Op>[] = []
-    getChangefeed(doc.settings).subscribeTree!((cs) =>
-      treeChangesets.push(cs),
-    )
+    getChangefeed(doc.settings).subscribeTree?.(cs => treeChangesets.push(cs))
 
     applyChanges(
       doc,
@@ -622,9 +616,9 @@ describe("applyChanges: origin tagging", () => {
     )
 
     expect(treeChangesets).toHaveLength(1)
-    expect(treeChangesets[0]!.origin).toBe("undo")
-    expect(treeChangesets[0]!.changes).toHaveLength(1)
-    expect(treeChangesets[0]!.changes[0]!.path).toEqual([
+    expect(treeChangesets[0]?.origin).toBe("undo")
+    expect(treeChangesets[0]?.changes).toHaveLength(1)
+    expect(treeChangesets[0]?.changes[0]?.path).toEqual([
       { type: "key", key: "darkMode" },
     ])
   })
@@ -640,7 +634,7 @@ describe("applyChanges: surgical cache invalidation", () => {
 
     // Populate caches at two unrelated paths
     const msgRef = doc.messages.at(0)
-    expect(msgRef!.author()).toBe("Alice")
+    expect(msgRef?.author()).toBe("Alice")
     expect(doc.settings.darkMode()).toBe(false)
 
     // Apply change only to settings.darkMode
@@ -658,7 +652,7 @@ describe("applyChanges: surgical cache invalidation", () => {
     expect(doc.settings.darkMode()).toBe(true)
     // Unrelated cache preserved — same ref identity
     expect(doc.messages.at(0)).toBe(msgRef)
-    expect(doc.messages.at(0)!.author()).toBe("Alice")
+    expect(doc.messages.at(0)?.author()).toBe("Alice")
   })
 
   it("invalidates sequence cache on insert (shift)", () => {
@@ -666,7 +660,7 @@ describe("applyChanges: surgical cache invalidation", () => {
 
     // Populate sequence cache
     const refAlice = doc.messages.at(0)
-    expect(refAlice!.author()).toBe("Alice")
+    expect(refAlice?.author()).toBe("Alice")
 
     // Insert at index 0 via applyChanges
     applyChanges(doc, [
@@ -679,7 +673,7 @@ describe("applyChanges: surgical cache invalidation", () => {
     ])
 
     // Alice shifted from index 0 → 1
-    expect(doc.messages.at(0)!.author()).toBe("Eve")
+    expect(doc.messages.at(0)?.author()).toBe("Eve")
     expect(doc.messages.at(1)).toBe(refAlice) // same ref, shifted
   })
 })
@@ -695,10 +689,10 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
 
     // Subscribe to tree events on the root of docA
     const treeChangesets: Changeset<Op>[] = []
-    getChangefeed(docA.doc).subscribeTree!((cs) => treeChangesets.push(cs))
+    getChangefeed(docA.doc).subscribeTree?.(cs => treeChangesets.push(cs))
 
     // Mutate docA — two changes at different leaf paths
-    change(docA.doc, (d) => {
+    change(docA.doc, d => {
       d.settings.darkMode.set(true)
       d.count.increment(5)
     })
@@ -711,8 +705,8 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
     // Reconstruct Op[] from all tree events.
     // Op.path is relative to the subscription point (root in
     // this case), so it's the same as the absolute path.
-    const reconstructedOps: Op[] = treeChangesets.flatMap((cs) =>
-      cs.changes.map((te) => ({
+    const reconstructedOps: Op[] = treeChangesets.flatMap(cs =>
+      cs.changes.map(te => ({
         path: te.path,
         change: te.change,
       })),
@@ -730,12 +724,12 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
 
     // Subscribe to tree events on docA.settings (subtree)
     const treeChangesets: Changeset<Op>[] = []
-    getChangefeed(docA.doc.settings).subscribeTree!((cs) =>
+    getChangefeed(docA.doc.settings).subscribeTree?.(cs =>
       treeChangesets.push(cs),
     )
 
     // Mutate settings subtree — two changes at different leaf paths
-    change(docA.doc, (d) => {
+    change(docA.doc, d => {
       d.settings.darkMode.set(true)
       d.settings.fontSize.set(24)
     })
@@ -744,18 +738,18 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
     expect(treeChangesets).toHaveLength(2)
 
     // Each changeset has one Op with a relative path
-    expect(treeChangesets[0]!.changes).toHaveLength(1)
-    expect(treeChangesets[0]!.changes[0]!.path).toEqual([
+    expect(treeChangesets[0]?.changes).toHaveLength(1)
+    expect(treeChangesets[0]?.changes[0]?.path).toEqual([
       { type: "key", key: "darkMode" },
     ])
-    expect(treeChangesets[1]!.changes).toHaveLength(1)
-    expect(treeChangesets[1]!.changes[0]!.path).toEqual([
+    expect(treeChangesets[1]?.changes).toHaveLength(1)
+    expect(treeChangesets[1]?.changes[0]?.path).toEqual([
       { type: "key", key: "fontSize" },
     ])
 
     // To apply to docB, we need to prepend the "settings" prefix
-    const absoluteOps: Op[] = treeChangesets.flatMap((cs) =>
-      cs.changes.map((te) => ({
+    const absoluteOps: Op[] = treeChangesets.flatMap(cs =>
+      cs.changes.map(te => ({
         path: [{ type: "key" as const, key: "settings" }, ...te.path],
         change: te.change,
       })),
@@ -778,23 +772,23 @@ describe("change: changefeed integration", () => {
     const { doc } = createChatDoc()
 
     const changesets: Changeset[] = []
-    getChangefeed(doc.settings.darkMode).subscribe((cs) => changesets.push(cs))
+    getChangefeed(doc.settings.darkMode).subscribe(cs => changesets.push(cs))
 
-    change(doc, (d) => {
+    change(doc, d => {
       d.settings.darkMode.set(true)
     })
 
     expect(changesets).toHaveLength(1)
-    expect(changesets[0]!.changes).toHaveLength(1)
+    expect(changesets[0]?.changes).toHaveLength(1)
   })
 
   it("change() with multiple mutations to same path batches them", () => {
     const { doc } = createChatDoc()
 
     const changesets: Changeset[] = []
-    getChangefeed(doc.count).subscribe((cs) => changesets.push(cs))
+    getChangefeed(doc.count).subscribe(cs => changesets.push(cs))
 
-    change(doc, (d) => {
+    change(doc, d => {
       d.count.increment(1)
       d.count.increment(2)
       d.count.increment(3)
@@ -802,7 +796,7 @@ describe("change: changefeed integration", () => {
 
     // One Changeset with 3 changes (transaction commit batches)
     expect(changesets).toHaveLength(1)
-    expect(changesets[0]!.changes).toHaveLength(3)
+    expect(changesets[0]?.changes).toHaveLength(3)
     expect(doc.count()).toBe(6)
   })
 })
@@ -822,7 +816,7 @@ describe("re-entrancy: mutation during notification", () => {
 
     // Subscribe to darkMode. When it fires, auto-commit a fontSize mutation.
     const fontSizeChangesets: Changeset[] = []
-    getChangefeed(doc.settings.fontSize).subscribe((cs) =>
+    getChangefeed(doc.settings.fontSize).subscribe(cs =>
       fontSizeChangesets.push(cs),
     )
 
@@ -833,7 +827,7 @@ describe("re-entrancy: mutation during notification", () => {
     })
 
     // Trigger the outer notification
-    change(doc, (d) => {
+    change(doc, d => {
       d.settings.darkMode.set(true)
     })
 
@@ -843,7 +837,7 @@ describe("re-entrancy: mutation during notification", () => {
 
     // The nested auto-commit delivered its own notification
     expect(fontSizeChangesets).toHaveLength(1)
-    expect(fontSizeChangesets[0]!.changes).toHaveLength(1)
+    expect(fontSizeChangesets[0]?.changes).toHaveLength(1)
   })
 
   it("change() inside subscriber does not corrupt outer notification", () => {
@@ -854,13 +848,13 @@ describe("re-entrancy: mutation during notification", () => {
     getChangefeed(doc.settings.darkMode).subscribe(() => {
       // Re-entrant change(): opens a transaction, mutates, commits —
       // all nested inside the outer flush's delivery.
-      nestedOps = change(doc, (d) => {
+      nestedOps = change(doc, d => {
         d.settings.fontSize.set(20)
         d.count.increment(5)
       })
     })
 
-    change(doc, (d) => {
+    change(doc, d => {
       d.settings.darkMode.set(true)
     })
 
@@ -877,7 +871,7 @@ describe("re-entrancy: mutation during notification", () => {
     const { doc } = createChatDoc()
 
     const countChangesets: Changeset[] = []
-    getChangefeed(doc.count).subscribe((cs) => countChangesets.push(cs))
+    getChangefeed(doc.count).subscribe(cs => countChangesets.push(cs))
 
     getChangefeed(doc.settings.darkMode).subscribe(() => {
       // Re-entrant applyChanges: calls executeBatch nested inside
@@ -890,7 +884,7 @@ describe("re-entrancy: mutation during notification", () => {
       ])
     })
 
-    change(doc, (d) => {
+    change(doc, d => {
       d.settings.darkMode.set(true)
     })
 
@@ -899,7 +893,7 @@ describe("re-entrancy: mutation during notification", () => {
 
     // The nested applyChanges delivered its own notification to count
     expect(countChangesets).toHaveLength(1)
-    expect(countChangesets[0]!.changes).toHaveLength(1)
+    expect(countChangesets[0]?.changes).toHaveLength(1)
   })
 
   it("chained re-entrancy: subscriber triggers mutation whose subscriber triggers another", () => {
@@ -914,7 +908,7 @@ describe("re-entrancy: mutation during notification", () => {
       doc.settings.fontSize.set(18)
     })
 
-    change(doc, (d) => {
+    change(doc, d => {
       d.settings.darkMode.set(true)
     })
 
@@ -928,7 +922,7 @@ describe("re-entrancy: mutation during notification", () => {
 
     // Track ALL darkMode notifications
     const darkModeChangesets: Changeset[] = []
-    getChangefeed(doc.settings.darkMode).subscribe((cs) =>
+    getChangefeed(doc.settings.darkMode).subscribe(cs =>
       darkModeChangesets.push(cs),
     )
 
@@ -937,7 +931,7 @@ describe("re-entrancy: mutation during notification", () => {
       doc.count.increment(1)
     })
 
-    change(doc, (d) => {
+    change(doc, d => {
       d.settings.darkMode.set(true)
     })
 
@@ -945,7 +939,7 @@ describe("re-entrancy: mutation during notification", () => {
     // nested count mutation should not cause a second darkMode
     // notification (the accumulator was already drained).
     expect(darkModeChangesets).toHaveLength(1)
-    expect(darkModeChangesets[0]!.changes).toHaveLength(1)
+    expect(darkModeChangesets[0]?.changes).toHaveLength(1)
   })
 })
 
@@ -958,19 +952,19 @@ describe("subscribeNode: basic behavior", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset[] = []
 
-    subscribeNode(doc.settings.darkMode, (cs) => changesets.push(cs))
+    subscribeNode(doc.settings.darkMode, cs => changesets.push(cs))
     doc.settings.darkMode.set(true)
 
     expect(changesets).toHaveLength(1)
-    expect(changesets[0]!.changes).toHaveLength(1)
-    expect(changesets[0]!.changes[0]!.type).toBe("replace")
+    expect(changesets[0]?.changes).toHaveLength(1)
+    expect(changesets[0]?.changes[0]?.type).toBe("replace")
   })
 
   it("composite subscribeNode fires on node-level change only (not child mutations)", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset[] = []
 
-    subscribeNode(doc.settings, (cs) => changesets.push(cs))
+    subscribeNode(doc.settings, cs => changesets.push(cs))
 
     // Child mutation — should NOT fire
     doc.settings.darkMode.set(true)
@@ -985,7 +979,9 @@ describe("subscribeNode: basic behavior", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset[] = []
 
-    const unsub = subscribeNode(doc.settings.darkMode, (cs) => changesets.push(cs))
+    const unsub = subscribeNode(doc.settings.darkMode, cs =>
+      changesets.push(cs),
+    )
     doc.settings.darkMode.set(true)
     expect(changesets).toHaveLength(1)
 
@@ -1008,12 +1004,12 @@ describe("subscribe: basic behavior", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset<Op>[] = []
 
-    subscribe(doc.settings, (cs) => changesets.push(cs))
+    subscribe(doc.settings, cs => changesets.push(cs))
     doc.settings.darkMode.set(true)
 
     expect(changesets).toHaveLength(1)
-    expect(changesets[0]!.changes).toHaveLength(1)
-    expect(changesets[0]!.changes[0]!.path).toEqual([
+    expect(changesets[0]?.changes).toHaveLength(1)
+    expect(changesets[0]?.changes[0]?.path).toEqual([
       { type: "key", key: "darkMode" },
     ])
   })
@@ -1022,19 +1018,19 @@ describe("subscribe: basic behavior", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset<Op>[] = []
 
-    subscribe(doc.settings, (cs) => changesets.push(cs))
+    subscribe(doc.settings, cs => changesets.push(cs))
     doc.settings.set({ darkMode: true, fontSize: 20 })
 
     expect(changesets).toHaveLength(1)
-    expect(changesets[0]!.changes).toHaveLength(1)
-    expect(changesets[0]!.changes[0]!.path).toEqual([])
+    expect(changesets[0]?.changes).toHaveLength(1)
+    expect(changesets[0]?.changes[0]?.path).toEqual([])
   })
 
   it("unsubscribe stops delivery", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset<Op>[] = []
 
-    const unsub = subscribe(doc.settings, (cs) => changesets.push(cs))
+    const unsub = subscribe(doc.settings, cs => changesets.push(cs))
     doc.settings.darkMode.set(true)
     expect(changesets).toHaveLength(1)
 
@@ -1065,17 +1061,17 @@ describe("integration: library-only round-trip", () => {
     const docB = createChatDoc()
 
     const treeChangesets: Changeset<Op>[] = []
-    subscribe(docA.doc, (cs) => treeChangesets.push(cs))
+    subscribe(docA.doc, cs => treeChangesets.push(cs))
 
     // Mutate docA via library-level change()
-    change(docA.doc, (d) => {
+    change(docA.doc, d => {
       d.settings.darkMode.set(true)
       d.count.increment(5)
     })
 
     // Reconstruct Op[] from tree events
-    const ops: Op[] = treeChangesets.flatMap((cs) =>
-      cs.changes.map((te) => ({
+    const ops: Op[] = treeChangesets.flatMap(cs =>
+      cs.changes.map(te => ({
         path: te.path,
         change: te.change,
       })),

@@ -9,38 +9,34 @@
  * Requires the schema package to be built (`npx tsup` in packages/schema).
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
-  Schema,
-  LoroSchema,
-  interpret,
-  readable,
-  writable,
-  changefeed,
-  plainContext,
-  hasChangefeed,
   CHANGEFEED,
-  Zero,
+  changefeed,
+  hasChangefeed,
+  interpret,
   isIncrementChange,
+  LoroSchema,
+  plainContext,
+  readable,
+  Schema,
+  writable,
+  Zero,
 } from "@kyneta/schema"
-import type { Ref } from "@kyneta/schema"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import {
+  conditionalRegion,
+  listRegion,
+  read,
+  Scope,
   subscribe,
   textRegion,
-  listRegion,
-  conditionalRegion,
-  read,
   valueRegion,
-  Scope,
 } from "../../runtime/index.js"
 import {
   activeSubscriptions,
-  getActiveSubscriptionCount,
-  resetSubscriptionIdCounter,
-  resetScopeIdCounter,
   createCountingContainer,
-  assertMaxMutations,
+  getActiveSubscriptionCount,
 } from "../../testing/index.js"
 import { installDOMGlobals, resetTestState } from "./helpers.js"
 
@@ -67,7 +63,10 @@ const todoSchema = LoroSchema.doc({
 
 function createDoc(seed: Record<string, unknown> = {}) {
   const defaults = Zero.structural(todoSchema) as Record<string, unknown>
-  const store = Zero.overlay(seed, defaults, todoSchema) as Record<string, unknown>
+  const store = Zero.overlay(seed, defaults, todoSchema) as Record<
+    string,
+    unknown
+  >
   const ctx = plainContext(store)
   const doc = interpret(todoSchema, ctx)
     .with(readable)
@@ -203,7 +202,7 @@ describe("schema-driven integration tests", () => {
       valueRegion(
         [doc.count],
         () => read(doc.count as any),
-        (v) => {
+        v => {
           textNode.textContent = String(v)
         },
         scope,
@@ -225,11 +224,7 @@ describe("schema-driven integration tests", () => {
       const scope = new Scope()
       const changes: any[] = []
 
-      subscribe(
-        doc.count,
-        (change) => changes.push(change),
-        scope,
-      )
+      subscribe(doc.count, change => changes.push(change), scope)
 
       doc.count.increment(3)
 
@@ -316,7 +311,10 @@ describe("schema-driven integration tests", () => {
       })
 
       // ListRefLike requires .length and .at(index)
-      const ref = doc.items as unknown as { length: number; at(i: number): unknown }
+      const ref = doc.items as unknown as {
+        length: number
+        at(i: number): unknown
+      }
       expect(typeof ref.length).toBe("number")
       expect(ref.length).toBe(2)
       expect(typeof ref.at).toBe("function")
@@ -416,9 +414,9 @@ describe("schema-driven integration tests", () => {
       expect(counts.insertBefore).toBe(1)
 
       expect(container.childNodes.length).toBe(11)
-      expect(
-        (container.childNodes[10] as HTMLElement).textContent,
-      ).toBe("New item")
+      expect((container.childNodes[10] as HTMLElement).textContent).toBe(
+        "New item",
+      )
 
       scope.dispose()
     })
@@ -485,7 +483,7 @@ describe("schema-driven integration tests", () => {
       valueRegion(
         [doc.count],
         () => read(doc.count as any),
-        (v) => {
+        v => {
           textNode.textContent = String(v)
         },
         scope,

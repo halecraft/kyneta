@@ -230,9 +230,7 @@ function emitContent(node: ContentNode, indent: string = ""): string[] {
     return [`${indent}_html += ${JSON.stringify(escaped)}`]
   }
   // Render-time and reactive - use template literal interpolation with escaping
-  return [
-    `${indent}_html += \`\${${escapeExpr(`String(${node.source})`)}}\``,
-  ]
+  return [`${indent}_html += \`\${${escapeExpr(`String(${node.source})`)}}\``]
 }
 
 /**
@@ -259,9 +257,7 @@ function emitElement(
     // Event handlers are skipped — SSR doesn't wire events
     const propsArg =
       propsEntries.length > 0 ? `{ ${propsEntries.join(", ")} }` : ""
-    lines.push(
-      `${indent}_html += ${node.factorySource}(${propsArg})()`,
-    )
+    lines.push(`${indent}_html += ${node.factorySource}(${propsArg})()`)
     return lines
   }
 
@@ -354,7 +350,7 @@ function emitLoop(
   lines.push(`${indent}for (const ${loopVar} of ${iterableExpr}) {`)
 
   // Loop body children
-  lines.push(...emitChildren(node.body, state, indent + "  "))
+  lines.push(...emitChildren(node.body, state, `${indent}  `))
 
   lines.push(`${indent}}`)
 
@@ -400,13 +396,13 @@ function emitConditional(
     if (isElse) {
       lines.push(`${indent}} else {`)
     } else if (isFirst) {
-      lines.push(`${indent}if (${branch.condition!.source}) {`)
+      lines.push(`${indent}if (${branch.condition?.source}) {`)
     } else {
-      lines.push(`${indent}} else if (${branch.condition!.source}) {`)
+      lines.push(`${indent}} else if (${branch.condition?.source}) {`)
     }
 
     // Branch body children
-    lines.push(...emitChildren(branch.body, state, indent + "  "))
+    lines.push(...emitChildren(branch.body, state, `${indent}  `))
   }
 
   lines.push(`${indent}}`)

@@ -18,6 +18,7 @@
  * @packageDocumentation
  */
 
+import { generateRegionMarkers } from "./html-constants.js"
 import type {
   BuilderNode,
   ConditionalNode,
@@ -26,8 +27,7 @@ import type {
   TemplateHole,
   TemplateNode,
 } from "./ir.js"
-import { generateRegionMarkers } from "./html-constants.js"
-import { walkIR, type WalkEvent } from "./walk.js"
+import { type WalkEvent, walkIR } from "./walk.js"
 
 // =============================================================================
 // Template Extraction
@@ -153,8 +153,6 @@ function processEvent(
       // No HTML output for event handlers
       return inOpeningTag
 
-
-
     case "staticText":
       // Close opening tag if needed before content
       if (inOpeningTag) {
@@ -182,7 +180,7 @@ function processEvent(
       htmlParts.push("<!---->")
       return false
 
-    case "regionPlaceholder":
+    case "regionPlaceholder": {
       // Close opening tag if needed
       if (inOpeningTag) {
         htmlParts.push(">")
@@ -202,6 +200,7 @@ function processEvent(
       htmlParts.push(markers.open)
       htmlParts.push(markers.close)
       return false
+    }
 
     case "componentPlaceholder":
       // Close opening tag if needed

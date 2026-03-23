@@ -19,38 +19,34 @@
 // See .plans/interpreter-decomposition.md §Phase 4.
 // See .plans/apply-changes.md §Phase 4.
 
-import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { Op } from "../changefeed.js"
+import type { Interpreter, Path, SumVariants } from "../interpret.js"
+
 export type { Op }
-import type { SubstratePrepare } from "../substrate.js"
-import {
-  isNullableSum,
-  type Schema,
-  type ScalarKind,
-  type ScalarSchema,
-  type ScalarPlain,
-  type ProductSchema,
-  type SequenceSchema,
-  type MapSchema,
-  type SumSchema,
-  type AnnotatedSchema,
-  type PositionalSumSchema,
-  type DiscriminatedSumSchema,
-} from "../schema.js"
+
 import type { ChangeBase } from "../change.js"
 import {
-  textChange,
-  sequenceChange,
+  incrementChange,
   mapChange,
   replaceChange,
-  incrementChange,
+  sequenceChange,
+  textChange,
 } from "../change.js"
-import {
-  type Store,
-  readByPath,
-  applyChangeToStore,
-} from "../store.js"
-import type { RefContext, Plain } from "../interpreter-types.js"
+import type { Plain, RefContext } from "../interpreter-types.js"
+import type {
+  AnnotatedSchema,
+  DiscriminatedSumSchema,
+  MapSchema,
+  PositionalSumSchema,
+  ProductSchema,
+  ScalarKind,
+  ScalarSchema,
+  Schema,
+  SequenceSchema,
+  SumSchema,
+} from "../schema.js"
+import { readByPath } from "../store.js"
+import type { SubstratePrepare } from "../substrate.js"
 
 // ---------------------------------------------------------------------------
 // WritableDiscriminantProductRef — hybrid product ref for discriminated unions
@@ -69,15 +65,18 @@ type WritableDiscriminantProductRef<
   F extends Record<string, Schema>,
   D extends string,
 > = {
-    readonly [K in keyof F]:
-      K extends D ? Plain<F[K]> : Writable<F[K]>
-  } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
-
-// Re-export store utilities for backward compatibility
-export { type Store, readByPath, writeByPath, applyChangeToStore } from "../store.js"
+  readonly [K in keyof F]: K extends D ? Plain<F[K]> : Writable<F[K]>
+} & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
 
 // Re-export shared types for backward compatibility
-export type { RefContext, Plain } from "../interpreter-types.js"
+export type { Plain, RefContext } from "../interpreter-types.js"
+// Re-export store utilities for backward compatibility
+export {
+  applyChangeToStore,
+  readByPath,
+  type Store,
+  writeByPath,
+} from "../store.js"
 
 // ---------------------------------------------------------------------------
 // TRANSACT symbol — composability hook for discovering a ref's context
@@ -200,7 +199,7 @@ export function executeBatch(
   if (ctx.inTransaction) {
     throw new Error(
       "executeBatch must not be called during an active transaction. " +
-      "Commit or abort the transaction first.",
+        "Commit or abort the transaction first.",
     )
   }
   for (const { path, change } of changes) {
@@ -235,7 +234,9 @@ export function executeBatch(
  * const doc = interpret(schema, ctx).with(readable).with(writable).done()
  * ```
  */
-export function buildWritableContext(substrate: SubstratePrepare): WritableContext {
+export function buildWritableContext(
+  substrate: SubstratePrepare,
+): WritableContext {
   const pending: Op[] = []
   let inTransaction = false
 
@@ -272,7 +273,9 @@ export function buildWritableContext(substrate: SubstratePrepare): WritableConte
 
   const beginTransaction = (): void => {
     if (inTransaction) {
-      throw new Error("Already in a transaction (nested transactions are not supported)")
+      throw new Error(
+        "Already in a transaction (nested transactions are not supported)",
+      )
     }
     inTransaction = true
   }
@@ -312,7 +315,9 @@ export function buildWritableContext(substrate: SubstratePrepare): WritableConte
     beginTransaction,
     commit,
     abort,
-    get inTransaction() { return inTransaction },
+    get inTransaction() {
+      return inTransaction
+    },
   }
 
   return ctx
@@ -414,10 +419,12 @@ export type Writable<S extends Schema> =
         ? CounterRef
         : Tag extends "doc"
           ? Inner extends ProductSchema<infer F>
-            ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
+            ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{
+                [K in keyof F]: Plain<F[K]>
+              }>
             : unknown
           : Tag extends "movable"
-            ? Inner extends SequenceSchema<infer I>
+            ? Inner extends SequenceSchema<infer _I>
               ? SequenceRef
               : unknown
             : Tag extends "tree"
@@ -433,16 +440,21 @@ export type Writable<S extends Schema> =
       ? ScalarRef<V>
       : // --- Product ---
         S extends ProductSchema<infer F>
-        ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
+        ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{
+            [K in keyof F]: Plain<F[K]>
+          }>
         : // --- Sequence ---
-          S extends SequenceSchema<infer I>
+          S extends SequenceSchema<infer _I>
           ? SequenceRef
           : // --- Map ---
             S extends MapSchema<infer I>
             ? WritableMapRef<Plain<I>>
             : // --- Sum ---
               S extends PositionalSumSchema<infer V>
-              ? V extends readonly [ScalarSchema<"null", any>, infer Inner extends Schema]
+              ? V extends readonly [
+                  ScalarSchema<"null", any>,
+                  infer Inner extends Schema,
+                ]
                 ? ScalarRef<Plain<Inner> | null>
                 : Writable<V[number]>
               : S extends DiscriminatedSumSchema<infer D, infer V>
@@ -683,13 +695,12 @@ export function withWritable<A>(
             // Read current text length via store inspection (not carrier call)
             // so navigate+write stacks work without a reading layer.
             const current = readByPath(ctx.store, path)
-            const currentLength = typeof current === "string" ? current.length : 0
+            const currentLength =
+              typeof current === "string" ? current.length : 0
             ctx.dispatch(
               path,
               textChange([
-                ...(currentLength > 0
-                  ? [{ delete: currentLength }]
-                  : []),
+                ...(currentLength > 0 ? [{ delete: currentLength }] : []),
                 { insert: content },
               ]),
             )

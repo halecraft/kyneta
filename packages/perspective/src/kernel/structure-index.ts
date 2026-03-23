@@ -15,14 +15,8 @@
 //
 // See unified-engine.md §7.2, §8.
 
-import type {
-  CnId,
-  Constraint,
-  StructureConstraint,
-  StructurePayload,
-  Policy,
-} from './types.js';
-import { cnIdKey } from './cnid.js';
+import { cnIdKey } from "./cnid.js"
+import type { CnId, Constraint, Policy, StructureConstraint } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Slot Identity
@@ -43,14 +37,14 @@ import { cnIdKey } from './cnid.js';
  * - Seq child: `seq:<ownCnIdKey>` — each seq element is unique.
  */
 export function slotId(constraint: StructureConstraint): string {
-  const p = constraint.payload;
+  const p = constraint.payload
   switch (p.kind) {
-    case 'root':
-      return `root:${p.containerId}`;
-    case 'map':
-      return `map:${cnIdKey(p.parent)}:${p.key}`;
-    case 'seq':
-      return `seq:${cnIdKey(constraint.id)}`;
+    case "root":
+      return `root:${p.containerId}`
+    case "map":
+      return `map:${cnIdKey(p.parent)}:${p.key}`
+    case "seq":
+      return `seq:${cnIdKey(constraint.id)}`
   }
 }
 
@@ -62,14 +56,14 @@ export function slotId(constraint: StructureConstraint): string {
  * - Seq child: the CnId key string (position determined by Fugue ordering).
  */
 export function childKey(constraint: StructureConstraint): string {
-  const p = constraint.payload;
+  const p = constraint.payload
   switch (p.kind) {
-    case 'root':
-      return p.containerId;
-    case 'map':
-      return p.key;
-    case 'seq':
-      return cnIdKey(constraint.id);
+    case "root":
+      return p.containerId
+    case "map":
+      return p.key
+    case "seq":
+      return cnIdKey(constraint.id)
   }
 }
 
@@ -86,19 +80,19 @@ export function childKey(constraint: StructureConstraint): string {
  */
 export interface SlotGroup {
   /** The slot identity string. */
-  readonly slotId: string;
+  readonly slotId: string
 
   /** All structure constraints in this slot group. */
-  readonly structures: readonly StructureConstraint[];
+  readonly structures: readonly StructureConstraint[]
 
   /** All CnId keys for structure constraints in this group. */
-  readonly structureKeys: ReadonlySet<string>;
+  readonly structureKeys: ReadonlySet<string>
 
   /** The policy of the parent container (or the container's own policy for roots). */
-  readonly policy: Policy;
+  readonly policy: Policy
 
   /** The child key for this slot (containerId, map key, or seq CnId key). */
-  readonly childKey: string;
+  readonly childKey: string
 }
 
 // ---------------------------------------------------------------------------
@@ -113,19 +107,19 @@ export interface SlotGroup {
  */
 export interface StructureIndex {
   /** O(1) lookup: CnId key → StructureConstraint. */
-  readonly byId: ReadonlyMap<string, StructureConstraint>;
+  readonly byId: ReadonlyMap<string, StructureConstraint>
 
   /** Slot groups indexed by slot identity string. */
-  readonly slotGroups: ReadonlyMap<string, SlotGroup>;
+  readonly slotGroups: ReadonlyMap<string, SlotGroup>
 
   /** Mapping from structure CnId key → slot identity string. */
-  readonly structureToSlot: ReadonlyMap<string, string>;
+  readonly structureToSlot: ReadonlyMap<string, string>
 
   /**
    * Root containers indexed by containerId.
    * Each root defines a top-level container in the reality.
    */
-  readonly roots: ReadonlyMap<string, SlotGroup>;
+  readonly roots: ReadonlyMap<string, SlotGroup>
 
   /**
    * Children of a parent node, indexed by parent CnId key.
@@ -134,7 +128,7 @@ export interface StructureIndex {
    * For map parents: children grouped by (parent, key).
    * For seq parents: each child is its own slot.
    */
-  readonly childrenOf: ReadonlyMap<string, ReadonlyMap<string, SlotGroup>>;
+  readonly childrenOf: ReadonlyMap<string, ReadonlyMap<string, SlotGroup>>
 }
 
 // ---------------------------------------------------------------------------
@@ -154,33 +148,36 @@ export function buildStructureIndex(
   activeConstraints: Iterable<Constraint>,
 ): StructureIndex {
   // Step 1: Collect all structure constraints and index by CnId.
-  const byId = new Map<string, StructureConstraint>();
+  const byId = new Map<string, StructureConstraint>()
 
   for (const c of activeConstraints) {
-    if (c.type === 'structure') {
-      byId.set(cnIdKey(c.id), c);
+    if (c.type === "structure") {
+      byId.set(cnIdKey(c.id), c)
     }
   }
 
   // Step 2: Group by slot identity.
-  const slotGroupsBuilder = new Map<string, {
-    slotId: string;
-    structures: StructureConstraint[];
-    structureKeys: Set<string>;
-    policy: Policy;
-    childKey: string;
-  }>();
+  const slotGroupsBuilder = new Map<
+    string,
+    {
+      slotId: string
+      structures: StructureConstraint[]
+      structureKeys: Set<string>
+      policy: Policy
+      childKey: string
+    }
+  >()
 
-  const structureToSlot = new Map<string, string>();
+  const structureToSlot = new Map<string, string>()
 
   for (const sc of byId.values()) {
-    const sid = slotId(sc);
-    const ckey = childKey(sc);
-    const scKey = cnIdKey(sc.id);
+    const sid = slotId(sc)
+    const ckey = childKey(sc)
+    const scKey = cnIdKey(sc.id)
 
-    structureToSlot.set(scKey, sid);
+    structureToSlot.set(scKey, sid)
 
-    let group = slotGroupsBuilder.get(sid);
+    let group = slotGroupsBuilder.get(sid)
     if (group === undefined) {
       group = {
         slotId: sid,
@@ -188,15 +185,15 @@ export function buildStructureIndex(
         structureKeys: new Set(),
         policy: policyOf(sc),
         childKey: ckey,
-      };
-      slotGroupsBuilder.set(sid, group);
+      }
+      slotGroupsBuilder.set(sid, group)
     }
-    group.structures.push(sc);
-    group.structureKeys.add(scKey);
+    group.structures.push(sc)
+    group.structureKeys.add(scKey)
   }
 
   // Freeze the groups.
-  const slotGroups = new Map<string, SlotGroup>();
+  const slotGroups = new Map<string, SlotGroup>()
   for (const [sid, builder] of slotGroupsBuilder) {
     slotGroups.set(sid, {
       slotId: builder.slotId,
@@ -204,31 +201,31 @@ export function buildStructureIndex(
       structureKeys: builder.structureKeys,
       policy: builder.policy,
       childKey: builder.childKey,
-    });
+    })
   }
 
   // Step 3: Build root and children indexes.
-  const roots = new Map<string, SlotGroup>();
-  const childrenOf = new Map<string, Map<string, SlotGroup>>();
+  const roots = new Map<string, SlotGroup>()
+  const childrenOf = new Map<string, Map<string, SlotGroup>>()
 
   for (const group of slotGroups.values()) {
     // Use the first structure constraint to determine the kind.
     // All constraints in a slot group have the same kind (root/map/seq)
     // because the slot identity prefix differs by kind.
-    const representative = group.structures[0]!;
-    const payload = representative.payload;
+    const representative = group.structures[0]!
+    const payload = representative.payload
 
-    if (payload.kind === 'root') {
-      roots.set(payload.containerId, group);
+    if (payload.kind === "root") {
+      roots.set(payload.containerId, group)
     } else {
       // Map or Seq child — index under parent.
-      const parentKey = cnIdKey(payload.parent);
-      let children = childrenOf.get(parentKey);
+      const parentKey = cnIdKey(payload.parent)
+      let children = childrenOf.get(parentKey)
       if (children === undefined) {
-        children = new Map();
-        childrenOf.set(parentKey, children);
+        children = new Map()
+        childrenOf.set(parentKey, children)
       }
-      children.set(group.slotId, group);
+      children.set(group.slotId, group)
     }
   }
 
@@ -238,7 +235,7 @@ export function buildStructureIndex(
     structureToSlot,
     roots,
     childrenOf,
-  };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +249,7 @@ export function getStructure(
   index: StructureIndex,
   id: CnId,
 ): StructureConstraint | undefined {
-  return index.byId.get(cnIdKey(id));
+  return index.byId.get(cnIdKey(id))
 }
 
 /**
@@ -262,7 +259,7 @@ export function getSlotId(
   index: StructureIndex,
   structureId: CnId,
 ): string | undefined {
-  return index.structureToSlot.get(cnIdKey(structureId));
+  return index.structureToSlot.get(cnIdKey(structureId))
 }
 
 /**
@@ -272,7 +269,7 @@ export function getSlotGroup(
   index: StructureIndex,
   sid: string,
 ): SlotGroup | undefined {
-  return index.slotGroups.get(sid);
+  return index.slotGroups.get(sid)
 }
 
 /**
@@ -286,17 +283,17 @@ export function getChildren(
   index: StructureIndex,
   parentId: CnId,
 ): ReadonlyMap<string, SlotGroup> {
-  const key = cnIdKey(parentId);
-  return index.childrenOf.get(key) ?? EMPTY_CHILDREN;
+  const key = cnIdKey(parentId)
+  return index.childrenOf.get(key) ?? EMPTY_CHILDREN
 }
 
-const EMPTY_CHILDREN: ReadonlyMap<string, SlotGroup> = new Map();
+const EMPTY_CHILDREN: ReadonlyMap<string, SlotGroup> = new Map()
 
 /**
  * Check whether a given CnId refers to a known structure constraint.
  */
 export function hasStructure(index: StructureIndex, id: CnId): boolean {
-  return index.byId.has(cnIdKey(id));
+  return index.byId.has(cnIdKey(id))
 }
 
 /**
@@ -311,19 +308,20 @@ export function getChildrenOfSlotGroup(
 ): ReadonlyMap<string, SlotGroup> {
   // Merge children from all structure CnIds in the group.
   if (group.structures.length === 1) {
-    return getChildren(index, group.structures[0]!.id);
+    // biome-ignore lint/style/noNonNullAssertion: group.structures.length === 1 guarantees element exists
+    return getChildren(index, group.structures[0]!.id)
   }
 
-  const merged = new Map<string, SlotGroup>();
+  const merged = new Map<string, SlotGroup>()
   for (const sc of group.structures) {
-    const children = getChildren(index, sc.id);
+    const children = getChildren(index, sc.id)
     for (const [sid, sg] of children) {
       if (!merged.has(sid)) {
-        merged.set(sid, sg);
+        merged.set(sid, sg)
       }
     }
   }
-  return merged;
+  return merged
 }
 
 // ---------------------------------------------------------------------------
@@ -344,16 +342,16 @@ export function getChildrenOfSlotGroup(
  */
 function policyOf(sc: StructureConstraint): Policy {
   switch (sc.payload.kind) {
-    case 'root':
-      return sc.payload.policy;
-    case 'map':
+    case "root":
+      return sc.payload.policy
+    case "map":
       // A map child is a node under a map parent.
       // The child itself doesn't have an explicit policy in its payload.
       // Its policy is determined by what kind of children IT has.
       // For slot grouping purposes, we use 'map' as the policy.
-      return 'map';
-    case 'seq':
+      return "map"
+    case "seq":
       // A seq child is a node under a seq parent.
-      return 'seq';
+      return "seq"
   }
 }

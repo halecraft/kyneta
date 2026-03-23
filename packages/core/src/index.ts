@@ -40,11 +40,11 @@ export {
   CompilerError,
   HydrationMismatchError,
   InvalidMountTargetError,
-  KynetaError,
-  KynetaErrorCode,
   // Deprecated aliases
   KineticError,
   KineticErrorCode,
+  KynetaError,
+  KynetaErrorCode,
   ScopeDisposedError,
   type SourceLocation,
 } from "./errors.js"
@@ -83,10 +83,10 @@ export {
   conditionalRegion,
   listRegion,
   read,
+  type SubscriptionId,
   subscribe,
   unsubscribe,
   valueRegion,
-  type SubscriptionId,
 } from "./runtime/index.js"
 
 // =============================================================================
@@ -111,4 +111,4 @@ export type {
 // =============================================================================
 
 export type { LocalRef } from "./reactive/index.js"
-export { state, isLocalRef } from "./reactive/index.js"
+export { isLocalRef, state } from "./reactive/index.js"

@@ -8,8 +8,8 @@
 import {
   CHANGEFEED,
   type ChangeBase,
-  type Changeset,
   type Changefeed,
+  type Changeset,
   type TextChange,
   type TextInstruction,
 } from "@kyneta/schema"
@@ -27,7 +27,6 @@ import {
   patchText,
   planTextPatch,
   textRegion,
-  type TextPatchOp,
 } from "./text-patch.js"
 
 // Set up DOM globals for testing
@@ -72,7 +71,10 @@ function createMockTextRef(initialValue: string): {
     emit: <C extends ChangeBase>(change: C, origin?: string) => {
       // Cast: emit is a test harness escape hatch that intentionally pushes
       // non-TextChange values (e.g. { type: "replace" }) to test fallback paths.
-      callback?.({ changes: [change] as unknown as readonly TextChange[], origin })
+      callback?.({
+        changes: [change] as unknown as readonly TextChange[],
+        origin,
+      })
     },
     setValue: (value: string) => {
       currentValue = value
@@ -129,7 +131,11 @@ describe("planTextPatch", () => {
   })
 
   it("handles multiple retains", () => {
-    const ops: TextInstruction[] = [{ retain: 3 }, { retain: 2 }, { insert: "X" }]
+    const ops: TextInstruction[] = [
+      { retain: 3 },
+      { retain: 2 },
+      { insert: "X" },
+    ]
     const result = planTextPatch(ops)
     expect(result).toHaveLength(1)
     expect(result[0]).toEqual({ kind: "insert", offset: 5, text: "X" })
@@ -259,21 +265,11 @@ describe("patchInputValue", () => {
 
     const setRangeTextSpy = vi.spyOn(input, "setRangeText")
 
-    patchInputValue(input, [
-      { retain: 5 },
-      { delete: 1 },
-      { insert: "!" },
-    ])
+    patchInputValue(input, [{ retain: 5 }, { delete: 1 }, { insert: "!" }])
 
     expect(setRangeTextSpy).toHaveBeenCalledTimes(2)
     expect(setRangeTextSpy).toHaveBeenNthCalledWith(1, "", 5, 6, "preserve")
-    expect(setRangeTextSpy).toHaveBeenNthCalledWith(
-      2,
-      "!",
-      5,
-      5,
-      "preserve",
-    )
+    expect(setRangeTextSpy).toHaveBeenNthCalledWith(2, "!", 5, 5, "preserve")
   })
 
   it("applies insert at start (no retain)", () => {
@@ -299,7 +295,9 @@ describe("patchInputValue", () => {
   })
 
   it("works with textarea elements", () => {
-    const textarea = document.createElement("textarea") as unknown as HTMLTextAreaElement
+    const textarea = document.createElement(
+      "textarea",
+    ) as unknown as HTMLTextAreaElement
     ;(textarea as any).value = "Hello"
 
     const setRangeTextSpy = vi.spyOn(textarea, "setRangeText")
@@ -450,7 +448,10 @@ describe("textRegion", () => {
 
       // Simulate text insert: "Hello" → "Hello World"
       setValue("Hello World")
-      emit({ type: "text", instructions: [{ retain: 5 }, { insert: " World" }] })
+      emit({
+        type: "text",
+        instructions: [{ retain: 5 }, { insert: " World" }],
+      })
 
       expect(textNode.textContent).toBe("Hello World")
 
@@ -560,7 +561,10 @@ describe("textRegion", () => {
       expect(textNode.textContent).toBe("Hello")
 
       setValue("Hello World")
-      emit({ type: "text", instructions: [{ retain: 5 }, { insert: " World" }] })
+      emit({
+        type: "text",
+        instructions: [{ retain: 5 }, { insert: " World" }],
+      })
       expect(textNode.textContent).toBe("Hello World")
 
       scope.dispose()
@@ -595,7 +599,10 @@ describe("textRegion", () => {
 
       // Changes after dispose should not affect the text node
       setValue("changed")
-      emit({ type: "text", instructions: [{ delete: 7 }, { insert: "changed" }] })
+      emit({
+        type: "text",
+        instructions: [{ delete: 7 }, { insert: "changed" }],
+      })
 
       // textNode should still show the last value before dispose
       expect(textNode.textContent).toBe("initial")
@@ -639,14 +646,19 @@ describe("inputTextRegion", () => {
       inputTextRegion(input, ref, scope)
 
       // Create a spy that updates the underlying value to simulate real behavior
-      const setRangeTextSpy = vi.spyOn(input, "setRangeText").mockImplementation(
-        function (this: HTMLInputElement, text: string, start?: number, end?: number) {
+      const setRangeTextSpy = vi
+        .spyOn(input, "setRangeText")
+        .mockImplementation(function (
+          this: HTMLInputElement,
+          text: string,
+          start?: number,
+          end?: number,
+        ) {
           const current = this.value
           const s = start ?? 0
           const e = end ?? current.length
           ;(this as any).value = current.slice(0, s) + text + current.slice(e)
-        } as any,
-      )
+        } as any)
 
       // Simulate text insert: "Hello" → "Hello World"
       setValue("Hello World")
@@ -668,14 +680,19 @@ describe("inputTextRegion", () => {
 
       inputTextRegion(input, ref, scope)
 
-      const setRangeTextSpy = vi.spyOn(input, "setRangeText").mockImplementation(
-        function (this: HTMLInputElement, text: string, start?: number, end?: number) {
+      const setRangeTextSpy = vi
+        .spyOn(input, "setRangeText")
+        .mockImplementation(function (
+          this: HTMLInputElement,
+          text: string,
+          start?: number,
+          end?: number,
+        ) {
           const current = this.value
           const s = start ?? 0
           const e = end ?? current.length
           ;(this as any).value = current.slice(0, s) + text + current.slice(e)
-        } as any,
-      )
+        } as any)
 
       // Simulate text delete: "Hello World" → "Hello"
       setValue("Hello")
@@ -730,14 +747,19 @@ describe("inputTextRegion", () => {
 
       inputTextRegion(input, ref, scope)
 
-      const setRangeTextSpy = vi.spyOn(input, "setRangeText").mockImplementation(
-        function (this: HTMLInputElement, text: string, start?: number, end?: number) {
+      const setRangeTextSpy = vi
+        .spyOn(input, "setRangeText")
+        .mockImplementation(function (
+          this: HTMLInputElement,
+          text: string,
+          start?: number,
+          end?: number,
+        ) {
           const current = this.value
           const s = start ?? 0
           const e = end ?? current.length
           ;(this as any).value = current.slice(0, s) + text + current.slice(e)
-        } as any,
-      )
+        } as any)
 
       // First edit
       setValue("abXc")
@@ -760,7 +782,9 @@ describe("inputTextRegion", () => {
     it("works with textarea elements", () => {
       const { ref } = createMockTextRef("Hello")
       const scope = new Scope()
-      const textarea = document.createElement("textarea") as unknown as HTMLTextAreaElement
+      const textarea = document.createElement(
+        "textarea",
+      ) as unknown as HTMLTextAreaElement
 
       inputTextRegion(textarea, ref, scope)
 
@@ -781,10 +805,13 @@ describe("inputTextRegion", () => {
 
         // Remote insert at start (origin not "local" → "preserve" mode)
         setValue("XXXHello")
-        emit({
-          type: "text",
-          instructions: [{ insert: "XXX" }],
-        } as TextChange, "import")
+        emit(
+          {
+            type: "text",
+            instructions: [{ insert: "XXX" }],
+          } as TextChange,
+          "import",
+        )
 
         // With preserve mode, cursor shifts right by the insert length
         expect(input.value).toBe("XXXHello")
@@ -802,10 +829,13 @@ describe("inputTextRegion", () => {
 
         // Remote insert at end
         setValue("Hello World")
-        emit({
-          type: "text",
-          instructions: [{ retain: 5 }, { insert: " World" }],
-        } as TextChange, "import")
+        emit(
+          {
+            type: "text",
+            instructions: [{ retain: 5 }, { insert: " World" }],
+          } as TextChange,
+          "import",
+        )
 
         expect(input.value).toBe("Hello World")
 
@@ -822,10 +852,13 @@ describe("inputTextRegion", () => {
 
         // Remote delete at start
         setValue("World")
-        emit({
-          type: "text",
-          instructions: [{ delete: 6 }],
-        } as TextChange, "import")
+        emit(
+          {
+            type: "text",
+            instructions: [{ delete: 6 }],
+          } as TextChange,
+          "import",
+        )
 
         expect(input.value).toBe("World")
 
@@ -842,10 +875,13 @@ describe("inputTextRegion", () => {
 
         // Local insert (origin === "local" → "end" mode)
         setValue("Hi")
-        emit({
-          type: "text",
-          instructions: [{ insert: "Hi" }],
-        } as TextChange, "local")
+        emit(
+          {
+            type: "text",
+            instructions: [{ insert: "Hi" }],
+          } as TextChange,
+          "local",
+        )
 
         expect(input.value).toBe("Hi")
 

@@ -12,26 +12,24 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { createServer as createHttpServer } from "node:http"
 import { readFileSync } from "node:fs"
-import { fileURLToPath } from "node:url"
+import { createServer as createHttpServer } from "node:http"
 import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import type { Changeset, Op } from "@kyneta/schema"
 import { createServer as createViteServer } from "vite"
-import { WebSocketServer, type WebSocket } from "ws"
-
-import { RecipeBookSchema } from "./schema.js"
-import { SEED } from "./seed.js"
+import { type WebSocket, WebSocketServer } from "ws"
 import {
-  createDoc,
-  change,
   applyChanges,
-  subscribe,
-  version,
+  createDoc,
   delta,
   exportSnapshot,
+  subscribe,
+  version,
 } from "./facade.js"
-import type { Changeset, Op } from "@kyneta/schema"
 import { parseServerMessage, toOps } from "./protocol.js"
+import { RecipeBookSchema } from "./schema.js"
+import { SEED } from "./seed.js"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dirname, "..")
@@ -140,7 +138,7 @@ async function start() {
     const { pathname } = new URL(req.url ?? "/", `http://${req.headers.host}`)
 
     if (pathname === "/ws") {
-      wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.handleUpgrade(req, socket, head, ws => {
         wss.emit("connection", ws, req)
       })
     } else {
@@ -158,22 +156,24 @@ async function start() {
     for (const [ws, state] of clients) {
       if (state.knownVersion < currentVer && ws.readyState === 1 /* OPEN */) {
         const ops = delta(doc, state.knownVersion)
-        ws.send(JSON.stringify({
-          type: "delta",
-          ops,
-          version: currentVer,
-        }))
+        ws.send(
+          JSON.stringify({
+            type: "delta",
+            ops,
+            version: currentVer,
+          }),
+        )
         state.knownVersion = currentVer
       }
     }
   })
 
-  wss.on("connection", (ws) => {
+  wss.on("connection", ws => {
     const state: ClientState = { ws, knownVersion: 0 }
     clients.set(ws, state)
     console.log(`[ws] client connected (${clients.size} total)`)
 
-    ws.on("message", (data) => {
+    ws.on("message", data => {
       const msg = parseServerMessage(String(data))
       if (!msg) return
 
@@ -183,14 +183,18 @@ async function start() {
         const currentVer = version(doc)
         ws.send(JSON.stringify({ type: "delta", ops, version: currentVer }))
         state.knownVersion = currentVer
-        console.log(`[ws] sync: client at v${msg.version}, server at v${currentVer}, sent ${ops.length} ops`)
+        console.log(
+          `[ws] sync: client at v${msg.version}, server at v${currentVer}, sent ${ops.length} ops`,
+        )
       } else if (msg.type === "delta" && msg.ops.length > 0) {
         // Mark this client as up-to-date BEFORE applying so the
         // subscribe broadcast (above) skips this sender.
         const nextVersion = version(doc) + 1
         state.knownVersion = nextVersion
         applyChanges(doc, toOps(msg.ops), { origin: "sync" })
-        console.log(`[ws] applied ${msg.ops.length} ops from client, now at v${version(doc)}`)
+        console.log(
+          `[ws] applied ${msg.ops.length} ops from client, now at v${version(doc)}`,
+        )
       }
     })
 
@@ -210,7 +214,7 @@ async function start() {
   })
 }
 
-start().catch((err) => {
+start().catch(err => {
   console.error("Failed to start server:", err)
   process.exit(1)
 })

@@ -1,28 +1,26 @@
 import { describe, expect, it } from "vitest"
 import {
-  Schema,
-  LoroSchema,
   interpret,
-  sequenceChange,
+  LoroSchema,
   mapChange,
-  replaceChange,
-  plainInterpreter,
-  withWritable,
   plainContext,
+  plainInterpreter,
+  replaceChange,
+  Schema,
+  sequenceChange,
+  withWritable,
 } from "../index.js"
-import {
-  bottomInterpreter,
-} from "../interpreters/bottom.js"
-import type {
-  HasCall,
-  HasNavigation,
-  HasCaching,
-} from "../interpreters/bottom.js"
-import { withReadable } from "../interpreters/with-readable.js"
-import { withNavigation } from "../interpreters/with-navigation.js"
-import { withCaching, INVALIDATE } from "../interpreters/with-caching.js"
 import type { Interpreter } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
+import type {
+  HasCaching,
+  HasCall,
+  HasNavigation,
+} from "../interpreters/bottom.js"
+import { bottomInterpreter } from "../interpreters/bottom.js"
+import { INVALIDATE, withCaching } from "../interpreters/with-caching.js"
+import { withNavigation } from "../interpreters/with-navigation.js"
+import { withReadable } from "../interpreters/with-readable.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -47,7 +45,9 @@ const loroDocSchema = LoroSchema.doc({
   ),
 })
 
-const cachedInterp = withCaching(withReadable(withNavigation(bottomInterpreter)))
+const cachedInterp = withCaching(
+  withReadable(withNavigation(bottomInterpreter)),
+)
 
 function createDoc(
   schema: Parameters<typeof interpret>[0],
@@ -336,14 +336,19 @@ describe("withCaching: INVALIDATE product", () => {
   })
 
   it("INVALIDATE with replaceChange clears all field caches", () => {
-    const { doc, store } = createDoc(structuralDocSchema, {
+    const { doc } = createDoc(structuralDocSchema, {
       settings: { darkMode: false, fontSize: 14 },
       metadata: {},
     })
     const settingsBefore = doc.settings
     expect(settingsBefore).toBe(doc.settings) // cached
 
-    doc[INVALIDATE](replaceChange({ settings: { darkMode: true, fontSize: 20 }, metadata: {} }))
+    doc[INVALIDATE](
+      replaceChange({
+        settings: { darkMode: true, fontSize: 20 },
+        metadata: {},
+      }),
+    )
 
     const settingsAfter = doc.settings
     expect(settingsAfter).not.toBe(settingsBefore) // cache cleared
@@ -372,7 +377,12 @@ describe("withCaching: INVALIDATE product", () => {
 
     // Mutate store directly and invalidate
     ;(store as any).settings = { darkMode: true, fontSize: 20 }
-    doc[INVALIDATE](replaceChange({ settings: { darkMode: true, fontSize: 20 }, metadata: {} }))
+    doc[INVALIDATE](
+      replaceChange({
+        settings: { darkMode: true, fontSize: 20 },
+        metadata: {},
+      }),
+    )
 
     // Fresh refs read new data
     expect(doc.settings.darkMode()).toBe(true)
@@ -406,7 +416,7 @@ describe("withCaching: INVALIDATE sequence", () => {
     ])
     // Populate cache
     const refA = doc.items.at(0)
-    const refB = doc.items.at(1)
+    const _refB = doc.items.at(1)
     const refC = doc.items.at(2)
     expect(refA).toBe(doc.items.at(0)) // confirm cached
 
@@ -440,7 +450,9 @@ describe("withCaching: INVALIDATE sequence", () => {
       { name: "b" },
       { name: "c" },
     ]
-    doc.items[INVALIDATE](sequenceChange([{ retain: 1 }, { insert: [{ name: "x" }] }]))
+    doc.items[INVALIDATE](
+      sequenceChange([{ retain: 1 }, { insert: [{ name: "x" }] }]),
+    )
 
     // index 0 unchanged
     expect(doc.items.at(0)).toBe(refA)
@@ -461,7 +473,9 @@ describe("withCaching: INVALIDATE sequence", () => {
 
     // Simulate append: [retain 2, insert [{name:"c"}]]
     ;(store as any).items = [{ name: "a" }, { name: "b" }, { name: "c" }]
-    doc.items[INVALIDATE](sequenceChange([{ retain: 2 }, { insert: [{ name: "c" }] }]))
+    doc.items[INVALIDATE](
+      sequenceChange([{ retain: 2 }, { insert: [{ name: "c" }] }]),
+    )
 
     // Existing refs should be preserved
     expect(doc.items.at(0)).toBe(refA)
@@ -473,7 +487,7 @@ describe("withCaching: INVALIDATE sequence", () => {
   it("INVALIDATE with replaceChange clears entire cache", () => {
     const { doc, store } = createListDoc([{ name: "a" }, { name: "b" }])
     const refA = doc.items.at(0)
-    const refB = doc.items.at(1)
+    const _refB = doc.items.at(1)
 
     ;(store as any).items = [{ name: "x" }]
     doc.items[INVALIDATE](replaceChange([{ name: "x" }]))
@@ -484,7 +498,7 @@ describe("withCaching: INVALIDATE sequence", () => {
   })
 
   it("INVALIDATE with unrecognized change clears entire cache", () => {
-    const { doc, store } = createListDoc([{ name: "a" }])
+    const { doc } = createListDoc([{ name: "a" }])
     const refA = doc.items.at(0)
 
     doc.items[INVALIDATE]({ type: "unknown" })
@@ -514,7 +528,7 @@ describe("withCaching: INVALIDATE map", () => {
   it("INVALIDATE with mapChange(delete) evicts deleted keys", () => {
     const { doc, store } = createMapDoc({ a: 1, b: 2, c: 3 })
     const refA = doc.metadata.at("a")
-    const refB = doc.metadata.at("b")
+    const _refB = doc.metadata.at("b")
     const refC = doc.metadata.at("c")
 
     // Delete key "b"
@@ -547,7 +561,7 @@ describe("withCaching: INVALIDATE map", () => {
   it("INVALIDATE with replaceChange clears entire cache", () => {
     const { doc, store } = createMapDoc({ a: 1, b: 2 })
     const refA = doc.metadata.at("a")
-    const refB = doc.metadata.at("b")
+    const _refB = doc.metadata.at("b")
 
     ;(store as any).metadata = { x: 10 }
     doc.metadata[INVALIDATE](replaceChange({ x: 10 }))
@@ -666,7 +680,9 @@ describe("INVALIDATE symbol", () => {
 // ===========================================================================
 
 describe("withCaching: prepare-pipeline invalidation", () => {
-  const fullInterpreter = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
+  const fullInterpreter = withWritable(
+    withCaching(withReadable(withNavigation(bottomInterpreter))),
+  )
 
   const docSchema = Schema.doc({
     settings: Schema.struct({
@@ -747,7 +763,10 @@ describe("withCaching: prepare-pipeline invalidation", () => {
 
     // Insert at index 0 via prepare (bypassing mutation methods)
     const path = [{ type: "key" as const, key: "messages" }]
-    ctx.prepare(path, sequenceChange([{ insert: [{ author: "Eve", body: "Hi" }] }]))
+    ctx.prepare(
+      path,
+      sequenceChange([{ insert: [{ author: "Eve", body: "Hi" }] }]),
+    )
     ctx.flush()
 
     // Cache should be shifted: Alice moved from 0→1, Bob from 1→2
@@ -759,7 +778,9 @@ describe("withCaching: prepare-pipeline invalidation", () => {
 
 describe("withCaching: read-only stack backward compatibility", () => {
   it("withCaching(withReadable(bottom)) with plain RefContext still works", () => {
-    const readOnlyInterp = withCaching(withReadable(withNavigation(bottomInterpreter)))
+    const readOnlyInterp = withCaching(
+      withReadable(withNavigation(bottomInterpreter)),
+    )
     const store = {
       settings: { darkMode: false, fontSize: 14 },
     }
@@ -794,7 +815,10 @@ describe("withCaching: read-only stack backward compatibility", () => {
 describe("type-level: withCaching", () => {
   it("withCaching(withReadable(bottomInterpreter)) is Interpreter<RefContext, HasCall & HasNavigation & HasCaching>", () => {
     const cached = withCaching(withReadable(withNavigation(bottomInterpreter)))
-    const _check: Interpreter<RefContext, HasCall & HasNavigation & HasCaching> = cached
+    const _check: Interpreter<
+      RefContext,
+      HasCall & HasNavigation & HasCaching
+    > = cached
     void _check
   })
 
@@ -823,8 +847,12 @@ describe("type-level: withCaching", () => {
   })
 
   it("withCaching(plainInterpreter) is a type error", () => {
-    // @ts-expect-error — plainInterpreter produces unknown, withCaching requires HasNavigation
-    const _bad = withCaching(plainInterpreter as any as Interpreter<RefContext, unknown>)
+    const unknownInterpreter = plainInterpreter as any as Interpreter<
+      RefContext,
+      unknown
+    >
+    // @ts-expect-error — unknown is not assignable to HasNavigation
+    const _bad = withCaching(unknownInterpreter)
     void _bad
   })
 })

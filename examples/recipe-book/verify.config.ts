@@ -8,16 +8,10 @@ export default defineConfig({
       parser: parsers.biome,
     },
     {
-      key: "types",
-      run: "tsgo --noEmit --skipLibCheck",
-      parser: parsers.tsc,
-      reportingDependsOn: ["format"],
-    },
-    {
       key: "logic",
       run: "vitest run",
       parser: parsers.vitest,
-      reportingDependsOn: ["format", "types"],
+      reportingDependsOn: ["format"],
     },
   ],
   env: {

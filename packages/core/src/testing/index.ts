@@ -29,14 +29,13 @@
 // Runtime Testing Utilities
 // =============================================================================
 
+export { resetScopeIdCounter, setRootScope } from "../runtime/scope.js"
 export {
   activeSubscriptions,
   getActiveSubscriptionCount,
   getActiveSubscriptions,
   resetSubscriptionIdCounter,
 } from "../runtime/subscribe.js"
-
-export { resetScopeIdCounter, setRootScope } from "../runtime/scope.js"
 
 // =============================================================================
 // Compiler Testing Utilities

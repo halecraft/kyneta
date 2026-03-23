@@ -18,8 +18,8 @@
 
 /// <reference path="../types/reactive-view.d.ts" />
 
-import { describe, it, expectTypeOf } from "vitest"
-import type { TextRef, CounterRef, ScalarRef } from "@kyneta/schema"
+import type { CounterRef, ScalarRef, TextRef } from "@kyneta/schema"
+import { describe, expectTypeOf, it } from "vitest"
 import type { LocalRef } from "../reactive/local-ref.js"
 
 // =============================================================================

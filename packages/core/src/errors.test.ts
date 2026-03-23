@@ -126,9 +126,7 @@ describe("KynetaErrorCode", () => {
   it("should have compiler errors in 100 range", () => {
     expect(KynetaErrorCode.COMPILER_PARSE_ERROR).toBeGreaterThanOrEqual(100)
     expect(KynetaErrorCode.COMPILER_PARSE_ERROR).toBeLessThan(200)
-    expect(KynetaErrorCode.COMPILER_TRANSFORM_ERROR).toBeGreaterThanOrEqual(
-      100,
-    )
+    expect(KynetaErrorCode.COMPILER_TRANSFORM_ERROR).toBeGreaterThanOrEqual(100)
     expect(KynetaErrorCode.COMPILER_TRANSFORM_ERROR).toBeLessThan(200)
   })
 

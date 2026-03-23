@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun src/server.ts",
-    "test": "vitest run"
+    "test": "verify logic",
+    "verify": "verify"
   },
   "dependencies": {
     "@kyneta/core": "workspace:^",

@@ -1,269 +1,233 @@
 // === Kernel Module Public API ===
 // Re-exports the public surface of the Layer 0 kernel.
 
-// --- Types ---
-export type {
-  PeerID,
-  Counter,
-  Lamport,
-  CnId,
-  VersionVector,
-  MutableVersionVector,
-  Value,
-  Policy,
-  StructurePayload,
-  ValuePayload,
-  RetractPayload,
-  RulePayload,
-  AuthorityPayload,
-  BookmarkPayload,
-  Capability,
-  RetractScope,
-  AuthorityAction,
-  ConstraintBase,
-  StructureConstraint,
-  ValueConstraint,
-  RetractConstraint,
-  RuleConstraint,
-  AuthorityConstraint,
-  BookmarkConstraint,
-  Constraint,
-  ConstraintType,
-  RealityNode,
-  Reality,
-  InsertError,
-  ValidationError,
-  Result,
-} from './types.js';
-
-// --- Type utilities ---
-export { ok, err, isSafeUint } from './types.js';
-
-// --- Re-exported Datalog types (for RulePayload) ---
-export type {
-  Atom,
-  Term,
-  ConstTerm,
-  VarTerm,
-  WildcardTerm,
-  GuardOp,
-  GuardElement,
-  BodyElement,
-  AtomElement,
-  NegationElement,
-  AggregationElement,
-  AggregationClause,
-  Rule,
-} from './types.js';
-
+// --- Agent ---
+export type { Agent } from "./agent.js"
+export {
+  createAgent,
+  produceMapChild,
+  produceRoot,
+  produceSeqChild,
+} from "./agent.js"
+// --- Authority (§5.1) ---
+export type { AuthorityState } from "./authority.js"
+export {
+  capabilityCovers,
+  capabilityEquals,
+  capabilityKey,
+  computeAuthority,
+  getCapabilities,
+  hasCapability,
+  requiredCapability,
+} from "./authority.js"
 // --- CnId ---
 export {
-  createCnId,
-  cnIdEquals,
-  cnIdNullableEquals,
   cnIdCompare,
-  cnIdToString,
+  cnIdEquals,
   cnIdFromString,
   cnIdKey,
-} from './cnid.js';
-
+  cnIdNullableEquals,
+  cnIdToString,
+  createCnId,
+} from "./cnid.js"
 // --- Lamport clock ---
-export type { LamportClock } from './lamport.js';
-
+export type { LamportClock } from "./lamport.js"
 export {
   createLamportClock,
   createLamportClockAt,
-  tick,
+  current as lamportCurrent,
   merge as lamportMerge,
   observe as lamportObserve,
-  current as lamportCurrent,
-} from './lamport.js';
-
-// --- Version vector ---
-export type { VVCompareResult } from './version-vector.js';
-
+  tick,
+} from "./lamport.js"
+// --- Native Resolution (§B.7) ---
 export {
-  createVersionVector,
-  vvFromObject,
-  vvClone,
-  vvGet,
-  vvHasSeen,
-  vvHasSeenCnId,
-  vvExtend,
-  vvExtendCnId,
-  vvCompare,
-  vvIncludes,
-  vvEquals,
-  vvMerge,
-  vvMergeInto,
-  filterByVersion,
-  vvDiff,
-  vvToObject,
-  vvToString,
-  vvPeers,
-  vvIsEmpty,
-  vvTotalOps,
-} from './version-vector.js';
-
-// --- Signature (stub) ---
-export {
-  STUB_SIGNATURE,
-  sign,
-  verify,
-  STUB_PRIVATE_KEY,
-  generateKeypair,
-} from './signature.js';
-
-// --- Store ---
+  buildNativeFuguePairs,
+  buildNativeResolution,
+} from "./native-resolution.js"
+// --- Pipeline (§7) ---
 export type {
-  ConstraintStore,
-  ConstraintDelta,
-} from './store.js';
-
+  PipelineConfig,
+  PipelineResult,
+} from "./pipeline.js"
 export {
-  createStore,
-  insert,
-  insertMany,
-  getConstraint,
-  hasConstraint,
-  constraintCount,
-  allConstraints,
-  constraintsByType,
-  mergeStores,
-  exportDelta,
-  importDelta,
-  getVersionVector,
-  getLamport,
-  getGeneration,
-} from './store.js';
-
-// --- Agent ---
-export type { Agent } from './agent.js';
-
+  solve,
+  solveFull,
+} from "./pipeline.js"
+// --- Projection (§7.2) ---
+export type { ProjectionResult } from "./projection.js"
 export {
-  createAgent,
-  produceRoot,
-  produceMapChild,
-  produceSeqChild,
-} from './agent.js';
-
-// --- Authority (§5.1) ---
-export type { AuthorityState } from './authority.js';
-
-export {
-  capabilityEquals,
-  capabilityKey,
-  capabilityCovers,
-  computeAuthority,
-  hasCapability,
-  getCapabilities,
-  requiredCapability,
-} from './authority.js';
-
-// --- Validity (§5.2–§5.3) ---
+  ACTIVE_STRUCTURE_SEQ,
+  ACTIVE_VALUE,
+  CONSTRAINT_PEER,
+  projectToFacts,
+} from "./projection.js"
+// --- Resolution (§B.4, §B.7 — Datalog→kernel bridge) ---
 export type {
-  ValidityResult,
-  InvalidConstraint,
-} from './validity.js';
-
+  FugueBeforePair,
+  ResolutionResult,
+  ResolvedWinner,
+} from "./resolve.js"
 export {
-  computeValid,
-  filterValid,
-} from './validity.js';
-
+  allPairsFromOrdered,
+  extractFugueOrdering,
+  extractResolution,
+  extractWinners,
+  fuguePairKey,
+  nativeResolution,
+  type ParsedSeqStructureFact,
+  parseLWWFact,
+  parseSeqStructureFact,
+  topologicalOrderFromPairs,
+} from "./resolve.js"
 // --- Retraction (§6) ---
 export type {
   RetractionConfig,
   RetractionResult,
   RetractionViolation,
   RetractionViolationReason,
-} from './retraction.js';
-
+} from "./retraction.js"
 export {
-  DEFAULT_RETRACTION_CONFIG,
   computeActive,
+  DEFAULT_RETRACTION_CONFIG,
   filterActive,
-} from './retraction.js';
-
+} from "./retraction.js"
+// --- Rule Detection (§B.7) ---
+export type { ResolutionStrategy } from "./rule-detection.js"
+export {
+  extractRules,
+  hasDefaultFugueRules,
+  hasDefaultLWWRules,
+  isDefaultRulesOnly,
+  selectResolutionStrategy,
+} from "./rule-detection.js"
+// --- Signature (stub) ---
+export {
+  generateKeypair,
+  STUB_PRIVATE_KEY,
+  STUB_SIGNATURE,
+  sign,
+  verify,
+} from "./signature.js"
+// --- Skeleton (§7.3) ---
+export { buildSkeleton } from "./skeleton.js"
+// --- Store ---
+export type {
+  ConstraintDelta,
+  ConstraintStore,
+} from "./store.js"
+export {
+  allConstraints,
+  constraintCount,
+  constraintsByType,
+  createStore,
+  exportDelta,
+  getConstraint,
+  getGeneration,
+  getLamport,
+  getVersionVector,
+  hasConstraint,
+  importDelta,
+  insert,
+  insertMany,
+  mergeStores,
+} from "./store.js"
 // --- Structure Index (§8) ---
 export type {
   SlotGroup,
   StructureIndex,
-} from './structure-index.js';
-
+} from "./structure-index.js"
 export {
-  slotId,
-  childKey,
   buildStructureIndex,
-  getStructure,
-  getSlotId,
-  getSlotGroup,
+  childKey,
   getChildren,
-  hasStructure,
   getChildrenOfSlotGroup,
-} from './structure-index.js';
-
-// --- Projection (§7.2) ---
+  getSlotGroup,
+  getSlotId,
+  getStructure,
+  hasStructure,
+  slotId,
+} from "./structure-index.js"
+// --- Types ---
+// --- Re-exported Datalog types (for RulePayload) ---
 export type {
-  ProjectionResult,
-} from './projection.js';
-
-export {
-  ACTIVE_VALUE,
-  ACTIVE_STRUCTURE_SEQ,
-  CONSTRAINT_PEER,
-  projectToFacts,
-} from './projection.js';
-
-// --- Resolution (§B.4, §B.7 — Datalog→kernel bridge) ---
+  AggregationClause,
+  AggregationElement,
+  Atom,
+  AtomElement,
+  AuthorityAction,
+  AuthorityConstraint,
+  AuthorityPayload,
+  BodyElement,
+  BookmarkConstraint,
+  BookmarkPayload,
+  Capability,
+  CnId,
+  Constraint,
+  ConstraintBase,
+  ConstraintType,
+  ConstTerm,
+  Counter,
+  GuardElement,
+  GuardOp,
+  InsertError,
+  Lamport,
+  MutableVersionVector,
+  NegationElement,
+  PeerID,
+  Policy,
+  Reality,
+  RealityNode,
+  Result,
+  RetractConstraint,
+  RetractPayload,
+  RetractScope,
+  Rule,
+  RuleConstraint,
+  RulePayload,
+  StructureConstraint,
+  StructurePayload,
+  Term,
+  ValidationError,
+  Value,
+  ValueConstraint,
+  ValuePayload,
+  VarTerm,
+  VersionVector,
+  WildcardTerm,
+} from "./types.js"
+// --- Type utilities ---
+export { err, isSafeUint, ok } from "./types.js"
+// --- Validity (§5.2–§5.3) ---
 export type {
-  ResolvedWinner,
-  FugueBeforePair,
-  ResolutionResult,
-} from './resolve.js';
-
+  InvalidConstraint,
+  ValidityResult,
+} from "./validity.js"
 export {
-  extractWinners,
-  extractFugueOrdering,
-  extractResolution,
-  nativeResolution,
-  topologicalOrderFromPairs,
-  fuguePairKey,
-  allPairsFromOrdered,
-  parseLWWFact,
-  type ParsedSeqStructureFact,
-  parseSeqStructureFact,
-} from './resolve.js';
-
-// --- Rule Detection (§B.7) ---
-export type { ResolutionStrategy } from './rule-detection.js';
-
+  computeValid,
+  filterValid,
+} from "./validity.js"
+// --- Version vector ---
+export type { VVCompareResult } from "./version-vector.js"
 export {
-  extractRules,
-  isDefaultRulesOnly,
-  hasDefaultLWWRules,
-  hasDefaultFugueRules,
-  selectResolutionStrategy,
-} from './rule-detection.js';
-
-// --- Native Resolution (§B.7) ---
-export {
-  buildNativeResolution,
-  buildNativeFuguePairs,
-} from './native-resolution.js';
-
-// --- Skeleton (§7.3) ---
-export {
-  buildSkeleton,
-} from './skeleton.js';
-
-// --- Pipeline (§7) ---
-export type {
-  PipelineConfig,
-  PipelineResult,
-} from './pipeline.js';
-
-export {
-  solve,
-  solveFull,
-} from './pipeline.js';
+  createVersionVector,
+  filterByVersion,
+  vvClone,
+  vvCompare,
+  vvDiff,
+  vvEquals,
+  vvExtend,
+  vvExtendCnId,
+  vvFromObject,
+  vvGet,
+  vvHasSeen,
+  vvHasSeenCnId,
+  vvIncludes,
+  vvIsEmpty,
+  vvMerge,
+  vvMergeInto,
+  vvPeers,
+  vvToObject,
+  vvToString,
+  vvTotalOps,
+} from "./version-vector.js"

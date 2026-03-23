@@ -62,7 +62,7 @@ declare module "@kyneta/schema" {
    * `recipe.name` is a `TextRef`. The compiler inserts the `()` read:
    * `recipe.name().toLowerCase()`.
    */
-  interface TextRef extends String {}
+  interface TextRef extends string {}
 
   /**
    * Widen `CounterRef` to expose `Number` instance methods.
@@ -71,5 +71,5 @@ declare module "@kyneta/schema" {
    * `doc.favorites` is a `CounterRef`. The compiler inserts the `()` read:
    * `doc.favorites().toFixed(2)`.
    */
-  interface CounterRef extends Number {}
+  interface CounterRef extends number {}
 }

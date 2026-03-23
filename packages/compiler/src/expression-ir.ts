@@ -239,37 +239,62 @@ export function refRead(ref: ExpressionIR, deltaKind: DeltaKind): RefReadNode {
 }
 
 /** Create a `SnapshotNode` — explicit ref() call by the developer. */
-export function snapshot(ref: ExpressionIR, args: readonly ExpressionIR[], deltaKind: DeltaKind): SnapshotNode {
+export function snapshot(
+  ref: ExpressionIR,
+  args: readonly ExpressionIR[],
+  deltaKind: DeltaKind,
+): SnapshotNode {
   return { kind: "snapshot", ref, args, deltaKind }
 }
 
 /** Create a `BindingRefNode` — reference to a reactive const binding. */
-export function bindingRef(name: string, expression: ExpressionIR): BindingRefNode {
+export function bindingRef(
+  name: string,
+  expression: ExpressionIR,
+): BindingRefNode {
   return { kind: "binding-ref", name, expression }
 }
 
 /** Create a `MethodCallNode` — `receiver.method(args)`. */
-export function methodCall(receiver: ExpressionIR, method: string, args: readonly ExpressionIR[]): MethodCallNode {
+export function methodCall(
+  receiver: ExpressionIR,
+  method: string,
+  args: readonly ExpressionIR[],
+): MethodCallNode {
   return { kind: "method-call", receiver, method, args }
 }
 
 /** Create a `PropertyAccessNode` — `object.property`. */
-export function propertyAccess(object: ExpressionIR, property: string): PropertyAccessNode {
+export function propertyAccess(
+  object: ExpressionIR,
+  property: string,
+): PropertyAccessNode {
   return { kind: "property-access", object, property }
 }
 
 /** Create a `CallNode` — `callee(args)`. */
-export function call(callee: ExpressionIR, args: readonly ExpressionIR[]): CallNode {
+export function call(
+  callee: ExpressionIR,
+  args: readonly ExpressionIR[],
+): CallNode {
   return { kind: "call", callee, args }
 }
 
 /** Create a `BinaryNode` — `left op right`. */
-export function binary(left: ExpressionIR, op: string, right: ExpressionIR): BinaryNode {
+export function binary(
+  left: ExpressionIR,
+  op: string,
+  right: ExpressionIR,
+): BinaryNode {
   return { kind: "binary", left, op, right }
 }
 
 /** Create a `UnaryNode` — `op operand` (prefix by default). */
-export function unary(op: string, operand: ExpressionIR, prefix: boolean = true): UnaryNode {
+export function unary(
+  op: string,
+  operand: ExpressionIR,
+  prefix: boolean = true,
+): UnaryNode {
   return { kind: "unary", op, operand, prefix }
 }
 
@@ -318,7 +343,9 @@ export function isMethodCall(node: ExpressionIR): node is MethodCallNode {
 }
 
 /** Check if the node is a `PropertyAccessNode`. */
-export function isPropertyAccess(node: ExpressionIR): node is PropertyAccessNode {
+export function isPropertyAccess(
+  node: ExpressionIR,
+): node is PropertyAccessNode {
   return node.kind === "property-access"
 }
 
@@ -503,19 +530,13 @@ export function isReactive(expr: ExpressionIR): boolean {
       return true
 
     case "method-call":
-      return (
-        isReactive(expr.receiver) ||
-        expr.args.some(isReactive)
-      )
+      return isReactive(expr.receiver) || expr.args.some(isReactive)
 
     case "property-access":
       return isReactive(expr.object)
 
     case "call":
-      return (
-        isReactive(expr.callee) ||
-        expr.args.some(isReactive)
-      )
+      return isReactive(expr.callee) || expr.args.some(isReactive)
 
     case "binary":
       return isReactive(expr.left) || isReactive(expr.right)
@@ -578,7 +599,10 @@ export interface RenderContext {
  * // → full rendered expression with () reads
  * ```
  */
-export function renderExpression(expr: ExpressionIR, ctx: RenderContext): string {
+export function renderExpression(
+  expr: ExpressionIR,
+  ctx: RenderContext,
+): string {
   switch (expr.kind) {
     case "ref-read":
       // The observation morphism: render the ref, then append ()
@@ -629,7 +653,8 @@ export function renderExpression(expr: ExpressionIR, ctx: RenderContext): string
         const part = expr.parts[i]
         if (i % 2 === 0) {
           // Even index: string segment (LiteralNode)
-          result += part.kind === "literal" ? part.value : renderExpression(part, ctx)
+          result +=
+            part.kind === "literal" ? part.value : renderExpression(part, ctx)
         } else {
           // Odd index: expression hole
           result += `\${${renderExpression(part, ctx)}}`

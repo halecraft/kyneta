@@ -31,16 +31,16 @@ export type {
   Dependency,
   ElementNode,
   EventHandlerNode,
+  FilterMetadata,
   IRNodeBase,
   IRNodeKind,
-  FilterMetadata,
+  LabeledBlockNode,
   LoopNode,
   MergeFailureReason,
   MergeResult,
   SlotKind,
   SourceSpan,
   StatementNode,
-  LabeledBlockNode,
   TemplateHole,
   TemplateHoleKind,
   TemplateNode,
@@ -51,19 +51,19 @@ export type {
 // =============================================================================
 
 export type {
-  ExpressionIR,
-  RefReadNode,
-  SnapshotNode,
+  BinaryNode,
   BindingRefNode,
+  CallNode,
+  ExpressionIR,
+  IdentifierNode,
+  LiteralNode,
   MethodCallNode,
   PropertyAccessNode,
-  CallNode,
-  BinaryNode,
-  UnaryNode,
-  TemplateNode as ExprTemplateNode,
-  LiteralNode,
-  IdentifierNode,
   RawNode,
+  RefReadNode,
+  SnapshotNode,
+  TemplateNode as ExprTemplateNode,
+  UnaryNode,
 } from "./expression-ir.js"
 
 // =============================================================================
@@ -71,18 +71,18 @@ export type {
 // =============================================================================
 
 export {
-  refRead,
-  snapshot,
+  binary,
   bindingRef,
+  call,
+  identifier,
+  literal,
   methodCall,
   propertyAccess,
-  call,
-  binary,
-  unary,
-  template as exprTemplate,
-  literal,
-  identifier,
   raw,
+  refRead,
+  snapshot,
+  template as exprTemplate,
+  unary,
 } from "./expression-ir.js"
 
 // =============================================================================
@@ -90,25 +90,25 @@ export {
 // =============================================================================
 
 export {
-  isRefRead,
-  isSnapshot,
+  isBinary,
   isBindingRef,
+  isCall,
+  isIdentifier,
+  isLiteral,
   isMethodCall,
   isPropertyAccess,
-  isCall,
-  isBinary,
-  isUnary,
-  isTemplate as isExprTemplate,
-  isLiteral,
-  isIdentifier,
   isRaw,
+  isRefRead,
+  isSnapshot,
+  isTemplate as isExprTemplate,
+  isUnary,
 } from "./expression-ir.js"
 
 // =============================================================================
 // Expression IR Rendering
 // =============================================================================
 
-export { renderExpression, type RenderContext } from "./expression-ir.js"
+export { type RenderContext, renderExpression } from "./expression-ir.js"
 
 // =============================================================================
 // Expression IR Derived Properties
@@ -124,8 +124,8 @@ export {
 // Expression IR Builder
 // =============================================================================
 
-export { buildExpressionIR } from "./expression-build.js"
 export type { ExpressionScope } from "./expression-build.js"
+export { buildExpressionIR } from "./expression-build.js"
 
 // =============================================================================
 // IR Factory Functions
@@ -138,11 +138,11 @@ export {
   createConditionalBranch,
   createContent,
   createElement,
+  createLabeledBlock,
   createLiteral,
   createLoop,
   createSpan,
   createStatement,
-  createLabeledBlock,
 } from "./ir.js"
 
 // =============================================================================
@@ -156,11 +156,11 @@ export {
   isDOMProducing,
   isElementNode,
   isInputTextRegionAttribute,
+  isLabeledBlockNode,
   isLiteralContent,
   isLoopNode,
   isReactiveContent,
   isStatementNode,
-  isLabeledBlockNode,
   isTextRegionContent,
 } from "./ir.js"
 
@@ -184,6 +184,7 @@ export {
 // HTML Constants & Utilities
 // =============================================================================
 
+export type { RegionMarkers, RegionMarkerType } from "./html-constants.js"
 export {
   escapeHtml,
   generateMarkerId,
@@ -191,8 +192,6 @@ export {
   isVoidElement,
   VOID_ELEMENTS,
 } from "./html-constants.js"
-
-export type { RegionMarkerType, RegionMarkers } from "./html-constants.js"
 
 // =============================================================================
 // Reactive Detection
@@ -232,15 +231,6 @@ export {
 // IR Walker
 // =============================================================================
 
-export {
-  collectEvents,
-  countEventTypes,
-  eventsWithPaths,
-  walkBranchBody,
-  walkIR,
-  walkLoopBody,
-} from "./walk.js"
-
 export type {
   ComponentPlaceholderEvent,
   DynamicAttributeEvent,
@@ -253,11 +243,20 @@ export type {
   StaticTextEvent,
   WalkEvent,
 } from "./walk.js"
+export {
+  collectEvents,
+  countEventTypes,
+  eventsWithPaths,
+  walkBranchBody,
+  walkIR,
+  walkLoopBody,
+} from "./walk.js"
 
 // =============================================================================
 // Template Extraction
 // =============================================================================
 
+export type { NavOp } from "./template.js"
 export {
   countHolesByKind,
   extractTemplate,
@@ -269,8 +268,6 @@ export {
   planWalk,
   simpleHash,
 } from "./template.js"
-
-export type { NavOp } from "./template.js"
 
 // =============================================================================
 // Project Management & Pipeline
@@ -287,15 +284,15 @@ export {
 // Binding Scope
 // =============================================================================
 
-export { createBindingScope, type BindingScope } from "./binding-scope.js"
+export { type BindingScope, createBindingScope } from "./binding-scope.js"
 
 // =============================================================================
 // Dependency Classification
 // =============================================================================
 
 export {
-  classifyDependencies,
   type ClassifiedDependency,
+  classifyDependencies,
   type DependencyClassification,
 } from "./classify.js"
 

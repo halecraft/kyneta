@@ -11,9 +11,9 @@
  */
 
 import { Project, type SourceFile, ts } from "ts-morph"
-import { resolveReactiveImports } from "./reactive-detection.js"
 import { analyzeBuilder, findBuilderCalls } from "./analyze.js"
 import type { BuilderNode } from "./ir.js"
+import { resolveReactiveImports } from "./reactive-detection.js"
 
 // =============================================================================
 // Project Management
@@ -166,7 +166,7 @@ export function hasBuilderCalls(source: string): boolean {
  */
 export function analyzeAllBuilders(
   sourceFile: SourceFile,
-  filename: string,
+  _filename: string,
 ): Array<{ call: SourceFile extends infer _ ? any : never; ir: BuilderNode }> {
   const calls = findBuilderCalls(sourceFile)
   const results: Array<{ call: any; ir: BuilderNode }> = []

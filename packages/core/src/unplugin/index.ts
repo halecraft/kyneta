@@ -17,10 +17,9 @@
  * @packageDocumentation
  */
 
+import { hasBuilderCalls } from "@kyneta/compiler"
 import type { UnpluginFactory } from "unplugin"
 import { createUnplugin } from "unplugin"
-
-import { hasBuilderCalls } from "@kyneta/compiler"
 import { shouldTransform } from "./filter.js"
 import { transformKynetaSource } from "./transform.js"
 
@@ -77,7 +76,7 @@ export interface KynetaPluginOptions {
  */
 export const unpluginFactory: UnpluginFactory<
   KynetaPluginOptions | undefined
-> = (options) => {
+> = options => {
   const extensions = options?.extensions ?? [".ts", ".tsx"]
   const debug = options?.debug ?? false
   const resolvedTarget = options?.target ?? "dom"

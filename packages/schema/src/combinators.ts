@@ -7,18 +7,14 @@
 // These are interpreter-level combinators (they transform Interpreter
 // instances). Distinct from Zero.overlay which operates on values.
 
+import type { Interpreter, Path, SumVariants } from "./interpret.js"
 import type {
-  Interpreter,
-  Path,
-  SumVariants,
-} from "./interpret.js"
-import type {
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
   AnnotatedSchema,
+  MapSchema,
+  ProductSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SumSchema,
 } from "./schema.js"
 
 // ---------------------------------------------------------------------------
@@ -95,8 +91,8 @@ export function product<Ctx, A, B>(
         return v
       }
       return [
-        f.sequence(ctx, path, schema, (i) => force(i)[0]),
-        g.sequence(ctx, path, schema, (i) => force(i)[1]),
+        f.sequence(ctx, path, schema, i => force(i)[0]),
+        g.sequence(ctx, path, schema, i => force(i)[1]),
       ]
     },
 
@@ -116,8 +112,8 @@ export function product<Ctx, A, B>(
         return v
       }
       return [
-        f.map(ctx, path, schema, (k) => force(k)[0]),
-        g.map(ctx, path, schema, (k) => force(k)[1]),
+        f.map(ctx, path, schema, k => force(k)[0]),
+        g.map(ctx, path, schema, k => force(k)[1]),
       ]
     },
 
@@ -142,8 +138,8 @@ export function product<Ctx, A, B>(
           }
           return v
         }
-        ;(variantsA as { byIndex: (i: number) => A }).byIndex = (i) => force(i)[0]
-        ;(variantsB as { byIndex: (i: number) => B }).byIndex = (i) => force(i)[1]
+        ;(variantsA as { byIndex: (i: number) => A }).byIndex = i => force(i)[0]
+        ;(variantsB as { byIndex: (i: number) => B }).byIndex = i => force(i)[1]
       }
 
       if (variants.byKey) {
@@ -157,8 +153,8 @@ export function product<Ctx, A, B>(
           }
           return v
         }
-        ;(variantsA as { byKey: (k: string) => A }).byKey = (k) => force(k)[0]
-        ;(variantsB as { byKey: (k: string) => B }).byKey = (k) => force(k)[1]
+        ;(variantsA as { byKey: (k: string) => A }).byKey = k => force(k)[0]
+        ;(variantsB as { byKey: (k: string) => B }).byKey = k => force(k)[1]
       }
 
       return [
@@ -201,11 +197,7 @@ export function product<Ctx, A, B>(
  * A merge function that combines a primary result with a fallback result
  * at each node. The schema is provided for shape-aware merging.
  */
-export type MergeFn<A> = (
-  primary: A,
-  fallback: A,
-  path: Path,
-) => A
+export type MergeFn<A> = (primary: A, fallback: A, path: Path) => A
 
 /**
  * Combines two interpreters with a merge function applied at every node.
@@ -270,12 +262,7 @@ export function overlay<Ctx, A>(
       )
     },
 
-    map(
-      ctx: Ctx,
-      path: Path,
-      schema: MapSchema,
-      item: (key: string) => A,
-    ): A {
+    map(ctx: Ctx, path: Path, schema: MapSchema, item: (key: string) => A): A {
       return merge(
         primary.map(ctx, path, schema, item),
         fallback.map(ctx, path, schema, item),
@@ -283,12 +270,7 @@ export function overlay<Ctx, A>(
       )
     },
 
-    sum(
-      ctx: Ctx,
-      path: Path,
-      schema: SumSchema,
-      variants: SumVariants<A>,
-    ): A {
+    sum(ctx: Ctx, path: Path, schema: SumSchema, variants: SumVariants<A>): A {
       return merge(
         primary.sum(ctx, path, schema, variants),
         fallback.sum(ctx, path, schema, variants),

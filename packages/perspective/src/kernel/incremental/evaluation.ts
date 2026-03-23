@@ -22,47 +22,38 @@
 // See Plan 006.1 Phase 3: Wire Unified Evaluator into Pipeline.
 // See theory/incremental.md §9.7 (native solver fast path).
 
-import type { Fact, Rule } from '../../datalog/types.js';
-import { factKey } from '../../datalog/types.js';
-import type {
-  Constraint,
-  RuleConstraint,
-} from '../types.js';
-import type {
-  ResolvedWinner,
-  FugueBeforePair,
-  ResolutionResult,
-} from '../resolve.js';
+import type { ZSet } from "../../base/zset.js"
 import {
-  nativeResolution,
-  fuguePairKey,
-} from '../resolve.js';
-import {
-  extractRules,
-  selectResolutionStrategy,
-  type ResolutionStrategy,
-} from '../rule-detection.js';
-import { cnIdKey } from '../cnid.js';
-import {
-  createIncrementalLWW,
-  type IncrementalLWW,
-} from '../../solver/incremental-lww.js';
+  zsetAdd,
+  zsetEmpty,
+  zsetForEach,
+  zsetIsEmpty,
+  zsetSingleton,
+} from "../../base/zset.js"
+import { createEvaluator, type Evaluator } from "../../datalog/evaluator.js"
+import type { Fact, Rule } from "../../datalog/types.js"
+import { factKey } from "../../datalog/types.js"
 import {
   createIncrementalFugue,
   type IncrementalFugue,
-} from '../../solver/incremental-fugue.js';
+} from "../../solver/incremental-fugue.js"
 import {
-  createEvaluator,
-  type Evaluator,
-} from '../../datalog/evaluator.js';
-import type { ZSet } from '../../base/zset.js';
+  createIncrementalLWW,
+  type IncrementalLWW,
+} from "../../solver/incremental-lww.js"
+import { cnIdKey } from "../cnid.js"
+import type {
+  FugueBeforePair,
+  ResolutionResult,
+  ResolvedWinner,
+} from "../resolve.js"
+import { fuguePairKey, nativeResolution } from "../resolve.js"
 import {
-  zsetEmpty,
-  zsetSingleton,
-  zsetAdd,
-  zsetIsEmpty,
-  zsetForEach,
-} from '../../base/zset.js';
+  extractRules,
+  type ResolutionStrategy,
+  selectResolutionStrategy,
+} from "../rule-detection.js"
+import type { Constraint, RuleConstraint } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Pure utility: fact routing
@@ -76,31 +67,29 @@ import {
  * native solver (LWW gets `active_value`, Fugue gets
  * `active_structure_seq` + `constraint_peer`).
  */
-export function routeFactsByPredicate(
-  deltaFacts: ZSet<Fact>,
-): {
-  lwwFacts: ZSet<Fact>;
-  fugueFacts: ZSet<Fact>;
-  otherFacts: ZSet<Fact>;
+export function routeFactsByPredicate(deltaFacts: ZSet<Fact>): {
+  lwwFacts: ZSet<Fact>
+  fugueFacts: ZSet<Fact>
+  otherFacts: ZSet<Fact>
 } {
-  let lwwFacts = zsetEmpty<Fact>();
-  let fugueFacts = zsetEmpty<Fact>();
-  let otherFacts = zsetEmpty<Fact>();
+  let lwwFacts = zsetEmpty<Fact>()
+  let fugueFacts = zsetEmpty<Fact>()
+  let otherFacts = zsetEmpty<Fact>()
 
   zsetForEach(deltaFacts, (entry, key) => {
-    const pred = entry.element.predicate;
-    const singleton = zsetSingleton(key, entry.element, entry.weight);
+    const pred = entry.element.predicate
+    const singleton = zsetSingleton(key, entry.element, entry.weight)
 
-    if (pred === 'active_value') {
-      lwwFacts = zsetAdd(lwwFacts, singleton);
-    } else if (pred === 'active_structure_seq' || pred === 'constraint_peer') {
-      fugueFacts = zsetAdd(fugueFacts, singleton);
+    if (pred === "active_value") {
+      lwwFacts = zsetAdd(lwwFacts, singleton)
+    } else if (pred === "active_structure_seq" || pred === "constraint_peer") {
+      fugueFacts = zsetAdd(fugueFacts, singleton)
     } else {
-      otherFacts = zsetAdd(otherFacts, singleton);
+      otherFacts = zsetAdd(otherFacts, singleton)
     }
-  });
+  })
 
-  return { lwwFacts, fugueFacts, otherFacts };
+  return { lwwFacts, fugueFacts, otherFacts }
 }
 
 // ---------------------------------------------------------------------------
@@ -117,23 +106,23 @@ export function routeFactsByPredicate(
 export function extractRuleDeltasFromActive(
   activeDelta: ZSet<Constraint>,
 ): ZSet<Rule> {
-  let ruleDeltas = zsetEmpty<Rule>();
+  let ruleDeltas = zsetEmpty<Rule>()
 
   zsetForEach(activeDelta, (entry, _key) => {
-    const c = entry.element;
-    if (c.type === 'rule') {
-      const rc = c as RuleConstraint;
-      const rule: Rule = { head: rc.payload.head, body: rc.payload.body };
+    const c = entry.element
+    if (c.type === "rule") {
+      const rc = c as RuleConstraint
+      const rule: Rule = { head: rc.payload.head, body: rc.payload.body }
       // Key by a stable identity — use the constraint's CnId
-      const ruleKey = cnIdKey(rc.id);
+      const ruleKey = cnIdKey(rc.id)
       ruleDeltas = zsetAdd(
         ruleDeltas,
         zsetSingleton(ruleKey, rule, entry.weight),
-      );
+      )
     }
-  });
+  })
 
-  return ruleDeltas;
+  return ruleDeltas
 }
 
 // ---------------------------------------------------------------------------
@@ -171,15 +160,15 @@ export interface IncrementalEvaluation {
     getAccumulatedFacts: () => Fact[],
     getActiveConstraints: () => readonly Constraint[],
   ): {
-    deltaResolved: ZSet<ResolvedWinner>;
-    deltaFuguePairs: ZSet<FugueBeforePair>;
-  };
+    deltaResolved: ZSet<ResolvedWinner>
+    deltaFuguePairs: ZSet<FugueBeforePair>
+  }
 
   /** Full materialized resolution result. */
-  current(): ResolutionResult;
+  current(): ResolutionResult
 
   /** Reset to empty state. */
-  reset(): void;
+  reset(): void
 }
 
 // ---------------------------------------------------------------------------
@@ -201,21 +190,21 @@ function diffResolution(
   oldRes: ResolutionResult | null,
   newRes: ResolutionResult,
 ): {
-  deltaResolved: ZSet<ResolvedWinner>;
-  deltaFuguePairs: ZSet<FugueBeforePair>;
+  deltaResolved: ZSet<ResolvedWinner>
+  deltaFuguePairs: ZSet<FugueBeforePair>
 } {
-  let deltaResolved = zsetEmpty<ResolvedWinner>();
+  let deltaResolved = zsetEmpty<ResolvedWinner>()
 
-  const oldWinners = oldRes?.winners ?? new Map<string, ResolvedWinner>();
-  const newWinners = newRes.winners;
+  const oldWinners = oldRes?.winners ?? new Map<string, ResolvedWinner>()
+  const newWinners = newRes.winners
 
   for (const [slotId, newWinner] of newWinners) {
-    const oldWinner = oldWinners.get(slotId);
+    const oldWinner = oldWinners.get(slotId)
     if (oldWinner === undefined) {
       deltaResolved = zsetAdd(
         deltaResolved,
         zsetSingleton(slotId, newWinner, 1),
-      );
+      )
     } else if (
       oldWinner.winnerCnIdKey !== newWinner.winnerCnIdKey ||
       oldWinner.content !== newWinner.content
@@ -224,7 +213,7 @@ function diffResolution(
       deltaResolved = zsetAdd(
         deltaResolved,
         zsetSingleton(slotId, newWinner, 1),
-      );
+      )
     }
   }
 
@@ -233,43 +222,44 @@ function diffResolution(
       deltaResolved = zsetAdd(
         deltaResolved,
         zsetSingleton(slotId, oldWinner, -1),
-      );
+      )
     }
   }
 
   // Fugue pair diffing
-  const oldPairsMap = oldRes?.fuguePairs ?? new Map<string, readonly FugueBeforePair[]>();
-  const newPairsMap = newRes.fuguePairs;
+  const oldPairsMap =
+    oldRes?.fuguePairs ?? new Map<string, readonly FugueBeforePair[]>()
+  const newPairsMap = newRes.fuguePairs
 
-  const oldFlat = new Map<string, FugueBeforePair>();
+  const oldFlat = new Map<string, FugueBeforePair>()
   for (const pairs of oldPairsMap.values()) {
     for (const p of pairs) {
-      oldFlat.set(fuguePairKey(p), p);
+      oldFlat.set(fuguePairKey(p), p)
     }
   }
 
-  const newFlat = new Map<string, FugueBeforePair>();
+  const newFlat = new Map<string, FugueBeforePair>()
   for (const pairs of newPairsMap.values()) {
     for (const p of pairs) {
-      newFlat.set(fuguePairKey(p), p);
+      newFlat.set(fuguePairKey(p), p)
     }
   }
 
-  let deltaFuguePairs = zsetEmpty<FugueBeforePair>();
+  let deltaFuguePairs = zsetEmpty<FugueBeforePair>()
 
   for (const [key, p] of newFlat) {
     if (!oldFlat.has(key)) {
-      deltaFuguePairs = zsetAdd(deltaFuguePairs, zsetSingleton(key, p, 1));
+      deltaFuguePairs = zsetAdd(deltaFuguePairs, zsetSingleton(key, p, 1))
     }
   }
 
   for (const [key, p] of oldFlat) {
     if (!newFlat.has(key)) {
-      deltaFuguePairs = zsetAdd(deltaFuguePairs, zsetSingleton(key, p, -1));
+      deltaFuguePairs = zsetAdd(deltaFuguePairs, zsetSingleton(key, p, -1))
     }
   }
 
-  return { deltaResolved, deltaFuguePairs };
+  return { deltaResolved, deltaFuguePairs }
 }
 
 // ---------------------------------------------------------------------------
@@ -281,15 +271,13 @@ function diffResolution(
  * into a full `ResolutionResult` for the `current()` method and
  * strategy-switch diffing.
  */
-function datalogCurrentResolution(
-  datalog: Evaluator,
-): ResolutionResult {
-  const res = datalog.currentResolution();
+function datalogCurrentResolution(datalog: Evaluator): ResolutionResult {
+  const res = datalog.currentResolution()
   return {
     winners: res.winners,
     fuguePairs: res.fuguePairs,
     fromDatalog: true,
-  };
+  }
 }
 
 /**
@@ -297,11 +285,11 @@ function datalogCurrentResolution(
  * Used for bootstrapping a strategy from accumulated facts.
  */
 function factsToZSet(facts: readonly Fact[]): ZSet<Fact> {
-  let zs = zsetEmpty<Fact>();
+  let zs = zsetEmpty<Fact>()
   for (const f of facts) {
-    zs = zsetAdd(zs, zsetSingleton(factKey(f), f, 1));
+    zs = zsetAdd(zs, zsetSingleton(factKey(f), f, 1))
   }
-  return zs;
+  return zs
 }
 
 // ---------------------------------------------------------------------------
@@ -315,16 +303,16 @@ function factsToZSet(facts: readonly Fact[]): ZSet<Fact> {
  */
 export function createIncrementalEvaluation(): IncrementalEvaluation {
   // --- Strategy state ---
-  let strategy: ResolutionStrategy = 'native';
-  let lww: IncrementalLWW = createIncrementalLWW();
-  let fugue: IncrementalFugue = createIncrementalFugue();
+  let strategy: ResolutionStrategy = "native"
+  let lww: IncrementalLWW = createIncrementalLWW()
+  let fugue: IncrementalFugue = createIncrementalFugue()
 
   // Unified Datalog evaluator — lazily created on first switch
   // to 'datalog' strategy. Holds its own accumulated Database.
-  let datalog: Evaluator | null = null;
+  let datalog: Evaluator | null = null
 
   // Accumulated rules for strategy detection on rule changes.
-  let accumulatedRules: Rule[] = [];
+  let accumulatedRules: Rule[] = []
 
   // --- Internal helpers ---
 
@@ -332,22 +320,22 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
    * Build a ResolutionResult from the native solvers' current state.
    */
   function nativeCurrentResolution(): ResolutionResult {
-    return nativeResolution(lww.current(), fugue.current());
+    return nativeResolution(lww.current(), fugue.current())
   }
 
   /**
    * Run the native path: route facts to LWW and Fugue, combine deltas.
    */
   function stepNative(deltaFacts: ZSet<Fact>): {
-    deltaResolved: ZSet<ResolvedWinner>;
-    deltaFuguePairs: ZSet<FugueBeforePair>;
+    deltaResolved: ZSet<ResolvedWinner>
+    deltaFuguePairs: ZSet<FugueBeforePair>
   } {
-    const { lwwFacts, fugueFacts } = routeFactsByPredicate(deltaFacts);
+    const { lwwFacts, fugueFacts } = routeFactsByPredicate(deltaFacts)
 
-    const deltaResolved = lww.step(lwwFacts);
-    const deltaFuguePairs = fugue.step(fugueFacts);
+    const deltaResolved = lww.step(lwwFacts)
+    const deltaFuguePairs = fugue.step(fugueFacts)
 
-    return { deltaResolved, deltaFuguePairs };
+    return { deltaResolved, deltaFuguePairs }
   }
 
   /**
@@ -357,19 +345,19 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
     deltaFacts: ZSet<Fact>,
     deltaRules: ZSet<Rule>,
   ): {
-    deltaResolved: ZSet<ResolvedWinner>;
-    deltaFuguePairs: ZSet<FugueBeforePair>;
+    deltaResolved: ZSet<ResolvedWinner>
+    deltaFuguePairs: ZSet<FugueBeforePair>
   } {
     if (datalog === null) {
       // Should not happen — datalog is created on switch.
-      return { deltaResolved: zsetEmpty(), deltaFuguePairs: zsetEmpty() };
+      return { deltaResolved: zsetEmpty(), deltaFuguePairs: zsetEmpty() }
     }
 
-    const result = datalog.step(deltaFacts, deltaRules);
+    const result = datalog.step(deltaFacts, deltaRules)
     return {
       deltaResolved: result.deltaResolved,
       deltaFuguePairs: result.deltaFuguePairs,
-    };
+    }
   }
 
   /**
@@ -386,25 +374,25 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
     getAccumulatedFacts: () => Fact[],
     getActiveConstraints: () => readonly Constraint[],
   ): {
-    deltaResolved: ZSet<ResolvedWinner>;
-    deltaFuguePairs: ZSet<FugueBeforePair>;
+    deltaResolved: ZSet<ResolvedWinner>
+    deltaFuguePairs: ZSet<FugueBeforePair>
   } {
-    const oldResolution = nativeCurrentResolution();
+    const oldResolution = nativeCurrentResolution()
 
     // Create the unified Datalog evaluator with current rules.
-    const rules = extractRules(getActiveConstraints());
-    datalog = createEvaluator(rules);
+    const rules = extractRules(getActiveConstraints())
+    datalog = createEvaluator(rules)
 
     // Bootstrap from accumulated ground facts.
-    const accFacts = getAccumulatedFacts();
+    const accFacts = getAccumulatedFacts()
     if (accFacts.length > 0) {
-      datalog.step(factsToZSet(accFacts), zsetEmpty());
+      datalog.step(factsToZSet(accFacts), zsetEmpty())
     }
 
-    strategy = 'datalog';
+    strategy = "datalog"
 
-    const newResolution = datalogCurrentResolution(datalog);
-    return diffResolution(oldResolution, newResolution);
+    const newResolution = datalogCurrentResolution(datalog)
+    return diffResolution(oldResolution, newResolution)
   }
 
   /**
@@ -416,41 +404,40 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
    * Returns only the switch diff — the caller is responsible for
    * processing deltaFacts through the new strategy afterward.
    */
-  function switchToNative(
-    getAccumulatedFacts: () => Fact[],
-  ): {
-    deltaResolved: ZSet<ResolvedWinner>;
-    deltaFuguePairs: ZSet<FugueBeforePair>;
+  function switchToNative(getAccumulatedFacts: () => Fact[]): {
+    deltaResolved: ZSet<ResolvedWinner>
+    deltaFuguePairs: ZSet<FugueBeforePair>
   } {
-    const oldResolution = datalog !== null
-      ? datalogCurrentResolution(datalog)
-      : nativeResolution(new Map(), new Map());
+    const oldResolution =
+      datalog !== null
+        ? datalogCurrentResolution(datalog)
+        : nativeResolution(new Map(), new Map())
 
     // Rebuild native solvers from accumulated facts
-    lww = createIncrementalLWW();
-    fugue = createIncrementalFugue();
+    lww = createIncrementalLWW()
+    fugue = createIncrementalFugue()
 
     // Feed all accumulated facts through the native solvers.
-    const accFacts = getAccumulatedFacts();
+    const accFacts = getAccumulatedFacts()
     for (const f of accFacts) {
-      const key = factKey(f);
-      const singleton = zsetSingleton(key, f, 1);
-      if (f.predicate === 'active_value') {
-        lww.step(singleton);
+      const key = factKey(f)
+      const singleton = zsetSingleton(key, f, 1)
+      if (f.predicate === "active_value") {
+        lww.step(singleton)
       } else if (
-        f.predicate === 'active_structure_seq' ||
-        f.predicate === 'constraint_peer'
+        f.predicate === "active_structure_seq" ||
+        f.predicate === "constraint_peer"
       ) {
-        fugue.step(singleton);
+        fugue.step(singleton)
       }
     }
 
     // Discard Datalog state.
-    datalog = null;
-    strategy = 'native';
+    datalog = null
+    strategy = "native"
 
-    const newResolution = nativeCurrentResolution();
-    return diffResolution(oldResolution, newResolution);
+    const newResolution = nativeCurrentResolution()
+    return diffResolution(oldResolution, newResolution)
   }
 
   // --- Public interface ---
@@ -461,36 +448,36 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
     getAccumulatedFacts: () => Fact[],
     getActiveConstraints: () => readonly Constraint[],
   ): {
-    deltaResolved: ZSet<ResolvedWinner>;
-    deltaFuguePairs: ZSet<FugueBeforePair>;
+    deltaResolved: ZSet<ResolvedWinner>
+    deltaFuguePairs: ZSet<FugueBeforePair>
   } {
     // --- Handle rule changes ---
     if (!zsetIsEmpty(deltaRules)) {
       // Update accumulated rules.
       // Rather than tracking incremental adds/removes, just rebuild
       // from active constraints — rules are rare (typically ~11 default).
-      accumulatedRules = extractRules(getActiveConstraints());
+      accumulatedRules = extractRules(getActiveConstraints())
 
       const newStrategy = selectResolutionStrategy(
         true, // always enable Datalog for strategy detection
         accumulatedRules,
         getActiveConstraints(),
-      );
+      )
 
       if (newStrategy !== strategy) {
         // Strategy switch needed.
         let switchDelta: {
-          deltaResolved: ZSet<ResolvedWinner>;
-          deltaFuguePairs: ZSet<FugueBeforePair>;
-        };
+          deltaResolved: ZSet<ResolvedWinner>
+          deltaFuguePairs: ZSet<FugueBeforePair>
+        }
 
-        if (newStrategy === 'datalog') {
+        if (newStrategy === "datalog") {
           switchDelta = switchToDatalog(
             getAccumulatedFacts,
             getActiveConstraints,
-          );
+          )
         } else {
-          switchDelta = switchToNative(getAccumulatedFacts);
+          switchDelta = switchToNative(getAccumulatedFacts)
         }
 
         // Fix: process deltaFacts through the newly-activated strategy
@@ -498,35 +485,41 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
         // Previously, deltaFacts were dropped on strategy switch.
         if (!zsetIsEmpty(deltaFacts)) {
           let factDelta: {
-            deltaResolved: ZSet<ResolvedWinner>;
-            deltaFuguePairs: ZSet<FugueBeforePair>;
-          };
+            deltaResolved: ZSet<ResolvedWinner>
+            deltaFuguePairs: ZSet<FugueBeforePair>
+          }
 
-          if (strategy === 'native') {
-            factDelta = stepNative(deltaFacts);
+          if (strategy === "native") {
+            factDelta = stepNative(deltaFacts)
           } else {
-            factDelta = stepDatalog(deltaFacts, zsetEmpty());
+            factDelta = stepDatalog(deltaFacts, zsetEmpty())
           }
 
           return {
-            deltaResolved: zsetAdd(switchDelta.deltaResolved, factDelta.deltaResolved),
-            deltaFuguePairs: zsetAdd(switchDelta.deltaFuguePairs, factDelta.deltaFuguePairs),
-          };
+            deltaResolved: zsetAdd(
+              switchDelta.deltaResolved,
+              factDelta.deltaResolved,
+            ),
+            deltaFuguePairs: zsetAdd(
+              switchDelta.deltaFuguePairs,
+              factDelta.deltaFuguePairs,
+            ),
+          }
         }
 
-        return switchDelta;
+        return switchDelta
       }
 
       // Strategy didn't change, but rules changed — if we're on the
       // Datalog path, forward the rule delta to the evaluator.
-      if (strategy === 'datalog' && datalog !== null) {
+      if (strategy === "datalog" && datalog !== null) {
         // Rules changed but strategy stays 'datalog'. Process both
         // deltaFacts and deltaRules through the evaluator together.
-        const result = datalog.step(deltaFacts, deltaRules);
+        const result = datalog.step(deltaFacts, deltaRules)
         return {
           deltaResolved: result.deltaResolved,
           deltaFuguePairs: result.deltaFuguePairs,
-        };
+        }
       }
     }
 
@@ -535,34 +528,34 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
       return {
         deltaResolved: zsetEmpty(),
         deltaFuguePairs: zsetEmpty(),
-      };
+      }
     }
 
-    if (strategy === 'native') {
-      return stepNative(deltaFacts);
+    if (strategy === "native") {
+      return stepNative(deltaFacts)
     } else {
-      return stepDatalog(deltaFacts, deltaRules);
+      return stepDatalog(deltaFacts, deltaRules)
     }
   }
 
   function current(): ResolutionResult {
-    if (strategy === 'native') {
-      return nativeCurrentResolution();
+    if (strategy === "native") {
+      return nativeCurrentResolution()
     } else if (datalog !== null) {
-      return datalogCurrentResolution(datalog);
+      return datalogCurrentResolution(datalog)
     } else {
       // No strategy active — return empty.
-      return nativeResolution(new Map(), new Map());
+      return nativeResolution(new Map(), new Map())
     }
   }
 
   function reset(): void {
-    strategy = 'native';
-    lww = createIncrementalLWW();
-    fugue = createIncrementalFugue();
-    datalog = null;
-    accumulatedRules = [];
+    strategy = "native"
+    lww = createIncrementalLWW()
+    fugue = createIncrementalFugue()
+    datalog = null
+    accumulatedRules = []
   }
 
-  return { step, current, reset };
+  return { step, current, reset }
 }

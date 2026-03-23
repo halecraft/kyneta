@@ -66,6 +66,13 @@ export const IngredientItem = (props: IngredientItemProps): Element => {
         props.onEdit((e.target as HTMLInputElement).value)
       },
     })
-    button({ class: "remove-btn", "aria-label": "Remove ingredient", onClick: props.onRemove }, "×")
+    button(
+      {
+        class: "remove-btn",
+        "aria-label": "Remove ingredient",
+        onClick: props.onRemove,
+      },
+      "×",
+    )
   })
 }

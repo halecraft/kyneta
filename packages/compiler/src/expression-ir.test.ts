@@ -9,45 +9,41 @@
 
 import { describe, expect, it } from "vitest"
 import {
-  // Factory functions
-  refRead,
-  snapshot,
-  bindingRef,
-  methodCall,
-  propertyAccess,
-  call,
   binary,
-  unary,
-  template,
-  literal,
+  bindingRef,
+  call,
+  // Types
+  type ExpressionIR,
+  // Derived properties
+  extractDeps,
   identifier,
-  raw,
-
+  isBinary,
+  isBindingRef,
+  isCall,
+  isIdentifier,
+  isLiteral,
+  isMethodCall,
+  isPropertyAccess,
+  isRaw,
+  isReactive,
   // Type guards
   isRefRead,
   isSnapshot,
-  isBindingRef,
-  isMethodCall,
-  isPropertyAccess,
-  isCall,
-  isBinary,
-  isUnary,
   isTemplate,
-  isLiteral,
-  isIdentifier,
-  isRaw,
-
-  // Derived properties
-  extractDeps,
-  isReactive,
-  renderRefSource,
-
+  isUnary,
+  literal,
+  methodCall,
+  propertyAccess,
+  type RenderContext,
+  raw,
+  // Factory functions
+  refRead,
   // Rendering
   renderExpression,
-  type RenderContext,
-
-  // Types
-  type ExpressionIR,
+  renderRefSource,
+  snapshot,
+  template,
+  unary,
 } from "./expression-ir.js"
 
 // =============================================================================
@@ -70,7 +66,11 @@ describe("Factory functions", () => {
     const node = snapshot(ref, [], "text")
     expect(node).toEqual({
       kind: "snapshot",
-      ref: { kind: "property-access", object: { kind: "identifier", name: "recipe" }, property: "name" },
+      ref: {
+        kind: "property-access",
+        object: { kind: "identifier", name: "recipe" },
+        property: "name",
+      },
       args: [],
       deltaKind: "text",
     })
@@ -112,7 +112,7 @@ describe("Factory functions", () => {
 
   it("methodCall with arguments", () => {
     const receiver = identifier("str")
-    const arg = literal("\"x\"")
+    const arg = literal('"x"')
     const node = methodCall(receiver, "includes", [arg])
     expect(node.kind).toBe("method-call")
     expect(node.method).toBe("includes")
@@ -165,11 +165,7 @@ describe("Factory functions", () => {
 
   it("template creates a TemplateNode", () => {
     // `Hello ${name}!`
-    const node = template([
-      literal("Hello "),
-      identifier("name"),
-      literal("!"),
-    ])
+    const node = template([literal("Hello "), identifier("name"), literal("!")])
     expect(node).toEqual({
       kind: "template",
       parts: [
@@ -183,7 +179,7 @@ describe("Factory functions", () => {
   it("literal creates a LiteralNode", () => {
     expect(literal("42")).toEqual({ kind: "literal", value: "42" })
     expect(literal("true")).toEqual({ kind: "literal", value: "true" })
-    expect(literal("\"hello\"")).toEqual({ kind: "literal", value: "\"hello\"" })
+    expect(literal('"hello"')).toEqual({ kind: "literal", value: '"hello"' })
   })
 
   it("identifier creates an IdentifierNode", () => {
@@ -314,10 +310,7 @@ describe("extractDeps", () => {
 
   it("extracts a single RefRead dependency", () => {
     // recipe.name (TextRef) — auto-read
-    const expr = refRead(
-      propertyAccess(identifier("recipe"), "name"),
-      "text",
-    )
+    const expr = refRead(propertyAccess(identifier("recipe"), "name"), "text")
     const deps = extractDeps(expr)
     expect(deps).toEqual([{ source: "recipe.name", deltaKind: "text" }])
   })
@@ -367,8 +360,8 @@ describe("extractDeps", () => {
     expect(deps).toHaveLength(2)
     const sources = deps.map(d => d.source).sort()
     expect(sources).toEqual(["filterText", "recipe.name"])
-    expect(deps.find(d => d.source === "recipe.name")!.deltaKind).toBe("text")
-    expect(deps.find(d => d.source === "filterText")!.deltaKind).toBe("replace")
+    expect(deps.find(d => d.source === "recipe.name")?.deltaKind).toBe("text")
+    expect(deps.find(d => d.source === "filterText")?.deltaKind).toBe("replace")
   })
 
   it("extracts deps from both sides of a binary expression", () => {
@@ -593,10 +586,7 @@ describe("extractDeps", () => {
   it("does not extract sub-deps from a RefRead ref subtree", () => {
     // RefRead(PropertyAccess(Identifier("recipe"), "name")) should NOT
     // produce a dep for "recipe" — only for "recipe.name"
-    const expr = refRead(
-      propertyAccess(identifier("recipe"), "name"),
-      "text",
-    )
+    const expr = refRead(propertyAccess(identifier("recipe"), "name"), "text")
     const deps = extractDeps(expr)
     expect(deps).toHaveLength(1)
     expect(deps[0].source).toBe("recipe.name")
@@ -645,20 +635,14 @@ describe("isReactive", () => {
   // ---------------------------------------------------------------------------
 
   it("MethodCall with reactive receiver is reactive", () => {
-    const expr = methodCall(
-      refRead(identifier("x"), "replace"),
-      "toString",
-      [],
-    )
+    const expr = methodCall(refRead(identifier("x"), "replace"), "toString", [])
     expect(isReactive(expr)).toBe(true)
   })
 
   it("MethodCall with reactive argument is reactive", () => {
-    const expr = methodCall(
-      identifier("str"),
-      "includes",
-      [refRead(identifier("x"), "replace")],
-    )
+    const expr = methodCall(identifier("str"), "includes", [
+      refRead(identifier("x"), "replace"),
+    ])
     expect(isReactive(expr)).toBe(true)
   })
 
@@ -668,10 +652,7 @@ describe("isReactive", () => {
   })
 
   it("PropertyAccess with reactive object is reactive", () => {
-    const expr = propertyAccess(
-      refRead(identifier("x"), "replace"),
-      "length",
-    )
+    const expr = propertyAccess(refRead(identifier("x"), "replace"), "length")
     expect(isReactive(expr)).toBe(true)
   })
 
@@ -696,20 +677,12 @@ describe("isReactive", () => {
   })
 
   it("Binary with reactive left is reactive", () => {
-    const expr = binary(
-      refRead(identifier("x"), "replace"),
-      ">",
-      literal("0"),
-    )
+    const expr = binary(refRead(identifier("x"), "replace"), ">", literal("0"))
     expect(isReactive(expr)).toBe(true)
   })
 
   it("Binary with reactive right is reactive", () => {
-    const expr = binary(
-      literal("0"),
-      "<",
-      refRead(identifier("x"), "replace"),
-    )
+    const expr = binary(literal("0"), "<", refRead(identifier("x"), "replace"))
     expect(isReactive(expr)).toBe(true)
   })
 
@@ -738,11 +711,7 @@ describe("isReactive", () => {
   })
 
   it("Template with no reactive holes is not reactive", () => {
-    const expr = template([
-      literal("Hello "),
-      identifier("name"),
-      literal("!"),
-    ])
+    const expr = template([literal("Hello "), identifier("name"), literal("!")])
     expect(isReactive(expr)).toBe(false)
   })
 
@@ -754,11 +723,7 @@ describe("isReactive", () => {
     // method(method(method(refRead(x))))
     const expr = methodCall(
       methodCall(
-        methodCall(
-          refRead(identifier("x"), "text"),
-          "toLowerCase",
-          [],
-        ),
+        methodCall(refRead(identifier("x"), "text"), "toLowerCase", []),
         "trim",
         [],
       ),
@@ -770,15 +735,7 @@ describe("isReactive", () => {
 
   it("deeply nested non-reactive tree is not reactive", () => {
     const expr = methodCall(
-      methodCall(
-        methodCall(
-          identifier("str"),
-          "toLowerCase",
-          [],
-        ),
-        "trim",
-        [],
-      ),
+      methodCall(methodCall(identifier("str"), "toLowerCase", []), "trim", []),
       "slice",
       [literal("0"), literal("10")],
     )
@@ -826,7 +783,11 @@ describe("renderRefSource", () => {
   })
 
   it("renders a snapshot as ref()", () => {
-    const expr = snapshot(propertyAccess(identifier("recipe"), "name"), [], "text")
+    const expr = snapshot(
+      propertyAccess(identifier("recipe"), "name"),
+      [],
+      "text",
+    )
     expect(renderRefSource(expr)).toBe("recipe.name()")
   })
 })
@@ -1017,7 +978,9 @@ describe("renderExpression", () => {
   })
 
   it("renders a raw node verbatim", () => {
-    expect(renderExpression(raw("some.complex[0]"), noExpand)).toBe("some.complex[0]")
+    expect(renderExpression(raw("some.complex[0]"), noExpand)).toBe(
+      "some.complex[0]",
+    )
   })
 
   // ---------------------------------------------------------------------------
@@ -1030,19 +993,13 @@ describe("renderExpression", () => {
   })
 
   it("RefRead on property access inserts ()", () => {
-    const expr = refRead(
-      propertyAccess(identifier("recipe"), "name"),
-      "text",
-    )
+    const expr = refRead(propertyAccess(identifier("recipe"), "name"), "text")
     expect(renderExpression(expr, noExpand)).toBe("recipe.name()")
   })
 
   it("RefRead on nested property access inserts ()", () => {
     const expr = refRead(
-      propertyAccess(
-        propertyAccess(identifier("doc"), "meta"),
-        "title",
-      ),
+      propertyAccess(propertyAccess(identifier("doc"), "meta"), "title"),
       "text",
     )
     expect(renderExpression(expr, noExpand)).toBe("doc.meta.title()")
@@ -1080,12 +1037,8 @@ describe("renderExpression", () => {
   })
 
   it("renders method call with args", () => {
-    const expr = methodCall(
-      identifier("str"),
-      "includes",
-      [literal("\"x\"")],
-    )
-    expect(renderExpression(expr, noExpand)).toBe("str.includes(\"x\")")
+    const expr = methodCall(identifier("str"), "includes", [literal('"x"')])
+    expect(renderExpression(expr, noExpand)).toBe('str.includes("x")')
   })
 
   it("renders chained method calls", () => {
@@ -1107,10 +1060,7 @@ describe("renderExpression", () => {
   })
 
   it("renders chained property access", () => {
-    const expr = propertyAccess(
-      propertyAccess(identifier("a"), "b"),
-      "c",
-    )
+    const expr = propertyAccess(propertyAccess(identifier("a"), "b"), "c")
     expect(renderExpression(expr, noExpand)).toBe("a.b.c")
   })
 
@@ -1191,11 +1141,7 @@ describe("renderExpression", () => {
 
   it("renders a template literal with expression hole", () => {
     // `Hello ${name}!`
-    const expr = template([
-      literal("Hello "),
-      identifier("name"),
-      literal("!"),
-    ])
+    const expr = template([literal("Hello "), identifier("name"), literal("!")])
     expect(renderExpression(expr, noExpand)).toBe("`Hello ${name}!`")
   })
 

@@ -70,19 +70,27 @@ export interface ScalarSchema<
  * Used as the default for the `V` type parameter on `ScalarSchema` and
  * by interpreters that need the "widest" type for a scalar kind.
  */
-export type ScalarPlain<K extends ScalarKind> =
-  K extends "string" ? string
-  : K extends "number" ? number
-  : K extends "boolean" ? boolean
-  : K extends "null" ? null
-  : K extends "undefined" ? undefined
-  : K extends "bytes" ? Uint8Array
-  : K extends "any" ? unknown
-  : never
+export type ScalarPlain<K extends ScalarKind> = K extends "string"
+  ? string
+  : K extends "number"
+    ? number
+    : K extends "boolean"
+      ? boolean
+      : K extends "null"
+        ? null
+        : K extends "undefined"
+          ? undefined
+          : K extends "bytes"
+            ? Uint8Array
+            : K extends "any"
+              ? unknown
+              : never
 
 // --- Product -----------------------------------------------------------------
 
-export interface ProductSchema<F extends Record<string, Schema> = Record<string, Schema>> {
+export interface ProductSchema<
+  F extends Record<string, Schema> = Record<string, Schema>,
+> {
   readonly _kind: "product"
   readonly fields: Readonly<F>
   readonly discriminantKey?: string
@@ -117,7 +125,9 @@ export interface MapSchema<I extends Schema = Schema> {
  */
 export type SumSchema = PositionalSumSchema | DiscriminatedSumSchema
 
-export interface PositionalSumSchema<V extends readonly Schema[] = readonly Schema[]> {
+export interface PositionalSumSchema<
+  V extends readonly Schema[] = readonly Schema[],
+> {
   readonly _kind: "sum"
   readonly variants: V
   readonly discriminant?: undefined
@@ -268,7 +278,9 @@ function scalar<K extends ScalarKind, V extends ScalarPlain<K>>(
   return { _kind: "scalar", scalarKind } as ScalarSchema<K, V>
 }
 
-function product<F extends Record<string, Schema>>(fields: F): ProductSchema<F> {
+function product<F extends Record<string, Schema>>(
+  fields: F,
+): ProductSchema<F> {
   return { _kind: "product", fields }
 }
 
@@ -306,7 +318,7 @@ export function buildVariantMap<D extends string>(
     if (!fieldSchema) {
       throw new Error(
         `discriminatedUnion: variant ${i} is missing the discriminant field "${discriminant}".` +
-        ` Each variant must include a field like { ${discriminant}: Schema.string("value") }.`,
+          ` Each variant must include a field like { ${discriminant}: Schema.string("value") }.`,
       )
     }
     if (
@@ -317,7 +329,7 @@ export function buildVariantMap<D extends string>(
     ) {
       throw new Error(
         `discriminatedUnion: variant ${i}'s "${discriminant}" field must be a constrained string scalar` +
-        ` (e.g. Schema.string("value")), got ${fieldSchema._kind}/${(fieldSchema as ScalarSchema).scalarKind ?? "?"}.`,
+          ` (e.g. Schema.string("value")), got ${fieldSchema._kind}/${(fieldSchema as ScalarSchema).scalarKind ?? "?"}.`,
       )
     }
     const discValue = fieldSchema.constraint[0] as string
@@ -331,10 +343,7 @@ export function buildVariantMap<D extends string>(
   return map
 }
 
-function discriminatedSum<
-  D extends string,
-  V extends ProductSchema[],
->(
+function discriminatedSum<D extends string, V extends ProductSchema[]>(
   discriminant: D,
   variants: [...V],
 ): DiscriminatedSumSchema<D, V> {
@@ -395,7 +404,9 @@ function record<I extends Schema>(item: I): MapSchema<I> {
  * this is the root entry point (analogous to TypedDoc in the current
  * codebase).
  */
-function doc<F extends Record<string, Schema>>(fields: F): AnnotatedSchema<"doc", ProductSchema<F>> {
+function doc<F extends Record<string, Schema>>(
+  fields: F,
+): AnnotatedSchema<"doc", ProductSchema<F>> {
   return annotated("doc", product(fields))
 }
 
@@ -416,7 +427,7 @@ function string_<V extends string = string>(
 ): ScalarSchema<"string", V> {
   return options.length > 0
     ? scalar("string", options)
-    : scalar("string") as ScalarSchema<"string", V>
+    : (scalar("string") as ScalarSchema<"string", V>)
 }
 
 /**
@@ -432,7 +443,7 @@ function number_<V extends number = number>(
 ): ScalarSchema<"number", V> {
   return options.length > 0
     ? scalar("number", options)
-    : scalar("number") as ScalarSchema<"number", V>
+    : (scalar("number") as ScalarSchema<"number", V>)
 }
 
 /**
@@ -448,7 +459,7 @@ function boolean_<V extends boolean = boolean>(
 ): ScalarSchema<"boolean", V> {
   return options.length > 0
     ? scalar("boolean", options)
-    : scalar("boolean") as ScalarSchema<"boolean", V>
+    : (scalar("boolean") as ScalarSchema<"boolean", V>)
 }
 
 /** Scalar null. Produces `scalar("null")`. */
@@ -482,7 +493,9 @@ function any(): ScalarSchema<"any"> {
  * Schema.union(Schema.string(), Schema.number())
  * ```
  */
-function union<V extends Schema[]>(...variants: [...V]): PositionalSumSchema<V> {
+function union<V extends Schema[]>(
+  ...variants: [...V]
+): PositionalSumSchema<V> {
   return sum(variants)
 }
 
@@ -519,7 +532,9 @@ function discriminatedUnion<D extends string, V extends ProductSchema[]>(
  * Schema.nullable(Schema.string()) // string | null
  * ```
  */
-function nullable<S extends Schema>(inner: S): PositionalSumSchema<[ScalarSchema<"null">, S]> {
+function nullable<S extends Schema>(
+  inner: S,
+): PositionalSumSchema<[ScalarSchema<"null">, S]> {
   return sum([null_(), inner])
 }
 
@@ -624,7 +639,7 @@ export function isAnnotated(schema: Schema): schema is AnnotatedSchema {
 export function isNullableSum(schema: PositionalSumSchema): boolean {
   return (
     schema.variants.length === 2 &&
-    schema.variants[0]!._kind === "scalar" &&
+    schema.variants[0]?._kind === "scalar" &&
     (schema.variants[0] as ScalarSchema).scalarKind === "null"
   )
 }

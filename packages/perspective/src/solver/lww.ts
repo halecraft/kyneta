@@ -21,15 +21,15 @@
 //
 // See unified-engine.md §7.2, §8, §B.7.
 
+import { cnIdKey } from "../kernel/cnid.js"
+import type { StructureIndex } from "../kernel/structure-index.js"
 import type {
   CnId,
   Lamport,
   PeerID,
   Value,
   ValueConstraint,
-} from '../kernel/types.js';
-import { cnIdKey } from '../kernel/cnid.js';
-import type { StructureIndex } from '../kernel/structure-index.js';
+} from "../kernel/types.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,15 +40,15 @@ import type { StructureIndex } from '../kernel/structure-index.js';
  */
 export interface LWWEntry {
   /** The value constraint's CnId. */
-  readonly id: CnId;
+  readonly id: CnId
   /** The slot identity string (from the structure index). */
-  readonly slotId: string;
+  readonly slotId: string
   /** The asserted content. */
-  readonly content: Value;
+  readonly content: Value
   /** Lamport timestamp for ordering. */
-  readonly lamport: Lamport;
+  readonly lamport: Lamport
   /** Peer ID for tiebreaking. */
-  readonly peer: PeerID;
+  readonly peer: PeerID
 }
 
 /**
@@ -56,15 +56,15 @@ export interface LWWEntry {
  */
 export interface LWWWinner {
   /** The slot identity string. */
-  readonly slotId: string;
+  readonly slotId: string
   /** The winning value constraint's CnId. */
-  readonly winnerId: CnId;
+  readonly winnerId: CnId
   /** The resolved content value. */
-  readonly content: Value;
+  readonly content: Value
   /** Lamport of the winner. */
-  readonly lamport: Lamport;
+  readonly lamport: Lamport
   /** Peer of the winner. */
-  readonly peer: PeerID;
+  readonly peer: PeerID
 }
 
 /**
@@ -72,7 +72,7 @@ export interface LWWWinner {
  */
 export interface LWWResult {
   /** Winning value per slot. */
-  readonly winners: ReadonlyMap<string, LWWWinner>;
+  readonly winners: ReadonlyMap<string, LWWWinner>
 }
 
 // ---------------------------------------------------------------------------
@@ -95,14 +95,14 @@ export function resolveLWW(
   structureIndex: StructureIndex,
 ): LWWResult {
   // Group entries by slot.
-  const bySlot = new Map<string, LWWEntry>();
+  const bySlot = new Map<string, LWWEntry>()
 
   for (const vc of activeValueConstraints) {
-    const targetKey = cnIdKey(vc.payload.target);
-    const sid = structureIndex.structureToSlot.get(targetKey);
+    const targetKey = cnIdKey(vc.payload.target)
+    const sid = structureIndex.structureToSlot.get(targetKey)
     if (sid === undefined) {
       // Orphaned value — target structure not found. Skip.
-      continue;
+      continue
     }
 
     const entry: LWWEntry = {
@@ -111,16 +111,16 @@ export function resolveLWW(
       content: vc.payload.content,
       lamport: vc.lamport,
       peer: vc.id.peer,
-    };
+    }
 
-    const existing = bySlot.get(sid);
+    const existing = bySlot.get(sid)
     if (existing === undefined || lwwCompare(entry, existing) > 0) {
-      bySlot.set(sid, entry);
+      bySlot.set(sid, entry)
     }
   }
 
   // Convert entries to winners.
-  const winners = new Map<string, LWWWinner>();
+  const winners = new Map<string, LWWWinner>()
   for (const [sid, entry] of bySlot) {
     winners.set(sid, {
       slotId: sid,
@@ -128,10 +128,10 @@ export function resolveLWW(
       content: entry.content,
       lamport: entry.lamport,
       peer: entry.peer,
-    });
+    })
   }
 
-  return { winners };
+  return { winners }
 }
 
 /**
@@ -146,16 +146,16 @@ export function resolveLWW(
 export function resolveLWWSlot(
   entries: readonly LWWEntry[],
 ): LWWEntry | undefined {
-  if (entries.length === 0) return undefined;
+  if (entries.length === 0) return undefined
 
-  let winner = entries[0]!;
+  let winner = entries[0]!
   for (let i = 1; i < entries.length; i++) {
-    const candidate = entries[i]!;
+    const candidate = entries[i]!
     if (lwwCompare(candidate, winner) > 0) {
-      winner = candidate;
+      winner = candidate
     }
   }
-  return winner;
+  return winner
 }
 
 // ---------------------------------------------------------------------------
@@ -173,12 +173,12 @@ export function resolveLWWSlot(
  */
 export function lwwCompare(a: LWWEntry, b: LWWEntry): number {
   if (a.lamport !== b.lamport) {
-    return a.lamport - b.lamport;
+    return a.lamport - b.lamport
   }
   // Lamport tie — peer ID breaks it (greater peer wins).
   if (a.peer !== b.peer) {
-    return a.peer > b.peer ? 1 : -1;
+    return a.peer > b.peer ? 1 : -1
   }
   // Same lamport AND same peer — compare by counter for determinism.
-  return a.id.counter - b.id.counter;
+  return a.id.counter - b.id.counter
 }

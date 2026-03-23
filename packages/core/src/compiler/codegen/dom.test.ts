@@ -5,7 +5,6 @@
  * JavaScript code from IR nodes.
  */
 
-import { describe, expect, it } from "vitest"
 import {
   type AttributeNode,
   createBuilder,
@@ -17,11 +16,12 @@ import {
   createLoop,
   createSpan,
   createStatement,
-  type Dependency,
   type DeltaKind,
+  type Dependency,
   type EventHandlerNode,
 } from "@kyneta/compiler"
 import { dissolveConditionals } from "@kyneta/compiler/transforms"
+import { describe, expect, it } from "vitest"
 import {
   generateDOM,
   generateElementFactory,
@@ -285,7 +285,6 @@ describe("generateDOM", () => {
       expect(code).toContain("valueRegion(")
       expect(code).toContain("[first, last]")
       expect(code).toContain("textContent")
-
     })
   })
 
@@ -518,12 +517,7 @@ describe("generateElementFactoryWithResult - template cloning attributes", () =>
   it("should use .value = for value attribute hole (not setAttribute)", () => {
     const valueAttr: AttributeNode = {
       name: "value",
-      value: createContent(
-        "currentText",
-        "render",
-        [],
-        span(1, 15, 1, 26),
-      ),
+      value: createContent("currentText", "render", [], span(1, 15, 1, 26)),
     }
     const builder = createBuilder(
       "input",
@@ -543,12 +537,7 @@ describe("generateElementFactoryWithResult - template cloning attributes", () =>
   it("should use .checked = for checked attribute hole (not setAttribute)", () => {
     const checkedAttr: AttributeNode = {
       name: "checked",
-      value: createContent(
-        "isChecked",
-        "render",
-        [],
-        span(1, 15, 1, 24),
-      ),
+      value: createContent("isChecked", "render", [], span(1, 15, 1, 24)),
     }
     const builder = createBuilder(
       "input",
@@ -575,13 +564,7 @@ describe("generateElementFactoryWithResult - template cloning attributes", () =>
         span(1, 15, 1, 32),
       ),
     }
-    const builder = createBuilder(
-      "div",
-      [styleAttr],
-      [],
-      [],
-      span(1, 0, 1, 35),
-    )
+    const builder = createBuilder("div", [styleAttr], [], [], span(1, 0, 1, 35))
 
     const result = generateElementFactoryWithResult(builder)
 
@@ -600,13 +583,7 @@ describe("generateElementFactoryWithResult - template cloning attributes", () =>
         span(1, 15, 1, 38),
       ),
     }
-    const builder = createBuilder(
-      "div",
-      [classAttr],
-      [],
-      [],
-      span(1, 0, 1, 40),
-    )
+    const builder = createBuilder("div", [classAttr], [], [], span(1, 0, 1, 40))
 
     const result = generateElementFactoryWithResult(builder)
 
@@ -669,12 +646,7 @@ describe("generateElementFactoryWithResult - template cloning attributes", () =>
   it("should still use setAttribute for unknown attributes in cloning path", () => {
     const ariaAttr: AttributeNode = {
       name: "aria-label",
-      value: createContent(
-        "labelText",
-        "render",
-        [],
-        span(1, 15, 1, 24),
-      ),
+      value: createContent("labelText", "render", [], span(1, 15, 1, 24)),
     }
     const builder = createBuilder(
       "button",
@@ -1120,7 +1092,14 @@ describe("generateDOM - code validity", () => {
           ),
         },
       ],
-      [{ event: "click", propName: "onClick", handlerSource: "() => {}", span: span(1, 0, 1, 10) }],
+      [
+        {
+          event: "click",
+          propName: "onClick",
+          handlerSource: "() => {}",
+          span: span(1, 0, 1, 10),
+        },
+      ],
       [loop, conditionalRegion],
       span(1, 0, 10, 1),
     )
@@ -1523,13 +1502,7 @@ describe("generateElementFactoryWithResult - dissolution on cloning path", () =>
       dep("count"),
       span(2, 2, 6, 3),
     )
-    const builder = createBuilder(
-      "div",
-      [],
-      [],
-      [cond],
-      span(1, 0, 7, 1),
-    )
+    const builder = createBuilder("div", [], [], [cond], span(1, 0, 7, 1))
 
     // Apply dissolution at IR level (simulating what the transform pipeline will do)
     const dissolved = dissolveConditionals(builder)
@@ -1555,19 +1528,14 @@ describe("generateElementFactoryWithResult - dissolution on cloning path", () =>
     // Should contain a subscription call for the reactive ternary
     expect(
       result.code.includes("subscribe(") ||
-      result.code.includes("valueRegion("),
+        result.code.includes("valueRegion("),
     ).toBe(true)
   })
 
   it("should still emit conditionalRegion on cloning path for non-dissolvable conditional", () => {
     // Non-dissolvable: different tags (p vs div)
     const trueBranch = createConditionalBranch(
-      createContent(
-        "flag.get()",
-        "reactive",
-        [dep("flag")],
-        span(2, 6, 2, 16),
-      ),
+      createContent("flag.get()", "reactive", [dep("flag")], span(2, 6, 2, 16)),
       [
         createElement(
           "p",
@@ -1599,13 +1567,7 @@ describe("generateElementFactoryWithResult - dissolution on cloning path", () =>
       dep("flag"),
       span(2, 2, 6, 3),
     )
-    const builder = createBuilder(
-      "div",
-      [],
-      [],
-      [cond],
-      span(1, 0, 7, 1),
-    )
+    const builder = createBuilder("div", [], [], [cond], span(1, 0, 7, 1))
 
     // Apply dissolution — should be a no-op for this non-dissolvable conditional
     const dissolved = dissolveConditionals(builder)

@@ -20,43 +20,36 @@
  */
 
 import {
-  type Expression,
-  type Node,
-  SyntaxKind,
-  type CallExpression,
-  type PropertyAccessExpression,
   type BinaryExpression,
-  type PrefixUnaryExpression,
-  type PostfixUnaryExpression,
-  type TemplateExpression,
-  type ParenthesizedExpression,
+  type CallExpression,
   type ConditionalExpression,
   type ElementAccessExpression,
+  type Expression,
+  type ParenthesizedExpression,
+  type PostfixUnaryExpression,
+  type PrefixUnaryExpression,
+  type PropertyAccessExpression,
+  SyntaxKind,
+  type TemplateExpression,
   type Type,
 } from "ts-morph"
 
 import {
-  type ExpressionIR,
-  refRead,
-  snapshot,
+  binary,
   bindingRef,
+  call,
+  type ExpressionIR,
+  identifier,
+  literal,
   methodCall,
   propertyAccess,
-  call,
-  binary,
-  unary,
-  template,
-  literal,
-  identifier,
   raw,
+  refRead,
+  snapshot,
+  template,
+  unary,
 } from "./expression-ir.js"
-
-import {
-  isChangefeedType,
-  getDeltaKind,
-} from "./reactive-detection.js"
-
-import type { DeltaKind } from "./ir.js"
+import { getDeltaKind, isChangefeedType } from "./reactive-detection.js"
 
 // =============================================================================
 // Expression Scope (for binding lookup)
@@ -202,10 +195,7 @@ function buildNode(expr: Expression, scope?: ExpressionScope): ExpressionIR {
     // Parenthesized: (expr)
     // -------------------------------------------------------------------------
     case SyntaxKind.ParenthesizedExpression:
-      return buildNode(
-        (expr as ParenthesizedExpression).getExpression(),
-        scope,
-      )
+      return buildNode((expr as ParenthesizedExpression).getExpression(), scope)
 
     // -------------------------------------------------------------------------
     // Conditional (ternary): cond ? a : b
@@ -533,7 +523,7 @@ function buildIdentifier(
  */
 function buildConditionalExpression(
   expr: ConditionalExpression,
-  scope?: ExpressionScope,
+  _scope?: ExpressionScope,
 ): ExpressionIR {
   // For now, fall back to raw since ExpressionIR doesn't model ternaries
   // and they're uncommon in reactive content positions.
@@ -552,7 +542,7 @@ function buildConditionalExpression(
  */
 function buildElementAccess(
   expr: ElementAccessExpression,
-  scope?: ExpressionScope,
+  _scope?: ExpressionScope,
 ): ExpressionIR {
   return raw(expr.getText())
 }
@@ -568,10 +558,7 @@ function buildElementAccess(
  * This is used by consumers (binary, unary, template holes) that need
  * their operands to be values, not changefeeds.
  */
-function wrapIfChangefeed(
-  ir: ExpressionIR,
-  astExpr: Expression,
-): ExpressionIR {
+function wrapIfChangefeed(ir: ExpressionIR, astExpr: Expression): ExpressionIR {
   // Already a ref-read or snapshot — don't double-wrap
   if (ir.kind === "ref-read" || ir.kind === "snapshot") {
     return ir
@@ -671,13 +658,20 @@ const KNOWN_REF_PROPERTIES = new Set([
  */
 function getUnaryOperatorText(token: SyntaxKind): string {
   switch (token) {
-    case SyntaxKind.ExclamationToken: return "!"
-    case SyntaxKind.MinusToken: return "-"
-    case SyntaxKind.PlusToken: return "+"
-    case SyntaxKind.TildeToken: return "~"
-    case SyntaxKind.PlusPlusToken: return "++"
-    case SyntaxKind.MinusMinusToken: return "--"
-    default: return "?"
+    case SyntaxKind.ExclamationToken:
+      return "!"
+    case SyntaxKind.MinusToken:
+      return "-"
+    case SyntaxKind.PlusToken:
+      return "+"
+    case SyntaxKind.TildeToken:
+      return "~"
+    case SyntaxKind.PlusPlusToken:
+      return "++"
+    case SyntaxKind.MinusMinusToken:
+      return "--"
+    default:
+      return "?"
   }
 }
 
@@ -686,8 +680,11 @@ function getUnaryOperatorText(token: SyntaxKind): string {
  */
 function getPostfixOperatorText(token: SyntaxKind): string {
   switch (token) {
-    case SyntaxKind.PlusPlusToken: return "++"
-    case SyntaxKind.MinusMinusToken: return "--"
-    default: return "?"
+    case SyntaxKind.PlusPlusToken:
+      return "++"
+    case SyntaxKind.MinusMinusToken:
+      return "--"
+    default:
+      return "?"
   }
 }

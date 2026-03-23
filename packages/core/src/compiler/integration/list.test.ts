@@ -3,7 +3,6 @@ import {
   assertMaxMutations,
   createCountingContainer,
   createMockSequenceRef,
-  getActiveSubscriptionCount,
   installDOMGlobals,
   listRegion,
   resetTestState,

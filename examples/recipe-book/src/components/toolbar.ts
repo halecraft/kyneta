@@ -26,8 +26,8 @@
 /// <reference types="@kyneta/core/types/reactive-view" />
 
 import type { Element, LocalRef } from "@kyneta/core"
-import type { RecipeBookDoc } from "../types.js"
 import { change } from "../facade.js"
+import type { RecipeBookDoc } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Props

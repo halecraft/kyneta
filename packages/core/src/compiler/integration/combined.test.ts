@@ -11,13 +11,11 @@ import {
   createMockCounterRef,
   createMockTextRef,
   installDOMGlobals,
-  listRegion,
   read,
   resetTestState,
   Scope,
-  subscribe,
-  valueRegion,
   transformSource,
+  valueRegion,
   withTypes,
 } from "./helpers.js"
 
@@ -69,8 +67,6 @@ describe("compiler integration - combined scenarios", () => {
       expect(result.code).toContain("doc.showCompleted")
       expect(result.code).toContain("item.done")
     })
-
-
 
     it("should compile nested lists with reactive items", () => {
       const source = withTypes(`
@@ -137,14 +133,16 @@ describe("compiler integration - combined scenarios", () => {
         c => c.kind === "conditional",
       )
       expect(conditionalRegionNode).toBeDefined()
-      if (conditionalRegionNode && conditionalRegionNode.kind === "conditional") {
+      if (
+        conditionalRegionNode &&
+        conditionalRegionNode.kind === "conditional"
+      ) {
         expect(conditionalRegionNode.branches.length).toBe(3)
       }
 
       // Should have list regions inside branches
       expect(result.code).toContain("listRegion")
     })
-
   })
 
   describe("Runtime execution of combined patterns", () => {

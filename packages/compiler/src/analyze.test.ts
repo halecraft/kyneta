@@ -15,12 +15,11 @@ import {
   ELEMENT_FACTORIES,
   findBuilderCalls,
 } from "./analyze.js"
+import type { ContentValue } from "./ir.js"
 import {
   isChangefeedType,
   isComponentFactoryType,
-  resolveReactiveImports,
 } from "./reactive-detection.js"
-import type { ContentValue } from "./ir.js"
 
 // =============================================================================
 // Test Helpers
@@ -153,8 +152,6 @@ function addSchemaTypes(project: Project) {
   )
 }
 
-
-
 /**
  * Add reactive type definitions (LocalRef, etc.) to the project.
  * Uses CHANGEFEED protocol.
@@ -229,6 +226,7 @@ describe("ComponentFactory detection", () => {
     const myComponentDecl = sourceFile.getVariableDeclaration("MyComponent")
     expect(myComponentDecl).toBeDefined()
 
+    // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
     const type = myComponentDecl!.getType()
     expect(isComponentFactoryType(type)).toBe(true)
   })
@@ -247,7 +245,9 @@ describe("ComponentFactory detection", () => {
     const regularDecl = sourceFile.getVariableDeclaration("regularFunc")
     const stringDecl = sourceFile.getVariableDeclaration("stringFunc")
 
+    // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
     expect(isComponentFactoryType(regularDecl!.getType())).toBe(false)
+    // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
     expect(isComponentFactoryType(stringDecl!.getType())).toBe(false)
   })
 
@@ -1151,10 +1151,10 @@ describe("analyzeStatement - arbitrary statements", () => {
     expect(builder).not.toBeNull()
     expect(builder?.children.length).toBe(5)
 
-    expect(builder?.children[0].kind).toBe("binding")  // const a = 1
+    expect(builder?.children[0].kind).toBe("binding") // const a = 1
     expect(builder?.children[1].kind).toBe("statement") // console.log("first")
-    expect(builder?.children[2].kind).toBe("element")   // p("element")
-    expect(builder?.children[3].kind).toBe("binding")  // const b = 2
+    expect(builder?.children[2].kind).toBe("element") // p("element")
+    expect(builder?.children[3].kind).toBe("binding") // const b = 2
     expect(builder?.children[4].kind).toBe("statement") // console.log("second")
   })
 
@@ -1177,7 +1177,7 @@ describe("analyzeStatement - arbitrary statements", () => {
     expect(builder).not.toBeNull()
     // Block contents should be flattened
     expect(builder?.children.length).toBe(2)
-    expect(builder?.children[0].kind).toBe("binding")  // const x = 1
+    expect(builder?.children[0].kind).toBe("binding") // const x = 1
     expect(builder?.children[1].kind).toBe("element")
   })
 
@@ -1709,8 +1709,14 @@ describe("isChangefeedType", () => {
     `,
     )
 
-    expect(isChangefeedType(sourceFile.getVariableDeclaration("a")!.getType())).toBe(false)
-    expect(isChangefeedType(sourceFile.getVariableDeclaration("u")!.getType())).toBe(false)
+    expect(
+      // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
+      isChangefeedType(sourceFile.getVariableDeclaration("a")!.getType()),
+    ).toBe(false)
+    expect(
+      // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
+      isChangefeedType(sourceFile.getVariableDeclaration("u")!.getType()),
+    ).toBe(false)
   })
 
   it("handles union types (has changefeed if any branch does)", () => {
@@ -1824,7 +1830,9 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     `,
     )
 
-    const callExpr = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)[0]
+    const callExpr = sourceFile.getDescendantsOfKind(
+      SyntaxKind.CallExpression,
+    )[0]
     expect(callExpr).toBeDefined()
 
     const result = analyzeExpression(callExpr) as ContentValue

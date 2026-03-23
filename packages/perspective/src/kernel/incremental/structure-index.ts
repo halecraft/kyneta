@@ -23,22 +23,18 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 4.
 // See theory/incremental.md §5.3.
 
-import type {
-  Constraint,
-  StructureConstraint,
-  Policy,
-} from '../types.js';
-import { cnIdKey } from '../cnid.js';
+import type { ZSet } from "../../base/zset.js"
+import { zsetForEach } from "../../base/zset.js"
+import { cnIdKey } from "../cnid.js"
 import {
-  slotId,
   childKey,
   type SlotGroup,
   type StructureIndex,
-} from '../structure-index.js';
-import type { ZSet } from '../../base/zset.js';
-import { zsetForEach } from '../../base/zset.js';
-import type { StructureIndexDelta } from './types.js';
-import { structureIndexDeltaEmpty, structureIndexDeltaFrom } from './types.js';
+  slotId,
+} from "../structure-index.js"
+import type { Constraint, Policy, StructureConstraint } from "../types.js"
+import type { StructureIndexDelta } from "./types.js"
+import { structureIndexDeltaEmpty, structureIndexDeltaFrom } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Incremental Structure Index Stage
@@ -73,18 +69,18 @@ export interface IncrementalStructureIndex {
    * Weight −1 entries are ignored — structure constraints are permanent
    * and immune to retraction.
    */
-  step(delta: ZSet<Constraint>): StructureIndexDelta;
+  step(delta: ZSet<Constraint>): StructureIndexDelta
 
   /**
    * Return the current accumulated StructureIndex.
    * Equal to buildStructureIndex(all structure constraints seen so far).
    */
-  current(): StructureIndex;
+  current(): StructureIndex
 
   /**
    * Reset to empty state.
    */
-  reset(): void;
+  reset(): void
 }
 
 // ---------------------------------------------------------------------------
@@ -97,11 +93,11 @@ export interface IncrementalStructureIndex {
 // ---------------------------------------------------------------------------
 
 interface MutableSlotGroup {
-  readonly slotId: string;
-  readonly structures: StructureConstraint[];
-  readonly structureKeys: Set<string>;
-  readonly policy: Policy;
-  readonly childKey: string;
+  readonly slotId: string
+  readonly structures: StructureConstraint[]
+  readonly structureKeys: Set<string>
+  readonly policy: Policy
+  readonly childKey: string
 }
 
 // ---------------------------------------------------------------------------
@@ -115,20 +111,20 @@ export function createIncrementalStructureIndex(): IncrementalStructureIndex {
   // --- Persistent state ---
 
   // All structure constraints by CnId key.
-  let byId = new Map<string, StructureConstraint>();
+  let byId = new Map<string, StructureConstraint>()
 
   // Mutable slot groups indexed by slot identity string.
-  let slotGroups = new Map<string, MutableSlotGroup>();
+  let slotGroups = new Map<string, MutableSlotGroup>()
 
   // Mapping from structure CnId key → slot identity string.
-  let structureToSlot = new Map<string, string>();
+  let structureToSlot = new Map<string, string>()
 
   // Root containers indexed by containerId.
-  let roots = new Map<string, MutableSlotGroup>();
+  let roots = new Map<string, MutableSlotGroup>()
 
   // Children of a parent node, indexed by parent CnId key.
   // Each entry maps child slot identity → MutableSlotGroup.
-  let childrenOf = new Map<string, Map<string, MutableSlotGroup>>();
+  let childrenOf = new Map<string, Map<string, MutableSlotGroup>>()
 
   // --- Internal helpers ---
 
@@ -138,12 +134,12 @@ export function createIncrementalStructureIndex(): IncrementalStructureIndex {
    */
   function policyOf(sc: StructureConstraint): Policy {
     switch (sc.payload.kind) {
-      case 'root':
-        return sc.payload.policy;
-      case 'map':
-        return 'map';
-      case 'seq':
-        return 'seq';
+      case "root":
+        return sc.payload.policy
+      case "map":
+        return "map"
+      case "seq":
+        return "seq"
     }
   }
 
@@ -153,24 +149,24 @@ export function createIncrementalStructureIndex(): IncrementalStructureIndex {
    * the constraint was a duplicate.
    */
   function addStructure(sc: StructureConstraint): string | null {
-    const scKey = cnIdKey(sc.id);
+    const scKey = cnIdKey(sc.id)
 
     // Dedup — already indexed
-    if (byId.has(scKey)) return null;
+    if (byId.has(scKey)) return null
 
     // Index by CnId
-    byId.set(scKey, sc);
+    byId.set(scKey, sc)
 
     // Compute slot identity
-    const sid = slotId(sc);
-    const ckey = childKey(sc);
+    const sid = slotId(sc)
+    const ckey = childKey(sc)
 
     // Map CnId → slot
-    structureToSlot.set(scKey, sid);
+    structureToSlot.set(scKey, sid)
 
     // Find or create slot group
-    let group = slotGroups.get(sid);
-    const isNewGroup = group === undefined;
+    let group = slotGroups.get(sid)
+    const isNewGroup = group === undefined
 
     if (isNewGroup) {
       group = {
@@ -179,61 +175,61 @@ export function createIncrementalStructureIndex(): IncrementalStructureIndex {
         structureKeys: new Set(),
         policy: policyOf(sc),
         childKey: ckey,
-      };
-      slotGroups.set(sid, group);
+      }
+      slotGroups.set(sid, group)
     }
 
     // Add structure to group
-    group!.structures.push(sc);
-    group!.structureKeys.add(scKey);
+    group?.structures.push(sc)
+    group?.structureKeys.add(scKey)
 
     // Update root/children indexes (only for new groups — joining an
     // existing group doesn't change the root/children topology)
     if (isNewGroup) {
-      const payload = sc.payload;
-      if (payload.kind === 'root') {
-        roots.set(payload.containerId, group!);
+      const payload = sc.payload
+      if (payload.kind === "root") {
+        roots.set(payload.containerId, group!)
       } else {
         // Map or Seq child — index under parent
-        const parentKey = cnIdKey(payload.parent);
-        let children = childrenOf.get(parentKey);
+        const parentKey = cnIdKey(payload.parent)
+        let children = childrenOf.get(parentKey)
         if (children === undefined) {
-          children = new Map();
-          childrenOf.set(parentKey, children);
+          children = new Map()
+          childrenOf.set(parentKey, children)
         }
-        children.set(sid, group!);
+        children.set(sid, group!)
       }
     }
 
-    return sid;
+    return sid
   }
 
   // --- Public interface ---
 
   function step(delta: ZSet<Constraint>): StructureIndexDelta {
-    if (delta.size === 0) return structureIndexDeltaEmpty();
+    if (delta.size === 0) return structureIndexDeltaEmpty()
 
-    const updatedSlotIds = new Map<string, SlotGroup>();
+    const updatedSlotIds = new Map<string, SlotGroup>()
 
     zsetForEach(delta, (entry, _key) => {
       // Only process additions (weight > 0) of structure constraints.
       // Structure is permanent — weight −1 is ignored.
-      if (entry.weight <= 0) return;
-      if (entry.element.type !== 'structure') return;
+      if (entry.weight <= 0) return
+      if (entry.element.type !== "structure") return
 
-      const sc = entry.element as StructureConstraint;
-      const sid = addStructure(sc);
+      const sc = entry.element as StructureConstraint
+      const sid = addStructure(sc)
 
       if (sid !== null) {
         // The group was created or modified — include in delta.
         // We cast the mutable group to SlotGroup (readonly interface).
-        const group = slotGroups.get(sid)!;
-        updatedSlotIds.set(sid, group as SlotGroup);
+        const group = slotGroups.get(sid)!
+        updatedSlotIds.set(sid, group as SlotGroup)
       }
-    });
+    })
 
-    if (updatedSlotIds.size === 0) return structureIndexDeltaEmpty();
-    return structureIndexDeltaFrom(updatedSlotIds);
+    if (updatedSlotIds.size === 0) return structureIndexDeltaEmpty()
+    return structureIndexDeltaFrom(updatedSlotIds)
   }
 
   function current(): StructureIndex {
@@ -244,17 +240,20 @@ export function createIncrementalStructureIndex(): IncrementalStructureIndex {
       slotGroups: slotGroups as ReadonlyMap<string, SlotGroup>,
       structureToSlot: structureToSlot as ReadonlyMap<string, string>,
       roots: roots as ReadonlyMap<string, SlotGroup>,
-      childrenOf: childrenOf as ReadonlyMap<string, ReadonlyMap<string, SlotGroup>>,
-    };
+      childrenOf: childrenOf as ReadonlyMap<
+        string,
+        ReadonlyMap<string, SlotGroup>
+      >,
+    }
   }
 
   function reset(): void {
-    byId = new Map();
-    slotGroups = new Map();
-    structureToSlot = new Map();
-    roots = new Map();
-    childrenOf = new Map();
+    byId = new Map()
+    slotGroups = new Map()
+    structureToSlot = new Map()
+    roots = new Map()
+    childrenOf = new Map()
   }
 
-  return { step, current, reset };
+  return { step, current, reset }
 }

@@ -21,7 +21,6 @@ import type {
   ElementNode,
   EventHandlerNode,
   LoopNode,
-  StatementNode,
   TemplateHole,
 } from "@kyneta/compiler"
 import {
@@ -34,9 +33,9 @@ import {
   isInputTextRegionAttribute,
   isTextRegionContent,
   planWalk,
+  type RenderContext,
   renderExpression,
   simpleHash,
-  type RenderContext,
 } from "@kyneta/compiler"
 
 // =============================================================================
@@ -165,7 +164,7 @@ function indented(state: CodegenState): CodegenState {
 // =============================================================================
 
 /** Render context for initial render (bindings emit their name). */
-const INITIAL_RENDER: RenderContext = { expandBindings: false }
+const _INITIAL_RENDER: RenderContext = { expandBindings: false }
 
 /** Render context for reactive closures (bindings expand to their expression tree). */
 const REACTIVE_CLOSURE: RenderContext = { expandBindings: true }
@@ -245,9 +244,7 @@ function generateReactiveContentSubscription(
     // re-evaluation closures (solves the stale-binding problem).
     const depSources = getReactiveDeps(node).join(", ")
     const source = getReactiveSource(node)
-    lines.push(
-      `${ind}valueRegion([${depSources}], () => ${source}, (v) => {`,
-    )
+    lines.push(`${ind}valueRegion([${depSources}], () => ${source}, (v) => {`)
     lines.push(`${ind}${state.indent}${textVar}.textContent = String(v)`)
     lines.push(`${ind}}, ${state.scopeVar})`)
   }
@@ -345,11 +342,11 @@ function generateAttributeSet(
 
   // For literal style, use setAttribute (the value is a plain string)
   if (attr.name === "style" && attr.value.bindingTime === "literal") {
-    lines.push(
-      `${ind}${elementVar}.setAttribute("style", ${content.code})`,
-    )
+    lines.push(`${ind}${elementVar}.setAttribute("style", ${content.code})`)
   } else {
-    lines.push(`${ind}${generateAttributeUpdateCode(elementVar, attr.name, content.code)}`)
+    lines.push(
+      `${ind}${generateAttributeUpdateCode(elementVar, attr.name, content.code)}`,
+    )
   }
 
   return lines
@@ -388,9 +385,7 @@ function generateAttributeSubscription(
   const depSources = getReactiveDeps(attr.value).join(", ")
   const source = getReactiveSource(attr.value)
   const updateCode = generateAttributeUpdateCode(elementVar, attr.name, "v")
-  lines.push(
-    `${ind}valueRegion([${depSources}], () => ${source}, (v) => {`,
-  )
+  lines.push(`${ind}valueRegion([${depSources}], () => ${source}, (v) => {`)
   lines.push(`${ind}${state.indent}${updateCode}`)
   lines.push(`${ind}}, ${state.scopeVar})`)
 
@@ -504,8 +499,6 @@ function generateElement(
   return { code: lines, varName: elementVar }
 }
 
-
-
 // =============================================================================
 // Child Generation
 // =============================================================================
@@ -570,8 +563,6 @@ function generateChild(
       lines.push(...generateConditional(node, parentVar, state))
       break
     }
-
-
 
     case "binding": {
       // Emit as a const declaration — the binding's value.source is the
@@ -869,7 +860,9 @@ function generateConditionalRegionCall(
 
   // Generate whenTrue handler
   lines.push(`${innerInd}whenTrue: () => {`)
-  lines.push(...generateBodyWithReturn(node.branches[0].body, indented(innerState)))
+  lines.push(
+    ...generateBodyWithReturn(node.branches[0].body, indented(innerState)),
+  )
   lines.push(`${innerInd}},`)
 
   // Generate whenFalse handler
@@ -1086,8 +1079,6 @@ function generateHoleSetup(
       break
     }
 
-
-
     case "region": {
       // Region hole - the grabbed node is the opening comment marker
       // Pass it to listRegion or conditionalRegion as mount point
@@ -1095,9 +1086,7 @@ function generateHoleSetup(
       if (!regionNode) break
 
       if (regionNode.kind === "loop") {
-        lines.push(
-          ...generateReactiveLoopBody(regionNode, nodeRef, state),
-        )
+        lines.push(...generateReactiveLoopBody(regionNode, nodeRef, state))
       } else if (regionNode.kind === "conditional") {
         lines.push(...generateConditionalRegionCall(regionNode, nodeRef, state))
       }
@@ -1195,7 +1184,7 @@ function generateDOMWithCloning(
  * Template cloning requires that we can extract a meaningful template.
  * Some patterns may not be suitable for cloning.
  */
-function canUseTemplateCloning(node: BuilderNode): boolean {
+function canUseTemplateCloning(_node: BuilderNode): boolean {
   // For now, always use template cloning for DOM target
   // In the future, we might skip it for very simple templates
   // or templates with complex patterns that don't benefit from cloning

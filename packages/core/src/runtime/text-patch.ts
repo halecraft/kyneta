@@ -19,9 +19,9 @@
  */
 
 import {
-  isTextChange,
   type ChangeBase,
   type HasChangefeed,
+  isTextChange,
   type TextInstruction,
 } from "@kyneta/schema"
 import type { Scope } from "./scope.js"
@@ -40,8 +40,6 @@ import { read, subscribe } from "./subscribe.js"
 export type TextPatchOp =
   | { kind: "insert"; offset: number; text: string }
   | { kind: "delete"; offset: number; count: number }
-
-
 
 // =============================================================================
 // Functional Core (Pure)
@@ -115,7 +113,10 @@ export function planTextPatch(ops: readonly TextInstruction[]): TextPatchOp[] {
  * // text.textContent === "Hello World"
  * ```
  */
-export function patchText(textNode: Text, ops: readonly TextInstruction[]): void {
+export function patchText(
+  textNode: Text,
+  ops: readonly TextInstruction[],
+): void {
   const patchOps = planTextPatch(ops)
 
   for (const op of patchOps) {
@@ -229,11 +230,7 @@ export function inputTextRegion(
         // - remote/unknown edits → "preserve" (cursor stays relative)
         const mode = origin === "local" ? "end" : "preserve"
         // Surgical update — O(k) where k is the edit size
-        patchInputValue(
-          input,
-          change.instructions,
-          mode,
-        )
+        patchInputValue(input, change.instructions, mode)
       } else {
         // Fallback for non-text changes (e.g., "replace") — O(n) full replacement
         input.value = readValue()

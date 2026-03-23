@@ -21,12 +21,8 @@
 //
 // See unified-engine.md §6.
 
-import type {
-  Constraint,
-  RetractConstraint,
-  CnId,
-} from './types.js';
-import { cnIdKey } from './cnid.js';
+import { cnIdKey } from "./cnid.js"
+import type { CnId, Constraint, RetractConstraint } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -44,12 +40,12 @@ import { cnIdKey } from './cnid.js';
  */
 export interface RetractionConfig {
   /** Maximum retraction chain depth. Default: 2. */
-  readonly maxDepth: number;
+  readonly maxDepth: number
 }
 
 export const DEFAULT_RETRACTION_CONFIG: RetractionConfig = {
   maxDepth: 2,
-};
+}
 
 // ---------------------------------------------------------------------------
 // Retraction Result
@@ -60,32 +56,36 @@ export const DEFAULT_RETRACTION_CONFIG: RetractionConfig = {
  */
 export interface RetractionResult {
   /** Constraints that are active (not dominated). */
-  readonly active: readonly Constraint[];
+  readonly active: readonly Constraint[]
 
   /** Constraints that are dominated by retraction. */
-  readonly dominated: readonly Constraint[];
+  readonly dominated: readonly Constraint[]
 
   /**
    * Retraction violations — retract constraints that were rejected
    * because they violate structural rules (target not in refs, or
    * target is a structure constraint).
    */
-  readonly violations: readonly RetractionViolation[];
+  readonly violations: readonly RetractionViolation[]
 }
 
 /**
  * A retraction rule violation.
  */
 export interface RetractionViolation {
-  readonly retractConstraint: RetractConstraint;
-  readonly reason: RetractionViolationReason;
+  readonly retractConstraint: RetractConstraint
+  readonly reason: RetractionViolationReason
 }
 
 export type RetractionViolationReason =
-  | { readonly kind: 'targetNotInRefs'; readonly target: CnId }
-  | { readonly kind: 'targetIsStructure'; readonly target: CnId }
-  | { readonly kind: 'targetIsAuthority'; readonly target: CnId }
-  | { readonly kind: 'depthExceeded'; readonly depth: number; readonly maxDepth: number };
+  | { readonly kind: "targetNotInRefs"; readonly target: CnId }
+  | { readonly kind: "targetIsStructure"; readonly target: CnId }
+  | { readonly kind: "targetIsAuthority"; readonly target: CnId }
+  | {
+      readonly kind: "depthExceeded"
+      readonly depth: number
+      readonly maxDepth: number
+    }
 
 // ---------------------------------------------------------------------------
 // Compute Active(S)
@@ -110,28 +110,28 @@ export function computeActive(
   config: RetractionConfig = DEFAULT_RETRACTION_CONFIG,
 ): RetractionResult {
   // Materialize and index constraints by CnId key
-  const all: Constraint[] = [];
-  const byKey = new Map<string, Constraint>();
+  const all: Constraint[] = []
+  const byKey = new Map<string, Constraint>()
 
   for (const c of validConstraints) {
-    all.push(c);
-    byKey.set(cnIdKey(c.id), c);
+    all.push(c)
+    byKey.set(cnIdKey(c.id), c)
   }
 
   // Step 1: Collect valid retract constraints and check structural rules.
   // retractEdges: Map<targetKey, retractConstraint[]>
-  const retractEdges = new Map<string, RetractConstraint[]>();
-  const violations: RetractionViolation[] = [];
+  const retractEdges = new Map<string, RetractConstraint[]>()
+  const violations: RetractionViolation[] = []
 
   // Track which retract constraints are valid (pass structural checks)
-  const validRetracts = new Set<string>(); // keys of valid retract constraints
+  const validRetracts = new Set<string>() // keys of valid retract constraints
 
   for (const c of all) {
-    if (c.type !== 'retract') continue;
+    if (c.type !== "retract") continue
 
-    const retract = c as RetractConstraint;
-    const targetKey = cnIdKey(retract.payload.target);
-    const target = byKey.get(targetKey);
+    const retract = c as RetractConstraint
+    const targetKey = cnIdKey(retract.payload.target)
+    const target = byKey.get(targetKey)
 
     // Rule: target must be in refs (causal safety)
     //
@@ -141,54 +141,54 @@ export function computeActive(
     // has counter >= T. This matches how version vectors work throughout
     // the codebase and is compatible with Agent.currentRefs(), which
     // compresses causal predecessors to the VV frontier.
-    const targetPeer = retract.payload.target.peer;
-    const targetCounter = retract.payload.target.counter;
+    const targetPeer = retract.payload.target.peer
+    const targetCounter = retract.payload.target.counter
     const targetInRefs = retract.refs.some(
-      (ref) => ref.peer === targetPeer && ref.counter >= targetCounter,
-    );
+      ref => ref.peer === targetPeer && ref.counter >= targetCounter,
+    )
     if (!targetInRefs) {
       violations.push({
         retractConstraint: retract,
-        reason: { kind: 'targetNotInRefs', target: retract.payload.target },
-      });
-      continue;
+        reason: { kind: "targetNotInRefs", target: retract.payload.target },
+      })
+      continue
     }
 
     // Rule: structure constraints are immune to retraction
-    if (target !== undefined && target.type === 'structure') {
+    if (target !== undefined && target.type === "structure") {
       violations.push({
         retractConstraint: retract,
-        reason: { kind: 'targetIsStructure', target: retract.payload.target },
-      });
-      continue;
+        reason: { kind: "targetIsStructure", target: retract.payload.target },
+      })
+      continue
     }
 
     // Rule: authority constraints are immune to retraction (§2.5)
     // Revocation is the dedicated mechanism for removing capabilities.
     // Using retraction to remove authority constraints would circumvent
     // the authority model.
-    if (target !== undefined && target.type === 'authority') {
+    if (target !== undefined && target.type === "authority") {
       violations.push({
         retractConstraint: retract,
-        reason: { kind: 'targetIsAuthority', target: retract.payload.target },
-      });
-      continue;
+        reason: { kind: "targetIsAuthority", target: retract.payload.target },
+      })
+      continue
     }
 
     // Valid retract — add to retraction graph
-    validRetracts.add(cnIdKey(retract.id));
+    validRetracts.add(cnIdKey(retract.id))
 
-    let edges = retractEdges.get(targetKey);
+    let edges = retractEdges.get(targetKey)
     if (edges === undefined) {
-      edges = [];
-      retractEdges.set(targetKey, edges);
+      edges = []
+      retractEdges.set(targetKey, edges)
     }
-    edges.push(retract);
+    edges.push(retract)
   }
 
   // If no retraction is allowed at all (depth 0), all constraints are active
   if (config.maxDepth === 0) {
-    return { active: all, dominated: [], violations };
+    return { active: all, dominated: [], violations }
   }
 
   // Step 2: Compute dominance via reverse topological traversal.
@@ -206,57 +206,57 @@ export function computeActive(
   // is treated as if it doesn't exist.
 
   // Cache: constraint key → 'active' | 'dominated'
-  const domCache = new Map<string, 'active' | 'dominated'>();
+  const domCache = new Map<string, "active" | "dominated">()
 
   // Depth cache: constraint key → retraction chain depth
   // (how many levels of retraction point at this constraint)
-  const depthCache = new Map<string, number>();
+  const depthCache = new Map<string, number>()
 
   // Computing set to detect cycles (should not happen in valid data)
-  const computing = new Set<string>();
+  const computing = new Set<string>()
 
-  function computeDom(key: string): 'active' | 'dominated' {
+  function computeDom(key: string): "active" | "dominated" {
     // Check cache
-    const cached = domCache.get(key);
-    if (cached !== undefined) return cached;
+    const cached = domCache.get(key)
+    if (cached !== undefined) return cached
 
     // Cycle detection (defensive — should not happen with valid causal data)
     if (computing.has(key)) {
       // Break cycle by treating as active
-      return 'active';
+      return "active"
     }
-    computing.add(key);
+    computing.add(key)
 
-    const retractors = retractEdges.get(key);
+    const retractors = retractEdges.get(key)
 
     // No retractors → active
     if (retractors === undefined || retractors.length === 0) {
-      domCache.set(key, 'active');
-      computing.delete(key);
-      return 'active';
+      domCache.set(key, "active")
+      computing.delete(key)
+      return "active"
     }
 
     // Check each retractor
-    let allRetractorsDominated = true;
+    const _allRetractorsDominated = true
 
     for (const retract of retractors) {
-      const retractKey = cnIdKey(retract.id);
+      const retractKey = cnIdKey(retract.id)
 
       // Compute the depth of this retraction chain
-      const retractDepth = computeDepth(key);
+      const retractDepth = computeDepth(key)
       if (retractDepth > config.maxDepth) {
         // This retraction exceeds the depth limit — ignore it
         // (treat as if it doesn't exist for dominance purposes)
-        continue;
+        continue
       }
 
       // Check if the retractor itself is active
-      const retractorDom = computeDom(retractKey);
-      if (retractorDom === 'active') {
+      const retractorDom = computeDom(retractKey)
+      if (retractorDom === "active") {
         // At least one active retractor → this constraint is dominated
-        domCache.set(key, 'dominated');
-        computing.delete(key);
-        return 'dominated';
+        domCache.set(key, "dominated")
+        computing.delete(key)
+        return "dominated"
       }
 
       // retractorDom === 'dominated' — this retractor is itself dominated
@@ -264,9 +264,9 @@ export function computeActive(
     }
 
     // All retractors are either dominated or exceeded depth limit → active
-    domCache.set(key, 'active');
-    computing.delete(key);
-    return 'active';
+    domCache.set(key, "active")
+    computing.delete(key)
+    return "active"
   }
 
   /**
@@ -280,40 +280,40 @@ export function computeActive(
    * For retract constraints, depth is 1 + depth(target).
    */
   function computeDepth(targetKey: string): number {
-    const cached = depthCache.get(targetKey);
-    if (cached !== undefined) return cached;
+    const cached = depthCache.get(targetKey)
+    if (cached !== undefined) return cached
 
-    const target = byKey.get(targetKey);
-    if (target === undefined || target.type !== 'retract') {
+    const target = byKey.get(targetKey)
+    if (target === undefined || target.type !== "retract") {
       // Non-retract target: retraction depth is 1
-      depthCache.set(targetKey, 1);
-      return 1;
+      depthCache.set(targetKey, 1)
+      return 1
     }
 
     // Target is itself a retract — depth is 1 + depth of its target
-    const innerTarget = (target as RetractConstraint).payload.target;
-    const innerKey = cnIdKey(innerTarget);
-    const innerDepth = computeDepth(innerKey);
-    const depth = 1 + innerDepth;
-    depthCache.set(targetKey, depth);
-    return depth;
+    const innerTarget = (target as RetractConstraint).payload.target
+    const innerKey = cnIdKey(innerTarget)
+    const innerDepth = computeDepth(innerKey)
+    const depth = 1 + innerDepth
+    depthCache.set(targetKey, depth)
+    return depth
   }
 
   // Step 3: Compute dominance for all constraints
-  const active: Constraint[] = [];
-  const dominated: Constraint[] = [];
+  const active: Constraint[] = []
+  const dominated: Constraint[] = []
 
   for (const c of all) {
-    const key = cnIdKey(c.id);
-    const dom = computeDom(key);
-    if (dom === 'active') {
-      active.push(c);
+    const key = cnIdKey(c.id)
+    const dom = computeDom(key)
+    if (dom === "active") {
+      active.push(c)
     } else {
-      dominated.push(c);
+      dominated.push(c)
     }
   }
 
-  return { active, dominated, violations };
+  return { active, dominated, violations }
 }
 
 // ---------------------------------------------------------------------------
@@ -333,5 +333,5 @@ export function filterActive(
   validConstraints: Iterable<Constraint>,
   config: RetractionConfig = DEFAULT_RETRACTION_CONFIG,
 ): Constraint[] {
-  return [...computeActive(validConstraints, config).active];
+  return [...computeActive(validConstraints, config).active]
 }

@@ -27,13 +27,7 @@ export const SEED = {
     {
       name: "Garden Stir Fry",
       vegetarian: true,
-      ingredients: [
-        "tofu",
-        "broccoli",
-        "bell pepper",
-        "soy sauce",
-        "rice",
-      ],
+      ingredients: ["tofu", "broccoli", "bell pepper", "soy sauce", "rice"],
     },
   ],
   favorites: 0,

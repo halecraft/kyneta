@@ -117,9 +117,7 @@ export function assertBuilderCompiled(code: string): void {
  */
 export function assertPassedThrough(code: string): void {
   if (!code.includes("const x = 1")) {
-    throw new Error(
-      "Expected non-builder source to pass through unchanged",
-    )
+    throw new Error("Expected non-builder source to pass through unchanged")
   }
   if (!code.includes("function greet")) {
     throw new Error(

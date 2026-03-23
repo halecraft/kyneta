@@ -17,7 +17,7 @@
  */
 
 import { createBunPlugin } from "unplugin"
-import { unpluginFactory, type KynetaPluginOptions } from "../index.js"
+import { type KynetaPluginOptions, unpluginFactory } from "../index.js"
 
 export default createBunPlugin(unpluginFactory)
 export type { KynetaPluginOptions }

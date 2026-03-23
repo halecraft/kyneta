@@ -10,23 +10,23 @@
 // - validate()    — throws the first error if any
 // - tryValidate() — returns a discriminated result with all errors
 
+import { isNonNullObject } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { interpret } from "../interpret.js"
-import {
-  isNullableSum,
-  type Schema,
-  type ScalarSchema,
-  type ProductSchema,
-  type SequenceSchema,
-  type MapSchema,
-  type SumSchema,
-  type AnnotatedSchema,
-  type PositionalSumSchema,
-  type DiscriminatedSumSchema,
-} from "../schema.js"
 import type { Plain } from "../interpreter-types.js"
+import {
+  type AnnotatedSchema,
+  type DiscriminatedSumSchema,
+  isNullableSum,
+  type MapSchema,
+  type PositionalSumSchema,
+  type ProductSchema,
+  type ScalarSchema,
+  type Schema,
+  type SequenceSchema,
+  type SumSchema,
+} from "../schema.js"
 import { readByPath } from "../store.js"
-import { isNonNullObject } from "../guards.js"
 
 // ---------------------------------------------------------------------------
 // Path formatting
@@ -114,10 +114,7 @@ export interface ValidateContext {
 // Scalar kind type checking
 // ---------------------------------------------------------------------------
 
-function checkScalarKind(
-  kind: string,
-  value: unknown,
-): boolean {
+function checkScalarKind(kind: string, value: unknown): boolean {
   switch (kind) {
     case "string":
       return typeof value === "string"
@@ -162,11 +159,7 @@ function scalarExpected(kind: string): string {
  * `ctx.errors`.
  */
 export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
-  scalar(
-    ctx: ValidateContext,
-    path: Path,
-    schema: ScalarSchema,
-  ): unknown {
+  scalar(ctx: ValidateContext, path: Path, schema: ScalarSchema): unknown {
     const value = readByPath(ctx.root, path)
 
     // Check type
@@ -182,13 +175,10 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     }
 
     // Check constraint
-    if (
-      schema.constraint !== undefined &&
-      schema.constraint.length > 0
-    ) {
+    if (schema.constraint !== undefined && schema.constraint.length > 0) {
       if (!schema.constraint.includes(value as never)) {
         const allowed = schema.constraint
-          .map((v) => JSON.stringify(v))
+          .map(v => JSON.stringify(v))
           .join(" | ")
         ctx.errors.push(
           new SchemaValidationError(
@@ -313,7 +303,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
           { type: "key", key: schema.discriminant },
         ]
         const keys = Object.keys(discSchema.variantMap)
-          .map((k) => JSON.stringify(k))
+          .map(k => JSON.stringify(k))
           .join(", ")
         ctx.errors.push(
           new SchemaValidationError(

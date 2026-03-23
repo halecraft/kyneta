@@ -39,7 +39,7 @@ export function classifyDependencies(
   loopVariable: string,
   iterableSource: string,
 ): ClassifiedDependency[] {
-  return deps.map((dep) => ({
+  return deps.map(dep => ({
     ...dep,
     classification: classifySingle(dep.source, loopVariable, iterableSource),
   }))
@@ -58,7 +58,7 @@ function classifySingle(
   // 2. Item-dependent — navigates from the loop variable
   //    Must check exact match OR dot-boundary prefix to avoid
   //    false positives (e.g., "recipeCount" for loop var "recipe")
-  if (source === loopVariable || source.startsWith(loopVariable + ".")) {
+  if (source === loopVariable || source.startsWith(`${loopVariable}.`)) {
     return "item"
   }
 

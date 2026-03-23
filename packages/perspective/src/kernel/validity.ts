@@ -14,21 +14,19 @@
 //
 // See unified-engine.md §5.
 
-import type {
-  PeerID,
-  Constraint,
-  CnId,
-  Capability,
-  ValidationError,
-  VersionVector,
-} from './types.js';
-import { verify } from './signature.js';
 import {
+  type AuthorityState,
   computeAuthority,
   hasCapability,
   requiredCapability,
-  type AuthorityState,
-} from './authority.js';
+} from "./authority.js"
+import { verify } from "./signature.js"
+import type {
+  Constraint,
+  PeerID,
+  ValidationError,
+  VersionVector,
+} from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Validity Result
@@ -39,21 +37,21 @@ import {
  */
 export interface ValidityResult {
   /** Constraints that passed both signature and capability checks. */
-  readonly valid: readonly Constraint[];
+  readonly valid: readonly Constraint[]
 
   /** Constraints that failed validation, with reasons. */
-  readonly invalid: readonly InvalidConstraint[];
+  readonly invalid: readonly InvalidConstraint[]
 
   /** The authority state computed during validation. */
-  readonly authorityState: AuthorityState;
+  readonly authorityState: AuthorityState
 }
 
 /**
  * A constraint that failed validation, paired with the reason.
  */
 export interface InvalidConstraint {
-  readonly constraint: Constraint;
-  readonly error: ValidationError;
+  readonly constraint: Constraint
+  readonly error: ValidationError
 }
 
 // ---------------------------------------------------------------------------
@@ -91,26 +89,26 @@ export function computeValid(
   // Materialize constraints so we can iterate multiple times
   const allConstraints = Array.isArray(constraints)
     ? constraints
-    : Array.from(constraints);
+    : Array.from(constraints)
 
   // Step 1: Compute the authority state by replaying authority constraints.
   // This tells us what capabilities each peer holds.
-  const authorityState = computeAuthority(allConstraints, creator, version);
+  const authorityState = computeAuthority(allConstraints, creator, version)
 
   // Step 2: Validate each constraint.
-  const valid: Constraint[] = [];
-  const invalid: InvalidConstraint[] = [];
+  const valid: Constraint[] = []
+  const invalid: InvalidConstraint[] = []
 
   for (const c of allConstraints) {
-    const error = validateConstraint(c, authorityState);
+    const error = validateConstraint(c, authorityState)
     if (error === null) {
-      valid.push(c);
+      valid.push(c)
     } else {
-      invalid.push({ constraint: c, error });
+      invalid.push({ constraint: c, error })
     }
   }
 
-  return { valid, invalid, authorityState };
+  return { valid, invalid, authorityState }
 }
 
 // ---------------------------------------------------------------------------
@@ -132,29 +130,29 @@ function validateConstraint(
   // Stub: always passes.
   if (!verifySignature(c)) {
     return {
-      kind: 'invalidSignature',
+      kind: "invalidSignature",
       constraintId: c.id,
-    };
+    }
   }
 
   // Check 2: Capability check
-  const required = requiredCapability(c);
+  const required = requiredCapability(c)
 
   // Some constraint types require no capability (e.g., bookmarks)
   if (required === null) {
-    return null;
+    return null
   }
 
   // Check if the asserting peer has the required capability
   if (!hasCapability(authorityState, c.id.peer, required)) {
     return {
-      kind: 'missingCapability',
+      kind: "missingCapability",
       constraintId: c.id,
       required,
-    };
+    }
   }
 
-  return null;
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +172,7 @@ function verifySignature(c: Constraint): boolean {
   // The stub signature module always returns true.
   // When real signatures are implemented, this function will
   // perform canonical serialization and delegate to verify().
-  return verify(new Uint8Array(0), c.sig, new Uint8Array(0));
+  return verify(new Uint8Array(0), c.sig, new Uint8Array(0))
 }
 
 // ---------------------------------------------------------------------------
@@ -197,5 +195,5 @@ export function filterValid(
   creator: PeerID,
   version?: VersionVector,
 ): Constraint[] {
-  return [...computeValid(constraints, creator, version).valid];
+  return [...computeValid(constraints, creator, version).valid]
 }

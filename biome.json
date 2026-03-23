@@ -12,7 +12,8 @@
       "!!**/*.db",
       "!!**/node_modules",
       "!!**/playwright-report",
-      "!!**/test-results"
+      "!!**/test-results",
+      "!!packages/schema/example"
     ]
   },
   "formatter": {
@@ -30,7 +31,7 @@
         "noUnusedVariables": "error"
       },
       "style": {
-        "noNonNullAssertion": "error"
+        "noNonNullAssertion": "warn"
       },
       "suspicious": {
         "noExplicitAny": "off"

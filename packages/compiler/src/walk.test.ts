@@ -2,16 +2,10 @@
  * Tests for the generator-based IR walker.
  */
 
-import type { ChildNode } from "./ir.js"
 import { describe, expect, it } from "vitest"
+import type { ChildNode } from "./ir.js"
 import {
-  collectEvents,
-  countEventTypes,
-  eventsWithPaths,
-  walkIR,
-  type WalkEvent,
-} from "./walk.js"
-import {
+  type BuilderNode,
   createBuilder,
   createConditional,
   createConditionalBranch,
@@ -19,9 +13,14 @@ import {
   createLiteral,
   createLoop,
   createSpan,
-  type BuilderNode,
   type ElementNode,
 } from "./ir.js"
+import {
+  collectEvents,
+  countEventTypes,
+  eventsWithPaths,
+  type WalkEvent,
+} from "./walk.js"
 
 // =============================================================================
 // Test Helpers

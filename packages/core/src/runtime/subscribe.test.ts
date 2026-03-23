@@ -11,8 +11,8 @@ import { resetScopeIdCounter, Scope } from "./scope.js"
 import {
   activeSubscriptions,
   getActiveSubscriptionCount,
-  resetSubscriptionIdCounter,
   read,
+  resetSubscriptionIdCounter,
   subscribe,
   unsubscribe,
   valueRegion,
@@ -377,6 +377,7 @@ describe("subscribe", () => {
       subscribe(customReactive, change => received.push(change), scope)
 
       // Emit a changeset manually (subscribe unwraps for the handler)
+      // biome-ignore lint/suspicious/useIterableCallbackReturn: simulating external event emission in test
       listeners.forEach(cb => cb({ changes: [{ type: "replace" }] }))
 
       expect(received).toEqual([{ type: "replace" }])

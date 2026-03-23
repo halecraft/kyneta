@@ -25,16 +25,16 @@
 //
 // See .plans/interpreter-decomposition.md §Phase 1.
 
+import type { ChangeBase } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type {
-  ScalarSchema,
-  ProductSchema,
-  SequenceSchema,
-  MapSchema,
-  SumSchema,
   AnnotatedSchema,
+  MapSchema,
+  ProductSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SumSchema,
 } from "../schema.js"
-import type { ChangeBase } from "../change.js"
 
 // ---------------------------------------------------------------------------
 // Forward-declared INVALIDATE symbol type
@@ -78,6 +78,7 @@ export const CALL: unique symbol = Symbol.for("kyneta:call") as any
  * subtyping to enforce composition ordering.
  */
 declare const NAVIGATION: unique symbol
+
 export type { NAVIGATION }
 
 /**
@@ -87,6 +88,7 @@ export type { NAVIGATION }
  * Never exists at runtime.
  */
 declare const CACHING: unique symbol
+
 export type { CACHING }
 
 // ---------------------------------------------------------------------------
@@ -174,9 +176,7 @@ export function makeCarrier(): HasCall {
   }
 
   carrier[CALL] = (): unknown => {
-    throw new Error(
-      "No call behavior configured",
-    )
+    throw new Error("No call behavior configured")
   }
 
   return carrier as HasCall
@@ -204,11 +204,7 @@ export function makeCarrier(): HasCall {
  * type signatures.
  */
 export const bottomInterpreter: Interpreter<unknown, HasCall> = {
-  scalar(
-    _ctx: unknown,
-    _path: Path,
-    _schema: ScalarSchema,
-  ): HasCall {
+  scalar(_ctx: unknown, _path: Path, _schema: ScalarSchema): HasCall {
     return makeCarrier()
   },
 

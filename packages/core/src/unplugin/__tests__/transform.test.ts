@@ -39,9 +39,7 @@ function createTransformHandler(
 
   const transform = plugin.transform
   if (!transform || typeof transform === "function") {
-    throw new Error(
-      "Expected transform to be an object with filter + handler",
-    )
+    throw new Error("Expected transform to be an object with filter + handler")
   }
 
   return {
@@ -74,7 +72,7 @@ describe("unplugin — universal transform", () => {
       const { filter } = createTransformHandler()
       expect(filter).toBeDefined()
 
-      const idFilter = filter!.id as RegExp
+      const idFilter = filter?.id as RegExp
       expect(idFilter).toBeInstanceOf(RegExp)
       expect(idFilter.test("app.ts")).toBe(true)
       expect(idFilter.test("app.tsx")).toBe(true)
@@ -89,10 +87,10 @@ describe("unplugin — universal transform", () => {
       const result = handler(BUILDER_SOURCE, "/src/app.ts")
 
       expect(result).not.toBeNull()
-      expect(result!.code).toContain("document.createElement")
-      expect(result!.code).not.toContain("div(() =>")
-      expect(result!.code).not.toContain('h1("Hello")')
-      expect(result!.code).not.toContain('p("World")')
+      expect(result?.code).toContain("document.createElement")
+      expect(result?.code).not.toContain("div(() =>")
+      expect(result?.code).not.toContain('h1("Hello")')
+      expect(result?.code).not.toContain('p("World")')
     })
 
     it("transforms multiple builder patterns", () => {
@@ -100,16 +98,15 @@ describe("unplugin — universal transform", () => {
       const result = handler(MULTI_BUILDER_SOURCE, "/src/app.ts")
 
       expect(result).not.toBeNull()
-      expect(result!.code).toContain("document.createElement")
-      expect(result!.code).not.toContain("div(() =>")
+      expect(result?.code).toContain("document.createElement")
+      expect(result?.code).not.toContain("div(() =>")
 
       // Both variable assignments should survive
-      expect(result!.code).toContain("header")
-      expect(result!.code).toContain("footer")
+      expect(result?.code).toContain("header")
+      expect(result?.code).toContain("footer")
 
-      const count = (
-        result!.code.match(/document\.createElement/g) || []
-      ).length
+      const count = (result?.code.match(/document\.createElement/g) || [])
+        .length
       expect(count).toBeGreaterThanOrEqual(2)
     })
 
@@ -127,7 +124,7 @@ describe("unplugin — universal transform", () => {
       const result = handler(BUILDER_SOURCE, "/src/app.ts")
 
       expect(result).not.toBeNull()
-      expect(result!.code).toContain("document.createElement")
+      expect(result?.code).toContain("document.createElement")
     })
 
     it("produces HTML output when target is 'html'", () => {
@@ -136,10 +133,10 @@ describe("unplugin — universal transform", () => {
 
       expect(result).not.toBeNull()
       // SSR output uses string concatenation for HTML
-      expect(result!.code).toContain("<div>")
-      expect(result!.code).toContain("<h1>")
+      expect(result?.code).toContain("<div>")
+      expect(result?.code).toContain("<h1>")
       // Should NOT contain DOM calls
-      expect(result!.code).not.toContain("document.createElement")
+      expect(result?.code).not.toContain("document.createElement")
     })
   })
 
@@ -171,7 +168,7 @@ describe("unplugin — universal transform", () => {
       // Custom extension should work
       const result = handler(BUILDER_SOURCE, "/src/app.kyneta.ts")
       expect(result).not.toBeNull()
-      expect(result!.code).toContain("document.createElement")
+      expect(result?.code).toContain("document.createElement")
     })
 
     it("respects include patterns", () => {
@@ -195,9 +192,7 @@ describe("unplugin — universal transform", () => {
         exclude: ["node_modules", "generated"],
       })
 
-      expect(
-        handler(BUILDER_SOURCE, "/project/generated/code.ts"),
-      ).toBeNull()
+      expect(handler(BUILDER_SOURCE, "/project/generated/code.ts")).toBeNull()
 
       const result = handler(BUILDER_SOURCE, "/project/src/app.ts")
       expect(result).not.toBeNull()

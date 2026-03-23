@@ -19,20 +19,19 @@
 //     ),
 //   })
 
-import {
-  Schema,
-  type AnnotatedSchema,
-  type ProductSchema,
-  type SequenceSchema,
-  type ScalarSchema,
-  type MapSchema,
-  type PositionalSumSchema,
-  type DiscriminatedSumSchema,
-  type PlainSchema,
-  type PlainProductSchema,
-} from "./schema.js"
-
 import type { Schema as SchemaType } from "./schema.js"
+import {
+  type AnnotatedSchema,
+  type DiscriminatedSumSchema,
+  type MapSchema,
+  type PlainProductSchema,
+  type PlainSchema,
+  type PositionalSumSchema,
+  type ProductSchema,
+  type ScalarSchema,
+  Schema,
+  type SequenceSchema,
+} from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // Loro-specific annotation constructors
@@ -74,9 +73,7 @@ function movableList<I extends SchemaType>(
  *
  * The `nodeData` schema describes the shape of each tree node's data.
  */
-function tree<S extends SchemaType>(
-  nodeData: S,
-): AnnotatedSchema<"tree", S> {
+function tree<S extends SchemaType>(nodeData: S): AnnotatedSchema<"tree", S> {
   return Schema.annotated("tree", nodeData)
 }
 
@@ -137,9 +134,7 @@ const plain = {
 
   /** Fixed-key plain struct (product with no annotation).
    *  Fields are constrained to `PlainSchema` — no CRDT annotations allowed. */
-  struct<F extends Record<string, PlainSchema>>(
-    fields: F,
-  ): ProductSchema<F> {
+  struct<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F> {
     return Schema.struct(fields)
   },
 
@@ -157,18 +152,13 @@ const plain = {
 
   /** Union of plain schemas.
    *  Variants are constrained to `PlainSchema`. */
-  union<V extends PlainSchema[]>(
-    ...variants: [...V]
-  ): PositionalSumSchema<V> {
+  union<V extends PlainSchema[]>(...variants: [...V]): PositionalSumSchema<V> {
     return Schema.sum(variants)
   },
 
   /** Discriminated union of plain schemas.
    *  Each variant must be a plain product declaring the discriminant field. */
-  discriminatedUnion<
-    D extends string,
-    V extends PlainProductSchema[],
-  >(
+  discriminatedUnion<D extends string, V extends PlainProductSchema[]>(
     discriminant: D,
     variants: [...V],
   ): DiscriminatedSumSchema<D, V> {

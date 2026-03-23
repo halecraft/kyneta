@@ -1,20 +1,8 @@
 import { describe, expect, it } from "vitest"
-import {
-  Schema,
-  LoroSchema,
-  interpret,
-} from "../index.js"
-import {
-  CALL,
-  makeCarrier,
-  bottomInterpreter,
-} from "../interpreters/bottom.js"
-import type {
-  HasCall,
-  HasNavigation,
-  HasRead,
-} from "../interpreters/bottom.js"
+import { interpret, LoroSchema, Schema } from "../index.js"
 import type { Interpreter } from "../interpret.js"
+import type { HasCall, HasNavigation, HasRead } from "../interpreters/bottom.js"
+import { bottomInterpreter, CALL, makeCarrier } from "../interpreters/bottom.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -140,9 +128,7 @@ describe("bottom: product", () => {
   })
 
   it("carrier has [CALL] symbol", () => {
-    const result = interpretBottom(
-      Schema.struct({ x: Schema.string() }),
-    ) as any
+    const result = interpretBottom(Schema.struct({ x: Schema.string() })) as any
     expect(CALL in result).toBe(true)
   })
 
@@ -280,9 +266,7 @@ describe("bottom: full document tree", () => {
     const counter = interpretBottom(LoroSchema.counter()) as any
     const list = interpretBottom(Schema.list(Schema.string())) as any
     const record = interpretBottom(Schema.record(Schema.number())) as any
-    const struct = interpretBottom(
-      Schema.struct({ a: Schema.string() }),
-    ) as any
+    const struct = interpretBottom(Schema.struct({ a: Schema.string() })) as any
     const scalar = interpretBottom(Schema.string()) as any
 
     for (const carrier of [text, counter, list, record, struct, scalar]) {
@@ -349,7 +333,7 @@ describe("type-level: capability lattice", () => {
 
   it("HasNavigation extends HasCall", () => {
     // If this compiles, HasNavigation is assignable to HasCall
-    const _check: (n: HasNavigation) => HasCall = (n) => n
+    const _check: (n: HasNavigation) => HasCall = n => n
     void _check
   })
 
@@ -362,13 +346,13 @@ describe("type-level: capability lattice", () => {
 
   it("HasRead extends HasNavigation", () => {
     // If this compiles, HasRead is assignable to HasNavigation
-    const _check: (r: HasRead) => HasNavigation = (r) => r
+    const _check: (r: HasRead) => HasNavigation = r => r
     void _check
   })
 
   it("HasRead extends HasCall", () => {
     // Transitivity: HasRead → HasNavigation → HasCall
-    const _check: (r: HasRead) => HasCall = (r) => r
+    const _check: (r: HasRead) => HasCall = r => r
     void _check
   })
 })

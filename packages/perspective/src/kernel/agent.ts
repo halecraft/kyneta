@@ -9,46 +9,40 @@
 //
 // See unified-engine.md §B.5, §1.
 
-import type {
-  PeerID,
-  Counter,
-  Lamport,
-  CnId,
-  Constraint,
-  StructureConstraint,
-  ValueConstraint,
-  RetractConstraint,
-  RuleConstraint,
-  AuthorityConstraint,
-  BookmarkConstraint,
-  StructurePayload,
-  ValuePayload,
-  RetractPayload,
-  RulePayload,
-  AuthorityPayload,
-  BookmarkPayload,
-  Value,
-  Policy,
-  Capability,
-  AuthorityAction,
-  VersionVector,
-  MutableVersionVector,
-} from './types.js';
-import type { Atom, BodyElement } from '../datalog/types.js';
-import { createCnId } from './cnid.js';
+import type { Atom, BodyElement } from "../datalog/types.js"
+import { createCnId } from "./cnid.js"
 import {
   createLamportClock,
-  tick,
-  observe as observeLamport,
   type LamportClock,
-} from './lamport.js';
+  observe as observeLamport,
+  tick,
+} from "./lamport.js"
+import { STUB_PRIVATE_KEY, sign } from "./signature.js"
+import type {
+  AuthorityAction,
+  AuthorityConstraint,
+  BookmarkConstraint,
+  Capability,
+  CnId,
+  Constraint,
+  Counter,
+  Lamport,
+  MutableVersionVector,
+  PeerID,
+  Policy,
+  RetractConstraint,
+  RuleConstraint,
+  StructureConstraint,
+  StructurePayload,
+  Value,
+  ValueConstraint,
+  VersionVector,
+} from "./types.js"
 import {
   createVersionVector,
   vvExtendCnId,
-  vvClone,
   vvMergeInto,
-} from './version-vector.js';
-import { sign, STUB_PRIVATE_KEY } from './signature.js';
+} from "./version-vector.js"
 
 // ---------------------------------------------------------------------------
 // Agent
@@ -68,40 +62,44 @@ import { sign, STUB_PRIVATE_KEY } from './signature.js';
  */
 export interface Agent {
   /** This agent's peer identity. */
-  readonly peerId: PeerID;
+  readonly peerId: PeerID
 
   /** The current counter value (next constraint will use this + 1). */
-  readonly counter: Counter;
+  readonly counter: Counter
 
   /** The current Lamport clock value. */
-  readonly lamportValue: Lamport;
+  readonly lamportValue: Lamport
 
   /** The current observed version vector (read-only view). */
-  readonly versionVector: VersionVector;
+  readonly versionVector: VersionVector
 
   // --- Constraint producers ---
 
   /** Produce a structure constraint (permanent node). */
-  produceStructure(payload: StructurePayload): StructureConstraint;
+  produceStructure(payload: StructurePayload): StructureConstraint
 
   /** Produce a value constraint (content at a node). */
-  produceValue(target: CnId, content: Value): ValueConstraint;
+  produceValue(target: CnId, content: Value): ValueConstraint
 
   /** Produce a retract constraint (dominate a target). */
-  produceRetract(target: CnId): RetractConstraint;
+  produceRetract(target: CnId): RetractConstraint
 
   /** Produce a rule constraint (Datalog rule at layer ≥ 2). */
-  produceRule(layer: number, head: Atom, body: readonly BodyElement[]): RuleConstraint;
+  produceRule(
+    layer: number,
+    head: Atom,
+    body: readonly BodyElement[],
+  ): RuleConstraint
 
   /** Produce an authority constraint (capability change). */
   produceAuthority(
     targetPeer: PeerID,
     action: AuthorityAction,
     capability: Capability,
-  ): AuthorityConstraint;
+  ): AuthorityConstraint
 
   /** Produce a bookmark constraint (named causal moment). */
-  produceBookmark(name: string, version: VersionVector): BookmarkConstraint;
+  produceBookmark(name: string, version: VersionVector): BookmarkConstraint
 
   // --- Observation ---
 
@@ -110,17 +108,17 @@ export interface Agent {
    * to reflect having seen this constraint. Call this when receiving
    * constraints from other agents or from the store.
    */
-  observe(constraint: Constraint): void;
+  observe(constraint: Constraint): void
 
   /**
    * Observe multiple constraints at once.
    */
-  observeMany(constraints: Iterable<Constraint>): void;
+  observeMany(constraints: Iterable<Constraint>): void
 
   /**
    * Merge an external version vector into the observed set.
    */
-  mergeVersionVector(vv: VersionVector): void;
+  mergeVersionVector(vv: VersionVector): void
 }
 
 // ---------------------------------------------------------------------------
@@ -142,13 +140,13 @@ export function createAgent(
   initialLamport: Lamport = 0,
 ): Agent {
   // Mutable state
-  let counter: Counter = initialCounter;
-  const clock: LamportClock = createLamportClock();
+  let counter: Counter = initialCounter
+  const clock: LamportClock = createLamportClock()
   if (initialLamport > 0) {
-    clock.value = initialLamport;
+    clock.value = initialLamport
   }
-  const observedVV: MutableVersionVector = createVersionVector();
-  const key: Uint8Array = privateKey;
+  const observedVV: MutableVersionVector = createVersionVector()
+  const key: Uint8Array = privateKey
 
   // --- Internal helpers ---
 
@@ -161,32 +159,32 @@ export function createAgent(
   function nextIdAndLamport(): [CnId, Lamport, CnId[]] {
     // Capture refs BEFORE updating VV — refs represent what we've
     // observed prior to this constraint, not including itself.
-    const refs = currentRefs();
+    const refs = currentRefs()
 
-    const nextCounter = counter;
-    const nextLamport = tick(clock);
+    const nextCounter = counter
+    const nextLamport = tick(clock)
 
     // Enforce safe-integer invariant (programmer error if hit)
     if (nextCounter > Number.MAX_SAFE_INTEGER) {
       throw new Error(
         `Agent ${peerId}: counter overflow (${nextCounter} > MAX_SAFE_INTEGER). ` +
-        `This is a programmer error — no single agent should assert 2^53 constraints.`,
-      );
+          `This is a programmer error — no single agent should assert 2^53 constraints.`,
+      )
     }
     if (nextLamport > Number.MAX_SAFE_INTEGER) {
       throw new Error(
         `Agent ${peerId}: lamport overflow (${nextLamport} > MAX_SAFE_INTEGER). ` +
-        `This is a programmer error.`,
-      );
+          `This is a programmer error.`,
+      )
     }
 
-    const id = createCnId(peerId, nextCounter);
-    counter += 1;
+    const id = createCnId(peerId, nextCounter)
+    counter += 1
 
     // Update our own version vector to include this new constraint
-    vvExtendCnId(observedVV, id);
+    vvExtendCnId(observedVV, id)
 
-    return [id, nextLamport, refs];
+    return [id, nextLamport, refs]
   }
 
   /**
@@ -198,21 +196,21 @@ export function createAgent(
    * the minimal representation of the full causal history.
    */
   function currentRefs(): CnId[] {
-    const refs: CnId[] = [];
+    const refs: CnId[] = []
     for (const [peer, nextCounter] of observedVV) {
       if (peer === peerId) {
         // Our own last constraint (if any) — counter is 0-based,
         // VV stores next expected, so last seen is nextCounter - 1.
         if (nextCounter > 0) {
-          refs.push(createCnId(peer, nextCounter - 1));
+          refs.push(createCnId(peer, nextCounter - 1))
         }
       } else {
         if (nextCounter > 0) {
-          refs.push(createCnId(peer, nextCounter - 1));
+          refs.push(createCnId(peer, nextCounter - 1))
         }
       }
     }
-    return refs;
+    return refs
   }
 
   /**
@@ -221,62 +219,62 @@ export function createAgent(
   function signConstraint(): Uint8Array {
     // In a real implementation, we'd serialize the constraint fields
     // and sign with the private key.
-    return sign(new Uint8Array(0), key);
+    return sign(new Uint8Array(0), key)
   }
 
   // --- Agent object ---
 
   const agent: Agent = {
     get peerId() {
-      return peerId;
+      return peerId
     },
 
     get counter() {
-      return counter;
+      return counter
     },
 
     get lamportValue() {
-      return clock.value;
+      return clock.value
     },
 
     get versionVector(): VersionVector {
-      return observedVV;
+      return observedVV
     },
 
     produceStructure(payload: StructurePayload): StructureConstraint {
-      const [id, lamport, refs] = nextIdAndLamport();
+      const [id, lamport, refs] = nextIdAndLamport()
       return {
         id,
         lamport,
         refs,
         sig: signConstraint(),
-        type: 'structure',
+        type: "structure",
         payload,
-      };
+      }
     },
 
     produceValue(target: CnId, content: Value): ValueConstraint {
-      const [id, lamport, refs] = nextIdAndLamport();
+      const [id, lamport, refs] = nextIdAndLamport()
       return {
         id,
         lamport,
         refs,
         sig: signConstraint(),
-        type: 'value',
+        type: "value",
         payload: { target, content },
-      };
+      }
     },
 
     produceRetract(target: CnId): RetractConstraint {
-      const [id, lamport, refs] = nextIdAndLamport();
+      const [id, lamport, refs] = nextIdAndLamport()
       return {
         id,
         lamport,
         refs,
         sig: signConstraint(),
-        type: 'retract',
+        type: "retract",
         payload: { target },
-      };
+      }
     },
 
     produceRule(
@@ -287,18 +285,18 @@ export function createAgent(
       if (layer < 2) {
         throw new Error(
           `Rule constraints must have layer ≥ 2, got ${layer}. ` +
-          `Layers 0–1 are reserved for kernel and default solver rules.`,
-        );
+            `Layers 0–1 are reserved for kernel and default solver rules.`,
+        )
       }
-      const [id, lamport, refs] = nextIdAndLamport();
+      const [id, lamport, refs] = nextIdAndLamport()
       return {
         id,
         lamport,
         refs,
         sig: signConstraint(),
-        type: 'rule',
+        type: "rule",
         payload: { layer, head, body },
-      };
+      }
     },
 
     produceAuthority(
@@ -306,50 +304,50 @@ export function createAgent(
       action: AuthorityAction,
       capability: Capability,
     ): AuthorityConstraint {
-      const [id, lamport, refs] = nextIdAndLamport();
+      const [id, lamport, refs] = nextIdAndLamport()
       return {
         id,
         lamport,
         refs,
         sig: signConstraint(),
-        type: 'authority',
+        type: "authority",
         payload: { targetPeer, action, capability },
-      };
+      }
     },
 
     produceBookmark(name: string, version: VersionVector): BookmarkConstraint {
-      const [id, lamport, refs] = nextIdAndLamport();
+      const [id, lamport, refs] = nextIdAndLamport()
       return {
         id,
         lamport,
         refs,
         sig: signConstraint(),
-        type: 'bookmark',
+        type: "bookmark",
         payload: { name, version },
-      };
+      }
     },
 
     observe(constraint: Constraint): void {
-      vvExtendCnId(observedVV, constraint.id);
-      observeLamport(clock, constraint.lamport);
+      vvExtendCnId(observedVV, constraint.id)
+      observeLamport(clock, constraint.lamport)
     },
 
     observeMany(constraints: Iterable<Constraint>): void {
       for (const c of constraints) {
-        vvExtendCnId(observedVV, c.id);
-        observeLamport(clock, c.lamport);
+        vvExtendCnId(observedVV, c.id)
+        observeLamport(clock, c.lamport)
       }
     },
 
     mergeVersionVector(vv: VersionVector): void {
-      vvMergeInto(observedVV, vv);
+      vvMergeInto(observedVV, vv)
       // Also update lamport to be at least as large as what the VV implies
       // (we don't have lamport info from VV alone, but this is fine —
       // lamport is updated when actual constraints are observed)
     },
-  };
+  }
 
-  return agent;
+  return agent
 }
 
 // ---------------------------------------------------------------------------
@@ -372,11 +370,11 @@ export function produceRoot(
   policy: Policy,
 ): { constraint: StructureConstraint; id: CnId } {
   const constraint = agent.produceStructure({
-    kind: 'root',
+    kind: "root",
     containerId,
     policy,
-  });
-  return { constraint, id: constraint.id };
+  })
+  return { constraint, id: constraint.id }
 }
 
 /**
@@ -393,11 +391,11 @@ export function produceMapChild(
   key: string,
 ): { constraint: StructureConstraint; id: CnId } {
   const constraint = agent.produceStructure({
-    kind: 'map',
+    kind: "map",
     parent,
     key,
-  });
-  return { constraint, id: constraint.id };
+  })
+  return { constraint, id: constraint.id }
 }
 
 /**
@@ -416,10 +414,10 @@ export function produceSeqChild(
   originRight: CnId | null,
 ): { constraint: StructureConstraint; id: CnId } {
   const constraint = agent.produceStructure({
-    kind: 'seq',
+    kind: "seq",
     parent,
     originLeft,
     originRight,
-  });
-  return { constraint, id: constraint.id };
+  })
+  return { constraint, id: constraint.id }
 }

@@ -12,11 +12,11 @@
 //
 // Context: jj:wmyomqzw (SubstratePrepare), jj:wqoqzzpp (Substrate)
 
-import type { Store } from "./store.js"
-import type { Path } from "./interpret.js"
 import type { ChangeBase } from "./change.js"
-import type { Schema as SchemaNode } from "./schema.js"
+import type { Path } from "./interpret.js"
 import type { WritableContext } from "./interpreters/writable.js"
+import type { Schema as SchemaNode } from "./schema.js"
+import type { Store } from "./store.js"
 
 // ---------------------------------------------------------------------------
 // SubstratePrepare — mutation primitives for the WritableContext
@@ -127,7 +127,8 @@ export interface SubstratePayload {
  * the doc reference. Within a substrate lifetime, all transitions are
  * deltas via `Changeset`. Between lifetimes, there is no continuity.
  */
-export interface Substrate<F extends Frontier = Frontier> extends SubstratePrepare {
+export interface Substrate<F extends Frontier = Frontier>
+  extends SubstratePrepare {
   /** The readable store for the interpreter (from SubstratePrepare). */
   readonly store: Store
 

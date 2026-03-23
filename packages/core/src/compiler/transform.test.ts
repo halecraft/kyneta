@@ -5,15 +5,15 @@
  * They validate that the pipeline produces correct output for real-world patterns.
  */
 
-import { Project } from "ts-morph"
-import { describe, expect, it } from "vitest"
 import {
   createBuilder,
   createLoop,
   createSpan,
-  type Dependency,
   type DeltaKind,
+  type Dependency,
 } from "@kyneta/compiler"
+import { Project } from "ts-morph"
+import { describe, expect, it } from "vitest"
 import {
   collectRequiredImports,
   hasBuilderCalls,
@@ -89,7 +89,7 @@ type TypedDoc<Shape> = Shape & HasChangefeed<unknown, MapChange> & {
  * Use when a test source string needs TextRef, CounterRef, ListRef, etc.
  */
 function withTypes(source: string): string {
-  return CHANGEFEED_TYPE_STUBS + "\n" + source
+  return `${CHANGEFEED_TYPE_STUBS}\n${source}`
 }
 
 // =============================================================================
@@ -547,8 +547,6 @@ describe("collectRequiredImports", () => {
     expect(runtime.has("conditionalRegion")).toBe(false)
   })
 
-
-
   it("should collect imports from multiple builders", () => {
     const builder1 = createBuilder(
       "div",
@@ -876,8 +874,7 @@ describe("mergeImports", () => {
   })
 
   it("should merge imports with existing core/runtime import", () => {
-    const importLine =
-      'import { subscribe } from "@kyneta/core/runtime"'
+    const importLine = 'import { subscribe } from "@kyneta/core/runtime"'
     const sourceFile = createSourceFile(`${importLine}\n\nconst app = div()`)
 
     mergeImports(sourceFile, {
@@ -887,14 +884,12 @@ describe("mergeImports", () => {
     const result = sourceFile.getFullText()
     expect(result).toContain("subscribe")
     expect(result).toContain("listRegion")
-    const importMatches =
-      result.match(/@kyneta\/core\/runtime/g) || []
+    const importMatches = result.match(/@kyneta\/core\/runtime/g) || []
     expect(importMatches.length).toBe(1)
   })
 
   it("should not duplicate existing imports", () => {
-    const importLine =
-      'import { subscribe } from "@kyneta/core/runtime"'
+    const importLine = 'import { subscribe } from "@kyneta/core/runtime"'
     const sourceFile = createSourceFile(`${importLine}\n\nconst app = div()`)
 
     mergeImports(sourceFile, {
@@ -906,8 +901,7 @@ describe("mergeImports", () => {
     expect(result).toContain("subscribe")
     expect(result).toContain("listRegion")
     // Only one import statement for /runtime
-    const importMatches =
-      result.match(/@kyneta\/core\/runtime/g) || []
+    const importMatches = result.match(/@kyneta\/core\/runtime/g) || []
     expect(importMatches.length).toBe(1)
   })
 
@@ -1046,7 +1040,7 @@ describe("transformSourceInPlace", () => {
   it("should return correct required imports for list regions", () => {
     const lines = [
       'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
-      "type SequenceChange<T = unknown> = { readonly type: \"sequence\"; readonly ops: readonly unknown[] }",
+      'type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }',
       "interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {",
       "  readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>",
       "  readonly length: number",
@@ -1191,7 +1185,7 @@ describe("transformSourceInPlace - HTML target", () => {
   it("should generate list map expression for for-of loops", () => {
     const lines = [
       'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
-      "type SequenceChange<T = unknown> = { readonly type: \"sequence\"; readonly ops: readonly unknown[] }",
+      'type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }',
       "interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>; readonly length: number; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }",
       "declare const items: ListRef<string>",
       "",
@@ -1217,8 +1211,8 @@ describe("transformSourceInPlace - HTML target", () => {
   it("should generate ternary for conditional regions", () => {
     const lines = [
       'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
-      "type ReplaceChange<T = unknown> = { readonly type: \"replace\"; readonly value: T }",
-      "type IncrementChange = { readonly type: \"increment\"; readonly amount: number }",
+      'type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }',
+      'type IncrementChange = { readonly type: "increment"; readonly amount: number }',
       "interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number; readonly [CHANGEFEED]: Changefeed<number, IncrementChange> }",
       "declare const count: CounterRef",
       "",
@@ -1248,8 +1242,8 @@ describe("transformSourceInPlace - HTML target", () => {
   it("should dissolve conditional on template cloning path (DOM target)", () => {
     const lines = [
       'import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"',
-      "type ReplaceChange<T = unknown> = { readonly type: \"replace\"; readonly value: T }",
-      "type IncrementChange = { readonly type: \"increment\"; readonly amount: number }",
+      'type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }',
+      'type IncrementChange = { readonly type: "increment"; readonly amount: number }',
       "interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number; readonly [CHANGEFEED]: Changefeed<number, IncrementChange> }",
       "declare const count: CounterRef",
       "",
@@ -1580,6 +1574,5 @@ describe("dependency subsumption", () => {
     `)
     const result = transformSource(source, { target: "dom" })
     expect(result.code).toContain("valueRegion")
-
   })
 })

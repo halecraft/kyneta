@@ -199,6 +199,7 @@ export function matchRegions(markers: HydrationMarker[]): RegionState[] {
 /**
  * Context for hydration walking.
  */
+// biome-ignore lint/correctness/noUnusedVariables: planned interface for DOM walking hydration
 interface WalkContext {
   /** Current position in expected children */
   index: number

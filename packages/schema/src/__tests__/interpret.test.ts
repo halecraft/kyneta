@@ -1,13 +1,12 @@
-import { describe, expect, it, vi } from "vitest"
-import {
-  Schema,
-  LoroSchema,
-  Zero,
-  interpret,
-  createInterpreter,
-  plainInterpreter,
-} from "../index.js"
+import { describe, expect, it } from "vitest"
 import type { Interpreter, Path } from "../index.js"
+import {
+  createInterpreter,
+  interpret,
+  LoroSchema,
+  plainInterpreter,
+  Schema,
+} from "../index.js"
 
 // ===========================================================================
 // Base grammar tests — Schema only, no Loro annotations
@@ -42,7 +41,11 @@ describe("interpret: catamorphism laziness", () => {
     )
 
     forceCount = 0
-    const result = interpret(docSchema, countingInterpreter, undefined) as Record<string, () => unknown>
+    const result = interpret(
+      docSchema,
+      countingInterpreter,
+      undefined,
+    ) as Record<string, () => unknown>
     expect(forceCount).toBe(0)
 
     // Force just title
@@ -117,7 +120,10 @@ describe("interpret: plain round-trip", () => {
 
     // Sparse store — count is missing
     const store = { title: "Hello" }
-    const result = interpret(schema, plainInterpreter, store) as Record<string, unknown>
+    const result = interpret(schema, plainInterpreter, store) as Record<
+      string,
+      unknown
+    >
     expect(result.title).toBe("Hello")
     expect(result.count).toBe(undefined)
   })
@@ -253,17 +259,17 @@ describe("interpret: path accumulation", () => {
     expect(paths[1]).toEqual({ kind: "product", path: [] })
 
     // title: scalar at [key:"title"]
-    const titlePath = paths.find((p) => p.kind === "scalar:string")
+    const titlePath = paths.find(p => p.kind === "scalar:string")
     expect(titlePath?.path).toEqual([{ type: "key", key: "title" }])
 
     // settings: product at [key:"settings"]
     const settingsPath = paths.find(
-      (p) => p.kind === "product" && p.path.length === 1,
+      p => p.kind === "product" && p.path.length === 1,
     )
     expect(settingsPath?.path).toEqual([{ type: "key", key: "settings" }])
 
     // darkMode: scalar at [key:"settings", key:"darkMode"]
-    const darkModePath = paths.find((p) => p.kind === "scalar:boolean")
+    const darkModePath = paths.find(p => p.kind === "scalar:boolean")
     expect(darkModePath?.path).toEqual([
       { type: "key", key: "settings" },
       { type: "key", key: "darkMode" },
@@ -314,8 +320,8 @@ describe("interpret: discriminatedUnion constructor validation", () => {
     expect(s.variants).toHaveLength(2)
     expect(s.variantMap).toHaveProperty("text")
     expect(s.variantMap).toHaveProperty("image")
-    expect(s.variantMap["text"]).toBe(s.variants[0])
-    expect(s.variantMap["image"]).toBe(s.variants[1])
+    expect(s.variantMap.text).toBe(s.variants[0])
+    expect(s.variantMap.image).toBe(s.variants[1])
   })
 
   it("throws if a variant lacks the discriminant field", () => {

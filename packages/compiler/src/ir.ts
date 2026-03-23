@@ -83,7 +83,13 @@ export type BindingTime = "literal" | "render" | "reactive"
  * - **tree**: Hierarchical changes — enables structural tree updates
  * - **increment**: Counter increment/decrement — enables in-place numeric updates
  */
-export type DeltaKind = "replace" | "text" | "sequence" | "map" | "tree" | "increment"
+export type DeltaKind =
+  | "replace"
+  | "text"
+  | "sequence"
+  | "map"
+  | "tree"
+  | "increment"
 
 /**
  * A reactive dependency with its delta kind.
@@ -743,7 +749,6 @@ export function isConditionalNode(node: ChildNode): node is ConditionalNode {
   return node.kind === "conditional"
 }
 
-
 /**
  * Check if a node is a statement.
  */
@@ -778,7 +783,11 @@ export function isLabeledBlockNode(node: ChildNode): node is LabeledBlockNode {
  * must use this predicate instead of ad-hoc kind checks.
  */
 export function isDOMProducing(node: ChildNode): boolean {
-  return node.kind !== "statement" && node.kind !== "binding" && node.kind !== "labeled-block"
+  return (
+    node.kind !== "statement" &&
+    node.kind !== "binding" &&
+    node.kind !== "labeled-block"
+  )
 }
 
 /**
@@ -1587,5 +1596,3 @@ export function createBuilder(
     span,
   }
 }
-
-

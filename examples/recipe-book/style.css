@@ -40,15 +40,21 @@ html {
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
   font-size: 16px;
   line-height: 1.6;
   color: #2c1810;
   background: #faf6f1;
 }
 
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   margin-top: 0;
   line-height: 1.3;
 }
@@ -205,7 +211,9 @@ button {
   font-size: 0.875rem;
   font-weight: 500;
   background: #fff;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
   white-space: nowrap;
 }
 
@@ -231,7 +239,9 @@ button {
   line-height: 1;
   color: #bba99c;
   background: transparent;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
 }
 
 .remove-btn:hover,
@@ -256,7 +266,9 @@ button {
   font-weight: 500;
   color: #2c1810;
   background: #fff;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
 
 .fav-btn:hover,
@@ -278,7 +290,8 @@ button {
 .recipe-card {
   background: #fff;
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(44, 24, 16, 0.08),
+  box-shadow:
+    0 1px 3px rgba(44, 24, 16, 0.08),
     0 1px 2px rgba(44, 24, 16, 0.04);
   padding: 20px 24px;
 }
