@@ -555,6 +555,96 @@ export function isReactive(expr: ExpressionIR): boolean {
 }
 
 // =============================================================================
+// Operator Precedence (for precedence-aware rendering)
+// =============================================================================
+
+/**
+ * JS binary operator precedence levels.
+ * Higher number = tighter binding.
+ * Unknown operators default to 0 (always parenthesize).
+ */
+const BINARY_PRECEDENCE: Record<string, number> = {
+  // Assignment (right-to-left)
+  "=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "%=": 1,
+  // Nullish coalescing
+  "??": 3,
+  // Logical OR
+  "||": 4,
+  // Logical AND
+  "&&": 5,
+  // Bitwise OR
+  "|": 6,
+  // Bitwise XOR
+  "^": 7,
+  // Bitwise AND
+  "&": 8,
+  // Equality
+  "==": 9, "!=": 9, "===": 9, "!==": 9,
+  // Relational
+  "<": 10, ">": 10, "<=": 10, ">=": 10, "instanceof": 10, "in": 10,
+  // Shift
+  "<<": 11, ">>": 11, ">>>": 11,
+  // Additive
+  "+": 12, "-": 12,
+  // Multiplicative
+  "*": 13, "/": 13, "%": 13,
+  // Exponentiation (right-to-left)
+  "**": 14,
+}
+
+/** Precedence level for prefix/postfix unary operators (above all binary). */
+const UNARY_PRECEDENCE = 15
+
+/** Precedence level for member access, call, ref-read (highest). */
+const MEMBER_PRECEDENCE = 20
+
+function getOperatorPrecedence(op: string): number {
+  return BINARY_PRECEDENCE[op] ?? 0
+}
+
+/** Right-associative binary operators: parens needed on the LEFT at same precedence. */
+const RIGHT_ASSOCIATIVE = new Set(["=", "+=", "-=", "*=", "/=", "%=", "**"])
+
+function isRightAssociative(op: string): boolean {
+  return RIGHT_ASSOCIATIVE.has(op)
+}
+
+/**
+ * Whether an expression node is "atomic" — safe to use as a receiver,
+ * callee, or ref without parenthesization.
+ *
+ * Atomic nodes produce output that binds tighter than any operator:
+ * identifiers, literals, calls (including method calls), property access,
+ * ref-reads, snapshots, and template literals.
+ *
+ * Non-atomic nodes (binary, unary, raw, binding-ref) may produce output
+ * that contains operators and must be wrapped when used in member-access
+ * or call position.
+ */
+function isAtomicExpr(node: ExpressionIR): boolean {
+  switch (node.kind) {
+    case "identifier":
+    case "literal":
+    case "method-call":
+    case "call":
+    case "property-access":
+    case "ref-read":
+    case "snapshot":
+    case "template":
+      return true
+    case "binary":
+    case "unary":
+    case "raw":
+      return false
+    case "binding-ref":
+      // A binding-ref with expandBindings=false renders as an identifier (atomic),
+      // but with expandBindings=true it renders as the inner expression.
+      // We conservatively return false — the caller checks context.
+      return false
+  }
+}
+
+// =============================================================================
 // Expression Rendering (ExpressionIR → JavaScript source)
 // =============================================================================
 
@@ -575,9 +665,20 @@ export interface RenderContext {
 /**
  * Render an ExpressionIR tree to a JavaScript source string.
  *
- * This is where auto-read insertion happens: `RefReadNode` renders as
- * `source()` — the observation morphism is a structural property of the
- * tree, not a string transformation.
+ * This is a **precedence-aware** pretty-printer: it re-introduces parentheses
+ * wherever the tree structure requires grouping that would otherwise be lost
+ * in the flat string output. This covers:
+ *
+ * - Binary operators: lower-precedence child of higher-precedence parent
+ * - Associativity: right child at same precedence for left-associative ops
+ * - Unary operators: compound operand (binary, raw) wrapped in parens
+ * - Unary chain: `-(-a)` not rendered as `--a` (token merge prevention)
+ * - Member access / call: non-atomic receiver/callee wrapped in parens
+ * - Binding expansion: expanded expression inherits parent precedence context
+ * - RawNode: conservatively wrapped when in a precedence-sensitive position
+ *
+ * Auto-read insertion happens here too: `RefReadNode` renders as `source()`
+ * — the observation morphism is a structural property of the tree.
  *
  * Binding expansion is controlled by `context.expandBindings`:
  * - `false` → `BindingRefNode` emits `"nameMatch"` (initial render)
@@ -596,68 +697,130 @@ export interface RenderContext {
  *
  * // BindingRef with expandBindings: true
  * renderExpression(bindingRef("nameMatch", expr), { expandBindings: true })
- * // → full rendered expression with () reads
+ * // → full rendered expression with () reads, parenthesized as needed
+ *
+ * // Precedence preservation
+ * renderExpression(binary(binary(a, "+", b), "*", c), ctx)
+ * // → "(a + b) * c"   (not "a + b * c")
  * ```
  */
 export function renderExpression(
   expr: ExpressionIR,
   ctx: RenderContext,
 ): string {
+  return renderWithPrec(expr, ctx, 0, "none")
+}
+
+/** Side of the child relative to a binary parent — used for associativity. */
+type Side = "left" | "right" | "none"
+
+/**
+ * Internal precedence-aware renderer.
+ *
+ * @param expr - The expression to render
+ * @param ctx - Render context (expandBindings flag)
+ * @param parentPrec - Precedence of the enclosing operator (0 = top-level)
+ * @param side - Which side of the parent binary operator this child is on
+ */
+function renderWithPrec(
+  expr: ExpressionIR,
+  ctx: RenderContext,
+  parentPrec: number,
+  side: Side,
+): string {
   switch (expr.kind) {
     case "ref-read":
       // The observation morphism: render the ref, then append ()
-      return `${renderExpression(expr.ref, ctx)}()`
+      // Result is a call expression — atomic, never needs outer parens.
+      return `${renderAtomic(expr.ref, ctx)}()`
 
     case "snapshot":
       // Explicit ref() call by the developer — same output shape as RefRead
       // but semantically distinct (the developer chose this)
       if (expr.args.length === 0) {
-        return `${renderExpression(expr.ref, ctx)}()`
+        return `${renderAtomic(expr.ref, ctx)}()`
       }
-      return `${renderExpression(expr.ref, ctx)}(${renderArgs(expr.args, ctx)})`
+      return `${renderAtomic(expr.ref, ctx)}(${renderArgs(expr.args, ctx)})`
 
     case "binding-ref":
       if (ctx.expandBindings) {
-        // Reactive closure context: inline the binding's expression tree
-        return renderExpression(expr.expression, ctx)
+        // Reactive closure context: inline the binding's expression tree.
+        // Pass parent precedence straight through — the expanded expression
+        // gets parenthesized by whatever case handles its node kind.
+        return renderWithPrec(expr.expression, ctx, parentPrec, side)
       }
-      // Initial render context: emit the binding name
+      // Initial render context: emit the binding name (atomic)
       return expr.name
 
     case "method-call":
-      return `${renderExpression(expr.receiver, ctx)}.${expr.method}(${renderArgs(expr.args, ctx)})`
+      // Result is a call — atomic. Receiver must be atomic for `.method()`.
+      return `${renderAtomic(expr.receiver, ctx)}.${expr.method}(${renderArgs(expr.args, ctx)})`
 
     case "property-access":
-      return `${renderExpression(expr.object, ctx)}.${expr.property}`
+      // Result is a member access — atomic. Object must be atomic for `.prop`.
+      return `${renderAtomic(expr.object, ctx)}.${expr.property}`
 
     case "call":
-      return `${renderExpression(expr.callee, ctx)}(${renderArgs(expr.args, ctx)})`
+      // Result is a call — atomic. Callee must be atomic for `callee()`.
+      return `${renderAtomic(expr.callee, ctx)}(${renderArgs(expr.args, ctx)})`
 
-    case "binary":
-      return `${renderExpression(expr.left, ctx)} ${expr.op} ${renderExpression(expr.right, ctx)}`
+    case "binary": {
+      const thisPrec = getOperatorPrecedence(expr.op)
 
-    case "unary":
+      // Render children with this operator's precedence as their parent context
+      const leftStr = renderWithPrec(expr.left, ctx, thisPrec, "left")
+      const rightStr = renderWithPrec(expr.right, ctx, thisPrec, "right")
+      const result = `${leftStr} ${expr.op} ${rightStr}`
+
+      // Does THIS binary expression need parens in its parent context?
+      if (needsParens(thisPrec, parentPrec, expr.op, side)) {
+        return `(${result})`
+      }
+      return result
+    }
+
+    case "unary": {
       if (expr.prefix) {
         // Prefix: `!x`, `-x`, `typeof x`
-        // Add a space for word operators like `typeof`, `void`, `delete`
         const space = /^[a-z]+$/i.test(expr.op) ? " " : ""
-        return `${expr.op}${space}${renderExpression(expr.operand, ctx)}`
+
+        // Operand rendered at unary precedence (tighter than any binary).
+        let operandStr = renderWithPrec(expr.operand, ctx, UNARY_PRECEDENCE, "none")
+
+        // Token merge prevention: -(-a) must not become --a, +(+a) must not become ++a.
+        // This happens when the operand is also a prefix unary with the same single-char op.
+        if (
+          expr.operand.kind === "unary" &&
+          expr.operand.prefix &&
+          expr.op === expr.operand.op &&
+          expr.op.length === 1
+        ) {
+          operandStr = `(${operandStr})`
+        }
+
+        return `${expr.op}${space}${operandStr}`
       }
+
       // Postfix: `x++`, `x--`
-      return `${renderExpression(expr.operand, ctx)}${expr.op}`
+      // Operand must be atomic — `(a + b)++` not `a + b++`
+      return `${renderAtomic(expr.operand, ctx)}${expr.op}`
+    }
 
     case "template": {
-      // Reconstruct template literal: `seg0${expr1}seg2${expr3}seg4`
+      // Template literals are self-contained (backtick-delimited) — atomic.
+      // Expression holes are inside ${...} which provides grouping.
       let result = "`"
       for (let i = 0; i < expr.parts.length; i++) {
         const part = expr.parts[i]
         if (i % 2 === 0) {
           // Even index: string segment (LiteralNode)
           result +=
-            part.kind === "literal" ? part.value : renderExpression(part, ctx)
+            part.kind === "literal"
+              ? part.value
+              : renderWithPrec(part, ctx, 0, "none")
         } else {
-          // Odd index: expression hole
-          result += `\${${renderExpression(part, ctx)}}`
+          // Odd index: expression hole — ${...} provides grouping
+          result += `\${${renderWithPrec(part, ctx, 0, "none")}}`
         }
       }
       result += "`"
@@ -671,15 +834,69 @@ export function renderExpression(
       return expr.name
 
     case "raw":
+      // Raw source text is opaque — we can't determine its precedence.
+      // Wrap conservatively when in a precedence-sensitive position
+      // (any parent operator or member-access context).
+      if (parentPrec > 0) {
+        return `(${expr.source})`
+      }
       return expr.source
   }
 }
 
 /**
+ * Render an expression that must be atomic (for use as a receiver, callee,
+ * or ref in member-access / call position).
+ *
+ * Non-atomic expressions are wrapped in parentheses.
+ */
+function renderAtomic(expr: ExpressionIR, ctx: RenderContext): string {
+  // For binding-ref with expansion, check the inner expression's atomicity
+  if (expr.kind === "binding-ref" && ctx.expandBindings) {
+    return renderAtomic(expr.expression, ctx)
+  }
+
+  if (isAtomicExpr(expr)) {
+    return renderWithPrec(expr, ctx, 0, "none")
+  }
+  // Wrap in parens — use MEMBER_PRECEDENCE so binary/raw children know they're inside parens
+  return `(${renderWithPrec(expr, ctx, 0, "none")})`
+}
+
+/**
+ * Determine if a binary expression needs parentheses in its parent context.
+ *
+ * Parens are needed when:
+ * 1. This operator's precedence is lower than the parent's (child is weaker)
+ * 2. Same precedence, but on the non-associative side:
+ *    - Left-associative op on the RIGHT side of same-prec parent
+ *    - Right-associative op on the LEFT side of same-prec parent
+ */
+function needsParens(
+  thisPrec: number,
+  parentPrec: number,
+  op: string,
+  side: Side,
+): boolean {
+  if (thisPrec < parentPrec) return true
+  if (thisPrec === parentPrec && parentPrec > 0) {
+    // Same precedence — check associativity
+    if (isRightAssociative(op)) {
+      // Right-assoc: a ** (b ** c) is natural, (a ** b) ** c needs parens
+      return side === "left"
+    }
+    // Left-assoc: (a - b) - c is natural, a - (b - c) needs parens
+    return side === "right"
+  }
+  return false
+}
+
+/**
  * Render a comma-separated argument list.
+ * Arguments are inside (...) which provides grouping — no parent precedence.
  */
 function renderArgs(args: readonly ExpressionIR[], ctx: RenderContext): string {
-  return args.map(arg => renderExpression(arg, ctx)).join(", ")
+  return args.map(arg => renderWithPrec(arg, ctx, 0, "none")).join(", ")
 }
 
 // =============================================================================

@@ -1093,7 +1093,7 @@ describe("renderExpression", () => {
       "*",
       identifier("c"),
     )
-    expect(renderExpression(expr, noExpand)).toBe("a + b * c")
+    expect(renderExpression(expr, noExpand)).toBe("(a + b) * c")
   })
 
   it("renders comparison operators", () => {
@@ -1280,7 +1280,7 @@ describe("renderExpression", () => {
     )
 
     expect(renderExpression(condition, expand)).toBe(
-      "recipe.name().toLowerCase().includes(filterText().toLowerCase()) && !veggieOnly() || recipe.vegetarian()",
+      "recipe.name().toLowerCase().includes(filterText().toLowerCase()) && (!veggieOnly() || recipe.vegetarian())",
     )
   })
 
@@ -1338,5 +1338,358 @@ describe("renderExpression", () => {
     expect(renderExpression(expr, noExpand)).toBe(
       "!veggieOnly() || recipe.vegetarian()",
     )
+  })
+})
+
+// =============================================================================
+// Precedence-aware rendering — regression tests for all 6 bug categories
+// =============================================================================
+
+describe("renderExpression — precedence", () => {
+  const ctx: RenderContext = { expandBindings: false }
+  const expand: RenderContext = { expandBindings: true }
+
+  // ---------------------------------------------------------------------------
+  // Category A — Binary child has lower precedence than binary parent
+  // ---------------------------------------------------------------------------
+
+  describe("Category A: binary child precedence", () => {
+    it("(a || b) && c — lower-prec left child", () => {
+      const expr = binary(
+        binary(identifier("a"), "||", identifier("b")),
+        "&&",
+        identifier("c"),
+      )
+      expect(renderExpression(expr, ctx)).toBe("(a || b) && c")
+    })
+
+    it("a && (b || c) — lower-prec right child", () => {
+      const expr = binary(
+        identifier("a"),
+        "&&",
+        binary(identifier("b"), "||", identifier("c")),
+      )
+      expect(renderExpression(expr, ctx)).toBe("a && (b || c)")
+    })
+
+    it("(a + b) * c — additive inside multiplicative", () => {
+      const expr = binary(
+        binary(identifier("a"), "+", identifier("b")),
+        "*",
+        identifier("c"),
+      )
+      expect(renderExpression(expr, ctx)).toBe("(a + b) * c")
+    })
+
+    it("a * (b + c) — additive inside multiplicative (right)", () => {
+      const expr = binary(
+        identifier("a"),
+        "*",
+        binary(identifier("b"), "+", identifier("c")),
+      )
+      expect(renderExpression(expr, ctx)).toBe("a * (b + c)")
+    })
+
+    it("a + b === c — additive binds tighter than equality, no parens needed", () => {
+      const expr = binary(
+        binary(identifier("a"), "+", identifier("b")),
+        "===",
+        identifier("c"),
+      )
+      // + (prec 12) > === (prec 9), so a + b === c already means (a + b) === c
+      expect(renderExpression(expr, ctx)).toBe("a + b === c")
+    })
+
+    it("(a === b) + c — equality inside additive needs parens", () => {
+      const expr = binary(
+        binary(identifier("a"), "===", identifier("b")),
+        "+",
+        identifier("c"),
+      )
+      expect(renderExpression(expr, ctx)).toBe("(a === b) + c")
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Category B — Same-precedence associativity
+  // ---------------------------------------------------------------------------
+
+  describe("Category B: same-precedence associativity", () => {
+    it("(a - b) - c — left child, left-assoc: no parens needed", () => {
+      const expr = binary(
+        binary(identifier("a"), "-", identifier("b")),
+        "-",
+        identifier("c"),
+      )
+      expect(renderExpression(expr, ctx)).toBe("a - b - c")
+    })
+
+    it("a - (b - c) — right child, same prec: parens needed", () => {
+      const expr = binary(
+        identifier("a"),
+        "-",
+        binary(identifier("b"), "-", identifier("c")),
+      )
+      expect(renderExpression(expr, ctx)).toBe("a - (b - c)")
+    })
+
+    it("a - (b + c) — right child, same precedence group: parens needed", () => {
+      const expr = binary(
+        identifier("a"),
+        "-",
+        binary(identifier("b"), "+", identifier("c")),
+      )
+      expect(renderExpression(expr, ctx)).toBe("a - (b + c)")
+    })
+
+    it("(a + b) - c — left child, left-assoc, same group: no parens", () => {
+      const expr = binary(
+        binary(identifier("a"), "+", identifier("b")),
+        "-",
+        identifier("c"),
+      )
+      expect(renderExpression(expr, ctx)).toBe("a + b - c")
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Category C — Unary wrapping compound operand
+  // ---------------------------------------------------------------------------
+
+  describe("Category C: unary wrapping compound", () => {
+    it("!(a || b) — negation of binary", () => {
+      const expr = unary("!", binary(identifier("a"), "||", identifier("b")))
+      expect(renderExpression(expr, ctx)).toBe("!(a || b)")
+    })
+
+    it("-(a + b) — arithmetic negation of binary", () => {
+      const expr = unary("-", binary(identifier("a"), "+", identifier("b")))
+      expect(renderExpression(expr, ctx)).toBe("-(a + b)")
+    })
+
+    it("typeof (a || b) — word operator on binary", () => {
+      const expr = unary(
+        "typeof",
+        binary(identifier("a"), "||", identifier("b")),
+      )
+      expect(renderExpression(expr, ctx)).toBe("typeof (a || b)")
+    })
+
+    it("(a + b)++ — postfix on compound", () => {
+      const expr = unary(
+        "++",
+        binary(identifier("a"), "+", identifier("b")),
+        false,
+      )
+      expect(renderExpression(expr, ctx)).toBe("(a + b)++")
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Category D — Unary chain token merge prevention
+  // ---------------------------------------------------------------------------
+
+  describe("Category D: unary chain token merge", () => {
+    it("-(-a) — must not become --a", () => {
+      const expr = unary("-", unary("-", identifier("a")))
+      expect(renderExpression(expr, ctx)).toBe("-(-a)")
+    })
+
+    it("+(+a) — must not become ++a", () => {
+      const expr = unary("+", unary("+", identifier("a")))
+      expect(renderExpression(expr, ctx)).toBe("+(+a)")
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Category E — Member access / call on compound expression
+  // ---------------------------------------------------------------------------
+
+  describe("Category E: member/call on compound", () => {
+    it("(a + b).toString() — method on binary", () => {
+      const expr = methodCall(
+        binary(identifier("a"), "+", identifier("b")),
+        "toString",
+        [],
+      )
+      expect(renderExpression(expr, ctx)).toBe("(a + b).toString()")
+    })
+
+    it("(a || b).length — property access on binary", () => {
+      const expr = propertyAccess(
+        binary(identifier("a"), "||", identifier("b")),
+        "length",
+      )
+      expect(renderExpression(expr, ctx)).toBe("(a || b).length")
+    })
+
+    it("(a || b)() — call on binary", () => {
+      const expr = call(
+        binary(identifier("a"), "||", identifier("b")),
+        [],
+      )
+      expect(renderExpression(expr, ctx)).toBe("(a || b)()")
+    })
+
+    it("(!a).toString() — method on unary", () => {
+      const expr = methodCall(
+        unary("!", identifier("a")),
+        "toString",
+        [],
+      )
+      expect(renderExpression(expr, ctx)).toBe("(!a).toString()")
+    })
+
+    it("(a + b)() via refRead — ref-read on compound", () => {
+      const expr = refRead(
+        binary(identifier("a"), "+", identifier("b")),
+        "replace",
+      )
+      expect(renderExpression(expr, ctx)).toBe("(a + b)()")
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Category F — RawNode in precedence-sensitive context
+  // ---------------------------------------------------------------------------
+
+  describe("Category F: RawNode in context", () => {
+    it("raw('a ? b : c') + d — ternary raw in binary", () => {
+      const expr = binary(raw("a ? b : c"), "+", identifier("d"))
+      expect(renderExpression(expr, ctx)).toBe("(a ? b : c) + d")
+    })
+
+    it("raw('a ? b : c').toString() — ternary raw as method receiver", () => {
+      const expr = methodCall(raw("a ? b : c"), "toString", [])
+      expect(renderExpression(expr, ctx)).toBe("(a ? b : c).toString()")
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Category G — Binding expansion inherits parent precedence
+  // ---------------------------------------------------------------------------
+
+  describe("Category G: binding expansion", () => {
+    it("expand(a || b) in && context", () => {
+      const inner = binary(identifier("b"), "||", identifier("c"))
+      const expr = binary(
+        identifier("a"),
+        "&&",
+        bindingRef("x", inner),
+      )
+      expect(renderExpression(expr, expand)).toBe("a && (b || c)")
+    })
+
+    it("expand(a || b) as method receiver", () => {
+      const inner = binary(identifier("a"), "||", identifier("b"))
+      const expr = methodCall(bindingRef("x", inner), "toString", [])
+      expect(renderExpression(expr, expand)).toBe("(a || b).toString()")
+    })
+
+    it("!expand(a || b) — unary on expanded binary", () => {
+      const inner = binary(identifier("a"), "||", identifier("b"))
+      const expr = unary("!", bindingRef("x", inner))
+      expect(renderExpression(expr, expand)).toBe("!(a || b)")
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Negative tests — no unnecessary parentheses
+  // ---------------------------------------------------------------------------
+
+  describe("no unnecessary parens", () => {
+    it("a - b - c — left-assoc natural grouping", () => {
+      const expr = binary(
+        binary(identifier("a"), "-", identifier("b")),
+        "-",
+        identifier("c"),
+      )
+      expect(renderExpression(expr, ctx)).toBe("a - b - c")
+    })
+
+    it("a * b + c — higher-prec child in lower-prec parent", () => {
+      const expr = binary(
+        binary(identifier("a"), "*", identifier("b")),
+        "+",
+        identifier("c"),
+      )
+      expect(renderExpression(expr, ctx)).toBe("a * b + c")
+    })
+
+    it("!a && b — unary as left child of binary", () => {
+      const expr = binary(
+        unary("!", identifier("a")),
+        "&&",
+        identifier("b"),
+      )
+      expect(renderExpression(expr, ctx)).toBe("!a && b")
+    })
+
+    it("a.b().c() — method chain stays clean", () => {
+      const expr = methodCall(
+        methodCall(identifier("a"), "b", []),
+        "c",
+        [],
+      )
+      expect(renderExpression(expr, ctx)).toBe("a.b().c()")
+    })
+
+    it("!fn() — unary of call", () => {
+      const expr = unary("!", call(identifier("fn"), []))
+      expect(renderExpression(expr, ctx)).toBe("!fn()")
+    })
+
+    it("fn(a + b) — binary inside argument list", () => {
+      const expr = call(identifier("fn"), [
+        binary(identifier("a"), "+", identifier("b")),
+      ])
+      expect(renderExpression(expr, ctx)).toBe("fn(a + b)")
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Recipe-book binding expansion regression test (original motivating bug)
+  // ---------------------------------------------------------------------------
+
+  describe("recipe-book regression", () => {
+    it("nameMatch && veggieMatch expands with correct grouping", () => {
+      // nameMatch = recipe.name().toLowerCase().includes(filterText().toLowerCase())
+      const nameMatchExpr = methodCall(
+        methodCall(
+          refRead(propertyAccess(identifier("recipe"), "name"), "text"),
+          "toLowerCase",
+          [],
+        ),
+        "includes",
+        [
+          methodCall(
+            refRead(identifier("filterText"), "replace"),
+            "toLowerCase",
+            [],
+          ),
+        ],
+      )
+
+      // veggieMatch = !veggieOnly() || recipe.vegetarian()
+      const veggieMatchExpr = binary(
+        unary("!", refRead(identifier("veggieOnly"), "replace")),
+        "||",
+        refRead(
+          propertyAccess(identifier("recipe"), "vegetarian"),
+          "replace",
+        ),
+      )
+
+      // nameMatch && veggieMatch (with binding expansion)
+      const condition = binary(
+        bindingRef("nameMatch", nameMatchExpr),
+        "&&",
+        bindingRef("veggieMatch", veggieMatchExpr),
+      )
+
+      expect(renderExpression(condition, expand)).toBe(
+        "recipe.name().toLowerCase().includes(filterText().toLowerCase()) && (!veggieOnly() || recipe.vegetarian())",
+      )
+    })
   })
 })
