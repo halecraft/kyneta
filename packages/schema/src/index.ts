@@ -54,9 +54,11 @@ export type { MergeFn } from "./combinators.js"
 // Interpreter composition combinators
 export { firstDefined, overlay, product } from "./combinators.js"
 export { describe } from "./describe.js"
-export type { ApplyChangesOptions } from "./facade.js"
+export type { ApplyChangesOptions } from "./facade/change.js"
 // Facade — library-level change capture and declarative application
-export { applyChanges, change, subscribe, subscribeNode } from "./facade.js"
+export { applyChanges, change } from "./facade/change.js"
+// Facade — library-level observation protocol
+export { subscribe, subscribeNode } from "./facade/observe.js"
 // Guards — shared type-narrowing utilities
 export { isNonNullObject, isPropertyHost } from "./guards.js"
 export type {

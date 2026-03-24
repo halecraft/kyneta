@@ -10,7 +10,7 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Schema } from "@kyneta/schema"
+import { Schema } from "@kyneta/schema/basic"
 
 export const RecipeSchema = Schema.struct({
   name: Schema.annotated("text"), // delta: text (within list items)

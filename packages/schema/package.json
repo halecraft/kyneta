@@ -18,8 +18,15 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./basic": {
+      "types": "./dist/basic/index.d.ts",
+      "import": "./dist/basic/index.js",
+      "default": "./dist/basic/index.js"
+    },
     "./src": "./src/index.ts",
-    "./src/*": "./src/*"
+    "./src/*": "./src/*",
+    "./basic/src": "./src/basic/index.ts",
+    "./basic/src/*": "./src/basic/*"
   },
   "scripts": {
     "build": "tsup",

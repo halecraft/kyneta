@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs"
 import { createServer as createHttpServer } from "node:http"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { Changeset, Op } from "@kyneta/schema"
+import type { Changeset, Op } from "@kyneta/schema/basic"
 import { createServer as createViteServer } from "vite"
 import { type WebSocket, WebSocketServer } from "ws"
 import {
@@ -26,7 +26,7 @@ import {
   exportSnapshot,
   subscribe,
   version,
-} from "./facade.js"
+} from "@kyneta/schema/basic"
 import { parseServerMessage, toOps } from "./protocol.js"
 import { RecipeBookSchema } from "./schema.js"
 import { SEED } from "./seed.js"

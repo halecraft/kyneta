@@ -8,7 +8,7 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type { Changeset, Op } from "@kyneta/schema"
+import type { Changeset, Op } from "@kyneta/schema/basic"
 import { hasChangefeed } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import {
@@ -20,7 +20,7 @@ import {
   exportSnapshot,
   subscribe,
   version,
-} from "./src/facade.js"
+} from "@kyneta/schema/basic"
 import { RecipeBookSchema } from "./src/schema.js"
 import { SEED } from "./src/seed.js"
 

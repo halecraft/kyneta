@@ -73,6 +73,55 @@ In the old grammar, `text` and `counter` were node kinds alongside `list` and `s
 
 ## Architecture
 
+### The `@kyneta/schema/basic` Subpath Export
+
+`@kyneta/schema` has a two-layer design:
+
+- **Layer 1 (`@kyneta/schema`)** — the composable toolkit for power users and library authors. Exports the full interpreter algebra, substrate primitives, symbols, and all building blocks. This is the layer documented in the rest of this file.
+- **Layer 2 (`@kyneta/schema/basic`)** — a curated, batteries-included API for application developers. Backed by `PlainSubstrate`. Hides the interpreter machinery behind a small, opinionated surface.
+
+#### What `basic/` exports
+
+| Category | Exports |
+|----------|---------|
+| Document lifecycle | `createDoc`, `createDocFromSnapshot` |
+| Schema | `Schema` (re-exported constructor namespace) |
+| Mutation | `change`, `applyChanges` |
+| Observation | `subscribe`, `subscribeNode` |
+| Sync | `version`, `delta`, `exportSnapshot` |
+| Validation | `validate`, `tryValidate` |
+| Utilities | `Zero`, `describe` |
+| Types | `Ref`, `RRef`, `Plain`, `Seed`, `Op`, `Changeset`, `SubstratePayload`, schema node types |
+
+#### What's deliberately excluded
+
+- **Interpreter machinery** — `interpret`, `readable`, `writable`, `changefeed`, `bottomInterpreter`, `withNavigation`, `withReadable`, `withCaching`, `withWritable`, `withChangefeed`, `InterpretBuilder`, `InterpreterLayer`, etc.
+- **Substrate primitives** — `plainSubstrateFactory`, `createPlainSubstrate`, `plainContext`, `PlainFrontier`.
+- **Symbols** — `CHANGEFEED`, `TRANSACT`, `CALL`, `INVALIDATE`.
+- **Other internals** — `LoroSchema`, change constructors (`ChangeBase`, `ScalarChange`, etc.), step functions, store utilities (`readByPath`, `writeByPath`, `applyChangeToStore`), capability types (`HasCall`, `HasRead`, `HasTransact`, `HasChangefeed`).
+
+#### `registerDoc` internal helper
+
+Both `createDoc` and `createDocFromSnapshot` delegate to a shared `registerDoc` helper in `basic/create.ts`. It:
+
+1. Runs `interpret(schema, substrate.context()).with(readable).with(writable).with(changefeed).done()` to build the full five-layer interpreter stack.
+2. Stores the `substrate` in a **module-scoped `WeakMap`** keyed by the returned ref, enabling `basic/sync.ts` to retrieve the substrate for sync operations without exposing it to callers.
+
+`getSubstrate` is exported from `basic/create.ts` for cross-module use by `basic/sync.ts` (which needs the substrate for `version`, `delta`, `exportSnapshot`) but is **not** re-exported from the `basic/index.ts` barrel — it's an internal implementation detail.
+
+#### Naming rationale
+
+"basic" was chosen over "plain" because "plain" already has four meanings in the codebase:
+
+1. `Plain<S>` — the type-level plain-JS snapshot of a schema
+2. `PlainSchema` / `LoroSchema.plain.*` — the plain (non-Loro) schema namespace
+3. `PlainSubstrate` / `plainContext` / `PlainFrontier` — the plain-JS substrate implementation
+4. `plainInterpreter` — the eager deep-snapshot interpreter
+
+"Basic" has zero collisions and communicates the right thing: this is the simple, default entry point.
+
+> **Note:** `plainContext` remains the recommended test helper for Layer 1 tests (direct store control, no facade). `createDoc` is the Layer 2 entry point for application code.
+
 ### Schema (`src/schema.ts`)
 
 One recursive `Schema` type discriminated by `_kind`:
@@ -471,7 +520,12 @@ Layers like `withChangefeed` wrap `prepare` (to accumulate notification entries)
 
 The `TRANSACT` symbol (`Symbol.for("kyneta:transact")`) and `HasTransact` interface enable context discovery from any ref — `change()` and `applyChanges()` find the `WritableContext` without a WeakMap or re-interpretation.
 
-#### Facade (`src/facade.ts`)
+#### Facade (`src/facade/`)
+
+The facade has been split into two cohesive modules under `src/facade/`:
+
+- **`facade/change.ts`** — mutation protocol: `change`, `applyChanges`, `ApplyChangesOptions`. Discovers `WritableContext` via `[TRANSACT]`.
+- **`facade/observe.ts`** — observation protocol: `subscribe`, `subscribeNode`. Discovers capabilities via `[CHANGEFEED]`.
 
 The library-level API for change capture, declarative application, and observation:
 
@@ -748,58 +802,68 @@ packages/schema/
 │   ├── step.ts                  # Pure (State, Change) → State transitions
 │   ├── zero.ts                  # Zero.structural, Zero.overlay
 │   ├── describe.ts              # Human-readable schema tree view
-│   ├── interpret.ts             # Interpreter interface + catamorphism + Path types + phantom brands (ReadableBrand, WritableBrand, ChangefeedBrand) + Resolve<S, Brands> + ResolveCarrier<S, A> + InterpretBuilder<S, Ctx, Brands>
-│   ├── facade.ts                # Library-level change, applyChanges, subscribe, subscribeNode
-│   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition (readable → ReadableBrand, writable → WritableBrand, changefeed → ChangefeedBrand)
+│   ├── interpret.ts             # Interpreter interface + catamorphism + Path types + phantom brands + InterpretBuilder
+│   ├── facade/
+│   │   ├── change.ts            # Mutation protocol: change, applyChanges, ApplyChangesOptions
+│   │   └── observe.ts           # Observation protocol: subscribe, subscribeNode
+│   ├── basic/
+│   │   ├── create.ts            # createDoc, createDocFromSnapshot, registerDoc helper, WeakMap substrate tracking
+│   │   ├── sync.ts              # version, delta, exportSnapshot — PlainSubstrate sync primitives
+│   │   └── index.ts             # Curated barrel for @kyneta/schema/basic
+│   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition
 │   ├── combinators.ts           # product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
 │   ├── interpreter-types.ts     # RefContext, Plain<S>, Seed<S> — shared types across interpreters
 │   ├── substrate.ts             # SubstratePrepare, Frontier, SubstratePayload, Substrate<F>, SubstrateFactory<F>
 │   ├── store.ts                 # Store type, readByPath, writeByPath, applyChangeToStore, pathKey, dispatchSum
-│   ├── ref.ts                   # SchemaRef<S,M> parameterized core + RRef<S>, RWRef<S>, Ref<S> tier aliases + Wrap<T,M>, RefMode + WithTransact<T> (deprecated alias)
+│   ├── ref.ts                   # SchemaRef<S,M> parameterized core + Ref<S>, RWRef<S>, RRef<S> tier aliases
 │   ├── interpreters/
-│   │   ├── bottom.ts            # bottomInterpreter, makeCarrier, CALL symbol, capability lattice (HasCall/HasNavigation/HasRead/HasCaching)
+│   │   ├── bottom.ts            # bottomInterpreter, makeCarrier, CALL symbol, capability lattice
 │   │   ├── navigable.ts         # Type-only: NavigableSequenceRef, NavigableMapRef
-│   │   ├── with-navigation.ts   # withNavigation transformer — coalgebraic structural addressing (no reading)
-│   │   ├── with-readable.ts     # withReadable transformer — fills [CALL] slot, adds .get(), toPrimitive
-│   │   ├── with-caching.ts      # withCaching transformer — caching + INVALIDATE + prepare-pipeline hooks
-│   │   ├── readable.ts          # Type-only: Readable<S>, ReadableSequenceRef (extends NavigableSequenceRef), ReadableMapRef (extends NavigableMapRef)
-│   │   ├── writable.ts          # withWritable transformer (returns A & HasTransact) + TRANSACT + WritableContext + executeBatch + buildWritableContext + SequenceRef (mutation-only)
-│   │   ├── plain.ts             # Read from plain JS object (eager deep snapshot)
-│   │   ├── with-changefeed.ts   # Changefeed transformer (returns A & HasChangefeed, attachChangefeed asserts narrowing) — compositional observation + batched notification (RefContext, requires HasRead)
+│   │   ├── with-navigation.ts   # withNavigation transformer — structural addressing
+│   │   ├── with-readable.ts     # withReadable transformer — fills [CALL], adds .get(), toPrimitive
+│   │   ├── with-caching.ts      # withCaching transformer — caching + INVALIDATE + prepare-pipeline
+│   │   ├── readable.ts          # Type-only: Readable<S>, ReadableSequenceRef, ReadableMapRef
+│   │   ├── writable.ts          # withWritable + TRANSACT + WritableContext + executeBatch
+│   │   ├── plain.ts             # plainInterpreter — eager deep snapshot
+│   │   ├── with-changefeed.ts   # Changefeed transformer — observation + batched notification
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate
 │   ├── substrates/
 │   │   └── plain.ts             # PlainFrontier, createPlainSubstrate, plainContext, plainSubstrateFactory
 │   ├── __tests__/
-│   │   ├── types.test.ts        # Type-level tests (expectTypeOf) — Ref<S>, NavigableRef hierarchy, capability lattice
+│   │   ├── basic.test.ts        # Integration tests for @kyneta/schema/basic API
+│   │   ├── types.test.ts        # Type-level tests (expectTypeOf)
 │   │   ├── interpret.test.ts    # Catamorphism, constructors, LoroSchema
-│   │   ├── bottom.test.ts       # Bottom interpreter: carriers, CALL symbol, capability lattice types
-│   │   ├── with-navigation.test.ts # withNavigation: structural addressing, navigate+write, read-only changefeed, type-level
-│   │   ├── with-readable.test.ts # withReadable: reading (CALL filling), .get(), toPrimitive, no caching
-│   │   ├── with-caching.test.ts # withCaching: referential identity, INVALIDATE, prepare-pipeline
-│   │   ├── plan-cache-update.test.ts # planCacheUpdate: table-driven cache op tests
-│   │   ├── plan-notifications.test.ts # planNotifications: table-driven notification grouping tests
-│   │   ├── readable.test.ts     # Composed stack: full read surface via composed interpreters
-│   │   ├── writable.test.ts     # withWritable: mutation, cache invalidation, stacks
-│   │   ├── transaction.test.ts  # Transaction lifecycle, inTransaction, TRANSACT symbol
-│   │   ├── changefeed.test.ts   # Changefeed: subscription, batched notification, tree, origin
+│   │   ├── bottom.test.ts       # Bottom interpreter: carriers, CALL symbol
+│   │   ├── with-navigation.test.ts
+│   │   ├── with-readable.test.ts
+│   │   ├── with-caching.test.ts
+│   │   ├── plan-cache-update.test.ts
+│   │   ├── plan-notifications.test.ts
+│   │   ├── readable.test.ts
+│   │   ├── writable.test.ts
+│   │   ├── transaction.test.ts
+│   │   ├── changefeed.test.ts
 │   │   ├── facade.test.ts       # change/applyChanges: round-trip, notification, origin, errors
-│   │   ├── fluent.test.ts       # Fluent interpret builder API
-│   │   ├── guards.test.ts       # isPropertyHost, isNonNullObject, hasChangefeed
-│   │   ├── zero.test.ts         # Zero.structural, Zero.overlay
-│   │   ├── describe.test.ts     # Schema tree view rendering
-│   │   ├── step.test.ts         # Pure state transitions
-│   │   ├── validate.test.ts     # Validation: all kinds, errors, type narrowing
-│   │   └── substrate.test.ts    # PlainFrontier, PlainSubstrate lifecycle, round-trip replication, epoch boundaries
-│   └── index.ts                 # Barrel export
+│   │   ├── fluent.test.ts
+│   │   ├── guards.test.ts
+│   │   ├── zero.test.ts
+│   │   ├── describe.test.ts
+│   │   ├── step.test.ts
+│   │   ├── validate.test.ts
+│   │   └── substrate.test.ts
+│   └── index.ts                 # Barrel export (Layer 1 — the full toolkit)
 ├── example/
-│   ├── main.ts                  # Showcase of the full @kyneta/schema API surface (no local facade)
-│   └── README.md                # Example documentation
-├── .plans/
-│   ├── navigation-layer.md     # Navigation layer plan: CALL rename + withNavigation + Ref<S> (PR stack)
-│   └── interpreter-decomposition.md # Original decomposition plan (lattice superseded by navigation-layer.md)
-├── package.json                 # No runtime deps
+│   ├── README.md                # Index pointing to basic/ and advanced/
+│   ├── helpers.ts               # Shared helpers (log, section, json)
+│   ├── basic/
+│   │   ├── main.ts              # Getting-started example (Layer 2 — @kyneta/schema/basic)
+│   │   └── README.md            # Beginner-friendly documentation
+│   └── advanced/
+│       ├── main.ts              # Composition algebra example (Layer 1 — @kyneta/schema)
+│       └── README.md            # Advanced documentation
+├── package.json                 # No runtime deps, ./basic subpath export
 ├── tsconfig.json
-├── tsup.config.ts
+├── tsup.config.ts               # Two entry points: src/index.ts, src/basic/index.ts
 └── TECHNICAL.md                 # This file
 ```

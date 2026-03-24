@@ -1,4 +1,4 @@
-import type { Op } from "@kyneta/schema"
+import type { Op } from "@kyneta/schema/basic"
 import { z } from "zod/v4"
 
 // --- Wire schemas ---

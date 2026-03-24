@@ -1,5 +1,5 @@
 import { mount } from "@kyneta/core"
-import type { Changeset, Op, SubstratePayload } from "@kyneta/schema"
+import type { Changeset, Op, SubstratePayload } from "@kyneta/schema/basic"
 import { createApp } from "./app.js"
 import {
   applyChanges,
@@ -7,7 +7,7 @@ import {
   createDocFromSnapshot,
   subscribe,
   version,
-} from "./facade.js"
+} from "@kyneta/schema/basic"
 import { parseClientMessage, toOps } from "./protocol.js"
 import { RecipeBookSchema } from "./schema.js"
 import { SEED } from "./seed.js"

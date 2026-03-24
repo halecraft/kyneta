@@ -37,7 +37,7 @@
 import { state } from "@kyneta/core"
 import { RecipeCard } from "./components/recipe-card.js"
 import { Toolbar } from "./components/toolbar.js"
-import { change } from "./facade.js"
+import { change } from "@kyneta/schema/basic"
 import type { RecipeBookDoc } from "./types.js"
 
 // ═══════════════════════════════════════════════════════════════════════════
