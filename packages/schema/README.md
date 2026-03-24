@@ -7,8 +7,14 @@ import { Schema, createDoc, change, subscribe } from "@kyneta/schema/basic"
 
 const TaskDoc = Schema.doc({
   title: Schema.annotated("text"),
-  done:  Schema.boolean(),
   count: Schema.annotated("counter"),
+  games: Schema.list(
+    Schema.struct({
+      type: Schema.string("uno", "catan"),
+      players: Schema.number(2, 3, 4)
+    })
+  )
+  done:  Schema.boolean(),
 })
 
 const doc = createDoc(TaskDoc, { title: "Ship it" })
@@ -17,6 +23,10 @@ doc.title()              // "Ship it"
 doc.title.insert(7, "!") // surgical text edit
 doc.count.increment()    // counter delta
 doc.done.set(true)       // whole-value swap
+doc.games.append({       // makes structural doc.games.at(0) available
+  type: "catan",
+  players: 3
+})
 
 subscribe(doc, (changeset) => {
   // fires for any change anywhere in the document
@@ -27,16 +37,7 @@ Zero runtime dependencies.
 
 ## What you get from one schema
 
-| Capability | How |
-|---|---|
-| **Typed reads** | `doc.title()` returns `string`, `doc()` returns the full plain snapshot |
-| **Typed writes** | `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` — each ref knows its mutation surface |
-| **Transactions** | `change(doc, d => { ... })` → `Op[]` — atomic batching, returns captured ops |
-| **Sync** | `applyChanges(docB, ops)` — apply ops from another doc, network, or undo stack |
-| **Observation** | `subscribe(doc, cb)` for tree-level, `subscribeNode(ref, cb)` for leaf-level |
-| **Version tracking** | `version(doc)`, `delta(doc, fromVersion)`, `exportSnapshot(doc)` |
-| **Validation** | `validate(schema, data)` — same schema, no separate Zod/Yup definition |
-| **Template coercion** | `` `Count: ${doc.count}` `` works via `toPrimitive` — no `.()` needed |
+| Capability | How | |---|---| | **Typed reads** | `doc.title()` returns `string`, `doc()` returns the full plain snapshot | | **Typed writes** | `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` — each ref knows its mutation surface | | **Transactions** | `change(doc, d => { ... })` → `Op[]` — atomic batching, returns captured ops | | **Sync** | `applyChanges(docB, ops)` — apply ops from another doc, network, or undo stack | | **Observation** | `subscribe(doc, cb)` for tree-level, `subscribeNode(ref, cb)` for leaf-level | | **Version tracking** | `version(doc)`, `delta(doc, fromVersion)`, `exportSnapshot(doc)` | | **Validation** | `validate(schema, data)` — same schema, no separate Zod/Yup definition | | **Template coercion** | `` `Count: ${doc.count}` `` works via `toPrimitive` — no `.()` needed |
 
 ## The sync story in 5 lines
 
@@ -92,6 +93,7 @@ doc.tasks.push({ ... })    // append
 doc.tasks.insert(0, item)  // insert at index
 doc.tasks.delete(1, 2)     // delete range
 for (const task of doc.tasks) { ... }  // iterate refs
+doc.tasks()                // convert tasks to plain JSON
 
 // Records
 doc.labels.at("bug")?.()   // navigate + read
@@ -100,6 +102,7 @@ doc.labels.set("bug", "red")
 doc.labels.delete("bug")
 doc.labels.keys()           // string[]
 doc.labels.has("bug")       // boolean
+doc.labels()                // convert labels to plain JSON
 ```
 
 ## Observation
@@ -139,10 +142,7 @@ if (!result.ok) {
 
 ## Two import paths
 
-| Path | Audience | What you get |
-|---|---|---|
-| `@kyneta/schema/basic` | App developers | `createDoc`, `change`, `subscribe`, `validate`, sync primitives — batteries included |
-| `@kyneta/schema` | Library authors | The full composable interpreter toolkit — build custom document systems |
+| Path | Audience | What you get | |---|---|---| | `@kyneta/schema/basic` | App developers | `createDoc`, `change`, `subscribe`, `validate`, sync primitives — batteries included | | `@kyneta/schema` | Library authors | The full composable interpreter toolkit — build custom document systems |
 
 Most projects only need `@kyneta/schema/basic`.
 
@@ -158,9 +158,19 @@ bun run example/basic/main.ts
 bun run example/advanced/main.ts
 ```
 
-## Design
+## Design (Math Nerd Corner)
 
-Under the hood, the schema is a recursive functor (`Scalar | Product | Sequence | Map | Sum | Annotated`) and each capability — reading, writing, caching, observation — is an F-algebra composed via interpreter transformers. `interpret()` is a catamorphism; `subscribe` is a coalgebra (Moore machine). The `step(state, change) → state` functions are pure, the change vocabulary is open, and the `change → applyChanges` round-trip is verified to be extensionally equal. This means the reactive system, the sync protocol, and the validation layer are all derived from the same structure — not parallel implementations that drift apart.
+Under the hood:
+
+- the schema is a recursive functor (`Scalar | Product | Sequence | Map | Sum | Annotated`)
+- `interpret()` is a catamorphism
+  - each capability (reading, writing, caching, observation) is an F-algebra composed via interpreter transformers
+- `subscribe` is a coalgebra (Moore machine)
+- the `step(state, change) → state` functions are pure
+- the `change → applyChanges` round-trip is verified to be extensionally equal
+- the change vocabulary is open
+ 
+This means the reactive system, the sync protocol, and the validation layer are all derived from the same structure — not parallel implementations that drift apart. It also means this represenation of schemas is rigorous, and you can depend on it.
 
 See `theory/interpreter-algebra.md` for the full treatment, or `TECHNICAL.md` for the implementation map.
 
