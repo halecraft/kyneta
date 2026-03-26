@@ -6,7 +6,7 @@ import {
   changefeed,
   interpret,
   LoroSchema,
-  PlainFrontier,
+  PlainVersion,
   plainSubstrateFactory,
   readable,
   Schema,
@@ -14,6 +14,13 @@ import {
   writable,
   Zero,
 } from "../index.js"
+
+// Helper: parse the store snapshot as a plain object for assertions.
+// Exercises the public export API rather than reaching through to the
+// backing StoreReader (which has no property access).
+function snapshotOf(substrate: Substrate<PlainVersion>): Record<string, unknown> {
+  return JSON.parse(substrate.exportSnapshot().data as string) as Record<string, unknown>
+}
 
 // ===========================================================================
 // Shared test schema
@@ -32,7 +39,7 @@ const TestSchema = LoroSchema.doc({
 })
 
 // Helper: create a full interpreter tree from a substrate
-function interpretSubstrate(substrate: Substrate<PlainFrontier>) {
+function interpretSubstrate(substrate: Substrate<PlainVersion>) {
   return interpret(TestSchema, substrate.context())
     .with(readable)
     .with(writable)
@@ -41,20 +48,20 @@ function interpretSubstrate(substrate: Substrate<PlainFrontier>) {
 }
 
 // ===========================================================================
-// PlainFrontier
+// PlainVersion
 // ===========================================================================
 
-describe("PlainFrontier", () => {
+describe("PlainVersion", () => {
   it("serialize() returns a numeric string", () => {
-    expect(new PlainFrontier(0).serialize()).toBe("0")
-    expect(new PlainFrontier(42).serialize()).toBe("42")
-    expect(new PlainFrontier(1000).serialize()).toBe("1000")
+    expect(new PlainVersion(0).serialize()).toBe("0")
+    expect(new PlainVersion(42).serialize()).toBe("42")
+    expect(new PlainVersion(1000).serialize()).toBe("1000")
   })
 
   it("compare() correctly reports behind/equal/ahead", () => {
-    const f0 = new PlainFrontier(0)
-    const f1 = new PlainFrontier(1)
-    const f5 = new PlainFrontier(5)
+    const f0 = new PlainVersion(0)
+    const f1 = new PlainVersion(1)
+    const f5 = new PlainVersion(5)
 
     expect(f0.compare(f1)).toBe("behind")
     expect(f1.compare(f0)).toBe("ahead")
@@ -70,7 +77,7 @@ describe("PlainFrontier", () => {
     const values = [0, 1, 2, 5, 10, 100]
     for (const a of values) {
       for (const b of values) {
-        const result = new PlainFrontier(a).compare(new PlainFrontier(b))
+        const result = new PlainVersion(a).compare(new PlainVersion(b))
         expect(result).not.toBe("concurrent")
         if (a < b) expect(result).toBe("behind")
         else if (a > b) expect(result).toBe("ahead")
@@ -79,9 +86,9 @@ describe("PlainFrontier", () => {
     }
   })
 
-  it("round-trip: parseFrontier(f.serialize()) compares equal to f", () => {
-    const original = new PlainFrontier(7)
-    const roundTripped = plainSubstrateFactory.parseFrontier(
+  it("round-trip: parseVersion(f.serialize()) compares equal to f", () => {
+    const original = new PlainVersion(7)
+    const roundTripped = plainSubstrateFactory.parseVersion(
       original.serialize(),
     )
     expect(roundTripped.compare(original)).toBe("equal")
@@ -89,16 +96,16 @@ describe("PlainFrontier", () => {
     expect(roundTripped.value).toBe(7)
   })
 
-  it("parseFrontier rejects invalid input", () => {
-    expect(() => plainSubstrateFactory.parseFrontier("abc")).toThrow()
-    expect(() => plainSubstrateFactory.parseFrontier("-1")).toThrow()
-    expect(() => plainSubstrateFactory.parseFrontier("1.5")).toThrow()
-    expect(() => plainSubstrateFactory.parseFrontier("")).toThrow()
+  it("parseVersion rejects invalid input", () => {
+    expect(() => plainSubstrateFactory.parseVersion("abc")).toThrow()
+    expect(() => plainSubstrateFactory.parseVersion("-1")).toThrow()
+    expect(() => plainSubstrateFactory.parseVersion("1.5")).toThrow()
+    expect(() => plainSubstrateFactory.parseVersion("")).toThrow()
   })
 
   it("value getter exposes the raw integer", () => {
-    expect(new PlainFrontier(0).value).toBe(0)
-    expect(new PlainFrontier(99).value).toBe(99)
+    expect(new PlainVersion(0).value).toBe(0)
+    expect(new PlainVersion(99).value).toBe(99)
   })
 })
 
@@ -117,20 +124,21 @@ describe("PlainSubstrate lifecycle", () => {
       unknown
     >
 
-    // Store should match the overlay result
-    expect(substrate.store).toEqual(expected)
+    // Snapshot should match the overlay result
+    const snap = snapshotOf(substrate)
+    expect(snap).toEqual(expected)
     // Seed values preserved
-    expect(substrate.store.title).toBe("Hello")
-    expect(substrate.store.theme).toBe("dark")
+    expect(snap.title).toBe("Hello")
+    expect(snap.theme).toBe("dark")
     // Defaults filled in
-    expect(substrate.store.count).toBe(0)
-    expect(substrate.store.items).toEqual([])
+    expect(snap.count).toBe(0)
+    expect(snap.items).toEqual([])
   })
 
   it("create(schema) without seed uses structural defaults", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const defaults = Zero.structural(TestSchema) as Record<string, unknown>
-    expect(substrate.store).toEqual(defaults)
+    expect(snapshotOf(substrate)).toEqual(defaults)
   })
 
   it("frontier() starts at 0 for a freshly created substrate", () => {
@@ -206,7 +214,7 @@ describe("PlainSubstrate lifecycle", () => {
     let prevVersion = 0
     subscribe(doc, () => {
       const currentVer = substrate.frontier().value
-      const payload = substrate.exportSince(new PlainFrontier(prevVersion))
+      const payload = substrate.exportSince(new PlainVersion(prevVersion))
       if (payload) {
         opsPerNotification.push(JSON.parse(payload.data as string) as Op[])
       }
@@ -240,15 +248,15 @@ describe("PlainSubstrate lifecycle", () => {
     expect(typeof snapshot.data).toBe("string")
 
     const parsed = JSON.parse(snapshot.data as string)
-    expect(parsed).toEqual(substrate.store)
+    expect(parsed).toEqual(snapshotOf(substrate))
     expect(parsed.title).toBe("Test!")
     expect(parsed.count).toBe(10)
   })
 
   it("exportSince(frontier) returns null when frontier is ahead", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
-    const futureFrontier = new PlainFrontier(999)
-    expect(substrate.exportSince(futureFrontier)).toBeNull()
+    const futureVersion = new PlainVersion(999)
+    expect(substrate.exportSince(futureVersion)).toBeNull()
   })
 
   it("exportSince(frontier) returns empty ops when frontier matches current version", () => {
@@ -325,11 +333,13 @@ describe("Round-trip replication", () => {
     const snapshot = substrateA.exportSnapshot()
     const substrateB = plainSubstrateFactory.fromSnapshot(snapshot, TestSchema)
 
-    // Stores should be deeply equal
-    expect(substrateB.store).toEqual(substrateA.store)
-    expect(substrateB.store.title).toBe("Original Title")
-    expect(substrateB.store.count).toBe(42)
-    expect(substrateB.store.items as unknown[]).toHaveLength(1)
+    // Snapshots should be deeply equal
+    const snapA = snapshotOf(substrateA)
+    const snapB = snapshotOf(substrateB)
+    expect(snapB).toEqual(snapA)
+    expect(snapB.title).toBe("Original Title")
+    expect(snapB.count).toBe(42)
+    expect(snapB.items as unknown[]).toHaveLength(1)
   })
 
   it("delta round-trip: exportSince → importDelta → stores are equal", () => {
@@ -357,10 +367,10 @@ describe("Round-trip replication", () => {
     const delta = substrateA.exportSince(f0)!
     substrateB.importDelta(delta, "sync")
 
-    // Stores should match
-    expect(substrateB.store).toEqual(substrateA.store)
-    expect(substrateB.store.title).toBe("Shared!")
-    expect(substrateB.store.count).toBe(10)
+    // Snapshots should match
+    expect(snapshotOf(substrateB)).toEqual(snapshotOf(substrateA))
+    expect(snapshotOf(substrateB).title).toBe("Shared!")
+    expect(snapshotOf(substrateB).count).toBe(10)
   })
 
   it("importDelta with origin 'sync' — changefeed fires with origin 'sync'", () => {
@@ -449,11 +459,13 @@ describe("Epoch boundaries", () => {
     // New substrate starts at frontier 0 — it's a fresh epoch
     expect(substrateB.frontier().value).toBe(0)
 
-    // But the store matches the source's current state
-    expect(substrateB.store).toEqual(substrateA.store)
-    expect(substrateB.store.title).toBe("Genesis v2")
-    expect(substrateB.store.count).toBe(100)
-    expect(substrateB.store.items as unknown[]).toHaveLength(1)
+    // But the snapshot matches the source's current state
+    const snapA = snapshotOf(substrateA)
+    const snapB = snapshotOf(substrateB)
+    expect(snapB).toEqual(snapA)
+    expect(snapB.title).toBe("Genesis v2")
+    expect(snapB.count).toBe(100)
+    expect(snapB.items as unknown[]).toHaveLength(1)
   })
 
   it("new epoch substrate is fully functional: can mutate, version, export", () => {
@@ -471,13 +483,13 @@ describe("Epoch boundaries", () => {
     // Mutate the new substrate
     change(docB, d => d.title.insert(6, "!"))
     expect(substrateB.frontier().value).toBe(1)
-    expect(substrateB.store.title).toBe("Source!")
+    expect(snapshotOf(substrateB).title).toBe("Source!")
 
     // Export from the new substrate works
     const snapshot2 = substrateB.exportSnapshot()
     expect(JSON.parse(snapshot2.data as string).title).toBe("Source!")
 
-    const delta = substrateB.exportSince(new PlainFrontier(0))!
+    const delta = substrateB.exportSince(new PlainVersion(0))!
     const ops = JSON.parse(delta.data as string) as Op[]
     expect(ops.length).toBe(1)
     expect(ops[0]?.change.type).toBe("text")
@@ -497,13 +509,13 @@ describe("Epoch boundaries", () => {
 
     // Mutate A — should not affect B
     change(docA, d => d.title.insert(6, " from A"))
-    expect(substrateA.store.title).toBe("Shared from A")
-    expect(substrateB.store.title).toBe("Shared")
+    expect(snapshotOf(substrateA).title).toBe("Shared from A")
+    expect(snapshotOf(substrateB).title).toBe("Shared")
 
     // Mutate B — should not affect A
     change(docB, d => d.title.insert(6, " from B"))
-    expect(substrateB.store.title).toBe("Shared from B")
-    expect(substrateA.store.title).toBe("Shared from A")
+    expect(snapshotOf(substrateB).title).toBe("Shared from B")
+    expect(snapshotOf(substrateA).title).toBe("Shared from A")
   })
 })
 

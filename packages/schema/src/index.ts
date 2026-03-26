@@ -75,7 +75,7 @@ export type {
   WritableBrand,
 } from "./interpret.js"
 // interpret — the generic catamorphism over the schema functor
-export { createInterpreter, interpret } from "./interpret.js"
+export { createInterpreter, dispatchSum, interpret } from "./interpret.js"
 // Shared interpreter types (canonical location)
 export type { Plain, RefContext, Seed } from "./interpreter-types.js"
 export type {
@@ -208,12 +208,12 @@ export {
   stepSequence,
   stepText,
 } from "./step.js"
-export type { Store } from "./store.js"
+export type { Store, StoreReader } from "./store.js"
 // Store — shared utilities for reading/writing plain JS object stores
 export {
   applyChangeToStore,
-  dispatchSum,
   pathKey,
+  plainStoreReader,
   readByPath,
   storeArrayLength,
   storeHasKey,
@@ -222,18 +222,27 @@ export {
 } from "./store.js"
 // Substrate — state management, versioning, and transfer semantics
 export type {
-  Frontier,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
   SubstratePrepare,
+  Version,
 } from "./substrate.js"
 // Plain substrate — plain JS object store with version tracking
 export {
   createPlainSubstrate,
-  PlainFrontier,
   plainContext,
+  PlainVersion,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
+
+// ---------------------------------------------------------------------------
+// Deprecated aliases — backward compatibility for Frontier → Version rename
+// ---------------------------------------------------------------------------
+
+/** @deprecated Use `Version` instead. */
+export type { Version as Frontier } from "./substrate.js"
+/** @deprecated Use `PlainVersion` instead. */
+export { PlainVersion as PlainFrontier } from "./substrates/plain.js"
 // Zero — default values separated from the schema
 export { scalarDefault, Zero } from "./zero.js"

@@ -19,7 +19,7 @@ import type {
   Schema,
   SequenceSchema,
 } from "./schema.js"
-import type { Store } from "./store.js"
+import type { StoreReader } from "./store.js"
 
 // ---------------------------------------------------------------------------
 // RefContext — minimal context for read-only interpretation
@@ -34,7 +34,7 @@ import type { Store } from "./store.js"
  * Each layer adds only what it needs.
  */
 export interface RefContext {
-  readonly store: Store
+  readonly store: StoreReader
 }
 
 // ---------------------------------------------------------------------------

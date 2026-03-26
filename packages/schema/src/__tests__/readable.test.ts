@@ -8,6 +8,7 @@ import {
   LoroSchema,
   mapChange,
   plainContext,
+  plainStoreReader,
   replaceChange,
   Schema,
   sequenceChange,
@@ -42,7 +43,7 @@ function createReadOnlyDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx: RefContext = { store }
+  const ctx: RefContext = { store: plainStoreReader(store) }
   const doc = interpret(structuralDocSchema, readableInterpreter, ctx) as any
   return { store, ctx, doc }
 }
@@ -72,7 +73,7 @@ function createReadOnlyLoroDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx: RefContext = { store }
+  const ctx: RefContext = { store: plainStoreReader(store) }
   const doc = interpret(loroDocSchema, readableInterpreter, ctx) as any
   return { store, ctx, doc }
 }
@@ -272,7 +273,7 @@ describe("readable: product lazy getters", () => {
       name: Schema.string(),
     })
     const store = { name: "test-value" }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readableInterpreter, ctx) as any
     // The lazy getter should return a child ref, not the function's name
     expect(typeof doc.name).toBe("function")
@@ -284,7 +285,7 @@ describe("readable: product lazy getters", () => {
       length: Schema.number(),
     })
     const store = { length: 99 }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readableInterpreter, ctx) as any
     expect(typeof doc.length).toBe("function")
     expect(doc.length()).toBe(99)
@@ -378,7 +379,7 @@ describe("readable: sequence ref", () => {
       settings: { darkMode: false, fontSize: 14 },
       metadata: {},
     }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(loroDocSchema, readableInterpreter, ctx) as any
     expect(doc.messages.get(0)).toEqual({ author: "Alice", body: "Hi" })
     // Mutate store directly
@@ -493,7 +494,7 @@ describe("readable: map ref", () => {
     const store = {
       records: { bug: { color: "red", priority: 1 } },
     }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readableInterpreter, ctx) as any
     expect(doc.records.get("bug")).toEqual({ color: "red", priority: 1 })
   })
@@ -503,7 +504,7 @@ describe("readable: map ref", () => {
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: { bug: "red" } }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readableInterpreter, ctx) as any
     expect(JSON.stringify(doc.labels.get("bug"))).toBe('"red"')
   })
@@ -532,14 +533,14 @@ describe("readable: discriminated sum", () => {
 
   it("dispatches to the correct variant based on store discriminant", () => {
     const store = { item: { type: "image", url: "pic.png" } }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readableInterpreter, ctx) as any
     expect(doc.item.url()).toBe("pic.png")
   })
 
   it("falls back to first variant when discriminant is missing", () => {
     const store = { item: {} }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readableInterpreter, ctx) as any
     expect(typeof doc.item.body).toBe("function")
   })
@@ -552,14 +553,14 @@ describe("readable: nullable (positional sum)", () => {
 
   it("null store value dispatches to the null variant", () => {
     const store = { bio: null }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readableInterpreter, ctx) as any
     expect(doc.bio()).toBe(null)
   })
 
   it("non-null store value dispatches to the inner variant", () => {
     const store = { bio: "Hello world" }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readableInterpreter, ctx) as any
     expect(doc.bio()).toBe("Hello world")
   })

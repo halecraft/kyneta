@@ -7,15 +7,15 @@
 
 import type { Op } from "../changefeed.js"
 import type { SubstratePayload } from "../substrate.js"
-import { PlainFrontier } from "../substrates/plain.js"
+import { PlainVersion } from "../substrates/plain.js"
 import { getSubstrate } from "./create.js"
 
 // ---------------------------------------------------------------------------
-// version — current frontier as a plain integer
+// version — current version as a plain integer
 // ---------------------------------------------------------------------------
 
 /**
- * Current frontier — monotonic integer, increments on each flush cycle
+ * Current version — monotonic integer, increments on each flush cycle
  * that produces at least one Op.
  *
  * @param doc - A document created by `createDoc` or `createDocFromSnapshot`.
@@ -38,12 +38,12 @@ export function version(doc: object): number {
  *
  * @param doc - A document created by `createDoc` or `createDocFromSnapshot`.
  * @param fromVersion - The version to diff from (inclusive lower bound).
- * @returns The ops applied between `fromVersion` and the current frontier.
+ * @returns The ops applied between `fromVersion` and the current version.
  * @throws If `doc` was not created by `createDoc` / `createDocFromSnapshot`.
  */
 export function delta(doc: object, fromVersion: number): Op[] {
   const substrate = getSubstrate(doc)
-  const since = new PlainFrontier(fromVersion)
+  const since = new PlainVersion(fromVersion)
   const payload = substrate.exportSince(since)
   if (!payload) return []
   const ops = JSON.parse(payload.data as string) as Op[]

@@ -6,6 +6,7 @@ import {
   interpret,
   LoroSchema,
   plainContext,
+  plainStoreReader,
   readable,
   Schema,
   TRANSACT,
@@ -886,7 +887,7 @@ describe("writable: TRANSACT attachment", () => {
     const store = { n: 0 }
     const dispatched: unknown[] = []
     const ctx: WritableContext = {
-      store,
+      store: plainStoreReader(store),
       prepare: (path, change) => dispatched.push({ path, change }),
       flush: () => {},
       dispatch: (path, change) => dispatched.push({ path, change }),

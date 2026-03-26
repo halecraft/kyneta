@@ -7,13 +7,7 @@
 
 import type { ChangeBase } from "./change.js"
 import { isNonNullObject } from "./guards.js"
-import type { Path, SumVariants } from "./interpret.js"
-import {
-  type DiscriminatedSumSchema,
-  isNullableSum,
-  type PositionalSumSchema,
-  type SumSchema,
-} from "./schema.js"
+import type { Path } from "./interpret.js"
 import { step } from "./step.js"
 
 // ---------------------------------------------------------------------------
@@ -25,6 +19,48 @@ import { step } from "./step.js"
  * reads from and writes to this object, proving no CRDT runtime is needed.
  */
 export type Store = Record<string, unknown>
+
+// ---------------------------------------------------------------------------
+// StoreReader — abstract read interface for interpreter store access
+// ---------------------------------------------------------------------------
+
+/**
+ * Abstract read interface for the interpreter stack.
+ *
+ * Interpreters read from the store exclusively through this interface,
+ * allowing substrates to provide their own read semantics. The plain
+ * substrate wraps a `Record<string, unknown>` via `plainStoreReader`;
+ * a Loro substrate would navigate the Loro container tree directly.
+ */
+export interface StoreReader {
+  /** Read the value at the given path. */
+  read(path: Path): unknown
+  /** Length of the sequence at the given path. */
+  arrayLength(path: Path): number
+  /** Keys of the map/product at the given path. */
+  keys(path: Path): string[]
+  /** Whether the map/product at the given path contains the key. */
+  hasKey(path: Path, key: string): boolean
+}
+
+/**
+ * Wraps a plain JS object in a StoreReader.
+ *
+ * **Liveness invariant:** The returned reader is a *live view* — mutations
+ * to `store` via `applyChangeToStore` are immediately visible through the
+ * reader. The reader and the mutator share the same backing object.
+ *
+ * Other substrates (e.g. Loro) provide their own StoreReader that reads
+ * from a different backing structure (the Loro container tree).
+ */
+export function plainStoreReader(store: Record<string, unknown>): StoreReader {
+  return {
+    read: (path) => readByPath(store, path),
+    arrayLength: (path) => storeArrayLength(store, path),
+    keys: (path) => storeKeys(store, path),
+    hasKey: (path, key) => storeHasKey(store, path, key),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -142,63 +178,8 @@ export function applyChangeToStore(
 }
 
 // ---------------------------------------------------------------------------
-// Sum dispatch — shared variant resolution
+// Sum dispatch — relocated to interpret.ts (alongside SumVariants)
 // ---------------------------------------------------------------------------
 
-/**
- * Resolves which sum variant to use based on runtime store state.
- *
- * Used by `readableInterpreter`, `withReadable`, and any interpreter
- * that needs store-driven variant dispatch. The logic is:
- *
- * 1. **Discriminated sums**: read the discriminant field from `value`.
- *    If the discriminant matches a variant in `variantMap`, dispatch
- *    via `variants.byKey()`. Otherwise fall back to the first variant.
- *
- * 2. **Nullable (positional) sums**: if the value is null/undefined,
- *    dispatch to variant 0 (the null variant); otherwise variant 1.
- *
- * 3. **General positional sums**: dispatch to variant 0 (first).
- *
- * Returns `undefined` if no variant can be resolved.
- */
-export function dispatchSum<A>(
-  value: unknown,
-  schema: SumSchema,
-  variants: SumVariants<A>,
-): A | undefined {
-  if (schema.discriminant !== undefined && variants.byKey) {
-    // ── Discriminated sum ──────────────────────────────────────
-    const discSchema = schema as DiscriminatedSumSchema
-
-    if (isNonNullObject(value)) {
-      const discValue = value[schema.discriminant]
-      if (typeof discValue === "string" && discValue in discSchema.variantMap) {
-        return variants.byKey(discValue)
-      }
-    }
-
-    // Fallback: first variant
-    const keys = Object.keys(discSchema.variantMap)
-    if (keys.length > 0) {
-      return variants.byKey(keys[0]!)
-    }
-    return undefined
-  }
-
-  // ── Positional sum ────────────────────────────────────────────
-  if (variants.byIndex) {
-    const posSchema = schema as PositionalSumSchema
-
-    if (isNullableSum(posSchema)) {
-      return value === null || value === undefined
-        ? variants.byIndex(0) // null variant
-        : variants.byIndex(1) // inner variant
-    }
-
-    // General positional sum: no runtime discriminator, use first
-    return variants.byIndex(0)
-  }
-
-  return undefined
-}
+/** @deprecated Import `dispatchSum` from `@kyneta/schema` or `interpret.js` instead. */
+export { dispatchSum } from "./interpret.js"

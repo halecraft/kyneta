@@ -45,7 +45,6 @@ import type {
   SequenceSchema,
   SumSchema,
 } from "../schema.js"
-import { readByPath } from "../store.js"
 import type { SubstratePrepare } from "../substrate.js"
 
 // ---------------------------------------------------------------------------
@@ -68,15 +67,7 @@ type WritableDiscriminantProductRef<
   readonly [K in keyof F]: K extends D ? Plain<F[K]> : Writable<F[K]>
 } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
 
-// Re-export shared types for backward compatibility
-export type { Plain, RefContext } from "../interpreter-types.js"
-// Re-export store utilities for backward compatibility
-export {
-  applyChangeToStore,
-  readByPath,
-  type Store,
-  writeByPath,
-} from "../store.js"
+
 
 // ---------------------------------------------------------------------------
 // TRANSACT symbol — composability hook for discovering a ref's context
@@ -567,8 +558,7 @@ export function withWritable<A>(
       const result = base.sequence(ctx, path, schema, item) as any
 
       result.push = (...items: unknown[]): void => {
-        const arr = readByPath(ctx.store, path)
-        const length = Array.isArray(arr) ? arr.length : 0
+        const length = ctx.store.arrayLength(path)
         const change = sequenceChange([{ retain: length }, { insert: items }])
         ctx.dispatch(path, change)
       }
@@ -624,13 +614,10 @@ export function withWritable<A>(
 
       Object.defineProperty(result, "clear", {
         value: (): void => {
-          const obj = readByPath(ctx.store, path)
-          if (obj !== null && obj !== undefined && typeof obj === "object") {
-            const allKeys = Object.keys(obj as Record<string, unknown>)
-            if (allKeys.length > 0) {
-              const change = mapChange(undefined, allKeys)
-              ctx.dispatch(path, change)
-            }
+          const allKeys = ctx.store.keys(path)
+          if (allKeys.length > 0) {
+            const change = mapChange(undefined, allKeys)
+            ctx.dispatch(path, change)
           }
         },
         enumerable: false,
@@ -694,7 +681,7 @@ export function withWritable<A>(
           result.update = (content: string): void => {
             // Read current text length via store inspection (not carrier call)
             // so navigate+write stacks work without a reading layer.
-            const current = readByPath(ctx.store, path)
+            const current = ctx.store.read(path)
             const currentLength =
               typeof current === "string" ? current.length : 0
             ctx.dispatch(

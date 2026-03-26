@@ -16,7 +16,7 @@ import type { ChangeBase } from "./change.js"
 import type { Path } from "./interpret.js"
 import type { WritableContext } from "./interpreters/writable.js"
 import type { Schema as SchemaNode } from "./schema.js"
-import type { Store } from "./store.js"
+import type { StoreReader } from "./store.js"
 
 // ---------------------------------------------------------------------------
 // SubstratePrepare — mutation primitives for the WritableContext
@@ -35,7 +35,7 @@ import type { Store } from "./store.js"
  */
 export interface SubstratePrepare {
   /** The readable store for the interpreter's RefContext. */
-  readonly store: Store
+  readonly store: StoreReader
 
   /** Apply a single (path, change) to the backing state. */
   prepare(path: Path, change: ChangeBase): void
@@ -50,36 +50,36 @@ export interface SubstratePrepare {
 }
 
 // ---------------------------------------------------------------------------
-// Frontier — external version marker
+// Version — external version marker
 // ---------------------------------------------------------------------------
 
 /**
- * A Frontier is a version marker for a substrate's state.
+ * A Version is a version marker for a substrate's state.
  *
- * `Frontier` is the external version concept — the one peers exchange,
+ * `Version` is the external version concept — the one peers exchange,
  * serialize into HTML meta tags, and compare to determine ordering.
  *
  * For a plain JS substrate, this wraps a monotonic integer.
  * For a Loro substrate, this would wrap a VersionVector.
  *
  * Substrates may use richer internal version tracking beyond what
- * Frontier exposes. The Frontier is what crosses the substrate boundary.
+ * Version exposes. The Version is what crosses the substrate boundary.
  *
- * Frontiers form a partial order: plain substrates are totally ordered
- * (no concurrency), CRDT substrates may have concurrent frontiers.
+ * Versions form a partial order: plain substrates are totally ordered
+ * (no concurrency), CRDT substrates may have concurrent versions.
  */
-export interface Frontier {
+export interface Version {
   /** Serialize for embedding in HTML (meta tags, script tags). */
   serialize(): string
 
   /**
-   * Compare with another frontier.
-   * - "behind": this frontier is strictly behind other
+   * Compare with another version.
+   * - "behind": this version is strictly behind other
    * - "equal": same version
-   * - "ahead": this frontier is strictly ahead of other
+   * - "ahead": this version is strictly ahead of other
    * - "concurrent": neither is ahead (only possible with CRDT substrates)
    */
-  compare(other: Frontier): "behind" | "equal" | "ahead" | "concurrent"
+  compare(other: Version): "behind" | "equal" | "ahead" | "concurrent"
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ export interface SubstratePayload {
  * Three responsibilities:
  * 1. Provide a readable store + WritableContext for the interpreter stack
  *    (inherited from SubstratePrepare: store, prepare, onFlush)
- * 2. Track versioning via Frontier
+ * 2. Track versioning via Version
  * 3. Export/import state for replication (sync, SSR)
  *
  * The substrate fires the `project` morphism automatically: after any
@@ -127,10 +127,10 @@ export interface SubstratePayload {
  * the doc reference. Within a substrate lifetime, all transitions are
  * deltas via `Changeset`. Between lifetimes, there is no continuity.
  */
-export interface Substrate<F extends Frontier = Frontier>
+export interface Substrate<F extends Version = Version>
   extends SubstratePrepare {
   /** The readable store for the interpreter (from SubstratePrepare). */
-  readonly store: Store
+  readonly store: StoreReader
 
   /** Build a WritableContext for this substrate. */
   context(): WritableContext
@@ -148,10 +148,10 @@ export interface Substrate<F extends Frontier = Frontier>
   exportSnapshot(): SubstratePayload
 
   /**
-   * Delta payload since a frontier — sufficient to catch up a live
+   * Delta payload since a version — sufficient to catch up a live
    * substrate via `importDelta()`.
    *
-   * Returns null if delta export is not possible (e.g. frontier too old,
+   * Returns null if delta export is not possible (e.g. version too old,
    * log compacted past that point, substrate doesn't support incremental).
    *
    * For PlainSubstrate: JSON-serialized Op[] from the version log.
@@ -179,7 +179,7 @@ export interface Substrate<F extends Frontier = Frontier>
 /**
  * Factory for constructing substrates. Each substrate type provides one.
  */
-export interface SubstrateFactory<F extends Frontier = Frontier> {
+export interface SubstrateFactory<F extends Version = Version> {
   /** Create a fresh substrate from a schema and optional seed. */
   create(schema: SchemaNode, seed?: Record<string, unknown>): Substrate<F>
 
@@ -198,6 +198,6 @@ export interface SubstrateFactory<F extends Frontier = Frontier> {
    */
   fromSnapshot(payload: SubstratePayload, schema: SchemaNode): Substrate<F>
 
-  /** Deserialize a frontier from its string representation. */
-  parseFrontier(serialized: string): F
+  /** Deserialize a version from its string representation. */
+  parseVersion(serialized: string): F
 }

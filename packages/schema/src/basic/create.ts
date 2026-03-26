@@ -13,14 +13,14 @@ import { changefeed, readable, writable } from "../layers.js"
 import type { Ref } from "../ref.js"
 import type { Schema as SchemaType } from "../schema.js"
 import type { Substrate, SubstratePayload } from "../substrate.js"
-import type { PlainFrontier } from "../substrates/plain.js"
+import type { PlainVersion } from "../substrates/plain.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 
 // ---------------------------------------------------------------------------
 // Substrate tracking (module-scoped)
 // ---------------------------------------------------------------------------
 
-const substrates = new WeakMap<object, Substrate<PlainFrontier>>()
+const substrates = new WeakMap<object, Substrate<PlainVersion>>()
 
 /**
  * Retrieve the substrate associated with a doc created by `createDoc`
@@ -30,7 +30,7 @@ const substrates = new WeakMap<object, Substrate<PlainFrontier>>()
  *
  * @throws If `doc` was not created by `createDoc` or `createDocFromSnapshot`.
  */
-export function getSubstrate(doc: object): Substrate<PlainFrontier> {
+export function getSubstrate(doc: object): Substrate<PlainVersion> {
   const s = substrates.get(doc)
   if (!s) {
     throw new Error(
@@ -47,7 +47,7 @@ export function getSubstrate(doc: object): Substrate<PlainFrontier> {
 
 function registerDoc(
   schema: SchemaType,
-  substrate: Substrate<PlainFrontier>,
+  substrate: Substrate<PlainVersion>,
 ): any {
   // The `as any` on the builder avoids TS2589 — interpret's fluent API
   // produces deeply recursive types when S is the abstract SchemaType.

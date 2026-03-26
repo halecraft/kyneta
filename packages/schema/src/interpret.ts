@@ -17,6 +17,7 @@
 // - Pre-built layers live in `./layers.ts` to avoid circular imports.
 
 import type { HasChangefeed } from "./changefeed.js"
+import { isNonNullObject } from "./guards.js"
 import type { HasRead } from "./interpreters/bottom.js"
 import { bottomInterpreter } from "./interpreters/bottom.js"
 import type { HasTransact } from "./interpreters/writable.js"
@@ -32,6 +33,7 @@ import type {
   SequenceSchema,
   SumSchema,
 } from "./schema.js"
+import { isNullableSum } from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // Path — breadcrumb trail through the schema tree
@@ -119,6 +121,68 @@ export interface SumVariants<A> {
   readonly byIndex?: (index: number) => A
   /** For discriminated sums — access variant by discriminant value. */
   readonly byKey?: (key: string) => A
+}
+
+// ---------------------------------------------------------------------------
+// Sum dispatch — shared variant resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves which sum variant to use based on runtime store state.
+ *
+ * Used by `readableInterpreter`, `withReadable`, and any interpreter
+ * that needs store-driven variant dispatch. The logic is:
+ *
+ * 1. **Discriminated sums**: read the discriminant field from `value`.
+ *    If the discriminant matches a variant in `variantMap`, dispatch
+ *    via `variants.byKey()`. Otherwise fall back to the first variant.
+ *
+ * 2. **Nullable (positional) sums**: if the value is null/undefined,
+ *    dispatch to variant 0 (the null variant); otherwise variant 1.
+ *
+ * 3. **General positional sums**: dispatch to variant 0 (first).
+ *
+ * Returns `undefined` if no variant can be resolved.
+ */
+export function dispatchSum<A>(
+  value: unknown,
+  schema: SumSchema,
+  variants: SumVariants<A>,
+): A | undefined {
+  if (schema.discriminant !== undefined && variants.byKey) {
+    // ── Discriminated sum ──────────────────────────────────────
+    const discSchema = schema as DiscriminatedSumSchema
+
+    if (isNonNullObject(value)) {
+      const discValue = value[schema.discriminant]
+      if (typeof discValue === "string" && discValue in discSchema.variantMap) {
+        return variants.byKey(discValue)
+      }
+    }
+
+    // Fallback: first variant
+    const keys = Object.keys(discSchema.variantMap)
+    if (keys.length > 0) {
+      return variants.byKey(keys[0]!)
+    }
+    return undefined
+  }
+
+  // ── Positional sum ────────────────────────────────────────────
+  if (variants.byIndex) {
+    const posSchema = schema as PositionalSumSchema
+
+    if (isNullableSum(posSchema)) {
+      return value === null || value === undefined
+        ? variants.byIndex(0) // null variant
+        : variants.byIndex(1) // inner variant
+    }
+
+    // General positional sum: no runtime discriminator, use first
+    return variants.byIndex(0)
+  }
+
+  return undefined
 }
 
 // ---------------------------------------------------------------------------

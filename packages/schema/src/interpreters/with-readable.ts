@@ -32,7 +32,7 @@ import type {
   SequenceSchema,
   SumSchema,
 } from "../schema.js"
-import { readByPath, storeArrayLength, storeKeys } from "../store.js"
+
 import type { HasNavigation, HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
 
@@ -73,11 +73,11 @@ export function withReadable<A extends HasNavigation>(
       const result = base.scalar(ctx, path, schema) as any
 
       // Fill CALL slot
-      result[CALL] = () => readByPath(ctx.store, path)
+      result[CALL] = () => ctx.store.read(path)
 
       // Hint-aware toPrimitive for template literal coercion
       result[Symbol.toPrimitive] = (hint: string) => {
-        const v = readByPath(ctx.store, path)
+        const v = ctx.store.read(path)
         return hint === "string" ? String(v) : v
       }
 
@@ -127,7 +127,7 @@ export function withReadable<A extends HasNavigation>(
       // after insert/delete. readByPath is still needed for structure
       // discovery (array length).
       result[CALL] = () => {
-        const len = storeArrayLength(ctx.store, path)
+        const len = ctx.store.arrayLength(path)
         const snapshot: unknown[] = []
         for (let i = 0; i < len; i++) {
           const child: unknown = item(i)
@@ -167,7 +167,7 @@ export function withReadable<A extends HasNavigation>(
       // map keys can be dynamically added/removed and cached refs may
       // have stale state.
       result[CALL] = () => {
-        const keys = storeKeys(ctx.store, path)
+        const keys = ctx.store.keys(path)
         const snapshot: Record<string, unknown> = {}
         for (const key of keys) {
           const child: unknown = item(key)
@@ -217,7 +217,7 @@ export function withReadable<A extends HasNavigation>(
           const result = base.annotated(ctx, path, schema, baseInner) as any
 
           result[CALL] = () => {
-            const v = readByPath(ctx.store, path)
+            const v = ctx.store.read(path)
             return typeof v === "string" ? v : String(v ?? "")
           }
           result[Symbol.toPrimitive] = (_hint: string) => result[CALL]()
@@ -230,7 +230,7 @@ export function withReadable<A extends HasNavigation>(
           const result = base.annotated(ctx, path, schema, baseInner) as any
 
           result[CALL] = () => {
-            const v = readByPath(ctx.store, path)
+            const v = ctx.store.read(path)
             return typeof v === "number" ? v : 0
           }
           result[Symbol.toPrimitive] = (hint: string) => {

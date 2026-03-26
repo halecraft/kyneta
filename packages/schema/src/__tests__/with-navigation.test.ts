@@ -11,6 +11,7 @@ import {
   withReadable,
   withWritable,
 } from "../index.js"
+import { plainStoreReader } from "../store.js"
 import type { Interpreter } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type { HasCall, HasNavigation, HasRead } from "../interpreters/bottom.js"
@@ -47,7 +48,7 @@ function createNavDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx: RefContext = { store }
+  const ctx: RefContext = { store: plainStoreReader(store) }
   const doc = interpret(structuralDocSchema, navInterp, ctx) as any
   return { store, ctx, doc }
 }
@@ -101,7 +102,7 @@ describe("withNavigation: sequence navigation", () => {
 
   function createSeqDoc(items: string[]) {
     const store = items as any
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const result = interpret(seqSchema, navInterp, ctx) as any
     return { store, ctx, result }
   }
@@ -163,7 +164,7 @@ describe("withNavigation: map navigation", () => {
 
   function createMapDoc(data: Record<string, number>) {
     const store = data as any
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const result = interpret(mapSchema, navInterp, ctx) as any
     return { store, ctx, result }
   }
@@ -243,7 +244,7 @@ describe("withNavigation: sum dispatch", () => {
       ]),
     })
     const store = { item: { type: "image", url: "pic.png" } }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, navInterp, ctx) as any
 
     // item should be a carrier (the resolved variant)
@@ -260,14 +261,14 @@ describe("withNavigation: sum dispatch", () => {
 
     // Non-null case
     const store1 = { bio: "hello" }
-    const ctx1: RefContext = { store: store1 }
+    const ctx1: RefContext = { store: plainStoreReader(store1) }
     const doc1 = interpret(schema, navInterp, ctx1) as any
     // bio resolves to the string variant (a carrier)
     expect(typeof doc1.bio).toBe("function")
 
     // Null case
     const store2 = { bio: null }
-    const ctx2: RefContext = { store: store2 }
+    const ctx2: RefContext = { store: plainStoreReader(store2) }
     const doc2 = interpret(schema, navInterp, ctx2) as any
     // bio resolves to the null variant (a carrier)
     expect(typeof doc2.bio).toBe("function")
@@ -285,7 +286,7 @@ describe("withNavigation: annotated delegation", () => {
       count: LoroSchema.counter(),
     })
     const store = { title: "Hello", count: 0 }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, navInterp, ctx) as any
 
     // doc delegates to product — field getters should work
@@ -298,7 +299,7 @@ describe("withNavigation: annotated delegation", () => {
   it("text annotation produces a carrier (no toPrimitive — that's withReadable)", () => {
     const schema = LoroSchema.text()
     const store = "Hello" as any
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const result = interpret(schema, navInterp, ctx) as any
 
     expect(typeof result).toBe("function")
@@ -309,7 +310,7 @@ describe("withNavigation: annotated delegation", () => {
   it("counter annotation produces a carrier (no toPrimitive)", () => {
     const schema = LoroSchema.counter()
     const store = 42 as any
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const result = interpret(schema, navInterp, ctx) as any
 
     expect(typeof result).toBe("function")
@@ -321,7 +322,7 @@ describe("withNavigation: annotated delegation", () => {
       Schema.list(Schema.struct({ title: Schema.string() })),
     )
     const store = [{ title: "A" }, { title: "B" }] as any
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const result = interpret(schema, navInterp, ctx) as any
 
     // Sequence navigation should be present
@@ -334,7 +335,7 @@ describe("withNavigation: annotated delegation", () => {
   it("tree annotation delegates to inner", () => {
     const schema = Schema.annotated("tree", Schema.string())
     const store = "leaf" as any
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const result = interpret(schema, navInterp, ctx) as any
 
     expect(typeof result).toBe("function")
@@ -459,7 +460,7 @@ describe("withNavigation: read-only changefeed stack", () => {
       count: Schema.number(),
     })
     const store = { title: "Hello", count: 42 }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readOnlyInterp, ctx) as any
 
     expect(hasChangefeed(doc)).toBe(true)
@@ -471,7 +472,7 @@ describe("withNavigation: read-only changefeed stack", () => {
       title: Schema.string(),
     })
     const store = { title: "Hello" }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readOnlyInterp, ctx) as any
 
     const CF_SYM = Symbol.for("kyneta:changefeed")
@@ -484,7 +485,7 @@ describe("withNavigation: read-only changefeed stack", () => {
       title: Schema.string(),
     })
     const store = { title: "Hello" }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readOnlyInterp, ctx) as any
 
     const CF_SYM = Symbol.for("kyneta:changefeed")
@@ -505,7 +506,7 @@ describe("withNavigation: read-only changefeed stack", () => {
       }),
     })
     const store = { settings: { darkMode: false, fontSize: 14 } }
-    const ctx: RefContext = { store }
+    const ctx: RefContext = { store: plainStoreReader(store) }
     const doc = interpret(schema, readOnlyInterp, ctx) as any
 
     const CF_SYM = Symbol.for("kyneta:changefeed")
@@ -534,7 +535,7 @@ describe("type-level: withNavigation", () => {
 
   it("result satisfies HasNavigation", () => {
     const nav = withNavigation(bottomInterpreter)
-    const ctx: RefContext = { store: "test" as any }
+    const ctx: RefContext = { store: plainStoreReader("test" as any) }
     const result = interpret(Schema.string(), nav, ctx)
     const _check: HasNavigation = result
     void _check
@@ -542,7 +543,7 @@ describe("type-level: withNavigation", () => {
 
   it("result also satisfies HasCall", () => {
     const nav = withNavigation(bottomInterpreter)
-    const ctx: RefContext = { store: "test" as any }
+    const ctx: RefContext = { store: plainStoreReader("test" as any) }
     const result = interpret(Schema.string(), nav, ctx)
     const _check: HasCall = result
     void _check
@@ -550,7 +551,7 @@ describe("type-level: withNavigation", () => {
 
   it("result does NOT satisfy HasRead (negative test)", () => {
     const nav = withNavigation(bottomInterpreter)
-    const ctx: RefContext = { store: "test" as any }
+    const ctx: RefContext = { store: plainStoreReader("test" as any) }
     const result = interpret(Schema.string(), nav, ctx)
     // @ts-expect-error — withNavigation does not produce HasRead
     const _bad: HasRead = result

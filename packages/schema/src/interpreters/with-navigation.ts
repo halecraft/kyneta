@@ -16,6 +16,7 @@
 //
 // See .plans/navigation-layer.md §Phase 2, Task 2.1.
 
+import { dispatchSum } from "../interpret.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type {
@@ -26,13 +27,6 @@ import type {
   SequenceSchema,
   SumSchema,
 } from "../schema.js"
-import {
-  dispatchSum,
-  readByPath,
-  storeArrayLength,
-  storeHasKey,
-  storeKeys,
-} from "../store.js"
 import type { HasCall, HasNavigation } from "./bottom.js"
 
 // ---------------------------------------------------------------------------
@@ -101,7 +95,7 @@ export function withNavigation<A extends HasCall>(
           const fieldPath: Path = [...path, { type: "key", key }]
           Object.defineProperty(result, key, {
             get() {
-              return readByPath(ctx.store, fieldPath)
+              return ctx.store.read(fieldPath)
             },
             enumerable: true,
             configurable: true,
@@ -137,7 +131,7 @@ export function withNavigation<A extends HasCall>(
       // Bounds checking: negative or out-of-bounds returns undefined.
       Object.defineProperty(result, "at", {
         value: (index: number): unknown => {
-          const len = storeArrayLength(ctx.store, path)
+          const len = ctx.store.arrayLength(path)
           if (index < 0 || index >= len) return undefined
           return item(index)
         },
@@ -148,7 +142,7 @@ export function withNavigation<A extends HasCall>(
       // .length — live from store
       Object.defineProperty(result, "length", {
         get() {
-          return storeArrayLength(ctx.store, path)
+          return ctx.store.arrayLength(path)
         },
         enumerable: false,
         configurable: true,
@@ -156,7 +150,7 @@ export function withNavigation<A extends HasCall>(
 
       // [Symbol.iterator] — yields child refs
       result[Symbol.iterator] = function* () {
-        const len = storeArrayLength(ctx.store, path)
+        const len = ctx.store.arrayLength(path)
         for (let i = 0; i < len; i++) {
           yield result.at(i)
         }
@@ -182,7 +176,7 @@ export function withNavigation<A extends HasCall>(
       // Returns undefined for missing keys.
       Object.defineProperty(result, "at", {
         value: (key: string): unknown => {
-          if (!storeHasKey(ctx.store, path, key)) {
+          if (!ctx.store.hasKey(path, key)) {
             return undefined
           }
           return item(key)
@@ -194,7 +188,7 @@ export function withNavigation<A extends HasCall>(
       // .has(key)
       Object.defineProperty(result, "has", {
         value: (key: string): boolean => {
-          return storeHasKey(ctx.store, path, key)
+          return ctx.store.hasKey(path, key)
         },
         enumerable: false,
         configurable: true,
@@ -202,7 +196,7 @@ export function withNavigation<A extends HasCall>(
 
       // .keys()
       Object.defineProperty(result, "keys", {
-        value: (): string[] => storeKeys(ctx.store, path),
+        value: (): string[] => ctx.store.keys(path),
         enumerable: false,
         configurable: true,
       })
@@ -210,7 +204,7 @@ export function withNavigation<A extends HasCall>(
       // .size
       Object.defineProperty(result, "size", {
         get(): number {
-          return storeKeys(ctx.store, path).length
+          return ctx.store.keys(path).length
         },
         enumerable: false,
         configurable: true,
@@ -219,7 +213,7 @@ export function withNavigation<A extends HasCall>(
       // .entries()
       Object.defineProperty(result, "entries", {
         value: function* (): IterableIterator<[string, unknown]> {
-          for (const key of storeKeys(ctx.store, path)) {
+          for (const key of ctx.store.keys(path)) {
             yield [key, result.at(key)]
           }
         },
@@ -230,7 +224,7 @@ export function withNavigation<A extends HasCall>(
       // .values()
       Object.defineProperty(result, "values", {
         value: function* (): IterableIterator<unknown> {
-          for (const key of storeKeys(ctx.store, path)) {
+          for (const key of ctx.store.keys(path)) {
             yield result.at(key)
           }
         },
@@ -241,7 +235,7 @@ export function withNavigation<A extends HasCall>(
       // [Symbol.iterator]
       Object.defineProperty(result, Symbol.iterator, {
         value: function* (): IterableIterator<[string, unknown]> {
-          for (const key of storeKeys(ctx.store, path)) {
+          for (const key of ctx.store.keys(path)) {
             yield [key, result.at(key)]
           }
         },
@@ -261,7 +255,7 @@ export function withNavigation<A extends HasCall>(
       schema: SumSchema,
       variants: SumVariants<A & HasNavigation>,
     ): A & HasNavigation {
-      const value = readByPath(ctx.store, path)
+      const value = ctx.store.read(path)
       const resolved = dispatchSum(value, schema, variants)
       if (resolved !== undefined) {
         return resolved

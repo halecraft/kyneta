@@ -5,14 +5,14 @@
 // case of the Substrate abstraction — no CRDT runtime, no native
 // oplog, just a plain JS object.
 //
-// `createPlainSubstrate(store)` returns a full `Substrate<PlainFrontier>`
+// `createPlainSubstrate(store)` returns a full `Substrate<PlainVersion>`
 // with version tracking via a shadow buffer in `prepare`/`onFlush`,
 // plus `frontier`, `exportSnapshot`, `exportSince`, `importDelta`.
 // `plainContext(store)` is a shorthand that returns just the
 // `WritableContext` — convenient for tests that don't need the
 // substrate reference.
 //
-// `PlainFrontier` wraps a monotonic integer — the external version
+// `PlainVersion` wraps a monotonic integer — the external version
 // marker for plain substrates. Plain substrates have a total order
 // (no concurrency), so `compare()` never returns "concurrent".
 //
@@ -28,9 +28,9 @@ import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
 import type { Schema as SchemaNode } from "../schema.js"
-import { applyChangeToStore, type Store } from "../store.js"
+import { applyChangeToStore, plainStoreReader, type Store } from "../store.js"
 import type {
-  Frontier,
+  Version,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
@@ -38,16 +38,16 @@ import type {
 import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
-// PlainFrontier — monotonic integer version marker
+// PlainVersion — monotonic integer version marker
 // ---------------------------------------------------------------------------
 
 /**
- * A frontier wrapping a monotonic integer.
+ * A version marker wrapping a monotonic integer.
  *
  * Plain substrates have a total order — `compare()` returns "behind",
  * "equal", or "ahead" but never "concurrent".
  */
-export class PlainFrontier implements Frontier {
+export class PlainVersion implements Version {
   readonly #value: number
 
   constructor(value: number) {
@@ -63,10 +63,10 @@ export class PlainFrontier implements Frontier {
     return String(this.#value)
   }
 
-  compare(other: Frontier): "behind" | "equal" | "ahead" | "concurrent" {
-    if (!(other instanceof PlainFrontier)) {
+  compare(other: Version): "behind" | "equal" | "ahead" | "concurrent" {
+    if (!(other instanceof PlainVersion)) {
       throw new Error(
-        "PlainFrontier can only be compared with another PlainFrontier",
+        "PlainVersion can only be compared with another PlainVersion",
       )
     }
     const otherValue = other.#value
@@ -77,11 +77,11 @@ export class PlainFrontier implements Frontier {
 }
 
 // ---------------------------------------------------------------------------
-// createPlainSubstrate — full Substrate<PlainFrontier> from a bare store
+// createPlainSubstrate — full Substrate<PlainVersion> from a bare store
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a full `Substrate<PlainFrontier>` wrapping a plain JS object
+ * Creates a full `Substrate<PlainVersion>` wrapping a plain JS object
  * store, with version tracking, export/import, and the shadow buffer
  * for op logging.
  *
@@ -89,7 +89,9 @@ export class PlainFrontier implements Frontier {
  * For schema-aware construction (with `Zero.structural` / `Zero.overlay`),
  * use `plainSubstrateFactory.create(schema, seed?)` instead.
  */
-export function createPlainSubstrate(store: Store): Substrate<PlainFrontier> {
+export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
+  const reader = plainStoreReader(storeObj)
+
   // --- Closure-scoped state ---
   // Shadow buffer: accumulates {path, change} entries during prepare,
   // drained by onFlush into the version log. The changefeed layer
@@ -108,11 +110,11 @@ export function createPlainSubstrate(store: Store): Substrate<PlainFrontier> {
   // is returned on every call to `context()`.
   let cachedCtx: WritableContext | undefined
 
-  const substrate: Substrate<PlainFrontier> = {
-    store,
+  const substrate: Substrate<PlainVersion> = {
+    store: reader,
 
     prepare(path: Path, change: ChangeBase): void {
-      applyChangeToStore(store, path, change)
+      applyChangeToStore(storeObj, path, change)
       pendingOps.push({ path, change })
     },
 
@@ -131,15 +133,15 @@ export function createPlainSubstrate(store: Store): Substrate<PlainFrontier> {
       return cachedCtx
     },
 
-    frontier(): PlainFrontier {
-      return new PlainFrontier(version)
+    frontier(): PlainVersion {
+      return new PlainVersion(version)
     },
 
     exportSnapshot(): SubstratePayload {
-      return { encoding: "json", data: JSON.stringify(store) }
+      return { encoding: "json", data: JSON.stringify(storeObj) }
     },
 
-    exportSince(since: PlainFrontier): SubstratePayload | null {
+    exportSince(since: PlainVersion): SubstratePayload | null {
       const sinceValue = since.value
       if (sinceValue > version) return null
       if (sinceValue === version) {
@@ -183,8 +185,8 @@ export function createPlainSubstrate(store: Store): Substrate<PlainFrontier> {
  * const doc = interpret(schema, ctx).with(readable).with(writable).done()
  * ```
  */
-export function plainContext(store: Store): WritableContext {
-  return createPlainSubstrate(store).context()
+export function plainContext(storeObj: Store): WritableContext {
+  return createPlainSubstrate(storeObj).context()
 }
 
 // ---------------------------------------------------------------------------
@@ -196,26 +198,26 @@ export function plainContext(store: Store): WritableContext {
  *
  * - `create(schema, seed?)` — fresh substrate from a schema + optional seed.
  * - `fromSnapshot(payload, schema)` — reconstruct from a snapshot payload.
- * - `parseFrontier(serialized)` — deserialize a PlainFrontier.
+ * - `parseVersion(serialized)` — deserialize a PlainVersion.
  */
-export const plainSubstrateFactory: SubstrateFactory<PlainFrontier> = {
+export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
   create(
     schema: SchemaNode,
     seed: Record<string, unknown> = {},
-  ): Substrate<PlainFrontier> {
+  ): Substrate<PlainVersion> {
     const defaults = Zero.structural(schema) as Record<string, unknown>
     const initial = Zero.overlay(seed, defaults, schema) as Record<
       string,
       unknown
     >
-    const store = { ...initial } as Store
-    return createPlainSubstrate(store)
+    const storeObj = { ...initial } as Store
+    return createPlainSubstrate(storeObj)
   },
 
   fromSnapshot(
     payload: SubstratePayload,
     schema: SchemaNode,
-  ): Substrate<PlainFrontier> {
+  ): Substrate<PlainVersion> {
     if (payload.encoding !== "json" || typeof payload.data !== "string") {
       throw new Error(
         "PlainSubstrateFactory.fromSnapshot only supports JSON-encoded payloads",
@@ -227,14 +229,14 @@ export const plainSubstrateFactory: SubstrateFactory<PlainFrontier> = {
     return plainSubstrateFactory.create(schema, snapshotState)
   },
 
-  parseFrontier(serialized: string): PlainFrontier {
+  parseVersion(serialized: string): PlainVersion {
     if (serialized === "") {
-      throw new Error(`Invalid PlainFrontier value: (empty string)`)
+      throw new Error(`Invalid PlainVersion value: (empty string)`)
     }
     const n = Number(serialized)
     if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n) {
-      throw new Error(`Invalid PlainFrontier value: ${serialized}`)
+      throw new Error(`Invalid PlainVersion value: ${serialized}`)
     }
-    return new PlainFrontier(n)
+    return new PlainVersion(n)
   },
 }

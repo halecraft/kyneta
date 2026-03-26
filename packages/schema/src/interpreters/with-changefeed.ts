@@ -52,7 +52,7 @@ import type {
   SequenceSchema,
   SumSchema,
 } from "../schema.js"
-import { pathKey, readByPath } from "../store.js"
+import { pathKey } from "../store.js"
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
 
@@ -852,10 +852,7 @@ export function withChangefeed<A extends HasRead>(
             }
             return item(index)
           },
-          () => {
-            const arr = readByPath(ctx.store, path)
-            return Array.isArray(arr) ? arr.length : 0
-          },
+          () => ctx.store.arrayLength(path),
         )
         attachChangefeed(result as object, cf)
         return result as A & HasChangefeed
@@ -887,13 +884,7 @@ export function withChangefeed<A extends HasRead>(
             }
             return item(key)
           },
-          () => {
-            const obj = readByPath(ctx.store, path)
-            if (obj !== null && obj !== undefined && typeof obj === "object") {
-              return Object.keys(obj as Record<string, unknown>)
-            }
-            return []
-          },
+          () => ctx.store.keys(path),
         )
         attachChangefeed(result as object, cf)
         return result as A & HasChangefeed
