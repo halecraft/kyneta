@@ -589,7 +589,7 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
 **`PlainSubstrate`** is the first concrete implementation. It wraps a plain JS object store (the degenerate case — no CRDT runtime, no native oplog). The raw `Record<string, unknown>` is wrapped in a `plainStoreReader` for the interpreter stack, while mutations and export still operate on the raw object directly. Version tracking uses a **shadow buffer**: `prepare` accumulates `{path, change}` entries alongside `applyChangeToStore`, and `onFlush` drains the buffer into the version log and increments the version counter. The changefeed layer independently accumulates the same entries for notification planning — both hold the same object references and are drained every flush cycle. `PlainVersion` wraps a monotonic integer; `compare()` never returns `"concurrent"`.
 
-A future `LoroSubstrate` would wrap a `LoroDoc`, using `VersionVector` as its Version type, delegating `exportSnapshot` to `doc.export({ mode: "snapshot" })`, `exportSince` to `doc.export({ mode: "update", from: vv })`, and `importDelta` to `doc.import(bytes)`. Its `StoreReader` would navigate the Loro container tree directly via `.get()`, `.keys()`, `.length`, etc.
+**`LoroSubstrate`** is the second concrete implementation, provided by the separate `@kyneta/schema-loro` package. It wraps a user-provided `LoroDoc` with schema-aware typed reads (via `LoroStoreReader`), `applyDiff`-based writes, and a persistent `doc.subscribe()` event bridge that ensures all mutations to the underlying LoroDoc — whether from kyneta, `importDelta`, or external systems — fire kyneta changefeed subscribers. See `packages/schema-loro/TECHNICAL.md` for the full architecture.
 
 ### Additional Interpreters
 

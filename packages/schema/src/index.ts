@@ -192,6 +192,7 @@ export type {
 } from "./schema.js"
 // Schema — unified recursive grammar (backend-agnostic)
 export {
+  advanceSchema,
   buildVariantMap,
   isAnnotated,
   isNullableSum,

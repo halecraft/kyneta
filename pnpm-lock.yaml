@@ -141,6 +141,24 @@ importers:
         specifier: ^4.0.17
         version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
 
+  packages/schema-loro:
+    devDependencies:
+      '@kyneta/schema':
+        specifier: workspace:*
+        version: link:../schema
+      loro-crdt:
+        specifier: ^1.10.0
+        version: 1.10.8
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.17
+        version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
+
 packages:
 
   '@asamuzakjp/css-color@3.2.0':
@@ -1975,6 +1993,9 @@ packages:
   loglevel@1.9.2:
     resolution: {integrity: sha512-HgMmCqIJSAKqo68l0rS2AanEWfkxaZ5wNiEFb5ggm08lDs9Xl2KxBlX3PTcaD2chBM1gXAYf491/M2Rv8Jwayg==}
     engines: {node: '>= 0.6.0'}
+
+  loro-crdt@1.10.8:
+    resolution: {integrity: sha512-GvH8fSJST1VDHRGzlQml80pBYoFbIP4ULeV1S8fD4ffmA8m+icoPORyVUW2AkJBY3dxKIcMMn0WqaJmpCmnbkQ==}
 
   lru-cache@10.4.3:
     resolution: {integrity: sha512-JNAzZcXrCt42VGLuYz0zfAzDfAvJWW6AfYlDBQyDV5DClI2m5sAmK+OIO7s59XfsRsWHp02jAJrRadPRGTt6SQ==}
@@ -4461,6 +4482,8 @@ snapshots:
   lodash.startcase@4.4.0: {}
 
   loglevel@1.9.2: {}
+
+  loro-crdt@1.10.8: {}
 
   lru-cache@10.4.3: {}
 

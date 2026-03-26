@@ -9,6 +9,8 @@
 // loro-schema.ts. The developer-facing Schema namespace provides only
 // structural constructors and the open `annotated()` mechanism.
 
+import type { PathSegment } from "./interpret.js"
+
 // ---------------------------------------------------------------------------
 // Scalar kinds — leaf values (not a separate recursive grammar)
 // ---------------------------------------------------------------------------
@@ -656,4 +658,87 @@ export function unwrapAnnotation(schema: Schema): Schema | undefined {
     return schema.schema
   }
   return schema
+}
+
+// ---------------------------------------------------------------------------
+// advanceSchema — pure schema descent for a single path segment
+// ---------------------------------------------------------------------------
+
+/**
+ * Given a schema node and a path segment, returns the child schema at
+ * that position.
+ *
+ * This is the pure schema descent extracted from the logic implicit in
+ * `interpretImpl`'s field/item path construction. It walks one step
+ * down the schema tree — no store access, no Loro dependency.
+ *
+ * Annotations are unwrapped before dispatching:
+ * - `doc(product)` → unwrap to product
+ * - `movable(sequence)` → unwrap to sequence
+ * - `tree(inner)` → unwrap to inner
+ * - other annotations with inner → unwrap to inner
+ *
+ * Sum types are never advanced through — sums resolve by value (store
+ * inspection), not by path segment. If a field's schema is a sum,
+ * `advanceSchema` on the parent product returns the sum as-is.
+ *
+ * @throws If the segment type doesn't match the schema kind (e.g.,
+ *   index segment on a product, or key segment on a scalar).
+ */
+export function advanceSchema(schema: Schema, segment: PathSegment): Schema {
+  // Unwrap annotations to reach the structural node
+  let structural = schema
+  while (structural._kind === "annotated") {
+    if (structural.schema === undefined) {
+      throw new Error(
+        `advanceSchema: cannot advance through leaf annotation "${structural.tag}" (no inner schema)`,
+      )
+    }
+    structural = structural.schema
+  }
+
+  switch (structural._kind) {
+    case "product": {
+      if (segment.type !== "key") {
+        throw new Error(
+          `advanceSchema: product expects a key segment, got index segment`,
+        )
+      }
+      const fieldSchema = structural.fields[segment.key]
+      if (!fieldSchema) {
+        throw new Error(
+          `advanceSchema: product has no field "${segment.key}"`,
+        )
+      }
+      return fieldSchema
+    }
+
+    case "sequence": {
+      if (segment.type !== "index") {
+        throw new Error(
+          `advanceSchema: sequence expects an index segment, got key segment "${segment.key}"`,
+        )
+      }
+      return structural.item
+    }
+
+    case "map": {
+      if (segment.type !== "key") {
+        throw new Error(
+          `advanceSchema: map expects a key segment, got index segment`,
+        )
+      }
+      return structural.item
+    }
+
+    case "scalar":
+      throw new Error(
+        `advanceSchema: cannot advance into a scalar (kind: ${structural.scalarKind})`,
+      )
+
+    case "sum":
+      throw new Error(
+        `advanceSchema: cannot advance through a sum (sums resolve by value, not by path segment)`,
+      )
+  }
 }
