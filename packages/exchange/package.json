@@ -1,0 +1,44 @@
+{
+  "name": "@kyneta/exchange",
+  "version": "0.0.1",
+  "description": "Substrate-agnostic state exchange — sync for any @kyneta/schema substrate",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./src": "./src/index.ts",
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "peerDependencies": {
+    "@kyneta/schema": ">=0.0.1"
+  },
+  "devDependencies": {
+    "@kyneta/schema": "workspace:*",
+    "@kyneta/schema-loro": "workspace:*",
+    "loro-crdt": "^1.10.0",
+    "mutative": "^1.3.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.17"
+  },
+  "dependencies": {
+    "mutative": "^1.3.0"
+  }
+}
