@@ -247,3 +247,8 @@ export type { Version as Frontier } from "./substrate.js"
 export { PlainVersion as PlainFrontier } from "./substrates/plain.js"
 // Zero — default values separated from the schema
 export { scalarDefault, Zero } from "./zero.js"
+// Bind — schema + factory + strategy binding
+export type { BoundSchema, FactoryBuilder, MergeStrategy } from "./bind.js"
+export { bind, bindLww, bindPlain, isBoundSchema } from "./bind.js"
+// Unwrap — general escape hatch for accessing the Substrate backing a ref
+export { registerSubstrate, unwrap } from "./unwrap.js"

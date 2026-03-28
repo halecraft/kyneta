@@ -10,12 +10,11 @@
 // Ported from @loro-extended/repo's Synchronizer with Loro-specific types
 // replaced by substrate-agnostic equivalents.
 
-import type { Substrate, SubstratePayload } from "@kyneta/schema"
+import type { Substrate, SubstratePayload, SubstrateFactory, MergeStrategy } from "@kyneta/schema"
 import { executeBatch } from "@kyneta/schema"
 import type { AnyAdapter } from "./adapter/adapter.js"
 import { AdapterManager } from "./adapter/adapter-manager.js"
 import type { Channel, ConnectedChannel } from "./channel.js"
-import type { ExchangeSubstrateFactory } from "./factory.js"
 import type { AddressedEnvelope, ChannelMsg } from "./messages.js"
 import { createPermissions, type Permissions } from "./permissions.js"
 import {
@@ -44,7 +43,8 @@ import type {
 export type DocRuntime = {
   docId: DocId
   substrate: Substrate<any>
-  factory: ExchangeSubstrateFactory<any>
+  factory: SubstrateFactory<any>
+  strategy: MergeStrategy
   ref: any // The interpreted Ref<S>
   schema: any // The schema (SchemaNode)
 }
@@ -145,7 +145,7 @@ export class Synchronizer {
       type: "synchronizer/doc-ensure",
       docId: runtime.docId,
       version: runtime.substrate.frontier().serialize(),
-      mergeStrategy: runtime.factory.mergeStrategy,
+      mergeStrategy: runtime.strategy,
     })
   }
 
@@ -532,7 +532,7 @@ export class Synchronizer {
     if (!runtime) return
 
     // For LWW: compare timestamps and reject stale
-    if (runtime.factory.mergeStrategy.type === "lww") {
+    if (runtime.strategy === "lww") {
       try {
         const incomingVersion = runtime.factory.parseVersion(command.version)
         const currentVersion = runtime.substrate.frontier()

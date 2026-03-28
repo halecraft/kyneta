@@ -54,3 +54,9 @@ export { batchToOps, changeToDiff } from "./change-mapping.js"
 
 // Substrate
 export { createLoroSubstrate, loroSubstrateFactory } from "./substrate.js"
+
+// Bind — convenience wrapper for Loro CRDT substrate
+export { bindLoro } from "./bind-loro.js"
+
+// Escape hatch — access the underlying LoroDoc from a ref
+export { loro } from "./loro-escape.js"

@@ -2,9 +2,9 @@
 //
 // These tests prove documents converge across two Exchange instances
 // connected via BridgeAdapter, for each merge strategy:
-// - Sequential (PlainSubstrate)
-// - Causal (LoroSubstrate)
-// - LWW (TimestampVersion + PlainSubstrate)
+// - Sequential (PlainSubstrate via bindPlain)
+// - Causal (LoroSubstrate via bindLoro)
+// - LWW (TimestampVersion via bind + custom factory)
 // - Heterogeneous (mixed substrates in one exchange)
 
 import { describe, expect, it, afterEach } from "vitest"
@@ -13,111 +13,51 @@ import {
   LoroSchema,
   plainSubstrateFactory,
   change,
+  bind,
+  bindPlain,
   buildWritableContext,
+  type BoundSchema,
   type Substrate,
   type SubstratePayload,
-  type Version,
   type WritableContext,
 } from "@kyneta/schema"
 import type { Schema as SchemaNode } from "@kyneta/schema"
-import { loroSubstrateFactory } from "@kyneta/schema-loro"
-import type { LoroVersion } from "@kyneta/schema-loro"
+import { bindLoro } from "@kyneta/schema-loro"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
 import { Bridge, BridgeAdapter } from "../adapter/bridge-adapter.js"
-import type { ExchangeSubstrateFactory, MergeStrategy } from "../factory.js"
 import { TimestampVersion } from "../timestamp-version.js"
 
 // ---------------------------------------------------------------------------
-// Factory wrappers — wrap SubstrateFactory into ExchangeSubstrateFactory
+// LWW factory builder — wraps plain store with TimestampVersion
 // ---------------------------------------------------------------------------
 
-function wrapPlainSequential(): ExchangeSubstrateFactory<any> {
+function lwwFactoryBuilder(_ctx: { peerId: string }) {
   return {
-    ...plainSubstrateFactory,
-    mergeStrategy: { type: "sequential" } as MergeStrategy,
-    _initialize(_ctx: { peerId: string }) {},
-    create: plainSubstrateFactory.create.bind(plainSubstrateFactory),
-    fromSnapshot: plainSubstrateFactory.fromSnapshot.bind(plainSubstrateFactory),
-    parseVersion: plainSubstrateFactory.parseVersion.bind(plainSubstrateFactory),
-  }
-}
-
-function wrapLoroFactory(): ExchangeSubstrateFactory<any> {
-  return {
-    ...loroSubstrateFactory,
-    mergeStrategy: { type: "causal" } as MergeStrategy,
-    _initialize(_ctx: { peerId: string }) {
-      // In a real implementation, we'd hash peerId → numeric Loro PeerID
-      // and call doc.setPeerId() in create(). For testing, we skip this.
-    },
-    create: loroSubstrateFactory.create.bind(loroSubstrateFactory),
-    fromSnapshot: loroSubstrateFactory.fromSnapshot.bind(loroSubstrateFactory),
-    parseVersion: loroSubstrateFactory.parseVersion.bind(loroSubstrateFactory),
-  }
-}
-
-/**
- * LWW substrate factory — wraps a plain store with TimestampVersion.
- *
- * This is the ephemeral/presence substrate: full snapshot on every export,
- * timestamp-based version for LWW conflict resolution.
- */
-function createLwwFactory(): ExchangeSubstrateFactory<TimestampVersion> {
-  return {
-    mergeStrategy: { type: "lww" } as MergeStrategy,
-
-    _initialize(_ctx: { peerId: string }) {},
-
     create(schema: SchemaNode, seed?: Record<string, unknown>): Substrate<TimestampVersion> {
-      // Use the plain substrate internally for state management
       const inner = plainSubstrateFactory.create(schema, seed)
-
-      // Track the latest version (updated on flush and import)
       let currentVersion = new TimestampVersion(0)
-
-      // Cached WritableContext that uses the wrapper's prepare/onFlush
       let cachedCtx: WritableContext | undefined
 
-      // The wrapper substrate — declared as `const` so context() can
-      // close over it and pass it to buildWritableContext.
       const substrate: Substrate<TimestampVersion> = {
         store: inner.store,
-        prepare(path, change) {
-          inner.prepare(path, change)
-        },
+        prepare(path: any, change: any) { inner.prepare(path, change) },
         onFlush(origin?: string) {
           inner.onFlush(origin)
-          // Bump version on every local flush
           currentVersion = TimestampVersion.now()
         },
         context(): WritableContext {
-          // Build a WritableContext that routes through the WRAPPER's
-          // prepare/onFlush (not the inner plain substrate's). This
-          // ensures version bumping happens on every change() call.
-          if (!cachedCtx) {
-            cachedCtx = buildWritableContext(substrate)
-          }
+          if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
           return cachedCtx
         },
-        frontier(): TimestampVersion {
-          return currentVersion
-        },
-        exportSnapshot(): SubstratePayload {
-          return inner.exportSnapshot()
-        },
-        exportSince(_since: TimestampVersion): SubstratePayload | null {
-          // LWW always exports full snapshot
-          return inner.exportSnapshot()
-        },
-        importDelta(payload: SubstratePayload, origin?: string): void {
-          // For LWW, "delta" is always a full snapshot → reconstruct store
+        frontier: () => currentVersion,
+        exportSnapshot: () => inner.exportSnapshot(),
+        exportSince: () => inner.exportSnapshot(),
+        importDelta(payload: SubstratePayload, origin?: string) {
           inner.importDelta(payload, origin)
-          // Bump version after import
           currentVersion = TimestampVersion.now()
         },
       }
-
       return substrate
     },
 
@@ -128,28 +68,23 @@ function createLwwFactory(): ExchangeSubstrateFactory<TimestampVersion> {
 
       const substrate: Substrate<TimestampVersion> = {
         store: inner.store,
-        prepare(path, change) {
-          inner.prepare(path, change)
-        },
+        prepare(path: any, change: any) { inner.prepare(path, change) },
         onFlush(origin?: string) {
           inner.onFlush(origin)
           currentVersion = TimestampVersion.now()
         },
         context(): WritableContext {
-          if (!cachedCtx) {
-            cachedCtx = buildWritableContext(substrate)
-          }
+          if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
           return cachedCtx
         },
         frontier: () => currentVersion,
         exportSnapshot: () => inner.exportSnapshot(),
         exportSince: () => inner.exportSnapshot(),
-        importDelta: (p, o) => {
-          inner.importDelta(p, o)
+        importDelta(payload: SubstratePayload, origin?: string) {
+          inner.importDelta(payload, origin)
           currentVersion = TimestampVersion.now()
         },
       }
-
       return substrate
     },
 
@@ -157,6 +92,17 @@ function createLwwFactory(): ExchangeSubstrateFactory<TimestampVersion> {
       return TimestampVersion.parse(serialized)
     },
   }
+}
+
+/**
+ * Bind a schema with LWW merge strategy using a custom LWW factory.
+ */
+function bindLwwCustom<S extends SchemaNode>(schema: S): BoundSchema<S> {
+  return bind({
+    schema,
+    factory: lwwFactoryBuilder,
+    strategy: "lww",
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +125,7 @@ async function drain(rounds = 20): Promise<void> {
 /** Active exchanges that need cleanup */
 const activeExchanges: Exchange[] = []
 
-function createExchange(params: ConstructorParameters<typeof Exchange>[0]): Exchange {
+function createExchange(params: ConstructorParameters<typeof Exchange>[0] = {}): Exchange {
   const ex = new Exchange(params)
   activeExchanges.push(ex)
   return ex
@@ -197,32 +143,50 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
+// Bound schemas (module scope)
+// ---------------------------------------------------------------------------
+
+const sequentialSchema = Schema.doc({
+  title: Schema.string(),
+  count: Schema.number(),
+})
+const SequentialDoc = bindPlain(sequentialSchema)
+
+const loroSchema = LoroSchema.doc({
+  title: LoroSchema.text(),
+  items: Schema.list(Schema.struct({ name: Schema.string() })),
+})
+const LoroDoc = bindLoro(loroSchema)
+
+const presenceSchema = Schema.doc({
+  cursor: Schema.struct({
+    x: Schema.number(),
+    y: Schema.number(),
+  }),
+  name: Schema.string(),
+})
+const PresenceDoc = bindLwwCustom(presenceSchema)
+
+// ---------------------------------------------------------------------------
 // Sequential (PlainSubstrate) — two-peer sync
 // ---------------------------------------------------------------------------
 
 describe("Sequential sync (PlainSubstrate)", () => {
-  const schema = Schema.doc({
-    title: Schema.string(),
-    count: Schema.number(),
-  })
-
   it("peer A creates doc, peer B syncs and gets the same state", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
 
     // Alice creates a doc with seed values
-    const docA = exchangeA.get("doc-1", schema, {
+    const docA = exchangeA.get("doc-1", SequentialDoc, {
       seed: { title: "Hello from Alice", count: 42 },
     })
 
@@ -230,7 +194,7 @@ describe("Sequential sync (PlainSubstrate)", () => {
     expect(docA.count()).toBe(42)
 
     // Bob creates the same doc (empty initially)
-    const docB = exchangeB.get("doc-1", schema)
+    const docB = exchangeB.get("doc-1", SequentialDoc)
 
     // Wait for sync
     await drain()
@@ -246,17 +210,15 @@ describe("Sequential sync (PlainSubstrate)", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
 
-    const docA = exchangeA.get("doc-1", schema, { seed: { title: "V1", count: 1 } })
-    const docB = exchangeB.get("doc-1", schema)
+    const docA = exchangeA.get("doc-1", SequentialDoc, { seed: { title: "V1", count: 1 } })
+    const docB = exchangeB.get("doc-1", SequentialDoc)
 
     // Initial sync
     await drain()
@@ -284,28 +246,21 @@ describe("Sequential sync (PlainSubstrate)", () => {
 // ---------------------------------------------------------------------------
 
 describe("Causal sync (LoroSubstrate)", () => {
-  const schema = LoroSchema.doc({
-    title: LoroSchema.text(),
-    items: Schema.list(Schema.struct({ name: Schema.string() })),
-  })
-
   it("peer A creates doc with text, peer B syncs and gets the same state", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { loro: wrapLoroFactory() },
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { loro: wrapLoroFactory() },
     })
 
     // Alice creates a doc
-    const docA = exchangeA.get("doc-1", schema)
+    const docA = exchangeA.get("doc-1", LoroDoc)
 
     // Insert text
     change(docA, (d: any) => {
@@ -316,7 +271,7 @@ describe("Causal sync (LoroSubstrate)", () => {
     exchangeA.synchronizer.notifyLocalChange("doc-1")
 
     // Bob creates the same doc
-    const docB = exchangeB.get("doc-1", schema)
+    const docB = exchangeB.get("doc-1", LoroDoc)
 
     await drain()
 
@@ -330,18 +285,16 @@ describe("Causal sync (LoroSubstrate)", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { loro: wrapLoroFactory() },
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { loro: wrapLoroFactory() },
     })
 
     // Both create the doc
-    const docA = exchangeA.get("doc-1", schema)
-    const docB = exchangeB.get("doc-1", schema)
+    const docA = exchangeA.get("doc-1", LoroDoc)
+    const docB = exchangeB.get("doc-1", LoroDoc)
 
     // Initial sync
     await drain()
@@ -375,33 +328,22 @@ describe("Causal sync (LoroSubstrate)", () => {
 // ---------------------------------------------------------------------------
 
 describe("LWW sync (Ephemeral/Presence)", () => {
-  const presenceSchema = Schema.doc({
-    cursor: Schema.struct({
-      x: Schema.number(),
-      y: Schema.number(),
-    }),
-    name: Schema.string(),
-  })
-
   it("peer A sets presence, peer B receives via broadcast", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { lww: createLwwFactory() },
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { lww: createLwwFactory() },
     })
 
-    // Alice sets presence with seed and triggers a flush so the version bumps
-    const presA = exchangeA.get("presence", presenceSchema)
+    // Alice sets presence with change() so the version bumps
+    const presA = exchangeA.get("presence", PresenceDoc)
 
-    // Use change() to set values — this triggers prepare + flush, bumping the version
     change(presA, (d: any) => {
       d.cursor.x.set(100)
       d.cursor.y.set(200)
@@ -409,7 +351,7 @@ describe("LWW sync (Ephemeral/Presence)", () => {
     })
 
     // Bob creates the same presence doc
-    const presB = exchangeB.get("presence", presenceSchema)
+    const presB = exchangeB.get("presence", PresenceDoc)
 
     // Notify synchronizer of the local change (LWW broadcasts to all)
     exchangeA.synchronizer.notifyLocalChange("presence")
@@ -428,17 +370,15 @@ describe("LWW sync (Ephemeral/Presence)", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { lww: createLwwFactory() },
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { lww: createLwwFactory() },
     })
 
-    const presA = exchangeA.get("presence", presenceSchema)
-    const presB = exchangeB.get("presence", presenceSchema)
+    const presA = exchangeA.get("presence", PresenceDoc)
+    const presB = exchangeB.get("presence", PresenceDoc)
 
     // Set initial values via change() so version bumps
     change(presA, (d: any) => {
@@ -478,47 +418,38 @@ describe("Heterogeneous documents", () => {
     const plainSchema = Schema.doc({
       config: Schema.string(),
     })
+    const ConfigDoc = bindPlain(plainSchema)
 
-    const loroSchema = LoroSchema.doc({
+    const collabSchema = LoroSchema.doc({
       text: LoroSchema.text(),
     })
+    const CollabDoc = bindLoro(collabSchema)
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: {
-        plain: wrapPlainSequential(),
-        loro: wrapLoroFactory(),
-      },
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: {
-        plain: wrapPlainSequential(),
-        loro: wrapLoroFactory(),
-      },
     })
 
     // Alice: plain config doc
-    const configA = exchangeA.get("config", plainSchema, {
-      substrate: "plain",
+    const configA = exchangeA.get("config", ConfigDoc, {
       seed: { config: "dark-mode" },
     })
 
     // Alice: loro collaborative doc
-    const textA = exchangeA.get("collab", loroSchema, {
-      substrate: "loro",
-    })
+    const textA = exchangeA.get("collab", CollabDoc)
     change(textA, (d: any) => {
       d.text.insert(0, "collaborative text")
     })
     exchangeA.synchronizer.notifyLocalChange("collab")
 
     // Bob: create both docs
-    const configB = exchangeB.get("config", plainSchema, { substrate: "plain" })
-    const textB = exchangeB.get("collab", loroSchema, { substrate: "loro" })
+    const configB = exchangeB.get("config", ConfigDoc)
+    const textB = exchangeB.get("collab", CollabDoc)
 
     await drain()
 

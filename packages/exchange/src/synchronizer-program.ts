@@ -13,9 +13,8 @@
 // Ported from @loro-extended/repo's synchronizer-program.ts with
 // Loro-specific types replaced by substrate-agnostic equivalents.
 
-import type { SubstratePayload } from "@kyneta/schema"
+import type { SubstratePayload, MergeStrategy } from "@kyneta/schema"
 import type { Channel, ConnectedChannel } from "./channel.js"
-import type { MergeStrategy } from "./factory.js"
 import type { AddressedEnvelope, ReturnEnvelope } from "./messages.js"
 import type {
   ChannelId,
@@ -596,7 +595,7 @@ function handleDiscover(
     const docEntry = model.documents.get(docId)
     if (docEntry) {
       // We have this doc — send interest with our version
-      const isCausal = docEntry.mergeStrategy.type === "causal"
+      const isCausal = docEntry.mergeStrategy === "causal"
       commands.push({
         type: "cmd/send-message",
         envelope: {
@@ -652,7 +651,7 @@ function handleInterest(
 
   const commands: Command[] = []
 
-  switch (docEntry.mergeStrategy.type) {
+  switch (docEntry.mergeStrategy) {
     case "causal":
       // Causal: always send our state (the CRDT handles merge)
       // Use exportSince if the peer provided a version, otherwise snapshot
@@ -812,7 +811,7 @@ function buildLocalChangePush(
   model: SynchronizerModel,
   _permissions: Permissions,
 ): Command | undefined {
-  switch (docEntry.mergeStrategy.type) {
+  switch (docEntry.mergeStrategy) {
     case "causal":
     case "sequential": {
       // Push delta offer to peers that have synced this doc

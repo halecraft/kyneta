@@ -95,6 +95,13 @@ const docB = createLoroDocFromSnapshot(mySchema, snapshot)
 
 ## API Reference
 
+### Bind & Escape Hatch
+
+| Export | Description |
+|--------|-------------|
+| `bindLoro(schema)` | Bind a schema to the Loro CRDT substrate with causal merge strategy. Returns a `BoundSchema<S>` for use with `exchange.get()`. The factory builder injects a deterministic numeric Loro PeerID derived from the exchange's string peerId. |
+| `loro(ref)` | Escape hatch — returns the `LoroDoc` backing a root document ref. Throws if the ref is not backed by a Loro substrate. Currently supports root refs only; child-level resolution is future work. |
+
 ### Batteries-Included (most users)
 
 | Export | Description |

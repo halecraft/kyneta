@@ -276,7 +276,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         m,
       )
@@ -303,7 +303,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         model,
       )
@@ -313,7 +313,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v2",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         m1,
       )
@@ -335,7 +335,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         m,
       )
@@ -401,7 +401,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: { type: "causal" },
+          mergeStrategy: "causal",
         },
         m,
       )
@@ -458,7 +458,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         m,
       )
@@ -505,7 +505,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "1000",
-          mergeStrategy: { type: "lww" },
+          mergeStrategy: "lww",
         },
         m,
       )
@@ -546,7 +546,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         m,
       )
@@ -615,7 +615,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: { type: "causal" },
+          mergeStrategy: "causal",
         },
         m,
       )
@@ -671,7 +671,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: { type: "causal" },
+          mergeStrategy: "causal",
         },
         m,
       )
@@ -717,7 +717,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "presence",
           version: "1000",
-          mergeStrategy: { type: "lww" },
+          mergeStrategy: "lww",
         },
         m,
       )
@@ -752,7 +752,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         m,
       )
@@ -783,7 +783,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         m,
       )
@@ -818,7 +818,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         model,
       )
@@ -840,7 +840,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: { type: "causal" },
+          mergeStrategy: "causal",
         },
         m,
       )
@@ -882,7 +882,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-ensure",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: { type: "sequential" },
+          mergeStrategy: "sequential",
         },
         m,
       )

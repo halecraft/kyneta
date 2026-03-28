@@ -36,6 +36,7 @@ import { PROPS_KEY } from "./loro-resolve.js"
 import { LoroVersion } from "./version.js"
 import { loroStoreReader } from "./store-reader.js"
 import { changeToDiff, batchToOps } from "./change-mapping.js"
+import { registerLoroSubstrate } from "./loro-escape.js"
 
 // ---------------------------------------------------------------------------
 // createLoroSubstrate — wrap a user-provided LoroDoc
@@ -224,6 +225,9 @@ export function createLoroSubstrate(
       inEventHandler = false
     }
   })
+
+  // Register for the loro() escape hatch
+  registerLoroSubstrate(substrate, doc)
 
   return substrate
 }

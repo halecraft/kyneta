@@ -5,44 +5,36 @@ Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastruc
 ## Getting Started
 
 ```ts
-import { Exchange, sync, Bridge, BridgeAdapter } from "@kyneta/exchange"
-import { Schema, plainSubstrateFactory } from "@kyneta/schema"
+import { Exchange, sync } from "@kyneta/exchange"
+import { Schema, bindPlain, change } from "@kyneta/schema"
 
-// 1. Define your schema
-const TodoSchema = Schema.doc({
+// 1. Define your document type (schema + substrate + strategy)
+const TodoDoc = bindPlain(Schema.doc({
   title: Schema.string(),
   items: Schema.list(
     Schema.struct({ text: Schema.string(), done: Schema.boolean() }),
   ),
-})
+}))
 
-// 2. Wrap a SubstrateFactory as an ExchangeSubstrateFactory
-const plainFactory = {
-  ...plainSubstrateFactory,
-  mergeStrategy: { type: "sequential" },
-  _initialize() {},
-}
-
-// 3. Create an Exchange
+// 2. Create an Exchange
 const exchange = new Exchange({
   identity: { name: "alice" },
-  adapters: [new BridgeAdapter({ adapterType: "peer-a", bridge })],
-  substrates: { plain: plainFactory },
+  adapters: [networkAdapter],
 })
 
-// 4. Get a typed document
-const doc = exchange.get("my-todos", TodoSchema, {
+// 3. Get a typed document
+const doc = exchange.get("my-todos", TodoDoc, {
   seed: { title: "My Todos", items: [] },
 })
 
-// 5. Read and write
+// 4. Read and write
 doc.title()  // "My Todos"
 change(doc, d => {
   d.title.set("Updated")
   d.items.push({ text: "Learn Exchange", done: false })
 })
 
-// 6. Access sync capabilities
+// 5. Access sync capabilities
 await sync(doc).waitForSync()
 sync(doc).readyStates
 sync(doc).peerId
@@ -50,28 +42,63 @@ sync(doc).peerId
 
 ## Core Concepts
 
-### The Exchange
+### BoundSchema — The Single Document Definition
 
-The `Exchange` class is the central orchestrator. It manages document lifecycle, coordinates adapters, and runs sync algorithms on behalf of passive substrates.
+A `BoundSchema` captures three choices that define a document type:
+
+1. **Schema** — what shape is the data?
+2. **Factory** — how is the data stored and versioned?
+3. **Strategy** — how does the exchange sync it?
+
+BoundSchemas are defined at module scope and passed to `exchange.get()`:
 
 ```ts
-const exchange = new Exchange({
-  identity: { peerId: "alice", name: "Alice", type: "user" },
-  adapters: [networkAdapter, storageAdapter],
-  substrates: { loro: loroFactory, plain: plainFactory },
-  defaultSubstrate: "loro",
+import { bindPlain, bindLww } from "@kyneta/schema"
+import { bindLoro } from "@kyneta/schema-loro"
+
+// Collaborative text — Loro CRDT with causal merge
+const TodoDoc = bindLoro(LoroSchema.doc({
+  title: LoroSchema.text(),
+  items: Schema.list(Schema.struct({ name: Schema.string() })),
+}))
+
+// Config data — plain substrate with sequential sync
+const ConfigDoc = bindPlain(Schema.doc({ theme: Schema.string() }))
+
+// Ephemeral presence — plain substrate with LWW broadcast
+const PresenceDoc = bindLww(Schema.doc({
+  cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
+  name: Schema.string(),
+}))
+```
+
+A BoundSchema can safely be shared across multiple Exchange instances. Each exchange calls the factory builder independently, producing a fresh factory with the correct peer identity.
+
+### The `bind()` Primitive
+
+For custom substrates, use `bind()` directly:
+
+```ts
+import { bind } from "@kyneta/schema"
+
+const CustomDoc = bind({
+  schema: Schema.doc({ data: Schema.string() }),
+  factory: (ctx) => createMyFactory(ctx.peerId),
+  strategy: "causal",
 })
 ```
 
+The `factory` is always a builder function `(context: { peerId: string }) => SubstrateFactory`. The exchange calls it lazily on first use, passing its peer identity. This ensures each exchange gets a fresh factory instance.
+
 ### Merge Strategies
 
-Each substrate factory declares a `mergeStrategy` that determines how the exchange syncs documents of that type. These are genuinely different protocols, not transport optimizations:
+Each BoundSchema declares a merge strategy that determines how the exchange syncs documents of that type. These are genuinely different protocols, not transport optimizations:
 
 | Strategy | Protocol | Version Order | Use Case |
 |----------|----------|---------------|----------|
-| `causal` | Bidirectional exchange | Partial (concurrent possible) | Loro CRDTs |
-| `sequential` | Request/response | Total (no concurrency) | Plain substrates |
-| `lww` | Unidirectional broadcast | Total (timestamp-based) | Ephemeral/presence |
+| `"causal"` | Bidirectional exchange | Partial (concurrent possible) | Loro CRDTs |
+| `"sequential"` | Request/response | Total (no concurrency) | Plain substrates |
+| `"lww"` | Unidirectional broadcast | Total (timestamp-based) | Ephemeral/presence |
 
 ### Three-Message Protocol
 
@@ -89,30 +116,41 @@ A single exchange can host documents backed by different substrate types simulta
 
 ```ts
 const exchange = new Exchange({
-  substrates: {
-    loro: loroFactory,     // CRDT collaborative docs
-    plain: plainFactory,   // Config/settings
-    lww: lwwFactory,       // Ephemeral presence
-  },
+  identity: { name: "alice" },
+  adapters: [networkAdapter],
 })
 
-const doc = exchange.get("collab-doc", docSchema, { substrate: "loro" })
-const config = exchange.get("settings", configSchema, { substrate: "plain" })
-const presence = exchange.get("presence", presenceSchema, { substrate: "lww" })
+const doc = exchange.get("collab-doc", TodoDoc)       // Loro CRDT
+const config = exchange.get("settings", ConfigDoc)     // Plain sequential
+const presence = exchange.get("presence", PresenceDoc) // LWW broadcast
 ```
 
-### Factory-Mediated Identity
+No `substrates` record needed — each document's substrate is determined by its BoundSchema.
 
-The exchange has a string `peerId`. During construction, it calls `_initialize({ peerId })` on each factory, allowing the factory to translate the exchange's identity into substrate-native form (e.g. hashing a string into Loro's numeric PeerID).
+### The Exchange
+
+The `Exchange` class is the central orchestrator. It manages document lifecycle, coordinates adapters, and runs sync algorithms on behalf of passive substrates.
+
+```ts
+const exchange = new Exchange({
+  identity: { peerId: "alice", name: "Alice", type: "user" },
+  adapters: [networkAdapter, storageAdapter],
+  permissions: {
+    visibility: (ctx) => true,
+    mutability: (ctx) => true,
+    deletion: (ctx) => true,
+  },
+})
+```
 
 ### The `sync()` Function
 
-Sync capabilities are accessed via the `sync()` function, keeping the common case simple:
+Sync capabilities are accessed via the `sync()` function:
 
 ```ts
 import { sync } from "@kyneta/exchange"
 
-const doc = exchange.get("doc-id", schema)
+const doc = exchange.get("doc-id", MyDoc)
 
 sync(doc).peerId        // Your peer ID
 sync(doc).docId         // Document ID
@@ -126,30 +164,22 @@ sync(doc).onReadyStateChange(states => {
 })
 ```
 
-### Ephemeral State as Substrate
+### Escape Hatches
 
-Presence and ephemeral state are modeled as plain-substrate documents with LWW merge strategy. No special subsystem — the exchange's sync machinery handles transport uniformly:
+Two escape hatches provide access to the underlying substrate:
 
 ```ts
-import { TimestampVersion } from "@kyneta/exchange"
+// General — returns the Substrate<any> backing a ref
+import { unwrap } from "@kyneta/schema"
+const substrate = unwrap(doc)
+substrate.frontier().serialize()  // current version
+substrate.exportSnapshot()       // full state
 
-const lwwFactory = {
-  mergeStrategy: { type: "lww" },
-  _initialize() {},
-  // ... (see TECHNICAL.md for full LWW factory implementation)
-}
-
-const exchange = new Exchange({
-  substrates: { lww: lwwFactory },
-})
-
-const presence = exchange.get("room:presence", presenceSchema)
-change(presence, d => {
-  d.cursor.x.set(100)
-  d.cursor.y.set(200)
-  d.name.set("Alice")
-})
-// → Broadcasts snapshot to all connected peers via LWW protocol
+// Loro-specific — returns the LoroDoc backing a ref
+import { loro } from "@kyneta/schema-loro"
+const loroDoc = loro(doc)
+loroDoc.toJSON()                 // raw Loro state
+loroDoc.version()                // VersionVector
 ```
 
 ## API Reference
@@ -158,7 +188,7 @@ change(presence, d => {
 
 | Method | Description |
 |--------|-------------|
-| `get(docId, schema, opts?)` | Get or create a document. Returns `Ref<S>`. |
+| `get(docId, boundSchema, opts?)` | Get or create a document. Returns `Ref<S>`. |
 | `has(docId)` | Check if a document exists. |
 | `delete(docId)` | Delete a document. |
 | `flush()` | Await all pending storage operations. |
@@ -177,15 +207,21 @@ change(presence, d => {
 | `waitForSync(opts?)` | Wait for sync with a peer of the specified kind. |
 | `onReadyStateChange(cb)` | Subscribe to sync status changes. Returns unsubscribe function. |
 
-### ExchangeSubstrateFactory
+### Bind Functions
 
-| Property/Method | Description |
-|----------------|-------------|
-| `mergeStrategy` | `{ type: "causal" }`, `{ type: "sequential" }`, or `{ type: "lww" }` |
-| `_initialize(ctx)` | Lifecycle hook called by the exchange with `{ peerId }`. |
-| `create(schema, seed?)` | Create a fresh substrate. (From `SubstrateFactory`.) |
-| `fromSnapshot(payload, schema)` | Reconstruct from snapshot. (From `SubstrateFactory`.) |
-| `parseVersion(serialized)` | Deserialize a version. (From `SubstrateFactory`.) |
+| Function | Package | Description |
+|----------|---------|-------------|
+| `bind({ schema, factory, strategy })` | `@kyneta/schema` | General primitive — explicit schema, factory builder, strategy. |
+| `bindPlain(schema)` | `@kyneta/schema` | Plain substrate + sequential strategy. |
+| `bindLww(schema)` | `@kyneta/schema` | Plain substrate + LWW broadcast strategy. |
+| `bindLoro(schema)` | `@kyneta/schema-loro` | Loro substrate + causal strategy. |
+
+### Escape Hatches
+
+| Function | Package | Description |
+|----------|---------|-------------|
+| `unwrap(ref)` | `@kyneta/schema` | Returns the `Substrate<any>` backing a ref. |
+| `loro(ref)` | `@kyneta/schema-loro` | Returns the `LoroDoc` backing a Loro-backed ref. |
 
 ### Adapters
 

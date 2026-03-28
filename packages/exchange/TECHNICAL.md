@@ -145,30 +145,65 @@ type EstablishResponseMsg = { type: "establish-response"; identity: PeerIdentity
 
 ---
 
-## 4. Factory-Mediated Identity
+## 4. BoundSchema and Factory Builders
 
-### The Problem
+### The Three Choices
 
-Different substrates have different peer identity constraints. Loro requires a numeric `PeerID` (internally a `bigint`). Plain substrates have no peer concept. Automerge uses hex `ActorId` strings.
+A `BoundSchema<S>` captures three explicit choices that define a document type:
 
-### The Solution
-
-The exchange has a canonical string `peerId` for network identity. Each `ExchangeSubstrateFactory` translates it deterministically into substrate-native form via the `_initialize()` lifecycle hook:
+1. **Schema** — what shape is the data? (a `SchemaNode` from `@kyneta/schema`)
+2. **Factory builder** — how to construct the substrate? (a function `(ctx: { peerId }) => SubstrateFactory`)
+3. **Merge strategy** — how does the exchange sync it? (`"causal"`, `"sequential"`, or `"lww"`)
 
 ```ts
-interface ExchangeSubstrateFactory<V extends Version> extends SubstrateFactory<V> {
-  readonly mergeStrategy: MergeStrategy
-  _initialize(context: { peerId: string }): void
+interface BoundSchema<S extends SchemaNode = SchemaNode> {
+  readonly _brand: "BoundSchema"
+  readonly schema: S
+  readonly factory: FactoryBuilder<any>
+  readonly strategy: MergeStrategy
 }
+
+type FactoryBuilder<V extends Version> = (context: { peerId: string }) => SubstrateFactory<V>
+type MergeStrategy = "causal" | "sequential" | "lww"
 ```
 
-The exchange calls `_initialize({ peerId })` on every factory during construction, before any `create()` or `fromSnapshot()` calls. This follows the same lifecycle pattern as adapters (`_initialize` → `_start` → `_stop`).
+BoundSchemas are static declarations created at module scope via `bind()`, `bindPlain()`, `bindLww()`, or `bindLoro()`. They are consumed at runtime by `exchange.get(docId, boundSchema)`.
 
-For heterogeneous exchanges, a single string identity is translated independently by each factory. The Loro factory hashes it to a numeric PeerID; the plain factory ignores it.
+### Factory Builder Lifecycle
 
-### Why Not Modify `SubstrateFactory`?
+The factory is always a **builder function**, not a static instance. This solves the identity injection problem:
 
-`ExchangeSubstrateFactory` extends `SubstrateFactory` rather than modifying it. This keeps `@kyneta/schema` unchanged — no transitive effects on `@kyneta/schema-loro`, `@kyneta/core`, or any existing consumers.
+1. **`BoundSchema` is defined at module scope** — it's a static, shareable declaration.
+2. **The exchange calls the builder lazily** on first `get()` that uses a given BoundSchema, passing `{ peerId: this.peerId }`.
+3. **Each exchange gets a fresh factory** — two exchanges sharing the same BoundSchema produce independent factory instances with their own peer identity.
+4. **Factories are cached per-exchange** — a `WeakMap<FactoryBuilder, SubstrateFactory>` ensures the builder is called at most once per exchange.
+
+For Loro substrates, the builder hashes the string peerId to a deterministic numeric Loro PeerID and returns a factory that calls `doc.setPeerId()` on every new LoroDoc. For plain substrates, the builder ignores the context: `() => plainSubstrateFactory`.
+
+### Convenience Wrappers
+
+| Function | Package | Factory | Strategy |
+|----------|---------|---------|----------|
+| `bindPlain(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"sequential"` |
+| `bindLww(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"lww"` |
+| `bindLoro(schema)` | `@kyneta/schema-loro` | `(ctx) => createLoroFactory(ctx.peerId)` | `"causal"` |
+
+### Why Not `ExchangeSubstrateFactory`?
+
+The previous design used `ExchangeSubstrateFactory` — a `SubstrateFactory` extended with `mergeStrategy` and `_initialize()`. This was replaced by `BoundSchema` because:
+
+1. **Merge strategy was on the wrong entity.** The same `plainSubstrateFactory` can be used with `"sequential"` or `"lww"`. The strategy is a property of *how the exchange uses the factory*, not the factory itself.
+2. **`_initialize()` didn't compose.** If a factory was shared across exchanges, it would be initialized with the first exchange's peerId. The builder function pattern produces a fresh factory per exchange.
+3. **Boilerplate.** Every usage required wrapping a `SubstrateFactory` to add `mergeStrategy` and `_initialize` — ~10 lines of wrapping per factory.
+
+### Escape Hatches
+
+Two escape hatches provide access to the underlying substrate:
+
+- **`unwrap(ref)`** in `@kyneta/schema` — general, returns `Substrate<any>`. Uses a `WeakMap<object, Substrate>` populated by `registerSubstrate()` (called by the exchange after building the ref).
+- **`loro(ref)`** in `@kyneta/schema-loro` — Loro-specific, returns `LoroDoc`. Uses `unwrap()` internally to get the substrate, then a `WeakMap<Substrate, LoroDoc>` populated by `createLoroSubstrate()`.
+
+The two-step approach (ref → substrate → LoroDoc) avoids duplicating tracking WeakMaps and composes cleanly. Currently supports root-level refs only; child-level resolution (e.g. `loro(doc.title)` → `LoroText`) is future work.
 
 ---
 
@@ -322,7 +357,6 @@ Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingM
 | File | Purpose |
 |------|---------|
 | `src/types.ts` | Core identity and state types (PeerId, DocId, ChannelId, PeerState, ReadyState) |
-| `src/factory.ts` | `MergeStrategy` type and `ExchangeSubstrateFactory` interface |
 | `src/timestamp-version.ts` | `TimestampVersion` — wall-clock version for LWW |
 | `src/messages.ts` | Three-message vocabulary (discover, interest, offer) + establishment messages |
 | `src/channel.ts` | Channel types and lifecycle (GeneratedChannel → ConnectedChannel → EstablishedChannel) |
@@ -336,30 +370,35 @@ Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingM
 | `src/synchronizer.ts` | Synchronizer runtime — dispatch, command execution, substrate interaction |
 | `src/exchange.ts` | `Exchange` class — public API |
 | `src/sync.ts` | `sync()` function and `SyncRef` — sync capabilities access |
-| `src/index.ts` | Barrel export |
+| `src/index.ts` | Barrel export (re-exports `bind`, `BoundSchema`, `MergeStrategy`, etc. from `@kyneta/schema`) |
+
+Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unwrap()`, and `registerSubstrate()` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` and `loro()` are defined in `@kyneta/schema-loro`.
 
 ### Test Files
 
 | File | Coverage |
 |------|----------|
-| `src/__tests__/timestamp-version.test.ts` | TimestampVersion serialize/parse/compare (15 tests) |
+| `src/__tests__/timestamp-version.test.ts` | TimestampVersion serialize/parse/compare (12 tests) |
 | `src/__tests__/adapter.test.ts` | Adapter lifecycle, AdapterManager, BridgeAdapter (13 tests) |
 | `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types and merge strategies (23 tests) |
-| `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle (23 tests) |
+| `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle (21 tests) |
 | `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, and heterogeneous (7 tests) |
+| `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, LWW stale rejection, causal deltas (6 tests) |
 
 ---
 
 ## 11. Verified Properties
 
-1. **Sequential sync converges**: Two exchanges with `plainSubstrateFactory`, peer A creates doc with seed, peer B syncs and reads same state. Mutations from A propagate to B after initial sync.
+1. **Sequential sync converges**: Two exchanges with `bindPlain()`, peer A creates doc with seed, peer B syncs and reads same state. Mutations from A propagate to B after initial sync.
 
-2. **Causal sync converges**: Two exchanges with `loroSubstrateFactory`, concurrent edits from both peers produce identical final state on both sides (CRDT merge).
+2. **Causal sync converges**: Two exchanges with `bindLoro()`, concurrent edits from both peers produce identical final state on both sides (CRDT merge).
 
 3. **LWW broadcast works**: Peer A sets presence via `change()`, peer B receives snapshot via LWW broadcast, state matches. Updates propagate via subsequent broadcasts.
 
-4. **Heterogeneous documents**: Single exchange hosts both Loro-backed and plain-backed documents. Both sync correctly to a peer through the same adapter infrastructure.
+4. **Heterogeneous documents**: Single exchange hosts both Loro-backed (`bindLoro`) and plain-backed (`bindPlain`) documents. Both sync correctly to a peer through the same adapter infrastructure.
 
-5. **Existing tests unaffected**: 1,097 `@kyneta/schema` tests + 86 `@kyneta/schema-loro` tests continue to pass with no modifications.
+5. **Factory builder isolation**: Two exchanges sharing the same `BoundSchema` get independent factory instances, each with the correct peer identity.
 
-6. **No `@kyneta/schema` changes**: `ExchangeSubstrateFactory` extends (not modifies) `SubstrateFactory`. The `Version`, `SubstratePayload`, and `Substrate` interfaces are unchanged.
+6. **Escape hatches work**: `unwrap(ref)` returns the substrate; `loro(ref)` returns the LoroDoc. Both compose via the `WeakMap` chain (ref → substrate → LoroDoc).
+
+7. **Existing tests unaffected**: `@kyneta/schema` tests (1110) and `@kyneta/schema-loro` tests (92) pass, including new `bind`/`unwrap`/`bindLoro`/`loro` tests. The `SubstrateFactory`, `Substrate`, and `Version` interfaces are unchanged.

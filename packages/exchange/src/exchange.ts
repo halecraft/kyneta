@@ -7,22 +7,26 @@
 // Usage:
 //   const exchange = new Exchange({
 //     identity: { name: "alice" },
-//     adapters: [network, storage],
-//     substrates: { loro: loroFactory, plain: plainFactory },
-//     defaultSubstrate: "loro",
+//     adapters: [network],
 //   })
 //
-//   const doc = exchange.get("my-doc", schema)
+//   const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
+//   const doc = exchange.get("my-doc", TodoDoc)
 //   sync(doc).waitForSync()
 
 import {
   interpret,
   type Ref,
   type Schema as SchemaNode,
+  type BoundSchema,
+  type MergeStrategy,
+  type FactoryBuilder,
+  type SubstrateFactory,
+  isBoundSchema,
+  registerSubstrate,
 } from "@kyneta/schema"
 import { changefeed, readable, writable } from "@kyneta/schema"
 import type { AnyAdapter } from "./adapter/adapter.js"
-import type { ExchangeSubstrateFactory } from "./factory.js"
 import type { Permissions } from "./permissions.js"
 import { registerSync } from "./sync.js"
 import { Synchronizer } from "./synchronizer.js"
@@ -48,25 +52,6 @@ export type ExchangeParams = {
   adapters?: AnyAdapter[]
 
   /**
-   * Named substrate factories. Each key is a substrate type name
-   * (e.g. "loro", "plain", "lww") and each value is an
-   * ExchangeSubstrateFactory that knows how to create substrates
-   * of that type.
-   *
-   * The exchange calls `_initialize({ peerId })` on each factory
-   * during construction, injecting the exchange's peer identity.
-   */
-  substrates: Record<string, ExchangeSubstrateFactory<any>>
-
-  /**
-   * Default substrate type. When `get()` is called without an
-   * explicit `substrate` option, this key is used to look up the
-   * factory. If omitted and there is exactly one substrate, that
-   * one is used as the default.
-   */
-  defaultSubstrate?: string
-
-  /**
    * Permission predicates controlling document access.
    */
   permissions?: Partial<Permissions>
@@ -77,13 +62,8 @@ export type ExchangeParams = {
  */
 export type GetOptions = {
   /**
-   * Which substrate factory to use (key into the `substrates` record).
-   * Falls back to `defaultSubstrate` if omitted.
-   */
-  substrate?: string
-
-  /**
    * Optional seed values for the initial document state.
+   * Seed is per-document-instance, not per-binding.
    */
   seed?: Record<string, unknown>
 }
@@ -94,8 +74,7 @@ export type GetOptions = {
 
 type DocCacheEntry = {
   ref: any
-  schema: SchemaNode
-  substrateName: string
+  bound: BoundSchema
 }
 
 // ---------------------------------------------------------------------------
@@ -111,20 +90,27 @@ type DocCacheEntry = {
  * document operations.
  *
  * A single Exchange can host documents backed by different substrate types
- * simultaneously (heterogeneous documents).
+ * simultaneously (heterogeneous documents). Each document's substrate type
+ * and sync strategy are determined by its `BoundSchema`.
  *
  * @example
  * ```typescript
+ * import { Exchange, sync } from "@kyneta/exchange"
+ * import { bindPlain } from "@kyneta/schema"
+ * import { bindLoro } from "@kyneta/schema-loro"
+ *
  * const exchange = new Exchange({
  *   identity: { name: "alice" },
  *   adapters: [new BridgeAdapter({ adapterType: "peer-a", bridge })],
- *   substrates: { plain: plainFactory, loro: loroFactory },
- *   defaultSubstrate: "plain",
  * })
  *
- * const doc = exchange.get("my-doc", mySchema)
+ * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
+ * const ConfigDoc = bindPlain(Schema.doc({ theme: Schema.string() }))
+ *
+ * const doc = exchange.get("my-doc", TodoDoc)
+ * const config = exchange.get("config", ConfigDoc)
  * doc.title()  // read
- * change(doc, d => d.title.set("Hello"))  // write
+ * change(doc, d => d.title.insert(0, "Hello"))  // write
  * await sync(doc).waitForSync()  // sync
  * ```
  */
@@ -132,17 +118,25 @@ export class Exchange {
   readonly peerId: string
 
   readonly #synchronizer: Synchronizer
-  readonly #substrates: Record<string, ExchangeSubstrateFactory<any>>
-  readonly #defaultSubstrate: string | undefined
   readonly #docCache = new Map<DocId, DocCacheEntry>()
+
+  /**
+   * Per-exchange factory cache. Each FactoryBuilder is called at most once
+   * per exchange, and the resulting SubstrateFactory is cached here.
+   *
+   * This ensures:
+   * 1. A BoundSchema shared across multiple exchanges gets a fresh factory
+   *    per exchange (with the correct peerId).
+   * 2. Multiple documents using the same BoundSchema within one exchange
+   *    share the same factory instance.
+   */
+  readonly #factoryCache = new WeakMap<FactoryBuilder<any>, SubstrateFactory<any>>()
 
   constructor({
     identity = {},
     adapters = [],
-    substrates,
-    defaultSubstrate,
     permissions,
-  }: ExchangeParams) {
+  }: ExchangeParams = {}) {
     // Resolve peer identity
     const peerId = identity.peerId ?? generatePeerId()
     validatePeerId(peerId)
@@ -154,30 +148,6 @@ export class Exchange {
       type: identity.type ?? "user",
     }
 
-    // Store substrate factories
-    this.#substrates = substrates
-
-    // Resolve default substrate
-    const substrateKeys = Object.keys(substrates)
-    if (defaultSubstrate) {
-      if (!(defaultSubstrate in substrates)) {
-        throw new Error(
-          `defaultSubstrate '${defaultSubstrate}' not found in substrates. ` +
-            `Available: ${substrateKeys.join(", ")}`,
-        )
-      }
-      this.#defaultSubstrate = defaultSubstrate
-    } else if (substrateKeys.length === 1) {
-      this.#defaultSubstrate = substrateKeys[0]
-    } else {
-      this.#defaultSubstrate = undefined
-    }
-
-    // Initialize all factories with peer identity
-    for (const factory of Object.values(substrates)) {
-      factory._initialize({ peerId })
-    }
-
     // Create synchronizer
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
@@ -187,89 +157,98 @@ export class Exchange {
   }
 
   // =========================================================================
+  // PRIVATE — Factory resolution
+  // =========================================================================
+
+  /**
+   * Resolve a FactoryBuilder to a SubstrateFactory, caching per-exchange.
+   *
+   * The builder is called with `{ peerId: this.peerId }` on first use.
+   * Subsequent calls with the same builder return the cached factory.
+   */
+  #resolveFactory(builder: FactoryBuilder<any>): SubstrateFactory<any> {
+    let factory = this.#factoryCache.get(builder)
+    if (!factory) {
+      factory = builder({ peerId: this.peerId })
+      this.#factoryCache.set(builder, factory)
+    }
+    return factory
+  }
+
+  // =========================================================================
   // PUBLIC API — Document access
   // =========================================================================
 
   /**
-   * Gets (or creates) a document with typed schema.
+   * Gets (or creates) a document with a bound schema.
    *
    * This is the primary API for accessing documents. Returns a full-stack
    * `Ref<S>` — callable, navigable, writable, transactable, and observable.
    *
-   * The ref is backed by a substrate determined by `opts.substrate` (or
-   * the default substrate). The substrate's merge strategy determines how
+   * The ref is backed by a substrate determined by the `BoundSchema`'s
+   * factory builder. The bound schema's merge strategy determines how
    * the exchange syncs this document with peers.
    *
    * Multiple calls with the same `docId` return the same instance.
-   * Calling with a different schema for the same `docId` throws.
+   * Calling with a different BoundSchema for the same `docId` throws.
    *
    * @param docId - The document ID
-   * @param schema - The schema describing the document structure
-   * @param opts - Options (substrate selection, seed values)
+   * @param bound - A BoundSchema created by `bind()`, `bindPlain()`, `bindLww()`, or `bindLoro()`
+   * @param opts - Options (seed values)
    * @returns A full-stack Ref<S> with sync capabilities via `sync()`
    *
    * @example
    * ```typescript
-   * const doc = exchange.get("my-doc", mySchema)
-   * doc.title()  // read via ref
+   * import { bindPlain } from "@kyneta/schema"
+   * import { bindLoro } from "@kyneta/schema-loro"
    *
-   * // With explicit substrate
-   * const doc2 = exchange.get("config", configSchema, { substrate: "plain" })
+   * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
+   * const doc = exchange.get("my-doc", TodoDoc)
    *
    * // With seed values
-   * const doc3 = exchange.get("new-doc", mySchema, { seed: { title: "Hello" } })
+   * const ConfigDoc = bindPlain(Schema.doc({ theme: Schema.string() }))
+   * const config = exchange.get("config", ConfigDoc, { seed: { theme: "dark" } })
    * ```
    */
   get<S extends SchemaNode>(
     docId: DocId,
-    schema: S,
+    bound: BoundSchema<S>,
     opts?: GetOptions,
   ): Ref<S> {
     // Check cache first
     const cached = this.#docCache.get(docId)
 
     if (cached) {
-      // Validate schema matches — throw if different schema for same docId
-      if (cached.schema !== schema) {
+      // Validate BoundSchema matches — throw if different binding for same docId
+      if (cached.bound !== bound) {
         throw new Error(
-          `Document '${docId}' already exists with a different schema. ` +
-            `Use the same schema object when calling exchange.get() for the same document.`,
+          `Document '${docId}' already exists with a different BoundSchema. ` +
+            `Use the same BoundSchema object when calling exchange.get() for the same document.`,
         )
       }
 
       return cached.ref as Ref<S>
     }
 
-    // Resolve factory
-    const substrateName = opts?.substrate ?? this.#defaultSubstrate
-    if (!substrateName) {
-      throw new Error(
-        "No substrate specified and no default substrate configured. " +
-          "Either pass { substrate: 'name' } to get() or set defaultSubstrate in the Exchange constructor.",
-      )
-    }
-
-    const factory = this.#substrates[substrateName]
-    if (!factory) {
-      throw new Error(
-        `Substrate '${substrateName}' not found. ` +
-          `Available: ${Object.keys(this.#substrates).join(", ")}`,
-      )
-    }
+    // Resolve factory from the BoundSchema's builder
+    const factory = this.#resolveFactory(bound.factory)
 
     // Create substrate
     const seed = opts?.seed ?? {}
-    const substrate = factory.create(schema, seed)
+    const substrate = factory.create(bound.schema, seed)
 
     // Build the full interpreter stack
     // The `as any` avoids TS2589 — interpret's fluent API produces deeply
     // recursive types when S is the abstract SchemaNode. The public
     // get<S>() signature provides the correct Ref<S> return type.
-    const ref: any = (interpret as any)(schema, substrate.context())
+    const ref: any = (interpret as any)(bound.schema, substrate.context())
       .with(readable)
       .with(writable)
       .with(changefeed)
       .done()
+
+    // Register substrate for unwrap() escape hatch
+    registerSubstrate(ref, substrate)
 
     // Register sync capabilities
     registerSync(ref, {
@@ -281,8 +260,7 @@ export class Exchange {
     // Cache
     this.#docCache.set(docId, {
       ref,
-      schema,
-      substrateName,
+      bound,
     })
 
     // Register with synchronizer
@@ -290,8 +268,9 @@ export class Exchange {
       docId,
       substrate,
       factory,
+      strategy: bound.strategy,
       ref,
-      schema,
+      schema: bound.schema,
     })
 
     return ref as Ref<S>

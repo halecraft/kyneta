@@ -4,6 +4,7 @@
 // 1. Empty delta → snapshot fallback (seeded state with version 0)
 // 2. Snapshot import preserves ref object identity
 // 3. LWW stale rejection discards out-of-order arrivals
+// 4. Causal sync uses deltas after initial sync
 
 import { describe, expect, it, afterEach } from "vitest"
 import {
@@ -11,38 +12,27 @@ import {
   LoroSchema,
   plainSubstrateFactory,
   change,
+  bind,
+  bindPlain,
   buildWritableContext,
+  type BoundSchema,
   type Substrate,
   type SubstratePayload,
   type WritableContext,
 } from "@kyneta/schema"
 import type { Schema as SchemaNode } from "@kyneta/schema"
-import { loroSubstrateFactory } from "@kyneta/schema-loro"
+import { bindLoro } from "@kyneta/schema-loro"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
 import { Bridge, BridgeAdapter } from "../adapter/bridge-adapter.js"
-import type { ExchangeSubstrateFactory, MergeStrategy } from "../factory.js"
 import { TimestampVersion } from "../timestamp-version.js"
 
 // ---------------------------------------------------------------------------
-// Factory helpers (shared across tests)
+// LWW factory builder (shared across tests)
 // ---------------------------------------------------------------------------
 
-function wrapPlainSequential(): ExchangeSubstrateFactory<any> {
+function lwwFactoryBuilder(_ctx: { peerId: string }) {
   return {
-    ...plainSubstrateFactory,
-    mergeStrategy: { type: "sequential" } as MergeStrategy,
-    _initialize() {},
-    create: plainSubstrateFactory.create.bind(plainSubstrateFactory),
-    fromSnapshot: plainSubstrateFactory.fromSnapshot.bind(plainSubstrateFactory),
-    parseVersion: plainSubstrateFactory.parseVersion.bind(plainSubstrateFactory),
-  }
-}
-
-function createLwwFactory(): ExchangeSubstrateFactory<TimestampVersion> {
-  return {
-    mergeStrategy: { type: "lww" } as MergeStrategy,
-    _initialize() {},
     create(schema: SchemaNode, seed?: Record<string, unknown>): Substrate<TimestampVersion> {
       const inner = plainSubstrateFactory.create(schema, seed)
       let currentVersion = new TimestampVersion(0)
@@ -50,7 +40,7 @@ function createLwwFactory(): ExchangeSubstrateFactory<TimestampVersion> {
 
       const substrate: Substrate<TimestampVersion> = {
         store: inner.store,
-        prepare(path, change) { inner.prepare(path, change) },
+        prepare(path: any, change: any) { inner.prepare(path, change) },
         onFlush(origin?: string) {
           inner.onFlush(origin)
           currentVersion = TimestampVersion.now()
@@ -76,7 +66,7 @@ function createLwwFactory(): ExchangeSubstrateFactory<TimestampVersion> {
 
       const substrate: Substrate<TimestampVersion> = {
         store: inner.store,
-        prepare(path, change) { inner.prepare(path, change) },
+        prepare(path: any, change: any) { inner.prepare(path, change) },
         onFlush(origin?: string) {
           inner.onFlush(origin)
           currentVersion = TimestampVersion.now()
@@ -99,6 +89,10 @@ function createLwwFactory(): ExchangeSubstrateFactory<TimestampVersion> {
   }
 }
 
+function bindLwwCustom<S extends SchemaNode>(schema: S): BoundSchema<S> {
+  return bind({ schema, factory: lwwFactoryBuilder, strategy: "lww" })
+}
+
 // ---------------------------------------------------------------------------
 // Drain + cleanup helpers
 // ---------------------------------------------------------------------------
@@ -112,7 +106,7 @@ async function drain(rounds = 20): Promise<void> {
 
 const activeExchanges: Exchange[] = []
 
-function createExchange(params: ConstructorParameters<typeof Exchange>[0]): Exchange {
+function createExchange(params: ConstructorParameters<typeof Exchange>[0] = {}): Exchange {
   const ex = new Exchange(params)
   activeExchanges.push(ex)
   return ex
@@ -126,6 +120,32 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
+// Bound schemas (module scope)
+// ---------------------------------------------------------------------------
+
+const seededSchema = Schema.doc({
+  title: Schema.string(),
+  count: Schema.number(),
+})
+const SeededDoc = bindPlain(seededSchema)
+
+const simpleSchema = Schema.doc({
+  title: Schema.string(),
+})
+const SimpleDoc = bindPlain(simpleSchema)
+
+const presenceSchema = Schema.doc({
+  name: Schema.string(),
+  x: Schema.number(),
+})
+const PresenceDoc = bindLwwCustom(presenceSchema)
+
+const loroSchema = LoroSchema.doc({
+  title: LoroSchema.text(),
+})
+const LoroDoc = bindLoro(loroSchema)
+
+// ---------------------------------------------------------------------------
 // 1. Empty delta → snapshot fallback
 //
 // Bug: When both peers have version 0 (PlainSubstrate starts at 0 even
@@ -137,33 +157,26 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("empty delta → snapshot fallback", () => {
-  const schema = Schema.doc({
-    title: Schema.string(),
-    count: Schema.number(),
-  })
-
   it("seeded doc at version 0 syncs via snapshot when exportSince returns empty ops", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
 
     // Alice creates a doc with seed — version is 0, but store has data
-    const docA = exchangeA.get("doc-1", schema, {
+    const docA = exchangeA.get("doc-1", SeededDoc, {
       seed: { title: "Seeded", count: 99 },
     })
     expect(docA.title()).toBe("Seeded")
 
     // Bob creates the same doc — version is also 0, store is empty defaults
-    const docB = exchangeB.get("doc-1", schema)
+    const docB = exchangeB.get("doc-1", SeededDoc)
     expect(docB.title()).toBe("")
 
     await drain()
@@ -184,26 +197,20 @@ describe("empty delta → snapshot fallback", () => {
 // ---------------------------------------------------------------------------
 
 describe("snapshot import preserves ref identity", () => {
-  const schema = Schema.doc({
-    title: Schema.string(),
-  })
-
   it("docB ref object is the same before and after receiving a snapshot", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
 
-    const docA = exchangeA.get("doc-1", schema, { seed: { title: "Hello" } })
-    const docB = exchangeB.get("doc-1", schema)
+    const docA = exchangeA.get("doc-1", SimpleDoc, { seed: { title: "Hello" } })
+    const docB = exchangeB.get("doc-1", SimpleDoc)
     const refBefore = docB
 
     await drain()
@@ -222,18 +229,16 @@ describe("snapshot import preserves ref identity", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { plain: wrapPlainSequential() },
     })
 
-    const docB = exchangeB.get("doc-1", schema)
+    const docB = exchangeB.get("doc-1", SimpleDoc)
     const syncRef = sync(docB)
 
-    exchangeA.get("doc-1", schema, { seed: { title: "Hello" } })
+    exchangeA.get("doc-1", SimpleDoc, { seed: { title: "Hello" } })
     await drain()
 
     // The SyncRef obtained before sync should still be valid
@@ -251,27 +256,20 @@ describe("snapshot import preserves ref identity", () => {
 // ---------------------------------------------------------------------------
 
 describe("LWW stale rejection", () => {
-  const presenceSchema = Schema.doc({
-    name: Schema.string(),
-    x: Schema.number(),
-  })
-
   it("out-of-order arrival: newer local state is not overwritten by stale offer", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { lww: createLwwFactory() },
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { lww: createLwwFactory() },
     })
 
     // Alice sets initial presence
-    const presA = exchangeA.get("presence", presenceSchema)
+    const presA = exchangeA.get("presence", PresenceDoc)
     change(presA, (d: any) => {
       d.name.set("Alice")
       d.x.set(100)
@@ -279,7 +277,7 @@ describe("LWW stale rejection", () => {
     exchangeA.synchronizer.notifyLocalChange("presence")
 
     // Bob creates the doc and receives Alice's state
-    const presB = exchangeB.get("presence", presenceSchema)
+    const presB = exchangeB.get("presence", PresenceDoc)
     await drain()
     expect(presB.name()).toBe("Alice")
     expect(presB.x()).toBe(100)
@@ -289,12 +287,8 @@ describe("LWW stale rejection", () => {
       d.name.set("Bob")
       d.x.set(999)
     })
-    // Bob's version is now newer than Alice's last offer
 
-    // Alice sends another update (but with an older or equal timestamp
-    // relative to Bob's new state — in practice, Alice's new timestamp
-    // might be milliseconds apart). We simulate this by having Alice
-    // update, then immediately having Bob's local state be the latest.
+    // Alice sends another update
     change(presA, (d: any) => {
       d.x.set(200)
     })
@@ -302,25 +296,16 @@ describe("LWW stale rejection", () => {
     await drain()
 
     // The key invariant: after all messages settle, both sides should
-    // have consistent state. Alice's x=200 offer has a newer timestamp
-    // than Bob's local change (because of wall-clock progression), so
-    // Bob should accept it. This is the expected LWW behavior — last
-    // writer (by timestamp) wins.
-    //
-    // What we're really testing: the synchronizer doesn't crash, the
-    // LWW comparison runs, and state converges to something consistent.
+    // have consistent state. The LWW comparison runs, and state
+    // converges to something consistent.
     const bobName = presB.name()
     const bobX = presB.x()
-    // Bob's state should reflect the latest offer (Alice's x=200)
-    // because Alice's timestamp is newer than Bob's local change
-    // (wall clock progressed between Bob's change and Alice's offer arrival)
     expect(typeof bobName).toBe("string")
     expect(typeof bobX).toBe("number")
   })
 
   it("equal-timestamp offers are discarded (idempotent)", async () => {
     // Unit-level test: verify the TimestampVersion comparison logic
-    // that guards the import path
     const v1 = new TimestampVersion(1000)
     const v2 = new TimestampVersion(1000)
 
@@ -346,37 +331,20 @@ describe("LWW stale rejection", () => {
 // ---------------------------------------------------------------------------
 
 describe("causal sync uses deltas when sender is ahead", () => {
-  const schema = LoroSchema.doc({
-    title: LoroSchema.text(),
-  })
-
   it("after initial sync, mutations propagate as deltas (not full snapshots)", async () => {
     const bridge = new Bridge()
-
-    function wrapLoro(): ExchangeSubstrateFactory<any> {
-      return {
-        ...loroSubstrateFactory,
-        mergeStrategy: { type: "causal" } as MergeStrategy,
-        _initialize() {},
-        create: loroSubstrateFactory.create.bind(loroSubstrateFactory),
-        fromSnapshot: loroSubstrateFactory.fromSnapshot.bind(loroSubstrateFactory),
-        parseVersion: loroSubstrateFactory.parseVersion.bind(loroSubstrateFactory),
-      }
-    }
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
-      substrates: { loro: wrapLoro() },
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
-      substrates: { loro: wrapLoro() },
     })
 
-    const docA = exchangeA.get("doc-1", schema)
-    const docB = exchangeB.get("doc-1", schema)
+    const docA = exchangeA.get("doc-1", LoroDoc)
+    const docB = exchangeB.get("doc-1", LoroDoc)
 
     // Initial sync
     await drain()

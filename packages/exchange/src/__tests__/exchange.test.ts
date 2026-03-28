@@ -1,38 +1,32 @@
 // Exchange — unit tests for the public Exchange API.
 
-import { describe, expect, it } from "vitest"
-import { Schema, plainSubstrateFactory } from "@kyneta/schema"
+import { describe, expect, it, vi } from "vitest"
+import {
+  Schema,
+  LoroSchema,
+  bindPlain,
+  bindLww,
+  bind,
+  plainSubstrateFactory,
+  unwrap,
+} from "@kyneta/schema"
+import { bindLoro, loro } from "@kyneta/schema-loro"
 import { Exchange } from "../exchange.js"
 import { sync, hasSync } from "../sync.js"
-import type { ExchangeSubstrateFactory } from "../factory.js"
-import type { MergeStrategy } from "../factory.js"
 
 // ---------------------------------------------------------------------------
-// Test helpers
+// Test schemas (bound at module scope)
 // ---------------------------------------------------------------------------
-
-/**
- * Wrap plainSubstrateFactory as an ExchangeSubstrateFactory with sequential merge.
- */
-function createPlainExchangeFactory(): ExchangeSubstrateFactory<any> {
-  let initialized = false
-  return {
-    ...plainSubstrateFactory,
-    mergeStrategy: { type: "sequential" } as MergeStrategy,
-    _initialize(_context: { peerId: string }) {
-      initialized = true
-    },
-    // Expose for testing
-    get _initialized() {
-      return initialized
-    },
-  } as ExchangeSubstrateFactory<any> & { _initialized: boolean }
-}
 
 const testSchema = Schema.doc({
   title: Schema.string(),
   count: Schema.number(),
 })
+
+const TestDoc = bindPlain(testSchema)
+
+const otherSchema = Schema.doc({ name: Schema.string() })
+const OtherDoc = bindPlain(otherSchema)
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -41,10 +35,7 @@ const testSchema = Schema.doc({
 describe("Exchange", () => {
   describe("constructor", () => {
     it("creates with auto-generated peerId", () => {
-      const factory = createPlainExchangeFactory()
-      const exchange = new Exchange({
-        substrates: { plain: factory },
-      })
+      const exchange = new Exchange()
 
       expect(exchange.peerId).toBeDefined()
       expect(typeof exchange.peerId).toBe("string")
@@ -52,68 +43,28 @@ describe("Exchange", () => {
     })
 
     it("creates with explicit peerId", () => {
-      const factory = createPlainExchangeFactory()
       const exchange = new Exchange({
         identity: { peerId: "my-peer" },
-        substrates: { plain: factory },
       })
 
       expect(exchange.peerId).toBe("my-peer")
     })
 
-    it("initializes all factories with peerId", () => {
-      const factory = createPlainExchangeFactory() as ExchangeSubstrateFactory<any> & { _initialized: boolean }
-      const exchange = new Exchange({
-        identity: { peerId: "test-peer" },
-        substrates: { plain: factory },
-      })
-
-      expect(factory._initialized).toBe(true)
-    })
-
-    it("throws if defaultSubstrate is not in substrates", () => {
-      expect(
-        () =>
-          new Exchange({
-            substrates: { plain: createPlainExchangeFactory() },
-            defaultSubstrate: "nonexistent",
-          }),
-      ).toThrow("not found in substrates")
-    })
-
-    it("auto-selects default when only one substrate is provided", () => {
-      const factory = createPlainExchangeFactory()
-      const exchange = new Exchange({
-        substrates: { plain: factory },
-      })
-
-      // Should not throw — auto-detected default
-      const doc = exchange.get("test-doc", testSchema)
-      expect(doc).toBeDefined()
-    })
   })
 
   describe("get()", () => {
     it("returns a Ref<S> that can be read", () => {
-      const factory = createPlainExchangeFactory()
-      const exchange = new Exchange({
-        substrates: { plain: factory },
-      })
-
-      const doc = exchange.get("doc-1", testSchema)
+      const exchange = new Exchange()
+      const doc = exchange.get("doc-1", TestDoc)
 
       // The ref should be callable (returns plain value)
       const value = doc()
       expect(value).toEqual({ title: "", count: 0 })
     })
 
-    it("returns a Ref<S> that can be read with navigation", () => {
-      const factory = createPlainExchangeFactory()
-      const exchange = new Exchange({
-        substrates: { plain: factory },
-      })
-
-      const doc = exchange.get("doc-1", testSchema, {
+    it("returns a Ref<S> with navigation and seed values", () => {
+      const exchange = new Exchange()
+      const doc = exchange.get("doc-1", TestDoc, {
         seed: { title: "Hello", count: 42 },
       })
 
@@ -122,76 +73,26 @@ describe("Exchange", () => {
     })
 
     it("same docId returns same instance", () => {
-      const factory = createPlainExchangeFactory()
-      const exchange = new Exchange({
-        substrates: { plain: factory },
-      })
+      const exchange = new Exchange()
 
-      const doc1 = exchange.get("doc-1", testSchema)
-      const doc2 = exchange.get("doc-1", testSchema)
+      const doc1 = exchange.get("doc-1", TestDoc)
+      const doc2 = exchange.get("doc-1", TestDoc)
 
       expect(doc1).toBe(doc2)
     })
 
-    it("different schema for same docId throws", () => {
-      const factory = createPlainExchangeFactory()
-      const exchange = new Exchange({
-        substrates: { plain: factory },
-      })
+    it("different BoundSchema for same docId throws", () => {
+      const exchange = new Exchange()
 
-      const otherSchema = Schema.doc({ name: Schema.string() })
-
-      exchange.get("doc-1", testSchema)
-      expect(() => exchange.get("doc-1", otherSchema)).toThrow(
-        "different schema",
+      exchange.get("doc-1", TestDoc)
+      expect(() => exchange.get("doc-1", OtherDoc)).toThrow(
+        "different BoundSchema",
       )
-    })
-
-    it("throws if no substrate specified and no default", () => {
-      const exchange = new Exchange({
-        substrates: {
-          plain: createPlainExchangeFactory(),
-          lww: createPlainExchangeFactory(),
-        },
-        // No defaultSubstrate, and more than one substrate
-      })
-
-      expect(() => exchange.get("doc-1", testSchema)).toThrow(
-        "No substrate specified",
-      )
-    })
-
-    it("explicit substrate option overrides default", () => {
-      const plainFactory = createPlainExchangeFactory()
-      const otherFactory = createPlainExchangeFactory()
-
-      const exchange = new Exchange({
-        substrates: { plain: plainFactory, other: otherFactory },
-        defaultSubstrate: "plain",
-      })
-
-      // Should use "other" factory
-      const doc = exchange.get("doc-1", testSchema, { substrate: "other" })
-      expect(doc).toBeDefined()
-    })
-
-    it("throws for unknown substrate name", () => {
-      const exchange = new Exchange({
-        substrates: { plain: createPlainExchangeFactory() },
-      })
-
-      expect(() =>
-        exchange.get("doc-1", testSchema, { substrate: "nonexistent" }),
-      ).toThrow("not found")
     })
 
     it("seed values are applied", () => {
-      const factory = createPlainExchangeFactory()
-      const exchange = new Exchange({
-        substrates: { plain: factory },
-      })
-
-      const doc = exchange.get("doc-1", testSchema, {
+      const exchange = new Exchange()
+      const doc = exchange.get("doc-1", TestDoc, {
         seed: { title: "Seeded", count: 99 },
       })
 
@@ -200,32 +101,74 @@ describe("Exchange", () => {
     })
   })
 
+  describe("factory builder lifecycle", () => {
+    it("factory builder is called with the exchange's peerId", () => {
+      const builder = vi.fn(() => plainSubstrateFactory)
+      const Doc = bind({ schema: testSchema, factory: builder, strategy: "sequential" })
+
+      const exchange = new Exchange({ identity: { peerId: "alice-123" } })
+      exchange.get("doc-1", Doc)
+
+      expect(builder).toHaveBeenCalledWith({ peerId: "alice-123" })
+    })
+
+    it("factory builder is called only once per unique builder (cached)", () => {
+      const builder = vi.fn(() => plainSubstrateFactory)
+      const DocA = bind({ schema: testSchema, factory: builder, strategy: "sequential" })
+      const DocB = bind({ schema: otherSchema, factory: builder, strategy: "sequential" })
+
+      const exchange = new Exchange()
+      exchange.get("doc-1", DocA)
+      exchange.get("doc-2", DocB)
+
+      // Same builder → called only once
+      expect(builder).toHaveBeenCalledTimes(1)
+    })
+
+    it("two exchanges sharing the same BoundSchema get independent factory instances", () => {
+      const factories: any[] = []
+      const builder = vi.fn((ctx: { peerId: string }) => {
+        const f = { ...plainSubstrateFactory, _peerId: ctx.peerId }
+        factories.push(f)
+        return f
+      })
+      const Doc = bind({ schema: testSchema, factory: builder, strategy: "sequential" })
+
+      const exchangeA = new Exchange({ identity: { peerId: "alice" } })
+      const exchangeB = new Exchange({ identity: { peerId: "bob" } })
+
+      exchangeA.get("doc-1", Doc)
+      exchangeB.get("doc-1", Doc)
+
+      // Builder called twice — once per exchange
+      expect(builder).toHaveBeenCalledTimes(2)
+      expect(builder).toHaveBeenCalledWith({ peerId: "alice" })
+      expect(builder).toHaveBeenCalledWith({ peerId: "bob" })
+
+      // Separate factory instances
+      expect(factories.length).toBe(2)
+      expect(factories[0]).not.toBe(factories[1])
+    })
+  })
+
   describe("has()", () => {
     it("returns false for unknown doc", () => {
-      const exchange = new Exchange({
-        substrates: { plain: createPlainExchangeFactory() },
-      })
-
+      const exchange = new Exchange()
       expect(exchange.has("nonexistent")).toBe(false)
     })
 
     it("returns true after get()", () => {
-      const exchange = new Exchange({
-        substrates: { plain: createPlainExchangeFactory() },
-      })
-
-      exchange.get("doc-1", testSchema)
+      const exchange = new Exchange()
+      exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
     })
   })
 
   describe("delete()", () => {
     it("removes a document", async () => {
-      const exchange = new Exchange({
-        substrates: { plain: createPlainExchangeFactory() },
-      })
+      const exchange = new Exchange()
 
-      exchange.get("doc-1", testSchema)
+      exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
 
       await exchange.delete("doc-1")
@@ -235,12 +178,8 @@ describe("Exchange", () => {
 
   describe("sync()", () => {
     it("returns a SyncRef with peerId and docId", () => {
-      const exchange = new Exchange({
-        identity: { peerId: "alice" },
-        substrates: { plain: createPlainExchangeFactory() },
-      })
-
-      const doc = exchange.get("doc-1", testSchema)
+      const exchange = new Exchange({ identity: { peerId: "alice" } })
+      const doc = exchange.get("doc-1", TestDoc)
       const s = sync(doc)
 
       expect(s.peerId).toBe("alice")
@@ -248,11 +187,8 @@ describe("Exchange", () => {
     })
 
     it("hasSync returns true for exchange docs", () => {
-      const exchange = new Exchange({
-        substrates: { plain: createPlainExchangeFactory() },
-      })
-
-      const doc = exchange.get("doc-1", testSchema)
+      const exchange = new Exchange()
+      const doc = exchange.get("doc-1", TestDoc)
       expect(hasSync(doc)).toBe(true)
     })
 
@@ -265,22 +201,17 @@ describe("Exchange", () => {
     })
 
     it("readyStates is initially empty", () => {
-      const exchange = new Exchange({
-        substrates: { plain: createPlainExchangeFactory() },
-      })
-
-      const doc = exchange.get("doc-1", testSchema)
+      const exchange = new Exchange()
+      const doc = exchange.get("doc-1", TestDoc)
       expect(sync(doc).readyStates).toEqual([])
     })
   })
 
   describe("lifecycle", () => {
     it("reset() clears doc cache", () => {
-      const exchange = new Exchange({
-        substrates: { plain: createPlainExchangeFactory() },
-      })
+      const exchange = new Exchange()
 
-      exchange.get("doc-1", testSchema)
+      exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
 
       exchange.reset()
@@ -288,13 +219,42 @@ describe("Exchange", () => {
     })
 
     it("shutdown() clears doc cache", async () => {
-      const exchange = new Exchange({
-        substrates: { plain: createPlainExchangeFactory() },
-      })
+      const exchange = new Exchange()
 
-      exchange.get("doc-1", testSchema)
+      exchange.get("doc-1", TestDoc)
       await exchange.shutdown()
       expect(exchange.has("doc-1")).toBe(false)
+    })
+
+    describe("escape hatches", () => {
+      it("unwrap(ref) returns the substrate for an exchange-created doc", () => {
+        const exchange = new Exchange()
+        const doc = exchange.get("doc-1", TestDoc, { seed: { title: "Hi", count: 1 } })
+
+        const substrate = unwrap(doc)
+        expect(substrate.frontier()).toBeDefined()
+
+        const snapshot = substrate.exportSnapshot()
+        expect(snapshot.encoding).toBe("json")
+        expect(JSON.parse(snapshot.data as string)).toEqual({ title: "Hi", count: 1 })
+      })
+
+      it("loro(ref) returns the LoroDoc for a Loro-backed exchange doc", () => {
+        const LoroDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
+        const exchange = new Exchange()
+        const doc = exchange.get("doc-1", LoroDoc)
+
+        const loroDoc = loro(doc)
+        expect(typeof loroDoc.toJSON).toBe("function")
+        expect(typeof loroDoc.getText).toBe("function")
+      })
+
+      it("loro(ref) throws for a plain-backed exchange doc", () => {
+        const exchange = new Exchange()
+        const doc = exchange.get("doc-1", TestDoc)
+
+        expect(() => loro(doc)).toThrow("not a Loro substrate")
+      })
     })
   })
 })

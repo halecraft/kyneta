@@ -22,10 +22,17 @@ export type {
 } from "./types.js"
 
 // ---------------------------------------------------------------------------
-// Factory — merge strategy + substrate factory extension
+// Bind — re-exported from @kyneta/schema for convenience
 // ---------------------------------------------------------------------------
 
-export type { ExchangeSubstrateFactory, MergeStrategy } from "./factory.js"
+export type { BoundSchema, FactoryBuilder, MergeStrategy } from "@kyneta/schema"
+export { bind, bindLww, bindPlain, isBoundSchema } from "@kyneta/schema"
+
+// ---------------------------------------------------------------------------
+// Unwrap — re-exported from @kyneta/schema for convenience
+// ---------------------------------------------------------------------------
+
+export { registerSubstrate, unwrap } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // TimestampVersion — LWW version implementation
