@@ -230,9 +230,6 @@ describe("Sequential sync (PlainSubstrate)", () => {
       d.count.set(2)
     })
 
-    // Notify synchronizer of local change
-    exchangeA.synchronizer.notifyLocalChange("doc-1")
-
     await drain()
 
     // Bob should see the mutation
@@ -267,9 +264,6 @@ describe("Causal sync (LoroSubstrate)", () => {
       d.title.insert(0, "Hello CRDT")
     })
 
-    // Notify synchronizer
-    exchangeA.synchronizer.notifyLocalChange("doc-1")
-
     // Bob creates the same doc
     const docB = exchangeB.get("doc-1", LoroDoc)
 
@@ -303,12 +297,10 @@ describe("Causal sync (LoroSubstrate)", () => {
     change(docA, (d: any) => {
       d.title.insert(0, "Alice")
     })
-    exchangeA.synchronizer.notifyLocalChange("doc-1")
 
     change(docB, (d: any) => {
       d.title.insert(0, "Bob")
     })
-    exchangeB.synchronizer.notifyLocalChange("doc-1")
 
     // Let sync happen
     await drain()
@@ -353,9 +345,6 @@ describe("LWW sync (Ephemeral/Presence)", () => {
     // Bob creates the same presence doc
     const presB = exchangeB.get("presence", PresenceDoc)
 
-    // Notify synchronizer of the local change (LWW broadcasts to all)
-    exchangeA.synchronizer.notifyLocalChange("presence")
-
     await drain()
 
     // Bob should have Alice's presence
@@ -387,8 +376,6 @@ describe("LWW sync (Ephemeral/Presence)", () => {
       d.name.set("Alice")
     })
 
-    // Initial broadcast
-    exchangeA.synchronizer.notifyLocalChange("presence")
     await drain()
     expect(presB.name()).toBe("Alice")
 
@@ -397,7 +384,6 @@ describe("LWW sync (Ephemeral/Presence)", () => {
       d.cursor.x.set(500)
       d.cursor.y.set(600)
     })
-    exchangeA.synchronizer.notifyLocalChange("presence")
 
     await drain()
 
@@ -445,8 +431,6 @@ describe("Heterogeneous documents", () => {
     change(textA, (d: any) => {
       d.text.insert(0, "collaborative text")
     })
-    exchangeA.synchronizer.notifyLocalChange("collab")
-
     // Bob: create both docs
     const configB = exchangeB.get("config", ConfigDoc)
     const textB = exchangeB.get("collab", CollabDoc)

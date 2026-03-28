@@ -152,8 +152,13 @@ export class Synchronizer {
   /**
    * Notify the synchronizer of a local change to a document.
    *
-   * Called when the changefeed fires for a locally-initiated mutation.
    * Triggers push to synced peers based on merge strategy.
+   *
+   * **Normally called automatically** by the Exchange's changefeed
+   * subscription — you do NOT need to call this after `change()`.
+   *
+   * Call this directly only when mutating the substrate outside of
+   * `change()`, e.g. via `unwrap(ref)` which bypasses the changefeed.
    */
   notifyLocalChange(docId: DocId): void {
     const runtime = this.#docRuntimes.get(docId)

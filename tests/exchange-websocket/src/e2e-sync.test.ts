@@ -359,8 +359,6 @@ describe("Sequential sync over Websocket (PlainSubstrate)", () => {
       d.title.set("V2")
       d.count.set(2)
     })
-    serverExchange.synchronizer.notifyLocalChange("doc-1")
-
     await drain()
 
     // Client should see the mutation
@@ -385,8 +383,6 @@ describe("Sequential sync over Websocket (PlainSubstrate)", () => {
       d.title.set("From Client")
       d.count.set(99)
     })
-    clientExchange.synchronizer.notifyLocalChange("doc-1")
-
     await drain()
 
     // Server should see the client's mutation
@@ -408,8 +404,6 @@ describe("Causal sync over Websocket (LoroSubstrate)", () => {
     change(docServer, (d: any) => {
       d.title.insert(0, "Hello CRDT")
     })
-    serverExchange.synchronizer.notifyLocalChange("doc-1")
-
     // Client creates the same doc
     const docClient = clientExchange.get("doc-1", LoroDoc)
 
@@ -433,13 +427,9 @@ describe("Causal sync over Websocket (LoroSubstrate)", () => {
     change(docServer, (d: any) => {
       d.title.insert(0, "Server")
     })
-    serverExchange.synchronizer.notifyLocalChange("doc-1")
-
     change(docClient, (d: any) => {
       d.title.insert(0, "Client")
     })
-    clientExchange.synchronizer.notifyLocalChange("doc-1")
-
     // Let sync happen
     await drain()
 
@@ -472,9 +462,6 @@ describe("LWW sync over Websocket (Ephemeral/Presence)", () => {
     // Client creates the same presence doc
     const presClient = clientExchange.get("presence", PresenceDoc)
 
-    // Notify synchronizer of the local change (LWW broadcasts to all)
-    serverExchange.synchronizer.notifyLocalChange("presence")
-
     await drain()
 
     // Client should have server's presence
@@ -495,7 +482,6 @@ describe("LWW sync over Websocket (Ephemeral/Presence)", () => {
       d.cursor.y.set(0)
       d.name.set("Server")
     })
-    serverExchange.synchronizer.notifyLocalChange("presence")
     await drain()
     expect(presClient.name()).toBe("Server")
 
@@ -504,8 +490,6 @@ describe("LWW sync over Websocket (Ephemeral/Presence)", () => {
       d.cursor.x.set(500)
       d.cursor.y.set(600)
     })
-    serverExchange.synchronizer.notifyLocalChange("presence")
-
     await drain()
 
     // Client sees updated cursor
@@ -538,8 +522,6 @@ describe("Heterogeneous documents over Websocket", () => {
     change(textServer, (d: any) => {
       d.text.insert(0, "collaborative text")
     })
-    serverExchange.synchronizer.notifyLocalChange("collab")
-
     // Client: create both docs
     const configClient = clientExchange.get("config", ConfigDoc)
     const textClient = clientExchange.get("collab", CollabDoc)
@@ -585,8 +567,6 @@ describe("Large payload fragmentation over Websocket", () => {
           "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
       )
     })
-    serverExchange.synchronizer.notifyLocalChange("large-doc")
-
     // Client creates the same doc
     const docClient = clientExchange.get("large-doc", LargeDoc)
 

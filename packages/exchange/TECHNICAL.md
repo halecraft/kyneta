@@ -39,6 +39,31 @@ Message → update(msg, model) → [newModel, Command?]
                    (via adapter)  (via substrate) (via substrate)
 ```
 
+### Changefeed ↔ Synchronizer Wiring
+
+The exchange bridges the Application algebra (CHANGEFEED) and the Replication algebra (Synchronizer) bidirectionally:
+
+```
+LOCAL MUTATION                              REMOTE MUTATION
+─────────────                               ───────────────
+change(doc, fn)                             adapter receives offer
+  → wrappedFlush()                            → Synchronizer.#executeImportDocData()
+    → originalFlush() [substrate committed]     → substrate.importDelta(payload, "sync")
+    → deliverNotifications()                      → changefeed fires with origin: "sync"
+      → Exchange's subscriber fires                 → UI subscribers see update
+        → origin !== "sync" ✓
+        → synchronizer.notifyLocalChange(docId)
+          → TEA dispatch: local-doc-change
+            → cmd/send-offer
+              → adapter sends to peers
+```
+
+**Echo prevention:** Remote imports arrive through `importDelta(payload, "sync")`, which propagates `"sync"` as the origin through `executeBatch` → `wrappedFlush` → `deliverNotifications`. The Exchange's changefeed subscriber checks `changeset.origin === "sync"` and skips the `notifyLocalChange` call, preventing a feedback loop where received data would be re-broadcast.
+
+**Timing:** The changefeed fires synchronously within `change()`. By the time the subscriber executes, `originalFlush` has already committed to the substrate, so `substrate.version()` reflects the new state — exactly what `notifyLocalChange` reads.
+
+**`notifyLocalChange` remains public** for edge cases where the substrate is mutated directly via `unwrap(ref)` (bypassing the changefeed). For standard `change()` usage, it is called automatically.
+
 ---
 
 ## 2. Merge Strategy as Dispatch Key
@@ -496,3 +521,5 @@ End-to-end tests in `tests/exchange-websocket/` prove the full stack over real W
 8. **Wire codec round-trip**: All 5 message types survive encode → decode through both CBOR and JSON codecs, including `OfferMsg` with binary `SubstratePayload` (38 codec tests, 31 frame tests, 54 fragment tests).
 
 9. **Websocket transport sync**: Sequential, causal, and LWW sync all work over real Websocket connections (Bun server + client adapter). Heterogeneous documents and fragmented large payloads sync correctly (8 integration tests).
+
+10. **Local mutations auto-trigger sync**: `change(doc, fn)` automatically notifies the synchronizer via the changefeed → `notifyLocalChange` wiring. No manual `synchronizer.notifyLocalChange()` call is needed. Echo is prevented by filtering `origin === "sync"` in the changefeed subscriber.

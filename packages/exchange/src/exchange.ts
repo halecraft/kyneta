@@ -24,7 +24,7 @@ import {
   isBoundSchema,
   registerSubstrate,
 } from "@kyneta/schema"
-import { changefeed, readable, writable } from "@kyneta/schema"
+import { changefeed, readable, subscribe, writable } from "@kyneta/schema"
 import type { AnyAdapter } from "./adapter/adapter.js"
 import type { Permissions } from "./permissions.js"
 import { registerSync } from "./sync.js"
@@ -270,6 +270,14 @@ export class Exchange {
       strategy: bound.strategy,
       ref,
       schema: bound.schema,
+    })
+
+    // Auto-wire changefeed → synchronizer: when a local mutation fires
+    // the changefeed, notify the synchronizer so it pushes to peers.
+    // Remote imports arrive with origin "sync" — skip those to avoid echo.
+    subscribe(ref, (changeset) => {
+      if (changeset.origin === "sync") return
+      this.#synchronizer.notifyLocalChange(docId)
     })
 
     return ref as Ref<S>

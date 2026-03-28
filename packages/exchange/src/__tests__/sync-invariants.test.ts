@@ -274,7 +274,6 @@ describe("LWW stale rejection", () => {
       d.name.set("Alice")
       d.x.set(100)
     })
-    exchangeA.synchronizer.notifyLocalChange("presence")
 
     // Bob creates the doc and receives Alice's state
     const presB = exchangeB.get("presence", PresenceDoc)
@@ -292,7 +291,6 @@ describe("LWW stale rejection", () => {
     change(presA, (d: any) => {
       d.x.set(200)
     })
-    exchangeA.synchronizer.notifyLocalChange("presence")
     await drain()
 
     // The key invariant: after all messages settle, both sides should
@@ -353,7 +351,6 @@ describe("causal sync uses deltas when sender is ahead", () => {
     change(docA, (d: any) => {
       d.title.insert(0, "First")
     })
-    exchangeA.synchronizer.notifyLocalChange("doc-1")
     await drain()
 
     expect(docB.title()).toBe("First")
@@ -362,7 +359,6 @@ describe("causal sync uses deltas when sender is ahead", () => {
     change(docA, (d: any) => {
       d.title.insert(5, " Second")
     })
-    exchangeA.synchronizer.notifyLocalChange("doc-1")
     await drain()
 
     // Both changes should be present (delta merge, not snapshot replace)

@@ -1,18 +1,20 @@
 // Exchange — unit tests for the public Exchange API.
 
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi, afterEach } from "vitest"
 import {
   Schema,
   LoroSchema,
   bindPlain,
   bindLww,
   bind,
+  change,
   plainSubstrateFactory,
   unwrap,
 } from "@kyneta/schema"
 import { bindLoro, loro } from "@kyneta/schema-loro"
 import { Exchange } from "../exchange.js"
 import { sync, hasSync } from "../sync.js"
+import { Bridge, BridgeAdapter } from "../adapter/bridge-adapter.js"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -30,6 +32,34 @@ const OtherDoc = bindPlain(otherSchema)
 
 // ---------------------------------------------------------------------------
 // Tests
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Helpers for multi-peer tests
+// ---------------------------------------------------------------------------
+
+async function drain(rounds = 20): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    await new Promise<void>((r) => queueMicrotask(r))
+    await new Promise<void>((r) => setTimeout(r, 0))
+  }
+}
+
+const activeExchanges: Exchange[] = []
+
+function createExchange(params: ConstructorParameters<typeof Exchange>[0] = {}): Exchange {
+  const ex = new Exchange(params)
+  activeExchanges.push(ex)
+  return ex
+}
+
+afterEach(async () => {
+  for (const ex of activeExchanges) {
+    try { await ex.shutdown() } catch { /* ignore */ }
+  }
+  activeExchanges.length = 0
+})
+
 // ---------------------------------------------------------------------------
 
 describe("Exchange", () => {
@@ -254,6 +284,40 @@ describe("Exchange", () => {
         const doc = exchange.get("doc-1", TestDoc)
 
         expect(() => loro(doc)).toThrow("not a Loro substrate")
+      })
+    })
+
+    describe("changefeed → synchronizer auto-wiring", () => {
+      it("change() auto-notifies synchronizer — no manual notifyLocalChange needed", async () => {
+        const bridge = new Bridge()
+
+        const exchangeA = createExchange({
+          identity: { peerId: "alice" },
+          adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+        })
+        const exchangeB = createExchange({
+          identity: { peerId: "bob" },
+          adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+        })
+
+        const docA = exchangeA.get("doc-1", TestDoc, { seed: { title: "V1", count: 1 } })
+        const docB = exchangeB.get("doc-1", TestDoc)
+
+        // Initial sync
+        await drain()
+        expect(docB.title()).toBe("V1")
+
+        // Mutate WITHOUT calling notifyLocalChange — auto-wiring should handle it
+        change(docA, (d: any) => {
+          d.title.set("V2")
+          d.count.set(2)
+        })
+
+        await drain()
+
+        // Bob should see the mutation via auto-wired sync
+        expect(docB.title()).toBe("V2")
+        expect(docB.count()).toBe(2)
       })
     })
   })
