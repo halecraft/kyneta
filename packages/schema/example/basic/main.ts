@@ -256,7 +256,7 @@ log(`
       d.name.insert(0, "✨ ")              // text
       d.stars.increment(10)                 // counter
       d.tasks.push({ title: "Ship it!" })   // sequence
-      d.settings.set({ darkMode: true })    // replace
+      d.settings.set({ darkMode: true, fontSize: 20 })    // replace
       d.labels.set("priority", "high")      // map
     })
 
