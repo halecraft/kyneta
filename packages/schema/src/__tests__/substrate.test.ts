@@ -18,8 +18,13 @@ import {
 // Helper: parse the store snapshot as a plain object for assertions.
 // Exercises the public export API rather than reaching through to the
 // backing StoreReader (which has no property access).
-function snapshotOf(substrate: Substrate<PlainVersion>): Record<string, unknown> {
-  return JSON.parse(substrate.exportSnapshot().data as string) as Record<string, unknown>
+function snapshotOf(
+  substrate: Substrate<PlainVersion>,
+): Record<string, unknown> {
+  return JSON.parse(substrate.exportSnapshot().data as string) as Record<
+    string,
+    unknown
+  >
 }
 
 // ===========================================================================

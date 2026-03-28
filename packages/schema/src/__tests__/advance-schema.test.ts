@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { advanceSchema, LoroSchema, Schema } from "../index.js"
 import type { PathSegment } from "../index.js"
+import { advanceSchema, LoroSchema, Schema } from "../index.js"
 
 // ===========================================================================
 // advanceSchema — pure schema descent for a single path segment
@@ -155,9 +155,7 @@ describe("advanceSchema", () => {
 
     it("throws when advancing into counter annotation (no inner schema)", () => {
       const schema = LoroSchema.counter()
-      expect(() => advanceSchema(schema, index(0))).toThrow(
-        "leaf annotation",
-      )
+      expect(() => advanceSchema(schema, index(0))).toThrow("leaf annotation")
     })
   })
 

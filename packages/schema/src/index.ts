@@ -3,6 +3,9 @@
 // This barrel re-exports the three core modules that make up the
 // schema interpreter algebra spike.
 
+// Bind — schema + factory + strategy binding
+export type { BoundSchema, FactoryBuilder, MergeStrategy } from "./bind.js"
+export { bind, bindLww, bindPlain, isBoundSchema } from "./bind.js"
 // Change types — the universal currency of change
 export type {
   BuiltinChange,
@@ -95,7 +98,6 @@ export type {
   NavigableMapRef,
   NavigableSequenceRef,
 } from "./interpreters/navigable.js"
-
 // Built-in interpreters
 export { plainInterpreter } from "./interpreters/plain.js"
 // Readable types — type-level interpretation for readable refs
@@ -232,14 +234,11 @@ export type {
 // Plain substrate — plain JS object store with version tracking
 export {
   createPlainSubstrate,
-  plainContext,
   PlainVersion,
+  plainContext,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
-// Zero — default values separated from the schema
-export { scalarDefault, Zero } from "./zero.js"
-// Bind — schema + factory + strategy binding
-export type { BoundSchema, FactoryBuilder, MergeStrategy } from "./bind.js"
-export { bind, bindLww, bindPlain, isBoundSchema } from "./bind.js"
 // Unwrap — general escape hatch for accessing the Substrate backing a ref
 export { registerSubstrate, unwrap } from "./unwrap.js"
+// Zero — default values separated from the schema
+export { scalarDefault, Zero } from "./zero.js"

@@ -55,9 +55,9 @@ export interface StoreReader {
  */
 export function plainStoreReader(store: Record<string, unknown>): StoreReader {
   return {
-    read: (path) => readByPath(store, path),
-    arrayLength: (path) => storeArrayLength(store, path),
-    keys: (path) => storeKeys(store, path),
+    read: path => readByPath(store, path),
+    arrayLength: path => storeArrayLength(store, path),
+    keys: path => storeKeys(store, path),
     hasKey: (path, key) => storeHasKey(store, path, key),
   }
 }

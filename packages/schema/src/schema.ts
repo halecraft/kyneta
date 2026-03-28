@@ -706,9 +706,7 @@ export function advanceSchema(schema: Schema, segment: PathSegment): Schema {
       }
       const fieldSchema = structural.fields[segment.key]
       if (!fieldSchema) {
-        throw new Error(
-          `advanceSchema: product has no field "${segment.key}"`,
-        )
+        throw new Error(`advanceSchema: product has no field "${segment.key}"`)
       }
       return fieldSchema
     }

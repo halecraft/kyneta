@@ -30,10 +30,10 @@ import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import { applyChangeToStore, plainStoreReader, type Store } from "../store.js"
 import type {
-  Version,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
+  Version,
 } from "../substrate.js"
 import { Zero } from "../zero.js"
 

@@ -11,11 +11,11 @@ import {
   withReadable,
   withWritable,
 } from "../index.js"
-import { plainStoreReader } from "../store.js"
 import type { Interpreter } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type { HasCall, HasNavigation, HasRead } from "../interpreters/bottom.js"
 import { withNavigation } from "../interpreters/with-navigation.js"
+import { plainStoreReader } from "../store.js"
 
 // ===========================================================================
 // Shared fixtures

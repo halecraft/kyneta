@@ -1,9 +1,9 @@
 // unwrap — unit tests for the general escape hatch.
 
 import { describe, expect, it } from "vitest"
-import { registerSubstrate, unwrap } from "../unwrap.js"
 import { Schema } from "../schema.js"
 import { createPlainSubstrate } from "../substrates/plain.js"
+import { registerSubstrate, unwrap } from "../unwrap.js"
 
 describe("unwrap()", () => {
   it("returns the registered substrate", () => {

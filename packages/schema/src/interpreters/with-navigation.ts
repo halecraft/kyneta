@@ -16,8 +16,8 @@
 //
 // See .plans/navigation-layer.md §Phase 2, Task 2.1.
 
-import { dispatchSum } from "../interpret.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
+import { dispatchSum } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type {
   AnnotatedSchema,

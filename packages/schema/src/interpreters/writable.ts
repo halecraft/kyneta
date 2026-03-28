@@ -67,8 +67,6 @@ type WritableDiscriminantProductRef<
   readonly [K in keyof F]: K extends D ? Plain<F[K]> : Writable<F[K]>
 } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
 
-
-
 // ---------------------------------------------------------------------------
 // TRANSACT symbol — composability hook for discovering a ref's context
 // ---------------------------------------------------------------------------
