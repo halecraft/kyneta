@@ -80,7 +80,7 @@ export type {
 // interpret — the generic catamorphism over the schema functor
 export { createInterpreter, dispatchSum, interpret } from "./interpret.js"
 // Shared interpreter types (canonical location)
-export type { Plain, RefContext, Seed } from "./interpreter-types.js"
+export type { Plain, RefContext } from "./interpreter-types.js"
 export type {
   HasCaching,
   HasCall,
@@ -240,5 +240,5 @@ export {
 } from "./substrates/plain.js"
 // Unwrap — general escape hatch for accessing the Substrate backing a ref
 export { registerSubstrate, unwrap } from "./unwrap.js"
-// Zero — default values separated from the schema
+// Zero — default values derived from the schema grammar
 export { scalarDefault, Zero } from "./zero.js"

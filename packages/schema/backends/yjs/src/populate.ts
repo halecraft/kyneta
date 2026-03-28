@@ -1,52 +1,45 @@
-// populate — shared root container population helpers for Yjs.
+// populate — Yjs container creation from schema structure.
 //
-// Extracts `populateRoot` and recursive helpers into a dedicated module
-// imported by both `substrate.ts` (for `yjsSubstrateFactory.create`) and
-// `bind-yjs.ts` (for `createYjsFactory`). This avoids the duplication
-// present in the Loro binding between `substrate.ts` and `bind-loro.ts`.
+// Ensures that the correct Yjs shared types (Y.Text, Y.Array, Y.Map)
+// exist in a Y.Doc's root map to match the schema structure, and that
+// scalar/sum fields are initialized with Zero.structural defaults.
+//
+// This is NOT seed data — it's structural completeness, matching what
+// PlainSubstrate does when it initializes its store with Zero.structural.
+// The Yjs store reader expects to find values at every schema path;
+// without this, unset scalars would return undefined instead of their
+// type-correct zero ("", 0, false).
 //
 // Root container strategy: All schema fields are children of a single
 // root `Y.Map` obtained via `doc.getMap("root")`. This root map holds
-// shared types (Y.Text, Y.Array, Y.Map) and plain values uniformly.
-//
-// Population uses populate-then-attach order for consistency with runtime
-// structured inserts, even though it doesn't matter during initial
-// population (no observers are registered yet).
+// shared types (Y.Text, Y.Array, Y.Map) and plain value slots uniformly.
 
 import type { Schema as SchemaNode } from "@kyneta/schema"
 import { Zero } from "@kyneta/schema"
 import * as Y from "yjs"
 
 // ---------------------------------------------------------------------------
-// populateRoot — top-level entry point
+// ensureContainers — top-level entry point
 // ---------------------------------------------------------------------------
 
 /**
- * Populate a Y.Doc's root map from a schema and initial values.
+ * Ensure that a Y.Doc's root map contains the correct Yjs shared types
+ * matching the schema structure.
  *
  * Obtains the root map via `doc.getMap("root")`, unwraps the root product
- * schema, computes defaults via `Zero.structural`, overlays the seed, and
- * populates each field within a single `doc.transact()` call for atomicity.
+ * schema, and creates empty containers for each field within a single
+ * `doc.transact()` call for atomicity.
  *
- * @param doc - The Y.Doc to populate
+ * No values are written — the containers are empty after this call.
+ * Initial content should be applied via `change()` after substrate
+ * construction.
+ *
+ * @param doc - The Y.Doc to prepare
  * @param schema - The root document schema (typically annotated("doc", product))
- * @param seed - Optional partial initial values to overlay on defaults
  */
-export function populateRoot(
-  doc: Y.Doc,
-  schema: SchemaNode,
-  seed: Record<string, unknown> = {},
-): void {
+export function ensureContainers(doc: Y.Doc, schema: SchemaNode): void {
   const rootMap = doc.getMap("root")
 
-  // Compute defaults and overlay seed
-  const defaults = Zero.structural(schema) as Record<string, unknown>
-  const initial = Zero.overlay(seed, defaults, schema) as Record<
-    string,
-    unknown
-  >
-
-  // Unwrap the root annotation (e.g. annotated("doc", product)) to get fields
   let rootProduct = schema
   while (
     rootProduct._kind === "annotated" &&
@@ -61,47 +54,39 @@ export function populateRoot(
 
   doc.transact(() => {
     for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
-      const value = initial[key]
-      populateRootField(rootMap, key, fieldSchema as SchemaNode, value)
+      ensureRootField(rootMap, key, fieldSchema as SchemaNode)
     }
   })
 }
 
 // ---------------------------------------------------------------------------
-// populateRootField — create root container and populate with initial value
+// ensureRootField — create a single root-level container
 // ---------------------------------------------------------------------------
 
 /**
- * Create a root-level container for a field and populate it with an
- * initial value from the seed/defaults.
+ * Ensure a root-level Yjs shared type exists for a schema field.
  *
  * Dispatches based on the schema annotation tag and structural kind:
- * - `annotated("text")` → Y.Text child
- * - `annotated("counter")` → throws (unsupported)
- * - `annotated("movable")` → throws (unsupported)
- * - `annotated("tree")` → throws (unsupported)
- * - `product` → nested Y.Map child
- * - `sequence` → Y.Array child
- * - `map` → Y.Map child
- * - `scalar`/`sum` → plain value entry
+ * - `annotated("text")` → empty Y.Text
+ * - `annotated("counter")` → throws (unsupported in Yjs)
+ * - `annotated("movable")` → throws (unsupported in Yjs)
+ * - `annotated("tree")` → throws (unsupported in Yjs)
+ * - `product` → empty Y.Map (recursive for nested products)
+ * - `sequence` → empty Y.Array
+ * - `map` → empty Y.Map
+ * - `scalar`/`sum` → no-op (plain values don't need containers)
  */
-function populateRootField(
-  rootMap: Y.Map<any>,
+function ensureRootField(
+  rootMap: Y.Map<unknown>,
   key: string,
   fieldSchema: SchemaNode,
-  value: unknown,
 ): void {
   const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
 
   switch (tag) {
-    case "text": {
-      const text = new Y.Text()
-      if (typeof value === "string" && value.length > 0) {
-        text.insert(0, value)
-      }
-      rootMap.set(key, text)
+    case "text":
+      rootMap.set(key, new Y.Text())
       return
-    }
 
     case "counter":
       throw new Error(
@@ -125,48 +110,26 @@ function populateRootField(
       )
   }
 
-  // Non-annotated structural types
   const structural = unwrapAnnotations(fieldSchema)
 
   switch (structural._kind) {
-    case "product": {
-      const map = populateMap(
-        typeof value === "object" && value !== null && !Array.isArray(value)
-          ? (value as Record<string, unknown>)
-          : {},
-        structural,
-      )
-      rootMap.set(key, map)
+    case "product":
+      rootMap.set(key, ensureMapContainers(structural))
       return
-    }
-
-    case "sequence": {
-      const arr = populateArray(
-        Array.isArray(value) ? value : [],
-        fieldSchema,
-      )
-      rootMap.set(key, arr)
+    case "sequence":
+      rootMap.set(key, new Y.Array())
       return
-    }
-
-    case "map": {
-      const map = new Y.Map()
-      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-        for (const [k, v] of Object.entries(
-          value as Record<string, unknown>,
-        )) {
-          map.set(k, v)
-        }
-      }
-      rootMap.set(key, map)
+    case "map":
+      rootMap.set(key, new Y.Map())
       return
-    }
-
     case "scalar":
     case "sum": {
-      // Non-container types: stored as plain values in the root map.
-      if (value !== undefined) {
-        rootMap.set(key, value)
+      // Plain values don't need shared type containers, but they DO
+      // need structural zero defaults so the store reader returns
+      // type-correct values (e.g. "" not undefined for strings).
+      const zero = Zero.structural(fieldSchema)
+      if (zero !== undefined) {
+        rootMap.set(key, zero)
       }
       return
     }
@@ -174,159 +137,59 @@ function populateRootField(
 }
 
 // ---------------------------------------------------------------------------
-// populateMap — recursively populate a Y.Map from a product schema
+// ensureMapContainers — recursively create nested Y.Map structure
 // ---------------------------------------------------------------------------
 
 /**
- * Create and populate a Y.Map from a plain object, using the product
- * schema to determine which fields need shared type children.
+ * Create an empty Y.Map with nested shared type children matching
+ * the product schema's field structure.
  *
- * Follows populate-then-attach: the map is fully populated before
- * the caller inserts it into a parent container.
+ * Only creates containers for fields that require Yjs shared types
+ * (text → Y.Text, product → Y.Map, sequence → Y.Array, map → Y.Map).
+ * Scalar and sum fields are left empty — they'll be written as plain
+ * values via change() when needed.
  */
-function populateMap(
-  value: Record<string, unknown>,
-  schema: SchemaNode,
-): Y.Map<any> {
+function ensureMapContainers(schema: SchemaNode): Y.Map<unknown> {
   const map = new Y.Map()
   const structural = unwrapAnnotations(schema)
 
-  for (const [key, fieldValue] of Object.entries(value)) {
-    if (fieldValue === undefined) continue
+  if (structural._kind !== "product") return map
 
-    let fieldSchema: SchemaNode | undefined
-    if (structural._kind === "product") {
-      fieldSchema = structural.fields[key]
+  for (const [key, fieldSchema] of Object.entries(
+    structural.fields as Record<string, SchemaNode>,
+  )) {
+    const tag =
+      fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+
+    if (tag === "text") {
+      map.set(key, new Y.Text())
+      continue
     }
 
-    if (fieldSchema) {
-      const tag =
-        fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+    const fs = unwrapAnnotations(fieldSchema)
 
-      // Text annotation → Y.Text
-      if (tag === "text") {
-        const text = new Y.Text()
-        if (typeof fieldValue === "string" && fieldValue.length > 0) {
-          text.insert(0, fieldValue)
+    switch (fs._kind) {
+      case "product":
+        map.set(key, ensureMapContainers(fieldSchema))
+        break
+      case "sequence":
+        map.set(key, new Y.Array())
+        break
+      case "map":
+        map.set(key, new Y.Map())
+        break
+      case "scalar":
+      case "sum": {
+        const zero = Zero.structural(fieldSchema)
+        if (zero !== undefined) {
+          map.set(key, zero)
         }
-        map.set(key, text)
-        continue
-      }
-
-      const fs = unwrapAnnotations(fieldSchema)
-
-      // Nested product → recursive Y.Map
-      if (
-        fs._kind === "product" &&
-        fieldValue !== null &&
-        typeof fieldValue === "object" &&
-        !Array.isArray(fieldValue)
-      ) {
-        const childMap = populateMap(
-          fieldValue as Record<string, unknown>,
-          fieldSchema,
-        )
-        map.set(key, childMap)
-        continue
-      }
-
-      // Nested sequence → Y.Array
-      if (fs._kind === "sequence" && Array.isArray(fieldValue)) {
-        const childArr = populateArray(fieldValue, fieldSchema)
-        map.set(key, childArr)
-        continue
-      }
-
-      // Nested map → Y.Map
-      if (
-        fs._kind === "map" &&
-        fieldValue !== null &&
-        typeof fieldValue === "object" &&
-        !Array.isArray(fieldValue)
-      ) {
-        const childMap = new Y.Map()
-        for (const [k, v] of Object.entries(
-          fieldValue as Record<string, unknown>,
-        )) {
-          childMap.set(k, v)
-        }
-        map.set(key, childMap)
-        continue
+        break
       }
     }
-
-    // Plain value
-    map.set(key, fieldValue)
   }
 
   return map
-}
-
-// ---------------------------------------------------------------------------
-// populateArray — recursively populate a Y.Array from a sequence schema
-// ---------------------------------------------------------------------------
-
-/**
- * Create and populate a Y.Array from a plain array, using the sequence
- * schema to determine whether items need shared type children.
- *
- * Follows populate-then-attach: the array is fully populated before
- * the caller inserts it into a parent container.
- */
-function populateArray(value: unknown[], schema: SchemaNode): Y.Array<any> {
-  const arr = new Y.Array()
-
-  let seqSchema = unwrapAnnotations(schema)
-  const itemSchema =
-    seqSchema._kind === "sequence" ? seqSchema.item : undefined
-
-  for (let i = 0; i < value.length; i++) {
-    const item = value[i]
-
-    if (itemSchema) {
-      const tag =
-        itemSchema._kind === "annotated" ? itemSchema.tag : undefined
-
-      // Text items
-      if (tag === "text") {
-        const text = new Y.Text()
-        if (typeof item === "string" && item.length > 0) {
-          text.insert(0, item)
-        }
-        arr.insert(i, [text])
-        continue
-      }
-
-      const is = unwrapAnnotations(itemSchema)
-
-      // Struct items → recursive Y.Map
-      if (
-        is._kind === "product" &&
-        item !== null &&
-        typeof item === "object" &&
-        !Array.isArray(item)
-      ) {
-        const childMap = populateMap(
-          item as Record<string, unknown>,
-          itemSchema,
-        )
-        arr.insert(i, [childMap])
-        continue
-      }
-
-      // Nested sequence items
-      if (is._kind === "sequence" && Array.isArray(item)) {
-        const childArr = populateArray(item, itemSchema)
-        arr.insert(i, [childArr])
-        continue
-      }
-    }
-
-    // Plain value
-    arr.insert(i, [item])
-  }
-
-  return arr
 }
 
 // ---------------------------------------------------------------------------

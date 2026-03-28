@@ -1,19 +1,33 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //
-//   Recipe Book — Seed Data
+//   Recipe Book — Initial Content
 //
-//   Initial state used by the server to create the authoritative document.
-//   Clients connecting via SSR receive the server's current state as a
-//   substrate snapshot — they don't use SEED directly.
+//   Populates the server's authoritative document with initial recipes.
+//   Uses change() to apply real operations that produce version history
+//   and sync correctly to peers.
+//
+//   This replaces the previous SEED constant, which pre-populated the
+//   store at construction time without producing operations — invisible
+//   to the sync protocol.
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type { RecipeBookSeed } from "./types.js"
+import { change } from "@kyneta/schema/basic"
+import type { RecipeBookDoc } from "./types.js"
 
-export const SEED = {
-  title: "My Recipe Book",
-  recipes: [
-    {
+/**
+ * Apply initial content to a recipe book document.
+ *
+ * Must be called after document construction. Produces real operations
+ * that increment the version and sync to peers.
+ */
+export function applyInitialContent(doc: RecipeBookDoc): void {
+  change(doc, (d) => {
+    d.title.insert(0, "My Recipe Book")
+  })
+
+  change(doc, (d) => {
+    d.recipes.push({
       name: "Pasta Carbonara",
       vegetarian: false,
       ingredients: [
@@ -23,12 +37,14 @@ export const SEED = {
         "pecorino",
         "black pepper",
       ],
-    },
-    {
+    })
+  })
+
+  change(doc, (d) => {
+    d.recipes.push({
       name: "Garden Stir Fry",
       vegetarian: true,
       ingredients: ["tofu", "broccoli", "bell pepper", "soy sauce", "rice"],
-    },
-  ],
-  favorites: 0,
-} satisfies RecipeBookSeed
+    })
+  })
+}

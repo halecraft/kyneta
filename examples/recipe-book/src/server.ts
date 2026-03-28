@@ -22,6 +22,7 @@ import { type WebSocket, WebSocketServer } from "ws"
 import {
   applyChanges,
   createDoc,
+  change,
   delta,
   exportSnapshot,
   subscribe,
@@ -29,7 +30,7 @@ import {
 } from "@kyneta/schema/basic"
 import { parseServerMessage, toOps } from "./protocol.js"
 import { RecipeBookSchema } from "./schema.js"
-import { SEED } from "./seed.js"
+import { applyInitialContent } from "./seed.js"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dirname, "..")
@@ -39,7 +40,8 @@ async function start() {
   // ─────────────────────────────────────────────────────────────────────
   // Server-side document — the authoritative state
   // ─────────────────────────────────────────────────────────────────────
-  const doc = createDoc(RecipeBookSchema, { ...SEED })
+  const doc = createDoc(RecipeBookSchema)
+  applyInitialContent(doc)
 
   // ─────────────────────────────────────────────────────────────────────
   // Part 1: Vite dev server in middleware mode

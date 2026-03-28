@@ -70,8 +70,8 @@ export { resolveYjsType, stepIntoYjs } from "./yjs-resolve.js"
 // Change mapping
 export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 
-// Population
-export { populateRoot } from "./populate.js"
+// Container creation
+export { ensureContainers } from "./populate.js"
 
 // Substrate
 export { createYjsSubstrate, yjsSubstrateFactory } from "./substrate.js"

@@ -5,7 +5,7 @@
 // - overlay(F, G)         — structural merge with fallback
 //
 // These are interpreter-level combinators (they transform Interpreter
-// instances). Distinct from Zero.overlay which operates on values.
+// instances).
 
 import type { Interpreter, Path, SumVariants } from "./interpret.js"
 import type {

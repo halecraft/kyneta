@@ -5,25 +5,31 @@ import {
   applyChanges,
   createDoc,
   createDocFromSnapshot,
+  change,
   subscribe,
   version,
 } from "@kyneta/schema/basic"
 import { parseClientMessage, toOps } from "./protocol.js"
 import { RecipeBookSchema } from "./schema.js"
-import { SEED } from "./seed.js"
+import { applyInitialContent } from "./seed.js"
 
 // --- Document initialization ---
 // If the server embedded a substrate snapshot in the SSR HTML, reconstruct
-// the doc from it. Otherwise fall back to creating from SEED (e.g. direct
-// JS load without SSR, or development without a server).
+// the doc from it. Otherwise fall back to an empty doc with initial content
+// applied via change() (e.g. direct JS load without SSR, or development
+// without a server).
 
 const snapshotText = document.getElementById("kyneta-state")?.textContent
-const doc = snapshotText
-  ? createDocFromSnapshot(RecipeBookSchema, {
-      encoding: "json",
-      data: snapshotText,
-    } satisfies SubstratePayload)
-  : createDoc(RecipeBookSchema, { ...SEED })
+let doc
+if (snapshotText) {
+  doc = createDocFromSnapshot(RecipeBookSchema, {
+    encoding: "json",
+    data: snapshotText,
+  } satisfies SubstratePayload)
+} else {
+  doc = createDoc(RecipeBookSchema)
+  applyInitialContent(doc)
+}
 
 const root = document.getElementById("root")!
 const app = createApp(doc)

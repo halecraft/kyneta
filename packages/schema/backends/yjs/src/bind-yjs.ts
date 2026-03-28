@@ -30,7 +30,7 @@ import type {
 import * as Y from "yjs"
 import { createYjsSubstrate } from "./substrate.js"
 import { YjsVersion } from "./version.js"
-import { populateRoot } from "./populate.js"
+import { ensureContainers } from "./populate.js"
 
 // ---------------------------------------------------------------------------
 // Peer ID hashing — deterministic string → numeric Yjs clientID
@@ -73,14 +73,11 @@ function createYjsFactory(
   const numericClientId = hashPeerId(peerId)
 
   return {
-    create(
-      schema: SchemaNode,
-      seed: Record<string, unknown> = {},
-    ): Substrate<YjsVersion> {
+    create(schema: SchemaNode): Substrate<YjsVersion> {
       const doc = new Y.Doc()
       doc.clientID = numericClientId
 
-      populateRoot(doc, schema, seed)
+      ensureContainers(doc, schema)
       return createYjsSubstrate(doc, schema)
     },
 

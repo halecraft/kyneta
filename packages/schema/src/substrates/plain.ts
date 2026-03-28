@@ -196,21 +196,15 @@ export function plainContext(storeObj: Store): WritableContext {
 /**
  * Factory for constructing plain JS object substrates.
  *
- * - `create(schema, seed?)` — fresh substrate from a schema + optional seed.
- * - `fromSnapshot(payload, schema)` — reconstruct from a snapshot payload.
+ * - `create(schema)` — fresh substrate with Zero.structural defaults.
+ * - `fromSnapshot(payload, schema)` — reconstruct from a snapshot payload
+ *   via executeBatch (produces version > 0 with ops in the log).
  * - `parseVersion(serialized)` — deserialize a PlainVersion.
  */
 export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
-  create(
-    schema: SchemaNode,
-    seed: Record<string, unknown> = {},
-  ): Substrate<PlainVersion> {
+  create(schema: SchemaNode): Substrate<PlainVersion> {
     const defaults = Zero.structural(schema) as Record<string, unknown>
-    const initial = Zero.overlay(seed, defaults, schema) as Record<
-      string,
-      unknown
-    >
-    const storeObj = { ...initial } as Store
+    const storeObj = { ...defaults } as Store
     return createPlainSubstrate(storeObj)
   },
 
@@ -224,9 +218,25 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
       )
     }
     const snapshotState = JSON.parse(payload.data) as Record<string, unknown>
-    // Use the snapshot state as the seed — Zero.overlay will fill any
-    // gaps from structural defaults (forward compatibility).
-    return plainSubstrateFactory.create(schema, snapshotState)
+
+    // Create empty substrate, then apply snapshot state through the
+    // prepare/flush pipeline. This produces version > 0 with ops in
+    // the log, so version comparison works correctly for sequential sync.
+    const substrate = plainSubstrateFactory.create(schema)
+    const ops: Array<{
+      path: Array<{ type: "key"; key: string }>
+      change: { type: "replace"; value: unknown }
+    }> = []
+    for (const [key, value] of Object.entries(snapshotState)) {
+      ops.push({
+        path: [{ type: "key" as const, key }],
+        change: { type: "replace" as const, value },
+      })
+    }
+    if (ops.length > 0) {
+      executeBatch(substrate.context(), ops)
+    }
+    return substrate
   },
 
   parseVersion(serialized: string): PlainVersion {

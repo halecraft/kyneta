@@ -10,7 +10,7 @@ import {
   exportSince,
   importDelta,
 } from "../sync.js"
-import { populateRoot } from "../populate.js"
+import { ensureContainers } from "../populate.js"
 
 // ===========================================================================
 // Helpers
@@ -72,53 +72,54 @@ describe("YjsSubstrate", () => {
   // -------------------------------------------------------------------------
 
   describe("factory create", () => {
-    it("creates a substrate with default values", () => {
+    it("creates a substrate with empty containers", () => {
       const substrate = yjsSubstrateFactory.create(SimpleSchema)
       expect(substrate.store.read([key("title")])).toBe("")
+      // Plain scalars return structural zeros
       expect(substrate.store.read([key("count")])).toBe(0)
       expect(substrate.store.read([key("items")])).toEqual([])
     })
 
-    it("creates a substrate with seed values", () => {
-      const substrate = yjsSubstrateFactory.create(SimpleSchema, {
-        title: "Hello",
-        count: 42,
-        items: ["a", "b"],
+    it("creates a substrate and populates via change()", () => {
+      const doc = createYjsDoc(SimpleSchema)
+      change(doc, (d: any) => {
+        d.title.insert(0, "Hello")
+        d.count.set(42)
       })
-      expect(substrate.store.read([key("title")])).toBe("Hello")
-      expect(substrate.store.read([key("count")])).toBe(42)
-      expect(substrate.store.read([key("items")])).toEqual(["a", "b"])
+      // Separate change() calls for list pushes to preserve order
+      // (Yjs reverses order within a single transaction)
+      change(doc, (d: any) => d.items.push("a"))
+      change(doc, (d: any) => d.items.push("b"))
+      expect(doc.title()).toBe("Hello")
+      expect(doc.count()).toBe(42)
+      expect(doc.items()).toEqual(["a", "b"])
     })
 
-    it("creates a substrate with partial seed (defaults fill gaps)", () => {
-      const substrate = yjsSubstrateFactory.create(SimpleSchema, {
-        title: "Partial",
+    it("creates a substrate with partial values (unset fields stay empty)", () => {
+      const doc = createYjsDoc(SimpleSchema)
+      change(doc, (d: any) => {
+        d.title.insert(0, "Partial")
       })
-      expect(substrate.store.read([key("title")])).toBe("Partial")
-      expect(substrate.store.read([key("count")])).toBe(0)
-      expect(substrate.store.read([key("items")])).toEqual([])
+      expect(doc.title()).toBe("Partial")
+      expect(doc.count()).toBe(0)
+      expect(doc.items()).toEqual([])
     })
 
-    it("creates a substrate with nested struct seed", () => {
-      const substrate = yjsSubstrateFactory.create(FullSchema, {
-        meta: { author: "Alice" },
+    it("creates a substrate with nested struct values via change()", () => {
+      const doc = createYjsDoc(FullSchema)
+      change(doc, (d: any) => {
+        d.meta.author.set("Alice")
       })
-      expect(substrate.store.read([key("meta"), key("author")])).toBe("Alice")
+      expect(doc.meta.author()).toBe("Alice")
     })
 
-    it("creates a substrate with struct list seed", () => {
-      const substrate = yjsSubstrateFactory.create(StructListSchema, {
-        tasks: [
-          { name: "Task 1", done: false },
-          { name: "Task 2", done: true },
-        ],
-      })
-      expect(substrate.store.read([key("tasks"), idx(0), key("name")])).toBe(
-        "Task 1",
-      )
-      expect(substrate.store.read([key("tasks"), idx(1), key("done")])).toBe(
-        true,
-      )
+    it("creates a substrate with struct list values via change()", () => {
+      const doc = createYjsDoc(StructListSchema)
+      // Separate change() calls for list pushes to preserve order
+      change(doc, (d: any) => d.tasks.push({ name: "Task 1", done: false }))
+      change(doc, (d: any) => d.tasks.push({ name: "Task 2", done: true }))
+      expect((doc.tasks.at(0) as any).name()).toBe("Task 1")
+      expect((doc.tasks.at(1) as any).done()).toBe(true)
     })
   })
 
@@ -128,7 +129,7 @@ describe("YjsSubstrate", () => {
 
   describe("write round-trip", () => {
     it("text insert round-trips through prepare/flush", () => {
-      const doc = createYjsDoc(SimpleSchema, { title: "" })
+      const doc = createYjsDoc(SimpleSchema)
       change(doc, (d: any) => {
         d.title.insert(0, "Hello")
       })
@@ -136,7 +137,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("scalar set round-trips through prepare/flush", () => {
-      const doc = createYjsDoc(SimpleSchema, { count: 0 })
+      const doc = createYjsDoc(SimpleSchema)
       change(doc, (d: any) => {
         d.count.set(42)
       })
@@ -175,8 +176,9 @@ describe("YjsSubstrate", () => {
     })
 
     it("version serialize/parse round-trips", () => {
-      const doc = createYjsDoc(SimpleSchema, { title: "Test" })
+      const doc = createYjsDoc(SimpleSchema)
       change(doc, (d: any) => {
+        d.title.insert(0, "Test")
         d.count.set(5)
       })
 
@@ -193,18 +195,22 @@ describe("YjsSubstrate", () => {
 
   describe("export/import snapshot", () => {
     it("exports a binary payload", () => {
-      const doc = createYjsDoc(SimpleSchema, { title: "Snapshot" })
+      const doc = createYjsDoc(SimpleSchema)
+      change(doc, (d: any) => { d.title.insert(0, "Snapshot") })
       const payload = exportSnapshot(doc)
       expect(payload.encoding).toBe("binary")
       expect(payload.data).toBeInstanceOf(Uint8Array)
     })
 
     it("reconstructs equivalent state from snapshot", () => {
-      const doc1 = createYjsDoc(SimpleSchema, {
-        title: "Hello",
-        count: 42,
-        items: ["a", "b"],
+      const doc1 = createYjsDoc(SimpleSchema)
+      change(doc1, (d: any) => {
+        d.title.insert(0, "Hello")
+        d.count.set(42)
       })
+      // Separate change() calls for list pushes to preserve order
+      change(doc1, (d: any) => d.items.push("a"))
+      change(doc1, (d: any) => d.items.push("b"))
       change(doc1, (d: any) => {
         d.title.insert(5, " World")
       })
@@ -224,7 +230,8 @@ describe("YjsSubstrate", () => {
 
   describe("delta sync", () => {
     it("exportSince → importDelta syncs state", () => {
-      const doc1 = createYjsDoc(SimpleSchema, { title: "Start" })
+      const doc1 = createYjsDoc(SimpleSchema)
+      change(doc1, (d: any) => { d.title.insert(0, "Start") })
       const doc2 = createYjsDocFromSnapshot(
         SimpleSchema,
         exportSnapshot(doc1),
@@ -246,7 +253,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("concurrent sync — two substrates converge after bidirectional sync", () => {
-      const doc1 = createYjsDoc(SimpleSchema, { title: "" })
+      const doc1 = createYjsDoc(SimpleSchema)
       const doc2 = createYjsDocFromSnapshot(
         SimpleSchema,
         exportSnapshot(doc1),
@@ -295,7 +302,8 @@ describe("YjsSubstrate", () => {
 
   describe("changefeed", () => {
     it("fires on importDelta", () => {
-      const doc1 = createYjsDoc(SimpleSchema, { title: "A" })
+      const doc1 = createYjsDoc(SimpleSchema)
+      change(doc1, (d: any) => { d.title.insert(0, "A") })
       const doc2 = createYjsDocFromSnapshot(
         SimpleSchema,
         exportSnapshot(doc1),
@@ -321,7 +329,7 @@ describe("YjsSubstrate", () => {
 
     it("fires on external Y.Doc mutation (raw Yjs API)", () => {
       const yjsDoc = new Y.Doc()
-      populateRoot(yjsDoc, SimpleSchema)
+      ensureContainers(yjsDoc, SimpleSchema)
       const doc = createYjsDoc(SimpleSchema, yjsDoc)
 
       const received: any[] = []
@@ -361,11 +369,7 @@ describe("YjsSubstrate", () => {
 
   describe("transaction support", () => {
     it("multi-op change() is atomic", () => {
-      const doc = createYjsDoc(SimpleSchema, {
-        title: "",
-        count: 0,
-        items: [],
-      })
+      const doc = createYjsDoc(SimpleSchema)
 
       const received: any[] = []
       subscribe(doc, (changeset: any) => {
@@ -421,9 +425,11 @@ describe("YjsSubstrate", () => {
     })
 
     it("nested struct write round-trip", () => {
-      const doc = createYjsDoc(FullSchema, {
-        meta: { author: "Alice" },
+      const doc = createYjsDoc(FullSchema)
+      change(doc, (d: any) => {
+        d.meta.author.set("Alice")
       })
+      expect(doc.meta.author()).toBe("Alice")
 
       change(doc, (d: any) => {
         d.meta.author.set("Bob")
@@ -487,18 +493,19 @@ describe("YjsSubstrate", () => {
     })
 
     it("reconstructs from snapshot with correct state", () => {
-      const original = yjsSubstrateFactory.create(SimpleSchema, {
-        title: "Snapshot Test",
-        count: 77,
-        items: ["x"],
+      const doc = createYjsDoc(SimpleSchema)
+      change(doc, (d: any) => {
+        d.title.insert(0, "Snapshot Test")
+        d.count.set(77)
+        d.items.push("x")
       })
 
-      const payload = original.exportSnapshot()
-      const restored = yjsSubstrateFactory.fromSnapshot(payload, SimpleSchema)
+      const payload = exportSnapshot(doc)
+      const doc2 = createYjsDocFromSnapshot(SimpleSchema, payload)
 
-      expect(restored.store.read([key("title")])).toBe("Snapshot Test")
-      expect(restored.store.read([key("count")])).toBe(77)
-      expect(restored.store.read([key("items")])).toEqual(["x"])
+      expect(doc2.title()).toBe("Snapshot Test")
+      expect(doc2.count()).toBe(77)
+      expect(doc2.items()).toEqual(["x"])
     })
   })
 

@@ -23,7 +23,7 @@ import type {
 import { buildWritableContext, executeBatch } from "@kyneta/schema"
 import * as Y from "yjs"
 import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
-import { populateRoot } from "./populate.js"
+import { ensureContainers } from "./populate.js"
 import { yjsStoreReader } from "./store-reader.js"
 import { YjsVersion } from "./version.js"
 import { registerYjsSubstrate } from "./yjs-escape.js"
@@ -215,19 +215,17 @@ export function createYjsSubstrate(
 /**
  * Factory for constructing Yjs-backed substrates.
  *
- * - `create(schema, seed?)` — creates a fresh Y.Doc, populates root
- *   containers from the schema, applies seed values, returns a substrate.
+ * - `create(schema)` — creates a fresh Y.Doc with empty containers
+ *   matching the schema structure. No seed data — initial content
+ *   should be applied via `change()` after construction.
  * - `fromSnapshot(payload, schema)` — creates a Y.Doc from a snapshot
  *   payload, returns a substrate.
  * - `parseVersion(serialized)` — deserializes a YjsVersion.
  */
 export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
-  create(
-    schema: SchemaNode,
-    seed: Record<string, unknown> = {},
-  ): Substrate<YjsVersion> {
+  create(schema: SchemaNode): Substrate<YjsVersion> {
     const doc = new Y.Doc()
-    populateRoot(doc, schema, seed)
+    ensureContainers(doc, schema)
     return createYjsSubstrate(doc, schema)
   },
 

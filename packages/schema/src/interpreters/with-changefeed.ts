@@ -163,6 +163,11 @@ export function deliverNotifications(
  *   drained by `flush`.
  * - `originalPrepare` / `originalFlush`: the unwrapped methods, called
  *   before/after the changefeed layer's logic.
+ * - `populated`: monotonic set of path keys that have received at least
+ *   one mutation. Once a key enters this set it never leaves (except
+ *   on substrate reset). Used by `isPopulated` changefeeds.
+ * - `populatedListeners`: callbacks waiting for a specific path key to
+ *   become populated. Fired at most once per path key, then removed.
  */
 interface ContextWiringState {
   readonly listeners: Map<
@@ -172,6 +177,8 @@ interface ContextWiringState {
   readonly pending: Op[]
   readonly originalPrepare: (path: Path, change: ChangeBase) => void
   readonly originalFlush: (origin?: string) => void
+  readonly populated: Set<string>
+  readonly populatedListeners: Map<string, Set<() => void>>
 }
 
 /**
@@ -244,13 +251,17 @@ function ensurePrepareWiring(
     Set<(changeset: Changeset<ChangeBase>) => void>
   >()
   const pending: Op[] = []
+  const populated = new Set<string>()
+  const populatedListeners = new Map<string, Set<() => void>>()
   const originalPrepare = ctx.prepare
   const originalFlush = ctx.flush
 
-  // Wrapped prepare: apply change to store, then accumulate for flush.
+  // Wrapped prepare: apply change to store, accumulate for flush,
+  // and mark the path (and all ancestor paths) as populated.
   const wrappedPrepare = (path: Path, change: ChangeBase): void => {
     originalPrepare(path, change)
     pending.push({ path, change })
+    markPopulated(path, populated, populatedListeners)
   }
 
   // Wrapped flush: plan notifications (pure), commit via inner flush
@@ -276,7 +287,7 @@ function ensurePrepareWiring(
   ctx.prepare = wrappedPrepare
   ctx.flush = wrappedFlush
 
-  state = { listeners, pending, originalPrepare, originalFlush }
+  state = { listeners, pending, originalPrepare, originalFlush, populated, populatedListeners }
   contextState.set(ctx, state)
   return listeners
 }
@@ -308,6 +319,157 @@ function listenAtPath(
       listeners.delete(key)
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Populated tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark a path and all its ancestors as populated.
+ *
+ * "Populated" means a mutation has been applied at this path or a
+ * descendant. This is a monotonic lattice: once true, never false
+ * (except on substrate reset).
+ *
+ * When a path transitions from unpopulated to populated, any registered
+ * listeners for that path key are fired and removed.
+ */
+function markPopulated(
+  path: Path,
+  populated: Set<string>,
+  populatedListeners: Map<string, Set<() => void>>,
+): void {
+  // Mark the exact path
+  const key = pathKey(path)
+  if (!populated.has(key)) {
+    populated.add(key)
+    firePopulatedListeners(key, populatedListeners)
+  }
+
+  // Mark all ancestor paths (prefix walk)
+  for (let i = path.length - 1; i >= 0; i--) {
+    const ancestorKey = pathKey(path.slice(0, i))
+    if (populated.has(ancestorKey)) break // already marked, ancestors are too
+    populated.add(ancestorKey)
+    firePopulatedListeners(ancestorKey, populatedListeners)
+  }
+}
+
+function firePopulatedListeners(
+  key: string,
+  populatedListeners: Map<string, Set<() => void>>,
+): void {
+  const set = populatedListeners.get(key)
+  if (set) {
+    // Fire all listeners, then remove — this fires at most once per path
+    for (const cb of set) cb()
+    populatedListeners.delete(key)
+  }
+}
+
+/**
+ * Create a `Changefeed<boolean>` for the `isPopulated` property at a path.
+ *
+ * - `.current` reads from the populated set (true if this path key is in the set)
+ * - `.subscribe` fires exactly once when the path transitions from
+ *   unpopulated to populated. If already populated at subscribe time,
+ *   the callback fires immediately (via microtask for consistency).
+ */
+function createPopulatedChangefeed(
+  path: Path,
+  populated: Set<string>,
+  populatedListeners: Map<string, Set<() => void>>,
+): Changefeed<boolean, ChangeBase> {
+  const key = pathKey(path)
+
+  return {
+    get current(): boolean {
+      return populated.has(key)
+    },
+    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
+      // Already populated — fire immediately via microtask
+      if (populated.has(key)) {
+        Promise.resolve().then(() => callback({ changes: [], origin: "populated" }))
+        return () => {}
+      }
+
+      // Not yet populated — register a one-shot listener
+      let set = populatedListeners.get(key)
+      if (!set) {
+        set = new Set()
+        populatedListeners.set(key, set)
+      }
+      const handler = () => callback({ changes: [], origin: "populated" })
+      set.add(handler)
+      return () => {
+        set?.delete(handler)
+        if (set?.size === 0) populatedListeners.delete(key)
+      }
+    },
+  }
+}
+
+/**
+ * Attach the `isPopulated` property to a ref as a non-enumerable object
+ * carrying its own `[CHANGEFEED]`.
+ *
+ * The property is an object with `[CHANGEFEED]: Changefeed<boolean>`.
+ * The compiler detects `[CHANGEFEED]` on the type and emits reactive
+ * regions (e.g. `conditionalRegion` for `if (ref.isPopulated)`).
+ */
+function attachIsPopulated(
+  target: object,
+  path: Path,
+  populated: Set<string>,
+  populatedListeners: Map<string, Set<() => void>>,
+): void {
+  const cf = createPopulatedChangefeed(path, populated, populatedListeners)
+  const populatedRef = Object.create(null) as Record<symbol, unknown>
+  Object.defineProperty(populatedRef, CHANGEFEED, {
+    value: cf,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  })
+  // Also make it callable: populatedRef() returns the boolean
+  const callable = function (this: unknown) {
+    return cf.current
+  } as any
+  Object.defineProperty(callable, CHANGEFEED, {
+    value: cf,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  })
+  Object.defineProperty(target, "isPopulated", {
+    value: callable,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  })
+}
+
+/**
+ * Get the populated state for a context. Returns the populated set and
+ * listeners map. For read-only stacks (no prepare pipeline), returns a
+ * static empty set — `isPopulated` will always be false.
+ */
+function getPopulatedState(
+  ctx: RefContext,
+): { populated: Set<string>; populatedListeners: Map<string, Set<() => void>> } {
+  if (!hasPreparePipeline(ctx)) {
+    // Read-only stack — no mutations possible, nothing is ever populated
+    return { populated: new Set(), populatedListeners: new Map() }
+  }
+  const state = contextState.get(ctx)
+  if (state) {
+    return { populated: state.populated, populatedListeners: state.populatedListeners }
+  }
+  // ensurePrepareWiring hasn't been called yet — call it to initialize
+  ensurePrepareWiring(ctx)
+  const state2 = contextState.get(ctx)!
+  return { populated: state2.populated, populatedListeners: state2.populatedListeners }
 }
 
 // ---------------------------------------------------------------------------
@@ -792,6 +954,8 @@ export function withChangefeed<A extends HasRead>(
           (result as any)[CALL](),
         )
         attachChangefeed(result as object, cf)
+        const ps = getPopulatedState(ctx)
+        attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
         return result as A & HasChangefeed
       }
 
@@ -820,6 +984,8 @@ export function withChangefeed<A extends HasRead>(
           fields as Readonly<Record<string, () => unknown>>,
         )
         attachChangefeed(result as object, cf)
+        const ps = getPopulatedState(ctx)
+        attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
         return result as A & HasChangefeed
       }
 
@@ -855,6 +1021,8 @@ export function withChangefeed<A extends HasRead>(
           () => ctx.store.arrayLength(path),
         )
         attachChangefeed(result as object, cf)
+        const ps = getPopulatedState(ctx)
+        attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
         return result as A & HasChangefeed
       }
 
@@ -887,6 +1055,8 @@ export function withChangefeed<A extends HasRead>(
           () => ctx.store.keys(path),
         )
         attachChangefeed(result as object, cf)
+        const ps = getPopulatedState(ctx)
+        attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
         return result as A & HasChangefeed
       }
 
@@ -928,6 +1098,8 @@ export function withChangefeed<A extends HasRead>(
               (result as any)[CALL](),
             )
             attachChangefeed(result as object, cf)
+            const ps = getPopulatedState(ctx)
+            attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
             return result as A & HasChangefeed
           }
           return result as A & HasChangefeed
@@ -952,6 +1124,8 @@ export function withChangefeed<A extends HasRead>(
               (result as any)[CALL](),
             )
             attachChangefeed(result as object, cf)
+            const ps2 = getPopulatedState(ctx)
+            attachIsPopulated(result as object, path, ps2.populated, ps2.populatedListeners)
             return result as A & HasChangefeed
           }
           return result as A & HasChangefeed

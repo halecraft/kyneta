@@ -67,38 +67,38 @@ function registerDoc(
 // ---------------------------------------------------------------------------
 
 // Interface call signature avoids TS2589 on Ref<S> when S is generic.
-// Seed is Record<string, unknown> for the same reason — use
-// `satisfies Seed<typeof MySchema>` at call sites for type safety.
-type CreateDoc = <S extends SchemaType>(
-  schema: S,
-  seed?: Record<string, unknown>,
-) => Ref<S>
+type CreateDoc = <S extends SchemaType>(schema: S) => Ref<S>
 
 /**
- * Create a live document from a schema and optional seed data.
+ * Create a live document from a schema.
  *
  * Returns a full-stack `Ref<S>` — callable, navigable, writable,
  * transactable, and observable. Backed by a `PlainSubstrate` (plain
  * JS object store with version tracking).
  *
+ * The store starts with `Zero.structural` defaults (empty strings,
+ * 0, false, empty arrays). To set initial content, use `change()`
+ * after construction:
+ *
  * ```ts
  * const doc = createDoc(Schema.doc({
  *   title: Schema.string(),
  *   count: Schema.number(),
- * }), { title: "Hello" })
+ * }))
  *
- * doc.title()           // "Hello"
+ * doc.title()           // "" (Zero default)
  * doc.count()           // 0 (Zero default)
- * doc.title.set("Hi")   // mutate
+ *
+ * change(doc, d => {
+ *   d.title.set("Hello")
+ *   d.count.set(42)
+ * })
  * ```
  *
  * @param schema - The schema describing the document structure.
- * @param seed - Optional partial initial values. Missing fields use
- *   `Zero.structural` defaults. Use `satisfies Seed<typeof MySchema>`
- *   at call sites for type-safe seeds.
  */
-export const createDoc: CreateDoc = (schema, seed = {}) =>
-  registerDoc(schema, plainSubstrateFactory.create(schema, seed))
+export const createDoc: CreateDoc = (schema) =>
+  registerDoc(schema, plainSubstrateFactory.create(schema))
 
 // ---------------------------------------------------------------------------
 // createDocFromSnapshot

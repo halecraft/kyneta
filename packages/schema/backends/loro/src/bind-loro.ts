@@ -21,12 +21,8 @@ import type { Schema as SchemaNode } from "@kyneta/schema"
 import type { Substrate, SubstrateFactory, SubstratePayload } from "@kyneta/schema"
 import { LoroDoc } from "loro-crdt"
 import type { PeerID } from "loro-crdt"
-import { createLoroSubstrate } from "./substrate.js"
+import { createLoroSubstrate, ensureRootContainer } from "./substrate.js"
 import { LoroVersion } from "./version.js"
-import {
-  Zero,
-  type Schema as SchemaNodeType,
-} from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Peer ID hashing — deterministic string → numeric Loro PeerID
@@ -71,25 +67,13 @@ function createLoroFactory(
 ): SubstrateFactory<LoroVersion> {
   const numericPeerId = hashPeerId(peerId)
 
-  // We build on top of the existing loroSubstrateFactory logic
-  // but inject setPeerId before the doc is used.
   return {
-    create(
-      schema: SchemaNode,
-      seed: Record<string, unknown> = {},
-    ): Substrate<LoroVersion> {
+    create(schema: SchemaNode): Substrate<LoroVersion> {
       const doc = new LoroDoc()
       doc.setPeerId(numericPeerId)
 
-      // Compute defaults and overlay seed
-      const defaults = Zero.structural(schema) as Record<string, unknown>
-      const initial = Zero.overlay(seed, defaults, schema) as Record<
-        string,
-        unknown
-      >
-
-      // Walk the schema to create root containers and populate.
-      // Import the populate helper pattern from substrate.ts.
+      // Ensure root containers exist (lazy creation). No seed data —
+      // initial content should be applied via change() after construction.
       let rootProduct = schema
       while (
         rootProduct._kind === "annotated" &&
@@ -100,8 +84,7 @@ function createLoroFactory(
 
       if (rootProduct._kind === "product") {
         for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
-          const value = initial[key]
-          populateRootField(doc, key, fieldSchema as SchemaNode, value)
+          ensureRootContainer(doc, key, fieldSchema as SchemaNode)
         }
       }
 
@@ -130,182 +113,6 @@ function createLoroFactory(
     parseVersion(serialized: string): LoroVersion {
       return LoroVersion.parse(serialized)
     },
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Root field population helpers (mirrored from substrate.ts)
-// ---------------------------------------------------------------------------
-
-import { LoroMap, LoroList } from "loro-crdt"
-import type { LoroDoc as LoroDocType } from "loro-crdt"
-
-const PROPS_KEY = "_props"
-
-function populateRootField(
-  doc: LoroDocType,
-  key: string,
-  fieldSchema: SchemaNode,
-  value: unknown,
-): void {
-  const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
-
-  switch (tag) {
-    case "text": {
-      const text = doc.getText(key)
-      if (typeof value === "string" && value.length > 0) {
-        text.insert(0, value)
-      }
-      return
-    }
-    case "counter": {
-      const counter = doc.getCounter(key)
-      if (typeof value === "number" && value !== 0) {
-        counter.increment(value)
-      }
-      return
-    }
-    case "movable": {
-      const movList = doc.getMovableList(key)
-      if (Array.isArray(value)) {
-        populateList(movList as any, value, fieldSchema)
-      }
-      return
-    }
-    case "tree": {
-      doc.getTree(key)
-      return
-    }
-  }
-
-  // Non-annotated structural types
-  let structural = fieldSchema
-  while (structural._kind === "annotated" && structural.schema !== undefined) {
-    structural = structural.schema
-  }
-
-  switch (structural._kind) {
-    case "product": {
-      const map = doc.getMap(key)
-      if (typeof value === "object" && value !== null) {
-        populateMap(map as any, value as Record<string, unknown>, structural)
-      }
-      return
-    }
-    case "sequence": {
-      const list = doc.getList(key)
-      if (Array.isArray(value)) {
-        populateList(list as any, value, fieldSchema)
-      }
-      return
-    }
-    case "map": {
-      const map = doc.getMap(key)
-      if (typeof value === "object" && value !== null) {
-        for (const [k, v] of Object.entries(
-          value as Record<string, unknown>,
-        )) {
-          map.set(k, v as any)
-        }
-      }
-      return
-    }
-    case "scalar":
-    case "sum": {
-      const propsMap = doc.getMap(PROPS_KEY)
-      if (value !== undefined) {
-        propsMap.set(key, value as any)
-      }
-      return
-    }
-  }
-}
-
-function populateMap(
-  map: any,
-  value: Record<string, unknown>,
-  schema: SchemaNode,
-): void {
-  let structural = schema
-  while (structural._kind === "annotated" && structural.schema !== undefined) {
-    structural = structural.schema
-  }
-
-  for (const [key, fieldValue] of Object.entries(value)) {
-    if (fieldValue === undefined) continue
-
-    let fieldSchema: SchemaNode | undefined
-    if (structural._kind === "product") {
-      fieldSchema = structural.fields[key]
-    }
-
-    if (
-      fieldSchema &&
-      fieldValue !== null &&
-      typeof fieldValue === "object" &&
-      !Array.isArray(fieldValue)
-    ) {
-      let fs = fieldSchema
-      while (fs._kind === "annotated" && fs.schema !== undefined) {
-        fs = fs.schema
-      }
-      if (fs._kind === "product") {
-        const childMap = map.setContainer(key, new LoroMap())
-        populateMap(
-          childMap,
-          fieldValue as Record<string, unknown>,
-          fieldSchema,
-        )
-        continue
-      }
-    }
-
-    if (fieldSchema && Array.isArray(fieldValue)) {
-      let fs = fieldSchema
-      while (fs._kind === "annotated" && fs.schema !== undefined) {
-        fs = fs.schema
-      }
-      if (fs._kind === "sequence") {
-        const childList = map.setContainer(key, new LoroList())
-        populateList(childList, fieldValue, fieldSchema)
-        continue
-      }
-    }
-
-    map.set(key, fieldValue as any)
-  }
-}
-
-function populateList(list: any, value: unknown[], schema: SchemaNode): void {
-  let seqSchema = schema
-  while (seqSchema._kind === "annotated" && seqSchema.schema !== undefined) {
-    seqSchema = seqSchema.schema
-  }
-
-  const itemSchema =
-    seqSchema._kind === "sequence" ? seqSchema.item : undefined
-
-  for (let i = 0; i < value.length; i++) {
-    const item = value[i]
-
-    if (
-      itemSchema &&
-      item !== null &&
-      typeof item === "object" &&
-      !Array.isArray(item)
-    ) {
-      let is = itemSchema
-      while (is._kind === "annotated" && is.schema !== undefined) {
-        is = is.schema
-      }
-      if (is._kind === "product") {
-        const childMap = list.insertContainer(i, new LoroMap())
-        populateMap(childMap, item as Record<string, unknown>, itemSchema)
-        continue
-      }
-    }
-
-    list.insert(i, item as any)
   }
 }
 

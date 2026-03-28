@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { Schema } from "@kyneta/schema"
+import { Schema, change } from "@kyneta/schema"
 import { bindYjs } from "../bind-yjs.js"
 import { yjs } from "../yjs-escape.js"
 import { createYjsDoc } from "../create.js"
@@ -62,26 +62,30 @@ describe("bindYjs", () => {
       const bound = bindYjs(SimpleSchema)
       const factory = bound.factory({ peerId: "peer-1" })
 
-      const substrate = factory.create(SimpleSchema, {
-        title: "Test",
-        count: 7,
+      const substrate = factory.create(SimpleSchema)
+
+      // Populate via the substrate's writable context
+      const doc = createYjsDocFromFactory(factory, SimpleSchema)
+      change(doc, (d: any) => {
+        d.title.insert(0, "Test")
+        d.count.set(7)
       })
 
-      expect(substrate.store.read([{ type: "key", key: "title" }])).toBe(
-        "Test",
-      )
-      expect(substrate.store.read([{ type: "key", key: "count" }])).toBe(7)
+      expect(doc.title()).toBe("Test")
+      expect(doc.count()).toBe(7)
     })
 
     it("factory supports fromSnapshot", () => {
       const bound = bindYjs(SimpleSchema)
       const factory = bound.factory({ peerId: "peer-1" })
 
-      // Create and export
-      const substrate1 = factory.create(SimpleSchema, {
-        title: "Snap",
-        count: 42,
+      // Create and populate
+      const doc1 = createYjsDocFromFactory(factory, SimpleSchema)
+      change(doc1, (d: any) => {
+        d.title.insert(0, "Snap")
+        d.count.set(42)
       })
+      const substrate1 = (unwrap as any)(doc1)
       const snapshot = substrate1.exportSnapshot()
 
       // Restore
@@ -171,7 +175,11 @@ describe("bindYjs", () => {
 
   describe("yjs() escape hatch", () => {
     it("returns the underlying Y.Doc from a createYjsDoc ref", () => {
-      const doc = createYjsDoc(SimpleSchema, { title: "Escape", count: 0 })
+      const doc = createYjsDoc(SimpleSchema)
+      change(doc, (d: any) => {
+        d.title.insert(0, "Escape")
+        d.count.set(0)
+      })
       const yjsDoc = yjs(doc)
 
       expect(yjsDoc).toBeInstanceOf(Y.Doc)
@@ -179,9 +187,10 @@ describe("bindYjs", () => {
     })
 
     it("returns a Y.Doc with the correct root map state", () => {
-      const doc = createYjsDoc(SimpleSchema, {
-        title: "Hello",
-        count: 42,
+      const doc = createYjsDoc(SimpleSchema)
+      change(doc, (d: any) => {
+        d.title.insert(0, "Hello")
+        d.count.set(42)
       })
       const yjsDoc = yjs(doc)
       const rootMap = yjsDoc.getMap("root")
@@ -203,7 +212,7 @@ describe("bindYjs", () => {
     })
 
     it("mutations through escape hatch are visible via kyneta ref", () => {
-      const doc = createYjsDoc(SimpleSchema, { title: "", count: 0 })
+      const doc = createYjsDoc(SimpleSchema)
       const yjsDoc = yjs(doc)
 
       // Mutate via raw Yjs
@@ -212,7 +221,10 @@ describe("bindYjs", () => {
     })
 
     it("text mutations through escape hatch are visible", () => {
-      const doc = createYjsDoc(SimpleSchema, { title: "Hello" })
+      const doc = createYjsDoc(SimpleSchema)
+      change(doc, (d: any) => {
+        d.title.insert(0, "Hello")
+      })
       const yjsDoc = yjs(doc)
 
       const text = yjsDoc.getMap("root").get("title") as Y.Text
@@ -226,7 +238,7 @@ describe("bindYjs", () => {
 // Helper — create a doc via a factory and return a ref with escape hatch
 // ===========================================================================
 
-import { interpret, readable, writable, changefeed, registerSubstrate } from "@kyneta/schema"
+import { interpret, readable, writable, changefeed, registerSubstrate, unwrap } from "@kyneta/schema"
 import type { SubstrateFactory } from "@kyneta/schema"
 import type { Schema as SchemaType } from "@kyneta/schema"
 

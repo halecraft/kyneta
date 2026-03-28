@@ -1,13 +1,14 @@
-// Zero — default values separated from the schema.
+// Zero — default values derived from the schema grammar.
 //
 // A zero is the identity element for the step monoid — the state before
-// any actions have been applied. Different contexts need different zeros
-// (new document vs. loading skeleton vs. test fixture), so zeros are
-// separated from the schema and composed via overlay.
+// any actions have been applied. Zero.structural(schema) derives
+// mechanical defaults by walking the unified schema grammar.
 //
-// Zero.structural(schema) derives mechanical defaults by walking the
-// unified schema grammar. Zero.overlay(primary, fallback, schema)
-// performs a deep structural merge aware of structural kinds.
+// Previous versions included Zero.overlay, Zero.for, and Zero.partial
+// for seed-based initialization. These were removed because seed data
+// conflates authoritative initial content with UI rendering defaults
+// and produces state invisible to the sync protocol. Initial content
+// should be applied via change() after substrate construction.
 
 import type {
   DiscriminatedSumSchema,
@@ -150,103 +151,6 @@ function structural(schema: Schema): unknown {
 }
 
 // ---------------------------------------------------------------------------
-// Zero.for — type-checked identity (runtime passthrough)
-// ---------------------------------------------------------------------------
-
-/**
- * Returns `value` unchanged. This exists purely for documentation and
- * type-checking — it signals "this is a zero for this schema" without
- * any transformation.
- *
- * In a fully typed system, this would enforce that `value` matches
- * `Plain<typeof schema>`. In this spike, it's a typed identity.
- */
-function forSchema<T>(_schema: Schema, value: T): T {
-  return value
-}
-
-// ---------------------------------------------------------------------------
-// Zero.partial — accept partial values (sparse zero)
-// ---------------------------------------------------------------------------
-
-/**
- * Returns `value` unchanged. Like `Zero.for`, this exists for
- * documentation and future type-checking. A partial zero is a sparse
- * object where some leaves are `undefined` (not yet specified).
- *
- * Partial zeros are composed with `Zero.overlay` to fill in gaps.
- */
-function partial<T>(_schema: Schema, value: T): T {
-  return value
-}
-
-// ---------------------------------------------------------------------------
-// Zero.overlay — deep structural merge with per-kind awareness
-// ---------------------------------------------------------------------------
-
-/**
- * Performs a deep structural merge of `primary` over `fallback`, using
- * the schema to determine the merge strategy at each level.
- *
- * The rule at each node:
- * - **scalar / annotated leaf**: `primary ?? fallback`
- * - **product**: merge per-key, recursing into each field
- * - **sequence**: use primary if non-nullish, else fallback
- * - **map**: use primary if non-nullish, else fallback
- * - **sum**: use primary if non-nullish, else fallback
- * - **annotated with inner**: recurse into inner schema
- *
- * This is NOT a simple `??` — it's a deep structural merge that
- * recurses through products so that a partial primary can have its
- * gaps filled by the fallback.
- */
-function overlay(primary: unknown, fallback: unknown, schema: Schema): unknown {
-  // If primary is nullish, use fallback entirely
-  if (primary === undefined || primary === null) {
-    return fallback
-  }
-
-  switch (schema._kind) {
-    case "scalar":
-      // Leaf: primary wins
-      return primary
-
-    case "product": {
-      // Deep merge per-key
-      const primaryObj = (primary as Record<string, unknown>) ?? {}
-      const fallbackObj = (fallback as Record<string, unknown>) ?? {}
-      const result: Record<string, unknown> = {}
-
-      for (const [key, fieldSchema] of Object.entries(schema.fields)) {
-        result[key] = overlay(primaryObj[key], fallbackObj[key], fieldSchema)
-      }
-      return result
-    }
-
-    case "sequence":
-      // Sequences: primary wins wholesale (no per-item merge by default)
-      return primary
-
-    case "map":
-      // Maps: primary wins wholesale
-      return primary
-
-    case "sum":
-      // Sums: primary wins wholesale
-      return primary
-
-    case "annotated": {
-      // If the annotation has an inner schema, recurse
-      if (schema.schema !== undefined) {
-        return overlay(primary, fallback, schema.schema)
-      }
-      // Leaf annotation (text, counter): primary wins
-      return primary
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Zero namespace
 // ---------------------------------------------------------------------------
 
@@ -255,9 +159,7 @@ function overlay(primary: unknown, fallback: unknown, schema: Schema): unknown {
  *
  * ```ts
  * const defaults = Zero.structural(mySchema)
- * const custom = Zero.for(mySchema, { title: "Untitled" })
- * const sparse = Zero.partial(mySchema, { title: "Draft" })
- * const merged = Zero.overlay(sparse, defaults, mySchema)
+ * // { title: "", count: 0, items: [], settings: { darkMode: false } }
  * ```
  */
 export const Zero = {
@@ -266,23 +168,4 @@ export const Zero = {
    * before any actions have been applied.
    */
   structural,
-
-  /**
-   * Type-checked identity — documents that a value is a complete zero
-   * for the given schema.
-   */
-  for: forSchema,
-
-  /**
-   * Accept a partial value as a sparse zero. Compose with `overlay`
-   * to fill in gaps.
-   */
-  partial,
-
-  /**
-   * Deep structural merge: `overlay(primary, fallback, schema)`.
-   * Uses primary where defined, recurses into products, falls back
-   * to fallback at leaves.
-   */
-  overlay,
 } as const

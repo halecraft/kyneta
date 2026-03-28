@@ -34,8 +34,8 @@ import { TimestampVersion } from "../timestamp-version.js"
 
 function lwwFactoryBuilder(_ctx: { peerId: string }) {
   return {
-    create(schema: SchemaNode, seed?: Record<string, unknown>): Substrate<TimestampVersion> {
-      const inner = plainSubstrateFactory.create(schema, seed)
+    create(schema: SchemaNode): Substrate<TimestampVersion> {
+      const inner = plainSubstrateFactory.create(schema)
       let currentVersion = new TimestampVersion(0)
       let cachedCtx: WritableContext | undefined
 
@@ -185,9 +185,11 @@ describe("Sequential sync (PlainSubstrate)", () => {
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
     })
 
-    // Alice creates a doc with seed values
-    const docA = exchangeA.get("doc-1", SequentialDoc, {
-      seed: { title: "Hello from Alice", count: 42 },
+    // Alice creates a doc and populates via change()
+    const docA = exchangeA.get("doc-1", SequentialDoc)
+    change(docA, (d: any) => {
+      d.title.set("Hello from Alice")
+      d.count.set(42)
     })
 
     expect(docA.title()).toBe("Hello from Alice")
@@ -217,7 +219,11 @@ describe("Sequential sync (PlainSubstrate)", () => {
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
     })
 
-    const docA = exchangeA.get("doc-1", SequentialDoc, { seed: { title: "V1", count: 1 } })
+    const docA = exchangeA.get("doc-1", SequentialDoc)
+    change(docA, (d: any) => {
+      d.title.set("V1")
+      d.count.set(1)
+    })
     const docB = exchangeB.get("doc-1", SequentialDoc)
 
     // Initial sync
@@ -422,8 +428,9 @@ describe("Heterogeneous documents", () => {
     })
 
     // Alice: plain config doc
-    const configA = exchangeA.get("config", ConfigDoc, {
-      seed: { config: "dark-mode" },
+    const configA = exchangeA.get("config", ConfigDoc)
+    change(configA, (d: any) => {
+      d.config.set("dark-mode")
     })
 
     // Alice: loro collaborative doc

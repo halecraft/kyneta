@@ -10,9 +10,9 @@
 // `getSubstrate` is exported for use by `sync.ts` but is NOT re-exported
 // from the barrel (`index.ts`). It is an internal cross-module helper.
 //
-// Two overloads for `createYjsDoc`:
+// Two forms for `createYjsDoc`:
 //   createYjsDoc(schema, yjsDoc)    — "bring your own doc" (wrap existing)
-//   createYjsDoc(schema, seed?)     — create a fresh Y.Doc internally
+//   createYjsDoc(schema)            — create a fresh empty Y.Doc
 
 import { interpret, registerSubstrate } from "@kyneta/schema"
 import { changefeed, readable, writable } from "@kyneta/schema"
@@ -73,7 +73,7 @@ function registerDoc(
 }
 
 // ---------------------------------------------------------------------------
-// isYDoc — runtime check for Y.Doc vs plain seed object
+// isYDoc — runtime check for Y.Doc
 // ---------------------------------------------------------------------------
 
 function isYDoc(value: unknown): value is Y.Doc {
@@ -97,22 +97,25 @@ function isYDoc(value: unknown): value is Y.Doc {
 // ---------------------------------------------------------------------------
 
 // Interface call signature avoids TS2589 on Ref<S> when S is generic.
-// Seed is Record<string, unknown> for the same reason — use
-// `satisfies Seed<typeof MySchema>` at call sites for type safety.
 
 /**
  * Create a live Yjs-backed document.
  *
- * **Overload 1 — bring your own doc:**
+ * **Form 1 — bring your own doc:**
  * ```ts
  * const yjsDoc = new Y.Doc()
  * const doc = createYjsDoc(mySchema, yjsDoc)
  * ```
  *
- * **Overload 2 — fresh doc with optional seed:**
+ * **Form 2 — fresh empty doc:**
  * ```ts
- * const doc = createYjsDoc(mySchema, { title: "Hello" })
- * const doc = createYjsDoc(mySchema)  // all defaults
+ * const doc = createYjsDoc(mySchema)
+ *
+ * // Apply initial content via change():
+ * change(doc, d => {
+ *   d.title.insert(0, "Hello")
+ *   d.items.push({ name: "First item" })
+ * })
  * ```
  *
  * Returns a full-stack `Ref<S>` — callable, navigable, writable,
@@ -124,23 +127,21 @@ function isYDoc(value: unknown): value is Y.Doc {
  * `Y.applyUpdate()`, external raw Yjs API mutations).
  *
  * @param schema - The schema describing the document structure.
- * @param docOrSeed - Either a `Y.Doc` instance to wrap, or an optional
- *   seed object with partial initial values. If omitted, a fresh Y.Doc
- *   is created with `Zero.structural` defaults.
+ * @param doc - Optional `Y.Doc` instance to wrap. If omitted, a fresh
+ *   empty Y.Doc is created with containers matching the schema.
  */
 type CreateYjsDoc = <S extends SchemaType>(
   schema: S,
-  docOrSeed?: Y.Doc | Record<string, unknown>,
+  doc?: Y.Doc,
 ) => Ref<S>
 
-export const createYjsDoc: CreateYjsDoc = (schema, docOrSeed) => {
-  if (docOrSeed !== undefined && isYDoc(docOrSeed)) {
+export const createYjsDoc: CreateYjsDoc = (schema, doc) => {
+  if (doc !== undefined && isYDoc(doc)) {
     // Bring your own doc — wrap the existing Y.Doc
-    return registerDoc(schema, createYjsSubstrate(docOrSeed, schema))
+    return registerDoc(schema, createYjsSubstrate(doc, schema))
   }
-  // Fresh doc with optional seed
-  const seed = (docOrSeed as Record<string, unknown> | undefined) ?? {}
-  return registerDoc(schema, yjsSubstrateFactory.create(schema, seed))
+  // Fresh empty doc
+  return registerDoc(schema, yjsSubstrateFactory.create(schema))
 }
 
 // ---------------------------------------------------------------------------

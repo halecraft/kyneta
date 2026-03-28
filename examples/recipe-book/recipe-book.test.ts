@@ -22,14 +22,16 @@ import {
   version,
 } from "@kyneta/schema/basic"
 import { RecipeBookSchema } from "./src/schema.js"
-import { SEED } from "./src/seed.js"
+import { applyInitialContent } from "./src/seed.js"
 
 // ---------------------------------------------------------------------------
-// Helper: create a doc from the shared seed
+// Helper: create a doc with initial content applied via change()
 // ---------------------------------------------------------------------------
 
 function makeDoc() {
-  return createDoc(RecipeBookSchema, { ...SEED })
+  const doc = createDoc(RecipeBookSchema)
+  applyInitialContent(doc)
+  return doc
 }
 
 // ---------------------------------------------------------------------------
@@ -156,36 +158,39 @@ describe("facade basics", () => {
 // ---------------------------------------------------------------------------
 
 describe("sync primitives", () => {
-  it("version(doc) starts at 0 for a seed-created doc", () => {
+  it("version(doc) reflects initial content operations", () => {
     const doc = makeDoc()
-    expect(version(doc)).toBe(0)
+    // applyInitialContent calls change() 3 times (title + 2 recipe pushes)
+    expect(version(doc)).toBeGreaterThan(0)
   })
 
   it("version(doc) increments on each change() call", () => {
     const doc = makeDoc()
-    expect(version(doc)).toBe(0)
+    const v0 = version(doc)
 
     change(doc, d => d.title.insert(0, "A"))
-    expect(version(doc)).toBe(1)
+    expect(version(doc)).toBe(v0 + 1)
 
     change(doc, d => d.favorites.increment(1))
-    expect(version(doc)).toBe(2)
+    expect(version(doc)).toBe(v0 + 2)
 
     change(doc, d =>
       d.recipes.push({ name: "X", vegetarian: false, ingredients: [] } as any),
     )
-    expect(version(doc)).toBe(3)
+    expect(version(doc)).toBe(v0 + 3)
   })
 
   it("version(doc) increments on applyChanges() call", () => {
     const docA = makeDoc()
     const docB = makeDoc()
+    const vA0 = version(docA)
+    const vB0 = version(docB)
 
     const ops = change(docA, d => d.title.insert(0, "Hi "))
-    expect(version(docA)).toBe(1)
+    expect(version(docA)).toBe(vA0 + 1)
 
     applyChanges(docB, ops)
-    expect(version(docB)).toBe(1)
+    expect(version(docB)).toBe(vB0 + 1)
   })
 
   it("delta(doc, 0) returns all operations since creation", () => {
@@ -215,6 +220,7 @@ describe("sync primitives", () => {
   it("round-trip: change(docA) → ops → applyChanges(docB) → snapshots match", () => {
     const docA = makeDoc()
     const docB = makeDoc()
+    const vB0 = version(docB)
 
     // Perform several mutations on docA
     change(docA, d => d.title.insert(0, "★ "))
@@ -223,8 +229,8 @@ describe("sync primitives", () => {
       d.recipes.at(0)?.vegetarian.set(true)
     })
 
-    // Get all ops and apply to docB
-    const ops = delta(docA, 0)
+    // Get only the ops that happened after the shared base state
+    const ops = delta(docA, vB0)
     applyChanges(docB, ops, { origin: "sync" })
 
     // Snapshots should match
@@ -287,17 +293,20 @@ describe("SSR snapshot round-trip", () => {
     expect((docB as any)()).toEqual((docA as any)())
   })
 
-  it("reconstructed doc starts at frontier 0 (fresh epoch)", () => {
+  it("reconstructed doc starts at a fresh epoch with version > 0", () => {
     const docA = makeDoc()
+    const vA0 = version(docA)
     change(docA, d => d.favorites.increment(5))
     change(docA, d => d.title.insert(0, "X"))
-    expect(version(docA)).toBe(2)
+    expect(version(docA)).toBe(vA0 + 2)
 
     const snapshot = exportSnapshot(docA)
     const docB = createDocFromSnapshot(RecipeBookSchema, snapshot)
 
-    // New substrate is a fresh epoch — frontier resets to 0
-    expect(version(docB)).toBe(0)
+    // fromSnapshot applies state via executeBatch, producing version > 0.
+    // The exact version depends on the number of top-level keys in the
+    // snapshot (one ReplaceChange per key).
+    expect(version(docB)).toBeGreaterThan(0)
   })
 
   it("delta(doc, version(doc)) returns [] when up to date", () => {

@@ -56,16 +56,7 @@ export type ExchangeParams = {
   permissions?: Partial<Permissions>
 }
 
-/**
- * Options for `exchange.get()`.
- */
-export type GetOptions = {
-  /**
-   * Optional seed values for the initial document state.
-   * Seed is per-document-instance, not per-binding.
-   */
-  seed?: Record<string, unknown>
-}
+
 
 // ---------------------------------------------------------------------------
 // Doc cache entry
@@ -193,7 +184,6 @@ export class Exchange {
    *
    * @param docId - The document ID
    * @param bound - A BoundSchema created by `bind()`, `bindPlain()`, `bindLww()`, or `bindLoro()`
-   * @param opts - Options (seed values)
    * @returns A full-stack Ref<S> with sync capabilities via `sync()`
    *
    * @example
@@ -204,15 +194,13 @@ export class Exchange {
    * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
    * const doc = exchange.get("my-doc", TodoDoc)
    *
-   * // With seed values
-   * const ConfigDoc = bindPlain(Schema.doc({ theme: Schema.string() }))
-   * const config = exchange.get("config", ConfigDoc, { seed: { theme: "dark" } })
+   * // Initial content via change() after construction:
+   * change(doc, d => { d.title.insert(0, "Hello") })
    * ```
    */
   get<S extends SchemaNode>(
     docId: DocId,
     bound: BoundSchema<S>,
-    opts?: GetOptions,
   ): Ref<S> {
     // Check cache first
     const cached = this.#docCache.get(docId)
@@ -232,9 +220,9 @@ export class Exchange {
     // Resolve factory from the BoundSchema's builder
     const factory = this.#resolveFactory(bound.factory)
 
-    // Create substrate
-    const seed = opts?.seed ?? {}
-    const substrate = factory.create(bound.schema, seed)
+    // Create substrate — empty, with Zero.structural defaults.
+    // Initial content should be applied via change() after get().
+    const substrate = factory.create(bound.schema)
 
     // Build the full interpreter stack
     // The `as any` avoids TS2589 — interpret's fluent API produces deeply

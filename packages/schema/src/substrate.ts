@@ -180,8 +180,8 @@ export interface Substrate<V extends Version = Version>
  * Factory for constructing substrates. Each substrate type provides one.
  */
 export interface SubstrateFactory<V extends Version = Version> {
-  /** Create a fresh substrate from a schema and optional seed. */
-  create(schema: SchemaNode, seed?: Record<string, unknown>): Substrate<V>
+  /** Create a fresh substrate from a schema. Store starts with Zero.structural defaults. */
+  create(schema: SchemaNode): Substrate<V>
 
   /**
    * Construct a new substrate from a snapshot payload.
@@ -193,7 +193,7 @@ export interface SubstrateFactory<V extends Version = Version> {
    * This is the entry point for epoch boundaries: SSR hydration,
    * reconnection past log compaction, etc.
    *
-   * For PlainSubstrate: parses JSON state image, uses as seed.
+   * For PlainSubstrate: parses JSON state image, applies via executeBatch.
    * For LoroSubstrate: LoroDoc.fromSnapshot(bytes).
    */
   fromSnapshot(payload: SubstratePayload, schema: SchemaNode): Substrate<V>

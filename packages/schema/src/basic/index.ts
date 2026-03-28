@@ -15,7 +15,7 @@ export { applyChanges, change } from "../facade/change.js"
 
 // --- Observation protocol (substrate-agnostic, re-exported for convenience) ---
 export { subscribe, subscribeNode } from "../facade/observe.js"
-export type { Plain, Seed } from "../interpreter-types.js"
+export type { Plain } from "../interpreter-types.js"
 
 // --- Validation ---
 export {

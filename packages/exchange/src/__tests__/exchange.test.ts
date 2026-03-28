@@ -92,10 +92,12 @@ describe("Exchange", () => {
       expect(value).toEqual({ title: "", count: 0 })
     })
 
-    it("returns a Ref<S> with navigation and seed values", () => {
+    it("returns a Ref<S> with navigation and change()-applied values", () => {
       const exchange = new Exchange()
-      const doc = exchange.get("doc-1", TestDoc, {
-        seed: { title: "Hello", count: 42 },
+      const doc = exchange.get("doc-1", TestDoc)
+      change(doc, (d: any) => {
+        d.title.set("Hello")
+        d.count.set(42)
       })
 
       expect(doc.title()).toBe("Hello")
@@ -120,13 +122,15 @@ describe("Exchange", () => {
       )
     })
 
-    it("seed values are applied", () => {
+    it("change() values are applied", () => {
       const exchange = new Exchange()
-      const doc = exchange.get("doc-1", TestDoc, {
-        seed: { title: "Seeded", count: 99 },
+      const doc = exchange.get("doc-1", TestDoc)
+      change(doc, (d: any) => {
+        d.title.set("Changed")
+        d.count.set(99)
       })
 
-      expect(doc.title()).toBe("Seeded")
+      expect(doc.title()).toBe("Changed")
       expect(doc.count()).toBe(99)
     })
   })
@@ -259,7 +263,11 @@ describe("Exchange", () => {
     describe("escape hatches", () => {
       it("unwrap(ref) returns the substrate for an exchange-created doc", () => {
         const exchange = new Exchange()
-        const doc = exchange.get("doc-1", TestDoc, { seed: { title: "Hi", count: 1 } })
+        const doc = exchange.get("doc-1", TestDoc)
+        change(doc, (d: any) => {
+          d.title.set("Hi")
+          d.count.set(1)
+        })
 
         const substrate = unwrap(doc)
         expect(substrate.version()).toBeDefined()
@@ -300,7 +308,11 @@ describe("Exchange", () => {
           adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
         })
 
-        const docA = exchangeA.get("doc-1", TestDoc, { seed: { title: "V1", count: 1 } })
+        const docA = exchangeA.get("doc-1", TestDoc)
+        change(docA, (d: any) => {
+          d.title.set("V1")
+          d.count.set(1)
+        })
         const docB = exchangeB.get("doc-1", TestDoc)
 
         // Initial sync

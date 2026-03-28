@@ -33,8 +33,8 @@ import { TimestampVersion } from "../timestamp-version.js"
 
 function lwwFactoryBuilder(_ctx: { peerId: string }) {
   return {
-    create(schema: SchemaNode, seed?: Record<string, unknown>): Substrate<TimestampVersion> {
-      const inner = plainSubstrateFactory.create(schema, seed)
+    create(schema: SchemaNode): Substrate<TimestampVersion> {
+      const inner = plainSubstrateFactory.create(schema)
       let currentVersion = new TimestampVersion(0)
       let cachedCtx: WritableContext | undefined
 
@@ -146,18 +146,15 @@ const loroSchema = LoroSchema.doc({
 const LoroDoc = bindLoro(loroSchema)
 
 // ---------------------------------------------------------------------------
-// 1. Empty delta → snapshot fallback
+// 1. Initial content via change() syncs to peers
 //
-// Bug: When both peers have version 0 (PlainSubstrate starts at 0 even
-// with seed data), exportSince(v0) returns "[]" (empty ops). Without
-// the fallback, the receiver imports nothing and stays empty.
-//
-// This test would FAIL against the pre-fix code because the synchronizer
-// would send an empty delta instead of falling back to a snapshot.
+// After seed removal, initial content is applied via change() which
+// produces real operations (version > 0). This test verifies that
+// change()-applied content syncs correctly to a peer.
 // ---------------------------------------------------------------------------
 
-describe("empty delta → snapshot fallback", () => {
-  it("seeded doc at version 0 syncs via snapshot when exportSince returns empty ops", async () => {
+describe("initial content via change() syncs to peers", () => {
+  it("change()-applied content syncs to peer via delta", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -169,21 +166,22 @@ describe("empty delta → snapshot fallback", () => {
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
     })
 
-    // Alice creates a doc with seed — version is 0, but store has data
-    const docA = exchangeA.get("doc-1", SeededDoc, {
-      seed: { title: "Seeded", count: 99 },
+    // Alice creates a doc and applies initial content via change()
+    const docA = exchangeA.get("doc-1", SeededDoc)
+    change(docA, (d: any) => {
+      d.title.set("Initial")
+      d.count.set(99)
     })
-    expect(docA.title()).toBe("Seeded")
+    expect(docA.title()).toBe("Initial")
 
-    // Bob creates the same doc — version is also 0, store is empty defaults
+    // Bob creates the same doc — starts with structural zeros
     const docB = exchangeB.get("doc-1", SeededDoc)
     expect(docB.title()).toBe("")
 
     await drain()
 
-    // The invariant: Bob must have Alice's seeded data, even though
-    // both started at version 0.
-    expect(docB.title()).toBe("Seeded")
+    // Bob must have Alice's content
+    expect(docB.title()).toBe("Initial")
     expect(docB.count()).toBe(99)
   })
 })
@@ -209,7 +207,10 @@ describe("snapshot import preserves ref identity", () => {
       adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
     })
 
-    const docA = exchangeA.get("doc-1", SimpleDoc, { seed: { title: "Hello" } })
+    const docA = exchangeA.get("doc-1", SimpleDoc)
+    change(docA, (d: any) => {
+      d.title.set("Hello")
+    })
     const docB = exchangeB.get("doc-1", SimpleDoc)
     const refBefore = docB
 

@@ -30,13 +30,16 @@ const TestSchema = Schema.doc({
   theme: Schema.string(),
 })
 
-function createSeed() {
-  return {
-    title: "Hello",
-    count: 5,
-    items: [{ name: "Task A", done: false }],
-    theme: "dark",
-  }
+/** Create a doc and apply seed values via change(). */
+function createSeededDoc() {
+  const doc = createDoc(TestSchema)
+  change(doc, d => {
+    d.title.insert(0, "Hello")
+    d.count.increment(5)
+    d.items.push({ name: "Task A", done: false })
+    d.theme.set("dark")
+  })
+  return doc
 }
 
 // ===========================================================================
@@ -52,8 +55,8 @@ describe("createDoc", () => {
     expect(doc()).not.toBeNull()
   })
 
-  it("with seed populates initial state", () => {
-    const doc = createDoc(TestSchema, createSeed())
+  it("with seed values applied via change() populates initial state", () => {
+    const doc = createSeededDoc()
 
     expect(doc.title()).toBe("Hello")
     expect(doc.count()).toBe(5)
@@ -88,7 +91,7 @@ describe("createDoc", () => {
 
 describe("createDocFromSnapshot", () => {
   it("round-trips with exportSnapshot", () => {
-    const docA = createDoc(TestSchema, createSeed())
+    const docA = createSeededDoc()
 
     // Mutate docA
     change(docA, d => {
@@ -117,7 +120,7 @@ describe("sync primitives", () => {
   })
 
   it("version increments after mutations", () => {
-    const doc = createDoc(TestSchema, createSeed())
+    const doc = createSeededDoc()
 
     const v0 = version(doc)
     change(doc, d => {
@@ -136,7 +139,7 @@ describe("sync primitives", () => {
   })
 
   it("delta returns ops after mutations", () => {
-    const doc = createDoc(TestSchema, createSeed())
+    const doc = createSeededDoc()
 
     change(doc, d => {
       d.theme.set("light")
@@ -148,7 +151,7 @@ describe("sync primitives", () => {
   })
 
   it("delta returns [] when already up to date", () => {
-    const doc = createDoc(TestSchema, createSeed())
+    const doc = createSeededDoc()
 
     change(doc, d => {
       d.theme.set("light")
@@ -160,7 +163,7 @@ describe("sync primitives", () => {
   })
 
   it("exportSnapshot produces a payload with encoding json and string data", () => {
-    const doc = createDoc(TestSchema, createSeed())
+    const doc = createSeededDoc()
 
     const payload: SubstratePayload = exportSnapshot(doc)
 
@@ -175,8 +178,8 @@ describe("sync primitives", () => {
 
 describe("change / applyChanges round-trip", () => {
   it("text insert round-trips correctly", () => {
-    const docA = createDoc(TestSchema, createSeed())
-    const docB = createDoc(TestSchema, createSeed())
+    const docA = createSeededDoc()
+    const docB = createDocFromSnapshot(TestSchema, exportSnapshot(docA))
 
     const ops = change(docA, d => {
       d.title.insert(5, " World")
@@ -188,8 +191,8 @@ describe("change / applyChanges round-trip", () => {
   })
 
   it("counter increment round-trips correctly", () => {
-    const docA = createDoc(TestSchema, createSeed())
-    const docB = createDoc(TestSchema, createSeed())
+    const docA = createSeededDoc()
+    const docB = createDocFromSnapshot(TestSchema, exportSnapshot(docA))
 
     const ops = change(docA, d => {
       d.count.increment(10)
@@ -201,8 +204,8 @@ describe("change / applyChanges round-trip", () => {
   })
 
   it("sequence push round-trips correctly", () => {
-    const docA = createDoc(TestSchema, createSeed())
-    const docB = createDoc(TestSchema, createSeed())
+    const docA = createSeededDoc()
+    const docB = createDocFromSnapshot(TestSchema, exportSnapshot(docA))
 
     const ops = change(docA, d => {
       d.items.push({ name: "Task B", done: true })
@@ -216,8 +219,8 @@ describe("change / applyChanges round-trip", () => {
   })
 
   it("mixed mutations round-trip correctly", () => {
-    const docA = createDoc(TestSchema, createSeed())
-    const docB = createDoc(TestSchema, createSeed())
+    const docA = createSeededDoc()
+    const docB = createDocFromSnapshot(TestSchema, exportSnapshot(docA))
 
     const ops = change(docA, d => {
       d.title.insert(5, "!")
@@ -231,12 +234,12 @@ describe("change / applyChanges round-trip", () => {
   })
 
   it("applyChanges with origin delivers origin to subscriber", () => {
-    const doc = createDoc(TestSchema, createSeed())
+    const doc = createSeededDoc()
 
     const changesets: Changeset<Op>[] = []
     subscribe(doc, cs => changesets.push(cs))
 
-    const otherDoc = createDoc(TestSchema, createSeed())
+    const otherDoc = createDocFromSnapshot(TestSchema, exportSnapshot(doc))
     const ops = change(otherDoc, d => {
       d.theme.set("light")
     })
@@ -254,7 +257,7 @@ describe("change / applyChanges round-trip", () => {
 
 describe("subscribe", () => {
   it("fires on mutations with correct paths", () => {
-    const doc = createDoc(TestSchema, createSeed())
+    const doc = createSeededDoc()
 
     const changesets: Changeset<Op>[] = []
     subscribe(doc, cs => changesets.push(cs))
@@ -271,7 +274,7 @@ describe("subscribe", () => {
   })
 
   it("fires on multiple mutations with all paths", () => {
-    const doc = createDoc(TestSchema, createSeed())
+    const doc = createSeededDoc()
 
     const changesets: Changeset<Op>[] = []
     subscribe(doc, cs => changesets.push(cs))
@@ -292,7 +295,7 @@ describe("subscribe", () => {
 
 describe("subscribeNode", () => {
   it("fires on count mutation", () => {
-    const doc = createDoc(TestSchema, createSeed())
+    const doc = createSeededDoc()
 
     const changesets: Changeset[] = []
     subscribeNode(doc.count, cs => changesets.push(cs))
@@ -307,7 +310,7 @@ describe("subscribeNode", () => {
   })
 
   it("does not fire on unrelated mutations", () => {
-    const doc = createDoc(TestSchema, createSeed())
+    const doc = createSeededDoc()
 
     const changesets: Changeset[] = []
     subscribeNode(doc.count, cs => changesets.push(cs))
@@ -326,8 +329,8 @@ describe("subscribeNode", () => {
 
 describe("WeakMap isolation", () => {
   it("two docs from same schema have independent substrates", () => {
-    const docA = createDoc(TestSchema, createSeed())
-    const docB = createDoc(TestSchema, createSeed())
+    const docA = createSeededDoc()
+    const docB = createSeededDoc()
 
     change(docA, d => {
       d.title.insert(5, " World")
@@ -347,8 +350,8 @@ describe("WeakMap isolation", () => {
   })
 
   it("version tracks independently per doc", () => {
-    const docA = createDoc(TestSchema, createSeed())
-    const docB = createDoc(TestSchema, createSeed())
+    const docA = createDoc(TestSchema)
+    const docB = createDoc(TestSchema)
 
     expect(version(docA)).toBe(0)
     expect(version(docB)).toBe(0)
@@ -365,5 +368,124 @@ describe("WeakMap isolation", () => {
     })
 
     expect(version(docB)).toBeGreaterThan(0)
+  })
+})
+
+// ===========================================================================
+// isPopulated
+// ===========================================================================
+
+describe("isPopulated", () => {
+  it("starts false on a fresh doc", () => {
+    const doc = createDoc(TestSchema)
+    expect(doc.isPopulated()).toBe(false)
+    expect(doc.title.isPopulated()).toBe(false)
+    expect(doc.count.isPopulated()).toBe(false)
+    expect(doc.items.isPopulated()).toBe(false)
+    expect(doc.theme.isPopulated()).toBe(false)
+  })
+
+  it("flips true on leaf scalar mutation", () => {
+    const doc = createDoc(TestSchema)
+    expect(doc.theme.isPopulated()).toBe(false)
+
+    change(doc, d => d.theme.set("dark"))
+
+    expect(doc.theme.isPopulated()).toBe(true)
+    // Other fields remain unpopulated
+    expect(doc.title.isPopulated()).toBe(false)
+    expect(doc.count.isPopulated()).toBe(false)
+  })
+
+  it("flips true on text annotation mutation", () => {
+    const doc = createDoc(TestSchema)
+    expect(doc.title.isPopulated()).toBe(false)
+
+    change(doc, d => d.title.insert(0, "Hello"))
+
+    expect(doc.title.isPopulated()).toBe(true)
+  })
+
+  it("flips true on counter annotation mutation", () => {
+    const doc = createDoc(TestSchema)
+    expect(doc.count.isPopulated()).toBe(false)
+
+    change(doc, d => d.count.increment(1))
+
+    expect(doc.count.isPopulated()).toBe(true)
+  })
+
+  it("flips true on sequence push", () => {
+    const doc = createDoc(TestSchema)
+    expect(doc.items.isPopulated()).toBe(false)
+
+    change(doc, d => d.items.push({ name: "Task", done: false }))
+
+    expect(doc.items.isPopulated()).toBe(true)
+  })
+
+  it("parent (doc) flips true when any child is mutated", () => {
+    const doc = createDoc(TestSchema)
+    expect(doc.isPopulated()).toBe(false)
+
+    change(doc, d => d.theme.set("light"))
+
+    // Doc itself is populated because a descendant was mutated
+    expect(doc.isPopulated()).toBe(true)
+    // The mutated child is populated
+    expect(doc.theme.isPopulated()).toBe(true)
+    // Other children remain unpopulated
+    expect(doc.title.isPopulated()).toBe(false)
+  })
+
+  it("never reverts to false after becoming true", () => {
+    const doc = createDoc(TestSchema)
+    change(doc, d => d.theme.set("dark"))
+    expect(doc.theme.isPopulated()).toBe(true)
+
+    // Another mutation doesn't change the boolean
+    change(doc, d => d.theme.set("light"))
+    expect(doc.theme.isPopulated()).toBe(true)
+  })
+
+  it("has [CHANGEFEED] for reactive detection", () => {
+    const doc = createDoc(TestSchema)
+    expect(hasChangefeed(doc.isPopulated)).toBe(true)
+    expect(hasChangefeed(doc.title.isPopulated)).toBe(true)
+  })
+
+  it("changefeed fires on false → true transition", () => {
+    const doc = createDoc(TestSchema)
+    const events: boolean[] = []
+
+    doc.theme.isPopulated[CHANGEFEED].subscribe(() => {
+      events.push(doc.theme.isPopulated())
+    })
+
+    change(doc, d => d.theme.set("dark"))
+
+    // Subscriber should have fired exactly once
+    expect(events).toEqual([true])
+
+    // Second mutation does NOT fire again (monotonic)
+    change(doc, d => d.theme.set("light"))
+    expect(events).toEqual([true])
+  })
+
+  it("works after importDelta (remote sync)", () => {
+    const docA = createDoc(TestSchema)
+    const docB = createDoc(TestSchema)
+
+    expect(docB.theme.isPopulated()).toBe(false)
+
+    // Mutate docA
+    change(docA, d => d.theme.set("synced"))
+
+    // Sync A → B
+    const ops = delta(docA, 0)
+    applyChanges(docB, ops, { origin: "sync" })
+
+    expect(docB.theme.isPopulated()).toBe(true)
+    expect(docB.theme()).toBe("synced")
   })
 })

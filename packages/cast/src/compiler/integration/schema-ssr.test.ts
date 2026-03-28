@@ -11,6 +11,7 @@
 
 import {
   CHANGEFEED,
+  change as schemaChange,
   changefeed,
   hasChangefeed,
   interpret,
@@ -61,18 +62,28 @@ const todoSchema = LoroSchema.doc({
   ),
 })
 
-function createDoc(seed: Record<string, unknown> = {}) {
+function createDoc(initial?: Record<string, unknown>) {
   const defaults = Zero.structural(todoSchema) as Record<string, unknown>
-  const store = Zero.overlay(seed, defaults, todoSchema) as Record<
-    string,
-    unknown
-  >
+  const store = { ...defaults } as Record<string, unknown>
   const ctx = plainContext(store)
   const doc = interpret(todoSchema, ctx)
     .with(readable)
     .with(writable)
     .with(changefeed)
     .done()
+  // Apply initial values via change() — real operations, not seed
+  if (initial) {
+    schemaChange(doc, (d: any) => {
+      if (initial.title !== undefined) d.title.update(initial.title)
+      if (initial.count !== undefined && initial.count !== 0) d.count.increment(initial.count)
+    })
+    // Push list items in separate change() calls to preserve order
+    if (initial.items) {
+      for (const item of initial.items as any[]) {
+        schemaChange(doc, (d: any) => d.items.push(item))
+      }
+    }
+  }
   return { doc, store, ctx }
 }
 

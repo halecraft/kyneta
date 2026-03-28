@@ -10,9 +10,9 @@
 // `getSubstrate` is exported for use by `sync.ts` but is NOT re-exported
 // from the barrel (`index.ts`). It is an internal cross-module helper.
 //
-// Two overloads for `createLoroDoc`:
+// Two forms for `createLoroDoc`:
 //   createLoroDoc(schema, loroDoc)   — "bring your own doc" (wrap existing)
-//   createLoroDoc(schema, seed?)     — create a fresh LoroDoc internally
+//   createLoroDoc(schema)            — create a fresh empty LoroDoc
 
 import { interpret } from "@kyneta/schema"
 import { changefeed, readable, writable } from "@kyneta/schema"
@@ -70,7 +70,7 @@ function registerDoc(
 }
 
 // ---------------------------------------------------------------------------
-// isLoroDoc — runtime check for LoroDoc vs plain seed object
+// isLoroDoc — runtime check for LoroDoc
 // ---------------------------------------------------------------------------
 
 function isLoroDoc(value: unknown): value is LoroDoc {
@@ -93,22 +93,25 @@ function isLoroDoc(value: unknown): value is LoroDoc {
 // ---------------------------------------------------------------------------
 
 // Interface call signature avoids TS2589 on Ref<S> when S is generic.
-// Seed is Record<string, unknown> for the same reason — use
-// `satisfies Seed<typeof MySchema>` at call sites for type safety.
 
 /**
  * Create a live Loro-backed document.
  *
- * **Overload 1 — bring your own doc:**
+ * **Form 1 — bring your own doc:**
  * ```ts
  * const loroDoc = new LoroDoc()
  * const doc = createLoroDoc(mySchema, loroDoc)
  * ```
  *
- * **Overload 2 — fresh doc with optional seed:**
+ * **Form 2 — fresh empty doc:**
  * ```ts
- * const doc = createLoroDoc(mySchema, { title: "Hello" })
- * const doc = createLoroDoc(mySchema)  // all defaults
+ * const doc = createLoroDoc(mySchema)
+ *
+ * // Apply initial content via change():
+ * change(doc, d => {
+ *   d.title.insert(0, "Hello")
+ *   d.items.push({ name: "First item" })
+ * })
  * ```
  *
  * Returns a full-stack `Ref<S>` — callable, navigable, writable,
@@ -120,23 +123,21 @@ function isLoroDoc(value: unknown): value is LoroDoc {
  * `doc.import()`, external raw Loro API mutations).
  *
  * @param schema - The schema describing the document structure.
- * @param docOrSeed - Either a `LoroDoc` instance to wrap, or an optional
- *   seed object with partial initial values. If omitted, a fresh LoroDoc
- *   is created with `Zero.structural` defaults.
+ * @param doc - Optional `LoroDoc` instance to wrap. If omitted, a fresh
+ *   empty LoroDoc is created with containers matching the schema.
  */
 type CreateLoroDoc = <S extends SchemaType>(
   schema: S,
-  docOrSeed?: LoroDoc | Record<string, unknown>,
+  doc?: LoroDoc,
 ) => Ref<S>
 
-export const createLoroDoc: CreateLoroDoc = (schema, docOrSeed) => {
-  if (docOrSeed !== undefined && isLoroDoc(docOrSeed)) {
+export const createLoroDoc: CreateLoroDoc = (schema, doc) => {
+  if (doc !== undefined && isLoroDoc(doc)) {
     // Bring your own doc — wrap the existing LoroDoc
-    return registerDoc(schema, createLoroSubstrate(docOrSeed, schema))
+    return registerDoc(schema, createLoroSubstrate(doc, schema))
   }
-  // Fresh doc with optional seed
-  const seed = (docOrSeed as Record<string, unknown> | undefined) ?? {}
-  return registerDoc(schema, loroSubstrateFactory.create(schema, seed))
+  // Fresh empty doc
+  return registerDoc(schema, loroSubstrateFactory.create(schema))
 }
 
 // ---------------------------------------------------------------------------

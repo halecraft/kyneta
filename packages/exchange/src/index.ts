@@ -116,7 +116,7 @@ export { createPermissions } from "./permissions.js"
 // ---------------------------------------------------------------------------
 
 export { Exchange } from "./exchange.js"
-export type { ExchangeParams, GetOptions } from "./exchange.js"
+export type { ExchangeParams } from "./exchange.js"
 
 // ---------------------------------------------------------------------------
 // Sync — sync capabilities access

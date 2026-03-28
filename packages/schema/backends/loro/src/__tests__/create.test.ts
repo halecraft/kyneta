@@ -43,7 +43,11 @@ describe("createLoroDoc (fresh doc)", () => {
   })
 
   it("creates a doc with seed values", () => {
-    const doc = createLoroDoc(TestSchema, { title: "Hello", theme: "dark" })
+    const doc = createLoroDoc(TestSchema)
+    change(doc, (d: any) => {
+      d.title.insert(0, "Hello")
+      d.theme.set("dark")
+    })
     expect(doc.title()).toBe("Hello")
     expect(doc.theme()).toBe("dark")
   })
@@ -70,7 +74,8 @@ describe("createLoroDoc (fresh doc)", () => {
   })
 
   it("supports scalar set", () => {
-    const doc = createLoroDoc(TestSchema, { theme: "light" })
+    const doc = createLoroDoc(TestSchema)
+    change(doc, (d: any) => d.theme.set("light"))
     expect(doc.theme()).toBe("light")
 
     change(doc, (d: any) => d.theme.set("dark"))
@@ -90,12 +95,9 @@ describe("createLoroDoc (fresh doc)", () => {
   })
 
   it("supports seed with list items", () => {
-    const doc = createLoroDoc(TestSchema, {
-      items: [
-        { name: "A", done: false },
-        { name: "B", done: true },
-      ],
-    })
+    const doc = createLoroDoc(TestSchema)
+    change(doc, (d: any) => d.items.push({ name: "A", done: false }))
+    change(doc, (d: any) => d.items.push({ name: "B", done: true }))
     expect(doc.items.length).toBe(2)
     expect((doc.items.at(0) as any).name()).toBe("A")
     expect((doc.items.at(1) as any).done()).toBe(true)
@@ -186,8 +188,12 @@ describe("createLoroDoc (bring your own doc)", () => {
 
 describe("createLoroDocFromSnapshot", () => {
   it("reconstructs from a snapshot", () => {
-    const docA = createLoroDoc(TestSchema, { title: "Original", theme: "dark" })
-    change(docA, (d: any) => d.count.increment(10))
+    const docA = createLoroDoc(TestSchema)
+    change(docA, (d: any) => {
+      d.title.insert(0, "Original")
+      d.theme.set("dark")
+      d.count.increment(10)
+    })
 
     const snapshot = exportSnapshot(docA)
     const docB = createLoroDocFromSnapshot(TestSchema, snapshot)
@@ -231,7 +237,8 @@ describe("sync primitives", () => {
   })
 
   it("exportSnapshot() returns a binary payload", () => {
-    const doc = createLoroDoc(TestSchema, { title: "Test" })
+    const doc = createLoroDoc(TestSchema)
+    change(doc, (d: any) => d.title.insert(0, "Test"))
     const snap = exportSnapshot(doc)
     expect(snap.encoding).toBe("binary")
     expect(snap.data).toBeInstanceOf(Uint8Array)
@@ -285,7 +292,8 @@ describe("sync primitives", () => {
 describe("full workflow", () => {
   it("create → mutate → sync → observe (the README example)", () => {
     // Peer A creates a doc
-    const docA = createLoroDoc(TestSchema, { title: "Draft" })
+    const docA = createLoroDoc(TestSchema)
+    change(docA, (d: any) => d.title.insert(0, "Draft"))
 
     // Peer A mutates
     change(docA, (d: any) => {

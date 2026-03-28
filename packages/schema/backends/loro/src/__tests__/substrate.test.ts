@@ -71,9 +71,11 @@ describe("loroSubstrateFactory.create", () => {
   })
 
   it("creates a substrate with seed values", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema, {
-      title: "Hello",
-      theme: "dark",
+    const substrate = loroSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(TestSchema, substrate)
+    change(doc, (d) => {
+      d.title.insert(0, "Hello")
+      d.theme.set("dark")
     })
     const reader = substrate.store
 
@@ -82,11 +84,13 @@ describe("loroSubstrateFactory.create", () => {
   })
 
   it("creates a substrate with seed list items", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema, {
-      items: [
-        { name: "Task 1", done: false },
-        { name: "Task 2", done: true },
-      ],
+    const substrate = loroSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(TestSchema, substrate)
+    change(doc, (d) => {
+      d.items.push({ name: "Task 1", done: false })
+    })
+    change(doc, (d) => {
+      d.items.push({ name: "Task 2", done: true })
     })
     const reader = substrate.store
 
@@ -133,11 +137,10 @@ describe("write round-trip", () => {
   })
 
   it("scalar set via change() is readable", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema, {
-      theme: "light",
-    })
+    const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
+    change(doc, (d) => d.theme.set("light"))
     expect(doc.theme()).toBe("light")
     change(doc, (d) => d.theme.set("dark"))
     expect(doc.theme()).toBe("dark")
@@ -189,18 +192,19 @@ describe("version tracking", () => {
 
 describe("export/import snapshot", () => {
   it("exportSnapshot returns a binary payload", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema, { title: "Test" })
+    const substrate = loroSubstrateFactory.create(TestSchema)
     const snapshot = substrate.exportSnapshot()
     expect(snapshot.encoding).toBe("binary")
     expect(snapshot.data).toBeInstanceOf(Uint8Array)
   })
 
   it("fromSnapshot reconstructs equivalent state", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema, {
-      title: "Original",
-      theme: "dark",
-    })
+    const substrateA = loroSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
+    change(docA, (d) => {
+      d.title.insert(0, "Original")
+      d.theme.set("dark")
+    })
     change(docA, (d) => {
       d.title.insert(8, " Title")
       d.count.increment(42)

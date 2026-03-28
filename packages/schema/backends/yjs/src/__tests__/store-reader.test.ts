@@ -2,23 +2,235 @@ import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { Schema } from "@kyneta/schema"
 import { yjsStoreReader } from "../store-reader.js"
-import { populateRoot } from "../populate.js"
+import { ensureContainers } from "../populate.js"
 
 // ===========================================================================
 // Helpers
 // ===========================================================================
 
 /**
- * Create a Y.Doc populated from a schema and seed, return the doc + reader.
+ * Create a Y.Doc with containers matching the schema, populate it using
+ * direct Yjs API calls, and return the doc + reader.
+ *
+ * After `ensureContainers` the doc has the correct shared types but no
+ * values. We populate values via raw Yjs API within a single transact.
  */
 function setup(
   schema: ReturnType<typeof Schema.doc>,
   seed?: Record<string, unknown>,
 ) {
   const doc = new Y.Doc()
-  populateRoot(doc, schema, seed)
+  ensureContainers(doc, schema)
+  if (seed) {
+    doc.transact(() => {
+      const rootMap = doc.getMap("root")
+      populateSeed(rootMap, schema, seed)
+    })
+  }
   const reader = yjsStoreReader(doc, schema)
   return { doc, reader }
+}
+
+/**
+ * Recursively populate a Y.Map from a seed object, guided by the schema.
+ *
+ * - text fields → Y.Text.insert(0, value)
+ * - scalar fields → Y.Map.set(key, value)
+ * - product (struct) fields → recurse into the existing Y.Map child
+ * - sequence (list) fields → push items into the existing Y.Array child
+ * - map (record) fields → set entries on the existing Y.Map child
+ */
+function populateSeed(
+  ymap: Y.Map<unknown>,
+  schema: ReturnType<typeof Schema.doc>,
+  seed: Record<string, unknown>,
+) {
+  const rootProduct = unwrapToProduct(schema)
+  if (!rootProduct) return
+
+  for (const [key, value] of Object.entries(seed)) {
+    if (value === undefined) continue
+    const fieldSchema = (rootProduct.fields as Record<string, any>)[key]
+    if (!fieldSchema) continue
+
+    populateField(ymap, key, fieldSchema, value)
+  }
+}
+
+function populateField(
+  ymap: Y.Map<unknown>,
+  key: string,
+  fieldSchema: any,
+  value: unknown,
+) {
+  const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+
+  if (tag === "text") {
+    // Text field — the Y.Text was already created by ensureContainers
+    const text = ymap.get(key) as Y.Text
+    if (text && typeof value === "string" && value.length > 0) {
+      text.insert(0, value)
+    }
+    return
+  }
+
+  const structural = unwrapAnnotations(fieldSchema)
+
+  switch (structural._kind) {
+    case "product": {
+      // Struct — recurse into the existing Y.Map
+      const childMap = ymap.get(key) as Y.Map<unknown>
+      if (childMap && typeof value === "object" && value !== null) {
+        for (const [childKey, childValue] of Object.entries(
+          value as Record<string, unknown>,
+        )) {
+          const childFieldSchema = (
+            structural.fields as Record<string, any>
+          )[childKey]
+          if (!childFieldSchema) continue
+          populateField(childMap, childKey, childFieldSchema, childValue)
+        }
+      }
+      return
+    }
+
+    case "sequence": {
+      // List — push items into the existing Y.Array
+      const arr = ymap.get(key) as Y.Array<unknown>
+      if (arr && Array.isArray(value)) {
+        for (const item of value) {
+          const itemSchema = structural.item
+          if (
+            itemSchema &&
+            unwrapAnnotations(itemSchema)._kind === "product"
+          ) {
+            // Struct items: create a Y.Map for each
+            const itemMap = buildStructMap(
+              unwrapAnnotations(itemSchema),
+              item as Record<string, unknown>,
+            )
+            arr.push([itemMap])
+          } else {
+            arr.push([item])
+          }
+        }
+      }
+      return
+    }
+
+    case "map": {
+      // Record — set entries on the existing Y.Map
+      const childMap = ymap.get(key) as Y.Map<unknown>
+      if (childMap && typeof value === "object" && value !== null) {
+        for (const [entryKey, entryValue] of Object.entries(
+          value as Record<string, unknown>,
+        )) {
+          childMap.set(entryKey, entryValue)
+        }
+      }
+      return
+    }
+
+    default: {
+      // Scalar — set plain value
+      ymap.set(key, value)
+      return
+    }
+  }
+}
+
+/**
+ * Build a Y.Map for a struct item (used inside Y.Array).
+ */
+function buildStructMap(
+  productSchema: any,
+  seed: Record<string, unknown>,
+): Y.Map<unknown> {
+  const map = new Y.Map<unknown>()
+  for (const [key, fieldSchema] of Object.entries(
+    productSchema.fields as Record<string, any>,
+  )) {
+    const value = seed[key]
+    if (value === undefined) continue
+
+    const tag =
+      fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+    if (tag === "text") {
+      const text = new Y.Text()
+      if (typeof value === "string" && value.length > 0) {
+        text.insert(0, value)
+      }
+      map.set(key, text)
+      continue
+    }
+
+    const structural = unwrapAnnotations(fieldSchema)
+    switch (structural._kind) {
+      case "product": {
+        map.set(
+          key,
+          buildStructMap(structural, value as Record<string, unknown>),
+        )
+        break
+      }
+      case "sequence": {
+        const arr = new Y.Array()
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            const itemSchema = structural.element ?? structural.schema
+            if (
+              itemSchema &&
+              unwrapAnnotations(itemSchema)._kind === "product"
+            ) {
+              arr.push([
+                buildStructMap(
+                  unwrapAnnotations(itemSchema),
+                  item as Record<string, unknown>,
+                ),
+              ])
+            } else {
+              arr.push([item])
+            }
+          }
+        }
+        map.set(key, arr)
+        break
+      }
+      case "map": {
+        const childMap = new Y.Map()
+        if (typeof value === "object" && value !== null) {
+          for (const [k, v] of Object.entries(
+            value as Record<string, unknown>,
+          )) {
+            childMap.set(k, v)
+          }
+        }
+        map.set(key, childMap)
+        break
+      }
+      default:
+        map.set(key, value)
+        break
+    }
+  }
+  return map
+}
+
+function unwrapToProduct(schema: any): any {
+  let s = schema
+  while (s._kind === "annotated" && s.schema !== undefined) {
+    s = s.schema
+  }
+  if (s._kind === "product") return s
+  return null
+}
+
+function unwrapAnnotations(schema: any): any {
+  let s = schema
+  while (s._kind === "annotated" && s.schema !== undefined) {
+    s = s.schema
+  }
+  return s
 }
 
 /** Key path segment helper */
