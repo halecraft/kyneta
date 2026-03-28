@@ -1,0 +1,20 @@
+{
+  "name": "@kyneta/test-exchange-websocket",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "devDependencies": {
+    "@kyneta/adapter-websocket": "workspace:*",
+    "@kyneta/exchange": "workspace:*",
+    "@kyneta/schema": "workspace:*",
+    "@kyneta/schema-loro": "workspace:*",
+    "@kyneta/wire": "workspace:*",
+    "bun-types": "latest",
+    "loro-crdt": "^1.10.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.17"
+  }
+}

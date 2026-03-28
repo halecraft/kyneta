@@ -387,7 +387,97 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unw
 
 ---
 
-## 11. Verified Properties
+## 11. Wire Format (`@kyneta/wire`)
+
+The `@kyneta/wire` package provides serialization infrastructure for the exchange's 5-message protocol. It sits between the exchange and transport adapters in the dependency graph:
+
+```
+@kyneta/exchange  →  @kyneta/wire  →  @kyneta/adapter-websocket
+   (messages)         (codecs)          (transport)
+```
+
+### Two Codecs
+
+| Codec | Transport | Binary Payload | Use Case |
+|-------|-----------|---------------|----------|
+| **CBOR** (`cborCodec`) | Websocket, WebRTC | Native byte strings | Primary — compact binary encoding |
+| **JSON** (`jsonCodec`) | SSE, HTTP responses | Base64-encoded | Debugging, text-only transports |
+
+Both implement the `MessageCodec` interface (`encode`, `decode`, `encodeBatch`, `decodeBatch`) and are injected into the frame layer — the frame doesn't care which encoding is used.
+
+### Frame Format
+
+Every message (or batch) is wrapped in a 6-byte frame header before transport:
+
+| Byte | Field | Size | Description |
+|------|-------|------|-------------|
+| 0 | Version | 1 byte | Protocol version (`0x02`) |
+| 1 | Flags | 1 byte | `0x00` = single, `0x01` = batch |
+| 2–5 | Payload Length | 4 bytes BE | Max ~4GB |
+
+### Fragmentation
+
+Large payloads are split into chunks with byte-prefix discriminators (`0x00` complete, `0x01` fragment header, `0x02` fragment data). The `FragmentReassembler` handles stateful reassembly with configurable timeouts (default 10s), memory limits (default 50MB), and oldest-first eviction.
+
+Default fragment thresholds by environment: AWS API Gateway 100KB, Cloudflare Workers 500KB, self-hosted 0 (disabled).
+
+### Wire Type Discriminators
+
+| Message | Discriminator | Compact Fields |
+|---------|--------------|----------------|
+| `establish-request` | `0x01` | `t`, `id`, `n?`, `y` |
+| `establish-response` | `0x02` | `t`, `id`, `n?`, `y` |
+| `discover` | `0x10` | `t`, `docs` |
+| `interest` | `0x11` | `t`, `doc`, `v?`, `r?` |
+| `offer` | `0x12` | `t`, `doc`, `ot`, `pe`, `d`, `v`, `r?` |
+
+See `packages/wire/PROTOCOL.md` for the full wire protocol specification.
+
+---
+
+## 12. Websocket Adapter (`@kyneta/adapter-websocket`)
+
+The first real transport adapter. Framework-agnostic via the `Socket` interface, with platform-specific wrappers for browser, Node.js `ws`, and Bun.
+
+### Package Structure
+
+Three subpath exports (no combined `"."` entry) to keep client/server/bun code tree-shakeable:
+
+| Subpath | Entry | Key Exports |
+|---------|-------|-------------|
+| `./client` | `src/client.ts` | `WebsocketClientAdapter`, `createWebsocketClient`, `createServiceWebsocketClient`, `WebsocketClientStateMachine` |
+| `./server` | `src/server.ts` | `WebsocketServerAdapter`, `WebsocketConnection`, `wrapNodeWebsocket`, `wrapStandardWebsocket` |
+| `./bun` | `src/bun.ts` | `BunWebsocketData`, `wrapBunWebsocket`, `createBunWebsocketHandlers` |
+
+### Connection Handshake
+
+The Websocket connection handshake is two-phase to avoid race conditions:
+
+1. **Transport-level**: Server sends text `"ready"` signal after Websocket opens
+2. **Protocol-level**: Client creates channel + sends `establish-request` after receiving `"ready"`
+3. Server's Synchronizer processes the `establish-request` and responds with `establish-response`
+
+The server does NOT call `establishChannel()` — it waits for the client's establish-request. This prevents a race condition where the server's binary establish-request could arrive before the client has processed `"ready"` and created its channel.
+
+### Client State Machine
+
+The `WebsocketClientStateMachine` provides validated, observable state transitions:
+
+```
+disconnected → connecting → connected → ready
+                   ↓            ↓         ↓
+              reconnecting ← ─ ┴ ─ ─ ─ ─ ┘
+```
+
+Transitions are delivered asynchronously via microtask queue. Reconnection uses exponential backoff with jitter.
+
+### Integration Tests
+
+End-to-end tests in `tests/exchange-websocket/` prove the full stack over real Websocket connections for all three merge strategies (sequential, causal, LWW), heterogeneous documents, and large payload fragmentation. These use Bun's built-in Websocket server on random ports.
+
+---
+
+## 13. Verified Properties
 
 1. **Sequential sync converges**: Two exchanges with `bindPlain()`, peer A creates doc with seed, peer B syncs and reads same state. Mutations from A propagate to B after initial sync.
 
@@ -402,3 +492,7 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unw
 6. **Escape hatches work**: `unwrap(ref)` returns the substrate; `loro(ref)` returns the LoroDoc. Both compose via the `WeakMap` chain (ref → substrate → LoroDoc).
 
 7. **Existing tests unaffected**: `@kyneta/schema` tests (1110) and `@kyneta/schema-loro` tests (92) pass, including new `bind`/`unwrap`/`bindLoro`/`loro` tests. The `SubstrateFactory`, `Substrate`, and `Version` interfaces are unchanged.
+
+8. **Wire codec round-trip**: All 5 message types survive encode → decode through both CBOR and JSON codecs, including `OfferMsg` with binary `SubstratePayload` (38 codec tests, 31 frame tests, 54 fragment tests).
+
+9. **Websocket transport sync**: Sequential, causal, and LWW sync all work over real Websocket connections (Bun server + client adapter). Heterogeneous documents and fragmented large payloads sync correctly (8 integration tests).

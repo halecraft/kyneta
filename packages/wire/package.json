@@ -1,7 +1,7 @@
 {
-  "name": "@kyneta/exchange",
+  "name": "@kyneta/wire",
   "version": "0.0.1",
-  "description": "Substrate-agnostic state exchange — sync for any @kyneta/schema substrate",
+  "description": "Wire format codecs, framing, and fragmentation for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
   "type": "module",
@@ -27,15 +27,16 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/schema": ">=0.0.1"
+    "@kyneta/exchange": ">=0.0.1"
+  },
+  "dependencies": {
+    "@levischuck/tiny-cbor": "^0.3.2"
   },
   "devDependencies": {
+    "@kyneta/exchange": "workspace:*",
     "@kyneta/schema": "workspace:*",
-    "@kyneta/schema-loro": "workspace:*",
-    "loro-crdt": "^1.10.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
-  },
-  "dependencies": {}
+  }
 }
