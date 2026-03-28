@@ -1,0 +1,23 @@
+{
+  "name": "example-todo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun src/server.ts",
+    "build": "bun src/build.ts"
+  },
+  "dependencies": {
+    "@kyneta/cast": "workspace:^",
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/loro-schema": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/websocket-transport": "workspace:^",
+    "loro-crdt": "^1.10.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8",
+    "bun-types": "latest",
+    "typescript": "^5.9",
+    "ws": "^8"
+  }
+}

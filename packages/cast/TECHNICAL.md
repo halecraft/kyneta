@@ -1592,3 +1592,34 @@ The boundary is domain-motivated: filter preferences are per-user-session (local
 
 
 Each region independently subscribes to its own reactive source. Parent disposal cascades to children via the `Scope` tree. Template cloning provides the static structure; delta regions fill in the dynamic holes.
+
+### Bun Build Plugin: WASM Passthrough
+
+The `@kyneta/cast/unplugin/bun` adapter wraps the unplugin-generated Bun plugin with a WASM passthrough handler. This is necessary because unplugin registers `build.onLoad({ filter: /.*/ })` — a catch-all that intercepts every file Bun resolves, including `.wasm` binaries. When unplugin's handler calls `Bun.file(wasmPath).text()` on a WASM file, Bun segfaults (confirmed through Bun v1.3.11).
+
+The fix registers a `.wasm` `onLoad` handler *before* unplugin's `setup()` runs:
+
+```typescript
+plugin.setup = (build) => {
+  build.onLoad({ filter: /\.wasm$/ }, async (args) => {
+    return {
+      contents: new Uint8Array(await Bun.file(args.path).arrayBuffer()),
+      loader: "file",
+    }
+  })
+  originalSetup(build)
+}
+```
+
+Bun's first-match semantics route WASM files to this handler (which copies them to the output directory via `loader: "file"`) before unplugin's catch-all can attempt to read them as text. This is always correct — the Cast compiler should never process binary files — and the fix is invisible to users: `plugins: [kyneta()]` just works, even with WASM-dependent packages like `loro-crdt` in the dependency graph.
+
+### The Todo Example
+
+The `examples/todo/` app is the minimal vertical-slice example. It exercises the full managed sync path: `LoroSchema` → `bindLoro` → `Exchange` → `WebsocketServerAdapter`/`WebsocketClientAdapter` → Cast view → running app.
+
+Unlike the recipe-book (which hand-rolls WebSocket sync), the todo uses `@kyneta/exchange` for all sync concerns. The `createApp(doc)` factory follows the same pattern — a pure builder function that receives a document ref and returns a Cast element — but the caller wires sync via Exchange rather than manual `subscribe`/`applyChanges`/WebSocket message passing.
+
+Key differences from recipe-book:
+- **No SSR** — `Bun.build()` produces a static bundle; the server serves files from `dist/`
+- **No Vite** — Bun handles both the build (via the Cast unplugin/bun adapter) and the HTTP/WebSocket server
+- **Exchange-managed sync** — `change(doc, fn)` automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline; no manual WebSocket code

@@ -365,9 +365,12 @@ function buildPropertyAccess(
     // Check if this is a ref-own property (like `.length` on a SequenceRef)
     // or a value-type property.
     if (isRefProperty(objType, propName)) {
-      // Ref-own property — no auto-read needed
-      // e.g., listRef.length (SequenceRef has .length)
-      return propertyAccess(objIR, propName)
+      // Ref-own property — still needs auto-read for reactivity.
+      // e.g., listRef.length → refRead(listRef).length
+      // The expression is reactive: when the list's changefeed fires
+      // (items added/removed), .length changes and must re-evaluate.
+      const deltaKind = getDeltaKind(objType)
+      return propertyAccess(refRead(objIR, deltaKind), propName)
     }
 
     // Value-type property — insert auto-read

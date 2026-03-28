@@ -335,19 +335,23 @@ describe("buildExpressionIR", () => {
       }
     })
 
-    it("ref-own property: listRef.length (no auto-read)", () => {
-      // length is defined on the SequenceRef/ListRef interface itself
+    it("ref-own property: listRef.length (auto-read for reactivity)", () => {
+      // length is defined on the SequenceRef/ListRef interface itself,
+      // but it's still reactive — when the list changefeed fires
+      // (items added/removed), .length changes and must re-evaluate.
       const ir = buildFromSource(
         project,
         `doc.recipes.length`,
         `declare const doc: RecipeBookDoc`,
       )
 
-      // The outer property access is `.length` on a ListRef
-      // ListRef.length is a ref-own property, so no auto-read
+      // The outer node is property-access(".length") wrapping a ref-read
+      // of the list ref. This ensures isReactive() returns true and
+      // extractDeps() finds doc.recipes as a subscription target.
       expect(ir.kind).toBe("property-access")
       if (ir.kind === "property-access") {
         expect(ir.property).toBe("length")
+        expect(ir.object.kind).toBe("ref-read")
       }
     })
   })
