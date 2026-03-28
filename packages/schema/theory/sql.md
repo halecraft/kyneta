@@ -1,16 +1,40 @@
-## What if a "Document" were backed by SQLite?
+# SQLite as a Schema Substrate
 
-The plain substrate is a `Record<string, unknown>` in memory. The Loro substrate is a `LoroDoc` in memory. Both are single-document, in-process objects. A SQLite substrate breaks this model in several ways that are worth thinking through carefully.
+> Theory document. No implementation exists yet. This captures design
+> analysis, architectural options, and composition patterns explored
+> in preparation for a future `@kyneta/schema-sqlite` package.
 
-**Option A: SQLite as a durable mirror of the in-memory model.** The `StoreReader` reads from an in-memory cache (same as plain substrate), and `prepare`/`onFlush` write-through to SQLite. This is the easy version — it's basically `PlainSubstrate` with persistence bolted on. Useful, but not very interesting. You could do this in 50 lines by wrapping `createPlainSubstrate` with a flush hook.
+---
 
-**Option B: SQLite as the source of truth.** The `StoreReader` issues actual SQL queries on every read. `prepare` queues SQL statements. `onFlush` executes them in a transaction. This is the hard version, and it's the one worth building, because it proves the abstraction works when the backing store has fundamentally different access patterns.
+## 1. The Question
 
-Let me focus on Option B because it's where the design gets genuinely novel.
+The plain substrate is a `Record<string, unknown>` in memory. The Loro
+substrate is a `LoroDoc` in memory. The Yjs substrate is a `Y.Doc` in
+memory. All three are single-document, in-process, tree-shaped state
+objects. A SQLite substrate breaks this model in several ways worth
+thinking through carefully.
 
-## The Schema → SQL Mapping
+**Option A: SQLite as a durable mirror of the in-memory model.** The
+`StoreReader` reads from an in-memory cache (same as plain substrate),
+and `prepare`/`onFlush` write-through to SQLite. This is basically
+`PlainSubstrate` with persistence bolted on. Useful but not
+interesting — you could do it in 50 lines by wrapping
+`createPlainSubstrate` with a flush hook.
 
-Your schema grammar maps surprisingly well to relational structure:
+**Option B: SQLite as the source of truth.** The `StoreReader` issues
+actual SQL queries on every read. `prepare` executes SQL statements.
+`onFlush` commits the transaction and captures the changeset. This is
+the hard version, and the one worth building, because it proves the
+abstraction works when the backing store has fundamentally different
+access patterns.
+
+This document focuses on Option B.
+
+---
+
+## 2. The Schema → SQL Mapping
+
+The schema grammar maps well to relational structure:
 
 ```/dev/null/mapping.txt#L1-13
 Schema.doc({                          →  database "my_doc"
@@ -28,23 +52,52 @@ Schema.doc({                          →  database "my_doc"
 })
 ```
 
-There's a design choice at every composite node: **embed or normalize?** A `Schema.struct` inside a `Schema.doc` could be a JSON column or a 1:1 joined table. A `Schema.list(Schema.string())` could be a JSON array column or a child table with an index column. A `Schema.list(Schema.struct(...))` almost certainly wants to be a child table.
+There's a design choice at every composite node: **embed or normalize?**
+A `Schema.struct` inside a `Schema.doc` could be a JSON column or a 1:1
+joined table. A `Schema.list(Schema.string())` could be a JSON array
+column or a child table with an index column.
 
-The interesting insight: **the schema already carries enough information to make this decision mechanically.** The recursive structure tells you nesting depth. The annotation tags tell you semantics. You could define a simple policy:
+The schema carries enough information to make this decision mechanically.
+A default policy:
 
 - Scalars → columns on the parent table
-- Products → embedded JSON if all-scalar fields, otherwise a child table
+- Products (all-scalar fields) → columns on the parent table
+- Products (nested composites) → child table with FK + 1:1 constraint
 - Sequences of scalars → JSON array column
-- Sequences of products → child table with an `_idx` column
-- Maps → child table with a `_key` column
+- Sequences of products → child table with `_idx` column
+- Maps → child table with `_key` column
 
-Or you could let the user override with annotations — `Schema.annotated("embedded", Schema.struct(...))` vs. `Schema.annotated("table", Schema.struct(...))`. Your annotation mechanism already supports arbitrary tags with metadata.
+User overrides via annotations: `Schema.annotated("embedded",
+Schema.struct(...))` vs. `Schema.annotated("table",
+Schema.struct(...))`.
 
-## The StoreReader: Where It Gets Genuinely Interesting
+### Algebraic properties
 
-Here's where the design tension really bites. Look at how the interpreter stack uses `StoreReader`:
+The schema grammar is an **initial algebra with a closed set of
+structural combinators** — no reference types, no cycles, no
+many-to-many relationships. It's a tree grammar, and relational
+databases represent trees perfectly well (adjacency list / nested set).
 
-```packages/schema/src/store.ts#L35-50
+The mapping is a **catamorphism** (fold over the initial algebra) that
+produces DDL. It is:
+
+- **Total** — defined for every schema
+- **Injective** — different schemas produce different table layouts
+- **Lossless** — every schema node has a well-defined SQL representation
+
+This is why the mapping avoids the classic ORM impedance mismatch. ORMs
+must handle arbitrary object graphs (inheritance hierarchies,
+bidirectional references, lazy-loaded collections, identity maps). The
+schema algebra forbids the constructs that cause those problems.
+
+---
+
+## 3. The StoreReader
+
+The interpreter stack reads from the store exclusively through this
+interface:
+
+```packages/schema/src/store.ts#L35-40
 export interface StoreReader {
   read(path: Path): unknown
   arrayLength(path: Path): number
@@ -53,75 +106,590 @@ export interface StoreReader {
 }
 ```
 
-The interpreter calls `read(path)` on every node visit, and the navigation layer calls `arrayLength` and `keys` for collection iteration. For an in-memory object, these are O(1) pointer chases. For SQLite, each call is a query. A naïve implementation where `read([{type:"key",key:"posts"},{type:"index",index:3},{type:"key",key:"title"}])` issues `SELECT title FROM posts WHERE doc_id = ? AND _idx = 3` would work, but it would N+1 query when you iterate a list.
+All four methods are synchronous. This is not a soft assumption — the
+entire interpreter stack (`withNavigation`, `withReadable`, `withCaching`,
+`withWritable`, `withChangefeed`) depends on synchronous reads. This
+rules out async-only SQL libraries and mandates `better-sqlite3` (which
+is synchronous by design).
 
-This is actually a **feature, not a bug**, because it surfaces a real architectural question: should the `StoreReader` be lazy (query-per-read) or should it prefetch? The answer depends on usage patterns, and the schema gives you enough information to decide:
+### The N+1 problem
 
-**Lazy reader** — Each `read()` is a prepared statement execution. This is great for sparse access patterns (read one field of a large document). SQLite prepared statements are extremely fast — sub-microsecond for simple lookups. `better-sqlite3` is synchronous, so this fits the synchronous `StoreReader` interface perfectly.
+When iterating a list of 100 posts, the interpreter calls:
+- `arrayLength([{key: "posts"}])` → 1 query
+- For each post i: `read([...path, {index: i}, {key: "title"}])` → 100 queries
+- For each post i: `read([...path, {index: i}, {key: "body"}])` → 100 queries
 
-**Prefetching reader** — On first access to a table, load all rows into a `Map`. Subsequent reads are memory lookups. Invalidate on flush. This is more like how the Loro store reader works (the Loro container tree is in-memory, navigation is pointer chasing).
+That's 201 queries. This is structural — baked into the `StoreReader`
+interface, which was designed for O(1) in-memory access.
 
-**Hybrid** — Scalars and small products: lazy. Lists: prefetch the whole list on first `.length` or `.at()` access. This is probably the sweet spot.
+### Mitigation strategies
 
-The beautiful thing is that the `StoreReader` interface doesn't care which strategy you pick. The interpreter stack is oblivious.
+**Lazy reader** — each `read()` is a prepared statement execution.
+Great for sparse access (read one field of a large document). SQLite
+prepared statements are sub-microsecond for simple lookups.
 
-## The Version Story: Change Data Capture
+**Prefetching reader** — on first access to a table, load all rows
+into a `Map`. Subsequent reads are memory lookups. Invalidate on flush.
 
-This is where SQLite gets surprisingly powerful. You have several options for tracking versions:
+**Hybrid** — scalars and small products: lazy. Lists: prefetch the
+whole list on first `.length` or `.at()` access. Probably the sweet
+spot.
 
-**1. WAL position.** SQLite's write-ahead log has a monotonic position. You can snapshot the WAL offset as your version. `exportSince(walPosition)` would replay the WAL. But this is fragile — WAL checkpointing destroys old entries.
+The `StoreReader` interface doesn't care which strategy is used. The
+interpreter stack is oblivious.
 
-**2. Shadow changelog table.** Same pattern as `PlainSubstrate`'s `log: Op[][]`, but persisted:
+### Honest assessment
 
-```/dev/null/sql.sql#L1-6
+The `StoreReader` interface is fundamentally a **navigator**
+(step-by-step path traversal), not a **query planner** (declarative
+data needs). SQL is powerful precisely because it separates "what you
+want" from "how to get it." The `StoreReader` throws away that
+separation by forcing point-access patterns. This is a real limitation
+— the SQL substrate can never expose SQL's set-oriented query power
+through the `Ref<S>` API. The user always thinks in document terms; the
+substrate translates behind the scenes.
+
+---
+
+## 4. The Version Story: Session-Based Change Capture
+
+This is where the design gets its most distinctive character. SQLite's
+**session extension** (`sqlite3session`) records row-level diffs as
+binary changesets.
+
+```/dev/null/session-concept.ts#L1-12
+const session = db.session()
+session.attach()  // track all tables
+
+// ... any SQL mutations happen here ...
+db.exec("UPDATE posts SET published = 1 WHERE _idx = 3")
+db.exec("INSERT INTO posts (_idx, title, body) VALUES (10, 'New', '')")
+
+// Extract the changeset — binary encoding of all mutations
+const changeset = session.changeset()  // Uint8Array
+
+// Changeset can be applied to another database with the same schema:
+// otherDb.applyChangeset(changeset)
+session.close()
+```
+
+For each affected row, the changeset contains:
+- Table name
+- Operation type (INSERT, UPDATE, DELETE)
+- For UPDATE: old PK values + new column values (changed columns only)
+- For INSERT: all column values
+- For DELETE: PK values
+
+### The session as the oplog
+
+The key insight: **the session extension is agnostic to mutation source.**
+It captures row-level diffs regardless of whether they came from
+`prepare()` (schema API) or raw SQL statements. This means the SQL
+database can be its own oplog, and the oplog is complete.
+
+```/dev/null/session-as-oplog.txt#L1-12
+Session is always recording.
+
+Mutation via schema API:
+  change(blog, b => b.posts.at(3).published.set(true))
+    → prepare(path, change)
+      → UPDATE posts SET published = 1 WHERE _idx = 3
+        → session captures it
+
+Mutation via raw SQL:
+  db.exec("UPDATE posts SET published = 1 WHERE _idx = 3")
+    → session captures it
+
+Both produce the same changeset entry.
+```
+
+### Versioning via changeset log
+
+```/dev/null/schema.sql#L1-5
 CREATE TABLE _changelog (
   version INTEGER PRIMARY KEY AUTOINCREMENT,
-  ops TEXT NOT NULL,  -- JSON-serialized Op[]
+  changeset BLOB NOT NULL,           -- binary session changeset
   created_at INTEGER DEFAULT (unixepoch())
 );
 ```
 
-`onFlush` inserts a row. `exportSince(v)` is `SELECT ops FROM _changelog WHERE version > ?`. `exportSnapshot` dumps the current tables as JSON. This is dead simple and maps directly to `PlainVersion`. You could even reuse `PlainVersion` as-is.
+On each flush: extract changeset from session → append to `_changelog`
+→ bump version counter → start new session.
 
-**3. SQLite session extension.** SQLite has a built-in changeset/patchset mechanism (`sqlite3session`) that records row-level diffs. `better-sqlite3` exposes this. A session records INSERT/UPDATE/DELETE operations between two points, and produces a compact binary changeset that can be applied to another database. This maps almost perfectly to your `SubstratePayload`:
+`exportSince(v)` returns concatenated changesets from `_changelog WHERE
+version > ?`. `exportSnapshot()` returns JSON-serialized full state (or
+the raw `.db` file). `importDelta()` applies a binary changeset via
+`db.applyChangeset()`.
 
-```/dev/null/concept.ts#L1-6
-exportSince(since: SqliteVersion): SubstratePayload {
-  // session was started at 'since' version
-  const changeset = session.changeset()
-  return { encoding: "binary", data: changeset }
-}
-importDelta(payload: SubstratePayload): void {
-  db.applyChangeset(payload.data)
-}
+This maps directly to `PlainVersion` (monotonic integer, total order).
+Reuse `PlainVersion` as-is.
+
+### Other versioning options (rejected or deferred)
+
+- **WAL position** — fragile, checkpointing destroys old entries.
+- **Shadow op log (JSON)** — simpler but misses out-of-band SQL writes.
+  The session extension subsumes this.
+
+---
+
+## 5. The Change Mapping
+
+### Forward: Op → SQL (`prepare` path)
+
+- `ReplaceChange` at scalar path → `UPDATE table SET column = ? WHERE ...`
+- `MapChange` on product → `UPDATE table SET col1 = ?, col2 = ? WHERE ...` (for `set`) + column NULLing (for `delete`)
+- `SequenceChange` on list → cursor walk → `INSERT`, `DELETE`, re-index `UPDATE ... SET _idx = _idx + ?`
+- `IncrementChange` → `UPDATE table SET column = column + ? WHERE ...`
+- `TextChange` → read current string, apply `stepText`, write back as `ReplaceChange`. Text columns are atomic from SQL's perspective.
+
+The `SequenceChange` cursor-to-index translation is the hardest part.
+The cursor instructions describe a linear scan with mutations, which
+must become absolute-position SQL operations with re-indexing. An insert
+at position 0 in a 10,000-row table means `UPDATE SET _idx = _idx + 1
+WHERE _idx >= 0` — touching every row. This is O(n) in the worst case,
+inherent to indexed-sequence-in-SQL.
+
+Mitigation: gap-based indexing (use floating-point `_idx` values with
+gaps, only re-index when gaps are exhausted).
+
+### Reverse: Session Changeset → Op[] (`flush` path)
+
+This is the genuinely novel direction. On flush, the session changeset
+contains row-level diffs. The schema provides the mapping back to typed
+ops:
+
+```/dev/null/reverse-example.txt#L1-6
+Changeset entry:
+  Table: "posts", Op: UPDATE, PK: (_idx = 3), Old: {published: 0}, New: {published: 1}
+
+Derived Op:
+  path: [{key:"posts"}, {index:3}, {key:"published"}]
+  change: {type:"replace", value: true}
 ```
 
-This is the most interesting option because it means SQLite is doing its own delta computation — you don't have to track ops manually. The version could be a monotonic counter incremented on each flush, and you'd start a new session per version epoch.
+For `UPDATE` on a scalar column, the reverse mapping is unambiguous.
 
-## The Change Mapping: Where Schema Meets SQL
+For `INSERT`/`DELETE` in child tables, the reverse mapper must
+reconstruct a `SequenceChange` from batched row-level diffs. All changes
+to the same table are collected, sorted by operation type and `_idx`,
+and the cursor instruction sequence is reconstructed. This is a
+non-trivial but pure function from `(table_changes, schema)` →
+`SequenceChange`.
 
-The `prepare(path, change)` contract takes a path and a change. For a SQL substrate:
+### Why the reverse mapping matters
 
-- `ReplaceChange` at a scalar path → `UPDATE table SET column = ? WHERE id = ?`
-- `MapChange` on a product → `UPDATE table SET col1 = ?, col2 = ? WHERE id = ?` (for `set`) + column NULLing (for `delete`)
-- `SequenceChange` on a list → This is the interesting one. `retain/insert/delete` cursor ops need to become:
-  - `INSERT INTO child_table (_idx, ...) VALUES (?, ...)`
-  - `DELETE FROM child_table WHERE _idx = ?`
-  - `UPDATE child_table SET _idx = _idx + ? WHERE _idx >= ?` (re-indexing after insert/delete)
-- `IncrementChange` → `UPDATE table SET column = column + ? WHERE id = ?`
-- `TextChange` → This one genuinely doesn't map to SQL in any natural way. A text column is atomic from SQL's perspective. You'd have to `ReplaceChange` the whole string (read current, apply `stepText`, write back). That's fine — not every change type needs a native mapping.
+It enables **out-of-band SQL writes** to flow into the changefeed:
 
-The `SequenceChange` → SQL translation is the most intellectually interesting part. The cursor-based retain/insert/delete ops describe a linear scan with mutations — you'd walk the instructions, track the cursor position, and emit a batch of SQL statements. The re-indexing is O(n) in the worst case (inserting at position 0 shifts every row), but that's inherent to indexed-sequence-in-SQL, not a limitation of the substrate abstraction.
+```/dev/null/outofband.txt#L1-10
+Admin runs:  UPDATE posts SET published = 1 WHERE reviewed = 1;
+      │
+      ▼
+Session captures: row changes for posts at _idx 3, 7, 12
+      │
+      ▼
+Flush extracts changeset → reverse map → Op[]
+      │
+      ▼
+Changefeed fires → all connected clients see posts become published
+```
 
-## The Changefeed: SQLite → Changefeed Bridge
+The session extension unifies all mutation sources. Schema API writes
+and raw SQL writes produce the same changeset entries. The reverse
+mapper converts them all to typed ops. The changefeed doesn't know or
+care where the mutation originated.
 
-This mirrors the Loro substrate's event bridge pattern. SQLite doesn't have a native change notification mechanism like `LoroDoc.subscribe()`, but you control all writes through `prepare`/`onFlush`, so you can emit changefeeds from the flush path — exactly what `PlainSubstrate` does. For externally-applied changes (via `importDelta`), you'd route through `executeBatch` the same way Loro does.
+---
 
-If you wanted to support external writers (other processes writing to the same SQLite file), you could use `sqlite3_update_hook` (exposed by `better-sqlite3` as `.function()` hooks) to detect external mutations. But that's an advanced feature — the basic version where all writes go through the substrate is sufficient.
+## 6. The Changefeed Bridge
 
-## What This Would Actually Look Like to a Developer
+The `prepare()` method executes SQL directly. The session records
+everything. On `onFlush()`:
 
-```/dev/null/usage.ts#L1-15
+1. Extract changeset from session
+2. Convert entire changeset → `Op[]` via schema-driven reverse mapping
+3. Deliver all ops through changefeed (with re-entrancy guard)
+4. Append changeset to `_changelog`
+5. Bump version
+6. Start new session
+
+This means `prepare()` doesn't need to track what it did — the session
+IS the op buffer. The flush cycle reads the session's changeset and
+derives ops via the reverse mapping.
+
+For `importDelta()` (receiving a changeset from another peer): apply
+the changeset to the database, then the session captures the resulting
+row changes, and the next flush delivers them through the changefeed.
+A `pendingImportOrigin` stash (same pattern as Loro/Yjs substrates)
+carries the origin tag for subscriber filtering.
+
+---
+
+## 7. Abstraction Quality Assessment
+
+### Where the abstraction is sound
+
+The schema → SQL mapping is a total, injective catamorphism. Every
+schema node has a lossless SQL representation. The `Substrate` interface
+(`prepare`, `onFlush`, `version`, `exportSnapshot`, `exportSince`,
+`importDelta`) maps cleanly to SQLite primitives. Cross-substrate
+interop works via the synchronizer's Strategy 2 fallback (reconstruct →
+replay as `ReplaceChange` ops).
+
+### Where the abstraction strains
+
+1. **Performance opacity.** The user can't predict, from the `Ref<S>`
+   API alone, whether an operation is O(1) in-memory or O(n) disk I/O.
+   A list insert at position 0 is O(n) array splice in PlainSubstrate,
+   O(log n) CRDT op in Loro, but O(n) SQL row reindexing on disk in
+   SqliteSubstrate — potentially orders of magnitude slower.
+
+2. **No set-oriented queries.** SQL's power is `SELECT ... WHERE ...
+   ORDER BY ... LIMIT`. The `Ref<S>` API is document-shaped: navigate
+   to a node, read it. There's no way to express "all posts matching
+   a predicate" through the change algebra. The user must iterate,
+   filter, and emit individual ops.
+
+3. **TextChange degeneracy.** `TextChange` (character-level
+   retain/insert/delete) has no natural SQL mapping. Text columns are
+   atomic. The SQL substrate falls back to whole-string replacement —
+   meaning character-level collaboration is not possible through this
+   substrate. For collaboration, use Loro or Yjs.
+
+4. **Schema evolution.** In-memory substrates are ephemeral — schema
+   changes mean restarting with new defaults. A persistent SQLite
+   database needs migration logic (`ALTER TABLE` generation from schema
+   diffs). The schema algebra has no concept of migration today.
+
+### Honest positioning
+
+The SQL substrate is not an ORM. It's a **server-side persistence
+substrate** that makes document data queryable while participating in
+the exchange protocol. It is inherently `strategy: "sequential"` —
+total order, server authority, no concurrent versions. It is not a
+collaborative substrate.
+
+---
+
+## 8. Three Ways to Compose SQL with the Architecture
+
+The SQL substrate is not the only way to get SQL into the picture. There
+are three composition patterns, each answering a different need.
+
+### 8a. Storage Adapter (Opaque Persistence)
+
+A `StorageAdapter` persists `SubstratePayload` blobs to a backing store
+(LevelDB, SQLite-as-KV, IndexedDB, filesystem). The database never sees
+the document structure — it stores opaque `Uint8Array` chunks. On
+restart, the exchange syncs from the storage adapter like any other peer.
+
+The kyneta exchange already has the `"storage"` channel kind
+infrastructure (ported from loro-extended). The `StorageAdapter` base
+class, `waitForSync({ kind: "storage" })`, and storage-channel routing
+in the synchronizer program all exist today.
+
+```/dev/null/storage-adapter.txt#L1-8
+LoroSubstrate (CRDT, in-memory)
+      │
+      └── StorageAdapter (opaque blobs → LevelDB/SQLite-KV)
+            └── durability ✅
+            └── queryability ❌
+            └── collaboration ✅ (Loro handles it)
+```
+
+**Value:** durable persistence for any substrate. **Limitation:** data
+is structurally invisible to the database. No queries, no analytics, no
+SQL tooling.
+
+**Build this first.** It's simpler, immediately useful, gives
+persistence to all existing substrates, and the infrastructure is
+already in place.
+
+### 8b. Schema-Driven Projection (Read-Only Materialized View)
+
+A `SchemaProjection` subscribes to a ref's changefeed and projects
+changes to a SQL database. The CRDT substrate is the source of truth;
+the SQL database is a derived, queryable artifact.
+
+```/dev/null/projection.txt#L1-8
+LoroSubstrate (source of truth)
+      │
+      ├── StorageAdapter (durability)
+      │
+      └── subscribe() → SchemaProjection
+            └── SQLite (.db)
+                  └── queryability ✅
+                  └── read-only (no writes back to CRDT)
+                  └── collaboration ✅ (Loro handles it)
+```
+
+Developer API:
+
+```/dev/null/projection-api.ts#L1-11
+import { projectToSql } from "@kyneta/schema-sqlite"
+
+const blogProjection = projectToSql(BlogSchema, { path: "./blog.db" })
+blogProjection.attach(blogRef)
+
+// blog.db is now a live, queryable materialized view
+const recentPosts = blogProjection.db.prepare(
+  "SELECT * FROM posts WHERE published = 1 ORDER BY _idx DESC LIMIT 10"
+).all()
+```
+
+**Value:** queryable SQL alongside CRDT collaboration. Clean separation
+of concerns. The projection is a library, not a substrate — it
+composes with any substrate via the changefeed protocol. Detachable and
+rebuildable from current ref state.
+
+**Limitation:** SQL database is read-only. Out-of-band SQL writes are
+not supported.
+
+**Implementation note:** this requires the same schema → DDL
+catamorphism and change → SQL translation as the full substrate, but
+skips `StoreReader`, versioning, `exportSnapshot`, `exportSince`,
+`importDelta`. Roughly half the implementation work.
+
+### 8c. SQL-Native Substrate (Full Substrate + Out-of-Band Writes)
+
+The SQL database IS the substrate. The session extension captures ALL
+mutations (schema API + raw SQL). The changefeed delivers ops derived
+from session changesets. The version log stores binary changesets for
+`exportSince`.
+
+```/dev/null/sql-substrate.txt#L1-10
+SqliteSubstrate (source of truth)
+      │
+      ├── prepare(path, change) → executes SQL
+      ├── raw SQL writes → also captured by session
+      │
+      ├── onFlush() → session changeset → reverse map → Op[]
+      │                → changefeed fires
+      │                → changeset appended to _changelog
+      │
+      └── queryability ✅, durability ✅, out-of-band writes ✅
+          collaboration ❌ (sequential only)
+```
+
+```/dev/null/sql-substrate-arch.txt#L1-18
+┌────────────────────────────────────────────────────────┐
+│  SqliteSubstrate                                        │
+│                                                         │
+│  ┌──────────────┐     ┌────────────────┐               │
+│  │  Session ext. │────▶│  Changeset log  │─ exportSince()│
+│  │  (always on)  │     │  (_changelog)   │              │
+│  └──────┬───────┘     └────────────────┘               │
+│         │ captures all mutations                        │
+│  ┌──────┴────────────────────────────┐                 │
+│  │          SQLite database           │                 │
+│  │   _root: (title TEXT, ...)         │◀─ prepare()     │
+│  │   posts: (_idx, title, body, ...)  │◀─ raw SQL       │
+│  │   _changelog: (version, changeset)│◀─ importDelta() │
+│  └───────────────────────────────────┘                 │
+│         │                                               │
+│         │ on flush: changeset → reverse map → Op[]      │
+│         ▼                                               │
+│  ┌──────────────┐                                      │
+│  │  Changefeed   │─ subscribers see ALL mutations       │
+│  └──────────────┘                                      │
+└────────────────────────────────────────────────────────┘
+```
+
+**Value:** the most complete story. One schema drives DDL, typed API,
+reactivity, sync, AND queryable persistence. External processes (admin
+tools, batch jobs, migrations) can write raw SQL and their changes
+propagate to connected clients via the changefeed.
+
+**Limitation:** no CRDT merge semantics. `strategy: "sequential"` only.
+The SequenceChange cursor-to-index translation and the reverse mapping
+(changeset → Op[]) are the hardest implementation pieces.
+
+### Comparison matrix
+
+| | Storage Adapter | Projection | SQL Substrate |
+|---|---|---|---|
+| Queryable SQL | ❌ | ✅ (read-only) | ✅ (read + write) |
+| Out-of-band SQL writes | N/A | ❌ | ✅ |
+| CRDT collaboration | ✅ | ✅ | ❌ |
+| Durability | ✅ | ✅ (derived) | ✅ (native) |
+| Implementation effort | Low | Medium | High |
+| Backing substrate | Any | Any (via changefeed) | Self (is the substrate) |
+
+### Recommendation: build in order
+
+1. **Storage Adapter** — immediate value, low effort, enables
+   persistence for Loro/Yjs substrates.
+2. **Schema-Driven Projection** — medium effort, shares the schema →
+   DDL and change → SQL work with option 3, gives queryability
+   alongside CRDT collaboration.
+3. **SQL-Native Substrate** — high effort, proves the algebra's
+   generality, enables out-of-band SQL writes, the full "have your
+   cake and eat it too" story.
+
+Options 2 and 3 share the same core implementation work: schema → DDL
+catamorphism + change → SQL forward mapping. Option 3 additionally
+requires the reverse mapping (changeset → Op[]) and the `StoreReader`.
+
+---
+
+## 9. Out-of-Band SQL Writes: The Bidirectional Problem
+
+The moment SQL writes flow back into the schema store, you move from a
+projection (one-way derivation) to a **bidirectional synchronization**.
+This is categorically harder.
+
+A materialized view is a morphism: `CRDT state → SQL tables`.
+A bidirectional sync is a **lens**: a pair of morphisms
+(`get: state → SQL`, `put: SQL × state → state`) that must satisfy
+round-trip laws.
+
+### Why the session extension solves it for the SQL substrate
+
+In composition 8c (SQL-native substrate), the session extension
+eliminates the bidirectional problem by making the SQL database the
+sole authority. There is no separate state to sync with. The session
+captures all mutations — schema API and raw SQL alike — into a single
+changeset. The reverse mapper converts changesets to ops. The changefeed
+delivers ops to subscribers.
+
+There is no second authority. No lens laws to maintain. No conflict
+resolution between SQL writes and CRDT writes. The database is the
+state.
+
+### Why it's harder for the projection pattern
+
+In composition 8b (projection), the CRDT is the authority and the SQL
+database is derived. An out-of-band SQL write creates a second mutation
+authority with no shared concurrency model. You'd need:
+
+1. **Detection** — triggers or `sqlite3_update_hook` to capture changes
+2. **Reverse mapping** — row changes → schema ops (same algorithm)
+3. **Application** — route ops through `executeBatch` into the CRDT
+4. **Re-entrancy suppression** — prevent the changefeed from projecting
+   the same changes back to SQL
+
+This is technically possible but **epistemically suspect**. Two
+independent writers mutating the same data through different APIs,
+with no shared concurrency model. The failure modes are subtle.
+
+### The command ingestion alternative
+
+Rather than bidirectional sync, external processes can connect to the
+exchange as peers and mutate through the schema API:
+
+```/dev/null/command-ingestion.ts#L1-12
+// External process connects as an exchange peer
+const adminExchange = new Exchange({
+  identity: { name: "admin-batch", type: "service" },
+  adapters: [new WebSocketAdapter({ url: "ws://localhost:8080" })],
+})
+
+const blog = adminExchange.get("blog", BlogDoc)
+await sync(blog).waitForSync()
+
+change(blog, b => {
+  for (const post of b.posts) {
+    if (post.reviewed()) post.published.set(true)
+  }
+})
+```
+
+All mutations flow through the CRDT. The projection remains read-only.
+No bidirectional bridge needed. This works for compositions 8a and 8b.
+
+For composition 8c (SQL-native substrate), this isn't needed — the SQL
+database natively accepts both schema API writes and raw SQL writes
+through the session extension.
+
+---
+
+## 10. Topologies
+
+### Topology 1: Server-Authoritative (The Natural Starting Point)
+
+```/dev/null/topology1.txt#L1-8
+┌─────────────────────┐          ┌──────────────────────┐
+│  Server              │          │  Browser              │
+│                      │  sync    │                       │
+│  SqliteSubstrate     │◄────────►│  PlainSubstrate       │
+│  (better-sqlite3)    │ exchange │  (in-memory)          │
+│                      │          │                       │
+│  blog.db on disk     │          │  Ref<S> → DOM         │
+└─────────────────────┘          └──────────────────────┘
+```
+
+The server is the authoritative peer with `strategy: "sequential"`.
+The client uses `bindPlain(BlogSchema)`. The server uses
+`bindSql(BlogSchema, { path: "./blog.db" })`. The exchange doesn't
+care — different `BoundSchema` for the same document ID, interoperable
+via `SubstratePayload`.
+
+Cross-substrate interop works today via the synchronizer's Strategy 2
+fallback: reconstruct temp substrate from snapshot → read state as JSON
+→ replay as `ReplaceChange` ops. A SQL substrate that exports
+`{ encoding: "json", data: JSON.stringify(allTablesAsNestedObject) }`
+interoperates with `PlainSubstrate` out of the box, with zero changes
+to the exchange.
+
+**Build this first.** Zero browser hacks. Clear value proposition:
+your server's database IS the document the client is editing.
+
+### Topology 2: Collaborative + Durable + Queryable
+
+```/dev/null/topology2.txt#L1-14
+┌────────────────────────────────────────────────────────┐
+│  Server                                                 │
+│                                                         │
+│  LoroSubstrate (collaboration, source of truth)         │
+│       │                                                 │
+│       ├── StorageAdapter → LevelDB (durability)         │
+│       │                                                 │
+│       └── SchemaProjection → SQLite (queryability)      │
+│                                                         │
+│  Exchange ◄────────────────────────► Clients            │
+│                      (PlainSubstrate, in-memory)        │
+└────────────────────────────────────────────────────────┘
+```
+
+All three concerns: CRDT collaboration via Loro, durable persistence
+via storage adapter, queryable SQL via schema-driven projection.
+External queries read from SQLite. All writes go through the CRDT.
+
+### Topology 3: Full Stack with Heterogeneous Documents
+
+```/dev/null/topology3.txt#L1-19
+┌─────────────────────────────────────────────────┐
+│  Server (Node.js)                                │
+│                                                  │
+│  Exchange                                        │
+│  ├── "blog"     → SqliteSubstrate (blog.db)     │
+│  ├── "collab"   → LoroSubstrate + StorageAdapter │
+│  ├── "presence" → PlainSubstrate (LWW, memory)  │
+│  └── adapters: [WebSocketAdapter]                │
+│                                                  │
+└──────────────────┬──────────────────────────────┘
+                   │ WebSocket (exchange protocol)
+┌──────────────────┴──────────────────────────────┐
+│  Browser                                         │
+│                                                  │
+│  Exchange                                        │
+│  ├── "blog"     → PlainSubstrate (memory)       │
+│  ├── "collab"   → LoroSubstrate (memory)        │
+│  ├── "presence" → PlainSubstrate (LWW, memory)  │
+│  └── adapters: [WebSocketAdapter]                │
+└─────────────────────────────────────────────────┘
+```
+
+Different documents use different substrates based on their needs.
+Blog data in SQLite (queryable, sequential). Collaborative documents
+in Loro (CRDT merge). Presence in plain LWW (ephemeral). The exchange
+protocol is substrate-agnostic — discover/interest/offer works
+regardless of what's behind each substrate.
+
+---
+
+## 11. What This Would Look Like to a Developer
+
+```/dev/null/usage.ts#L1-16
 import { bindSql } from "@kyneta/schema-sqlite"
 import { Exchange, sync } from "@kyneta/exchange"
 
@@ -134,6 +702,7 @@ const BlogSchema = Schema.doc({
   })),
 })
 
+// Server: SQL substrate
 const BlogDoc = bindSql(BlogSchema, { path: "./blog.db" })
 const blog = exchange.get("blog", BlogDoc)
 
@@ -141,204 +710,143 @@ blog.title()                        // → SELECT title FROM _root WHERE id = 1
 blog.posts.at(0).title()            // → SELECT title FROM posts WHERE _idx = 0
 change(blog, b => b.posts.push({ title: "New", body: "", published: false }))
                                      // → INSERT INTO posts ...
+
+// Raw SQL works too — session captures it, changefeed delivers it
+blog.db.exec("UPDATE posts SET published = 1 WHERE title LIKE '%release%'")
 ```
 
-Same `Ref<S>` API. Same `change()` / `subscribe()` / `sync()` surface. But the data lives on disk in a queryable relational format. You could open the `.db` file in any SQLite tool and see your data as tables.
-
-## The Genuinely Novel Claim
-
-What makes this more than a novelty: the same schema definition that drives your reactive UI also defines your database schema. The same `change()` call that triggers a DOM update also writes to SQLite. The same `subscribe()` that the compiler uses for delta-driven rendering can observe database mutations. And the same `exportSince` / `importDelta` that the exchange uses for peer sync works over SQLite changesets.
-
-One schema. One API. Four concerns (typing, reactivity, persistence, sync) handled by one substrate contract.
-
-## What I'd Recommend Starting With
-
-If you want to build this, I'd suggest a phased approach:
-
-**Phase 1:** Schema → DDL generation. Write a function `schemaToSql(schema)` that produces `CREATE TABLE` statements. This is a standalone catamorphism over your schema functor — it doesn't even need to implement `Substrate`. But it proves the mapping is sound and forces you to make the embed-vs-normalize decisions.
-
-**Phase 2:** `SqliteStoreReader` — implement the four `StoreReader` methods against a live SQLite database. Use `better-sqlite3` for synchronous reads. Start with the lazy (query-per-read) strategy.
-
-**Phase 3:** `SqliteSubstrate` — implement `prepare`, `onFlush`, `version`, `exportSnapshot`. Use the shadow changelog table approach (option 2 above) for versioning. Skip `exportSince` / `importDelta` initially (return `null` from `exportSince`; the exchange falls back to snapshots).
-
-**Phase 4:** `bindSql` + exchange integration. Wire it up with `strategy: "sequential"` and prove it syncs with another peer.
-
-**Phase 5:** Delta support via SQLite sessions or the changelog table. This turns the snapshot-only sync into efficient incremental sync.
-
-The hardest part is Phase 1 (the schema → SQL mapping decisions). Everything else follows from the contracts you've already defined.
-
-## The Honest Starting Point
-
-`better-sqlite3` is a native Node addon. It doesn't run in browsers. `sql.js` (Emscripten-compiled SQLite) does run in browsers, but it operates on an in-memory `Uint8Array` — there's no filesystem, so "persistence" means serializing the entire database to IndexedDB or OPFS on every flush. That's viable but it's not really "SQLite as a database" anymore — it's "SQLite as a serialization format for an in-memory store."
-
-So the realistic topologies are:
-
-## Topology 1: Server-Side Only
-
-The SQLite substrate runs on the server. The client runs a plain or Loro substrate. The exchange bridges them.
-
-```/dev/null/topology1.txt#L1-11
-┌─────────────────────┐          ┌──────────────────────┐
-│  Server              │          │  Browser              │
-│                      │  sync    │                       │
-│  SqliteSubstrate     │◄────────►│  PlainSubstrate       │
-│  (better-sqlite3)    │ exchange │  (in-memory)          │
-│                      │          │                       │
-│  blog.db on disk     │          │  Ref<S> → DOM         │
-└─────────────────────┘          └──────────────────────┘
-```
-
-The server is the authoritative peer. It persists to disk. The client gets a `Ref<S>` backed by a plain in-memory substrate that syncs with the server via the exchange. This is actually the most natural topology — and it's powerful because:
-
-- The server's data is queryable SQL. You can run analytics, backups, migrations with standard SQLite tooling.
-- The client doesn't know or care that the server is using SQLite. It sees a `Ref<S>` and the exchange protocol.
-- SSR works the same way as the recipe-book example: server renders from its substrate, serializes a snapshot into the HTML, client hydrates from the snapshot into a plain substrate, then the exchange catches it up with any changes that happened since.
-
-The merge strategy would be `"sequential"` — the server has total authority, clients push changes and receive ordered deltas back. This is the classic client-server model, but with the kyneta twist that both sides share the same schema and speak the same change protocol.
-
-This is the topology I'd actually build first, because it requires zero browser hacks and the value proposition is clear: **your server's database IS the document the client is editing.**
-
-## Topology 2: Server-to-Server (Multi-Node)
-
-Multiple server processes, each with their own SQLite file, syncing via the exchange.
-
-```/dev/null/topology2.txt#L1-11
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Node A       │     │  Node B       │     │  Node C       │
-│               │sync │               │sync │               │
-│  SqliteSubstr │◄───►│  SqliteSubstr │◄───►│  SqliteSubstr │
-│  data-a.db    │     │  data-b.db    │     │  data-c.db    │
-└──────────────┘     └──────────────┘     └──────────────┘
-```
-
-This is Litestream / LiteFS territory — SQLite replication. With `strategy: "sequential"`, one node is the writer and others are read replicas receiving deltas. With the SQLite session extension producing binary changesets, `exportSince` and `importDelta` become native SQLite replication primitives.
-
-This is interesting but niche. The more compelling version is hybrid:
-
-## Topology 3: The Full Stack (Most Interesting)
-
-This is where it gets genuinely compelling. One schema definition drives the entire stack:
-
-```/dev/null/topology3.txt#L1-19
-┌─────────────────────────────────────────────────┐
-│  Server (Node.js)                                │
-│                                                  │
-│  Exchange                                        │
-│  ├── "blog"     → SqliteSubstrate (blog.db)     │
-│  ├── "presence" → PlainSubstrate  (LWW, memory) │
-│  └── adapters: [WebSocketAdapter]                │
-│                                                  │
-└──────────────────┬──────────────────────────────┘
-                   │ WebSocket (exchange protocol)
-┌──────────────────┴──────────────────────────────┐
-│  Browser                                         │
-│                                                  │
-│  Exchange                                        │
-│  ├── "blog"     → PlainSubstrate  (memory)      │
-│  ├── "presence" → PlainSubstrate  (LWW, memory) │
-│  └── adapters: [WebSocketAdapter]                │
-│                                                  │
-└─────────────────────────────────────────────────┘
-```
-
-The server exchange hosts heterogeneous documents — the blog data lives in SQLite on disk, presence state lives in a plain LWW substrate in memory. The client exchange mirrors both, but everything is in-memory plain substrates. The exchange protocol doesn't care — it's the same discover/interest/offer flow regardless of what's behind the substrate interface on each side.
-
-The developer writes:
-
-```/dev/null/server-code.ts#L1-14
-// server.ts
-const BlogDoc = bindSql(BlogSchema, { path: "./blog.db" })
-const PresenceDoc = bindLww(PresenceSchema)
-
-const server = new Exchange({
-  identity: { name: "server", type: "service" },
-  adapters: [new WebSocketServerAdapter({ port: 8080 })],
-})
-
-const blog = server.get("blog", BlogDoc, { seed: { title: "My Blog" } })
-const presence = server.get("presence", PresenceDoc)
-```
-
-```/dev/null/client-code.ts#L1-14
-// client.ts
-const BlogDoc = bindPlain(BlogSchema)      // same schema, different substrate
-const PresenceDoc = bindLww(PresenceSchema) // same on both sides
-
-const client = new Exchange({
-  identity: { name: "alice" },
-  adapters: [new WebSocketAdapter({ url: "ws://localhost:8080" })],
-})
-
+```/dev/null/client-usage.ts#L1-7
+// Client: plain substrate, same schema, different binding
+const BlogDoc = bindPlain(BlogSchema)
 const blog = client.get("blog", BlogDoc)
-const presence = client.get("presence", PresenceDoc)
-
 await sync(blog).waitForSync()
-// blog.title() now reads the server's SQLite data
+
+// Client doesn't know it's talking to SQLite
+blog.title()  // reads from in-memory plain store, synced from server
 ```
 
-Notice what happened there: **the client and server use different `BoundSchema` for the same document ID.** The client uses `bindPlain(BlogSchema)`, the server uses `bindSql(BlogSchema)`. The exchange doesn't care — the sync protocol works over `SubstratePayload`, which is opaque. As long as the server's `exportSnapshot` produces JSON that the client's `PlainSubstrateFactory.fromSnapshot` can consume (or vice versa), they interoperate.
+---
 
-This is already true today between `bindPlain` and `bindLoro` — the snapshot import strategy in the synchronizer tries `importDelta` first, then falls back to reconstructing via `fromSnapshot`, then falls back to replaying as `ReplaceChange` ops. A SQL substrate that exports JSON snapshots would slot into this chain naturally.
+## 12. The Genuinely Novel Claims
 
-## The Key Realization
+**Claim 1: One schema, five concerns.** The same schema definition
+drives typing (`Ref<S>`, `Plain<S>`), reactivity (`CHANGEFEED`),
+persistence (SQL DDL + transactions), queryability (standard SQL
+tooling), and sync (exchange protocol). No other system does this from
+a single source of truth.
 
-The SQLite substrate doesn't need to run on the client at all. It's a **server-side persistence substrate** that participates in the same exchange protocol as every other substrate. The client doesn't know it's talking to SQLite. The server doesn't know the client is in-memory.
+**Claim 2: The substrate is truly an implementation detail.** Two peers
+with completely different backing stores (SQLite on server, plain JS in
+browser), different versioning schemes, different storage semantics —
+and the same three messages (discover, interest, offer) make them
+converge. This is hard to believe without seeing it, which is why
+building it matters.
 
-This is actually the strongest version of the demo, because it proves something about the architecture that would be hard to believe without seeing it: **the substrate is truly an implementation detail hidden behind the exchange protocol.** Two peers with completely different backing stores, different versioning schemes, different storage semantics — and the same three messages (discover, interest, offer) make them converge.
+**Claim 3: Out-of-band SQL writes are first-class.** The session
+extension captures all mutations regardless of source. Admin scripts,
+batch jobs, migration tools, and interactive SQL tools can modify the
+database directly, and their changes propagate through the changefeed
+to all connected clients. No special bridging required.
 
-## What Would Need to Be True
+---
 
-For this to work with the current exchange, one practical constraint: the `SubstratePayload` formats need to be compatible at the exchange level. Looking at how the synchronizer handles snapshot import:
+## 13. Implementation Plan
 
-```packages/exchange/src/synchronizer.ts#L588-626
-  #importSnapshot(runtime: DocRuntime, payload: SubstratePayload): void {
-    // Strategy 1: try importDelta (works for Loro and any substrate
-    // whose importDelta accepts snapshot payloads)
-    try {
-      runtime.substrate.importDelta(payload, "sync")
-      return
-    } catch {
-      // importDelta doesn't support this payload format — use strategy 2
-    }
+### Phase 0: Storage Adapter (prerequisite, separate package)
 
-    // Strategy 2: reconstruct from snapshot, read state, replay into
-    // existing substrate as ReplaceChange ops.
-    const tempSubstrate = runtime.factory.fromSnapshot(payload, runtime.schema)
-    const tempSnapshot = tempSubstrate.exportSnapshot()
+Implement a `StorageAdapter` for the kyneta exchange. Persist
+`SubstratePayload` blobs to a backing store. This gives durable
+persistence to Loro/Yjs substrates immediately, independent of the
+SQL substrate work. The exchange infrastructure (`"storage"` channel
+kind, `waitForSync({ kind: "storage" })`) already exists.
 
-    if (
-      tempSnapshot.encoding === "json" &&
-      typeof tempSnapshot.data === "string"
-    ) {
-      const state = JSON.parse(tempSnapshot.data) as Record<string, unknown>
-      const ctx = runtime.substrate.context()
+### Phase 1: Schema → DDL Catamorphism
 
-      // Build ops: one ReplaceChange per top-level key
-      const ops: Array<{
-        path: Array<{ type: "key"; key: string }>
-        change: { type: "replace"; value: unknown }
-      }> = []
-      for (const [key, value] of Object.entries(state)) {
-        ops.push({
-          path: [{ type: "key" as const, key }],
-          change: { type: "replace" as const, value },
-        })
-      }
+Write `schemaToSql(schema)` that produces `CREATE TABLE` statements.
+A standalone fold over the schema functor. Forces the embed-vs-normalize
+decisions. Shared by both the projection (8b) and the substrate (8c).
 
-      if (ops.length > 0) {
-        executeBatch(ctx, ops, "sync")
-      }
-    }
-  }
-```
+Existing utilities: `advanceSchema()` for schema descent,
+`unwrapAnnotation()` for stripping annotations, `structuralKind()` for
+node discrimination. `Zero.structural(schema)` for default values
+(needed for initial table population).
 
-Strategy 2 is the universal fallback: reconstruct a temp substrate from the snapshot, read its state as JSON, then replay into the live substrate as `ReplaceChange` ops. This means **any substrate that can export JSON snapshots can interoperate with any other substrate that accepts `ReplaceChange` ops** — which is all of them, since `step(state, { type: "replace", value })` is universal.
+### Phase 2: Change → SQL Forward Mapping
 
-So a `SqliteSubstrate` that exports `{ encoding: "json", data: JSON.stringify(allTablesAsNestedObject) }` would interoperate with `PlainSubstrate` out of the box, today, with zero changes to the exchange.
+Implement `applyChangeToSql(db, schema, path, change)`. Translates
+each `ChangeBase` type to SQL statements. The SequenceChange cursor-
+to-index translation is the hardest part — consider gap-based indexing
+to mitigate worst-case re-indexing.
 
-The delta path is trickier — SQLite session changesets are a binary format that only other SQLite databases understand. But for the sequential strategy where the server is authoritative, the server sends its deltas as JSON-serialized `Op[]` (same as `PlainSubstrate.exportSince`), and the client's plain substrate consumes them via `importDelta`. That works today.
+### Phase 3: Schema-Driven Projection
 
-## So: Single-Process CLI or Full Stack?
+Combine phases 1 and 2 into a `projectToSql(schema, opts)` that
+returns a projection attachable to any ref via `ref[CHANGEFEED]
+.subscribeTree()`. This is useful on its own — read-only queryable
+SQL alongside any substrate.
 
-Both, but the full-stack story is the interesting one. The CLI case (SQLite substrate in a single Node process, no sync) is just the persistence story — useful but pedestrian. The full-stack case — SQLite on the server, plain in-memory on the client, exchange bridging them over WebSocket — is where it demonstrates something genuinely new about the architecture. And it requires no new exchange capabilities; just a new substrate implementation and a `bindSql` convenience function.
+### Phase 4: SqliteStoreReader
 
+Implement the four `StoreReader` methods against a live SQLite database.
+Start with the hybrid strategy (lazy scalars, prefetching lists).
+
+### Phase 5: Reverse Mapping (Changeset → Op[])
+
+Implement the session changeset → `Op[]` reverse mapping. Batch row
+changes per table, sort by operation type and `_idx`, reconstruct
+cursor instructions for `SequenceChange`. This is the hardest
+algorithmic piece.
+
+### Phase 6: SqliteSubstrate
+
+Wire together: StoreReader + forward mapping (prepare) + session
+management (onFlush) + reverse mapping (changefeed bridge) + changeset
+log (versioning) + export/import. Use `strategy: "sequential"`.
+
+### Phase 7: `bindSql` + Exchange Integration
+
+Create `bindSql(schema, opts)` convenience wrapper. Prove
+cross-substrate sync: SqliteSubstrate on server ↔ PlainSubstrate on
+client, via the exchange.
+
+### Phase 8: Out-of-Band SQL Write Support
+
+Expose the raw `better-sqlite3` database handle. Verify that raw SQL
+writes are captured by the always-on session, reverse-mapped to ops,
+and delivered through the changefeed.
+
+---
+
+## 14. Open Questions
+
+1. **Does `better-sqlite3` expose the session extension?** Needs
+   verification. If not, alternatives: `better-sqlite3` custom build,
+   FFI wrapper, or `node-sqlite3` with session support.
+
+2. **Performance of always-on session recording?** SQLite sessions are
+   designed to be lightweight, but "always on for every table" has a
+   cost. Benchmarking needed.
+
+3. **Can changesets be meaningfully applied across databases?**
+   Changesets use primary keys for row identity. If two databases have
+   different `_idx` assignments, applying a changeset produces
+   nonsense. This constrains `importDelta` to databases that share
+   row identity — guaranteed for `strategy: "sequential"` (one
+   authority, replicas apply its changesets), breaks for concurrent
+   writers.
+
+4. **Gap-based indexing for sequences?** Using floating-point `_idx`
+   values with gaps avoids worst-case O(n) re-indexing on every insert.
+   Only re-index when gaps are exhausted. Adds complexity but
+   dramatically improves list mutation performance.
+
+5. **Schema migration story?** `ALTER TABLE` generation from schema
+   diffs is a second catamorphism over pairs of schemas. Not needed
+   for MVP but essential for production use.
+
+6. **Postgres generalization?** The core design (schema → DDL, change →
+   SQL, session-based CDC) is not SQLite-specific. Postgres has logical
+   replication / `wal2json` for CDC, `LISTEN/NOTIFY` for change events.
+   A Postgres substrate is architecturally similar but would use async
+   I/O (requiring an async `StoreReader` variant or a connection-pool
+   prefetch strategy).
