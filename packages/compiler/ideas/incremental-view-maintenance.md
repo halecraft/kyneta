@@ -586,7 +586,7 @@ The compiler knows at compile time which fields the predicate touches. The runti
 
 ### 7.2. What Moves Where
 
-From `@kyneta/core` to `@kyneta/compiler`:
+From `@kyneta/cast` to `@kyneta/compiler`:
 
 - `analyze.ts` — AST analysis
 - `reactive-detection.ts` — Changefeed type detection
@@ -594,7 +594,7 @@ From `@kyneta/core` to `@kyneta/compiler`:
 - `walk.ts` — template extraction
 - `template.ts` — template analysis
 
-From `@kyneta/core` to `@kyneta/web`:
+From `@kyneta/cast` to `@kyneta/web`:
 
 - `codegen/dom.ts` — DOM code generation
 - `codegen/html.ts` — HTML/SSR code generation
@@ -612,7 +612,7 @@ Stays in `@kyneta/schema`:
 
 This restructuring doesn't need to happen all at once. The path:
 
-1. **BindingNode + scope tracking** can be added to the existing `@kyneta/core` compiler. This is the highest-value, lowest-risk change.
+1. **BindingNode + scope tracking** can be added to the existing `@kyneta/cast` compiler. This is the highest-value, lowest-risk change.
 
 1. **Filter pattern recognition** can be added as a new Stage 3 in the existing transform pipeline.
 

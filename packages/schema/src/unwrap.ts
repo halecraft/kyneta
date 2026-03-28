@@ -48,7 +48,7 @@ export function registerSubstrate(
  * capabilities (versioning, export/import) from a ref. For
  * substrate-specific escape hatches (e.g. accessing the underlying
  * `LoroDoc`), see the substrate's package (e.g. `loro()` from
- * `@kyneta/schema-loro`).
+ * `@kyneta/loro-schema`).
  *
  * @param ref - A ref created by `exchange.get()` or equivalent
  * @returns The `Substrate<any>` backing the ref

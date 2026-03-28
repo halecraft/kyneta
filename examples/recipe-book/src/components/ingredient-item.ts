@@ -16,9 +16,9 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// <reference types="@kyneta/core/types/elements" />
+/// <reference types="@kyneta/cast/types/elements" />
 
-import type { Element } from "@kyneta/core"
+import type { Element } from "@kyneta/cast"
 
 // ---------------------------------------------------------------------------
 // Props

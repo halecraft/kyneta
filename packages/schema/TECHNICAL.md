@@ -1,6 +1,6 @@
 # @kyneta/schema — Technical Documentation
 
-This package implements the Schema Interpreter Algebra described in `theory/interpreter-algebra.md`. It has no runtime dependencies and is consumed by `@kyneta/core` (compiler runtime) and `examples/recipe-book` (full-stack SSR demo). The architecture provides a composable interpreter stack for schema-driven reactive documents with pluggable backing stores via the Substrate abstraction.
+This package implements the Schema Interpreter Algebra described in `theory/interpreter-algebra.md`. It has no runtime dependencies and is consumed by `@kyneta/cast` (compiler runtime) and `examples/recipe-book` (full-stack SSR demo). The architecture provides a composable interpreter stack for schema-driven reactive documents with pluggable backing stores via the Substrate abstraction.
 
 ## The Key Insight: Unified Schema Grammar
 
@@ -534,7 +534,7 @@ The library-level API for change capture, declarative application, and observati
 - **`subscribe(ref, cb) → () => void`** — tree-level observation (the default). Callback receives `Changeset<Op>` with relative paths. Only works on composite refs (products, sequences, maps). A strict superset of `subscribeNode` — subscribers also see own-path changes with `path: []`. Delegates to `ref[CHANGEFEED].subscribeTree(cb)`.
 - **`subscribeNode(ref, cb) → () => void`** — node-level observation. Callback receives `Changeset`. For leaf refs, fires on any mutation. For composite refs, fires only on node-level changes (e.g. product `.set()`), not child mutations. Delegates to `ref[CHANGEFEED].subscribe(cb)`.
 
-**Facade vs. protocol naming.** The facade and the changefeed protocol use different vocabulary by design. The facade speaks the developer's language: `subscribe` is the unmarked default (deep/tree-level, the thing you reach for first), `subscribeNode` is the explicit opt-in for node-level observation. The protocol speaks its own language: `Changefeed.subscribe` is the universal Moore machine transition stream, `ComposedChangefeed.subscribeTree` is the tree-level composition extension. The facade translates: `subscribe` → `[CHANGEFEED].subscribeTree`, `subscribeNode` → `[CHANGEFEED].subscribe`. This follows the principle of least surprise and ecosystem precedent (Yjs `observeDeep`, Vue `{ deep: true }`, MobX deep-by-default). The name `subscribeNode` communicates positive intent ("I want events at this node") rather than degradation — the `@kyneta/core` runtime's `listRegion` legitimately needs node-level subscriptions for structural `SequenceChange` events, and that's the correct semantic.
+**Facade vs. protocol naming.** The facade and the changefeed protocol use different vocabulary by design. The facade speaks the developer's language: `subscribe` is the unmarked default (deep/tree-level, the thing you reach for first), `subscribeNode` is the explicit opt-in for node-level observation. The protocol speaks its own language: `Changefeed.subscribe` is the universal Moore machine transition stream, `ComposedChangefeed.subscribeTree` is the tree-level composition extension. The facade translates: `subscribe` → `[CHANGEFEED].subscribeTree`, `subscribeNode` → `[CHANGEFEED].subscribe`. This follows the principle of least surprise and ecosystem precedent (Yjs `observeDeep`, Vue `{ deep: true }`, MobX deep-by-default). The name `subscribeNode` communicates positive intent ("I want events at this node") rather than degradation — the `@kyneta/cast` runtime's `listRegion` legitimately needs node-level subscriptions for structural `SequenceChange` events, and that's the correct semantic.
 
 `change` and `applyChanges` are symmetric duals: `change` produces `Op[]`, `applyChanges` consumes them. Round-trip correctness is verified: `change(docA, fn)` → ops → `applyChanges(docB, ops)` → `docA()` deep-equals `docB()`.
 
@@ -589,7 +589,7 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
 **`PlainSubstrate`** is the first concrete implementation. It wraps a plain JS object store (the degenerate case — no CRDT runtime, no native oplog). The raw `Record<string, unknown>` is wrapped in a `plainStoreReader` for the interpreter stack, while mutations and export still operate on the raw object directly. Version tracking uses a **shadow buffer**: `prepare` accumulates `{path, change}` entries alongside `applyChangeToStore`, and `onFlush` drains the buffer into the version log and increments the version counter. The changefeed layer independently accumulates the same entries for notification planning — both hold the same object references and are drained every flush cycle. `PlainVersion` wraps a monotonic integer; `compare()` never returns `"concurrent"`.
 
-**`LoroSubstrate`** is the second concrete implementation, provided by the separate `@kyneta/schema-loro` package. It wraps a user-provided `LoroDoc` with schema-aware typed reads (via `LoroStoreReader`), `applyDiff`-based writes, and a persistent `doc.subscribe()` event bridge that ensures all mutations to the underlying LoroDoc — whether from kyneta, `importDelta`, or external systems — fire kyneta changefeed subscribers. See `packages/schema-loro/TECHNICAL.md` for the full architecture.
+**`LoroSubstrate`** is the second concrete implementation, provided by the separate `@kyneta/loro-schema` package. It wraps a user-provided `LoroDoc` with schema-aware typed reads (via `LoroStoreReader`), `applyDiff`-based writes, and a persistent `doc.subscribe()` event bridge that ensures all mutations to the underlying LoroDoc — whether from kyneta, `importDelta`, or external systems — fire kyneta changefeed subscribers. See `packages/schema/loro/TECHNICAL.md` for the full architecture.
 
 ### Additional Interpreters
 
@@ -653,7 +653,7 @@ The types that remain:
 
 **Why `.get()` for reading:** Every JavaScript collection API (`Map`, `WeakMap`, `URLSearchParams`, `Headers`, `FormData`) uses `.get()` to return a value. Making `.get()` return a ref violated universal developer expectations, caused type asymmetry with `.set()`, and produced `undefined` from `JSON.stringify()` (since refs are functions).
 
-**Why iteration yields refs, not values:** Refs are the primary currency of the reactive system. In reactive frameworks (e.g. `packages/core`), iterating over refs to bind them to DOM nodes is the core use case. Plain values are trivially available via fold: `Object.entries(doc.labels())` or `doc.tasks().forEach(...)`.
+**Why iteration yields refs, not values:** Refs are the primary currency of the reactive system. In reactive frameworks (e.g. `packages/cast`), iterating over refs to bind them to DOM nodes is the core use case. Plain values are trivially available via fold: `Object.entries(doc.labels())` or `doc.tasks().forEach(...)`.
 
 Sequence iteration follows **Array** semantics (yields bare child refs), while map iteration follows **Map** semantics (yields `[key, ref]` entries).
 

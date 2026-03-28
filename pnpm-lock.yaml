@@ -23,9 +23,9 @@ importers:
 
   examples/recipe-book:
     dependencies:
-      '@kyneta/core':
+      '@kyneta/cast':
         specifier: workspace:^
-        version: link:../../packages/core
+        version: link:../../packages/cast
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../packages/schema
@@ -52,53 +52,7 @@ importers:
         specifier: ^8
         version: 8.19.0
 
-  packages/adapter-websocket:
-    devDependencies:
-      '@kyneta/exchange':
-        specifier: workspace:*
-        version: link:../exchange
-      '@kyneta/schema':
-        specifier: workspace:*
-        version: link:../schema
-      '@kyneta/wire':
-        specifier: workspace:*
-        version: link:../wire
-      '@types/node':
-        specifier: ^22
-        version: 22.19.15
-      bun-types:
-        specifier: latest
-        version: 1.3.11
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.9.2
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.17
-        version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
-
-  packages/compiler:
-    dependencies:
-      '@kyneta/schema':
-        specifier: workspace:^
-        version: link:../schema
-      ts-morph:
-        specifier: ^25.0.0
-        version: 25.0.1
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.9.2
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.17
-        version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
-
-  packages/core:
+  packages/cast:
     dependencies:
       '@kyneta/compiler':
         specifier: workspace:^
@@ -144,17 +98,63 @@ importers:
         specifier: ^4.0.17
         version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
 
+  packages/compiler:
+    dependencies:
+      '@kyneta/schema':
+        specifier: workspace:^
+        version: link:../schema
+      ts-morph:
+        specifier: ^25.0.0
+        version: 25.0.1
+    devDependencies:
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.17
+        version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
+
   packages/exchange:
     devDependencies:
+      '@kyneta/loro-schema':
+        specifier: workspace:*
+        version: link:../schema/backends/loro
       '@kyneta/schema':
         specifier: workspace:*
         version: link:../schema
-      '@kyneta/schema-loro':
-        specifier: workspace:*
-        version: link:../schema-loro
       loro-crdt:
         specifier: ^1.10.0
         version: 1.10.8
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.17
+        version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
+
+  packages/exchange/transports/websocket:
+    devDependencies:
+      '@kyneta/exchange':
+        specifier: workspace:*
+        version: link:../..
+      '@kyneta/schema':
+        specifier: workspace:*
+        version: link:../../../schema
+      '@kyneta/wire':
+        specifier: workspace:*
+        version: link:../../../wire
+      '@types/node':
+        specifier: ^22
+        version: 22.19.15
+      bun-types:
+        specifier: latest
+        version: 1.3.11
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
@@ -189,11 +189,11 @@ importers:
         specifier: ^4.0.17
         version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
 
-  packages/schema-loro:
+  packages/schema/backends/loro:
     devDependencies:
       '@kyneta/schema':
         specifier: workspace:*
-        version: link:../schema
+        version: link:../..
       loro-crdt:
         specifier: ^1.10.0
         version: 1.10.8
@@ -207,11 +207,11 @@ importers:
         specifier: ^4.0.17
         version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
 
-  packages/schema-yjs:
+  packages/schema/backends/yjs:
     devDependencies:
       '@kyneta/schema':
         specifier: workspace:*
-        version: link:../schema
+        version: link:../..
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
@@ -249,18 +249,18 @@ importers:
 
   tests/exchange-websocket:
     devDependencies:
-      '@kyneta/adapter-websocket':
-        specifier: workspace:*
-        version: link:../../packages/adapter-websocket
       '@kyneta/exchange':
         specifier: workspace:*
         version: link:../../packages/exchange
+      '@kyneta/loro-schema':
+        specifier: workspace:*
+        version: link:../../packages/schema/backends/loro
       '@kyneta/schema':
         specifier: workspace:*
         version: link:../../packages/schema
-      '@kyneta/schema-loro':
+      '@kyneta/websocket-transport':
         specifier: workspace:*
-        version: link:../../packages/schema-loro
+        version: link:../../packages/exchange/transports/websocket
       '@kyneta/wire':
         specifier: workspace:*
         version: link:../../packages/wire

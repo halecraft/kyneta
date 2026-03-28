@@ -1,0 +1,43 @@
+{
+  "name": "@kyneta/websocket-transport",
+  "version": "0.0.1",
+  "description": "Websocket transport for @kyneta/exchange — client, server, and Bun integration",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "type": "module",
+  "files": ["dist", "src"],
+  "exports": {
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./bun": {
+      "types": "./dist/bun.d.ts",
+      "import": "./dist/bun.js"
+    },
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "peerDependencies": {
+    "@kyneta/exchange": ">=0.0.1",
+    "@kyneta/wire": ">=0.0.1"
+  },
+  "devDependencies": {
+    "@kyneta/exchange": "workspace:*",
+    "@kyneta/wire": "workspace:*",
+    "@kyneta/schema": "workspace:*",
+    "@types/node": "^22",
+    "bun-types": "latest",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.17"
+  }
+}

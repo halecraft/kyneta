@@ -22,7 +22,7 @@ import {
   type WritableContext,
 } from "@kyneta/schema"
 import type { Schema as SchemaNode } from "@kyneta/schema"
-import { bindLoro } from "@kyneta/schema-loro"
+import { bindLoro } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
 import { Bridge, BridgeAdapter } from "../adapter/bridge-adapter.js"

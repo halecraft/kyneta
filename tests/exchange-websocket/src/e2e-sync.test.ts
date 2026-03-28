@@ -40,17 +40,14 @@ import {
   type WritableContext,
 } from "@kyneta/schema"
 import type { Schema as SchemaNode } from "@kyneta/schema"
-import { bindLoro } from "@kyneta/schema-loro"
-import { Exchange, sync, TimestampVersion } from "@kyneta/exchange"
-import { WebsocketServerAdapter } from "@kyneta/adapter-websocket/server"
-import {
-  WebsocketClientAdapter,
-  createWebsocketClient,
-} from "@kyneta/adapter-websocket/client"
+import { bindLoro } from "@kyneta/loro-schema"
+import { Exchange, TimestampVersion } from "@kyneta/exchange"
+import { WebsocketServerAdapter } from "@kyneta/websocket-transport/server"
+import { WebsocketClientAdapter } from "@kyneta/websocket-transport/client"
 import {
   createBunWebsocketHandlers,
   type BunWebsocketData,
-} from "@kyneta/adapter-websocket/bun"
+} from "@kyneta/websocket-transport/bun"
 
 // ---------------------------------------------------------------------------
 // Test infrastructure

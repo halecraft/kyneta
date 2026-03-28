@@ -22,10 +22,10 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// <reference types="@kyneta/core/types/elements" />
-/// <reference types="@kyneta/core/types/reactive-view" />
+/// <reference types="@kyneta/cast/types/elements" />
+/// <reference types="@kyneta/cast/types/reactive-view" />
 
-import type { Element } from "@kyneta/core"
+import type { Element } from "@kyneta/cast"
 import type { Ref } from "@kyneta/schema/basic"
 import { change } from "@kyneta/schema/basic"
 import { IngredientItem } from "./ingredient-item.js"

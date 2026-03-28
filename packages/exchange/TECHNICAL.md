@@ -211,7 +211,7 @@ For Loro substrates, the builder hashes the string peerId to a deterministic num
 |----------|---------|---------|----------|
 | `bindPlain(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"sequential"` |
 | `bindLww(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"lww"` |
-| `bindLoro(schema)` | `@kyneta/schema-loro` | `(ctx) => createLoroFactory(ctx.peerId)` | `"causal"` |
+| `bindLoro(schema)` | `@kyneta/loro-schema` | `(ctx) => createLoroFactory(ctx.peerId)` | `"causal"` |
 
 ### Why Not `ExchangeSubstrateFactory`?
 
@@ -226,7 +226,7 @@ The previous design used `ExchangeSubstrateFactory` — a `SubstrateFactory` ext
 Two escape hatches provide access to the underlying substrate:
 
 - **`unwrap(ref)`** in `@kyneta/schema` — general, returns `Substrate<any>`. Uses a `WeakMap<object, Substrate>` populated by `registerSubstrate()` (called by the exchange after building the ref).
-- **`loro(ref)`** in `@kyneta/schema-loro` — Loro-specific, returns `LoroDoc`. Uses `unwrap()` internally to get the substrate, then a `WeakMap<Substrate, LoroDoc>` populated by `createLoroSubstrate()`.
+- **`loro(ref)`** in `@kyneta/loro-schema` — Loro-specific, returns `LoroDoc`. Uses `unwrap()` internally to get the substrate, then a `WeakMap<Substrate, LoroDoc>` populated by `createLoroSubstrate()`.
 
 The two-step approach (ref → substrate → LoroDoc) avoids duplicating tracking WeakMaps and composes cleanly. Currently supports root-level refs only; child-level resolution (e.g. `loro(doc.title)` → `LoroText`) is future work.
 
@@ -397,7 +397,7 @@ Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingM
 | `src/sync.ts` | `sync()` function and `SyncRef` — sync capabilities access |
 | `src/index.ts` | Barrel export (re-exports `bind`, `BoundSchema`, `MergeStrategy`, etc. from `@kyneta/schema`) |
 
-Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unwrap()`, and `registerSubstrate()` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` and `loro()` are defined in `@kyneta/schema-loro`.
+Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unwrap()`, and `registerSubstrate()` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` and `loro()` are defined in `@kyneta/loro-schema`.
 
 ### Test Files
 
@@ -417,7 +417,7 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unw
 The `@kyneta/wire` package provides serialization infrastructure for the exchange's 5-message protocol. It sits between the exchange and transport adapters in the dependency graph:
 
 ```
-@kyneta/exchange  →  @kyneta/wire  →  @kyneta/adapter-websocket
+@kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-transport
    (messages)         (codecs)          (transport)
 ```
 
@@ -460,7 +460,7 @@ See `packages/wire/PROTOCOL.md` for the full wire protocol specification.
 
 ---
 
-## 12. Websocket Adapter (`@kyneta/adapter-websocket`)
+## 12. Websocket Adapter (`@kyneta/websocket-transport`)
 
 The first real transport adapter. Framework-agnostic via the `Socket` interface, with platform-specific wrappers for browser, Node.js `ws`, and Bun.
 
@@ -516,7 +516,7 @@ End-to-end tests in `tests/exchange-websocket/` prove the full stack over real W
 
 6. **Escape hatches work**: `unwrap(ref)` returns the substrate; `loro(ref)` returns the LoroDoc. Both compose via the `WeakMap` chain (ref → substrate → LoroDoc).
 
-7. **Existing tests unaffected**: `@kyneta/schema` tests (1110) and `@kyneta/schema-loro` tests (92) pass, including new `bind`/`unwrap`/`bindLoro`/`loro` tests. The `SubstrateFactory`, `Substrate`, and `Version` interfaces are unchanged.
+7. **Existing tests unaffected**: `@kyneta/schema` tests (1110) and `@kyneta/loro-schema` tests (92) pass, including new `bind`/`unwrap`/`bindLoro`/`loro` tests. The `SubstrateFactory`, `Substrate`, and `Version` interfaces are unchanged.
 
 8. **Wire codec round-trip**: All 5 message types survive encode → decode through both CBOR and JSON codecs, including `OfferMsg` with binary `SubstratePayload` (38 codec tests, 31 frame tests, 54 fragment tests).
 

@@ -24,8 +24,8 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// <reference types="@kyneta/core/types/elements" />
-/// <reference types="@kyneta/core/types/reactive-view" />
+/// <reference types="@kyneta/cast/types/elements" />
+/// <reference types="@kyneta/cast/types/reactive-view" />
 
 // ─── 1. Imports & Doc Type ───────────────────────────────────────────────
 //
@@ -34,7 +34,7 @@
 // Module organization mirrors a real app: schema types, facade functions,
 // framework primitives, and component modules each have their own import.
 
-import { state } from "@kyneta/core"
+import { state } from "@kyneta/cast"
 import { RecipeCard } from "./components/recipe-card.js"
 import { Toolbar } from "./components/toolbar.js"
 import { change } from "@kyneta/schema/basic"

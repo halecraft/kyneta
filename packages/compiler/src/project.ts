@@ -4,7 +4,7 @@
  * Manages the shared Project singleton, source file parsing,
  * and @kyneta/schema module resolution.
  *
- * These functions were extracted from `@kyneta/core`'s `transform.ts`
+ * These functions were extracted from `@kyneta/cast`'s `transform.ts`
  * because they are compiler infrastructure, not target-specific logic.
  *
  * @packageDocumentation
@@ -31,7 +31,7 @@ let sharedProject: Project | null = null
  * The project uses the real filesystem so that imports from node_modules
  * resolve naturally — no type stubs needed. The Vite plugin passes the
  * file's real absolute path, enabling ts-morph's module resolution to
- * find @kyneta/schema, @kyneta/core, etc. via pnpm workspace symlinks.
+ * find @kyneta/schema, @kyneta/cast, etc. via pnpm workspace symlinks.
  *
  * Key configuration:
  * - moduleResolution: Bundler (100) for pnpm compatibility

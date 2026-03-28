@@ -2,7 +2,7 @@
 //
 // The `sync()` function retrieves sync capabilities for a document
 // created by `Exchange.get()`. Internally, sync state is tracked via
-// a module-scoped WeakMap (same pattern as @kyneta/schema-loro's
+// a module-scoped WeakMap (same pattern as @kyneta/loro-schema's
 // substrate tracking and the vendor's syncRefMap).
 //
 // Usage:

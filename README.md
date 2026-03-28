@@ -8,23 +8,23 @@ A collaborative-first application platform where CRDTs meet compiled UI. Kyneta 
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/core`](./packages/core) (Kinetic) | Compiled delta-driven UI framework. Transforms natural TypeScript into code that directly consumes Loro CRDT deltas — character-level text patches, O(k) list updates, branch swapping — with no virtual DOM and no diffing. | ~1,000 |
+| [`@kyneta/cast`](./packages/cast) (Kinetic) | Compiled delta-driven UI framework. Transforms natural TypeScript into code that directly consumes Loro CRDT deltas — character-level text patches, O(k) list updates, branch swapping — with no virtual DOM and no diffing. | ~1,000 |
 | [`@kyneta/exchange`](./packages/exchange) | Substrate-agnostic state exchange. Three merge strategies (causal, sequential, LWW) dispatched over a uniform three-message protocol (discover, interest, offer). Hosts heterogeneous documents — Loro CRDTs, plain JS, ephemeral presence — in one sync network. | 81 |
 | [`@kyneta/perspective`](./packages/perspective) (Prism) | Convergent Constraint Systems engine. Agents assert constraints, merge is set union, and a stratified Datalog evaluator derives shared reality. Includes an incremental pipeline based on DBSP for O(\|Δ\|) updates. Zero runtime dependencies. | 1,304 |
 | [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Zero runtime dependencies. | 1,097 |
-| [`@kyneta/schema-loro`](./packages/schema-loro) | Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge that observes all mutations regardless of source. | 86 |
+| [`@kyneta/loro-schema`](./packages/schema/loro) | Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge that observes all mutations regardless of source. | 86 |
 
 ### Dependencies
 
 ```
-@kyneta/core ──────depends on──▶ @kyneta/schema
+@kyneta/cast ──────depends on──▶ @kyneta/schema
 @kyneta/exchange ──depends on──▶ @kyneta/schema
-@kyneta/schema-loro ─depends on──▶ @kyneta/schema + loro-crdt
+@kyneta/loro-schema ─depends on──▶ @kyneta/schema + loro-crdt
 @kyneta/perspective               (standalone)
 @kyneta/schema                    (standalone)
 ```
 
-The packages share a monorepo. `@kyneta/schema` is the foundational algebra; `@kyneta/schema-loro` and `@kyneta/exchange` build on it; `@kyneta/perspective` and `@kyneta/core` are independent explorations.
+The packages share a monorepo. `@kyneta/schema` is the foundational algebra; `@kyneta/loro-schema` and `@kyneta/exchange` build on it; `@kyneta/perspective` and `@kyneta/cast` are independent explorations.
 
 ## Why Kyneta
 
@@ -50,7 +50,7 @@ The packages share a monorepo. `@kyneta/schema` is the foundational algebra; `@k
 pnpm install
 
 # Run tests per package
-cd packages/core && pnpm test
+cd packages/cast && pnpm test
 cd packages/perspective && pnpm run test:run
 cd packages/schema && pnpm test
 ```
@@ -60,7 +60,7 @@ cd packages/schema && pnpm test
 All three packages are experimental prototypes at v0.0.1. The core ideas are validated with 2,800+ tests across the monorepo, but APIs are unstable and integration between packages is incomplete.
 
 See each package's README for detailed status:
-- [Kinetic status](./packages/core/README.md#prototype-status)
+- [Kinetic status](./packages/cast/README.md#prototype-status)
 - [Prism status](./packages/perspective/README.md#project-status)
 
 ## License
@@ -69,6 +69,6 @@ Each package is independently licensed. See the LICENSE file in each package dir
 
 | Package | License |
 |---------|---------|
-| `@kyneta/core` | MIT |
+| `@kyneta/cast` | MIT |
 | `@kyneta/perspective` | BSD-3-Clause |
 | `@kyneta/schema` | GPL-3.0-only |

@@ -1,0 +1,104 @@
+{
+  "name": "@kyneta/cast",
+  "version": "0.0.1",
+  "description": "Compiled delta-driven web framework",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./unplugin": {
+      "types": "./dist/unplugin/index.d.ts",
+      "import": "./dist/unplugin/index.js",
+      "default": "./dist/unplugin/index.js"
+    },
+    "./unplugin/vite": {
+      "types": "./dist/unplugin/adapters/vite.d.ts",
+      "import": "./dist/unplugin/adapters/vite.js",
+      "default": "./dist/unplugin/adapters/vite.js"
+    },
+    "./unplugin/bun": {
+      "types": "./dist/unplugin/adapters/bun.d.ts",
+      "import": "./dist/unplugin/adapters/bun.js",
+      "default": "./dist/unplugin/adapters/bun.js"
+    },
+    "./unplugin/farm": {
+      "types": "./dist/unplugin/adapters/farm.d.ts",
+      "import": "./dist/unplugin/adapters/farm.js",
+      "default": "./dist/unplugin/adapters/farm.js"
+    },
+    "./unplugin/rollup": {
+      "types": "./dist/unplugin/adapters/rollup.d.ts",
+      "import": "./dist/unplugin/adapters/rollup.js",
+      "default": "./dist/unplugin/adapters/rollup.js"
+    },
+    "./unplugin/rolldown": {
+      "types": "./dist/unplugin/adapters/rolldown.d.ts",
+      "import": "./dist/unplugin/adapters/rolldown.js",
+      "default": "./dist/unplugin/adapters/rolldown.js"
+    },
+    "./unplugin/esbuild": {
+      "types": "./dist/unplugin/adapters/esbuild.d.ts",
+      "import": "./dist/unplugin/adapters/esbuild.js",
+      "default": "./dist/unplugin/adapters/esbuild.js"
+    },
+    "./vite": {
+      "types": "./dist/vite/plugin.d.ts",
+      "import": "./dist/vite/plugin.js",
+      "default": "./dist/vite/plugin.js"
+    },
+
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js",
+      "default": "./dist/runtime/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    },
+    "./types/elements": {
+      "types": "./src/types/elements.d.ts"
+    },
+    "./types/reactive-view": {
+      "types": "./src/types/reactive-view.d.ts"
+    },
+    "./src": "./src/index.ts",
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "dependencies": {
+    "@kyneta/compiler": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "js-beautify": "^1.15.4",
+    "ts-morph": "^25.0.0",
+    "unplugin": "^3.0.0"
+  },
+  "devDependencies": {
+    "@farmfe/core": "^1.7.11",
+    "@types/js-beautify": "^1.14.3",
+    "@types/jsdom": "^21.1.7",
+    "@typescript/native-preview": "7.0.0-dev.20260103.1",
+    "jsdom": "^26.1.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vite": "^6.1.1",
+    "vitest": "^4.0.17"
+  }
+}

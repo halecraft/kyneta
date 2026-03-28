@@ -16,7 +16,7 @@ Zero runtime dependencies. 1000+ tests.
 
 Target-agnostic incremental view maintenance compiler.
 
-Takes TypeScript source with builder patterns over Changefeed-emitting state and produces a classified IR annotated with incremental strategies. Does not generate code for any specific rendering target — rendering targets (`@kyneta/core`, future `@kyneta/native`, etc.) consume the IR and produce target-specific output.
+Takes TypeScript source with builder patterns over Changefeed-emitting state and produces a classified IR annotated with incremental strategies. Does not generate code for any specific rendering target — rendering targets (`@kyneta/cast`, future `@kyneta/native`, etc.) consume the IR and produce target-specific output.
 
 Key subsystems:
 - **Analysis** (`analyze.ts`) — AST → IR via ts-morph, reactive detection, expression classification
@@ -28,7 +28,7 @@ Key subsystems:
 
 330+ tests.
 
-### `@kyneta/core`
+### `@kyneta/cast`
 
 Web rendering target — compiled delta-driven web framework.
 
@@ -53,14 +53,14 @@ Convergent Constraint Systems — a constraint-based approach to CRDTs. Research
     │
     ├──► @kyneta/compiler   (AST → IR analysis, IR transforms)
     │        │
-    │        └──► @kyneta/core   (IR → DOM/HTML codegen, runtime, unplugin)
+    │        └──► @kyneta/cast   (IR → DOM/HTML codegen, runtime, unplugin)
     │                 │
     │                 └──► examples/recipe-book
     │
     └──► @kyneta/perspective
 ```
 
-`@kyneta/schema` is the foundation — it defines the CHANGEFEED protocol, delta types, and the interpreter algebra that `compiler`, `core`, and `perspective` build upon. `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/core` is the web rendering target that consumes compiler IR and produces DOM/HTML output. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
+`@kyneta/schema` is the foundation — it defines the CHANGEFEED protocol, delta types, and the interpreter algebra that `compiler`, `core`, and `perspective` build upon. `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/cast` is the web rendering target that consumes compiler IR and produces DOM/HTML output. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
 
 ## Key Concepts
 
@@ -81,7 +81,7 @@ The compiler supports a **bare-ref developer experience**: developers write `rec
 - **Explicit snapshot**: `recipe.name()` → developer writes `()` explicitly, compiler produces `SnapshotNode` — same rendering, distinct semantics (developer intent)
 - **Binding expansion**: `const nameMatch = recipe.name.toLowerCase().includes(filterText.toLowerCase())` — the `nameMatch` binding carries its full expression tree. In reactive closures, the codegen expands the binding inline for self-contained re-evaluation from live refs.
 
-The `reactive-view` type augmentations (`@kyneta/core/types/reactive-view`) widen `TextRef extends String` and `CounterRef extends Number` so that value-type methods (`.toLowerCase()`, `.toFixed()`, etc.) are visible at the type level. `LocalRef<T> = Widen<T> & LocalRefBase<T>` gives the same widening via intersection. These are compile-time illusions — the compiler transforms the code before it runs.
+The `reactive-view` type augmentations (`@kyneta/cast/types/reactive-view`) widen `TextRef extends String` and `CounterRef extends Number` so that value-type methods (`.toLowerCase()`, `.toFixed()`, etc.) are visible at the type level. `LocalRef<T> = Widen<T> & LocalRefBase<T>` gives the same widening via intersection. These are compile-time illusions — the compiler transforms the code before it runs.
 
 ### Delta Kinds
 
@@ -131,7 +131,7 @@ pnpm build                              # alias for: turbo build
 pnpm verify                             # alias for: turbo verify --filter='!@kyneta/perspective'
 
 # Test a single package (auto-builds upstream deps if stale)
-npx turbo test --filter=@kyneta/core    # builds schema + compiler first, then runs core tests
+npx turbo test --filter=@kyneta/cast    # builds schema + compiler first, then runs core tests
 
 # Verify perspective separately (opt-in, not in default pipeline)
 npx turbo verify --filter=@kyneta/perspective
@@ -155,7 +155,7 @@ Each step depends on the previous: types won't run if format fails, logic won't 
 |---------|-------|-------|
 | `@kyneta/schema` | 1050+ | Interpreter algebra, changefeeds, substrates |
 | `@kyneta/compiler` | 504 | AST analysis, ExpressionIR, reactive detection |
-| `@kyneta/core` | 632 | Codegen, runtime regions, integration tests |
+| `@kyneta/cast` | 632 | Codegen, runtime regions, integration tests |
 | `examples/recipe-book` | 18 | Full-stack SSR + sync integration |
 | `@kyneta/perspective` | 1374 | CCS kernel, Datalog evaluator, incremental pipeline |
 
@@ -166,7 +166,7 @@ kyneta/
 ├── packages/
 │   ├── schema/       @kyneta/schema
 │   ├── compiler/     @kyneta/compiler
-│   ├── core/         @kyneta/core
+│   ├── core/         @kyneta/cast
 │   └── perspective/  @kyneta/perspective
 ├── examples/
 │   └── recipe-book/  Full-stack SSR + sync example
@@ -187,7 +187,7 @@ VCS: **jj** (Jujutsu).
 Kyneta was originally developed as `@loro-extended/*` — a set of packages extending the [Loro](https://loro.dev/) CRDT framework. The architecture has since been decoupled:
 
 - `@kyneta/schema` defines a **backend-agnostic** schema grammar (`Schema` namespace). The `LoroSchema` namespace adds Loro-specific annotations (`text`, `counter`, `movableList`, `tree`) via the annotation mechanism — these are markers that a Loro backend would interpret, but the interpreter algebra itself is pure.
-- `@kyneta/core` consumes the CHANGEFEED protocol, which is defined in `@kyneta/schema` and has no Loro dependency.
+- `@kyneta/cast` consumes the CHANGEFEED protocol, which is defined in `@kyneta/schema` and has no Loro dependency.
 - Historical documents (`LEARNINGS.md`, `theory/interpreter-algebra.md`) retain `@loro-extended` references as they are factually accurate for their era.
 
 The annotation mechanism (`Schema.annotated("text")`, `Schema.annotated("counter")`) is the bridge: it marks schema nodes with backend-specific semantics without coupling the grammar to any particular CRDT implementation.

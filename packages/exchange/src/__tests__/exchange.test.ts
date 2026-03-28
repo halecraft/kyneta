@@ -11,7 +11,7 @@ import {
   plainSubstrateFactory,
   unwrap,
 } from "@kyneta/schema"
-import { bindLoro, loro } from "@kyneta/schema-loro"
+import { bindLoro, loro } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
 import { sync, hasSync } from "../sync.js"
 import { Bridge, BridgeAdapter } from "../adapter/bridge-adapter.js"

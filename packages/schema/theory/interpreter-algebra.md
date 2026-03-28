@@ -389,7 +389,7 @@ time** (after import, before first render — normal module initialization
 order):
 
 ```typescript
-import { registerPatchStrategy } from "@kyneta/core/runtime"
+import { registerPatchStrategy } from "@kyneta/cast/runtime"
 
 registerPatchStrategy("richtext", (element, feed, action) => {
   // Custom DOM patching for rich text actions

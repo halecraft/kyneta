@@ -1,13 +1,13 @@
 # Recipe Book
 
-A best-practices example for **@kyneta/core** — demonstrating SSR, hydration, multi-tab sync via WebSocket, all four delta kinds, and the **bare-ref developer experience** with compiler auto-read insertion.
+A best-practices example for **@kyneta/cast** — demonstrating SSR, hydration, multi-tab sync via WebSocket, all four delta kinds, and the **bare-ref developer experience** with compiler auto-read insertion.
 
 ## Quick Start
 
 ```sh
 # 1. Build dependencies (from monorepo root)
 pnpm -C packages/schema build
-pnpm -C packages/core build
+pnpm -C packages/cast build
 
 # 2. Install and run
 cd examples/recipe-book
@@ -105,7 +105,7 @@ const nameMatch = recipe.name().toLowerCase().includes(filterText().toLowerCase(
 const veggieMatch = !veggieOnly() || recipe.vegetarian()
 ```
 
-This works via the `ExpressionIR` tree — the compiler detects changefeed sub-expressions consumed in value contexts and wraps them in `RefReadNode`, which renders as `source()`. The `reactive-view` type augmentations (`/// <reference types="@kyneta/core/types/reactive-view" />`) widen `TextRef extends String` so that `.toLowerCase()`, `.includes()`, etc. are visible at the type level.
+This works via the `ExpressionIR` tree — the compiler detects changefeed sub-expressions consumed in value contexts and wraps them in `RefReadNode`, which renders as `source()`. The `reactive-view` type augmentations (`/// <reference types="@kyneta/cast/types/reactive-view" />`) widen `TextRef extends String` so that `.toLowerCase()`, `.includes()`, etc. are visible at the type level.
 
 **Explicit snapshots** are used where bare-ref style is not appropriate:
 - `recipe.name()` in `value: recipe.name()` — intentional snapshot to avoid `inputTextRegion` cursor positioning issues; the explicit `()` produces a `SnapshotNode` → `valueRegion` instead of `textRegion`
@@ -143,7 +143,7 @@ The CSS is linked from `index.html` as a static asset, so it works with SSR (the
 examples/recipe-book/
 ├── index.html               HTML shell with <!--ssr--> placeholder
 ├── style.css                Kitchen-friendly stylesheet (static, no build step)
-├── package.json             Dependencies: @kyneta/core, @kyneta/schema, zod
+├── package.json             Dependencies: @kyneta/cast, @kyneta/schema, zod
 ├── vite.config.ts           Kyneta Vite plugin (auto-detects SSR target)
 ├── vitest.config.ts         Test runner config
 ├── recipe-book.test.ts      18 integration tests (facade + sync + SSR snapshot round-trip)

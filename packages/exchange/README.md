@@ -54,7 +54,7 @@ BoundSchemas are defined at module scope and passed to `exchange.get()`:
 
 ```ts
 import { bindPlain, bindLww } from "@kyneta/schema"
-import { bindLoro } from "@kyneta/schema-loro"
+import { bindLoro } from "@kyneta/loro-schema"
 
 // Collaborative text — Loro CRDT with causal merge
 const TodoDoc = bindLoro(LoroSchema.doc({
@@ -176,7 +176,7 @@ substrate.frontier().serialize()  // current version
 substrate.exportSnapshot()       // full state
 
 // Loro-specific — returns the LoroDoc backing a ref
-import { loro } from "@kyneta/schema-loro"
+import { loro } from "@kyneta/loro-schema"
 const loroDoc = loro(doc)
 loroDoc.toJSON()                 // raw Loro state
 loroDoc.version()                // VersionVector
@@ -214,14 +214,14 @@ loroDoc.version()                // VersionVector
 | `bind({ schema, factory, strategy })` | `@kyneta/schema` | General primitive — explicit schema, factory builder, strategy. |
 | `bindPlain(schema)` | `@kyneta/schema` | Plain substrate + sequential strategy. |
 | `bindLww(schema)` | `@kyneta/schema` | Plain substrate + LWW broadcast strategy. |
-| `bindLoro(schema)` | `@kyneta/schema-loro` | Loro substrate + causal strategy. |
+| `bindLoro(schema)` | `@kyneta/loro-schema` | Loro substrate + causal strategy. |
 
 ### Escape Hatches
 
 | Function | Package | Description |
 |----------|---------|-------------|
 | `unwrap(ref)` | `@kyneta/schema` | Returns the `Substrate<any>` backing a ref. |
-| `loro(ref)` | `@kyneta/schema-loro` | Returns the `LoroDoc` backing a Loro-backed ref. |
+| `loro(ref)` | `@kyneta/loro-schema` | Returns the `LoroDoc` backing a Loro-backed ref. |
 
 ### Adapters
 

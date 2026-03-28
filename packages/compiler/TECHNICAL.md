@@ -1,6 +1,6 @@
 # @kyneta/compiler — Technical Documentation
 
-Target-agnostic incremental view maintenance compiler. Takes TypeScript source with builder patterns over Changefeed-emitting state and produces a classified IR annotated with incremental strategies. Does not generate code for any specific rendering target — rendering targets (`@kyneta/core`, future `@kyneta/native`, etc.) consume the IR and produce target-specific output.
+Target-agnostic incremental view maintenance compiler. Takes TypeScript source with builder patterns over Changefeed-emitting state and produces a classified IR annotated with incremental strategies. Does not generate code for any specific rendering target — rendering targets (`@kyneta/cast`, future `@kyneta/native`, etc.) consume the IR and produce target-specific output.
 
 ## Architecture
 
@@ -184,7 +184,7 @@ Returns `FilterMetadata` (with classified dependencies and the conditional refer
 
 Chained filters (e.g., `if (a) { if (b) { ... } }`) are automatically flattened: the function looks through single-child-conditional chains and merges their condition dependencies.
 
-**Codegen consumption:** When `LoopNode.filter` is present, the DOM codegen (`@kyneta/core/compiler/codegen/dom.ts`) emits a `filteredListRegion(...)` call instead of the standard `listRegion + conditionalRegion` composition. The codegen extracts:
+**Codegen consumption:** When `LoopNode.filter` is present, the DOM codegen (`@kyneta/cast/compiler/codegen/dom.ts`) emits a `filteredListRegion(...)` call instead of the standard `listRegion + conditionalRegion` composition. The codegen extracts:
 - `predicate` closure from `filter.predicate` (rendered with binding expansion for self-contained re-evaluation)
 - `externalRefs` array from `filter.externalDeps[].source`
 - `itemRefs` accessor from `filter.itemDeps[].source`
@@ -298,7 +298,7 @@ packages/compiler/src/
     ↑
 @kyneta/compiler     # AST → IR analysis, IR transforms (/transforms)
     ↑
-@kyneta/core         # IR → DOM/HTML codegen, runtime, build plugins
+@kyneta/cast         # IR → DOM/HTML codegen, runtime, build plugins
 ```
 
 The compiler depends only on `@kyneta/schema` (for the `CHANGEFEED` symbol and change types used in reactive detection) and `ts-morph` (for TypeScript AST analysis). It has no runtime, DOM, or rendering dependencies.

@@ -1,6 +1,9 @@
 packages:
   - examples/*
   - packages/*
+  - packages/schema/backends/*
+  - packages/exchange/transports/*
+  - packages/exchange/storage/*
   - tests/*
 
 onlyBuiltDependencies:

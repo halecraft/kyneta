@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "@kyneta/schema": "workspace:*",
-    "@kyneta/schema-loro": "workspace:*",
+    "@kyneta/loro-schema": "workspace:*",
     "loro-crdt": "^1.10.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",

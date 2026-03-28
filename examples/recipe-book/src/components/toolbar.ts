@@ -22,10 +22,10 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// <reference types="@kyneta/core/types/elements" />
-/// <reference types="@kyneta/core/types/reactive-view" />
+/// <reference types="@kyneta/cast/types/elements" />
+/// <reference types="@kyneta/cast/types/reactive-view" />
 
-import type { Element, LocalRef } from "@kyneta/core"
+import type { Element, LocalRef } from "@kyneta/cast"
 import { change } from "@kyneta/schema/basic"
 import type { RecipeBookDoc } from "../types.js"
 

@@ -8,7 +8,7 @@
     "verify": "verify"
   },
   "dependencies": {
-    "@kyneta/core": "workspace:^",
+    "@kyneta/cast": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "zod": "^4.3.6"
   },

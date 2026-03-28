@@ -101,7 +101,7 @@ it doesn't actually have these methods. But the compiler transforms the code
 before it runs, so the runtime type mismatch is invisible to the developer.
 
 For schema refs (`TextRef`, `CounterRef`), the widening uses TypeScript
-**module augmentation** — declared in `@kyneta/core`, not in `@kyneta/schema`.
+**module augmentation** — declared in `@kyneta/cast`, not in `@kyneta/schema`.
 The schema package is unaware of and unaffected by this. The augmentation is
 opt-in via a `/// <reference>` directive, following the same pattern as the
 existing element factory types.

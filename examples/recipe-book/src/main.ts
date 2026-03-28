@@ -1,4 +1,4 @@
-import { mount } from "@kyneta/core"
+import { mount } from "@kyneta/cast"
 import type { Changeset, Op, SubstratePayload } from "@kyneta/schema/basic"
 import { createApp } from "./app.js"
 import {
