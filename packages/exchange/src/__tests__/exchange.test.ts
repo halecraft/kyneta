@@ -232,7 +232,7 @@ describe("Exchange", () => {
         const doc = exchange.get("doc-1", TestDoc, { seed: { title: "Hi", count: 1 } })
 
         const substrate = unwrap(doc)
-        expect(substrate.frontier()).toBeDefined()
+        expect(substrate.version()).toBeDefined()
 
         const snapshot = substrate.exportSnapshot()
         expect(snapshot.encoding).toBe("json")

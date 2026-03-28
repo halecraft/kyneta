@@ -236,15 +236,6 @@ export {
   PlainVersion,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
-
-// ---------------------------------------------------------------------------
-// Deprecated aliases — backward compatibility for Frontier → Version rename
-// ---------------------------------------------------------------------------
-
-/** @deprecated Use `Version` instead. */
-export type { Version as Frontier } from "./substrate.js"
-/** @deprecated Use `PlainVersion` instead. */
-export { PlainVersion as PlainFrontier } from "./substrates/plain.js"
 // Zero — default values separated from the schema
 export { scalarDefault, Zero } from "./zero.js"
 // Bind — schema + factory + strategy binding

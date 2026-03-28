@@ -7,7 +7,7 @@
 //
 // `createPlainSubstrate(store)` returns a full `Substrate<PlainVersion>`
 // with version tracking via a shadow buffer in `prepare`/`onFlush`,
-// plus `frontier`, `exportSnapshot`, `exportSince`, `importDelta`.
+// plus `version`, `exportSnapshot`, `exportSince`, `importDelta`.
 // `plainContext(store)` is a shorthand that returns just the
 // `WritableContext` — convenient for tests that don't need the
 // substrate reference.
@@ -133,7 +133,7 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
       return cachedCtx
     },
 
-    frontier(): PlainVersion {
+    version(): PlainVersion {
       return new PlainVersion(version)
     },
 

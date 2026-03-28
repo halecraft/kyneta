@@ -144,7 +144,7 @@ export class Synchronizer {
     this.#dispatch({
       type: "synchronizer/doc-ensure",
       docId: runtime.docId,
-      version: runtime.substrate.frontier().serialize(),
+      version: runtime.substrate.version().serialize(),
       mergeStrategy: runtime.strategy,
     })
   }
@@ -162,7 +162,7 @@ export class Synchronizer {
     this.#dispatch({
       type: "synchronizer/local-doc-change",
       docId,
-      version: runtime.substrate.frontier().serialize(),
+      version: runtime.substrate.version().serialize(),
     })
   }
 
@@ -461,7 +461,7 @@ export class Synchronizer {
     if (command.sinceVersion && !command.forceSnapshot) {
       try {
         const sinceVer = runtime.factory.parseVersion(command.sinceVersion)
-        const currentVersion = runtime.substrate.frontier()
+        const currentVersion = runtime.substrate.version()
         const comparison = currentVersion.compare(sinceVer)
 
         // Only attempt delta if we're strictly ahead of the requester.
@@ -495,7 +495,7 @@ export class Synchronizer {
       offerType = "snapshot"
     }
 
-    const version = runtime.substrate.frontier().serialize()
+    const version = runtime.substrate.version().serialize()
 
     this.#outboundQueue.push({
       toChannelIds: command.toChannelIds,
@@ -535,7 +535,7 @@ export class Synchronizer {
     if (runtime.strategy === "lww") {
       try {
         const incomingVersion = runtime.factory.parseVersion(command.version)
-        const currentVersion = runtime.substrate.frontier()
+        const currentVersion = runtime.substrate.version()
         const comparison = incomingVersion.compare(currentVersion)
         if (comparison === "behind" || comparison === "equal") {
           // Stale or duplicate — discard
@@ -562,7 +562,7 @@ export class Synchronizer {
     }
 
     // Notify the model of successful import
-    const newVersion = runtime.substrate.frontier().serialize()
+    const newVersion = runtime.substrate.version().serialize()
     this.#dispatch({
       type: "synchronizer/doc-imported",
       docId: command.docId,

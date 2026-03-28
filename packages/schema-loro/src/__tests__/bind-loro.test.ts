@@ -35,7 +35,7 @@ describe("bindLoro()", () => {
 
     // Create a substrate and verify it works
     const substrate = factory.create(testSchema)
-    expect(substrate.frontier().serialize()).toBeDefined()
+    expect(substrate.version().serialize()).toBeDefined()
     expect(substrate.exportSnapshot()).toBeDefined()
   })
 

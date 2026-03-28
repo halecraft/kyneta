@@ -149,34 +149,34 @@ describe("write round-trip", () => {
 // ===========================================================================
 
 describe("version tracking", () => {
-  it("frontier() returns a LoroVersion", () => {
+  it("version() returns a LoroVersion", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
-    const f = substrate.frontier()
+    const f = substrate.version()
     expect(f).toBeInstanceOf(LoroVersion)
   })
 
-  it("frontier() advances after mutations", () => {
+  it("version() advances after mutations", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
-    const v0 = substrate.frontier()
+    const v0 = substrate.version()
 
     change(doc, (d) => d.title.insert(0, "A"))
-    const v1 = substrate.frontier()
+    const v1 = substrate.version()
     expect(v0.compare(v1)).toBe("behind")
 
     change(doc, (d) => d.count.increment(1))
-    const v2 = substrate.frontier()
+    const v2 = substrate.version()
     expect(v1.compare(v2)).toBe("behind")
     expect(v0.compare(v2)).toBe("behind")
   })
 
-  it("frontier() serialize/parse round-trips", () => {
+  it("version() serialize/parse round-trips", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     change(doc, (d) => d.title.insert(0, "Hello"))
-    const f = substrate.frontier()
+    const f = substrate.version()
     const serialized = f.serialize()
     const parsed = LoroVersion.parse(serialized)
     expect(parsed.compare(f)).toBe("equal")
@@ -215,7 +215,7 @@ describe("export/import snapshot", () => {
     expect(readerB.read([{ type: "key", key: "theme" }])).toBe("dark")
   })
 
-  it("fromSnapshot creates a new epoch (frontier independent)", () => {
+  it("fromSnapshot creates a new epoch (version independent)", () => {
     const substrateA = loroSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
     change(docA, (d) => d.title.insert(0, "Hello"))
@@ -240,7 +240,7 @@ describe("delta sync", () => {
     const substrateB = loroSubstrateFactory.create(TestSchema)
     const _docB = interpretSubstrate(TestSchema, substrateB)
 
-    const sinceVV = substrateB.frontier()
+    const sinceVV = substrateB.version()
 
     // Mutate A
     change(docA, (d) => {
@@ -285,8 +285,8 @@ describe("concurrent sync", () => {
     change(docB, (d) => d.count.increment(5))
 
     // Bidirectional sync
-    const deltaAtoB = substrateA.exportSince(substrateB.frontier())
-    const deltaBtoA = substrateB.exportSince(substrateA.frontier())
+    const deltaAtoB = substrateA.exportSince(substrateB.version())
+    const deltaBtoA = substrateB.exportSince(substrateA.version())
     if (deltaAtoB) substrateB.importDelta(deltaAtoB, "sync")
     if (deltaBtoA) substrateA.importDelta(deltaBtoA, "sync")
 
@@ -310,7 +310,7 @@ describe("changefeed fires on importDelta", () => {
     const substrateB = loroSubstrateFactory.create(TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
-    const sinceVV = substrateB.frontier()
+    const sinceVV = substrateB.version()
 
     // Subscribe to B
     const received: unknown[] = []
@@ -493,7 +493,7 @@ describe("parseVersion", () => {
     const doc = interpretSubstrate(TestSchema, substrate)
     change(doc, (d) => d.title.insert(0, "Hi"))
 
-    const v = substrate.frontier()
+    const v = substrate.version()
     const serialized = v.serialize()
     const parsed = loroSubstrateFactory.parseVersion(serialized)
     expect(parsed.compare(v)).toBe("equal")

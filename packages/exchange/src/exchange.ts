@@ -19,7 +19,6 @@ import {
   type Ref,
   type Schema as SchemaNode,
   type BoundSchema,
-  type MergeStrategy,
   type FactoryBuilder,
   type SubstrateFactory,
   isBoundSchema,

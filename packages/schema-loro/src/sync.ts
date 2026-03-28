@@ -27,7 +27,7 @@ import { getSubstrate } from "./create.js"
  * @throws If `doc` was not created by `createLoroDoc` / `createLoroDocFromSnapshot`.
  */
 export function version(doc: object): LoroVersion {
-  return getSubstrate(doc).frontier()
+  return getSubstrate(doc).version()
 }
 
 // ---------------------------------------------------------------------------

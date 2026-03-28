@@ -2,8 +2,8 @@
 // interpreter stack, and the replication layer.
 //
 // `SubstratePrepare` (Phase 0) is the ground floor of the prepare/flush
-// pipeline. `Substrate<F>` extends it with versioning and transfer
-// semantics. `SubstrateFactory<F>` constructs substrates from schemas
+// pipeline. `Substrate<V>` extends it with versioning and transfer
+// semantics. `SubstrateFactory<V>` constructs substrates from schemas
 // or snapshot payloads.
 //
 // The payload type `SubstratePayload` is intentionally opaque — the
@@ -105,7 +105,7 @@ export interface SubstratePayload {
 }
 
 // ---------------------------------------------------------------------------
-// Substrate<F> — state + versioning + transfer
+// Substrate<V> — state + versioning + transfer
 // ---------------------------------------------------------------------------
 
 /**
@@ -127,7 +127,7 @@ export interface SubstratePayload {
  * the doc reference. Within a substrate lifetime, all transitions are
  * deltas via `Changeset`. Between lifetimes, there is no continuity.
  */
-export interface Substrate<F extends Version = Version>
+export interface Substrate<V extends Version = Version>
   extends SubstratePrepare {
   /** The readable store for the interpreter (from SubstratePrepare). */
   readonly store: StoreReader
@@ -136,7 +136,7 @@ export interface Substrate<F extends Version = Version>
   context(): WritableContext
 
   /** Current version marker. */
-  frontier(): F
+  version(): V
 
   /**
    * Full state — sufficient to construct an equivalent substrate from
@@ -157,7 +157,7 @@ export interface Substrate<F extends Version = Version>
    * For PlainSubstrate: JSON-serialized Op[] from the version log.
    * For LoroSubstrate: doc.export({ mode: "update", from: vv }).
    */
-  exportSince(since: F): SubstratePayload | null
+  exportSince(since: V): SubstratePayload | null
 
   /**
    * Apply a delta payload to this live substrate. The payload must have
@@ -173,15 +173,15 @@ export interface Substrate<F extends Version = Version>
 }
 
 // ---------------------------------------------------------------------------
-// SubstrateFactory<F> — construction from schema or snapshot
+// SubstrateFactory<V> — construction from schema or snapshot
 // ---------------------------------------------------------------------------
 
 /**
  * Factory for constructing substrates. Each substrate type provides one.
  */
-export interface SubstrateFactory<F extends Version = Version> {
+export interface SubstrateFactory<V extends Version = Version> {
   /** Create a fresh substrate from a schema and optional seed. */
-  create(schema: SchemaNode, seed?: Record<string, unknown>): Substrate<F>
+  create(schema: SchemaNode, seed?: Record<string, unknown>): Substrate<V>
 
   /**
    * Construct a new substrate from a snapshot payload.
@@ -196,8 +196,8 @@ export interface SubstrateFactory<F extends Version = Version> {
    * For PlainSubstrate: parses JSON state image, uses as seed.
    * For LoroSubstrate: LoroDoc.fromSnapshot(bytes).
    */
-  fromSnapshot(payload: SubstratePayload, schema: SchemaNode): Substrate<F>
+  fromSnapshot(payload: SubstratePayload, schema: SchemaNode): Substrate<V>
 
   /** Deserialize a version from its string representation. */
-  parseVersion(serialized: string): F
+  parseVersion(serialized: string): V
 }

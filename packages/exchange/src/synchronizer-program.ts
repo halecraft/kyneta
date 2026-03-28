@@ -40,7 +40,7 @@ import type { Permissions } from "./permissions.js"
  */
 export type DocEntry = {
   docId: DocId
-  /** Serialized version from substrate.frontier().serialize() */
+  /** Serialized version from substrate.version().serialize() */
   version: string
   /** The merge strategy for this document's substrate */
   mergeStrategy: MergeStrategy

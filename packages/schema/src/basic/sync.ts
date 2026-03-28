@@ -22,7 +22,7 @@ import { getSubstrate } from "./create.js"
  * @throws If `doc` was not created by `createDoc` / `createDocFromSnapshot`.
  */
 export function version(doc: object): number {
-  return getSubstrate(doc).frontier().value
+  return getSubstrate(doc).version().value
 }
 
 // ---------------------------------------------------------------------------

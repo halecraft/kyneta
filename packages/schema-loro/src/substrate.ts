@@ -148,7 +148,7 @@ export function createLoroSubstrate(
       return cachedCtx
     },
 
-    frontier(): LoroVersion {
+    version(): LoroVersion {
       return new LoroVersion(doc.version())
     },
 

@@ -49,7 +49,7 @@ function lwwFactoryBuilder(_ctx: { peerId: string }) {
           if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
           return cachedCtx
         },
-        frontier: () => currentVersion,
+        version: () => currentVersion,
         exportSnapshot: () => inner.exportSnapshot(),
         exportSince: () => inner.exportSnapshot(),
         importDelta(payload: SubstratePayload, origin?: string) {
@@ -75,7 +75,7 @@ function lwwFactoryBuilder(_ctx: { peerId: string }) {
           if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
           return cachedCtx
         },
-        frontier: () => currentVersion,
+        version: () => currentVersion,
         exportSnapshot: () => inner.exportSnapshot(),
         exportSince: () => inner.exportSnapshot(),
         importDelta(payload: SubstratePayload, origin?: string) {

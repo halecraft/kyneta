@@ -14,7 +14,7 @@ The exchange operates at the boundary between three algebras defined by `@kyneta
 | **State** (Substrate) | State management, merge semantics | Substrate-native |
 | **Replication** (Exchange) | Peer-to-peer data transfer | `SubstratePayload`, `Version` |
 
-The exchange is the active sync algebra. The substrate is the passive state algebra. They compose at the boundary defined by five substrate methods: `frontier()`, `exportSnapshot()`, `exportSince()`, `importDelta()`, and `context()`.
+The exchange is the active sync algebra. The substrate is the passive state algebra. They compose at the boundary defined by five substrate methods: `version()`, `exportSnapshot()`, `exportSince()`, `importDelta()`, and `context()`.
 
 **Key invariant:** The exchange never inspects `SubstratePayload` contents. It treats payloads as opaque blobs with an encoding hint (`"json" | "binary"`). Only the substrate knows how to produce and consume them.
 

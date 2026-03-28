@@ -141,55 +141,55 @@ describe("PlainSubstrate lifecycle", () => {
     expect(snapshotOf(substrate)).toEqual(defaults)
   })
 
-  it("frontier() starts at 0 for a freshly created substrate", () => {
+  it("version() starts at 0 for a freshly created substrate", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
-    const f = substrate.frontier()
+    const f = substrate.version()
     expect(f.value).toBe(0)
     expect(f.serialize()).toBe("0")
   })
 
-  it("frontier() increments after mutations via the writable context", () => {
+  it("version() increments after mutations via the writable context", () => {
     const substrate = plainSubstrateFactory.create(TestSchema, { title: "" })
     const doc = interpretSubstrate(substrate)
 
-    expect(substrate.frontier().value).toBe(0)
+    expect(substrate.version().value).toBe(0)
 
     // Each change() call triggers one flush cycle → one version bump
     change(doc, d => d.title.insert(0, "Hi"))
-    expect(substrate.frontier().value).toBe(1)
+    expect(substrate.version().value).toBe(1)
 
     change(doc, d => d.count.increment(5))
-    expect(substrate.frontier().value).toBe(2)
+    expect(substrate.version().value).toBe(2)
 
     // A multi-op transaction is a single flush cycle → one version bump
     change(doc, d => {
       d.title.insert(2, " there")
       d.count.increment(3)
     })
-    expect(substrate.frontier().value).toBe(3)
+    expect(substrate.version().value).toBe(3)
   })
 
-  it("frontier() does not increment for empty transactions", () => {
+  it("version() does not increment for empty transactions", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    expect(substrate.frontier().value).toBe(0)
+    expect(substrate.version().value).toBe(0)
 
     // applyChanges with empty array should not bump version
     applyChanges(doc, [])
-    expect(substrate.frontier().value).toBe(0)
+    expect(substrate.version().value).toBe(0)
   })
 
-  it("frontier() is up-to-date inside a subscribe callback (notify-after-commit)", () => {
+  it("version() is up-to-date inside a subscribe callback (notify-after-commit)", () => {
     const substrate = plainSubstrateFactory.create(TestSchema, { title: "" })
     const doc = interpretSubstrate(substrate)
 
-    expect(substrate.frontier().value).toBe(0)
+    expect(substrate.version().value).toBe(0)
 
-    // Track the frontier value observed inside the subscriber
+    // Track the version value observed inside the subscriber
     const observedVersions: number[] = []
     subscribe(doc, () => {
-      observedVersions.push(substrate.frontier().value)
+      observedVersions.push(substrate.version().value)
     })
 
     change(doc, d => d.title.insert(0, "A"))
@@ -213,7 +213,7 @@ describe("PlainSubstrate lifecycle", () => {
     const opsPerNotification: Op[][] = []
     let prevVersion = 0
     subscribe(doc, () => {
-      const currentVer = substrate.frontier().value
+      const currentVer = substrate.version().value
       const payload = substrate.exportSince(new PlainVersion(prevVersion))
       if (payload) {
         opsPerNotification.push(JSON.parse(payload.data as string) as Op[])
@@ -253,29 +253,29 @@ describe("PlainSubstrate lifecycle", () => {
     expect(parsed.count).toBe(10)
   })
 
-  it("exportSince(frontier) returns null when frontier is ahead", () => {
+  it("exportSince(version) returns null when version is ahead", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const futureVersion = new PlainVersion(999)
     expect(substrate.exportSince(futureVersion)).toBeNull()
   })
 
-  it("exportSince(frontier) returns empty ops when frontier matches current version", () => {
+  it("exportSince(version) returns empty ops when version matches current version", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
     change(doc, d => d.count.increment(1))
 
-    const payload = substrate.exportSince(substrate.frontier())
+    const payload = substrate.exportSince(substrate.version())
     expect(payload).not.toBeNull()
     const ops = JSON.parse(payload?.data as string)
     expect(ops).toEqual([])
   })
 
-  it("exportSince(frontier) returns ops when frontier is behind", () => {
+  it("exportSince(version) returns ops when version is behind", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    const f0 = substrate.frontier()
+    const f0 = substrate.version()
     change(doc, d => d.title.insert(0, "A"))
     change(doc, d => d.count.increment(1))
 
@@ -292,16 +292,16 @@ describe("PlainSubstrate lifecycle", () => {
     expect(types).toContain("increment")
   })
 
-  it("exportSince(partialFrontier) returns only the missing ops", () => {
+  it("exportSince(partialVersion) returns only the missing ops", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
     change(doc, d => d.title.insert(0, "A"))
-    const f1 = substrate.frontier()
+    const f1 = substrate.version()
     expect(f1.value).toBe(1)
 
     change(doc, d => d.count.increment(1))
-    expect(substrate.frontier().value).toBe(2)
+    expect(substrate.version().value).toBe(2)
 
     // exportSince(f1) should only contain the second mutation
     const payload = substrate.exportSince(f1)!
@@ -354,7 +354,7 @@ describe("Round-trip replication", () => {
     })
     const _docB = interpretSubstrate(substrateB)
 
-    const f0 = substrateA.frontier()
+    const f0 = substrateA.version()
 
     // Mutate A
     change(docA, d => {
@@ -380,7 +380,7 @@ describe("Round-trip replication", () => {
     const substrateB = plainSubstrateFactory.create(TestSchema)
     const docB = interpretSubstrate(substrateB)
 
-    const f0 = substrateA.frontier()
+    const f0 = substrateA.version()
 
     // Mutate A
     change(docA, d => d.title.insert(0, "Hello"))
@@ -400,36 +400,36 @@ describe("Round-trip replication", () => {
     }
   })
 
-  it("importDelta increments the frontier", () => {
+  it("importDelta increments the version", () => {
     const substrateA = plainSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(substrateA)
 
     const substrateB = plainSubstrateFactory.create(TestSchema)
     interpretSubstrate(substrateB) // wire up the interpreter tree
 
-    const f0 = substrateA.frontier()
+    const f0 = substrateA.version()
 
     change(docA, d => d.count.increment(1))
     change(docA, d => d.count.increment(2))
 
-    expect(substrateB.frontier().value).toBe(0)
+    expect(substrateB.version().value).toBe(0)
 
     const delta = substrateA.exportSince(f0)!
     substrateB.importDelta(delta)
 
     // importDelta applies all ops in a single executeBatch call,
     // which triggers one prepare×N + flush×1 cycle → one version bump
-    expect(substrateB.frontier().value).toBe(1)
+    expect(substrateB.version().value).toBe(1)
   })
 
-  it("importDelta with empty ops does not increment the frontier", () => {
+  it("importDelta with empty ops does not increment the version", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     interpretSubstrate(substrate)
 
     const emptyPayload: SubstratePayload = { encoding: "json", data: "[]" }
     substrate.importDelta(emptyPayload)
 
-    expect(substrate.frontier().value).toBe(0)
+    expect(substrate.version().value).toBe(0)
   })
 })
 
@@ -438,26 +438,26 @@ describe("Round-trip replication", () => {
 // ===========================================================================
 
 describe("Epoch boundaries", () => {
-  it("fromSnapshot creates a fresh epoch: frontier at 0, store matches source", () => {
+  it("fromSnapshot creates a fresh epoch: version at 0, store matches source", () => {
     const substrateA = plainSubstrateFactory.create(TestSchema, {
       title: "Genesis",
       theme: "light",
     })
     const docA = interpretSubstrate(substrateA)
 
-    // Apply several mutations to advance the frontier
+    // Apply several mutations to advance the version
     change(docA, d => d.title.insert(7, " v2"))
     change(docA, d => d.count.increment(100))
     change(docA, d => d.items.push({ name: "Task", done: false }))
 
-    expect(substrateA.frontier().value).toBe(3)
+    expect(substrateA.version().value).toBe(3)
 
     // Export snapshot and create a new substrate
     const snapshot = substrateA.exportSnapshot()
     const substrateB = plainSubstrateFactory.fromSnapshot(snapshot, TestSchema)
 
-    // New substrate starts at frontier 0 — it's a fresh epoch
-    expect(substrateB.frontier().value).toBe(0)
+    // New substrate starts at version 0 — it's a fresh epoch
+    expect(substrateB.version().value).toBe(0)
 
     // But the snapshot matches the source's current state
     const snapA = snapshotOf(substrateA)
@@ -482,7 +482,7 @@ describe("Epoch boundaries", () => {
 
     // Mutate the new substrate
     change(docB, d => d.title.insert(6, "!"))
-    expect(substrateB.frontier().value).toBe(1)
+    expect(substrateB.version().value).toBe(1)
     expect(snapshotOf(substrateB).title).toBe("Source!")
 
     // Export from the new substrate works
