@@ -449,3 +449,109 @@ describe("Heterogeneous documents", () => {
     expect(textB.text()).toBe("collaborative text")
   })
 })
+
+// ---------------------------------------------------------------------------
+// Multi-hop relay — three-peer topology (A ↔ Hub ↔ B)
+// ---------------------------------------------------------------------------
+
+describe("Multi-hop relay (three-peer topology)", () => {
+  it("causal: mutation on A propagates through Hub to B", async () => {
+    // Two separate bridges: Alice↔Hub and Hub↔Bob
+    const bridgeAH = new Bridge()
+    const bridgeHB = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
+    })
+
+    const exchangeHub = createExchange({
+      identity: { peerId: "hub" },
+      adapters: [
+        new BridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
+        new BridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
+      ],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
+    })
+
+    // All three open the same doc
+    const docA = exchangeA.get("doc-1", LoroDoc)
+    const docHub = exchangeHub.get("doc-1", LoroDoc)
+    const docB = exchangeB.get("doc-1", LoroDoc)
+
+    // Let initial handshakes settle
+    await drain()
+
+    // Alice inserts text
+    change(docA, (d: any) => {
+      d.title.insert(0, "hello from alice")
+    })
+
+    // Drain enough rounds for A→Hub→B relay
+    await drain(40)
+
+    // Hub should have Alice's text (direct peer)
+    expect(docHub.title()).toBe("hello from alice")
+    // Bob should have Alice's text (relayed through Hub)
+    expect(docB.title()).toBe("hello from alice")
+  })
+
+  it("sequential: mutation on A propagates through Hub to B", async () => {
+    const bridgeAH = new Bridge()
+    const bridgeHB = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
+    })
+
+    const exchangeHub = createExchange({
+      identity: { peerId: "hub" },
+      adapters: [
+        new BridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
+        new BridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
+      ],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
+    })
+
+    // Hub creates the doc with initial state (sequential needs a populated source)
+    const docHub = exchangeHub.get("doc-1", SequentialDoc)
+    change(docHub, (d: any) => {
+      d.title.set("initial")
+      d.count.set(0)
+    })
+
+    const docA = exchangeA.get("doc-1", SequentialDoc)
+    const docB = exchangeB.get("doc-1", SequentialDoc)
+
+    // Let initial sync settle
+    await drain(40)
+
+    expect(docA.title()).toBe("initial")
+    expect(docB.title()).toBe("initial")
+
+    // Alice mutates
+    change(docA, (d: any) => {
+      d.title.set("updated by alice")
+      d.count.set(99)
+    })
+
+    // Drain for A→Hub→B relay
+    await drain(40)
+
+    // Hub should have Alice's mutation
+    expect(docHub.title()).toBe("updated by alice")
+    expect(docHub.count()).toBe(99)
+    // Bob should have Alice's mutation (relayed through Hub)
+    expect(docB.title()).toBe("updated by alice")
+    expect(docB.count()).toBe(99)
+  })
+})

@@ -28,6 +28,12 @@ const bobIdentity: PeerIdentityDetails = {
   type: "user",
 }
 
+const carolIdentity: PeerIdentityDetails = {
+  peerId: "carol",
+  name: "Carol",
+  type: "user",
+}
+
 function makeUpdate() {
   return createSynchronizerUpdate({
     permissions: createPermissions(),
@@ -805,6 +811,154 @@ describe("synchronizer-program", () => {
       if (docSync.status === "synced") {
         expect(docSync.lastKnownVersion).toBe("v1")
       }
+    })
+
+    it("causal: relays to other synced peers, excluding sender", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Establish two peers: Bob (channel 1) and Carol (channel 2)
+      let m = establishChannel(update, model, 1, bobIdentity)
+      m = establishChannel(update, m, 2, carolIdentity)
+
+      // Register doc as causal
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "v0",
+          mergeStrategy: "causal",
+        },
+        m,
+      )
+
+      // Mark both peers as synced for this doc
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "doc-1",
+          version: "v1",
+          fromPeerId: "bob",
+        },
+        m,
+      )
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "doc-1",
+          version: "v2",
+          fromPeerId: "carol",
+        },
+        m,
+      )
+
+      // Now the actual test: import from Bob at v3
+      const [_m2, cmd] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "doc-1",
+          version: "v3",
+          fromPeerId: "bob",
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const offerCmd = commands.find((c) => c.type === "cmd/send-offer")
+      expect(offerCmd).toBeDefined()
+      if (offerCmd && offerCmd.type === "cmd/send-offer") {
+        expect(offerCmd.docId).toBe("doc-1")
+        // Should target Carol's channel, NOT Bob's
+        expect(offerCmd.toChannelIds).toContain(2)
+        expect(offerCmd.toChannelIds).not.toContain(1)
+        // sinceVersion must be the pre-import version (v2), not the new version (v3)
+        expect(offerCmd.sinceVersion).toBe("v2")
+        expect(offerCmd.forceSnapshot).toBeFalsy()
+      }
+    })
+
+    it("lww: relays to all established peers, excluding sender", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Establish two peers: Bob (channel 1) and Carol (channel 2)
+      let m = establishChannel(update, model, 1, bobIdentity)
+      m = establishChannel(update, m, 2, carolIdentity)
+
+      // Register doc as lww
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "1000",
+          mergeStrategy: "lww",
+        },
+        m,
+      )
+
+      // Import from Bob — LWW broadcasts to ALL established, minus sender
+      const [_m2, cmd] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "doc-1",
+          version: "2000",
+          fromPeerId: "bob",
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const offerCmd = commands.find((c) => c.type === "cmd/send-offer")
+      expect(offerCmd).toBeDefined()
+      if (offerCmd && offerCmd.type === "cmd/send-offer") {
+        expect(offerCmd.docId).toBe("doc-1")
+        // Should target Carol's channel, NOT Bob's
+        expect(offerCmd.toChannelIds).toContain(2)
+        expect(offerCmd.toChannelIds).not.toContain(1)
+        expect(offerCmd.forceSnapshot).toBe(true)
+        expect(offerCmd.sinceVersion).toBeUndefined()
+      }
+    })
+
+    it("no other synced peers returns no command", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Only Bob established — no other peers
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "v0",
+          mergeStrategy: "causal",
+        },
+        m,
+      )
+
+      // Mark Bob as synced
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "doc-1",
+          version: "v1",
+          fromPeerId: "bob",
+        },
+        m,
+      )
+
+      // Import from Bob again — he's the only peer, so no relay target
+      const [_m2, cmd] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "doc-1",
+          version: "v2",
+          fromPeerId: "bob",
+        },
+        m,
+      )
+
+      expect(cmd).toBeUndefined()
     })
   })
 

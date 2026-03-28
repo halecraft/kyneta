@@ -222,7 +222,7 @@ export function createSynchronizerUpdate({
         return handleDocDelete(msg, model)
 
       case "synchronizer/doc-imported":
-        return handleDocImported(msg, model)
+        return handleDocImported(msg, model, permissions)
 
       case "synchronizer/channel-receive-message":
         return handleChannelReceiveMessage(msg, model, permissions)
@@ -402,9 +402,22 @@ function handleDocImported(
     fromPeerId: PeerId
   },
   model: SynchronizerModel,
+  permissions: Permissions,
 ): [SynchronizerModel, Command?] {
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
+
+  // Relay to other peers (multi-hop propagation).
+  // Must read docEntry.version BEFORE updating — this is the "since" version
+  // for delta export, so peers receive exactly the imported ops.
+  const cmd = buildRelayPush(
+    msg.docId,
+    docEntry,
+    msg.version,
+    model,
+    permissions,
+    msg.fromPeerId,
+  )
 
   // Update version
   const documents = new Map(model.documents)
@@ -423,7 +436,7 @@ function handleDocImported(
     peers.set(msg.fromPeerId, { ...peerState, docSyncStates })
   }
 
-  return [{ ...model, documents, peers }]
+  return [{ ...model, documents, peers }, cmd]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -804,6 +817,51 @@ function handleOffer(
 // Local change push — merge-strategy dispatch
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
+/**
+ * Build a relay push command for imported changes — forward to all synced
+ * peers EXCEPT the sender. Mirrors buildLocalChangePush but with an
+ * excludePeerId parameter to prevent echo.
+ */
+function buildRelayPush(
+  docId: DocId,
+  docEntry: DocEntry,
+  _newVersion: string,
+  model: SynchronizerModel,
+  _permissions: Permissions,
+  excludePeerId: PeerId,
+): Command | undefined {
+  switch (docEntry.mergeStrategy) {
+    case "causal":
+    case "sequential": {
+      // Push delta offer to synced peers, excluding the sender
+      const channelIds = getSyncedPeerChannels(model, docId, excludePeerId)
+      if (channelIds.length === 0) return undefined
+
+      return {
+        type: "cmd/send-offer",
+        docId,
+        toChannelIds: channelIds,
+        sinceVersion: docEntry.version, // delta since pre-import version
+        forceSnapshot: false,
+      }
+    }
+
+    case "lww": {
+      // Broadcast snapshot to ALL established peers, excluding the sender
+      const channelIds = getEstablishedChannelIds(model, excludePeerId)
+      if (channelIds.length === 0) return undefined
+
+      return {
+        type: "cmd/send-offer",
+        docId,
+        toChannelIds: channelIds,
+        // No sinceVersion — always snapshot for LWW
+        forceSnapshot: true,
+      }
+    }
+  }
+}
+
 function buildLocalChangePush(
   docId: DocId,
   docEntry: DocEntry,
@@ -847,10 +905,14 @@ function buildLocalChangePush(
 // Helpers
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-function getEstablishedChannelIds(model: SynchronizerModel): ChannelId[] {
+function getEstablishedChannelIds(
+  model: SynchronizerModel,
+  excludePeerId?: PeerId,
+): ChannelId[] {
   const ids: ChannelId[] = []
   for (const [id, channel] of model.channels) {
     if (channel.type === "established") {
+      if (excludePeerId && channel.peerId === excludePeerId) continue
       ids.push(id)
     }
   }
@@ -877,9 +939,11 @@ function getChannelIdsByKind(
 function getSyncedPeerChannels(
   model: SynchronizerModel,
   docId: DocId,
+  excludePeerId?: PeerId,
 ): ChannelId[] {
   const ids: ChannelId[] = []
-  for (const [_peerId, peerState] of model.peers) {
+  for (const [peerId, peerState] of model.peers) {
+    if (excludePeerId && peerId === excludePeerId) continue
     const docSync = peerState.docSyncStates.get(docId)
     if (
       docSync &&

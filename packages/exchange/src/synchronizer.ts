@@ -469,6 +469,13 @@ export class Synchronizer {
         const currentVersion = runtime.substrate.version()
         const comparison = currentVersion.compare(sinceVer)
 
+        // If we're behind the requester, we have nothing useful to send —
+        // they already have everything we have (and more). Sending our
+        // older state would cause the peer to regress.
+        if (comparison === "behind") {
+          return
+        }
+
         // Only attempt delta if we're strictly ahead of the requester.
         // If versions are equal, the requester has the same version counter
         // but may have different content (e.g. one was seeded, one wasn't).
@@ -488,7 +495,7 @@ export class Synchronizer {
             }
           }
         }
-        // If "behind" or "equal", fall through to snapshot
+        // If "equal", fall through to snapshot
       } catch {
         // Fall through to snapshot
       }
