@@ -10,9 +10,11 @@
     "@kyneta/cast": "workspace:^",
     "@kyneta/exchange": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
+    "@kyneta/yjs-schema": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@kyneta/websocket-transport": "workspace:^",
-    "loro-crdt": "^1.10.0"
+    "loro-crdt": "^1.10.0",
+    "yjs": "^13.6.30"
   },
   "devDependencies": {
     "@types/ws": "^8",

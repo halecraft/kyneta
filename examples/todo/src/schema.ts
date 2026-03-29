@@ -12,9 +12,7 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { LoroSchema, Schema } from "@kyneta/schema"
-import { bindLoro } from "@kyneta/loro-schema"
-import type { Ref } from "@kyneta/schema"
+import { LoroSchema, Schema, type Ref } from "@kyneta/schema"
 
 export const TodoSchema = LoroSchema.doc({
   todos: Schema.list(
@@ -26,7 +24,12 @@ export const TodoSchema = LoroSchema.doc({
 })
 
 /** BoundSchema: Loro substrate + causal merge strategy. */
-export const TodoDoc = bindLoro(TodoSchema)
+// import { bindLoro } from "@kyneta/loro-schema"
+// export const TodoDoc = bindLoro(TodoSchema)
+
+/** BoundSchema: Yjs substrate + causal merge strategy. */
+import { bindYjs } from "@kyneta/yjs-schema"
+export const TodoDoc = bindYjs(TodoSchema)
 
 /** Full-stack ref type: read + write + transact + changefeed. */
 export type TodoDocRef = Ref<typeof TodoSchema>

@@ -69,9 +69,15 @@ importers:
       '@kyneta/websocket-transport':
         specifier: workspace:^
         version: link:../../packages/exchange/transports/websocket
+      '@kyneta/yjs-schema':
+        specifier: workspace:^
+        version: link:../../packages/schema/backends/yjs
       loro-crdt:
         specifier: ^1.10.0
         version: 1.10.8
+      yjs:
+        specifier: ^13.6.30
+        version: 13.6.30
     devDependencies:
       '@types/ws':
         specifier: ^8
