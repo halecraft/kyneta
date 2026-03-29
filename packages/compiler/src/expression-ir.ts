@@ -38,11 +38,13 @@ export type ExpressionIR =
   | CallNode
   | BinaryNode
   | UnaryNode
+  | TernaryNode
   | TemplateNode
   | LiteralNode
   | IdentifierNode
   | BindingRefNode
   | SnapshotNode
+  | ElementAccessNode
   | RawNode
 
 // -----------------------------------------------------------------------------
@@ -229,6 +231,32 @@ export interface RawNode {
   readonly source: string
 }
 
+/**
+ * Ternary (conditional) expression: `condition ? whenTrue : whenFalse`.
+ *
+ * All three sub-expressions participate in reactivity — if any contains
+ * a changefeed ref, the whole ternary is reactive.
+ */
+export interface TernaryNode {
+  readonly kind: "ternary"
+  readonly condition: ExpressionIR
+  readonly whenTrue: ExpressionIR
+  readonly whenFalse: ExpressionIR
+}
+
+/**
+ * Element (bracket) access expression: `object[index]`.
+ *
+ * Both sub-expressions participate in reactivity. The object may be a
+ * changefeed being consumed (needs `refRead` wrapping by the builder),
+ * and the index may also be reactive.
+ */
+export interface ElementAccessNode {
+  readonly kind: "element-access"
+  readonly object: ExpressionIR
+  readonly index: ExpressionIR
+}
+
 // =============================================================================
 // Factory Functions
 // =============================================================================
@@ -318,6 +346,23 @@ export function raw(source: string): RawNode {
   return { kind: "raw", source }
 }
 
+/** Create a `TernaryNode` — `condition ? whenTrue : whenFalse`. */
+export function ternary(
+  condition: ExpressionIR,
+  whenTrue: ExpressionIR,
+  whenFalse: ExpressionIR,
+): TernaryNode {
+  return { kind: "ternary", condition, whenTrue, whenFalse }
+}
+
+/** Create an `ElementAccessNode` — `object[index]`. */
+export function elementAccess(
+  object: ExpressionIR,
+  index: ExpressionIR,
+): ElementAccessNode {
+  return { kind: "element-access", object, index }
+}
+
 // =============================================================================
 // Type Guards
 // =============================================================================
@@ -382,6 +427,16 @@ export function isIdentifier(node: ExpressionIR): node is IdentifierNode {
 /** Check if the node is a `RawNode`. */
 export function isRaw(node: ExpressionIR): node is RawNode {
   return node.kind === "raw"
+}
+
+/** Check if the node is a `TernaryNode`. */
+export function isTernary(node: ExpressionIR): node is TernaryNode {
+  return node.kind === "ternary"
+}
+
+/** Check if the node is an `ElementAccessNode`. */
+export function isElementAccess(node: ExpressionIR): node is ElementAccessNode {
+  return node.kind === "element-access"
 }
 
 // =============================================================================
@@ -479,6 +534,19 @@ export function extractDeps(expr: ExpressionIR): Dependency[] {
         break
       }
 
+      case "ternary": {
+        collect(node.condition)
+        collect(node.whenTrue)
+        collect(node.whenFalse)
+        break
+      }
+
+      case "element-access": {
+        collect(node.object)
+        collect(node.index)
+        break
+      }
+
       case "literal":
       case "identifier":
       case "raw":
@@ -547,6 +615,12 @@ export function isReactive(expr: ExpressionIR): boolean {
     case "template":
       return expr.parts.some(isReactive)
 
+    case "ternary":
+      return isReactive(expr.condition) || isReactive(expr.whenTrue) || isReactive(expr.whenFalse)
+
+    case "element-access":
+      return isReactive(expr.object) || isReactive(expr.index)
+
     case "literal":
     case "identifier":
     case "raw":
@@ -592,6 +666,9 @@ const BINARY_PRECEDENCE: Record<string, number> = {
   "**": 14,
 }
 
+/** Precedence level for ternary conditional (between assignment and ??). */
+const TERNARY_PRECEDENCE = 2
+
 /** Precedence level for prefix/postfix unary operators (above all binary). */
 const UNARY_PRECEDENCE = 15
 
@@ -634,8 +711,12 @@ function isAtomicExpr(node: ExpressionIR): boolean {
       return true
     case "binary":
     case "unary":
+    case "ternary":
     case "raw":
       return false
+    case "element-access":
+      // Bracket access binds as tightly as dot access — atomic
+      return true
     case "binding-ref":
       // A binding-ref with expandBindings=false renders as an identifier (atomic),
       // but with expandBindings=true it renders as the inner expression.
@@ -833,6 +914,22 @@ function renderWithPrec(
     case "identifier":
       return expr.name
 
+    case "ternary": {
+      // Ternary: condition ? whenTrue : whenFalse
+      // Precedence 2 (between assignment=1 and ??=3), right-associative.
+      // Branches are delimited by ? and : — reset to precedence 0.
+      const condStr = renderWithPrec(expr.condition, ctx, TERNARY_PRECEDENCE, "left")
+      const trueStr = renderWithPrec(expr.whenTrue, ctx, 0, "none")
+      const falseStr = renderWithPrec(expr.whenFalse, ctx, 0, "none")
+      const result = `${condStr} ? ${trueStr} : ${falseStr}`
+      return parentPrec > TERNARY_PRECEDENCE ? `(${result})` : result
+    }
+
+    case "element-access":
+      // Bracket access: object[index]. Atomic like property-access.
+      // Object in member position, index inside [] resets precedence.
+      return `${renderAtomic(expr.object, ctx)}[${renderWithPrec(expr.index, ctx, 0, "none")}]`
+
     case "raw":
       // Raw source text is opaque — we can't determine its precedence.
       // Wrap conservatively when in a precedence-sensitive position
@@ -958,5 +1055,11 @@ export function renderRefSource(expr: ExpressionIR): string {
 
     case "template":
       return "`...`"
+
+    case "ternary":
+      return `${renderRefSource(expr.condition)} ? ${renderRefSource(expr.whenTrue)} : ${renderRefSource(expr.whenFalse)}`
+
+    case "element-access":
+      return `${renderRefSource(expr.object)}[${renderRefSource(expr.index)}]`
   }
 }

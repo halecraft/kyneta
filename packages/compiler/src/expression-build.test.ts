@@ -591,6 +591,87 @@ describe("buildExpressionIR", () => {
   })
 
   // ===========================================================================
+  // Ternary expressions
+  // ===========================================================================
+
+  describe("Ternary expressions", () => {
+    it("non-reactive ternary expression", () => {
+      const ir = buildFromSource(
+        project,
+        `a ? b : c`,
+        `declare const a: boolean; declare const b: string; declare const c: string`,
+      )
+      expect(ir.kind).toBe("ternary")
+      if (ir.kind === "ternary") {
+        expect(ir.condition.kind).toBe("identifier")
+        expect(ir.whenTrue.kind).toBe("identifier")
+        expect(ir.whenFalse.kind).toBe("identifier")
+      }
+    })
+
+    it("ternary with changefeed condition → auto-read wrapping", () => {
+      const ir = buildFromSource(
+        project,
+        `recipe.vegetarian ? "yes" : "no"`,
+        `declare const recipe: RecipeRef`,
+      )
+      expect(ir.kind).toBe("ternary")
+      if (ir.kind === "ternary") {
+        expect(ir.condition.kind).toBe("ref-read")
+        expect(ir.whenTrue.kind).toBe("literal")
+        expect(ir.whenFalse.kind).toBe("literal")
+      }
+    })
+
+    it("ternary with changefeed in branch → auto-read wrapping", () => {
+      const ir = buildFromSource(
+        project,
+        `flag ? recipe.name : fallback`,
+        `declare const recipe: RecipeRef; declare const flag: boolean; declare const fallback: string`,
+      )
+      expect(ir.kind).toBe("ternary")
+      if (ir.kind === "ternary") {
+        expect(ir.condition.kind).toBe("identifier")
+        expect(ir.whenTrue.kind).toBe("ref-read")
+        expect(ir.whenFalse.kind).toBe("identifier")
+      }
+    })
+  })
+
+  // ===========================================================================
+  // Element access expressions
+  // ===========================================================================
+
+  describe("Element access expressions", () => {
+    it("non-reactive element access", () => {
+      const ir = buildFromSource(
+        project,
+        `arr[0]`,
+        `declare const arr: string[]`,
+      )
+      expect(ir.kind).toBe("element-access")
+      if (ir.kind === "element-access") {
+        expect(ir.object.kind).toBe("identifier")
+        expect(ir.index.kind).toBe("literal")
+      }
+    })
+
+    it("element access on changefeed object → auto-read wrapping", () => {
+      const ir = buildFromSource(
+        project,
+        `doc.recipes[0]`,
+        `declare const doc: RecipeBookDoc`,
+      )
+      expect(ir.kind).toBe("element-access")
+      if (ir.kind === "element-access") {
+        // doc.recipes is a ListRef (changefeed) consumed for a non-changefeed element
+        expect(ir.object.kind).toBe("ref-read")
+        expect(ir.index.kind).toBe("literal")
+      }
+    })
+  })
+
+  // ===========================================================================
   // Unary expressions
   // ===========================================================================
 
@@ -1198,6 +1279,17 @@ describe("buildExpressionIR", () => {
       expect(sources).toEqual(["recipe.name", "recipe.vegetarian"])
     })
 
+    it("ternary with reactive condition → deps include the ref source", () => {
+      const ir = buildFromSource(
+        project,
+        `recipe.vegetarian ? "yes" : "no"`,
+        `declare const recipe: RecipeRef`,
+      )
+      const deps = extractDeps(ir)
+      expect(deps).toHaveLength(1)
+      expect(deps[0].source).toBe("recipe.vegetarian")
+    })
+
     it("non-reactive expression → 0 deps", () => {
       const ir = buildFromSource(project, `"hello".toLowerCase()`)
       const deps = extractDeps(ir)
@@ -1253,6 +1345,24 @@ describe("buildExpressionIR", () => {
         scope,
       )
       expect(isReactive(ir)).toBe(true)
+    })
+
+    it("ternary with reactive condition is reactive", () => {
+      const ir = buildFromSource(
+        project,
+        `recipe.vegetarian ? "yes" : "no"`,
+        `declare const recipe: RecipeRef`,
+      )
+      expect(isReactive(ir)).toBe(true)
+    })
+
+    it("non-reactive ternary is not reactive", () => {
+      const ir = buildFromSource(
+        project,
+        `flag ? "a" : "b"`,
+        `declare const flag: boolean`,
+      )
+      expect(isReactive(ir)).toBe(false)
     })
 
     it("non-reactive expression is not reactive", () => {
@@ -1364,6 +1474,26 @@ describe("buildExpressionIR", () => {
       )
       const source = renderExpression(ir, noExpand)
       expect(source).toBe("!veggieOnly()")
+    })
+
+    it("ternary with reactive condition renders with auto-read", () => {
+      const ir = buildFromSource(
+        project,
+        `recipe.vegetarian ? "yes" : "no"`,
+        `declare const recipe: RecipeRef`,
+      )
+      const source = renderExpression(ir, noExpand)
+      expect(source).toBe('recipe.vegetarian() ? "yes" : "no"')
+    })
+
+    it("element access renders with brackets", () => {
+      const ir = buildFromSource(
+        project,
+        `arr[0]`,
+        `declare const arr: string[]`,
+      )
+      const source = renderExpression(ir, noExpand)
+      expect(source).toBe("arr[0]")
     })
   })
 })

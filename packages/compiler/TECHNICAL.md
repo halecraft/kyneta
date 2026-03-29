@@ -90,6 +90,8 @@ Instead of carrying pre-baked source strings, the compiler represents reactive e
 | `CallNode` | `callee(args)` (non-method calls) | Function call |
 | `BinaryNode` | `left op right` | Binary operation |
 | `UnaryNode` | `op operand` (prefix/postfix) | Unary operation |
+| `TernaryNode` | `condition ? whenTrue : whenFalse` | Conditional expression |
+| `ElementAccessNode` | `object[index]` | Bracket access |
 | `TemplateNode` | `` `text${expr}text` `` | Template literal |
 | `LiteralNode` | String, number, boolean, null | Verbatim value |
 | `IdentifierNode` | Plain identifier (non-reactive) | Variable name |
@@ -97,7 +99,7 @@ Instead of carrying pre-baked source strings, the compiler represents reactive e
 
 Factory functions (`refRead`, `snapshot`, `bindingRef`, `methodCall`, etc.) create each node. Type guards (`isRefRead`, `isSnapshot`, etc.) enable safe narrowing.
 
-**Auto-read insertion**: When the `ExpressionIR` builder detects a changefeed sub-expression consumed in a value context (e.g., as a binary operand, method receiver, or template hole), it wraps it in a `RefReadNode`. The renderer then emits `source()` — the observation morphism. This is the mechanism that makes `recipe.name.toLowerCase()` compile to `recipe.name().toLowerCase()`.
+**Auto-read insertion**: When the `ExpressionIR` builder detects a changefeed sub-expression consumed in a value context (e.g., as a binary operand, ternary condition/branch, element access object/index, method receiver, or template hole), it wraps it in a `RefReadNode`. The renderer then emits `source()` — the observation morphism. This is the mechanism that makes `recipe.name.toLowerCase()` compile to `recipe.name().toLowerCase()` and `todo.done ? "done" : ""` compile to `todo.done() ? "done" : ""`.
 
 **Binding expansion**: `BindingRefNode` carries the binding's full expression tree. The `RenderContext.expandBindings` flag controls rendering:
 - `false` (initial render) → emit the binding name (e.g., `"nameMatch"`) — the `const` is in scope

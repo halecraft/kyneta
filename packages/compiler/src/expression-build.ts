@@ -38,6 +38,7 @@ import {
   binary,
   bindingRef,
   call,
+  elementAccess,
   type ExpressionIR,
   identifier,
   literal,
@@ -47,6 +48,7 @@ import {
   refRead,
   snapshot,
   template,
+  ternary,
   unary,
 } from "./expression-ir.js"
 import { getDeltaKind, isChangefeedType } from "./reactive-detection.js"
@@ -517,20 +519,23 @@ function buildIdentifier(
 /**
  * Build a ConditionalExpression (ternary): `cond ? whenTrue : whenFalse`.
  *
- * We represent this as a RawNode since the ExpressionIR doesn't have
- * a dedicated ternary node type. The condition, true branch, and false
- * branch are all rendered inline.
- *
- * TODO: Consider adding a TernaryNode to ExpressionIR if ternaries in
- * reactive expressions become common enough to warrant structural handling.
+ * All three sub-expressions are in value-consuming positions: the condition
+ * is consumed as a boolean, the branches are consumed as values. Each is
+ * wrapped via `wrapIfChangefeed` so changefeed refs get auto-read.
  */
 function buildConditionalExpression(
   expr: ConditionalExpression,
-  _scope?: ExpressionScope,
+  scope?: ExpressionScope,
 ): ExpressionIR {
-  // For now, fall back to raw since ExpressionIR doesn't model ternaries
-  // and they're uncommon in reactive content positions.
-  return raw(expr.getText())
+  const condExpr = expr.getCondition()
+  const trueExpr = expr.getWhenTrue()
+  const falseExpr = expr.getWhenFalse()
+
+  const condIR = wrapIfChangefeed(buildNode(condExpr, scope), condExpr)
+  const trueIR = wrapIfChangefeed(buildNode(trueExpr, scope), trueExpr)
+  const falseIR = wrapIfChangefeed(buildNode(falseExpr, scope), falseExpr)
+
+  return ternary(condIR, trueIR, falseIR)
 }
 
 // =============================================================================
@@ -540,14 +545,38 @@ function buildConditionalExpression(
 /**
  * Build an ElementAccessExpression: `obj[key]`.
  *
- * Falls back to raw since ExpressionIR doesn't have a dedicated node
- * for bracket access. This is uncommon in reactive content expressions.
+ * Uses the same two-type check as `buildPropertyAccess` for the object:
+ * if the object is a changefeed and the result is NOT a changefeed,
+ * wrap the object in `refRead` (value consumption). If both are changefeeds,
+ * it's structural navigation — no wrap.
+ *
+ * The index is always value-consuming (you never "structurally navigate"
+ * through an index), so it uses `wrapIfChangefeed`.
  */
 function buildElementAccess(
   expr: ElementAccessExpression,
-  _scope?: ExpressionScope,
+  scope?: ExpressionScope,
 ): ExpressionIR {
-  return raw(expr.getText())
+  const objExpr = expr.getExpression()
+  const argExpr = expr.getArgumentExpression()
+  if (!argExpr) return raw(expr.getText())
+
+  const objIR = buildNode(objExpr, scope)
+  const indexIR = wrapIfChangefeed(buildNode(argExpr, scope), argExpr)
+
+  // Two-type check: same logic as buildPropertyAccess.
+  // Only wrap the object in refRead when it's a changefeed being consumed
+  // for a non-changefeed result. When both are changefeeds (structural
+  // navigation via bracket), don't wrap.
+  const objType = objExpr.getType()
+  const resultType = expr.getType()
+
+  if (isChangefeedType(objType) && !isChangefeedType(resultType)) {
+    const deltaKind = getDeltaKind(objType)
+    return elementAccess(refRead(objIR, deltaKind), indexIR)
+  }
+
+  return elementAccess(objIR, indexIR)
 }
 
 // =============================================================================
