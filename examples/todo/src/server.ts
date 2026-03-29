@@ -5,8 +5,9 @@
 //   Single entry point that:
 //   1. Creates a server-side Exchange with WebSocket transport
 //   2. Registers the collaborative todo document
-//   3. Builds the client app using Bun.build() + Cast unplugin
+//   3. Builds the client app (+ optional brotli pre-compression)
 //   4. Serves static files from dist/ and upgrades /ws to WebSocket
+//      — serves .br pre-compressed files when Accept-Encoding: br
 //
 //   Run with:  bun src/server.ts
 //
@@ -20,8 +21,8 @@ import {
   createBunWebsocketHandlers,
   type BunWebsocketData,
 } from "@kyneta/websocket-transport/bun"
-import kyneta from "@kyneta/cast/unplugin/bun"
 import { TodoDoc } from "./schema.js"
+import { buildClient } from "./build.js"
 
 // ─────────────────────────────────────────────────────────────────────────
 // 1. Exchange — server-side sync hub
@@ -40,18 +41,10 @@ const exchange = new Exchange({
 exchange.get("todos", TodoDoc)
 
 // ─────────────────────────────────────────────────────────────────────────
-// 2. Build — compile the client app with Cast's Bun plugin
+// 2. Build — compile the client app + optional brotli pre-compression
 // ─────────────────────────────────────────────────────────────────────────
 
-const buildResult = await Bun.build({
-  entrypoints: ["./public/index.html"],
-  outdir: "./dist",
-  plugins: [kyneta()],
-})
-
-if (!buildResult.success) {
-  throw new AggregateError(buildResult.logs, "Client build failed")
-}
+await buildClient()
 
 // ─────────────────────────────────────────────────────────────────────────
 // 3. Serve — HTTP for static files, WebSocket for sync
@@ -72,7 +65,23 @@ Bun.serve<BunWebsocketData>({
     }
 
     // Static file serving from dist/
+    // Serve pre-compressed .br when the client accepts brotli
     const pathname = url.pathname === "/" ? "/index.html" : url.pathname
+    const acceptsBr = /\bbr\b/.test(req.headers.get("accept-encoding") ?? "")
+
+    if (acceptsBr) {
+      const brFile = Bun.file(`./dist${pathname}.br`)
+      if (await brFile.exists()) {
+        const original = Bun.file(`./dist${pathname}`)
+        return new Response(brFile, {
+          headers: {
+            "Content-Encoding": "br",
+            "Content-Type": original.type,
+          },
+        })
+      }
+    }
+
     const file = Bun.file(`./dist${pathname}`)
     return (await file.exists())
       ? new Response(file)
