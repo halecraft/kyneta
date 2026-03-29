@@ -761,15 +761,20 @@ function generateReactiveLoopBody(
 
   lines.push(`${ind}listRegion(${mountVar}, ${node.iterableSource}, {`)
 
-  // Generate create handler
-  const params = node.indexVariable
-    ? `(${node.itemVariable}, ${node.indexVariable})`
-    : `(${node.itemVariable}, _index)`
+  // Generate create handler — third parameter is the per-item scope
+  // used by all reactive subscriptions inside the create body.
+  const indexVar = node.indexVariable ?? "_index"
+  const createParams = node.hasReactiveItems
+    ? `(${node.itemVariable}, ${indexVar}, _scope)`
+    : `(${node.itemVariable}, ${indexVar})`
 
-  lines.push(`${innerInd}create: ${params} => {`)
+  lines.push(`${innerInd}create: ${createParams} => {`)
 
-  // Generate body using shared helper
-  const bodyState = indented(innerState)
+  // Generate body using shared helper. When reactive, rebind scopeVar
+  // so valueRegion/textRegion/etc. use the per-item _scope.
+  const bodyState = node.hasReactiveItems
+    ? indented({ ...innerState, scopeVar: "_scope" })
+    : indented(innerState)
   lines.push(...generateBodyWithReturn(node.body, bodyState))
 
   lines.push(`${innerInd}},`)
@@ -882,17 +887,17 @@ function generateFilteredLoopBody(
     `${ind}filteredListRegion(${mountVar}, ${node.iterableSource}, {`,
   )
 
-  // Generate create handler — uses the innermost then-branch body
-  const params = node.indexVariable
-    ? `(${node.itemVariable}, ${node.indexVariable})`
-    : `(${node.itemVariable}, _index)`
+  // Generate create handler — third parameter is the per-item scope.
+  // Filtered lists always have isReactive: true.
+  const indexVar = node.indexVariable ?? "_index"
+  const createParams = `(${node.itemVariable}, ${indexVar}, _scope)`
 
   // Extract the DOM body from the filter conditional (peel through chains)
   const { leadingBindings, domBody } = extractFilterBody(node.body)
 
-  lines.push(`${innerInd}create: ${params} => {`)
+  lines.push(`${innerInd}create: ${createParams} => {`)
 
-  const bodyState = indented(innerState)
+  const bodyState = indented({ ...innerState, scopeVar: "_scope" })
   const bodyInd = getIndent(bodyState)
 
   // Emit leading bindings first (they may be used by the create body)
@@ -907,7 +912,8 @@ function generateFilteredLoopBody(
   // Generate predicate closure — rendered with binding expansion for
   // self-contained re-evaluation from live refs
   const predicateSource = getReactiveSource(filter.predicate)
-  lines.push(`${innerInd}predicate: ${params} => {`)
+  const predicateParams = `(${node.itemVariable}, ${indexVar})`
+  lines.push(`${innerInd}predicate: ${predicateParams} => {`)
   // Emit bindings inside the predicate closure too (they may be needed
   // for evaluating the predicate expression)
   for (const binding of leadingBindings) {

@@ -7,52 +7,52 @@ import { applyCacheOps, planCacheUpdate } from "../interpreters/with-caching.js"
 // ===========================================================================
 
 describe("planCacheUpdate: sequence", () => {
-  it("insert-at-middle: [retain 2, insert 1] → shift from 2 by +1", () => {
+  it("insert-at-middle: [retain 2, insert 1] → evictFrom 2", () => {
     const change = sequenceChange([{ retain: 2 }, { insert: ["x"] }])
     const ops = planCacheUpdate(change, "sequence")
-    expect(ops).toEqual([{ type: "shift", from: 2, delta: 1 }])
+    expect(ops).toEqual([{ type: "evictFrom", start: 2 }])
   })
 
-  it("insert-at-start: [insert 2] → shift from 0 by +2", () => {
+  it("insert-at-start: [insert 2] → evictFrom 0", () => {
     const change = sequenceChange([{ insert: ["a", "b"] }])
     const ops = planCacheUpdate(change, "sequence")
-    expect(ops).toEqual([{ type: "shift", from: 0, delta: 2 }])
+    expect(ops).toEqual([{ type: "evictFrom", start: 0 }])
   })
 
-  it("delete: [retain 1, delete 1] → delete [1], shift from 2 by -1", () => {
+  it("delete: [retain 1, delete 1] → delete [1], evictFrom 1", () => {
     const change = sequenceChange([{ retain: 1 }, { delete: 1 }])
     const ops = planCacheUpdate(change, "sequence")
     expect(ops).toEqual([
       { type: "delete", keys: [1] },
-      { type: "shift", from: 2, delta: -1 },
+      { type: "evictFrom", start: 1 },
     ])
   })
 
-  it("delete multiple: [retain 1, delete 3] → delete [1,2,3], shift from 4 by -3", () => {
+  it("delete multiple: [retain 1, delete 3] → delete [1,2,3], evictFrom 1", () => {
     const change = sequenceChange([{ retain: 1 }, { delete: 3 }])
     const ops = planCacheUpdate(change, "sequence")
     expect(ops).toEqual([
       { type: "delete", keys: [1, 2, 3] },
-      { type: "shift", from: 4, delta: -3 },
+      { type: "evictFrom", start: 1 },
     ])
   })
 
-  it("delete-at-start: [delete 1] → delete [0], shift from 1 by -1", () => {
+  it("delete-at-start: [delete 1] → delete [0], evictFrom 0", () => {
     const change = sequenceChange([{ delete: 1 }])
     const ops = planCacheUpdate(change, "sequence")
     expect(ops).toEqual([
       { type: "delete", keys: [0] },
-      { type: "shift", from: 1, delta: -1 },
+      { type: "evictFrom", start: 0 },
     ])
   })
 
-  it("append: [retain N, insert items] → shift from N (no-op in practice)", () => {
-    // When inserting at the end, the shift targets indices >= N,
+  it("append: [retain N, insert items] → evictFrom N (no-op in practice)", () => {
+    // When inserting at the end, evictFrom targets indices >= N,
     // but no existing cache entries are at those indices. So the
-    // shift is structurally emitted but has no practical effect.
+    // evictFrom is structurally emitted but has no practical effect.
     const change = sequenceChange([{ retain: 5 }, { insert: ["x", "y"] }])
     const ops = planCacheUpdate(change, "sequence")
-    expect(ops).toEqual([{ type: "shift", from: 5, delta: 2 }])
+    expect(ops).toEqual([{ type: "evictFrom", start: 5 }])
   })
 
   it("replace on sequence → clear", () => {
@@ -80,13 +80,13 @@ describe("planCacheUpdate: sequence", () => {
       { delete: 1 },
     ])
     const ops = planCacheUpdate(change, "sequence")
-    // insert at cursor 0: shift from 0 by +1 (cursor stays at 0 — inserts don't consume)
+    // insert at cursor 0: evictFrom 0
     // retain 2: cursor moves to 2
-    // delete at cursor 2: delete [2], shift from 3 by -1
+    // delete at cursor 2: delete [2], evictFrom 2
     expect(ops).toEqual([
-      { type: "shift", from: 0, delta: 1 },
+      { type: "evictFrom", start: 0 },
       { type: "delete", keys: [2] },
-      { type: "shift", from: 3, delta: -1 },
+      { type: "evictFrom", start: 2 },
     ])
   })
 })
@@ -199,98 +199,94 @@ describe("applyCacheOps", () => {
     expect(cache.has("b")).toBe(true)
   })
 
-  it("shift moves entries forward (positive delta)", () => {
-    const cache = new Map<number, string>([
-      [0, "a"],
-      [1, "b"],
-      [2, "c"],
-    ])
-    // Shift entries at index >= 1 by +2
-    applyCacheOps(cache, [{ type: "shift", from: 1, delta: 2 }])
-    expect(cache.size).toBe(3)
-    expect(cache.get(0)).toBe("a") // unchanged
-    expect(cache.get(3)).toBe("b") // 1 → 3
-    expect(cache.get(4)).toBe("c") // 2 → 4
-    expect(cache.has(1)).toBe(false)
-    expect(cache.has(2)).toBe(false)
-  })
-
-  it("shift moves entries backward (negative delta)", () => {
-    const cache = new Map<number, string>([
-      [0, "a"],
-      [2, "b"],
-      [3, "c"],
-    ])
-    // Shift entries at index >= 2 by -1
-    applyCacheOps(cache, [{ type: "shift", from: 2, delta: -1 }])
-    expect(cache.size).toBe(3)
-    expect(cache.get(0)).toBe("a") // unchanged
-    expect(cache.get(1)).toBe("b") // 2 → 1
-    expect(cache.get(2)).toBe("c") // 3 → 2
-  })
-
-  it("shift drops entries that would go negative", () => {
-    const cache = new Map<number, string>([
-      [0, "a"],
-      [1, "b"],
-    ])
-    // Shift entries at index >= 0 by -1: index 0 would become -1 (dropped)
-    applyCacheOps(cache, [{ type: "shift", from: 0, delta: -1 }])
-    expect(cache.size).toBe(1)
-    expect(cache.get(0)).toBe("b") // 1 → 0
-    expect(cache.has(-1 as any)).toBe(false)
-  })
-
-  it("combined delete + shift (simulates sequence delete)", () => {
+  it("evictFrom removes all entries at or above start index", () => {
     const cache = new Map<number, string>([
       [0, "a"],
       [1, "b"],
       [2, "c"],
       [3, "d"],
     ])
-    // Delete index 1, then shift indices >= 2 by -1
-    applyCacheOps(cache, [
-      { type: "delete", keys: [1] },
-      { type: "shift", from: 2, delta: -1 },
-    ])
-    expect(cache.size).toBe(3)
-    expect(cache.get(0)).toBe("a") // unchanged
-    expect(cache.get(1)).toBe("c") // was at 2, shifted to 1
-    expect(cache.get(2)).toBe("d") // was at 3, shifted to 2
+    applyCacheOps(cache, [{ type: "evictFrom", start: 2 }])
+    expect(cache.size).toBe(2)
+    expect(cache.get(0)).toBe("a")
+    expect(cache.get(1)).toBe("b")
+    expect(cache.has(2)).toBe(false)
     expect(cache.has(3)).toBe(false)
   })
 
-  it("combined shift (simulates sequence insert at middle)", () => {
+  it("evictFrom at 0 clears all numeric entries", () => {
     const cache = new Map<number, string>([
       [0, "a"],
       [1, "b"],
       [2, "c"],
     ])
-    // Insert at index 1: shift entries >= 1 by +1
-    applyCacheOps(cache, [{ type: "shift", from: 1, delta: 1 }])
-    expect(cache.size).toBe(3)
-    expect(cache.get(0)).toBe("a") // unchanged
-    expect(cache.get(2)).toBe("b") // was at 1, shifted to 2
-    expect(cache.get(3)).toBe("c") // was at 2, shifted to 3
-    expect(cache.has(1)).toBe(false) // slot 1 is now empty (for the new item)
-  })
-
-  it("shift on empty cache is a no-op", () => {
-    const cache = new Map<number, string>()
-    applyCacheOps(cache, [{ type: "shift", from: 0, delta: 5 }])
+    applyCacheOps(cache, [{ type: "evictFrom", start: 0 }])
     expect(cache.size).toBe(0)
   })
 
-  it("shift with string keys is ignored (only numeric keys shift)", () => {
-    const cache = new Map<string, number>([
-      ["a", 1],
-      ["b", 2],
+  it("evictFrom beyond cache range is a no-op", () => {
+    const cache = new Map<number, string>([
+      [0, "a"],
+      [1, "b"],
     ])
-    // shift is designed for numeric indices; string keys don't match
-    applyCacheOps(cache, [{ type: "shift", from: "a" as any, delta: 1 }])
+    applyCacheOps(cache, [{ type: "evictFrom", start: 5 }])
     expect(cache.size).toBe(2)
-    expect(cache.get("a")).toBe(1)
-    expect(cache.get("b")).toBe(2)
+    expect(cache.get(0)).toBe("a")
+    expect(cache.get(1)).toBe("b")
+  })
+
+  it("evictFrom ignores string keys", () => {
+    const cache = new Map<string | number, string>([
+      ["a", "alpha"],
+      [0, "zero"],
+      [1, "one"],
+      [2, "two"],
+    ] as [string | number, string][])
+    applyCacheOps(cache as Map<number, unknown>, [{ type: "evictFrom", start: 1 }])
+    expect(cache.size).toBe(2)
+    expect(cache.get("a")).toBe("alpha")
+    expect(cache.get(0)).toBe("zero")
+    expect(cache.has(1)).toBe(false)
+    expect(cache.has(2)).toBe(false)
+  })
+
+  it("combined delete + evictFrom (simulates sequence delete)", () => {
+    const cache = new Map<number, string>([
+      [0, "a"],
+      [1, "b"],
+      [2, "c"],
+      [3, "d"],
+    ])
+    // Delete index 1, then evict all indices >= 1
+    applyCacheOps(cache, [
+      { type: "delete", keys: [1] },
+      { type: "evictFrom", start: 1 },
+    ])
+    expect(cache.size).toBe(1)
+    expect(cache.get(0)).toBe("a")
+    expect(cache.has(1)).toBe(false)
+    expect(cache.has(2)).toBe(false)
+    expect(cache.has(3)).toBe(false)
+  })
+
+  it("combined evictFrom (simulates sequence insert at middle)", () => {
+    const cache = new Map<number, string>([
+      [0, "a"],
+      [1, "b"],
+      [2, "c"],
+    ])
+    // Insert at index 1: evict entries >= 1
+    applyCacheOps(cache, [{ type: "evictFrom", start: 1 }])
+    expect(cache.size).toBe(1)
+    expect(cache.get(0)).toBe("a")
+    expect(cache.has(1)).toBe(false)
+    expect(cache.has(2)).toBe(false)
+  })
+
+  it("evictFrom on empty cache is a no-op", () => {
+    const cache = new Map<number, string>()
+    applyCacheOps(cache, [{ type: "evictFrom", start: 0 }])
+    expect(cache.size).toBe(0)
   })
 
   it("no ops → no changes", () => {

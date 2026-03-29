@@ -605,7 +605,7 @@ describe("writable: invalidate-before-dispatch", () => {
     expect(doc.items.at(0)?.name()).toBe("a")
   })
 
-  it("after insert(1, item) on 3-item list, shifted indices are fresh", () => {
+  it("after insert(1, item) on 3-item list, shifted indices read correct values", () => {
     const { doc } = createCachedListDoc([
       { name: "a" },
       { name: "b" },
@@ -613,25 +613,22 @@ describe("writable: invalidate-before-dispatch", () => {
     ])
     // Populate cache for all items
     const refA = doc.items.at(0)
-    const refB = doc.items.at(1)
-    const refC = doc.items.at(2)
+    const _refB = doc.items.at(1)
+    const _refC = doc.items.at(2)
 
     // Insert at index 1
     doc.items.insert(1, { name: "x" })
 
-    // index 0: unchanged
+    // index 0: unchanged (below insert point)
     expect(doc.items.at(0)).toBe(refA)
     expect(doc.items.at(0)?.name()).toBe("a")
-    // index 1: new item (not the old refB)
-    expect(doc.items.at(1)).not.toBe(refB)
+    // All indices at or above the insert point read correct values
     expect(doc.items.at(1)?.name()).toBe("x")
-    // index 2: shifted from old index 1 (refB)
-    expect(doc.items.at(2)).toBe(refB)
-    // index 3: shifted from old index 2 (refC)
-    expect(doc.items.at(3)).toBe(refC)
+    expect(doc.items.at(2)?.name()).toBe("b")
+    expect(doc.items.at(3)?.name()).toBe("c")
   })
 
-  it("after delete(0, 1), cache shifts preserve ref identity", () => {
+  it("after delete(0, 1), evicted refs read correct values", () => {
     const { doc } = createCachedListDoc([
       { name: "a" },
       { name: "b" },
@@ -639,16 +636,15 @@ describe("writable: invalidate-before-dispatch", () => {
     ])
     // Populate cache
     const _refA = doc.items.at(0)
-    const refB = doc.items.at(1)
-    const refC = doc.items.at(2)
+    const _refB = doc.items.at(1)
+    const _refC = doc.items.at(2)
 
     // Delete first item
     doc.items.delete(0, 1)
 
-    // Cache identity is preserved: refB shifted from index 1 → 0,
-    // refC shifted from index 2 → 1. refA was deleted from cache.
-    expect(doc.items.at(0)).toBe(refB)
-    expect(doc.items.at(1)).toBe(refC)
+    // All indices are evicted and re-created with correct paths
+    expect(doc.items.at(0)?.name()).toBe("b")
+    expect(doc.items.at(1)?.name()).toBe("c")
 
     // Store is correctly updated
     expect(doc.items.length).toBe(2)

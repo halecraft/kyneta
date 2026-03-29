@@ -122,10 +122,9 @@ export function withReadable<A extends HasNavigation>(
       const result = base.sequence(ctx, path, schema, baseItem) as any
 
       // Fill CALL slot — fold child values to produce a fresh array
-      // snapshot. Uses the raw `item` closure (not result.at()) because
-      // withCaching's cache shifting can leave refs with stale paths
-      // after insert/delete. readByPath is still needed for structure
-      // discovery (array length).
+      // snapshot. Uses the raw `item` closure directly for simplicity,
+      // bypassing the cache layer entirely. readByPath is still needed
+      // for structure discovery (array length).
       result[CALL] = () => {
         const len = ctx.store.arrayLength(path)
         const snapshot: unknown[] = []

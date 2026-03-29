@@ -3,6 +3,7 @@ import type { Changeset, Op } from "../index.js"
 import type { MapChange, ReplaceChange, TextChange, SequenceChange, IncrementChange } from "../change.js"
 import {
   CHANGEFEED,
+  change,
   changefeed,
   expandMapOpsToLeaves,
   hasChangefeed,
@@ -423,7 +424,7 @@ describe("changefeed: sequence subscribeTree", () => {
     expect(newItemEvent).toBeDefined()
   })
 
-  it("delete cleans up subscriptions — mutating deleted item does not fire", () => {
+  it("delete rebuilds subscriptions — new item at evicted index fires correctly", () => {
     const { doc } = createChatDoc({
       messages: [
         { author: "Alice", body: "Hi" },
@@ -436,16 +437,17 @@ describe("changefeed: sequence subscribeTree", () => {
       for (const event of changeset.changes) events.push(event)
     })
 
-    // Get a reference to the first item before deleting
-    const firstMsg = doc.messages.at(0)!
-
-    // Delete the first item
+    // Delete the first item — Bob shifts to index 0
     doc.messages.delete(0, 1)
     const eventsAfterDelete = events.length
 
-    // Mutate the deleted item's old ref — should NOT fire
-    firstMsg.author.set("Ghost")
-    expect(events.length).toBe(eventsAfterDelete)
+    // Get a fresh ref to the new item at index 0 (Bob)
+    const newFirst = doc.messages.at(0)!
+    expect(newFirst.author()).toBe("Bob")
+
+    // Mutate the new first item — tree subscription should fire
+    newFirst.author.set("Robert")
+    expect(events.length).toBeGreaterThan(eventsAfterDelete)
   })
 })
 
@@ -1154,5 +1156,64 @@ describe("expandMapOpsToLeaves", () => {
     expect(result[1].change).toEqual({ type: "replace", value: true })
     // counter passes through
     expect(result[2].change.type).toBe("increment")
+  })
+})
+
+// ===========================================================================
+// Phase-separation enforcement (flush boundary)
+// ===========================================================================
+
+describe("changefeed: flush boundary enforcement", () => {
+  it("change() propagates subscriber error, not secondary abort error", () => {
+    const store = { x: 0 }
+    const schema = LoroSchema.doc({ x: LoroSchema.plain.number() })
+    const ctx = plainContext(store)
+    const doc = interpret(schema, ctx)
+      .with(readable)
+      .with(writable)
+      .with(changefeed)
+      .done()
+
+    // Subscribe with a callback that throws
+    getChangefeed(doc.x).subscribe(() => {
+      throw new Error("subscriber boom")
+    })
+
+    // The change() call should propagate the SUBSCRIBER error,
+    // not a secondary "No active transaction to abort" error.
+    expect(() => {
+      change(doc, (d: any) => {
+        d.x.set(42)
+      })
+    }).toThrow("subscriber boom")
+  })
+
+  it("re-entrant change() during notification delivery throws descriptive error", () => {
+    const store = { x: 0, y: 0 }
+    const schema = LoroSchema.doc({
+      x: LoroSchema.plain.number(),
+      y: LoroSchema.plain.number(),
+    })
+    const ctx = plainContext(store)
+    const doc = interpret(schema, ctx)
+      .with(readable)
+      .with(writable)
+      .with(changefeed)
+      .done()
+
+    // Subscribe to x; when x changes, try to mutate y via change()
+    getChangefeed(doc.x).subscribe(() => {
+      change(doc, (d: any) => {
+        d.y.set(99)
+      })
+    })
+
+    // The outer change() should throw with a descriptive message
+    // about notification delivery, not "No active transaction to abort".
+    expect(() => {
+      change(doc, (d: any) => {
+        d.x.set(42)
+      })
+    }).toThrow(/notification delivery/)
   })
 })

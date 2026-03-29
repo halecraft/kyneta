@@ -648,6 +648,44 @@ describe("regions", () => {
         scope.dispose()
       })
     })
+
+    it("should pass per-item scope to create, disposed on item delete", () => {
+      const { ref, emit, setItems } = createMockSequenceRef(["a", "b"])
+      const scope = new Scope()
+      const container = document.createElement("ul")
+      let disposedCount = 0
+
+      listRegion(
+        container,
+        ref,
+        {
+          create: (item: string, _index: number, itemScope: Scope) => {
+            const li = document.createElement("li")
+            li.textContent = item
+            // Register a disposal callback on the item scope
+            itemScope.onDispose(() => {
+              disposedCount++
+            })
+            return li
+          },
+          isReactive: true,
+        },
+        scope,
+      )
+
+      expect(container.children.length).toBe(2)
+      expect(disposedCount).toBe(0)
+
+      // Delete item 0
+      setItems(["b"])
+      emit(sequenceChange([{ delete: 1 }]))
+
+      expect(container.children.length).toBe(1)
+      // The per-item scope for the deleted item should have been disposed
+      expect(disposedCount).toBe(1)
+
+      scope.dispose()
+    })
   })
 
   // ===========================================================================

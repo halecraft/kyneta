@@ -74,7 +74,7 @@ export function change<D extends object>(ref: D, fn: (draft: D) => void): Op[] {
     fn(ref)
     return ctx.commit()
   } catch (e) {
-    ctx.abort()
+    if (ctx.inTransaction) ctx.abort()
     throw e
   }
 }

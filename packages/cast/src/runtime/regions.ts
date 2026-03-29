@@ -461,7 +461,7 @@ function executeOp<T>(
 
   if (op.kind === "insert") {
     const itemScope = needsScope ? state.parentScope.createChild() : null
-    const node = handlers.create(op.item, op.index)
+    const node = handlers.create(op.item, op.index, itemScope ?? state.parentScope)
 
     // Insert into DOM at correct position
     // For single nodes, use the node; for ranges, use the start marker
@@ -506,7 +506,7 @@ function executeOp<T>(
       if (item === undefined) continue
 
       const itemScope = needsScope ? state.parentScope.createChild() : null
-      const node = handlers.create(item, op.index + i)
+      const node = handlers.create(item, op.index + i, itemScope ?? state.parentScope)
 
       // For batch insert, we always use single-node slots within the fragment
       // The fragment itself handles the batching
@@ -845,7 +845,7 @@ function showItem<T>(
 
   const needsScope = handlers.isReactive !== false
   const itemScope = needsScope ? state.parentScope.createChild() : null
-  const node = handlers.create(item, index)
+  const node = handlers.create(item, index, itemScope ?? state.parentScope)
 
   const referenceNode = findReferenceNode(state, index)
   const slot = claimSlot(parent, node, referenceNode, handlers.slotKind)

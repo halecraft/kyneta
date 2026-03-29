@@ -78,13 +78,15 @@ export const INVALIDATE: unique symbol = Symbol.for("kyneta:invalidate") as any
  *
  * - `clear` — drop all cached entries
  * - `delete` — drop specific keys
- * - `shift` — re-key numeric entries: all entries with key >= `from`
- *   get their key adjusted by `delta`
+ * - `evictFrom` — drop all numeric cache entries at index ≥ `start`.
+ *   Used after structural changes (insert/delete) where items shift
+ *   positions. Eviction forces fresh ref creation on next `.at()` call,
+ *   ensuring the ref's baked-in path matches the new store index.
  */
 export type CacheInstruction<K = number | string> =
   | { readonly type: "clear" }
   | { readonly type: "delete"; readonly keys: K[] }
-  | { readonly type: "shift"; readonly from: K; readonly delta: number }
+  | { readonly type: "evictFrom"; readonly start: number }
 
 // ---------------------------------------------------------------------------
 // planCacheUpdate — Functional Core (pure, table-testable)
@@ -132,7 +134,9 @@ export function planCacheUpdate(
  * Plan cache updates for a sequence change.
  *
  * Walks the retain/insert/delete ops to compute which cached indices
- * need to be deleted and which need to be shifted.
+ * need to be evicted. Structural changes (insert/delete) invalidate
+ * all indices from the mutation point onward via `evictFrom`, because
+ * refs have baked-in paths that cannot be updated after creation.
  */
 function planSequenceCacheUpdate(
   change: SequenceChange,
@@ -146,22 +150,22 @@ function planSequenceCacheUpdate(
     } else if ("insert" in op) {
       const count = op.insert.length
       if (count > 0) {
-        // Inserting at `cursor` shifts all existing entries at cursor+
-        // forward by `count`. If cursor is past all existing entries
-        // (append), this is a no-op shift since there's nothing to shift.
-        ops.push({ type: "shift", from: cursor, delta: count })
+        // Inserting at `cursor` invalidates all entries at cursor+
+        // because items shifted right. Fresh refs with correct paths
+        // will be created on next `.at()` access.
+        ops.push({ type: "evictFrom", start: cursor })
       }
     } else if ("delete" in op) {
       const count = op.delete
       if (count > 0) {
-        // Delete entries [cursor, cursor+count)
+        // Explicitly delete entries [cursor, cursor+count)
         const deletedKeys: (number | string)[] = []
         for (let i = 0; i < count; i++) {
           deletedKeys.push(cursor + i)
         }
         ops.push({ type: "delete", keys: deletedKeys })
-        // Shift entries at cursor+count down by count
-        ops.push({ type: "shift", from: cursor + count, delta: -count })
+        // Evict all entries at cursor+ because items shifted left
+        ops.push({ type: "evictFrom", start: cursor })
       }
     }
   }
@@ -210,7 +214,7 @@ function planMapCacheUpdate(
  *
  * - `clear` → map.clear()
  * - `delete` → iterate keys, map.delete(k)
- * - `shift` → re-key entries: collect affected, delete old keys, set new keys
+ * - `evictFrom` → delete all numeric keys ≥ start
  */
 export function applyCacheOps<K extends number | string>(
   cache: Map<K, unknown>,
@@ -228,25 +232,10 @@ export function applyCacheOps<K extends number | string>(
         }
         break
 
-      case "shift": {
-        // Collect entries that need shifting
-        const toShift: Array<[K, unknown]> = []
-        for (const [key, value] of cache) {
-          if (typeof key === "number" && key >= (op.from as number)) {
-            toShift.push([key, value])
-          }
-        }
-        // Sort by key for deterministic processing
-        toShift.sort((a, b) => (a[0] as number) - (b[0] as number))
-        // Delete old keys
-        for (const [key] of toShift) {
-          cache.delete(key)
-        }
-        // Set new keys
-        for (const [key, value] of toShift) {
-          const newKey = ((key as number) + op.delta) as K
-          if ((newKey as number) >= 0) {
-            cache.set(newKey, value)
+      case "evictFrom": {
+        for (const key of [...cache.keys()]) {
+          if (typeof key === "number" && key >= op.start) {
+            cache.delete(key)
           }
         }
         break

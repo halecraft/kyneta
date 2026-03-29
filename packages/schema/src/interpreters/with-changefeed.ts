@@ -179,6 +179,7 @@ interface ContextWiringState {
   readonly originalFlush: (origin?: string) => void
   readonly populated: Set<string>
   readonly populatedListeners: Map<string, Set<() => void>>
+
 }
 
 /**
@@ -255,10 +256,19 @@ function ensurePrepareWiring(
   const populatedListeners = new Map<string, Set<() => void>>()
   const originalPrepare = ctx.prepare
   const originalFlush = ctx.flush
+  let isFlushing = false
 
   // Wrapped prepare: apply change to store, accumulate for flush,
   // and mark the path (and all ancestor paths) as populated.
+  // The isFlushing guard prevents re-entrant mutations during
+  // notification delivery — a phase-separation invariant.
   const wrappedPrepare = (path: Path, change: ChangeBase): void => {
+    if (isFlushing) {
+      throw new Error(
+        "Mutation during notification delivery is not supported. " +
+          "Defer the change() call (e.g., via queueMicrotask).",
+      )
+    }
     originalPrepare(path, change)
     pending.push({ path, change })
     markPopulated(path, populated, populatedListeners)
@@ -278,7 +288,12 @@ function ensurePrepareWiring(
       // the just-flushed operations when subscribers read them.
       originalFlush(origin)
 
-      deliverNotifications(plan, listeners, origin)
+      isFlushing = true
+      try {
+        deliverNotifications(plan, listeners, origin)
+      } finally {
+        isFlushing = false
+      }
     } else {
       originalFlush(origin)
     }

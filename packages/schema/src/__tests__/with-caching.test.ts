@@ -418,7 +418,7 @@ describe("withCaching: INVALIDATE sequence", () => {
     // Populate cache
     const refA = doc.items.at(0)
     const _refB = doc.items.at(1)
-    const refC = doc.items.at(2)
+    const _refC = doc.items.at(2)
     expect(refA).toBe(doc.items.at(0)) // confirm cached
 
     // Simulate delete at index 1: [retain 1, delete 1]
@@ -428,12 +428,11 @@ describe("withCaching: INVALIDATE sequence", () => {
 
     // index 0 should still be the same ref (it wasn't affected)
     expect(doc.items.at(0)).toBe(refA)
-    // index 1 should now point to what was at index 2 (shifted down)
-    expect(doc.items.at(1)).toBe(refC)
-    // old refB is gone
+    // index 1 reads correct value (semantic correctness, not identity)
+    expect(doc.items.at(1).name()).toBe("c")
   })
 
-  it("INVALIDATE with sequenceChange (insert at middle) shifts cached refs", () => {
+  it("INVALIDATE with sequenceChange (insert at middle) evicts affected indices", () => {
     const { doc, store } = createListDoc([
       { name: "a" },
       { name: "b" },
@@ -441,8 +440,8 @@ describe("withCaching: INVALIDATE sequence", () => {
     ])
     // Populate cache
     const refA = doc.items.at(0)
-    const refB = doc.items.at(1)
-    const refC = doc.items.at(2)
+    const _refB = doc.items.at(1)
+    const _refC = doc.items.at(2)
 
     // Simulate insert at index 1: [retain 1, insert [{name:"x"}]]
     ;(store as any).items = [
@@ -455,15 +454,12 @@ describe("withCaching: INVALIDATE sequence", () => {
       sequenceChange([{ retain: 1 }, { insert: [{ name: "x" }] }]),
     )
 
-    // index 0 unchanged
+    // index 0 unchanged (below insert point)
     expect(doc.items.at(0)).toBe(refA)
-    // index 1 should be a NEW ref (the inserted item)
-    expect(doc.items.at(1)).not.toBe(refB)
+    // All indices at or above the insert point read correct values
     expect(doc.items.at(1).name()).toBe("x")
-    // index 2 should be refB (shifted from 1 to 2)
-    expect(doc.items.at(2)).toBe(refB)
-    // index 3 should be refC (shifted from 2 to 3)
-    expect(doc.items.at(3)).toBe(refC)
+    expect(doc.items.at(2).name()).toBe("b")
+    expect(doc.items.at(3).name()).toBe("c")
   })
 
   it("INVALIDATE with sequenceChange (append) preserves existing cache", () => {
@@ -505,6 +501,49 @@ describe("withCaching: INVALIDATE sequence", () => {
     doc.items[INVALIDATE]({ type: "unknown" })
 
     expect(doc.items.at(0)).not.toBe(refA)
+  })
+
+  it("shifted ref reads correct value after delete (semantic correctness)", () => {
+    const { doc, store } = createListDoc([
+      { name: "Alice" },
+      { name: "Bob" },
+      { name: "Carol" },
+    ])
+    // Cache all refs
+    const _refAlice = doc.items.at(0)
+    const _refBob = doc.items.at(1)
+    const _refCarol = doc.items.at(2)
+
+    // Delete index 0 ("Alice"): store becomes ["Bob", "Carol"]
+    ;(store as any).items = [{ name: "Bob" }, { name: "Carol" }]
+    doc.items[INVALIDATE](sequenceChange([{ delete: 1 }]))
+
+    // After delete, doc.items.at(0) should read "Bob" and at(1) should read "Carol"
+    expect(doc.items.at(0).name()).toBe("Bob")
+    expect(doc.items.at(1).name()).toBe("Carol")
+  })
+
+  it("shifted ref reads correct value after insert (semantic correctness)", () => {
+    const { doc, store } = createListDoc([
+      { name: "Alice" },
+      { name: "Bob" },
+    ])
+    // Cache all refs
+    const _refAlice = doc.items.at(0)
+    const _refBob = doc.items.at(1)
+
+    // Insert "Eve" at index 0: store becomes ["Eve", "Alice", "Bob"]
+    ;(store as any).items = [
+      { name: "Eve" },
+      { name: "Alice" },
+      { name: "Bob" },
+    ]
+    doc.items[INVALIDATE](sequenceChange([{ insert: [{ name: "Eve" }] }]))
+
+    // After insert, refs at shifted indices should read correct values
+    expect(doc.items.at(0).name()).toBe("Eve")
+    expect(doc.items.at(1).name()).toBe("Alice")
+    expect(doc.items.at(2).name()).toBe("Bob")
   })
 })
 
@@ -753,14 +792,14 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     expect(doc.messages.at(0).author()).toBe("Alice")
   })
 
-  it("ctx.prepare invalidates sequence cache (shift on insert)", () => {
+  it("ctx.prepare invalidates sequence cache (evict on insert)", () => {
     const { doc, ctx } = createFullDoc()
 
     // Populate sequence cache
-    const refAlice = doc.messages.at(0)
-    const refBob = doc.messages.at(1)
-    expect(refAlice.author()).toBe("Alice")
-    expect(refBob.author()).toBe("Bob")
+    const _refAlice = doc.messages.at(0)
+    const _refBob = doc.messages.at(1)
+    expect(_refAlice.author()).toBe("Alice")
+    expect(_refBob.author()).toBe("Bob")
 
     // Insert at index 0 via prepare (bypassing mutation methods)
     const path = [{ type: "key" as const, key: "messages" }]
@@ -770,10 +809,10 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     )
     ctx.flush()
 
-    // Cache should be shifted: Alice moved from 0→1, Bob from 1→2
+    // All indices are evicted and re-created with correct paths
     expect(doc.messages.at(0).author()).toBe("Eve") // new item
-    expect(doc.messages.at(1)).toBe(refAlice) // shifted, same ref
-    expect(doc.messages.at(2)).toBe(refBob) // shifted, same ref
+    expect(doc.messages.at(1).author()).toBe("Alice") // semantic correctness
+    expect(doc.messages.at(2).author()).toBe("Bob") // semantic correctness
   })
 })
 

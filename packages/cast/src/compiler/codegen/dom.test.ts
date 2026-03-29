@@ -698,6 +698,40 @@ describe("generateDOM - list regions", () => {
     expect(code).toContain("item")
   })
 
+  it("should emit _scope parameter in reactive list create callback", () => {
+    const reactiveContent = createContent(
+      "item.name",
+      "reactive",
+      [{ source: "item.name", deltaKind: "replace" as DeltaKind }],
+      span(3, 6, 3, 15),
+    )
+    const liElement = createElement(
+      "li",
+      [],
+      [],
+      [],
+      [reactiveContent],
+      span(3, 4, 3, 17),
+    )
+    const loop = createLoop(
+      "items",
+      "reactive",
+      "item",
+      null,
+      [liElement],
+      [dep("items")],
+      span(2, 2, 4, 3),
+    )
+    const builder = createBuilder("ul", [], [], [loop], span(1, 0, 5, 1))
+
+    const code = generateDOM(builder)
+
+    // The create callback should have a third _scope parameter
+    expect(code).toContain("_scope")
+    // valueRegion should use _scope, not the outer scope
+    expect(code).toMatch(/valueRegion\(.*_scope\)/s)
+  })
+
   it("should generate list region with index variable", () => {
     const liElement = createElement(
       "li",

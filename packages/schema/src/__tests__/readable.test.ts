@@ -591,21 +591,20 @@ describe("readable: composability hooks", () => {
     expect(doc.messages.at(0)).not.toBe(first)
   })
 
-  it("sequence [INVALIDATE](change) with delete shifts cached entries", () => {
-    const { doc } = createReadOnlyLoroDoc({
+  it("sequence [INVALIDATE](change) with delete evicts affected cached entries", () => {
+    const { doc, store } = createReadOnlyLoroDoc({
       messages: [
         { author: "Alice", body: "Hi" },
         { author: "Bob", body: "Hey" },
       ],
     })
     const _first = doc.messages.at(0)!
-    const second = doc.messages.at(1)!
-    // Delete index 0: [{ retain: 0 }, { delete: 1 }]
-    // This removes index 0 and shifts index 1 → index 0
+    const _second = doc.messages.at(1)!
+    // Simulate delete at index 0: update store then invalidate cache
+    ;(store as any).messages = [{ author: "Bob", body: "Hey" }]
     doc.messages[INVALIDATE](sequenceChange([{ retain: 0 }, { delete: 1 }]))
-    // Index 0 was deleted, so the old first ref is gone.
-    // The old second ref (Bob) is now shifted to index 0.
-    expect(doc.messages.at(0)).toBe(second)
+    // Index 0 should now read "Bob" (semantic correctness, not identity)
+    expect(doc.messages.at(0)?.author()).toBe("Bob")
   })
 
   it("map ref has [INVALIDATE] symbol", () => {
