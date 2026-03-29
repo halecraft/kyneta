@@ -39,6 +39,79 @@ import { changeToDiff, batchToOps } from "./change-mapping.js"
 import { registerLoroSubstrate } from "./loro-escape.js"
 
 // ---------------------------------------------------------------------------
+// mergePendingGroups — outbound leaf→container composition
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge pending diff groups that target the same ContainerID with MapDiff.
+ *
+ * When a transaction sets multiple keys on the same struct (e.g.,
+ * `d.settings.a.set(true); d.settings.b.set(0)`), each `prepare` call
+ * produces a separate single-element group targeting the same LoroMap.
+ * This function merges those into a single group with a combined
+ * `updated` record, producing one `applyDiff` call per container.
+ *
+ * **Only merges** single-element groups whose sole tuple is a MapDiff
+ * (type "map") with no `🦜:` (JsonContainerID) references in values.
+ * Multi-element groups (structured inserts with cross-references) and
+ * non-map diffs (text, list, counter) are never merged — they pass
+ * through unchanged.
+ */
+function mergePendingGroups(
+  groups: [ContainerID, Diff | JsonDiff][][],
+): [ContainerID, Diff | JsonDiff][][] {
+  if (groups.length <= 1) return groups
+
+  const result: [ContainerID, Diff | JsonDiff][][] = []
+  // Map from ContainerID → index in result where the merged group lives
+  const mergeTargets = new Map<ContainerID, number>()
+
+  for (const group of groups) {
+    // Only merge single-element groups with a MapDiff
+    if (group.length === 1) {
+      const [cid, diff] = group[0]
+      if (diff.type === "map" && !hasJsonContainerRef(diff)) {
+        const existingIdx = mergeTargets.get(cid)
+        if (existingIdx !== undefined) {
+          // Merge into existing group: combine `updated` records
+          const existing = result[existingIdx][0][1] as { type: "map"; updated: Record<string, unknown> }
+          const incoming = diff as { type: "map"; updated: Record<string, unknown> }
+          existing.updated = { ...existing.updated, ...incoming.updated }
+          continue
+        }
+        // First MapDiff for this CID — register as a merge target
+        // Clone the diff so we can mutate `updated` during merge
+        const cloned: [ContainerID, Diff | JsonDiff] = [
+          cid,
+          { type: "map", updated: { ...(diff as any).updated } } as Diff | JsonDiff,
+        ]
+        mergeTargets.set(cid, result.length)
+        result.push([cloned])
+        continue
+      }
+    }
+    // Non-mergeable group — pass through
+    result.push(group)
+  }
+
+  return result
+}
+
+/**
+ * Check if a MapDiff has any JsonContainerID references (`🦜:` prefix)
+ * in its `updated` values. Groups with such references are structured
+ * inserts that must stay intact for CID resolution.
+ */
+function hasJsonContainerRef(diff: Diff | JsonDiff): boolean {
+  const updated = (diff as any).updated
+  if (!updated) return false
+  for (const value of Object.values(updated)) {
+    if (typeof value === "string" && value.startsWith("🦜:")) return true
+  }
+  return false
+}
+
+// ---------------------------------------------------------------------------
 // createLoroSubstrate — wrap a user-provided LoroDoc
 // ---------------------------------------------------------------------------
 
@@ -116,13 +189,12 @@ export function createLoroSubstrate(
       if (!inEventHandler) {
         // Local write: apply accumulated diff groups, then commit.
         if (pendingGroups.length > 0) {
-          // Apply each group as a single applyDiff() call. Groups from
-          // different prepare() calls are applied separately (Loro can't
-          // handle duplicate ContainerIDs in a single batch, e.g. two
-          // TextDiffs for the same container from a multi-op transaction).
-          // Within a group, entries may cross-reference via JsonContainerID
-          // (🦜:) and MUST be in the same applyDiff() call.
-          for (const group of pendingGroups) {
+          // Merge single-element MapDiff groups targeting the same
+          // ContainerID into one group. This composes N per-leaf replace
+          // ops into a single per-container map update — the inverse of
+          // expandMapOpsToLeaves on the inbound path.
+          const merged = mergePendingGroups(pendingGroups)
+          for (const group of merged) {
             doc.applyDiff(group as any)
           }
           pendingGroups.length = 0

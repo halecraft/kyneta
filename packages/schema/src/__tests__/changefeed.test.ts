@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest"
 import type { Changeset, Op } from "../index.js"
+import type { MapChange, ReplaceChange, TextChange, SequenceChange, IncrementChange } from "../change.js"
 import {
   CHANGEFEED,
   changefeed,
+  expandMapOpsToLeaves,
   hasChangefeed,
   hasComposedChangefeed,
   interpret,
@@ -1056,5 +1058,101 @@ describe("changefeed: edge cases", () => {
     expect(changesets[0]?.changes[0]?.path).toEqual([
       { type: "key", key: "darkMode" },
     ])
+  })
+})
+
+// ===========================================================================
+// expandMapOpsToLeaves — container→leaf op expansion
+// ===========================================================================
+
+describe("expandMapOpsToLeaves", () => {
+  it("map op with single key → one leaf replace op", () => {
+    const ops: Op<MapChange>[] = [
+      {
+        path: [{ type: "key", key: "settings" }],
+        change: { type: "map", set: { a: true } },
+      },
+    ]
+    const result = expandMapOpsToLeaves(ops)
+    expect(result).toHaveLength(1)
+    expect(result[0].path).toEqual([
+      { type: "key", key: "settings" },
+      { type: "key", key: "a" },
+    ])
+    expect(result[0].change).toEqual({ type: "replace", value: true })
+  })
+
+  it("map op with multiple keys → N leaf replace ops", () => {
+    const ops: Op<MapChange>[] = [
+      {
+        path: [{ type: "key", key: "settings" }],
+        change: { type: "map", set: { a: true, b: 0, c: "hi" } },
+      },
+    ]
+    const result = expandMapOpsToLeaves(ops)
+    expect(result).toHaveLength(3)
+    const keys = result.map((r) => (r.path[1] as { key: string }).key).sort()
+    expect(keys).toEqual(["a", "b", "c"])
+    for (const r of result) {
+      expect(r.change.type).toBe("replace")
+    }
+  })
+
+  it("map op with delete keys → leaf replace ops with undefined", () => {
+    const ops: Op<MapChange>[] = [
+      {
+        path: [{ type: "key", key: "settings" }],
+        change: { type: "map", delete: ["x", "y"] },
+      },
+    ]
+    const result = expandMapOpsToLeaves(ops)
+    expect(result).toHaveLength(2)
+    expect(result[0].change).toEqual({ type: "replace", value: undefined })
+    expect(result[1].change).toEqual({ type: "replace", value: undefined })
+  })
+
+  it("non-map op → pass through unchanged", () => {
+    const ops: Op<TextChange | SequenceChange>[] = [
+      {
+        path: [{ type: "key", key: "title" }],
+        change: { type: "text", instructions: [{ insert: "hello" }] },
+      },
+      {
+        path: [{ type: "key", key: "items" }],
+        change: { type: "sequence", instructions: [{ insert: ["a"] }] },
+      },
+    ]
+    const result = expandMapOpsToLeaves(ops)
+    expect(result).toHaveLength(2)
+    expect(result).toEqual(ops)
+  })
+
+  it("mixed ops → only map ops expanded", () => {
+    const ops: Op<TextChange | MapChange | IncrementChange>[] = [
+      {
+        path: [{ type: "key", key: "title" }],
+        change: { type: "text", instructions: [{ insert: "hi" }] },
+      },
+      {
+        path: [{ type: "key", key: "settings" }],
+        change: { type: "map", set: { dark: true } },
+      },
+      {
+        path: [{ type: "key", key: "count" }],
+        change: { type: "increment", amount: 1 },
+      },
+    ]
+    const result = expandMapOpsToLeaves(ops)
+    expect(result).toHaveLength(3)
+    // text passes through
+    expect(result[0].change.type).toBe("text")
+    // map expanded to leaf replace
+    expect(result[1].path).toEqual([
+      { type: "key", key: "settings" },
+      { type: "key", key: "dark" },
+    ])
+    expect(result[1].change).toEqual({ type: "replace", value: true })
+    // counter passes through
+    expect(result[2].change.type).toBe("increment")
   })
 })

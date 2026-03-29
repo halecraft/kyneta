@@ -16,7 +16,7 @@
 // This produces a single observeDeep event with the complete struct,
 // rather than a cascade of child MapChange events.
 
-import { advanceSchema } from "@kyneta/schema"
+import { advanceSchema, expandMapOpsToLeaves } from "@kyneta/schema"
 import type {
   ChangeBase,
   IncrementChange,
@@ -383,7 +383,7 @@ export function eventsToOps(events: Y.YEvent<any>[]): Op[] {
     }
   }
 
-  return ops
+  return expandMapOpsToLeaves(ops)
 }
 
 // ---------------------------------------------------------------------------

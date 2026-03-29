@@ -13,7 +13,7 @@
 // `applyChanges` deliver multi-change batches. The subscriber API
 // is uniform regardless of batch size.
 
-import type { ChangeBase } from "./change.js"
+import type { ChangeBase, ReplaceChange } from "./change.js"
 import type { Path } from "./interpret.js"
 
 // ---------------------------------------------------------------------------
@@ -68,6 +68,58 @@ export interface Changeset<C = ChangeBase> {
 export interface Op<C extends ChangeBase = ChangeBase> {
   readonly path: Path
   readonly change: C
+}
+
+// ---------------------------------------------------------------------------
+// Op transformations
+// ---------------------------------------------------------------------------
+
+/**
+ * Expand container-level map ops into leaf-level replace ops.
+ *
+ * CRDT substrates (Loro, Yjs) fire events at container boundaries —
+ * a map/struct container fires a single event with per-key diffs.
+ * Kyneta's changefeed model subscribes at leaf paths. This function
+ * bridges the gap: a `MapChange` at path `p` with `{ set: { k: v } }`
+ * becomes a `ReplaceChange` at path `[...p, k]` with `{ value: v }`.
+ *
+ * Non-map ops (text, sequence, counter, tree) pass through unchanged —
+ * their event paths already match their changefeed subscription paths.
+ *
+ * This is the right adjoint to the implicit leaf→container composition
+ * that happens on the outbound path (e.g., `replaceChangeToDiff`).
+ */
+export function expandMapOpsToLeaves(ops: readonly Op[]): Op<ReplaceChange | ChangeBase>[] {
+  const result: Op<ReplaceChange | ChangeBase>[] = []
+
+  for (const op of ops) {
+    if (op.change.type !== "map") {
+      result.push(op)
+      continue
+    }
+
+    const mapChange = op.change as { type: "map"; set?: Record<string, unknown>; delete?: string[] }
+
+    if (mapChange.set) {
+      for (const [key, value] of Object.entries(mapChange.set)) {
+        result.push({
+          path: [...op.path, { type: "key", key }],
+          change: { type: "replace", value },
+        })
+      }
+    }
+
+    if (mapChange.delete) {
+      for (const key of mapChange.delete) {
+        result.push({
+          path: [...op.path, { type: "key", key }],
+          change: { type: "replace", value: undefined },
+        })
+      }
+    }
+  }
+
+  return result
 }
 
 // ---------------------------------------------------------------------------

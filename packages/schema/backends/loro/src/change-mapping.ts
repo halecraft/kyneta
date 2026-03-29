@@ -12,7 +12,7 @@
 // to reference new containers within an applyDiff batch. See the
 // "Structured inserts via JsonContainerID" section in the plan.
 
-import { advanceSchema } from "@kyneta/schema"
+import { advanceSchema, expandMapOpsToLeaves } from "@kyneta/schema"
 import { PROPS_KEY } from "./loro-resolve.js"
 import type {
   ChangeBase,
@@ -508,7 +508,7 @@ export function batchToOps(
     }
   }
 
-  return ops
+  return expandMapOpsToLeaves(ops)
 }
 
 // ---------------------------------------------------------------------------

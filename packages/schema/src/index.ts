@@ -48,6 +48,7 @@ export type {
 // Changefeed — the unified reactive protocol
 export {
   CHANGEFEED,
+  expandMapOpsToLeaves,
   getOrCreateChangefeed,
   hasChangefeed,
   hasComposedChangefeed,

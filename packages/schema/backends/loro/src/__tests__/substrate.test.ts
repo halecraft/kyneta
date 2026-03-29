@@ -328,6 +328,206 @@ describe("changefeed fires on importDelta", () => {
     // B's subscriber should have fired
     expect(received.length).toBeGreaterThanOrEqual(1)
   })
+
+  it("nested struct field changefeed fires on importDelta (todo done toggle)", () => {
+    // Replicates: Client A toggles todo.done → syncs to Client B →
+    // B's field-level changefeed for `done` should fire so the UI updates.
+    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const docA = interpretSubstrate(TestSchema, substrateA)
+
+    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const docB = interpretSubstrate(TestSchema, substrateB)
+
+    // Both peers add the same item via initial sync
+    change(docA, (d: any) => {
+      d.items.push({ name: "Buy milk", done: false })
+    })
+    const snapshot = substrateA.exportSnapshot()
+    substrateB.importDelta(snapshot, "sync")
+
+    // Verify B has the item
+    expect([...docB.items]).toHaveLength(1)
+    const itemB = [...docB.items][0] as any
+    expect(itemB.done()).toBe(false)
+
+    // Subscribe to the FIELD-LEVEL changefeed on B's item
+    const sinceVV = substrateB.version()
+    const fieldChanges: unknown[] = []
+    const cf = (itemB.done as any)[Symbol.for("kyneta:changefeed")]
+    expect(cf).toBeDefined()
+    const unsub = cf.subscribe((cs: unknown) => fieldChanges.push(cs))
+
+    // A toggles done
+    change(docA, (d: any) => {
+      d.items.at(0).done.set(true)
+    })
+
+    // Sync the toggle to B
+    const delta = substrateA.exportSince(sinceVV)!
+    substrateB.importDelta(delta, "sync")
+
+    // B should see the updated value
+    expect(itemB.done()).toBe(true)
+
+    // The field-level changefeed should have fired
+    expect(fieldChanges.length).toBeGreaterThanOrEqual(1)
+
+    unsub()
+  })
+
+  it("multi-key struct update fires per-field changefeeds on importDelta", () => {
+    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const docA = interpretSubstrate(TestSchema, substrateA)
+
+    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const docB = interpretSubstrate(TestSchema, substrateB)
+
+    // Both peers add the same item via initial sync
+    change(docA, (d: any) => {
+      d.items.push({ name: "Buy milk", done: false })
+    })
+    const snapshot = substrateA.exportSnapshot()
+    substrateB.importDelta(snapshot, "sync")
+
+    const itemB = [...docB.items][0] as any
+    const sinceVV = substrateB.version()
+
+    // Subscribe to BOTH field-level changefeeds on B's item
+    const nameChanges: unknown[] = []
+    const doneChanges: unknown[] = []
+    const cfName = (itemB.name as any)[Symbol.for("kyneta:changefeed")]
+    const cfDone = (itemB.done as any)[Symbol.for("kyneta:changefeed")]
+    const unsub1 = cfName.subscribe((cs: unknown) => nameChanges.push(cs))
+    const unsub2 = cfDone.subscribe((cs: unknown) => doneChanges.push(cs))
+
+    // A updates both fields in a single change()
+    change(docA, (d: any) => {
+      const item = d.items.at(0)
+      item.name.set("Buy oat milk")
+      item.done.set(true)
+    })
+
+    // Sync to B
+    const delta = substrateA.exportSince(sinceVV)!
+    substrateB.importDelta(delta, "sync")
+
+    // Both field-level changefeeds should have fired
+    expect(nameChanges.length).toBeGreaterThanOrEqual(1)
+    expect(doneChanges.length).toBeGreaterThanOrEqual(1)
+
+    // Values should be updated
+    expect(itemB.name()).toBe("Buy oat milk")
+    expect(itemB.done()).toBe(true)
+
+    unsub1()
+    unsub2()
+  })
+
+  it("batchToOps inverts changeToDiff for map changes (round-trip symmetry)", () => {
+    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const docA = interpretSubstrate(TestSchema, substrateA)
+
+    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const docB = interpretSubstrate(TestSchema, substrateB)
+
+    // Add item on A, sync to B
+    change(docA, (d: any) => {
+      d.items.push({ name: "Task", done: false })
+    })
+    substrateB.importDelta(substrateA.exportSnapshot(), "sync")
+
+    const sinceVV = substrateB.version()
+
+    // Capture the leaf ops from A's local mutation
+    const localOps = change(docA, (d: any) => {
+      d.items.at(0).done.set(true)
+    })
+
+    // The local op should be a leaf-level replace at ["items", 0, "done"]
+    expect(localOps.length).toBe(1)
+    expect(localOps[0].path).toEqual([
+      { type: "key", key: "items" },
+      { type: "index", index: 0 },
+      { type: "key", key: "done" },
+    ])
+    expect(localOps[0].change.type).toBe("replace")
+
+    // Sync to B — the event bridge produces ops via batchToOps + expandMapOpsToLeaves
+    // Subscribe to B's field changefeed to capture the inbound ops indirectly
+    const itemB = [...docB.items][0] as any
+    const fieldChanges: unknown[] = []
+    const cf = (itemB.done as any)[Symbol.for("kyneta:changefeed")]
+    const unsub = cf.subscribe((cs: unknown) => fieldChanges.push(cs))
+
+    const delta = substrateA.exportSince(sinceVV)!
+    substrateB.importDelta(delta, "sync")
+
+    // The inbound path should have reached the same leaf path
+    // (proven by the field-level changefeed firing)
+    expect(fieldChanges.length).toBeGreaterThanOrEqual(1)
+    expect(itemB.done()).toBe(true)
+
+    unsub()
+  })
+})
+
+// ===========================================================================
+// Outbound: mergePendingGroups
+// ===========================================================================
+
+describe("outbound: multi-key struct mutation batching", () => {
+  it("multi-key struct mutation produces correct state", () => {
+    // This test verifies that mergePendingGroups doesn't break
+    // correctness: setting 3 keys on the same struct in one transaction
+    // should produce the correct final state.
+    const substrate = loroSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(TestSchema, substrate)
+
+    change(doc, (d: any) => {
+      d.items.push({ name: "initial", done: false })
+    })
+
+    // Update multiple fields in one transaction
+    change(doc, (d: any) => {
+      const item = d.items.at(0)
+      item.name.set("updated")
+      item.done.set(true)
+    })
+
+    const item = [...doc.items][0] as any
+    expect(item.name()).toBe("updated")
+    expect(item.done()).toBe(true)
+  })
+
+  it("multi-key struct mutation syncs correctly to another peer", () => {
+    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const docA = interpretSubstrate(TestSchema, substrateA)
+
+    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const docB = interpretSubstrate(TestSchema, substrateB)
+
+    change(docA, (d: any) => {
+      d.items.push({ name: "initial", done: false })
+    })
+    substrateB.importDelta(substrateA.exportSnapshot(), "sync")
+
+    const sinceVV = substrateB.version()
+
+    // Update multiple fields in one transaction on A
+    change(docA, (d: any) => {
+      const item = d.items.at(0)
+      item.name.set("updated")
+      item.done.set(true)
+    })
+
+    // Sync to B
+    const delta = substrateA.exportSince(sinceVV)!
+    substrateB.importDelta(delta, "sync")
+
+    const itemB = [...docB.items][0] as any
+    expect(itemB.name()).toBe("updated")
+    expect(itemB.done()).toBe(true)
+  })
 })
 
 // ===========================================================================

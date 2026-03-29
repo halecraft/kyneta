@@ -361,6 +361,93 @@ describe("YjsSubstrate", () => {
       // not twice (not also from the event bridge).
       expect(received.length).toBe(1)
     })
+
+    it("nested struct field changefeed fires on importDelta", () => {
+      const doc1 = createYjsDoc(StructListSchema)
+      const doc2 = createYjsDocFromSnapshot(
+        StructListSchema,
+        exportSnapshot(doc1),
+      )
+
+      // Add a struct item on doc1, sync to doc2
+      change(doc1, (d: any) => {
+        d.tasks.push({ name: "Buy milk", done: false })
+      })
+      const snap = exportSnapshot(doc1)
+      const doc2b = createYjsDocFromSnapshot(StructListSchema, snap)
+
+      const taskB = [...doc2b.tasks][0] as any
+      expect(taskB.done()).toBe(false)
+
+      // Subscribe to the FIELD-LEVEL changefeed on doc2b's task
+      const v2 = version(doc2b)
+      const fieldChanges: unknown[] = []
+      const cf = (taskB.done as any)[Symbol.for("kyneta:changefeed")]
+      expect(cf).toBeDefined()
+      const unsub = cf.subscribe((cs: unknown) => fieldChanges.push(cs))
+
+      // Toggle done on doc1
+      change(doc1, (d: any) => {
+        d.tasks.at(0).done.set(true)
+      })
+
+      // Sync the toggle to doc2b
+      const delta = exportSince(doc1, v2)!
+      importDelta(doc2b, delta)
+
+      // Value should be updated
+      expect(taskB.done()).toBe(true)
+
+      // The field-level changefeed should have fired
+      expect(fieldChanges.length).toBeGreaterThanOrEqual(1)
+
+      unsub()
+    })
+
+    it("multi-key struct update fires per-field changefeeds on importDelta", () => {
+      const doc1 = createYjsDoc(StructListSchema)
+
+      // Add a struct item, sync to doc2
+      change(doc1, (d: any) => {
+        d.tasks.push({ name: "Buy milk", done: false })
+      })
+      const doc2 = createYjsDocFromSnapshot(
+        StructListSchema,
+        exportSnapshot(doc1),
+      )
+
+      const taskB = [...doc2.tasks][0] as any
+      const v2 = version(doc2)
+
+      // Subscribe to BOTH field-level changefeeds
+      const nameChanges: unknown[] = []
+      const doneChanges: unknown[] = []
+      const cfName = (taskB.name as any)[Symbol.for("kyneta:changefeed")]
+      const cfDone = (taskB.done as any)[Symbol.for("kyneta:changefeed")]
+      const unsub1 = cfName.subscribe((cs: unknown) => nameChanges.push(cs))
+      const unsub2 = cfDone.subscribe((cs: unknown) => doneChanges.push(cs))
+
+      // Update both fields in a single change() on doc1
+      change(doc1, (d: any) => {
+        const task = d.tasks.at(0)
+        task.name.set("Buy oat milk")
+        task.done.set(true)
+      })
+
+      // Sync to doc2
+      const delta = exportSince(doc1, v2)!
+      importDelta(doc2, delta)
+
+      // Both field-level changefeeds should have fired
+      expect(nameChanges.length).toBeGreaterThanOrEqual(1)
+      expect(doneChanges.length).toBeGreaterThanOrEqual(1)
+
+      expect(taskB.name()).toBe("Buy oat milk")
+      expect(taskB.done()).toBe(true)
+
+      unsub1()
+      unsub2()
+    })
   })
 
   // -------------------------------------------------------------------------
