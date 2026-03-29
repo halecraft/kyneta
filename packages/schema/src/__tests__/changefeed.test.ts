@@ -16,6 +16,31 @@ import {
   TRANSACT,
   writable,
 } from "../index.js"
+import { RawPath, type RawSegment } from "../path.js"
+
+/** Narrowed helper: return the key variant of RawSegment. */
+function keySeg(path: { readonly segments: readonly unknown[] }, i: number): { role: "key"; resolve(): string; type?: string; key?: string } {
+  const seg = path.segments[i] as any
+  return {
+    role: "key" as const,
+    resolve: () => seg.resolve() as string,
+    // Backwards compat for tests that check .type and .key
+    type: "key",
+    key: seg.resolve() as string,
+  }
+}
+
+/** Narrowed helper: return the index variant of RawSegment. */
+function idxSeg(path: { readonly segments: readonly unknown[] }, i: number): { role: "index"; resolve(): number; type?: string; index?: number } {
+  const seg = path.segments[i] as any
+  return {
+    role: "index" as const,
+    resolve: () => seg.resolve() as number,
+    // Backwards compat for tests that check .type and .index
+    type: "index",
+    index: seg.resolve() as number,
+  }
+}
 
 // ===========================================================================
 // Shared fixtures
@@ -290,7 +315,7 @@ describe("changefeed: product subscribeTree", () => {
 
     doc.settings.darkMode.set(true)
     expect(events).toHaveLength(1)
-    expect(events[0]?.path).toEqual([{ type: "key", key: "darkMode" }])
+    expect(events[0]?.path.key).toBe(RawPath.empty.field("darkMode").key)
     expect(events[0]?.change.type).toBe("replace")
   })
 
@@ -304,7 +329,7 @@ describe("changefeed: product subscribeTree", () => {
 
     doc.settings.set({ darkMode: true, fontSize: 18 })
     expect(events).toHaveLength(1)
-    expect(events[0]?.path).toEqual([])
+    expect(events[0]?.path.length).toBe(0)
     expect(events[0]?.change.type).toBe("replace")
   })
 
@@ -322,10 +347,10 @@ describe("changefeed: product subscribeTree", () => {
     const darkModeEvent = events.find(
       e =>
         e.path.length === 2 &&
-        e.path[0]?.type === "key" &&
-        (e.path[0] as { key: string }).key === "settings" &&
-        e.path[1]?.type === "key" &&
-        (e.path[1] as { key: string }).key === "darkMode",
+        keySeg(e.path, 0).type === "key" &&
+        keySeg(e.path, 0).key === "settings" &&
+        keySeg(e.path, 1).type === "key" &&
+        keySeg(e.path, 1).key === "darkMode",
     )
     expect(darkModeEvent).toBeDefined()
     expect(darkModeEvent?.change.type).toBe("replace")
@@ -376,8 +401,8 @@ describe("changefeed: sequence subscribeTree", () => {
     const itemEvent = events.find(
       e =>
         e.path.length >= 2 &&
-        e.path[0]?.type === "index" &&
-        (e.path[0] as { index: number }).index === 0,
+        idxSeg(e.path, 0).type === "index" &&
+        idxSeg(e.path, 0).index === 0,
     )
     expect(itemEvent).toBeDefined()
     expect(itemEvent?.change.type).toBe("replace")
@@ -418,8 +443,8 @@ describe("changefeed: sequence subscribeTree", () => {
     const newItemEvent = events.find(
       e =>
         e.path.length >= 2 &&
-        e.path[0]?.type === "index" &&
-        (e.path[0] as { index: number }).index === 1,
+        idxSeg(e.path, 0).type === "index" &&
+        idxSeg(e.path, 0).index === 1,
     )
     expect(newItemEvent).toBeDefined()
   })
@@ -472,8 +497,8 @@ describe("changefeed: map subscribeTree", () => {
     const entryEvent = events.find(
       e =>
         e.path.length >= 1 &&
-        e.path[0]?.type === "key" &&
-        (e.path[0] as { key: string }).key === "color",
+        keySeg(e.path, 0).type === "key" &&
+        keySeg(e.path, 0).key === "color",
     )
     expect(entryEvent).toBeDefined()
   })
@@ -556,7 +581,7 @@ describe("changefeed: coexistence of subscribe and subscribeTree", () => {
 
     expect(shallowChangesets).toHaveLength(1)
     expect(treeEvents).toHaveLength(1)
-    expect(treeEvents[0]?.path).toEqual([])
+    expect(treeEvents[0]?.path.length).toBe(0)
   })
 })
 
@@ -639,14 +664,14 @@ describe("changefeed: transaction integration", () => {
     const darkModeEvents = allEvents.filter(
       e =>
         e.path.length === 1 &&
-        e.path[0]?.type === "key" &&
-        (e.path[0] as { key: string }).key === "darkMode",
+        keySeg(e.path, 0).type === "key" &&
+        keySeg(e.path, 0).key === "darkMode",
     )
     const fontSizeEvents = allEvents.filter(
       e =>
         e.path.length === 1 &&
-        e.path[0]?.type === "key" &&
-        (e.path[0] as { key: string }).key === "fontSize",
+        keySeg(e.path, 0).type === "key" &&
+        keySeg(e.path, 0).key === "fontSize",
     )
     expect(darkModeEvents).toHaveLength(1)
     expect(fontSizeEvents).toHaveLength(1)
@@ -729,14 +754,14 @@ describe("changefeed: transaction integration", () => {
     const darkModeEvents = allEvents.filter(
       e =>
         e.path.length === 1 &&
-        e.path[0]?.type === "key" &&
-        (e.path[0] as { key: string }).key === "darkMode",
+        keySeg(e.path, 0).type === "key" &&
+        keySeg(e.path, 0).key === "darkMode",
     )
     const fontSizeEvents = allEvents.filter(
       e =>
         e.path.length === 1 &&
-        e.path[0]?.type === "key" &&
-        (e.path[0] as { key: string }).key === "fontSize",
+        keySeg(e.path, 0).type === "key" &&
+        keySeg(e.path, 0).key === "fontSize",
     )
     expect(darkModeEvents).toHaveLength(1)
     expect(fontSizeEvents).toHaveLength(1)
@@ -869,9 +894,9 @@ describe("changefeed: batched notification", () => {
     expect(treeChangesets).toHaveLength(1)
     expect(treeChangesets[0]?.origin).toBe("undo")
     expect(treeChangesets[0]?.changes).toHaveLength(1)
-    expect(treeChangesets[0]?.changes[0]?.path).toEqual([
-      { type: "key", key: "darkMode" },
-    ])
+    expect(treeChangesets[0]?.changes[0]?.path.key).toBe(
+      RawPath.empty.field("darkMode").key,
+    )
   })
 
   it("multiple paths in one transaction: each path gets its own Changeset", () => {
@@ -1057,9 +1082,9 @@ describe("changefeed: edge cases", () => {
     doc.settings.darkMode.set(true)
     expect(changesets).toHaveLength(1)
     expect(changesets[0]?.changes).toHaveLength(1)
-    expect(changesets[0]?.changes[0]?.path).toEqual([
-      { type: "key", key: "darkMode" },
-    ])
+    expect(changesets[0]?.changes[0]?.path.key).toBe(
+      RawPath.empty.field("darkMode").key,
+    )
   })
 })
 
@@ -1071,29 +1096,28 @@ describe("expandMapOpsToLeaves", () => {
   it("map op with single key → one leaf replace op", () => {
     const ops: Op<MapChange>[] = [
       {
-        path: [{ type: "key", key: "settings" }],
+        path: RawPath.empty.field("settings"),
         change: { type: "map", set: { a: true } },
       },
     ]
     const result = expandMapOpsToLeaves(ops)
     expect(result).toHaveLength(1)
-    expect(result[0].path).toEqual([
-      { type: "key", key: "settings" },
-      { type: "key", key: "a" },
-    ])
+    expect(result[0].path.key).toBe(
+      RawPath.empty.field("settings").field("a").key,
+    )
     expect(result[0].change).toEqual({ type: "replace", value: true })
   })
 
   it("map op with multiple keys → N leaf replace ops", () => {
     const ops: Op<MapChange>[] = [
       {
-        path: [{ type: "key", key: "settings" }],
+        path: RawPath.empty.field("settings"),
         change: { type: "map", set: { a: true, b: 0, c: "hi" } },
       },
     ]
     const result = expandMapOpsToLeaves(ops)
     expect(result).toHaveLength(3)
-    const keys = result.map((r) => (r.path[1] as { key: string }).key).sort()
+    const keys = result.map((r) => keySeg(r.path, 1).key).sort()
     expect(keys).toEqual(["a", "b", "c"])
     for (const r of result) {
       expect(r.change.type).toBe("replace")
@@ -1103,7 +1127,7 @@ describe("expandMapOpsToLeaves", () => {
   it("map op with delete keys → leaf replace ops with undefined", () => {
     const ops: Op<MapChange>[] = [
       {
-        path: [{ type: "key", key: "settings" }],
+        path: RawPath.empty.field("settings"),
         change: { type: "map", delete: ["x", "y"] },
       },
     ]
@@ -1116,11 +1140,11 @@ describe("expandMapOpsToLeaves", () => {
   it("non-map op → pass through unchanged", () => {
     const ops: Op<TextChange | SequenceChange>[] = [
       {
-        path: [{ type: "key", key: "title" }],
+        path: RawPath.empty.field("title"),
         change: { type: "text", instructions: [{ insert: "hello" }] },
       },
       {
-        path: [{ type: "key", key: "items" }],
+        path: RawPath.empty.field("items"),
         change: { type: "sequence", instructions: [{ insert: ["a"] }] },
       },
     ]
@@ -1132,15 +1156,15 @@ describe("expandMapOpsToLeaves", () => {
   it("mixed ops → only map ops expanded", () => {
     const ops: Op<TextChange | MapChange | IncrementChange>[] = [
       {
-        path: [{ type: "key", key: "title" }],
+        path: RawPath.empty.field("title"),
         change: { type: "text", instructions: [{ insert: "hi" }] },
       },
       {
-        path: [{ type: "key", key: "settings" }],
+        path: RawPath.empty.field("settings"),
         change: { type: "map", set: { dark: true } },
       },
       {
-        path: [{ type: "key", key: "count" }],
+        path: RawPath.empty.field("count"),
         change: { type: "increment", amount: 1 },
       },
     ]
@@ -1149,10 +1173,9 @@ describe("expandMapOpsToLeaves", () => {
     // text passes through
     expect(result[0].change.type).toBe("text")
     // map expanded to leaf replace
-    expect(result[1].path).toEqual([
-      { type: "key", key: "settings" },
-      { type: "key", key: "dark" },
-    ])
+    expect(result[1].path.key).toBe(
+      RawPath.empty.field("settings").field("dark").key,
+    )
     expect(result[1].change).toEqual({ type: "replace", value: true })
     // counter passes through
     expect(result[2].change.type).toBe("increment")

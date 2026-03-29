@@ -5,6 +5,7 @@ import {
   interpret,
   LoroSchema,
   plainInterpreter,
+  RawPath,
   Schema,
 } from "../index.js"
 
@@ -253,27 +254,26 @@ describe("interpret: path accumulation", () => {
     interpret(schema, pathTracker, undefined)
 
     // Root: annotated("doc") at []
-    expect(paths[0]).toEqual({ kind: "annotated:doc", path: [] })
+    expect(paths[0]?.kind).toBe("annotated:doc")
+    expect(paths[0]?.path.length).toBe(0)
 
     // Inner product at [] (annotation doesn't advance path)
-    expect(paths[1]).toEqual({ kind: "product", path: [] })
+    expect(paths[1]?.kind).toBe("product")
+    expect(paths[1]?.path.length).toBe(0)
 
     // title: scalar at [key:"title"]
     const titlePath = paths.find(p => p.kind === "scalar:string")
-    expect(titlePath?.path).toEqual([{ type: "key", key: "title" }])
+    expect(titlePath?.path.format()).toBe("title")
 
     // settings: product at [key:"settings"]
     const settingsPath = paths.find(
       p => p.kind === "product" && p.path.length === 1,
     )
-    expect(settingsPath?.path).toEqual([{ type: "key", key: "settings" }])
+    expect(settingsPath?.path.format()).toBe("settings")
 
     // darkMode: scalar at [key:"settings", key:"darkMode"]
     const darkModePath = paths.find(p => p.kind === "scalar:boolean")
-    expect(darkModePath?.path).toEqual([
-      { type: "key", key: "settings" },
-      { type: "key", key: "darkMode" },
-    ])
+    expect(darkModePath?.path.format()).toBe("settings.darkMode")
   })
 })
 

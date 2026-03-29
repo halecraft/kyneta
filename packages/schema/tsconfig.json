@@ -5,7 +5,7 @@
     "moduleResolution": "NodeNext",
     "strict": true,
     "skipLibCheck": true,
-    "lib": ["ESNext"],
+    "lib": ["ESNext", "DOM"],
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,

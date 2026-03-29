@@ -8,6 +8,7 @@ import {
   interpret,
   LoroSchema,
   plainContext,
+  RawPath,
   readable,
   replaceChange,
   Schema,
@@ -82,10 +83,7 @@ describe("change: basic behavior", () => {
     })
 
     expect(ops).toHaveLength(1)
-    expect(ops[0]?.path).toEqual([
-      { type: "key", key: "settings" },
-      { type: "key", key: "darkMode" },
-    ])
+    expect(ops[0]?.path.key).toBe(RawPath.empty.field("settings").field("darkMode").key)
     expect(ops[0]?.change).toEqual(replaceChange(true))
   })
 
@@ -100,17 +98,11 @@ describe("change: basic behavior", () => {
 
     expect(ops).toHaveLength(3)
     // First: darkMode set
-    expect(ops[0]?.path).toEqual([
-      { type: "key", key: "settings" },
-      { type: "key", key: "darkMode" },
-    ])
+    expect(ops[0]?.path.key).toBe(RawPath.empty.field("settings").field("darkMode").key)
     // Second: fontSize set
-    expect(ops[1]?.path).toEqual([
-      { type: "key", key: "settings" },
-      { type: "key", key: "fontSize" },
-    ])
+    expect(ops[1]?.path.key).toBe(RawPath.empty.field("settings").field("fontSize").key)
     // Third: messages push
-    expect(ops[2]?.path).toEqual([{ type: "key", key: "messages" }])
+    expect(ops[2]?.path.key).toBe(RawPath.empty.field("messages").key)
   })
 
   it("captures text mutations", () => {
@@ -178,10 +170,7 @@ describe("applyChanges: basic behavior", () => {
 
     const ops: Op[] = [
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "darkMode" },
-        ],
+        path: RawPath.empty.field("settings").field("darkMode"),
         change: replaceChange(true),
       },
     ]
@@ -196,7 +185,7 @@ describe("applyChanges: basic behavior", () => {
 
     const ops: Op[] = [
       {
-        path: [{ type: "key", key: "title" }],
+        path: RawPath.empty.field("title"),
         change: textChange([{ retain: 5 }, { insert: " World" }]),
       },
     ]
@@ -211,7 +200,7 @@ describe("applyChanges: basic behavior", () => {
 
     const ops: Op[] = [
       {
-        path: [{ type: "key", key: "messages" }],
+        path: RawPath.empty.field("messages"),
         change: sequenceChange([
           { retain: 1 },
           { insert: [{ author: "Bob", body: "Hey" }] },
@@ -230,7 +219,7 @@ describe("applyChanges: basic behavior", () => {
 
     const ops: Op[] = [
       {
-        path: [{ type: "key", key: "count" }],
+        path: RawPath.empty.field("count"),
         change: incrementChange(5),
       },
     ]
@@ -245,21 +234,15 @@ describe("applyChanges: basic behavior", () => {
 
     const ops: Op[] = [
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "darkMode" },
-        ],
+        path: RawPath.empty.field("settings").field("darkMode"),
         change: replaceChange(true),
       },
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "fontSize" },
-        ],
+        path: RawPath.empty.field("settings").field("fontSize"),
         change: replaceChange(20),
       },
       {
-        path: [{ type: "key", key: "title" }],
+        path: RawPath.empty.field("title"),
         change: textChange([{ delete: 5 }, { insert: "Goodbye" }]),
       },
     ]
@@ -275,10 +258,7 @@ describe("applyChanges: basic behavior", () => {
     const { doc } = createChatDoc()
     const ops: Op[] = [
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "darkMode" },
-        ],
+        path: RawPath.empty.field("settings").field("darkMode"),
         change: replaceChange(true),
       },
     ]
@@ -309,10 +289,7 @@ describe("applyChanges: basic behavior", () => {
     expect(() =>
       applyChanges(doc, [
         {
-          path: [
-            { type: "key", key: "settings" },
-            { type: "key", key: "darkMode" },
-          ],
+          path: RawPath.empty.field("settings").field("darkMode"),
           change: replaceChange(true),
         },
       ]),
@@ -437,17 +414,11 @@ describe("applyChanges: batched notification", () => {
 
     applyChanges(doc, [
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "darkMode" },
-        ],
+        path: RawPath.empty.field("settings").field("darkMode"),
         change: replaceChange(true),
       },
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "fontSize" },
-        ],
+        path: RawPath.empty.field("settings").field("fontSize"),
         change: replaceChange(20),
       },
     ])
@@ -464,17 +435,11 @@ describe("applyChanges: batched notification", () => {
 
     applyChanges(doc, [
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "darkMode" },
-        ],
+        path: RawPath.empty.field("settings").field("darkMode"),
         change: replaceChange(false),
       },
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "fontSize" },
-        ],
+        path: RawPath.empty.field("settings").field("fontSize"),
         change: replaceChange(16),
       },
     ])
@@ -499,17 +464,11 @@ describe("applyChanges: batched notification", () => {
 
     applyChanges(doc, [
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "darkMode" },
-        ],
+        path: RawPath.empty.field("settings").field("darkMode"),
         change: replaceChange(true),
       },
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "fontSize" },
-        ],
+        path: RawPath.empty.field("settings").field("fontSize"),
         change: replaceChange(20),
       },
     ])
@@ -526,15 +485,15 @@ describe("applyChanges: batched notification", () => {
 
     applyChanges(doc, [
       {
-        path: [{ type: "key", key: "count" }],
+        path: RawPath.empty.field("count"),
         change: incrementChange(1),
       },
       {
-        path: [{ type: "key", key: "count" }],
+        path: RawPath.empty.field("count"),
         change: incrementChange(2),
       },
       {
-        path: [{ type: "key", key: "count" }],
+        path: RawPath.empty.field("count"),
         change: incrementChange(3),
       },
     ])
@@ -561,10 +520,7 @@ describe("applyChanges: origin tagging", () => {
       doc,
       [
         {
-          path: [
-            { type: "key", key: "settings" },
-            { type: "key", key: "darkMode" },
-          ],
+          path: RawPath.empty.field("settings").field("darkMode"),
           change: replaceChange(true),
         },
       ],
@@ -583,10 +539,7 @@ describe("applyChanges: origin tagging", () => {
 
     applyChanges(doc, [
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "darkMode" },
-        ],
+        path: RawPath.empty.field("settings").field("darkMode"),
         change: replaceChange(true),
       },
     ])
@@ -605,10 +558,7 @@ describe("applyChanges: origin tagging", () => {
       doc,
       [
         {
-          path: [
-            { type: "key", key: "settings" },
-            { type: "key", key: "darkMode" },
-          ],
+          path: RawPath.empty.field("settings").field("darkMode"),
           change: replaceChange(true),
         },
       ],
@@ -618,9 +568,7 @@ describe("applyChanges: origin tagging", () => {
     expect(treeChangesets).toHaveLength(1)
     expect(treeChangesets[0]?.origin).toBe("undo")
     expect(treeChangesets[0]?.changes).toHaveLength(1)
-    expect(treeChangesets[0]?.changes[0]?.path).toEqual([
-      { type: "key", key: "darkMode" },
-    ])
+    expect(treeChangesets[0]?.changes[0]?.path.key).toBe(RawPath.empty.field("darkMode").key)
   })
 })
 
@@ -640,10 +588,7 @@ describe("applyChanges: surgical cache invalidation", () => {
     // Apply change only to settings.darkMode
     applyChanges(doc, [
       {
-        path: [
-          { type: "key", key: "settings" },
-          { type: "key", key: "darkMode" },
-        ],
+        path: RawPath.empty.field("settings").field("darkMode"),
         change: replaceChange(true),
       },
     ])
@@ -665,7 +610,7 @@ describe("applyChanges: surgical cache invalidation", () => {
     // Insert at index 0 via applyChanges
     applyChanges(doc, [
       {
-        path: [{ type: "key", key: "messages" }],
+        path: RawPath.empty.field("messages"),
         change: sequenceChange([
           { insert: [{ author: "Eve", body: "First!" }] },
         ]),
@@ -739,18 +684,14 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
 
     // Each changeset has one Op with a relative path
     expect(treeChangesets[0]?.changes).toHaveLength(1)
-    expect(treeChangesets[0]?.changes[0]?.path).toEqual([
-      { type: "key", key: "darkMode" },
-    ])
+    expect(treeChangesets[0]?.changes[0]?.path.key).toBe(RawPath.empty.field("darkMode").key)
     expect(treeChangesets[1]?.changes).toHaveLength(1)
-    expect(treeChangesets[1]?.changes[0]?.path).toEqual([
-      { type: "key", key: "fontSize" },
-    ])
+    expect(treeChangesets[1]?.changes[0]?.path.key).toBe(RawPath.empty.field("fontSize").key)
 
     // To apply to docB, we need to prepend the "settings" prefix
     const absoluteOps: Op[] = treeChangesets.flatMap(cs =>
       cs.changes.map(te => ({
-        path: [{ type: "key" as const, key: "settings" }, ...te.path],
+        path: te.path.root().field("settings").concat(te.path),
         change: te.change,
       })),
     )
@@ -851,7 +792,7 @@ describe("re-entrancy: mutation during notification is forbidden", () => {
     getChangefeed(doc.settings.darkMode).subscribe(() => {
       applyChanges(doc, [
         {
-          path: [{ type: "key", key: "count" }],
+          path: RawPath.empty.field("count"),
           change: incrementChange(10),
         },
       ])
@@ -970,9 +911,7 @@ describe("subscribe: basic behavior", () => {
 
     expect(changesets).toHaveLength(1)
     expect(changesets[0]?.changes).toHaveLength(1)
-    expect(changesets[0]?.changes[0]?.path).toEqual([
-      { type: "key", key: "darkMode" },
-    ])
+    expect(changesets[0]?.changes[0]?.path.key).toBe(RawPath.empty.field("darkMode").key)
   })
 
   it("fires on own-path change with path []", () => {
@@ -984,7 +923,7 @@ describe("subscribe: basic behavior", () => {
 
     expect(changesets).toHaveLength(1)
     expect(changesets[0]?.changes).toHaveLength(1)
-    expect(changesets[0]?.changes[0]?.path).toEqual([])
+    expect(changesets[0]?.changes[0]?.path.key).toBe(RawPath.empty.key)
   })
 
   it("unsubscribe stops delivery", () => {

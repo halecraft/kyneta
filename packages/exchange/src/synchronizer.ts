@@ -10,8 +10,8 @@
 // Ported from @loro-extended/repo's Synchronizer with Loro-specific types
 // replaced by substrate-agnostic equivalents.
 
-import type { Substrate, SubstratePayload, SubstrateFactory, MergeStrategy } from "@kyneta/schema"
-import { executeBatch } from "@kyneta/schema"
+import type { Substrate, SubstratePayload, SubstrateFactory, MergeStrategy, Op } from "@kyneta/schema"
+import { executeBatch, RawPath, replaceChange } from "@kyneta/schema"
 import type { AnyAdapter } from "./adapter/adapter.js"
 import { AdapterManager } from "./adapter/adapter-manager.js"
 import type { Channel, ConnectedChannel } from "./channel.js"
@@ -620,14 +620,11 @@ export class Synchronizer {
       const ctx = runtime.substrate.context()
 
       // Build ops: one ReplaceChange per top-level key
-      const ops: Array<{
-        path: Array<{ type: "key"; key: string }>
-        change: { type: "replace"; value: unknown }
-      }> = []
+      const ops: Op[] = []
       for (const [key, value] of Object.entries(state)) {
         ops.push({
-          path: [{ type: "key" as const, key }],
-          change: { type: "replace" as const, value },
+          path: RawPath.empty.field(key),
+          change: replaceChange(value),
         })
       }
 

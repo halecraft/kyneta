@@ -6,6 +6,7 @@
 // module-scoped WeakMap in `create.ts`.
 
 import type { Op } from "../changefeed.js"
+import { RawPath } from "../path.js"
 import type { SubstratePayload } from "../substrate.js"
 import { PlainVersion } from "../substrates/plain.js"
 import { getSubstrate } from "./create.js"
@@ -46,8 +47,18 @@ export function delta(doc: object, fromVersion: number): Op[] {
   const since = new PlainVersion(fromVersion)
   const payload = substrate.exportSince(since)
   if (!payload) return []
-  const ops = JSON.parse(payload.data as string) as Op[]
-  return ops
+  const raw = JSON.parse(payload.data as string) as Array<{
+    path: Array<{ type: string; key?: string; index?: number }>
+    change: Op["change"]
+  }>
+  return raw.map(op => ({
+    path: op.path.reduce(
+      (p: RawPath, seg) =>
+        seg.type === "key" ? p.field(seg.key!) : p.item(seg.index!),
+      RawPath.empty,
+    ),
+    change: op.change,
+  }))
 }
 
 // ---------------------------------------------------------------------------

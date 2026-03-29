@@ -103,7 +103,7 @@ export function expandMapOpsToLeaves(ops: readonly Op[]): Op<ReplaceChange | Cha
     if (mapChange.set) {
       for (const [key, value] of Object.entries(mapChange.set)) {
         result.push({
-          path: [...op.path, { type: "key", key }],
+          path: op.path.field(key),
           change: { type: "replace", value },
         })
       }
@@ -112,7 +112,7 @@ export function expandMapOpsToLeaves(ops: readonly Op[]): Op<ReplaceChange | Cha
     if (mapChange.delete) {
       for (const key of mapChange.delete) {
         result.push({
-          path: [...op.path, { type: "key", key }],
+          path: op.path.field(key),
           change: { type: "replace", value: undefined },
         })
       }

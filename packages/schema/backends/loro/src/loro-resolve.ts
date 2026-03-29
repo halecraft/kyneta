@@ -18,7 +18,7 @@
 // avoids creating a separate root container per scalar field.
 
 import { advanceSchema } from "@kyneta/schema"
-import type { Path, PathSegment } from "@kyneta/schema"
+import type { Path, Segment } from "@kyneta/schema"
 import type { Schema as SchemaNode } from "@kyneta/schema"
 import type { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
 
@@ -154,7 +154,7 @@ function unwrapToStructural(schema: SchemaNode): SchemaNode {
  */
 function stepFromContainer(
   container: unknown,
-  segment: PathSegment,
+  segment: Segment,
 ): unknown {
   if (!hasKind(container)) {
     // Plain value or unknown — cannot step further
@@ -162,35 +162,21 @@ function stepFromContainer(
   }
 
   const kind = container.kind()
+  const resolved = segment.resolve()
 
   switch (kind) {
     case "Map":
-      if (segment.type !== "key") {
-        throw new Error(
-          `loro-resolve: Map container expects a key segment, got index`,
-        )
-      }
-      return (container as LoroMap).get(segment.key)
+      return (container as LoroMap).get(resolved as string)
 
     case "List":
-      if (segment.type !== "index") {
-        throw new Error(
-          `loro-resolve: List container expects an index segment, got key "${segment.key}"`,
-        )
-      }
-      return (container as LoroList).get(segment.index)
+      return (container as LoroList).get(resolved as number)
 
     case "MovableList":
-      if (segment.type !== "index") {
-        throw new Error(
-          `loro-resolve: MovableList container expects an index segment, got key "${segment.key}"`,
-        )
-      }
-      return (container as LoroMovableList).get(segment.index)
+      return (container as LoroMovableList).get(resolved as number)
 
     default:
       throw new Error(
-        `loro-resolve: cannot step into container of kind "${kind}" with segment ${JSON.stringify(segment)}`,
+        `loro-resolve: cannot step into container of kind "${kind}"`,
       )
   }
 }
@@ -217,15 +203,10 @@ export function stepIntoLoro(
   current: unknown,
   _currentSchema: SchemaNode,
   nextSchema: SchemaNode,
-  segment: PathSegment,
+  segment: Segment,
 ): unknown {
   if (isLoroDoc(current)) {
-    if (segment.type !== "key") {
-      throw new Error(
-        `loro-resolve: LoroDoc root expects a key segment, got index`,
-      )
-    }
-    return stepFromDoc(current, nextSchema, segment.key)
+    return stepFromDoc(current, nextSchema, segment.resolve() as string)
   }
 
   return stepFromContainer(current, segment)
@@ -251,7 +232,7 @@ export function resolveContainer(
 ): unknown {
   let current: unknown = doc
   let schema = rootSchema
-  for (const seg of path) {
+  for (const seg of path.segments) {
     const nextSchema = advanceSchema(schema, seg)
     current = stepIntoLoro(current, schema, nextSchema, seg)
     schema = nextSchema

@@ -268,9 +268,7 @@ describe("subscribe", () => {
 
     expect(changesets).toHaveLength(1)
     expect(changesets[0]?.changes).toHaveLength(1)
-    expect(changesets[0]?.changes[0]?.path).toEqual([
-      { type: "key", key: "theme" },
-    ])
+    expect(changesets[0]?.changes[0]?.path.format()).toBe("theme")
   })
 
   it("fires on multiple mutations with all paths", () => {

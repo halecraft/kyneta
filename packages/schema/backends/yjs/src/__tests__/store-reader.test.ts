@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { Schema } from "@kyneta/schema"
+import { RawPath, Schema } from "@kyneta/schema"
 import { yjsStoreReader } from "../store-reader.js"
 import { ensureContainers } from "../populate.js"
 
@@ -233,14 +233,13 @@ function unwrapAnnotations(schema: any): any {
   return s
 }
 
-/** Key path segment helper */
-function key(k: string) {
-  return { type: "key" as const, key: k }
-}
-
-/** Index path segment helper */
-function idx(i: number) {
-  return { type: "index" as const, index: i }
+/** Build a RawPath from variadic key/index segments. */
+function p(...segs: (string | number)[]): RawPath {
+  let path = RawPath.empty
+  for (const s of segs) {
+    path = typeof s === "string" ? path.field(s) : path.item(s)
+  }
+  return path
 }
 
 // ===========================================================================
@@ -311,13 +310,13 @@ describe("YjsStoreReader", () => {
   describe("read", () => {
     it("reads Y.Text as string", () => {
       const { reader } = setup(TextSchema, { title: "Hello", subtitle: "" })
-      expect(reader.read([key("title")])).toBe("Hello")
-      expect(reader.read([key("subtitle")])).toBe("")
+      expect(reader.read(p("title"))).toBe("Hello")
+      expect(reader.read(p("subtitle"))).toBe("")
     })
 
     it("reads Y.Text with default empty string", () => {
       const { reader } = setup(TextSchema)
-      expect(reader.read([key("title")])).toBe("")
+      expect(reader.read(p("title"))).toBe("")
     })
 
     it("reads plain scalars (string, number, boolean)", () => {
@@ -326,16 +325,16 @@ describe("YjsStoreReader", () => {
         count: 42,
         active: true,
       })
-      expect(reader.read([key("name")])).toBe("Alice")
-      expect(reader.read([key("count")])).toBe(42)
-      expect(reader.read([key("active")])).toBe(true)
+      expect(reader.read(p("name"))).toBe("Alice")
+      expect(reader.read(p("count"))).toBe(42)
+      expect(reader.read(p("active"))).toBe(true)
     })
 
     it("reads scalar defaults", () => {
       const { reader } = setup(ScalarSchema)
-      expect(reader.read([key("name")])).toBe("")
-      expect(reader.read([key("count")])).toBe(0)
-      expect(reader.read([key("active")])).toBe(false)
+      expect(reader.read(p("name"))).toBe("")
+      expect(reader.read(p("count"))).toBe(0)
+      expect(reader.read(p("active"))).toBe(false)
     })
 
     it("reads nested struct fields", () => {
@@ -346,13 +345,13 @@ describe("YjsStoreReader", () => {
           address: { city: "Portland", zip: "97201" },
         },
       })
-      expect(reader.read([key("profile"), key("first")])).toBe("Jane")
-      expect(reader.read([key("profile"), key("last")])).toBe("Doe")
+      expect(reader.read(p("profile", "first"))).toBe("Jane")
+      expect(reader.read(p("profile", "last"))).toBe("Doe")
       expect(
-        reader.read([key("profile"), key("address"), key("city")]),
+        reader.read(p("profile", "address", "city")),
       ).toBe("Portland")
       expect(
-        reader.read([key("profile"), key("address"), key("zip")]),
+        reader.read(p("profile", "address", "zip")),
       ).toBe("97201")
     })
 
@@ -364,7 +363,7 @@ describe("YjsStoreReader", () => {
           address: { city: "Portland", zip: "97201" },
         },
       })
-      const profile = reader.read([key("profile")]) as Record<string, unknown>
+      const profile = reader.read(p("profile")) as Record<string, unknown>
       expect(profile.first).toBe("Jane")
       expect(profile.last).toBe("Doe")
       expect((profile.address as Record<string, unknown>).city).toBe("Portland")
@@ -375,9 +374,9 @@ describe("YjsStoreReader", () => {
         items: ["a", "b", "c"],
         structs: [],
       })
-      expect(reader.read([key("items"), idx(0)])).toBe("a")
-      expect(reader.read([key("items"), idx(1)])).toBe("b")
-      expect(reader.read([key("items"), idx(2)])).toBe("c")
+      expect(reader.read(p("items", 0))).toBe("a")
+      expect(reader.read(p("items", 1))).toBe("b")
+      expect(reader.read(p("items", 2))).toBe("c")
     })
 
     it("reads list as plain array", () => {
@@ -385,7 +384,7 @@ describe("YjsStoreReader", () => {
         items: ["x", "y"],
         structs: [],
       })
-      expect(reader.read([key("items")])).toEqual(["x", "y"])
+      expect(reader.read(p("items"))).toEqual(["x", "y"])
     })
 
     it("reads struct items within lists", () => {
@@ -396,11 +395,11 @@ describe("YjsStoreReader", () => {
           { name: "Task 2", done: true },
         ],
       })
-      expect(reader.read([key("structs"), idx(0), key("name")])).toBe(
+      expect(reader.read(p("structs", 0, "name"))).toBe(
         "Task 1",
       )
-      expect(reader.read([key("structs"), idx(1), key("done")])).toBe(true)
-      const item = reader.read([key("structs"), idx(0)]) as Record<
+      expect(reader.read(p("structs", 1, "done"))).toBe(true)
+      const item = reader.read(p("structs", 0)) as Record<
         string,
         unknown
       >
@@ -412,15 +411,15 @@ describe("YjsStoreReader", () => {
       const { reader } = setup(MapSchema, {
         labels: { bug: "red", feature: "green" },
       })
-      expect(reader.read([key("labels"), key("bug")])).toBe("red")
-      expect(reader.read([key("labels"), key("feature")])).toBe("green")
+      expect(reader.read(p("labels", "bug"))).toBe("red")
+      expect(reader.read(p("labels", "feature"))).toBe("green")
     })
 
     it("reads map as plain object", () => {
       const { reader } = setup(MapSchema, {
         labels: { bug: "red", feature: "green" },
       })
-      expect(reader.read([key("labels")])).toEqual({
+      expect(reader.read(p("labels"))).toEqual({
         bug: "red",
         feature: "green",
       })
@@ -432,7 +431,7 @@ describe("YjsStoreReader", () => {
         count: 7,
         active: false,
       })
-      const root = reader.read([]) as Record<string, unknown>
+      const root = reader.read(RawPath.empty) as Record<string, unknown>
       expect(root.name).toBe("Bob")
       expect(root.count).toBe(7)
       expect(root.active).toBe(false)
@@ -446,7 +445,7 @@ describe("YjsStoreReader", () => {
   describe("arrayLength", () => {
     it("returns 0 for empty list", () => {
       const { reader } = setup(ListSchema, { items: [], structs: [] })
-      expect(reader.arrayLength([key("items")])).toBe(0)
+      expect(reader.arrayLength(p("items"))).toBe(0)
     })
 
     it("returns correct length for populated list", () => {
@@ -454,7 +453,7 @@ describe("YjsStoreReader", () => {
         items: ["a", "b", "c"],
         structs: [],
       })
-      expect(reader.arrayLength([key("items")])).toBe(3)
+      expect(reader.arrayLength(p("items"))).toBe(3)
     })
 
     it("returns correct length for struct list", () => {
@@ -465,12 +464,12 @@ describe("YjsStoreReader", () => {
           { name: "B", done: true },
         ],
       })
-      expect(reader.arrayLength([key("structs")])).toBe(2)
+      expect(reader.arrayLength(p("structs"))).toBe(2)
     })
 
     it("returns 0 for non-list paths", () => {
       const { reader } = setup(ScalarSchema, { name: "test", count: 0, active: true })
-      expect(reader.arrayLength([key("name")])).toBe(0)
+      expect(reader.arrayLength(p("name"))).toBe(0)
     })
   })
 
@@ -483,13 +482,13 @@ describe("YjsStoreReader", () => {
       const { reader } = setup(MapSchema, {
         labels: { bug: "red", feature: "green", docs: "blue" },
       })
-      const k = reader.keys([key("labels")])
+      const k = reader.keys(p("labels"))
       expect(k.sort()).toEqual(["bug", "docs", "feature"])
     })
 
     it("returns keys of empty map", () => {
       const { reader } = setup(MapSchema, { labels: {} })
-      expect(reader.keys([key("labels")])).toEqual([])
+      expect(reader.keys(p("labels"))).toEqual([])
     })
 
     it("returns keys of nested struct (product stored as Y.Map)", () => {
@@ -500,7 +499,7 @@ describe("YjsStoreReader", () => {
           address: { city: "Portland", zip: "97201" },
         },
       })
-      const k = reader.keys([key("profile")])
+      const k = reader.keys(p("profile"))
       expect(k.sort()).toEqual(["address", "first", "last"])
     })
 
@@ -512,13 +511,13 @@ describe("YjsStoreReader", () => {
           address: { city: "Portland", zip: "97201" },
         },
       })
-      const k = reader.keys([key("profile"), key("address")])
+      const k = reader.keys(p("profile", "address"))
       expect(k.sort()).toEqual(["city", "zip"])
     })
 
     it("returns empty array for non-map paths", () => {
       const { reader } = setup(ScalarSchema, { name: "test", count: 0, active: true })
-      expect(reader.keys([key("name")])).toEqual([])
+      expect(reader.keys(p("name"))).toEqual([])
     })
   })
 
@@ -531,14 +530,14 @@ describe("YjsStoreReader", () => {
       const { reader } = setup(MapSchema, {
         labels: { bug: "red" },
       })
-      expect(reader.hasKey([key("labels")], "bug")).toBe(true)
+      expect(reader.hasKey(p("labels"), "bug")).toBe(true)
     })
 
     it("returns false for missing key in record", () => {
       const { reader } = setup(MapSchema, {
         labels: { bug: "red" },
       })
-      expect(reader.hasKey([key("labels")], "nonexistent")).toBe(false)
+      expect(reader.hasKey(p("labels"), "nonexistent")).toBe(false)
     })
 
     it("returns true for existing key in struct (Y.Map)", () => {
@@ -549,8 +548,8 @@ describe("YjsStoreReader", () => {
           address: { city: "Portland", zip: "97201" },
         },
       })
-      expect(reader.hasKey([key("profile")], "first")).toBe(true)
-      expect(reader.hasKey([key("profile")], "address")).toBe(true)
+      expect(reader.hasKey(p("profile"), "first")).toBe(true)
+      expect(reader.hasKey(p("profile"), "address")).toBe(true)
     })
 
     it("returns false for missing key in struct", () => {
@@ -561,12 +560,12 @@ describe("YjsStoreReader", () => {
           address: { city: "Portland", zip: "97201" },
         },
       })
-      expect(reader.hasKey([key("profile")], "nonexistent")).toBe(false)
+      expect(reader.hasKey(p("profile"), "nonexistent")).toBe(false)
     })
 
     it("returns false for non-map paths", () => {
       const { reader } = setup(ScalarSchema, { name: "test", count: 0, active: true })
-      expect(reader.hasKey([key("name")], "anything")).toBe(false)
+      expect(reader.hasKey(p("name"), "anything")).toBe(false)
     })
   })
 
@@ -577,13 +576,13 @@ describe("YjsStoreReader", () => {
   describe("liveness", () => {
     it("text mutations are immediately visible", () => {
       const { doc, reader } = setup(TextSchema, { title: "Hello" })
-      expect(reader.read([key("title")])).toBe("Hello")
+      expect(reader.read(p("title"))).toBe("Hello")
 
       // Mutate via raw Yjs API
       const rootMap = doc.getMap("root")
       const text = rootMap.get("title") as Y.Text
       text.insert(5, " World")
-      expect(reader.read([key("title")])).toBe("Hello World")
+      expect(reader.read(p("title"))).toBe("Hello World")
     })
 
     it("scalar mutations are immediately visible", () => {
@@ -592,11 +591,11 @@ describe("YjsStoreReader", () => {
         count: 0,
         active: false,
       })
-      expect(reader.read([key("name")])).toBe("Alice")
+      expect(reader.read(p("name"))).toBe("Alice")
 
       const rootMap = doc.getMap("root")
       rootMap.set("name", "Bob")
-      expect(reader.read([key("name")])).toBe("Bob")
+      expect(reader.read(p("name"))).toBe("Bob")
     })
 
     it("list mutations are immediately visible", () => {
@@ -604,28 +603,28 @@ describe("YjsStoreReader", () => {
         items: ["a"],
         structs: [],
       })
-      expect(reader.arrayLength([key("items")])).toBe(1)
+      expect(reader.arrayLength(p("items"))).toBe(1)
 
       const rootMap = doc.getMap("root")
       const items = rootMap.get("items") as Y.Array<string>
       items.push(["b", "c"])
-      expect(reader.arrayLength([key("items")])).toBe(3)
-      expect(reader.read([key("items"), idx(1)])).toBe("b")
-      expect(reader.read([key("items"), idx(2)])).toBe("c")
+      expect(reader.arrayLength(p("items"))).toBe(3)
+      expect(reader.read(p("items", 1))).toBe("b")
+      expect(reader.read(p("items", 2))).toBe("c")
     })
 
     it("map mutations are immediately visible", () => {
       const { doc, reader } = setup(MapSchema, {
         labels: { bug: "red" },
       })
-      expect(reader.hasKey([key("labels")], "feature")).toBe(false)
+      expect(reader.hasKey(p("labels"), "feature")).toBe(false)
 
       const rootMap = doc.getMap("root")
       const labels = rootMap.get("labels") as Y.Map<string>
       labels.set("feature", "green")
-      expect(reader.hasKey([key("labels")], "feature")).toBe(true)
-      expect(reader.read([key("labels"), key("feature")])).toBe("green")
-      expect(reader.keys([key("labels")]).sort()).toEqual(["bug", "feature"])
+      expect(reader.hasKey(p("labels"), "feature")).toBe(true)
+      expect(reader.read(p("labels", "feature"))).toBe("green")
+      expect(reader.keys(p("labels")).sort()).toEqual(["bug", "feature"])
     })
 
     it("struct field mutations are immediately visible", () => {
@@ -636,12 +635,12 @@ describe("YjsStoreReader", () => {
           address: { city: "Portland", zip: "97201" },
         },
       })
-      expect(reader.read([key("profile"), key("first")])).toBe("Jane")
+      expect(reader.read(p("profile", "first"))).toBe("Jane")
 
       const rootMap = doc.getMap("root")
       const profile = rootMap.get("profile") as Y.Map<unknown>
       profile.set("first", "John")
-      expect(reader.read([key("profile"), key("first")])).toBe("John")
+      expect(reader.read(p("profile", "first"))).toBe("John")
     })
 
     it("nested struct mutations are immediately visible", () => {
@@ -657,7 +656,7 @@ describe("YjsStoreReader", () => {
       const address = profile.get("address") as Y.Map<string>
       address.set("city", "Seattle")
       expect(
-        reader.read([key("profile"), key("address"), key("city")]),
+        reader.read(p("profile", "address", "city")),
       ).toBe("Seattle")
     })
 
@@ -670,11 +669,11 @@ describe("YjsStoreReader", () => {
       const items = rootMap.get("items") as Y.Array<string>
 
       items.delete(1, 1) // remove "b"
-      expect(reader.arrayLength([key("items")])).toBe(2)
-      expect(reader.read([key("items")])).toEqual(["a", "c"])
+      expect(reader.arrayLength(p("items"))).toBe(2)
+      expect(reader.read(p("items"))).toEqual(["a", "c"])
 
       items.insert(1, ["x"])
-      expect(reader.read([key("items")])).toEqual(["a", "x", "c"])
+      expect(reader.read(p("items"))).toEqual(["a", "x", "c"])
     })
   })
 
@@ -699,25 +698,25 @@ describe("YjsStoreReader", () => {
       })
 
       // Text
-      expect(reader.read([key("title")])).toBe("My Doc")
+      expect(reader.read(p("title"))).toBe("My Doc")
 
       // Scalar
-      expect(reader.read([key("count")])).toBe(7)
+      expect(reader.read(p("count"))).toBe(7)
 
       // List of structs
-      expect(reader.arrayLength([key("items")])).toBe(2)
-      expect(reader.read([key("items"), idx(0), key("name")])).toBe("Task 1")
-      expect(reader.read([key("items"), idx(1), key("done")])).toBe(true)
+      expect(reader.arrayLength(p("items"))).toBe(2)
+      expect(reader.read(p("items", 0, "name"))).toBe("Task 1")
+      expect(reader.read(p("items", 1, "done"))).toBe(true)
 
       // Nested struct with nested list
-      expect(reader.read([key("meta"), key("author")])).toBe("Alice")
-      expect(reader.arrayLength([key("meta"), key("tags")])).toBe(2)
-      expect(reader.read([key("meta"), key("tags"), idx(0)])).toBe("draft")
+      expect(reader.read(p("meta", "author"))).toBe("Alice")
+      expect(reader.arrayLength(p("meta", "tags"))).toBe(2)
+      expect(reader.read(p("meta", "tags", 0))).toBe("draft")
 
       // Record (map)
-      expect(reader.read([key("labels"), key("priority")])).toBe("high")
-      expect(reader.hasKey([key("labels")], "priority")).toBe(true)
-      expect(reader.keys([key("labels")])).toEqual(["priority"])
+      expect(reader.read(p("labels", "priority"))).toBe("high")
+      expect(reader.hasKey(p("labels"), "priority")).toBe(true)
+      expect(reader.keys(p("labels"))).toEqual(["priority"])
     })
   })
 })

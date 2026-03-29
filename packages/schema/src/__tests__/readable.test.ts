@@ -12,6 +12,7 @@ import {
   replaceChange,
   Schema,
   sequenceChange,
+  withAddressing,
   withCaching,
   withChangefeed,
   withNavigation,
@@ -19,10 +20,10 @@ import {
   withWritable,
 } from "../index.js"
 
-// Composed interpreter stack — functionally equivalent to the removed
-// monolithic readableInterpreter.
+// Composed interpreter stack — includes withAddressing for
+// identity-preserving sequence/map caching via the address table.
 const readableInterpreter = withCaching(
-  withReadable(withNavigation(bottomInterpreter)),
+  withAddressing(withReadable(withNavigation(bottomInterpreter))),
 )
 
 // ===========================================================================
@@ -330,7 +331,7 @@ describe("readable: sequence ref", () => {
     expect(authors).toEqual(["Alice", "Bob"])
   })
 
-  it(".at(i) caches child refs (referential identity)", () => {
+  it(".at(i) caches child refs (referential identity via address table)", () => {
     const { doc } = createReadOnlyLoroDoc()
     expect(doc.messages.at(0)).toBe(doc.messages.at(0))
   })
@@ -465,7 +466,7 @@ describe("readable: map ref", () => {
     expect(typeof pairs[0]?.[1]).toBe("function")
   })
 
-  it(".at(key) caches child refs (referential identity)", () => {
+  it(".at(key) caches child refs (referential identity via address table)", () => {
     const { doc } = createReadOnlyDoc()
     expect(doc.metadata.at("version")).toBe(doc.metadata.at("version"))
   })
@@ -576,7 +577,7 @@ describe("readable: composability hooks", () => {
     expect(typeof doc.messages[INVALIDATE]).toBe("function")
   })
 
-  it("sequence [INVALIDATE]() clears full cache", () => {
+  it("sequence INVALIDATE is a no-op (addressing layer handles advancement)", () => {
     const { doc } = createReadOnlyLoroDoc({
       messages: [
         { author: "Alice", body: "Hi" },
@@ -584,27 +585,13 @@ describe("readable: composability hooks", () => {
       ],
     })
     const first = doc.messages.at(0)!
-    expect(doc.messages.at(0)).toBe(first) // cached
-    // replaceChange([]) triggers a full cache clear
-    doc.messages[INVALIDATE](replaceChange([]))
-    // After invalidation, .at(0) creates a new ref (different identity)
-    expect(doc.messages.at(0)).not.toBe(first)
-  })
+    expect(doc.messages.at(0)).toBe(first) // cached via address table
 
-  it("sequence [INVALIDATE](change) with delete evicts affected cached entries", () => {
-    const { doc, store } = createReadOnlyLoroDoc({
-      messages: [
-        { author: "Alice", body: "Hi" },
-        { author: "Bob", body: "Hey" },
-      ],
-    })
-    const _first = doc.messages.at(0)!
-    const _second = doc.messages.at(1)!
-    // Simulate delete at index 0: update store then invalidate cache
-    ;(store as any).messages = [{ author: "Bob", body: "Hey" }]
-    doc.messages[INVALIDATE](sequenceChange([{ retain: 0 }, { delete: 1 }]))
-    // Index 0 should now read "Bob" (semantic correctness, not identity)
-    expect(doc.messages.at(0)?.author()).toBe("Bob")
+    // INVALIDATE with sequence change is a no-op — addressing handles it
+    doc.messages[INVALIDATE](sequenceChange([{ retain: 1 }, { delete: 1 }]))
+
+    // Ref is still the same object (INVALIDATE didn't clear anything)
+    expect(doc.messages.at(0)).toBe(first)
   })
 
   it("map ref has [INVALIDATE] symbol", () => {
@@ -612,15 +599,18 @@ describe("readable: composability hooks", () => {
     expect(typeof doc.metadata[INVALIDATE]).toBe("function")
   })
 
-  it("map [INVALIDATE](change) clears single entry", () => {
+  it("map INVALIDATE is a no-op (addressing layer handles tombstoning)", () => {
     const { doc } = createReadOnlyDoc({
       metadata: { a: 1, b: 2 },
     })
     const aRef = doc.metadata.at("a")
     const bRef = doc.metadata.at("b")
-    // Invalidate key "a" via mapChange with delete
+
+    // INVALIDATE with map change is a no-op — addressing handles it
     doc.metadata[INVALIDATE](mapChange(undefined, ["a"]))
-    expect(doc.metadata.at("a")).not.toBe(aRef)
+
+    // Both refs are still the same objects
+    expect(doc.metadata.at("a")).toBe(aRef)
     expect(doc.metadata.at("b")).toBe(bRef)
   })
 })

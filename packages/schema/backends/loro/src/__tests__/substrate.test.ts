@@ -9,6 +9,7 @@ import {
   subscribe,
   LoroSchema,
   Schema,
+  RawPath,
   type Ref,
   type SchemaNode,
 } from "@kyneta/schema"
@@ -63,11 +64,11 @@ describe("loroSubstrateFactory.create", () => {
     const reader = substrate.store
 
     // Text defaults to empty string
-    expect(reader.read([{ type: "key", key: "title" }])).toBe("")
+    expect(reader.read(RawPath.empty.field("title"))).toBe("")
     // Counter defaults to 0
-    expect(reader.read([{ type: "key", key: "count" }])).toBe(0)
+    expect(reader.read(RawPath.empty.field("count"))).toBe(0)
     // List defaults to empty
-    expect(reader.arrayLength([{ type: "key", key: "items" }])).toBe(0)
+    expect(reader.arrayLength(RawPath.empty.field("items"))).toBe(0)
   })
 
   it("creates a substrate with seed values", () => {
@@ -79,8 +80,8 @@ describe("loroSubstrateFactory.create", () => {
     })
     const reader = substrate.store
 
-    expect(reader.read([{ type: "key", key: "title" }])).toBe("Hello")
-    expect(reader.read([{ type: "key", key: "theme" }])).toBe("dark")
+    expect(reader.read(RawPath.empty.field("title"))).toBe("Hello")
+    expect(reader.read(RawPath.empty.field("theme"))).toBe("dark")
   })
 
   it("creates a substrate with seed list items", () => {
@@ -94,20 +95,12 @@ describe("loroSubstrateFactory.create", () => {
     })
     const reader = substrate.store
 
-    expect(reader.arrayLength([{ type: "key", key: "items" }])).toBe(2)
+    expect(reader.arrayLength(RawPath.empty.field("items"))).toBe(2)
     expect(
-      reader.read([
-        { type: "key", key: "items" },
-        { type: "index", index: 0 },
-        { type: "key", key: "name" },
-      ]),
+      reader.read(RawPath.empty.field("items").item(0).field("name")),
     ).toBe("Task 1")
     expect(
-      reader.read([
-        { type: "key", key: "items" },
-        { type: "index", index: 1 },
-        { type: "key", key: "done" },
-      ]),
+      reader.read(RawPath.empty.field("items").item(1).field("done")),
     ).toBe(true)
   })
 })
@@ -214,9 +207,9 @@ describe("export/import snapshot", () => {
     const substrateB = loroSubstrateFactory.fromSnapshot(snapshot, TestSchema)
 
     const readerB = substrateB.store
-    expect(readerB.read([{ type: "key", key: "title" }])).toBe("Original Title")
-    expect(readerB.read([{ type: "key", key: "count" }])).toBe(42)
-    expect(readerB.read([{ type: "key", key: "theme" }])).toBe("dark")
+    expect(readerB.read(RawPath.empty.field("title"))).toBe("Original Title")
+    expect(readerB.read(RawPath.empty.field("count"))).toBe(42)
+    expect(readerB.read(RawPath.empty.field("theme"))).toBe("dark")
   })
 
   it("fromSnapshot creates a new epoch (version independent)", () => {
@@ -228,7 +221,7 @@ describe("export/import snapshot", () => {
     const substrateB = loroSubstrateFactory.fromSnapshot(snapshot, TestSchema)
 
     // Both substrates have equivalent state
-    expect(substrateB.store.read([{ type: "key", key: "title" }])).toBe("Hello")
+    expect(substrateB.store.read(RawPath.empty.field("title"))).toBe("Hello")
   })
 })
 
@@ -258,10 +251,10 @@ describe("delta sync", () => {
     substrateB.importDelta(delta!, "sync")
 
     // B should now have A's state
-    expect(substrateB.store.read([{ type: "key", key: "title" }])).toBe(
+    expect(substrateB.store.read(RawPath.empty.field("title"))).toBe(
       "Hello!",
     )
-    expect(substrateB.store.read([{ type: "key", key: "count" }])).toBe(10)
+    expect(substrateB.store.read(RawPath.empty.field("count"))).toBe(10)
   })
 })
 
@@ -295,10 +288,10 @@ describe("concurrent sync", () => {
     if (deltaBtoA) substrateA.importDelta(deltaBtoA, "sync")
 
     // Both should have converged
-    expect(substrateA.store.read([{ type: "key", key: "title" }])).toBe("A")
-    expect(substrateA.store.read([{ type: "key", key: "count" }])).toBe(5)
-    expect(substrateB.store.read([{ type: "key", key: "title" }])).toBe("A")
-    expect(substrateB.store.read([{ type: "key", key: "count" }])).toBe(5)
+    expect(substrateA.store.read(RawPath.empty.field("title"))).toBe("A")
+    expect(substrateA.store.read(RawPath.empty.field("count"))).toBe(5)
+    expect(substrateB.store.read(RawPath.empty.field("title"))).toBe("A")
+    expect(substrateB.store.read(RawPath.empty.field("count"))).toBe(5)
   })
 })
 
@@ -445,11 +438,7 @@ describe("changefeed fires on importDelta", () => {
 
     // The local op should be a leaf-level replace at ["items", 0, "done"]
     expect(localOps.length).toBe(1)
-    expect(localOps[0].path).toEqual([
-      { type: "key", key: "items" },
-      { type: "index", index: 0 },
-      { type: "key", key: "done" },
-    ])
+    expect(localOps[0].path.format()).toBe("items[0].done")
     expect(localOps[0].change.type).toBe("replace")
 
     // Sync to B — the event bridge produces ops via batchToOps + expandMapOpsToLeaves

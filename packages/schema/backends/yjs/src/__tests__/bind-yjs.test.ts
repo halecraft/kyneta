@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { Schema, change } from "@kyneta/schema"
+import { Schema, change, RawPath } from "@kyneta/schema"
 import { bindYjs } from "../bind-yjs.js"
 import { yjs } from "../yjs-escape.js"
 import { createYjsDoc } from "../create.js"
@@ -90,10 +90,10 @@ describe("bindYjs", () => {
 
       // Restore
       const substrate2 = factory.fromSnapshot(snapshot, SimpleSchema)
-      expect(substrate2.store.read([{ type: "key", key: "title" }])).toBe(
+      expect(substrate2.store.read(RawPath.empty.field("title"))).toBe(
         "Snap",
       )
-      expect(substrate2.store.read([{ type: "key", key: "count" }])).toBe(42)
+      expect(substrate2.store.read(RawPath.empty.field("count"))).toBe(42)
     })
 
     it("factory supports parseVersion", () => {

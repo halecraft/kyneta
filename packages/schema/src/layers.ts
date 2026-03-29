@@ -23,6 +23,7 @@ import type {
   WritableBrand,
 } from "./interpret.js"
 import type { RefContext } from "./interpreter-types.js"
+import { withAddressing } from "./interpreters/with-addressing.js"
 import { withCaching } from "./interpreters/with-caching.js"
 import { withChangefeed } from "./interpreters/with-changefeed.js"
 import { withNavigation } from "./interpreters/with-navigation.js"
@@ -56,6 +57,30 @@ export const navigation: InterpreterLayer<RefContext, RefContext> = {
 }
 
 // ---------------------------------------------------------------------------
+// addressing — stable identity for all composite nodes
+// ---------------------------------------------------------------------------
+
+/**
+ * Addressing layer: stable identity for all composite refs.
+ *
+ * Composes `withAddressing(base)` in a single layer. Installs an
+ * `AddressedPath` root on the context so all descendant paths are
+ * identity-stable. Hooks into `prepare` for eager address advancement
+ * (sequences) and tombstoning (maps).
+ *
+ * Context: `RefContext` → `RefContext` (no widening).
+ *
+ * Typically composed inside `readable`, but exported standalone for
+ * users who compose manually.
+ */
+export const addressing: InterpreterLayer<RefContext, RefContext> = {
+  name: "addressing",
+  transform(base) {
+    return withAddressing(base)
+  },
+}
+
+// ---------------------------------------------------------------------------
 // readable — navigation + reading + identity-preserving caching
 // ---------------------------------------------------------------------------
 
@@ -77,7 +102,7 @@ export const readable: InterpreterLayer<RefContext, RefContext, ReadableBrand> =
   {
     name: "readable",
     transform(base) {
-      return withCaching(withReadable(withNavigation(base)))
+      return withCaching(withAddressing(withReadable(withNavigation(base))))
     },
   }
 

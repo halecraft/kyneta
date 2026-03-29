@@ -1,18 +1,12 @@
 import { describe, expect, it } from "vitest"
 import type { Op } from "../index.js"
 import { planNotifications } from "../index.js"
-import type { Path } from "../interpret.js"
-import { pathKey } from "../store.js"
+import type { Path } from "../path.js"
+import { RawPath } from "../path.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Shorthand for a key path segment. */
-const key = (k: string): Path[number] => ({ type: "key" as const, key: k })
-
-/** Shorthand for an index path segment. */
-const idx = (i: number): Path[number] => ({ type: "index" as const, index: i })
 
 /** Build a Op from a path and change type string. */
 function pc(path: Path, type: string): Op {
@@ -30,29 +24,27 @@ describe("planNotifications: grouping", () => {
   })
 
   it("single change → single group with 1 entry", () => {
-    const path: Path = [key("title")]
+    const path = RawPath.empty.field("title")
     const plan = planNotifications([pc(path, "text")])
 
     expect(plan.grouped.size).toBe(1)
-    const k = pathKey(path)
-    expect(plan.grouped.get(k)).toEqual([{ type: "text" }])
+    expect(plan.grouped.get(path.key)).toEqual([{ type: "text" }])
   })
 
   it("two changes at the same path → single group with 2 entries", () => {
-    const path: Path = [key("x")]
+    const path = RawPath.empty.field("x")
     const plan = planNotifications([pc(path, "replace"), pc(path, "replace")])
 
     expect(plan.grouped.size).toBe(1)
-    const k = pathKey(path)
-    const changes = plan.grouped.get(k)!
+    const changes = plan.grouped.get(path.key)!
     expect(changes).toHaveLength(2)
     expect(changes[0]?.type).toBe("replace")
     expect(changes[1]?.type).toBe("replace")
   })
 
   it("three changes at two paths → two groups", () => {
-    const pathX: Path = [key("x")]
-    const pathY: Path = [key("y")]
+    const pathX = RawPath.empty.field("x")
+    const pathY = RawPath.empty.field("y")
     const plan = planNotifications([
       pc(pathX, "replace"),
       pc(pathY, "replace"),
@@ -60,19 +52,19 @@ describe("planNotifications: grouping", () => {
     ])
 
     expect(plan.grouped.size).toBe(2)
-    expect(plan.grouped.get(pathKey(pathX))).toHaveLength(2)
-    expect(plan.grouped.get(pathKey(pathY))).toHaveLength(1)
+    expect(plan.grouped.get(pathX.key)).toHaveLength(2)
+    expect(plan.grouped.get(pathY.key)).toHaveLength(1)
   })
 
   it("preserves change ordering within a group", () => {
-    const path: Path = [key("counter")]
+    const path = RawPath.empty.field("counter")
     const plan = planNotifications([
       pc(path, "increment"),
       pc(path, "replace"),
       pc(path, "increment"),
     ])
 
-    const changes = plan.grouped.get(pathKey(path))!
+    const changes = plan.grouped.get(path.key)!
     expect(changes).toHaveLength(3)
     expect(changes[0]?.type).toBe("increment")
     expect(changes[1]?.type).toBe("replace")
@@ -80,9 +72,9 @@ describe("planNotifications: grouping", () => {
   })
 
   it("nested paths are grouped independently", () => {
-    const settingsPath: Path = [key("settings")]
-    const darkModePath: Path = [key("settings"), key("darkMode")]
-    const fontSizePath: Path = [key("settings"), key("fontSize")]
+    const settingsPath = RawPath.empty.field("settings")
+    const darkModePath = RawPath.empty.field("settings").field("darkMode")
+    const fontSizePath = RawPath.empty.field("settings").field("fontSize")
 
     const plan = planNotifications([
       pc(darkModePath, "replace"),
@@ -91,14 +83,14 @@ describe("planNotifications: grouping", () => {
     ])
 
     expect(plan.grouped.size).toBe(3)
-    expect(plan.grouped.get(pathKey(settingsPath))).toHaveLength(1)
-    expect(plan.grouped.get(pathKey(darkModePath))).toHaveLength(1)
-    expect(plan.grouped.get(pathKey(fontSizePath))).toHaveLength(1)
+    expect(plan.grouped.get(settingsPath.key)).toHaveLength(1)
+    expect(plan.grouped.get(darkModePath.key)).toHaveLength(1)
+    expect(plan.grouped.get(fontSizePath.key)).toHaveLength(1)
   })
 
   it("index path segments produce distinct keys", () => {
-    const path0: Path = [key("items"), idx(0)]
-    const path1: Path = [key("items"), idx(1)]
+    const path0 = RawPath.empty.field("items").item(0)
+    const path1 = RawPath.empty.field("items").item(1)
 
     const plan = planNotifications([
       pc(path0, "replace"),
@@ -107,13 +99,13 @@ describe("planNotifications: grouping", () => {
     ])
 
     expect(plan.grouped.size).toBe(2)
-    expect(plan.grouped.get(pathKey(path0))).toHaveLength(2)
-    expect(plan.grouped.get(pathKey(path1))).toHaveLength(1)
+    expect(plan.grouped.get(path0.key)).toHaveLength(2)
+    expect(plan.grouped.get(path1.key)).toHaveLength(1)
   })
 
   it("root path (empty) is a valid group key", () => {
-    const rootPath: Path = []
-    const childPath: Path = [key("x")]
+    const rootPath = RawPath.empty
+    const childPath = RawPath.empty.field("x")
 
     const plan = planNotifications([
       pc(rootPath, "map"),
@@ -121,14 +113,13 @@ describe("planNotifications: grouping", () => {
     ])
 
     expect(plan.grouped.size).toBe(2)
-    expect(plan.grouped.get(pathKey(rootPath))).toHaveLength(1)
-    expect(plan.grouped.get(pathKey(childPath))).toHaveLength(1)
+    expect(plan.grouped.get(rootPath.key)).toHaveLength(1)
+    expect(plan.grouped.get(childPath.key)).toHaveLength(1)
   })
 
   it("many changes to many paths group correctly", () => {
-    const paths = Array.from(
-      { length: 5 },
-      (_, i) => [key(`field${i}`)] as Path,
+    const paths = Array.from({ length: 5 }, (_, i) =>
+      RawPath.empty.field(`field${i}`),
     )
     const pending: Op[] = []
     // 3 changes per path = 15 total
@@ -141,14 +132,14 @@ describe("planNotifications: grouping", () => {
     const plan = planNotifications(pending)
     expect(plan.grouped.size).toBe(5)
     for (const path of paths) {
-      expect(plan.grouped.get(pathKey(path))).toHaveLength(3)
+      expect(plan.grouped.get(path.key)).toHaveLength(3)
     }
   })
 })
 
 describe("planNotifications: immutability", () => {
   it("does not mutate the input array", () => {
-    const path: Path = [key("x")]
+    const path = RawPath.empty.field("x")
     const input: Op[] = [pc(path, "replace")]
     const copy = [...input]
 
@@ -158,7 +149,7 @@ describe("planNotifications: immutability", () => {
   })
 
   it("returns a new map each time", () => {
-    const path: Path = [key("x")]
+    const path = RawPath.empty.field("x")
     const input = [pc(path, "replace")]
 
     const plan1 = planNotifications(input)
@@ -170,14 +161,14 @@ describe("planNotifications: immutability", () => {
 
 describe("planNotifications: change data integrity", () => {
   it("preserves full change objects (not just type)", () => {
-    const path: Path = [key("items")]
+    const path = RawPath.empty.field("items")
     const change = {
       type: "sequence" as const,
       ops: [{ retain: 2 }, { insert: ["a", "b"] }],
     }
     const plan = planNotifications([{ path, change }])
 
-    const changes = plan.grouped.get(pathKey(path))!
+    const changes = plan.grouped.get(path.key)!
     expect(changes).toHaveLength(1)
     expect(changes[0]).toBe(change) // Same reference — no cloning
   })

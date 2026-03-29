@@ -20,13 +20,13 @@ import type {
   MapChange,
   Op,
   Path,
-  PathSegment,
   ReplaceChange,
   SequenceChange,
   SequenceInstruction,
   TextChange,
   TextInstruction,
 } from "@kyneta/schema"
+import { RawPath } from "@kyneta/schema"
 import type { Schema as SchemaNode } from "@kyneta/schema"
 import type {
   ContainerID,
@@ -136,7 +136,7 @@ export function changeToDiff(
   } else {
     // The path resolved to a scalar value inside a container.
     // The target for the diff is the parent container.
-    if (path.length === 0) {
+    if (path.segments.length === 0) {
       throw new Error(
         "changeToDiff: cannot create diff for root-level scalar",
       )
@@ -154,7 +154,7 @@ export function changeToDiff(
 
   // Resolve the schema at the target path for structured insert handling
   let targetSchema = schema
-  for (const seg of path) {
+  for (const seg of path.segments) {
     targetSchema = advanceSchema(targetSchema, seg)
   }
 
@@ -342,11 +342,11 @@ function replaceChangeToDiff(
   schema: SchemaNode,
   doc: LoroDoc,
 ): [ContainerID, Diff | JsonDiff][] {
-  if (path.length === 0) {
+  if (path.segments.length === 0) {
     throw new Error("replaceChangeToDiff: cannot replace at root")
   }
 
-  const lastSeg = path[path.length - 1]!
+  const lastSeg = path.segments[path.segments.length - 1]!
   const parentPath = path.slice(0, -1)
   const parentResolved = resolveContainer(doc, schema, parentPath)
 
@@ -356,11 +356,12 @@ function replaceChangeToDiff(
   if (!hasKind(parentResolved)) {
     // Parent is the LoroDoc — this is a root-level replace.
     // Scalars at root are stored in _props.
-    if (lastSeg.type === "key") {
+    if (lastSeg.role === "key") {
+      const key = lastSeg.resolve() as string
       const propsMap = (parentResolved as any).getMap(PROPS_KEY)
       const propsCID = propsMap.id as ContainerID
       const updated: Record<string, Value | undefined> = {
-        [lastSeg.key]: change.value as Value,
+        [key]: change.value as Value,
       }
       return [[propsCID, { type: "map", updated } as MapDiff]]
     }
@@ -370,27 +371,29 @@ function replaceChangeToDiff(
   }
 
   const parentCID = parentResolved.id
+  const resolved = lastSeg.resolve()
 
-  if (lastSeg.type === "key") {
+  if (lastSeg.role === "key") {
     const updated: Record<string, Value | undefined> = {
-      [lastSeg.key]: change.value as Value,
+      [resolved as string]: change.value as Value,
     }
     return [[parentCID, { type: "map", updated } as MapDiff]]
   }
 
   // Index-based replace in a list — modeled as delete + insert at position
-  if (lastSeg.type === "index") {
+  if (lastSeg.role === "index") {
+    const idx = resolved as number
     const diff: Delta<(Value)[]>[] = []
-    if (lastSeg.index > 0) {
-      diff.push({ retain: lastSeg.index } as Delta<Value[]>)
+    if (idx > 0) {
+      diff.push({ retain: idx } as Delta<Value[]>)
     }
     diff.push({ delete: 1 } as Delta<Value[]>)
     diff.push({ insert: [change.value as Value] } as Delta<Value[]>)
     return [[parentCID, { type: "list", diff } as ListDiff]]
   }
 
-  // TypeScript has exhaustively narrowed segment types above
-  throw new Error("replaceChangeToDiff: unexpected segment type")
+  // TypeScript has exhaustively narrowed segment roles above
+  throw new Error("replaceChangeToDiff: unexpected segment role")
 }
 
 /**
@@ -517,21 +520,21 @@ export function batchToOps(
 
 /**
  * Convert a Loro event path (array of string | number | TreeID) to a
- * kyneta Path (array of {type: "key", key} | {type: "index", index}).
+ * kyneta RawPath.
  */
 function loroPathToKynetaPath(
   loroPath: (string | number | unknown)[],
-): Path {
-  const result: PathSegment[] = []
+): RawPath {
+  let path = RawPath.empty
   for (const segment of loroPath) {
     if (typeof segment === "string") {
-      result.push({ type: "key", key: segment })
+      path = path.field(segment)
     } else if (typeof segment === "number") {
-      result.push({ type: "index", index: segment })
+      path = path.item(segment)
     }
     // TreeID segments are skipped — tree path handling is future work
   }
-  return result
+  return path
 }
 
 // ---------------------------------------------------------------------------

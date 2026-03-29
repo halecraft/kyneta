@@ -20,8 +20,10 @@ import type {
 } from "../interpreters/bottom.js"
 import { bottomInterpreter } from "../interpreters/bottom.js"
 import { INVALIDATE, withCaching } from "../interpreters/with-caching.js"
+import { withAddressing } from "../interpreters/with-addressing.js"
 import { withNavigation } from "../interpreters/with-navigation.js"
 import { withReadable } from "../interpreters/with-readable.js"
+import { RawPath } from "../path.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -46,7 +48,14 @@ const loroDocSchema = LoroSchema.doc({
   ),
 })
 
+// Default interpreter: includes withAddressing for identity-preserving
+// sequence/map caching via the address table.
 const cachedInterp = withCaching(
+  withAddressing(withReadable(withNavigation(bottomInterpreter))),
+)
+
+// Interpreter WITHOUT withAddressing — for testing graceful degradation.
+const cachedInterpNoAddressing = withCaching(
   withReadable(withNavigation(bottomInterpreter)),
 )
 
@@ -56,6 +65,15 @@ function createDoc(
 ) {
   const ctx: RefContext = { store: plainStoreReader(store) }
   const doc = interpret(schema, cachedInterp, ctx) as any
+  return { doc, store, ctx }
+}
+
+function createDocNoAddressing(
+  schema: Parameters<typeof interpret>[0],
+  store: Record<string, unknown>,
+) {
+  const ctx: RefContext = { store: plainStoreReader(store) }
+  const doc = interpret(schema, cachedInterpNoAddressing, ctx) as any
   return { doc, store, ctx }
 }
 
@@ -409,141 +427,27 @@ describe("withCaching: INVALIDATE sequence", () => {
     expect(typeof doc.items[INVALIDATE]).toBe("function")
   })
 
-  it("INVALIDATE with sequenceChange (delete) evicts the deleted index", () => {
-    const { doc, store } = createListDoc([
-      { name: "a" },
-      { name: "b" },
-      { name: "c" },
-    ])
-    // Populate cache
-    const refA = doc.items.at(0)
-    const _refB = doc.items.at(1)
-    const _refC = doc.items.at(2)
-    expect(refA).toBe(doc.items.at(0)) // confirm cached
-
-    // Simulate delete at index 1: [retain 1, delete 1]
-    // After this, store should be [{name:"a"},{name:"c"}]
-    ;(store as any).items = [{ name: "a" }, { name: "c" }]
-    doc.items[INVALIDATE](sequenceChange([{ retain: 1 }, { delete: 1 }]))
-
-    // index 0 should still be the same ref (it wasn't affected)
-    expect(doc.items.at(0)).toBe(refA)
-    // index 1 reads correct value (semantic correctness, not identity)
-    expect(doc.items.at(1).name()).toBe("c")
-  })
-
-  it("INVALIDATE with sequenceChange (insert at middle) evicts affected indices", () => {
-    const { doc, store } = createListDoc([
-      { name: "a" },
-      { name: "b" },
-      { name: "c" },
-    ])
-    // Populate cache
-    const refA = doc.items.at(0)
-    const _refB = doc.items.at(1)
-    const _refC = doc.items.at(2)
-
-    // Simulate insert at index 1: [retain 1, insert [{name:"x"}]]
-    ;(store as any).items = [
-      { name: "a" },
-      { name: "x" },
-      { name: "b" },
-      { name: "c" },
-    ]
-    doc.items[INVALIDATE](
-      sequenceChange([{ retain: 1 }, { insert: [{ name: "x" }] }]),
-    )
-
-    // index 0 unchanged (below insert point)
-    expect(doc.items.at(0)).toBe(refA)
-    // All indices at or above the insert point read correct values
-    expect(doc.items.at(1).name()).toBe("x")
-    expect(doc.items.at(2).name()).toBe("b")
-    expect(doc.items.at(3).name()).toBe("c")
-  })
-
-  it("INVALIDATE with sequenceChange (append) preserves existing cache", () => {
-    const { doc, store } = createListDoc([{ name: "a" }, { name: "b" }])
-    // Populate cache
+  it("sequence INVALIDATE is a no-op (addressing layer handles advancement)", () => {
+    const { doc } = createListDoc([{ name: "a" }, { name: "b" }])
     const refA = doc.items.at(0)
     const refB = doc.items.at(1)
 
-    // Simulate append: [retain 2, insert [{name:"c"}]]
-    ;(store as any).items = [{ name: "a" }, { name: "b" }, { name: "c" }]
-    doc.items[INVALIDATE](
-      sequenceChange([{ retain: 2 }, { insert: [{ name: "c" }] }]),
-    )
+    // Calling INVALIDATE with a sequence change should be a no-op —
+    // the addressing layer handles all advancement in prepare.
+    doc.items[INVALIDATE](sequenceChange([{ retain: 1 }, { delete: 1 }]))
 
-    // Existing refs should be preserved
+    // Refs are still the same objects (INVALIDATE didn't clear anything)
     expect(doc.items.at(0)).toBe(refA)
-    expect(doc.items.at(1)).toBe(refB)
-    // New item gets a fresh ref
-    expect(doc.items.at(2).name()).toBe("c")
+    // Note: refB's address may have been advanced by the addressing
+    // layer during prepare, but direct INVALIDATE doesn't change it.
   })
 
-  it("INVALIDATE with replaceChange clears entire cache", () => {
-    const { doc, store } = createListDoc([{ name: "a" }, { name: "b" }])
-    const refA = doc.items.at(0)
-    const _refB = doc.items.at(1)
+  it("address-table-backed .at(i) returns same ref on repeated access", () => {
+    const { doc } = createListDoc([{ name: "a" }, { name: "b" }])
 
-    ;(store as any).items = [{ name: "x" }]
-    doc.items[INVALIDATE](replaceChange([{ name: "x" }]))
-
-    // Both old refs should be gone
-    expect(doc.items.at(0)).not.toBe(refA)
-    expect(doc.items.at(0).name()).toBe("x")
-  })
-
-  it("INVALIDATE with unrecognized change clears entire cache", () => {
-    const { doc } = createListDoc([{ name: "a" }])
-    const refA = doc.items.at(0)
-
-    doc.items[INVALIDATE]({ type: "unknown" })
-
-    expect(doc.items.at(0)).not.toBe(refA)
-  })
-
-  it("shifted ref reads correct value after delete (semantic correctness)", () => {
-    const { doc, store } = createListDoc([
-      { name: "Alice" },
-      { name: "Bob" },
-      { name: "Carol" },
-    ])
-    // Cache all refs
-    const _refAlice = doc.items.at(0)
-    const _refBob = doc.items.at(1)
-    const _refCarol = doc.items.at(2)
-
-    // Delete index 0 ("Alice"): store becomes ["Bob", "Carol"]
-    ;(store as any).items = [{ name: "Bob" }, { name: "Carol" }]
-    doc.items[INVALIDATE](sequenceChange([{ delete: 1 }]))
-
-    // After delete, doc.items.at(0) should read "Bob" and at(1) should read "Carol"
-    expect(doc.items.at(0).name()).toBe("Bob")
-    expect(doc.items.at(1).name()).toBe("Carol")
-  })
-
-  it("shifted ref reads correct value after insert (semantic correctness)", () => {
-    const { doc, store } = createListDoc([
-      { name: "Alice" },
-      { name: "Bob" },
-    ])
-    // Cache all refs
-    const _refAlice = doc.items.at(0)
-    const _refBob = doc.items.at(1)
-
-    // Insert "Eve" at index 0: store becomes ["Eve", "Alice", "Bob"]
-    ;(store as any).items = [
-      { name: "Eve" },
-      { name: "Alice" },
-      { name: "Bob" },
-    ]
-    doc.items[INVALIDATE](sequenceChange([{ insert: [{ name: "Eve" }] }]))
-
-    // After insert, refs at shifted indices should read correct values
-    expect(doc.items.at(0).name()).toBe("Eve")
-    expect(doc.items.at(1).name()).toBe("Alice")
-    expect(doc.items.at(2).name()).toBe("Bob")
+    const ref0a = doc.items.at(0)
+    const ref0b = doc.items.at(0)
+    expect(ref0a).toBe(ref0b) // identity via address table
   })
 })
 
@@ -565,59 +469,23 @@ describe("withCaching: INVALIDATE map", () => {
     expect(typeof doc.metadata[INVALIDATE]).toBe("function")
   })
 
-  it("INVALIDATE with mapChange(delete) evicts deleted keys", () => {
-    const { doc, store } = createMapDoc({ a: 1, b: 2, c: 3 })
+  it("map INVALIDATE is a no-op (addressing layer handles tombstoning)", () => {
+    const { doc } = createMapDoc({ a: 1, b: 2 })
     const refA = doc.metadata.at("a")
-    const _refB = doc.metadata.at("b")
-    const refC = doc.metadata.at("c")
 
-    // Delete key "b"
-    delete (store.metadata as any).b
+    // Calling INVALIDATE with a map change should be a no-op
     doc.metadata[INVALIDATE](mapChange(undefined, ["b"]))
 
-    // "a" and "c" should still be cached
+    // Ref A is still the same object
     expect(doc.metadata.at("a")).toBe(refA)
-    expect(doc.metadata.at("c")).toBe(refC)
-    // "b" is gone from cache (and from store)
-    expect(doc.metadata.at("b")).toBeUndefined()
   })
 
-  it("INVALIDATE with mapChange(set) evicts set keys for re-creation", () => {
-    const { doc, store } = createMapDoc({ a: 1, b: 2 })
-    const refA = doc.metadata.at("a")
-    const refB = doc.metadata.at("b")
+  it("address-table-backed .at(key) returns same ref on repeated access", () => {
+    const { doc } = createMapDoc({ a: 1, b: 2 })
 
-    // Update key "a" value
-    ;(store.metadata as any).a = 99
-    doc.metadata[INVALIDATE](mapChange({ a: 99 }))
-
-    // "a" cache is evicted — fresh ref created
-    expect(doc.metadata.at("a")).not.toBe(refA)
-    expect(doc.metadata.at("a")()).toBe(99)
-    // "b" should still be cached
-    expect(doc.metadata.at("b")).toBe(refB)
-  })
-
-  it("INVALIDATE with replaceChange clears entire cache", () => {
-    const { doc, store } = createMapDoc({ a: 1, b: 2 })
-    const refA = doc.metadata.at("a")
-    const _refB = doc.metadata.at("b")
-
-    ;(store as any).metadata = { x: 10 }
-    doc.metadata[INVALIDATE](replaceChange({ x: 10 }))
-
-    expect(doc.metadata.at("a")).toBeUndefined() // key no longer in store
-    expect(doc.metadata.at("x")).not.toBe(refA) // fresh ref
-    expect(doc.metadata.at("x")()).toBe(10)
-  })
-
-  it("INVALIDATE with unrecognized change clears entire cache", () => {
-    const { doc } = createMapDoc({ a: 1 })
-    const refA = doc.metadata.at("a")
-
-    doc.metadata[INVALIDATE]({ type: "unknown" })
-
-    expect(doc.metadata.at("a")).not.toBe(refA)
+    const refA1 = doc.metadata.at("a")
+    const refA2 = doc.metadata.at("a")
+    expect(refA1).toBe(refA2) // identity via address table
   })
 })
 
@@ -680,7 +548,7 @@ describe("withCaching: sum dispatch", () => {
 // ===========================================================================
 
 describe("withCaching: full doc tree", () => {
-  it("produces a complete navigable, cached tree", () => {
+  it("produces a complete navigable, cached tree with identity", () => {
     const { doc } = createDoc(loroDocSchema, {
       title: "Hello",
       count: 42,
@@ -721,7 +589,7 @@ describe("INVALIDATE symbol", () => {
 
 describe("withCaching: prepare-pipeline invalidation", () => {
   const fullInterpreter = withWritable(
-    withCaching(withReadable(withNavigation(bottomInterpreter))),
+    withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter)))),
   )
 
   const docSchema = Schema.doc({
@@ -760,10 +628,7 @@ describe("withCaching: prepare-pipeline invalidation", () => {
 
     // Bypass mutation methods — call prepare + flush directly.
     // This simulates what applyChanges will do in Phase 5.
-    const path = [
-      { type: "key" as const, key: "settings" },
-      { type: "key" as const, key: "darkMode" },
-    ]
+    const path = RawPath.empty.field("settings").field("darkMode")
     ctx.prepare(path, replaceChange(true))
     ctx.flush()
 
@@ -772,7 +637,7 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     expect(doc.settings.darkMode()).toBe(true)
   })
 
-  it("surgical invalidation: mutating one path preserves unrelated cached refs", () => {
+  it("mutating one path preserves unrelated cached refs", () => {
     const { doc } = createFullDoc()
 
     // Populate caches at two unrelated paths
@@ -802,7 +667,7 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     expect(_refBob.author()).toBe("Bob")
 
     // Insert at index 0 via prepare (bypassing mutation methods)
-    const path = [{ type: "key" as const, key: "messages" }]
+    const path = RawPath.empty.field("messages")
     ctx.prepare(
       path,
       sequenceChange([{ insert: [{ author: "Eve", body: "Hi" }] }]),
@@ -816,10 +681,52 @@ describe("withCaching: prepare-pipeline invalidation", () => {
   })
 })
 
+describe("withCaching: degradation without withAddressing", () => {
+  it("product field caching still works without withAddressing", () => {
+    const { doc } = createDocNoAddressing(structuralDocSchema, {
+      settings: { darkMode: false, fontSize: 14 },
+      metadata: {},
+    })
+    // Product field identity is preserved (thunk memoization is self-contained)
+    expect(doc.settings).toBe(doc.settings)
+    expect(doc.settings.darkMode).toBe(doc.settings.darkMode)
+  })
+
+  it("sequence .at(i) returns fresh ref each time without withAddressing", () => {
+    const schema = Schema.doc({
+      items: Schema.list(Schema.string()),
+    })
+    const { doc } = createDocNoAddressing(schema, { items: ["a", "b"] })
+
+    const ref1 = doc.items.at(0)
+    const ref2 = doc.items.at(0)
+    // No memoization — fresh ref each time
+    expect(ref1).not.toBe(ref2)
+    // But both read the correct value
+    expect(ref1()).toBe("a")
+    expect(ref2()).toBe("a")
+  })
+
+  it("map .at(key) returns fresh ref each time without withAddressing", () => {
+    const schema = Schema.doc({
+      metadata: Schema.record(Schema.number()),
+    })
+    const { doc } = createDocNoAddressing(schema, { metadata: { a: 1 } })
+
+    const ref1 = doc.metadata.at("a")
+    const ref2 = doc.metadata.at("a")
+    // No memoization — fresh ref each time
+    expect(ref1).not.toBe(ref2)
+    // But both read the correct value
+    expect(ref1()).toBe(1)
+    expect(ref2()).toBe(1)
+  })
+})
+
 describe("withCaching: read-only stack backward compatibility", () => {
-  it("withCaching(withReadable(bottom)) with plain RefContext still works", () => {
+  it("withCaching(withAddressing(withReadable(bottom))) with plain RefContext still works", () => {
     const readOnlyInterp = withCaching(
-      withReadable(withNavigation(bottomInterpreter)),
+      withAddressing(withReadable(withNavigation(bottomInterpreter))),
     )
     const store = {
       settings: { darkMode: false, fontSize: 14 },

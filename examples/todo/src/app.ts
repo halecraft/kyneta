@@ -75,6 +75,8 @@ export function createApp(doc: TodoDocRef) {
     // O(1) DOM mutations per operation.
     ul(() => {
       for (const todo of doc.todos) {
+
+
         li(() => {
           // Checkbox — toggles the `done` field.
           // The compiler detects todo.done has [CHANGEFEED] and wires

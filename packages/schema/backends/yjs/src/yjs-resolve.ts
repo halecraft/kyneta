@@ -15,7 +15,7 @@
 // captures all mutations with correct relative paths.
 
 import { advanceSchema } from "@kyneta/schema"
-import type { Path, PathSegment } from "@kyneta/schema"
+import type { Path, Segment } from "@kyneta/schema"
 import type { Schema as SchemaNode } from "@kyneta/schema"
 import * as Y from "yjs"
 
@@ -37,30 +37,21 @@ import * as Y from "yjs"
  */
 export function stepIntoYjs(
   current: unknown,
-  segment: PathSegment,
+  segment: Segment,
 ): unknown {
+  const resolved = segment.resolve()
+
   if (current instanceof Y.Map) {
-    if (segment.type !== "key") {
-      throw new Error(
-        `yjs-resolve: Y.Map expects a key segment, got index`,
-      )
-    }
-    return current.get(segment.key)
+    return current.get(resolved as string)
   }
 
   if (current instanceof Y.Array) {
-    if (segment.type !== "index") {
-      throw new Error(
-        `yjs-resolve: Y.Array expects an index segment, got key "${segment.key}"`,
-      )
-    }
-    return current.get(segment.index)
+    return current.get(resolved as number)
   }
 
   if (current instanceof Y.Text) {
-    // Y.Text is a terminal type — cannot step further
     throw new Error(
-      `yjs-resolve: cannot step into Y.Text with segment ${JSON.stringify(segment)}`,
+      `yjs-resolve: cannot step into Y.Text`,
     )
   }
 
@@ -104,7 +95,7 @@ export function resolveYjsType(
   }
 
   for (let i = 0; i < path.length; i++) {
-    const seg = path[i]!
+    const seg = path.segments[i]!
     const nextSchema = advanceSchema(schema, seg)
 
     // For the first segment, we step into the root map directly.

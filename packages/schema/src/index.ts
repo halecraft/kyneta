@@ -11,7 +11,10 @@ export type {
   BuiltinChange,
   Change,
   ChangeBase,
+  FoldResult,
   IncrementChange,
+  Instruction,
+  InstructionFold,
   MapChange,
   ReplaceChange,
   SequenceChange,
@@ -22,6 +25,9 @@ export type {
   TreeInstruction,
 } from "./change.js"
 export {
+  advanceAddresses,
+  advanceIndex,
+  foldInstructions,
   incrementChange,
   isIncrementChange,
   isMapChange,
@@ -70,8 +76,6 @@ export type {
   InterpretBuilder,
   Interpreter,
   InterpreterLayer,
-  Path,
-  PathSegment,
   ReadableBrand,
   Resolve,
   ResolveCarrier,
@@ -79,7 +83,28 @@ export type {
   WritableBrand,
 } from "./interpret.js"
 // interpret — the generic catamorphism over the schema functor
-export { createInterpreter, dispatchSum, interpret } from "./interpret.js"
+export { createInterpreter, dispatchSum, interpret, RawPath, rawKey, rawIndex } from "./interpret.js"
+// Re-export path types from their canonical location
+export type {
+  Address,
+  AddressTableRegistry,
+  IndexAddress,
+  MapAddressTable,
+  Path,
+  RawSegment,
+  Segment,
+  SequenceAddressTable,
+} from "./path.js"
+export {
+  AddressedPath,
+  indexAddress,
+  keyAddress,
+  nextAddressId,
+  resetAddressIdCounter,
+  resolveToAddressed,
+} from "./path.js"
+// withAddressing — stable identity for all composite refs
+export { ADDRESS_TABLE, withAddressing } from "./interpreters/with-addressing.js"
 // Shared interpreter types (canonical location)
 export type { Plain, RefContext } from "./interpreter-types.js"
 export type {
@@ -118,14 +143,13 @@ export {
   validate,
   validateInterpreter,
 } from "./interpreters/validate.js"
-export type { CacheInstruction } from "./interpreters/with-caching.js"
 // withCaching — interposition transformer (identity-preserving caching + INVALIDATE)
 export {
-  applyCacheOps,
   INVALIDATE,
-  planCacheUpdate,
   withCaching,
 } from "./interpreters/with-caching.js"
+// Path types — re-exported from path.ts via interpret.ts
+// (Path, RawPath, RawSegment, Segment, etc. are exported above)
 export type { NotificationPlan } from "./interpreters/with-changefeed.js"
 // Changefeed interpreter transformer — compositional observation layer
 export {
@@ -157,7 +181,7 @@ export {
   withWritable,
 } from "./interpreters/writable.js"
 // Pre-built interpreter layers for fluent composition
-export { changefeed, navigation, readable, writable } from "./layers.js"
+export { addressing, changefeed, navigation, readable, writable } from "./layers.js"
 // LoroSchema — Loro-specific annotations + composition constraints
 export { LoroSchema } from "./loro-schema.js"
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
@@ -216,9 +240,7 @@ export type { Store, StoreReader } from "./store.js"
 // Store — shared utilities for reading/writing plain JS object stores
 export {
   applyChangeToStore,
-  pathKey,
   plainStoreReader,
-  readByPath,
   storeArrayLength,
   storeHasKey,
   storeKeys,

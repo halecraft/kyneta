@@ -3,6 +3,7 @@
 
 import { describe, expect, expectTypeOf, it } from "vitest"
 import type { SchemaNode, ValidateContext } from "../index.js"
+import { RawPath } from "../path.js"
 import {
   formatPath,
   interpret,
@@ -36,38 +37,28 @@ function validateUntyped(schema: SchemaNode, value: unknown): unknown {
 
 describe("formatPath", () => {
   it("empty path → 'root'", () => {
-    expect(formatPath([])).toBe("root")
+    expect(formatPath(RawPath.empty)).toBe("root")
   })
 
   it("single key segment", () => {
-    expect(formatPath([{ type: "key", key: "title" }])).toBe("title")
+    expect(formatPath(RawPath.empty.field("title"))).toBe("title")
   })
 
   it("nested key segments use dot notation", () => {
     expect(
-      formatPath([
-        { type: "key", key: "settings" },
-        { type: "key", key: "darkMode" },
-      ]),
+      formatPath(RawPath.empty.field("settings").field("darkMode")),
     ).toBe("settings.darkMode")
   })
 
   it("index segments use bracket notation", () => {
     expect(
-      formatPath([
-        { type: "key", key: "items" },
-        { type: "index", index: 0 },
-      ]),
+      formatPath(RawPath.empty.field("items").item(0)),
     ).toBe("items[0]")
   })
 
   it("mixed key and index segments", () => {
     expect(
-      formatPath([
-        { type: "key", key: "messages" },
-        { type: "index", index: 2 },
-        { type: "key", key: "author" },
-      ]),
+      formatPath(RawPath.empty.field("messages").item(2).field("author")),
     ).toBe("messages[2].author")
   })
 })

@@ -23,8 +23,10 @@
 // Context: jj:wmyomqzw (Phase 0), jj:wqoqzzpp (Phase 2)
 
 import type { ChangeBase } from "../change.js"
+import { replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
 import type { Path } from "../interpret.js"
+import { RawPath, rawKey, rawIndex } from "../path.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
 import type { Schema as SchemaNode } from "../schema.js"
@@ -148,7 +150,7 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
         return { encoding: "json", data: JSON.stringify([]) }
       }
       const ops = log.slice(sinceValue).flat()
-      return { encoding: "json", data: JSON.stringify(ops) }
+      return { encoding: "json", data: JSON.stringify(serializeOps(ops)) }
     },
 
     importDelta(payload: SubstratePayload, origin?: string): void {
@@ -157,8 +159,9 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
           "PlainSubstrate.importDelta only supports JSON-encoded payloads",
         )
       }
-      const ops = JSON.parse(payload.data) as Op[]
-      if (ops.length === 0) return
+      const raw = JSON.parse(payload.data) as SerializedOp[]
+      if (raw.length === 0) return
+      const ops = deserializeOps(raw)
 
       // Apply through the prepare/flush pipeline so the changefeed
       // layer delivers notifications to subscribers.
@@ -223,14 +226,11 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     // prepare/flush pipeline. This produces version > 0 with ops in
     // the log, so version comparison works correctly for sequential sync.
     const substrate = plainSubstrateFactory.create(schema)
-    const ops: Array<{
-      path: Array<{ type: "key"; key: string }>
-      change: { type: "replace"; value: unknown }
-    }> = []
+    const ops: Op[] = []
     for (const [key, value] of Object.entries(snapshotState)) {
       ops.push({
-        path: [{ type: "key" as const, key }],
-        change: { type: "replace" as const, value },
+        path: RawPath.empty.field(key),
+        change: replaceChange(value),
       })
     }
     if (ops.length > 0) {
@@ -249,4 +249,57 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     }
     return new PlainVersion(n)
   },
+}
+
+// ---------------------------------------------------------------------------
+// Op serialization — convert between Path objects and JSON-safe arrays
+// ---------------------------------------------------------------------------
+
+/** A JSON-safe representation of a path segment. */
+type SerializedSegment =
+  | { type: "key"; key: string }
+  | { type: "index"; index: number }
+
+/** A JSON-safe representation of an Op. */
+interface SerializedOp {
+  path: SerializedSegment[]
+  change: ChangeBase
+}
+
+/**
+ * Convert Ops with Path objects into JSON-safe form for serialization.
+ * Extracts segments and produces plain `{ type, key/index }` objects.
+ */
+function serializeOps(ops: readonly Op[]): SerializedOp[] {
+  return ops.map(op => ({
+    path: op.path.segments.map(seg =>
+      seg.role === "key"
+        ? { type: "key" as const, key: seg.resolve() as string }
+        : { type: "index" as const, index: seg.resolve() as number },
+    ),
+    change: op.change,
+  }))
+}
+
+/**
+ * Reconstruct Ops with RawPath objects from JSON-parsed data.
+ * Converts plain `{ type, key/index }` arrays back into RawPath instances.
+ */
+function deserializeOps(raw: SerializedOp[]): Op[] {
+  return raw.map(op => ({
+    path: deserializePath(op.path),
+    change: op.change,
+  }))
+}
+
+function deserializePath(segments: SerializedSegment[]): RawPath {
+  let path = RawPath.empty
+  for (const seg of segments) {
+    if (seg.type === "key") {
+      path = path.field(seg.key)
+    } else {
+      path = path.item(seg.index)
+    }
+  }
+  return path
 }

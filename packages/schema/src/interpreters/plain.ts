@@ -16,7 +16,7 @@ import type {
   SequenceSchema,
   SumSchema,
 } from "../schema.js"
-import { readByPath } from "../store.js"
+
 
 // ---------------------------------------------------------------------------
 // Plain interpreter
@@ -47,7 +47,7 @@ import { readByPath } from "../store.js"
  */
 export const plainInterpreter: Interpreter<unknown, unknown> = {
   scalar(ctx: unknown, path: Path, _schema: ScalarSchema): unknown {
-    return readByPath(ctx, path)
+    return path.read(ctx)
   },
 
   product(
@@ -72,7 +72,7 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     item: (index: number) => unknown,
   ): unknown {
     // Read the array at this path and interpret each item
-    const arr = readByPath(ctx, path)
+    const arr = path.read(ctx)
     if (!Array.isArray(arr)) {
       return []
     }
@@ -86,7 +86,7 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     item: (key: string) => unknown,
   ): unknown {
     // Read the object at this path and interpret each key
-    const obj = readByPath(ctx, path)
+    const obj = path.read(ctx)
     if (!isNonNullObject(obj)) {
       return {}
     }
@@ -109,7 +109,7 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     // For discriminated sums, read the discriminant from the value
     // and interpret through the matching variant.
     if (schema.discriminant !== undefined && variants.byKey) {
-      const value = readByPath(ctx, path)
+      const value = path.read(ctx)
       if (isNonNullObject(value)) {
         const discValue = value[schema.discriminant]
         if (typeof discValue === "string") {
@@ -124,7 +124,7 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     // belongs to at runtime without additional type information.
     // Return the raw value — callers that need variant dispatch should
     // use discriminated sums.
-    return readByPath(ctx, path)
+    return path.read(ctx)
   },
 
   annotated(
@@ -144,6 +144,6 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     // The catamorphism passes the same path for the annotation and
     // its inner — so for leaf annotations without inner schema,
     // we read from the store directly.
-    return readByPath(_ctx, _path)
+    return _path.read(_ctx)
   },
 }

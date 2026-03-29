@@ -19,6 +19,7 @@ import type {
   Schema,
   SequenceSchema,
 } from "./schema.js"
+import type { Path } from "./path.js"
 import type { StoreReader } from "./store.js"
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,25 @@ import type { StoreReader } from "./store.js"
  */
 export interface RefContext {
   readonly store: StoreReader
+  /**
+   * The root path for the interpreter stack. Determines the concrete
+   * Path type for all descendants.
+   *
+   * - `undefined` (default): `interpretImpl` uses `RawPath.empty` —
+   *   all paths are positional `RawPath` instances.
+   * - Set by `withAddressing` to an `AddressedPath` root — all paths
+   *   are identity-stable `AddressedPath` instances.
+   */
+  readonly rootPath?: Path
+  /**
+   * Hook called after each child ref is created by `interpretImpl`.
+   *
+   * Installed by `withAddressing` for ref registration (linking the
+   * Address to its ref) and attaching the `deleted` getter.
+   *
+   * Non-addressing stacks don't set this — the optional call is a no-op.
+   */
+  readonly onRefCreated?: (path: Path, ref: unknown) => void
 }
 
 // ---------------------------------------------------------------------------

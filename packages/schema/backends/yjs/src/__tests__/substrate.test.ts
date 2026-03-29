@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
-import { Schema, change, subscribe } from "@kyneta/schema"
+import { Schema, change, subscribe, RawPath } from "@kyneta/schema"
 import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
 import { YjsVersion } from "../version.js"
 import { createYjsDoc, createYjsDocFromSnapshot } from "../create.js"
@@ -16,15 +16,7 @@ import { ensureContainers } from "../populate.js"
 // Helpers
 // ===========================================================================
 
-/** Key path segment helper */
-function key(k: string) {
-  return { type: "key" as const, key: k }
-}
 
-/** Index path segment helper */
-function idx(i: number) {
-  return { type: "index" as const, index: i }
-}
 
 // ===========================================================================
 // Schemas used across tests
@@ -74,10 +66,10 @@ describe("YjsSubstrate", () => {
   describe("factory create", () => {
     it("creates a substrate with empty containers", () => {
       const substrate = yjsSubstrateFactory.create(SimpleSchema)
-      expect(substrate.store.read([key("title")])).toBe("")
+      expect(substrate.store.read(RawPath.empty.field("title"))).toBe("")
       // Plain scalars return structural zeros
-      expect(substrate.store.read([key("count")])).toBe(0)
-      expect(substrate.store.read([key("items")])).toEqual([])
+      expect(substrate.store.read(RawPath.empty.field("count"))).toBe(0)
+      expect(substrate.store.read(RawPath.empty.field("items"))).toEqual([])
     })
 
     it("creates a substrate and populates via change()", () => {

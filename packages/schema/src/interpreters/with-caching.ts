@@ -6,20 +6,16 @@
 // structural navigation with memoization:
 //
 // - Product: thunk memoization (resolved/cached closure pattern)
-// - Sequence: Map<number, A> child cache wrapping .at(i)
-// - Map: Map<string, A> child cache wrapping .at(key)
+// - Sequence: delegates to address table when withAddressing is in the
+//   stack. The address table IS the cache — no separate Map<number, ref>.
+//   Without withAddressing, .at(i) returns a fresh ref each time.
+// - Map: same pattern as sequence — address table or fresh ref.
 //
-// Each structural node gets an [INVALIDATE](change) method that
-// interprets the change surgically:
+// Each structural node gets an [INVALIDATE](change) method:
 //
-// - SequenceChange → shift/delete cached entries
-// - MapChange → delete affected keys
-// - ReplaceChange → clear all
-// - Unknown → clear all (safe fallback)
-//
-// The logic is split into Functional Core (planCacheUpdate — pure,
-// table-testable) and Imperative Shell (applyCacheOps — trivial Map
-// mutation).
+// - Product: clear all resolved flags (re-evaluate thunks on next access)
+// - Sequence: no-op (withAddressing handles advancement in prepare)
+// - Map: no-op (withAddressing handles tombstoning in prepare)
 //
 // Pipeline integration: when composed in a writable stack, withCaching
 // hooks into the `prepare` phase via `ensureCacheWiring`. Each composite
@@ -28,12 +24,9 @@
 // forwarding to the inner prepare (store mutation). This means
 // `withWritable` mutation methods don't need to call [INVALIDATE]
 // directly — the pipeline handles it.
-//
-// See .plans/interpreter-decomposition.md §Phase 3.
-// See .plans/apply-changes.md §Phase 4.
 
-import type { ChangeBase, MapChange, SequenceChange } from "../change.js"
-import { isMapChange, isReplaceChange, isSequenceChange } from "../change.js"
+import type { ChangeBase } from "../change.js"
+import { isReplaceChange } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type {
@@ -44,7 +37,7 @@ import type {
   SequenceSchema,
   SumSchema,
 } from "../schema.js"
-import { pathKey } from "../store.js"
+
 import type { HasCaching, HasNavigation } from "./bottom.js"
 
 // ---------------------------------------------------------------------------
@@ -61,188 +54,19 @@ import type { HasCaching, HasNavigation } from "./bottom.js"
  * registers per-path handlers that fire automatically during
  * `ctx.prepare(path, change)`, before store mutation.
  *
- * The handler accepts a `ChangeBase` and interprets it surgically —
- * shifting indices, deleting keys, or clearing the entire cache
- * depending on the change type and node kind.
- *
  * Uses `Symbol.for` so multiple copies of this module share identity.
  */
 export const INVALIDATE: unique symbol = Symbol.for("kyneta:invalidate") as any
 
 // ---------------------------------------------------------------------------
-// CacheInstruction — the instruction set for cache updates
+// ADDRESS_TABLE discovery (via Symbol.for to avoid import coupling)
 // ---------------------------------------------------------------------------
 
 /**
- * A cache update operation produced by `planCacheUpdate`.
- *
- * - `clear` — drop all cached entries
- * - `delete` — drop specific keys
- * - `evictFrom` — drop all numeric cache entries at index ≥ `start`.
- *   Used after structural changes (insert/delete) where items shift
- *   positions. Eviction forces fresh ref creation on next `.at()` call,
- *   ensuring the ref's baked-in path matches the new store index.
+ * Symbol for discovering address tables on sequence/map refs.
+ * Matches the symbol defined in `with-addressing.ts`.
  */
-export type CacheInstruction<K = number | string> =
-  | { readonly type: "clear" }
-  | { readonly type: "delete"; readonly keys: K[] }
-  | { readonly type: "evictFrom"; readonly start: number }
-
-// ---------------------------------------------------------------------------
-// planCacheUpdate — Functional Core (pure, table-testable)
-// ---------------------------------------------------------------------------
-
-/**
- * Given a change and the kind of node it targets, produce a list of
- * cache operations that keep the cache consistent.
- *
- * This function inspects only the *structural* impact of changes
- * (retain counts, insert lengths, delete counts). It never reads
- * inserted item values.
- *
- * Unrecognized change types produce `[{ type: "clear" }]` as a safe
- * fallback.
- */
-export function planCacheUpdate(
-  change: ChangeBase,
-  kind: "sequence" | "map" | "product",
-): CacheInstruction<number | string>[] {
-  // ReplaceChange always clears everything, regardless of node kind
-  if (isReplaceChange(change)) {
-    return [{ type: "clear" }]
-  }
-
-  if (kind === "sequence" && isSequenceChange(change)) {
-    return planSequenceCacheUpdate(change)
-  }
-
-  if (kind === "map" && isMapChange(change)) {
-    return planMapCacheUpdate(change)
-  }
-
-  // Product only responds to ReplaceChange (handled above).
-  // Any other change type on a product is unexpected — clear as fallback.
-  if (kind === "product") {
-    return [{ type: "clear" }]
-  }
-
-  // Unrecognized change type — safe fallback
-  return [{ type: "clear" }]
-}
-
-/**
- * Plan cache updates for a sequence change.
- *
- * Walks the retain/insert/delete ops to compute which cached indices
- * need to be evicted. Structural changes (insert/delete) invalidate
- * all indices from the mutation point onward via `evictFrom`, because
- * refs have baked-in paths that cannot be updated after creation.
- */
-function planSequenceCacheUpdate(
-  change: SequenceChange,
-): CacheInstruction<number | string>[] {
-  const ops: CacheInstruction<number | string>[] = []
-  let cursor = 0
-
-  for (const op of change.instructions) {
-    if ("retain" in op) {
-      cursor += op.retain
-    } else if ("insert" in op) {
-      const count = op.insert.length
-      if (count > 0) {
-        // Inserting at `cursor` invalidates all entries at cursor+
-        // because items shifted right. Fresh refs with correct paths
-        // will be created on next `.at()` access.
-        ops.push({ type: "evictFrom", start: cursor })
-      }
-    } else if ("delete" in op) {
-      const count = op.delete
-      if (count > 0) {
-        // Explicitly delete entries [cursor, cursor+count)
-        const deletedKeys: (number | string)[] = []
-        for (let i = 0; i < count; i++) {
-          deletedKeys.push(cursor + i)
-        }
-        ops.push({ type: "delete", keys: deletedKeys })
-        // Evict all entries at cursor+ because items shifted left
-        ops.push({ type: "evictFrom", start: cursor })
-      }
-    }
-  }
-
-  return ops
-}
-
-/**
- * Plan cache updates for a map change.
- *
- * Map changes have `set` (keys to upsert) and `delete` (keys to remove).
- * Only deleted keys need cache eviction — set keys will be re-populated
- * on next access via .at(key).
- */
-function planMapCacheUpdate(
-  change: MapChange,
-): CacheInstruction<number | string>[] {
-  const ops: CacheInstruction<number | string>[] = []
-
-  // Delete entries for removed keys
-  if (change.delete && change.delete.length > 0) {
-    ops.push({ type: "delete", keys: [...change.delete] })
-  }
-
-  // Set keys: evict from cache so next .at(key) re-creates the ref
-  // with the new value. Without this, the cached ref would still read
-  // the old value from the store (store is updated, but the child ref's
-  // path-based read would return the new value — however the ref identity
-  // would be stale if the key was previously deleted and re-added).
-  if (change.set) {
-    const setKeys = Object.keys(change.set)
-    if (setKeys.length > 0) {
-      ops.push({ type: "delete", keys: setKeys })
-    }
-  }
-
-  return ops
-}
-
-// ---------------------------------------------------------------------------
-// applyCacheOps — Imperative Shell (trivial Map mutation)
-// ---------------------------------------------------------------------------
-
-/**
- * Applies planned cache operations to an actual `Map`.
- *
- * - `clear` → map.clear()
- * - `delete` → iterate keys, map.delete(k)
- * - `evictFrom` → delete all numeric keys ≥ start
- */
-export function applyCacheOps<K extends number | string>(
-  cache: Map<K, unknown>,
-  ops: CacheInstruction<K>[],
-): void {
-  for (const op of ops) {
-    switch (op.type) {
-      case "clear":
-        cache.clear()
-        break
-
-      case "delete":
-        for (const key of op.keys) {
-          cache.delete(key)
-        }
-        break
-
-      case "evictFrom": {
-        for (const key of [...cache.keys()]) {
-          if (typeof key === "number" && key >= op.start) {
-            cache.delete(key)
-          }
-        }
-        break
-      }
-    }
-  }
-}
+const ADDRESS_TABLE_SYM = Symbol.for("kyneta:addressTable")
 
 // ---------------------------------------------------------------------------
 // ensureCacheWiring — prepare-pipeline integration (per-context, idempotent)
@@ -284,7 +108,7 @@ function hasPrepare(ctx: RefContext): ctx is RefContext & {
  * context doesn't have `prepare` (read-only stack).
  *
  * - `prepare` wrapping: before forwarding to the inner prepare,
- *   looks up an invalidation handler by `pathKey(path)` and calls it
+ *   looks up an invalidation handler by `path.key` and calls it
  *   if found. This invalidates the cache BEFORE store mutation, so
  *   subsequent reads (e.g. during subscriber notification after flush)
  *   see updated values.
@@ -305,7 +129,7 @@ function ensureCacheWiring(
 
   // Wrapped prepare: invalidate cache at path, then forward.
   const wrappedPrepare = (path: Path, change: ChangeBase): void => {
-    const key = pathKey(path)
+    const key = path.key
     const handler = handlers.get(key)
     if (handler) handler(change)
     originalPrepare(path, change)
@@ -331,7 +155,7 @@ function registerCacheHandler(
   handler: (change: ChangeBase) => void,
 ): void {
   if (handlers) {
-    handlers.set(pathKey(path), handler)
+    handlers.set(path.key, handler)
   }
 }
 
@@ -350,27 +174,26 @@ function registerCacheHandler(
  *
  * After caching:
  * - `ref.title === ref.title` (product field identity)
- * - `seq.at(0) === seq.at(0)` (sequence child identity)
- * - `map.at("k") === map.at("k")` (map child identity)
+ * - `seq.at(0) === seq.at(0)` (sequence child identity, when withAddressing is in stack)
+ * - `map.at("k") === map.at("k")` (map child identity, when withAddressing is in stack)
+ *
+ * **Sequence/Map caching with addressing:**
+ * When `withAddressing` is in the stack, the address table (discovered
+ * via `[ADDRESS_TABLE]`) IS the cache. `.at(i)` looks up the address
+ * at index `i` in the table, then retrieves the registered ref from
+ * `byId`. Cache miss falls through to `baseAt(i)` which creates the
+ * ref (and registers it in the address table via `onRefCreated`).
+ *
+ * **Sequence/Map caching without addressing:**
+ * `.at(i)` calls `baseAt(i)` fresh every time — no memoization.
+ * Product field caching still works (it's self-contained).
  *
  * **Pipeline integration:** When composed inside `withWritable` (i.e.
  * the context is a `WritableContext`), `withCaching` hooks into the
  * `prepare` phase via `ensureCacheWiring`. Each composite node
  * registers its invalidation handler by path. The `prepare` wrapper
  * fires the handler before store mutation, so caches are invalidated
- * automatically for every change — whether from imperative mutation
- * methods or declarative `applyChanges`.
- *
- * In read-only stacks (`RefContext` without `prepare`), the pipeline
- * hook is skipped. `[INVALIDATE]` remains on refs as a public symbol
- * for direct use.
- *
- * ```ts
- * const cached = withCaching(withReadable(bottomInterpreter))
- * const ctx: RefContext = { store }
- * const doc = interpret(schema, cached, ctx)
- * doc.title === doc.title  // true (cached)
- * ```
+ * automatically for every change.
  */
 export function withCaching<A extends HasNavigation>(
   base: Interpreter<RefContext, A>,
@@ -424,8 +247,6 @@ export function withCaching<A extends HasNavigation>(
       }
 
       // INVALIDATE handler: clear all field caches.
-      // Products always do a full clear (planCacheUpdate for product
-      // always returns [{ type: "clear" }] for any change type).
       const invalidateProduct = (_change: ChangeBase): void => {
         for (const key of Object.keys(fieldState)) {
           fieldState[key]!.resolved = false
@@ -444,7 +265,7 @@ export function withCaching<A extends HasNavigation>(
     },
 
     // --- Sequence ---------------------------------------------------------------
-    // Wrap .at(i) with a Map<number, A> child cache.
+    // Delegate to address table for identity-preserving lookup.
     sequence(
       ctx: RefContext,
       path: Path,
@@ -455,32 +276,43 @@ export function withCaching<A extends HasNavigation>(
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem) as any
 
-      const childCache = new Map<number, unknown>()
-
-      // Capture the base .at() — withReadable installed it
+      // Capture the base .at() — withReadable/withNavigation installed it
       const baseAt = result.at as (index: number) => unknown
 
-      // Override .at() with caching
+      // Override .at() with address-table-backed lookup
       Object.defineProperty(result, "at", {
         value: (index: number): unknown => {
-          // Bounds check — delegate to base which returns undefined for OOB
-          if (childCache.has(index)) {
-            return childCache.get(index)
+          // Discover the address table (lazy getter from withAddressing)
+          const addressTable = (result as any)[ADDRESS_TABLE_SYM] as
+            | { byIndex: Map<number, any>; byId: Map<number, { address: any; ref: unknown }> }
+            | undefined
+
+          if (addressTable) {
+            const addr = addressTable.byIndex.get(index)
+            if (addr && addr.kind === "index") {
+              const entry = addressTable.byId.get(addr.id)
+              if (entry?.ref !== undefined) {
+                return entry.ref
+              }
+            }
           }
-          const child = baseAt.call(result, index)
-          if (child !== undefined) {
-            childCache.set(index, child)
-          }
-          return child
+
+          // Cache miss or no address table — delegate to base.
+          // With addressing: baseAt triggers interpretImpl → onRefCreated
+          // which registers the ref in the address table for next time.
+          // Without addressing: fresh ref each time (no memoization).
+          return baseAt.call(result, index)
         },
         enumerable: false,
         configurable: true,
       })
 
-      // INVALIDATE handler: surgical cache update
-      const invalidateSequence = (change: ChangeBase): void => {
-        const ops = planCacheUpdate(change, "sequence")
-        applyCacheOps(childCache, ops as CacheInstruction<number>[])
+      // INVALIDATE handler: no-op for sequence changes.
+      // Address advancement is handled by withAddressing in the prepare
+      // pipeline. For ReplaceChange, withAddressing marks all addresses
+      // dead and clears the table — no cache action needed here.
+      const invalidateSequence = (_change: ChangeBase): void => {
+        // Intentionally empty — addressing layer handles all cases.
       }
 
       // Attach [INVALIDATE] on the ref (public API, direct use)
@@ -494,7 +326,7 @@ export function withCaching<A extends HasNavigation>(
     },
 
     // --- Map -------------------------------------------------------------------
-    // Wrap .at(key) with a Map<string, A> child cache.
+    // Delegate to address table for identity-preserving lookup.
     map(
       ctx: RefContext,
       path: Path,
@@ -505,31 +337,35 @@ export function withCaching<A extends HasNavigation>(
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem) as any
 
-      const childCache = new Map<string, unknown>()
-
-      // Capture the base .at() — withReadable installed it
+      // Capture the base .at() — withReadable/withNavigation installed it
       const baseAt = result.at as (key: string) => unknown
 
-      // Override .at() with caching
+      // Override .at() with address-table-backed lookup
       Object.defineProperty(result, "at", {
         value: (key: string): unknown => {
-          if (childCache.has(key)) {
-            return childCache.get(key)
+          // Discover the map address table (lazy getter from withAddressing)
+          const addressTable = (result as any)[ADDRESS_TABLE_SYM] as
+            | { byKey: Map<string, { address: any; ref: unknown }> }
+            | undefined
+
+          if (addressTable) {
+            const entry = addressTable.byKey.get(key)
+            if (entry?.ref !== undefined && !entry.address.dead) {
+              return entry.ref
+            }
           }
-          const child = baseAt.call(result, key)
-          if (child !== undefined) {
-            childCache.set(key, child)
-          }
-          return child
+
+          // Cache miss or no address table — delegate to base.
+          return baseAt.call(result, key)
         },
         enumerable: false,
         configurable: true,
       })
 
-      // INVALIDATE handler: surgical cache update
-      const invalidateMap = (change: ChangeBase): void => {
-        const ops = planCacheUpdate(change, "map")
-        applyCacheOps(childCache, ops as CacheInstruction<string>[])
+      // INVALIDATE handler: no-op for map changes.
+      // Tombstoning is handled by withAddressing in the prepare pipeline.
+      const invalidateMap = (_change: ChangeBase): void => {
+        // Intentionally empty — addressing layer handles all cases.
       }
 
       // Attach [INVALIDATE] on the ref (public API, direct use)

@@ -1,3 +1,7 @@
 - use `pnpm` as a package manager
 - use `bun` to run typescript files, especially on the CLI during investigatory sampling
   - check types with `bunx tsc`
+
+We are seeking mathematical rigor, correctness, beauty, and elegance in our design. NEVER support backwards compatibility, or deprecating code. This project is experimental and fluid--always delete old code, always take the elegant path even if it means extra effort and/or refactoring.
+
+If you catch yourself saying, "But this is a bigger refactor" and dismiss an instruction, or "Let me be pragmatic..." and then simplify or ignore part of the plan, re-read the plan. Follow the instructions. Big refactors are ok. Pragmatism does not trump elegance.

@@ -26,35 +26,15 @@ import {
   type SequenceSchema,
   type SumSchema,
 } from "../schema.js"
-import { readByPath } from "../store.js"
-
-// ---------------------------------------------------------------------------
-// Path formatting
-// ---------------------------------------------------------------------------
 
 /**
  * Converts a typed Path to a human-readable string for error reporting.
  *
- * - Empty path → `"root"`
- * - Key segments use dot notation: `.author`
- * - Index segments use bracket notation: `[0]`
- *
- * Examples:
- * - `[{type:"key",key:"messages"},{type:"index",index:0},{type:"key",key:"author"}]`
- *   → `"messages[0].author"`
+ * @deprecated Use `path.format()` instead. This free function is retained
+ * temporarily for downstream consumers that haven't migrated yet.
  */
 export function formatPath(path: Path): string {
-  if (path.length === 0) return "root"
-  let result = ""
-  for (const seg of path) {
-    if (seg.type === "key") {
-      if (result.length > 0) result += "."
-      result += seg.key
-    } else {
-      result += `[${seg.index}]`
-    }
-  }
-  return result
+  return path.format()
 }
 
 // ---------------------------------------------------------------------------
@@ -160,13 +140,13 @@ function scalarExpected(kind: string): string {
  */
 export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
   scalar(ctx: ValidateContext, path: Path, schema: ScalarSchema): unknown {
-    const value = readByPath(ctx.root, path)
+    const value = path.read(ctx.root)
 
     // Check type
     if (!checkScalarKind(schema.scalarKind, value)) {
       ctx.errors.push(
         new SchemaValidationError(
-          formatPath(path),
+          path.format(),
           scalarExpected(schema.scalarKind),
           value,
         ),
@@ -182,7 +162,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
           .join(" | ")
         ctx.errors.push(
           new SchemaValidationError(
-            formatPath(path),
+            path.format(),
             `one of ${allowed}`,
             value,
           ),
@@ -200,11 +180,11 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     _schema: ProductSchema,
     fields: Readonly<Record<string, () => unknown>>,
   ): unknown {
-    const value = readByPath(ctx.root, path)
+    const value = path.read(ctx.root)
 
     if (!isNonNullObject(value) || Array.isArray(value)) {
       ctx.errors.push(
-        new SchemaValidationError(formatPath(path), "object", value),
+        new SchemaValidationError(path.format(), "object", value),
       )
       return undefined
     }
@@ -224,11 +204,11 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     _schema: SequenceSchema,
     item: (index: number) => unknown,
   ): unknown {
-    const value = readByPath(ctx.root, path)
+    const value = path.read(ctx.root)
 
     if (!Array.isArray(value)) {
       ctx.errors.push(
-        new SchemaValidationError(formatPath(path), "array", value),
+        new SchemaValidationError(path.format(), "array", value),
       )
       return undefined
     }
@@ -242,11 +222,11 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     _schema: MapSchema,
     item: (key: string) => unknown,
   ): unknown {
-    const value = readByPath(ctx.root, path)
+    const value = path.read(ctx.root)
 
     if (!isNonNullObject(value) || Array.isArray(value)) {
       ctx.errors.push(
-        new SchemaValidationError(formatPath(path), "object", value),
+        new SchemaValidationError(path.format(), "object", value),
       )
       return undefined
     }
@@ -267,12 +247,12 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     if (schema.discriminant !== undefined && variants.byKey) {
       // ── Discriminated sum ──────────────────────────────────────────
       const discSchema = schema as DiscriminatedSumSchema
-      const value = readByPath(ctx.root, path)
+      const value = path.read(ctx.root)
 
       // Must be an object
       if (!isNonNullObject(value) || Array.isArray(value)) {
         ctx.errors.push(
-          new SchemaValidationError(formatPath(path), "object", value),
+          new SchemaValidationError(path.format(), "object", value),
         )
         return undefined
       }
@@ -282,13 +262,10 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
 
       // Discriminant must be a string
       if (typeof discValue !== "string") {
-        const discPath: Path = [
-          ...path,
-          { type: "key", key: schema.discriminant },
-        ]
+        const discPath = path.field(schema.discriminant)
         ctx.errors.push(
           new SchemaValidationError(
-            formatPath(discPath),
+            discPath.format(),
             "string (discriminant)",
             discValue,
           ),
@@ -298,16 +275,13 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
 
       // Discriminant must be a known variant key
       if (!(discValue in discSchema.variantMap)) {
-        const discPath: Path = [
-          ...path,
-          { type: "key", key: schema.discriminant },
-        ]
+        const discPath = path.field(schema.discriminant)
         const keys = Object.keys(discSchema.variantMap)
           .map(k => JSON.stringify(k))
           .join(", ")
         ctx.errors.push(
           new SchemaValidationError(
-            formatPath(discPath),
+            discPath.format(),
             `one of [${keys}]`,
             discValue,
           ),
@@ -345,17 +319,17 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
         const innerDesc = innerSchemaExpected(inner)
         ctx.errors.push(
           new SchemaValidationError(
-            formatPath(path),
+            path.format(),
             `nullable<${innerDesc}>`,
-            readByPath(ctx.root, path),
+            path.read(ctx.root),
           ),
         )
       } else {
         ctx.errors.push(
           new SchemaValidationError(
-            formatPath(path),
+            path.format(),
             `one of union variants`,
-            readByPath(ctx.root, path),
+            path.read(ctx.root),
           ),
         )
       }
@@ -375,14 +349,14 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
 
     // ── Leaf annotations (no inner schema) ─────────────────────────
     if (inner === undefined) {
-      const value = readByPath(ctx.root, path)
+      const value = path.read(ctx.root)
 
       switch (tag) {
         case "text":
           if (typeof value !== "string") {
             ctx.errors.push(
               new SchemaValidationError(
-                formatPath(path),
+                path.format(),
                 "string (text)",
                 value,
               ),
@@ -395,7 +369,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
           if (typeof value !== "number") {
             ctx.errors.push(
               new SchemaValidationError(
-                formatPath(path),
+                path.format(),
                 "number (counter)",
                 value,
               ),

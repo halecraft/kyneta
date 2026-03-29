@@ -122,14 +122,15 @@ export function withReadable<A extends HasNavigation>(
       const result = base.sequence(ctx, path, schema, baseItem) as any
 
       // Fill CALL slot — fold child values to produce a fresh array
-      // snapshot. Uses the raw `item` closure directly for simplicity,
-      // bypassing the cache layer entirely. readByPath is still needed
-      // for structure discovery (array length).
+      // snapshot. Uses result.at(i) to go through the caching/addressing
+      // layer, preserving ref identity in the address table. Without this,
+      // calling ref() (e.g. in conditionalRegion) would bypass withCaching
+      // and create fresh carriers that overwrite address table entries.
       result[CALL] = () => {
         const len = ctx.store.arrayLength(path)
         const snapshot: unknown[] = []
         for (let i = 0; i < len; i++) {
-          const child: unknown = item(i)
+          const child: unknown = result.at(i)
           snapshot.push(
             typeof child === "function" ? (child as () => unknown)() : child,
           )
@@ -162,14 +163,15 @@ export function withReadable<A extends HasNavigation>(
       const result = base.map(ctx, path, schema, baseItem) as any
 
       // Fill CALL slot — fold child values to produce a fresh record
-      // snapshot. Uses the raw `item` closure (not result.at()) because
-      // map keys can be dynamically added/removed and cached refs may
-      // have stale state.
+      // snapshot. Uses result.at(key) to go through the caching/addressing
+      // layer, preserving ref identity in the address table. Without this,
+      // calling ref() would bypass withCaching and create fresh carriers
+      // that overwrite address table entries.
       result[CALL] = () => {
         const keys = ctx.store.keys(path)
         const snapshot: Record<string, unknown> = {}
         for (const key of keys) {
-          const child: unknown = item(key)
+          const child: unknown = result.at(key)
           snapshot[key] =
             typeof child === "function" ? (child as () => unknown)() : child
         }

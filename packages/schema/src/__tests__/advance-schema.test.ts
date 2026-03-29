@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest"
-import type { PathSegment } from "../index.js"
+import { type RawSegment, rawKey, rawIndex } from "../index.js"
 import { advanceSchema, LoroSchema, Schema } from "../index.js"
 
 // ===========================================================================
 // advanceSchema — pure schema descent for a single path segment
 // ===========================================================================
 
-const key = (k: string): PathSegment => ({ type: "key", key: k })
-const index = (i: number): PathSegment => ({ type: "index", index: i })
+const key = (k: string): RawSegment => rawKey(k)
+const index = (i: number): RawSegment => rawIndex(i)
 
 describe("advanceSchema", () => {
   // -------------------------------------------------------------------------

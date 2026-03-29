@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { LoroDoc, LoroMap, LoroList, LoroMovableList } from "loro-crdt"
-import { LoroSchema, Schema } from "@kyneta/schema"
+import { LoroSchema, RawPath, Schema } from "@kyneta/schema"
 import { loroStoreReader } from "../store-reader.js"
 import type { StoreReader } from "@kyneta/schema"
 
@@ -22,8 +22,16 @@ function createReader(
   return { doc, reader: loroStoreReader(doc, schema) }
 }
 
-const key = (k: string) => ({ type: "key" as const, key: k })
-const idx = (i: number) => ({ type: "index" as const, index: i })
+
+/** Build a RawPath from variadic key/index segments. */
+function p(...segs: (string | number)[]): RawPath {
+  let path = RawPath.empty
+  for (const s of segs) {
+    path = typeof s === "string" ? path.field(s) : path.item(s)
+  }
+  return path
+}
+
 
 // ===========================================================================
 // Test schemas
@@ -78,7 +86,7 @@ describe("loroStoreReader", () => {
       const { reader } = createReader(SimpleDocSchema, (doc) => {
         doc.getText("title").insert(0, "Hello World")
       })
-      expect(reader.read([key("title")])).toBe("Hello World")
+      expect(reader.read(p("title"))).toBe("Hello World")
     })
 
     it("reads an empty LoroText as empty string", () => {
@@ -86,21 +94,21 @@ describe("loroStoreReader", () => {
         // getText auto-creates; no insert
         _doc.getText("title")
       })
-      expect(reader.read([key("title")])).toBe("")
+      expect(reader.read(p("title"))).toBe("")
     })
 
     it("reads a LoroCounter as a number", () => {
       const { reader } = createReader(SimpleDocSchema, (doc) => {
         doc.getCounter("count").increment(42)
       })
-      expect(reader.read([key("count")])).toBe(42)
+      expect(reader.read(p("count"))).toBe(42)
     })
 
     it("reads a LoroCounter with zero value", () => {
       const { reader } = createReader(SimpleDocSchema, (doc) => {
         doc.getCounter("count") // auto-creates at 0
       })
-      expect(reader.read([key("count")])).toBe(0)
+      expect(reader.read(p("count"))).toBe(0)
     })
   })
 
@@ -115,8 +123,8 @@ describe("loroStoreReader", () => {
         settings.set("darkMode", true)
         settings.set("fontSize", 16)
       })
-      expect(reader.read([key("settings"), key("darkMode")])).toBe(true)
-      expect(reader.read([key("settings"), key("fontSize")])).toBe(16)
+      expect(reader.read(p("settings", "darkMode"))).toBe(true)
+      expect(reader.read(p("settings", "fontSize"))).toBe(16)
     })
 
     it("reads a nested struct as a plain object (product read)", () => {
@@ -125,7 +133,7 @@ describe("loroStoreReader", () => {
         settings.set("darkMode", false)
         settings.set("fontSize", 14)
       })
-      const result = reader.read([key("settings")])
+      const result = reader.read(p("settings"))
       expect(result).toEqual({ darkMode: false, fontSize: 14 })
     })
   })
@@ -142,7 +150,7 @@ describe("loroStoreReader", () => {
         map.set("name", "Task 1")
         map.set("done", false)
       })
-      const item = reader.read([key("items"), idx(0)])
+      const item = reader.read(p("items", 0))
       expect(item).toEqual({ name: "Task 1", done: false })
     })
 
@@ -153,8 +161,8 @@ describe("loroStoreReader", () => {
         map.set("name", "Buy milk")
         map.set("done", true)
       })
-      expect(reader.read([key("items"), idx(0), key("name")])).toBe("Buy milk")
-      expect(reader.read([key("items"), idx(0), key("done")])).toBe(true)
+      expect(reader.read(p("items", 0, "name"))).toBe("Buy milk")
+      expect(reader.read(p("items", 0, "done"))).toBe(true)
     })
 
     it("reads multiple list items", () => {
@@ -167,8 +175,8 @@ describe("loroStoreReader", () => {
         m1.set("name", "Second")
         m1.set("done", true)
       })
-      expect(reader.read([key("items"), idx(0), key("name")])).toBe("First")
-      expect(reader.read([key("items"), idx(1), key("name")])).toBe("Second")
+      expect(reader.read(p("items", 0, "name"))).toBe("First")
+      expect(reader.read(p("items", 1, "name"))).toBe("Second")
     })
   })
 
@@ -183,8 +191,8 @@ describe("loroStoreReader", () => {
         labels.set("bug", "red")
         labels.set("feature", "blue")
       })
-      expect(reader.read([key("labels"), key("bug")])).toBe("red")
-      expect(reader.read([key("labels"), key("feature")])).toBe("blue")
+      expect(reader.read(p("labels", "bug"))).toBe("red")
+      expect(reader.read(p("labels", "feature"))).toBe("blue")
     })
   })
 
@@ -200,7 +208,7 @@ describe("loroStoreReader", () => {
         m.set("title", "Urgent task")
         m.set("priority", 1)
       })
-      const item = reader.read([key("tasks"), idx(0)])
+      const item = reader.read(p("tasks", 0))
       expect(item).toEqual({ title: "Urgent task", priority: 1 })
     })
 
@@ -211,7 +219,7 @@ describe("loroStoreReader", () => {
         m.set("title", "Do laundry")
         m.set("priority", 3)
       })
-      expect(reader.read([key("tasks"), idx(0), key("title")])).toBe(
+      expect(reader.read(p("tasks", 0, "title"))).toBe(
         "Do laundry",
       )
     })
@@ -226,7 +234,7 @@ describe("loroStoreReader", () => {
       const { reader } = createReader(ListDocSchema, (doc) => {
         doc.getList("items") // auto-creates empty
       })
-      expect(reader.arrayLength([key("items")])).toBe(0)
+      expect(reader.arrayLength(p("items"))).toBe(0)
     })
 
     it("returns correct length after inserts", () => {
@@ -236,7 +244,7 @@ describe("loroStoreReader", () => {
         list.insertContainer(1, new LoroMap())
         list.insertContainer(2, new LoroMap())
       })
-      expect(reader.arrayLength([key("items")])).toBe(3)
+      expect(reader.arrayLength(p("items"))).toBe(3)
     })
 
     it("returns correct length for movable list", () => {
@@ -245,14 +253,14 @@ describe("loroStoreReader", () => {
         tasks.insertContainer(0, new LoroMap())
         tasks.insertContainer(1, new LoroMap())
       })
-      expect(reader.arrayLength([key("tasks")])).toBe(2)
+      expect(reader.arrayLength(p("tasks"))).toBe(2)
     })
 
     it("returns 0 for a non-list container", () => {
       const { reader } = createReader(NestedDocSchema, (doc) => {
         doc.getMap("settings")
       })
-      expect(reader.arrayLength([key("settings")])).toBe(0)
+      expect(reader.arrayLength(p("settings"))).toBe(0)
     })
   })
 
@@ -268,7 +276,7 @@ describe("loroStoreReader", () => {
         labels.set("feature", "blue")
         labels.set("chore", "gray")
       })
-      const k = reader.keys([key("labels")])
+      const k = reader.keys(p("labels"))
       expect(k).toContain("bug")
       expect(k).toContain("feature")
       expect(k).toContain("chore")
@@ -279,7 +287,7 @@ describe("loroStoreReader", () => {
       const { reader } = createReader(MapDocSchema, (doc) => {
         doc.getMap("labels")
       })
-      expect(reader.keys([key("labels")])).toEqual([])
+      expect(reader.keys(p("labels"))).toEqual([])
     })
 
     it("returns keys for a nested struct (LoroMap)", () => {
@@ -288,7 +296,7 @@ describe("loroStoreReader", () => {
         settings.set("darkMode", false)
         settings.set("fontSize", 14)
       })
-      const k = reader.keys([key("settings")])
+      const k = reader.keys(p("settings"))
       expect(k).toContain("darkMode")
       expect(k).toContain("fontSize")
     })
@@ -297,7 +305,7 @@ describe("loroStoreReader", () => {
       const { reader } = createReader(ListDocSchema, (doc) => {
         doc.getList("items")
       })
-      expect(reader.keys([key("items")])).toEqual([])
+      expect(reader.keys(p("items"))).toEqual([])
     })
   })
 
@@ -310,21 +318,21 @@ describe("loroStoreReader", () => {
       const { reader } = createReader(MapDocSchema, (doc) => {
         doc.getMap("labels").set("bug", "red")
       })
-      expect(reader.hasKey([key("labels")], "bug")).toBe(true)
+      expect(reader.hasKey(p("labels"), "bug")).toBe(true)
     })
 
     it("returns false for a missing key", () => {
       const { reader } = createReader(MapDocSchema, (doc) => {
         doc.getMap("labels").set("bug", "red")
       })
-      expect(reader.hasKey([key("labels")], "missing")).toBe(false)
+      expect(reader.hasKey(p("labels"), "missing")).toBe(false)
     })
 
     it("returns false for non-map container", () => {
       const { reader } = createReader(ListDocSchema, (doc) => {
         doc.getList("items")
       })
-      expect(reader.hasKey([key("items")], "anything")).toBe(false)
+      expect(reader.hasKey(p("items"), "anything")).toBe(false)
     })
 
     it("works on nested map (struct)", () => {
@@ -332,8 +340,8 @@ describe("loroStoreReader", () => {
         const settings = doc.getMap("settings")
         settings.set("darkMode", true)
       })
-      expect(reader.hasKey([key("settings")], "darkMode")).toBe(true)
-      expect(reader.hasKey([key("settings")], "fontSize")).toBe(false)
+      expect(reader.hasKey(p("settings"), "darkMode")).toBe(true)
+      expect(reader.hasKey(p("settings"), "fontSize")).toBe(false)
     })
   })
 
@@ -346,34 +354,34 @@ describe("loroStoreReader", () => {
       const { doc, reader } = createReader(SimpleDocSchema, (d) => {
         d.getText("title").insert(0, "Hello")
       })
-      expect(reader.read([key("title")])).toBe("Hello")
+      expect(reader.read(p("title"))).toBe("Hello")
 
       // Mutate after reader creation
       doc.getText("title").insert(5, " World")
       doc.commit()
-      expect(reader.read([key("title")])).toBe("Hello World")
+      expect(reader.read(p("title"))).toBe("Hello World")
     })
 
     it("reflects counter mutations immediately", () => {
       const { doc, reader } = createReader(SimpleDocSchema, (d) => {
         d.getCounter("count").increment(1)
       })
-      expect(reader.read([key("count")])).toBe(1)
+      expect(reader.read(p("count"))).toBe(1)
 
       doc.getCounter("count").increment(9)
       doc.commit()
-      expect(reader.read([key("count")])).toBe(10)
+      expect(reader.read(p("count"))).toBe(10)
     })
 
     it("reflects list length changes immediately", () => {
       const { doc, reader } = createReader(ListDocSchema, (d) => {
         d.getList("items")
       })
-      expect(reader.arrayLength([key("items")])).toBe(0)
+      expect(reader.arrayLength(p("items"))).toBe(0)
 
       doc.getList("items").insertContainer(0, new LoroMap())
       doc.commit()
-      expect(reader.arrayLength([key("items")])).toBe(1)
+      expect(reader.arrayLength(p("items"))).toBe(1)
     })
   })
 
@@ -402,11 +410,11 @@ describe("loroStoreReader", () => {
         bob.set("age", 25)
       })
 
-      expect(reader.read([key("people"), idx(0), key("name")])).toBe("Alice")
-      expect(reader.read([key("people"), idx(0), key("age")])).toBe(30)
-      expect(reader.read([key("people"), idx(1), key("name")])).toBe("Bob")
-      expect(reader.read([key("people"), idx(1), key("age")])).toBe(25)
-      expect(reader.arrayLength([key("people")])).toBe(2)
+      expect(reader.read(p("people", 0, "name"))).toBe("Alice")
+      expect(reader.read(p("people", 0, "age"))).toBe(30)
+      expect(reader.read(p("people", 1, "name"))).toBe("Bob")
+      expect(reader.read(p("people", 1, "age"))).toBe(25)
+      expect(reader.arrayLength(p("people"))).toBe(2)
     })
   })
 
@@ -462,17 +470,17 @@ describe("loroStoreReader", () => {
       const reader1 = loroStoreReader(doc1, schema)
       const reader2 = loroStoreReader(doc2, schema)
 
-      expect(reader1.arrayLength([key("items")])).toBe(2)
-      expect(reader2.arrayLength([key("items")])).toBe(2)
+      expect(reader1.arrayLength(p("items"))).toBe(2)
+      expect(reader2.arrayLength(p("items"))).toBe(2)
 
       // Both should see the same items (convergence)
       const names1 = [
-        reader1.read([key("items"), idx(0), key("name")]),
-        reader1.read([key("items"), idx(1), key("name")]),
+        reader1.read(p("items", 0, "name")),
+        reader1.read(p("items", 1, "name")),
       ].sort()
       const names2 = [
-        reader2.read([key("items"), idx(0), key("name")]),
-        reader2.read([key("items"), idx(1), key("name")]),
+        reader2.read(p("items", 0, "name")),
+        reader2.read(p("items", 1, "name")),
       ].sort()
 
       expect(names1).toEqual(names2)

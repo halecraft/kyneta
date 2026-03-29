@@ -21,6 +21,8 @@ import { isNonNullObject } from "./guards.js"
 import type { HasRead } from "./interpreters/bottom.js"
 import { bottomInterpreter } from "./interpreters/bottom.js"
 import type { HasTransact } from "./interpreters/writable.js"
+import type { Path } from "./path.js"
+import { RawPath } from "./path.js"
 import type { Ref, RRef, RWRef } from "./ref.js"
 import type {
   AnnotatedSchema,
@@ -36,19 +38,11 @@ import type {
 import { isNullableSum } from "./schema.js"
 
 // ---------------------------------------------------------------------------
-// Path — breadcrumb trail through the schema tree
+// Path — re-exported from path.ts
 // ---------------------------------------------------------------------------
 
-/**
- * A path segment identifies a position within the schema tree.
- * Used by interpreters that need to know "where am I" (e.g. for
- * reading from a store, building path selectors, etc.).
- */
-export type PathSegment =
-  | { readonly type: "key"; readonly key: string }
-  | { readonly type: "index"; readonly index: number }
-
-export type Path = readonly PathSegment[]
+export type { Path, Segment, RawSegment } from "./path.js"
+export { RawPath, rawKey, rawIndex } from "./path.js"
 
 // ---------------------------------------------------------------------------
 // Interpreter interface
@@ -438,7 +432,7 @@ export function interpret(
       schema,
       interpOrCtx as Interpreter<any, any>,
       ctx!,
-      path ?? [],
+      path,
     )
   }
   // Two-arg form: return a fluent builder
@@ -495,7 +489,7 @@ function createBuilder(
       for (const layer of layers) {
         interp = layer.transform(interp)
       }
-      return interpretImpl(schema, interp, ctx, [])
+      return interpretImpl(schema, interp, ctx)
     },
   }
 }
@@ -508,41 +502,76 @@ function interpretImpl<Ctx, A>(
   schema: Schema,
   interp: Interpreter<Ctx, A>,
   ctx: Ctx,
-  path: Path = [],
+  path?: Path,
 ): A {
+  // Resolve the path. For the root call (path === undefined), ctx.rootPath
+  // may not be set yet — withAddressing sets it on first method invocation.
+  // We use RawPath.empty as a temporary root path; child-deriving closures
+  // (field thunks, itemFn, innerThunk) re-read ctx.rootPath at execution
+  // time so that withAddressing's rootPath is picked up.
+  const isRootCall = path === undefined
+  const resolvedPath: Path = path ?? (ctx as any)?.rootPath ?? RawPath.empty
+
+  // onRefCreated hook — called after each child ref is created.
+  // Installed by withAddressing for ref registration and deleted getter.
+  // Read lazily so that hooks installed during interpretation are visible.
+  const getOnRefCreated = () =>
+    (ctx as any)?.onRefCreated as
+      | ((path: Path, ref: unknown) => void)
+      | undefined
+
+  // For the root call, child-deriving closures need the path that
+  // ctx.rootPath resolves to AFTER the first interpreter method has run
+  // (which is when withAddressing installs rootPath). Non-root calls
+  // use the explicitly-passed resolvedPath directly.
+  const effectivePath = (): Path => {
+    if (isRootCall) {
+      return (ctx as any)?.rootPath ?? resolvedPath
+    }
+    return resolvedPath
+  }
+
   switch (schema._kind) {
     case "scalar":
-      return interp.scalar(ctx, path, schema)
+      return interp.scalar(ctx, resolvedPath, schema)
 
     case "product": {
-      // Build thunks for each field — lazy, not pre-computed
+      // Build thunks for each field — lazy, not pre-computed.
+      // Thunks call effectivePath() at execution time (not capture time)
+      // so that ctx.rootPath set by withAddressing is picked up.
       const fieldThunks: Record<string, () => A> = {}
       for (const key of Object.keys(schema.fields)) {
         const fieldSchema = schema.fields[key]!
-        const fieldPath: Path = [...path, { type: "key", key }]
-        // Each thunk captures its own key and path
-        fieldThunks[key] = () =>
-          interpretImpl(fieldSchema, interp, ctx, fieldPath)
+        fieldThunks[key] = () => {
+          const childPath = effectivePath().field(key)
+          const result = interpretImpl(fieldSchema, interp, ctx, childPath)
+          getOnRefCreated()?.(childPath, result)
+          return result
+        }
       }
-      return interp.product(ctx, path, schema, fieldThunks)
+      return interp.product(ctx, resolvedPath, schema, fieldThunks)
     }
 
     case "sequence": {
-      // Item closure: caller provides an index, gets back an interpreted child
+      // Item closure: caller provides an index, gets back an interpreted child.
       const itemFn = (index: number): A => {
-        const itemPath: Path = [...path, { type: "index", index }]
-        return interpretImpl(schema.item, interp, ctx, itemPath)
+        const childPath = effectivePath().item(index)
+        const result = interpretImpl(schema.item, interp, ctx, childPath)
+        getOnRefCreated()?.(childPath, result)
+        return result
       }
-      return interp.sequence(ctx, path, schema, itemFn)
+      return interp.sequence(ctx, resolvedPath, schema, itemFn)
     }
 
     case "map": {
-      // Item closure: caller provides a key, gets back an interpreted child
+      // Item closure: caller provides a key, gets back an interpreted child.
       const itemFn = (key: string): A => {
-        const itemPath: Path = [...path, { type: "key", key }]
-        return interpretImpl(schema.item, interp, ctx, itemPath)
+        const childPath = effectivePath().field(key)
+        const result = interpretImpl(schema.item, interp, ctx, childPath)
+        getOnRefCreated()?.(childPath, result)
+        return result
       }
-      return interp.map(ctx, path, schema, itemFn)
+      return interp.map(ctx, resolvedPath, schema, itemFn)
     }
 
     case "sum": {
@@ -559,7 +588,7 @@ function interpretImpl<Ctx, A>(
               `interpret: discriminated sum has no variant for key "${key}"`,
             )
           }
-          return interpretImpl(variantSchema, interp, ctx, path)
+          return interpretImpl(variantSchema, interp, ctx, resolvedPath)
         }
       } else {
         // Positional sum
@@ -573,20 +602,28 @@ function interpretImpl<Ctx, A>(
               `interpret: positional sum has no variant at index ${index}`,
             )
           }
-          return interpretImpl(variantSchema, interp, ctx, path)
+          return interpretImpl(variantSchema, interp, ctx, resolvedPath)
         }
       }
-      return interp.sum(ctx, path, schema, variants)
+      return interp.sum(ctx, resolvedPath, schema, variants)
     }
 
     case "annotated": {
-      // If there's an inner schema, provide a thunk for it
+      // If there's an inner schema, provide a thunk for it.
+      // Annotated reuses the parent path (no new segment appended).
+      // The inner thunk uses effectivePath() so that withAddressing's
+      // rootPath is picked up after the annotated method installs it.
       const innerThunk: (() => A) | undefined =
         schema.schema !== undefined
-          ? () => interpretImpl(schema.schema!, interp, ctx, path)
+          ? () => {
+              const innerPath = effectivePath()
+              const result = interpretImpl(schema.schema!, interp, ctx, innerPath)
+              getOnRefCreated()?.(innerPath, result)
+              return result
+            }
           : undefined
 
-      return interp.annotated(ctx, path, schema, innerThunk)
+      return interp.annotated(ctx, resolvedPath, schema, innerThunk)
     }
   }
 }

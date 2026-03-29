@@ -19,7 +19,6 @@ export type { Plain } from "../interpreter-types.js"
 
 // --- Validation ---
 export {
-  formatPath,
   SchemaValidationError,
   tryValidate,
   validate,

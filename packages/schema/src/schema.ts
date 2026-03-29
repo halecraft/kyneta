@@ -9,7 +9,7 @@
 // loro-schema.ts. The developer-facing Schema namespace provides only
 // structural constructors and the open `annotated()` mechanism.
 
-import type { PathSegment } from "./interpret.js"
+import type { Segment } from "./path.js"
 
 // ---------------------------------------------------------------------------
 // Scalar kinds — leaf values (not a separate recursive grammar)
@@ -685,7 +685,7 @@ export function unwrapAnnotation(schema: Schema): Schema | undefined {
  * @throws If the segment type doesn't match the schema kind (e.g.,
  *   index segment on a product, or key segment on a scalar).
  */
-export function advanceSchema(schema: Schema, segment: PathSegment): Schema {
+export function advanceSchema(schema: Schema, segment: Segment): Schema {
   // Unwrap annotations to reach the structural node
   let structural = schema
   while (structural._kind === "annotated") {
@@ -699,29 +699,30 @@ export function advanceSchema(schema: Schema, segment: PathSegment): Schema {
 
   switch (structural._kind) {
     case "product": {
-      if (segment.type !== "key") {
+      if (segment.role !== "key") {
         throw new Error(
           `advanceSchema: product expects a key segment, got index segment`,
         )
       }
-      const fieldSchema = structural.fields[segment.key]
+      const key = segment.resolve() as string
+      const fieldSchema = structural.fields[key]
       if (!fieldSchema) {
-        throw new Error(`advanceSchema: product has no field "${segment.key}"`)
+        throw new Error(`advanceSchema: product has no field "${key}"`)
       }
       return fieldSchema
     }
 
     case "sequence": {
-      if (segment.type !== "index") {
+      if (segment.role !== "index") {
         throw new Error(
-          `advanceSchema: sequence expects an index segment, got key segment "${segment.key}"`,
+          `advanceSchema: sequence expects an index segment, got key segment "${segment.resolve()}"`,
         )
       }
       return structural.item
     }
 
     case "map": {
-      if (segment.type !== "key") {
+      if (segment.role !== "key") {
         throw new Error(
           `advanceSchema: map expects a key segment, got index segment`,
         )

@@ -1,5 +1,6 @@
 // withChangefeed — compositional changefeed interpreter transformer.
 //
+//
 // This module owns the observation concern. It takes a base interpreter
 // that produces refs with HasRead (filled [CALL] slot) and attaches
 // [CHANGEFEED] to every node:
@@ -28,7 +29,7 @@
 // See .plans/navigation-layer.md §Phase 2, Task 2.2b.
 
 import type { ChangeBase } from "../change.js"
-import { isSequenceChange } from "../change.js"
+import { isReplaceChange, isSequenceChange } from "../change.js"
 import type {
   Changefeed,
   Changeset,
@@ -43,6 +44,7 @@ import {
 } from "../changefeed.js"
 import { isPropertyHost } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
+import { AddressedPath, RawPath, resolveToAddressed, type SequenceAddressTable } from "../path.js"
 import type { RefContext } from "../interpreter-types.js"
 import type {
   AnnotatedSchema,
@@ -52,7 +54,7 @@ import type {
   SequenceSchema,
   SumSchema,
 } from "../schema.js"
-import { pathKey } from "../store.js"
+
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
 
@@ -112,7 +114,7 @@ export interface NotificationPlan {
 export function planNotifications(pending: readonly Op[]): NotificationPlan {
   const grouped = new Map<string, ChangeBase[]>()
   for (const { path, change } of pending) {
-    const key = pathKey(path)
+    const key = path.key
     let arr = grouped.get(key)
     if (!arr) {
       arr = []
@@ -269,9 +271,17 @@ function ensurePrepareWiring(
           "Defer the change() call (e.g., via queueMicrotask).",
       )
     }
-    originalPrepare(path, change)
-    pending.push({ path, change })
-    markPopulated(path, populated, populatedListeners)
+    // Resolve raw paths to addressed paths so that path.key matches
+    // the identity-stable keys used by changefeed listeners and cache
+    // invalidation handlers. Idempotent for already-addressed paths.
+    const rootPath = (ctx as any)?.rootPath
+    const resolved =
+      rootPath instanceof AddressedPath
+        ? resolveToAddressed(path, rootPath.registry)
+        : path
+    originalPrepare(resolved, change)
+    pending.push({ path: resolved, change })
+    markPopulated(resolved, populated, populatedListeners)
   }
 
   // Wrapped flush: plan notifications (pure), commit via inner flush
@@ -321,7 +331,7 @@ function listenAtPath(
   path: Path,
   callback: (changeset: Changeset<ChangeBase>) => void,
 ): () => void {
-  const key = pathKey(path)
+  const key = path.key
   let set = listeners.get(key)
   if (!set) {
     set = new Set()
@@ -356,7 +366,7 @@ function markPopulated(
   populatedListeners: Map<string, Set<() => void>>,
 ): void {
   // Mark the exact path
-  const key = pathKey(path)
+  const key = path.key
   if (!populated.has(key)) {
     populated.add(key)
     firePopulatedListeners(key, populatedListeners)
@@ -364,7 +374,7 @@ function markPopulated(
 
   // Mark all ancestor paths (prefix walk)
   for (let i = path.length - 1; i >= 0; i--) {
-    const ancestorKey = pathKey(path.slice(0, i))
+    const ancestorKey = path.slice(0, i).key
     if (populated.has(ancestorKey)) break // already marked, ancestors are too
     populated.add(ancestorKey)
     firePopulatedListeners(ancestorKey, populatedListeners)
@@ -396,7 +406,7 @@ function createPopulatedChangefeed(
   populated: Set<string>,
   populatedListeners: Map<string, Set<() => void>>,
 ): Changefeed<boolean, ChangeBase> {
-  const key = pathKey(path)
+  const key = path.key
 
   return {
     get current(): boolean {
@@ -535,7 +545,8 @@ function createProductChangefeed(
   listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
   path: Path,
   readCurrent: () => unknown,
-  fields: Readonly<Record<string, () => unknown>>,
+  productRef: object,
+  fieldKeys: readonly string[],
 ): ComposedChangefeed<unknown, ChangeBase> {
   // Per-node shallow subscribers (node-level) — receive Changeset
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
@@ -551,7 +562,7 @@ function createProductChangefeed(
     // Tree subscribers also see own-path changes with path []
     if (treeSubs.size > 0) {
       const treeChangeset: Changeset<Op> = {
-        changes: changeset.changes.map(change => ({ path: [], change })),
+        changes: changeset.changes.map(change => ({ path: path.root(), change })),
         origin: changeset.origin,
       }
       for (const cb of treeSubs) cb(treeChangeset)
@@ -565,11 +576,14 @@ function createProductChangefeed(
     if (childWiringDone) return
     childWiringDone = true
 
-    for (const key of Object.keys(fields)) {
-      const child = fields[key]?.()
+    for (const key of fieldKeys) {
+      // Access through the product ref's cached getter (result[key])
+      // instead of raw field thunks. Raw thunks create new carriers
+      // and fire onRefCreated, overwriting address table entries.
+      const child = (productRef as any)[key]
       if (!hasChangefeed(child)) continue
 
-      const prefix: Path = [{ type: "key" as const, key }]
+      const prefix = path.root().field(key)
 
       if (hasComposedChangefeed(child)) {
         // Composite child — subscribe to its tree, re-prefix events
@@ -577,7 +591,7 @@ function createProductChangefeed(
           if (treeSubs.size === 0) return
           const propagated: Changeset<Op> = {
             changes: changeset.changes.map(event => ({
-              path: [...prefix, ...event.path],
+              path: prefix.concat(event.path),
               change: event.change,
             })),
             origin: changeset.origin,
@@ -644,21 +658,61 @@ function createSequenceChangefeed(
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
   const treeSubs = new Set<(changeset: Changeset<Op>) => void>()
 
-  // Per-item unsubscribe functions, keyed by index
+  // Per-item unsubscribe functions, keyed by stable address ID (not
+  // positional index). Address IDs never change — they survive structural
+  // changes. This means retained/shifted items keep their subscriptions
+  // without teardown/rebuild. Only dead items need cleanup.
+  //
+  // Falls back to index-keyed for non-addressing stacks (no ADDRESS_TABLE).
   const itemUnsubs = new Map<number, () => void>()
 
-  function subscribeToItem(index: number): void {
-    // Unsubscribe from any existing subscription at this index
-    const existing = itemUnsubs.get(index)
-    if (existing) existing()
+  // Symbol.for so we don't need a runtime import from with-addressing.ts
+  const ADDRESS_TABLE_SYM = Symbol.for("kyneta:addressTable")
 
+  /**
+   * Get the sequence address table from the parent ref, if available.
+   * Returns undefined for non-addressing stacks.
+   */
+  function getAddressTable(): SequenceAddressTable | undefined {
+    // The parent ref is accessible via getItemRef's closure over the
+    // result object. We discover the table via the symbol on the
+    // sequence ref that createSequenceChangefeed is attached to.
+    // The caller (withChangefeed.sequence) passes getItemRef which
+    // calls result.at(i), so `result` is in the closure. We can't
+    // access it here directly, but the ADDRESS_TABLE is discoverable
+    // from any item's parent. Instead, we check the path: if it's
+    // addressed, the registry has the table.
+    if (path.isAddressed) {
+      const addrPath = path as AddressedPath
+      return addrPath.registry.getSequenceTable(path.key)
+    }
+    return undefined
+  }
+
+  function subscribeToItem(index: number): void {
     const child = getItemRef(index)
-    if (!child || !hasChangefeed(child)) {
-      itemUnsubs.delete(index)
-      return
+    if (!child || !hasChangefeed(child)) return
+
+    // Determine a stable key for this subscription.
+    // With addressing: use the address ID (stable across structural changes).
+    // Without addressing: use the positional index (falls back to old behavior).
+    let subKey = index
+    const table = getAddressTable()
+    if (table) {
+      const addr = table.byIndex.get(index)
+      if (addr && addr.kind === "index") {
+        subKey = addr.id
+      }
     }
 
-    const prefix: Path = [{ type: "index" as const, index }]
+    // If already subscribed under this key, skip (idempotent).
+    if (itemUnsubs.has(subKey)) return
+
+    // The prefix captures the Address object from the registry (via
+    // path.root().item(index)), which is the SAME Address that
+    // withAddressing advances. So prefix.resolve() returns the
+    // current index after advancement — the prefix is live.
+    const prefix = path.root().item(index)
 
     let unsub: () => void
     if (hasComposedChangefeed(child)) {
@@ -666,7 +720,7 @@ function createSequenceChangefeed(
         if (treeSubs.size === 0) return
         const propagated: Changeset<Op> = {
           changes: changeset.changes.map(event => ({
-            path: [...prefix, ...event.path],
+            path: prefix.concat(event.path),
             change: event.change,
           })),
           origin: changeset.origin,
@@ -688,7 +742,7 @@ function createSequenceChangefeed(
         },
       )
     }
-    itemUnsubs.set(index, unsub)
+    itemUnsubs.set(subKey, unsub)
   }
 
   function subscribeToAllItems(): void {
@@ -699,27 +753,50 @@ function createSequenceChangefeed(
   }
 
   function handleStructuralChange(changeset: Changeset<ChangeBase>): void {
-    // Check if any change in the batch is a sequence change
-    const hasNonSequence = changeset.changes.some(c => !isSequenceChange(c))
-    if (hasNonSequence) {
-      // ReplaceChange or unknown — tear down all, rebuild
+    const table = getAddressTable()
+
+    if (!table) {
+      // Non-addressing stack: fall back to O(n) teardown/rebuild
       for (const unsub of itemUnsubs.values()) unsub()
       itemUnsubs.clear()
       if (treeSubs.size > 0) subscribeToAllItems()
       return
     }
 
-    // Parse the sequence ops to determine what indices changed
-    // After the store is updated, we need to rebuild subscriptions
-    // at affected indices. The simplest correct approach: tear down
-    // all subscriptions and rebuild for the new length.
-    //
-    // This is O(n) per structural change but correct. A more
-    // sophisticated approach would parse retain/insert/delete ops
-    // to shift subscriptions, but that optimization can come later.
-    for (const unsub of itemUnsubs.values()) unsub()
-    itemUnsubs.clear()
-    if (treeSubs.size > 0) subscribeToAllItems()
+    // Addressing stack: only clean up dead items.
+    // Retained/shifted items keep their subscriptions — their address
+    // IDs are stable, and the prefix path auto-updates because it
+    // captures the same Address object that withAddressing advances.
+
+    const hasReplace = changeset.changes.some(c => isReplaceChange(c))
+    if (hasReplace) {
+      // ReplaceChange: all addresses are dead, tear down everything
+      for (const unsub of itemUnsubs.values()) unsub()
+      itemUnsubs.clear()
+      if (treeSubs.size > 0) subscribeToAllItems()
+      return
+    }
+
+    // SequenceChange: unsubscribe only dead items
+    for (const [addrId, unsub] of itemUnsubs) {
+      const entry = table.byId.get(addrId)
+      if (entry && entry.address.dead) {
+        unsub()
+        itemUnsubs.delete(addrId)
+      }
+    }
+
+    // Subscribe to any newly inserted items that are already accessed.
+    // New items get subscribed lazily when accessed via .at(), but if
+    // subscribeToAllItems was already called, we should pick up new
+    // items at their current indices.
+    if (treeSubs.size > 0) {
+      const len = getLength()
+      for (let i = 0; i < len; i++) {
+        // subscribeToItem is idempotent — skips if already subscribed
+        subscribeToItem(i)
+      }
+    }
   }
 
   // Register in the listener map for own-path changes.
@@ -733,7 +810,7 @@ function createSequenceChangefeed(
     // Tree subscribers see own-path structural changes with path []
     if (treeSubs.size > 0) {
       const treeChangeset: Changeset<Op> = {
-        changes: changeset.changes.map(change => ({ path: [], change })),
+        changes: changeset.changes.map(change => ({ path: path.root(), change })),
         origin: changeset.origin,
       }
       for (const cb of treeSubs) cb(treeChangeset)
@@ -804,7 +881,7 @@ function createMapChangefeed(
       return
     }
 
-    const prefix: Path = [{ type: "key" as const, key }]
+    const prefix = path.root().field(key)
 
     let unsub: () => void
     if (hasComposedChangefeed(child)) {
@@ -812,7 +889,7 @@ function createMapChangefeed(
         if (treeSubs.size === 0) return
         const propagated: Changeset<Op> = {
           changes: changeset.changes.map(event => ({
-            path: [...prefix, ...event.path],
+            path: prefix.concat(event.path),
             change: event.change,
           })),
           origin: changeset.origin,
@@ -860,7 +937,7 @@ function createMapChangefeed(
 
     if (treeSubs.size > 0) {
       const treeChangeset: Changeset<Op> = {
-        changes: changeset.changes.map(change => ({ path: [], change })),
+        changes: changeset.changes.map(change => ({ path: path.root(), change })),
         origin: changeset.origin,
       }
       for (const cb of treeSubs) cb(treeChangeset)
@@ -992,11 +1069,11 @@ export function withChangefeed<A extends HasRead>(
           listeners,
           path,
           () => (result as any)[CALL](),
-          // The fields object contains thunks — forcing them yields
-          // child refs with [CHANGEFEED] already attached (because
-          // the catamorphism interprets children before parents, and
-          // the field thunks capture the full interpreter).
-          fields as Readonly<Record<string, () => unknown>>,
+          // Pass the product ref so wireChildren accesses fields through
+          // withCaching's memoized getters, not raw thunks. Raw thunks
+          // create new carriers that overwrite address table entries.
+          result as object,
+          Object.keys(fields),
         )
         attachChangefeed(result as object, cf)
         const ps = getPopulatedState(ctx)
@@ -1031,7 +1108,10 @@ export function withChangefeed<A extends HasRead>(
             if (typeof resultAny.at === "function") {
               return resultAny.at(index)
             }
-            return item(index)
+            throw new Error(
+              "withChangefeed: sequence ref missing .at() method. " +
+              "Ensure withNavigation is in the interpreter stack.",
+            )
           },
           () => ctx.store.arrayLength(path),
         )
@@ -1065,7 +1145,10 @@ export function withChangefeed<A extends HasRead>(
             if (typeof resultAny.at === "function") {
               return resultAny.at(key)
             }
-            return item(key)
+            throw new Error(
+              "withChangefeed: map ref missing .at() method. " +
+              "Ensure withNavigation is in the interpreter stack.",
+            )
           },
           () => ctx.store.keys(path),
         )

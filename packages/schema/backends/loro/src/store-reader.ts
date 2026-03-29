@@ -9,7 +9,7 @@
 // Collections: LoroList/LoroMovableList → .length, LoroMap → .keys().
 
 import type { StoreReader } from "@kyneta/schema"
-import type { Path, PathSegment } from "@kyneta/schema"
+import type { Path } from "@kyneta/schema"
 import type { Schema as SchemaNode } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
 import { resolveContainer } from "./loro-resolve.js"

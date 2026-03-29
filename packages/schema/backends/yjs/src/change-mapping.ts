@@ -23,7 +23,6 @@ import type {
   MapChange,
   Op,
   Path,
-  PathSegment,
   ReplaceChange,
   Schema as SchemaNode,
   SequenceChange,
@@ -31,6 +30,7 @@ import type {
   TextChange,
   TextInstruction,
 } from "@kyneta/schema"
+import { RawPath } from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
 
@@ -210,20 +210,21 @@ function applyReplaceChange(
 
   // Target the parent container, using the last segment to identify
   // which child to replace.
-  const lastSeg = path[path.length - 1]!
+  const lastSeg = path.segments[path.segments.length - 1]!
   const parentPath = path.slice(0, -1)
   const parent = resolveYjsType(rootMap, rootSchema, parentPath)
 
-  if (parent instanceof Y.Map && lastSeg.type === "key") {
+  const resolved = lastSeg.resolve()
+  if (parent instanceof Y.Map && lastSeg.role === "key") {
     // Resolve schema for the target field for structured value detection
     const targetSchema = resolveSchemaAtPath(rootSchema, path)
     const yjsValue = maybeCreateSharedType(change.value, targetSchema)
-    parent.set(lastSeg.key, yjsValue)
-  } else if (parent instanceof Y.Array && lastSeg.type === "index") {
+    parent.set(resolved as string, yjsValue)
+  } else if (parent instanceof Y.Array && lastSeg.role === "index") {
     const targetSchema = resolveSchemaAtPath(rootSchema, path)
     const yjsValue = maybeCreateSharedType(change.value, targetSchema)
-    parent.delete(lastSeg.index, 1)
-    parent.insert(lastSeg.index, [yjsValue])
+    parent.delete(resolved as number, 1)
+    parent.insert(resolved as number, [yjsValue])
   } else {
     throw new Error(
       `applyChangeToYjs: ReplaceChange parent at path [${pathToString(parentPath)}] ` +
@@ -396,16 +397,16 @@ export function eventsToOps(events: Y.YEvent<any>[]): Op[] {
  * `event.path` from `observeDeep` is relative to the observed type.
  * Strings become key segments, numbers become index segments.
  */
-function yjsPathToKynetaPath(yjsPath: (string | number)[]): Path {
-  const result: PathSegment[] = []
+function yjsPathToKynetaPath(yjsPath: (string | number)[]): RawPath {
+  let path = RawPath.empty
   for (const segment of yjsPath) {
     if (typeof segment === "string") {
-      result.push({ type: "key", key: segment })
+      path = path.field(segment)
     } else if (typeof segment === "number") {
-      result.push({ type: "index", index: segment })
+      path = path.item(segment)
     }
   }
-  return result
+  return path
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +552,7 @@ function unwrapAnnotations(schema: SchemaNode): SchemaNode {
  */
 function resolveSchemaAtPath(rootSchema: SchemaNode, path: Path): SchemaNode {
   let schema = rootSchema
-  for (const seg of path) {
+  for (const seg of path.segments) {
     schema = advanceSchema(schema, seg)
   }
   return schema
@@ -587,7 +588,7 @@ function getFieldSchema(
 // ---------------------------------------------------------------------------
 
 function pathToString(path: Path): string {
-  return path
-    .map((seg) => (seg.type === "key" ? seg.key : String(seg.index)))
+  return path.segments
+    .map((seg) => String(seg.resolve()))
     .join(".")
 }

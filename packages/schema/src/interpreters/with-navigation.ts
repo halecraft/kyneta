@@ -92,7 +92,7 @@ export function withNavigation<A extends HasCall>(
           // Discriminant field: return raw store value, not a ref.
           // This enables standard TS discriminated union narrowing
           // (ref.type === "text") and prevents discriminant mutation.
-          const fieldPath: Path = [...path, { type: "key", key }]
+          const fieldPath = path.field(key)
           Object.defineProperty(result, key, {
             get() {
               return ctx.store.read(fieldPath)

@@ -7,7 +7,7 @@
 
 import type { ChangeBase } from "./change.js"
 import { isNonNullObject } from "./guards.js"
-import type { Path } from "./interpret.js"
+import type { Path } from "./path.js"
 import { step } from "./step.js"
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ export interface StoreReader {
  */
 export function plainStoreReader(store: Record<string, unknown>): StoreReader {
   return {
-    read: path => readByPath(store, path),
+    read: path => path.read(store),
     arrayLength: path => storeArrayLength(store, path),
     keys: path => storeKeys(store, path),
     hasKey: (path, key) => storeHasKey(store, path, key),
@@ -63,51 +63,15 @@ export function plainStoreReader(store: Record<string, unknown>): StoreReader {
 }
 
 // ---------------------------------------------------------------------------
-// Path helpers
+// Store read helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Converts a `Path` to a stable string key for use as a `Map` key.
- *
- * Uses `\0` (null byte) as a delimiter — this character cannot appear
- * in JSON property names, so the encoding is injection-free.
- *
- * Shared across interpreter layers (`withChangefeed`, `withCaching`)
- * that maintain path-keyed handler maps.
- */
-export function pathKey(path: Path): string {
-  return path
-    .map(seg => (seg.type === "key" ? seg.key : String(seg.index)))
-    .join("\0")
-}
-
-/**
- * Resolves a segment key for JS object access.
- * Key segments use the key directly; index segments use the numeric index
- * (which JS coerces to a string for object/array access).
- */
-function segKey(seg: Path[number]): string | number {
-  return seg.type === "key" ? seg.key : seg.index
-}
-
-/**
- * Reads a value from a nested plain object by following a Path.
- */
-export function readByPath(store: unknown, path: Path): unknown {
-  let current: unknown = store
-  for (const seg of path) {
-    if (current === null || current === undefined) return undefined
-    current = (current as Record<string | number, unknown>)[segKey(seg)]
-  }
-  return current
-}
 
 /**
  * Returns the length of the array at the given path in the store.
  * Returns 0 if the value is not an array.
  */
 export function storeArrayLength(store: unknown, path: Path): number {
-  const arr = readByPath(store, path)
+  const arr = path.read(store)
   return Array.isArray(arr) ? arr.length : 0
 }
 
@@ -116,7 +80,7 @@ export function storeArrayLength(store: unknown, path: Path): number {
  * Returns an empty array if the value is not a non-null object.
  */
 export function storeKeys(store: unknown, path: Path): string[] {
-  const obj = readByPath(store, path)
+  const obj = path.read(store)
   return isNonNullObject(obj) ? Object.keys(obj) : []
 }
 
@@ -125,25 +89,29 @@ export function storeKeys(store: unknown, path: Path): string[] {
  * Returns false if the value is not a non-null object or the key is missing.
  */
 export function storeHasKey(store: unknown, path: Path, key: string): boolean {
-  const obj = readByPath(store, path)
+  const obj = path.read(store)
   return isNonNullObject(obj) && key in obj
 }
 
 /**
  * Writes a value into a nested plain object at the given Path.
  * Creates intermediate objects as needed.
+ *
+ * Uses `seg.resolve()` for each segment — for dead addresses this
+ * throws, which is the correct behavior (writes to dead refs should fail).
  */
 export function writeByPath(store: Store, path: Path, value: unknown): void {
   if (path.length === 0) return
+  const segments = path.segments
   let current: Record<string | number, unknown> = store
-  for (let i = 0; i < path.length - 1; i++) {
-    const k = segKey(path[i]!)
+  for (let i = 0; i < segments.length - 1; i++) {
+    const k = segments[i]!.resolve()
     if (!isNonNullObject(current[k])) {
       current[k] = {}
     }
     current = current[k] as Record<string | number, unknown>
   }
-  current[segKey(path[path.length - 1]!)] = value
+  current[segments[segments.length - 1]!.resolve()] = value
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +140,7 @@ export function applyChangeToStore(
     }
     return
   }
-  const current = readByPath(store, path)
+  const current = path.read(store)
   const next = step(current, change)
   writeByPath(store, path, next)
 }
