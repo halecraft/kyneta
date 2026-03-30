@@ -172,8 +172,24 @@ function bump(version: string, groupNames: GroupName[]): void {
 
 // ── publish ─────────────────────────────────────────────────────────────────
 
+function checkNpmAuth(): void {
+	console.log("Checking npm authentication...\n")
+	try {
+		const user = execSync("npm whoami", { cwd: ROOT, encoding: "utf8" }).trim()
+		console.log(`  Logged in as: ${user}\n`)
+	} catch {
+		console.error(
+			"Error: Not logged in to npm. Run `npm login` first.\n",
+		)
+		process.exit(1)
+	}
+}
+
 function publish(dryRun: boolean): void {
 	console.log(`\n${dryRun ? "[DRY RUN] " : ""}Publishing Kyneta packages\n`)
+
+	// 0. Preflight — verify npm auth
+	checkNpmAuth()
 
 	// 1. Build
 	console.log("Step 1/3: Building all packages...\n")
@@ -185,6 +201,9 @@ function publish(dryRun: boolean): void {
 
 	// 3. Publish in tier order
 	console.log("\nStep 3/3: Publishing in dependency order...\n")
+	const published: string[] = []
+	const failed: string[] = []
+
 	for (let tier = 0; tier < PUBLISH_TIERS.length; tier++) {
 		const dirs = PUBLISH_TIERS[tier]
 		console.log(`\n── Tier ${tier} ──`)
@@ -194,15 +213,31 @@ function publish(dryRun: boolean): void {
 			const version = pkg.version as string
 			console.log(`\nPublishing ${name}@${version}...`)
 			const dryRunFlag = dryRun ? " --dry-run" : ""
-			run(`pnpm publish --access public --no-git-checks${dryRunFlag}`, {
-				cwd: rootPath(dir),
-			})
+			try {
+				run(
+					`pnpm publish --access public --no-git-checks${dryRunFlag}`,
+					{ cwd: rootPath(dir) },
+				)
+				published.push(name)
+			} catch {
+				console.error(`  ✗ Failed to publish ${name}@${version}`)
+				failed.push(name)
+			}
 		}
 	}
 
-	console.log(
-		`\n${dryRun ? "[DRY RUN] " : ""}Published ${ALL_PACKAGE_DIRS.length} packages.\n`,
-	)
+	// Summary
+	console.log(`\n── Summary ──\n`)
+	if (published.length > 0) {
+		console.log(
+			`  ${dryRun ? "[DRY RUN] " : ""}Published (${published.length}): ${published.join(", ")}`,
+		)
+	}
+	if (failed.length > 0) {
+		console.log(`  Failed (${failed.length}): ${failed.join(", ")}`)
+		process.exit(1)
+	}
+	console.log()
 }
 
 // ── status ──────────────────────────────────────────────────────────────────
