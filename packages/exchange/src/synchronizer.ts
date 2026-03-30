@@ -16,7 +16,7 @@ import type { AnyAdapter } from "./adapter/adapter.js"
 import { AdapterManager } from "./adapter/adapter-manager.js"
 import type { Channel, ConnectedChannel } from "./channel.js"
 import type { AddressedEnvelope, ChannelMsg } from "./messages.js"
-import { createPermissions, type Permissions } from "./permissions.js"
+import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
 import {
   type Command,
   createSynchronizerUpdate,
@@ -57,11 +57,19 @@ export type DocRuntime = {
  */
 export type DocCreationCallback = (docId: DocId, peer: PeerIdentityDetails) => void
 
+/**
+ * Callback invoked when a peer sends a `dismiss` message for a document.
+ * The Exchange wraps the user's `onDocDismissed` callback.
+ */
+export type DocDismissedCallback = (docId: DocId, peer: PeerIdentityDetails) => void
+
 export type SynchronizerParams = {
   identity: PeerIdentityDetails
   adapters?: AnyAdapter[]
-  permissions?: Partial<Permissions>
+  route: RoutePredicate
+  authorize: AuthorizePredicate
   onDocCreationRequested?: DocCreationCallback
+  onDocDismissed?: DocDismissedCallback
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +83,7 @@ export class Synchronizer {
   readonly #updateFn: ReturnType<typeof createSynchronizerUpdate>
   readonly #docRuntimes = new Map<DocId, DocRuntime>()
   readonly #docCreationCallback?: DocCreationCallback
+  readonly #docDismissedCallback?: DocDismissedCallback
 
   /**
    * Outbound message queue — accumulated during dispatch, flushed at quiescence.
@@ -97,13 +106,12 @@ export class Synchronizer {
     (docId: DocId, readyStates: ReadyState[]) => void
   >()
 
-  constructor({ identity, adapters = [], permissions, onDocCreationRequested }: SynchronizerParams) {
+  constructor({ identity, adapters = [], route, authorize, onDocCreationRequested, onDocDismissed }: SynchronizerParams) {
     this.identity = identity
 
-    this.#updateFn = createSynchronizerUpdate({
-      permissions: createPermissions(permissions),
-    })
+    this.#updateFn = createSynchronizerUpdate({ route, authorize })
     this.#docCreationCallback = onDocCreationRequested
+    this.#docDismissedCallback = onDocDismissed
 
     // Initialize model
     const [initialModel, initialCommand] = init(this.identity)
@@ -197,12 +205,23 @@ export class Synchronizer {
   }
 
   /**
-   * Remove a document from the synchronizer.
+   * Remove a document from the synchronizer (internal, no peer notification).
    */
   async removeDocument(docId: DocId): Promise<void> {
     this.#docRuntimes.delete(docId)
     this.#dispatch({
       type: "synchronizer/doc-delete",
+      docId,
+    })
+  }
+
+  /**
+   * Dismiss a document — remove locally and broadcast `dismiss` to peers.
+   */
+  dismissDocument(docId: DocId): void {
+    this.#docRuntimes.delete(docId)
+    this.#dispatch({
+      type: "synchronizer/doc-dismiss",
       docId,
     })
   }
@@ -444,6 +463,12 @@ export class Synchronizer {
         // triggers registerDoc() → #dispatch(doc-ensure), which is
         // queued in #pendingMessages and processed before quiescence.
         this.#docCreationCallback?.(command.docId, command.peer)
+        break
+
+      case "cmd/notify-doc-dismissed":
+        // Fire-and-forget: the Exchange's onDocDismissed callback
+        // handles application-level cleanup (e.g. exchange.dismiss()).
+        this.#docDismissedCallback?.(command.docId, command.peer)
         break
 
       case "cmd/dispatch":

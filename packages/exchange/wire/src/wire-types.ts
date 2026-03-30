@@ -23,6 +23,7 @@ export const MessageType = {
   Discover: 0x10,
   Interest: 0x11,
   Offer: 0x12,
+  Dismiss: 0x13,
 } as const
 
 export type MessageTypeValue =
@@ -37,6 +38,7 @@ export const MessageTypeToString: Record<MessageTypeValue, string> = {
   [MessageType.Discover]: "discover",
   [MessageType.Interest]: "interest",
   [MessageType.Offer]: "offer",
+  [MessageType.Dismiss]: "dismiss",
 }
 
 /**
@@ -48,6 +50,7 @@ export const StringToMessageType: Record<string, MessageTypeValue> = {
   discover: MessageType.Discover,
   interest: MessageType.Interest,
   offer: MessageType.Offer,
+  dismiss: MessageType.Dismiss,
 }
 
 // ---------------------------------------------------------------------------
@@ -167,9 +170,16 @@ export type WireOfferMsg = {
   r?: boolean
 }
 
+/** Compact wire format for dismiss. */
+export type WireDismissMsg = {
+  t: typeof MessageType.Dismiss
+  doc: string
+}
+
 /** Union of all compact wire message types. */
 export type WireMessage =
   | WireEstablishMsg
   | WireDiscoverMsg
   | WireInterestMsg
   | WireOfferMsg
+  | WireDismissMsg

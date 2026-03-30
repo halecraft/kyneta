@@ -198,14 +198,14 @@ describe("Exchange", () => {
     })
   })
 
-  describe("delete()", () => {
-    it("removes a document", async () => {
+  describe("dismiss()", () => {
+    it("removes a document", () => {
       const exchange = new Exchange()
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
 
-      await exchange.delete("doc-1")
+      exchange.dismiss("doc-1")
       expect(exchange.has("doc-1")).toBe(false)
     })
   })

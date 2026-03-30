@@ -662,3 +662,224 @@ describe("onDocDiscovered (dynamic document creation)", () => {
     expect(presB.cursor.y()).toBe(600)
   })
 })
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// Route predicate
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+describe("route predicate", () => {
+  it("route prevents document announcement", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      // Deny bob from seeing "secret"
+      route: (docId) => docId !== "secret",
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+    })
+
+    // Alice creates doc that bob shouldn't see
+    exchangeA.get("secret", SequentialDoc)
+
+    await drain(40)
+
+    expect(exchangeB.has("secret")).toBe(false)
+  })
+
+  it("route prevents relay in three-peer topology", async () => {
+    const bridgeAH = new Bridge()
+    const bridgeHB = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
+    })
+
+    // Hub allows alice but denies bob for "private-doc"
+    const exchangeHub = createExchange({
+      identity: { peerId: "hub" },
+      adapters: [
+        new BridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
+        new BridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
+      ],
+      route: (docId, peer) => {
+        if (docId === "private-doc" && peer.peerId === "bob") return false
+        return true
+      },
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
+    })
+
+    // Hub creates doc
+    const docHub = exchangeHub.get("private-doc", SequentialDoc)
+    change(docHub, (d: any) => {
+      d.title.set("hub data")
+      d.count.set(42)
+    })
+
+    // Alice creates same doc
+    const docA = exchangeA.get("private-doc", SequentialDoc)
+
+    await drain(40)
+
+    // Alice (allowed) should have the data
+    expect(docA.title()).toBe("hub data")
+
+    // Bob (denied) should not have the doc
+    expect(exchangeB.has("private-doc")).toBe(false)
+  })
+})
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// Authorize predicate
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+describe("authorize predicate", () => {
+  it("authorize rejects offer — doc content unchanged", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    // Bob rejects all mutations
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      authorize: () => false,
+    })
+
+    const docA = exchangeA.get("doc-1", SequentialDoc)
+    const docB = exchangeB.get("doc-1", SequentialDoc)
+
+    change(docA, (d: any) => {
+      d.title.set("from alice")
+      d.count.set(99)
+    })
+
+    await drain(40)
+
+    // Bob's doc should remain at defaults (authorize rejected the offer)
+    expect(docB.title()).toBe("")
+    expect(docB.count()).toBe(0)
+  })
+})
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// Dismiss
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+describe("dismiss", () => {
+  it("dismiss triggers onDocDismissed on the receiving peer", async () => {
+    const bridge = new Bridge()
+    let dismissedDocId: string | undefined
+    let dismissedPeerId: string | undefined
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      onDocDismissed: (docId, peer) => {
+        dismissedDocId = docId
+        dismissedPeerId = peer.peerId
+      },
+    })
+
+    // Both create and sync a doc
+    const docA = exchangeA.get("shared-doc", SequentialDoc)
+    exchangeB.get("shared-doc", SequentialDoc)
+
+    await drain(40)
+
+    // Alice dismisses
+    exchangeA.dismiss("shared-doc")
+
+    await drain(40)
+
+    expect(dismissedDocId).toBe("shared-doc")
+    expect(dismissedPeerId).toBe("alice")
+  })
+
+  it("dismiss removes doc locally and stops sync", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+    })
+
+    exchangeA.get("doc-1", SequentialDoc)
+    const docB = exchangeB.get("doc-1", SequentialDoc)
+
+    await drain(40)
+
+    // Alice dismisses — doc should be removed locally
+    exchangeA.dismiss("doc-1")
+    expect(exchangeA.has("doc-1")).toBe(false)
+
+    // Bob writes
+    change(docB, (d: any) => {
+      d.title.set("bob update")
+    })
+
+    await drain(40)
+
+    // Alice should NOT re-acquire the doc
+    expect(exchangeA.has("doc-1")).toBe(false)
+  })
+})
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// Route + onDocDiscovered interaction
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+describe("route + onDocDiscovered interaction", () => {
+  it("route denying a peer prevents onDocDiscovered from firing", async () => {
+    const bridge = new Bridge()
+    let discoveredCallCount = 0
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      // Route denies alice for "blocked-doc"
+      route: (docId) => docId !== "blocked-doc",
+      onDocDiscovered: (docId) => {
+        discoveredCallCount++
+        if (docId === "blocked-doc") return SequentialDoc
+        return undefined
+      },
+    })
+
+    // Alice creates the doc
+    exchangeA.get("blocked-doc", SequentialDoc)
+
+    await drain(40)
+
+    // Bob's onDocDiscovered should never have fired (route blocked it)
+    expect(discoveredCallCount).toBe(0)
+    expect(exchangeB.has("blocked-doc")).toBe(false)
+  })
+})

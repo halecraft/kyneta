@@ -10,7 +10,6 @@ import {
 } from "../synchronizer-program.js"
 import type { PeerIdentityDetails } from "../types.js"
 import type { ConnectedChannel, EstablishedChannel } from "../channel.js"
-import { createPermissions } from "../permissions.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -35,9 +34,7 @@ const carolIdentity: PeerIdentityDetails = {
 }
 
 function makeUpdate() {
-  return createSynchronizerUpdate({
-    permissions: createPermissions(),
-  })
+  return createSynchronizerUpdate()
 }
 
 function makeConnectedChannel(
@@ -1172,6 +1169,574 @@ describe("synchronizer-program", () => {
         interestCmd.envelope.message.type === "interest"
       ) {
         expect(interestCmd.envelope.message.reciprocate).toBe(false)
+      }
+    })
+  })
+
+  // =========================================================================
+  // Route predicate
+  // =========================================================================
+
+  describe("route predicate", () => {
+    it("handleEstablishRequest filters discover by route", () => {
+      // Route denies "secret-doc" for bob
+      const update = createSynchronizerUpdate({
+        route: (docId) => docId !== "secret-doc",
+      })
+      const [model] = init(aliceIdentity)
+
+      // Add two docs
+      let m = model
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "public-doc",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "secret-doc",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      // Add a connected channel
+      const channel = makeConnectedChannel(1)
+      ;[m] = update({ type: "synchronizer/channel-added", channel }, m)
+
+      // Receive establish-request from bob
+      const [m2, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "establish-request", identity: bobIdentity },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const discoverCmd = commands.find(
+        (c) =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "discover",
+      )
+      expect(discoverCmd).toBeDefined()
+      if (
+        discoverCmd &&
+        discoverCmd.type === "cmd/send-message" &&
+        discoverCmd.envelope.message.type === "discover"
+      ) {
+        expect(discoverCmd.envelope.message.docIds).toContain("public-doc")
+        expect(discoverCmd.envelope.message.docIds).not.toContain("secret-doc")
+      }
+    })
+
+    it("handleEstablishResponse filters discover by route", () => {
+      const update = createSynchronizerUpdate({
+        route: (docId) => docId !== "secret-doc",
+      })
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "public-doc",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "secret-doc",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      const channel = makeConnectedChannel(1)
+      ;[m] = update({ type: "synchronizer/channel-added", channel }, m)
+
+      // Receive establish-response (the other side initiated)
+      const [, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "establish-response", identity: bobIdentity },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const discoverCmd = commands.find(
+        (c) =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "discover",
+      )
+      expect(discoverCmd).toBeDefined()
+      if (
+        discoverCmd &&
+        discoverCmd.type === "cmd/send-message" &&
+        discoverCmd.envelope.message.type === "discover"
+      ) {
+        expect(discoverCmd.envelope.message.docIds).toContain("public-doc")
+        expect(discoverCmd.envelope.message.docIds).not.toContain("secret-doc")
+      }
+    })
+
+    it("handleDocEnsure filters channels by route", () => {
+      // Route allows "doc-1" for bob but not carol
+      const update = createSynchronizerUpdate({
+        route: (docId, peer) => peer.peerId !== "carol",
+      })
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+      m = establishChannel(update, m, 2, carolIdentity)
+
+      const [m2, cmd] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      // All outbound messages should target channel 1 (bob), not channel 2 (carol)
+      const sendMsgs = commands.filter((c) => c.type === "cmd/send-message")
+      for (const c of sendMsgs) {
+        if (c.type === "cmd/send-message") {
+          expect(c.envelope.toChannelIds).toContain(1)
+          expect(c.envelope.toChannelIds).not.toContain(2)
+        }
+      }
+    })
+
+    it("buildPush respects route for LWW relay", () => {
+      // Route denies carol
+      const update = createSynchronizerUpdate({
+        route: (_docId, peer) => peer.peerId !== "carol",
+      })
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+      m = establishChannel(update, m, 2, carolIdentity)
+
+      // Register an LWW doc
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "presence",
+          version: "0",
+          mergeStrategy: "lww",
+        },
+        m,
+      )
+
+      // Import from bob → relay should skip carol
+      const [, cmd] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "presence",
+          version: "1",
+          fromPeerId: "bob",
+        },
+        m,
+      )
+
+      // Should produce no relay since carol is denied and bob is excluded as sender
+      const commands = flattenCommands(cmd)
+      const offerCmds = commands.filter((c) => c.type === "cmd/send-offer")
+      // No offer should target carol's channel
+      for (const c of offerCmds) {
+        if (c.type === "cmd/send-offer") {
+          expect(c.toChannelIds).not.toContain(2)
+        }
+      }
+    })
+
+    it("buildPush respects route for local change", () => {
+      const update = createSynchronizerUpdate({
+        route: (_docId, peer) => peer.peerId !== "carol",
+      })
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+      m = establishChannel(update, m, 2, carolIdentity)
+
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "0",
+          mergeStrategy: "lww",
+        },
+        m,
+      )
+
+      const [, cmd] = update(
+        {
+          type: "synchronizer/local-doc-change",
+          docId: "doc-1",
+          version: "1",
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const offerCmds = commands.filter((c) => c.type === "cmd/send-offer")
+      expect(offerCmds.length).toBe(1)
+      if (offerCmds[0] && offerCmds[0].type === "cmd/send-offer") {
+        expect(offerCmds[0].toChannelIds).toContain(1) // bob allowed
+        expect(offerCmds[0].toChannelIds).not.toContain(2) // carol denied
+      }
+    })
+
+    it("handleDiscover checks route before request-doc-creation", () => {
+      // Route denies "forbidden" doc from bob
+      const update = createSynchronizerUpdate({
+        route: (docId) => docId !== "forbidden",
+      })
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+
+      const [, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "discover", docIds: ["forbidden"] },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const creationCmds = commands.filter(
+        (c) => c.type === "cmd/request-doc-creation",
+      )
+      expect(creationCmds).toHaveLength(0)
+    })
+
+    it("default route/authorize preserves existing behavior", () => {
+      // Default update (no route/authorize) should work identically to before
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+
+      // Use LWW — broadcasts to all established peers (no sync state required)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "0",
+          mergeStrategy: "lww",
+        },
+        m,
+      )
+
+      // Local change should broadcast to bob
+      const [, cmd] = update(
+        { type: "synchronizer/local-doc-change", docId: "doc-1", version: "1" },
+        m,
+      )
+      expect(cmd).toBeDefined()
+    })
+
+    it("storage channels bypass route filtering", () => {
+      // Route denies everything — but storage should still be included
+      const update = createSynchronizerUpdate({
+        route: () => false,
+      })
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      // Establish a storage channel (bypasses route)
+      m = establishChannel(update, m, 1, bobIdentity, "storage")
+      // Establish a network channel (should be filtered)
+      m = establishChannel(update, m, 2, carolIdentity, "network")
+
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "0",
+          mergeStrategy: "lww",
+        },
+        m,
+      )
+
+      const [, cmd] = update(
+        { type: "synchronizer/local-doc-change", docId: "doc-1", version: "1" },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const offerCmds = commands.filter((c) => c.type === "cmd/send-offer")
+      expect(offerCmds.length).toBe(1)
+      if (offerCmds[0] && offerCmds[0].type === "cmd/send-offer") {
+        // Storage channel kept despite route: () => false
+        expect(offerCmds[0].toChannelIds).toContain(1)
+        // Network channel filtered out
+        expect(offerCmds[0].toChannelIds).not.toContain(2)
+      }
+    })
+  })
+
+  // =========================================================================
+  // Authorize predicate
+  // =========================================================================
+
+  describe("authorize predicate", () => {
+    it("handleOffer rejects import but still processes reciprocation", () => {
+      const update = createSynchronizerUpdate({
+        authorize: () => false,
+      })
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      const [, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "offer",
+              docId: "doc-1",
+              offerType: "snapshot" as const,
+              payload: { encoding: "json" as const, data: "{}" },
+              version: "1",
+              reciprocate: true,
+            },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      // Import should be blocked
+      const importCmds = commands.filter(
+        (c) => c.type === "cmd/import-doc-data",
+      )
+      expect(importCmds).toHaveLength(0)
+
+      // But reciprocation (interest back) should still happen
+      const interestCmds = commands.filter(
+        (c) =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "interest",
+      )
+      expect(interestCmds).toHaveLength(1)
+    })
+
+    it("handleOffer allows import when authorize returns true", () => {
+      const update = createSynchronizerUpdate({
+        authorize: () => true,
+      })
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      const [, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "offer",
+              docId: "doc-1",
+              offerType: "snapshot" as const,
+              payload: { encoding: "json" as const, data: "{}" },
+              version: "1",
+            },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const importCmds = commands.filter(
+        (c) => c.type === "cmd/import-doc-data",
+      )
+      expect(importCmds).toHaveLength(1)
+    })
+  })
+
+  // =========================================================================
+  // Dismiss
+  // =========================================================================
+
+  describe("dismiss", () => {
+    it("handleDismiss emits notify-doc-dismissed", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      const [, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "dismiss", docId: "doc-1" },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const dismissCmd = commands.find(
+        (c) => c.type === "cmd/notify-doc-dismissed",
+      )
+      expect(dismissCmd).toBeDefined()
+      if (dismissCmd && dismissCmd.type === "cmd/notify-doc-dismissed") {
+        expect(dismissCmd.docId).toBe("doc-1")
+        expect(dismissCmd.peer.peerId).toBe("bob")
+      }
+    })
+
+    it("handleDismiss cleans up peer sync state", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+
+      // Ensure doc and simulate bob having synced it
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      // Simulate bob having imported (so peer state is tracked)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "doc-1",
+          version: "1",
+          fromPeerId: "bob",
+        },
+        m,
+      )
+
+      // Verify bob has doc sync state
+      expect(m.peers.get("bob")?.docSyncStates.has("doc-1")).toBe(true)
+
+      // Bob dismisses
+      const [m2] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "dismiss", docId: "doc-1" },
+          },
+        },
+        m,
+      )
+
+      // Bob's sync state for doc-1 should be cleaned up
+      expect(m2.peers.get("bob")?.docSyncStates.has("doc-1")).toBe(false)
+    })
+
+    it("handleDocDismiss broadcasts dismiss to routed peers and removes doc", () => {
+      // Route allows bob but not carol
+      const update = createSynchronizerUpdate({
+        route: (_docId, peer) => peer.peerId !== "carol",
+      })
+      const [model] = init(aliceIdentity)
+
+      let m = model
+      m = establishChannel(update, m, 1, bobIdentity)
+      m = establishChannel(update, m, 2, carolIdentity)
+
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "0",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      const [m2, cmd] = update(
+        { type: "synchronizer/doc-dismiss", docId: "doc-1" },
+        m,
+      )
+
+      // Doc should be removed from model
+      expect(m2.documents.has("doc-1")).toBe(false)
+
+      // Dismiss should only be sent to bob (channel 1), not carol (channel 2)
+      const commands = flattenCommands(cmd)
+      const sendCmds = commands.filter((c) => c.type === "cmd/send-message")
+      expect(sendCmds.length).toBe(1)
+      if (sendCmds[0] && sendCmds[0].type === "cmd/send-message") {
+        expect(sendCmds[0].envelope.toChannelIds).toContain(1)
+        expect(sendCmds[0].envelope.toChannelIds).not.toContain(2)
+        expect(sendCmds[0].envelope.message.type).toBe("dismiss")
       }
     })
   })

@@ -14,6 +14,7 @@
 
 import type {
   ChannelMsg,
+  DismissMsg,
   DiscoverMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
@@ -145,6 +146,9 @@ function fromJsonSafe(obj: unknown): ChannelMsg {
 
     case "interest":
       return record as unknown as InterestMsg
+
+    case "dismiss":
+      return record as unknown as DismissMsg
 
     case "offer": {
       const jsonOffer = record as unknown as JsonOfferMsg

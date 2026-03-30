@@ -26,7 +26,6 @@ import {
 } from "@kyneta/schema"
 import { changefeed, readable, subscribe, writable } from "@kyneta/schema"
 import type { AnyAdapter } from "./adapter/adapter.js"
-import type { Permissions } from "./permissions.js"
 import { registerSync } from "./sync.js"
 import { Synchronizer } from "./synchronizer.js"
 import type { DocId, PeerIdentityDetails } from "./types.js"
@@ -35,6 +34,30 @@ import { generatePeerId, validatePeerId } from "./utils.js"
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * Outbound flow control: should this peer participate in the sync graph
+ * for this document? Checked at every outbound gate (discover, push,
+ * relay). Storage channels bypass this check.
+ *
+ * @returns `true` to include the peer, `false` to exclude.
+ */
+export type RoutePredicate = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+) => boolean
+
+/**
+ * Inbound flow control: should mutations from this peer be accepted
+ * for this document? Checked before importing offers. Storage channels
+ * bypass this check.
+ *
+ * @returns `true` to accept, `false` to reject silently.
+ */
+export type AuthorizePredicate = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+) => boolean
 
 /**
  * Callback invoked when a peer announces a document the local exchange
@@ -51,6 +74,21 @@ export type OnDocDiscovered = (
 ) => BoundSchema | undefined
 
 /**
+ * Callback invoked when a peer sends a `dismiss` message for a document.
+ * The peer is announcing it's leaving the sync graph for this document.
+ *
+ * The callback can take any application-level action: call
+ * `exchange.dismiss(docId)` to also leave, archive the doc, etc.
+ *
+ * @param docId - The document ID being dismissed
+ * @param peer - Identity of the peer that sent the dismiss
+ */
+export type OnDocDismissed = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+) => void
+
+/**
  * Options for creating an Exchange.
  */
 export type ExchangeParams = {
@@ -65,9 +103,38 @@ export type ExchangeParams = {
   adapters?: AnyAdapter[]
 
   /**
-   * Permission predicates controlling document access.
+   * Outbound flow control. Determines which peers participate in the
+   * sync graph for each document. Checked at every outbound gate:
+   * initial discover, doc-ensure broadcast, relay push, local change push.
+   *
+   * Also gates `onDocDiscovered`: if `route` returns `false` for
+   * the announcing peer, the callback never fires.
+   *
+   * Storage channels bypass this check.
+   *
+   * @default () => true (open routing)
    */
-  permissions?: Partial<Permissions>
+  route?: RoutePredicate
+
+  /**
+   * Inbound flow control. Determines whose mutations are accepted.
+   * Checked before importing offers from network peers.
+   *
+   * Storage channels bypass this check.
+   *
+   * @default () => true (accept all)
+   */
+  authorize?: AuthorizePredicate
+
+  /**
+   * Called when a peer sends `dismiss` for a document, announcing
+   * it's leaving the sync graph. The callback handles the application
+   * response — it can call `exchange.dismiss(docId)` to also leave,
+   * or ignore the event.
+   *
+   * @default undefined (dismiss messages are no-ops)
+   */
+  onDocDismissed?: OnDocDismissed
 
   /**
    * Called when a peer discovers a document this exchange doesn't have.
@@ -160,7 +227,9 @@ export class Exchange {
   constructor({
     identity = {},
     adapters = [],
-    permissions,
+    route,
+    authorize,
+    onDocDismissed,
     onDocDiscovered,
   }: ExchangeParams = {}) {
     // Resolve peer identity
@@ -178,7 +247,9 @@ export class Exchange {
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
       adapters,
-      permissions,
+      route: route ?? (() => true),
+      authorize: authorize ?? (() => true),
+      onDocDismissed,
       onDocCreationRequested: onDocDiscovered
         ? (docId, peer) => {
             const bound = onDocDiscovered(docId, peer)
@@ -329,13 +400,17 @@ export class Exchange {
   }
 
   /**
-   * Deletes a document from the exchange.
+   * Dismiss a document — remove it locally and broadcast `dismiss` to
+   * all peers in the routing topology.
    *
-   * @param docId - The ID of the document to delete
+   * This is the single public API for document removal. For bulk
+   * teardown without per-doc notification, use `reset()` or `shutdown()`.
+   *
+   * @param docId - The ID of the document to dismiss
    */
-  async delete(docId: DocId): Promise<void> {
+  dismiss(docId: DocId): void {
     this.#docCache.delete(docId)
-    await this.#synchronizer.removeDocument(docId)
+    this.#synchronizer.dismissDocument(docId)
   }
 
   // =========================================================================

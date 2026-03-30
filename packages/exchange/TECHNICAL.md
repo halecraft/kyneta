@@ -110,13 +110,15 @@ These are genuinely different protocols matched to the mathematical properties o
 
 ---
 
-## 3. Three-Message Vocabulary
+## 3. Sync Protocol
+
+Six message types: two for channel establishment, four for document exchange.
 
 ### `discover`
 
-Document existence announcement. Sent after channel establishment to announce all known documents. The receiver sends `interest` messages for docs it also has.
+Document existence announcement. Sent after channel establishment to announce all known documents, filtered by the `route` predicate (§16). The receiver sends `interest` messages for docs it also has.
 
-When the receiver encounters an unknown doc ID, it emits a `cmd/request-doc-creation` command. If the Exchange has an `onDocDiscovered` callback configured, the callback fires with the doc ID and the announcing peer's identity. If the callback returns a `BoundSchema`, the Exchange creates the document and the normal interest → offer flow proceeds. See §14 for details.
+When the receiver encounters an unknown doc ID, the `route` predicate is checked first — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted. If the Exchange has an `onDocDiscovered` callback configured, the callback fires with the doc ID and the announcing peer's identity. If the callback returns a `BoundSchema`, the Exchange creates the document and the normal interest → offer flow proceeds. See §15 for details.
 
 ```ts
 type DiscoverMsg = {
@@ -160,6 +162,19 @@ The `offerType` field distinguishes snapshots from deltas:
 - **`"delta"`**: incremental — receiver applies via `substrate.importDelta()`
 
 This distinction is necessary because `PlainSubstrate.importDelta()` expects Op[] format (path + change pairs), while `PlainSubstrate.exportSnapshot()` produces a JSON state image. For Loro substrates, `importDelta()` handles both formats natively.
+
+### `dismiss`
+
+Document departure announcement — the dual of `discover`. A peer sends `dismiss` when it's leaving the sync graph for a document. One-way announcement with no response needed.
+
+```ts
+type DismissMsg = {
+  type: "dismiss"
+  docId: DocId
+}
+```
+
+The receiving exchange fires `onDocDismissed` if configured (§17). The handler also cleans up the dismissing peer's sync state (`docSyncStates`, `subscriptions`) for the document.
 
 ### Establishment messages
 
@@ -396,17 +411,17 @@ Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingM
 |------|---------|
 | `src/types.ts` | Core identity and state types (PeerId, DocId, ChannelId, PeerState, ReadyState) |
 | `src/timestamp-version.ts` | `TimestampVersion` — wall-clock version for LWW |
-| `src/messages.ts` | Three-message vocabulary (discover, interest, offer) + establishment messages |
+| `src/messages.ts` | Sync protocol messages (discover, interest, offer, dismiss) + establishment messages |
 | `src/channel.ts` | Channel types and lifecycle (GeneratedChannel → ConnectedChannel → EstablishedChannel) |
 | `src/channel-directory.ts` | Channel ID generation and lifecycle management |
 | `src/adapter/adapter.ts` | Abstract `Adapter` base class |
 | `src/adapter/adapter-manager.ts` | `AdapterManager` — adapter lifecycle and message routing |
 | `src/adapter/bridge-adapter.ts` | `Bridge` + `BridgeAdapter` — in-process testing |
-| `src/permissions.ts` | Permission predicates (visibility, mutability, deletion) |
+
 | `src/utils.ts` | PeerId generation and validation |
 | `src/synchronizer-program.ts` | TEA state machine — model, messages, commands, sync algorithms |
 | `src/synchronizer.ts` | Synchronizer runtime — dispatch, command execution, substrate interaction |
-| `src/exchange.ts` | `Exchange` class — public API |
+| `src/exchange.ts` | `Exchange` class — public API, `RoutePredicate`, `AuthorizePredicate`, `OnDocDismissed` types |
 | `src/sync.ts` | `sync()` function and `SyncRef` — sync capabilities access |
 | `src/index.ts` | Barrel export (re-exports `bind`, `BoundSchema`, `MergeStrategy`, etc. from `@kyneta/schema`) |
 
@@ -427,7 +442,7 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unw
 
 ## 11. Wire Format (`@kyneta/wire`)
 
-The `@kyneta/wire` package provides serialization infrastructure for the exchange's 5-message protocol. It sits between the exchange and network adapters in the dependency graph:
+The `@kyneta/wire` package provides serialization infrastructure for the exchange's 6-message protocol. It sits between the exchange and network adapters in the dependency graph:
 
 ```
 @kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-network-adapter
@@ -699,5 +714,134 @@ Previously, `doc-ensure` only sent `discover` to network channels and `interest`
 The vendor (`@loro-extended/repo`) handles this in `handleSyncRequest` — when a `sync-request` arrives for an unknown doc, the doc is auto-created, gated by `permissions.creation`. Kyneta's approach differs:
 
 1. **Trigger point**: `discover` (not `interest`/`sync-request`), because kyneta's `interest` is only sent for docs the sender already has.
-2. **Gating mechanism**: a callback returning `BoundSchema | undefined` (not a boolean permission predicate), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
-3. **No separate `creation` permission**: the callback subsumes the permission check. Returning `undefined` is equivalent to denying creation.
+2. **Route gating**: The `route` predicate (§16) is checked before `cmd/request-doc-creation` is emitted. If `route(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `onDocDiscovered` never fires.
+3. **Gating mechanism**: a callback returning `BoundSchema | undefined` (not a boolean permission predicate), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
+4. **No separate `creation` permission**: the callback subsumes the permission check. Returning `undefined` is equivalent to denying creation.
+
+---
+
+## 16. Route and Authorize — Information Flow Control
+
+Two predicates on `ExchangeParams` control information flow through the sync protocol. They replace the vendor's four-predicate model (`visibility`, `mutability`, `creation`, `deletion`) with a cleaner two-axis decomposition: outbound flow (routing) and inbound flow (authority).
+
+### Predicate Signatures
+
+```ts
+type RoutePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
+type AuthorizePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
+```
+
+Both default to `() => true` (open access), preserving backward compatibility.
+
+### `route` — Outbound Flow Control
+
+The `route` predicate gates all outbound messages. It answers: "should this peer participate in the sync graph for this document?"
+
+| Gate | Handler | What `route: false` does |
+|------|---------|--------------------------|
+| Initial discover | `handleEstablishRequest` / `handleEstablishResponse` | Doc omitted from `discover` message |
+| Doc-ensure broadcast | `handleDocEnsure` | Channel excluded from discover+interest |
+| Push (local change + relay) | `buildPush` | Channel excluded from offer |
+| `onDocDiscovered` gating | `handleDiscover` | `cmd/request-doc-creation` not emitted |
+
+### `authorize` — Inbound Flow Control
+
+The `authorize` predicate gates inbound data import. It answers: "should this peer's mutations be accepted for this document?"
+
+| Gate | Handler | What `authorize: false` does |
+|------|---------|-------------------------------|
+| Offer import | `handleOffer` | `cmd/import-doc-data` not emitted; peer sync state still updated |
+
+When `authorize` rejects an offer, the peer's sync state is still updated to prevent re-requesting. Only the data import is suppressed.
+
+### Storage Channel Bypass
+
+Both predicates are skipped for storage channels (`channel.kind === "storage"`). Storage is local infrastructure, not a policy boundary — you always want to persist and load your own docs. The predicates govern the network boundary only.
+
+Implementation: `filterChannelsByRoute(model, channelIds, docId, route)` encapsulates the storage-bypass + route-check pattern. For each channel ID, if `kind === "storage"`, keep unconditionally. Otherwise, resolve peer identity and call `route(docId, peer)`.
+
+### The `route` → `authorize` Invariant
+
+`authorize` implies `route`: if you accept mutations from a peer, that peer must be in the routing topology. The converse is not true — a read-only subscriber is routed but not authorized. The system does not enforce this formally. If a developer sets `authorize: () => true` but `route: () => false`, nothing breaks — inbound data never arrives because the outbound announcement was suppressed.
+
+### Relationship to `onDocDiscovered`
+
+`route` is checked **before** `onDocDiscovered` fires. When a peer announces an unknown doc in `handleDiscover`, the flow is:
+
+1. Check `route(docId, announcingPeer)` — if `false`, silently drop
+2. Emit `cmd/request-doc-creation`
+3. `onDocDiscovered` callback fires (factory decision)
+4. If callback returns `BoundSchema`, `exchange.get()` creates the doc
+5. Subsequent discover/interest/offer flow is subject to `route` normally
+
+This means `onDocDiscovered` can assume the announcing peer already passed the route check.
+
+---
+
+## 17. Dismiss — Leaving the Sync Graph
+
+### The `dismiss` Wire Message
+
+`dismiss` is the dual of `discover`: discover announces "I have this doc," dismiss announces "I'm leaving this doc." It is a one-way announcement with no response needed.
+
+```ts
+type DismissMsg = { type: "dismiss"; docId: DocId }
+```
+
+Wire encoding: `Dismiss: 0x13` in the CBOR codec (next after `Offer: 0x12`). Compact wire format: `{ t: 0x13, doc: string }`.
+
+### `exchange.dismiss(docId)`
+
+The single public API for document removal. Replaces the former `exchange.delete(docId)`.
+
+```ts
+exchange.dismiss("my-doc")
+```
+
+Internally: clears the doc from `#docCache`, then calls `synchronizer.dismissDocument(docId)`, which dispatches `synchronizer/doc-dismiss` to the TEA program. The program removes the doc from `model.documents` and broadcasts `dismiss` to all established channels (filtered by `route`).
+
+For bulk teardown without per-doc notification, use `exchange.reset()` or `exchange.shutdown()`.
+
+### `onDocDismissed` Callback
+
+```ts
+type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails) => void
+```
+
+Optional field on `ExchangeParams`. Fires when a peer sends `dismiss` for a document. The callback handles the application-level response — it can call `exchange.dismiss(docId)` to also leave, archive the document, or do nothing.
+
+### Protocol Flow
+
+```
+Peer A                            Peer B
+  |                                 |
+  | exchange.dismiss("doc-1")       |
+  | → #docCache.delete("doc-1")    |
+  | → synchronizer.dismissDocument  |
+  | → dispatch doc-dismiss          |
+  | → handleDocDismiss:             |
+  |   model.documents.delete        |
+  |   cmd/send-message: dismiss     |
+  |                                 |
+  |── dismiss { docId: "doc-1" } ──>|
+  |                                 | handleDismiss:
+  |                                 |   clean up peer sync state
+  |                                 |   cmd/notify-doc-dismissed
+  |                                 |   → onDocDismissed("doc-1", peerA)
+  |                                 |
+```
+
+### Peer State Cleanup
+
+When `handleDismiss` processes a `dismiss` message from a peer, it removes the document from the peer's `docSyncStates` and `subscriptions`. This ensures:
+
+- Future local changes for this doc are not pushed to the dismissed peer
+- The peer's ready state no longer appears in `sync(doc).readyStates`
+
+### The `cmd/notify-doc-dismissed` Command
+
+```ts
+{ type: "cmd/notify-doc-dismissed", docId: DocId, peer: PeerIdentityDetails }
+```
+
+Follows the same fire-and-forget pattern as `cmd/request-doc-creation`. The Synchronizer runtime calls the `DocDismissedCallback`, which the Exchange wraps to invoke the user's `onDocDismissed` callback.

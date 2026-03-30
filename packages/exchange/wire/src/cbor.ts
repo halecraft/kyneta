@@ -10,6 +10,7 @@
 import { type CBORType, decodeCBOR, encodeCBOR } from "@levischuck/tiny-cbor"
 import type {
   ChannelMsg,
+  DismissMsg,
   DiscoverMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
@@ -25,6 +26,7 @@ import {
   PayloadEncodingToString,
   StringToOfferType,
   StringToPayloadEncoding,
+  type WireDismissMsg,
   type WireDiscoverMsg,
   type WireEstablishMsg,
   type WireInterestMsg,
@@ -160,6 +162,12 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
       if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
       return wire
     }
+
+    case "dismiss":
+      return {
+        t: MessageType.Dismiss,
+        doc: msg.docId,
+      } satisfies WireDismissMsg
   }
 }
 
@@ -232,6 +240,12 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
       if (wire.r !== undefined) msg.reciprocate = wire.r
       return msg
     }
+
+    case MessageType.Dismiss:
+      return {
+        type: "dismiss",
+        docId: wire.doc,
+      } satisfies DismissMsg
 
     default:
       throw new Error(

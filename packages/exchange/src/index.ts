@@ -47,6 +47,7 @@ export { TimestampVersion } from "./timestamp-version.js"
 export type {
   AddressedEnvelope,
   ChannelMsg,
+  DismissMsg,
   DiscoverMsg,
   EstablishmentMsg,
   EstablishRequestMsg,
@@ -111,18 +112,17 @@ export { init, createSynchronizerUpdate } from "./synchronizer-program.js"
 export { Synchronizer } from "./synchronizer.js"
 
 // ---------------------------------------------------------------------------
-// Permissions
-// ---------------------------------------------------------------------------
-
-export type { Permissions } from "./permissions.js"
-export { createPermissions } from "./permissions.js"
-
-// ---------------------------------------------------------------------------
 // Exchange — the public API
 // ---------------------------------------------------------------------------
 
 export { Exchange } from "./exchange.js"
-export type { ExchangeParams, OnDocDiscovered } from "./exchange.js"
+export type {
+  AuthorizePredicate,
+  ExchangeParams,
+  OnDocDiscovered,
+  OnDocDismissed,
+  RoutePredicate,
+} from "./exchange.js"
 
 // ---------------------------------------------------------------------------
 // Sync — sync capabilities access

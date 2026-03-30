@@ -101,6 +101,18 @@ export type OfferMsg = {
   reciprocate?: boolean
 }
 
+/**
+ * Document dismissal — "I'm leaving the sync graph for this document."
+ *
+ * The dual of `discover`: discover announces presence, dismiss announces
+ * departure. One-way announcement with no response needed. The receiving
+ * exchange fires `onDocDismissed` if configured.
+ */
+export type DismissMsg = {
+  type: "dismiss"
+  docId: DocId
+}
+
 // ---------------------------------------------------------------------------
 // Message unions
 // ---------------------------------------------------------------------------
@@ -109,7 +121,7 @@ export type OfferMsg = {
 export type EstablishmentMsg = EstablishRequestMsg | EstablishResponseMsg
 
 /** Messages valid after establishment is complete. */
-export type ExchangeMsg = DiscoverMsg | InterestMsg | OfferMsg
+export type ExchangeMsg = DiscoverMsg | InterestMsg | OfferMsg | DismissMsg
 
 /** All channel messages. */
 export type ChannelMsg = EstablishmentMsg | ExchangeMsg

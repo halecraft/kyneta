@@ -15,6 +15,7 @@
 
 import type { SubstratePayload, MergeStrategy } from "@kyneta/schema"
 import type { Channel, ConnectedChannel } from "./channel.js"
+import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
 import type { AddressedEnvelope, ReturnEnvelope } from "./messages.js"
 import type {
   ChannelId,
@@ -24,7 +25,7 @@ import type {
   PeerState,
   PendingInterest,
 } from "./types.js"
-import type { Permissions } from "./permissions.js"
+
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // STATE
@@ -96,6 +97,7 @@ export type SynchronizerMessage =
     }
   | { type: "synchronizer/local-doc-change"; docId: DocId; version: string }
   | { type: "synchronizer/doc-delete"; docId: DocId }
+  | { type: "synchronizer/doc-dismiss"; docId: DocId }
   | {
       type: "synchronizer/doc-imported"
       docId: DocId
@@ -105,6 +107,50 @@ export type SynchronizerMessage =
 
   // Channel message received (from network or storage)
   | { type: "synchronizer/channel-receive-message"; envelope: ReturnEnvelope }
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// UTILITIES — routing & batching
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+/**
+ * Filter channel IDs by the route predicate, bypassing storage channels.
+ *
+ * For each channel: if `kind === "storage"`, keep unconditionally.
+ * Otherwise, resolve peer identity and call `route(docId, peer)`.
+ * Channels with unresolvable peer identity are dropped.
+ */
+function filterChannelsByRoute(
+  model: SynchronizerModel,
+  channelIds: ChannelId[],
+  docId: DocId,
+  route: RoutePredicate,
+): ChannelId[] {
+  return channelIds.filter((id) => {
+    const channel = model.channels.get(id)
+    if (!channel || channel.type !== "established") return false
+    // Storage channels bypass route checks
+    if (channel.kind === "storage") return true
+    const peerState = model.peers.get(channel.peerId)
+    if (!peerState) return false
+    return route(docId, peerState.identity)
+  })
+}
+
+/**
+ * Collapse an array of commands (possibly with undefined entries) into
+ * a single Command or undefined. Filters out undefined, returns undefined
+ * for empty, the single command for length 1, or a batch for multiple.
+ */
+function batchAsNeeded(
+  ...commands: (Command | undefined)[]
+): Command | undefined {
+  const filtered = commands.filter(
+    (c): c is Command => c !== undefined,
+  )
+  if (filtered.length === 0) return undefined
+  if (filtered.length === 1) return filtered[0]
+  return { type: "cmd/batch", commands: filtered }
+}
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // COMMANDS (outputs of the update function)
@@ -148,6 +194,13 @@ export type Command =
       fromPeerId: PeerId
     }
 
+  // Lifecycle notifications
+  | {
+      type: "cmd/notify-doc-dismissed"
+      docId: DocId
+      peer: PeerIdentityDetails
+    }
+
   // Utilities
   | { type: "cmd/dispatch"; dispatch: SynchronizerMessage }
   | { type: "cmd/batch"; commands: Command[] }
@@ -188,25 +241,31 @@ export type SynchronizerUpdate = (
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 type CreateSynchronizerUpdateParams = {
-  permissions: Permissions
+  route: RoutePredicate
+  authorize: AuthorizePredicate
+}
+
+const defaultParams: CreateSynchronizerUpdateParams = {
+  route: () => true,
+  authorize: () => true,
 }
 
 /**
  * Creates the main synchronizer update function.
  *
  * The returned function is the pure TEA update: (msg, model) → [model, cmd?].
- * It uses mutative internally for ergonomic immutable updates.
+ * The `route` and `authorize` predicates control information flow:
+ * - `route`: gates all outbound messages (discover, push, relay)
+ * - `authorize`: gates inbound data import (offers)
  */
-export function createSynchronizerUpdate({
-  permissions,
-}: CreateSynchronizerUpdateParams): SynchronizerUpdate {
+export function createSynchronizerUpdate(
+  params: Partial<CreateSynchronizerUpdateParams> = {},
+): SynchronizerUpdate {
+  const { route, authorize } = { ...defaultParams, ...params }
   return function update(
     msg: SynchronizerMessage,
     model: SynchronizerModel,
   ): [SynchronizerModel, Command?] {
-    // We create a shallow clone for top-level mutations.
-    // For deep mutations (maps), we clone the map.
-    // This is simpler than pulling in mutative for the initial scaffold.
     switch (msg.type) {
       case "synchronizer/channel-added":
         return handleChannelAdded(msg, model)
@@ -218,19 +277,22 @@ export function createSynchronizerUpdate({
         return handleChannelRemoved(msg, model)
 
       case "synchronizer/doc-ensure":
-        return handleDocEnsure(msg, model)
+        return handleDocEnsure(msg, model, route)
 
       case "synchronizer/local-doc-change":
-        return handleLocalDocChange(msg, model, permissions)
+        return handleLocalDocChange(msg, model, route)
 
       case "synchronizer/doc-delete":
         return handleDocDelete(msg, model)
 
+      case "synchronizer/doc-dismiss":
+        return handleDocDismiss(msg, model, route)
+
       case "synchronizer/doc-imported":
-        return handleDocImported(msg, model, permissions)
+        return handleDocImported(msg, model, route)
 
       case "synchronizer/channel-receive-message":
-        return handleChannelReceiveMessage(msg, model, permissions)
+        return handleChannelReceiveMessage(msg, model, route, authorize)
     }
   }
 }
@@ -310,6 +372,7 @@ function handleDocEnsure(
     mergeStrategy: MergeStrategy
   },
   model: SynchronizerModel,
+  route: RoutePredicate,
 ): [SynchronizerModel, Command?] {
   if (model.documents.has(msg.docId)) {
     return [model]
@@ -326,43 +389,37 @@ function handleDocEnsure(
   // We send both discover (so peers learn we have the doc) and interest
   // (so peers send us their state). This is essential for docs created
   // via onDocDiscovered — the local doc is empty and needs to pull data.
-  const commands: Command[] = []
-
-  const establishedChannelIds = getEstablishedChannelIds(model)
-  if (establishedChannelIds.length > 0) {
-    const isCausal = msg.mergeStrategy === "causal"
-    commands.push(
-      {
-        type: "cmd/send-message",
-        envelope: {
-          toChannelIds: establishedChannelIds,
-          message: {
-            type: "discover",
-            docIds: [msg.docId],
-          },
-        },
-      },
-      {
-        type: "cmd/send-message",
-        envelope: {
-          toChannelIds: establishedChannelIds,
-          message: {
-            type: "interest",
-            docId: msg.docId,
-            version: msg.version,
-            reciprocate: isCausal,
-          },
-        },
-      },
-    )
+  const allEstablished = getEstablishedChannelIds(model)
+  const establishedChannelIds = filterChannelsByRoute(model, allEstablished, msg.docId, route)
+  if (establishedChannelIds.length === 0) {
+    return [{ ...model, documents }]
   }
 
-  const cmd: Command | undefined =
-    commands.length === 0
-      ? undefined
-      : commands.length === 1
-        ? commands[0]
-        : { type: "cmd/batch", commands }
+  const isCausal = msg.mergeStrategy === "causal"
+  const cmd = batchAsNeeded(
+    {
+      type: "cmd/send-message",
+      envelope: {
+        toChannelIds: establishedChannelIds,
+        message: {
+          type: "discover",
+          docIds: [msg.docId],
+        },
+      },
+    },
+    {
+      type: "cmd/send-message",
+      envelope: {
+        toChannelIds: establishedChannelIds,
+        message: {
+          type: "interest",
+          docId: msg.docId,
+          version: msg.version,
+          reciprocate: isCausal,
+        },
+      },
+    },
+  )
 
   return [{ ...model, documents }, cmd]
 }
@@ -370,7 +427,7 @@ function handleDocEnsure(
 function handleLocalDocChange(
   msg: { type: "synchronizer/local-doc-change"; docId: DocId; version: string },
   model: SynchronizerModel,
-  permissions: Permissions,
+  route: RoutePredicate,
 ): [SynchronizerModel, Command?] {
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
@@ -380,13 +437,7 @@ function handleLocalDocChange(
   documents.set(msg.docId, { ...docEntry, version: msg.version })
 
   // Push to synced peers based on merge strategy
-  const cmd = buildLocalChangePush(
-    msg.docId,
-    docEntry,
-    msg.version,
-    model,
-    permissions,
-  )
+  const cmd = buildPush(msg.docId, docEntry, model, route)
 
   return [{ ...model, documents }, cmd]
 }
@@ -400,6 +451,35 @@ function handleDocDelete(
   return [{ ...model, documents }]
 }
 
+function handleDocDismiss(
+  msg: { type: "synchronizer/doc-dismiss"; docId: DocId },
+  model: SynchronizerModel,
+  route: RoutePredicate,
+): [SynchronizerModel, Command?] {
+  const documents = new Map(model.documents)
+  documents.delete(msg.docId)
+
+  // Broadcast dismiss to all established channels (filtered by route)
+  const allEstablished = getEstablishedChannelIds(model)
+  const channelIds = filterChannelsByRoute(model, allEstablished, msg.docId, route)
+
+  const cmd: Command | undefined =
+    channelIds.length > 0
+      ? {
+          type: "cmd/send-message",
+          envelope: {
+            toChannelIds: channelIds,
+            message: {
+              type: "dismiss",
+              docId: msg.docId,
+            },
+          },
+        }
+      : undefined
+
+  return [{ ...model, documents }, cmd]
+}
+
 function handleDocImported(
   msg: {
     type: "synchronizer/doc-imported"
@@ -408,7 +488,7 @@ function handleDocImported(
     fromPeerId: PeerId
   },
   model: SynchronizerModel,
-  permissions: Permissions,
+  route: RoutePredicate,
 ): [SynchronizerModel, Command?] {
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
@@ -416,14 +496,7 @@ function handleDocImported(
   // Relay to other peers (multi-hop propagation).
   // Must read docEntry.version BEFORE updating — this is the "since" version
   // for delta export, so peers receive exactly the imported ops.
-  const cmd = buildRelayPush(
-    msg.docId,
-    docEntry,
-    msg.version,
-    model,
-    permissions,
-    msg.fromPeerId,
-  )
+  const cmd = buildPush(msg.docId, docEntry, model, route, msg.fromPeerId)
 
   // Update version
   const documents = new Map(model.documents)
@@ -455,25 +528,29 @@ function handleChannelReceiveMessage(
     envelope: ReturnEnvelope
   },
   model: SynchronizerModel,
-  permissions: Permissions,
+  route: RoutePredicate,
+  authorize: AuthorizePredicate,
 ): [SynchronizerModel, Command?] {
   const { fromChannelId, message } = msg.envelope
 
   switch (message.type) {
     case "establish-request":
-      return handleEstablishRequest(fromChannelId, message, model)
+      return handleEstablishRequest(fromChannelId, message, model, route)
 
     case "establish-response":
-      return handleEstablishResponse(fromChannelId, message, model)
+      return handleEstablishResponse(fromChannelId, message, model, route)
 
     case "discover":
-      return handleDiscover(fromChannelId, message, model, permissions)
+      return handleDiscover(fromChannelId, message, model, route)
 
     case "interest":
-      return handleInterest(fromChannelId, message, model, permissions)
+      return handleInterest(fromChannelId, message, model)
 
     case "offer":
-      return handleOffer(fromChannelId, message, model, permissions)
+      return handleOffer(fromChannelId, message, model, authorize)
+
+    case "dismiss":
+      return handleDismiss(fromChannelId, message, model)
   }
 }
 
@@ -481,37 +558,77 @@ function handleChannelReceiveMessage(
 // HANDLER: Establishment
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-function handleEstablishRequest(
-  fromChannelId: ChannelId,
-  message: { type: "establish-request"; identity: PeerIdentityDetails },
+/**
+ * Upgrade a connected channel to established and track peer state.
+ * Shared by handleEstablishRequest and handleEstablishResponse.
+ */
+function upgradeChannel(
   model: SynchronizerModel,
-): [SynchronizerModel, Command?] {
-  const channel = model.channels.get(fromChannelId)
-  if (!channel) return [model]
+  channelId: ChannelId,
+  peerIdentity: PeerIdentityDetails,
+): SynchronizerModel {
+  const channel = model.channels.get(channelId)
+  if (!channel) return model
 
-  // Upgrade channel to established
   const channels = new Map(model.channels)
-  const established = {
+  channels.set(channelId, {
     ...channel,
     type: "established" as const,
-    peerId: message.identity.peerId,
-  }
-  channels.set(fromChannelId, established)
+    peerId: peerIdentity.peerId,
+  })
 
-  // Track peer state
   const peers = new Map(model.peers)
-  const existingPeer = peers.get(message.identity.peerId)
+  const existingPeer = peers.get(peerIdentity.peerId)
   const peerChannels = new Set(existingPeer?.channels ?? [])
-  peerChannels.add(fromChannelId)
-  peers.set(message.identity.peerId, {
-    identity: message.identity,
+  peerChannels.add(channelId)
+  peers.set(peerIdentity.peerId, {
+    identity: peerIdentity,
     docSyncStates: existingPeer?.docSyncStates ?? new Map(),
     subscriptions: existingPeer?.subscriptions ?? new Set(),
     channels: peerChannels,
   })
 
-  // Send establish-response + discover our docs
-  const commands: Command[] = [
+  return { ...model, channels, peers }
+}
+
+/**
+ * Build a discover command for a set of doc IDs to a single channel.
+ * Returns undefined if there are no docs to announce.
+ */
+function buildDiscover(
+  docIds: DocId[],
+  toChannelId: ChannelId,
+): Command | undefined {
+  if (docIds.length === 0) return undefined
+  return {
+    type: "cmd/send-message",
+    envelope: {
+      toChannelIds: [toChannelId],
+      message: {
+        type: "discover",
+        docIds,
+      },
+    },
+  }
+}
+
+function handleEstablishRequest(
+  fromChannelId: ChannelId,
+  message: { type: "establish-request"; identity: PeerIdentityDetails },
+  model: SynchronizerModel,
+  route: RoutePredicate,
+): [SynchronizerModel, Command?] {
+  const channel = model.channels.get(fromChannelId)
+  if (!channel) return [model]
+
+  const upgraded = upgradeChannel(model, fromChannelId, message.identity)
+
+  // Filter docs by route — only announce docs this peer is allowed to see
+  const docIds = Array.from(model.documents.keys()).filter(
+    (id) => route(id, message.identity),
+  )
+
+  const cmd = batchAsNeeded(
     {
       type: "cmd/send-message",
       envelope: {
@@ -522,75 +639,62 @@ function handleEstablishRequest(
         },
       },
     },
-  ]
+    buildDiscover(docIds, fromChannelId),
+  )
 
-  // Send discover with all our doc IDs
-  const docIds = Array.from(model.documents.keys())
-  if (docIds.length > 0) {
-    commands.push({
-      type: "cmd/send-message",
-      envelope: {
-        toChannelIds: [fromChannelId],
-        message: {
-          type: "discover",
-          docIds,
-        },
-      },
-    })
-  }
-
-  return [
-    { ...model, channels, peers },
-    { type: "cmd/batch", commands },
-  ]
+  return [upgraded, cmd]
 }
 
 function handleEstablishResponse(
   fromChannelId: ChannelId,
   message: { type: "establish-response"; identity: PeerIdentityDetails },
   model: SynchronizerModel,
+  route: RoutePredicate,
 ): [SynchronizerModel, Command?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel) return [model]
 
-  // Upgrade channel to established
-  const channels = new Map(model.channels)
-  const established = {
-    ...channel,
-    type: "established" as const,
-    peerId: message.identity.peerId,
-  }
-  channels.set(fromChannelId, established)
+  const upgraded = upgradeChannel(model, fromChannelId, message.identity)
 
-  // Track peer state
+  // Filter docs by route — only announce docs this peer is allowed to see
+  const docIds = Array.from(model.documents.keys()).filter(
+    (id) => route(id, message.identity),
+  )
+  const cmd = buildDiscover(docIds, fromChannelId)
+
+  return [upgraded, cmd]
+}
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// HANDLER: Dismiss
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+function handleDismiss(
+  fromChannelId: ChannelId,
+  message: { type: "dismiss"; docId: DocId },
+  model: SynchronizerModel,
+): [SynchronizerModel, Command?] {
+  const channel = model.channels.get(fromChannelId)
+  if (!channel || channel.type !== "established") return [model]
+
+  const peerState = model.peers.get(channel.peerId)
+  if (!peerState) return [model]
+
+  // Clean up peer sync state for this doc
   const peers = new Map(model.peers)
-  const existingPeer = peers.get(message.identity.peerId)
-  const peerChannels = new Set(existingPeer?.channels ?? [])
-  peerChannels.add(fromChannelId)
-  peers.set(message.identity.peerId, {
-    identity: message.identity,
-    docSyncStates: existingPeer?.docSyncStates ?? new Map(),
-    subscriptions: existingPeer?.subscriptions ?? new Set(),
-    channels: peerChannels,
-  })
+  const docSyncStates = new Map(peerState.docSyncStates)
+  docSyncStates.delete(message.docId)
+  const subscriptions = new Set(peerState.subscriptions)
+  subscriptions.delete(message.docId)
+  peers.set(channel.peerId, { ...peerState, docSyncStates, subscriptions })
 
-  // Send discover with all our doc IDs
-  const docIds = Array.from(model.documents.keys())
-  const cmd: Command | undefined =
-    docIds.length > 0
-      ? {
-          type: "cmd/send-message",
-          envelope: {
-            toChannelIds: [fromChannelId],
-            message: {
-              type: "discover",
-              docIds,
-            },
-          },
-        }
-      : undefined
+  const cmd: Command = {
+    type: "cmd/notify-doc-dismissed",
+    docId: message.docId,
+    peer: peerState.identity,
+  }
 
-  return [{ ...model, channels, peers }, cmd]
+  return [{ ...model, peers }, cmd]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -601,7 +705,7 @@ function handleDiscover(
   fromChannelId: ChannelId,
   message: { type: "discover"; docIds: DocId[] },
   model: SynchronizerModel,
-  _permissions: Permissions,
+  route: RoutePredicate,
 ): [SynchronizerModel, Command?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
@@ -628,7 +732,8 @@ function handleDiscover(
         },
       })
     } else if (peerState) {
-      // Unknown doc — request creation via callback
+      // Unknown doc — check route before requesting creation
+      if (!route(docId, peerState.identity)) continue
       commands.push({
         type: "cmd/request-doc-creation",
         docId,
@@ -637,14 +742,7 @@ function handleDiscover(
     }
   }
 
-  const cmd: Command | undefined =
-    commands.length === 0
-      ? undefined
-      : commands.length === 1
-        ? commands[0]
-        : { type: "cmd/batch", commands }
-
-  return [model, cmd]
+  return [model, batchAsNeeded(...commands)]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -660,7 +758,6 @@ function handleInterest(
     reciprocate?: boolean
   },
   model: SynchronizerModel,
-  _permissions: Permissions,
 ): [SynchronizerModel, Command?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
@@ -744,14 +841,7 @@ function handleInterest(
     peers.set(channel.peerId, { ...peerState, docSyncStates })
   }
 
-  const cmd: Command | undefined =
-    commands.length === 0
-      ? undefined
-      : commands.length === 1
-        ? commands[0]
-        : { type: "cmd/batch", commands }
-
-  return [{ ...model, peers }, cmd]
+  return [{ ...model, peers }, batchAsNeeded(...commands)]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -769,7 +859,7 @@ function handleOffer(
     reciprocate?: boolean
   },
   model: SynchronizerModel,
-  _permissions: Permissions,
+  authorize: AuthorizePredicate,
 ): [SynchronizerModel, Command?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
@@ -777,24 +867,33 @@ function handleOffer(
   const docEntry = model.documents.get(message.docId)
   if (!docEntry) {
     // We don't have this doc — ignore the offer
-    // (Future: auto-create if the doc was discovered)
     return [model]
   }
 
   const commands: Command[] = []
 
-  // Import the payload — the runtime will handle version comparison
-  // and call substrate.importDelta() or factory.fromSnapshot() depending
-  // on the offerType. For LWW, the runtime compares timestamps. For
-  // causal, the CRDT handles merge. For sequential, the runtime checks ordering.
-  commands.push({
-    type: "cmd/import-doc-data",
-    docId: message.docId,
-    payload: message.payload,
-    offerType: message.offerType,
-    version: message.version,
-    fromPeerId: channel.peerId,
-  })
+  // Check authorize for network channels — storage channels bypass.
+  // Even when rejected, we still process reciprocation and update peer
+  // state so we don't re-request from this peer.
+  const peerState = model.peers.get(channel.peerId)
+  const authorized =
+    channel.kind === "storage" ||
+    (peerState != null && authorize(message.docId, peerState.identity))
+
+  if (authorized) {
+    // Import the payload — the runtime will handle version comparison
+    // and call substrate.importDelta() or factory.fromSnapshot() depending
+    // on the offerType. For LWW, the runtime compares timestamps. For
+    // causal, the CRDT handles merge. For sequential, the runtime checks ordering.
+    commands.push({
+      type: "cmd/import-doc-data",
+      docId: message.docId,
+      payload: message.payload,
+      offerType: message.offerType,
+      version: message.version,
+      fromPeerId: channel.peerId,
+    })
+  }
 
   // If the offerer asked for reciprocation, send an interest back
   if (message.reciprocate) {
@@ -812,98 +911,54 @@ function handleOffer(
     })
   }
 
-  const cmd: Command | undefined =
-    commands.length === 0
-      ? undefined
-      : commands.length === 1
-        ? commands[0]
-        : { type: "cmd/batch", commands }
-
-  return [model, cmd]
+  return [model, batchAsNeeded(...commands)]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// Local change push — merge-strategy dispatch
+// Push — merge-strategy dispatch for outbound changes
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 /**
- * Build a relay push command for imported changes — forward to all synced
- * peers EXCEPT the sender. Mirrors buildLocalChangePush but with an
- * excludePeerId parameter to prevent echo.
+ * Build a push command for document changes — used for both local changes
+ * and relay (imported changes forwarded to other peers).
+ *
+ * When `excludePeerId` is provided, that peer is excluded from the push
+ * (relay case: don't echo back to the sender).
  */
-function buildRelayPush(
+function buildPush(
   docId: DocId,
   docEntry: DocEntry,
-  _newVersion: string,
   model: SynchronizerModel,
-  _permissions: Permissions,
-  excludePeerId: PeerId,
+  route: RoutePredicate,
+  excludePeerId?: PeerId,
 ): Command | undefined {
   switch (docEntry.mergeStrategy) {
     case "causal":
     case "sequential": {
-      // Push delta offer to synced peers, excluding the sender
-      const channelIds = getSyncedPeerChannels(model, docId, excludePeerId)
+      // Push delta offer to synced peers, filtered by route
+      const raw = getSyncedPeerChannels(model, docId, excludePeerId)
+      const channelIds = filterChannelsByRoute(model, raw, docId, route)
       if (channelIds.length === 0) return undefined
 
       return {
         type: "cmd/send-offer",
         docId,
         toChannelIds: channelIds,
-        sinceVersion: docEntry.version, // delta since pre-import version
+        sinceVersion: docEntry.version,
         forceSnapshot: false,
       }
     }
 
     case "lww": {
-      // Broadcast snapshot to ALL established peers, excluding the sender
-      const channelIds = getEstablishedChannelIds(model, excludePeerId)
+      // Broadcast snapshot to ALL established peers, filtered by route
+      const raw = getEstablishedChannelIds(model, excludePeerId)
+      const channelIds = filterChannelsByRoute(model, raw, docId, route)
       if (channelIds.length === 0) return undefined
 
       return {
         type: "cmd/send-offer",
         docId,
         toChannelIds: channelIds,
-        // No sinceVersion — always snapshot for LWW
-        forceSnapshot: true,
-      }
-    }
-  }
-}
-
-function buildLocalChangePush(
-  docId: DocId,
-  docEntry: DocEntry,
-  newVersion: string,
-  model: SynchronizerModel,
-  _permissions: Permissions,
-): Command | undefined {
-  switch (docEntry.mergeStrategy) {
-    case "causal":
-    case "sequential": {
-      // Push delta offer to peers that have synced this doc
-      const channelIds = getSyncedPeerChannels(model, docId)
-      if (channelIds.length === 0) return undefined
-
-      return {
-        type: "cmd/send-offer",
-        docId,
-        toChannelIds: channelIds,
-        sinceVersion: docEntry.version, // delta since previous version
-        forceSnapshot: false,
-      }
-    }
-
-    case "lww": {
-      // Broadcast snapshot to ALL established peers
-      const channelIds = getEstablishedChannelIds(model)
-      if (channelIds.length === 0) return undefined
-
-      return {
-        type: "cmd/send-offer",
-        docId,
-        toChannelIds: channelIds,
-        // No sinceVersion — always snapshot for LWW
         forceSnapshot: true,
       }
     }

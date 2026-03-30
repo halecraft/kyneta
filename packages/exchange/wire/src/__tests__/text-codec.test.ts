@@ -1,4 +1,4 @@
-// Text codec tests — round-trip all 5 message types.
+// Text codec tests — round-trip all 6 message types.
 //
 // Verifies that every ChannelMsg variant survives encode → decode
 // through the textCodec. Special attention to SubstratePayload
@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest"
 import { textCodec } from "../json.js"
 import type {
   ChannelMsg,
+  DismissMsg,
   DiscoverMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
@@ -275,6 +276,21 @@ describe("Text codec — offer", () => {
 })
 
 // ---------------------------------------------------------------------------
+// Dismiss
+// ---------------------------------------------------------------------------
+
+describe("Text codec — dismiss", () => {
+  it("round-trips dismiss message", () => {
+    const msg: DismissMsg = {
+      type: "dismiss",
+      docId: "doc-to-leave",
+    }
+    const decoded = roundTrip(msg)
+    expect(decoded).toEqual(msg)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Batch encoding
 // ---------------------------------------------------------------------------
 
@@ -306,16 +322,21 @@ describe("Text codec — batch", () => {
         version: "2",
         reciprocate: false,
       },
+      {
+        type: "dismiss",
+        docId: "d1",
+      },
     ]
 
     const encoded = textCodec.encode(msgs)
 
     const decoded = textCodec.decode(encoded)
-    expect(decoded).toHaveLength(4)
+    expect(decoded).toHaveLength(5)
     expect(decoded[0]!.type).toBe("establish-request")
     expect(decoded[1]!.type).toBe("discover")
     expect(decoded[2]!.type).toBe("interest")
     expect(decoded[3]!.type).toBe("offer")
+    expect(decoded[4]!.type).toBe("dismiss")
 
     // Verify the offer's binary payload survived
     const decodedOffer = decoded[3] as OfferMsg

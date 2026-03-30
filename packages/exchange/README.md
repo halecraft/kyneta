@@ -100,15 +100,16 @@ Each BoundSchema declares a merge strategy that determines how the exchange sync
 | `"sequential"` | Request/response | Total (no concurrency) | Plain substrates |
 | `"lww"` | Unidirectional broadcast | Total (timestamp-based) | Ephemeral/presence |
 
-### Three-Message Protocol
+### Sync Protocol
 
-All sync communication uses three message types:
+Four exchange message types handle document sync:
 
-- **`discover`** — "What documents exist?" / "I have these documents."
+- **`discover`** — "I have these documents." (filtered by `route`)
 - **`interest`** — "I want document X. Here's my version."
-- **`offer`** — "Here is state for document X."
+- **`offer`** — "Here is state for document X." (gated by `authorize`)
+- **`dismiss`** — "I'm leaving document X." (triggers `onDocDismissed`)
 
-The merge strategy determines *when* and *how* these messages are sent, not their shape. The protocol is uniform across all substrate types.
+Two additional messages (`establish-request`, `establish-response`) handle channel handshake. The merge strategy determines *when* and *how* messages are sent, not their shape.
 
 ### Heterogeneous Documents
 
@@ -135,13 +136,26 @@ The `Exchange` class is the central orchestrator. It manages document lifecycle,
 const exchange = new Exchange({
   identity: { peerId: "alice", name: "Alice", type: "user" },
   adapters: [networkAdapter, storageAdapter],
-  permissions: {
-    visibility: (ctx) => true,
-    mutability: (ctx) => true,
-    deletion: (ctx) => true,
+  route: (docId, peer) => {
+    // Control which peers see which documents
+    if (docId.startsWith("input:")) return peer.peerId === docId.slice(6)
+    return true
+  },
+  authorize: (docId, peer) => {
+    // Control whose mutations are accepted
+    if (docId === "game-state") return false // only server writes
+    return true
   },
 })
 ```
+
+### Route and Authorize
+
+Two predicates control information flow through the sync protocol:
+
+- **`route(docId, peer) → boolean`** — Outbound flow control. Determines which peers participate in the sync graph for each document. Checked at every outbound gate: initial discover, doc-ensure broadcast, relay push, local change push. Also gates `onDocDiscovered` — if `route` returns `false` for the announcing peer, the callback never fires. Storage channels bypass this check. Defaults to `() => true`.
+
+- **`authorize(docId, peer) → boolean`** — Inbound flow control. Determines whose mutations are accepted. Checked before importing offers from network peers. When rejected, the offer is silently dropped but peer sync state is still updated to prevent re-requesting. Storage channels bypass this check. Defaults to `() => true`.
 
 ### Dynamic Document Creation (`onDocDiscovered`)
 
@@ -163,7 +177,7 @@ const exchange = new Exchange({
 })
 ```
 
-This enables patterns where clients create per-peer documents (e.g. `input:${peerId}`) and the server materializes them automatically when the client connects. No pre-coordination required — the callback is the single gating mechanism (returning `undefined` is equivalent to denying creation).
+This enables patterns where clients create per-peer documents (e.g. `input:${peerId}`) and the server materializes them automatically when the client connects. No pre-coordination required — the `route` predicate is checked first (the callback only fires if routing allows it), then returning `undefined` is equivalent to denying creation.
 
 ### The `sync()` Function
 
@@ -210,15 +224,18 @@ loroDoc.version()                // VersionVector
 
 | Method / Option | Description |
 |----------------|-------------|
-| `get(docId, boundSchema, opts?)` | Get or create a document. Returns `Ref<S>`. |
+| `get(docId, boundSchema)` | Get or create a document. Returns `Ref<S>`. |
 | `has(docId)` | Check if a document exists. |
-| `delete(docId)` | Delete a document. |
+| `dismiss(docId)` | Leave the sync graph for a document — removes locally and broadcasts `dismiss` to peers. |
 | `flush()` | Await all pending storage operations. |
 | `shutdown()` | Flush + disconnect all adapters. |
 | `reset()` | Disconnect adapters and clear state (synchronous). |
 | `addAdapter(adapter)` | Add an adapter at runtime. |
 | `removeAdapter(adapterId)` | Remove an adapter at runtime. |
-| `onDocDiscovered` | Constructor option. Callback `(docId, peer) → BoundSchema \| undefined` for dynamic doc creation. |
+| `route` | Constructor option. `(docId, peer) → boolean` — outbound flow control. Default: `() => true`. |
+| `authorize` | Constructor option. `(docId, peer) → boolean` — inbound flow control. Default: `() => true`. |
+| `onDocDiscovered` | Constructor option. `(docId, peer) → BoundSchema \| undefined` — dynamic doc creation. |
+| `onDocDismissed` | Constructor option. `(docId, peer) → void` — react to peer leaving a document. |
 
 ### sync()
 
