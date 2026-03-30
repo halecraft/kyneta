@@ -123,7 +123,7 @@ Convenience wrappers make this a one-liner:
 - `bindLoro(schema)` — Loro CRDT substrate, causal merge
 - `bindYjs(schema)` — Yjs CRDT substrate, causal merge
 - `bindPlain(schema)` — plain JS substrate, sequential merge
-- `bindLww(schema)` — plain JS substrate, LWW broadcast merge
+- `bindEphemeral(schema)` — LWW substrate (TimestampVersion), ephemeral/presence state
 
 Swapping CRDT backends is a one-import change. Everything downstream — the Exchange sync protocol, the Cast view, the WebSocket transport, the wire format — stays identical because they depend on the `Substrate` interface, not on any particular CRDT library.
 

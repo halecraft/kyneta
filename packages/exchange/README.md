@@ -53,7 +53,7 @@ A `BoundSchema` captures three choices that define a document type:
 BoundSchemas are defined at module scope and passed to `exchange.get()`:
 
 ```ts
-import { bindPlain, bindLww } from "@kyneta/schema"
+import { bindPlain, bindEphemeral } from "@kyneta/schema"
 import { bindLoro } from "@kyneta/loro-schema"
 
 // Collaborative text — Loro CRDT with causal merge
@@ -66,7 +66,7 @@ const TodoDoc = bindLoro(LoroSchema.doc({
 const ConfigDoc = bindPlain(Schema.doc({ theme: Schema.string() }))
 
 // Ephemeral presence — plain substrate with LWW broadcast
-const PresenceDoc = bindLww(Schema.doc({
+const PresenceDoc = bindEphemeral(Schema.doc({
   cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
   name: Schema.string(),
 }))
@@ -162,7 +162,7 @@ Two predicates control information flow through the sync protocol:
 When a peer announces a document your exchange doesn't have, the `onDocDiscovered` callback lets you create it on demand. Return a `BoundSchema` to auto-create and sync, or `undefined` to ignore:
 
 ```ts
-const PlayerInputDoc = bindLww(Schema.doc({
+const PlayerInputDoc = bindEphemeral(Schema.doc({
   force: Schema.number(),
   angle: Schema.number(),
 }))
@@ -253,7 +253,7 @@ loroDoc.version()                // VersionVector
 |----------|---------|-------------|
 | `bind({ schema, factory, strategy })` | `@kyneta/schema` | General primitive — explicit schema, factory builder, strategy. |
 | `bindPlain(schema)` | `@kyneta/schema` | Plain substrate + sequential strategy. |
-| `bindLww(schema)` | `@kyneta/schema` | Plain substrate + LWW broadcast strategy. |
+| `bindEphemeral(schema)` | `@kyneta/schema` | LWW substrate (TimestampVersion) + LWW broadcast strategy. Ideal for ephemeral/presence state. |
 | `bindLoro(schema)` | `@kyneta/loro-schema` | Loro substrate + causal strategy. |
 
 ### Escape Hatches

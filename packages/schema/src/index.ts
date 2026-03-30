@@ -5,7 +5,7 @@
 
 // Bind — schema + factory + strategy binding
 export type { BoundSchema, FactoryBuilder, MergeStrategy } from "./bind.js"
-export { bind, bindLww, bindPlain, isBoundSchema } from "./bind.js"
+export { bind, bindEphemeral, bindPlain, isBoundSchema } from "./bind.js"
 // Change types — the universal currency of change
 export type {
   BuiltinChange,
@@ -261,6 +261,10 @@ export {
   plainContext,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
+// Timestamp version — wall-clock version for LWW/ephemeral substrates
+export { TimestampVersion } from "./substrates/timestamp-version.js"
+// LWW substrate — plain substrate wrapped with TimestampVersion for ephemeral state
+export { lwwSubstrateFactory } from "./substrates/lww.js"
 // Unwrap — general escape hatch for accessing the Substrate backing a ref
 export { registerSubstrate, unwrap } from "./unwrap.js"
 // Zero — default values derived from the schema grammar

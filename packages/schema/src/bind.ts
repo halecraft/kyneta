@@ -11,6 +11,8 @@
 // This ensures each exchange gets a fresh factory instance with the
 // correct peer identity. Factories that don't need peer identity
 // (e.g. plain) simply ignore the context: () => plainSubstrateFactory.
+// For LWW/ephemeral, the builder returns lwwSubstrateFactory (which wraps
+// plain with TimestampVersion for cross-peer stale rejection).
 //
 // MergeStrategy is a string union declaring the sync algorithm the
 // exchange runs on behalf of the substrate:
@@ -20,6 +22,7 @@
 
 import type { Schema as SchemaNode } from "./schema.js"
 import type { SubstrateFactory, Version } from "./substrate.js"
+import { lwwSubstrateFactory } from "./substrates/lww.js"
 import { plainSubstrateFactory } from "./substrates/plain.js"
 
 // ---------------------------------------------------------------------------
@@ -75,7 +78,7 @@ export type FactoryBuilder<V extends Version = Version> = (context: {
  * 3. **strategy** — how does the exchange sync it?
  *
  * BoundSchemas are static declarations created at module scope via
- * `bind()`, `bindPlain()`, `bindLww()`, or `bindLoro()`. They are
+ * `bind()`, `bindPlain()`, `bindEphemeral()`, or `bindLoro()`. They are
  * consumed at runtime by `exchange.get(docId, boundSchema)`.
  *
  * A BoundSchema can safely be shared across multiple exchange instances.
@@ -97,7 +100,7 @@ export interface BoundSchema<S extends SchemaNode = SchemaNode> {
  * Create a BoundSchema from explicit schema, factory builder, and strategy.
  *
  * This is the general primitive. Most users should prefer the convenience
- * wrappers `bindPlain()`, `bindLww()`, or `bindLoro()`.
+ * wrappers `bindPlain()`, `bindEphemeral()`, or `bindLoro()`.
  *
  * @example
  * ```ts
@@ -164,31 +167,33 @@ export function bindPlain<S extends SchemaNode>(schema: S): BoundSchema<S> {
 }
 
 // ---------------------------------------------------------------------------
-// bindLww — convenience for plain JS substrate + LWW broadcast strategy
+// bindEphemeral — convenience for LWW broadcast strategy (ephemeral/presence)
 // ---------------------------------------------------------------------------
 
 /**
- * Bind a schema to the plain JS substrate with LWW broadcast strategy.
+ * Bind a schema to the LWW substrate for ephemeral/presence state.
  *
- * Uses the plain substrate for state management, but the exchange syncs
- * it via last-writer-wins broadcast — pushing full snapshots on every
- * local change, with timestamp-based stale filtering at the receiver.
+ * Uses a plain JS substrate wrapped with `TimestampVersion` for
+ * cross-peer stale rejection. The exchange syncs it via last-writer-wins
+ * broadcast — pushing full snapshots on every local change, with
+ * timestamp-based stale filtering at the receiver.
  *
- * Ideal for ephemeral/presence state.
+ * Ideal for cursor position, player input, typing indicators, and any
+ * state where only the latest value matters.
  *
  * @example
  * ```ts
- * const PresenceDoc = bindLww(Schema.doc({
+ * const PresenceDoc = bindEphemeral(Schema.doc({
  *   cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
  *   name: Schema.string(),
  * }))
  * const presence = exchange.get("presence", PresenceDoc)
  * ```
  */
-export function bindLww<S extends SchemaNode>(schema: S): BoundSchema<S> {
+export function bindEphemeral<S extends SchemaNode>(schema: S): BoundSchema<S> {
   return bind({
     schema,
-    factory: () => plainSubstrateFactory,
+    factory: () => lwwSubstrateFactory,
     strategy: "lww",
   })
 }

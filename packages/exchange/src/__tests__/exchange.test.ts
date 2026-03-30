@@ -5,7 +5,7 @@ import {
   Schema,
   LoroSchema,
   bindPlain,
-  bindLww,
+  bindEphemeral,
   bind,
   change,
   plainSubstrateFactory,

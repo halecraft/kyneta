@@ -26,7 +26,7 @@ export type {
 // ---------------------------------------------------------------------------
 
 export type { BoundSchema, FactoryBuilder, MergeStrategy } from "@kyneta/schema"
-export { bind, bindLww, bindPlain, isBoundSchema } from "@kyneta/schema"
+export { bind, bindEphemeral, bindPlain, isBoundSchema } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Unwrap — re-exported from @kyneta/schema for convenience
@@ -35,10 +35,10 @@ export { bind, bindLww, bindPlain, isBoundSchema } from "@kyneta/schema"
 export { registerSubstrate, unwrap } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
-// TimestampVersion — LWW version implementation
+// TimestampVersion — LWW version implementation (re-exported from @kyneta/schema)
 // ---------------------------------------------------------------------------
 
-export { TimestampVersion } from "./timestamp-version.js"
+export { TimestampVersion } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Messages — the three-message sync vocabulary

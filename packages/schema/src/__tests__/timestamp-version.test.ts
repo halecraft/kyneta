@@ -1,7 +1,7 @@
 // TimestampVersion — unit tests for LWW version implementation.
 
 import { describe, expect, it } from "vitest"
-import { TimestampVersion } from "../timestamp-version.js"
+import { TimestampVersion } from "../substrates/timestamp-version.js"
 
 describe("TimestampVersion", () => {
   describe("serialize / parse round-trip", () => {

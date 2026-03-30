@@ -4,106 +4,20 @@
 // connected via BridgeAdapter, for each merge strategy:
 // - Sequential (PlainSubstrate via bindPlain)
 // - Causal (LoroSubstrate via bindLoro)
-// - LWW (TimestampVersion via bind + custom factory)
+// - LWW (TimestampVersion via bindEphemeral)
 // - Heterogeneous (mixed substrates in one exchange)
 
 import { describe, expect, it, afterEach } from "vitest"
 import {
   Schema,
   LoroSchema,
-  plainSubstrateFactory,
   change,
-  bind,
   bindPlain,
-  buildWritableContext,
-  type BoundSchema,
-  type Substrate,
-  type SubstratePayload,
-  type WritableContext,
+  bindEphemeral,
 } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
 import { bindLoro } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
-import { sync } from "../sync.js"
 import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
-import { TimestampVersion } from "../timestamp-version.js"
-
-// ---------------------------------------------------------------------------
-// LWW factory builder — wraps plain store with TimestampVersion
-// ---------------------------------------------------------------------------
-
-function lwwFactoryBuilder(_ctx: { peerId: string }) {
-  return {
-    create(schema: SchemaNode): Substrate<TimestampVersion> {
-      const inner = plainSubstrateFactory.create(schema)
-      let currentVersion = new TimestampVersion(0)
-      let cachedCtx: WritableContext | undefined
-
-      const substrate: Substrate<TimestampVersion> = {
-        store: inner.store,
-        prepare(path: any, change: any) { inner.prepare(path, change) },
-        onFlush(origin?: string) {
-          inner.onFlush(origin)
-          currentVersion = TimestampVersion.now()
-        },
-        context(): WritableContext {
-          if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
-          return cachedCtx
-        },
-        version: () => currentVersion,
-        exportSnapshot: () => inner.exportSnapshot(),
-        exportSince: () => inner.exportSnapshot(),
-        importDelta(payload: SubstratePayload, origin?: string) {
-          inner.importDelta(payload, origin)
-          currentVersion = TimestampVersion.now()
-        },
-      }
-      return substrate
-    },
-
-    fromSnapshot(payload: SubstratePayload, schema: SchemaNode): Substrate<TimestampVersion> {
-      const inner = plainSubstrateFactory.fromSnapshot(payload, schema)
-      let currentVersion = TimestampVersion.now()
-      let cachedCtx: WritableContext | undefined
-
-      const substrate: Substrate<TimestampVersion> = {
-        store: inner.store,
-        prepare(path: any, change: any) { inner.prepare(path, change) },
-        onFlush(origin?: string) {
-          inner.onFlush(origin)
-          currentVersion = TimestampVersion.now()
-        },
-        context(): WritableContext {
-          if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
-          return cachedCtx
-        },
-        version: () => currentVersion,
-        exportSnapshot: () => inner.exportSnapshot(),
-        exportSince: () => inner.exportSnapshot(),
-        importDelta(payload: SubstratePayload, origin?: string) {
-          inner.importDelta(payload, origin)
-          currentVersion = TimestampVersion.now()
-        },
-      }
-      return substrate
-    },
-
-    parseVersion(serialized: string): TimestampVersion {
-      return TimestampVersion.parse(serialized)
-    },
-  }
-}
-
-/**
- * Bind a schema with LWW merge strategy using a custom LWW factory.
- */
-function bindLwwCustom<S extends SchemaNode>(schema: S): BoundSchema<S> {
-  return bind({
-    schema,
-    factory: lwwFactoryBuilder,
-    strategy: "lww",
-  })
-}
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -116,16 +30,18 @@ function bindLwwCustom<S extends SchemaNode>(schema: S): BoundSchema<S> {
  */
 async function drain(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i++) {
-    await new Promise<void>((r) => queueMicrotask(r))
+    await new Promise<void>(r => queueMicrotask(r))
     // Also yield to promise queue
-    await new Promise<void>((r) => setTimeout(r, 0))
+    await new Promise<void>(r => setTimeout(r, 0))
   }
 }
 
 /** Active exchanges that need cleanup */
 const activeExchanges: Exchange[] = []
 
-function createExchange(params: ConstructorParameters<typeof Exchange>[0] = {}): Exchange {
+function createExchange(
+  params: ConstructorParameters<typeof Exchange>[0] = {},
+): Exchange {
   const ex = new Exchange(params)
   activeExchanges.push(ex)
   return ex
@@ -165,7 +81,7 @@ const presenceSchema = Schema.doc({
   }),
   name: Schema.string(),
 })
-const PresenceDoc = bindLwwCustom(presenceSchema)
+const PresenceDoc = bindEphemeral(presenceSchema)
 
 // ---------------------------------------------------------------------------
 // Sequential (PlainSubstrate) — two-peer sync
@@ -462,7 +378,9 @@ describe("Multi-hop relay (three-peer topology)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
+      adapters: [
+        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH }),
+      ],
     })
 
     const exchangeHub = createExchange({
@@ -506,7 +424,9 @@ describe("Multi-hop relay (three-peer topology)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
+      adapters: [
+        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH }),
+      ],
     })
 
     const exchangeHub = createExchange({
@@ -572,7 +492,7 @@ describe("onDocDiscovered (dynamic document creation)", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
-      onDocDiscovered: (docId) => {
+      onDocDiscovered: docId => {
         if (docId === "dynamic-doc") return SequentialDoc
         return undefined
       },
@@ -627,7 +547,7 @@ describe("onDocDiscovered (dynamic document creation)", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
-      onDocDiscovered: (docId) => {
+      onDocDiscovered: docId => {
         if (docId === "presence") return PresenceDoc
         return undefined
       },
@@ -675,7 +595,7 @@ describe("route predicate", () => {
       identity: { peerId: "alice" },
       adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
       // Deny bob from seeing "secret"
-      route: (docId) => docId !== "secret",
+      route: docId => docId !== "secret",
     })
 
     const exchangeB = createExchange({
@@ -697,7 +617,9 @@ describe("route predicate", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
+      adapters: [
+        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH }),
+      ],
     })
 
     // Hub allows alice but denies bob for "private-doc"
@@ -865,8 +787,8 @@ describe("route + onDocDiscovered interaction", () => {
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
       // Route denies alice for "blocked-doc"
-      route: (docId) => docId !== "blocked-doc",
-      onDocDiscovered: (docId) => {
+      route: docId => docId !== "blocked-doc",
+      onDocDiscovered: docId => {
         discoveredCallCount++
         if (docId === "blocked-doc") return SequentialDoc
         return undefined

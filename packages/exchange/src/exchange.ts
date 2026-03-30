@@ -308,7 +308,7 @@ export class Exchange {
    * Calling with a different BoundSchema for the same `docId` throws.
    *
    * @param docId - The document ID
-   * @param bound - A BoundSchema created by `bind()`, `bindPlain()`, `bindLww()`, or `bindLoro()`
+   * @param bound - A BoundSchema created by `bind()`, `bindPlain()`, `bindEphemeral()`, or `bindLoro()`
    * @returns A full-stack Ref<S> with sync capabilities via `sync()`
    *
    * @example

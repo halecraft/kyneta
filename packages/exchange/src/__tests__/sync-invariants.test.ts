@@ -10,88 +10,15 @@ import { describe, expect, it, afterEach } from "vitest"
 import {
   Schema,
   LoroSchema,
-  plainSubstrateFactory,
   change,
-  bind,
   bindPlain,
-  buildWritableContext,
-  type BoundSchema,
-  type Substrate,
-  type SubstratePayload,
-  type WritableContext,
+  bindEphemeral,
+  TimestampVersion,
 } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
 import { bindLoro } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
 import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
-import { TimestampVersion } from "../timestamp-version.js"
-
-// ---------------------------------------------------------------------------
-// LWW factory builder (shared across tests)
-// ---------------------------------------------------------------------------
-
-function lwwFactoryBuilder(_ctx: { peerId: string }) {
-  return {
-    create(schema: SchemaNode): Substrate<TimestampVersion> {
-      const inner = plainSubstrateFactory.create(schema)
-      let currentVersion = new TimestampVersion(0)
-      let cachedCtx: WritableContext | undefined
-
-      const substrate: Substrate<TimestampVersion> = {
-        store: inner.store,
-        prepare(path: any, change: any) { inner.prepare(path, change) },
-        onFlush(origin?: string) {
-          inner.onFlush(origin)
-          currentVersion = TimestampVersion.now()
-        },
-        context(): WritableContext {
-          if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
-          return cachedCtx
-        },
-        version: () => currentVersion,
-        exportSnapshot: () => inner.exportSnapshot(),
-        exportSince: () => inner.exportSnapshot(),
-        importDelta(payload: SubstratePayload, origin?: string) {
-          inner.importDelta(payload, origin)
-          currentVersion = TimestampVersion.now()
-        },
-      }
-      return substrate
-    },
-    fromSnapshot(payload: SubstratePayload, schema: SchemaNode): Substrate<TimestampVersion> {
-      const inner = plainSubstrateFactory.fromSnapshot(payload, schema)
-      let currentVersion = TimestampVersion.now()
-      let cachedCtx: WritableContext | undefined
-
-      const substrate: Substrate<TimestampVersion> = {
-        store: inner.store,
-        prepare(path: any, change: any) { inner.prepare(path, change) },
-        onFlush(origin?: string) {
-          inner.onFlush(origin)
-          currentVersion = TimestampVersion.now()
-        },
-        context(): WritableContext {
-          if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
-          return cachedCtx
-        },
-        version: () => currentVersion,
-        exportSnapshot: () => inner.exportSnapshot(),
-        exportSince: () => inner.exportSnapshot(),
-        importDelta(payload: SubstratePayload, origin?: string) {
-          inner.importDelta(payload, origin)
-          currentVersion = TimestampVersion.now()
-        },
-      }
-      return substrate
-    },
-    parseVersion: (s: string) => TimestampVersion.parse(s),
-  }
-}
-
-function bindLwwCustom<S extends SchemaNode>(schema: S): BoundSchema<S> {
-  return bind({ schema, factory: lwwFactoryBuilder, strategy: "lww" })
-}
 
 // ---------------------------------------------------------------------------
 // Drain + cleanup helpers
@@ -99,14 +26,16 @@ function bindLwwCustom<S extends SchemaNode>(schema: S): BoundSchema<S> {
 
 async function drain(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i++) {
-    await new Promise<void>((r) => queueMicrotask(r))
-    await new Promise<void>((r) => setTimeout(r, 0))
+    await new Promise<void>(r => queueMicrotask(r))
+    await new Promise<void>(r => setTimeout(r, 0))
   }
 }
 
 const activeExchanges: Exchange[] = []
 
-function createExchange(params: ConstructorParameters<typeof Exchange>[0] = {}): Exchange {
+function createExchange(
+  params: ConstructorParameters<typeof Exchange>[0] = {},
+): Exchange {
   const ex = new Exchange(params)
   activeExchanges.push(ex)
   return ex
@@ -114,7 +43,11 @@ function createExchange(params: ConstructorParameters<typeof Exchange>[0] = {}):
 
 afterEach(async () => {
   for (const ex of activeExchanges) {
-    try { await ex.shutdown() } catch { /* ignore */ }
+    try {
+      await ex.shutdown()
+    } catch {
+      /* ignore */
+    }
   }
   activeExchanges.length = 0
 })
@@ -138,7 +71,7 @@ const presenceSchema = Schema.doc({
   name: Schema.string(),
   x: Schema.number(),
 })
-const PresenceDoc = bindLwwCustom(presenceSchema)
+const PresenceDoc = bindEphemeral(presenceSchema)
 
 const loroSchema = LoroSchema.doc({
   title: LoroSchema.text(),
@@ -239,7 +172,7 @@ describe("snapshot import preserves ref identity", () => {
     const docB = exchangeB.get("doc-1", SimpleDoc)
     const syncRef = sync(docB)
 
-    exchangeA.get("doc-1", SimpleDoc, { seed: { title: "Hello" } })
+    exchangeA.get("doc-1", SimpleDoc)
     await drain()
 
     // The SyncRef obtained before sync should still be valid

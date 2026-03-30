@@ -591,6 +591,20 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
 **`LoroSubstrate`** is the second concrete implementation, provided by the separate `@kyneta/loro-schema` package. It wraps a user-provided `LoroDoc` with schema-aware typed reads (via `LoroStoreReader`), `applyDiff`-based writes, and a persistent `doc.subscribe()` event bridge that ensures all mutations to the underlying LoroDoc — whether from kyneta, `importDelta`, or external systems — fire kyneta changefeed subscribers. See `packages/schema/loro/TECHNICAL.md` for the full architecture.
 
+**`TimestampVersion`** wraps a wall-clock timestamp (milliseconds since epoch). Timestamps form a total order — `compare()` returns `"behind"`, `"equal"`, or `"ahead"` but never `"concurrent"`. This is the version type for LWW substrates: the receiver compares timestamps and discards stale arrivals. `serialize()` encodes to a decimal string; `TimestampVersion.parse()` is the inverse. `TimestampVersion.now()` creates a version from the current wall clock.
+
+**`LwwSubstrate`** (via `lwwSubstrateFactory`) is the third concrete implementation. It uses the **decorator pattern**: `wrapWithTimestamp()` takes any `Substrate<PlainVersion>` and returns a `Substrate<TimestampVersion>` that delegates all state operations to the inner plain substrate while maintaining its own timestamp-based version. On every `onFlush()` and `importDelta()`, the wrapper bumps `currentVersion = TimestampVersion.now()`.
+
+**Critical `context()` gotcha.** The wrapper's `context()` must build its `WritableContext` from the *wrapper* substrate object, not the inner one. If `context()` delegated to `inner.context()`, only the inner plain substrate's `onFlush` would run and the wrapper's timestamp would never advance. This is correct-by-construction in `wrapWithTimestamp` — the extracted helper eliminates the risk of copy-paste errors. See `@kyneta/exchange` TECHNICAL.md §8 for the original design note.
+
+The `lwwSubstrateFactory` provides the `SubstrateFactory<TimestampVersion>` interface: `create(schema)` wraps a fresh plain substrate with initial timestamp 0; `fromSnapshot(payload, schema)` wraps a reconstructed plain substrate with `TimestampVersion.now()`; `parseVersion()` delegates to `TimestampVersion.parse()`. The factory is consumed by `bindEphemeral()` in `bind.ts`.
+
+| Version Type | Substrate | Order | History |
+|---|---|---|---|
+| `LoroVersion` (VersionVector) | Loro CRDT | Partial | Full causal oplog |
+| `PlainVersion` (monotonic counter) | Plain JS | Total (single-writer) | Limited op log |
+| `TimestampVersion` (wall clock) | LWW/Ephemeral | Total (by convention) | None — latest value only |
+
 ### Additional Interpreters
 
 | Interpreter | Context | Result | Purpose |
@@ -831,7 +845,9 @@ packages/schema/
 │   │   ├── with-changefeed.ts   # Changefeed transformer — observation + batched notification
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate
 │   ├── substrates/
-│   │   └── plain.ts             # PlainVersion, createPlainSubstrate, plainContext, plainSubstrateFactory
+│   │   ├── plain.ts             # PlainVersion, createPlainSubstrate, plainContext, plainSubstrateFactory
+│   │   ├── timestamp-version.ts # TimestampVersion — wall-clock version for LWW/ephemeral substrates
+│   │   └── lww.ts               # wrapWithTimestamp, lwwSubstrateFactory — PlainSubstrate + TimestampVersion decorator
 │   ├── __tests__/
 │   │   ├── basic.test.ts        # Integration tests for @kyneta/schema/basic API
 │   │   ├── types.test.ts        # Type-level tests (expectTypeOf)

@@ -40,7 +40,7 @@ const serverAdapter = new WebsocketServerAdapter()
 
 const exchange = new Exchange({
   identity: { name: "server" },
-  adapters: [serverAdapter],
+  adapters: [() => serverAdapter],
 })
 
 // Register the todo document. The server holds the authoritative copy.
@@ -84,7 +84,7 @@ httpServer.on("request", (req, res) => {
 
 const wss = new WebSocketServer({ noServer: true })
 
-wss.on("connection", (ws) => {
+wss.on("connection", ws => {
   const { start } = serverAdapter.handleConnection({
     socket: wrapNodeWebsocket(ws),
   })
@@ -93,7 +93,7 @@ wss.on("connection", (ws) => {
 
 httpServer.on("upgrade", (req, socket, head) => {
   if (req.url === "/ws") {
-    wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.handleUpgrade(req, socket, head, ws => {
       wss.emit("connection", ws, req)
     })
   }

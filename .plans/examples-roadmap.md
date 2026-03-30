@@ -96,7 +96,7 @@ Build the bumper-cars example. Demonstrates heterogeneous merge strategies: caus
 - Domain: three schemas, three `BoundSchema` declarations, physics engine
 - Server: Bun, game loop at 60fps mutating the sequential game-state doc, reading LWW input docs
 - Client: React, joystick input writing to LWW doc, rendering from sequential game-state doc, scoreboard from causal doc
-- Key point: no special "presence" or "ephemeral" API — LWW is `bindLww()` + `exchange.get()`, same as everything else
+- Key point: no special "presence" or "ephemeral" API — ephemeral state is `bindEphemeral()` + `exchange.get()`, same as everything else
 
 ### Phase 5: WebRTC transport + video-conference
 

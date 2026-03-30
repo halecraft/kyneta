@@ -209,7 +209,7 @@ type FactoryBuilder<V extends Version> = (context: { peerId: string }) => Substr
 type MergeStrategy = "causal" | "sequential" | "lww"
 ```
 
-BoundSchemas are static declarations created at module scope via `bind()`, `bindPlain()`, `bindLww()`, or `bindLoro()`. They are consumed at runtime by `exchange.get(docId, boundSchema)`.
+BoundSchemas are static declarations created at module scope via `bind()`, `bindPlain()`, `bindEphemeral()`, or `bindLoro()`. They are consumed at runtime by `exchange.get(docId, boundSchema)`.
 
 ### Factory Builder Lifecycle
 
@@ -220,14 +220,14 @@ The factory is always a **builder function**, not a static instance. This solves
 3. **Each exchange gets a fresh factory** — two exchanges sharing the same BoundSchema produce independent factory instances with their own peer identity.
 4. **Factories are cached per-exchange** — a `WeakMap<FactoryBuilder, SubstrateFactory>` ensures the builder is called at most once per exchange.
 
-For Loro substrates, the builder hashes the string peerId to a deterministic numeric Loro PeerID and returns a factory that calls `doc.setPeerId()` on every new LoroDoc. For plain substrates, the builder ignores the context: `() => plainSubstrateFactory`.
+For Loro substrates, the builder hashes the string peerId to a deterministic numeric Loro PeerID and returns a factory that calls `doc.setPeerId()` on every new LoroDoc. For plain/sequential substrates, the builder ignores the context: `() => plainSubstrateFactory`. For LWW/ephemeral substrates, the builder returns `lwwSubstrateFactory` (which wraps `plainSubstrateFactory` with `TimestampVersion`).
 
 ### Convenience Wrappers
 
 | Function | Package | Factory | Strategy |
 |----------|---------|---------|----------|
 | `bindPlain(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"sequential"` |
-| `bindLww(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"lww"` |
+| `bindEphemeral(schema)` | `@kyneta/schema` | `() => lwwSubstrateFactory` | `"lww"` |
 | `bindLoro(schema)` | `@kyneta/loro-schema` | `(ctx) => createLoroFactory(ctx.peerId)` | `"causal"` |
 
 ### Why Not `ExchangeSubstrateFactory`?
@@ -341,7 +341,7 @@ In-process adapter for testing. Messages are delivered asynchronously via `queue
 
 ## 6. TimestampVersion
 
-`TimestampVersion` implements `Version` using wall-clock timestamps (milliseconds since epoch) for LWW semantics.
+`TimestampVersion` implements `Version` using wall-clock timestamps (milliseconds since epoch) for LWW semantics. It is defined in `@kyneta/schema` (in `src/substrates/timestamp-version.ts`) alongside the other version types and re-exported by `@kyneta/exchange` for convenience.
 
 ```ts
 class TimestampVersion implements Version {
@@ -404,25 +404,25 @@ This handles the common case where `PlainSubstrate.create(schema, seed)` writes 
 
 ## 8. LWW Substrate Pattern
 
-An LWW substrate wraps a `PlainSubstrate` with `TimestampVersion`:
+The LWW substrate pattern is implemented by `lwwSubstrateFactory` in `@kyneta/schema` (`src/substrates/lww.ts`), consumed by `bindEphemeral()`. The internal `wrapWithTimestamp()` helper uses the decorator pattern to wrap a `PlainSubstrate` with `TimestampVersion`:
 
 - **State management**: delegates to the inner `PlainSubstrate` (same `StoreReader`, `applyChangeToStore`, interpreter stack)
 - **Version tracking**: `TimestampVersion` bumped on every `onFlush()` and `importDelta()`
-- **Export**: always `exportSnapshot()` (full state)
+- **Export**: always `exportSnapshot()` (full state). `exportSince()` delegates to `inner.exportSnapshot()` for defensive correctness, but is never called in practice — the synchronizer always sets `forceSnapshot: true` for LWW pushes.
 - **Import**: delegates to inner `PlainSubstrate`
 
-**Critical:** The LWW substrate must override `context()` to return a `WritableContext` built from the **wrapper** substrate, not the inner one. This ensures `onFlush()` (which bumps the timestamp version) is called during `change()`:
+**Critical:** The LWW substrate must override `context()` to return a `WritableContext` built from the **wrapper** substrate, not the inner one. This ensures `onFlush()` (which bumps the timestamp version) is called during `change()`. This is correct-by-construction in `wrapWithTimestamp` — the extracted helper eliminates the risk of copy-paste errors:
 
 ```ts
 context(): WritableContext {
   if (!cachedCtx) {
-    cachedCtx = buildWritableContext(wrapperSubstrate)  // NOT inner
+    cachedCtx = buildWritableContext(substrate)  // the wrapper, NOT inner
   }
   return cachedCtx
 }
 ```
 
-If `context()` delegates to `inner.context()`, the inner plain substrate's `onFlush` runs but the wrapper's version is never bumped, causing LWW timestamp comparison to use stale timestamps.
+If `context()` delegated to `inner.context()`, the inner plain substrate's `onFlush` would run but the wrapper's version would never be bumped, causing LWW timestamp comparison to use stale timestamps.
 
 ---
 
@@ -457,7 +457,6 @@ Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingM
 | File | Purpose |
 |------|---------|
 | `src/types.ts` | Core identity and state types (PeerId, DocId, ChannelId, PeerState, ReadyState) |
-| `src/timestamp-version.ts` | `TimestampVersion` — wall-clock version for LWW |
 | `src/messages.ts` | Sync protocol messages (discover, interest, offer, dismiss) + establishment messages |
 | `src/channel.ts` | Channel types and lifecycle (GeneratedChannel → ConnectedChannel → EstablishedChannel) |
 | `src/channel-directory.ts` | Channel ID generation and lifecycle management |
@@ -472,13 +471,12 @@ Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingM
 | `src/sync.ts` | `sync()` function and `SyncRef` — sync capabilities access |
 | `src/index.ts` | Barrel export (re-exports `bind`, `BoundSchema`, `MergeStrategy`, etc. from `@kyneta/schema`) |
 
-Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unwrap()`, and `registerSubstrate()` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` and `loro()` are defined in `@kyneta/loro-schema`.
+Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`, `unwrap()`, `registerSubstrate()`, and `TimestampVersion` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` and `loro()` are defined in `@kyneta/loro-schema`.
 
 ### Test Files
 
 | File | Coverage |
 |------|----------|
-| `src/__tests__/timestamp-version.test.ts` | TimestampVersion serialize/parse/compare (12 tests) |
 | `src/__tests__/adapter.test.ts` | Adapter lifecycle, AdapterManager, BridgeAdapter (13 tests) |
 | `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, and `cmd/request-doc-creation` (28 tests) |
 | `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle (24 tests) |
@@ -618,7 +616,7 @@ The `examples/todo-react` example demonstrates the full Yjs + WebSocket + React 
 
 11. **End-to-end in a real app**: The `examples/todo/` app proves the full managed sync path in a running application: `LoroSchema` → `bindLoro` → `Exchange` → `WebsocketServerAdapter`/`WebsocketClientAdapter` → Cast compiled view → collaborative real-time sync between browser tabs. No hand-rolled WebSocket code — `change(doc, fn)` on any client automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline.
 
-12. **Dynamic document creation via `onDocDiscovered`**: Peer A creates a document unknown to peer B. B's `onDocDiscovered` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and LWW (TimestampVersion) strategies. Callback returning `undefined` correctly suppresses creation.
+12. **Dynamic document creation via `onDocDiscovered`**: Peer A creates a document unknown to peer B. B's `onDocDiscovered` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and LWW (`bindEphemeral` / `TimestampVersion`) strategies. Callback returning `undefined` correctly suppresses creation.
 
 ---
 

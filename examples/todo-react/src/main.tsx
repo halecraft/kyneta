@@ -13,24 +13,20 @@
 
 import { createRoot } from "react-dom/client"
 import { ExchangeProvider } from "@kyneta/react"
-import { WebsocketClientAdapter } from "@kyneta/websocket-network-adapter/client"
+import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
 import { App } from "./app.js"
 import "../style.css"
 
 // ─────────────────────────────────────────────────────────────────────────
-// 1. Network Adapter — WebSocket client adapter
-// ─────────────────────────────────────────────────────────────────────────
-
-const wsAdapter = new WebsocketClientAdapter({
-  url: `ws://${location.host}/ws`,
-})
-
-// ─────────────────────────────────────────────────────────────────────────
-// 2. Mount — ExchangeProvider creates the Exchange from config
+// Mount — ExchangeProvider creates the Exchange from config
 // ─────────────────────────────────────────────────────────────────────────
 
 createRoot(document.getElementById("root")!).render(
-  <ExchangeProvider config={{ adapters: [wsAdapter] }}>
+  <ExchangeProvider
+    config={{
+      adapters: [createWebsocketClient({ url: `ws://${location.host}/ws` })],
+    }}
+  >
     <App />
   </ExchangeProvider>,
 )

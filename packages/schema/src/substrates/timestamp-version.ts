@@ -9,7 +9,7 @@
 // out-of-order packets and allows for a compare-once-at-destination
 // semantic for LWW.
 
-import type { Version } from "@kyneta/schema"
+import type { Version } from "../substrate.js"
 
 /**
  * A Version wrapping a wall-clock timestamp (milliseconds since epoch).

@@ -29,19 +29,12 @@ import { describe, expect, it, afterEach } from "vitest"
 import {
   Schema,
   LoroSchema,
-  plainSubstrateFactory,
   change,
-  bind,
   bindPlain,
-  buildWritableContext,
-  type BoundSchema,
-  type Substrate,
-  type SubstratePayload,
-  type WritableContext,
+  bindEphemeral,
 } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
 import { bindLoro } from "@kyneta/loro-schema"
-import { Exchange, TimestampVersion } from "@kyneta/exchange"
+import { Exchange } from "@kyneta/exchange"
 import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
 import { WebsocketClientAdapter } from "@kyneta/websocket-network-adapter/client"
 import {
@@ -147,87 +140,6 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// LWW factory builder — wraps plain store with TimestampVersion
-// ---------------------------------------------------------------------------
-
-function lwwFactoryBuilder(_ctx: { peerId: string }) {
-  return {
-    create(schema: SchemaNode): Substrate<TimestampVersion> {
-      const inner = plainSubstrateFactory.create(schema)
-      let currentVersion = new TimestampVersion(0)
-      let cachedCtx: WritableContext | undefined
-
-      const substrate: Substrate<TimestampVersion> = {
-        store: inner.store,
-        prepare(path: any, change: any) {
-          inner.prepare(path, change)
-        },
-        onFlush(origin?: string) {
-          inner.onFlush(origin)
-          currentVersion = TimestampVersion.now()
-        },
-        context(): WritableContext {
-          if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
-          return cachedCtx
-        },
-        version: () => currentVersion,
-        exportSnapshot: () => inner.exportSnapshot(),
-        exportSince: () => inner.exportSnapshot(),
-        importDelta(payload: SubstratePayload, origin?: string) {
-          inner.importDelta(payload, origin)
-          currentVersion = TimestampVersion.now()
-        },
-      }
-      return substrate
-    },
-
-    fromSnapshot(
-      payload: SubstratePayload,
-      schema: SchemaNode,
-    ): Substrate<TimestampVersion> {
-      const inner = plainSubstrateFactory.fromSnapshot(payload, schema)
-      let currentVersion = TimestampVersion.now()
-      let cachedCtx: WritableContext | undefined
-
-      const substrate: Substrate<TimestampVersion> = {
-        store: inner.store,
-        prepare(path: any, change: any) {
-          inner.prepare(path, change)
-        },
-        onFlush(origin?: string) {
-          inner.onFlush(origin)
-          currentVersion = TimestampVersion.now()
-        },
-        context(): WritableContext {
-          if (!cachedCtx) cachedCtx = buildWritableContext(substrate)
-          return cachedCtx
-        },
-        version: () => currentVersion,
-        exportSnapshot: () => inner.exportSnapshot(),
-        exportSince: () => inner.exportSnapshot(),
-        importDelta(payload: SubstratePayload, origin?: string) {
-          inner.importDelta(payload, origin)
-          currentVersion = TimestampVersion.now()
-        },
-      }
-      return substrate
-    },
-
-    parseVersion(serialized: string): TimestampVersion {
-      return TimestampVersion.parse(serialized)
-    },
-  }
-}
-
-function bindLwwCustom<S extends SchemaNode>(schema: S): BoundSchema<S> {
-  return bind({
-    schema,
-    factory: lwwFactoryBuilder,
-    strategy: "lww",
-  })
-}
-
-// ---------------------------------------------------------------------------
 // Bound schemas (module scope)
 // ---------------------------------------------------------------------------
 
@@ -250,7 +162,7 @@ const presenceSchema = Schema.doc({
   }),
   name: Schema.string(),
 })
-const PresenceDoc = bindLwwCustom(presenceSchema)
+const PresenceDoc = bindEphemeral(presenceSchema)
 
 // ---------------------------------------------------------------------------
 // Helper: create connected server + client exchange pair
