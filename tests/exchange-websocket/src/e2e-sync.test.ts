@@ -28,12 +28,11 @@
 import { describe, expect, it, afterEach } from "vitest"
 import {
   Schema,
-  LoroSchema,
   change,
   bindPlain,
   bindEphemeral,
 } from "@kyneta/schema"
-import { bindLoro } from "@kyneta/loro-schema"
+import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
 import { Exchange } from "@kyneta/exchange"
 import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
 import { WebsocketClientAdapter } from "@kyneta/websocket-network-adapter/client"
