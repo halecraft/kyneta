@@ -80,6 +80,12 @@ export { isEstablished } from "./channel.js"
 export { Adapter } from "./adapter/adapter.js"
 export type { AdapterContext, AnyAdapter } from "./adapter/adapter.js"
 export { AdapterManager } from "./adapter/adapter-manager.js"
+export {
+  ClientStateMachine,
+  type ClientStateMachineConfig,
+  type StateTransition,
+  type TransitionListener,
+} from "./adapter/client-state-machine.js"
 
 // ---------------------------------------------------------------------------
 // Bridge — in-process testing adapter

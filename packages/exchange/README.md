@@ -252,6 +252,13 @@ Adapters provide pluggable network and storage connectivity. They create channel
 |---------|------|----------|
 | `BridgeAdapter` | Network | In-process testing of multi-peer scenarios |
 
+### Network Adapters
+
+| Adapter | Transport | Package |
+|---------|-----------|---------|
+| `@kyneta/websocket-network-adapter` | WebSocket (binary CBOR) | `packages/exchange/network-adapters/websocket` |
+| `@kyneta/sse-network-adapter` | SSE + HTTP POST (text JSON) | `packages/exchange/network-adapters/sse` |
+
 ### Creating Custom Adapters
 
 Extend the `Adapter<G>` base class:

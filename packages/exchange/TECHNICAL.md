@@ -255,6 +255,17 @@ Adapters follow a lifecycle managed by the `AdapterManager`:
 
 Subclasses implement `generate(context)`, `onStart()`, and `onStop()`.
 
+### ClientStateMachine\<S\>
+
+Generic observable state machine for network adapter client reconnection lifecycle. Extracted from the websocket adapter to eliminate duplication across adapters.
+
+Parameterized on the state type `S extends { status: string }` and constructed with a transition map. Provides validated transitions, async delivery via microtask queue, `subscribeToTransitions`, `waitForState`/`waitForStatus`, and `reset()`. Both the websocket and SSE adapters instantiate it with their specific state types:
+
+- `WebsocketClientStateMachine extends ClientStateMachine<WebsocketClientState>` — 5 states (disconnected, connecting, connected, ready, reconnecting)
+- `SseClientStateMachine extends ClientStateMachine<SseClientState>` — 4 states (disconnected, connecting, connected, reconnecting)
+
+Exported from `@kyneta/exchange` as shared infrastructure.
+
 ### BridgeAdapter
 
 In-process adapter for testing. Messages are delivered asynchronously via `queueMicrotask()` to simulate real network behavior. Two-phase initialization avoids double-establishment:
@@ -419,7 +430,7 @@ The `@kyneta/wire` package provides serialization infrastructure for the exchang
 ```
 @kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-network-adapter
    (messages)         (codecs)          (network adapter)
-                                        @kyneta/sse-network-adapter (future)
+                                        @kyneta/sse-network-adapter
 ```
 
 ### Frame<T> — Universal Abstraction
@@ -540,3 +551,69 @@ End-to-end tests in `tests/exchange-websocket/` prove the full stack over real W
 10. **Local mutations auto-trigger sync**: `change(doc, fn)` automatically notifies the synchronizer via the changefeed → `notifyLocalChange` wiring. No manual `synchronizer.notifyLocalChange()` call is needed. Echo is prevented by filtering `origin === "sync"` in the changefeed subscriber.
 
 11. **End-to-end in a real app**: The `examples/todo/` app proves the full managed sync path in a running application: `LoroSchema` → `bindLoro` → `Exchange` → `WebsocketServerAdapter`/`WebsocketClientAdapter` → Cast compiled view → collaborative real-time sync between browser tabs. No hand-rolled WebSocket code — `change(doc, fn)` on any client automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline.
+
+---
+
+## 14. SSE Network Adapter (`@kyneta/sse-network-adapter`)
+
+The SSE adapter uses an **asymmetric transport** (POST for uplink, SSE for downlink) with **symmetric encoding** (text wire format in both directions).
+
+### Package Structure
+
+Three subpath exports (no combined `"."` entry) to keep client/server/express code tree-shakeable:
+
+| Subpath | Entry | Key Exports |
+|---------|-------|-------------|
+| `./client` | `src/client.ts` | `SseClientAdapter`, `createSseClient`, `SseClientStateMachine` |
+| `./server` | `src/server.ts` | `SseServerAdapter`, `SseConnection` |
+| `./express` | `src/express.ts` | `createSseExpressRouter`, `parseTextPostBody`, `SseServerAdapter` (re-export) |
+
+### Architecture: Symmetric Encoding, Asymmetric Transport
+
+Unlike the old `@loro-extended/adapter-sse` which used binary CBOR for POST and ad-hoc JSON for SSE, the kyneta SSE adapter uses the **text wire format** (`textCodec` + text framing) in both directions:
+
+```
+Client → Server (POST):  encodeTextComplete(textCodec, msg) → text frame string → fetch(url, { body: textFrame })
+Server → Client (SSE):   encodeTextComplete(textCodec, msg) → text frame string → sendFn(textFrame) → res.write(`data: ${textFrame}\n\n`)
+```
+
+Benefits: single encode/decode path, human-readable debugging, no `express.raw()` needed, text fragmentation works in both directions.
+
+### Why No "Ready" Signal (Unlike WebSocket)
+
+The WebSocket adapter has a two-phase handshake: server sends text `"ready"` → client creates channel. This is necessary because the WebSocket `open` event fires when the TCP connection is established, but the server's message handler may not be fully wired up yet.
+
+SSE doesn't need this. The `EventSource.onopen` event fires only after the server has sent the HTTP response headers, which means the server's route handler is already executing and the connection is registered. The client transitions directly from `connecting` → `connected` and immediately creates its channel.
+
+### Custom Reconnection (No `reconnecting-eventsource`)
+
+The browser's native `EventSource` has built-in reconnection. The adapter **closes the EventSource immediately** on `onerror` and takes over reconnection via the `SseClientStateMachine`'s backoff logic. This prevents two reconnection systems from fighting and gives full control over:
+
+- Exponential backoff timing with jitter
+- Attempt counting and max attempts
+- Channel lifecycle (preserve vs. recreate)
+- Observable state transitions for UI feedback
+
+### The `sendFn` Pattern
+
+`SseConnection.send(msg)` owns encoding and fragmentation. It encodes the `ChannelMsg` to a text frame string, optionally fragments it, and calls `sendFn(textFrame)` for each piece. The injected `sendFn: (textFrame: string) => void` is a pure transport concern:
+
+```
+Express: connection.setSendFunction((tf) => res.write(`data: ${tf}\n\n`))
+Hono:    connection.setSendFunction((tf) => stream.writeSSE({ data: tf }))
+```
+
+This is cleaner than the old pattern where the framework integration had to call `serializeChannelMsg()`.
+
+### Two-Step Decode in `parseTextPostBody`
+
+POST bodies are text wire frame strings. Decoding requires two steps:
+
+1. `TextReassembler.receive(body)` → `Frame<string>` (handles both complete and fragment frames)
+2. `JSON.parse(frame.content.payload)` → `textCodec.decode(parsed)` → `ChannelMsg[]`
+
+The `parseTextPostBody` function (functional core) returns a discriminated union result. The framework integration (imperative shell) executes side effects based on the result type (`messages` → deliver, `pending` → 202, `error` → 400).
+
+### Integration Tests
+
+The SSE adapter's functional core (`parseTextPostBody`, `SseConnection.send`) is tested via unit tests that verify text frame round-trips and fragmentation. End-to-end integration tests over real HTTP connections are deferred to the chat example.

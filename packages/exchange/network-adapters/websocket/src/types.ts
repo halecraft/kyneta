@@ -9,6 +9,10 @@
 // naming conventions applied.
 
 import type { PeerId } from "@kyneta/exchange"
+import type {
+  StateTransition,
+  TransitionListener as GenericTransitionListener,
+} from "@kyneta/exchange"
 
 // ---------------------------------------------------------------------------
 // Socket ready states
@@ -138,20 +142,18 @@ export type WebsocketClientState =
   | { status: "reconnecting"; attempt: number; nextAttemptMs: number }
 
 /**
- * A state transition event.
+ * A state transition event for websocket client states.
+ * Specialized from the generic `StateTransition<S>`.
  */
-export type WebsocketClientStateTransition = {
-  from: WebsocketClientState
-  to: WebsocketClientState
-  timestamp: number
-}
+export type WebsocketClientStateTransition =
+  StateTransition<WebsocketClientState>
 
 /**
- * Listener for state transitions.
+ * Listener for websocket client state transitions.
+ * Specialized from the generic `TransitionListener<S>`.
  */
-export type TransitionListener = (
-  transition: WebsocketClientStateTransition,
-) => void
+export type TransitionListener =
+  GenericTransitionListener<WebsocketClientState>
 
 // ---------------------------------------------------------------------------
 // Socket wrapper — standard WebSocket API (browser + Node ws)
