@@ -765,6 +765,8 @@ The vendor (`@loro-extended/repo`) handles this in `handleSyncRequest` — when 
 3. **Gating mechanism**: a callback returning `BoundSchema | undefined` (not a boolean permission predicate), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
 4. **No separate `creation` permission**: the callback subsumes the permission check. Returning `undefined` is equivalent to denying creation.
 
+See `examples/bumper-cars/src/server.ts` for a concrete usage example — the server materializes `input:${peerId}` documents when players connect, and registers them with the game loop via a queued microtask.
+
 ---
 
 ## 16. Route and Authorize — Information Flow Control
@@ -822,6 +824,8 @@ Implementation: `filterChannelsByRoute(model, channelIds, docId, route)` encapsu
 5. Subsequent discover/interest/offer flow is subject to `route` normally
 
 This means `onDocDiscovered` can assume the announcing peer already passed the route check.
+
+See `examples/bumper-cars/src/server.ts` for a concrete usage example — `route` restricts input doc visibility to the owning peer, and `authorize` enforces server-only writes to game state.
 
 ---
 
