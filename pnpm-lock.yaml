@@ -188,13 +188,35 @@ importers:
         version: link:../../../schema
       '@kyneta/wire':
         specifier: workspace:*
-        version: link:../../../wire
+        version: link:../../wire
       '@types/node':
         specifier: ^22
         version: 22.19.15
       bun-types:
         specifier: latest
         version: 1.3.11
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.17
+        version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
+
+  packages/exchange/wire:
+    dependencies:
+      '@levischuck/tiny-cbor':
+        specifier: ^0.3.2
+        version: 0.3.2
+    devDependencies:
+      '@kyneta/exchange':
+        specifier: workspace:*
+        version: link:..
+      '@kyneta/schema':
+        specifier: workspace:*
+        version: link:../../schema
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
@@ -265,28 +287,6 @@ importers:
         specifier: ^13.6.30
         version: 13.6.30
 
-  packages/wire:
-    dependencies:
-      '@levischuck/tiny-cbor':
-        specifier: ^0.3.2
-        version: 0.3.2
-    devDependencies:
-      '@kyneta/exchange':
-        specifier: workspace:*
-        version: link:../exchange
-      '@kyneta/schema':
-        specifier: workspace:*
-        version: link:../schema
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(postcss@8.5.8)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.9.2
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.17
-        version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
-
   tests/exchange-websocket:
     devDependencies:
       '@kyneta/exchange':
@@ -303,7 +303,7 @@ importers:
         version: link:../../packages/exchange/transports/websocket
       '@kyneta/wire':
         specifier: workspace:*
-        version: link:../../packages/wire
+        version: link:../../packages/exchange/wire
       bun-types:
         specifier: latest
         version: 1.3.11

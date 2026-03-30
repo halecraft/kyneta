@@ -320,9 +320,11 @@ describe("Sequential sync over Websocket (PlainSubstrate)", () => {
   it("server creates doc, client syncs and gets the same state", async () => {
     const { serverExchange, clientExchange } = await createConnectedPair()
 
-    // Server creates a doc with seed values
-    const docServer = serverExchange.get("doc-1", SequentialDoc, {
-      seed: { title: "Hello from Server", count: 42 },
+    // Server creates a doc and populates it via change()
+    const docServer = serverExchange.get("doc-1", SequentialDoc)
+    change(docServer, (d: any) => {
+      d.title.set("Hello from Server")
+      d.count.set(42)
     })
 
     expect(docServer.title()).toBe("Hello from Server")
@@ -342,8 +344,10 @@ describe("Sequential sync over Websocket (PlainSubstrate)", () => {
   it("mutations propagate from server to client after initial sync", async () => {
     const { serverExchange, clientExchange } = await createConnectedPair()
 
-    const docServer = serverExchange.get("doc-1", SequentialDoc, {
-      seed: { title: "V1", count: 1 },
+    const docServer = serverExchange.get("doc-1", SequentialDoc)
+    change(docServer, (d: any) => {
+      d.title.set("V1")
+      d.count.set(1)
     })
     const docClient = clientExchange.get("doc-1", SequentialDoc)
 
@@ -366,8 +370,10 @@ describe("Sequential sync over Websocket (PlainSubstrate)", () => {
   it("mutations propagate from client to server after initial sync", async () => {
     const { serverExchange, clientExchange } = await createConnectedPair()
 
-    const docServer = serverExchange.get("doc-1", SequentialDoc, {
-      seed: { title: "V1", count: 1 },
+    const docServer = serverExchange.get("doc-1", SequentialDoc)
+    change(docServer, (d: any) => {
+      d.title.set("V1")
+      d.count.set(1)
     })
     const docClient = clientExchange.get("doc-1", SequentialDoc)
 
@@ -510,8 +516,9 @@ describe("Heterogeneous documents over Websocket", () => {
     const CollabDoc = bindLoro(collabSchema)
 
     // Server: plain config doc
-    const configServer = serverExchange.get("config", ConfigDoc, {
-      seed: { config: "dark-mode" },
+    const configServer = serverExchange.get("config", ConfigDoc)
+    change(configServer, (d: any) => {
+      d.config.set("dark-mode")
     })
 
     // Server: Loro collaborative doc
