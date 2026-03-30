@@ -414,11 +414,11 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unw
 
 ## 11. Wire Format (`@kyneta/wire`)
 
-The `@kyneta/wire` package provides serialization infrastructure for the exchange's 5-message protocol. It sits between the exchange and transport adapters in the dependency graph:
+The `@kyneta/wire` package provides serialization infrastructure for the exchange's 5-message protocol. It sits between the exchange and network adapters in the dependency graph:
 
 ```
-@kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-transport
-   (messages)         (codecs)          (transport)
+@kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-network-adapter
+   (messages)         (codecs)          (network adapter)
 ```
 
 ### Two Codecs
@@ -460,9 +460,9 @@ See `packages/wire/PROTOCOL.md` for the full wire protocol specification.
 
 ---
 
-## 12. Websocket Adapter (`@kyneta/websocket-transport`)
+## 12. Websocket Network Adapter (`@kyneta/websocket-network-adapter`)
 
-The first real transport adapter. Framework-agnostic via the `Socket` interface, with platform-specific wrappers for browser, Node.js `ws`, and Bun.
+The first real network adapter. Framework-agnostic via the `Socket` interface, with platform-specific wrappers for browser, Node.js `ws`, and Bun.
 
 ### Package Structure
 

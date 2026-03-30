@@ -9,12 +9,12 @@
 
 import { mount } from "@kyneta/cast"
 import { Exchange } from "@kyneta/exchange"
-import { WebsocketClientAdapter } from "@kyneta/websocket-transport/client"
+import { WebsocketClientAdapter } from "@kyneta/websocket-network-adapter/client"
 import { createApp } from "./app.js"
 import { TodoDoc } from "./schema.js"
 
 // ─────────────────────────────────────────────────────────────────────────
-// 1. Transport — WebSocket client adapter
+// 1. Network Adapter — WebSocket client adapter
 // ─────────────────────────────────────────────────────────────────────────
 
 const wsAdapter = new WebsocketClientAdapter({

@@ -1,4 +1,4 @@
-// client — barrel export for @kyneta/websocket-transport/client.
+// client — barrel export for @kyneta/websocket-network-adapter/client.
 //
 // This is the client-side entry point. It exports everything needed
 // to create a Websocket client adapter for browser or service connections.

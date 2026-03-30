@@ -1,4 +1,4 @@
-// bun-websocket — Bun-specific Websocket wrapper for @kyneta/websocket-transport.
+// bun-websocket — Bun-specific Websocket wrapper for @kyneta/websocket-network-adapter.
 //
 // Provides a wrapper to adapt Bun's ServerWebSocket to the Socket interface
 // expected by WebsocketServerAdapter.
@@ -50,8 +50,8 @@ export type BunWebsocketData = {
  *
  * @example
  * ```typescript
- * import { WebsocketServerAdapter } from "@kyneta/websocket-transport/server"
- * import { wrapBunWebsocket, type BunWebsocketData } from "@kyneta/websocket-transport/bun"
+ * import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
+ * import { wrapBunWebsocket, type BunWebsocketData } from "@kyneta/websocket-network-adapter/bun"
  *
  * const serverAdapter = new WebsocketServerAdapter()
  *
@@ -123,8 +123,8 @@ export function wrapBunWebsocket(
  *
  * @example
  * ```typescript
- * import { WebsocketServerAdapter } from "@kyneta/websocket-transport/server"
- * import { createBunWebsocketHandlers, type BunWebsocketData } from "@kyneta/websocket-transport/bun"
+ * import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
+ * import { createBunWebsocketHandlers, type BunWebsocketData } from "@kyneta/websocket-network-adapter/bun"
  *
  * const serverAdapter = new WebsocketServerAdapter()
  *

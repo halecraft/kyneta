@@ -661,7 +661,7 @@ export class WebsocketClientAdapter extends Adapter<void> {
  *
  * @example
  * ```typescript
- * import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+ * import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
  *
  * const adapter = createWebsocketClient({
  *   url: "ws://localhost:3000/ws",
@@ -692,7 +692,7 @@ export function createWebsocketClient(
  *
  * @example
  * ```typescript
- * import { createServiceWebsocketClient } from "@kyneta/websocket-transport/client"
+ * import { createServiceWebsocketClient } from "@kyneta/websocket-network-adapter/client"
  *
  * const adapter = createServiceWebsocketClient({
  *   url: "ws://primary-server:3000/ws",

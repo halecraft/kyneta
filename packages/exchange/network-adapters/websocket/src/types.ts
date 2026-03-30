@@ -1,4 +1,4 @@
-// types — framework-agnostic Websocket abstractions for @kyneta/websocket-transport.
+// types — framework-agnostic Websocket abstractions for @kyneta/websocket-network-adapter.
 //
 // The `Socket` interface decouples the adapter from any specific Websocket
 // library (browser WebSocket, Node `ws`, Bun ServerWebSocket). Platform-

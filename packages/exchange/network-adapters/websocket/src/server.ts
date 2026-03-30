@@ -1,4 +1,4 @@
-// server — barrel export for @kyneta/websocket-transport/server.
+// server — barrel export for @kyneta/websocket-network-adapter/server.
 //
 // This is the server-side entry point. It exports everything needed
 // to create a Websocket server adapter with any framework.

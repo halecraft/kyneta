@@ -42,12 +42,12 @@ import {
 import type { Schema as SchemaNode } from "@kyneta/schema"
 import { bindLoro } from "@kyneta/loro-schema"
 import { Exchange, TimestampVersion } from "@kyneta/exchange"
-import { WebsocketServerAdapter } from "@kyneta/websocket-transport/server"
-import { WebsocketClientAdapter } from "@kyneta/websocket-transport/client"
+import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
+import { WebsocketClientAdapter } from "@kyneta/websocket-network-adapter/client"
 import {
   createBunWebsocketHandlers,
   type BunWebsocketData,
-} from "@kyneta/websocket-transport/bun"
+} from "@kyneta/websocket-network-adapter/bun"
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -152,11 +152,8 @@ afterEach(async () => {
 
 function lwwFactoryBuilder(_ctx: { peerId: string }) {
   return {
-    create(
-      schema: SchemaNode,
-      seed?: Record<string, unknown>,
-    ): Substrate<TimestampVersion> {
-      const inner = plainSubstrateFactory.create(schema, seed)
+    create(schema: SchemaNode): Substrate<TimestampVersion> {
+      const inner = plainSubstrateFactory.create(schema)
       let currentVersion = new TimestampVersion(0)
       let cachedCtx: WritableContext | undefined
 

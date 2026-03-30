@@ -1,4 +1,4 @@
-# @kyneta/websocket-transport
+# @kyneta/websocket-network-adapter
 
 Websocket adapter for `@kyneta/exchange` — client, server, and Bun integration. Provides bidirectional real-time sync over Websockets using the `@kyneta/wire` binary protocol (CBOR codec + framing + fragmentation).
 
@@ -6,9 +6,9 @@ Websocket adapter for `@kyneta/exchange` — client, server, and Bun integration
 
 | Export | Entry point | Environment |
 |--------|-------------|-------------|
-| `@kyneta/websocket-transport/client` | `./dist/client.js` | Browser, Bun, Node.js |
-| `@kyneta/websocket-transport/server` | `./dist/server.js` | Bun, Node.js |
-| `@kyneta/websocket-transport/bun` | `./dist/bun.js` | Bun only |
+| `@kyneta/websocket-network-adapter/client` | `./dist/client.js` | Browser, Bun, Node.js |
+| `@kyneta/websocket-network-adapter/server` | `./dist/server.js` | Bun, Node.js |
+| `@kyneta/websocket-network-adapter/bun` | `./dist/bun.js` | Bun only |
 
 ## Server Setup
 
@@ -18,8 +18,8 @@ Use `createBunWebsocketHandlers` for zero-boilerplate integration with `Bun.serv
 
 ```/dev/null/bun-server.ts#L1-18
 import { Exchange } from "@kyneta/exchange"
-import { WebsocketServerAdapter } from "@kyneta/websocket-transport/server"
-import { createBunWebsocketHandlers, type BunWebsocketData } from "@kyneta/websocket-transport/bun"
+import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
+import { createBunWebsocketHandlers, type BunWebsocketData } from "@kyneta/websocket-network-adapter/bun"
 
 const serverAdapter = new WebsocketServerAdapter()
 
@@ -40,7 +40,7 @@ Bun.serve<BunWebsocketData>({
 For more control, use `wrapBunWebsocket` directly:
 
 ```/dev/null/bun-server-manual.ts#L1-17
-import { wrapBunWebsocket, type BunWebsocketData } from "@kyneta/websocket-transport/bun"
+import { wrapBunWebsocket, type BunWebsocketData } from "@kyneta/websocket-network-adapter/bun"
 
 Bun.serve<BunWebsocketData>({
   fetch(req, server) {
@@ -69,7 +69,7 @@ Use `wrapNodeWebsocket` to adapt the `ws` library's `WebSocket` to the framework
 
 ```/dev/null/node-server.ts#L1-16
 import { WebSocketServer } from "ws"
-import { WebsocketServerAdapter, wrapNodeWebsocket } from "@kyneta/websocket-transport/server"
+import { WebsocketServerAdapter, wrapNodeWebsocket } from "@kyneta/websocket-network-adapter/server"
 
 const serverAdapter = new WebsocketServerAdapter()
 
@@ -94,7 +94,7 @@ Use `createWebsocketClient` for browser-to-server connections:
 
 ```/dev/null/browser-client.ts#L1-12
 import { Exchange } from "@kyneta/exchange"
-import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
 
 const adapter = createWebsocketClient({
   url: "ws://localhost:3000/ws",
@@ -112,7 +112,7 @@ const exchange = new Exchange({
 Use `createServiceWebsocketClient` for backend connections that need authentication headers during the Websocket upgrade. Headers are a Bun/Node-specific extension — the browser `WebSocket` API does not support custom headers.
 
 ```/dev/null/service-client.ts#L1-13
-import { createServiceWebsocketClient } from "@kyneta/websocket-transport/client"
+import { createServiceWebsocketClient } from "@kyneta/websocket-network-adapter/client"
 
 const adapter = createServiceWebsocketClient({
   url: "ws://primary-server:3000/ws",
@@ -163,7 +163,7 @@ disconnected → connecting → connected → ready
 ### Observing State
 
 ```/dev/null/observe-state.ts#L1-18
-import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
 
 const adapter = createWebsocketClient({
   url: "ws://localhost:3000/ws",

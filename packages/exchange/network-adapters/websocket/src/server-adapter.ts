@@ -5,8 +5,8 @@
 // library through the Socket interface.
 //
 // Usage with Bun:
-//   import { WebsocketServerAdapter } from "@kyneta/websocket-transport/server"
-//   import { createBunWebsocketHandlers } from "@kyneta/websocket-transport/bun"
+//   import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
+//   import { createBunWebsocketHandlers } from "@kyneta/websocket-network-adapter/bun"
 //
 //   const serverAdapter = new WebsocketServerAdapter()
 //   Bun.serve({
@@ -15,7 +15,7 @@
 //   })
 //
 // Usage with Node.js `ws`:
-//   import { WebsocketServerAdapter, wrapNodeWebsocket } from "@kyneta/websocket-transport/server"
+//   import { WebsocketServerAdapter, wrapNodeWebsocket } from "@kyneta/websocket-network-adapter/server"
 //   import { WebSocketServer } from "ws"
 //
 //   const serverAdapter = new WebsocketServerAdapter()

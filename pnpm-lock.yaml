@@ -66,9 +66,9 @@ importers:
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../packages/schema
-      '@kyneta/websocket-transport':
+      '@kyneta/websocket-network-adapter':
         specifier: workspace:^
-        version: link:../../packages/exchange/transports/websocket
+        version: link:../../packages/exchange/network-adapters/websocket
       '@kyneta/yjs-schema':
         specifier: workspace:^
         version: link:../../packages/schema/backends/yjs
@@ -178,7 +178,7 @@ importers:
         specifier: ^4.0.17
         version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)
 
-  packages/exchange/transports/websocket:
+  packages/exchange/network-adapters/websocket:
     devDependencies:
       '@kyneta/exchange':
         specifier: workspace:*
@@ -298,9 +298,9 @@ importers:
       '@kyneta/schema':
         specifier: workspace:*
         version: link:../../packages/schema
-      '@kyneta/websocket-transport':
+      '@kyneta/websocket-network-adapter':
         specifier: workspace:*
-        version: link:../../packages/exchange/transports/websocket
+        version: link:../../packages/exchange/network-adapters/websocket
       '@kyneta/wire':
         specifier: workspace:*
         version: link:../../packages/exchange/wire

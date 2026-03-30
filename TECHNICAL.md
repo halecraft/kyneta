@@ -62,9 +62,9 @@ Manages document lifecycle, coordinates adapters, and synchronizes state across 
 
 Sub-packages:
 - **`@kyneta/wire`** (`exchange/wire/`) — binary wire protocol. CBOR codec with compact field names, 6-byte binary frame headers, and a fragmentation protocol for cloud WebSocket gateways (AWS API Gateway 128KB limit, Cloudflare Workers 1MB limit). JSON codec for debugging. See `PROTOCOL.md` for the full specification. 122 tests.
-- **`@kyneta/websocket-transport`** (`exchange/transports/websocket/`) — WebSocket transport adapters. Client adapter (browser `WebSocket`), server adapter (abstract), and Bun-specific handlers (`createBunWebsocketHandlers`). Handles connection lifecycle, keepalive pings, ready signaling, and reconnection. 41 tests.
+- **`@kyneta/websocket-network-adapter`** (`exchange/network-adapters/websocket/`) — WebSocket network adapters. Client adapter (browser `WebSocket`), server adapter (abstract), and Bun-specific handlers (`createBunWebsocketHandlers`). Handles connection lifecycle, keepalive pings, ready signaling, and reconnection. 41 tests.
 
-90 tests (+ 122 wire + 41 websocket-transport).
+90 tests (+ 122 wire + 41 websocket-network-adapter).
 
 ### `@kyneta/perspective`
 
@@ -86,18 +86,18 @@ Convergent Constraint Systems — a constraint-based approach to CRDTs. Agents a
     │
     ├──► @kyneta/exchange
     │        ├──► @kyneta/wire          (+ tiny-cbor)
-    │        └──► @kyneta/websocket-transport
+    │        └──► @kyneta/websocket-network-adapter
     │
     └──► @kyneta/perspective            (standalone, no @kyneta deps)
 ```
 
-`@kyneta/schema` is the foundation — it defines the CHANGEFEED protocol, delta types, the interpreter algebra, and the `Substrate` interface. `@kyneta/loro-schema` and `@kyneta/yjs-schema` are CRDT substrate backends that implement `Substrate` for Loro and Yjs respectively. `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/cast` is the web rendering target that consumes compiler IR and produces DOM/HTML output. `@kyneta/exchange` orchestrates sync via adapters and the synchronizer state machine; its sub-packages `@kyneta/wire` (binary encoding and framing) and `@kyneta/websocket-transport` (WebSocket adapter pair) live under the exchange directory. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
+`@kyneta/schema` is the foundation — it defines the CHANGEFEED protocol, delta types, the interpreter algebra, and the `Substrate` interface. `@kyneta/loro-schema` and `@kyneta/yjs-schema` are CRDT substrate backends that implement `Substrate` for Loro and Yjs respectively. `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/cast` is the web rendering target that consumes compiler IR and produces DOM/HTML output. `@kyneta/exchange` orchestrates sync via adapters and the synchronizer state machine; its sub-packages `@kyneta/wire` (binary encoding and framing) and `@kyneta/websocket-network-adapter` (WebSocket adapter pair) live under the exchange directory. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
 
 The `examples/todo` app exercises the full vertical slice:
 
 ```
 @kyneta/schema → @kyneta/yjs-schema → @kyneta/exchange
-→ @kyneta/websocket-transport → @kyneta/cast → running app
+→ @kyneta/websocket-network-adapter → @kyneta/cast → running app
 ```
 
 ## Key Concepts
@@ -254,7 +254,7 @@ Each step depends on the previous: types won't run if format fails, logic won't 
 | `@kyneta/cast` | 634 | Codegen, runtime regions, unplugin, integration tests |
 | `@kyneta/exchange` | 90 | Synchronizer state machine, three merge strategies, multi-hop relay |
 | `@kyneta/wire` | 122 | CBOR/JSON codecs, framing, fragmentation, reassembly |
-| `@kyneta/websocket-transport` | 41 | Client/server adapters, Bun handlers, connection lifecycle |
+| `@kyneta/websocket-network-adapter` | 41 | Client/server adapters, Bun handlers, connection lifecycle |
 | `@kyneta/perspective` | 1,374 | CCS kernel, Datalog evaluator, incremental pipeline |
 | `examples/recipe-book` | 18 | Full-stack SSR + sync integration |
 | `tests/exchange-websocket` | 9 | End-to-end Exchange sync over real Bun WebSocket connections |
@@ -273,8 +273,8 @@ kyneta/
 │   ├── cast/                     @kyneta/cast
 │   ├── exchange/                 @kyneta/exchange
 │   │   ├── wire/                 @kyneta/wire
-│   │   └── transports/
-│   │       └── websocket/        @kyneta/websocket-transport
+│   │   └── network-adapters/
+│   │       └── websocket/        @kyneta/websocket-network-adapter
 │   └── perspective/              @kyneta/perspective
 ├── examples/
 │   ├── todo/                     Collaborative todo (Cast + Exchange + Yjs)

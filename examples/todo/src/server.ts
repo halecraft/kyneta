@@ -3,7 +3,7 @@
 //   Todo — Bun Server
 //
 //   Single entry point that:
-//   1. Creates a server-side Exchange with WebSocket transport
+//   1. Creates a server-side Exchange with WebSocket network adapter
 //   2. Registers the collaborative todo document
 //   3. Builds the client app (+ optional brotli pre-compression)
 //   4. Serves static files from dist/ and upgrades /ws to WebSocket
@@ -16,11 +16,11 @@
 /// <reference types="bun-types" />
 
 import { Exchange } from "@kyneta/exchange"
-import { WebsocketServerAdapter } from "@kyneta/websocket-transport/server"
+import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
 import {
   createBunWebsocketHandlers,
   type BunWebsocketData,
-} from "@kyneta/websocket-transport/bun"
+} from "@kyneta/websocket-network-adapter/bun"
 import { TodoDoc } from "./schema.js"
 import { buildClient } from "./build.js"
 

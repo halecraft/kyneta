@@ -39,12 +39,12 @@ The four axes of variation exist in the architecture. Each example exercises spe
 
 ## Prerequisites — What Must Be Built First
 
-### Transport adapters
+### Network adapters
 
-The vendor `@loro-extended` has SSE, HTTP-polling, and WebRTC adapters. Kyneta currently has only WebSocket (`@kyneta/websocket-transport`). The following must be ported to the `@kyneta/exchange` adapter interface:
+The vendor `@loro-extended` has SSE, HTTP-polling, and WebRTC adapters. Kyneta currently has only WebSocket (`@kyneta/websocket-network-adapter`). The following must be ported to the `@kyneta/exchange` adapter interface:
 
-1. **`@kyneta/sse-transport`** — Required by chat, video-conference. Port from `@loro-extended/adapter-sse`. Both server (Express integration) and client (EventSource + POST) sides.
-2. **`@kyneta/webrtc-transport`** — Required by video-conference. Port from `@loro-extended/adapter-webrtc`. BYODC (Bring Your Own Data Channel) design. Uses `@kyneta/wire` for encoding/fragmentation.
+1. **`@kyneta/sse-network-adapter`** — Required by chat, video-conference. Port from `@loro-extended/adapter-sse`. Both server (Express integration) and client (EventSource + POST) sides.
+2. **`@kyneta/webrtc-network-adapter`** — Required by video-conference. Port from `@loro-extended/adapter-webrtc`. BYODC (Bring Your Own Data Channel) design. Uses `@kyneta/wire` for encoding/fragmentation.
 
 HTTP-polling is not required by any example and can be deferred.
 
@@ -62,7 +62,7 @@ The existing `recipe-book` example hand-rolls WebSocket sync. It should either b
 
 ### Phase 1: Foundation (todo)
 
-Port the todo example using Cast + WebSocket + Loro + Bun. This validates the full vertical slice: `@kyneta/schema` → `bindLoro` from `@kyneta/loro-schema` → `@kyneta/exchange` → `@kyneta/websocket-transport` → `@kyneta/cast` view → running app.
+Port the todo example using Cast + WebSocket + Loro + Bun. This validates the full vertical slice: `@kyneta/schema` → `bindLoro` from `@kyneta/loro-schema` → `@kyneta/exchange` → `@kyneta/websocket-network-adapter` → `@kyneta/cast` view → running app.
 
 - Domain: schema, mutations, types, seed data
 - Server: Bun entry point with `Bun.serve()`, `WebsocketServerAdapter`, `Exchange`
