@@ -1,6 +1,8 @@
 # @kyneta/schema — Technical Documentation
 
-This package implements the Schema Interpreter Algebra described in `theory/interpreter-algebra.md`. It has no runtime dependencies and is consumed by `@kyneta/cast` (compiler runtime) and `examples/recipe-book` (full-stack SSR demo). The architecture provides a composable interpreter stack for schema-driven reactive documents with pluggable backing stores via the Substrate abstraction.
+This package implements the Schema Interpreter Algebra described in `theory/interpreter-algebra.md`. It has no runtime dependencies. The architecture provides a composable interpreter stack for schema-driven reactive documents with pluggable backing stores via the Substrate abstraction.
+
+**Consumers:** `@kyneta/cast` (compiler runtime), `@kyneta/exchange` (substrate-agnostic sync), `@kyneta/react` (React bindings), and the example apps (`examples/recipe-book`, `examples/bumper-cars`, `examples/todo-react`). Backend substrate packages `@kyneta/loro-schema` (Loro CRDT) and `@kyneta/yjs-schema` (Yjs CRDT) depend on `@kyneta/schema` as a peer dependency and provide their own `Substrate<V>` implementations.
 
 ## The Key Insight: Unified Schema Grammar
 
@@ -316,21 +318,22 @@ However, the carrier type `A` is now **honest** — `withWritable` returns `Inte
 
 Both `Ref<S>` and `RWRef<S>` require `HasRead` — a carrier that can't read has no business being typed as a schema-level ref (which promises a call signature returning `Plain<S>`). Write-only and read-only stacks fall through to raw `A`.
 
-### Interpreters: The Five-Layer Decomposed Stack
+### Interpreters: The Six-Layer Decomposed Stack
 
-The interpreter system is built from five composable transformer layers that stack on a universal foundation. Each layer adds exactly one capability:
+The interpreter system is built from six composable transformer layers that stack on a universal foundation. Each layer adds exactly one capability:
 
 | Layer | Kind | Input → Output | Purpose |
 |---|---|---|---|
 | `bottomInterpreter` | Foundation | `Interpreter<unknown, HasCall>` | Callable function carriers with `[CALL]` slot |
 | `withNavigation(base)` | Coalgebra | `HasCall → HasNavigation` | Structural addressing: field getters, `.at()`, `.keys()`, sum dispatch |
 | `withReadable(base)` | Refinement | `HasNavigation → HasRead` | Fills `[CALL]` slot with reading logic, adds `.get()`, `toPrimitive` |
+| `withAddressing(base)` | Enrichment | `HasNavigation → HasNavigation` | Stable identity: address tables, prepare-pipeline hooks for index advancement + tombstoning |
 | `withCaching(base)` | Interposition | `HasNavigation → HasCaching` | Identity-preserving child memoization + `[INVALIDATE]` |
 | `withWritable(base)` | Extension | `A → A` | Mutation methods (`.set()`, `.insert()`, etc.) |
 
 The standard composition:
 ```ts
-const interp = withWritable(withCaching(withReadable(withNavigation(bottomInterpreter))))
+const interp = withWritable(withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter)))))
 ```
 
 Each layer is independently useful. Combinatorial stacks produce valid interpreters at every level:
@@ -340,12 +343,11 @@ Each layer is independently useful. Combinatorial stacks produce valid interpret
 | `bottomInterpreter` | Carriers only | Foundation for custom transformers |
 | `withNavigation(bottom)` | Navigate only (ref() throws) | Structural addressing without reading |
 | `withReadable(withNavigation(bottom))` | Reading + navigation (no caching) | Throwaway reads, tests |
-| `withCaching(withReadable(withNavigation(bottom)))` | Reading + navigation + caching | Read-only documents |
+| `withCaching(withAddressing(withReadable(withNavigation(bottom))))` | Reading + navigation + addressing + caching | Read-only documents |
 | `withWritable(bottom)` | Write-only (ref() throws) | Mutation dispatch without reading |
 | `withWritable(withNavigation(bottom))` | Navigate + write (no read) | Reach children via `.at()` and mutate, but `ref()` throws |
-| `withCaching(withNavigation(bottom))` | Navigate + cache (no read) | Memoized structural addressing without value observation |
-| `withWritable(withReadable(withNavigation(bottom)))` | Read + write (no caching) | Ephemeral documents |
-| `withWritable(withCaching(withReadable(withNavigation(bottom))))` | Full stack | Standard composition |
+| `withWritable(withReadable(withNavigation(bottom)))` | Read + write (no caching, no addressing) | Ephemeral documents |
+| `withWritable(withCaching(withAddressing(withReadable(withNavigation(bottom)))))` | Full stack | Standard composition |
 
 #### Capability Lattice
 
@@ -377,6 +379,7 @@ Cross-layer communication uses four well-known symbols:
 | Symbol | Module | Purpose |
 |---|---|---|
 | `CALL` (`kyneta:call`) | `bottom.ts` | Controls what `carrier()` does — default throws, `withReadable` fills it with reading logic |
+| `ADDRESS_TABLE` (`kyneta:addressTable`) | `with-addressing.ts` | Exposes the address table on sequence/map refs so `withCaching` can delegate memoization |
 | `INVALIDATE` (`kyneta:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — refs carry it for direct use; `prepare` pipeline fires it automatically |
 | `CHANGEFEED` (`kyneta:changefeed`) | `changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it |
 | `TRANSACT` (`kyneta:transact`) | `writable.ts` | Context discovery — refs carry a reference to their `WritableContext` |
@@ -387,7 +390,7 @@ All use `Symbol.for()` so multiple copies of the module share identity.
 
 The universal foundation. Every schema node produces a callable **function carrier** via `makeCarrier()`. The carrier delegates to its `[CALL]` slot: `(...args) => carrier[CALL](...args)`. By default, `CALL` throws `"No call behavior configured"`.
 
-The carrier is a real `Function` object, so any layer can attach properties (navigation, caching, mutation methods) without replacing the carrier identity. This identity-preserving property is critical — `withNavigation`, `withReadable`, `withCaching`, and `withWritable` all mutate the same carrier object.
+The carrier is a real `Function` object, so any layer can attach properties (navigation, caching, mutation methods) without replacing the carrier identity. This identity-preserving property is critical — `withNavigation`, `withReadable`, `withAddressing`, `withCaching`, and `withWritable` all mutate the same carrier object.
 
 The `product`, `sequence`, `map`, and `sum` cases ignore their thunks/closures/variants — bottom produces inert carriers. The `annotated` case delegates to `inner()` when present.
 
@@ -406,6 +409,27 @@ The coalgebraic structural addressing transformer. Takes any `HasCall`-producing
 Navigation is a coalgebra (`A → F(A)`): it reveals addressable child positions within a composite. The `[CALL]` slot is NOT filled — calling the carrier still throws after `withNavigation` alone.
 
 **Store inspection vs value reading.** Navigation uses `storeArrayLength`, `storeKeys`, `storeHasKey` (extracted into `store.ts`) to make structural decisions. These ask "what shape is here?" — not "what is the value?" This distinction keeps navigation independent from reading.
+
+#### withAddressing (`src/interpreters/with-addressing.ts`)
+
+The stable-identity enrichment transformer. Takes any `HasNavigation`-producing interpreter and attaches address tables that give every composite child a stable identity that survives mutations (sequence reorderings, map key deletions).
+
+An **Address** is the stable identity of an entity within a composite node. Three flavors:
+
+- **Sequence (`IndexAddress`)**: mutable `index` + stable `id` + `dead` flag. When a sequence insert/delete instruction shifts indices, `advanceAddresses` (from `change.ts`) updates all live addresses in O(n+k) tandem walk. Deleted items get `dead = true`.
+- **Map (`MapAddress`)**: stable `key` + `dead` flag. When a map change deletes a key, the address is tombstoned.
+- **Product (`KeyAddress`)**: stable `key`, always alive. Product fields never move or die.
+
+**`AddressedPath` root.** `withAddressing` installs an `AddressedPath` on the context at the root call of `interpret()`. All descendant paths are built from this root via `resolveToAddressed()`, giving every ref an identity-stable path. The `AddressTableRegistry` on the root tracks all tables for cleanup.
+
+**Prepare-pipeline hooks.** When `ctx.prepare` exists (writable stacks), `withAddressing` wraps it to intercept changes before they hit the store:
+- **Sequence changes**: runs `advanceAddresses` on the sequence's address table, updating indices and tombstoning deleted items.
+- **Map changes**: marks deleted keys as dead in the map's address table.
+- **Replace changes**: clears the entire address table (wholesale replacement).
+
+**`ADDRESS_TABLE` symbol** (`Symbol.for("kyneta:addressTable")`): attached to sequence and map refs so `withCaching` can delegate its memoization to the address table rather than maintaining a separate cache. This is the bridge between addressing and caching — `withCaching` reads the address table to determine which cached children are still valid.
+
+**Composition ordering**: `withCaching(withAddressing(withReadable(withNavigation(bottom))))`. Addressing must come after `withReadable` (needs navigable refs to attach tables to) and before `withCaching` (caching consults address tables for invalidation).
 
 #### withReadable (`src/interpreters/with-readable.ts`)
 
@@ -554,7 +578,9 @@ For leaf refs, attaches a plain `Changefeed` with `subscribe` (node-level). For 
 
 **Tree notification** propagates via subscription composition (children → parent), not a flat subscriber map. When a leaf's changefeed fires, its parent's `subscribeTree` callback re-prefixes the path and propagates upward. Each child path produces its own `Changeset<Op>` — so a transaction touching N different paths delivers N tree changesets to the parent (each with the correct relative path prefix).
 
-**Composition:** `withChangefeed(withWritable(withCaching(withReadable(bottomInterpreter))))`
+**`isPopulated` changefeeds.** `withChangefeed` attaches an `isPopulated` reactive boolean to every ref (leaf and composite). The implementation uses a per-context monotonic `Set<string>` of path keys that have received at least one mutation. Once a path key enters the populated set, it never leaves. `isPopulated()` reads from this set; `.isPopulated[CHANGEFEED].subscribe(cb)` fires exactly once on the `false → true` transition (via microtask for consistency if already populated at subscribe time). Parent refs flip `true` when any descendant is mutated — the changefeed layer marks all ancestor path keys in the populated set during `prepare`. The `isPopulated` property object carries its own `[CHANGEFEED]` symbol, enabling the compiler (`@kyneta/cast`) to emit conditional rendering regions that activate when data arrives.
+
+**Composition:** `withChangefeed(withWritable(withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter))))))`
 
 ### Substrate (`src/substrate.ts`, `src/substrates/`)
 
@@ -583,7 +609,7 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
 - **`Substrate<V>`** extends `SubstratePrepare` — adds `version()`, `exportSnapshot()`, `exportSince()`, `importDelta()`, and `context()`. The `SubstratePrepare` interface (Phase 0) provides the ground floor of the prepare/flush pipeline: `store: StoreReader`, `prepare(path, change)`, `onFlush(origin?)`.
 
-- **`SubstrateFactory<V>`** — `create(schema, seed?)` for fresh substrates, `fromSnapshot(payload, schema)` for reconstruction from snapshots, `parseVersion(serialized)` for version deserialization.
+- **`SubstrateFactory<V>`** — `create(schema)` for fresh substrates, `fromSnapshot(payload, schema)` for reconstruction from snapshots, `parseVersion(serialized)` for version deserialization.
 
 **Epoch boundaries.** Within a single substrate lifetime, all state transitions are deltas delivered as `Changeset`s through the changefeed. `Changeset` is and remains delta-only. State replacement (snapshot import) is an **epoch boundary** — a new substrate is constructed via `factory.fromSnapshot()`, and the application layer swaps the doc reference. The old interpreter tree is GC'd. The invariant: within an epoch, all transitions are deltas; between epochs, there is no continuity.
 
@@ -604,6 +630,41 @@ The `lwwSubstrateFactory` provides the `SubstrateFactory<TimestampVersion>` inte
 | `LoroVersion` (VersionVector) | Loro CRDT | Partial | Full causal oplog |
 | `PlainVersion` (monotonic counter) | Plain JS | Total (single-writer) | Limited op log |
 | `TimestampVersion` (wall clock) | LWW/Ephemeral | Total (by convention) | None — latest value only |
+
+### BoundSchema and Binding (`src/bind.ts`)
+
+A `BoundSchema<S>` is a static declaration that bundles three choices into one object:
+
+1. **Schema** — what shape is the data? (`Schema` node)
+2. **Factory** — how is the data stored and versioned? (`FactoryBuilder<V>`)
+3. **Strategy** — how does the exchange sync it? (`MergeStrategy`)
+
+```ts
+interface BoundSchema<S extends Schema> {
+  readonly schema: S
+  readonly factory: FactoryBuilder<any>
+  readonly strategy: MergeStrategy
+}
+```
+
+**`MergeStrategy`** is a string union declaring the sync algorithm:
+
+| Strategy | Protocol | `compare()` returns | Payload method |
+|---|---|---|---|
+| `"causal"` | Bidirectional exchange | May return `"concurrent"` | `exportSince()` deltas |
+| `"sequential"` | Request/response, total order | Never `"concurrent"` | `exportSince()` or `exportSnapshot()` |
+| `"lww"` | Unidirectional push/broadcast | Timestamp-based | Always `exportSnapshot()` |
+
+**`FactoryBuilder<V>`** is `(context: { peerId: string }) => SubstrateFactory<V>` — a deferred factory constructor. The exchange calls it lazily on first use, passing its peer identity. Each exchange instance gets a fresh factory. Factories that don't need peer identity ignore the context: `() => plainSubstrateFactory`.
+
+**Convenience wrappers:**
+
+- **`bindPlain(schema)`** — plain JS substrate + sequential strategy. For server-authoritative or single-writer data.
+- **`bindEphemeral(schema)`** — LWW substrate (plain + `TimestampVersion`) + lww strategy. For cursor position, player input, typing indicators — any state where only the latest value matters.
+
+Backend packages provide their own binders: `bindLoro(schema)` from `@kyneta/loro-schema`, `bindYjs(schema)` from `@kyneta/yjs-schema`.
+
+BoundSchemas are consumed by `exchange.get(docId, boundSchema)`. A single Exchange can host documents with different BoundSchemas simultaneously (heterogeneous documents). The BoundSchema can safely be shared across multiple Exchange instances — each exchange calls the factory builder independently.
 
 ### Additional Interpreters
 
@@ -676,8 +737,6 @@ Sequence iteration follows **Array** semantics (yields bare child refs), while m
 Several recursive conditional types map schema types to their corresponding value types:
 
 **`Plain<S>`** — the plain JavaScript/JSON type. `Plain<ScalarSchema<"string", "a" | "b">>` = `"a" | "b"`. `Plain<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ x: number }`. Used for `toJSON()` return types, validation result types, and serialization boundaries.
-
-**`Seed<S>`** — the deep-partial plain type for document seeds. `Seed<ProductSchema<{ x: ScalarSchema<"number"> }>>` = `{ x?: number }`. Structurally equivalent to a recursive `DeepPartial<Plain<S>>` but decomposed into helper types (`SeedFields`, `SeedAnnotated`) to stay within TS's conditional type depth budget — `Partial<Plain<S>>` triggers TS2589 on complex schemas. Products have all keys optional; scalars and leaf annotations resolve to their `Plain` value type; sequences, maps, and sums delegate to `Plain<S>` (seeds at these positions are atomic — you provide the full value or omit it). Used for seed parameters via `satisfies Seed<typeof mySchema>` at call sites. **Limitation:** `Seed<S>` triggers TS2589 when used as a generic function parameter (e.g. `<S>(schema: S, seed?: Seed<S>)`) — use it for direct type annotations and `satisfies`, not in generic signatures.
 
 **`Readable<S>`** — the callable ref type for read-only stacks. `Readable<ScalarSchema<"number">>` = `(() => number) & { [Symbol.toPrimitive]: ... }`. Used to type refs from `withCaching(withReadable(withNavigation(bottomInterpreter)))` — navigation + reading, no mutation.
 
@@ -756,7 +815,7 @@ The nullable pattern match is: `V extends readonly [ScalarSchema<"null", any>, i
 
 ## Verified Properties
 
-The spike validates these properties via 2012 tests across 38 test files (1 pre-existing `tsc` TS2589 error in `validate.test.ts`, unrelated to this work):
+The spike validates these properties via 1,400+ tests across 27 test files:
 
 1. **Laziness**: after `interpret()`, zero thunks are forced. Accessing one field does not force siblings.
 2. **Referential identity**: requires `withCaching` — `doc.title === doc.title`, `seq.at(0) === seq.at(0)`, `map.at("k") === map.at("k")`. Without `withCaching`, each access produces a new ref.
@@ -829,7 +888,9 @@ packages/schema/
 │   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition
 │   ├── combinators.ts           # product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
-│   ├── interpreter-types.ts     # RefContext, Plain<S>, Seed<S> — shared types across interpreters
+│   ├── interpreter-types.ts     # RefContext, Plain<S> — shared types across interpreters
+│   ├── bind.ts                  # BoundSchema, bind(), bindPlain(), bindEphemeral(), isBoundSchema()
+│   ├── unwrap.ts                # registerSubstrate, unwrap — general escape hatch for substrate access
 │   ├── substrate.ts             # SubstratePrepare, Version, SubstratePayload, Substrate<F>, SubstrateFactory<F>
 │   ├── store.ts                 # Store type, StoreReader, plainStoreReader, readByPath, writeByPath, applyChangeToStore, pathKey
 │   ├── ref.ts                   # SchemaRef<S,M> parameterized core + Ref<S>, RWRef<S>, RRef<S> tier aliases
@@ -838,6 +899,7 @@ packages/schema/
 │   │   ├── navigable.ts         # Type-only: NavigableSequenceRef, NavigableMapRef
 │   │   ├── with-navigation.ts   # withNavigation transformer — structural addressing
 │   │   ├── with-readable.ts     # withReadable transformer — fills [CALL], adds .get(), toPrimitive
+│   │   ├── with-addressing.ts   # withAddressing transformer — ADDRESS_TABLE, stable identity, prepare hooks
 │   │   ├── with-caching.ts      # withCaching transformer — caching + INVALIDATE + prepare-pipeline
 │   │   ├── readable.ts          # Type-only: Readable<S>, ReadableSequenceRef, ReadableMapRef
 │   │   ├── writable.ts          # withWritable + TRANSACT + WritableContext + executeBatch
@@ -851,10 +913,11 @@ packages/schema/
 │   ├── __tests__/
 │   │   ├── basic.test.ts        # Integration tests for @kyneta/schema/basic API
 │   │   ├── types.test.ts        # Type-level tests (expectTypeOf)
-│   │   ├── interpret.test.ts    # Catamorphism, constructors, LoroSchema
+│   │   ├── interpret.test.ts    # Catamorphism, constructors, annotations
 │   │   ├── bottom.test.ts       # Bottom interpreter: carriers, CALL symbol
 │   │   ├── with-navigation.test.ts
 │   │   ├── with-readable.test.ts
+│   │   ├── with-addressing.test.ts  # Address tables, prepare hooks, tombstoning
 │   │   ├── with-caching.test.ts
 │   │   ├── plan-cache-update.test.ts
 │   │   ├── plan-notifications.test.ts
@@ -868,8 +931,13 @@ packages/schema/
 │   │   ├── zero.test.ts
 │   │   ├── describe.test.ts
 │   │   ├── step.test.ts
+│   │   ├── instructions.test.ts # foldInstructions, advanceIndex, advanceAddresses
 │   │   ├── validate.test.ts
-│   │   └── substrate.test.ts
+│   │   ├── substrate.test.ts
+│   │   ├── timestamp-version.test.ts  # TimestampVersion: serialize, parse, compare
+│   │   ├── bind.test.ts         # BoundSchema, bindPlain, bindEphemeral
+│   │   ├── unwrap.test.ts       # registerSubstrate, unwrap
+│   │   └── advance-schema.test.ts  # advanceSchema — pure schema descent
 │   └── index.ts                 # Barrel export (Layer 1 — the full toolkit)
 ├── example/
 │   ├── README.md                # Index pointing to basic/ and advanced/

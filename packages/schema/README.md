@@ -15,19 +15,24 @@ const TaskDoc = Schema.doc({
       type: Schema.string("uno", "catan"),
       players: Schema.number(2, 3, 4)
     })
-  )
+  ),
   done:  Schema.boolean(),
 })
 
-const doc = createDoc(TaskDoc, { title: "Ship it" })
+const doc = createDoc(TaskDoc)
+
+change(doc, d => {
+  d.title.insert(0, "Ship it")
+  d.done.set(true)
+  d.games.push({ type: "catan", players: 3 })
+})
 
 doc.title()              // "Ship it"
 doc.title.insert(7, "!") // surgical text edit
 doc.count.increment()    // counter delta
-doc.done.set(true)       // whole-value swap
-doc.games.append({       // makes structural doc.games.at(0) available
-  type: "catan",
-  players: 3
+doc.games.push({         // makes structural doc.games.at(1) available
+  type: "uno",
+  players: 4
 })
 
 subscribe(doc, (changeset) => {
@@ -125,6 +130,21 @@ subscribeNode(doc.count, (changeset) => {
 
 Subscribers receive batched `Changeset` objects — never partially-applied state. Origin provenance (`{ origin: "sync" }`) flows through from `change()` and `applyChanges()`.
 
+## Data readiness
+
+```ts
+// Every ref starts unpopulated — no data has arrived yet
+doc.title.isPopulated()     // false
+
+change(doc, d => d.title.insert(0, "Hello"))
+
+doc.title.isPopulated()     // true (monotonic — never reverts)
+doc.isPopulated()           // true (parent flips when any child does)
+doc.count.isPopulated()     // false (untouched siblings stay false)
+```
+
+`isPopulated` is a reactive boolean on every ref. It starts `false` and flips to `true` when any mutation — local or remote — touches that ref or a descendant. Once `true`, it never reverts. Each `isPopulated` carries its own `[CHANGEFEED]`, so the compiler can emit conditional rendering regions that activate when data arrives.
+
 ## Validation
 
 ```ts
@@ -148,7 +168,7 @@ if (!result.ok) {
 
 Most projects only need `@kyneta/schema/basic`.
 
-The `/basic` API is built on a composable interpreter algebra with five stackable layers (navigation, reading, caching, writing, observation). If you need custom stacks — read-only documents, write-only mutation dispatchers, or your own substrate — import from `@kyneta/schema` directly. See `example/advanced/` for details.
+The `/basic` API is built on a composable interpreter algebra with six stackable layers (navigation, reading, addressing, caching, writing, observation). If you need custom stacks — read-only documents, write-only mutation dispatchers, or your own substrate — import from `@kyneta/schema` directly. See `example/advanced/` for details.
 
 ## Examples
 
@@ -166,7 +186,7 @@ Under the hood:
 
 - the schema is a recursive functor (`Scalar | Product | Sequence | Map | Sum | Annotated`)
 - `interpret()` is a catamorphism
-  - each capability (reading, writing, caching, observation) is an F-algebra composed via interpreter transformers
+  - each capability (reading, addressing, writing, caching, observation) is an F-algebra composed via interpreter transformers
 - `subscribe` is a coalgebra (Moore machine)
 - the `step(state, change) → state` functions are pure
 - the `change → applyChanges` round-trip is verified to be extensionally equal

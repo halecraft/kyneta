@@ -14,7 +14,6 @@ import type {
   Changeset,
   Op,
   Ref,
-  Seed,
   SubstratePayload,
 } from "../../src/basic/index.js"
 
@@ -33,7 +32,6 @@ import {
   tryValidate,
   SchemaValidationError,
   describe,
-  formatPath,
 } from "../../src/basic/index.js"
 
 import { json, log, section } from "../helpers.js"
@@ -91,15 +89,18 @@ log(`\n${describe(ProjectSchema)}`)
 
 section(2, "Create a Document")
 
-const doc = createDoc(ProjectSchema, {
-  name: "My Project",
-  content: { type: "text", body: "Hello world" },
+const doc = createDoc(ProjectSchema)
+
+change(doc, d => {
+  d.name.insert(0, "My Project")
+  d.content.set({ type: "text", body: "Hello world" })
 })
 
 log(`
-    const doc = createDoc(ProjectSchema, {
-      name: "My Project",
-      content: { type: "text", body: "Hello world" },
+    const doc = createDoc(ProjectSchema)
+    change(doc, d => {
+      d.name.insert(0, "My Project")
+      d.content.set({ type: "text", body: "Hello world" })
     })
 
     doc() →
@@ -274,13 +275,16 @@ section(8, "Round-Trip: change → applyChanges")
 
 log(`    Capture mutations on one doc, apply them to a separate doc.`)
 
-const baseSeed = {
-  name: "Shared Doc",
-  content: { type: "text" as const, body: "" },
-} satisfies Seed<typeof ProjectSchema>
-
-const docA = createDoc(ProjectSchema, baseSeed)
-const docB = createDoc(ProjectSchema, baseSeed)
+const docA = createDoc(ProjectSchema)
+change(docA, d => {
+  d.name.insert(0, "Shared Doc")
+  d.content.set({ type: "text", body: "" })
+})
+const docB = createDoc(ProjectSchema)
+change(docB, d => {
+  d.name.insert(0, "Shared Doc")
+  d.content.set({ type: "text", body: "" })
+})
 
 // Subscribe docB before applying — observe the origin tag
 const docBChangesets: Changeset[] = []
@@ -338,7 +342,7 @@ const treeEvents: { path: string; type: string }[] = []
 const unsub2 = subscribe(doc, cs => {
   for (const event of cs.changes) {
     treeEvents.push({
-      path: formatPath(event.path),
+      path: event.path.format(),
       type: event.change.type,
     })
   }
@@ -501,9 +505,10 @@ section(13, "Batched Notification")
 log(`    applyChanges delivers ONE changeset per affected path, not per op.`)
 
 {
-  const batchDoc = createDoc(ProjectSchema, {
-    name: "Batch",
-    content: { type: "text", body: "" },
+  const batchDoc = createDoc(ProjectSchema)
+  change(batchDoc, d => {
+    d.name.insert(0, "Batch")
+    d.content.set({ type: "text", body: "" })
   })
   const changesets: Changeset[] = []
   subscribeNode(batchDoc.stars, cs => changesets.push(cs))
@@ -515,9 +520,10 @@ log(`    applyChanges delivers ONE changeset per affected path, not per op.`)
   changesets.length = 0 // reset from the individual changes above
 
   // Create a fresh doc and apply all 3 ops as one batch
-  const batchDoc2 = createDoc(ProjectSchema, {
-    name: "Batch",
-    content: { type: "text", body: "" },
+  const batchDoc2 = createDoc(ProjectSchema)
+  change(batchDoc2, d => {
+    d.name.insert(0, "Batch")
+    d.content.set({ type: "text", body: "" })
   })
   const batchChangesets: Changeset[] = []
   subscribeNode(batchDoc2.stars, cs => batchChangesets.push(cs))
