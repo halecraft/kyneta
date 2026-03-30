@@ -21,6 +21,7 @@
 
 import { Adapter } from "@kyneta/exchange"
 import type {
+  AdapterFactory,
   Channel,
   ChannelMsg,
   GeneratedChannel,
@@ -658,27 +659,27 @@ export class WebsocketClientAdapter extends Adapter<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a Websocket client adapter for browser-to-server connections.
+ * Create a Websocket client adapter factory for browser-to-server connections.
+ *
+ * Returns an `AdapterFactory` — a closure that creates a fresh adapter
+ * instance when called. Pass directly to `Exchange({ adapters: [...] })`.
  *
  * @example
  * ```typescript
  * import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
  *
- * const adapter = createWebsocketClient({
- *   url: "ws://localhost:3000/ws",
- *   reconnect: { enabled: true },
- * })
- *
  * const exchange = new Exchange({
- *   identity: { peerId: "browser-client" },
- *   adapters: [adapter],
+ *   adapters: [createWebsocketClient({
+ *     url: "ws://localhost:3000/ws",
+ *     reconnect: { enabled: true },
+ *   })],
  * })
  * ```
  */
 export function createWebsocketClient(
   options: WebsocketClientOptions,
-): WebsocketClientAdapter {
-  return new WebsocketClientAdapter(options)
+): AdapterFactory {
+  return () => new WebsocketClientAdapter(options)
 }
 
 /**
@@ -695,15 +696,17 @@ export function createWebsocketClient(
  * ```typescript
  * import { createServiceWebsocketClient } from "@kyneta/websocket-network-adapter/client"
  *
- * const adapter = createServiceWebsocketClient({
- *   url: "ws://primary-server:3000/ws",
- *   headers: { Authorization: "Bearer token" },
- *   reconnect: { enabled: true },
+ * const exchange = new Exchange({
+ *   adapters: [createServiceWebsocketClient({
+ *     url: "ws://primary-server:3000/ws",
+ *     headers: { Authorization: "Bearer token" },
+ *     reconnect: { enabled: true },
+ *   })],
  * })
  * ```
  */
 export function createServiceWebsocketClient(
   options: ServiceWebsocketClientOptions,
-): WebsocketClientAdapter {
-  return new WebsocketClientAdapter(options)
+): AdapterFactory {
+  return () => new WebsocketClientAdapter(options)
 }

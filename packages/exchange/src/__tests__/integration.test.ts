@@ -25,7 +25,7 @@ import type { Schema as SchemaNode } from "@kyneta/schema"
 import { bindLoro } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
-import { Bridge, BridgeAdapter } from "../adapter/bridge-adapter.js"
+import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
 import { TimestampVersion } from "../timestamp-version.js"
 
 // ---------------------------------------------------------------------------
@@ -177,12 +177,12 @@ describe("Sequential sync (PlainSubstrate)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     // Alice creates a doc and populates via change()
@@ -211,12 +211,12 @@ describe("Sequential sync (PlainSubstrate)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     const docA = exchangeA.get("doc-1", SequentialDoc)
@@ -254,12 +254,12 @@ describe("Causal sync (LoroSubstrate)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     // Alice creates a doc
@@ -284,12 +284,12 @@ describe("Causal sync (LoroSubstrate)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     // Both create the doc
@@ -331,12 +331,12 @@ describe("LWW sync (Ephemeral/Presence)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     // Alice sets presence with change() so the version bumps
@@ -364,12 +364,12 @@ describe("LWW sync (Ephemeral/Presence)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     const presA = exchangeA.get("presence", PresenceDoc)
@@ -419,12 +419,12 @@ describe("Heterogeneous documents", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     // Alice: plain config doc
@@ -462,20 +462,20 @@ describe("Multi-hop relay (three-peer topology)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
     })
 
     const exchangeHub = createExchange({
       identity: { peerId: "hub" },
       adapters: [
-        new BridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
-        new BridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
+        createBridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
+        createBridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
       ],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
     })
 
     // All three open the same doc
@@ -506,20 +506,20 @@ describe("Multi-hop relay (three-peer topology)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
     })
 
     const exchangeHub = createExchange({
       identity: { peerId: "hub" },
       adapters: [
-        new BridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
-        new BridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
+        createBridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
+        createBridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
       ],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
     })
 
     // Hub creates the doc with initial state (sequential needs a populated source)
@@ -566,12 +566,12 @@ describe("onDocDiscovered (dynamic document creation)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
       onDocDiscovered: (docId) => {
         if (docId === "dynamic-doc") return SequentialDoc
         return undefined
@@ -600,12 +600,12 @@ describe("onDocDiscovered (dynamic document creation)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
       onDocDiscovered: () => undefined,
     })
 
@@ -621,12 +621,12 @@ describe("onDocDiscovered (dynamic document creation)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
       onDocDiscovered: (docId) => {
         if (docId === "presence") return PresenceDoc
         return undefined
@@ -673,14 +673,14 @@ describe("route predicate", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
       // Deny bob from seeing "secret"
       route: (docId) => docId !== "secret",
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     // Alice creates doc that bob shouldn't see
@@ -697,15 +697,15 @@ describe("route predicate", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH })],
     })
 
     // Hub allows alice but denies bob for "private-doc"
     const exchangeHub = createExchange({
       identity: { peerId: "hub" },
       adapters: [
-        new BridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
-        new BridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
+        createBridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
+        createBridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
       ],
       route: (docId, peer) => {
         if (docId === "private-doc" && peer.peerId === "bob") return false
@@ -715,7 +715,7 @@ describe("route predicate", () => {
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
     })
 
     // Hub creates doc
@@ -748,13 +748,13 @@ describe("authorize predicate", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     // Bob rejects all mutations
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
       authorize: () => false,
     })
 
@@ -786,12 +786,12 @@ describe("dismiss", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
       onDocDismissed: (docId, peer) => {
         dismissedDocId = docId
         dismissedPeerId = peer.peerId
@@ -818,12 +818,12 @@ describe("dismiss", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     exchangeA.get("doc-1", SequentialDoc)
@@ -858,12 +858,12 @@ describe("route + onDocDiscovered interaction", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
       // Route denies alice for "blocked-doc"
       route: (docId) => docId !== "blocked-doc",
       onDocDiscovered: (docId) => {

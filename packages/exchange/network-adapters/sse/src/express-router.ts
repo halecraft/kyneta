@@ -84,7 +84,7 @@ export interface SseExpressRouterOptions {
  * const serverAdapter = new SseServerAdapter()
  * const exchange = new Exchange({
  *   identity: { peerId: "server", name: "server", type: "service" },
- *   adapters: [serverAdapter],
+ *   adapters: [() => serverAdapter],
  * })
  *
  * app.use("/sse", createSseExpressRouter(serverAdapter, {

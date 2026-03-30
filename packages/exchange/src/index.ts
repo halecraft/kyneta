@@ -79,7 +79,7 @@ export { isEstablished } from "./channel.js"
 // ---------------------------------------------------------------------------
 
 export { Adapter } from "./adapter/adapter.js"
-export type { AdapterContext, AnyAdapter } from "./adapter/adapter.js"
+export type { AdapterContext, AdapterFactory, AnyAdapter } from "./adapter/adapter.js"
 export { AdapterManager } from "./adapter/adapter-manager.js"
 export {
   ClientStateMachine,
@@ -92,7 +92,8 @@ export {
 // Bridge — in-process testing adapter
 // ---------------------------------------------------------------------------
 
-export { Bridge, BridgeAdapter } from "./adapter/bridge-adapter.js"
+export { Bridge, BridgeAdapter, createBridgeAdapter } from "./adapter/bridge-adapter.js"
+export type { BridgeAdapterParams } from "./adapter/bridge-adapter.js"
 
 // ---------------------------------------------------------------------------
 // Synchronizer — TEA state machine

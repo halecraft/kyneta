@@ -32,7 +32,7 @@ const serverAdapter = new WebsocketServerAdapter()
 
 const exchange = new Exchange({
   identity: { name: "server" },
-  adapters: [serverAdapter],
+  adapters: [() => serverAdapter],
 })
 
 // Register the todo document. The server holds the authoritative copy.

@@ -28,7 +28,7 @@ const serverAdapter = new SseServerAdapter()
 
 const exchange = new Exchange({
   identity: { peerId: "server", name: "server", type: "service" },
-  adapters: [serverAdapter],
+  adapters: [() => serverAdapter],
 })
 
 app.use("/sse", createSseExpressRouter(serverAdapter, {
@@ -104,15 +104,13 @@ Use `createSseClient` for browser-to-server connections:
 import { Exchange } from "@kyneta/exchange"
 import { createSseClient } from "@kyneta/sse-network-adapter/client"
 
-const adapter = createSseClient({
-  postUrl: "/sse/sync",
-  eventSourceUrl: (peerId) => `/sse/events?peerId=${peerId}`,
-  reconnect: { enabled: true },
-})
-
 const exchange = new Exchange({
   identity: { peerId: "browser-client", name: "Alice", type: "user" },
-  adapters: [adapter],
+  adapters: [createSseClient({
+    postUrl: "/sse/sync",
+    eventSourceUrl: (peerId) => `/sse/events?peerId=${peerId}`,
+    reconnect: { enabled: true },
+  })],
 })
 ```
 

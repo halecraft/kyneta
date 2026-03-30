@@ -39,4 +39,4 @@ export type { Ref, RRef, Plain, Changeset, Op, BoundSchema } from "@kyneta/schem
 // ---------------------------------------------------------------------------
 
 export { Exchange, sync, hasSync } from "@kyneta/exchange"
-export type { ExchangeParams, SyncRef, ReadyState, DocId } from "@kyneta/exchange"
+export type { AdapterFactory, ExchangeParams, SyncRef, ReadyState, DocId } from "@kyneta/exchange"

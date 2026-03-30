@@ -9,34 +9,26 @@
 
 import { mount } from "@kyneta/cast"
 import { Exchange } from "@kyneta/exchange"
-import { WebsocketClientAdapter } from "@kyneta/websocket-network-adapter/client"
+import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
 import { createApp } from "./app.js"
 import { TodoDoc } from "./schema.js"
 
 // ─────────────────────────────────────────────────────────────────────────
-// 1. Network Adapter — WebSocket client adapter
-// ─────────────────────────────────────────────────────────────────────────
-
-const wsAdapter = new WebsocketClientAdapter({
-  url: `ws://${location.host}/ws`,
-})
-
-// ─────────────────────────────────────────────────────────────────────────
-// 2. Exchange — client-side sync
+// 1. Exchange — client-side sync
 // ─────────────────────────────────────────────────────────────────────────
 
 const exchange = new Exchange({
-  adapters: [wsAdapter],
+  adapters: [createWebsocketClient({ url: `ws://${location.host}/ws` })],
 })
 
 // ─────────────────────────────────────────────────────────────────────────
-// 3. Document — get (or create) the collaborative todo doc
+// 2. Document — get (or create) the collaborative todo doc
 // ─────────────────────────────────────────────────────────────────────────
 
 const doc = exchange.get("todos", TodoDoc)
 
 // ─────────────────────────────────────────────────────────────────────────
-// 4. Mount — render the Cast view into the DOM
+// 3. Mount — render the Cast view into the DOM
 // ─────────────────────────────────────────────────────────────────────────
 
 const app = createApp(doc)

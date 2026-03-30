@@ -7,7 +7,7 @@
 // Usage:
 //   const exchange = new Exchange({
 //     identity: { name: "alice" },
-//     adapters: [network],
+//     adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 //   })
 //
 //   const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
@@ -25,7 +25,7 @@ import {
   registerSubstrate,
 } from "@kyneta/schema"
 import { changefeed, readable, subscribe, writable } from "@kyneta/schema"
-import type { AnyAdapter } from "./adapter/adapter.js"
+import type { AnyAdapter, AdapterFactory } from "./adapter/adapter.js"
 import { registerSync } from "./sync.js"
 import { Synchronizer } from "./synchronizer.js"
 import type { DocId, PeerIdentityDetails } from "./types.js"
@@ -98,9 +98,16 @@ export type ExchangeParams = {
   identity?: Partial<PeerIdentityDetails>
 
   /**
-   * Adapters for network and storage connectivity.
+   * Adapter factories for network and storage connectivity.
+   *
+   * Each factory is called once during Exchange construction to create
+   * a fresh adapter instance. Use `create*` helpers for low-friction setup:
+   *
+   * ```typescript
+   * adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })]
+   * ```
    */
-  adapters?: AnyAdapter[]
+  adapters?: AdapterFactory[]
 
   /**
    * Outbound flow control. Determines which peers participate in the
@@ -193,7 +200,7 @@ type DocCacheEntry = {
  *
  * const exchange = new Exchange({
  *   identity: { name: "alice" },
- *   adapters: [new BridgeAdapter({ adapterType: "peer-a", bridge })],
+ *   adapters: [createBridgeAdapter({ adapterType: "peer-a", bridge })],
  * })
  *
  * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
@@ -243,10 +250,10 @@ export class Exchange {
       type: identity.type ?? "user",
     }
 
-    // Create synchronizer
+    // Create synchronizer — call each factory to produce fresh adapter instances
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
-      adapters,
+      adapters: adapters.map(factory => factory()),
       route: route ?? (() => true),
       authorize: authorize ?? (() => true),
       onDocDismissed,

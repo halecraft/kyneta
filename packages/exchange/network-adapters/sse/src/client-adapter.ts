@@ -25,6 +25,7 @@
 
 import { Adapter } from "@kyneta/exchange"
 import type {
+  AdapterFactory,
   Channel,
   ChannelMsg,
   GeneratedChannel,
@@ -706,18 +707,15 @@ export class SseClientAdapter extends Adapter<void> {
  * ```typescript
  * import { createSseClient } from "@kyneta/sse-network-adapter/client"
  *
- * const adapter = createSseClient({
- *   postUrl: "/sync",
- *   eventSourceUrl: (peerId) => `/events?peerId=${peerId}`,
- *   reconnect: { enabled: true },
- * })
- *
  * const exchange = new Exchange({
- *   identity: { peerId: "browser-client" },
- *   adapters: [adapter],
+ *   adapters: [createSseClient({
+ *     postUrl: "/sync",
+ *     eventSourceUrl: (peerId) => `/events?peerId=${peerId}`,
+ *     reconnect: { enabled: true },
+ *   })],
  * })
  * ```
  */
-export function createSseClient(options: SseClientOptions): SseClientAdapter {
-  return new SseClientAdapter(options)
+export function createSseClient(options: SseClientOptions): AdapterFactory {
+  return () => new SseClientAdapter(options)
 }

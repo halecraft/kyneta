@@ -144,6 +144,35 @@ This follows the MobX/Valtio "deep is default" pattern. A component using `useVa
 
 If async shutdown is needed (e.g. flushing pending storage writes), the consumer should call `exchange.shutdown()` before unmounting the provider. The provider itself does not handle async teardown.
 
+### Adapter Factories and StrictMode
+
+`ExchangeParams.adapters` accepts `AdapterFactory[]` — closures that create fresh adapter instances. This is critical for React StrictMode, which double-mounts components in development (mount → unmount → remount).
+
+The lifecycle under StrictMode:
+
+1. **First mount**: `useMemo` creates Exchange → calls each factory → fresh adapters → `_start()`
+2. **Unmount**: `useEffect` cleanup calls `exchange.reset()` → adapters stopped and discarded
+3. **Remount**: `useMemo` creates a new Exchange → calls each factory again → fresh adapters → `_start()`
+
+Because the `config` object contains factory closures (not adapter instances), it is stable across renders. `useMemo` sees the same `config` reference on remount but creates a new Exchange because StrictMode discards memoized values on unmount. Each Exchange gets its own fresh adapter instances via the factories.
+
+Without factories (passing adapter instances directly), step 3 would reuse the stopped/disposed adapter from step 2 — a zombie with disposed reassemblers and a dead state machine. The factory pattern eliminates this class of bugs.
+
+The recommended pattern:
+
+```tsx
+import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+
+// Stable config — factory closures, not instances
+const config = {
+  adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+}
+
+<ExchangeProvider config={config}>
+  <App />
+</ExchangeProvider>
+```
+
 ## Epoch Boundary Behavior
 
 When a remote peer sends a full snapshot (e.g. on initial sync or after log compaction), the exchange replays it as `ReplaceChange` ops on the existing substrate. This preserves all ref handles — components holding refs don't go stale on sync.

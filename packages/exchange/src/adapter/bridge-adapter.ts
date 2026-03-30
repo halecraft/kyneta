@@ -10,16 +10,17 @@
 // Usage:
 //   const bridge = new Bridge()
 //   const exchangeA = new Exchange({
-//     adapters: [new BridgeAdapter({ adapterType: "peer-a", bridge })],
+//     adapters: [createBridgeAdapter({ adapterType: "peer-a", bridge })],
 //   })
 //   const exchangeB = new Exchange({
-//     adapters: [new BridgeAdapter({ adapterType: "peer-b", bridge })],
+//     adapters: [createBridgeAdapter({ adapterType: "peer-b", bridge })],
 //   })
 
 import type { ChannelMsg } from "../messages.js"
 import type { GeneratedChannel } from "../channel.js"
 import type { AdapterType, ChannelId } from "../types.js"
 import { Adapter } from "./adapter.js"
+import type { AdapterFactory } from "./adapter.js"
 
 // ---------------------------------------------------------------------------
 // Bridge — message router connecting multiple BridgeAdapters in-process
@@ -80,7 +81,7 @@ type BridgeAdapterContext = {
   targetAdapterType: AdapterType
 }
 
-type BridgeAdapterParams = {
+export type BridgeAdapterParams = {
   adapterType: AdapterType
   /**
    * Unique identifier for this adapter instance.
@@ -102,12 +103,10 @@ type BridgeAdapterParams = {
  * ```typescript
  * const bridge = new Bridge()
  * const exchangeA = new Exchange({
- *   adapters: [new BridgeAdapter({ adapterType: "peer-a", bridge })],
- *   substrates: { plain: plainFactory },
+ *   adapters: [createBridgeAdapter({ adapterType: "peer-a", bridge })],
  * })
  * const exchangeB = new Exchange({
- *   adapters: [new BridgeAdapter({ adapterType: "peer-b", bridge })],
- *   substrates: { plain: plainFactory },
+ *   adapters: [createBridgeAdapter({ adapterType: "peer-b", bridge })],
  * })
  * ```
  */
@@ -243,4 +242,30 @@ export class BridgeAdapter extends Adapter<BridgeAdapterContext> {
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Factory function
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a BridgeAdapter factory for in-process testing.
+ *
+ * Returns an `AdapterFactory` — pass directly to `Exchange({ adapters: [...] })`.
+ * The `Bridge` is shared configuration (the rendezvous point); each call to
+ * the factory creates a fresh `BridgeAdapter` instance.
+ *
+ * @example
+ * ```typescript
+ * const bridge = new Bridge()
+ * const exchangeA = new Exchange({
+ *   adapters: [createBridgeAdapter({ adapterType: "peer-a", bridge })],
+ * })
+ * const exchangeB = new Exchange({
+ *   adapters: [createBridgeAdapter({ adapterType: "peer-b", bridge })],
+ * })
+ * ```
+ */
+export function createBridgeAdapter(params: BridgeAdapterParams): AdapterFactory {
+  return () => new BridgeAdapter(params)
 }

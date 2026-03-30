@@ -23,6 +23,25 @@ import type { AdapterType, ChannelId, PeerIdentityDetails } from "../types.js"
 
 export type AnyAdapter = Adapter<any>
 
+/**
+ * A zero-argument function that creates a fresh adapter instance.
+ *
+ * Adapters have a linear lifecycle (create → use → discard) and cannot
+ * be restarted after `_stop()`. Passing factories instead of instances
+ * ensures the Exchange can create fresh adapters on construction and
+ * discard them on reset — no shared mutable state across lifecycles.
+ *
+ * Use the `create*` helper functions for low-friction configuration:
+ * ```typescript
+ * import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+ *
+ * const exchange = new Exchange({
+ *   adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+ * })
+ * ```
+ */
+export type AdapterFactory = () => AnyAdapter
+
 type AdapterParams = {
   adapterType: AdapterType
   /**

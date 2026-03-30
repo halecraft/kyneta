@@ -14,7 +14,7 @@ import {
 import { bindLoro, loro } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
 import { sync, hasSync } from "../sync.js"
-import { Bridge, BridgeAdapter } from "../adapter/bridge-adapter.js"
+import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -301,11 +301,11 @@ describe("Exchange", () => {
 
         const exchangeA = createExchange({
           identity: { peerId: "alice" },
-          adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+          adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
         })
         const exchangeB = createExchange({
           identity: { peerId: "bob" },
-          adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+          adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
         })
 
         const docA = exchangeA.get("doc-1", TestDoc)

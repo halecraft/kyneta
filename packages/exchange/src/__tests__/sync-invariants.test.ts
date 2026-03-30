@@ -24,7 +24,7 @@ import type { Schema as SchemaNode } from "@kyneta/schema"
 import { bindLoro } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
-import { Bridge, BridgeAdapter } from "../adapter/bridge-adapter.js"
+import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
 import { TimestampVersion } from "../timestamp-version.js"
 
 // ---------------------------------------------------------------------------
@@ -159,11 +159,11 @@ describe("initial content via change() syncs to peers", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     // Alice creates a doc and applies initial content via change()
@@ -200,11 +200,11 @@ describe("snapshot import preserves ref identity", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     const docA = exchangeA.get("doc-1", SimpleDoc)
@@ -229,11 +229,11 @@ describe("snapshot import preserves ref identity", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     const docB = exchangeB.get("doc-1", SimpleDoc)
@@ -262,11 +262,11 @@ describe("LWW stale rejection", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     // Alice sets initial presence
@@ -335,11 +335,11 @@ describe("causal sync uses deltas when sender is ahead", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
     })
 
     const docA = exchangeA.get("doc-1", LoroDoc)

@@ -280,7 +280,7 @@ async function createConnectedPair(opts?: {
 
   const serverExchange = createExchange({
     identity: { peerId: serverPeerId },
-    adapters: [serverAdapter],
+    adapters: [() => serverAdapter],
   })
 
   const clientAdapter = new WebsocketClientAdapter({
@@ -291,7 +291,7 @@ async function createConnectedPair(opts?: {
 
   const clientExchange = createExchange({
     identity: { peerId: clientPeerId },
-    adapters: [clientAdapter],
+    adapters: [() => clientAdapter],
   })
 
   // Wait for the client to be fully ready

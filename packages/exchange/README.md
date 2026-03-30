@@ -19,7 +19,7 @@ const TodoDoc = bindPlain(Schema.doc({
 // 2. Create an Exchange
 const exchange = new Exchange({
   identity: { name: "alice" },
-  adapters: [networkAdapter],
+  adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 })
 
 // 3. Get a typed document

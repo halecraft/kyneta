@@ -264,13 +264,60 @@ GeneratedChannel → ConnectedChannel → EstablishedChannel
 
 ### Adapter Base Class
 
-Adapters follow a lifecycle managed by the `AdapterManager`:
+Adapters follow a linear lifecycle: **create → initialize → start → stop → discard**. They cannot be restarted after `_stop()` — internal resources (`readonly` reassemblers, state machines) are disposed and not recreated. If you need a new adapter, create a new instance.
 
 1. **`_initialize(context)`**: receives identity and callbacks (onChannelAdded, onChannelRemoved, onChannelReceive, onChannelEstablish)
 2. **`_start()`**: begins operation — subclasses create initial channels here
-3. **`_stop()`**: cleans up — all channels are removed
+3. **`_stop()`**: cleans up — all channels are removed, reassemblers disposed
 
 Subclasses implement `generate(context)`, `onStart()`, and `onStop()`.
+
+### AdapterFactory — Configuration as Description
+
+`ExchangeParams.adapters` accepts `AdapterFactory[]` — an array of zero-argument functions that each create a fresh adapter instance:
+
+```typescript
+type AdapterFactory = () => AnyAdapter
+```
+
+The Exchange calls each factory once during construction. On `reset()`, the adapter instances are stopped and discarded. A new Exchange with the same factories creates fresh instances — no shared mutable state across lifecycles.
+
+This follows the same principle as `BoundSchema.factory` (called per-exchange to produce a fresh `SubstrateFactory`) and React elements (descriptions of what to render, not the rendered thing).
+
+#### The `create*` Helper Convention
+
+Each adapter package exports a `create*` helper that captures options and returns an `AdapterFactory`:
+
+```typescript
+import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+
+const exchange = new Exchange({
+  adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+})
+```
+
+Available helpers:
+- `createWebsocketClient(options)` — browser-to-server WebSocket
+- `createServiceWebsocketClient(options)` — service-to-service WebSocket (with headers)
+- `createSseClient(options)` — SSE client (EventSource + POST)
+- `createBridgeAdapter(params)` — in-process testing adapter
+
+The adapter classes (`WebsocketClientAdapter`, `SseClientAdapter`, etc.) remain exported for advanced use cases that need a handle to the instance (e.g. `subscribeToTransitions`, `waitForStatus`).
+
+#### Server Adapter Pattern
+
+Server adapters are referenced by HTTP framework integration code (`handleConnection`, `registerConnection`, Express routers, Bun handlers). They use a "pre-created with single-use factory wrapper" pattern:
+
+```typescript
+const serverAdapter = new WebsocketServerAdapter()
+const exchange = new Exchange({
+  adapters: [() => serverAdapter],
+})
+// serverAdapter is now available for framework wiring:
+// wss.on("connection", ws => serverAdapter.handleConnection({ socket: wrapNodeWebsocket(ws) }))
+```
+
+This is safe because server-side Exchanges are typically created once and never reset. The factory returns the same pre-created instance — the Exchange calls it once during construction.
 
 ### ClientStateMachine\<S\>
 
