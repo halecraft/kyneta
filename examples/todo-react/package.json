@@ -1,0 +1,29 @@
+{
+  "name": "example-todo-react",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/react": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/yjs-schema": "workspace:^",
+    "@kyneta/websocket-network-adapter": "workspace:^",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "yjs": "^13.6.30",
+    "ws": "^8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.5.2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@types/ws": "^8",
+    "@types/node": "^22",
+    "tsx": "^4.19.4",
+    "typescript": "^5.9.2",
+    "vite": "^6"
+  }
+}

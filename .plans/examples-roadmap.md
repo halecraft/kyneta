@@ -23,7 +23,7 @@ Each example picks one concrete stack. Variant files (e.g. `server-node.ts` alon
 | Example | Framework | Transport | Backend | Runtime | Server |
 |---------|-----------|-----------|---------|---------|--------|
 | todo | Cast | WebSocket | Loro | Bun | `Bun.serve()` |
-| todo-react | React | WebSocket | Loro | Bun | shared with todo |
+| todo-react | React | WebSocket | Yjs | Node | Vite middleware + `ws` |
 | chat | React | SSE | Loro | Node | Express |
 | bumper-cars | React | WebSocket | Loro + Plain | Bun | `Bun.serve()` |
 | video-conference | React | SSE + WebRTC | Loro | Node | Express |
@@ -70,13 +70,14 @@ Port the todo example using Cast + WebSocket + Loro + Bun. This validates the fu
 - Variant: `server-node.ts` using `ws` + `wrapNodeWebsocket`
 - README: includes "swap Yjs" one-line guide
 
-### Phase 2: React bindings (todo-react)
+### Phase 2: React bindings (todo-react) ✅
 
-Build `@kyneta/react` and the todo-react example. Shares the todo's schema and server. Proves the sync layer is framework-agnostic.
+Build `@kyneta/react` and the todo-react example. Proves the sync layer is framework-agnostic and the CRDT substrate is swappable.
 
-- Build `@kyneta/react` with `ExchangeProvider`, `useDocument`, `useValue`
-- Client: React view using hooks, same WebSocket transport
-- Server: reuse or symlink from todo
+- `@kyneta/react` ✅ — `ExchangeProvider`, `useDocument`, `useValue`, `useSyncStatus`
+- Client: React view using hooks, WebSocket transport, Yjs substrate (`bindYjs`)
+- Server: single-process Vite middleware mode + `ws` WebSocketServer on Node (via `tsx`)
+- Demonstrates four axes of variation from the Cast todo: UI framework, CRDT substrate, build system, runtime
 
 ### Phase 3: SSE transport + chat
 

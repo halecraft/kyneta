@@ -217,4 +217,4 @@ This example focuses on the essentials. For more advanced patterns, see the othe
 - ❌ Persistence — in-memory only; restart clears all todos
 - ❌ Authentication — no auth; all clients share one document
 - ❌ Hot module reloading — restart the server to see changes
-- ❌ React — see the todo-react example (shares this schema + server)
+- ❌ React — see the [todo-react](../todo-react/) example (same schema, React hooks, Yjs substrate)

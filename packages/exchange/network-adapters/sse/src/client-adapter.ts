@@ -36,7 +36,6 @@ import type {
 import {
   textCodec,
   encodeTextComplete,
-  decodeTextFrame,
   fragmentTextPayload,
   TextReassembler,
 } from "@kyneta/wire"
