@@ -49,10 +49,19 @@ export type DocRuntime = {
   schema: any // The schema (SchemaNode)
 }
 
+/**
+ * Callback invoked when a peer discovers a document the local exchange
+ * doesn't have. The Synchronizer fires this during command execution;
+ * the Exchange wraps the user's `onDocDiscovered` callback to call
+ * `exchange.get()` if a BoundSchema is returned.
+ */
+export type DocCreationCallback = (docId: DocId, peer: PeerIdentityDetails) => void
+
 export type SynchronizerParams = {
   identity: PeerIdentityDetails
   adapters?: AnyAdapter[]
   permissions?: Partial<Permissions>
+  onDocCreationRequested?: DocCreationCallback
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +74,7 @@ export class Synchronizer {
 
   readonly #updateFn: ReturnType<typeof createSynchronizerUpdate>
   readonly #docRuntimes = new Map<DocId, DocRuntime>()
+  readonly #docCreationCallback?: DocCreationCallback
 
   /**
    * Outbound message queue — accumulated during dispatch, flushed at quiescence.
@@ -87,12 +97,13 @@ export class Synchronizer {
     (docId: DocId, readyStates: ReadyState[]) => void
   >()
 
-  constructor({ identity, adapters = [], permissions }: SynchronizerParams) {
+  constructor({ identity, adapters = [], permissions, onDocCreationRequested }: SynchronizerParams) {
     this.identity = identity
 
     this.#updateFn = createSynchronizerUpdate({
       permissions: createPermissions(permissions),
     })
+    this.#docCreationCallback = onDocCreationRequested
 
     // Initialize model
     const [initialModel, initialCommand] = init(this.identity)
@@ -426,6 +437,13 @@ export class Synchronizer {
 
       case "cmd/subscribe-doc":
         // No-op for now — the Exchange handles subscription wiring
+        break
+
+      case "cmd/request-doc-creation":
+        // Fire-and-forget: if the callback calls exchange.get(), that
+        // triggers registerDoc() → #dispatch(doc-ensure), which is
+        // queued in #pendingMessages and processed before quiescence.
+        this.#docCreationCallback?.(command.docId, command.peer)
         break
 
       case "cmd/dispatch":

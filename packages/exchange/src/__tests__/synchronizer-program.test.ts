@@ -269,7 +269,7 @@ describe("synchronizer-program", () => {
   })
 
   describe("doc-ensure", () => {
-    it("registers document and announces via discover", () => {
+    it("registers document and sends discover + interest to established channels", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -290,14 +290,34 @@ describe("synchronizer-program", () => {
       expect(m2.documents.has("doc-1")).toBe(true)
       expect(m2.documents.get("doc-1")!.version).toBe("v1")
 
-      // Should send discover to the established channel
       const commands = flattenCommands(cmd)
+
+      // Should send discover to the established channel
       const discoverCmd = commands.find(
         (c) =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "discover",
       )
       expect(discoverCmd).toBeDefined()
+
+      // Should also send interest — essential for pulling data into
+      // empty docs created via onDocDiscovered
+      const interestCmd = commands.find(
+        (c) =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "interest",
+      )
+      expect(interestCmd).toBeDefined()
+      if (
+        interestCmd &&
+        interestCmd.type === "cmd/send-message" &&
+        interestCmd.envelope.message.type === "interest"
+      ) {
+        expect(interestCmd.envelope.message.docId).toBe("doc-1")
+        expect(interestCmd.envelope.message.version).toBe("v1")
+        // Sequential does not reciprocate
+        expect(interestCmd.envelope.message.reciprocate).toBe(false)
+      }
     })
 
     it("doc-ensure is idempotent for same docId", () => {
@@ -375,7 +395,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("receiving discover for an unknown doc is a no-op", () => {
+    it("receiving discover for an unknown doc emits request-doc-creation", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -392,7 +412,94 @@ describe("synchronizer-program", () => {
         m,
       )
 
-      expect(cmd).toBeUndefined()
+      const commands = flattenCommands(cmd)
+      expect(commands).toHaveLength(1)
+      expect(commands[0].type).toBe("cmd/request-doc-creation")
+      if (commands[0].type === "cmd/request-doc-creation") {
+        expect(commands[0].docId).toBe("unknown-doc")
+        expect(commands[0].peer.peerId).toBe("bob")
+      }
+    })
+
+    it("receiving discover with mixed known/unknown docs emits both interest and request-doc-creation", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "known-doc",
+          version: "v1",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      const [_m2, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "discover", docIds: ["known-doc", "unknown-doc"] },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      expect(commands).toHaveLength(2)
+
+      const interestCmd = commands.find(
+        (c) =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "interest",
+      )
+      expect(interestCmd).toBeDefined()
+
+      const creationCmd = commands.find(
+        (c) => c.type === "cmd/request-doc-creation",
+      )
+      expect(creationCmd).toBeDefined()
+      if (creationCmd && creationCmd.type === "cmd/request-doc-creation") {
+        expect(creationCmd.docId).toBe("unknown-doc")
+        expect(creationCmd.peer.peerId).toBe("bob")
+      }
+    })
+
+    it("receiving discover with all known docs produces no creation commands", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+        },
+        m,
+      )
+
+      const [_m2, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "discover", docIds: ["doc-1"] },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const creationCmds = commands.filter(
+        (c) => c.type === "cmd/request-doc-creation",
+      )
+      expect(creationCmds).toHaveLength(0)
+      // Should still have the interest command
+      expect(commands.length).toBeGreaterThanOrEqual(1)
     })
   })
 

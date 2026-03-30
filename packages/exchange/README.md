@@ -143,6 +143,28 @@ const exchange = new Exchange({
 })
 ```
 
+### Dynamic Document Creation (`onDocDiscovered`)
+
+When a peer announces a document your exchange doesn't have, the `onDocDiscovered` callback lets you create it on demand. Return a `BoundSchema` to auto-create and sync, or `undefined` to ignore:
+
+```ts
+const PlayerInputDoc = bindLww(Schema.doc({
+  force: Schema.number(),
+  angle: Schema.number(),
+}))
+
+const exchange = new Exchange({
+  identity: { name: "server" },
+  adapters: [serverAdapter],
+  onDocDiscovered: (docId, peer) => {
+    if (docId.startsWith("input:")) return PlayerInputDoc
+    return undefined
+  },
+})
+```
+
+This enables patterns where clients create per-peer documents (e.g. `input:${peerId}`) and the server materializes them automatically when the client connects. No pre-coordination required — the callback is the single gating mechanism (returning `undefined` is equivalent to denying creation).
+
 ### The `sync()` Function
 
 Sync capabilities are accessed via the `sync()` function:
@@ -186,8 +208,8 @@ loroDoc.version()                // VersionVector
 
 ### Exchange
 
-| Method | Description |
-|--------|-------------|
+| Method / Option | Description |
+|----------------|-------------|
 | `get(docId, boundSchema, opts?)` | Get or create a document. Returns `Ref<S>`. |
 | `has(docId)` | Check if a document exists. |
 | `delete(docId)` | Delete a document. |
@@ -196,6 +218,7 @@ loroDoc.version()                // VersionVector
 | `reset()` | Disconnect adapters and clear state (synchronous). |
 | `addAdapter(adapter)` | Add an adapter at runtime. |
 | `removeAdapter(adapterId)` | Remove an adapter at runtime. |
+| `onDocDiscovered` | Constructor option. Callback `(docId, peer) → BoundSchema \| undefined` for dynamic doc creation. |
 
 ### sync()
 

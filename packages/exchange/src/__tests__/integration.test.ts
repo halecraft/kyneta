@@ -555,3 +555,110 @@ describe("Multi-hop relay (three-peer topology)", () => {
     expect(docB.count()).toBe(99)
   })
 })
+
+// ---------------------------------------------------------------------------
+// onDocDiscovered — dynamic document creation
+// ---------------------------------------------------------------------------
+
+describe("onDocDiscovered (dynamic document creation)", () => {
+  it("peer A creates doc, peer B materializes it via onDocDiscovered", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      onDocDiscovered: (docId) => {
+        if (docId === "dynamic-doc") return SequentialDoc
+        return undefined
+      },
+    })
+
+    // Alice creates a doc that Bob doesn't have yet
+    const docA = exchangeA.get("dynamic-doc", SequentialDoc)
+    change(docA, (d: any) => {
+      d.title.set("created by alice")
+      d.count.set(7)
+    })
+
+    // Drain — discover → request-doc-creation → callback → doc-ensure → discover → interest → offer
+    await drain(40)
+
+    // Bob should now have the doc with Alice's content
+    expect(exchangeB.has("dynamic-doc")).toBe(true)
+    const docB = exchangeB.get("dynamic-doc", SequentialDoc)
+    expect(docB.title()).toBe("created by alice")
+    expect(docB.count()).toBe(7)
+  })
+
+  it("onDocDiscovered returning undefined does not create the doc", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      onDocDiscovered: () => undefined,
+    })
+
+    exchangeA.get("ignored-doc", SequentialDoc)
+
+    await drain(40)
+
+    expect(exchangeB.has("ignored-doc")).toBe(false)
+  })
+
+  it("LWW dynamic doc syncs correctly", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [new BridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [new BridgeAdapter({ adapterType: "bob", bridge })],
+      onDocDiscovered: (docId) => {
+        if (docId === "presence") return PresenceDoc
+        return undefined
+      },
+    })
+
+    // Alice creates an LWW doc
+    const presA = exchangeA.get("presence", PresenceDoc)
+    change(presA, (d: any) => {
+      d.cursor.x.set(100)
+      d.cursor.y.set(200)
+      d.name.set("Alice")
+    })
+
+    await drain(40)
+
+    // Bob should have Alice's presence
+    expect(exchangeB.has("presence")).toBe(true)
+    const presB = exchangeB.get("presence", PresenceDoc)
+    expect(presB.name()).toBe("Alice")
+    expect(presB.cursor.x()).toBe(100)
+    expect(presB.cursor.y()).toBe(200)
+
+    // Alice updates — LWW broadcasts snapshot
+    change(presA, (d: any) => {
+      d.cursor.x.set(500)
+      d.cursor.y.set(600)
+    })
+
+    await drain(40)
+
+    expect(presB.cursor.x()).toBe(500)
+    expect(presB.cursor.y()).toBe(600)
+  })
+})

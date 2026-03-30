@@ -134,6 +134,11 @@ export type Command =
   // Document operations
   | { type: "cmd/subscribe-doc"; docId: DocId }
   | {
+      type: "cmd/request-doc-creation"
+      docId: DocId
+      peer: PeerIdentityDetails
+    }
+  | {
       type: "cmd/import-doc-data"
       docId: DocId
       payload: SubstratePayload
@@ -317,38 +322,39 @@ function handleDocEnsure(
     mergeStrategy: msg.mergeStrategy,
   })
 
-  // Announce new doc to all established channels
+  // Announce new doc and request sync from all established channels.
+  // We send both discover (so peers learn we have the doc) and interest
+  // (so peers send us their state). This is essential for docs created
+  // via onDocDiscovered — the local doc is empty and needs to pull data.
   const commands: Command[] = []
 
   const establishedChannelIds = getEstablishedChannelIds(model)
   if (establishedChannelIds.length > 0) {
-    commands.push({
-      type: "cmd/send-message",
-      envelope: {
-        toChannelIds: establishedChannelIds,
-        message: {
-          type: "discover",
-          docIds: [msg.docId],
+    const isCausal = msg.mergeStrategy === "causal"
+    commands.push(
+      {
+        type: "cmd/send-message",
+        envelope: {
+          toChannelIds: establishedChannelIds,
+          message: {
+            type: "discover",
+            docIds: [msg.docId],
+          },
         },
       },
-    })
-  }
-
-  // Also send interest to storage channels
-  const storageChannelIds = getChannelIdsByKind(model, "storage")
-  if (storageChannelIds.length > 0) {
-    commands.push({
-      type: "cmd/send-message",
-      envelope: {
-        toChannelIds: storageChannelIds,
-        message: {
-          type: "interest",
-          docId: msg.docId,
-          version: msg.version,
-          reciprocate: true,
+      {
+        type: "cmd/send-message",
+        envelope: {
+          toChannelIds: establishedChannelIds,
+          message: {
+            type: "interest",
+            docId: msg.docId,
+            version: msg.version,
+            reciprocate: isCausal,
+          },
         },
       },
-    })
+    )
   }
 
   const cmd: Command | undefined =
@@ -600,9 +606,8 @@ function handleDiscover(
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
 
-  // For each doc that the remote peer has that we also have,
-  // send an interest to initiate sync
   const commands: Command[] = []
+  const peerState = model.peers.get(channel.peerId)
 
   for (const docId of message.docIds) {
     const docEntry = model.documents.get(docId)
@@ -622,11 +627,15 @@ function handleDiscover(
           },
         },
       })
+    } else if (peerState) {
+      // Unknown doc — request creation via callback
+      commands.push({
+        type: "cmd/request-doc-creation",
+        docId,
+        peer: peerState.identity,
+      })
     }
   }
-
-  // For docs we DON'T have, we could create them (future: auto-subscribe)
-  // For now, we only sync docs that both sides already have.
 
   const cmd: Command | undefined =
     commands.length === 0

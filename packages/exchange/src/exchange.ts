@@ -37,6 +37,20 @@ import { generatePeerId, validatePeerId } from "./utils.js"
 // ---------------------------------------------------------------------------
 
 /**
+ * Callback invoked when a peer announces a document the local exchange
+ * doesn't have. Return a `BoundSchema` to auto-create the document,
+ * or `undefined` to ignore it.
+ *
+ * @param docId - The document ID announced by the peer
+ * @param peer - Identity of the peer that announced the document
+ * @returns A BoundSchema to create the document, or undefined to ignore
+ */
+export type OnDocDiscovered = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+) => BoundSchema | undefined
+
+/**
  * Options for creating an Exchange.
  */
 export type ExchangeParams = {
@@ -54,6 +68,27 @@ export type ExchangeParams = {
    * Permission predicates controlling document access.
    */
   permissions?: Partial<Permissions>
+
+  /**
+   * Called when a peer discovers a document this exchange doesn't have.
+   *
+   * Return a `BoundSchema` to auto-create the document and begin sync,
+   * or `undefined` to ignore the unknown document.
+   *
+   * This enables dynamic document patterns where one peer creates a
+   * document and the other materializes it on demand.
+   *
+   * @example
+   * ```typescript
+   * const exchange = new Exchange({
+   *   onDocDiscovered: (docId, peer) => {
+   *     if (docId.startsWith("input:")) return PlayerInputDoc
+   *     return undefined
+   *   },
+   * })
+   * ```
+   */
+  onDocDiscovered?: OnDocDiscovered
 }
 
 
@@ -126,6 +161,7 @@ export class Exchange {
     identity = {},
     adapters = [],
     permissions,
+    onDocDiscovered,
   }: ExchangeParams = {}) {
     // Resolve peer identity
     const peerId = identity.peerId ?? generatePeerId()
@@ -143,6 +179,17 @@ export class Exchange {
       identity: fullIdentity,
       adapters,
       permissions,
+      onDocCreationRequested: onDocDiscovered
+        ? (docId, peer) => {
+            const bound = onDocDiscovered(docId, peer)
+            if (bound) {
+              // Cast to avoid TS2589 — get()'s Ref<S> return type triggers
+              // excessively deep instantiation when S defaults to SchemaNode.
+              // We don't need the return value here.
+              ;(this as any).get(docId, bound)
+            }
+          }
+        : undefined,
     })
   }
 

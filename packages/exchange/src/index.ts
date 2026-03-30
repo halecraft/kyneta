@@ -122,7 +122,7 @@ export { createPermissions } from "./permissions.js"
 // ---------------------------------------------------------------------------
 
 export { Exchange } from "./exchange.js"
-export type { ExchangeParams } from "./exchange.js"
+export type { ExchangeParams, OnDocDiscovered } from "./exchange.js"
 
 // ---------------------------------------------------------------------------
 // Sync — sync capabilities access

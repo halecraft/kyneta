@@ -116,6 +116,8 @@ These are genuinely different protocols matched to the mathematical properties o
 
 Document existence announcement. Sent after channel establishment to announce all known documents. The receiver sends `interest` messages for docs it also has.
 
+When the receiver encounters an unknown doc ID, it emits a `cmd/request-doc-creation` command. If the Exchange has an `onDocDiscovered` callback configured, the callback fires with the doc ID and the announcing peer's identity. If the callback returns a `BoundSchema`, the Exchange creates the document and the normal interest → offer flow proceeds. See §14 for details.
+
 ```ts
 type DiscoverMsg = {
   type: "discover"
@@ -416,9 +418,9 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindLww()`, `unw
 |------|----------|
 | `src/__tests__/timestamp-version.test.ts` | TimestampVersion serialize/parse/compare (12 tests) |
 | `src/__tests__/adapter.test.ts` | Adapter lifecycle, AdapterManager, BridgeAdapter (13 tests) |
-| `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types and merge strategies (23 tests) |
-| `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle (21 tests) |
-| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, and heterogeneous (7 tests) |
+| `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, and `cmd/request-doc-creation` (28 tests) |
+| `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle (24 tests) |
+| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, heterogeneous, and `onDocDiscovered` dynamic creation (12 tests) |
 | `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, LWW stale rejection, causal deltas (6 tests) |
 
 ---
@@ -552,6 +554,8 @@ End-to-end tests in `tests/exchange-websocket/` prove the full stack over real W
 
 11. **End-to-end in a real app**: The `examples/todo/` app proves the full managed sync path in a running application: `LoroSchema` → `bindLoro` → `Exchange` → `WebsocketServerAdapter`/`WebsocketClientAdapter` → Cast compiled view → collaborative real-time sync between browser tabs. No hand-rolled WebSocket code — `change(doc, fn)` on any client automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline.
 
+12. **Dynamic document creation via `onDocDiscovered`**: Peer A creates a document unknown to peer B. B's `onDocDiscovered` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and LWW (TimestampVersion) strategies. Callback returning `undefined` correctly suppresses creation.
+
 ---
 
 ## 14. SSE Network Adapter (`@kyneta/sse-network-adapter`)
@@ -617,3 +621,83 @@ The `parseTextPostBody` function (functional core) returns a discriminated union
 ### Integration Tests
 
 The SSE adapter's functional core (`parseTextPostBody`, `SseConnection.send`) is tested via unit tests that verify text frame round-trips and fragmentation. End-to-end integration tests over real HTTP connections are deferred to the chat example.
+
+---
+
+## 15. Lazy Document Creation (`onDocDiscovered`)
+
+### Callback Signature
+
+```ts
+type OnDocDiscovered = (docId: DocId, peer: PeerIdentityDetails) => BoundSchema | undefined
+```
+
+The `onDocDiscovered` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `discover`) a document the local exchange doesn't have. Return a `BoundSchema` to auto-create the document and begin sync, or `undefined` to ignore it.
+
+```ts
+const exchange = new Exchange({
+  onDocDiscovered: (docId, peer) => {
+    if (docId.startsWith("input:")) return PlayerInputDoc
+    return undefined
+  },
+})
+```
+
+### Protocol Flow
+
+```
+Peer A (has doc)               Peer B (doesn't have doc)
+     |                                |
+     |── discover ["input:alice"] ──> |
+     |                                | handleDiscover: unknown doc
+     |                                | → cmd/request-doc-creation
+     |                                | → onDocDiscovered("input:alice", peerA)
+     |                                | → returns PlayerInputDoc
+     |                                | → exchange.get("input:alice", PlayerInputDoc)
+     |                                | → registerDoc → doc-ensure dispatched
+     |                                |
+     | <── discover ["input:alice"] ──| doc-ensure: announce + interest
+     | <── interest { version: "0" } ─|
+     |                                |
+     |── offer { snapshot, data } ──> | handleOffer: import A's state
+     |                                |
+```
+
+### The `cmd/request-doc-creation` Command
+
+When `handleDiscover` encounters an unknown doc ID, the pure program emits:
+
+```ts
+{ type: "cmd/request-doc-creation", docId: DocId, peer: PeerIdentityDetails }
+```
+
+The `Synchronizer` runtime executes this command by calling the `DocCreationCallback` provided by the Exchange. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
+
+### Reentrancy Through the Dispatch Loop
+
+The reentrancy path is safe because of the serialized dispatch architecture (§9):
+
+1. `handleDiscover` returns `[model, cmd/request-doc-creation]`
+2. `#executeCommand` calls the callback
+3. Callback calls `exchange.get()` → `synchronizer.registerDoc()` → `#dispatch(doc-ensure)`
+4. `#dispatch` sees `#dispatching === true`, pushes `doc-ensure` to `#pendingMessages`, returns
+5. Control returns to the dispatch loop, which processes `doc-ensure` next
+6. `doc-ensure` emits `discover` + `interest` messages, accumulated in the outbound queue
+7. At quiescence, all messages are flushed together
+
+### `doc-ensure` Sends Both `discover` and `interest`
+
+When a document is registered after channels are established (the dynamic creation case), `handleDocEnsure` sends **both** `discover` and `interest` to all established channels:
+
+- **`discover`**: announces the doc to peers (they may create it via their own `onDocDiscovered`)
+- **`interest`**: requests data from peers who already have the doc (essential for pulling content into the newly created empty doc)
+
+Previously, `doc-ensure` only sent `discover` to network channels and `interest` to storage channels. This was insufficient for dynamic creation — the newly created doc was empty, and the `discover` → `interest` → `offer` round-trip resulted in the empty doc offering its empty state, rather than pulling the remote peer's data.
+
+### Relationship to the Vendor Pattern
+
+The vendor (`@loro-extended/repo`) handles this in `handleSyncRequest` — when a `sync-request` arrives for an unknown doc, the doc is auto-created, gated by `permissions.creation`. Kyneta's approach differs:
+
+1. **Trigger point**: `discover` (not `interest`/`sync-request`), because kyneta's `interest` is only sent for docs the sender already has.
+2. **Gating mechanism**: a callback returning `BoundSchema | undefined` (not a boolean permission predicate), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
+3. **No separate `creation` permission**: the callback subsumes the permission check. Returning `undefined` is equivalent to denying creation.
