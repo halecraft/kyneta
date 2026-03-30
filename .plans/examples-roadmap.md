@@ -52,7 +52,7 @@ HTTP-polling is not required by any example and can be deferred.
 
 The vendor has `@loro-extended/react` providing `RepoProvider`, `useDocument`, `useValue`, `change()`, `useDocIdFromHash`. Kyneta needs an equivalent:
 
-3. **`@kyneta/react`** — Thin React bindings over `@kyneta/exchange` and `@kyneta/schema`. Provides hooks for document access, reactive subscriptions, and the Exchange provider context. Required by todo-react, chat, bumper-cars, video-conference.
+3. **`@kyneta/react`** ✅ — Thin React bindings over `@kyneta/exchange` and `@kyneta/schema`. Provides `ExchangeProvider`, `useDocument`, `useValue`, `useSyncStatus`, and re-exports of `change()`, `subscribe()`, etc. Required by todo-react, chat, bumper-cars, video-conference.
 
 ### Exchange integration in recipe-book
 

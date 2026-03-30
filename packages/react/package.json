@@ -1,0 +1,46 @@
+{
+  "name": "@kyneta/react",
+  "version": "0.0.1",
+  "description": "Thin React bindings over @kyneta/schema + @kyneta/exchange",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./src": "./src/index.ts",
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "@kyneta/schema": ">=0.0.1",
+    "@kyneta/exchange": ">=0.0.1"
+  },
+  "devDependencies": {
+    "react": "^19.1.0",
+    "@types/react": "^19.1.8",
+    "@kyneta/schema": "workspace:*",
+    "@kyneta/exchange": "workspace:*",
+    "@kyneta/loro-schema": "workspace:*",
+    "@testing-library/react": "^16.3.0",
+    "vitest": "^4.0.17",
+    "jsdom": "^26.1.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2"
+  }
+}
