@@ -16,7 +16,6 @@ import {
   type Interpreter,
   type InterpreterLayer,
   interpret,
-  LoroSchema,
   type MapSchema,
   type NavigableMapRef,
   type NavigableSequenceRef,
@@ -615,48 +614,51 @@ describe("type-level: Plain<S> end-to-end structural schema", () => {
 })
 
 // ===========================================================================
-// LoroSchema tests — Loro-specific annotation types
+// Annotation tests — annotation-specific types
 // ===========================================================================
 
-describe("type-level: LoroSchema annotation tag literal preservation", () => {
-  it("LoroSchema.text() → tag is literal 'text'", () => {
-    const s = LoroSchema.text()
+describe("type-level: annotation tag literal preservation", () => {
+  it("Schema.annotated('text') → tag is literal 'text'", () => {
+    const s = Schema.annotated("text")
     expectTypeOf(s.tag).toEqualTypeOf<"text">()
   })
 
-  it("LoroSchema.counter() → tag is literal 'counter'", () => {
-    const s = LoroSchema.counter()
+  it("Schema.annotated('counter') → tag is literal 'counter'", () => {
+    const s = Schema.annotated("counter")
     expectTypeOf(s.tag).toEqualTypeOf<"counter">()
   })
 
-  it("LoroSchema.movableList() → tag is literal 'movable'", () => {
-    const s = LoroSchema.movableList(LoroSchema.plain.string())
+  it("Schema.annotated('movable') → tag is literal 'movable'", () => {
+    const s = Schema.annotated("movable", Schema.list(Schema.string()))
     expectTypeOf(s.tag).toEqualTypeOf<"movable">()
   })
 
-  it("LoroSchema.tree() → tag is literal 'tree'", () => {
-    const s = LoroSchema.tree(
-      LoroSchema.plain.struct({ label: LoroSchema.plain.string() }),
+  it("Schema.annotated('tree') → tag is literal 'tree'", () => {
+    const s = Schema.annotated(
+      "tree",
+      Schema.struct({ label: Schema.string() }),
     )
     expectTypeOf(s.tag).toEqualTypeOf<"tree">()
   })
 })
 
-describe("type-level: Writable<S> for Loro leaf annotations", () => {
+describe("type-level: Writable<S> for leaf annotations", () => {
   it("Writable<text()> = TextRef", () => {
-    type Result = Writable<ReturnType<typeof LoroSchema.text>>
+    const s = Schema.annotated("text")
+    type Result = Writable<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<TextRef>()
   })
 
   it("Writable<counter()> = CounterRef", () => {
-    type Result = Writable<ReturnType<typeof LoroSchema.counter>>
+    const s = Schema.annotated("counter")
+    type Result = Writable<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<CounterRef>()
   })
 
   it("Writable<struct with text and counter> maps annotations", () => {
     const s = Schema.struct({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
     })
     type Result = Writable<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<
@@ -668,22 +670,22 @@ describe("type-level: Writable<S> for Loro leaf annotations", () => {
   })
 })
 
-describe("type-level: Writable<S> end-to-end Loro schema", () => {
-  it("a Loro doc schema produces fully typed refs", () => {
-    const loroDoc = LoroSchema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
+describe("type-level: Writable<S> end-to-end annotated schema", () => {
+  it("an annotated doc schema produces fully typed refs", () => {
+    const loroDoc = Schema.doc({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
       messages: Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: LoroSchema.text(),
+          body: Schema.annotated("text"),
         }),
       ),
-      settings: LoroSchema.plain.struct({
-        darkMode: LoroSchema.plain.boolean(),
-        fontSize: LoroSchema.plain.number(),
+      settings: Schema.struct({
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
-      metadata: Schema.record(LoroSchema.plain.any()),
+      metadata: Schema.record(Schema.any()),
     })
 
     type Doc = Writable<typeof loroDoc>
@@ -704,53 +706,58 @@ describe("type-level: Writable<S> end-to-end Loro schema", () => {
   })
 })
 
-describe("type-level: Plain<S> for Loro leaf annotations", () => {
+describe("type-level: Plain<S> for leaf annotations", () => {
   it("Plain<text()> = string", () => {
-    type Result = Plain<ReturnType<typeof LoroSchema.text>>
+    const s = Schema.annotated("text")
+    type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<string>()
   })
 
   it("Plain<counter()> = number", () => {
-    type Result = Plain<ReturnType<typeof LoroSchema.counter>>
+    const s = Schema.annotated("counter")
+    type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<number>()
   })
 })
 
-describe("type-level: Plain<S> for Loro movable list", () => {
+describe("type-level: Plain<S> for movable list", () => {
   it("Plain<movableList(string())> = string[]", () => {
-    const s = LoroSchema.movableList(LoroSchema.plain.string())
+    const s = Schema.annotated("movable", Schema.list(Schema.string()))
     type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<string[]>()
   })
 
   it("Plain<movableList(struct({...}))> = typed object[]", () => {
-    const s = LoroSchema.movableList(
-      LoroSchema.plain.struct({
-        id: LoroSchema.plain.number(),
-        label: LoroSchema.plain.string(),
-      }),
+    const s = Schema.annotated(
+      "movable",
+      Schema.list(
+        Schema.struct({
+          id: Schema.number(),
+          label: Schema.string(),
+        }),
+      ),
     )
     type Result = Plain<typeof s>
     expectTypeOf<Result>().toEqualTypeOf<{ id: number; label: string }[]>()
   })
 })
 
-describe("type-level: Plain<S> end-to-end Loro schema", () => {
-  it("a Loro doc schema produces fully typed plain object", () => {
-    const loroDoc = LoroSchema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
+describe("type-level: Plain<S> end-to-end annotated schema", () => {
+  it("an annotated doc schema produces fully typed plain object", () => {
+    const loroDoc = Schema.doc({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
       messages: Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: LoroSchema.text(),
+          body: Schema.annotated("text"),
         }),
       ),
-      settings: LoroSchema.plain.struct({
-        darkMode: LoroSchema.plain.boolean(),
-        fontSize: LoroSchema.plain.number(),
+      settings: Schema.struct({
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
-      metadata: Schema.record(LoroSchema.plain.any()),
+      metadata: Schema.record(Schema.any()),
     })
 
     type Doc = Plain<typeof loroDoc>
@@ -970,79 +977,7 @@ describe("type-level: PlainSchema rejects annotated schemas", () => {
   })
 })
 
-describe("type-level: LoroSchema.plain.* constructors enforce PlainSchema constraint", () => {
-  it("plain.struct accepts plain scalars", () => {
-    const s = LoroSchema.plain.struct({
-      name: LoroSchema.plain.string(),
-      count: LoroSchema.plain.number(),
-      active: LoroSchema.plain.boolean(),
-    })
-    // Return type is ProductSchema (not PlainProductSchema) — works with Plain<S>
-    expectTypeOf(s).toMatchTypeOf<ProductSchema>()
-    expectTypeOf(s).toMatchTypeOf<SchemaNode>()
-  })
 
-  it("plain.struct accepts nested plain struct", () => {
-    const inner = LoroSchema.plain.struct({ x: LoroSchema.plain.string() })
-    const outer = LoroSchema.plain.struct({ nested: inner })
-    expectTypeOf(outer).toMatchTypeOf<ProductSchema>()
-  })
-
-  it("plain.struct accepts plain array inside", () => {
-    const arr = LoroSchema.plain.array(LoroSchema.plain.string())
-    const s = LoroSchema.plain.struct({ items: arr })
-    expectTypeOf(s).toMatchTypeOf<ProductSchema>()
-  })
-
-  it("plain.struct accepts nullable plain scalar", () => {
-    const nullable = Schema.nullable(Schema.string())
-    const s = LoroSchema.plain.struct({ bio: nullable })
-    expectTypeOf(s).toMatchTypeOf<ProductSchema>()
-  })
-
-  it("plain.struct rejects LoroSchema.text()", () => {
-    // @ts-expect-error — CRDT annotation inside plain struct
-    LoroSchema.plain.struct({ title: LoroSchema.text() })
-  })
-
-  it("plain.struct rejects LoroSchema.counter()", () => {
-    // @ts-expect-error — CRDT annotation inside plain struct
-    LoroSchema.plain.struct({ count: LoroSchema.counter() })
-  })
-
-  it("plain.array rejects LoroSchema.text()", () => {
-    // @ts-expect-error — CRDT annotation as plain array item
-    LoroSchema.plain.array(LoroSchema.text())
-  })
-
-  it("plain.record rejects LoroSchema.counter()", () => {
-    // @ts-expect-error — CRDT annotation as plain record item
-    LoroSchema.plain.record(LoroSchema.counter())
-  })
-
-  it("plain.struct rejects nullable wrapping a CRDT annotation", () => {
-    const nullableText = Schema.nullable(LoroSchema.text())
-    // @ts-expect-error — annotation nested inside sum inside plain struct
-    LoroSchema.plain.struct({ bio: nullableText })
-  })
-
-  it("Plain<S> and Writable<S> still work for plain.struct results", () => {
-    const s = LoroSchema.plain.struct({
-      name: LoroSchema.plain.string(),
-      active: LoroSchema.plain.boolean(),
-    })
-    type P = Plain<typeof s>
-    expectTypeOf<P>().toEqualTypeOf<{ name: string; active: boolean }>()
-
-    type W = Writable<typeof s>
-    expectTypeOf<W>().toEqualTypeOf<
-      {
-        readonly name: ScalarRef<string>
-        readonly active: ScalarRef<boolean>
-      } & ProductRef<{ name: string; active: boolean }>
-    >()
-  })
-})
 
 // ===========================================================================
 // NavigableSequenceRef / NavigableMapRef type hierarchy
@@ -1209,8 +1144,8 @@ describe("type-level: Ref<S> for maps", () => {
 describe("type-level: Ref<S> for annotated doc with text", () => {
   it("Ref<doc({ title: text() })> — .title has .insert() AND () call", () => {
     const s = Schema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
     })
     type Doc = Ref<typeof s>
     // Doc is callable
@@ -1238,12 +1173,12 @@ describe("type-level: Ref<S> for annotated doc with text", () => {
 describe("type-level: Ref<S> end-to-end", () => {
   it("full doc schema produces unified type with read + write + transact", () => {
     const docSchema = Schema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
       messages: Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: LoroSchema.text(),
+          body: Schema.annotated("text"),
         }),
       ),
       settings: Schema.struct({
@@ -1423,8 +1358,8 @@ describe("type-level: Ref<S> has HasTransact AND HasChangefeed", () => {
 
   it("Ref<doc> with text field — child text ref has [CHANGEFEED]", () => {
     const s = Schema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
     })
     type Doc = Ref<typeof s>
     expectTypeOf<Doc>().toHaveProperty(CHANGEFEED)
@@ -1696,12 +1631,12 @@ describe("type-level: InterpretBuilder<S, Ctx, Brands>", () => {
 // ===========================================================================
 
 describe("type-level: change() callback infers draft type from fluent-built doc", () => {
-  const docSchema = LoroSchema.doc({
-    title: LoroSchema.text(),
-    count: LoroSchema.counter(),
+  const docSchema = Schema.doc({
+    title: Schema.annotated("text"),
+    count: Schema.annotated("counter"),
     items: Schema.list(Schema.struct({ name: Schema.string() })),
-    settings: LoroSchema.plain.struct({
-      darkMode: LoroSchema.plain.boolean(),
+    settings: Schema.struct({
+      darkMode: Schema.boolean(),
     }),
   })
 

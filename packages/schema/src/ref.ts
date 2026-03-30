@@ -265,7 +265,7 @@ export type RWRef<S extends Schema> = SchemaRef<S, "rw">
  *
  * ```ts
  * const s = Schema.doc({
- *   title: LoroSchema.text(),
+ *   title: Schema.annotated("text"),
  *   items: Schema.list(Schema.struct({
  *     name: Schema.string(),
  *   })),

@@ -7,7 +7,7 @@
 //
 // Loro developers import only LoroSchema — one namespace, one import:
 //
-//   import { LoroSchema } from "@kyneta/schema"
+//   import { LoroSchema } from "@kyneta/loro-schema"
 //
 //   LoroSchema.doc({
 //     title: LoroSchema.text(),
@@ -19,7 +19,7 @@
 //     ),
 //   })
 
-import type { Schema as SchemaType } from "./schema.js"
+import type { Schema as SchemaType } from "@kyneta/schema"
 import {
   type AnnotatedSchema,
   type DiscriminatedSumSchema,
@@ -31,7 +31,7 @@ import {
   type ScalarSchema,
   Schema,
   type SequenceSchema,
-} from "./schema.js"
+} from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Loro-specific annotation constructors

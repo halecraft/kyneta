@@ -6,7 +6,7 @@ import {
   changefeed,
   CHANGEFEED,
   interpret,
-  LoroSchema,
+
   plainContext,
   readable,
   RawPath,

@@ -7,7 +7,6 @@ import { RawPath } from "../path.js"
 import {
   formatPath,
   interpret,
-  LoroSchema,
   plainInterpreter,
   Schema,
   SchemaValidationError,
@@ -559,16 +558,16 @@ describe("validate: nullable", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Annotated validation (Loro annotations)
+// Annotated validation
 // ---------------------------------------------------------------------------
 
 describe("validate: annotated", () => {
   it("text — valid string", () => {
-    expect(validate(LoroSchema.text(), "hello")).toBe("hello")
+    expect(validate(Schema.annotated("text"), "hello")).toBe("hello")
   })
 
   it("text — invalid (number)", () => {
-    const result = tryValidate(LoroSchema.text(), 42)
+    const result = tryValidate(Schema.annotated("text"), 42)
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors[0]?.expected).toContain("text")
@@ -576,11 +575,11 @@ describe("validate: annotated", () => {
   })
 
   it("counter — valid number", () => {
-    expect(validate(LoroSchema.counter(), 42)).toBe(42)
+    expect(validate(Schema.annotated("counter"), 42)).toBe(42)
   })
 
   it("counter — invalid (string)", () => {
-    const result = tryValidate(LoroSchema.counter(), "nope")
+    const result = tryValidate(Schema.annotated("counter"), "nope")
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors[0]?.expected).toContain("counter")
@@ -613,12 +612,12 @@ describe("validate: annotated", () => {
   })
 
   it("movableList — delegates to inner sequence", () => {
-    const s = LoroSchema.movableList(Schema.string())
+    const s = Schema.annotated("movable", Schema.list(Schema.string()))
     expect(validate(s, ["a", "b"])).toEqual(["a", "b"])
   })
 
   it("movableList — invalid item", () => {
-    const s = LoroSchema.movableList(Schema.string())
+    const s = Schema.annotated("movable", Schema.list(Schema.string()))
     const result = tryValidate(s, ["a", 42])
     expect(result.ok).toBe(false)
     if (!result.ok) {
@@ -627,7 +626,7 @@ describe("validate: annotated", () => {
   })
 
   it("tree — delegates to inner", () => {
-    const s = LoroSchema.tree(Schema.struct({ label: Schema.string() }))
+    const s = Schema.annotated("tree", Schema.struct({ label: Schema.string() }))
     expect(validate(s, { label: "root" })).toEqual({ label: "root" })
   })
 
@@ -649,9 +648,9 @@ describe("validate: annotated", () => {
 // ---------------------------------------------------------------------------
 
 describe("validate: nested realistic schema", () => {
-  const ProjectSchema = LoroSchema.doc({
-    name: LoroSchema.text(),
-    stars: LoroSchema.counter(),
+  const ProjectSchema = Schema.doc({
+    name: Schema.annotated("text"),
+    stars: Schema.annotated("counter"),
     tasks: Schema.list(
       Schema.struct({
         title: Schema.string(),

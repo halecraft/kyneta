@@ -9,7 +9,7 @@ import {
   hasChangefeed,
   hasComposedChangefeed,
   interpret,
-  LoroSchema,
+
   plainContext,
   readable,
   Schema,
@@ -46,20 +46,20 @@ function idxSeg(path: { readonly segments: readonly unknown[] }, i: number): { r
 // Shared fixtures
 // ===========================================================================
 
-const chatDocSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
+const chatDocSchema = Schema.doc({
+  title: Schema.annotated("text"),
+  count: Schema.annotated("counter"),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
-      body: LoroSchema.text(),
+      body: Schema.annotated("text"),
     }),
   ),
-  settings: LoroSchema.plain.struct({
-    darkMode: LoroSchema.plain.boolean(),
-    fontSize: LoroSchema.plain.number(),
+  settings: Schema.struct({
+    darkMode: Schema.boolean(),
+    fontSize: Schema.number(),
   }),
-  metadata: Schema.record(LoroSchema.plain.any()),
+  metadata: Schema.record(Schema.any()),
 })
 
 function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
@@ -607,9 +607,9 @@ describe("changefeed: TRANSACT preserved", () => {
 describe("changefeed: transaction integration", () => {
   it("no subscriber notifications during transaction buffering", () => {
     const store = { x: 0, y: 0 }
-    const schema = LoroSchema.doc({
-      x: LoroSchema.plain.number(),
-      y: LoroSchema.plain.number(),
+    const schema = Schema.doc({
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
@@ -679,9 +679,9 @@ describe("changefeed: transaction integration", () => {
 
   it("store buffers changes during transaction until commit", () => {
     const store = { x: 0, y: 0 }
-    const schema = LoroSchema.doc({
-      x: LoroSchema.plain.number(),
-      y: LoroSchema.plain.number(),
+    const schema = Schema.doc({
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
@@ -705,9 +705,9 @@ describe("changefeed: transaction integration", () => {
 
   it("commit delivers exactly one Changeset per affected path", () => {
     const store = { x: 0, y: 0 }
-    const schema = LoroSchema.doc({
-      x: LoroSchema.plain.number(),
-      y: LoroSchema.plain.number(),
+    const schema = Schema.doc({
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
@@ -775,9 +775,9 @@ describe("changefeed: transaction integration", () => {
 describe("changefeed: batched notification", () => {
   it("transaction commit delivers one Changeset with N changes to same-path subscriber", () => {
     const store = { x: 0, y: 0 }
-    const schema = LoroSchema.doc({
-      x: LoroSchema.plain.number(),
-      y: LoroSchema.plain.number(),
+    const schema = Schema.doc({
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
@@ -805,9 +805,9 @@ describe("changefeed: batched notification", () => {
 
   it("subscriber sees fully-applied state when Changeset arrives", () => {
     const store = { x: 0, y: 0 }
-    const schema = LoroSchema.doc({
-      x: LoroSchema.plain.number(),
-      y: LoroSchema.plain.number(),
+    const schema = Schema.doc({
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
@@ -848,9 +848,9 @@ describe("changefeed: batched notification", () => {
 
   it("origin tagging: commit(origin) attaches origin to emitted Changeset", () => {
     const store = { x: 0, y: 0 }
-    const schema = LoroSchema.doc({
-      x: LoroSchema.plain.number(),
-      y: LoroSchema.plain.number(),
+    const schema = Schema.doc({
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
@@ -901,9 +901,9 @@ describe("changefeed: batched notification", () => {
 
   it("multiple paths in one transaction: each path gets its own Changeset", () => {
     const store = { x: 0, y: 0 }
-    const schema = LoroSchema.doc({
-      x: LoroSchema.plain.number(),
-      y: LoroSchema.plain.number(),
+    const schema = Schema.doc({
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
@@ -934,9 +934,9 @@ describe("changefeed: batched notification", () => {
 
   it("no notification for paths without subscribers", () => {
     const store = { x: 0, y: 0 }
-    const schema = LoroSchema.doc({
-      x: LoroSchema.plain.number(),
-      y: LoroSchema.plain.number(),
+    const schema = Schema.doc({
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
@@ -1189,7 +1189,7 @@ describe("expandMapOpsToLeaves", () => {
 describe("changefeed: flush boundary enforcement", () => {
   it("change() propagates subscriber error, not secondary abort error", () => {
     const store = { x: 0 }
-    const schema = LoroSchema.doc({ x: LoroSchema.plain.number() })
+    const schema = Schema.doc({ x: Schema.number() })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
       .with(readable)
@@ -1213,9 +1213,9 @@ describe("changefeed: flush boundary enforcement", () => {
 
   it("re-entrant change() during notification delivery throws descriptive error", () => {
     const store = { x: 0, y: 0 }
-    const schema = LoroSchema.doc({
-      x: LoroSchema.plain.number(),
-      y: LoroSchema.plain.number(),
+    const schema = Schema.doc({
+      x: Schema.number(),
+      y: Schema.number(),
     })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)

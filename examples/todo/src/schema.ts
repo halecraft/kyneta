@@ -12,9 +12,9 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { LoroSchema, Schema, type Ref } from "@kyneta/schema"
+import { Schema, type Ref } from "@kyneta/schema"
 
-export const TodoSchema = LoroSchema.doc({
+export const TodoSchema = Schema.doc({
   todos: Schema.list(
     Schema.struct({
       text: Schema.string(),

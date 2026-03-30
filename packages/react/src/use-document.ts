@@ -43,6 +43,7 @@ type UseDocument = <S extends SchemaNode>(
  * ref instance (Exchange.get() is idempotent).
  *
  * ```tsx
+ * import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
  * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
  *
  * function App() {

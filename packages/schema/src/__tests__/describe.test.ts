@@ -1,5 +1,5 @@
 import { expect, it, describe as testDescribe } from "vitest"
-import { describe, LoroSchema, Schema } from "../index.js"
+import { describe, Schema } from "../index.js"
 
 // ===========================================================================
 // Base grammar tests — Schema only, no Loro annotations
@@ -268,43 +268,43 @@ testDescribe("describe: base grammar", () => {
 })
 
 // ===========================================================================
-// LoroSchema tests — Loro-specific annotation rendering
+// Annotation rendering tests
 // ===========================================================================
 
-testDescribe("describe: LoroSchema annotations", () => {
+testDescribe("describe: annotation rendering", () => {
   testDescribe("leaf annotations", () => {
     it("describes text", () => {
-      expect(describe(LoroSchema.text())).toBe("text")
+      expect(describe(Schema.annotated("text"))).toBe("text")
     })
 
     it("describes counter", () => {
-      expect(describe(LoroSchema.counter())).toBe("counter")
+      expect(describe(Schema.annotated("counter"))).toBe("counter")
     })
   })
 
   testDescribe("movable list", () => {
     it("describes movable list with inline item", () => {
-      expect(describe(LoroSchema.movableList(LoroSchema.plain.string()))).toBe(
+      expect(describe(Schema.annotated("movable", Schema.list(Schema.string())))).toBe(
         "movable-list<string>",
       )
     })
 
     it("describes movable list with complex item", () => {
-      const s = LoroSchema.movableList(
-        LoroSchema.plain.struct({
-          name: LoroSchema.plain.string(),
+      const s = Schema.annotated("movable", Schema.list(
+        Schema.struct({
+          name: Schema.string(),
         }),
-      )
+      ))
       expect(describe(s)).toBe(["movable-list", "  name: string"].join("\n"))
     })
   })
 
   testDescribe("tree", () => {
     it("describes tree with node data", () => {
-      const s = LoroSchema.tree(
-        LoroSchema.plain.struct({
-          label: LoroSchema.plain.string(),
-          weight: LoroSchema.plain.number(),
+      const s = Schema.annotated("tree",
+        Schema.struct({
+          label: Schema.string(),
+          weight: Schema.number(),
         }),
       )
       expect(describe(s)).toBe(
@@ -315,14 +315,14 @@ testDescribe("describe: LoroSchema annotations", () => {
 
   testDescribe("list with annotation item", () => {
     it("describes list with inline annotation item", () => {
-      expect(describe(Schema.list(LoroSchema.text()))).toBe("list<text>")
+      expect(describe(Schema.list(Schema.annotated("text")))).toBe("list<text>")
     })
 
     it("inlines movable-list inside a labeled field", () => {
       const s = Schema.struct({
         a: Schema.list(Schema.number()),
         b: Schema.record(Schema.boolean()),
-        c: LoroSchema.movableList(Schema.string()),
+        c: Schema.annotated("movable", Schema.list(Schema.string())),
       })
       expect(describe(s)).toBe(
         [
@@ -335,24 +335,24 @@ testDescribe("describe: LoroSchema annotations", () => {
   })
 
   testDescribe("realistic nested schemas", () => {
-    it("describes a full Loro project schema", () => {
-      const s = LoroSchema.doc({
-        name: LoroSchema.text(),
-        description: LoroSchema.text(),
-        stars: LoroSchema.counter(),
+    it("describes a full annotated project schema", () => {
+      const s = Schema.doc({
+        name: Schema.annotated("text"),
+        description: Schema.annotated("text"),
+        stars: Schema.annotated("counter"),
         tasks: Schema.list(
-          LoroSchema.plain.struct({
-            title: LoroSchema.plain.string(),
-            done: LoroSchema.plain.boolean(),
-            priority: LoroSchema.plain.number(),
+          Schema.struct({
+            title: Schema.string(),
+            done: Schema.boolean(),
+            priority: Schema.number(),
           }),
         ),
-        settings: LoroSchema.plain.struct({
-          visibility: LoroSchema.plain.string(),
-          maxTasks: LoroSchema.plain.number(),
-          archived: LoroSchema.plain.boolean(),
+        settings: Schema.struct({
+          visibility: Schema.string(),
+          maxTasks: Schema.number(),
+          archived: Schema.boolean(),
         }),
-        labels: Schema.record(LoroSchema.plain.string()),
+        labels: Schema.record(Schema.string()),
       })
 
       expect(describe(s)).toBe(
@@ -375,14 +375,14 @@ testDescribe("describe: LoroSchema annotations", () => {
     })
 
     it("describes deeply nested containers", () => {
-      const s = LoroSchema.doc({
+      const s = Schema.doc({
         channels: Schema.list(
           Schema.struct({
-            name: LoroSchema.text(),
+            name: Schema.annotated("text"),
             messages: Schema.list(
               Schema.struct({
                 author: Schema.string(),
-                body: LoroSchema.text(),
+                body: Schema.annotated("text"),
                 reactions: Schema.record(Schema.number()),
               }),
             ),
@@ -404,16 +404,16 @@ testDescribe("describe: LoroSchema annotations", () => {
     })
 
     it("describes schema with movable list and tree", () => {
-      const s = LoroSchema.doc({
-        tasks: LoroSchema.movableList(
-          LoroSchema.plain.struct({
-            title: LoroSchema.plain.string(),
+      const s = Schema.doc({
+        tasks: Schema.annotated("movable", Schema.list(
+          Schema.struct({
+            title: Schema.string(),
           }),
-        ),
-        hierarchy: LoroSchema.tree(
-          LoroSchema.plain.struct({
-            label: LoroSchema.plain.string(),
-            color: LoroSchema.plain.string(),
+        )),
+        hierarchy: Schema.annotated("tree",
+          Schema.struct({
+            label: Schema.string(),
+            color: Schema.string(),
           }),
         ),
       })
@@ -495,7 +495,7 @@ testDescribe("describe: LoroSchema annotations", () => {
     })
 
     it("renders nullable<text> for annotated inner", () => {
-      expect(describe(Schema.nullable(LoroSchema.text()))).toBe(
+      expect(describe(Schema.nullable(Schema.annotated("text")))).toBe(
         "nullable<text>",
       )
     })

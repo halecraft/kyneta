@@ -22,52 +22,45 @@ SchemaF<A> =
   | Annotated(tag, A?)              — semantic enrichment (text, counter, movable, tree, doc)
 ```
 
-Annotations attach backend semantics without changing the recursive structure. `LoroSchema.text()` is `annotated("text")`. `LoroSchema.counter()` is `annotated("counter")`. `LoroSchema.movableList(item)` is `annotated("movable", sequence(item))`. The annotation set is open — third-party backends define their own tags.
+Annotations attach backend semantics without changing the recursive structure. `Schema.annotated("text")` produces a text annotation. `Schema.annotated("counter")` produces a counter annotation. `Schema.annotated("movable", Schema.sequence(item))` produces a movable list. The annotation set is open — third-party backends define their own tags.
 
-### Two-Namespace Design: `Schema` + `LoroSchema`
+### Backend-Specific Constructor Namespaces
 
-The constructor namespace is split into two layers:
+The `Schema` namespace in `@kyneta/schema` provides the **backend-agnostic grammar**: scalars, structural composites, the `doc` root constructor, low-level grammar-native constructors (`scalar`, `product`, `sequence`, `map`, `sum`, `discriminatedSum`), and the universal `annotated(tag, inner?)` mechanism for semantic enrichment.
 
-**`Schema`** — the backend-agnostic base grammar. Contains scalars (`string`, `number`, `boolean`, `null`, `undefined`, `bytes`, `any`), structural composites (`struct`, `list`, `record`, `union`, `discriminatedUnion`, `nullable`), the `doc` root constructor, and low-level grammar-native constructors (`scalar`, `product`, `sequence`, `map`, `sum`, `discriminatedSum`, `annotated`).
+Each CRDT backend package provides its **own constructor namespace** that wraps `Schema.annotated(tag)` with ergonomic names matching that backend's vocabulary:
 
-**`LoroSchema`** — the Loro-specific developer API. Re-exports everything from `Schema` and adds Loro annotation constructors (`text`, `counter`, `movableList`, `tree`) plus a `plain` sub-namespace with composition-constrained constructors that enforce "no CRDTs inside value blobs" at the type level.
+| Package | Namespace | Annotation constructors |
+|---|---|---|
+| `@kyneta/loro-schema` | `LoroSchema` | `text()`, `counter()`, `movableList()`, `tree()`, plus `plain.*` sub-namespace |
+| `@kyneta/yjs-schema` | (standalone `text()` export) | `text()` |
 
-```
-Schema                          LoroSchema
-├── string()  number()  ...     ├── (all of Schema)
-├── struct()  list()  record()  ├── text()  counter()
-├── union()  nullable()         ├── movableList()  tree()
-├── discriminatedUnion()        └── plain.string()  plain.struct()  ...
-├── doc()
-└── scalar()  product()  ...
-```
+The interpreter dispatch is identical regardless of which constructor produced the node — interpreters dispatch on `_kind` and annotation tag strings, not constructor origin. `LoroSchema.text()` and `Schema.annotated("text")` produce the same schema node.
 
-A Loro developer imports only `LoroSchema` — one namespace, one import. A backend-agnostic library imports `Schema`. The interpreter dispatch is identical regardless of which constructor produced the node — interpreters dispatch on `_kind` and annotation tag strings, not constructor origin.
+**Note:** The core interpreters (`withNavigation`, `withReadable`, `withWritable`, `withChangefeed`, `describe`, `zero`) have built-in awareness of the `"text"`, `"counter"`, `"movable"`, `"tree"`, and `"doc"` annotation tags. These are the well-known tags that the grammar recognizes. Making the core fully tag-agnostic (open interpreter registry) is a possible future evolution.
 
 ### Composition Constraints Are Backend-Specific
 
-Even with a unified grammar, Loro imposes validity rules (e.g. you can't nest a CRDT container inside a plain value blob). These are **well-formedness rules** — context-sensitive constraints layered on the context-free grammar. The solution: the internal `Schema` type is unconstrained; the developer-facing constructor API (`LoroSchema.text()`, `LoroSchema.plain.struct()`, etc.) uses TypeScript's type system to enforce backend-specific constraints at build time.
+Even with a unified grammar, some backends impose validity rules (e.g. Loro can't nest a CRDT container inside a plain value blob). These are **well-formedness rules** — context-sensitive constraints layered on the context-free grammar. The solution: the internal `Schema` type is unconstrained; backend-specific constructor APIs (e.g. `LoroSchema.plain.struct()` in `@kyneta/loro-schema`) use TypeScript's type system to enforce constraints at build time.
 
-**`PlainSchema` — the annotation-free subset.** The grammar defines `PlainSchema`, a recursive type that includes all structural kinds (`ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`) but excludes `AnnotatedSchema`. Each structural kind has a `Plain*` counterpart (`PlainProductSchema`, `PlainSequenceSchema`, etc.) where the recursive position is narrowed from `Schema` to `PlainSchema`. These types exist solely for the recursive definition — they are not used in return positions.
+**`PlainSchema` — the annotation-free subset.** The grammar defines `PlainSchema` in `schema.ts`, a recursive type that includes all structural kinds (`ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`) but excludes `AnnotatedSchema`. Each structural kind has a `Plain*` counterpart (`PlainProductSchema`, `PlainSequenceSchema`, etc.) where the recursive position is narrowed from `Schema` to `PlainSchema`. These types are exported from `@kyneta/schema` for use by any backend's composition constraints.
 
-The `LoroSchema.plain.*` constructors use `PlainSchema` as their **parameter constraint** while keeping the original `ProductSchema<F>`, `SequenceSchema<I>`, etc. as **return types**:
+Backend `plain.*` constructors use `PlainSchema` as their **parameter constraint** while keeping the original `ProductSchema<F>`, `SequenceSchema<I>`, etc. as **return types**:
 
 ```ts
-// Parameter type narrowed to PlainSchema — rejects annotations:
-struct<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F>
+// In @kyneta/loro-schema — parameter type narrowed to PlainSchema:
+LoroSchema.plain.struct<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F>
 
 // This compiles:
-LoroSchema.plain.struct({ name: LoroSchema.plain.string() })
+LoroSchema.plain.struct({ name: Schema.string() })
 
 // This is a compile error — AnnotatedSchema ∉ PlainSchema:
-LoroSchema.plain.struct({ title: LoroSchema.text() })
+LoroSchema.plain.struct({ title: Schema.annotated("text") })
 ```
 
-The constraint is recursive: `LoroSchema.plain.struct({ items: Schema.list(LoroSchema.text()) })` also fails because `SequenceSchema<AnnotatedSchema<"text">>` is not assignable to `PlainSequenceSchema` (which requires `PlainSchema` items).
+The constraint is recursive: nesting an annotation anywhere inside a `plain.*` tree is rejected at compile time.
 
 By keeping return types as the original interfaces, all downstream consumers — `interpret()`, `Plain<S>`, `Writable<S>`, `describe()`, `validate()`, `Zero.structural()` — work unchanged. The `PlainSchema` types are invisible at the API surface; they are felt only when you try to pass an annotation where plain data is expected.
-
-This mirrors the approach in the predecessor shape system, where `Shape.plain.struct<T extends Record<string, ValueShape>>` constrains to `ValueShape` (excluding `ContainerShape`), while `Shape.struct<T extends Record<string, ContainerOrValueShape>>` accepts both.
 
 ### Annotations Unify Leaf CRDTs and Structural Modifiers
 
@@ -100,7 +93,7 @@ In the old grammar, `text` and `counter` were node kinds alongside `list` and `s
 - **Interpreter machinery** — `interpret`, `readable`, `writable`, `changefeed`, `bottomInterpreter`, `withNavigation`, `withReadable`, `withCaching`, `withWritable`, `withChangefeed`, `InterpretBuilder`, `InterpreterLayer`, etc.
 - **Substrate primitives** — `plainSubstrateFactory`, `createPlainSubstrate`, `plainContext`, `PlainVersion`.
 - **Symbols** — `CHANGEFEED`, `TRANSACT`, `CALL`, `INVALIDATE`.
-- **Other internals** — `LoroSchema`, change constructors (`ChangeBase`, `ScalarChange`, etc.), step functions, store utilities (`readByPath`, `writeByPath`, `applyChangeToStore`), capability types (`HasCall`, `HasRead`, `HasTransact`, `HasChangefeed`).
+- **Other internals** — change constructors (`ChangeBase`, `ScalarChange`, etc.), step functions, store utilities (`readByPath`, `writeByPath`, `applyChangeToStore`), capability types (`HasCall`, `HasRead`, `HasTransact`, `HasChangefeed`).
 
 #### `registerDoc` internal helper
 
@@ -116,7 +109,7 @@ Both `createDoc` and `createDocFromSnapshot` delegate to a shared `registerDoc` 
 "basic" was chosen over "plain" because "plain" already has four meanings in the codebase:
 
 1. `Plain<S>` — the type-level plain-JS snapshot of a schema
-2. `PlainSchema` / `LoroSchema.plain.*` — the plain (non-Loro) schema namespace
+2. `PlainSchema` — the annotation-free subset of Schema (used by backend composition constraints)
 3. `PlainSubstrate` / `plainContext` / `PlainVersion` — the plain-JS substrate implementation
 4. `plainInterpreter` — the eager deep-snapshot interpreter
 
@@ -151,14 +144,7 @@ Developer-facing sugar produces nodes in this grammar:
 | `Schema.nullable(inner)` | `sum([scalar("null"), inner])` | Sugar for `union(null, X)` |
 | `Schema.doc(fields)` | `annotated("doc", product(fields))` | Root document |
 
-Loro-specific annotation constructors live in `LoroSchema` (`src/loro-schema.ts`):
-
-| Sugar | Produces |
-|---|---|
-| `LoroSchema.text()` | `annotated("text")` |
-| `LoroSchema.counter()` | `annotated("counter")` |
-| `LoroSchema.movableList(item)` | `annotated("movable", sequence(item))` |
-| `LoroSchema.tree(nodeData)` | `annotated("tree", nodeData)` |
+Backend packages provide their own annotation constructors as ergonomic wrappers around `Schema.annotated(tag)`. For example, `@kyneta/loro-schema` exports `LoroSchema.text()` → `annotated("text")`, `LoroSchema.counter()` → `annotated("counter")`, etc. The core interpreters dispatch on the annotation tag string, not the constructor origin.
 
 ### `ProductSchema.discriminantKey`
 
@@ -195,7 +181,7 @@ The grammar has one `sum` kind with two flavors:
 
 ```ts
 Schema.discriminatedUnion("type", [
-  Schema.struct({ type: Schema.string("text"), body: LoroSchema.text() }),
+  Schema.struct({ type: Schema.string("text"), body: Schema.annotated("text") }),
   Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
 ])
 ```
@@ -871,7 +857,6 @@ packages/schema/
 │   └── interpreter-algebra.md   # Full theory document
 ├── src/
 │   ├── schema.ts                # Unified recursive type + constructors + ScalarPlain + buildVariantMap
-│   ├── loro-schema.ts           # LoroSchema namespace (Loro annotations + plain)
 │   ├── change.ts                # ChangeBase + built-in change types
 │   ├── changefeed.ts            # CHANGEFEED symbol, Changeset, Changefeed/ComposedChangefeed, Op
 │   ├── step.ts                  # Pure (State, Change) → State transitions

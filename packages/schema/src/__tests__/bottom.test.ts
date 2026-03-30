@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { interpret, LoroSchema, Schema } from "../index.js"
+import { interpret, Schema } from "../index.js"
 import type { Interpreter } from "../interpret.js"
 import type { HasCall, HasNavigation, HasRead } from "../interpreters/bottom.js"
 import { bottomInterpreter, CALL, makeCarrier } from "../interpreters/bottom.js"
@@ -16,9 +16,9 @@ const structuralDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-const loroDocSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
+const annotatedDocSchema = Schema.doc({
+  title: Schema.annotated("text"),
+  count: Schema.annotated("counter"),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
@@ -195,13 +195,13 @@ describe("bottom: sum (nullable / positional)", () => {
 
 describe("bottom: annotated", () => {
   it("text annotation produces a callable carrier", () => {
-    const result = interpretBottom(LoroSchema.text()) as any
+    const result = interpretBottom(Schema.annotated("text")) as any
     expect(typeof result).toBe("function")
     expect(CALL in result).toBe(true)
   })
 
   it("counter annotation produces a callable carrier", () => {
-    const result = interpretBottom(LoroSchema.counter()) as any
+    const result = interpretBottom(Schema.annotated("counter")) as any
     expect(typeof result).toBe("function")
     expect(CALL in result).toBe(true)
   })
@@ -214,9 +214,9 @@ describe("bottom: annotated", () => {
   })
 
   it("movableList annotation delegates to inner (sequence carrier)", () => {
-    const schema = LoroSchema.doc({
-      items: LoroSchema.movableList(
-        Schema.list(Schema.struct({ title: Schema.string() })),
+    const schema = Schema.doc({
+      items: Schema.annotated("movable",
+        Schema.list(Schema.list(Schema.struct({ title: Schema.string() }))),
       ),
     })
     // doc → product (bottom ignores fields), so we get a carrier
@@ -252,8 +252,8 @@ describe("bottom: annotated", () => {
 // ===========================================================================
 
 describe("bottom: full document tree", () => {
-  it("produces a carrier for a complex Loro doc schema", () => {
-    const result = interpretBottom(loroDocSchema) as any
+  it("produces a carrier for a complex annotated doc schema", () => {
+    const result = interpretBottom(annotatedDocSchema) as any
     expect(typeof result).toBe("function")
     expect(CALL in result).toBe(true)
     // Calling throws since no call behavior is configured
@@ -262,8 +262,8 @@ describe("bottom: full document tree", () => {
 
   it("every carrier in the tree is independently callable", () => {
     // Interpret individual parts to verify each kind gets a carrier
-    const text = interpretBottom(LoroSchema.text()) as any
-    const counter = interpretBottom(LoroSchema.counter()) as any
+    const text = interpretBottom(Schema.annotated("text")) as any
+    const counter = interpretBottom(Schema.annotated("counter")) as any
     const list = interpretBottom(Schema.list(Schema.string())) as any
     const record = interpretBottom(Schema.record(Schema.number())) as any
     const struct = interpretBottom(Schema.struct({ a: Schema.string() })) as any

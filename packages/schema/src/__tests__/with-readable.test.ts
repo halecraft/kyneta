@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest"
 import {
   dispatchSum,
   interpret,
-  LoroSchema,
   plainInterpreter,
   plainStoreReader,
   Schema,
@@ -26,9 +25,9 @@ const structuralDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-const loroDocSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
+const annotatedDocSchema = Schema.doc({
+  title: Schema.annotated("text"),
+  count: Schema.annotated("counter"),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
@@ -165,7 +164,7 @@ describe("withReadable: product", () => {
 // ===========================================================================
 
 describe("withReadable: sequence", () => {
-  const schema = LoroSchema.doc({
+  const schema = Schema.doc({
     messages: Schema.list(
       Schema.struct({
         author: Schema.string(),
@@ -383,21 +382,21 @@ describe("withReadable: map", () => {
 
 describe("withReadable: annotated", () => {
   it("text ref returns current string when called", () => {
-    const { doc } = createDoc(LoroSchema.doc({ title: LoroSchema.text() }), {
+    const { doc } = createDoc(Schema.doc({ title: Schema.annotated("text") }), {
       title: "Hello",
     })
     expect(doc.title()).toBe("Hello")
   })
 
   it("text ref returns empty string when store value is null", () => {
-    const { doc } = createDoc(LoroSchema.doc({ title: LoroSchema.text() }), {
+    const { doc } = createDoc(Schema.doc({ title: Schema.annotated("text") }), {
       title: null,
     })
     expect(doc.title()).toBe("")
   })
 
   it("text ref toPrimitive produces string", () => {
-    const { doc } = createDoc(LoroSchema.doc({ title: LoroSchema.text() }), {
+    const { doc } = createDoc(Schema.doc({ title: Schema.annotated("text") }), {
       title: "Hello",
     })
     expect(`Title: ${doc.title}`).toBe("Title: Hello")
@@ -405,21 +404,21 @@ describe("withReadable: annotated", () => {
   })
 
   it("counter ref returns current number when called", () => {
-    const { doc } = createDoc(LoroSchema.doc({ count: LoroSchema.counter() }), {
+    const { doc } = createDoc(Schema.doc({ count: Schema.annotated("counter") }), {
       count: 42,
     })
     expect(doc.count()).toBe(42)
   })
 
   it("counter ref returns 0 when store value is not a number", () => {
-    const { doc } = createDoc(LoroSchema.doc({ count: LoroSchema.counter() }), {
+    const { doc } = createDoc(Schema.doc({ count: Schema.annotated("counter") }), {
       count: "oops",
     })
     expect(doc.count()).toBe(0)
   })
 
   it("counter ref toPrimitive is hint-aware", () => {
-    const { doc } = createDoc(LoroSchema.doc({ count: LoroSchema.counter() }), {
+    const { doc } = createDoc(Schema.doc({ count: Schema.annotated("counter") }), {
       count: 42,
     })
     expect(doc.count[Symbol.toPrimitive]("string")).toBe("42")
@@ -428,7 +427,7 @@ describe("withReadable: annotated", () => {
   })
 
   it("counter ref works in template literal", () => {
-    const { doc } = createDoc(LoroSchema.doc({ count: LoroSchema.counter() }), {
+    const { doc } = createDoc(Schema.doc({ count: Schema.annotated("counter") }), {
       count: 7,
     })
     expect(`Stars: ${doc.count}`).toBe("Stars: 7")
@@ -586,8 +585,8 @@ describe("withReadable: nullable (positional sum)", () => {
 // ===========================================================================
 
 describe("withReadable: full doc tree", () => {
-  it("produces a complete navigable tree from a Loro doc schema", () => {
-    const { doc } = createDoc(loroDocSchema, {
+  it("produces a complete navigable tree from an annotated doc schema", () => {
+    const { doc } = createDoc(annotatedDocSchema, {
       title: "Hello",
       count: 42,
       messages: [{ author: "Alice", body: "Hi" }],
@@ -602,7 +601,7 @@ describe("withReadable: full doc tree", () => {
   })
 
   it("doc ref() returns full deep snapshot when called", () => {
-    const { doc } = createDoc(loroDocSchema, {
+    const { doc } = createDoc(annotatedDocSchema, {
       title: "Hello",
       count: 42,
       messages: [],
@@ -611,7 +610,7 @@ describe("withReadable: full doc tree", () => {
   })
 
   it("typeof every ref is 'function'", () => {
-    const { doc } = createDoc(loroDocSchema, {
+    const { doc } = createDoc(annotatedDocSchema, {
       title: "Hello",
       count: 0,
       messages: [],

@@ -41,7 +41,7 @@ import type {
  *
  * ### Annotations are transparent
  *
- * `LoroSchema.text()` and `Schema.string()` both read a string from
+ * `Schema.annotated("text")` and `Schema.string()` both read a string from
  * the store. The plain interpreter doesn't distinguish between annotated
  * and unannotated nodes — it reads from the same path regardless.
  */

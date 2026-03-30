@@ -4,7 +4,6 @@ import {
   bottomInterpreter,
   hasTransact,
   interpret,
-  LoroSchema,
   plainContext,
   plainStoreReader,
   readable,
@@ -38,11 +37,11 @@ const writeOnlyInterpreter = withWritable(bottomInterpreter)
 const _writableInterpreter = fullInterpreter
 
 // ===========================================================================
-// Base grammar tests — Schema only, no Loro annotations
+// Base grammar tests — Schema only, no annotations
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// Shared fixture: pure structural schema (no Loro annotations)
+// Shared fixture: pure structural schema (no annotations)
 // ---------------------------------------------------------------------------
 
 const structuralDocSchema = Schema.doc({
@@ -394,30 +393,30 @@ describe("writable: nullable (positional sum)", () => {
 })
 
 // ===========================================================================
-// LoroSchema tests — Loro-specific annotation-driven behavior
+// Annotated tests — annotation-specific behavior
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// Shared fixture: Loro document schema (with annotations)
+// Shared fixture: annotated document schema (with annotations)
 // ---------------------------------------------------------------------------
 
-const loroDocSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
+const annotatedDocSchema = Schema.doc({
+  title: Schema.annotated("text"),
+  count: Schema.annotated("counter"),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
-      body: LoroSchema.text(),
+      body: Schema.annotated("text"),
     }),
   ),
-  settings: LoroSchema.plain.struct({
-    darkMode: LoroSchema.plain.boolean(),
-    fontSize: LoroSchema.plain.number(),
+  settings: Schema.struct({
+    darkMode: Schema.boolean(),
+    fontSize: Schema.number(),
   }),
-  metadata: Schema.record(LoroSchema.plain.any()),
+  metadata: Schema.record(Schema.any()),
 })
 
-function createLoroDoc(storeOverrides: Record<string, unknown> = {}) {
+function createAnnotatedDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = {
     title: "Hello",
     count: 0,
@@ -427,98 +426,98 @@ function createLoroDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = plainContext(store)
-  const doc = interpret(loroDocSchema, ctx).with(readable).with(writable).done()
+  const doc = interpret(annotatedDocSchema, ctx).with(readable).with(writable).done()
   return { store, ctx, doc }
 }
 
 // ---------------------------------------------------------------------------
-// Text ref (Loro-specific)
+// Text ref (annotation-specific)
 // ---------------------------------------------------------------------------
 
 describe("writable: text ref", () => {
   it("ref() returns the current string", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.title()).toBe("Hello")
   })
 
   it(".insert() applies a text action to the store", () => {
-    const { store, doc } = createLoroDoc()
+    const { store, doc } = createAnnotatedDoc()
     doc.title.insert(5, " World")
     expect(store.title).toBe("Hello World")
   })
 
   it(".delete() removes characters from the store", () => {
-    const { store, doc } = createLoroDoc()
+    const { store, doc } = createAnnotatedDoc()
     doc.title.delete(0, 2)
     expect(store.title).toBe("llo")
   })
 
   it(".update() replaces the entire string", () => {
-    const { store, doc } = createLoroDoc()
+    const { store, doc } = createAnnotatedDoc()
     doc.title.update("New Title")
     expect(store.title).toBe("New Title")
   })
 })
 
 // ---------------------------------------------------------------------------
-// Counter ref (Loro-specific)
+// Counter ref (annotation-specific)
 // ---------------------------------------------------------------------------
 
 describe("writable: counter ref", () => {
   it("ref() returns the current value", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.count()).toBe(0)
   })
 
   it(".increment() adds to the value", () => {
-    const { store, doc } = createLoroDoc()
+    const { store, doc } = createAnnotatedDoc()
     doc.count.increment(5)
     expect(store.count).toBe(5)
   })
 
   it(".decrement() subtracts from the value", () => {
-    const { store, doc } = createLoroDoc()
+    const { store, doc } = createAnnotatedDoc()
     doc.count.decrement(3)
     expect(store.count).toBe(-3)
   })
 
   it(".increment() with no arg defaults to 1", () => {
-    const { store, doc } = createLoroDoc()
+    const { store, doc } = createAnnotatedDoc()
     doc.count.increment()
     expect(store.count).toBe(1)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Sequence ref (using Loro fixture for list-of-structs)
+// Sequence ref (using annotated fixture for list-of-structs)
 // ---------------------------------------------------------------------------
 
 describe("writable: sequence ref", () => {
   it(".length reflects the store array length", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.messages.length).toBe(1)
   })
 
   it(".at(i) returns a child ref for the item at index i", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     const msg = doc.messages.at(0)!
     expect(msg.author()).toBe("Alice")
   })
 
   it(".push() appends items and updates the store", () => {
-    const { store, doc } = createLoroDoc()
+    const { store, doc } = createAnnotatedDoc()
     doc.messages.push({ author: "Bob", body: "Hey" })
     expect((store.messages as unknown[]).length).toBe(2)
   })
 
   it(".delete() removes items from the store", () => {
-    const { store, doc } = createLoroDoc()
+    const { store, doc } = createAnnotatedDoc()
     doc.messages.delete(0)
     expect((store.messages as unknown[]).length).toBe(0)
   })
 
   it(".get(i) returns the plain value directly after .push()", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     doc.messages.push({ author: "Bob", body: "Hey" })
     const val = doc.messages.get(1)
     expect(typeof val).not.toBe("function")
@@ -531,8 +530,8 @@ describe("writable: sequence ref", () => {
 // ---------------------------------------------------------------------------
 
 describe("writable: annotation-driven behavior", () => {
-  it("LoroSchema.text() writable has .insert() and .delete()", () => {
-    const { doc } = createLoroDoc()
+  it("annotated text writable has .insert() and .delete()", () => {
+    const { doc } = createAnnotatedDoc()
     expect(typeof doc.title.insert).toBe("function")
     expect(typeof doc.title.delete).toBe("function")
     expect(typeof doc.title.update).toBe("function")
@@ -540,8 +539,8 @@ describe("writable: annotation-driven behavior", () => {
     expect(typeof doc.title).toBe("function")
   })
 
-  it("LoroSchema.plain.string() writable has .set() and is callable", () => {
-    const { doc } = createLoroDoc()
+  it("Schema.string() writable has .set() and is callable", () => {
+    const { doc } = createAnnotatedDoc()
     const msg = doc.messages.at(0)!
     expect(typeof msg.author).toBe("function")
     expect(typeof msg.author.set).toBe("function")
@@ -551,8 +550,8 @@ describe("writable: annotation-driven behavior", () => {
     ).toBeUndefined()
   })
 
-  it("LoroSchema.counter() writable has .increment() and .decrement()", () => {
-    const { doc } = createLoroDoc()
+  it("annotated counter writable has .increment() and .decrement()", () => {
+    const { doc } = createAnnotatedDoc()
     expect(typeof doc.count.increment).toBe("function")
     expect(typeof doc.count.decrement).toBe("function")
     // Callable — no .get()
@@ -561,12 +560,12 @@ describe("writable: annotation-driven behavior", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Portable refs (Loro-specific: TextRef works outside the tree)
+// Portable refs (annotation-specific: TextRef works outside the tree)
 // ---------------------------------------------------------------------------
 
-describe("writable: portable refs (Loro)", () => {
+describe("writable: portable refs (annotated)", () => {
   it("extracted text ref works outside the tree", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     const ref = doc.title
     ref.insert(ref().length, " World")
     expect(ref()).toBe("Hello World")
@@ -582,7 +581,7 @@ describe("writable: portable refs (Loro)", () => {
 // ===========================================================================
 
 describe("writable: invalidate-before-dispatch", () => {
-  const listSchema = LoroSchema.doc({
+  const listSchema = Schema.doc({
     items: Schema.list(Schema.struct({ name: Schema.string() })),
   })
 
@@ -658,7 +657,7 @@ describe("writable: invalidate-before-dispatch", () => {
 
 describe("writable: cacheless stack", () => {
   it("push() works without caching, store updated, no crash", () => {
-    const schema = LoroSchema.doc({
+    const schema = Schema.doc({
       items: Schema.list(Schema.struct({ name: Schema.string() })),
     })
     const store = { items: [{ name: "a" }] }
@@ -748,19 +747,19 @@ describe("writable: mutation + read integration", () => {
   })
 
   it("ref() reflects value after .insert()", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     doc.title.insert(5, " World")
     expect(doc.title()).toBe("Hello World")
   })
 
   it("ref() reflects value after .increment()", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     doc.count.increment(10)
     expect(doc.count()).toBe(10)
   })
 
   it("sequence ref() reflects new items after .push()", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     doc.messages.push({ author: "Bob", body: "Hey" })
     const arr = doc.messages()
     expect(Array.isArray(arr)).toBe(true)
@@ -768,7 +767,7 @@ describe("writable: mutation + read integration", () => {
   })
 
   it("sequence cache invalidation: after .push(), .at(newIndex) returns correct child", () => {
-    const { doc } = createLoroDoc()
+    const { doc } = createAnnotatedDoc()
     doc.messages.push({ author: "Bob", body: "Hey" })
     const msg = doc.messages.at(1)!
     expect(msg.author()).toBe("Bob")
@@ -818,7 +817,7 @@ describe("writable: TRANSACT attachment", () => {
   })
 
   it("sequence ref has [TRANSACT] pointing to ctx", () => {
-    const { ctx, doc } = createLoroDoc()
+    const { ctx, doc } = createAnnotatedDoc()
     expect(doc.messages[TRANSACT]).toBe(ctx)
   })
 
@@ -828,17 +827,17 @@ describe("writable: TRANSACT attachment", () => {
   })
 
   it("text annotated ref has [TRANSACT] pointing to ctx", () => {
-    const { ctx, doc } = createLoroDoc()
+    const { ctx, doc } = createAnnotatedDoc()
     expect(doc.title[TRANSACT]).toBe(ctx)
   })
 
   it("counter annotated ref has [TRANSACT] pointing to ctx", () => {
-    const { ctx, doc } = createLoroDoc()
+    const { ctx, doc } = createAnnotatedDoc()
     expect(doc.count[TRANSACT]).toBe(ctx)
   })
 
   it("doc (delegating annotation) ref has [TRANSACT] pointing to ctx", () => {
-    const { ctx, doc } = createLoroDoc()
+    const { ctx, doc } = createAnnotatedDoc()
     expect(doc[TRANSACT]).toBe(ctx)
   })
 

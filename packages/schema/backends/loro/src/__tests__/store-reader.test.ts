@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { LoroDoc, LoroMap, LoroList, LoroMovableList } from "loro-crdt"
-import { LoroSchema, RawPath, Schema } from "@kyneta/schema"
+import { RawPath, Schema } from "@kyneta/schema"
+import { LoroSchema } from "../loro-schema.js"
 import { loroStoreReader } from "../store-reader.js"
 import type { StoreReader } from "@kyneta/schema"
 

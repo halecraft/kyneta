@@ -3,7 +3,6 @@ import {
   bottomInterpreter,
   hasChangefeed,
   interpret,
-  LoroSchema,
   plainContext,
   Schema,
   withCaching,
@@ -29,9 +28,9 @@ const structuralDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-const _loroDocSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
+const _annotatedDocSchema = Schema.doc({
+  title: Schema.annotated("text"),
+  count: Schema.annotated("counter"),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
@@ -281,9 +280,9 @@ describe("withNavigation: sum dispatch", () => {
 
 describe("withNavigation: annotated delegation", () => {
   it("doc annotation delegates to inner (product gets getters)", () => {
-    const schema = LoroSchema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
+    const schema = Schema.doc({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
     })
     const store = { title: "Hello", count: 0 }
     const ctx: RefContext = { store: plainStoreReader(store) }
@@ -297,7 +296,7 @@ describe("withNavigation: annotated delegation", () => {
   })
 
   it("text annotation produces a carrier (no toPrimitive — that's withReadable)", () => {
-    const schema = LoroSchema.text()
+    const schema = Schema.annotated("text")
     const store = "Hello" as any
     const ctx: RefContext = { store: plainStoreReader(store) }
     const result = interpret(schema, navInterp, ctx) as any
@@ -308,7 +307,7 @@ describe("withNavigation: annotated delegation", () => {
   })
 
   it("counter annotation produces a carrier (no toPrimitive)", () => {
-    const schema = LoroSchema.counter()
+    const schema = Schema.annotated("counter")
     const store = 42 as any
     const ctx: RefContext = { store: plainStoreReader(store) }
     const result = interpret(schema, navInterp, ctx) as any
@@ -318,7 +317,7 @@ describe("withNavigation: annotated delegation", () => {
   })
 
   it("movable list annotation delegates to inner sequence", () => {
-    const schema = LoroSchema.movableList(
+    const schema = Schema.annotated("movable",
       Schema.list(Schema.struct({ title: Schema.string() })),
     )
     const store = [{ title: "A" }, { title: "B" }] as any
@@ -418,8 +417,8 @@ describe("withNavigation: navigate + write stack", () => {
   })
 
   it("text .update() works without reading layer", () => {
-    const schema = LoroSchema.doc({
-      title: LoroSchema.text(),
+    const schema = Schema.doc({
+      title: Schema.annotated("text"),
     })
     const store = { title: "hello" }
     const ctx = plainContext(store)

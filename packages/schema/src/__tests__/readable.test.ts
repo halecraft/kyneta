@@ -5,7 +5,6 @@ import {
   hasChangefeed,
   INVALIDATE,
   interpret,
-  LoroSchema,
   mapChange,
   plainContext,
   plainStoreReader,
@@ -49,23 +48,23 @@ function createReadOnlyDoc(storeOverrides: Record<string, unknown> = {}) {
   return { store, ctx, doc }
 }
 
-const loroDocSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
+const annotatedDocSchema = Schema.doc({
+  title: Schema.annotated("text"),
+  count: Schema.annotated("counter"),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
-      body: LoroSchema.text(),
+      body: Schema.annotated("text"),
     }),
   ),
-  settings: LoroSchema.plain.struct({
-    darkMode: LoroSchema.plain.boolean(),
-    fontSize: LoroSchema.plain.number(),
+  settings: Schema.struct({
+    darkMode: Schema.boolean(),
+    fontSize: Schema.number(),
   }),
-  metadata: Schema.record(LoroSchema.plain.any()),
+  metadata: Schema.record(Schema.any()),
 })
 
-function createReadOnlyLoroDoc(storeOverrides: Record<string, unknown> = {}) {
+function createReadOnlyAnnotatedDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = {
     title: "Hello",
     count: 42,
@@ -75,7 +74,7 @@ function createReadOnlyLoroDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx: RefContext = { store: plainStoreReader(store) }
-  const doc = interpret(loroDocSchema, readableInterpreter, ctx) as any
+  const doc = interpret(annotatedDocSchema, readableInterpreter, ctx) as any
   return { store, ctx, doc }
 }
 
@@ -103,22 +102,22 @@ describe("readable: callable refs", () => {
   })
 
   it("text ref returns current string when called", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.title()).toBe("Hello")
   })
 
   it("counter ref returns current number when called", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.count()).toBe(42)
   })
 
   it("counter ref returns 0 when store value is not a number", () => {
-    const { doc } = createReadOnlyLoroDoc({ count: "not a number" })
+    const { doc } = createReadOnlyAnnotatedDoc({ count: "not a number" })
     expect(doc.count()).toBe(0)
   })
 
   it("text ref returns empty string when store value is null", () => {
-    const { doc } = createReadOnlyLoroDoc({ title: null })
+    const { doc } = createReadOnlyAnnotatedDoc({ title: null })
     expect(doc.title()).toBe("")
   })
 
@@ -155,7 +154,7 @@ describe("readable: callable refs", () => {
   })
 
   it("sequence ref() returns a fresh snapshot — mutating it does not corrupt the store", () => {
-    const { doc, store } = createReadOnlyLoroDoc()
+    const { doc, store } = createReadOnlyAnnotatedDoc()
     const snap = doc.messages()
     snap.push({ author: "Evil", body: "Injected" })
 
@@ -214,32 +213,32 @@ describe("readable: callable refs", () => {
 
 describe("readable: toPrimitive coercion", () => {
   it("counter ref in template literal produces string", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(`Stars: ${doc.count}`).toBe("Stars: 42")
   })
 
   it("text ref in template literal produces string", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(`Title: ${doc.title}`).toBe("Title: Hello")
   })
 
   it("counter toPrimitive with 'number' hint returns number", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.count[Symbol.toPrimitive]("number")).toBe(42)
   })
 
   it("counter toPrimitive with 'string' hint returns string", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.count[Symbol.toPrimitive]("string")).toBe("42")
   })
 
   it("counter toPrimitive with 'default' hint returns number", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.count[Symbol.toPrimitive]("default")).toBe(42)
   })
 
   it("String(textRef) works via toPrimitive", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(String(doc.title)).toBe("Hello")
   })
 
@@ -299,26 +298,26 @@ describe("readable: product lazy getters", () => {
 
 describe("readable: sequence ref", () => {
   it(".length reflects the store array length", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.messages.length).toBe(1)
   })
 
   it(".at(i) returns a child ref that is itself callable", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     const msg = doc.messages.at(0)!
     expect(typeof msg).toBe("function")
     expect(msg.author()).toBe("Alice")
   })
 
   it("sequence ref is callable and returns plain array", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     const arr = doc.messages()
     expect(Array.isArray(arr)).toBe(true)
     expect(arr).toEqual([{ author: "Alice", body: "Hi" }])
   })
 
   it("iteration via for..of yields child refs", () => {
-    const { doc } = createReadOnlyLoroDoc({
+    const { doc } = createReadOnlyAnnotatedDoc({
       messages: [
         { author: "Alice", body: "Hi" },
         { author: "Bob", body: "Hey" },
@@ -332,35 +331,35 @@ describe("readable: sequence ref", () => {
   })
 
   it(".at(i) caches child refs (referential identity via address table)", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.messages.at(0)).toBe(doc.messages.at(0))
   })
 
   it(".at(i) returns undefined for out-of-bounds index", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.messages.at(100)).toBeUndefined()
   })
 
   it(".at(i) returns undefined for negative index", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.messages.at(-1)).toBeUndefined()
   })
 
   it(".get(i) returns the plain value directly (not a function)", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     const val = doc.messages.get(0)
     expect(typeof val).not.toBe("function")
     expect(val).toEqual({ author: "Alice", body: "Hi" })
   })
 
   it(".get(i) returns undefined for out-of-bounds index", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(doc.messages.get(100)).toBeUndefined()
     expect(doc.messages.get(-1)).toBeUndefined()
   })
 
   it(".get(i) returns a deep plain snapshot for structural items", () => {
-    const { doc } = createReadOnlyLoroDoc({
+    const { doc } = createReadOnlyAnnotatedDoc({
       messages: [
         { author: "Alice", body: "Hi" },
         { author: "Bob", body: "Hey" },
@@ -381,7 +380,7 @@ describe("readable: sequence ref", () => {
       metadata: {},
     }
     const ctx: RefContext = { store: plainStoreReader(store) }
-    const doc = interpret(loroDocSchema, readableInterpreter, ctx) as any
+    const doc = interpret(annotatedDocSchema, readableInterpreter, ctx) as any
     expect(doc.messages.get(0)).toEqual({ author: "Alice", body: "Hi" })
     // Mutate store directly
     ;(store.messages as unknown[]).push({ author: "Bob", body: "Hey" })
@@ -573,12 +572,12 @@ describe("readable: nullable (positional sum)", () => {
 
 describe("readable: composability hooks", () => {
   it("sequence ref has [INVALIDATE] symbol", () => {
-    const { doc } = createReadOnlyLoroDoc()
+    const { doc } = createReadOnlyAnnotatedDoc()
     expect(typeof doc.messages[INVALIDATE]).toBe("function")
   })
 
   it("sequence INVALIDATE is a no-op (addressing layer handles advancement)", () => {
-    const { doc } = createReadOnlyLoroDoc({
+    const { doc } = createReadOnlyAnnotatedDoc({
       messages: [
         { author: "Alice", body: "Hi" },
         { author: "Bob", body: "Hey" },
@@ -622,9 +621,9 @@ describe("readable: composability hooks", () => {
 describe("readable: composition with withChangefeed", () => {
   it("withChangefeed(withWritable(readableInterpreter)) attaches [CHANGEFEED] to callable refs", () => {
     const store = { title: "Hello", count: 42 }
-    const schema = LoroSchema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
+    const schema = Schema.doc({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
     })
     // withChangefeed needs WritableContext (extends RefContext)
     const ctx = plainContext(store)
@@ -646,13 +645,15 @@ describe("readable: composition with withChangefeed", () => {
 
 describe("type-level: Readable<S>", () => {
   it("Readable<text()> has call signature returning string", () => {
-    type Result = Readable<ReturnType<typeof LoroSchema.text>>
+    const textSchema = Schema.annotated("text")
+    type Result = Readable<typeof textSchema>
     // If this compiles, the type has a call signature
     const _check: (r: Result) => string = r => r()
   })
 
   it("Readable<counter()> has call signature returning number", () => {
-    type Result = Readable<ReturnType<typeof LoroSchema.counter>>
+    const counterSchema = Schema.annotated("counter")
+    type Result = Readable<typeof counterSchema>
     const _check: (r: Result) => number = r => r()
   })
 

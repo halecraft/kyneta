@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
   interpret,
-  LoroSchema,
   mapChange,
   plainContext,
   plainInterpreter,
@@ -37,9 +36,9 @@ const structuralDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-const loroDocSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
+const annotatedDocSchema = Schema.doc({
+  title: Schema.annotated("text"),
+  count: Schema.annotated("counter"),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
@@ -135,7 +134,7 @@ describe("withCaching: product referential identity", () => {
 // ===========================================================================
 
 describe("withCaching: sequence referential identity", () => {
-  const schema = LoroSchema.doc({
+  const schema = Schema.doc({
     messages: Schema.list(
       Schema.struct({
         author: Schema.string(),
@@ -414,7 +413,7 @@ describe("withCaching: INVALIDATE product", () => {
 // ===========================================================================
 
 describe("withCaching: INVALIDATE sequence", () => {
-  const schema = LoroSchema.doc({
+  const schema = Schema.doc({
     items: Schema.list(Schema.struct({ name: Schema.string() })),
   })
 
@@ -501,13 +500,13 @@ describe("withCaching: leaf pass-through", () => {
   })
 
   it("text annotation refs do not have [INVALIDATE]", () => {
-    const schema = LoroSchema.doc({ title: LoroSchema.text() })
+    const schema = Schema.doc({ title: Schema.annotated("text") })
     const { doc } = createDoc(schema, { title: "Hello" })
     expect(INVALIDATE in doc.title).toBe(false)
   })
 
   it("counter annotation refs do not have [INVALIDATE]", () => {
-    const schema = LoroSchema.doc({ count: LoroSchema.counter() })
+    const schema = Schema.doc({ count: Schema.annotated("counter") })
     const { doc } = createDoc(schema, { count: 0 })
     expect(INVALIDATE in doc.count).toBe(false)
   })
@@ -549,7 +548,7 @@ describe("withCaching: sum dispatch", () => {
 
 describe("withCaching: full doc tree", () => {
   it("produces a complete navigable, cached tree with identity", () => {
-    const { doc } = createDoc(loroDocSchema, {
+    const { doc } = createDoc(annotatedDocSchema, {
       title: "Hello",
       count: 42,
       messages: [{ author: "Alice", body: "Hi" }],

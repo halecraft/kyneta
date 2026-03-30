@@ -16,13 +16,13 @@ import {
   hasChangefeed,
   interpret,
   isIncrementChange,
-  LoroSchema,
   plainContext,
   readable,
   Schema,
   writable,
   Zero,
 } from "@kyneta/schema"
+import { LoroSchema } from "@kyneta/loro-schema"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import {

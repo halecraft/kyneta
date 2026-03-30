@@ -168,6 +168,9 @@ importers:
       '@farmfe/core':
         specifier: ^1.7.11
         version: 1.7.11(@types/node@22.19.15)
+      '@kyneta/loro-schema':
+        specifier: workspace:*
+        version: link:../schema/backends/loro
       '@types/js-beautify':
         specifier: ^1.14.3
         version: 1.14.3

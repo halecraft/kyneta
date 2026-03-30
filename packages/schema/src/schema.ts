@@ -5,9 +5,10 @@
 // semantics without changing the recursive structure.
 //
 // This grammar is backend-agnostic. Backend-specific annotation
-// constructors (e.g. LoroSchema.text(), LoroSchema.counter()) live in
-// loro-schema.ts. The developer-facing Schema namespace provides only
-// structural constructors and the open `annotated()` mechanism.
+// constructors live in their respective backend packages (e.g.
+// @kyneta/loro-schema, @kyneta/yjs-schema). The developer-facing Schema
+// namespace provides structural constructors and the open `annotated()`
+// mechanism.
 
 import type { Segment } from "./path.js"
 
@@ -158,7 +159,7 @@ export interface DiscriminatedSumSchema<
  * a string tag and optional metadata. The tag set is open — backends
  * define their own.
  *
- * Built-in tags used by the Loro-flavored constructor API:
+ * Well-known tags recognized by the core interpreters:
  * - `"text"` — collaborative text (inner: none, implies scalar string)
  * - `"counter"` — counter semantics (inner: none, implies scalar number)
  * - `"movable"` — move-capable sequence (inner: sequence)
@@ -186,12 +187,12 @@ export interface AnnotatedSchema<
 /**
  * The subset of the schema grammar that contains no annotations.
  *
- * `PlainSchema` is the recursive type used by `LoroSchema.plain.*`
+ * `PlainSchema` is the recursive type used by backend `plain.*`
  * constructors to enforce Loro's well-formedness rule: CRDT containers
  * (text, counter, movable list, tree) — which are all represented as
  * `AnnotatedSchema` — cannot appear inside plain value blobs.
  *
- * This type lives in the grammar layer (not in `LoroSchema`) because it
+ * This type lives in the grammar layer (not in any backend) because it
  * is a *structural* subset — "schema without annotations" — with no
  * backend-specific knowledge. Other backends with their own annotation
  * tags can reuse the same constraint.
@@ -375,8 +376,8 @@ function annotated<T extends string, S extends Schema | undefined = undefined>(
 // Developer-facing sugar — structural constructors
 // ---------------------------------------------------------------------------
 // These produce structural nodes in the unified grammar. Backend-specific
-// annotation constructors (text, counter, movableList, tree) live in
-// LoroSchema (src/loro-schema.ts).
+// annotation constructors (e.g. text, counter, movableList, tree) live in
+// their respective backend packages (@kyneta/loro-schema, @kyneta/yjs-schema).
 
 /**
  * Ordered list. Produces `sequence(item)`.
@@ -573,7 +574,7 @@ function nullable<S extends Schema>(
  * `Schema.sum`, `Schema.discriminatedSum`, `Schema.annotated`
  *
  * Backend-specific annotation constructors (text, counter, movableList,
- * tree) live in `LoroSchema`. See `src/loro-schema.ts`.
+ * tree) live in their respective backend packages.
  */
 export const Schema = {
   // Low-level structural constructors

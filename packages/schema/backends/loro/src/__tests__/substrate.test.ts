@@ -7,12 +7,12 @@ import {
   changefeed,
   change,
   subscribe,
-  LoroSchema,
   Schema,
   RawPath,
   type Ref,
   type SchemaNode,
 } from "@kyneta/schema"
+import { LoroSchema } from "../loro-schema.js"
 import type { Substrate, SubstratePayload } from "@kyneta/schema"
 import {
   createLoroSubstrate,

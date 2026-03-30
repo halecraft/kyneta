@@ -182,8 +182,6 @@ export {
 } from "./interpreters/writable.js"
 // Pre-built interpreter layers for fluent composition
 export { addressing, changefeed, navigation, readable, writable } from "./layers.js"
-// LoroSchema — Loro-specific annotations + composition constraints
-export { LoroSchema } from "./loro-schema.js"
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
 export type {
   Ref,
@@ -202,7 +200,7 @@ export type {
   PlainMapSchema,
   PlainPositionalSumSchema,
   PlainProductSchema,
-  // Plain subset (no annotations) — used by LoroSchema.plain.* constraints
+  // Plain subset (no annotations) — used by backend composition constraints
   PlainSchema,
   PlainSequenceSchema,
   PositionalSumSchema,

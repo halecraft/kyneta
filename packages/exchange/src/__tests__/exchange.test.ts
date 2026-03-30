@@ -3,7 +3,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest"
 import {
   Schema,
-  LoroSchema,
   bindPlain,
   bindEphemeral,
   bind,
@@ -11,7 +10,7 @@ import {
   plainSubstrateFactory,
   unwrap,
 } from "@kyneta/schema"
-import { bindLoro, loro } from "@kyneta/loro-schema"
+import { bindLoro, LoroSchema, loro } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
 import { sync, hasSync } from "../sync.js"
 import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"

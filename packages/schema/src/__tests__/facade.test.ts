@@ -6,7 +6,6 @@ import {
   changefeed,
   incrementChange,
   interpret,
-  LoroSchema,
   plainContext,
   RawPath,
   readable,
@@ -23,20 +22,20 @@ import {
 // Shared fixtures
 // ===========================================================================
 
-const chatDocSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
+const chatDocSchema = Schema.doc({
+  title: Schema.annotated("text"),
+  count: Schema.annotated("counter"),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
-      body: LoroSchema.text(),
+      body: Schema.annotated("text"),
     }),
   ),
-  settings: LoroSchema.plain.struct({
-    darkMode: LoroSchema.plain.boolean(),
-    fontSize: LoroSchema.plain.number(),
+  settings: Schema.struct({
+    darkMode: Schema.boolean(),
+    fontSize: Schema.number(),
   }),
-  metadata: Schema.record(LoroSchema.plain.any()),
+  metadata: Schema.record(Schema.any()),
 })
 
 function createSeed() {

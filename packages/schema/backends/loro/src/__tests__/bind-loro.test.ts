@@ -10,8 +10,8 @@ import {
 } from "@kyneta/schema"
 import { bindLoro } from "../bind-loro.js"
 import { loro } from "../loro-escape.js"
-import { LoroSchema } from "@kyneta/schema"
 import { Schema } from "@kyneta/schema"
+import { LoroSchema } from "../loro-schema.js"
 import { createLoroDoc } from "../create.js"
 import { getSubstrate } from "../create.js"
 

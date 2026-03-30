@@ -3,7 +3,6 @@ import type { Interpreter, Path } from "../index.js"
 import {
   createInterpreter,
   interpret,
-  LoroSchema,
   plainInterpreter,
   RawPath,
   Schema,
@@ -278,31 +277,31 @@ describe("interpret: path accumulation", () => {
 })
 
 // ===========================================================================
-// LoroSchema tests — Loro-specific annotation constructors
+// Annotation tests — annotation constructors
 // ===========================================================================
 
-describe("interpret: LoroSchema constructors produce correct grammar nodes", () => {
-  it("LoroSchema.text() produces annotated with tag 'text'", () => {
-    const s = LoroSchema.text()
+describe("interpret: annotation constructors produce correct grammar nodes", () => {
+  it("Schema.annotated('text') produces annotated with tag 'text'", () => {
+    const s = Schema.annotated("text")
     expect(s._kind).toBe("annotated")
     expect(s.tag).toBe("text")
   })
 
-  it("LoroSchema.counter() produces annotated with tag 'counter'", () => {
-    const s = LoroSchema.counter()
+  it("Schema.annotated('counter') produces annotated with tag 'counter'", () => {
+    const s = Schema.annotated("counter")
     expect(s._kind).toBe("annotated")
     expect(s.tag).toBe("counter")
   })
 
-  it("LoroSchema.movableList() produces annotated('movable', sequence(...))", () => {
-    const s = LoroSchema.movableList(Schema.string())
+  it("Schema.annotated('movable', Schema.list(...)) produces annotated('movable', sequence(...))", () => {
+    const s = Schema.annotated("movable", Schema.list(Schema.string()))
     expect(s._kind).toBe("annotated")
     expect(s.tag).toBe("movable")
     expect(s.schema?._kind).toBe("sequence")
   })
 
-  it("LoroSchema.tree() produces annotated('tree', product(...))", () => {
-    const s = LoroSchema.tree(Schema.struct({ label: Schema.string() }))
+  it("Schema.annotated('tree', ...) produces annotated('tree', product(...))", () => {
+    const s = Schema.annotated("tree", Schema.struct({ label: Schema.string() }))
     expect(s._kind).toBe("annotated")
     expect(s.tag).toBe("tree")
     expect(s.schema?._kind).toBe("product")
@@ -366,17 +365,17 @@ describe("interpret: discriminatedUnion constructor validation", () => {
   })
 })
 
-describe("interpret: LoroSchema plain round-trip with annotations", () => {
-  it("reads a document with Loro annotations correctly", () => {
-    const schema = LoroSchema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
-      messages: LoroSchema.movableList(
+describe("interpret: annotated schema plain round-trip", () => {
+  it("reads a document with annotations correctly", () => {
+    const schema = Schema.doc({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
+      messages: Schema.annotated("movable", Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: LoroSchema.text(),
+          body: Schema.annotated("text"),
         }),
-      ),
+      )),
     })
 
     const store = {

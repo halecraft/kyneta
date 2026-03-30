@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { LoroSchema, Schema, Zero } from "../index.js"
+import { Schema, Zero } from "../index.js"
 
 // ===========================================================================
-// Base grammar tests — Schema only, no Loro annotations
+// Base grammar tests — Schema only, no annotations
 // ===========================================================================
 
 describe("Zero.structural: scalars", () => {
@@ -65,8 +65,8 @@ describe("Zero.structural: constrained scalars", () => {
     })
   })
 
-  it("LoroSchema.plain constrained string → first option", () => {
-    expect(Zero.structural(LoroSchema.plain.string("a", "b"))).toBe("a")
+  it("Schema constrained string → first option", () => {
+    expect(Zero.structural(Schema.string("a", "b"))).toBe("a")
   })
 })
 
@@ -167,51 +167,51 @@ describe("Zero.structural: doc (structural root)", () => {
 })
 
 
-// LoroSchema tests — Loro-specific annotation defaults
+// Annotated tests — annotation-specific defaults
 // ===========================================================================
 
-describe("Zero.structural: LoroSchema annotations", () => {
+describe("Zero.structural: annotated schemas", () => {
   it("text → empty string", () => {
-    expect(Zero.structural(LoroSchema.text())).toBe("")
+    expect(Zero.structural(Schema.annotated("text"))).toBe("")
   })
 
   it("counter → 0", () => {
-    expect(Zero.structural(LoroSchema.counter())).toBe(0)
+    expect(Zero.structural(Schema.annotated("counter"))).toBe(0)
   })
 
   it("movableList → empty array", () => {
     expect(
-      Zero.structural(LoroSchema.movableList(LoroSchema.plain.string())),
+      Zero.structural(Schema.annotated("movable", Schema.list(Schema.string()))),
     ).toEqual([])
   })
 
-  it("doc with Loro annotations delegates correctly", () => {
+  it("doc with annotations delegates correctly", () => {
     expect(
       Zero.structural(
-        LoroSchema.doc({
-          title: LoroSchema.text(),
-          count: LoroSchema.counter(),
+        Schema.doc({
+          title: Schema.annotated("text"),
+          count: Schema.annotated("counter"),
         }),
       ),
     ).toEqual({ title: "", count: 0 })
   })
 
-  it("realistic Loro document schema", () => {
-    const chatDoc = LoroSchema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
+  it("realistic annotated document schema", () => {
+    const chatDoc = Schema.doc({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
       messages: Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: LoroSchema.text(),
+          body: Schema.annotated("text"),
         }),
       ),
-      settings: LoroSchema.plain.struct({
-        darkMode: LoroSchema.plain.boolean(),
-        fontSize: LoroSchema.plain.number(),
+      settings: Schema.struct({
+        darkMode: Schema.boolean(),
+        fontSize: Schema.number(),
       }),
-      tags: Schema.list(LoroSchema.plain.string()),
-      metadata: Schema.record(LoroSchema.plain.any()),
+      tags: Schema.list(Schema.string()),
+      metadata: Schema.record(Schema.any()),
     })
 
     expect(Zero.structural(chatDoc)).toEqual({

@@ -5,7 +5,6 @@ import {
   change,
   changefeed,
   interpret,
-  LoroSchema,
   PlainVersion,
   plainSubstrateFactory,
   readable,
@@ -31,9 +30,9 @@ function snapshotOf(
 // Shared test schema
 // ===========================================================================
 
-const TestSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
+const TestSchema = Schema.doc({
+  title: Schema.annotated("text"),
+  count: Schema.annotated("counter"),
   items: Schema.list(
     Schema.struct({
       name: Schema.string(),

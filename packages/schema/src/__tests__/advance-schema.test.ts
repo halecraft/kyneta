@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { type RawSegment, rawKey, rawIndex } from "../index.js"
-import { advanceSchema, LoroSchema, Schema } from "../index.js"
+import { advanceSchema, Schema } from "../index.js"
 
 // ===========================================================================
 // advanceSchema — pure schema descent for a single path segment
@@ -130,8 +130,9 @@ describe("advanceSchema", () => {
   // -------------------------------------------------------------------------
 
   describe("annotated: movable", () => {
-    const schema = LoroSchema.movableList(
-      Schema.struct({ name: Schema.string() }),
+    const schema = Schema.annotated(
+      "movable",
+      Schema.list(Schema.struct({ name: Schema.string() })),
     )
 
     it("unwraps movable annotation and returns item schema", () => {
@@ -147,14 +148,14 @@ describe("advanceSchema", () => {
 
   describe("annotated: leaf", () => {
     it("throws when advancing into text annotation (no inner schema)", () => {
-      const schema = LoroSchema.text()
+      const schema = Schema.annotated("text")
       expect(() => advanceSchema(schema, key("anything"))).toThrow(
         "leaf annotation",
       )
     })
 
     it("throws when advancing into counter annotation (no inner schema)", () => {
-      const schema = LoroSchema.counter()
+      const schema = Schema.annotated("counter")
       expect(() => advanceSchema(schema, index(0))).toThrow("leaf annotation")
     })
   })
@@ -267,18 +268,21 @@ describe("advanceSchema", () => {
   })
 
   // -------------------------------------------------------------------------
-  // LoroSchema doc with Loro annotations
+  // Annotated doc with annotations
   // -------------------------------------------------------------------------
 
-  describe("LoroSchema doc", () => {
-    const schema = LoroSchema.doc({
-      title: LoroSchema.text(),
-      count: LoroSchema.counter(),
-      tasks: LoroSchema.movableList(
-        Schema.struct({
-          name: Schema.string(),
-          done: Schema.boolean(),
-        }),
+  describe("annotated doc with annotations", () => {
+    const schema = Schema.doc({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
+      tasks: Schema.annotated(
+        "movable",
+        Schema.list(
+          Schema.struct({
+            name: Schema.string(),
+            done: Schema.boolean(),
+          }),
+        ),
       ),
     })
 

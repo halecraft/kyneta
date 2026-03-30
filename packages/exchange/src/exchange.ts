@@ -10,7 +10,7 @@
 //     adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 //   })
 //
-//   const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
+//   const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))  // LoroSchema from @kyneta/loro-schema
 //   const doc = exchange.get("my-doc", TodoDoc)
 //   sync(doc).waitForSync()
 
@@ -196,7 +196,7 @@ type DocCacheEntry = {
  * ```typescript
  * import { Exchange, sync } from "@kyneta/exchange"
  * import { bindPlain } from "@kyneta/schema"
- * import { bindLoro } from "@kyneta/loro-schema"
+ * import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
  *
  * const exchange = new Exchange({
  *   identity: { name: "alice" },
@@ -314,7 +314,7 @@ export class Exchange {
    * @example
    * ```typescript
    * import { bindPlain } from "@kyneta/schema"
-   * import { bindLoro } from "@kyneta/loro-schema"
+   * import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
    *
    * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
    * const doc = exchange.get("my-doc", TodoDoc)

@@ -31,7 +31,8 @@ export { applyChanges, change } from "@kyneta/schema"
 export { subscribe, subscribeNode } from "@kyneta/schema"
 
 // Schema definition (re-exported for convenience)
-export { LoroSchema, Schema } from "@kyneta/schema"
+export { Schema } from "@kyneta/schema"
+export { LoroSchema } from "./loro-schema.js"
 
 // Types (re-exported for convenience)
 export type { Changeset, Op, Ref, SubstratePayload } from "@kyneta/schema"
