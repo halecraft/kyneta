@@ -344,6 +344,7 @@ function createStructuredMap(
     return map
   }
 
+  // Process fields present in the value object
   for (const [key, val] of Object.entries(obj)) {
     if (val === undefined) continue
     const fieldSchema = structural.fields[key]
@@ -351,6 +352,23 @@ function createStructuredMap(
       ? maybeCreateSharedType(val, fieldSchema)
       : val
     map.set(key, yjsVal)
+  }
+
+  // Create shared types for annotated fields declared in the schema
+  // but missing from the value object. This ensures Yjs containers
+  // exist for later mutation (e.g. .insert() on a text field inside
+  // a struct inside a record/list).
+  for (const [key, fieldSchema] of Object.entries(
+    structural.fields as Record<string, SchemaNode>,
+  )) {
+    if (key in obj) continue // already processed above
+    const tag =
+      fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+    if (tag === "text") {
+      map.set(key, new Y.Text())
+    }
+    // Other annotated container types (counter, movable, tree) are
+    // unsupported in Yjs and will throw if used elsewhere.
   }
 
   return map

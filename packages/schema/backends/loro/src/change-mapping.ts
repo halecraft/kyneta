@@ -252,7 +252,7 @@ function sequenceChangeToDiff(
       for (const item of inst.insert as readonly unknown[]) {
         if (itemSchema && needsContainer(item, itemSchema)) {
           // Structured insert: create synthetic container diffs
-          const cid = syntheticCID("Map")
+          const cid = materializeCIDForSchema(itemSchema)
           items.push(jsonCID(cid))
           materializeValueDiffs(item, itemSchema, cid, result)
         } else {
@@ -307,7 +307,7 @@ function mapChangeToDiff(
       }
 
       if (fieldSchema && needsContainer(value, fieldSchema)) {
-        const cid = syntheticCID("Map")
+        const cid = materializeCIDForSchema(fieldSchema)
         updated[key] = jsonCID(cid)
         materializeValueDiffs(value, fieldSchema, cid, result)
       } else {
@@ -408,24 +408,48 @@ function counterChangeToDiff(change: IncrementChange): CounterDiff {
 // ---------------------------------------------------------------------------
 
 /**
+ * Map an annotation tag to the Loro container type string used in
+ * synthetic CID generation, or `undefined` if the tag does not
+ * correspond to a Loro container.
+ */
+function annotationToContainerType(
+  tag: string,
+): "Counter" | "Text" | "List" | "MovableList" | "Tree" | undefined {
+  switch (tag) {
+    case "counter": return "Counter"
+    case "text": return "Text"
+    case "movable": return "MovableList"
+    case "tree": return "Tree"
+    default: return undefined
+  }
+}
+
+/**
  * Determine whether a value needs to be materialized as a Loro container
  * (vs. inserted as a plain value).
  *
- * A value needs a container if the schema indicates it should be a
- * product (struct), sequence (list), or map — i.e., a composite type
- * that Loro represents as a container.
+ * A value needs a container if the schema indicates it should be:
+ * - A composite type (product/struct, sequence/list, map/record)
+ * - An annotated Loro container type (counter, text, movableList, tree)
+ *
+ * For annotated containers the value itself may be a primitive (number
+ * for counter, string for text) but Loro still needs a container.
  */
-function needsContainer(value: unknown, schema: SchemaNode): boolean {
-  if (value === null || value === undefined) return false
-  if (typeof value !== "object") return false
+function needsContainer(_value: unknown, schema: SchemaNode): boolean {
+  // Check for annotated Loro container types BEFORE unwrapping
+  if (schema._kind === "annotated") {
+    if (annotationToContainerType(schema.tag) !== undefined) {
+      return true
+    }
+  }
 
-  // Unwrap annotations
+  // Unwrap annotations (e.g. "doc" wrapping a product)
   let s = schema
   while (s._kind === "annotated" && s.schema !== undefined) {
     s = s.schema
   }
 
-  return s._kind === "product" || s._kind === "map"
+  return s._kind === "product" || s._kind === "map" || s._kind === "sequence"
 }
 
 /**
@@ -435,6 +459,12 @@ function needsContainer(value: unknown, schema: SchemaNode): boolean {
  * The `parentCID` is the synthetic CID that was referenced via 🦜: in
  * the parent's insert. This function emits a MapDiff for `parentCID`
  * with the value's fields, and recurses for any nested containers.
+ *
+ * For product (struct) schemas, also creates containers for annotated
+ * fields (counter, text, etc.) that are declared in the schema but may
+ * be missing from the value object. This ensures Loro containers exist
+ * for later mutation (e.g. `.increment()` on a counter inside a struct
+ * inside a record).
  */
 function materializeValueDiffs(
   value: unknown,
@@ -442,7 +472,42 @@ function materializeValueDiffs(
   parentCID: ContainerID,
   result: [ContainerID, Diff | JsonDiff][],
 ): void {
-  // Unwrap annotations
+  // Check for annotated Loro container types first (counter, text, etc.)
+  if (schema._kind === "annotated") {
+    const containerType = annotationToContainerType(schema.tag)
+    if (containerType !== undefined) {
+      // Leaf container — emit an appropriate diff to initialize it.
+      // The parentCID already points to this container (was referenced
+      // via 🦜: in the parent's updated map).
+      switch (schema.tag) {
+        case "counter": {
+          // Initialize counter with the provided value, or 0 if absent
+          const amount = typeof value === "number" ? value : 0
+          if (amount !== 0) {
+            result.push([parentCID, { type: "counter", increment: amount } as CounterDiff])
+          }
+          // If amount is 0, no diff needed — counter starts at 0
+          return
+        }
+        case "text": {
+          // Initialize text with the provided value, or "" if absent
+          const content = typeof value === "string" ? value : ""
+          if (content !== "") {
+            result.push([parentCID, {
+              type: "text",
+              diff: [{ insert: content }],
+            } as TextDiff])
+          }
+          return
+        }
+        default:
+          // movableList, tree — future work; fall through to structural handling
+          break
+      }
+    }
+  }
+
+  // Unwrap annotations (e.g. "doc" wrapping a product)
   let s = schema
   while (s._kind === "annotated" && s.schema !== undefined) {
     s = s.schema
@@ -452,33 +517,106 @@ function materializeValueDiffs(
     const obj = value as Record<string, unknown>
     const updated: Record<string, Value | JsonContainerID | undefined> = {}
 
+    // Deferred init diffs for annotated containers (counter, text).
+    // These must come AFTER the parent MapDiff that creates them via
+    // 🦜: JsonContainerID references. Loro resolves 🦜: refs when it
+    // processes a MapDiff, so the container must be created (by the
+    // MapDiff) before the init diff (CounterDiff, TextDiff) can target it.
+    const deferred: [ContainerID, Diff | JsonDiff][] = []
+
+    // Process fields present in the value object
     for (const [key, fieldValue] of Object.entries(obj)) {
       const fieldSchema = s.fields[key]
       if (fieldSchema && needsContainer(fieldValue, fieldSchema)) {
-        const childCID = syntheticCID("Map")
+        const childCID = materializeCIDForSchema(fieldSchema)
         updated[key] = jsonCID(childCID)
-        materializeValueDiffs(fieldValue, fieldSchema, childCID, result)
+        materializeValueDiffs(fieldValue, fieldSchema, childCID, deferred)
       } else {
         updated[key] = fieldValue as Value
       }
     }
 
+    // Create containers for annotated fields declared in the schema
+    // but missing from the value object. This ensures Loro containers
+    // exist for later mutation (e.g. counter.increment()).
+    for (const [key, fieldSchema] of Object.entries(s.fields)) {
+      if (key in obj) continue // already processed above
+      if (fieldSchema && needsContainer(undefined, fieldSchema as SchemaNode)) {
+        const childCID = materializeCIDForSchema(fieldSchema as SchemaNode)
+        updated[key] = jsonCID(childCID)
+        materializeValueDiffs(undefined, fieldSchema as SchemaNode, childCID, deferred)
+      }
+    }
+
+    // Parent MapDiff first (creates containers via 🦜: refs), then
+    // deferred init diffs for the containers it created.
     result.push([parentCID, { type: "map", updated } as MapJsonDiff])
+    result.push(...deferred)
+  } else if (s._kind === "product" && (value === undefined || value === null)) {
+    // Product with no value — still need to create containers for
+    // annotated fields in the schema
+    const updated: Record<string, Value | JsonContainerID | undefined> = {}
+    const deferred: [ContainerID, Diff | JsonDiff][] = []
+
+    for (const [key, fieldSchema] of Object.entries(s.fields)) {
+      if (fieldSchema && needsContainer(undefined, fieldSchema as SchemaNode)) {
+        const childCID = materializeCIDForSchema(fieldSchema as SchemaNode)
+        updated[key] = jsonCID(childCID)
+        materializeValueDiffs(undefined, fieldSchema as SchemaNode, childCID, deferred)
+      }
+    }
+
+    if (Object.keys(updated).length > 0) {
+      result.push([parentCID, { type: "map", updated } as MapJsonDiff])
+      result.push(...deferred)
+    }
   } else if (s._kind === "map" && typeof value === "object" && value !== null) {
     const obj = value as Record<string, unknown>
     const updated: Record<string, Value | JsonContainerID | undefined> = {}
+    const deferred: [ContainerID, Diff | JsonDiff][] = []
 
     for (const [key, entryValue] of Object.entries(obj)) {
       if (needsContainer(entryValue, s.item)) {
-        const childCID = syntheticCID("Map")
+        const childCID = materializeCIDForSchema(s.item)
         updated[key] = jsonCID(childCID)
-        materializeValueDiffs(entryValue, s.item, childCID, result)
+        materializeValueDiffs(entryValue, s.item, childCID, deferred)
       } else {
         updated[key] = entryValue as Value
       }
     }
 
     result.push([parentCID, { type: "map", updated } as MapJsonDiff])
+    result.push(...deferred)
+  }
+}
+
+/**
+ * Create a synthetic CID with the appropriate Loro container type
+ * for a given schema node.
+ *
+ * For annotated schemas (counter, text, etc.), uses the annotation tag
+ * to determine the container type. For structural schemas (product,
+ * map, sequence), uses "Map" or "List".
+ */
+function materializeCIDForSchema(schema: SchemaNode): ContainerID {
+  if (schema._kind === "annotated") {
+    const containerType = annotationToContainerType(schema.tag)
+    if (containerType !== undefined) {
+      return syntheticCID(containerType)
+    }
+  }
+
+  // Unwrap annotations to find the structural kind
+  let s = schema
+  while (s._kind === "annotated" && s.schema !== undefined) {
+    s = s.schema
+  }
+
+  switch (s._kind) {
+    case "sequence": return syntheticCID("List")
+    case "product":
+    case "map":
+    default: return syntheticCID("Map")
   }
 }
 
