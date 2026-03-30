@@ -7,11 +7,11 @@
     "verify": "verify"
   },
   "devDependencies": {
-    "@kyneta/websocket-network-adapter": "workspace:*",
-    "@kyneta/exchange": "workspace:*",
-    "@kyneta/schema": "workspace:*",
-    "@kyneta/loro-schema": "workspace:*",
-    "@kyneta/wire": "workspace:*",
+    "@kyneta/websocket-network-adapter": "workspace:^",
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/loro-schema": "workspace:^",
+    "@kyneta/wire": "workspace:^",
     "bun-types": "latest",
     "loro-crdt": "^1.10.0",
     "typescript": "^5.9.2",

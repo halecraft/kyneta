@@ -4,6 +4,14 @@
   "description": "Schema interpreter algebra — pure structure, pluggable interpretations",
   "author": "Duane Johnson",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/schema"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

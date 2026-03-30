@@ -4,6 +4,14 @@
   "description": "Thin React bindings over @kyneta/schema + @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/react"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -28,15 +36,15 @@
   },
   "peerDependencies": {
     "react": ">=18",
-    "@kyneta/schema": ">=0.0.1",
-    "@kyneta/exchange": ">=0.0.1"
+    "@kyneta/schema": "^0.0.1",
+    "@kyneta/exchange": "^0.0.1"
   },
   "devDependencies": {
     "react": "^19.1.0",
     "@types/react": "^19.1.8",
-    "@kyneta/schema": "workspace:*",
-    "@kyneta/exchange": "workspace:*",
-    "@kyneta/loro-schema": "workspace:*",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/loro-schema": "workspace:^",
     "@testing-library/react": "^16.3.0",
     "vitest": "^4.0.17",
     "jsdom": "^26.1.0",

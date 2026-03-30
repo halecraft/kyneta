@@ -4,8 +4,19 @@
   "description": "Websocket network adapter for @kyneta/exchange — client, server, and Bun integration",
   "author": "Duane Johnson",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/exchange/network-adapters/websocket"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "exports": {
     "./client": {
       "types": "./dist/client.d.ts",
@@ -27,13 +38,13 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": ">=0.0.1",
+    "@kyneta/exchange": "^0.0.1",
     "@kyneta/wire": ">=0.0.1"
   },
   "devDependencies": {
-    "@kyneta/exchange": "workspace:*",
-    "@kyneta/wire": "workspace:*",
-    "@kyneta/schema": "workspace:*",
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/wire": "workspace:^",
+    "@kyneta/schema": "workspace:^",
     "@types/node": "^22",
     "bun-types": "latest",
     "tsup": "^8.5.0",

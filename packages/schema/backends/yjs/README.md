@@ -176,3 +176,7 @@ Because `yjs(doc)` returns a standard `Y.Doc`, the entire Yjs provider ecosystem
 | `populateRoot(doc, schema, seed)` | Root container population |
 | `createYjsSubstrate(doc, schema)` | Low-level substrate construction |
 | `yjsSubstrateFactory` | `SubstrateFactory<YjsVersion>` |
+
+## License
+
+MIT

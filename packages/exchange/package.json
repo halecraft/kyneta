@@ -4,6 +4,14 @@
   "description": "Substrate-agnostic state exchange — sync for any @kyneta/schema substrate",
   "author": "Duane Johnson",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/exchange"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -27,11 +35,11 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/schema": ">=0.0.1"
+    "@kyneta/schema": "^0.0.1"
   },
   "devDependencies": {
-    "@kyneta/schema": "workspace:*",
-    "@kyneta/loro-schema": "workspace:*",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/loro-schema": "workspace:^",
     "loro-crdt": "^1.10.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",

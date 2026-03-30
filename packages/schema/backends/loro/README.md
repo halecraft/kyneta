@@ -149,3 +149,7 @@ Wrapping a `LoroDoc` in a kyneta substrate means `subscribe()` observes **all** 
   }
 }
 ```
+
+## License
+
+MIT

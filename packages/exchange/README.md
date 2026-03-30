@@ -1,6 +1,6 @@
 # @kyneta/exchange
 
-Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastructure for any substrate type — Loro CRDTs, plain JS objects, LWW ephemeral state — through a unified three-message protocol.
+Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastructure for any substrate type — Loro CRDTs, plain JS objects, LWW ephemeral state — through a four-message sync protocol (discover, interest, offer, dismiss) over a two-message handshake (establish-request, establish-response).
 
 ## Getting Started
 

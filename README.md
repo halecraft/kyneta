@@ -1,34 +1,45 @@
 # Kyneta
 
-> 🧪 **Experimental** — All packages are v0.0.1 prototypes. Not ready for production use.
-
 A collaborative-first application platform where CRDTs meet compiled UI. Kyneta explores three ideas in parallel: a constraint-based CRDT engine where merge is trivially set union and complexity lives in a Datalog solver; a schema algebra that collapses parallel tree walkers into a single generic catamorphism; and a compiled UI framework that exploits CRDT deltas for O(k) DOM updates.
 
 ## Packages
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/cast`](./packages/cast) (Kinetic) | Compiled delta-driven UI framework. Transforms natural TypeScript into code that directly consumes Loro CRDT deltas — character-level text patches, O(k) list updates, branch swapping — with no virtual DOM and no diffing. | 634 |
-| [`@kyneta/exchange`](./packages/exchange) | Substrate-agnostic state exchange. Three merge strategies (causal, sequential, LWW) dispatched over a uniform three-message protocol (discover, interest, offer). Hosts heterogeneous documents — Loro CRDTs, plain JS, ephemeral presence — in one sync network. | 127 |
-| [`@kyneta/perspective`](./packages/perspective) (Prism) | Convergent Constraint Systems engine. Agents assert constraints, merge is set union, and a stratified Datalog evaluator derives shared reality. Includes an incremental pipeline based on DBSP for O(\|Δ\|) updates. Zero runtime dependencies. | 1,374 |
-| [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Zero runtime dependencies. | 1,400+ |
-| [`@kyneta/loro-schema`](./packages/schema/backends/loro) | Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge that observes all mutations regardless of source. | 123 |
+| [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Zero runtime dependencies. | 1,447 |
+| [`@kyneta/compiler`](./packages/compiler) | Target-agnostic incremental view maintenance compiler. Transforms TypeScript AST into classified IR annotated with binding times, delta kinds, and incremental strategies. | 547 |
+| [`@kyneta/cast`](./packages/cast) (Kinetic) | Compiled delta-driven UI framework. Transforms natural TypeScript into code that directly consumes CRDT deltas — character-level text patches, O(k) list updates, branch swapping — with no virtual DOM and no diffing. | 634 |
+| [`@kyneta/exchange`](./packages/exchange) | Substrate-agnostic state exchange. Three merge strategies (causal, sequential, LWW) dispatched over a four-message sync protocol (discover, interest, offer, dismiss) with a two-message handshake (establish-request, establish-response). Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS, ephemeral presence — in one sync network. | 127 |
+| [`@kyneta/react`](./packages/react) | Thin React bindings over `@kyneta/schema` + `@kyneta/exchange`. Hooks for document access, sync status, and reactive value observation via `useSyncExternalStore`. | 29 |
+| [`@kyneta/loro-schema`](./packages/schema/backends/loro) | Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge that observes all mutations regardless of source. | 134 |
 | [`@kyneta/yjs-schema`](./packages/schema/backends/yjs) | Yjs CRDT substrate for `@kyneta/schema`. Wraps a `Y.Doc` with schema-aware typed reads, Yjs-native writes, and a persistent event bridge. | 143 |
-| [`@kyneta/react`](./packages/react) | Thin React bindings over `@kyneta/schema` + `@kyneta/exchange`. Hooks for document access, sync status, and reactive value observation. | 29 |
+| [`@kyneta/wire`](./packages/exchange/wire) | Wire format codecs, framing, and fragmentation for `@kyneta/exchange`. CBOR and JSON codecs, 6-byte binary frames, and a fragmentation protocol for cloud WebSocket gateways. | 181 |
+| [`@kyneta/websocket-network-adapter`](./packages/exchange/network-adapters/websocket) | WebSocket network adapter for `@kyneta/exchange`. Client, server, and Bun-specific handlers with connection lifecycle, keepalive, and reconnection. | 41 |
+| [`@kyneta/sse-network-adapter`](./packages/exchange/network-adapters/sse) | SSE network adapter for `@kyneta/exchange`. Client, server, and Express integration with text wire format and custom reconnection state machine. | 33 |
 
 ### Dependencies
 
 ```
-@kyneta/cast ───────depends on──▶ @kyneta/schema
-@kyneta/exchange ───depends on──▶ @kyneta/schema
-@kyneta/react ──────depends on──▶ @kyneta/schema + @kyneta/exchange
-@kyneta/loro-schema ─depends on──▶ @kyneta/schema + loro-crdt
-@kyneta/yjs-schema ──depends on──▶ @kyneta/schema + yjs
-@kyneta/perspective                (standalone)
-@kyneta/schema                     (standalone)
+@kyneta/schema                          (standalone — no runtime dependencies)
+    │
+    ├──► @kyneta/compiler               (+ ts-morph)
+    │        │
+    │        └──► @kyneta/cast          (+ unplugin)
+    │
+    ├──► @kyneta/exchange
+    │        │
+    │        ├──► @kyneta/wire          (+ tiny-cbor)
+    │        │        │
+    │        │        ├──► @kyneta/websocket-network-adapter
+    │        │        └──► @kyneta/sse-network-adapter
+    │        │
+    │        └──► @kyneta/react         (+ react)
+    │
+    ├──► @kyneta/loro-schema            (+ loro-crdt)
+    └──► @kyneta/yjs-schema             (+ yjs)
 ```
 
-The packages share a monorepo. `@kyneta/schema` is the foundational algebra; `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/exchange`, and `@kyneta/react` build on it; `@kyneta/perspective` and `@kyneta/cast` are independent explorations.
+`@kyneta/schema` is the foundational algebra — it defines the CHANGEFEED protocol, delta types, the interpreter algebra, and the `Substrate` interface. Everything else builds on it.
 
 ## Why Kyneta
 
@@ -53,30 +64,35 @@ The packages share a monorepo. `@kyneta/schema` is the foundational algebra; `@k
 # Install dependencies
 pnpm install
 
-# Run tests per package
-cd packages/cast && pnpm test
-cd packages/perspective && pnpm run test:run
+# Build all packages
+pnpm build
+
+# Run all tests
+pnpm test
+
+# Run tests for a specific package
 cd packages/schema && pnpm test
 ```
 
 ## Project Status
 
-All packages are experimental prototypes at v0.0.1. The core ideas are validated with 3,800+ tests across the monorepo, but APIs are unstable and integration between packages is incomplete.
-
-See each package's README for detailed status:
+The core ideas are validated with 3,300+ tests across the monorepo. See each package's README for detailed status:
 - [Kinetic status](./packages/cast/README.md#prototype-status)
-- [Prism status](./packages/perspective/README.md#project-status)
+- [Schema status](./packages/schema/README.md)
 
 ## License
 
-Each package is independently licensed. See the LICENSE file in each package directory.
+MIT — see [LICENSE](./LICENSE).
 
 | Package | License |
 |---------|---------|
+| `@kyneta/schema` | MIT |
+| `@kyneta/compiler` | MIT |
 | `@kyneta/cast` | MIT |
 | `@kyneta/exchange` | MIT |
-| `@kyneta/perspective` | BSD-3-Clause |
 | `@kyneta/react` | MIT |
-| `@kyneta/schema` | MIT |
 | `@kyneta/loro-schema` | MIT |
 | `@kyneta/yjs-schema` | MIT |
+| `@kyneta/wire` | MIT |
+| `@kyneta/websocket-network-adapter` | MIT |
+| `@kyneta/sse-network-adapter` | MIT |

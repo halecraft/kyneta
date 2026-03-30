@@ -4,6 +4,14 @@
   "description": "Wire format codecs, framing, and fragmentation for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/exchange/wire"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -27,14 +35,14 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": ">=0.0.1"
+    "@kyneta/exchange": "^0.0.1"
   },
   "dependencies": {
     "@levischuck/tiny-cbor": "^0.3.2"
   },
   "devDependencies": {
-    "@kyneta/exchange": "workspace:*",
-    "@kyneta/schema": "workspace:*",
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"

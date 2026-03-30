@@ -4,8 +4,19 @@
   "description": "SSE (Server-Sent Events) network adapter for @kyneta/exchange — client, server, and Express integration",
   "author": "Duane Johnson",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/exchange/network-adapters/sse"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "exports": {
     "./client": {
       "types": "./dist/client.d.ts",
@@ -27,7 +38,7 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": ">=0.0.1",
+    "@kyneta/exchange": "^0.0.1",
     "@kyneta/wire": ">=0.0.1"
   },
   "peerDependenciesMeta": {
@@ -36,9 +47,9 @@
     }
   },
   "devDependencies": {
-    "@kyneta/exchange": "workspace:*",
-    "@kyneta/wire": "workspace:*",
-    "@kyneta/schema": "workspace:*",
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/wire": "workspace:^",
+    "@kyneta/schema": "workspace:^",
     "@types/express": "^4.17.23",
     "@types/node": "^22",
     "express": "^4.21.0",

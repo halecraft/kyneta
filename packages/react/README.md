@@ -167,3 +167,7 @@ See [TECHNICAL.md](./TECHNICAL.md) for details on snapshot memoization, type rec
 | Framework abstraction | `FrameworkHooks` DI + factory pattern | None — CHANGEFEED is the framework boundary |
 | Text input hooks | `useCollaborativeText` (beforeinput) | Deferred (future work) |
 | Undo/redo | `useUndoManager` | Deferred (future work) |
+
+## License
+
+MIT
