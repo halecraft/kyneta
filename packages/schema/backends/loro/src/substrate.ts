@@ -11,6 +11,8 @@
 // importDelta, external doc.import, external raw Loro API mutations).
 
 import type {
+  Replica,
+  ReplicaFactory,
   Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
@@ -305,6 +307,79 @@ export function createLoroSubstrate(
 }
 
 // ---------------------------------------------------------------------------
+// loroReplicaFactory — ReplicaFactory<LoroVersion>
+// ---------------------------------------------------------------------------
+
+/**
+ * Schema-free replica factory for Loro substrates.
+ *
+ * Constructs headless `Replica<LoroVersion>` instances backed by bare
+ * `LoroDoc`s — no schema walking, no container initialization, no
+ * StoreReader, no event bridge, no changefeed. Just the CRDT runtime
+ * with version tracking and export/import.
+ *
+ * Used by conduit participants (storage adapters, routing servers)
+ * that need to accumulate state, compute per-peer deltas, and compact
+ * storage without ever interpreting document fields.
+ */
+function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
+  return {
+    version(): LoroVersion {
+      return new LoroVersion(doc.version())
+    },
+
+    exportSnapshot(): SubstratePayload {
+      return { encoding: "binary", data: doc.export({ mode: "snapshot" }) }
+    },
+
+    exportSince(since: LoroVersion): SubstratePayload | null {
+      try {
+        const bytes = doc.export({ mode: "update", from: since.vv })
+        return { encoding: "binary", data: bytes }
+      } catch {
+        return null
+      }
+    },
+
+    importDelta(payload: SubstratePayload, _origin?: string): void {
+      if (
+        payload.encoding !== "binary" ||
+        !(payload.data instanceof Uint8Array)
+      ) {
+        throw new Error(
+          "LoroReplica.importDelta only supports binary-encoded payloads",
+        )
+      }
+      doc.import(payload.data)
+    },
+  }
+}
+
+export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
+  createEmpty(): Replica<LoroVersion> {
+    return createLoroReplica(new LoroDoc())
+  },
+
+  fromSnapshot(payload: SubstratePayload): Replica<LoroVersion> {
+    if (
+      payload.encoding !== "binary" ||
+      !(payload.data instanceof Uint8Array)
+    ) {
+      throw new Error(
+        "LoroReplicaFactory.fromSnapshot only supports binary-encoded payloads",
+      )
+    }
+    const doc = new LoroDoc()
+    doc.import(payload.data)
+    return createLoroReplica(doc)
+  },
+
+  parseVersion(serialized: string): LoroVersion {
+    return LoroVersion.parse(serialized)
+  },
+}
+
+// ---------------------------------------------------------------------------
 // loroSubstrateFactory — SubstrateFactory<LoroVersion>
 // ---------------------------------------------------------------------------
 
@@ -319,6 +394,8 @@ export function createLoroSubstrate(
  * - `parseVersion(serialized)` — deserializes a LoroVersion.
  */
 export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
+  replica: loroReplicaFactory,
+
   create(schema: SchemaNode): Substrate<LoroVersion> {
     const doc = new LoroDoc()
 

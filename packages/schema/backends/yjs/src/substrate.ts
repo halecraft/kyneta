@@ -13,6 +13,8 @@
 import type {
   ChangeBase,
   Path,
+  Replica,
+  ReplicaFactory,
   Schema as SchemaNode,
   StoreReader,
   Substrate,
@@ -222,7 +224,86 @@ export function createYjsSubstrate(
  *   payload, returns a substrate.
  * - `parseVersion(serialized)` — deserializes a YjsVersion.
  */
+// ---------------------------------------------------------------------------
+// yjsReplicaFactory — ReplicaFactory<YjsVersion>
+// ---------------------------------------------------------------------------
+
+/**
+ * Schema-free replica factory for Yjs substrates.
+ *
+ * Constructs headless `Replica<YjsVersion>` instances backed by bare
+ * `Y.Doc`s — no schema walking, no container initialization, no
+ * StoreReader, no event bridge, no changefeed. Just the CRDT runtime
+ * with version tracking and export/import.
+ *
+ * Used by conduit participants (storage adapters, routing servers)
+ * that need to accumulate state, compute per-peer deltas, and compact
+ * storage without ever interpreting document fields.
+ */
+function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
+  return {
+    version(): YjsVersion {
+      return new YjsVersion(Y.encodeStateVector(doc))
+    },
+
+    exportSnapshot(): SubstratePayload {
+      return { encoding: "binary", data: Y.encodeStateAsUpdate(doc) }
+    },
+
+    exportSince(since: YjsVersion): SubstratePayload | null {
+      try {
+        const bytes = Y.encodeStateAsUpdate(doc, since.sv)
+        return { encoding: "binary", data: bytes }
+      } catch {
+        return null
+      }
+    },
+
+    importDelta(payload: SubstratePayload, _origin?: string): void {
+      if (
+        payload.encoding !== "binary" ||
+        !(payload.data instanceof Uint8Array)
+      ) {
+        throw new Error(
+          "YjsReplica.importDelta only supports binary-encoded payloads",
+        )
+      }
+      Y.applyUpdate(doc, payload.data)
+    },
+  }
+}
+
+export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
+  createEmpty(): Replica<YjsVersion> {
+    return createYjsReplica(new Y.Doc())
+  },
+
+  fromSnapshot(payload: SubstratePayload): Replica<YjsVersion> {
+    if (
+      payload.encoding !== "binary" ||
+      !(payload.data instanceof Uint8Array)
+    ) {
+      throw new Error(
+        "YjsReplicaFactory.fromSnapshot only supports binary-encoded payloads",
+      )
+    }
+    const doc = new Y.Doc()
+    Y.applyUpdate(doc, payload.data)
+    return createYjsReplica(doc)
+  },
+
+  parseVersion(serialized: string): YjsVersion {
+    return YjsVersion.parse(serialized)
+  },
+}
+
+// ---------------------------------------------------------------------------
+// yjsSubstrateFactory — SubstrateFactory<YjsVersion>
+// ---------------------------------------------------------------------------
+
 export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
+  replica: yjsReplicaFactory,
+
   create(schema: SchemaNode): Substrate<YjsVersion> {
     const doc = new Y.Doc()
     ensureContainers(doc, schema)

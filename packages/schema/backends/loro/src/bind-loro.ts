@@ -18,10 +18,10 @@
 import { bind } from "@kyneta/schema"
 import type { BoundSchema } from "@kyneta/schema"
 import type { Schema as SchemaNode } from "@kyneta/schema"
-import type { Substrate, SubstrateFactory, SubstratePayload } from "@kyneta/schema"
+import type { Substrate, SubstrateFactory, SubstratePayload, ReplicaFactory } from "@kyneta/schema"
 import { LoroDoc } from "loro-crdt"
 import type { PeerID } from "loro-crdt"
-import { createLoroSubstrate, ensureRootContainer } from "./substrate.js"
+import { createLoroSubstrate, ensureRootContainer, loroReplicaFactory } from "./substrate.js"
 import { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
@@ -68,6 +68,8 @@ function createLoroFactory(
   const numericPeerId = hashPeerId(peerId)
 
   return {
+    replica: loroReplicaFactory,
+
     create(schema: SchemaNode): Substrate<LoroVersion> {
       const doc = new LoroDoc()
       doc.setPeerId(numericPeerId)

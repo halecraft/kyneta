@@ -1,14 +1,37 @@
 // substrate — the formal interface between state management, the
 // interpreter stack, and the replication layer.
 //
-// `SubstratePrepare` (Phase 0) is the ground floor of the prepare/flush
-// pipeline. `Substrate<V>` extends it with versioning and transfer
-// semantics. `SubstrateFactory<V>` constructs substrates from schemas
-// or snapshot payloads.
+// Two orthogonal concerns are factored into separate interfaces:
 //
-// The payload type `SubstratePayload` is intentionally opaque — the
-// meaning of a payload is determined by which method produced it and
-// which method consumes it (see Design Decisions in jj:wqoqzzpp).
+//   Replica<V>     — replication surface (schema-free)
+//                    version tracking, export/import, payload transfer.
+//                    Sufficient for conduit participants: storage adapters,
+//                    routing servers, CDN edges, replication services.
+//
+//   Substrate<V>   — interpretation surface (schema-aware)
+//                    extends Replica with readable store, writable context,
+//                    prepare/flush pipeline. Required for participants that
+//                    read, write, or observe document state.
+//
+// The same factoring applies to their factories:
+//
+//   ReplicaFactory<V>    — construct replicas without a schema.
+//   SubstrateFactory<V>  — construct substrates from schemas.
+//                          Every SubstrateFactory provides a ReplicaFactory
+//                          via the `replica` accessor.
+//
+// Three tiers of participation follow from this factoring:
+//
+//   Opaque conduit      — stores/forwards SubstratePayload blobs verbatim.
+//                          Needs nothing from this module beyond the types.
+//
+//   Replication conduit — accumulates state, computes per-peer deltas,
+//                          compacts storage. Needs ReplicaFactory + Replica.
+//                          Does NOT need a schema.
+//
+//   Full interpreter    — reads, writes, observes document state via the
+//                          schema-driven interpreter stack. Needs
+//                          SubstrateFactory + Substrate + SchemaNode.
 //
 // Context: jj:wmyomqzw (SubstratePrepare), jj:wqoqzzpp (Substrate)
 
@@ -17,37 +40,6 @@ import type { Path } from "./interpret.js"
 import type { WritableContext } from "./interpreters/writable.js"
 import type { Schema as SchemaNode } from "./schema.js"
 import type { StoreReader } from "./store.js"
-
-// ---------------------------------------------------------------------------
-// SubstratePrepare — mutation primitives for the WritableContext
-// ---------------------------------------------------------------------------
-
-/**
- * The mutation primitives a substrate exposes to the WritableContext.
- *
- * `prepare` applies a single addressed delta to the substrate's state.
- * `onFlush` is called once per flush cycle, after the changefeed layer
- * has delivered notifications to subscribers.
- *
- * These are the ground floor of the prepare/flush pipeline. Caching and
- * changefeed layers wrap them — the substrate never needs to know about
- * those layers.
- */
-export interface SubstratePrepare {
-  /** The readable store for the interpreter's RefContext. */
-  readonly store: StoreReader
-
-  /** Apply a single (path, change) to the backing state. */
-  prepare(path: Path, change: ChangeBase): void
-
-  /**
-   * Called once per flush cycle after all prepares and before changefeed
-   * notification delivery (so subscribers see the updated version/log).
-   *
-   * For PlainSubstrate: bumps version, appends to operation log.
-   */
-  onFlush(origin?: string): void
-}
 
 // ---------------------------------------------------------------------------
 // Version — external version marker
@@ -94,7 +86,7 @@ export interface Version {
  * determined by which method produced it and which method consumes it:
  *
  *   exportSnapshot() → SubstratePayload → factory.fromSnapshot()
- *   exportSince()    → SubstratePayload → substrate.importDelta()
+ *   exportSince()    → SubstratePayload → replica.importDelta()
  *
  * The `encoding` hint tells the transport layer whether the data is
  * text-safe (JSON) or binary (needs base64 for text contexts).
@@ -105,17 +97,123 @@ export interface SubstratePayload {
 }
 
 // ---------------------------------------------------------------------------
-// Substrate<V> — state + versioning + transfer
+// Replica<V> — replication surface (schema-free)
 // ---------------------------------------------------------------------------
 
 /**
- * A Substrate holds document state and defines its transfer semantics.
+ * The replication surface of a document.
  *
- * Three responsibilities:
+ * A Replica holds the state needed for convergent state transfer between
+ * peers: version tracking, snapshot export, incremental delta export,
+ * and delta import. It does NOT provide schema-driven reads, writes, or
+ * the changefeed — those require the full `Substrate`.
+ *
+ * Two responsibilities:
+ * 1. Track versioning via Version
+ * 2. Export/import state for replication (sync, storage, relay)
+ *
+ * Replicas are the minimal capability for conduit participants:
+ * - Storage adapters use replicas for compaction (accumulate deltas,
+ *   export a consolidated snapshot).
+ * - Routing servers use replicas for per-peer delta computation
+ *   (accumulate state from multiple peers, export deltas relative
+ *   to each downstream peer's version).
+ *
+ * For causal substrates (Loro, Yjs), creating a replica requires the
+ * CRDT runtime but NOT a schema. For sequential/LWW substrates, a
+ * replica is a plain JS object with an op log — no external runtime.
+ */
+export interface Replica<V extends Version = Version> {
+  /** Current version marker. */
+  version(): V
+
+  /**
+   * Full state — sufficient to construct an equivalent replica from
+   * scratch via `ReplicaFactory.fromSnapshot()`.
+   *
+   * For PlainSubstrate: JSON-serialized store (a state image).
+   * For LoroSubstrate: doc.export({ mode: "snapshot" }) (a complete oplog).
+   */
+  exportSnapshot(): SubstratePayload
+
+  /**
+   * Delta payload since a version — sufficient to catch up a live
+   * replica via `importDelta()`.
+   *
+   * Returns null if delta export is not possible (e.g. version too old,
+   * log compacted past that point, substrate doesn't support incremental).
+   *
+   * For PlainSubstrate: JSON-serialized Op[] from the version log.
+   * For LoroSubstrate: doc.export({ mode: "update", from: vv }).
+   */
+  exportSince(since: V): SubstratePayload | null
+
+  /**
+   * Apply a delta payload to this live replica. The payload must have
+   * been produced by `exportSince()` or `exportSnapshot()` on a
+   * compatible replica/substrate.
+   *
+   * For a full Substrate, import also fires the changefeed so that
+   * subscribers observe the incoming mutations. For a bare Replica,
+   * no changefeed exists — import only updates the internal state
+   * and version.
+   *
+   * For PlainSubstrate: parses Op[], applies to the store.
+   * For LoroSubstrate: doc.import(bytes).
+   */
+  importDelta(payload: SubstratePayload, origin?: string): void
+}
+
+// ---------------------------------------------------------------------------
+// SubstratePrepare — mutation primitives for the WritableContext
+// ---------------------------------------------------------------------------
+
+/**
+ * The mutation primitives a substrate exposes to the WritableContext.
+ *
+ * `prepare` applies a single addressed delta to the substrate's state.
+ * `onFlush` is called once per flush cycle, after the changefeed layer
+ * has delivered notifications to subscribers.
+ *
+ * These are the ground floor of the prepare/flush pipeline. Caching and
+ * changefeed layers wrap them — the substrate never needs to know about
+ * those layers.
+ */
+export interface SubstratePrepare {
+  /** The readable store for the interpreter's RefContext. */
+  readonly store: StoreReader
+
+  /** Apply a single (path, change) to the backing state. */
+  prepare(path: Path, change: ChangeBase): void
+
+  /**
+   * Called once per flush cycle after all prepares and before changefeed
+   * notification delivery (so subscribers see the updated version/log).
+   *
+   * For PlainSubstrate: bumps version, appends to operation log.
+   */
+  onFlush(origin?: string): void
+}
+
+// ---------------------------------------------------------------------------
+// Substrate<V> — interpretation + replication (schema-aware)
+// ---------------------------------------------------------------------------
+
+/**
+ * A Substrate holds document state and defines both its interpretation
+ * and transfer semantics.
+ *
+ * Extends `Replica<V>` with the schema-driven interpretation surface:
+ * readable store, writable context, prepare/flush pipeline. This is the
+ * full-stack interface required by participants that read, write, or
+ * observe document state (clients, application servers with game logic,
+ * etc.).
+ *
+ * Responsibilities:
  * 1. Provide a readable store + WritableContext for the interpreter stack
- *    (inherited from SubstratePrepare: store, prepare, onFlush)
- * 2. Track versioning via Version
- * 3. Export/import state for replication (sync, SSR)
+ *    (from SubstratePrepare: store, prepare, onFlush)
+ * 2. Track versioning via Version (from Replica)
+ * 3. Export/import state for replication (from Replica)
  *
  * The substrate fires the `project` morphism automatically: after any
  * mutation (local or imported), the resulting Ops are delivered through
@@ -128,56 +226,67 @@ export interface SubstratePayload {
  * deltas via `Changeset`. Between lifetimes, there is no continuity.
  */
 export interface Substrate<V extends Version = Version>
-  extends SubstratePrepare {
+  extends Replica<V>,
+    SubstratePrepare {
   /** The readable store for the interpreter (from SubstratePrepare). */
   readonly store: StoreReader
 
   /** Build a WritableContext for this substrate. */
   context(): WritableContext
-
-  /** Current version marker. */
-  version(): V
-
-  /**
-   * Full state — sufficient to construct an equivalent substrate from
-   * scratch via `SubstrateFactory.fromSnapshot()`.
-   *
-   * For PlainSubstrate: JSON-serialized store (a state image).
-   * For LoroSubstrate: doc.export({ mode: "snapshot" }) (a complete oplog).
-   */
-  exportSnapshot(): SubstratePayload
-
-  /**
-   * Delta payload since a version — sufficient to catch up a live
-   * substrate via `importDelta()`.
-   *
-   * Returns null if delta export is not possible (e.g. version too old,
-   * log compacted past that point, substrate doesn't support incremental).
-   *
-   * For PlainSubstrate: JSON-serialized Op[] from the version log.
-   * For LoroSubstrate: doc.export({ mode: "update", from: vv }).
-   */
-  exportSince(since: V): SubstratePayload | null
-
-  /**
-   * Apply a delta payload to this live substrate. The payload must have
-   * been produced by `exportSince()` on a compatible substrate.
-   *
-   * After import, the changefeed layer delivers the resulting Ops as
-   * a Changeset to subscribers (via the prepare/flush pipeline).
-   *
-   * For PlainSubstrate: parses Op[], applies via executeBatch.
-   * For LoroSubstrate: doc.import(bytes).
-   */
-  importDelta(payload: SubstratePayload, origin?: string): void
 }
 
 // ---------------------------------------------------------------------------
-// SubstrateFactory<V> — construction from schema or snapshot
+// ReplicaFactory<V> — schema-free construction
 // ---------------------------------------------------------------------------
 
 /**
- * Factory for constructing substrates. Each substrate type provides one.
+ * Factory for constructing replicas without a schema.
+ *
+ * This is the minimal factory needed by conduit participants (storage
+ * adapters, routing servers). It constructs headless replicas that
+ * support replication operations but not schema-driven interpretation.
+ *
+ * For Loro: `createEmpty()` creates a bare `LoroDoc()` — no schema
+ * walking, no container initialization. `fromSnapshot()` creates a
+ * `LoroDoc()` and imports the payload. Both return replicas that
+ * support `version()`, `exportSnapshot()`, `exportSince()`, and
+ * `importDelta()` but NOT `store`, `prepare`, `onFlush`, or `context()`.
+ *
+ * For Plain: `createEmpty()` creates a fresh store with an empty op log.
+ * `fromSnapshot()` parses the JSON state image into a store.
+ */
+export interface ReplicaFactory<V extends Version = Version> {
+  /** Create a fresh, empty replica. No schema needed. */
+  createEmpty(): Replica<V>
+
+  /**
+   * Construct a replica from a snapshot payload.
+   *
+   * The payload must have been produced by `exportSnapshot()` on a
+   * compatible replica or substrate. No schema needed — the payload
+   * is self-describing for replication purposes.
+   */
+  fromSnapshot(payload: SubstratePayload): Replica<V>
+
+  /** Deserialize a version from its string representation. */
+  parseVersion(serialized: string): V
+}
+
+// ---------------------------------------------------------------------------
+// SubstrateFactory<V> — schema-aware construction
+// ---------------------------------------------------------------------------
+
+/**
+ * Factory for constructing substrates from schemas.
+ *
+ * This is the full factory needed by interpreter participants (clients,
+ * application servers). It constructs substrates that support both
+ * schema-driven interpretation AND replication.
+ *
+ * Every SubstrateFactory provides a `replica` accessor that returns
+ * the corresponding `ReplicaFactory` — the schema-free subset. This
+ * enables conduit participants to receive just the `ReplicaFactory`
+ * without depending on the schema infrastructure.
  */
 export interface SubstrateFactory<V extends Version = Version> {
   /** Create a fresh substrate from a schema. Store starts with Zero.structural defaults. */
@@ -200,4 +309,18 @@ export interface SubstrateFactory<V extends Version = Version> {
 
   /** Deserialize a version from its string representation. */
   parseVersion(serialized: string): V
+
+  /**
+   * The schema-free replication factory.
+   *
+   * Returns a `ReplicaFactory` that constructs headless replicas
+   * without requiring a schema. Used by conduit participants (storage
+   * adapters, routing servers) that handle replication but don't
+   * interpret document state.
+   *
+   * The returned factory constructs `Replica<V>` instances — not
+   * full `Substrate<V>` instances. Replicas support versioning and
+   * export/import but not the prepare/flush pipeline or changefeed.
+   */
+  replica: ReplicaFactory<V>
 }

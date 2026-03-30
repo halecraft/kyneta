@@ -18,12 +18,15 @@ import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
+  Replica,
+  ReplicaFactory,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
 } from "../substrate.js"
 import type { PlainVersion } from "./plain.js"
-import { plainSubstrateFactory } from "./plain.js"
+import { plainSubstrateFactory, plainReplicaFactory, createPlainReplica } from "./plain.js"
+import type { Store } from "../store.js"
 import { TimestampVersion } from "./timestamp-version.js"
 
 // ---------------------------------------------------------------------------
@@ -98,6 +101,70 @@ function wrapWithTimestamp(
 }
 
 // ---------------------------------------------------------------------------
+// wrapReplicaWithTimestamp — decorator: PlainReplica → LWW Replica
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap a plain replica with timestamp-based versioning for LWW semantics.
+ *
+ * The headless counterpart of `wrapWithTimestamp` — wraps a
+ * `Replica<PlainVersion>` as `Replica<TimestampVersion>` without
+ * requiring schema interpretation, changefeed, or WritableContext.
+ */
+function wrapReplicaWithTimestamp(
+  inner: Replica<PlainVersion>,
+  initialVersion: TimestampVersion,
+): Replica<TimestampVersion> {
+  let currentVersion = initialVersion
+
+  return {
+    version(): TimestampVersion {
+      return currentVersion
+    },
+
+    exportSnapshot(): SubstratePayload {
+      return inner.exportSnapshot()
+    },
+
+    exportSince(_since: TimestampVersion): SubstratePayload | null {
+      return inner.exportSnapshot()
+    },
+
+    importDelta(payload: SubstratePayload, origin?: string): void {
+      inner.importDelta(payload, origin)
+      currentVersion = TimestampVersion.now()
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// lwwReplicaFactory — ReplicaFactory<TimestampVersion>
+// ---------------------------------------------------------------------------
+
+/**
+ * Schema-free replica factory for LWW substrates.
+ *
+ * Wraps `plainReplicaFactory` with `TimestampVersion` for cross-peer
+ * stale rejection. Constructs headless `Replica<TimestampVersion>`
+ * instances without requiring a schema.
+ */
+export const lwwReplicaFactory: ReplicaFactory<TimestampVersion> = {
+  createEmpty(): Replica<TimestampVersion> {
+    const inner = plainReplicaFactory.createEmpty()
+    return wrapReplicaWithTimestamp(inner, new TimestampVersion(0))
+  },
+
+  fromSnapshot(payload: SubstratePayload): Replica<TimestampVersion> {
+    const inner = plainReplicaFactory.fromSnapshot(payload)
+    return wrapReplicaWithTimestamp(inner, TimestampVersion.now())
+  },
+
+  parseVersion(serialized: string): TimestampVersion {
+    return TimestampVersion.parse(serialized)
+  },
+}
+
+// ---------------------------------------------------------------------------
 // lwwSubstrateFactory — SubstrateFactory<TimestampVersion>
 // ---------------------------------------------------------------------------
 
@@ -113,6 +180,8 @@ function wrapWithTimestamp(
  * - `parseVersion(serialized)` — deserialize a `TimestampVersion`
  */
 export const lwwSubstrateFactory: SubstrateFactory<TimestampVersion> = {
+  replica: lwwReplicaFactory,
+
   create(schema: SchemaNode): Substrate<TimestampVersion> {
     const inner = plainSubstrateFactory.create(schema)
     return wrapWithTimestamp(inner, new TimestampVersion(0))

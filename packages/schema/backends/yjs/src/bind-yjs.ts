@@ -28,7 +28,7 @@ import type {
   SubstratePayload,
 } from "@kyneta/schema"
 import * as Y from "yjs"
-import { createYjsSubstrate } from "./substrate.js"
+import { createYjsSubstrate, yjsReplicaFactory } from "./substrate.js"
 import { YjsVersion } from "./version.js"
 import { ensureContainers } from "./populate.js"
 
@@ -73,6 +73,8 @@ function createYjsFactory(
   const numericClientId = hashPeerId(peerId)
 
   return {
+    replica: yjsReplicaFactory,
+
     create(schema: SchemaNode): Substrate<YjsVersion> {
       const doc = new Y.Doc()
       doc.clientID = numericClientId

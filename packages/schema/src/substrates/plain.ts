@@ -32,6 +32,8 @@ import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import { applyChangeToStore, plainStoreReader, type Store } from "../store.js"
 import type {
+  Replica,
+  ReplicaFactory,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
@@ -94,19 +96,8 @@ export class PlainVersion implements Version {
 export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
   const reader = plainStoreReader(storeObj)
 
-  // --- Closure-scoped state ---
-  // Shadow buffer: accumulates {path, change} entries during prepare,
-  // drained by onFlush into the version log. The changefeed layer
-  // independently accumulates the same entries for notification
-  // planning — both hold the same object references (not clones).
-  const pendingOps: Op[] = []
-
-  // Version log: log[i] = batch of Ops from version i → i+1.
-  const log: Op[][] = []
-
-  // Monotonic version counter, incremented on each flush cycle
-  // that produced at least one Op.
-  let version = 0
+  // --- Shared replication core ---
+  const replicaCore = createPlainReplicaCore(storeObj)
 
   // The WritableContext is built lazily and cached — the same context
   // is returned on every call to `context()`.
@@ -117,15 +108,11 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
 
     prepare(path: Path, change: ChangeBase): void {
       applyChangeToStore(storeObj, path, change)
-      pendingOps.push({ path, change })
+      replicaCore.pendingOps.push({ path, change })
     },
 
     onFlush(_origin?: string): void {
-      if (pendingOps.length > 0) {
-        log.push([...pendingOps])
-        pendingOps.length = 0
-        version++
-      }
+      replicaCore.flush()
     },
 
     context(): WritableContext {
@@ -136,21 +123,15 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
     },
 
     version(): PlainVersion {
-      return new PlainVersion(version)
+      return replicaCore.version()
     },
 
     exportSnapshot(): SubstratePayload {
-      return { encoding: "json", data: JSON.stringify(storeObj) }
+      return replicaCore.exportSnapshot()
     },
 
     exportSince(since: PlainVersion): SubstratePayload | null {
-      const sinceValue = since.value
-      if (sinceValue > version) return null
-      if (sinceValue === version) {
-        return { encoding: "json", data: JSON.stringify([]) }
-      }
-      const ops = log.slice(sinceValue).flat()
-      return { encoding: "json", data: JSON.stringify(serializeOps(ops)) }
+      return replicaCore.exportSince(since)
     },
 
     importDelta(payload: SubstratePayload, origin?: string): void {
@@ -171,6 +152,110 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
   }
 
   return substrate
+}
+
+// ---------------------------------------------------------------------------
+// createPlainReplicaCore — shared versioning and export/import core
+// ---------------------------------------------------------------------------
+
+/**
+ * The shared replication core used by both `createPlainSubstrate` and
+ * `createPlainReplica`. Holds the op log, version counter, and
+ * export/import logic — the parts that don't require schema
+ * interpretation or the changefeed pipeline.
+ */
+function createPlainReplicaCore(storeObj: Store) {
+  // Version log: log[i] = batch of Ops from version i → i+1.
+  const log: Op[][] = []
+
+  // Monotonic version counter, incremented on each flush cycle
+  // that produced at least one Op.
+  let versionCounter = 0
+
+  // Pending ops buffer — filled by prepare (Substrate) or
+  // importDelta (Replica), drained by flush.
+  const pendingOps: Op[] = []
+
+  return {
+    pendingOps,
+
+    flush(): void {
+      if (pendingOps.length > 0) {
+        log.push([...pendingOps])
+        pendingOps.length = 0
+        versionCounter++
+      }
+    },
+
+    version(): PlainVersion {
+      return new PlainVersion(versionCounter)
+    },
+
+    exportSnapshot(): SubstratePayload {
+      return { encoding: "json", data: JSON.stringify(storeObj) }
+    },
+
+    exportSince(since: PlainVersion): SubstratePayload | null {
+      const sinceValue = since.value
+      if (sinceValue > versionCounter) return null
+      if (sinceValue === versionCounter) {
+        return { encoding: "json", data: JSON.stringify([]) }
+      }
+      const ops = log.slice(sinceValue).flat()
+      return { encoding: "json", data: JSON.stringify(serializeOps(ops)) }
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// createPlainReplica — headless replication surface (no schema)
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates a headless `Replica<PlainVersion>` — a plain JS object with
+ * version tracking and export/import, but no schema interpretation,
+ * no StoreReader, no WritableContext, no changefeed.
+ *
+ * Used by conduit participants (storage adapters, routing servers)
+ * that need to accumulate state, compute deltas, and compact storage
+ * without ever reading or writing document fields.
+ *
+ * @param storeObj - The backing plain JS object store.
+ */
+export function createPlainReplica(storeObj: Store): Replica<PlainVersion> {
+  const core = createPlainReplicaCore(storeObj)
+
+  return {
+    version(): PlainVersion {
+      return core.version()
+    },
+
+    exportSnapshot(): SubstratePayload {
+      return core.exportSnapshot()
+    },
+
+    exportSince(since: PlainVersion): SubstratePayload | null {
+      return core.exportSince(since)
+    },
+
+    importDelta(payload: SubstratePayload, _origin?: string): void {
+      if (payload.encoding !== "json" || typeof payload.data !== "string") {
+        throw new Error(
+          "PlainReplica.importDelta only supports JSON-encoded payloads",
+        )
+      }
+      const raw = JSON.parse(payload.data) as SerializedOp[]
+      if (raw.length === 0) return
+      const ops = deserializeOps(raw)
+
+      // Apply directly to the store — no changefeed, no prepare/flush.
+      for (const op of ops) {
+        applyChangeToStore(storeObj, op.path, op.change)
+        core.pendingOps.push(op)
+      }
+      core.flush()
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +289,40 @@ export function plainContext(storeObj: Store): WritableContext {
  *   via executeBatch (produces version > 0 with ops in the log).
  * - `parseVersion(serialized)` — deserialize a PlainVersion.
  */
+/**
+ * Schema-free replica factory for plain substrates.
+ *
+ * Constructs headless `Replica<PlainVersion>` instances without
+ * requiring a schema. Used by conduit participants and as the
+ * `replica` accessor on `plainSubstrateFactory`.
+ */
+export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
+  createEmpty(): Replica<PlainVersion> {
+    return createPlainReplica({} as Store)
+  },
+
+  fromSnapshot(payload: SubstratePayload): Replica<PlainVersion> {
+    if (payload.encoding !== "json" || typeof payload.data !== "string") {
+      throw new Error(
+        "PlainReplicaFactory.fromSnapshot only supports JSON-encoded payloads",
+      )
+    }
+    const state = JSON.parse(payload.data) as Record<string, unknown>
+    return createPlainReplica(state as Store)
+  },
+
+  parseVersion(serialized: string): PlainVersion {
+    if (serialized === "") {
+      throw new Error(`Invalid PlainVersion value: (empty string)`)
+    }
+    const n = Number(serialized)
+    if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n) {
+      throw new Error(`Invalid PlainVersion value: ${serialized}`)
+    }
+    return new PlainVersion(n)
+  },
+}
+
 export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
   create(schema: SchemaNode): Substrate<PlainVersion> {
     const defaults = Zero.structural(schema) as Record<string, unknown>
@@ -240,15 +359,10 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
   },
 
   parseVersion(serialized: string): PlainVersion {
-    if (serialized === "") {
-      throw new Error(`Invalid PlainVersion value: (empty string)`)
-    }
-    const n = Number(serialized)
-    if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n) {
-      throw new Error(`Invalid PlainVersion value: ${serialized}`)
-    }
-    return new PlainVersion(n)
+    return plainReplicaFactory.parseVersion(serialized)
   },
+
+  replica: plainReplicaFactory,
 }
 
 // ---------------------------------------------------------------------------

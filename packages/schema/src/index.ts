@@ -246,6 +246,8 @@ export {
 } from "./store.js"
 // Substrate — state management, versioning, and transfer semantics
 export type {
+  Replica,
+  ReplicaFactory,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
@@ -254,9 +256,11 @@ export type {
 } from "./substrate.js"
 // Plain substrate — plain JS object store with version tracking
 export {
+  createPlainReplica,
   createPlainSubstrate,
   PlainVersion,
   plainContext,
+  plainReplicaFactory,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
 // Timestamp version — wall-clock version for LWW/ephemeral substrates
