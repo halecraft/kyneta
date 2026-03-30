@@ -2,6 +2,8 @@
 
 Define a schema. Get a live, reactive, syncable document with full TypeScript types.
 
+`@kyneta/schema` is a mathematically rigorous but beautifully ergonomic building block for representing structured data as it changes over time. A passion project pursuing perfection. You can use plain JS, or bring your own CRDT library (e.g. Loro, Yjs).
+
 ```ts
 import { Schema, createDoc, change, subscribe } from "@kyneta/schema/basic"
 
@@ -169,8 +171,8 @@ Under the hood:
 - the `step(state, change) → state` functions are pure
 - the `change → applyChanges` round-trip is verified to be extensionally equal
 - the change vocabulary is open
- 
-This means the reactive system, the sync protocol, and the validation layer are all derived from the same structure — not parallel implementations that drift apart. It also means this represenation of schemas is rigorous, and you can depend on it.
+
+This means the reactive system, the sync protocol, and the validation layer are all derived from the same structure — not parallel implementations that drift apart. It also means this representation of schemas is rigorous, and you can depend on it.
 
 See `theory/interpreter-algebra.md` for the full treatment, or `TECHNICAL.md` for the implementation map.
 
