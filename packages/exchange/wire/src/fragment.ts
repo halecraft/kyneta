@@ -1,25 +1,27 @@
 // fragment — transport-level fragmentation for large payloads.
 //
 // Pure functions for fragmenting and parsing transport payloads.
-// Stateful reassembly logic lives in reassembler.ts.
+// Stateful reassembly logic lives in the FragmentCollector (generic)
+// and its binary/text wrappers.
 //
-// Fragmentation uses byte-prefix discriminators to distinguish between:
-// - Complete messages (0x00)
-// - Fragment headers (0x01)
-// - Fragment data chunks (0x02)
+// Two transport payload types:
+// - Complete (0x00): a full frame (single or batch — self-describing)
+// - Fragment (0x01): a self-describing fragment frame
 //
-// This avoids double encoding and keeps the framed payload as raw bytes.
-//
-// Ported from @loro-extended/wire-format — this module has zero domain
-// imports and operates purely on raw Uint8Array data.
+// Fragments are fully self-describing: each carries frameId, index,
+// total, and totalSize. No separate "fragment header" message is
+// needed — the collector auto-creates state on first contact.
 
 import {
-  BATCH_ID_SIZE,
-  FRAGMENT_DATA,
-  FRAGMENT_DATA_MIN_SIZE,
-  FRAGMENT_HEADER,
-  FRAGMENT_HEADER_PAYLOAD_SIZE,
+  BinaryFrameType,
+  FRAGMENT,
+  FRAGMENT_META_SIZE,
+  FRAGMENT_MIN_SIZE,
+  FRAME_ID_SIZE,
+  HASH_ALGO,
+  HEADER_SIZE,
   MESSAGE_COMPLETE,
+  WIRE_VERSION,
 } from "./constants.js"
 
 // ---------------------------------------------------------------------------
@@ -28,24 +30,17 @@ import {
 
 /**
  * Discriminated union for parsed transport payloads.
+ *
+ * Two variants:
+ * - `complete`: a full frame (may contain a single message or a batch)
+ * - `fragment`: a self-describing fragment with reassembly metadata
  */
 export type TransportPayload =
-  | { kind: "message"; data: Uint8Array }
-  | {
-      kind: "fragment-header"
-      batchId: Uint8Array
-      count: number
-      totalSize: number
-    }
-  | {
-      kind: "fragment-data"
-      batchId: Uint8Array
-      index: number
-      data: Uint8Array
-    }
+  | { kind: "complete"; data: Uint8Array }
+  | { kind: "fragment"; data: Uint8Array }
 
 // ---------------------------------------------------------------------------
-// Error types
+// Error type
 // ---------------------------------------------------------------------------
 
 /**
@@ -57,27 +52,8 @@ export class FragmentParseError extends Error {
   constructor(
     public readonly code:
       | "unknown_prefix"
-      | "truncated_header"
-      | "truncated_data"
-      | "invalid_count"
-      | "invalid_size",
-    message: string,
-  ) {
-    super(message)
-  }
-}
-
-/**
- * Error thrown when reassembling fragments fails.
- */
-export class FragmentReassembleError extends Error {
-  override readonly name = "FragmentReassembleError"
-
-  constructor(
-    public readonly code:
-      | "missing_fragments"
-      | "size_mismatch"
-      | "invalid_index",
+      | "truncated"
+      | "empty",
     message: string,
   ) {
     super(message)
@@ -85,38 +61,43 @@ export class FragmentReassembleError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Batch ID helpers
+// Frame ID helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Generate a random 8-byte batch ID using crypto.getRandomValues.
+ * Generate a random frame ID as a hex string.
+ *
+ * Uses crypto.getRandomValues for randomness. The returned string
+ * is `FRAME_ID_SIZE * 2` hex characters (16 chars for 8 bytes).
  */
-export function generateBatchId(): Uint8Array {
-  const id = new Uint8Array(BATCH_ID_SIZE)
-  crypto.getRandomValues(id)
-  return id
+export function generateFrameId(): string {
+  const bytes = new Uint8Array(FRAME_ID_SIZE)
+  crypto.getRandomValues(bytes)
+  return bytesToHex(bytes)
 }
 
 /**
- * Convert a batch ID to a hex string for use as a Map key.
+ * Convert a Uint8Array to a hex string.
  */
-export function batchIdToKey(id: Uint8Array): string {
+export function bytesToHex(bytes: Uint8Array): string {
   let hex = ""
-  for (let i = 0; i < id.length; i++) {
-    hex += id[i]!.toString(16).padStart(2, "0")
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i]!.toString(16).padStart(2, "0")
   }
   return hex
 }
 
 /**
- * Convert a hex string key back to a batch ID.
+ * Convert a hex string to a fixed-length Uint8Array.
+ * Pads with zeros or truncates to `length` bytes.
  */
-export function keyToBatchId(key: string): Uint8Array {
-  const id = new Uint8Array(BATCH_ID_SIZE)
-  for (let i = 0; i < BATCH_ID_SIZE; i++) {
-    id[i] = Number.parseInt(key.slice(i * 2, i * 2 + 2), 16)
+export function hexToBytes(hex: string, length: number): Uint8Array {
+  const bytes = new Uint8Array(length)
+  const chars = Math.min(hex.length, length * 2)
+  for (let i = 0; i < chars; i += 2) {
+    bytes[i / 2] = Number.parseInt(hex.slice(i, i + 2), 16)
   }
-  return id
+  return bytes
 }
 
 // ---------------------------------------------------------------------------
@@ -124,10 +105,10 @@ export function keyToBatchId(key: string): Uint8Array {
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap a complete message with the MESSAGE_COMPLETE prefix.
+ * Wrap a complete frame with the MESSAGE_COMPLETE transport prefix.
  *
  * Used by adapters for unfragmented messages — prepends the 0x00 byte
- * so the receiver can distinguish complete messages from fragments.
+ * so the receiver can distinguish complete frames from fragments.
  */
 export function wrapCompleteMessage(data: Uint8Array): Uint8Array {
   const result = new Uint8Array(1 + data.length)
@@ -137,44 +118,15 @@ export function wrapCompleteMessage(data: Uint8Array): Uint8Array {
 }
 
 /**
- * Create a fragment header payload.
+ * Wrap a fragment frame with the FRAGMENT transport prefix.
  *
- * Layout: prefix (1) + batchId (8) + count (4 BE) + totalSize (4 BE)
+ * Used by adapters for fragmented messages — prepends the 0x01 byte
+ * so the receiver can quickly distinguish fragments from complete frames.
  */
-export function createFragmentHeader(
-  batchId: Uint8Array,
-  count: number,
-  totalSize: number,
-): Uint8Array {
-  const result = new Uint8Array(1 + FRAGMENT_HEADER_PAYLOAD_SIZE)
-  const view = new DataView(result.buffer)
-
-  result[0] = FRAGMENT_HEADER
-  result.set(batchId, 1)
-  view.setUint32(1 + BATCH_ID_SIZE, count, false)
-  view.setUint32(1 + BATCH_ID_SIZE + 4, totalSize, false)
-
-  return result
-}
-
-/**
- * Create a fragment data payload.
- *
- * Layout: prefix (1) + batchId (8) + index (4 BE) + data (variable)
- */
-export function createFragmentData(
-  batchId: Uint8Array,
-  index: number,
-  data: Uint8Array,
-): Uint8Array {
-  const result = new Uint8Array(1 + BATCH_ID_SIZE + 4 + data.length)
-  const view = new DataView(result.buffer)
-
-  result[0] = FRAGMENT_DATA
-  result.set(batchId, 1)
-  view.setUint32(1 + BATCH_ID_SIZE, index, false)
-  result.set(data, 1 + BATCH_ID_SIZE + 4)
-
+export function wrapFragment(data: Uint8Array): Uint8Array {
+  const result = new Uint8Array(1 + data.length)
+  result[0] = FRAGMENT
+  result.set(data, 1)
   return result
 }
 
@@ -185,75 +137,38 @@ export function createFragmentData(
 /**
  * Parse a transport payload from raw bytes.
  *
- * Inspects the first byte (prefix) to determine the payload type,
- * then parses the remaining bytes accordingly.
+ * Inspects the first byte (prefix) to determine the payload type:
+ * - 0x00: complete frame
+ * - 0x01: fragment frame
  *
  * @throws FragmentParseError if parsing fails
  */
 export function parseTransportPayload(data: Uint8Array): TransportPayload {
   if (data.length < 1) {
-    throw new FragmentParseError("truncated_header", "Empty payload")
+    throw new FragmentParseError("empty", "Empty transport payload")
   }
 
   const prefix = data[0]
 
   switch (prefix) {
     case MESSAGE_COMPLETE: {
-      return {
-        kind: "message",
-        data: data.slice(1),
+      if (data.length < 1 + HEADER_SIZE) {
+        throw new FragmentParseError(
+          "truncated",
+          `Complete payload too short: expected at least ${1 + HEADER_SIZE} bytes, got ${data.length}`,
+        )
       }
+      return { kind: "complete", data: data.slice(1) }
     }
 
-    case FRAGMENT_HEADER: {
-      const minSize = 1 + FRAGMENT_HEADER_PAYLOAD_SIZE
-      if (data.length < minSize) {
+    case FRAGMENT: {
+      if (data.length < 1 + FRAGMENT_MIN_SIZE) {
         throw new FragmentParseError(
-          "truncated_header",
-          `Fragment header too short: expected ${minSize} bytes, got ${data.length}`,
+          "truncated",
+          `Fragment payload too short: expected at least ${1 + FRAGMENT_MIN_SIZE} bytes, got ${data.length}`,
         )
       }
-
-      const batchId = data.slice(1, 1 + BATCH_ID_SIZE)
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-      const count = view.getUint32(1 + BATCH_ID_SIZE, false)
-      const totalSize = view.getUint32(1 + BATCH_ID_SIZE + 4, false)
-
-      if (count === 0) {
-        throw new FragmentParseError(
-          "invalid_count",
-          "Fragment count cannot be zero",
-        )
-      }
-
-      return {
-        kind: "fragment-header",
-        batchId,
-        count,
-        totalSize,
-      }
-    }
-
-    case FRAGMENT_DATA: {
-      const minSize = 1 + FRAGMENT_DATA_MIN_SIZE
-      if (data.length < minSize) {
-        throw new FragmentParseError(
-          "truncated_data",
-          `Fragment data too short: expected at least ${minSize} bytes, got ${data.length}`,
-        )
-      }
-
-      const batchId = data.slice(1, 1 + BATCH_ID_SIZE)
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-      const index = view.getUint32(1 + BATCH_ID_SIZE, false)
-      const fragmentData = data.slice(1 + BATCH_ID_SIZE + 4)
-
-      return {
-        kind: "fragment-data",
-        batchId,
-        index,
-        data: fragmentData,
-      }
+      return { kind: "fragment", data: data.slice(1) }
     }
 
     default:
@@ -269,112 +184,92 @@ export function parseTransportPayload(data: Uint8Array): TransportPayload {
 // ---------------------------------------------------------------------------
 
 /**
- * Fragment a payload into multiple transport chunks.
+ * Fragment a codec-encoded payload into multiple self-describing
+ * binary fragment frames, each wrapped with the FRAGMENT transport prefix.
  *
- * Returns an array of transport payloads:
- * - First element is always a fragment header
- * - Subsequent elements are fragment data chunks
+ * Each fragment is a complete binary frame with:
+ * - 7-byte header (version, type=FRAGMENT, hashAlgo=NONE, payloadLength)
+ * - 20-byte fragment metadata (frameId, index, total, totalSize)
+ * - chunk data
  *
- * @param data - The payload to fragment
- * @param maxFragmentSize - Maximum size of each fragment's data (not including headers)
- * @returns Array of transport payloads [header, chunk0, chunk1, ...]
+ * The returned array contains one transport-prefixed fragment per chunk.
+ * Unlike the old protocol, there is no separate "fragment header" message.
+ *
+ * @param frameData - The complete binary frame data to fragment (header + payload)
+ * @param maxChunkSize - Maximum size of each fragment's data chunk (not including frame header or metadata)
+ * @returns Array of transport-prefixed fragment payloads
  */
 export function fragmentPayload(
-  data: Uint8Array,
-  maxFragmentSize: number,
+  frameData: Uint8Array,
+  maxChunkSize: number,
 ): Uint8Array[] {
-  if (maxFragmentSize <= 0) {
-    throw new Error("maxFragmentSize must be positive")
+  if (maxChunkSize <= 0) {
+    throw new Error("maxChunkSize must be positive")
   }
 
-  const batchId = generateBatchId()
-  const fragmentCount = Math.ceil(data.length / maxFragmentSize)
+  const frameId = generateFrameId()
+  const frameIdBytes = hexToBytes(frameId, FRAME_ID_SIZE)
+  const totalSize = frameData.length
+  const fragmentCount = Math.ceil(totalSize / maxChunkSize)
   const result: Uint8Array[] = []
 
-  // Fragment header
-  result.push(createFragmentHeader(batchId, fragmentCount, data.length))
-
-  // Fragment data chunks
   for (let i = 0; i < fragmentCount; i++) {
-    const start = i * maxFragmentSize
-    const end = Math.min(start + maxFragmentSize, data.length)
-    const chunk = data.slice(start, end)
-    result.push(createFragmentData(batchId, i, chunk))
+    const chunkStart = i * maxChunkSize
+    const chunkEnd = Math.min(chunkStart + maxChunkSize, totalSize)
+    const chunk = frameData.slice(chunkStart, chunkEnd)
+
+    // Build the fragment frame: header + metadata + chunk
+    const fragFrame = buildFragmentFrame(
+      frameIdBytes,
+      i,
+      fragmentCount,
+      totalSize,
+      chunk,
+    )
+
+    // Wrap with FRAGMENT transport prefix
+    result.push(wrapFragment(fragFrame))
   }
 
   return result
 }
 
-// ---------------------------------------------------------------------------
-// Reassembly (pure function — no timers, no state)
-// ---------------------------------------------------------------------------
-
 /**
- * Reassemble fragments into the original payload.
+ * Build a self-describing binary fragment frame.
  *
- * This is a **pure function** that expects all fragments to be present.
- * Use `FragmentReassembler` (reassembler.ts) for stateful reassembly
- * with timeout handling, memory limits, and eviction.
- *
- * @param header - The fragment header (count and totalSize)
- * @param fragments - Map of fragment index → fragment data
- * @returns Reassembled payload
- * @throws FragmentReassembleError if reassembly fails
+ * Layout: 7B header + 20B metadata + chunk data
  */
-export function reassembleFragments(
-  header: TransportPayload & { kind: "fragment-header" },
-  fragments: Map<number, Uint8Array>,
+function buildFragmentFrame(
+  frameIdBytes: Uint8Array,
+  index: number,
+  total: number,
+  totalSize: number,
+  chunk: Uint8Array,
 ): Uint8Array {
-  const { count, totalSize } = header
+  const frame = new Uint8Array(HEADER_SIZE + FRAGMENT_META_SIZE + chunk.length)
+  const view = new DataView(frame.buffer)
 
-  // Verify all fragments are present
-  if (fragments.size !== count) {
-    const missing: number[] = []
-    for (let i = 0; i < count; i++) {
-      if (!fragments.has(i)) {
-        missing.push(i)
-      }
-    }
-    throw new FragmentReassembleError(
-      "missing_fragments",
-      `Missing ${count - fragments.size} fragments: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "..." : ""}`,
-    )
-  }
+  // 7-byte header
+  view.setUint8(0, WIRE_VERSION)
+  view.setUint8(1, BinaryFrameType.FRAGMENT)
+  view.setUint8(2, HASH_ALGO.NONE)
+  view.setUint32(3, chunk.length, false)
 
-  // Validate indices
-  for (const index of fragments.keys()) {
-    if (index < 0 || index >= count) {
-      throw new FragmentReassembleError(
-        "invalid_index",
-        `Invalid fragment index ${index} (expected 0–${count - 1})`,
-      )
-    }
-  }
+  // 20-byte fragment metadata
+  let offset = HEADER_SIZE
+  frame.set(frameIdBytes, offset)
+  offset += FRAME_ID_SIZE
+  view.setUint32(offset, index, false)
+  offset += 4
+  view.setUint32(offset, total, false)
+  offset += 4
+  view.setUint32(offset, totalSize, false)
+  offset += 4
 
-  // Calculate actual total size
-  let actualSize = 0
-  for (const data of fragments.values()) {
-    actualSize += data.length
-  }
+  // Chunk data
+  frame.set(chunk, offset)
 
-  if (actualSize !== totalSize) {
-    throw new FragmentReassembleError(
-      "size_mismatch",
-      `Size mismatch: expected ${totalSize} bytes, got ${actualSize} bytes`,
-    )
-  }
-
-  // Reassemble in order
-  const result = new Uint8Array(totalSize)
-  let offset = 0
-
-  for (let i = 0; i < count; i++) {
-    const fragment = fragments.get(i)!
-    result.set(fragment, offset)
-    offset += fragment.length
-  }
-
-  return result
+  return frame
 }
 
 // ---------------------------------------------------------------------------
@@ -399,17 +294,15 @@ export function shouldFragment(
  * Calculate the overhead of fragmentation for a given payload size.
  *
  * @param payloadSize - Size of the original payload
- * @param maxFragmentSize - Maximum size of each fragment's data
- * @returns Total overhead in bytes (header + per-fragment prefixes)
+ * @param maxChunkSize - Maximum size of each fragment's data chunk
+ * @returns Total overhead in bytes (per-fragment headers + metadata)
  */
 export function calculateFragmentationOverhead(
   payloadSize: number,
-  maxFragmentSize: number,
+  maxChunkSize: number,
 ): number {
-  const fragmentCount = Math.ceil(payloadSize / maxFragmentSize)
-  // Header: 1 (prefix) + 8 (batchId) + 4 (count) + 4 (totalSize) = 17 bytes
-  const headerOverhead = 1 + FRAGMENT_HEADER_PAYLOAD_SIZE
-  // Per fragment: 1 (prefix) + 8 (batchId) + 4 (index) = 13 bytes
-  const perFragmentOverhead = 1 + BATCH_ID_SIZE + 4
-  return headerOverhead + fragmentCount * perFragmentOverhead
+  const fragmentCount = Math.ceil(payloadSize / maxChunkSize)
+  // Per fragment: 1 (transport prefix) + 7 (header) + 20 (metadata) = 28 bytes
+  const perFragmentOverhead = 1 + HEADER_SIZE + FRAGMENT_META_SIZE
+  return fragmentCount * perFragmentOverhead
 }

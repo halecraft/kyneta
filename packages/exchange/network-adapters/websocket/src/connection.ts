@@ -13,8 +13,8 @@
 import type { ChannelMsg, Channel, PeerId } from "@kyneta/exchange"
 import {
   cborCodec,
-  encodeFrame,
-  decodeFrame,
+  encodeComplete,
+  decodeBinaryFrame,
   FragmentReassembler,
   fragmentPayload,
   wrapCompleteMessage,
@@ -74,11 +74,9 @@ export class WebsocketConnection {
       config?.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
     this.#reassembler = new FragmentReassembler({
       timeoutMs: 10_000,
-      onTimeout: batchId => {
+      onTimeout: (frameId: string) => {
         console.warn(
-          `[WebsocketConnection] Fragment batch timed out: ${Array.from(batchId)
-            .map(b => b.toString(16).padStart(2, "0"))
-            .join("")}`,
+          `[WebsocketConnection] Fragment batch timed out: ${frameId}`,
         )
       },
     })
@@ -128,7 +126,7 @@ export class WebsocketConnection {
       return
     }
 
-    const frame = encodeFrame(cborCodec, msg)
+    const frame = encodeComplete(cborCodec, msg)
 
     // Fragment large payloads for cloud infrastructure compatibility
     if (
@@ -186,7 +184,8 @@ export class WebsocketConnection {
 
     if (result.status === "complete") {
       try {
-        const messages = decodeFrame(cborCodec, result.data)
+        const frame = decodeBinaryFrame(result.data)
+        const messages = cborCodec.decode(frame.content.payload)
         for (const msg of messages) {
           this.#handleChannelMessage(msg)
         }

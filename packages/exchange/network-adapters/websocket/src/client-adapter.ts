@@ -28,8 +28,8 @@ import type {
 } from "@kyneta/exchange"
 import {
   cborCodec,
-  encodeFrame,
-  decodeFrame,
+  encodeComplete,
+  decodeBinaryFrame,
   FragmentReassembler,
   fragmentPayload,
   wrapCompleteMessage,
@@ -278,7 +278,7 @@ export class WebsocketClientAdapter extends Adapter<void> {
           return
         }
 
-        const frame = encodeFrame(cborCodec, msg)
+        const frame = encodeComplete(cborCodec, msg)
 
         // Fragment large payloads for cloud infrastructure compatibility
         if (
@@ -481,7 +481,8 @@ export class WebsocketClientAdapter extends Adapter<void> {
 
       if (result.status === "complete") {
         try {
-          const messages = decodeFrame(cborCodec, result.data)
+          const frame = decodeBinaryFrame(result.data)
+          const messages = cborCodec.decode(frame.content.payload)
           for (const msg of messages) {
             this.#handleChannelMessage(msg)
           }

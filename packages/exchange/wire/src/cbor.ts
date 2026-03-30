@@ -16,7 +16,7 @@ import type {
   InterestMsg,
   OfferMsg,
 } from "@kyneta/exchange"
-import type { MessageCodec } from "./codec.js"
+import type { BinaryCodec } from "./codec.js"
 import {
   MessageType,
   OfferType,
@@ -251,45 +251,33 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
  * payload size. `Uint8Array` data in `SubstratePayload` is encoded
  * natively as CBOR byte strings — no base64 overhead.
  */
-export const cborCodec: MessageCodec = {
-  encode(msg: ChannelMsg): Uint8Array {
-    const wire = toWireFormat(msg)
+export const cborCodec: BinaryCodec = {
+  encode(input: ChannelMsg | ChannelMsg[]): Uint8Array {
+    if (Array.isArray(input)) {
+      const wireMessages = input.map(toWireFormat)
+      return encodeCBOR(objectToMap(wireMessages))
+    }
+    const wire = toWireFormat(input)
     return encodeCBOR(objectToMap(wire))
   },
 
-  decode(data: Uint8Array): ChannelMsg {
+  decode(data: Uint8Array): ChannelMsg[] {
     const normalized = normalizeUint8Array(data)
     try {
       const decoded = decodeCBOR(normalized)
-      const wire = mapToObject(decoded) as WireMessage
-      return fromWireFormat(wire)
+      const obj = mapToObject(decoded)
+
+      // Auto-detect: array = batch, object = single message
+      if (Array.isArray(obj)) {
+        return (obj as WireMessage[]).map(fromWireFormat)
+      }
+      return [fromWireFormat(obj as WireMessage)]
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("Unknown wire")) {
         throw error
       }
       throw new Error(
         `Failed to decode CBOR: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-  },
-
-  encodeBatch(msgs: ChannelMsg[]): Uint8Array {
-    const wireMessages = msgs.map(toWireFormat)
-    return encodeCBOR(objectToMap(wireMessages))
-  },
-
-  decodeBatch(data: Uint8Array): ChannelMsg[] {
-    const normalized = normalizeUint8Array(data)
-    try {
-      const decoded = decodeCBOR(normalized)
-      const wireMessages = mapToObject(decoded) as WireMessage[]
-      return wireMessages.map(fromWireFormat)
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith("Unknown wire")) {
-        throw error
-      }
-      throw new Error(
-        `Failed to decode CBOR batch: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
   },

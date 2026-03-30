@@ -1,75 +1,90 @@
 // constants — wire protocol constants for @kyneta/wire.
 //
-// Defines the binary protocol framing: version byte, flags, header size,
-// and transport-layer prefixes for complete/fragmented messages.
+// Defines the binary protocol framing: version byte, type byte,
+// hash algorithm byte, header size, and transport-layer prefixes
+// for complete/fragment messages.
 //
-// Ported from @loro-extended/wire-format with Loro-specific message
-// type constants removed (those live in wire-types.ts instead).
+// Version 0 — clean slate redesign with unified Frame<T> architecture.
 
 // ---------------------------------------------------------------------------
 // Frame header
 // ---------------------------------------------------------------------------
 
-/** Current wire protocol version. */
-export const WIRE_VERSION = 2
+/** Current binary wire protocol version. */
+export const WIRE_VERSION = 0
 
-/** Frame header size in bytes: version (1) + flags (1) + payload length (4). */
-export const HEADER_SIZE = 6
+/**
+ * Frame header size in bytes:
+ * version (1) + type (1) + hashAlgo (1) + payload length (4) = 7.
+ */
+export const HEADER_SIZE = 7
 
 // ---------------------------------------------------------------------------
-// Frame flags (byte 1 of header)
+// Binary frame type (byte 1 of header)
 // ---------------------------------------------------------------------------
 
 /**
- * Bit flags for the frame header's flags byte.
+ * Frame type byte in the binary frame header.
  *
- * - `NONE`: single message payload
- * - `BATCH`: payload is a CBOR/JSON array of messages
- * - `COMPRESSED`: reserved for future compression support
+ * - `COMPLETE`: payload is a complete message (single or batch — self-describing)
+ * - `FRAGMENT`: payload is one chunk of a fragmented message, with fragment metadata
  */
-export const FrameFlags = {
-  NONE: 0x00,
-  BATCH: 0x01,
-  COMPRESSED: 0x02,
+export const BinaryFrameType = {
+  COMPLETE: 0x00,
+  FRAGMENT: 0x01,
 } as const
+
+export type BinaryFrameTypeValue =
+  (typeof BinaryFrameType)[keyof typeof BinaryFrameType]
+
+// ---------------------------------------------------------------------------
+// Hash algorithm (byte 2 of header)
+// ---------------------------------------------------------------------------
+
+/**
+ * Hash algorithm byte in the binary frame header.
+ *
+ * - `NONE`: no hash present
+ * - `SHA256`: reserved for future SHA-256 content hash (32 bytes after header)
+ */
+export const HASH_ALGO = {
+  NONE: 0x00,
+  SHA256: 0x01,
+} as const
+
+export type HashAlgoValue = (typeof HASH_ALGO)[keyof typeof HASH_ALGO]
 
 // ---------------------------------------------------------------------------
 // Transport prefixes (byte 0 of each transport payload)
 // ---------------------------------------------------------------------------
 
 /**
- * Byte prefix for a complete (non-fragmented) message.
+ * Byte prefix for a complete (non-fragmented) frame.
  * Followed by the framed payload (header + encoded data).
  */
 export const MESSAGE_COMPLETE = 0x00
 
 /**
- * Byte prefix for a fragment header.
- * Followed by: batchId (8 bytes) + count (4 bytes BE) + totalSize (4 bytes BE).
+ * Byte prefix for a fragment frame.
+ * Followed by the framed fragment (header + fragment metadata + chunk data).
  */
-export const FRAGMENT_HEADER = 0x01
-
-/**
- * Byte prefix for fragment data.
- * Followed by: batchId (8 bytes) + index (4 bytes BE) + data (remaining bytes).
- */
-export const FRAGMENT_DATA = 0x02
+export const FRAGMENT = 0x01
 
 // ---------------------------------------------------------------------------
 // Fragment layout sizes
 // ---------------------------------------------------------------------------
 
-/** Size of a batch ID in bytes. */
-export const BATCH_ID_SIZE = 8
+/** Size of a frame ID in bytes (used in binary fragment metadata). */
+export const FRAME_ID_SIZE = 8
 
 /**
- * Size of the fragment header payload (excluding the 1-byte prefix):
- * batchId (8) + count (4) + totalSize (4) = 16 bytes.
+ * Size of fragment metadata following the frame header:
+ * frameId (8) + index (4) + total (4) + totalSize (4) = 20 bytes.
  */
-export const FRAGMENT_HEADER_PAYLOAD_SIZE = BATCH_ID_SIZE + 4 + 4
+export const FRAGMENT_META_SIZE = FRAME_ID_SIZE + 4 + 4 + 4
 
 /**
- * Minimum size of a fragment data payload (excluding the 1-byte prefix):
- * batchId (8) + index (4) + at least 1 byte of data = 13 bytes.
+ * Minimum size of a fragment frame (header + metadata + at least 1 byte):
+ * 7 (header) + 20 (metadata) + 1 (data) = 28 bytes.
  */
-export const FRAGMENT_DATA_MIN_SIZE = BATCH_ID_SIZE + 4 + 1
+export const FRAGMENT_MIN_SIZE = HEADER_SIZE + FRAGMENT_META_SIZE + 1

@@ -1,13 +1,16 @@
-// json — JSON codec for encoding/decoding ChannelMsg types.
+// json — text codec for encoding/decoding ChannelMsg types.
 //
-// Uses JSON serialization for text transports (SSE, HTTP responses).
-// Human-readable — uses the ChannelMsg type strings directly
-// ("establish-request", "discover", etc.) without integer discriminators.
+// Implements the TextCodec interface — JSON-safe objects in/out.
+// The text codec produces objects, not strings. The text frame layer
+// (text-frame.ts) handles JSON serialization into the wire format.
 //
 // SubstratePayload with encoding "binary" has its Uint8Array data
 // transparently base64-encoded on the way out and base64-decoded on
 // the way in. SubstratePayload with encoding "json" passes through
 // as-is (the data is already a string).
+//
+// Human-readable — uses the ChannelMsg type strings directly
+// ("establish-request", "discover", etc.) without integer discriminators.
 
 import type {
   ChannelMsg,
@@ -17,14 +20,11 @@ import type {
   InterestMsg,
   OfferMsg,
 } from "@kyneta/exchange"
-import type { MessageCodec } from "./codec.js"
+import type { TextCodec } from "./codec.js"
 
 // ---------------------------------------------------------------------------
 // Base64 helpers
 // ---------------------------------------------------------------------------
-
-const encoder = new TextEncoder()
-const decoder = new TextDecoder()
 
 /**
  * Encode a Uint8Array to a base64 string.
@@ -33,7 +33,6 @@ const decoder = new TextDecoder()
  * Bun, and Deno.
  */
 function uint8ArrayToBase64(data: Uint8Array): string {
-  // Convert Uint8Array to binary string, then base64
   let binary = ""
   for (let i = 0; i < data.length; i++) {
     binary += String.fromCharCode(data[i]!)
@@ -130,24 +129,25 @@ function toJsonSafe(msg: ChannelMsg): unknown {
  *
  * Reverses the base64 encoding for binary SubstratePayload data.
  */
-function fromJsonSafe(obj: Record<string, unknown>): ChannelMsg {
-  const type = obj.type as string
+function fromJsonSafe(obj: unknown): ChannelMsg {
+  const record = obj as Record<string, unknown>
+  const type = record.type as string
 
   switch (type) {
     case "establish-request":
-      return obj as unknown as EstablishRequestMsg
+      return record as unknown as EstablishRequestMsg
 
     case "establish-response":
-      return obj as unknown as EstablishResponseMsg
+      return record as unknown as EstablishResponseMsg
 
     case "discover":
-      return obj as unknown as DiscoverMsg
+      return record as unknown as DiscoverMsg
 
     case "interest":
-      return obj as unknown as InterestMsg
+      return record as unknown as InterestMsg
 
     case "offer": {
-      const jsonOffer = obj as unknown as JsonOfferMsg
+      const jsonOffer = record as unknown as JsonOfferMsg
       const payload = jsonOffer.payload
 
       // Reverse the base64 encoding for binary payloads
@@ -178,47 +178,35 @@ function fromJsonSafe(obj: Record<string, unknown>): ChannelMsg {
 }
 
 // ---------------------------------------------------------------------------
-// JSON MessageCodec implementation
+// TextCodec implementation
 // ---------------------------------------------------------------------------
 
 /**
- * JSON codec for text transports (SSE, HTTP responses).
+ * Text codec for text transports (SSE, HTTP).
  *
- * Uses ChannelMsg type strings directly — human-readable on the wire.
- * Binary SubstratePayload data is transparently base64-encoded.
+ * Converts `ChannelMsg` to/from JSON-safe objects. Uses human-readable
+ * type strings directly — no integer discriminators.
+ *
+ * Binary `SubstratePayload` data is transparently base64-encoded on
+ * write and base64-decoded on read. JSON `SubstratePayload` passes
+ * through as-is.
+ *
+ * The text codec produces objects, not strings. The text frame layer
+ * (`encodeTextFrame`) handles JSON serialization and framing.
  */
-export const jsonCodec: MessageCodec = {
-  encode(msg: ChannelMsg): Uint8Array {
-    const json = JSON.stringify(toJsonSafe(msg))
-    return encoder.encode(json)
-  },
-
-  decode(data: Uint8Array): ChannelMsg {
-    const json = decoder.decode(data)
-    try {
-      const obj = JSON.parse(json) as Record<string, unknown>
-      return fromJsonSafe(obj)
-    } catch (error) {
-      throw new Error(
-        `Failed to decode JSON: ${error instanceof Error ? error.message : String(error)}`,
-      )
+export const textCodec: TextCodec = {
+  encode(input: ChannelMsg | ChannelMsg[]): unknown {
+    if (Array.isArray(input)) {
+      return input.map(toJsonSafe)
     }
+    return toJsonSafe(input)
   },
 
-  encodeBatch(msgs: ChannelMsg[]): Uint8Array {
-    const json = JSON.stringify(msgs.map(toJsonSafe))
-    return encoder.encode(json)
-  },
-
-  decodeBatch(data: Uint8Array): ChannelMsg[] {
-    const json = decoder.decode(data)
-    try {
-      const arr = JSON.parse(json) as Record<string, unknown>[]
-      return arr.map(fromJsonSafe)
-    } catch (error) {
-      throw new Error(
-        `Failed to decode JSON batch: ${error instanceof Error ? error.message : String(error)}`,
-      )
+  decode(obj: unknown): ChannelMsg[] {
+    // Auto-detect: array = batch, object = single message
+    if (Array.isArray(obj)) {
+      return obj.map(fromJsonSafe)
     }
+    return [fromJsonSafe(obj)]
   },
 }

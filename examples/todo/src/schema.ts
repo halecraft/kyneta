@@ -23,13 +23,13 @@ export const TodoSchema = LoroSchema.doc({
   ),
 })
 
-/** BoundSchema: Loro substrate + causal merge strategy. */
-// import { bindLoro } from "@kyneta/loro-schema"
-// export const TodoDoc = bindLoro(TodoSchema)
+/** Use Loro for collaborative, realtime, shared state (WASM, ~1mb) */
+import { bindLoro } from "@kyneta/loro-schema"
+export const TodoDoc = bindLoro(TodoSchema)
 
-/** BoundSchema: Yjs substrate + causal merge strategy. */
-import { bindYjs } from "@kyneta/yjs-schema"
-export const TodoDoc = bindYjs(TodoSchema)
+/** Or, pick Yjs--it works just the same via kyneta/schema! (JS, ~300kb) */
+// import { bindYjs } from "@kyneta/yjs-schema"
+// export const TodoDoc = bindYjs(TodoSchema)
 
 /** Full-stack ref type: read + write + transact + changefeed. */
 export type TodoDocRef = Ref<typeof TodoSchema>

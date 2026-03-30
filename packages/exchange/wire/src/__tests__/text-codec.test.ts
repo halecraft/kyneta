@@ -1,12 +1,14 @@
-// JSON codec tests — round-trip all 5 message types.
+// Text codec tests — round-trip all 5 message types.
 //
 // Verifies that every ChannelMsg variant survives encode → decode
-// through the JSON codec. Special attention to SubstratePayload
+// through the textCodec. Special attention to SubstratePayload
 // handling: binary payloads must be base64-encoded transparently,
 // while JSON payloads pass through as-is.
+//
+// The text codec works with JSON-safe objects, not bytes.
 
 import { describe, expect, it } from "vitest"
-import { jsonCodec } from "../json.js"
+import { textCodec } from "../json.js"
 import type {
   ChannelMsg,
   DiscoverMsg,
@@ -20,25 +22,20 @@ import type {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const decoder = new TextDecoder()
-
 function roundTrip(msg: ChannelMsg): ChannelMsg {
-  const encoded = jsonCodec.encode(msg)
-  expect(encoded).toBeInstanceOf(Uint8Array)
-  expect(encoded.length).toBeGreaterThan(0)
-  return jsonCodec.decode(encoded)
-}
-
-/** Peek at the JSON string on the wire (for inspecting encoding). */
-function encodeToString(msg: ChannelMsg): string {
-  return decoder.decode(jsonCodec.encode(msg))
+  const encoded = textCodec.encode(msg)
+  // The encoded value should be a JSON-safe object (not Uint8Array)
+  expect(encoded).not.toBeInstanceOf(Uint8Array)
+  const decoded = textCodec.decode(encoded)
+  expect(decoded).toHaveLength(1)
+  return decoded[0]!
 }
 
 // ---------------------------------------------------------------------------
 // Establishment messages
 // ---------------------------------------------------------------------------
 
-describe("JSON codec — establishment messages", () => {
+describe("Text codec — establishment messages", () => {
   it("round-trips establish-request with full identity", () => {
     const msg: EstablishRequestMsg = {
       type: "establish-request",
@@ -82,15 +79,13 @@ describe("JSON codec — establishment messages", () => {
     expect(decoded).toEqual(msg)
   })
 
-  it("uses human-readable type strings on the wire", () => {
+  it("uses human-readable type strings (not integer discriminators)", () => {
     const msg: EstablishRequestMsg = {
       type: "establish-request",
       identity: { peerId: "p1", type: "user" },
     }
-    const json = encodeToString(msg)
-    const parsed = JSON.parse(json)
-    // JSON codec uses the original type string, not integer discriminators
-    expect(parsed.type).toBe("establish-request")
+    const encoded = textCodec.encode(msg) as Record<string, unknown>
+    expect(encoded.type).toBe("establish-request")
   })
 })
 
@@ -98,7 +93,7 @@ describe("JSON codec — establishment messages", () => {
 // Exchange messages
 // ---------------------------------------------------------------------------
 
-describe("JSON codec — discover", () => {
+describe("Text codec — discover", () => {
   it("round-trips discover with multiple docIds", () => {
     const msg: DiscoverMsg = {
       type: "discover",
@@ -118,7 +113,7 @@ describe("JSON codec — discover", () => {
   })
 })
 
-describe("JSON codec — interest", () => {
+describe("Text codec — interest", () => {
   it("round-trips interest with version and reciprocate", () => {
     const msg: InterestMsg = {
       type: "interest",
@@ -139,7 +134,6 @@ describe("JSON codec — interest", () => {
     expect(decoded.type).toBe("interest")
     const interest = decoded as InterestMsg
     expect(interest.docId).toBe("doc-xyz")
-    // JSON serialization drops undefined fields
     expect("version" in interest).toBe(false)
     expect("reciprocate" in interest).toBe(false)
   })
@@ -156,7 +150,7 @@ describe("JSON codec — interest", () => {
   })
 })
 
-describe("JSON codec — offer", () => {
+describe("Text codec — offer", () => {
   it("round-trips offer with JSON payload (snapshot)", () => {
     const msg: OfferMsg = {
       type: "offer",
@@ -185,13 +179,12 @@ describe("JSON codec — offer", () => {
       version: "1",
     }
 
-    // Inspect the wire format
-    const wireJson = encodeToString(msg)
-    const parsed = JSON.parse(wireJson)
+    const encoded = textCodec.encode(msg) as Record<string, unknown>
+    const payload = encoded.payload as Record<string, unknown>
 
     // The data should be the original string, not base64
-    expect(parsed.payload.data).toBe(jsonData)
-    expect(parsed.payload.encoding).toBe("json")
+    expect(payload.data).toBe(jsonData)
+    expect(payload.encoding).toBe("json")
   })
 
   it("round-trips offer with binary payload (delta)", () => {
@@ -215,12 +208,12 @@ describe("JSON codec — offer", () => {
     expect(decoded.version).toBe("AQ==:3")
     expect(decoded.reciprocate).toBe(true)
 
-    // Uint8Array should survive the JSON round-trip via base64
+    // Uint8Array should survive the round-trip via base64
     expect(decoded.payload.data).toBeInstanceOf(Uint8Array)
     expect(decoded.payload.data).toEqual(binaryData)
   })
 
-  it("binary payload data is base64-encoded on the wire", () => {
+  it("binary payload data is base64-encoded in the JSON-safe output", () => {
     const binaryData = new Uint8Array([72, 101, 108, 108, 111]) // "Hello" in ASCII
     const msg: OfferMsg = {
       type: "offer",
@@ -233,15 +226,14 @@ describe("JSON codec — offer", () => {
       version: "1",
     }
 
-    // Inspect the wire format
-    const wireJson = encodeToString(msg)
-    const parsed = JSON.parse(wireJson)
+    const encoded = textCodec.encode(msg) as Record<string, unknown>
+    const payload = encoded.payload as Record<string, unknown>
 
     // The data should be base64-encoded
-    expect(parsed.payload.encoding).toBe("binary")
-    expect(typeof parsed.payload.data).toBe("string")
+    expect(payload.encoding).toBe("binary")
+    expect(typeof payload.data).toBe("string")
     // btoa("Hello") === "SGVsbG8="
-    expect(parsed.payload.data).toBe("SGVsbG8=")
+    expect(payload.data).toBe("SGVsbG8=")
   })
 
   it("round-trips offer with large binary payload", () => {
@@ -278,7 +270,6 @@ describe("JSON codec — offer", () => {
       version: "1",
     }
     const decoded = roundTrip(msg) as OfferMsg
-    // JSON serialization drops undefined fields
     expect("reciprocate" in decoded).toBe(false)
   })
 })
@@ -287,7 +278,7 @@ describe("JSON codec — offer", () => {
 // Batch encoding
 // ---------------------------------------------------------------------------
 
-describe("JSON codec — batch", () => {
+describe("Text codec — batch", () => {
   it("round-trips a batch of mixed message types", () => {
     const msgs: ChannelMsg[] = [
       {
@@ -317,10 +308,9 @@ describe("JSON codec — batch", () => {
       },
     ]
 
-    const encoded = jsonCodec.encodeBatch(msgs)
-    expect(encoded).toBeInstanceOf(Uint8Array)
+    const encoded = textCodec.encode(msgs)
 
-    const decoded = jsonCodec.decodeBatch(encoded)
+    const decoded = textCodec.decode(encoded)
     expect(decoded).toHaveLength(4)
     expect(decoded[0]!.type).toBe("establish-request")
     expect(decoded[1]!.type).toBe("discover")
@@ -334,20 +324,9 @@ describe("JSON codec — batch", () => {
   })
 
   it("round-trips an empty batch", () => {
-    const encoded = jsonCodec.encodeBatch([])
-    const decoded = jsonCodec.decodeBatch(encoded)
+    const encoded = textCodec.encode([])
+    const decoded = textCodec.decode(encoded)
     expect(decoded).toEqual([])
-  })
-
-  it("batch wire format is a JSON array", () => {
-    const msgs: ChannelMsg[] = [
-      { type: "discover", docIds: ["d1"] },
-      { type: "discover", docIds: ["d2"] },
-    ]
-    const wireJson = decoder.decode(jsonCodec.encodeBatch(msgs))
-    const parsed = JSON.parse(wireJson)
-    expect(Array.isArray(parsed)).toBe(true)
-    expect(parsed).toHaveLength(2)
   })
 })
 
@@ -355,20 +334,75 @@ describe("JSON codec — batch", () => {
 // Error handling
 // ---------------------------------------------------------------------------
 
-describe("JSON codec — error handling", () => {
-  it("throws on invalid JSON data", () => {
-    const garbage = new TextEncoder().encode("not valid json {{{")
-    expect(() => jsonCodec.decode(garbage)).toThrow("Failed to decode JSON")
-  })
-
+describe("Text codec — error handling", () => {
   it("throws on unknown message type", () => {
-    const bad = new TextEncoder().encode(
-      JSON.stringify({ type: "unknown-type", data: 123 }),
-    )
-    expect(() => jsonCodec.decode(bad)).toThrow("Unknown JSON message type")
+    const bad = { type: "unknown-type", data: 123 }
+    expect(() => textCodec.decode(bad)).toThrow("Unknown JSON message type")
   })
 
-  it("throws on empty input", () => {
-    expect(() => jsonCodec.decode(new Uint8Array(0))).toThrow()
+  it("throws on unknown message type in batch", () => {
+    const bad = [{ type: "unknown-type" }]
+    expect(() => textCodec.decode(bad)).toThrow("Unknown JSON message type")
+  })
+
+  it("throws on null input", () => {
+    expect(() => textCodec.decode(null)).toThrow()
+  })
+
+  it("throws on non-object input", () => {
+    expect(() => textCodec.decode("not an object")).toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// JSON-safe output verification
+// ---------------------------------------------------------------------------
+
+describe("Text codec — JSON-safe output", () => {
+  it("encode output survives JSON.stringify → JSON.parse round-trip", () => {
+    const msg: OfferMsg = {
+      type: "offer",
+      docId: "doc-1",
+      offerType: "snapshot",
+      payload: {
+        encoding: "binary",
+        data: new Uint8Array([1, 2, 3, 4, 5]),
+      },
+      version: "1",
+    }
+
+    const encoded = textCodec.encode(msg)
+    // Simulate going through JSON serialization (as a text frame would)
+    const serialized = JSON.stringify(encoded)
+    const deserialized = JSON.parse(serialized)
+    const decoded = textCodec.decode(deserialized)
+    expect(decoded).toHaveLength(1)
+    const offer = decoded[0] as OfferMsg
+
+    expect(offer.payload.data).toBeInstanceOf(Uint8Array)
+    expect(offer.payload.data).toEqual(new Uint8Array([1, 2, 3, 4, 5]))
+  })
+
+  it("encode(batch) output survives JSON.stringify → JSON.parse round-trip", () => {
+    const msgs: ChannelMsg[] = [
+      { type: "discover", docIds: ["a"] },
+      {
+        type: "offer",
+        docId: "b",
+        offerType: "delta",
+        payload: { encoding: "binary", data: new Uint8Array([10, 20]) },
+        version: "1",
+      },
+    ]
+
+    const encoded = textCodec.encode(msgs)
+    const serialized = JSON.stringify(encoded)
+    const deserialized = JSON.parse(serialized)
+    const decoded = textCodec.decode(deserialized)
+
+    expect(decoded).toHaveLength(2)
+    expect(decoded[0]!.type).toBe("discover")
+    const offer = decoded[1] as OfferMsg
+    expect(offer.payload.data).toEqual(new Uint8Array([10, 20]))
   })
 })

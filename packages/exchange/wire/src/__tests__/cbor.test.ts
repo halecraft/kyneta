@@ -23,7 +23,9 @@ function roundTrip(msg: ChannelMsg): ChannelMsg {
   const encoded = cborCodec.encode(msg)
   expect(encoded).toBeInstanceOf(Uint8Array)
   expect(encoded.length).toBeGreaterThan(0)
-  return cborCodec.decode(encoded)
+  const decoded = cborCodec.decode(encoded)
+  expect(decoded).toHaveLength(1)
+  return decoded[0]!
 }
 
 // ---------------------------------------------------------------------------
@@ -250,10 +252,10 @@ describe("CBOR codec — batch", () => {
       },
     ]
 
-    const encoded = cborCodec.encodeBatch(msgs)
+    const encoded = cborCodec.encode(msgs)
     expect(encoded).toBeInstanceOf(Uint8Array)
 
-    const decoded = cborCodec.decodeBatch(encoded)
+    const decoded = cborCodec.decode(encoded)
     expect(decoded).toHaveLength(4)
     expect(decoded[0]!.type).toBe("establish-request")
     expect(decoded[1]!.type).toBe("discover")
@@ -271,8 +273,8 @@ describe("CBOR codec — batch", () => {
   })
 
   it("round-trips an empty batch", () => {
-    const encoded = cborCodec.encodeBatch([])
-    const decoded = cborCodec.decodeBatch(encoded)
+    const encoded = cborCodec.encode([])
+    const decoded = cborCodec.decode(encoded)
     expect(decoded).toEqual([])
   })
 })
@@ -284,7 +286,7 @@ describe("CBOR codec — batch", () => {
 describe("CBOR codec — error handling", () => {
   it("throws on invalid CBOR data", () => {
     const garbage = new Uint8Array([0xff, 0xfe, 0xfd, 0xfc])
-    expect(() => cborCodec.decode(garbage)).toThrow("Failed to decode CBOR")
+    expect(() => cborCodec.decode(garbage)).toThrow("Failed to decode")
   })
 
   it("throws on empty input", () => {

@@ -419,34 +419,49 @@ The `@kyneta/wire` package provides serialization infrastructure for the exchang
 ```
 @kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-network-adapter
    (messages)         (codecs)          (network adapter)
+                                        @kyneta/sse-network-adapter (future)
 ```
 
-### Two Codecs
+### Frame<T> — Universal Abstraction
 
-| Codec | Transport | Binary Payload | Use Case |
-|-------|-----------|---------------|----------|
-| **CBOR** (`cborCodec`) | Websocket, WebRTC | Native byte strings | Primary — compact binary encoding |
-| **JSON** (`jsonCodec`) | SSE, HTTP responses | Base64-encoded | Debugging, text-only transports |
+Every message is wrapped in a `Frame<T>`. A frame carries a protocol version, an optional content hash (reserved for future SHA-256), and content that is either **complete** (the full payload) or a **fragment** (one piece of a larger payload). Binary pipeline: `Frame<Uint8Array>`. Text pipeline: `Frame<string>`.
 
-Both implement the `MessageCodec` interface (`encode`, `decode`, `encodeBatch`, `decodeBatch`) and are injected into the frame layer — the frame doesn't care which encoding is used.
+Batching is **orthogonal to framing**. The frame layer does not distinguish single messages from batches — the payload's own structure (CBOR array vs map, JSON array vs object) determines singular vs plural.
 
-### Frame Format
+### Two Codec Interfaces
 
-Every message (or batch) is wrapped in a 6-byte frame header before transport:
+| Interface | Type `T` | Implementation | Transport | Binary Payload |
+|-----------|----------|----------------|-----------|----------------|
+| **BinaryCodec** | `Uint8Array` | `cborCodec` | WebSocket, WebRTC | Native CBOR byte strings |
+| **TextCodec** | JSON-safe objects | `textCodec` | SSE, HTTP | Base64-encoded in JSON |
 
-| Byte | Field | Size | Description |
-|------|-------|------|-------------|
-| 0 | Version | 1 byte | Protocol version (`0x02`) |
-| 1 | Flags | 1 byte | `0x00` = single, `0x01` = batch |
-| 2–5 | Payload Length | 4 bytes BE | Max ~4GB |
+The `BinaryCodec` operates on raw bytes (`encode`/`decode`/`encodeBatch`/`decodeBatch` with `Uint8Array`). The `TextCodec` operates on JSON-safe objects (`encode` returns `unknown`, `decode` accepts `unknown`).
 
-### Fragmentation
+### Two Pipelines
 
-Large payloads are split into chunks with byte-prefix discriminators (`0x00` complete, `0x01` fragment header, `0x02` fragment data). The `FragmentReassembler` handles stateful reassembly with configurable timeouts (default 10s), memory limits (default 50MB), and oldest-first eviction.
+```
+Binary: BinaryCodec (CBOR) → binary frame (7B header) → binary fragmentation → FragmentReassembler
+                                                                                 └→ FragmentCollector<Uint8Array>
 
-Default fragment thresholds by environment: AWS API Gateway 100KB, Cloudflare Workers 500KB, self-hosted 0 (disabled).
+Text:   TextCodec (JSON)   → text frame ("Vx" prefix) → text fragmentation   → TextReassembler
+                                                                                 └→ FragmentCollector<string>
+```
 
-### Wire Type Discriminators
+### Binary Frame Format
+
+7-byte header: version (1B, `0x00`) + type (1B, `0x00`=complete / `0x01`=fragment) + hash algorithm (1B, `0x00`=none) + payload length (4B BE). Fragment frames add 20 bytes of metadata (frameId 8B + index 4B + total 4B + totalSize 4B) before the payload. Two transport prefixes: `0x00` (complete) and `0x01` (fragment).
+
+### Text Frame Format
+
+JSON array with a 2-character prefix: position 0 is the version (`'0'`), position 1 encodes type + hash via case (`'c'`=complete, `'C'`=complete+hash, `'f'`=fragment, `'F'`=fragment+hash). Complete frames embed the payload as a native JSON value. Fragment frames carry `frameId`, `index`, `total`, `totalSize`, and a JSON substring chunk.
+
+### FragmentCollector<T>
+
+Generic stateful fragment collector parameterized on chunk type `T`. Uses a pure decision function (`decideFragment`) as the functional core and the `FragmentCollector` class as the imperative shell. Both `FragmentReassembler` (binary) and `TextReassembler` (text) are thin wrappers (~80–100 lines) that handle format-specific parsing and delegate collection to the generic collector.
+
+Fragments are fully self-describing — no separate "fragment header" message. The collector auto-creates tracking state on first contact with a new frame ID. Configurable timeouts (default 10s), max concurrent frames (32), max total size (50MB), and oldest-first eviction.
+
+### Wire Type Discriminators (CBOR)
 
 | Message | Discriminator | Compact Fields |
 |---------|--------------|----------------|
@@ -456,7 +471,7 @@ Default fragment thresholds by environment: AWS API Gateway 100KB, Cloudflare Wo
 | `interest` | `0x11` | `t`, `doc`, `v?`, `r?` |
 | `offer` | `0x12` | `t`, `doc`, `ot`, `pe`, `d`, `v`, `r?` |
 
-See `packages/wire/PROTOCOL.md` for the full wire protocol specification.
+See `packages/exchange/wire/PROTOCOL.md` for the full wire protocol specification.
 
 ---
 

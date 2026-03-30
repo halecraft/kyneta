@@ -1,18 +1,34 @@
 // @kyneta/wire — wire format codecs, framing, and fragmentation.
 //
-// Provides serialization infrastructure for @kyneta/exchange's
-// 5-message protocol (establish-request, establish-response,
-// discover, interest, offer).
+// Universal Frame<T> abstraction: every message is a frame. A frame
+// carries a version, optional hash, and content (Complete or Fragment).
+// Binary: Frame<Uint8Array>. Text: Frame<string>.
 //
-// Two codecs:
-// - CBOR (src/cbor.ts) — compact binary for Websocket, WebRTC
-// - JSON (src/json.ts) — human-readable for SSE, HTTP, debugging
+// Two pipelines for @kyneta/exchange's 5-message protocol
+// (establish-request, establish-response, discover, interest, offer):
+//
+// Binary pipeline (WebSocket, WebRTC):
+//   BinaryCodec (CBOR) → binary frame (7B header) → binary fragmentation → FragmentReassembler
+//
+// Text pipeline (SSE, HTTP):
+//   TextCodec (JSON) → text frame ("Vx" prefix) → text fragmentation → TextReassembler
+//
+// Shared: FragmentCollector<T> — generic stateful fragment collection
+// with FC/IS design (pure decideFragment + imperative shell).
+// Batching is orthogonal to framing — the codec handles it.
 
 // ---------------------------------------------------------------------------
-// Codec interface
+// Frame types — universal frame abstraction
 // ---------------------------------------------------------------------------
 
-export type { MessageCodec } from "./codec.js"
+export type { Frame, Complete, Fragment } from "./frame-types.js"
+export { complete, fragment, isComplete, isFragment } from "./frame-types.js"
+
+// ---------------------------------------------------------------------------
+// Codec interfaces
+// ---------------------------------------------------------------------------
+
+export type { BinaryCodec, TextCodec } from "./codec.js"
 
 // ---------------------------------------------------------------------------
 // CBOR codec — binary transports
@@ -21,10 +37,10 @@ export type { MessageCodec } from "./codec.js"
 export { cborCodec } from "./cbor.js"
 
 // ---------------------------------------------------------------------------
-// JSON codec — text transports
+// Text codec — text transports (SSE, HTTP)
 // ---------------------------------------------------------------------------
 
-export { jsonCodec } from "./json.js"
+export { textCodec } from "./json.js"
 
 // ---------------------------------------------------------------------------
 // Wire types — discriminators and compact field names (CBOR internals)
@@ -51,32 +67,50 @@ export {
 } from "./wire-types.js"
 
 // ---------------------------------------------------------------------------
-// Constants — protocol version, flags, transport prefixes
+// Constants — protocol version, transport prefixes
 // ---------------------------------------------------------------------------
 
 export {
   WIRE_VERSION,
   HEADER_SIZE,
-  FrameFlags,
+  BinaryFrameType,
+  type BinaryFrameTypeValue,
+  HASH_ALGO,
+  type HashAlgoValue,
   MESSAGE_COMPLETE,
-  FRAGMENT_HEADER,
-  FRAGMENT_DATA,
-  BATCH_ID_SIZE,
-  FRAGMENT_HEADER_PAYLOAD_SIZE,
-  FRAGMENT_DATA_MIN_SIZE,
+  FRAGMENT,
+  FRAME_ID_SIZE,
+  FRAGMENT_META_SIZE,
+  FRAGMENT_MIN_SIZE,
 } from "./constants.js"
 
 // ---------------------------------------------------------------------------
-// Frame — 6-byte header encoding/decoding
+// Frame — 7-byte header encoding/decoding
 // ---------------------------------------------------------------------------
 
 export {
-  encodeFrame,
-  encodeBatchFrame,
-  decodeFrame,
+  encodeBinaryFrame,
+  decodeBinaryFrame,
+  encodeComplete,
+  encodeCompleteBatch,
   FrameDecodeError,
   type FrameDecodeErrorCode,
 } from "./frame.js"
+
+// ---------------------------------------------------------------------------
+// Text frame — 2-char prefix encoding/decoding
+// ---------------------------------------------------------------------------
+
+export {
+  TEXT_WIRE_VERSION,
+  encodeTextFrame,
+  decodeTextFrame,
+  fragmentTextPayload,
+  encodeTextComplete,
+  encodeTextCompleteBatch,
+  TextFrameDecodeError,
+  type TextFrameDecodeErrorCode,
+} from "./text-frame.js"
 
 // ---------------------------------------------------------------------------
 // Fragment — transport-level payload fragmentation
@@ -85,22 +119,34 @@ export {
 export {
   type TransportPayload,
   FragmentParseError,
-  FragmentReassembleError,
-  generateBatchId,
-  batchIdToKey,
-  keyToBatchId,
+  generateFrameId,
+  bytesToHex,
+  hexToBytes,
   wrapCompleteMessage,
-  createFragmentHeader,
-  createFragmentData,
+  wrapFragment,
   parseTransportPayload,
   fragmentPayload,
-  reassembleFragments,
   shouldFragment,
   calculateFragmentationOverhead,
 } from "./fragment.js"
 
 // ---------------------------------------------------------------------------
-// Reassembler — stateful fragment reassembly
+// Fragment collector — generic stateful fragment collection
+// ---------------------------------------------------------------------------
+
+export {
+  FragmentCollector,
+  decideFragment,
+  type CollectorResult,
+  type CollectorError,
+  type CollectorConfig,
+  type CollectorOps,
+  type FragmentDecision,
+  type TimerAPI,
+} from "./fragment-collector.js"
+
+// ---------------------------------------------------------------------------
+// Reassembler — stateful fragment reassembly (binary wrapper)
 // ---------------------------------------------------------------------------
 
 export {
@@ -108,5 +154,15 @@ export {
   type ReassembleResult,
   type ReassembleError,
   type ReassemblerConfig,
-  type TimerAPI,
 } from "./reassembler.js"
+
+// ---------------------------------------------------------------------------
+// Text reassembler — stateful fragment reassembly (text wrapper)
+// ---------------------------------------------------------------------------
+
+export {
+  TextReassembler,
+  type TextReassembleResult,
+  type TextReassembleError,
+  type TextReassemblerConfig,
+} from "./text-reassembler.js"
