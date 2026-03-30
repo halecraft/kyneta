@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/exchange",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Substrate-agnostic state exchange — sync for any @kyneta/schema substrate",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -35,7 +35,7 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/schema": "^0.0.1"
+    "@kyneta/schema": "^1.0.0"
   },
   "devDependencies": {
     "@kyneta/schema": "workspace:^",

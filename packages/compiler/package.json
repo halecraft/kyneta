@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/compiler",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Incremental view maintenance compiler for structured deltas",
   "author": "Duane Johnson",
   "license": "MIT",

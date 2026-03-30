@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/wire",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Wire format codecs, framing, and fragmentation for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -35,7 +35,7 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": "^0.0.1"
+    "@kyneta/exchange": "^1.0.0"
   },
   "dependencies": {
     "@levischuck/tiny-cbor": "^0.3.2"
