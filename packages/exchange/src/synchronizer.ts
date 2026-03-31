@@ -113,6 +113,45 @@ type VersionGapResult =
     }
 
 /**
+ * Shared version-gap classifier used by the semantic inbound/outbound helpers.
+ *
+ * This centralizes the common mechanics:
+ * - parse the serialized version string
+ * - read the replica's current version
+ * - run the supplied comparison
+ * - classify the result as parse-error, no-gap, or actionable gap
+ *
+ * The comparison direction remains the responsibility of the wrapper:
+ * - inbound uses `parsed.compare(current)`
+ * - outbound uses `current.compare(parsed)`
+ */
+function classifyVersionGap(
+  replica: Replica<any>,
+  replicaFactory: ReplicaFactory<any>,
+  serializedVersion: string,
+  compare: (
+    parsed: Version,
+    current: Version,
+  ) => "behind" | "equal" | "ahead" | "concurrent",
+): VersionGapResult {
+  let parsed: Version
+  try {
+    parsed = replicaFactory.parseVersion(serializedVersion)
+  } catch (error) {
+    return { kind: "parse-error", error }
+  }
+
+  const currentVersion = replica.version()
+  const comparison = compare(parsed, currentVersion)
+
+  if (comparison === "behind" || comparison === "equal") {
+    return { kind: "no-gap", comparison }
+  }
+
+  return { kind: "gap", comparison, parsed }
+}
+
+/**
  * Compare an incoming peer version against our current replica version.
  *
  * Semantics:
@@ -126,21 +165,12 @@ function resolveInboundVersionGap(
   replicaFactory: ReplicaFactory<any>,
   serializedVersion: string,
 ): VersionGapResult {
-  let parsed: Version
-  try {
-    parsed = replicaFactory.parseVersion(serializedVersion)
-  } catch (error) {
-    return { kind: "parse-error", error }
-  }
-
-  const currentVersion = replica.version()
-  const comparison = parsed.compare(currentVersion)
-
-  if (comparison === "behind" || comparison === "equal") {
-    return { kind: "no-gap", comparison }
-  }
-
-  return { kind: "gap", comparison, parsed }
+  return classifyVersionGap(
+    replica,
+    replicaFactory,
+    serializedVersion,
+    (parsed, current) => parsed.compare(current),
+  )
 }
 
 /**
@@ -157,21 +187,12 @@ function resolveOutboundVersionGap(
   replicaFactory: ReplicaFactory<any>,
   serializedVersion: string,
 ): VersionGapResult {
-  let parsed: Version
-  try {
-    parsed = replicaFactory.parseVersion(serializedVersion)
-  } catch (error) {
-    return { kind: "parse-error", error }
-  }
-
-  const currentVersion = replica.version()
-  const comparison = currentVersion.compare(parsed)
-
-  if (comparison === "behind" || comparison === "equal") {
-    return { kind: "no-gap", comparison }
-  }
-
-  return { kind: "gap", comparison, parsed }
+  return classifyVersionGap(
+    replica,
+    replicaFactory,
+    serializedVersion,
+    (parsed, current) => current.compare(parsed),
+  )
 }
 
 // ---------------------------------------------------------------------------
