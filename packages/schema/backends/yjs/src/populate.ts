@@ -158,8 +158,7 @@ function ensureMapContainers(schema: SchemaNode): Y.Map<unknown> {
   for (const [key, fieldSchema] of Object.entries(
     structural.fields as Record<string, SchemaNode>,
   )) {
-    const tag =
-      fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+    const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
 
     if (tag === "text") {
       map.set(key, new Y.Text())

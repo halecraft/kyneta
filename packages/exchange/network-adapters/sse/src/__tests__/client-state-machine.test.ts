@@ -113,7 +113,11 @@ describe("SseClientStateMachine — invalid transitions", () => {
   it("rejects disconnected → reconnecting", () => {
     const sm = new SseClientStateMachine()
     expect(() =>
-      sm.transition({ status: "reconnecting", attempt: 1, nextAttemptMs: 1000 }),
+      sm.transition({
+        status: "reconnecting",
+        attempt: 1,
+        nextAttemptMs: 1000,
+      }),
     ).toThrow("Invalid state transition: disconnected -> reconnecting")
   })
 
@@ -131,9 +135,9 @@ describe("SseClientStateMachine — invalid transitions", () => {
     const sm = new SseClientStateMachine()
     sm.transition({ status: "connecting", attempt: 1 })
     sm.transition({ status: "connected" })
-    expect(() =>
-      sm.transition({ status: "ready" } as any),
-    ).toThrow("Invalid state transition: connected -> ready")
+    expect(() => sm.transition({ status: "ready" } as any)).toThrow(
+      "Invalid state transition: connected -> ready",
+    )
   })
 })
 

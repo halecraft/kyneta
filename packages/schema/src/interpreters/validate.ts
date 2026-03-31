@@ -161,11 +161,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
           .map(v => JSON.stringify(v))
           .join(" | ")
         ctx.errors.push(
-          new SchemaValidationError(
-            path.format(),
-            `one of ${allowed}`,
-            value,
-          ),
+          new SchemaValidationError(path.format(), `one of ${allowed}`, value),
         )
         return undefined
       }
@@ -183,9 +179,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     const value = path.read(ctx.root)
 
     if (!isNonNullObject(value) || Array.isArray(value)) {
-      ctx.errors.push(
-        new SchemaValidationError(path.format(), "object", value),
-      )
+      ctx.errors.push(new SchemaValidationError(path.format(), "object", value))
       return undefined
     }
 
@@ -207,9 +201,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     const value = path.read(ctx.root)
 
     if (!Array.isArray(value)) {
-      ctx.errors.push(
-        new SchemaValidationError(path.format(), "array", value),
-      )
+      ctx.errors.push(new SchemaValidationError(path.format(), "array", value))
       return undefined
     }
 
@@ -225,9 +217,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     const value = path.read(ctx.root)
 
     if (!isNonNullObject(value) || Array.isArray(value)) {
-      ctx.errors.push(
-        new SchemaValidationError(path.format(), "object", value),
-      )
+      ctx.errors.push(new SchemaValidationError(path.format(), "object", value))
       return undefined
     }
 
@@ -355,11 +345,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
         case "text":
           if (typeof value !== "string") {
             ctx.errors.push(
-              new SchemaValidationError(
-                path.format(),
-                "string (text)",
-                value,
-              ),
+              new SchemaValidationError(path.format(), "string (text)", value),
             )
             return undefined
           }

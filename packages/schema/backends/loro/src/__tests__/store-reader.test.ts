@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest"
-import { LoroDoc, LoroMap, LoroList, LoroMovableList } from "loro-crdt"
+import type { StoreReader } from "@kyneta/schema"
 import { RawPath, Schema } from "@kyneta/schema"
+import { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
+import { describe, expect, it } from "vitest"
 import { LoroSchema } from "../loro-schema.js"
 import { loroStoreReader } from "../store-reader.js"
-import type { StoreReader } from "@kyneta/schema"
 
 // ===========================================================================
 // Helpers
@@ -23,7 +23,6 @@ function createReader(
   return { doc, reader: loroStoreReader(doc, schema) }
 }
 
-
 /** Build a RawPath from variadic key/index segments. */
 function p(...segs: (string | number)[]): RawPath {
   let path = RawPath.empty
@@ -32,7 +31,6 @@ function p(...segs: (string | number)[]): RawPath {
   }
   return path
 }
-
 
 // ===========================================================================
 // Test schemas
@@ -84,14 +82,14 @@ describe("loroStoreReader", () => {
 
   describe("read: scalars", () => {
     it("reads a LoroText as a string", () => {
-      const { reader } = createReader(SimpleDocSchema, (doc) => {
+      const { reader } = createReader(SimpleDocSchema, doc => {
         doc.getText("title").insert(0, "Hello World")
       })
       expect(reader.read(p("title"))).toBe("Hello World")
     })
 
     it("reads an empty LoroText as empty string", () => {
-      const { reader } = createReader(SimpleDocSchema, (_doc) => {
+      const { reader } = createReader(SimpleDocSchema, _doc => {
         // getText auto-creates; no insert
         _doc.getText("title")
       })
@@ -99,14 +97,14 @@ describe("loroStoreReader", () => {
     })
 
     it("reads a LoroCounter as a number", () => {
-      const { reader } = createReader(SimpleDocSchema, (doc) => {
+      const { reader } = createReader(SimpleDocSchema, doc => {
         doc.getCounter("count").increment(42)
       })
       expect(reader.read(p("count"))).toBe(42)
     })
 
     it("reads a LoroCounter with zero value", () => {
-      const { reader } = createReader(SimpleDocSchema, (doc) => {
+      const { reader } = createReader(SimpleDocSchema, doc => {
         doc.getCounter("count") // auto-creates at 0
       })
       expect(reader.read(p("count"))).toBe(0)
@@ -119,7 +117,7 @@ describe("loroStoreReader", () => {
 
   describe("read: nested structs", () => {
     it("reads a nested scalar field", () => {
-      const { reader } = createReader(NestedDocSchema, (doc) => {
+      const { reader } = createReader(NestedDocSchema, doc => {
         const settings = doc.getMap("settings")
         settings.set("darkMode", true)
         settings.set("fontSize", 16)
@@ -129,7 +127,7 @@ describe("loroStoreReader", () => {
     })
 
     it("reads a nested struct as a plain object (product read)", () => {
-      const { reader } = createReader(NestedDocSchema, (doc) => {
+      const { reader } = createReader(NestedDocSchema, doc => {
         const settings = doc.getMap("settings")
         settings.set("darkMode", false)
         settings.set("fontSize", 14)
@@ -145,7 +143,7 @@ describe("loroStoreReader", () => {
 
   describe("read: lists", () => {
     it("reads a list item (struct inside list)", () => {
-      const { reader } = createReader(ListDocSchema, (doc) => {
+      const { reader } = createReader(ListDocSchema, doc => {
         const list = doc.getList("items")
         const map = list.insertContainer(0, new LoroMap())
         map.set("name", "Task 1")
@@ -156,7 +154,7 @@ describe("loroStoreReader", () => {
     })
 
     it("reads a scalar field inside a list item", () => {
-      const { reader } = createReader(ListDocSchema, (doc) => {
+      const { reader } = createReader(ListDocSchema, doc => {
         const list = doc.getList("items")
         const map = list.insertContainer(0, new LoroMap())
         map.set("name", "Buy milk")
@@ -167,7 +165,7 @@ describe("loroStoreReader", () => {
     })
 
     it("reads multiple list items", () => {
-      const { reader } = createReader(ListDocSchema, (doc) => {
+      const { reader } = createReader(ListDocSchema, doc => {
         const list = doc.getList("items")
         const m0 = list.insertContainer(0, new LoroMap())
         m0.set("name", "First")
@@ -187,7 +185,7 @@ describe("loroStoreReader", () => {
 
   describe("read: maps", () => {
     it("reads a map entry", () => {
-      const { reader } = createReader(MapDocSchema, (doc) => {
+      const { reader } = createReader(MapDocSchema, doc => {
         const labels = doc.getMap("labels")
         labels.set("bug", "red")
         labels.set("feature", "blue")
@@ -203,7 +201,7 @@ describe("loroStoreReader", () => {
 
   describe("read: movable lists", () => {
     it("reads a movable list item", () => {
-      const { reader } = createReader(MovableListDocSchema, (doc) => {
+      const { reader } = createReader(MovableListDocSchema, doc => {
         const tasks = doc.getMovableList("tasks")
         const m = tasks.insertContainer(0, new LoroMap())
         m.set("title", "Urgent task")
@@ -214,15 +212,13 @@ describe("loroStoreReader", () => {
     })
 
     it("reads a field inside a movable list item", () => {
-      const { reader } = createReader(MovableListDocSchema, (doc) => {
+      const { reader } = createReader(MovableListDocSchema, doc => {
         const tasks = doc.getMovableList("tasks")
         const m = tasks.insertContainer(0, new LoroMap())
         m.set("title", "Do laundry")
         m.set("priority", 3)
       })
-      expect(reader.read(p("tasks", 0, "title"))).toBe(
-        "Do laundry",
-      )
+      expect(reader.read(p("tasks", 0, "title"))).toBe("Do laundry")
     })
   })
 
@@ -232,14 +228,14 @@ describe("loroStoreReader", () => {
 
   describe("arrayLength", () => {
     it("returns 0 for an empty list", () => {
-      const { reader } = createReader(ListDocSchema, (doc) => {
+      const { reader } = createReader(ListDocSchema, doc => {
         doc.getList("items") // auto-creates empty
       })
       expect(reader.arrayLength(p("items"))).toBe(0)
     })
 
     it("returns correct length after inserts", () => {
-      const { reader } = createReader(ListDocSchema, (doc) => {
+      const { reader } = createReader(ListDocSchema, doc => {
         const list = doc.getList("items")
         list.insertContainer(0, new LoroMap())
         list.insertContainer(1, new LoroMap())
@@ -249,7 +245,7 @@ describe("loroStoreReader", () => {
     })
 
     it("returns correct length for movable list", () => {
-      const { reader } = createReader(MovableListDocSchema, (doc) => {
+      const { reader } = createReader(MovableListDocSchema, doc => {
         const tasks = doc.getMovableList("tasks")
         tasks.insertContainer(0, new LoroMap())
         tasks.insertContainer(1, new LoroMap())
@@ -258,7 +254,7 @@ describe("loroStoreReader", () => {
     })
 
     it("returns 0 for a non-list container", () => {
-      const { reader } = createReader(NestedDocSchema, (doc) => {
+      const { reader } = createReader(NestedDocSchema, doc => {
         doc.getMap("settings")
       })
       expect(reader.arrayLength(p("settings"))).toBe(0)
@@ -271,7 +267,7 @@ describe("loroStoreReader", () => {
 
   describe("keys", () => {
     it("returns keys for a LoroMap", () => {
-      const { reader } = createReader(MapDocSchema, (doc) => {
+      const { reader } = createReader(MapDocSchema, doc => {
         const labels = doc.getMap("labels")
         labels.set("bug", "red")
         labels.set("feature", "blue")
@@ -285,14 +281,14 @@ describe("loroStoreReader", () => {
     })
 
     it("returns empty array for an empty map", () => {
-      const { reader } = createReader(MapDocSchema, (doc) => {
+      const { reader } = createReader(MapDocSchema, doc => {
         doc.getMap("labels")
       })
       expect(reader.keys(p("labels"))).toEqual([])
     })
 
     it("returns keys for a nested struct (LoroMap)", () => {
-      const { reader } = createReader(NestedDocSchema, (doc) => {
+      const { reader } = createReader(NestedDocSchema, doc => {
         const settings = doc.getMap("settings")
         settings.set("darkMode", false)
         settings.set("fontSize", 14)
@@ -303,7 +299,7 @@ describe("loroStoreReader", () => {
     })
 
     it("returns empty array for a non-map container", () => {
-      const { reader } = createReader(ListDocSchema, (doc) => {
+      const { reader } = createReader(ListDocSchema, doc => {
         doc.getList("items")
       })
       expect(reader.keys(p("items"))).toEqual([])
@@ -316,28 +312,28 @@ describe("loroStoreReader", () => {
 
   describe("hasKey", () => {
     it("returns true for an existing key", () => {
-      const { reader } = createReader(MapDocSchema, (doc) => {
+      const { reader } = createReader(MapDocSchema, doc => {
         doc.getMap("labels").set("bug", "red")
       })
       expect(reader.hasKey(p("labels"), "bug")).toBe(true)
     })
 
     it("returns false for a missing key", () => {
-      const { reader } = createReader(MapDocSchema, (doc) => {
+      const { reader } = createReader(MapDocSchema, doc => {
         doc.getMap("labels").set("bug", "red")
       })
       expect(reader.hasKey(p("labels"), "missing")).toBe(false)
     })
 
     it("returns false for non-map container", () => {
-      const { reader } = createReader(ListDocSchema, (doc) => {
+      const { reader } = createReader(ListDocSchema, doc => {
         doc.getList("items")
       })
       expect(reader.hasKey(p("items"), "anything")).toBe(false)
     })
 
     it("works on nested map (struct)", () => {
-      const { reader } = createReader(NestedDocSchema, (doc) => {
+      const { reader } = createReader(NestedDocSchema, doc => {
         const settings = doc.getMap("settings")
         settings.set("darkMode", true)
       })
@@ -352,7 +348,7 @@ describe("loroStoreReader", () => {
 
   describe("liveness", () => {
     it("reflects text mutations immediately", () => {
-      const { doc, reader } = createReader(SimpleDocSchema, (d) => {
+      const { doc, reader } = createReader(SimpleDocSchema, d => {
         d.getText("title").insert(0, "Hello")
       })
       expect(reader.read(p("title"))).toBe("Hello")
@@ -364,7 +360,7 @@ describe("loroStoreReader", () => {
     })
 
     it("reflects counter mutations immediately", () => {
-      const { doc, reader } = createReader(SimpleDocSchema, (d) => {
+      const { doc, reader } = createReader(SimpleDocSchema, d => {
         d.getCounter("count").increment(1)
       })
       expect(reader.read(p("count"))).toBe(1)
@@ -375,7 +371,7 @@ describe("loroStoreReader", () => {
     })
 
     it("reflects list length changes immediately", () => {
-      const { doc, reader } = createReader(ListDocSchema, (d) => {
+      const { doc, reader } = createReader(ListDocSchema, d => {
         d.getList("items")
       })
       expect(reader.arrayLength(p("items"))).toBe(0)
@@ -401,7 +397,7 @@ describe("loroStoreReader", () => {
         ),
       })
 
-      const { reader } = createReader(schema, (doc) => {
+      const { reader } = createReader(schema, doc => {
         const list = doc.getList("people")
         const alice = list.insertContainer(0, new LoroMap())
         alice.set("name", "Alice")

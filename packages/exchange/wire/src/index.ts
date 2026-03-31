@@ -21,7 +21,7 @@
 // Frame types — universal frame abstraction
 // ---------------------------------------------------------------------------
 
-export type { Frame, Complete, Fragment } from "./frame-types.js"
+export type { Complete, Fragment, Frame } from "./frame-types.js"
 export { complete, fragment, isComplete, isFragment } from "./frame-types.js"
 
 // ---------------------------------------------------------------------------
@@ -48,22 +48,22 @@ export { textCodec } from "./json.js"
 
 export {
   MessageType,
-  type MessageTypeValue,
   MessageTypeToString,
-  StringToMessageType,
-  PayloadKind,
-  type PayloadKindValue,
-  PayloadKindToString,
-  StringToPayloadKind,
+  type MessageTypeValue,
   PayloadEncoding,
-  type PayloadEncodingValue,
   PayloadEncodingToString,
+  type PayloadEncodingValue,
+  PayloadKind,
+  PayloadKindToString,
+  type PayloadKindValue,
+  StringToMessageType,
   StringToPayloadEncoding,
-  type WireEstablishMsg,
+  StringToPayloadKind,
   type WireDiscoverMsg,
+  type WireEstablishMsg,
   type WireInterestMsg,
-  type WireOfferMsg,
   type WireMessage,
+  type WireOfferMsg,
 } from "./wire-types.js"
 
 // ---------------------------------------------------------------------------
@@ -71,17 +71,17 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  WIRE_VERSION,
-  HEADER_SIZE,
   BinaryFrameType,
   type BinaryFrameTypeValue,
-  HASH_ALGO,
-  type HashAlgoValue,
-  MESSAGE_COMPLETE,
   FRAGMENT,
-  FRAME_ID_SIZE,
   FRAGMENT_META_SIZE,
   FRAGMENT_MIN_SIZE,
+  FRAME_ID_SIZE,
+  HASH_ALGO,
+  type HashAlgoValue,
+  HEADER_SIZE,
+  MESSAGE_COMPLETE,
+  WIRE_VERSION,
 } from "./constants.js"
 
 // ---------------------------------------------------------------------------
@@ -89,8 +89,8 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  encodeBinaryFrame,
   decodeBinaryFrame,
+  encodeBinaryFrame,
   encodeComplete,
   encodeCompleteBatch,
   FrameDecodeError,
@@ -102,12 +102,12 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  TEXT_WIRE_VERSION,
-  encodeTextFrame,
   decodeTextFrame,
-  fragmentTextPayload,
   encodeTextComplete,
   encodeTextCompleteBatch,
+  encodeTextFrame,
+  fragmentTextPayload,
+  TEXT_WIRE_VERSION,
   TextFrameDecodeError,
   type TextFrameDecodeErrorCode,
 } from "./text-frame.js"
@@ -117,17 +117,17 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  type TransportPayload,
-  FragmentParseError,
-  generateFrameId,
   bytesToHex,
+  calculateFragmentationOverhead,
+  FragmentParseError,
+  fragmentPayload,
+  generateFrameId,
   hexToBytes,
+  parseTransportPayload,
+  shouldFragment,
+  type TransportPayload,
   wrapCompleteMessage,
   wrapFragment,
-  parseTransportPayload,
-  fragmentPayload,
-  shouldFragment,
-  calculateFragmentationOverhead,
 } from "./fragment.js"
 
 // ---------------------------------------------------------------------------
@@ -135,12 +135,12 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  FragmentCollector,
-  decideFragment,
-  type CollectorResult,
-  type CollectorError,
   type CollectorConfig,
+  type CollectorError,
   type CollectorOps,
+  type CollectorResult,
+  decideFragment,
+  FragmentCollector,
   type FragmentDecision,
   type TimerAPI,
 } from "./fragment-collector.js"
@@ -151,8 +151,8 @@ export {
 
 export {
   FragmentReassembler,
-  type ReassembleResult,
   type ReassembleError,
+  type ReassembleResult,
   type ReassemblerConfig,
 } from "./reassembler.js"
 
@@ -161,8 +161,8 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  TextReassembler,
-  type TextReassembleResult,
   type TextReassembleError,
+  type TextReassembleResult,
+  TextReassembler,
   type TextReassemblerConfig,
 } from "./text-reassembler.js"

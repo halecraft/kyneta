@@ -1,22 +1,15 @@
+import { change, RawPath, Schema, subscribe } from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
-import { Schema, change, subscribe, RawPath } from "@kyneta/schema"
-import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
-import { YjsVersion } from "../version.js"
 import { createYjsDoc, createYjsDocFromEntirety } from "../create.js"
-import {
-  version,
-  exportEntirety,
-  exportSince,
-  merge,
-} from "../sync.js"
 import { ensureContainers } from "../populate.js"
+import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
+import { exportEntirety, exportSince, merge, version } from "../sync.js"
+import { YjsVersion } from "../version.js"
 
 // ===========================================================================
 // Helpers
 // ===========================================================================
-
-
 
 // ===========================================================================
 // Schemas used across tests
@@ -188,7 +181,9 @@ describe("YjsSubstrate", () => {
   describe("export/import snapshot", () => {
     it("exports a binary payload", () => {
       const doc = createYjsDoc(SimpleSchema)
-      change(doc, (d: any) => { d.title.insert(0, "Snapshot") })
+      change(doc, (d: any) => {
+        d.title.insert(0, "Snapshot")
+      })
       const payload = exportEntirety(doc)
       expect(payload.encoding).toBe("binary")
       expect(payload.data).toBeInstanceOf(Uint8Array)
@@ -223,11 +218,10 @@ describe("YjsSubstrate", () => {
   describe("delta sync", () => {
     it("exportSince → merge syncs state", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      change(doc1, (d: any) => { d.title.insert(0, "Start") })
-      const doc2 = createYjsDocFromEntirety(
-        SimpleSchema,
-        exportEntirety(doc1),
-      )
+      change(doc1, (d: any) => {
+        d.title.insert(0, "Start")
+      })
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       const v1Before = version(doc1)
 
@@ -246,10 +240,7 @@ describe("YjsSubstrate", () => {
 
     it("concurrent sync — two substrates converge after bidirectional sync", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      const doc2 = createYjsDocFromEntirety(
-        SimpleSchema,
-        exportEntirety(doc1),
-      )
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       const v1Before = version(doc1)
       const v2Before = version(doc2)
@@ -295,11 +286,10 @@ describe("YjsSubstrate", () => {
   describe("changefeed", () => {
     it("fires on merge", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      change(doc1, (d: any) => { d.title.insert(0, "A") })
-      const doc2 = createYjsDocFromEntirety(
-        SimpleSchema,
-        exportEntirety(doc1),
-      )
+      change(doc1, (d: any) => {
+        d.title.insert(0, "A")
+      })
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       const v2Before = version(doc2)
 
@@ -528,9 +518,7 @@ describe("YjsSubstrate", () => {
         count: Schema.annotated("counter"),
       })
 
-      expect(() =>
-        yjsSubstrateFactory.create(CounterSchema),
-      ).toThrow("counter")
+      expect(() => yjsSubstrateFactory.create(CounterSchema)).toThrow("counter")
     })
 
     it("movable annotation throws clear error at construction", () => {
@@ -538,9 +526,7 @@ describe("YjsSubstrate", () => {
         items: Schema.annotated("movable", Schema.list(Schema.string())),
       })
 
-      expect(() =>
-        yjsSubstrateFactory.create(MovableSchema),
-      ).toThrow("movable")
+      expect(() => yjsSubstrateFactory.create(MovableSchema)).toThrow("movable")
     })
 
     it("tree annotation throws clear error at construction", () => {
@@ -551,9 +537,7 @@ describe("YjsSubstrate", () => {
         ),
       })
 
-      expect(() =>
-        yjsSubstrateFactory.create(TreeSchema),
-      ).toThrow("tree")
+      expect(() => yjsSubstrateFactory.create(TreeSchema)).toThrow("tree")
     })
   })
 

@@ -18,16 +18,16 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  change,
   createYjsDoc,
   createYjsDocFromEntirety,
-  version,
   exportEntirety,
   exportSince,
   merge,
-  change,
+  Schema,
   subscribe,
   text,
-  Schema,
+  version,
 } from "../index.js"
 
 // ===========================================================================
@@ -130,7 +130,10 @@ describe("record-of-struct (plain baseline)", () => {
     })
 
     // Establish docB from snapshot (avoids Yjs clientID collision)
-    const docB = createYjsDocFromEntirety(PlainRecordSchema, exportEntirety(docA))
+    const docB = createYjsDocFromEntirety(
+      PlainRecordSchema,
+      exportEntirety(docA),
+    )
 
     const v0 = version(docB)
 
@@ -246,7 +249,9 @@ describe("text-inside-struct-inside-record", () => {
     })
 
     let fired = false
-    subscribe(doc, () => { fired = true })
+    subscribe(doc, () => {
+      fired = true
+    })
 
     change(doc, (d: any) => {
       d.profiles.at("alice").bio.insert(0, "Hello")
@@ -411,7 +416,10 @@ describe("text-inside-struct-inside-list", () => {
     })
 
     // Establish docB from snapshot (avoids Yjs clientID collision)
-    const docB = createYjsDocFromEntirety(ListProfileSchema, exportEntirety(docA))
+    const docB = createYjsDocFromEntirety(
+      ListProfileSchema,
+      exportEntirety(docA),
+    )
     const v0 = version(docB)
 
     change(docA, (d: any) => {

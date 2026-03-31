@@ -883,9 +883,7 @@ function generateFilteredLoopBody(
   const innerState = indented(state)
   const innerInd = getIndent(innerState)
 
-  lines.push(
-    `${ind}filteredListRegion(${mountVar}, ${node.iterableSource}, {`,
-  )
+  lines.push(`${ind}filteredListRegion(${mountVar}, ${node.iterableSource}, {`)
 
   // Generate create handler — third parameter is the per-item scope.
   // Filtered lists always have isReactive: true.
@@ -928,9 +926,7 @@ function generateFilteredLoopBody(
 
   // Generate itemRefs accessor
   const itemSources = filter.itemDeps.map(d => d.source).join(", ")
-  lines.push(
-    `${innerInd}itemRefs: (${node.itemVariable}) => [${itemSources}],`,
-  )
+  lines.push(`${innerInd}itemRefs: (${node.itemVariable}) => [${itemSources}],`)
 
   // Emit slotKind — compute from the DOM body (not the full loop body)
   const filterSlotKind = computeSlotKind(domBody)

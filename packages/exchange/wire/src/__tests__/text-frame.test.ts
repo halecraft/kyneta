@@ -4,25 +4,25 @@
 // x=type/hash via case), JSON array envelope, fragment fields,
 // fragmentTextPayload splitting, and end-to-end with TextReassembler.
 
-import { describe, expect, it } from "vitest"
-import {
-  encodeTextFrame,
-  decodeTextFrame,
-  fragmentTextPayload,
-  encodeTextComplete,
-  encodeTextCompleteBatch,
-  TEXT_WIRE_VERSION,
-  TextFrameDecodeError,
-} from "../text-frame.js"
-import { textCodec } from "../json.js"
-import { TextReassembler } from "../text-reassembler.js"
-import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
 import type {
   ChannelMsg,
   DiscoverMsg,
   InterestMsg,
   OfferMsg,
 } from "@kyneta/exchange"
+import { describe, expect, it } from "vitest"
+import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
+import { textCodec } from "../json.js"
+import {
+  decodeTextFrame,
+  encodeTextComplete,
+  encodeTextCompleteBatch,
+  encodeTextFrame,
+  fragmentTextPayload,
+  TEXT_WIRE_VERSION,
+  TextFrameDecodeError,
+} from "../text-frame.js"
+import { TextReassembler } from "../text-reassembler.js"
 
 // ---------------------------------------------------------------------------
 // Prefix correctness
@@ -37,7 +37,11 @@ describe("Text frame — prefix", () => {
   })
 
   it("complete frame with hash has prefix '0C'", () => {
-    const frame = complete(TEXT_WIRE_VERSION, '{"type":"discover","docIds":[]}', "abcdef1234567890")
+    const frame = complete(
+      TEXT_WIRE_VERSION,
+      '{"type":"discover","docIds":[]}',
+      "abcdef1234567890",
+    )
     const wire = encodeTextFrame(frame)
     const arr = JSON.parse(wire)
     expect(arr[0]).toBe("0C")
@@ -51,7 +55,15 @@ describe("Text frame — prefix", () => {
   })
 
   it("fragment frame with hash has prefix '0F'", () => {
-    const frame = fragment(TEXT_WIRE_VERSION, "aabbccdd", 0, 3, 100, "chunk", "deadbeef")
+    const frame = fragment(
+      TEXT_WIRE_VERSION,
+      "aabbccdd",
+      0,
+      3,
+      100,
+      "chunk",
+      "deadbeef",
+    )
     const wire = encodeTextFrame(frame)
     const arr = JSON.parse(wire)
     expect(arr[0]).toBe("0F")
@@ -129,7 +141,14 @@ describe("Text frame — complete round-trip", () => {
 describe("Text frame — fragment round-trip", () => {
   it("round-trips a fragment frame", () => {
     const frameId = "a1b2c3d4"
-    const frame = fragment(TEXT_WIRE_VERSION, frameId, 2, 5, 1000, "json-chunk-data")
+    const frame = fragment(
+      TEXT_WIRE_VERSION,
+      frameId,
+      2,
+      5,
+      1000,
+      "json-chunk-data",
+    )
     const wire = encodeTextFrame(frame)
     const decoded = decodeTextFrame(wire)
 
@@ -168,12 +187,12 @@ describe("Text frame — fragment round-trip", () => {
     const arr = JSON.parse(wire)
 
     // ["0f", frameId, index, total, totalSize, chunk]
-    expect(typeof arr[0]).toBe("string")   // prefix
-    expect(typeof arr[1]).toBe("string")   // frameId
-    expect(typeof arr[2]).toBe("number")   // index
-    expect(typeof arr[3]).toBe("number")   // total
-    expect(typeof arr[4]).toBe("number")   // totalSize
-    expect(typeof arr[5]).toBe("string")   // chunk
+    expect(typeof arr[0]).toBe("string") // prefix
+    expect(typeof arr[1]).toBe("string") // frameId
+    expect(typeof arr[2]).toBe("number") // index
+    expect(typeof arr[3]).toBe("number") // total
+    expect(typeof arr[4]).toBe("number") // totalSize
+    expect(typeof arr[5]).toBe("string") // chunk
   })
 })
 
@@ -231,7 +250,8 @@ describe("fragmentTextPayload", () => {
   })
 
   it("concatenated chunks reconstruct the original payload", () => {
-    const payload = '{"type":"offer","docId":"doc-1","payload":{"encoding":"json","data":"hello"},"version":"1"}'
+    const payload =
+      '{"type":"offer","docId":"doc-1","payload":{"encoding":"json","data":"hello"},"version":"1"}'
     const fragments = fragmentTextPayload(payload, 20)
 
     const chunks: string[] = []
@@ -280,11 +300,15 @@ describe("fragmentTextPayload", () => {
   })
 
   it("throws on zero maxChunkSize", () => {
-    expect(() => fragmentTextPayload("abc", 0)).toThrow("maxChunkSize must be positive")
+    expect(() => fragmentTextPayload("abc", 0)).toThrow(
+      "maxChunkSize must be positive",
+    )
   })
 
   it("throws on negative maxChunkSize", () => {
-    expect(() => fragmentTextPayload("abc", -1)).toThrow("maxChunkSize must be positive")
+    expect(() => fragmentTextPayload("abc", -1)).toThrow(
+      "maxChunkSize must be positive",
+    )
   })
 
   it("different calls produce different frameIds", () => {
@@ -337,7 +361,11 @@ describe("Text frame — convenience functions", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-1",
-      payload: { kind: "entirety", encoding: "binary", data: new Uint8Array([1, 2, 3]) },
+      payload: {
+        kind: "entirety",
+        encoding: "binary",
+        data: new Uint8Array([1, 2, 3]),
+      },
       version: "1",
     }
     const wire = encodeTextComplete(textCodec, msg)
@@ -364,7 +392,9 @@ describe("Text frame — end-to-end with TextReassembler", () => {
       payload: {
         kind: "entirety",
         encoding: "json",
-        data: JSON.stringify({ items: Array.from({ length: 100 }, (_, i) => `item-${i}`) }),
+        data: JSON.stringify({
+          items: Array.from({ length: 100 }, (_, i) => `item-${i}`),
+        }),
       },
       version: "42",
     }
@@ -404,7 +434,11 @@ describe("Text frame — end-to-end with TextReassembler", () => {
       {
         type: "offer",
         docId: "d",
-        payload: { kind: "since", encoding: "binary", data: new Uint8Array([10, 20, 30]) },
+        payload: {
+          kind: "since",
+          encoding: "binary",
+          data: new Uint8Array([10, 20, 30]),
+        },
         version: "1",
         reciprocate: true,
       },
@@ -479,7 +513,7 @@ describe("Text frame — end-to-end with TextReassembler", () => {
 
   it("interleaved fragment streams from two sources", () => {
     const payload1 = "AAAAABBBBBCCCCC" // 15 chars
-    const payload2 = "1111122222"       // 10 chars
+    const payload2 = "1111122222" // 10 chars
 
     const frags1 = fragmentTextPayload(payload1, 5) // 3 fragments
     const frags2 = fragmentTextPayload(payload2, 5) // 2 fragments
@@ -517,7 +551,9 @@ describe("Text frame — error handling", () => {
   })
 
   it("throws on non-array JSON", () => {
-    expect(() => decodeTextFrame('{"not": "array"}')).toThrow(TextFrameDecodeError)
+    expect(() => decodeTextFrame('{"not": "array"}')).toThrow(
+      TextFrameDecodeError,
+    )
   })
 
   it("throws on array too short", () => {
@@ -541,39 +577,61 @@ describe("Text frame — error handling", () => {
 
   it("throws on unsupported version", () => {
     expect(() => decodeTextFrame('["9c", 123]')).toThrow(TextFrameDecodeError)
-    expect(() => decodeTextFrame('["9c", 123]')).toThrow("Unsupported text wire version")
+    expect(() => decodeTextFrame('["9c", 123]')).toThrow(
+      "Unsupported text wire version",
+    )
   })
 
   it("throws on truncated complete frame with hash", () => {
     // "0C" expects hash + payload = 3 elements total
-    expect(() => decodeTextFrame('["0C", "hash"]')).toThrow(TextFrameDecodeError)
+    expect(() => decodeTextFrame('["0C", "hash"]')).toThrow(
+      TextFrameDecodeError,
+    )
     expect(() => decodeTextFrame('["0C", "hash"]')).toThrow("at least 3")
   })
 
   it("throws on truncated fragment frame", () => {
     // "0f" expects frameId, index, total, totalSize, chunk = 6 elements
-    expect(() => decodeTextFrame('["0f", "id", 0, 3]')).toThrow(TextFrameDecodeError)
+    expect(() => decodeTextFrame('["0f", "id", 0, 3]')).toThrow(
+      TextFrameDecodeError,
+    )
     expect(() => decodeTextFrame('["0f", "id", 0, 3]')).toThrow("at least 6")
   })
 
   it("throws on truncated fragment frame with hash", () => {
     // "0F" expects hash, frameId, index, total, totalSize, chunk = 7 elements
-    expect(() => decodeTextFrame('["0F", "hash", "id", 0, 3]')).toThrow(TextFrameDecodeError)
-    expect(() => decodeTextFrame('["0F", "hash", "id", 0, 3]')).toThrow("at least 7")
+    expect(() => decodeTextFrame('["0F", "hash", "id", 0, 3]')).toThrow(
+      TextFrameDecodeError,
+    )
+    expect(() => decodeTextFrame('["0F", "hash", "id", 0, 3]')).toThrow(
+      "at least 7",
+    )
   })
 
   it("throws on non-string frameId in fragment", () => {
-    expect(() => decodeTextFrame('["0f", 123, 0, 3, 100, "chunk"]')).toThrow(TextFrameDecodeError)
-    expect(() => decodeTextFrame('["0f", 123, 0, 3, 100, "chunk"]')).toThrow("frameId must be a string")
+    expect(() => decodeTextFrame('["0f", 123, 0, 3, 100, "chunk"]')).toThrow(
+      TextFrameDecodeError,
+    )
+    expect(() => decodeTextFrame('["0f", 123, 0, 3, 100, "chunk"]')).toThrow(
+      "frameId must be a string",
+    )
   })
 
   it("throws on non-number index in fragment", () => {
-    expect(() => decodeTextFrame('["0f", "id", "zero", 3, 100, "chunk"]')).toThrow(TextFrameDecodeError)
-    expect(() => decodeTextFrame('["0f", "id", "zero", 3, 100, "chunk"]')).toThrow("must be numbers")
+    expect(() =>
+      decodeTextFrame('["0f", "id", "zero", 3, 100, "chunk"]'),
+    ).toThrow(TextFrameDecodeError)
+    expect(() =>
+      decodeTextFrame('["0f", "id", "zero", 3, 100, "chunk"]'),
+    ).toThrow("must be numbers")
   })
 
   it("throws on non-string chunk in fragment", () => {
-    expect(() => decodeTextFrame('["0f", "id", 0, 3, 100, 42]')).toThrow(TextFrameDecodeError)
-    expect(() => decodeTextFrame('["0f", "id", 0, 3, 100, 42]')).toThrow("chunk must be a string")
+    expect(() => decodeTextFrame('["0f", "id", 0, 3, 100, 42]')).toThrow(
+      TextFrameDecodeError,
+    )
+    expect(() => decodeTextFrame('["0f", "id", 0, 3, 100, 42]')).toThrow(
+      "chunk must be a string",
+    )
   })
 })

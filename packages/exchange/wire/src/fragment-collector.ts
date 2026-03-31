@@ -26,7 +26,8 @@ export interface TimerAPI {
 
 const DEFAULT_TIMER_API: TimerAPI = {
   setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
-  clearTimeout: (id) => globalThis.clearTimeout(id as ReturnType<typeof setTimeout>),
+  clearTimeout: id =>
+    globalThis.clearTimeout(id as ReturnType<typeof setTimeout>),
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +276,15 @@ export class FragmentCollector<T> {
     const batch = this.#batches.get(frameId)
     const decision = decideFragment(batch, index, total, totalSize)
 
-    return this.#executeDecision(decision, frameId, index, total, totalSize, chunk, batch)
+    return this.#executeDecision(
+      decision,
+      frameId,
+      index,
+      total,
+      totalSize,
+      chunk,
+      batch,
+    )
   }
 
   /**
@@ -445,7 +454,10 @@ export class FragmentCollector<T> {
     this.#totalSize -= batch.receivedSize
 
     // Validate total size
-    if (batch.expectedTotalSize > 0 && batch.receivedSize !== batch.expectedTotalSize) {
+    if (
+      batch.expectedTotalSize > 0 &&
+      batch.receivedSize !== batch.expectedTotalSize
+    ) {
       return {
         status: "error",
         error: {

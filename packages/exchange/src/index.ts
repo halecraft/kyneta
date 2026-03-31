@@ -47,8 +47,8 @@ export { TimestampVersion } from "@kyneta/schema"
 export type {
   AddressedEnvelope,
   ChannelMsg,
-  DismissMsg,
   DiscoverMsg,
+  DismissMsg,
   EstablishmentMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
@@ -78,8 +78,12 @@ export { isEstablished } from "./channel.js"
 // Adapter — base class and adapter manager
 // ---------------------------------------------------------------------------
 
+export type {
+  AdapterContext,
+  AdapterFactory,
+  AnyAdapter,
+} from "./adapter/adapter.js"
 export { Adapter } from "./adapter/adapter.js"
-export type { AdapterContext, AdapterFactory, AnyAdapter } from "./adapter/adapter.js"
 export { AdapterManager } from "./adapter/adapter-manager.js"
 export {
   ClientStateMachine,
@@ -92,8 +96,12 @@ export {
 // Bridge — in-process testing adapter
 // ---------------------------------------------------------------------------
 
-export { Bridge, BridgeAdapter, createBridgeAdapter } from "./adapter/bridge-adapter.js"
 export type { BridgeAdapterParams } from "./adapter/bridge-adapter.js"
+export {
+  Bridge,
+  BridgeAdapter,
+  createBridgeAdapter,
+} from "./adapter/bridge-adapter.js"
 
 // ---------------------------------------------------------------------------
 // Synchronizer — TEA state machine
@@ -104,7 +112,7 @@ export type {
   SynchronizerMessage,
   SynchronizerModel,
 } from "./synchronizer-program.js"
-export { init, createSynchronizerUpdate } from "./synchronizer-program.js"
+export { createSynchronizerUpdate, init } from "./synchronizer-program.js"
 
 // ---------------------------------------------------------------------------
 // Synchronizer runtime
@@ -116,7 +124,6 @@ export { Synchronizer } from "./synchronizer.js"
 // Exchange — the public API
 // ---------------------------------------------------------------------------
 
-export { Exchange } from "./exchange.js"
 export type {
   AuthorizePredicate,
   ExchangeParams,
@@ -124,10 +131,11 @@ export type {
   OnDocDismissed,
   RoutePredicate,
 } from "./exchange.js"
+export { Exchange } from "./exchange.js"
 
 // ---------------------------------------------------------------------------
 // Sync — sync capabilities access
 // ---------------------------------------------------------------------------
 
-export { sync, hasSync } from "./sync.js"
 export type { SyncRef, WaitForSyncOptions } from "./sync.js"
+export { hasSync, sync } from "./sync.js"

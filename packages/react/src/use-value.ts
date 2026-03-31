@@ -11,7 +11,11 @@
 //   undefined → undefined
 
 import { useMemo, useSyncExternalStore } from "react"
-import { createChangefeedStore, createNullishStore, type CallableRef } from "./store.js"
+import {
+  type CallableRef,
+  createChangefeedStore,
+  createNullishStore,
+} from "./store.js"
 
 // ---------------------------------------------------------------------------
 // useValue

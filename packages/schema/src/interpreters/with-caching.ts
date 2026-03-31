@@ -284,7 +284,10 @@ export function withCaching<A extends HasNavigation>(
         value: (index: number): unknown => {
           // Discover the address table (lazy getter from withAddressing)
           const addressTable = (result as any)[ADDRESS_TABLE_SYM] as
-            | { byIndex: Map<number, any>; byId: Map<number, { address: any; ref: unknown }> }
+            | {
+                byIndex: Map<number, any>
+                byId: Map<number, { address: any; ref: unknown }>
+              }
             | undefined
 
           if (addressTable) {

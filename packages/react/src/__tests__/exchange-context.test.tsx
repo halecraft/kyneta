@@ -3,10 +3,10 @@
 // Proves ExchangeProvider supplies Exchange via context, throws on
 // missing provider, and calls reset() on unmount.
 
-import { describe, expect, it, vi } from "vitest"
-import { renderHook } from "@testing-library/react"
 import { Exchange } from "@kyneta/exchange"
+import { renderHook } from "@testing-library/react"
 import type { ReactNode } from "react"
+import { describe, expect, it, vi } from "vitest"
 import { ExchangeProvider, useExchange } from "../exchange-context.js"
 
 // ---------------------------------------------------------------------------

@@ -215,7 +215,8 @@ describe("bottom: annotated", () => {
 
   it("movableList annotation delegates to inner (sequence carrier)", () => {
     const schema = Schema.doc({
-      items: Schema.annotated("movable",
+      items: Schema.annotated(
+        "movable",
         Schema.list(Schema.list(Schema.struct({ title: Schema.string() }))),
       ),
     })

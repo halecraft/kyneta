@@ -1,17 +1,17 @@
-import { describe, expect, it } from "vitest"
 import { LoroDoc } from "loro-crdt"
+import { describe, expect, it } from "vitest"
 import {
+  change,
   createLoroDoc,
   createLoroDocFromEntirety,
-  version,
   exportEntirety,
   exportSince,
-  merge,
-  change,
-  subscribe,
   LoroSchema,
-  Schema,
   LoroVersion,
+  merge,
+  Schema,
+  subscribe,
+  version,
 } from "../index.js"
 
 // ===========================================================================

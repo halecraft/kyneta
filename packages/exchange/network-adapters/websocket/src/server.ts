@@ -17,8 +17,8 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  WebsocketConnection,
   DEFAULT_FRAGMENT_THRESHOLD,
+  WebsocketConnection,
   type WebsocketConnectionConfig,
 } from "./connection.js"
 
@@ -27,13 +27,13 @@ export {
 // ---------------------------------------------------------------------------
 
 export type {
+  DisconnectReason,
+  NodeWebsocketLike,
   Socket,
   SocketReadyState,
-  DisconnectReason,
-  WebsocketConnectionOptions,
   WebsocketConnectionHandle,
+  WebsocketConnectionOptions,
   WebsocketConnectionResult,
-  NodeWebsocketLike,
 } from "./types.js"
 
-export { wrapStandardWebsocket, wrapNodeWebsocket } from "./types.js"
+export { wrapNodeWebsocket, wrapStandardWebsocket } from "./types.js"

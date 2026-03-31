@@ -348,12 +348,16 @@ describe("compiler integration - list regions", () => {
 
       if (loop.filter) {
         // Item deps should include recipe.name and recipe.vegetarian
-        const itemSources = loop.filter.itemDeps.map((d: any) => d.source).sort()
+        const itemSources = loop.filter.itemDeps
+          .map((d: any) => d.source)
+          .sort()
         expect(itemSources).toContain("recipe.name")
         expect(itemSources).toContain("recipe.vegetarian")
 
         // External deps should include filterText and veggieOnly
-        const extSources = loop.filter.externalDeps.map((d: any) => d.source).sort()
+        const extSources = loop.filter.externalDeps
+          .map((d: any) => d.source)
+          .sort()
         expect(extSources).toContain("filterText")
         expect(extSources).toContain("veggieOnly")
       }

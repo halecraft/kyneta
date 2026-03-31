@@ -9,9 +9,9 @@
 // the deeply recursive Ref<S> type exceeds TypeScript's depth
 // budget when S is a generic parameter inside useMemo's callback.
 
-import { useMemo } from "react"
-import type { BoundSchema, Ref, SchemaNode } from "@kyneta/schema"
 import type { Exchange } from "@kyneta/exchange"
+import type { BoundSchema, Ref, SchemaNode } from "@kyneta/schema"
+import { useMemo } from "react"
 import { useExchange } from "./exchange-context.js"
 
 // ---------------------------------------------------------------------------

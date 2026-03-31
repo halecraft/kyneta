@@ -129,9 +129,7 @@ export type ChannelMsg = EstablishmentMsg | ExchangeMsg
 
 /** Type predicate for establishment-phase messages. */
 export function isEstablishmentMsg(msg: ChannelMsg): msg is EstablishmentMsg {
-  return (
-    msg.type === "establish-request" || msg.type === "establish-response"
-  )
+  return msg.type === "establish-request" || msg.type === "establish-response"
 }
 
 /** Type predicate for post-establishment exchange messages. */

@@ -26,7 +26,9 @@ declare const Bun: {
 interface BunPluginBuilder {
   onLoad(
     options: { filter: RegExp },
-    callback: (args: { path: string }) => Promise<{ contents: Uint8Array; loader: string }>,
+    callback: (args: {
+      path: string
+    }) => Promise<{ contents: Uint8Array; loader: string }>,
   ): void
 }
 

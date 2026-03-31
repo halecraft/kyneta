@@ -7,20 +7,20 @@
 // - LWW (TimestampVersion via bindEphemeral)
 // - Heterogeneous (mixed substrates in one exchange)
 
-import { describe, expect, it, afterEach } from "vitest"
-import {
-  Schema,
-  change,
-  bindPlain,
-  bindEphemeral,
-  Interpret,
-  Replicate,
-  plainReplicaFactory,
-  lwwReplicaFactory,
-} from "@kyneta/schema"
 import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
-import { Exchange } from "../exchange.js"
+import {
+  bindEphemeral,
+  bindPlain,
+  change,
+  Interpret,
+  lwwReplicaFactory,
+  plainReplicaFactory,
+  Replicate,
+  Schema,
+} from "@kyneta/schema"
+import { afterEach, describe, expect, it } from "vitest"
 import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
+import { Exchange } from "../exchange.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -821,7 +821,9 @@ describe("relay via exchange.replicate()", () => {
     // Peer A — full interpreter
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+      adapters: [
+        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      ],
     })
 
     // Relay — headless replication, no schema knowledge
@@ -839,7 +841,7 @@ describe("relay via exchange.replicate()", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
-      onDocDiscovered: (docId) => {
+      onDocDiscovered: docId => {
         if (docId === "shared") return Interpret(LoroDoc)
         return undefined
       },
@@ -868,7 +870,9 @@ describe("relay via exchange.replicate()", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+      adapters: [
+        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      ],
     })
 
     const relay = createExchange({
@@ -884,7 +888,7 @@ describe("relay via exchange.replicate()", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
-      onDocDiscovered: (docId) => {
+      onDocDiscovered: docId => {
         if (docId === "config") return Interpret(SequentialDoc)
         return undefined
       },
@@ -911,7 +915,9 @@ describe("relay via exchange.replicate()", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+      adapters: [
+        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      ],
     })
 
     const relay = createExchange({
@@ -920,14 +926,13 @@ describe("relay via exchange.replicate()", () => {
         createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
         createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB }),
       ],
-      onDocDiscovered: (_docId, _peer) =>
-        Replicate(lwwReplicaFactory, "lww"),
+      onDocDiscovered: (_docId, _peer) => Replicate(lwwReplicaFactory, "lww"),
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
-      onDocDiscovered: (docId) => {
+      onDocDiscovered: docId => {
         if (docId === "presence") return Interpret(PresenceDoc)
         return undefined
       },
@@ -984,7 +989,9 @@ describe("relay via exchange.replicate()", () => {
     // Phase 1: Alice connects to relay, writes data
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+      adapters: [
+        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      ],
     })
 
     const relay = createExchange({
@@ -1015,7 +1022,7 @@ describe("relay via exchange.replicate()", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
-      onDocDiscovered: (docId) => {
+      onDocDiscovered: docId => {
         if (docId === "shared") return Interpret(LoroDoc)
         return undefined
       },
@@ -1043,7 +1050,8 @@ describe("relay via exchange.replicate()", () => {
       onDocDiscovered: (docId, _peer) => {
         // Interpret some docs, replicate others
         if (docId === "app-doc") return Interpret(SequentialDoc)
-        if (docId === "relay-doc") return Replicate(loroReplicaFactory, "causal")
+        if (docId === "relay-doc")
+          return Replicate(loroReplicaFactory, "causal")
         return undefined
       },
     })

@@ -1,11 +1,15 @@
-import { describe, expect, it, beforeEach } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import {
-  type Instruction,
-  foldInstructions,
-  advanceIndex,
   advanceAddresses,
+  advanceIndex,
+  foldInstructions,
+  type Instruction,
 } from "../change.js"
-import { type IndexAddress, indexAddress, resetAddressIdCounter } from "../path.js"
+import {
+  type IndexAddress,
+  indexAddress,
+  resetAddressIdCounter,
+} from "../path.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -150,29 +154,35 @@ describe("advanceIndex", () => {
     // Source: [0,1] retained, [2] deleted, [3,4,5,6] retained
     // Target: [0,1, new,new,new, 3,4,5,6]
     // Old index 0 → retained at target 0
-    expect(advanceIndex(0, [
-      { retain: 2 },
-      { insert: { length: 3 } },
-      { delete: 1 },
-      { retain: 4 },
-    ])).toBe(0)
+    expect(
+      advanceIndex(0, [
+        { retain: 2 },
+        { insert: { length: 3 } },
+        { delete: 1 },
+        { retain: 4 },
+      ]),
+    ).toBe(0)
 
     // Old index 2 → deleted
-    expect(advanceIndex(2, [
-      { retain: 2 },
-      { insert: { length: 3 } },
-      { delete: 1 },
-      { retain: 4 },
-    ])).toBeNull()
+    expect(
+      advanceIndex(2, [
+        { retain: 2 },
+        { insert: { length: 3 } },
+        { delete: 1 },
+        { retain: 4 },
+      ]),
+    ).toBeNull()
 
     // Old index 3 → after insert+delete, source=3 target=5, in retain(4) range
     // target + (3 - source) = 5 + (3 - 3) = 5
-    expect(advanceIndex(3, [
-      { retain: 2 },
-      { insert: { length: 3 } },
-      { delete: 1 },
-      { retain: 4 },
-    ])).toBe(5)
+    expect(
+      advanceIndex(3, [
+        { retain: 2 },
+        { insert: { length: 3 } },
+        { delete: 1 },
+        { retain: 4 },
+      ]),
+    ).toBe(5)
   })
 
   it("implicit trailing retain", () => {

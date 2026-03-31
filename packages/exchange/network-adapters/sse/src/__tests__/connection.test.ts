@@ -7,10 +7,10 @@
 // 4. Guard: send() throws if sendFn not set
 // 5. Guard: receive() throws if channel not set
 
+import type { ChannelMsg } from "@kyneta/exchange"
+import { decodeTextFrame, textCodec } from "@kyneta/wire"
 import { describe, expect, it, vi } from "vitest"
 import { SseConnection } from "../connection.js"
-import { textCodec, decodeTextFrame } from "@kyneta/wire"
-import type { ChannelMsg } from "@kyneta/exchange"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,7 +49,7 @@ describe("SseConnection — send", () => {
   it("encodes a ChannelMsg to a valid text frame and calls sendFn", () => {
     const conn = createConnection()
     const sent: string[] = []
-    conn.setSendFunction((textFrame) => sent.push(textFrame))
+    conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
     conn.send(discoverMsg)
@@ -68,7 +68,7 @@ describe("SseConnection — send", () => {
   it("round-trips establish-request with identity", () => {
     const conn = createConnection()
     const sent: string[] = []
-    conn.setSendFunction((textFrame) => sent.push(textFrame))
+    conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
     conn.send(establishMsg)
@@ -96,7 +96,7 @@ describe("SseConnection — fragmentation", () => {
   it("sends a single text frame when below threshold", () => {
     const conn = createConnection({ fragmentThreshold: 100_000 })
     const sent: string[] = []
-    conn.setSendFunction((textFrame) => sent.push(textFrame))
+    conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
     conn.send(discoverMsg)
@@ -111,7 +111,7 @@ describe("SseConnection — fragmentation", () => {
     // Use a very low threshold to force fragmentation on a normal message
     const conn = createConnection({ fragmentThreshold: 20 })
     const sent: string[] = []
-    conn.setSendFunction((textFrame) => sent.push(textFrame))
+    conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
     conn.send(discoverMsg)
@@ -127,7 +127,7 @@ describe("SseConnection — fragmentation", () => {
   it("does not fragment when threshold is 0 (disabled)", () => {
     const conn = createConnection({ fragmentThreshold: 0 })
     const sent: string[] = []
-    conn.setSendFunction((textFrame) => sent.push(textFrame))
+    conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
     conn.send(discoverMsg)

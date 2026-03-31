@@ -11,18 +11,18 @@
 // replaced by substrate-agnostic equivalents.
 
 import type {
+  MergeStrategy,
   Replica,
   ReplicaFactory,
   Substrate,
   SubstratePayload,
-  MergeStrategy,
   Version,
 } from "@kyneta/schema"
 import type { AnyAdapter } from "./adapter/adapter.js"
 import { AdapterManager } from "./adapter/adapter-manager.js"
 import type { Channel, ConnectedChannel } from "./channel.js"
-import type { AddressedEnvelope, ChannelMsg } from "./messages.js"
 import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
+import type { AddressedEnvelope, ChannelMsg } from "./messages.js"
 import {
   type Command,
   createSynchronizerUpdate,

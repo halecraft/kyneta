@@ -7,7 +7,14 @@
 export type { BoundSchema, FactoryBuilder, MergeStrategy } from "./bind.js"
 // Interpret and Replicate are dual-namespace (type + value) — export from
 // the value line only; TypeScript resolves the type automatically.
-export { bind, bindEphemeral, bindPlain, Interpret, isBoundSchema, Replicate } from "./bind.js"
+export {
+  bind,
+  bindEphemeral,
+  bindPlain,
+  Interpret,
+  isBoundSchema,
+  Replicate,
+} from "./bind.js"
 // Change types — the universal currency of change
 export type {
   BuiltinChange,
@@ -85,28 +92,14 @@ export type {
   WritableBrand,
 } from "./interpret.js"
 // interpret — the generic catamorphism over the schema functor
-export { createInterpreter, dispatchSum, interpret, RawPath, rawKey, rawIndex } from "./interpret.js"
-// Re-export path types from their canonical location
-export type {
-  Address,
-  AddressTableRegistry,
-  IndexAddress,
-  MapAddressTable,
-  Path,
-  RawSegment,
-  Segment,
-  SequenceAddressTable,
-} from "./path.js"
 export {
-  AddressedPath,
-  indexAddress,
-  keyAddress,
-  nextAddressId,
-  resetAddressIdCounter,
-  resolveToAddressed,
-} from "./path.js"
-// withAddressing — stable identity for all composite refs
-export { ADDRESS_TABLE, withAddressing } from "./interpreters/with-addressing.js"
+  createInterpreter,
+  dispatchSum,
+  interpret,
+  RawPath,
+  rawIndex,
+  rawKey,
+} from "./interpret.js"
 // Shared interpreter types (canonical location)
 export type { Plain, RefContext } from "./interpreter-types.js"
 export type {
@@ -145,6 +138,11 @@ export {
   validate,
   validateInterpreter,
 } from "./interpreters/validate.js"
+// withAddressing — stable identity for all composite refs
+export {
+  ADDRESS_TABLE,
+  withAddressing,
+} from "./interpreters/with-addressing.js"
 // withCaching — interposition transformer (identity-preserving caching + INVALIDATE)
 export {
   INVALIDATE,
@@ -183,7 +181,32 @@ export {
   withWritable,
 } from "./interpreters/writable.js"
 // Pre-built interpreter layers for fluent composition
-export { addressing, changefeed, navigation, readable, writable } from "./layers.js"
+export {
+  addressing,
+  changefeed,
+  navigation,
+  readable,
+  writable,
+} from "./layers.js"
+// Re-export path types from their canonical location
+export type {
+  Address,
+  AddressTableRegistry,
+  IndexAddress,
+  MapAddressTable,
+  Path,
+  RawSegment,
+  Segment,
+  SequenceAddressTable,
+} from "./path.js"
+export {
+  AddressedPath,
+  indexAddress,
+  keyAddress,
+  nextAddressId,
+  resetAddressIdCounter,
+  resolveToAddressed,
+} from "./path.js"
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
 export type {
   Ref,
@@ -256,6 +279,8 @@ export type {
   SubstratePrepare,
   Version,
 } from "./substrate.js"
+// LWW substrate — plain substrate wrapped with TimestampVersion for ephemeral state
+export { lwwReplicaFactory, lwwSubstrateFactory } from "./substrates/lww.js"
 // Plain substrate — plain JS object store with version tracking
 export {
   createPlainReplica,
@@ -267,8 +292,6 @@ export {
 } from "./substrates/plain.js"
 // Timestamp version — wall-clock version for LWW/ephemeral substrates
 export { TimestampVersion } from "./substrates/timestamp-version.js"
-// LWW substrate — plain substrate wrapped with TimestampVersion for ephemeral state
-export { lwwReplicaFactory, lwwSubstrateFactory } from "./substrates/lww.js"
 // Unwrap — general escape hatch for accessing the Substrate backing a ref
 export { registerSubstrate, unwrap } from "./unwrap.js"
 // Zero — default values derived from the schema grammar

@@ -10,8 +10,8 @@
 // and deltas — these are Loro's native oplog/snapshot bytes.
 
 import type { SubstratePayload } from "@kyneta/schema"
-import { LoroVersion } from "./version.js"
 import { getSubstrate } from "./create.js"
+import type { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
 // version — current LoroVersion

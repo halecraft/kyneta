@@ -5,15 +5,15 @@
 // 2. Fragment text frame body → returns pending, then complete on final fragment
 // 3. Malformed body → returns error
 
-import { describe, expect, it } from "vitest"
-import { parseTextPostBody } from "../sse-handler.js"
+import type { ChannelMsg } from "@kyneta/exchange"
 import {
-  textCodec,
   encodeTextComplete,
   fragmentTextPayload,
   TextReassembler,
+  textCodec,
 } from "@kyneta/wire"
-import type { ChannelMsg } from "@kyneta/exchange"
+import { describe, expect, it } from "vitest"
+import { parseTextPostBody } from "../sse-handler.js"
 
 // ---------------------------------------------------------------------------
 // Helpers

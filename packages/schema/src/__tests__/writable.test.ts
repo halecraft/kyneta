@@ -426,7 +426,10 @@ function createAnnotatedDoc(storeOverrides: Record<string, unknown> = {}) {
     ...storeOverrides,
   }
   const ctx = plainContext(store)
-  const doc = interpret(annotatedDocSchema, ctx).with(readable).with(writable).done()
+  const doc = interpret(annotatedDocSchema, ctx)
+    .with(readable)
+    .with(writable)
+    .done()
   return { store, ctx, doc }
 }
 

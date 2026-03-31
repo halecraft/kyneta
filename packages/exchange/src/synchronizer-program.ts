@@ -13,7 +13,7 @@
 // Ported from @loro-extended/repo's synchronizer-program.ts with
 // Loro-specific types replaced by substrate-agnostic equivalents.
 
-import type { SubstratePayload, MergeStrategy } from "@kyneta/schema"
+import type { MergeStrategy, SubstratePayload } from "@kyneta/schema"
 import type { Channel, ConnectedChannel } from "./channel.js"
 import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
 import type { AddressedEnvelope, ReturnEnvelope } from "./messages.js"
@@ -25,7 +25,6 @@ import type {
   PeerState,
   PendingInterest,
 } from "./types.js"
-
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // STATE
@@ -128,7 +127,7 @@ function filterChannelsByRoute(
   docId: DocId,
   route: RoutePredicate,
 ): ChannelId[] {
-  return channelIds.filter((id) => {
+  return channelIds.filter(id => {
     const channel = model.channels.get(id)
     if (!channel || channel.type !== "established") return false
     // Storage channels bypass route checks
@@ -147,9 +146,7 @@ function filterChannelsByRoute(
 function batchAsNeeded(
   ...commands: (Command | undefined)[]
 ): Command | undefined {
-  const filtered = commands.filter(
-    (c): c is Command => c !== undefined,
-  )
+  const filtered = commands.filter((c): c is Command => c !== undefined)
   if (filtered.length === 0) return undefined
   if (filtered.length === 1) return filtered[0]
   return { type: "cmd/batch", commands: filtered }
@@ -391,7 +388,12 @@ function handleDocEnsure(
   // (so peers send us their state). This is essential for docs created
   // via onDocDiscovered — the local doc is empty and needs to pull data.
   const allEstablished = getEstablishedChannelIds(model)
-  const establishedChannelIds = filterChannelsByRoute(model, allEstablished, msg.docId, route)
+  const establishedChannelIds = filterChannelsByRoute(
+    model,
+    allEstablished,
+    msg.docId,
+    route,
+  )
   if (establishedChannelIds.length === 0) {
     return [{ ...model, documents }]
   }
@@ -462,7 +464,12 @@ function handleDocDismiss(
 
   // Broadcast dismiss to all established channels (filtered by route)
   const allEstablished = getEstablishedChannelIds(model)
-  const channelIds = filterChannelsByRoute(model, allEstablished, msg.docId, route)
+  const channelIds = filterChannelsByRoute(
+    model,
+    allEstablished,
+    msg.docId,
+    route,
+  )
 
   const cmd: Command | undefined =
     channelIds.length > 0
@@ -625,8 +632,8 @@ function handleEstablishRequest(
   const upgraded = upgradeChannel(model, fromChannelId, message.identity)
 
   // Filter docs by route — only announce docs this peer is allowed to see
-  const docIds = Array.from(model.documents.keys()).filter(
-    (id) => route(id, message.identity),
+  const docIds = Array.from(model.documents.keys()).filter(id =>
+    route(id, message.identity),
   )
 
   const cmd = batchAsNeeded(
@@ -658,8 +665,8 @@ function handleEstablishResponse(
   const upgraded = upgradeChannel(model, fromChannelId, message.identity)
 
   // Filter docs by route — only announce docs this peer is allowed to see
-  const docIds = Array.from(model.documents.keys()).filter(
-    (id) => route(id, message.identity),
+  const docIds = Array.from(model.documents.keys()).filter(id =>
+    route(id, message.identity),
   )
   const cmd = buildDiscover(docIds, fromChannelId)
 

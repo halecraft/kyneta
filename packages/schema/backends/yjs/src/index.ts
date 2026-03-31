@@ -15,23 +15,24 @@
 // Batteries-included API — one import, one createYjsDoc call, done
 // ---------------------------------------------------------------------------
 
+// Mutation & observation (re-exported from @kyneta/schema for convenience)
+// Schema definition (re-exported for convenience)
+export {
+  applyChanges,
+  change,
+  Schema,
+  subscribe,
+  subscribeNode,
+} from "@kyneta/schema"
 // Construction
 export { createYjsDoc, createYjsDocFromEntirety } from "./create.js"
-
 // Sync primitives (Yjs-specific)
 export {
-  exportSince,
   exportEntirety,
+  exportSince,
   merge,
   version,
 } from "./sync.js"
-
-// Mutation & observation (re-exported from @kyneta/schema for convenience)
-export { applyChanges, change } from "@kyneta/schema"
-export { subscribe, subscribeNode } from "@kyneta/schema"
-
-// Schema definition (re-exported for convenience)
-export { Schema } from "@kyneta/schema"
 
 // Text annotation convenience — so users don't need LoroSchema just for text()
 import type { AnnotatedSchema } from "@kyneta/schema"
@@ -58,26 +59,19 @@ export type { Changeset, Op, Ref, SubstratePayload } from "@kyneta/schema"
 // Low-level primitives — for power users and custom substrate compositions
 // ---------------------------------------------------------------------------
 
-// Version
-export { YjsVersion } from "./version.js"
-
-// Store reader
-export { yjsStoreReader } from "./store-reader.js"
-
-// Container resolution
-export { resolveYjsType, stepIntoYjs } from "./yjs-resolve.js"
-
-// Change mapping
-export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
-
-// Container creation
-export { ensureContainers } from "./populate.js"
-
-// Substrate
-export { createYjsSubstrate, yjsSubstrateFactory } from "./substrate.js"
-
 // Bind — convenience wrapper for Yjs CRDT substrate
 export { bindYjs } from "./bind-yjs.js"
-
+// Change mapping
+export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
+// Container creation
+export { ensureContainers } from "./populate.js"
+// Store reader
+export { yjsStoreReader } from "./store-reader.js"
+// Substrate
+export { createYjsSubstrate, yjsSubstrateFactory } from "./substrate.js"
+// Version
+export { YjsVersion } from "./version.js"
 // Escape hatch — access the underlying Y.Doc from a ref
 export { yjs } from "./yjs-escape.js"
+// Container resolution
+export { resolveYjsType, stepIntoYjs } from "./yjs-resolve.js"

@@ -26,9 +26,9 @@ import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
 import type { Path } from "../interpret.js"
-import { RawPath, rawKey, rawIndex } from "../path.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
+import { RawPath, rawIndex, rawKey } from "../path.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import { applyChangeToStore, plainStoreReader, type Store } from "../store.js"
 import type {
@@ -202,7 +202,11 @@ function createPlainReplicaCore(storeObj: Store) {
     },
 
     exportEntirety(): SubstratePayload {
-      return { kind: "entirety", encoding: "json", data: JSON.stringify(storeObj) }
+      return {
+        kind: "entirety",
+        encoding: "json",
+        data: JSON.stringify(storeObj),
+      }
     },
 
     exportSince(since: PlainVersion): SubstratePayload | null {
@@ -212,7 +216,11 @@ function createPlainReplicaCore(storeObj: Store) {
         return null
       }
       const ops = log.slice(sinceValue).flat()
-      return { kind: "since", encoding: "json", data: JSON.stringify(serializeOps(ops)) }
+      return {
+        kind: "since",
+        encoding: "json",
+        data: JSON.stringify(serializeOps(ops)),
+      }
     },
   }
 }
@@ -256,9 +264,10 @@ export function createPlainReplica(storeObj: Store): Replica<PlainVersion> {
       }
 
       // Dispatch on payload kind — the producer tagged it at creation time.
-      const ops: Op[] = payload.kind === "entirety"
-        ? stateImageToOps(payload.data)
-        : deserializeOps(JSON.parse(payload.data) as SerializedOp[])
+      const ops: Op[] =
+        payload.kind === "entirety"
+          ? stateImageToOps(payload.data)
+          : deserializeOps(JSON.parse(payload.data) as SerializedOp[])
 
       if (ops.length === 0) return
 

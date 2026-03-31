@@ -616,7 +616,11 @@ export function isReactive(expr: ExpressionIR): boolean {
       return expr.parts.some(isReactive)
 
     case "ternary":
-      return isReactive(expr.condition) || isReactive(expr.whenTrue) || isReactive(expr.whenFalse)
+      return (
+        isReactive(expr.condition) ||
+        isReactive(expr.whenTrue) ||
+        isReactive(expr.whenFalse)
+      )
 
     case "element-access":
       return isReactive(expr.object) || isReactive(expr.index)
@@ -639,7 +643,12 @@ export function isReactive(expr: ExpressionIR): boolean {
  */
 const BINARY_PRECEDENCE: Record<string, number> = {
   // Assignment (right-to-left)
-  "=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "%=": 1,
+  "=": 1,
+  "+=": 1,
+  "-=": 1,
+  "*=": 1,
+  "/=": 1,
+  "%=": 1,
   // Nullish coalescing
   "??": 3,
   // Logical OR
@@ -653,15 +662,28 @@ const BINARY_PRECEDENCE: Record<string, number> = {
   // Bitwise AND
   "&": 8,
   // Equality
-  "==": 9, "!=": 9, "===": 9, "!==": 9,
+  "==": 9,
+  "!=": 9,
+  "===": 9,
+  "!==": 9,
   // Relational
-  "<": 10, ">": 10, "<=": 10, ">=": 10, "instanceof": 10, "in": 10,
+  "<": 10,
+  ">": 10,
+  "<=": 10,
+  ">=": 10,
+  instanceof: 10,
+  in: 10,
   // Shift
-  "<<": 11, ">>": 11, ">>>": 11,
+  "<<": 11,
+  ">>": 11,
+  ">>>": 11,
   // Additive
-  "+": 12, "-": 12,
+  "+": 12,
+  "-": 12,
   // Multiplicative
-  "*": 13, "/": 13, "%": 13,
+  "*": 13,
+  "/": 13,
+  "%": 13,
   // Exponentiation (right-to-left)
   "**": 14,
 }
@@ -866,7 +888,12 @@ function renderWithPrec(
         const space = /^[a-z]+$/i.test(expr.op) ? " " : ""
 
         // Operand rendered at unary precedence (tighter than any binary).
-        let operandStr = renderWithPrec(expr.operand, ctx, UNARY_PRECEDENCE, "none")
+        let operandStr = renderWithPrec(
+          expr.operand,
+          ctx,
+          UNARY_PRECEDENCE,
+          "none",
+        )
 
         // Token merge prevention: -(-a) must not become --a, +(+a) must not become ++a.
         // This happens when the operand is also a prefix unary with the same single-char op.
@@ -918,7 +945,12 @@ function renderWithPrec(
       // Ternary: condition ? whenTrue : whenFalse
       // Precedence 2 (between assignment=1 and ??=3), right-associative.
       // Branches are delimited by ? and : — reset to precedence 0.
-      const condStr = renderWithPrec(expr.condition, ctx, TERNARY_PRECEDENCE, "left")
+      const condStr = renderWithPrec(
+        expr.condition,
+        ctx,
+        TERNARY_PRECEDENCE,
+        "left",
+      )
       const trueStr = renderWithPrec(expr.whenTrue, ctx, 0, "none")
       const falseStr = renderWithPrec(expr.whenFalse, ctx, 0, "none")
       const result = `${condStr} ? ${trueStr} : ${falseStr}`

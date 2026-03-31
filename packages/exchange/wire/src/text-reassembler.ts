@@ -6,9 +6,9 @@
 // and delegates.
 
 import {
-  FragmentCollector,
   type CollectorConfig,
   type CollectorError,
+  FragmentCollector,
   type TimerAPI,
 } from "./fragment-collector.js"
 import type { Frame } from "./frame-types.js"

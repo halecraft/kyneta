@@ -19,18 +19,18 @@
 //
 //   const doc = exchange.get("my-doc", TodoDoc)
 
-import { bind } from "@kyneta/schema"
-import type { BoundSchema } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
 import type {
+  BoundSchema,
+  Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
 } from "@kyneta/schema"
+import { bind } from "@kyneta/schema"
 import * as Y from "yjs"
+import { ensureContainers } from "./populate.js"
 import { createYjsSubstrate, yjsReplicaFactory } from "./substrate.js"
 import { YjsVersion } from "./version.js"
-import { ensureContainers } from "./populate.js"
 
 // ---------------------------------------------------------------------------
 // Peer ID hashing — deterministic string → numeric Yjs clientID
@@ -67,9 +67,7 @@ function hashPeerId(peerId: string): number {
  * on every new Y.Doc with a deterministic uint32 clientID derived
  * from the exchange's string peerId.
  */
-function createYjsFactory(
-  peerId: string,
-): SubstrateFactory<YjsVersion> {
+function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
   const numericClientId = hashPeerId(peerId)
 
   return {
@@ -143,7 +141,7 @@ function createYjsFactory(
 export function bindYjs<S extends SchemaNode>(schema: S): BoundSchema<S> {
   return bind({
     schema,
-    factory: (ctx) => createYjsFactory(ctx.peerId),
+    factory: ctx => createYjsFactory(ctx.peerId),
     strategy: "causal",
   })
 }

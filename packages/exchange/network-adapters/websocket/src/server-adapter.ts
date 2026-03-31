@@ -28,15 +28,11 @@
 // Ported from @loro-extended/adapter-websocket's WsServerNetworkAdapter with
 // kyneta naming conventions and the kyneta 5-message protocol.
 
+import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/exchange"
 import { Adapter } from "@kyneta/exchange"
-import type {
-  ChannelMsg,
-  GeneratedChannel,
-  PeerId,
-} from "@kyneta/exchange"
 import {
-  WebsocketConnection,
   DEFAULT_FRAGMENT_THRESHOLD,
+  WebsocketConnection,
   type WebsocketConnectionConfig,
 } from "./connection.js"
 import type {
@@ -69,8 +65,7 @@ export interface WebsocketServerAdapterOptions {
  * Generate a random peer ID for connections that don't provide one.
  */
 function generatePeerId(): PeerId {
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
   let result = "ws-"
   for (let i = 0; i < 12; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length))

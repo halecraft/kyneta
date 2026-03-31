@@ -17,6 +17,7 @@ import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
 import type { Schema as SchemaNode } from "../schema.js"
+import type { Store } from "../store.js"
 import type {
   Replica,
   ReplicaFactory,
@@ -25,8 +26,11 @@ import type {
   SubstratePayload,
 } from "../substrate.js"
 import type { PlainVersion } from "./plain.js"
-import { plainSubstrateFactory, plainReplicaFactory, createPlainReplica } from "./plain.js"
-import type { Store } from "../store.js"
+import {
+  createPlainReplica,
+  plainReplicaFactory,
+  plainSubstrateFactory,
+} from "./plain.js"
 import { TimestampVersion } from "./timestamp-version.js"
 
 // ---------------------------------------------------------------------------

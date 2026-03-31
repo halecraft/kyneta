@@ -17,8 +17,8 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  SseConnection,
   DEFAULT_FRAGMENT_THRESHOLD,
+  SseConnection,
   type SseConnectionConfig,
 } from "./connection.js"
 

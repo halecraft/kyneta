@@ -9,6 +9,7 @@
 // Previously RefContext lived in writable.ts (and was re-exported by readable.ts)
 // and Plain<S> lived in writable.ts (forcing readable.ts to duplicate it as ReadablePlain<S>).
 
+import type { Path } from "./path.js"
 import type {
   AnnotatedSchema,
   DiscriminatedSumSchema,
@@ -19,7 +20,6 @@ import type {
   Schema,
   SequenceSchema,
 } from "./schema.js"
-import type { Path } from "./path.js"
 import type { StoreReader } from "./store.js"
 
 // ---------------------------------------------------------------------------

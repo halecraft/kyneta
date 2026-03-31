@@ -1,8 +1,8 @@
+import { RawPath, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { RawPath, Schema } from "@kyneta/schema"
-import { yjsStoreReader } from "../store-reader.js"
 import { ensureContainers } from "../populate.js"
+import { yjsStoreReader } from "../store-reader.js"
 
 // ===========================================================================
 // Helpers
@@ -84,9 +84,9 @@ function populateField(
         for (const [childKey, childValue] of Object.entries(
           value as Record<string, unknown>,
         )) {
-          const childFieldSchema = (
-            structural.fields as Record<string, any>
-          )[childKey]
+          const childFieldSchema = (structural.fields as Record<string, any>)[
+            childKey
+          ]
           if (!childFieldSchema) continue
           populateField(childMap, childKey, childFieldSchema, childValue)
         }
@@ -100,10 +100,7 @@ function populateField(
       if (arr && Array.isArray(value)) {
         for (const item of value) {
           const itemSchema = structural.item
-          if (
-            itemSchema &&
-            unwrapAnnotations(itemSchema)._kind === "product"
-          ) {
+          if (itemSchema && unwrapAnnotations(itemSchema)._kind === "product") {
             // Struct items: create a Y.Map for each
             const itemMap = buildStructMap(
               unwrapAnnotations(itemSchema),
@@ -153,8 +150,7 @@ function buildStructMap(
     const value = seed[key]
     if (value === undefined) continue
 
-    const tag =
-      fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+    const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
     if (tag === "text") {
       const text = new Y.Text()
       if (typeof value === "string" && value.length > 0) {
@@ -347,12 +343,8 @@ describe("YjsStoreReader", () => {
       })
       expect(reader.read(p("profile", "first"))).toBe("Jane")
       expect(reader.read(p("profile", "last"))).toBe("Doe")
-      expect(
-        reader.read(p("profile", "address", "city")),
-      ).toBe("Portland")
-      expect(
-        reader.read(p("profile", "address", "zip")),
-      ).toBe("97201")
+      expect(reader.read(p("profile", "address", "city"))).toBe("Portland")
+      expect(reader.read(p("profile", "address", "zip"))).toBe("97201")
     })
 
     it("reads nested struct as plain object", () => {
@@ -395,14 +387,9 @@ describe("YjsStoreReader", () => {
           { name: "Task 2", done: true },
         ],
       })
-      expect(reader.read(p("structs", 0, "name"))).toBe(
-        "Task 1",
-      )
+      expect(reader.read(p("structs", 0, "name"))).toBe("Task 1")
       expect(reader.read(p("structs", 1, "done"))).toBe(true)
-      const item = reader.read(p("structs", 0)) as Record<
-        string,
-        unknown
-      >
+      const item = reader.read(p("structs", 0)) as Record<string, unknown>
       expect(item.name).toBe("Task 1")
       expect(item.done).toBe(false)
     })
@@ -468,7 +455,11 @@ describe("YjsStoreReader", () => {
     })
 
     it("returns 0 for non-list paths", () => {
-      const { reader } = setup(ScalarSchema, { name: "test", count: 0, active: true })
+      const { reader } = setup(ScalarSchema, {
+        name: "test",
+        count: 0,
+        active: true,
+      })
       expect(reader.arrayLength(p("name"))).toBe(0)
     })
   })
@@ -516,7 +507,11 @@ describe("YjsStoreReader", () => {
     })
 
     it("returns empty array for non-map paths", () => {
-      const { reader } = setup(ScalarSchema, { name: "test", count: 0, active: true })
+      const { reader } = setup(ScalarSchema, {
+        name: "test",
+        count: 0,
+        active: true,
+      })
       expect(reader.keys(p("name"))).toEqual([])
     })
   })
@@ -564,7 +559,11 @@ describe("YjsStoreReader", () => {
     })
 
     it("returns false for non-map paths", () => {
-      const { reader } = setup(ScalarSchema, { name: "test", count: 0, active: true })
+      const { reader } = setup(ScalarSchema, {
+        name: "test",
+        count: 0,
+        active: true,
+      })
       expect(reader.hasKey(p("name"), "anything")).toBe(false)
     })
   })
@@ -655,9 +654,7 @@ describe("YjsStoreReader", () => {
       const profile = rootMap.get("profile") as Y.Map<unknown>
       const address = profile.get("address") as Y.Map<string>
       address.set("city", "Seattle")
-      expect(
-        reader.read(p("profile", "address", "city")),
-      ).toBe("Seattle")
+      expect(reader.read(p("profile", "address", "city"))).toBe("Seattle")
     })
 
     it("list delete + insert mutations are immediately visible", () => {

@@ -41,8 +41,8 @@ import { isNullableSum } from "./schema.js"
 // Path — re-exported from path.ts
 // ---------------------------------------------------------------------------
 
-export type { Path, Segment, RawSegment } from "./path.js"
-export { RawPath, rawKey, rawIndex } from "./path.js"
+export type { Path, RawSegment, Segment } from "./path.js"
+export { RawPath, rawIndex, rawKey } from "./path.js"
 
 // ---------------------------------------------------------------------------
 // Interpreter interface
@@ -617,7 +617,12 @@ function interpretImpl<Ctx, A>(
         schema.schema !== undefined
           ? () => {
               const innerPath = effectivePath()
-              const result = interpretImpl(schema.schema!, interp, ctx, innerPath)
+              const result = interpretImpl(
+                schema.schema!,
+                interp,
+                ctx,
+                innerPath,
+              )
               getOnRefCreated()?.(innerPath, result)
               return result
             }

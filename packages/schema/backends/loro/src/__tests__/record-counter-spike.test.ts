@@ -14,16 +14,16 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  change,
   createLoroDoc,
   createLoroDocFromEntirety,
-  version,
   exportEntirety,
   exportSince,
-  merge,
-  change,
-  subscribe,
   LoroSchema,
+  merge,
   Schema,
+  subscribe,
+  version,
 } from "../index.js"
 
 // ===========================================================================
@@ -236,7 +236,9 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
     })
 
     let fired = false
-    subscribe(doc, () => { fired = true })
+    subscribe(doc, () => {
+      fired = true
+    })
 
     change(doc, (d: any) => d.scores.at("alice").bumps.increment(1))
 

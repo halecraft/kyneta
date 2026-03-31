@@ -19,15 +19,11 @@
 //   // Wire up GET /events and POST /sync manually using
 //   // serverAdapter.registerConnection() and parseTextPostBody()
 
+import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/exchange"
 import { Adapter } from "@kyneta/exchange"
-import type {
-  ChannelMsg,
-  GeneratedChannel,
-  PeerId,
-} from "@kyneta/exchange"
 import {
-  SseConnection,
   DEFAULT_FRAGMENT_THRESHOLD,
+  SseConnection,
   type SseConnectionConfig,
 } from "./connection.js"
 
@@ -56,8 +52,7 @@ export interface SseServerAdapterOptions {
  * Generate a random peer ID for connections that don't provide one.
  */
 function generatePeerId(): PeerId {
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
   let result = "sse-"
   for (let i = 0; i < 12; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length))
@@ -176,11 +171,9 @@ export class SseServerAdapter extends Adapter<PeerId> {
     const channel = this.addChannel(resolvedPeerId)
 
     // Create connection object with fragmentation config
-    const connection = new SseConnection(
-      resolvedPeerId,
-      channel.channelId,
-      { fragmentThreshold: this.#fragmentThreshold },
-    )
+    const connection = new SseConnection(resolvedPeerId, channel.channelId, {
+      fragmentThreshold: this.#fragmentThreshold,
+    })
     connection._setChannel(channel)
 
     // Store connection

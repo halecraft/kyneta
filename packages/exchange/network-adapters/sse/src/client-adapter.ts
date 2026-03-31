@@ -23,31 +23,31 @@
 // takes over reconnection via the state machine's backoff logic, rather than
 // letting the browser's built-in EventSource reconnection run.
 
-import { Adapter } from "@kyneta/exchange"
 import type {
   AdapterFactory,
   Channel,
   ChannelMsg,
   GeneratedChannel,
   PeerId,
-  TransitionListener,
   StateTransition,
+  TransitionListener,
 } from "@kyneta/exchange"
+import { Adapter } from "@kyneta/exchange"
 import {
-  textCodec,
   encodeTextComplete,
   fragmentTextPayload,
   TextReassembler,
+  textCodec,
 } from "@kyneta/wire"
 import { SseClientStateMachine } from "./client-state-machine.js"
 import type {
   DisconnectReason,
-  SseClientState,
   SseClientLifecycleEvents,
+  SseClientState,
 } from "./types.js"
 
 // Re-export state types for convenience
-export type { DisconnectReason, SseClientState, SseClientLifecycleEvents }
+export type { DisconnectReason, SseClientLifecycleEvents, SseClientState }
 
 // ---------------------------------------------------------------------------
 // Options
@@ -288,7 +288,10 @@ export class SseClientAdapter extends Adapter<void> {
           textFrame.length > this.#fragmentThreshold
         ) {
           const payload = JSON.stringify(textCodec.encode(msg))
-          const fragments = fragmentTextPayload(payload, this.#fragmentThreshold)
+          const fragments = fragmentTextPayload(
+            payload,
+            this.#fragmentThreshold,
+          )
           for (const fragment of fragments) {
             void this.#sendTextWithRetry(resolvedPostUrl, fragment)
           }

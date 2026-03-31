@@ -7,8 +7,8 @@
 // All logic lives in createSyncStore (Functional Core); this hook
 // is a thin Imperative Shell wrapper.
 
+import { type ReadyState, sync } from "@kyneta/exchange"
 import { useMemo, useSyncExternalStore } from "react"
-import { sync, type ReadyState } from "@kyneta/exchange"
 import { createSyncStore } from "./store.js"
 
 // ---------------------------------------------------------------------------

@@ -251,7 +251,11 @@ export interface ListRegionHandlers<T> {
    * (valueRegion, textRegion, etc.) inside create should use this scope
    * so they are cleaned up when the item is deleted.
    */
-  create: (item: T, index: number, scope: import("./runtime/scope.js").Scope) => Node
+  create: (
+    item: T,
+    index: number,
+    scope: import("./runtime/scope.js").Scope,
+  ) => Node
 
   /**
    * Called when an item's content needs updating (optional).

@@ -6,9 +6,9 @@
 
 import { describe, expect, it, vi } from "vitest"
 import {
+  type CollectorOps,
   decideFragment,
   FragmentCollector,
-  type CollectorOps,
   type TimerAPI,
 } from "../fragment-collector.js"
 
@@ -178,7 +178,11 @@ describe("decideFragment — pure", () => {
 describe("FragmentCollector — basic", () => {
   it("completes a single-fragment frame immediately", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     const result = collector.addFragment("f1", 0, 1, 5, "hello")
 
@@ -195,7 +199,11 @@ describe("FragmentCollector — basic", () => {
 
   it("collects fragments in order", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     expect(collector.addFragment("f1", 0, 3, 11, "hel").status).toBe("pending")
     expect(collector.addFragment("f1", 1, 3, 11, "lo ").status).toBe("pending")
@@ -211,7 +219,11 @@ describe("FragmentCollector — basic", () => {
 
   it("collects fragments out of order", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     collector.addFragment("f1", 2, 3, 6, "ld")
     collector.addFragment("f1", 0, 3, 6, "wo")
@@ -224,7 +236,11 @@ describe("FragmentCollector — basic", () => {
 
   it("concatenates in index order regardless of arrival order", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     collector.addFragment("f1", 2, 3, 5, "C")
     collector.addFragment("f1", 0, 3, 5, "A")
@@ -238,7 +254,11 @@ describe("FragmentCollector — basic", () => {
 
   it("concatenates correctly with matching totalSize", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     collector.addFragment("f1", 2, 3, 3, "C")
     collector.addFragment("f1", 0, 3, 3, "A")
@@ -254,7 +274,11 @@ describe("FragmentCollector — basic", () => {
 
   it("handles multiple concurrent frames", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     collector.addFragment("f1", 0, 2, 2, "A")
     collector.addFragment("f2", 0, 2, 2, "X")
@@ -276,7 +300,11 @@ describe("FragmentCollector — basic", () => {
 
   it("tracks pendingFrameCount", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     expect(collector.pendingFrameCount).toBe(0)
 
@@ -294,7 +322,11 @@ describe("FragmentCollector — basic", () => {
 
   it("tracks pendingSize", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     expect(collector.pendingSize).toBe(0)
 
@@ -318,7 +350,11 @@ describe("FragmentCollector — basic", () => {
 describe("FragmentCollector — errors", () => {
   it("returns error on duplicate fragment", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     collector.addFragment("f1", 0, 3, 9, "abc")
     const result = collector.addFragment("f1", 0, 3, 9, "abc") // duplicate
@@ -337,7 +373,11 @@ describe("FragmentCollector — errors", () => {
 
   it("returns error on invalid index", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     const result = collector.addFragment("f1", 5, 3, 9, "abc") // index 5 >= total 3
 
@@ -351,7 +391,11 @@ describe("FragmentCollector — errors", () => {
 
   it("returns error on total mismatch", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     collector.addFragment("f1", 0, 3, 9, "abc")
     const result = collector.addFragment("f1", 1, 5, 9, "def") // claims total=5, batch expects 3
@@ -370,7 +414,11 @@ describe("FragmentCollector — errors", () => {
 
   it("returns error on totalSize mismatch", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     collector.addFragment("f1", 0, 3, 100, "abc")
     const result = collector.addFragment("f1", 1, 3, 200, "def") // claims totalSize=200, batch expects 100
@@ -389,7 +437,11 @@ describe("FragmentCollector — errors", () => {
 
   it("returns size_mismatch on completion when chunks don't match totalSize", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     // totalSize=100 but actual chunks are only 6 chars
     collector.addFragment("f1", 0, 2, 100, "abc")
@@ -405,7 +457,11 @@ describe("FragmentCollector — errors", () => {
 
   it("returns disposed error after dispose", () => {
     const timer = createMockTimer()
-    const collector = new FragmentCollector({ timeoutMs: 5000 }, STRING_OPS, timer)
+    const collector = new FragmentCollector(
+      { timeoutMs: 5000 },
+      STRING_OPS,
+      timer,
+    )
 
     collector.dispose()
 

@@ -5,8 +5,8 @@
 // tested in each adapter's own test file.
 
 import { describe, expect, it, vi } from "vitest"
-import { ClientStateMachine } from "../adapter/client-state-machine.js"
 import type { StateTransition } from "../adapter/client-state-machine.js"
+import { ClientStateMachine } from "../adapter/client-state-machine.js"
 
 // ---------------------------------------------------------------------------
 // Test state type
@@ -308,9 +308,9 @@ describe("ClientStateMachine — waitForStatus", () => {
   it("rejects on timeout", async () => {
     const sm = createMachine()
 
-    await expect(
-      sm.waitForStatus("done", { timeoutMs: 50 }),
-    ).rejects.toThrow("Timeout")
+    await expect(sm.waitForStatus("done", { timeoutMs: 50 })).rejects.toThrow(
+      "Timeout",
+    )
   })
 })
 

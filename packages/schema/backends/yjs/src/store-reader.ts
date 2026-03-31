@@ -8,9 +8,7 @@
 // Y.Text → .toJSON() (string), Y.Map → .toJSON() (plain object),
 // Y.Array → .toJSON() (plain array), plain values → as-is.
 
-import type { StoreReader } from "@kyneta/schema"
-import type { Path } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
+import type { Path, Schema as SchemaNode, StoreReader } from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
 
@@ -58,10 +56,7 @@ function extractValue(resolved: unknown): unknown {
  * @param doc - The Y.Doc to read from.
  * @param schema - The root schema for the document.
  */
-export function yjsStoreReader(
-  doc: Y.Doc,
-  schema: SchemaNode,
-): StoreReader {
+export function yjsStoreReader(doc: Y.Doc, schema: SchemaNode): StoreReader {
   const rootMap = doc.getMap("root")
 
   return {

@@ -5,14 +5,14 @@
 // heavy lifting (timeouts, eviction, validation); this module
 // just parses the binary wire format and delegates.
 
+import { parseTransportPayload, type TransportPayload } from "./fragment.js"
 import {
-  FragmentCollector,
   type CollectorConfig,
-  type CollectorResult,
   type CollectorError,
+  type CollectorResult,
+  FragmentCollector,
   type TimerAPI,
 } from "./fragment-collector.js"
-import { parseTransportPayload, type TransportPayload } from "./fragment.js"
 import { decodeBinaryFrame } from "./frame.js"
 
 // ---------------------------------------------------------------------------
@@ -156,24 +156,35 @@ export class FragmentReassembler {
               status: "error",
               error: {
                 type: "parse_error",
-                message: "Fragment transport payload contains a non-fragment frame",
+                message:
+                  "Fragment transport payload contains a non-fragment frame",
               },
             }
           }
 
-          const { frameId, index, total, totalSize, payload: chunk } =
-            frame.content
+          const {
+            frameId,
+            index,
+            total,
+            totalSize,
+            payload: chunk,
+          } = frame.content
 
           return this.#mapCollectorResult(
-            this.#collector.addFragment(frameId, index, total, totalSize, chunk),
+            this.#collector.addFragment(
+              frameId,
+              index,
+              total,
+              totalSize,
+              chunk,
+            ),
           )
         } catch (error) {
           return {
             status: "error",
             error: {
               type: "parse_error",
-              message:
-                error instanceof Error ? error.message : String(error),
+              message: error instanceof Error ? error.message : String(error),
             },
           }
         }

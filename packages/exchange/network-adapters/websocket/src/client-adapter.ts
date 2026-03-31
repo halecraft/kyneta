@@ -19,7 +19,6 @@
 // Ported from @loro-extended/adapter-websocket's WsClientNetworkAdapter
 // with kyneta naming conventions and the kyneta 5-message protocol.
 
-import { Adapter } from "@kyneta/exchange"
 import type {
   AdapterFactory,
   Channel,
@@ -27,10 +26,11 @@ import type {
   GeneratedChannel,
   PeerId,
 } from "@kyneta/exchange"
+import { Adapter } from "@kyneta/exchange"
 import {
   cborCodec,
-  encodeComplete,
   decodeBinaryFrame,
+  encodeComplete,
   FragmentReassembler,
   fragmentPayload,
   wrapCompleteMessage,
@@ -38,9 +38,9 @@ import {
 import { WebsocketClientStateMachine } from "./client-state-machine.js"
 import type {
   DisconnectReason,
+  TransitionListener,
   WebsocketClientState,
   WebsocketClientStateTransition,
-  TransitionListener,
 } from "./types.js"
 
 // Re-export state types for convenience

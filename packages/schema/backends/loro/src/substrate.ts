@@ -20,11 +20,11 @@ import type {
 } from "@kyneta/schema"
 import {
   buildWritableContext,
-  executeBatch,
-  type WritableContext,
-  type Path,
   type ChangeBase,
+  executeBatch,
   type Op,
+  type Path,
+  type WritableContext,
   Zero,
 } from "@kyneta/schema"
 import type {
@@ -34,11 +34,11 @@ import type {
   LoroDoc as LoroDocType,
 } from "loro-crdt"
 import { LoroDoc } from "loro-crdt"
-import { PROPS_KEY } from "./loro-resolve.js"
-import { LoroVersion } from "./version.js"
-import { loroStoreReader } from "./store-reader.js"
-import { changeToDiff, batchToOps } from "./change-mapping.js"
+import { batchToOps, changeToDiff } from "./change-mapping.js"
 import { registerLoroSubstrate } from "./loro-escape.js"
+import { PROPS_KEY } from "./loro-resolve.js"
+import { loroStoreReader } from "./store-reader.js"
+import { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
 // mergePendingGroups — outbound leaf→container composition
@@ -76,8 +76,14 @@ function mergePendingGroups(
         const existingIdx = mergeTargets.get(cid)
         if (existingIdx !== undefined) {
           // Merge into existing group: combine `updated` records
-          const existing = result[existingIdx][0][1] as { type: "map"; updated: Record<string, unknown> }
-          const incoming = diff as { type: "map"; updated: Record<string, unknown> }
+          const existing = result[existingIdx][0][1] as {
+            type: "map"
+            updated: Record<string, unknown>
+          }
+          const incoming = diff as {
+            type: "map"
+            updated: Record<string, unknown>
+          }
           existing.updated = { ...existing.updated, ...incoming.updated }
           continue
         }
@@ -85,7 +91,9 @@ function mergePendingGroups(
         // Clone the diff so we can mutate `updated` during merge
         const cloned: [ContainerID, Diff | JsonDiff] = [
           cid,
-          { type: "map", updated: { ...(diff as any).updated } } as Diff | JsonDiff,
+          { type: "map", updated: { ...(diff as any).updated } } as
+            | Diff
+            | JsonDiff,
         ]
         mergeTargets.set(cid, result.length)
         result.push([cloned])
@@ -266,7 +274,7 @@ export function createLoroSubstrate(
 
   // --- Event bridge (registered once at construction) ---
 
-  doc.subscribe((batch) => {
+  doc.subscribe(batch => {
     // Ignore our own commits (changefeed already captured via wrappedPrepare)
     if (batch.by === "local" && inOurCommit) {
       return
@@ -330,7 +338,11 @@ function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
     },
 
     exportEntirety(): SubstratePayload {
-      return { kind: "entirety", encoding: "binary", data: doc.export({ mode: "snapshot" }) }
+      return {
+        kind: "entirety",
+        encoding: "binary",
+        data: doc.export({ mode: "snapshot" }),
+      }
     },
 
     exportSince(since: LoroVersion): SubstratePayload | null {

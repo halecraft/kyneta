@@ -222,9 +222,24 @@ export type FoldResult<S> = S | { readonly done: S }
  * (source and target) at the start of the operation.
  */
 export interface InstructionFold<S> {
-  onRetain: (acc: S, count: number, source: number, target: number) => FoldResult<S>
-  onInsert: (acc: S, length: number, source: number, target: number) => FoldResult<S>
-  onDelete: (acc: S, count: number, source: number, target: number) => FoldResult<S>
+  onRetain: (
+    acc: S,
+    count: number,
+    source: number,
+    target: number,
+  ) => FoldResult<S>
+  onInsert: (
+    acc: S,
+    length: number,
+    source: number,
+    target: number,
+  ) => FoldResult<S>
+  onDelete: (
+    acc: S,
+    count: number,
+    source: number,
+    target: number,
+  ) => FoldResult<S>
 }
 
 function isDone<S>(result: FoldResult<S>): result is { readonly done: S } {
@@ -315,7 +330,9 @@ export function advanceIndex(
         // If oldIndex falls within this retain range, it maps to
         // the corresponding position in the target.
         if (oldIndex >= source && oldIndex < source + count) {
-          return { done: { resolved: true, result: target + (oldIndex - source) } }
+          return {
+            done: { resolved: true, result: target + (oldIndex - source) },
+          }
         }
         return acc
       },

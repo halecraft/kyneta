@@ -12,12 +12,12 @@
 //   Express: res.write(`data: ${textFrame}\n\n`)
 //   Hono:    stream.writeSSE({ data: textFrame })
 
-import type { ChannelMsg, Channel, PeerId } from "@kyneta/exchange"
+import type { Channel, ChannelMsg, PeerId } from "@kyneta/exchange"
 import {
-  textCodec,
   encodeTextComplete,
   fragmentTextPayload,
   TextReassembler,
+  textCodec,
 } from "@kyneta/wire"
 
 /**
@@ -64,11 +64,7 @@ export class SseConnection {
    */
   readonly reassembler: TextReassembler
 
-  constructor(
-    peerId: PeerId,
-    channelId: number,
-    config?: SseConnectionConfig,
-  ) {
+  constructor(peerId: PeerId, channelId: number, config?: SseConnectionConfig) {
     this.peerId = peerId
     this.channelId = channelId
     this.#fragmentThreshold =

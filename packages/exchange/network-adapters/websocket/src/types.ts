@@ -8,10 +8,10 @@
 // Ported from @loro-extended/adapter-websocket's WsSocket with kyneta
 // naming conventions applied.
 
-import type { PeerId } from "@kyneta/exchange"
 import type {
-  StateTransition,
   TransitionListener as GenericTransitionListener,
+  PeerId,
+  StateTransition,
 } from "@kyneta/exchange"
 
 // ---------------------------------------------------------------------------
@@ -152,8 +152,7 @@ export type WebsocketClientStateTransition =
  * Listener for websocket client state transitions.
  * Specialized from the generic `TransitionListener<S>`.
  */
-export type TransitionListener =
-  GenericTransitionListener<WebsocketClientState>
+export type TransitionListener = GenericTransitionListener<WebsocketClientState>
 
 // ---------------------------------------------------------------------------
 // Socket wrapper — standard WebSocket API (browser + Node ws)
@@ -234,15 +233,9 @@ export interface NodeWebsocketLike {
   close(code?: number, reason?: string): void
   on(
     event: "message",
-    handler: (
-      data: Buffer | ArrayBuffer | string,
-      isBinary: boolean,
-    ) => void,
+    handler: (data: Buffer | ArrayBuffer | string, isBinary: boolean) => void,
   ): void
-  on(
-    event: "close",
-    handler: (code: number, reason: Buffer) => void,
-  ): void
+  on(event: "close", handler: (code: number, reason: Buffer) => void): void
   on(event: "error", handler: (error: Error) => void): void
   readyState: number
 }
@@ -269,10 +262,7 @@ export function wrapNodeWebsocket(ws: NodeWebsocketLike): Socket {
     onMessage(handler: (data: Uint8Array | string) => void): void {
       ws.on(
         "message",
-        (
-          data: Buffer | ArrayBuffer | string,
-          isBinary: boolean,
-        ) => {
+        (data: Buffer | ArrayBuffer | string, isBinary: boolean) => {
           if (isBinary) {
             if (data instanceof ArrayBuffer) {
               handler(new Uint8Array(data))

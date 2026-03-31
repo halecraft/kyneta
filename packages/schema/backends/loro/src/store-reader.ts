@@ -8,9 +8,7 @@
 // LoroText → .toString(), LoroCounter → .value, plain values as-is.
 // Collections: LoroList/LoroMovableList → .length, LoroMap → .keys().
 
-import type { StoreReader } from "@kyneta/schema"
-import type { Path } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
+import type { Path, Schema as SchemaNode, StoreReader } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
 import { resolveContainer } from "./loro-resolve.js"
 
@@ -78,10 +76,7 @@ function extractValue(resolved: unknown): unknown {
  * @param doc - The LoroDoc to read from.
  * @param schema - The root schema for the document.
  */
-export function loroStoreReader(
-  doc: LoroDoc,
-  schema: SchemaNode,
-): StoreReader {
+export function loroStoreReader(doc: LoroDoc, schema: SchemaNode): StoreReader {
   return {
     read(path: Path): unknown {
       if (path.length === 0) {

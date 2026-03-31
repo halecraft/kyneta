@@ -4,17 +4,17 @@
 // through the CBOR codec, including OfferMsg with both "json" and
 // "binary" SubstratePayload encodings.
 
-import { describe, expect, it } from "vitest"
-import { cborCodec } from "../cbor.js"
 import type {
   ChannelMsg,
-  DismissMsg,
   DiscoverMsg,
+  DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
   InterestMsg,
   OfferMsg,
 } from "@kyneta/exchange"
+import { describe, expect, it } from "vitest"
+import { cborCodec } from "../cbor.js"
 
 // ---------------------------------------------------------------------------
 // Helpers

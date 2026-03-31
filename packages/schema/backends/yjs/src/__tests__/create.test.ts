@@ -1,11 +1,11 @@
+import { change, Schema, subscribe } from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
-import { Schema, change, subscribe } from "@kyneta/schema"
 import { createYjsDoc, createYjsDocFromEntirety } from "../create.js"
-import { version, exportEntirety, exportSince, merge } from "../sync.js"
-import { YjsVersion } from "../version.js"
 import { ensureContainers } from "../populate.js"
 import { yjsSubstrateFactory } from "../substrate.js"
+import { exportEntirety, exportSince, merge, version } from "../sync.js"
+import { YjsVersion } from "../version.js"
 import { yjs } from "../yjs-escape.js"
 
 // ===========================================================================
@@ -330,7 +330,9 @@ describe("sync primitives", () => {
 
     it("serialize/parse round-trips", () => {
       const doc = createYjsDoc(SimpleSchema)
-      change(doc, (d: any) => { d.title.insert(0, "Test") })
+      change(doc, (d: any) => {
+        d.title.insert(0, "Test")
+      })
       const v = version(doc)
       const serialized = v.serialize()
       const parsed = YjsVersion.parse(serialized)
@@ -341,7 +343,9 @@ describe("sync primitives", () => {
   describe("exportEntirety", () => {
     it("returns a binary payload", () => {
       const doc = createYjsDoc(SimpleSchema)
-      change(doc, (d: any) => { d.title.insert(0, "Snap") })
+      change(doc, (d: any) => {
+        d.title.insert(0, "Snap")
+      })
       const payload = exportEntirety(doc)
       expect(payload.encoding).toBe("binary")
       expect(payload.data).toBeInstanceOf(Uint8Array)
@@ -352,7 +356,9 @@ describe("sync primitives", () => {
   describe("exportSince + merge", () => {
     it("syncs incremental changes between two docs", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      change(doc1, (d: any) => { d.title.insert(0, "Start") })
+      change(doc1, (d: any) => {
+        d.title.insert(0, "Start")
+      })
       const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       const v2Before = version(doc2)
@@ -407,7 +413,9 @@ describe("sync primitives", () => {
 
     it("changefeed fires on merge", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      change(doc1, (d: any) => { d.title.insert(0, "Source") })
+      change(doc1, (d: any) => {
+        d.title.insert(0, "Source")
+      })
       const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       const v2Before = version(doc2)
@@ -452,7 +460,9 @@ describe("sync primitives", () => {
   describe("versions equal after sync", () => {
     it("versions equal after full snapshot sync", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      change(doc1, (d: any) => { d.title.insert(0, "Same") })
+      change(doc1, (d: any) => {
+        d.title.insert(0, "Same")
+      })
       change(doc1, (d: any) => {
         d.count.set(42)
       })

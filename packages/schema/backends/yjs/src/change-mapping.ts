@@ -16,7 +16,6 @@
 // This produces a single observeDeep event with the complete struct,
 // rather than a cascade of child MapChange events.
 
-import { advanceSchema, expandMapOpsToLeaves } from "@kyneta/schema"
 import type {
   ChangeBase,
   IncrementChange,
@@ -30,7 +29,7 @@ import type {
   TextChange,
   TextInstruction,
 } from "@kyneta/schema"
-import { RawPath } from "@kyneta/schema"
+import { advanceSchema, expandMapOpsToLeaves, RawPath } from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
 
@@ -146,7 +145,7 @@ function applySequenceChange(
       // cursor stays — deleted items shift remaining items down
     } else if ("insert" in instruction) {
       const items = instruction.insert as readonly unknown[]
-      const yjsItems = items.map((item) =>
+      const yjsItems = items.map(item =>
         maybeCreateSharedType(item, itemSchema),
       )
       resolved.insert(cursor, yjsItems)
@@ -265,9 +264,7 @@ function maybeCreateSharedType(
 
   // Annotated counter/movable/tree → should not reach here (thrown earlier)
   if (tag === "counter" || tag === "movable" || tag === "tree") {
-    throw new Error(
-      `Yjs substrate does not support "${tag}" annotations.`,
-    )
+    throw new Error(`Yjs substrate does not support "${tag}" annotations.`)
   }
 
   switch (structural._kind) {
@@ -280,17 +277,14 @@ function maybeCreateSharedType(
       ) {
         return value
       }
-      return createStructuredMap(
-        value as Record<string, unknown>,
-        structural,
-      )
+      return createStructuredMap(value as Record<string, unknown>, structural)
     }
 
     case "sequence": {
       if (!Array.isArray(value)) return value
       const arr = new Y.Array()
       const itemSchema = structural.item
-      const items = (value as unknown[]).map((item) =>
+      const items = (value as unknown[]).map(item =>
         maybeCreateSharedType(item, itemSchema),
       )
       arr.insert(0, items)
@@ -308,9 +302,7 @@ function maybeCreateSharedType(
       }
       const map = new Y.Map()
       const valueSchema = structural.item
-      for (const [k, v] of Object.entries(
-        value as Record<string, unknown>,
-      )) {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
         map.set(k, maybeCreateSharedType(v, valueSchema))
       }
       return map
@@ -348,9 +340,7 @@ function createStructuredMap(
   for (const [key, val] of Object.entries(obj)) {
     if (val === undefined) continue
     const fieldSchema = structural.fields[key]
-    const yjsVal = fieldSchema
-      ? maybeCreateSharedType(val, fieldSchema)
-      : val
+    const yjsVal = fieldSchema ? maybeCreateSharedType(val, fieldSchema) : val
     map.set(key, yjsVal)
   }
 
@@ -362,8 +352,7 @@ function createStructuredMap(
     structural.fields as Record<string, SchemaNode>,
   )) {
     if (key in obj) continue // already processed above
-    const tag =
-      fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+    const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
     if (tag === "text") {
       map.set(key, new Y.Text())
     }
@@ -512,18 +501,16 @@ function mapEventToChange(event: Y.YEvent<any>): MapChange | null {
 
   const target = event.target as Y.Map<any>
 
-  event.changes.keys.forEach(
-    (change: { action: string }, key: string) => {
-      if (change.action === "add" || change.action === "update") {
-        const value = target.get(key)
-        set[key] = extractEventValue(value)
-        hasSet = true
-      } else if (change.action === "delete") {
-        deleteKeys.push(key)
-        hasDelete = true
-      }
-    },
-  )
+  event.changes.keys.forEach((change: { action: string }, key: string) => {
+    if (change.action === "add" || change.action === "update") {
+      const value = target.get(key)
+      set[key] = extractEventValue(value)
+      hasSet = true
+    } else if (change.action === "delete") {
+      deleteKeys.push(key)
+      hasDelete = true
+    }
+  })
 
   if (!hasSet && !hasDelete) return null
 
@@ -606,7 +593,5 @@ function getFieldSchema(
 // ---------------------------------------------------------------------------
 
 function pathToString(path: Path): string {
-  return path.segments
-    .map((seg) => String(seg.resolve()))
-    .join(".")
+  return path.segments.map(seg => String(seg.resolve())).join(".")
 }

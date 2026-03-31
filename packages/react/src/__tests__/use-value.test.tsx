@@ -4,9 +4,9 @@
 // rendering cycle via useSyncExternalStore. Thin tests — the core
 // logic is already covered by store.test.ts (Tier 1).
 
+import { change, createDoc, Schema } from "@kyneta/schema/basic"
+import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
-import { renderHook, act } from "@testing-library/react"
-import { createDoc, change, Schema } from "@kyneta/schema/basic"
 import { useValue } from "../use-value.js"
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ describe("useValue", () => {
     expect(result.current).toBe("")
 
     act(() => {
-      change(doc, (d) => {
+      change(doc, d => {
         d.title.set("hello")
       })
     })
@@ -55,7 +55,7 @@ describe("useValue", () => {
     const { result } = renderHook(() => useValue(doc))
 
     act(() => {
-      change(doc, (d) => {
+      change(doc, d => {
         d.title.set("updated")
       })
     })
@@ -80,7 +80,7 @@ describe("useValue", () => {
     unmount()
 
     // Mutate after unmount — should not cause errors
-    change(doc, (d) => {
+    change(doc, d => {
       d.title.set("after unmount")
     })
   })
@@ -88,10 +88,9 @@ describe("useValue", () => {
   it("transitions from null to a ref and back", () => {
     const doc = createDoc(TestSchema)
 
-    const { result, rerender } = renderHook(
-      ({ ref }) => useValue(ref),
-      { initialProps: { ref: null as any } },
-    )
+    const { result, rerender } = renderHook(({ ref }) => useValue(ref), {
+      initialProps: { ref: null as any },
+    })
 
     expect(result.current).toBe(null)
 
@@ -101,7 +100,7 @@ describe("useValue", () => {
 
     // Mutation should cause re-render
     act(() => {
-      change(doc, (d) => {
+      change(doc, d => {
         d.title.set("alive")
       })
     })

@@ -46,7 +46,6 @@ import {
   type ScalarSchema,
   Schema,
   type SchemaNode,
-
   type SequenceRef,
   type SequenceSchema,
   subscribe,
@@ -976,8 +975,6 @@ describe("type-level: PlainSchema rejects annotated schemas", () => {
     expectTypeOf<Bad>().not.toMatchTypeOf<PlainProductSchema>()
   })
 })
-
-
 
 // ===========================================================================
 // NavigableSequenceRef / NavigableMapRef type hierarchy
@@ -1957,4 +1954,3 @@ describe("type-level: Plain<S> regression guards for sums", () => {
     expectTypeOf<Result>().toEqualTypeOf<Expected>()
   })
 })
-

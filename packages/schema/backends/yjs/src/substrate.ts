@@ -187,9 +187,7 @@ export function createYjsSubstrate(
     // fall back to the transaction's origin if it's a string.
     const origin =
       pendingMergeOrigin ??
-      (typeof transaction.origin === "string"
-        ? transaction.origin
-        : undefined)
+      (typeof transaction.origin === "string" ? transaction.origin : undefined)
 
     // Lazily ensure the context is built
     const ctx = substrate.context()
@@ -248,7 +246,11 @@ function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
     },
 
     exportEntirety(): SubstratePayload {
-      return { kind: "entirety", encoding: "binary", data: Y.encodeStateAsUpdate(doc) }
+      return {
+        kind: "entirety",
+        encoding: "binary",
+        data: Y.encodeStateAsUpdate(doc),
+      }
     },
 
     exportSince(since: YjsVersion): SubstratePayload | null {

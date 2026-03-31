@@ -13,30 +13,49 @@
 // Local hooks
 // ---------------------------------------------------------------------------
 
-export { ExchangeProvider, useExchange } from "./exchange-context.js"
 export type { ExchangeProviderProps } from "./exchange-context.js"
-export { useDocument } from "./use-document.js"
-export { useValue } from "./use-value.js"
-export { useSyncStatus } from "./use-sync-status.js"
-
+export { ExchangeProvider, useExchange } from "./exchange-context.js"
+export type { CallableRef, ExternalStore } from "./store.js"
 // Store factories (Functional Core — framework-agnostic, independently testable)
 export {
   createChangefeedStore,
-  createSyncStore,
   createNullishStore,
+  createSyncStore,
 } from "./store.js"
-export type { ExternalStore, CallableRef } from "./store.js"
+export { useDocument } from "./use-document.js"
+export { useSyncStatus } from "./use-sync-status.js"
+export { useValue } from "./use-value.js"
 
 // ---------------------------------------------------------------------------
 // Thin re-exports from @kyneta/schema
 // ---------------------------------------------------------------------------
 
-export { change, applyChanges, subscribe, subscribeNode, Schema, CHANGEFEED } from "@kyneta/schema"
-export type { Ref, RRef, Plain, Changeset, Op, BoundSchema } from "@kyneta/schema"
+export type {
+  BoundSchema,
+  Changeset,
+  Op,
+  Plain,
+  Ref,
+  RRef,
+} from "@kyneta/schema"
+export {
+  applyChanges,
+  CHANGEFEED,
+  change,
+  Schema,
+  subscribe,
+  subscribeNode,
+} from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Thin re-exports from @kyneta/exchange
 // ---------------------------------------------------------------------------
 
-export { Exchange, sync, hasSync } from "@kyneta/exchange"
-export type { AdapterFactory, ExchangeParams, SyncRef, ReadyState, DocId } from "@kyneta/exchange"
+export type {
+  AdapterFactory,
+  DocId,
+  ExchangeParams,
+  ReadyState,
+  SyncRef,
+} from "@kyneta/exchange"
+export { Exchange, hasSync, sync } from "@kyneta/exchange"

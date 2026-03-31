@@ -12,8 +12,6 @@
 // to reference new containers within an applyDiff batch. See the
 // "Structured inserts via JsonContainerID" section in the plan.
 
-import { advanceSchema, expandMapOpsToLeaves } from "@kyneta/schema"
-import { PROPS_KEY } from "./loro-resolve.js"
 import type {
   ChangeBase,
   IncrementChange,
@@ -21,13 +19,13 @@ import type {
   Op,
   Path,
   ReplaceChange,
+  Schema as SchemaNode,
   SequenceChange,
   SequenceInstruction,
   TextChange,
   TextInstruction,
 } from "@kyneta/schema"
-import { RawPath } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
+import { advanceSchema, expandMapOpsToLeaves, RawPath } from "@kyneta/schema"
 import type {
   ContainerID,
   CounterDiff,
@@ -46,7 +44,7 @@ import type {
   TreeDiff,
   Value,
 } from "loro-crdt"
-import { resolveContainer } from "./loro-resolve.js"
+import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
 
 // ---------------------------------------------------------------------------
 // Synthetic ContainerID generation (batch-local)
@@ -118,12 +116,7 @@ export function changeToDiff(
   // parent container, not the scalar value itself). Dispatch early
   // before attempting target CID resolution.
   if (change.type === "replace") {
-    return replaceChangeToDiff(
-      path,
-      change as ReplaceChange,
-      schema,
-      doc,
-    )
+    return replaceChangeToDiff(path, change as ReplaceChange, schema, doc)
   }
 
   // Resolve the target container
@@ -137,9 +130,7 @@ export function changeToDiff(
     // The path resolved to a scalar value inside a container.
     // The target for the diff is the parent container.
     if (path.segments.length === 0) {
-      throw new Error(
-        "changeToDiff: cannot create diff for root-level scalar",
-      )
+      throw new Error("changeToDiff: cannot create diff for root-level scalar")
     }
     const parentPath = path.slice(0, -1)
     const parentResolved = resolveContainer(doc, schema, parentPath)
@@ -160,9 +151,7 @@ export function changeToDiff(
 
   switch (change.type) {
     case "text":
-      return [
-        [targetCID, textChangeToDiff(change as TextChange)],
-      ]
+      return [[targetCID, textChangeToDiff(change as TextChange)]]
 
     case "sequence":
       return sequenceChangeToDiff(
@@ -172,16 +161,10 @@ export function changeToDiff(
       )
 
     case "map":
-      return mapChangeToDiff(
-        targetCID,
-        change as MapChange,
-        targetSchema,
-      )
+      return mapChangeToDiff(targetCID, change as MapChange, targetSchema)
 
     case "increment":
-      return [
-        [targetCID, counterChangeToDiff(change as IncrementChange)],
-      ]
+      return [[targetCID, counterChangeToDiff(change as IncrementChange)]]
 
     default:
       throw new Error(`changeToDiff: unsupported change type "${change.type}"`)
@@ -234,8 +217,7 @@ function sequenceChangeToDiff(
   while (seqSchema._kind === "annotated" && seqSchema.schema !== undefined) {
     seqSchema = seqSchema.schema
   }
-  const itemSchema =
-    seqSchema._kind === "sequence" ? seqSchema.item : undefined
+  const itemSchema = seqSchema._kind === "sequence" ? seqSchema.item : undefined
 
   for (const inst of change.instructions as readonly SequenceInstruction[]) {
     if ("retain" in inst) {
@@ -323,10 +305,7 @@ function mapChangeToDiff(
     }
   }
 
-  result.unshift([
-    targetCID,
-    { type: "map", updated } as MapJsonDiff,
-  ])
+  result.unshift([targetCID, { type: "map", updated } as MapJsonDiff])
   return result
 }
 
@@ -383,7 +362,7 @@ function replaceChangeToDiff(
   // Index-based replace in a list — modeled as delete + insert at position
   if (lastSeg.role === "index") {
     const idx = resolved as number
-    const diff: Delta<(Value)[]>[] = []
+    const diff: Delta<Value[]>[] = []
     if (idx > 0) {
       diff.push({ retain: idx } as Delta<Value[]>)
     }
@@ -416,11 +395,16 @@ function annotationToContainerType(
   tag: string,
 ): "Counter" | "Text" | "List" | "MovableList" | "Tree" | undefined {
   switch (tag) {
-    case "counter": return "Counter"
-    case "text": return "Text"
-    case "movable": return "MovableList"
-    case "tree": return "Tree"
-    default: return undefined
+    case "counter":
+      return "Counter"
+    case "text":
+      return "Text"
+    case "movable":
+      return "MovableList"
+    case "tree":
+      return "Tree"
+    default:
+      return undefined
   }
 }
 
@@ -484,7 +468,10 @@ function materializeValueDiffs(
           // Initialize counter with the provided value, or 0 if absent
           const amount = typeof value === "number" ? value : 0
           if (amount !== 0) {
-            result.push([parentCID, { type: "counter", increment: amount } as CounterDiff])
+            result.push([
+              parentCID,
+              { type: "counter", increment: amount } as CounterDiff,
+            ])
           }
           // If amount is 0, no diff needed — counter starts at 0
           return
@@ -493,10 +480,13 @@ function materializeValueDiffs(
           // Initialize text with the provided value, or "" if absent
           const content = typeof value === "string" ? value : ""
           if (content !== "") {
-            result.push([parentCID, {
-              type: "text",
-              diff: [{ insert: content }],
-            } as TextDiff])
+            result.push([
+              parentCID,
+              {
+                type: "text",
+                diff: [{ insert: content }],
+              } as TextDiff,
+            ])
           }
           return
         }
@@ -544,7 +534,12 @@ function materializeValueDiffs(
       if (fieldSchema && needsContainer(undefined, fieldSchema as SchemaNode)) {
         const childCID = materializeCIDForSchema(fieldSchema as SchemaNode)
         updated[key] = jsonCID(childCID)
-        materializeValueDiffs(undefined, fieldSchema as SchemaNode, childCID, deferred)
+        materializeValueDiffs(
+          undefined,
+          fieldSchema as SchemaNode,
+          childCID,
+          deferred,
+        )
       }
     }
 
@@ -562,7 +557,12 @@ function materializeValueDiffs(
       if (fieldSchema && needsContainer(undefined, fieldSchema as SchemaNode)) {
         const childCID = materializeCIDForSchema(fieldSchema as SchemaNode)
         updated[key] = jsonCID(childCID)
-        materializeValueDiffs(undefined, fieldSchema as SchemaNode, childCID, deferred)
+        materializeValueDiffs(
+          undefined,
+          fieldSchema as SchemaNode,
+          childCID,
+          deferred,
+        )
       }
     }
 
@@ -613,10 +613,12 @@ function materializeCIDForSchema(schema: SchemaNode): ContainerID {
   }
 
   switch (s._kind) {
-    case "sequence": return syntheticCID("List")
+    case "sequence":
+      return syntheticCID("List")
     case "product":
     case "map":
-    default: return syntheticCID("Map")
+    default:
+      return syntheticCID("Map")
   }
 }
 
@@ -635,10 +637,7 @@ function materializeCIDForSchema(schema: SchemaNode): ContainerID {
  * @param batch - The Loro event batch from doc.subscribe()
  * @param _schema - The root document schema (for future use in disambiguation)
  */
-export function batchToOps(
-  batch: LoroEventBatch,
-  _schema: SchemaNode,
-): Op[] {
+export function batchToOps(batch: LoroEventBatch, _schema: SchemaNode): Op[] {
   const ops: Op[] = []
 
   for (const event of batch.events) {
@@ -734,7 +733,7 @@ function listDiffToChange(diff: ListDiff): SequenceChange {
     (delta: Delta<(Value | any)[]>) => {
       if (delta.insert !== undefined) {
         // Convert container objects to plain values
-        const items = (delta.insert as unknown[]).map((item) => {
+        const items = (delta.insert as unknown[]).map(item => {
           if (hasKind(item)) {
             return (item as any).toJSON()
           }
@@ -795,10 +794,12 @@ function counterDiffToChange(diff: CounterDiff): IncrementChange {
 /**
  * TreeDiff → TreeChange (stub — tree support is future work)
  */
-function treeDiffToChange(diff: TreeDiff): ChangeBase & { instructions: unknown[] } {
+function treeDiffToChange(
+  diff: TreeDiff,
+): ChangeBase & { instructions: unknown[] } {
   // Map TreeDiffItems to kyneta TreeInstructions
   // This is a simplified mapping — full tree support is future work
-  const instructions = diff.diff.map((item) => {
+  const instructions = diff.diff.map(item => {
     switch (item.action) {
       case "create":
         return {

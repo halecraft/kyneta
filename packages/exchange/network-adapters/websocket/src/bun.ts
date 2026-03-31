@@ -9,8 +9,8 @@
 
 export {
   type BunWebsocketData,
-  wrapBunWebsocket,
   createBunWebsocketHandlers,
+  wrapBunWebsocket,
 } from "./bun-websocket.js"
 
 // ---------------------------------------------------------------------------
@@ -18,7 +18,7 @@ export {
 // ---------------------------------------------------------------------------
 
 export type {
+  DisconnectReason,
   Socket,
   SocketReadyState,
-  DisconnectReason,
 } from "./types.js"

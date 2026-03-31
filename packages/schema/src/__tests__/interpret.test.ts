@@ -301,7 +301,10 @@ describe("interpret: annotation constructors produce correct grammar nodes", () 
   })
 
   it("Schema.annotated('tree', ...) produces annotated('tree', product(...))", () => {
-    const s = Schema.annotated("tree", Schema.struct({ label: Schema.string() }))
+    const s = Schema.annotated(
+      "tree",
+      Schema.struct({ label: Schema.string() }),
+    )
     expect(s._kind).toBe("annotated")
     expect(s.tag).toBe("tree")
     expect(s.schema?._kind).toBe("product")
@@ -370,12 +373,15 @@ describe("interpret: annotated schema plain round-trip", () => {
     const schema = Schema.doc({
       title: Schema.annotated("text"),
       count: Schema.annotated("counter"),
-      messages: Schema.annotated("movable", Schema.list(
-        Schema.struct({
-          author: Schema.string(),
-          body: Schema.annotated("text"),
-        }),
-      )),
+      messages: Schema.annotated(
+        "movable",
+        Schema.list(
+          Schema.struct({
+            author: Schema.string(),
+            body: Schema.annotated("text"),
+          }),
+        ),
+      ),
     })
 
     const store = {

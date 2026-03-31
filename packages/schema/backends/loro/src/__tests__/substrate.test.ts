@@ -1,24 +1,24 @@
-import { describe, expect, it } from "vitest"
-import { LoroDoc } from "loro-crdt"
-import {
-  interpret,
-  readable,
-  writable,
-  changefeed,
-  change,
-  subscribe,
-  Schema,
-  RawPath,
-  type Ref,
-  type SchemaNode,
-} from "@kyneta/schema"
-import { LoroSchema } from "../loro-schema.js"
 import type { Substrate, SubstratePayload } from "@kyneta/schema"
 import {
+  change,
+  changefeed,
+  interpret,
+  RawPath,
+  type Ref,
+  readable,
+  Schema,
+  type SchemaNode,
+  subscribe,
+  writable,
+} from "@kyneta/schema"
+import { LoroDoc } from "loro-crdt"
+import { describe, expect, it } from "vitest"
+import {
   createLoroSubstrate,
-  loroSubstrateFactory,
   LoroVersion,
+  loroSubstrateFactory,
 } from "../index.js"
+import { LoroSchema } from "../loro-schema.js"
 
 // ===========================================================================
 // Shared test schema
@@ -74,7 +74,7 @@ describe("loroSubstrateFactory.create", () => {
   it("creates a substrate with seed values", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
-    change(doc, (d) => {
+    change(doc, d => {
       d.title.insert(0, "Hello")
       d.theme.set("dark")
     })
@@ -87,10 +87,10 @@ describe("loroSubstrateFactory.create", () => {
   it("creates a substrate with seed list items", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
-    change(doc, (d) => {
+    change(doc, d => {
       d.items.push({ name: "Task 1", done: false })
     })
-    change(doc, (d) => {
+    change(doc, d => {
       d.items.push({ name: "Task 2", done: true })
     })
     const reader = substrate.store
@@ -114,7 +114,7 @@ describe("write round-trip", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
-    change(doc, (d) => d.title.insert(0, "Hi"))
+    change(doc, d => d.title.insert(0, "Hi"))
     expect(doc.title()).toBe("Hi")
   })
 
@@ -122,10 +122,10 @@ describe("write round-trip", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
-    change(doc, (d) => d.count.increment(5))
+    change(doc, d => d.count.increment(5))
     expect(doc.count()).toBe(5)
 
-    change(doc, (d) => d.count.increment(3))
+    change(doc, d => d.count.increment(3))
     expect(doc.count()).toBe(8)
   })
 
@@ -133,9 +133,9 @@ describe("write round-trip", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
-    change(doc, (d) => d.theme.set("light"))
+    change(doc, d => d.theme.set("light"))
     expect(doc.theme()).toBe("light")
-    change(doc, (d) => d.theme.set("dark"))
+    change(doc, d => d.theme.set("dark"))
     expect(doc.theme()).toBe("dark")
   })
 })
@@ -157,11 +157,11 @@ describe("version tracking", () => {
 
     const v0 = substrate.version()
 
-    change(doc, (d) => d.title.insert(0, "A"))
+    change(doc, d => d.title.insert(0, "A"))
     const v1 = substrate.version()
     expect(v0.compare(v1)).toBe("behind")
 
-    change(doc, (d) => d.count.increment(1))
+    change(doc, d => d.count.increment(1))
     const v2 = substrate.version()
     expect(v1.compare(v2)).toBe("behind")
     expect(v0.compare(v2)).toBe("behind")
@@ -171,7 +171,7 @@ describe("version tracking", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
-    change(doc, (d) => d.title.insert(0, "Hello"))
+    change(doc, d => d.title.insert(0, "Hello"))
     const f = substrate.version()
     const serialized = f.serialize()
     const parsed = LoroVersion.parse(serialized)
@@ -194,11 +194,11 @@ describe("export/import snapshot", () => {
   it("fromSnapshot reconstructs equivalent state", () => {
     const substrateA = loroSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
-    change(docA, (d) => {
+    change(docA, d => {
       d.title.insert(0, "Original")
       d.theme.set("dark")
     })
-    change(docA, (d) => {
+    change(docA, d => {
       d.title.insert(8, " Title")
       d.count.increment(42)
     })
@@ -215,7 +215,7 @@ describe("export/import snapshot", () => {
   it("fromSnapshot creates a new epoch (version independent)", () => {
     const substrateA = loroSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
-    change(docA, (d) => d.title.insert(0, "Hello"))
+    change(docA, d => d.title.insert(0, "Hello"))
 
     const snapshot = substrateA.exportEntirety()
     const substrateB = loroSubstrateFactory.fromEntirety(snapshot, TestSchema)
@@ -240,7 +240,7 @@ describe("delta sync", () => {
     const sinceVV = substrateB.version()
 
     // Mutate A
-    change(docA, (d) => {
+    change(docA, d => {
       d.title.insert(0, "Hello!")
       d.count.increment(10)
     })
@@ -251,9 +251,7 @@ describe("delta sync", () => {
     substrateB.merge(delta!, "sync")
 
     // B should now have A's state
-    expect(substrateB.store.read(RawPath.empty.field("title"))).toBe(
-      "Hello!",
-    )
+    expect(substrateB.store.read(RawPath.empty.field("title"))).toBe("Hello!")
     expect(substrateB.store.read(RawPath.empty.field("count"))).toBe(10)
   })
 })
@@ -278,8 +276,8 @@ describe("concurrent sync", () => {
     } as SubstratePayload)
 
     // Independent mutations
-    change(docA, (d) => d.title.insert(0, "A"))
-    change(docB, (d) => d.count.increment(5))
+    change(docA, d => d.title.insert(0, "A"))
+    change(docB, d => d.count.increment(5))
 
     // Bidirectional sync
     const deltaAtoB = substrateA.exportSince(substrateB.version())
@@ -311,10 +309,10 @@ describe("changefeed fires on merge", () => {
 
     // Subscribe to B
     const received: unknown[] = []
-    subscribe(docB, (cs) => received.push(cs))
+    subscribe(docB, cs => received.push(cs))
 
     // Mutate A, then sync to B
-    change(docA, (d) => d.title.insert(0, "Remote"))
+    change(docA, d => d.title.insert(0, "Remote"))
     const delta = substrateA.exportSince(sinceVV)!
     substrateB.merge(delta, "sync")
 
@@ -544,7 +542,7 @@ describe("changefeed fires on external import", () => {
 
     // Subscribe via kyneta
     const received: unknown[] = []
-    subscribe(kDoc, (cs) => received.push(cs))
+    subscribe(kDoc, cs => received.push(cs))
 
     // External import — bypasses substrate.merge()
     doc2.import(update)
@@ -571,7 +569,7 @@ describe("changefeed fires on external local write", () => {
 
     // Subscribe via kyneta
     const received: unknown[] = []
-    subscribe(kDoc, (cs) => received.push(cs))
+    subscribe(kDoc, cs => received.push(cs))
 
     // External local write — raw Loro API, not via kyneta change()
     doc.getText("title").insert(0, "External write")
@@ -599,10 +597,10 @@ describe("no double-fire on kyneta local writes", () => {
       fireCount++
     })
 
-    change(doc, (d) => d.title.insert(0, "Hi"))
+    change(doc, d => d.title.insert(0, "Hi"))
     expect(fireCount).toBe(1)
 
-    change(doc, (d) => d.count.increment(1))
+    change(doc, d => d.count.increment(1))
     expect(fireCount).toBe(2)
   })
 })
@@ -622,7 +620,7 @@ describe("transaction support", () => {
     })
 
     // Multiple ops in a single change() call
-    change(doc, (d) => {
+    change(doc, d => {
       d.title.insert(0, "Hello")
       d.count.increment(10)
     })
@@ -647,7 +645,7 @@ describe("nested structure", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
-    change(doc, (d) => {
+    change(doc, d => {
       d.items.push({ name: "New task", done: false })
     })
 
@@ -662,10 +660,10 @@ describe("nested structure", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
-    change(doc, (d) => {
+    change(doc, d => {
       d.items.push({ name: "First", done: false })
     })
-    change(doc, (d) => {
+    change(doc, d => {
       d.items.push({ name: "Second", done: true })
     })
 
@@ -684,7 +682,7 @@ describe("parseVersion", () => {
   it("round-trips through factory", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
-    change(doc, (d) => d.title.insert(0, "Hi"))
+    change(doc, d => d.title.insert(0, "Hi"))
 
     const v = substrate.version()
     const serialized = v.serialize()

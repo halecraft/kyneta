@@ -2,30 +2,29 @@ import { describe, expect, it } from "vitest"
 import {
   ADDRESS_TABLE,
   applyChanges,
+  CHANGEFEED,
   change,
   changefeed,
-  CHANGEFEED,
   interpret,
-
+  mapChange,
   plainContext,
-  readable,
   RawPath,
+  readable,
+  replaceChange,
   resolveToAddressed,
   Schema,
   sequenceChange,
   subscribe,
-  mapChange,
-  replaceChange,
-  writable,
   withAddressing,
   withCaching,
   withNavigation,
   withReadable,
+  writable,
 } from "../index.js"
-import { bottomInterpreter } from "../interpreters/bottom.js"
 import type { RefContext } from "../interpreter-types.js"
-import { plainStoreReader } from "../store.js"
+import { bottomInterpreter } from "../interpreters/bottom.js"
 import { AddressedPath, AddressTableRegistry } from "../path.js"
+import { plainStoreReader } from "../store.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -228,8 +227,6 @@ describe("withAddressing: maps", () => {
 // ===========================================================================
 // Product addressing
 // ===========================================================================
-
-
 
 // ===========================================================================
 // Stack composition and rootPath propagation
@@ -452,9 +449,7 @@ describe("withAddressing: dead ref detection", () => {
   })
 
   it("end-to-end sequence: delete item → read throws, write throws, deleted is true", () => {
-    const { doc } = createTodoDoc([
-      { text: "only", done: false },
-    ])
+    const { doc } = createTodoDoc([{ text: "only", done: false }])
 
     const item = doc.todos.at(0)
     expect(item.deleted).toBe(false)
@@ -467,7 +462,9 @@ describe("withAddressing: dead ref detection", () => {
     expect(item.deleted).toBe(true)
     expect(() => item.text()).toThrow("Ref access on deleted list item")
     expect(() => {
-      change(doc, () => { item.done.set(true) })
+      change(doc, () => {
+        item.done.set(true)
+      })
     }).toThrow("Ref access on deleted list item")
   })
 
@@ -485,7 +482,9 @@ describe("withAddressing: dead ref detection", () => {
     expect(ref.deleted).toBe(true)
     expect(() => ref()).toThrow("Ref access on deleted map entry")
     expect(() => {
-      change(doc, () => { ref.set("2.0") })
+      change(doc, () => {
+        ref.set("2.0")
+      })
     }).toThrow("Ref access on deleted map entry")
   })
 
@@ -541,9 +540,7 @@ describe("resolveToAddressed", () => {
 
 describe("withAddressing: external mutation routing", () => {
   it("applyChanges with RawPath fires leaf-level subscriber", () => {
-    const { doc } = createTodoDoc([
-      { text: "alpha", done: false },
-    ])
+    const { doc } = createTodoDoc([{ text: "alpha", done: false }])
 
     const item = doc.todos.at(0)
     const textChanges: any[] = []
@@ -655,9 +652,7 @@ describe("withAddressing: subscription survival after structural change", () => 
   })
 
   it("external mutation via applyChanges invalidates cached product field", () => {
-    const { doc, store } = createTodoDoc([
-      { text: "alpha", done: false },
-    ])
+    const { doc, store } = createTodoDoc([{ text: "alpha", done: false }])
 
     const item = doc.todos.at(0)
     // Read to populate the cache

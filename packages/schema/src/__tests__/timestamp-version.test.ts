@@ -32,15 +32,21 @@ describe("TimestampVersion", () => {
 
   describe("compare", () => {
     it("returns 'behind' when this is older", () => {
-      expect(new TimestampVersion(1000).compare(new TimestampVersion(2000))).toBe("behind")
+      expect(
+        new TimestampVersion(1000).compare(new TimestampVersion(2000)),
+      ).toBe("behind")
     })
 
     it("returns 'ahead' when this is newer", () => {
-      expect(new TimestampVersion(2000).compare(new TimestampVersion(1000))).toBe("ahead")
+      expect(
+        new TimestampVersion(2000).compare(new TimestampVersion(1000)),
+      ).toBe("ahead")
     })
 
     it("returns 'equal' for same timestamp", () => {
-      expect(new TimestampVersion(1000).compare(new TimestampVersion(1000))).toBe("equal")
+      expect(
+        new TimestampVersion(1000).compare(new TimestampVersion(1000)),
+      ).toBe("equal")
     })
 
     it("never returns 'concurrent' — timestamps form a total order", () => {

@@ -11,19 +11,19 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import {
+  change,
   createLoroDoc,
   createLoroDocFromEntirety,
-  change,
-  subscribe,
-  version,
   exportEntirety,
   exportSince,
-  merge,
   LoroSchema,
+  merge,
   Schema,
+  subscribe,
+  version,
 } from "../../src/index.js"
 
-import { section, log, json, peer } from "../helpers.js"
+import { json, log, peer, section } from "../helpers.js"
 
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -173,15 +173,27 @@ log(`
 
 peer("A", `title="${peerA.title()}"`)
 peer("A", `likes=${peerA.likes()}`)
-peer("A", `tags=[${Array.from({ length: peerA.tags.length }, (_, i) => `"${(peerA.tags.at(i) as any)()}"`).join(", ")}]`)
-peer("A", `tasks=[${Array.from({ length: peerA.tasks.length }, (_, i) => `"${(peerA.tasks.at(i) as any).text()}"`).join(", ")}]`)
+peer(
+  "A",
+  `tags=[${Array.from({ length: peerA.tags.length }, (_, i) => `"${(peerA.tags.at(i) as any)()}"`).join(", ")}]`,
+)
+peer(
+  "A",
+  `tasks=[${Array.from({ length: peerA.tasks.length }, (_, i) => `"${(peerA.tasks.at(i) as any).text()}"`).join(", ")}]`,
+)
 
 console.log()
 
 peer("B", `title="${peerB.title()}"`)
 peer("B", `likes=${peerB.likes()}`)
-peer("B", `tags=[${Array.from({ length: peerB.tags.length }, (_, i) => `"${(peerB.tags.at(i) as any)()}"`).join(", ")}]`)
-peer("B", `tasks=[${Array.from({ length: peerB.tasks.length }, (_, i) => `"${(peerB.tasks.at(i) as any).text()}"`).join(", ")}]`)
+peer(
+  "B",
+  `tags=[${Array.from({ length: peerB.tags.length }, (_, i) => `"${(peerB.tags.at(i) as any)()}"`).join(", ")}]`,
+)
+peer(
+  "B",
+  `tasks=[${Array.from({ length: peerB.tasks.length }, (_, i) => `"${(peerB.tasks.at(i) as any).text()}"`).join(", ")}]`,
+)
 
 log(`
     ✓ Title: A's emoji prefix merged with the original text

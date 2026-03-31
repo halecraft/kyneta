@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { type RawSegment, rawKey, rawIndex } from "../index.js"
-import { advanceSchema, Schema } from "../index.js"
+import {
+  advanceSchema,
+  type RawSegment,
+  rawIndex,
+  rawKey,
+  Schema,
+} from "../index.js"
 
 // ===========================================================================
 // advanceSchema — pure schema descent for a single path segment

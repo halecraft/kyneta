@@ -3,7 +3,6 @@
 
 import { describe, expect, expectTypeOf, it } from "vitest"
 import type { SchemaNode, ValidateContext } from "../index.js"
-import { RawPath } from "../path.js"
 import {
   formatPath,
   interpret,
@@ -15,6 +14,7 @@ import {
   validateInterpreter,
   Zero,
 } from "../index.js"
+import { RawPath } from "../path.js"
 
 // Helper: run validation without triggering Plain<S> type resolution.
 // Avoids TS2589 ("excessively deep") when used inside expect(() => ...).toThrow()
@@ -44,15 +44,13 @@ describe("formatPath", () => {
   })
 
   it("nested key segments use dot notation", () => {
-    expect(
-      formatPath(RawPath.empty.field("settings").field("darkMode")),
-    ).toBe("settings.darkMode")
+    expect(formatPath(RawPath.empty.field("settings").field("darkMode"))).toBe(
+      "settings.darkMode",
+    )
   })
 
   it("index segments use bracket notation", () => {
-    expect(
-      formatPath(RawPath.empty.field("items").item(0)),
-    ).toBe("items[0]")
+    expect(formatPath(RawPath.empty.field("items").item(0))).toBe("items[0]")
   })
 
   it("mixed key and index segments", () => {
@@ -626,7 +624,10 @@ describe("validate: annotated", () => {
   })
 
   it("tree — delegates to inner", () => {
-    const s = Schema.annotated("tree", Schema.struct({ label: Schema.string() }))
+    const s = Schema.annotated(
+      "tree",
+      Schema.struct({ label: Schema.string() }),
+    )
     expect(validate(s, { label: "root" })).toEqual({ label: "root" })
   })
 

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest"
+import type {
+  IncrementChange,
+  MapChange,
+  ReplaceChange,
+  SequenceChange,
+  TextChange,
+} from "../change.js"
 import type { Changeset, Op } from "../index.js"
-import type { MapChange, ReplaceChange, TextChange, SequenceChange, IncrementChange } from "../change.js"
 import {
   CHANGEFEED,
   change,
@@ -9,7 +15,6 @@ import {
   hasChangefeed,
   hasComposedChangefeed,
   interpret,
-
   plainContext,
   readable,
   Schema,
@@ -19,7 +24,10 @@ import {
 import { RawPath, type RawSegment } from "../path.js"
 
 /** Narrowed helper: return the key variant of RawSegment. */
-function keySeg(path: { readonly segments: readonly unknown[] }, i: number): { role: "key"; resolve(): string; type?: string; key?: string } {
+function keySeg(
+  path: { readonly segments: readonly unknown[] },
+  i: number,
+): { role: "key"; resolve(): string; type?: string; key?: string } {
   const seg = path.segments[i] as any
   return {
     role: "key" as const,
@@ -31,7 +39,10 @@ function keySeg(path: { readonly segments: readonly unknown[] }, i: number): { r
 }
 
 /** Narrowed helper: return the index variant of RawSegment. */
-function idxSeg(path: { readonly segments: readonly unknown[] }, i: number): { role: "index"; resolve(): number; type?: string; index?: number } {
+function idxSeg(
+  path: { readonly segments: readonly unknown[] },
+  i: number,
+): { role: "index"; resolve(): number; type?: string; index?: number } {
   const seg = path.segments[i] as any
   return {
     role: "index" as const,
@@ -1117,7 +1128,7 @@ describe("expandMapOpsToLeaves", () => {
     ]
     const result = expandMapOpsToLeaves(ops)
     expect(result).toHaveLength(3)
-    const keys = result.map((r) => keySeg(r.path, 1).key).sort()
+    const keys = result.map(r => keySeg(r.path, 1).key).sort()
     expect(keys).toEqual(["a", "b", "c"])
     for (const r of result) {
       expect(r.change.type).toBe("replace")

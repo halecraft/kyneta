@@ -404,32 +404,44 @@ describe("withReadable: annotated", () => {
   })
 
   it("counter ref returns current number when called", () => {
-    const { doc } = createDoc(Schema.doc({ count: Schema.annotated("counter") }), {
-      count: 42,
-    })
+    const { doc } = createDoc(
+      Schema.doc({ count: Schema.annotated("counter") }),
+      {
+        count: 42,
+      },
+    )
     expect(doc.count()).toBe(42)
   })
 
   it("counter ref returns 0 when store value is not a number", () => {
-    const { doc } = createDoc(Schema.doc({ count: Schema.annotated("counter") }), {
-      count: "oops",
-    })
+    const { doc } = createDoc(
+      Schema.doc({ count: Schema.annotated("counter") }),
+      {
+        count: "oops",
+      },
+    )
     expect(doc.count()).toBe(0)
   })
 
   it("counter ref toPrimitive is hint-aware", () => {
-    const { doc } = createDoc(Schema.doc({ count: Schema.annotated("counter") }), {
-      count: 42,
-    })
+    const { doc } = createDoc(
+      Schema.doc({ count: Schema.annotated("counter") }),
+      {
+        count: 42,
+      },
+    )
     expect(doc.count[Symbol.toPrimitive]("string")).toBe("42")
     expect(doc.count[Symbol.toPrimitive]("number")).toBe(42)
     expect(doc.count[Symbol.toPrimitive]("default")).toBe(42)
   })
 
   it("counter ref works in template literal", () => {
-    const { doc } = createDoc(Schema.doc({ count: Schema.annotated("counter") }), {
-      count: 7,
-    })
+    const { doc } = createDoc(
+      Schema.doc({ count: Schema.annotated("counter") }),
+      {
+        count: 7,
+      },
+    )
     expect(`Stars: ${doc.count}`).toBe("Stars: 7")
   })
 

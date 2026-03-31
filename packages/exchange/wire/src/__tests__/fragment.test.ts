@@ -9,26 +9,26 @@
 
 import { describe, expect, it } from "vitest"
 import {
-  fragmentPayload,
-  parseTransportPayload,
-  wrapCompleteMessage,
-  wrapFragment,
-  shouldFragment,
-  calculateFragmentationOverhead,
-  generateFrameId,
-  bytesToHex,
-  hexToBytes,
-  FragmentParseError,
-  type TransportPayload,
-} from "../fragment.js"
-import { decodeBinaryFrame } from "../frame.js"
-import {
-  MESSAGE_COMPLETE,
   FRAGMENT,
+  FRAGMENT_META_SIZE,
   FRAME_ID_SIZE,
   HEADER_SIZE,
-  FRAGMENT_META_SIZE,
+  MESSAGE_COMPLETE,
 } from "../constants.js"
+import {
+  bytesToHex,
+  calculateFragmentationOverhead,
+  FragmentParseError,
+  fragmentPayload,
+  generateFrameId,
+  hexToBytes,
+  parseTransportPayload,
+  shouldFragment,
+  type TransportPayload,
+  wrapCompleteMessage,
+  wrapFragment,
+} from "../fragment.js"
+import { decodeBinaryFrame } from "../frame.js"
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -350,10 +350,7 @@ export class RawPath extends AbstractPath {
     if (other.isAddressed) {
       throw new Error("Cannot concat AddressedPath onto RawPath")
     }
-    return new RawPath([
-      ...this.segments,
-      ...(other as RawPath).segments,
-    ])
+    return new RawPath([...this.segments, ...(other as RawPath).segments])
   }
 
   root(): RawPath {
@@ -457,7 +454,10 @@ export class AddressTableRegistry {
 
     // Create a new index address
     addr = indexAddress(index)
-    table.byId.set((addr as { id: number }).id, { address: addr, ref: undefined })
+    table.byId.set((addr as { id: number }).id, {
+      address: addr,
+      ref: undefined,
+    })
     table.byIndex.set(index, addr)
     return addr
   }
@@ -565,10 +565,7 @@ export class AddressedPath extends AbstractPath {
   }
 
   slice(start: number, end?: number): AddressedPath {
-    return new AddressedPath(
-      this.segments.slice(start, end),
-      this.registry,
-    )
+    return new AddressedPath(this.segments.slice(start, end), this.registry)
   }
 
   concat(other: Path): AddressedPath {

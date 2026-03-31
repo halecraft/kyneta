@@ -284,24 +284,28 @@ testDescribe("describe: annotation rendering", () => {
 
   testDescribe("movable list", () => {
     it("describes movable list with inline item", () => {
-      expect(describe(Schema.annotated("movable", Schema.list(Schema.string())))).toBe(
-        "movable-list<string>",
-      )
+      expect(
+        describe(Schema.annotated("movable", Schema.list(Schema.string()))),
+      ).toBe("movable-list<string>")
     })
 
     it("describes movable list with complex item", () => {
-      const s = Schema.annotated("movable", Schema.list(
-        Schema.struct({
-          name: Schema.string(),
-        }),
-      ))
+      const s = Schema.annotated(
+        "movable",
+        Schema.list(
+          Schema.struct({
+            name: Schema.string(),
+          }),
+        ),
+      )
       expect(describe(s)).toBe(["movable-list", "  name: string"].join("\n"))
     })
   })
 
   testDescribe("tree", () => {
     it("describes tree with node data", () => {
-      const s = Schema.annotated("tree",
+      const s = Schema.annotated(
+        "tree",
         Schema.struct({
           label: Schema.string(),
           weight: Schema.number(),
@@ -405,12 +409,16 @@ testDescribe("describe: annotation rendering", () => {
 
     it("describes schema with movable list and tree", () => {
       const s = Schema.doc({
-        tasks: Schema.annotated("movable", Schema.list(
-          Schema.struct({
-            title: Schema.string(),
-          }),
-        )),
-        hierarchy: Schema.annotated("tree",
+        tasks: Schema.annotated(
+          "movable",
+          Schema.list(
+            Schema.struct({
+              title: Schema.string(),
+            }),
+          ),
+        ),
+        hierarchy: Schema.annotated(
+          "tree",
           Schema.struct({
             label: Schema.string(),
             color: Schema.string(),

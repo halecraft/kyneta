@@ -64,7 +64,9 @@ const annotatedDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-function createReadOnlyAnnotatedDoc(storeOverrides: Record<string, unknown> = {}) {
+function createReadOnlyAnnotatedDoc(
+  storeOverrides: Record<string, unknown> = {},
+) {
   const store = {
     title: "Hello",
     count: 42,

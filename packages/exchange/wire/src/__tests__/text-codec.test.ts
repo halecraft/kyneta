@@ -7,17 +7,17 @@
 //
 // The text codec works with JSON-safe objects, not bytes.
 
-import { describe, expect, it } from "vitest"
-import { textCodec } from "../json.js"
 import type {
   ChannelMsg,
-  DismissMsg,
   DiscoverMsg,
+  DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
   InterestMsg,
   OfferMsg,
 } from "@kyneta/exchange"
+import { describe, expect, it } from "vitest"
+import { textCodec } from "../json.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -409,7 +409,11 @@ describe("Text codec — JSON-safe output", () => {
       {
         type: "offer",
         docId: "b",
-        payload: { kind: "since", encoding: "binary", data: new Uint8Array([10, 20]) },
+        payload: {
+          kind: "since",
+          encoding: "binary",
+          data: new Uint8Array([10, 20]),
+        },
         version: "1",
       },
     ]

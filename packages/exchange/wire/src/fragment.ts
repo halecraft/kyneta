@@ -50,10 +50,7 @@ export class FragmentParseError extends Error {
   override readonly name = "FragmentParseError"
 
   constructor(
-    public readonly code:
-      | "unknown_prefix"
-      | "truncated"
-      | "empty",
+    public readonly code: "unknown_prefix" | "truncated" | "empty",
     message: string,
   ) {
     super(message)

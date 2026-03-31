@@ -8,13 +8,13 @@
 // ---------------------------------------------------------------------------
 
 export {
-  SseClientAdapter,
   createSseClient,
   DEFAULT_FRAGMENT_THRESHOLD,
-  type SseClientOptions,
   type DisconnectReason,
-  type SseClientState,
+  SseClientAdapter,
   type SseClientLifecycleEvents,
+  type SseClientOptions,
+  type SseClientState,
 } from "./client-adapter.js"
 
 // ---------------------------------------------------------------------------

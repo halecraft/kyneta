@@ -317,7 +317,8 @@ describe("withNavigation: annotated delegation", () => {
   })
 
   it("movable list annotation delegates to inner sequence", () => {
-    const schema = Schema.annotated("movable",
+    const schema = Schema.annotated(
+      "movable",
       Schema.list(Schema.struct({ title: Schema.string() })),
     )
     const store = [{ title: "A" }, { title: "B" }] as any

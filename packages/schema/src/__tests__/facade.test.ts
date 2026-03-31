@@ -82,7 +82,9 @@ describe("change: basic behavior", () => {
     })
 
     expect(ops).toHaveLength(1)
-    expect(ops[0]?.path.key).toBe(RawPath.empty.field("settings").field("darkMode").key)
+    expect(ops[0]?.path.key).toBe(
+      RawPath.empty.field("settings").field("darkMode").key,
+    )
     expect(ops[0]?.change).toEqual(replaceChange(true))
   })
 
@@ -97,9 +99,13 @@ describe("change: basic behavior", () => {
 
     expect(ops).toHaveLength(3)
     // First: darkMode set
-    expect(ops[0]?.path.key).toBe(RawPath.empty.field("settings").field("darkMode").key)
+    expect(ops[0]?.path.key).toBe(
+      RawPath.empty.field("settings").field("darkMode").key,
+    )
     // Second: fontSize set
-    expect(ops[1]?.path.key).toBe(RawPath.empty.field("settings").field("fontSize").key)
+    expect(ops[1]?.path.key).toBe(
+      RawPath.empty.field("settings").field("fontSize").key,
+    )
     // Third: messages push
     expect(ops[2]?.path.key).toBe(RawPath.empty.field("messages").key)
   })
@@ -567,7 +573,9 @@ describe("applyChanges: origin tagging", () => {
     expect(treeChangesets).toHaveLength(1)
     expect(treeChangesets[0]?.origin).toBe("undo")
     expect(treeChangesets[0]?.changes).toHaveLength(1)
-    expect(treeChangesets[0]?.changes[0]?.path.key).toBe(RawPath.empty.field("darkMode").key)
+    expect(treeChangesets[0]?.changes[0]?.path.key).toBe(
+      RawPath.empty.field("darkMode").key,
+    )
   })
 })
 
@@ -683,9 +691,13 @@ describe("round-trip: subscribeTree output → applyChanges input", () => {
 
     // Each changeset has one Op with a relative path
     expect(treeChangesets[0]?.changes).toHaveLength(1)
-    expect(treeChangesets[0]?.changes[0]?.path.key).toBe(RawPath.empty.field("darkMode").key)
+    expect(treeChangesets[0]?.changes[0]?.path.key).toBe(
+      RawPath.empty.field("darkMode").key,
+    )
     expect(treeChangesets[1]?.changes).toHaveLength(1)
-    expect(treeChangesets[1]?.changes[0]?.path.key).toBe(RawPath.empty.field("fontSize").key)
+    expect(treeChangesets[1]?.changes[0]?.path.key).toBe(
+      RawPath.empty.field("fontSize").key,
+    )
 
     // To apply to docB, we need to prepend the "settings" prefix
     const absoluteOps: Op[] = treeChangesets.flatMap(cs =>
@@ -910,7 +922,9 @@ describe("subscribe: basic behavior", () => {
 
     expect(changesets).toHaveLength(1)
     expect(changesets[0]?.changes).toHaveLength(1)
-    expect(changesets[0]?.changes[0]?.path.key).toBe(RawPath.empty.field("darkMode").key)
+    expect(changesets[0]?.changes[0]?.path.key).toBe(
+      RawPath.empty.field("darkMode").key,
+    )
   })
 
   it("fires on own-path change with path []", () => {

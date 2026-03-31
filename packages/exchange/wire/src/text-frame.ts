@@ -20,9 +20,9 @@
 
 import type { ChannelMsg } from "@kyneta/exchange"
 import type { TextCodec } from "./codec.js"
+import { generateFrameId } from "./fragment.js"
 import type { Frame } from "./frame-types.js"
 import { complete, fragment } from "./frame-types.js"
-import { generateFrameId } from "./fragment.js"
 
 // ---------------------------------------------------------------------------
 // Version
@@ -148,7 +148,15 @@ export function encodeTextFrame(frame: Frame<string>): string {
   const { frameId, index, total, totalSize, payload } = content
   const prefix = buildPrefix(version, true, hasHash)
   if (hasHash) {
-    return JSON.stringify([prefix, hash, frameId, index, total, totalSize, payload])
+    return JSON.stringify([
+      prefix,
+      hash,
+      frameId,
+      index,
+      total,
+      totalSize,
+      payload,
+    ])
   }
   return JSON.stringify([prefix, frameId, index, total, totalSize, payload])
 }
@@ -254,13 +262,26 @@ export function decodeTextFrame(wire: string): Frame<string> {
   const chunk = arr[offset + 4] as string
 
   if (typeof frameId !== "string") {
-    throw new TextFrameDecodeError("invalid_structure", "Fragment frameId must be a string")
+    throw new TextFrameDecodeError(
+      "invalid_structure",
+      "Fragment frameId must be a string",
+    )
   }
-  if (typeof index !== "number" || typeof total !== "number" || typeof totalSize !== "number") {
-    throw new TextFrameDecodeError("invalid_structure", "Fragment index/total/totalSize must be numbers")
+  if (
+    typeof index !== "number" ||
+    typeof total !== "number" ||
+    typeof totalSize !== "number"
+  ) {
+    throw new TextFrameDecodeError(
+      "invalid_structure",
+      "Fragment index/total/totalSize must be numbers",
+    )
   }
   if (typeof chunk !== "string") {
-    throw new TextFrameDecodeError("invalid_structure", "Fragment chunk must be a string")
+    throw new TextFrameDecodeError(
+      "invalid_structure",
+      "Fragment chunk must be a string",
+    )
   }
 
   return fragment(version, frameId, index, total, totalSize, chunk, hash)
@@ -324,10 +345,7 @@ export function fragmentTextPayload(
  *
  * Composes codec.encode → JSON.stringify → encodeTextFrame.
  */
-export function encodeTextComplete(
-  codec: TextCodec,
-  msg: ChannelMsg,
-): string {
+export function encodeTextComplete(codec: TextCodec, msg: ChannelMsg): string {
   const payload = JSON.stringify(codec.encode(msg))
   return encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
 }

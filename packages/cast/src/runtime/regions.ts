@@ -461,7 +461,11 @@ function executeOp<T>(
 
   if (op.kind === "insert") {
     const itemScope = needsScope ? state.parentScope.createChild() : null
-    const node = handlers.create(op.item, op.index, itemScope ?? state.parentScope)
+    const node = handlers.create(
+      op.item,
+      op.index,
+      itemScope ?? state.parentScope,
+    )
 
     // Insert into DOM at correct position
     // For single nodes, use the node; for ranges, use the start marker
@@ -506,7 +510,11 @@ function executeOp<T>(
       if (item === undefined) continue
 
       const itemScope = needsScope ? state.parentScope.createChild() : null
-      const node = handlers.create(item, op.index + i, itemScope ?? state.parentScope)
+      const node = handlers.create(
+        item,
+        op.index + i,
+        itemScope ?? state.parentScope,
+      )
 
       // For batch insert, we always use single-node slots within the fragment
       // The fragment itself handles the batching
@@ -1044,9 +1052,7 @@ export function filteredListRegion<T>(
 
     // Set up per-item subscriptions (even for hidden items — we need to
     // know when they become visible)
-    state.itemUnsubs.push(
-      setupItemSubscriptions(state, handlers, i, scope),
-    )
+    state.itemUnsubs.push(setupItemSubscriptions(state, handlers, i, scope))
   }
 
   // --- Structural subscription (Layer 1) ---

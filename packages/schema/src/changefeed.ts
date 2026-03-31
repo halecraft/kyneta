@@ -89,7 +89,9 @@ export interface Op<C extends ChangeBase = ChangeBase> {
  * This is the right adjoint to the implicit leaf→container composition
  * that happens on the outbound path (e.g., `replaceChangeToDiff`).
  */
-export function expandMapOpsToLeaves(ops: readonly Op[]): Op<ReplaceChange | ChangeBase>[] {
+export function expandMapOpsToLeaves(
+  ops: readonly Op[],
+): Op<ReplaceChange | ChangeBase>[] {
   const result: Op<ReplaceChange | ChangeBase>[] = []
 
   for (const op of ops) {
@@ -98,7 +100,11 @@ export function expandMapOpsToLeaves(ops: readonly Op[]): Op<ReplaceChange | Cha
       continue
     }
 
-    const mapChange = op.change as { type: "map"; set?: Record<string, unknown>; delete?: string[] }
+    const mapChange = op.change as {
+      type: "map"
+      set?: Record<string, unknown>
+      delete?: string[]
+    }
 
     if (mapChange.set) {
       for (const [key, value] of Object.entries(mapChange.set)) {

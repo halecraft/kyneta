@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest"
 import { LoroDoc } from "loro-crdt"
+import { describe, expect, it } from "vitest"
 import { LoroVersion } from "../version.js"
 
 // ===========================================================================
@@ -37,7 +37,7 @@ describe("LoroVersion", () => {
     })
 
     it("round-trips a version vector with one peer", () => {
-      const v = versionAfterOps((doc) => {
+      const v = versionAfterOps(doc => {
         doc.getText("title").insert(0, "Hello")
       })
       const serialized = v.serialize()
@@ -70,7 +70,7 @@ describe("LoroVersion", () => {
     })
 
     it("serialized form is a non-empty string", () => {
-      const v = versionAfterOps((doc) => {
+      const v = versionAfterOps(doc => {
         doc.getCounter("count").increment(1)
       })
       const s = v.serialize()
@@ -93,7 +93,7 @@ describe("LoroVersion", () => {
 
   describe("compare", () => {
     it("returns 'equal' for the same version vector", () => {
-      const v = versionAfterOps((doc) => {
+      const v = versionAfterOps(doc => {
         doc.getText("t").insert(0, "hi")
       })
       expect(v.compare(v)).toBe("equal")

@@ -36,7 +36,7 @@ describe("YjsVersion", () => {
     })
 
     it("round-trips a version vector with one peer", () => {
-      const v = versionAfterOps((doc) => {
+      const v = versionAfterOps(doc => {
         doc.getMap("root").set("title", "Hello")
       })
       const serialized = v.serialize()
@@ -66,7 +66,7 @@ describe("YjsVersion", () => {
     })
 
     it("serialized form is a non-empty string", () => {
-      const v = versionAfterOps((doc) => {
+      const v = versionAfterOps(doc => {
         doc.getMap("root").set("count", 42)
       })
       const s = v.serialize()
@@ -89,7 +89,7 @@ describe("YjsVersion", () => {
 
   describe("compare", () => {
     it("returns 'equal' for the same version vector", () => {
-      const v = versionAfterOps((doc) => {
+      const v = versionAfterOps(doc => {
         doc.getMap("root").set("t", "hi")
       })
       expect(v.compare(v)).toBe("equal")
@@ -152,10 +152,7 @@ describe("YjsVersion", () => {
       doc2.getMap("root").set("t", "B")
 
       // Sync doc1 → doc2 only (doc2 knows about both, doc1 only knows itself)
-      const update = Y.encodeStateAsUpdate(
-        doc1,
-        Y.encodeStateVector(doc2),
-      )
+      const update = Y.encodeStateAsUpdate(doc1, Y.encodeStateVector(doc2))
       Y.applyUpdate(doc2, update)
 
       const v1 = new YjsVersion(Y.encodeStateVector(doc1))
@@ -175,14 +172,8 @@ describe("YjsVersion", () => {
       doc2.getMap("root").set("t", "B")
 
       // Bidirectional sync
-      const u1to2 = Y.encodeStateAsUpdate(
-        doc1,
-        Y.encodeStateVector(doc2),
-      )
-      const u2to1 = Y.encodeStateAsUpdate(
-        doc2,
-        Y.encodeStateVector(doc1),
-      )
+      const u1to2 = Y.encodeStateAsUpdate(doc1, Y.encodeStateVector(doc2))
+      const u2to1 = Y.encodeStateAsUpdate(doc2, Y.encodeStateVector(doc1))
       Y.applyUpdate(doc2, u1to2)
       Y.applyUpdate(doc1, u2to1)
 

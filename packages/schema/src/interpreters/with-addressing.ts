@@ -18,23 +18,23 @@
 // See .jj-plan/01-cursor-stable-refs.md §Phase 2.
 
 import type { ChangeBase } from "../change.js"
-import { advanceAddresses } from "../change.js"
 import {
+  advanceAddresses,
   isMapChange,
   isReplaceChange,
   isSequenceChange,
 } from "../change.js"
+import { isPropertyHost } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import {
+  type Address,
   AddressedPath,
   AddressTableRegistry,
-  type Address,
   type IndexAddress,
-  type SequenceAddressTable,
   type MapAddressTable,
+  type SequenceAddressTable,
 } from "../path.js"
-import { isPropertyHost } from "../guards.js"
 import type {
   AnnotatedSchema,
   MapSchema,
@@ -176,10 +176,7 @@ function handleSequenceChange(
  * Handle a change to a map node by tombstoning deleted keys
  * and resurrecting re-set keys.
  */
-function handleMapChange(
-  table: MapAddressTable,
-  change: ChangeBase,
-): void {
+function handleMapChange(table: MapAddressTable, change: ChangeBase): void {
   if (isReplaceChange(change)) {
     // Replace: mark all addresses dead
     for (const entry of table.byKey.values()) {
@@ -264,7 +261,7 @@ export function withAddressing<A extends HasNavigation>(
         if (!path.isAddressed) {
           throw new Error(
             `withAddressing: onRefCreated received a non-addressed path "${path.format()}". ` +
-            `This indicates ctx.rootPath was not set before child path derivation.`,
+              `This indicates ctx.rootPath was not set before child path derivation.`,
           )
         }
 

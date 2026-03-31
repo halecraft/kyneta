@@ -430,7 +430,11 @@ describe("Round-trip replication", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     interpretSubstrate(substrate)
 
-    const emptyPayload: SubstratePayload = { kind: "since", encoding: "json", data: "[]" }
+    const emptyPayload: SubstratePayload = {
+      kind: "since",
+      encoding: "json",
+      data: "[]",
+    }
     substrate.merge(emptyPayload)
 
     expect(substrate.version().value).toBe(0)
@@ -453,7 +457,12 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
     const entirety: SubstratePayload = {
       kind: "entirety",
       encoding: "json",
-      data: JSON.stringify({ title: "Replaced", count: 99, theme: "dark", items: [] }),
+      data: JSON.stringify({
+        title: "Replaced",
+        count: 99,
+        theme: "dark",
+        items: [],
+      }),
     }
     substrate.merge(entirety, "sync")
 
@@ -475,7 +484,12 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
     const entirety: SubstratePayload = {
       kind: "entirety",
       encoding: "json",
-      data: JSON.stringify({ title: "After", count: 0, theme: "light", items: [] }),
+      data: JSON.stringify({
+        title: "After",
+        count: 0,
+        theme: "light",
+        items: [],
+      }),
     }
     substrate.merge(entirety, "sync")
 
@@ -490,12 +504,17 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
     const doc = interpretSubstrate(substrate)
 
     const received: { origin?: string }[] = []
-    subscribe(doc, (cs) => received.push({ origin: cs.origin }))
+    subscribe(doc, cs => received.push({ origin: cs.origin }))
 
     const entirety: SubstratePayload = {
       kind: "entirety",
       encoding: "json",
-      data: JSON.stringify({ title: "Synced", count: 42, theme: "dark", items: [] }),
+      data: JSON.stringify({
+        title: "Synced",
+        count: 42,
+        theme: "dark",
+        items: [],
+      }),
     }
     substrate.merge(entirety, "sync")
 

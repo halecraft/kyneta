@@ -8,14 +8,14 @@
 // ---------------------------------------------------------------------------
 
 export {
-  WebsocketClientAdapter,
-  createWebsocketClient,
   createServiceWebsocketClient,
+  createWebsocketClient,
   DEFAULT_FRAGMENT_THRESHOLD,
-  type WebsocketClientOptions,
-  type WebsocketClientLifecycleEvents,
-  type ServiceWebsocketClientOptions,
   type DisconnectReason,
+  type ServiceWebsocketClientOptions,
+  WebsocketClientAdapter,
+  type WebsocketClientLifecycleEvents,
+  type WebsocketClientOptions,
   type WebsocketClientState,
   type WebsocketClientStateTransition,
 } from "./client-adapter.js"

@@ -23,9 +23,9 @@
 //   const loroDoc = loro(doc)  // LoroDoc
 //   loroDoc.toJSON()           // raw Loro inspection
 
-import type { LoroDoc } from "loro-crdt"
 import type { Substrate } from "@kyneta/schema"
 import { unwrap } from "@kyneta/schema"
+import type { LoroDoc } from "loro-crdt"
 
 // ---------------------------------------------------------------------------
 // Substrate → LoroDoc mapping

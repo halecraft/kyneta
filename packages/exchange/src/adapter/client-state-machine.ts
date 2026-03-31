@@ -226,9 +226,7 @@ export class ClientStateMachine<S extends { status: string }> {
         timeoutId = setTimeout(() => {
           cleanup()
           reject(
-            new Error(
-              `Timeout waiting for state after ${options.timeoutMs}ms`,
-            ),
+            new Error(`Timeout waiting for state after ${options.timeoutMs}ms`),
           )
         }, options.timeoutMs)
       }

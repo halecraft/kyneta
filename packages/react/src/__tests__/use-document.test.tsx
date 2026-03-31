@@ -4,11 +4,11 @@
 // and that repeated calls with the same docId + BoundSchema return
 // the same ref identity.
 
-import { describe, expect, it } from "vitest"
-import { renderHook } from "@testing-library/react"
 import { Exchange } from "@kyneta/exchange"
 import { bindPlain, Schema } from "@kyneta/schema"
+import { renderHook } from "@testing-library/react"
 import type { ReactNode } from "react"
+import { describe, expect, it } from "vitest"
 import { ExchangeProvider } from "../exchange-context.js"
 import { useDocument } from "../use-document.js"
 

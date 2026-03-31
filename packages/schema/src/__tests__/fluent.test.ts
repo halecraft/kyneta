@@ -18,9 +18,9 @@ import {
   interpret,
   plainContext,
   plainStoreReader,
+  RawPath,
   rawKey,
   readable,
-  RawPath,
   Schema,
   TRANSACT,
   withCaching,
@@ -139,7 +139,9 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
     )
     doc.settings.darkMode.set(true)
     expect(events.length).toBeGreaterThanOrEqual(1)
-    expect((events[0]?.path.segments[0] as RawSegment & { key: string }).key).toBe("darkMode")
+    expect(
+      (events[0]?.path.segments[0] as RawSegment & { key: string }).key,
+    ).toBe("darkMode")
   })
 })
 
@@ -241,9 +243,7 @@ describe("fluent: custom layer", () => {
               typeof result === "function"
             ) {
               Object.defineProperty(result, TAG, {
-                value: path.segments
-                  .map(s => String(s.resolve()))
-                  .join("."),
+                value: path.segments.map(s => String(s.resolve())).join("."),
                 enumerable: false,
               })
             }
@@ -311,9 +311,12 @@ describe("fluent: three-arg interpret regression", () => {
     const store = { nested: { a: 99 } }
     const ctx: RefContext = { store: plainStoreReader(store) }
     const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
-    const doc = interpret(innerSchema, interp, ctx, new RawPath([
-      rawKey("nested"),
-    ])) as any
+    const doc = interpret(
+      innerSchema,
+      interp,
+      ctx,
+      new RawPath([rawKey("nested")]),
+    ) as any
 
     expect(doc.a()).toBe(99)
   })

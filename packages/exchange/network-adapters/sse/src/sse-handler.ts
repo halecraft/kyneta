@@ -14,7 +14,7 @@
 //   2. JSON.parse(frame.content.payload) → textCodec.decode(parsed) → ChannelMsg[]
 
 import type { ChannelMsg } from "@kyneta/exchange"
-import { textCodec, type TextReassembler } from "@kyneta/wire"
+import { type TextReassembler, textCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Result types

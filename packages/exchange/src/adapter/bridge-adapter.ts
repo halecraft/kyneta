@@ -16,11 +16,11 @@
 //     adapters: [createBridgeAdapter({ adapterType: "peer-b", bridge })],
 //   })
 
-import type { ChannelMsg } from "../messages.js"
 import type { GeneratedChannel } from "../channel.js"
+import type { ChannelMsg } from "../messages.js"
 import type { AdapterType, ChannelId } from "../types.js"
-import { Adapter } from "./adapter.js"
 import type { AdapterFactory } from "./adapter.js"
+import { Adapter } from "./adapter.js"
 
 // ---------------------------------------------------------------------------
 // Bridge — message router connecting multiple BridgeAdapters in-process
@@ -127,7 +127,7 @@ export class BridgeAdapter extends Adapter<BridgeAdapterContext> {
     return {
       adapterType: this.adapterType,
       kind: "network",
-      send: (msg) => {
+      send: msg => {
         // Route message through bridge to target adapter
         this.bridge.routeMessage(
           this.adapterType,
@@ -266,6 +266,8 @@ export class BridgeAdapter extends Adapter<BridgeAdapterContext> {
  * })
  * ```
  */
-export function createBridgeAdapter(params: BridgeAdapterParams): AdapterFactory {
+export function createBridgeAdapter(
+  params: BridgeAdapterParams,
+): AdapterFactory {
   return () => new BridgeAdapter(params)
 }

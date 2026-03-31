@@ -15,21 +15,24 @@
 //   sync(doc).waitForSync()
 
 import {
-  interpret,
-  Interpret,
-  Replicate,
-  type Ref,
-  type Schema as SchemaNode,
   type BoundSchema,
+  changefeed,
   type FactoryBuilder,
-  type MergeStrategy,
-  type ReplicaFactory,
-  type SubstrateFactory,
+  type Interpret,
+  interpret,
   isBoundSchema,
+  type MergeStrategy,
+  type Ref,
+  type ReplicaFactory,
+  type Replicate,
+  readable,
   registerSubstrate,
+  type Schema as SchemaNode,
+  type SubstrateFactory,
+  subscribe,
+  writable,
 } from "@kyneta/schema"
-import { changefeed, readable, subscribe, writable } from "@kyneta/schema"
-import type { AnyAdapter, AdapterFactory } from "./adapter/adapter.js"
+import type { AdapterFactory, AnyAdapter } from "./adapter/adapter.js"
 import { registerSync } from "./sync.js"
 import { Synchronizer } from "./synchronizer.js"
 import type { DocId, PeerIdentityDetails } from "./types.js"
@@ -91,10 +94,7 @@ export type OnDocDiscovered = (
  * @param docId - The document ID being dismissed
  * @param peer - Identity of the peer that sent the dismiss
  */
-export type OnDocDismissed = (
-  docId: DocId,
-  peer: PeerIdentityDetails,
-) => void
+export type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails) => void
 
 /**
  * Options for creating an Exchange.
@@ -184,8 +184,6 @@ export type ExchangeParams = {
   onDocDiscovered?: OnDocDiscovered
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Doc cache entry
 // ---------------------------------------------------------------------------
@@ -247,7 +245,10 @@ export class Exchange {
    * 2. Multiple documents using the same BoundSchema within one exchange
    *    share the same factory instance.
    */
-  readonly #factoryCache = new WeakMap<FactoryBuilder<any>, SubstrateFactory<any>>()
+  readonly #factoryCache = new WeakMap<
+    FactoryBuilder<any>,
+    SubstrateFactory<any>
+  >()
 
   constructor({
     identity = {},
@@ -359,10 +360,7 @@ export class Exchange {
    * change(doc, d => { d.title.insert(0, "Hello") })
    * ```
    */
-  get<S extends SchemaNode>(
-    docId: DocId,
-    bound: BoundSchema<S>,
-  ): Ref<S> {
+  get<S extends SchemaNode>(docId: DocId, bound: BoundSchema<S>): Ref<S> {
     // Check cache first
     const cached = this.#docCache.get(docId)
 
@@ -423,7 +421,7 @@ export class Exchange {
     this.#synchronizer.registerDoc({
       mode: "interpret",
       docId,
-      replica: substrate,           // Substrate extends Replica
+      replica: substrate, // Substrate extends Replica
       replicaFactory: factory.replica,
       strategy: bound.strategy,
     })
@@ -431,7 +429,7 @@ export class Exchange {
     // Auto-wire changefeed → synchronizer: when a local mutation fires
     // the changefeed, notify the synchronizer so it pushes to peers.
     // Remote imports arrive with origin "sync" — skip those to avoid echo.
-    subscribe(ref, (changeset) => {
+    subscribe(ref, changeset => {
       if (changeset.origin === "sync") return
       this.#synchronizer.notifyLocalChange(docId)
     })

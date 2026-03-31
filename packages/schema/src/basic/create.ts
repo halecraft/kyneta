@@ -97,7 +97,7 @@ type CreateDoc = <S extends SchemaType>(schema: S) => Ref<S>
  *
  * @param schema - The schema describing the document structure.
  */
-export const createDoc: CreateDoc = (schema) =>
+export const createDoc: CreateDoc = schema =>
   registerDoc(schema, plainSubstrateFactory.create(schema))
 
 // ---------------------------------------------------------------------------

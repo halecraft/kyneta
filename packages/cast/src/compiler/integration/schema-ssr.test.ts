@@ -9,9 +9,9 @@
  * Requires the schema package to be built (`npx tsup` in packages/schema).
  */
 
+import { LoroSchema } from "@kyneta/loro-schema"
 import {
   CHANGEFEED,
-  change as schemaChange,
   changefeed,
   hasChangefeed,
   interpret,
@@ -19,10 +19,10 @@ import {
   plainContext,
   readable,
   Schema,
+  change as schemaChange,
   writable,
   Zero,
 } from "@kyneta/schema"
-import { LoroSchema } from "@kyneta/loro-schema"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import {
@@ -75,7 +75,8 @@ function createDoc(initial?: Record<string, unknown>) {
   if (initial) {
     schemaChange(doc, (d: any) => {
       if (initial.title !== undefined) d.title.update(initial.title)
-      if (initial.count !== undefined && initial.count !== 0) d.count.increment(initial.count)
+      if (initial.count !== undefined && initial.count !== 0)
+        d.count.increment(initial.count)
     })
     // Push list items in separate change() calls to preserve order
     if (initial.items) {

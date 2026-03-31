@@ -7,27 +7,27 @@
 // objects with integer discriminators and short field names, then
 // encodes/decodes those wire objects as CBOR.
 
-import { type CBORType, decodeCBOR, encodeCBOR } from "@levischuck/tiny-cbor"
 import type {
   ChannelMsg,
-  DismissMsg,
   DiscoverMsg,
+  DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
   InterestMsg,
   OfferMsg,
 } from "@kyneta/exchange"
+import { type CBORType, decodeCBOR, encodeCBOR } from "@levischuck/tiny-cbor"
 import type { BinaryCodec } from "./codec.js"
 import {
   MessageType,
-  PayloadKind,
-  PayloadKindToString,
   PayloadEncoding,
   PayloadEncodingToString,
-  StringToPayloadKind,
+  PayloadKind,
+  PayloadKindToString,
   StringToPayloadEncoding,
-  type WireDismissMsg,
+  StringToPayloadKind,
   type WireDiscoverMsg,
+  type WireDismissMsg,
   type WireEstablishMsg,
   type WireInterestMsg,
   type WireMessage,
@@ -217,8 +217,10 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
     }
 
     case MessageType.Offer: {
-      const kind = PayloadKindToString[wire.pk as keyof typeof PayloadKindToString]
-      const encoding = PayloadEncodingToString[wire.pe as keyof typeof PayloadEncodingToString]
+      const kind =
+        PayloadKindToString[wire.pk as keyof typeof PayloadKindToString]
+      const encoding =
+        PayloadEncodingToString[wire.pe as keyof typeof PayloadEncodingToString]
 
       if (!kind) {
         throw new Error(`Unknown wire payload kind: ${wire.pk}`)
@@ -248,9 +250,7 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
       } satisfies DismissMsg
 
     default:
-      throw new Error(
-        `Unknown wire message type: ${(wire as WireMessage).t}`,
-      )
+      throw new Error(`Unknown wire message type: ${(wire as WireMessage).t}`)
   }
 }
 

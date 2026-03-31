@@ -85,9 +85,7 @@ export class YjsVersion implements Version {
    */
   compare(other: Version): "behind" | "equal" | "ahead" | "concurrent" {
     if (!(other instanceof YjsVersion)) {
-      throw new Error(
-        "YjsVersion can only be compared with another YjsVersion",
-      )
+      throw new Error("YjsVersion can only be compared with another YjsVersion")
     }
 
     const thisMap = decodeStateVector(this.sv)

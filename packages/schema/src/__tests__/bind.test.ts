@@ -2,10 +2,10 @@
 
 import { describe, expect, it, vi } from "vitest"
 import { bind, bindEphemeral, bindPlain, isBoundSchema } from "../bind.js"
+import { replaceChange } from "../change.js"
 import { executeBatch } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
 import { Schema } from "../schema.js"
-import { replaceChange } from "../change.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 import { TimestampVersion } from "../substrates/timestamp-version.js"
 

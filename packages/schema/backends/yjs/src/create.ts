@@ -14,14 +14,22 @@
 //   createYjsDoc(schema, yjsDoc)    — "bring your own doc" (wrap existing)
 //   createYjsDoc(schema)            — create a fresh empty Y.Doc
 
-import { interpret, registerSubstrate } from "@kyneta/schema"
-import { changefeed, readable, writable } from "@kyneta/schema"
-import type { Ref } from "@kyneta/schema"
-import type { Schema as SchemaType } from "@kyneta/schema"
-import type { Substrate, SubstratePayload } from "@kyneta/schema"
-import * as Y from "yjs"
-import { YjsVersion } from "./version.js"
+import type {
+  Ref,
+  Schema as SchemaType,
+  Substrate,
+  SubstratePayload,
+} from "@kyneta/schema"
+import {
+  changefeed,
+  interpret,
+  readable,
+  registerSubstrate,
+  writable,
+} from "@kyneta/schema"
+import type * as Y from "yjs"
 import { createYjsSubstrate, yjsSubstrateFactory } from "./substrate.js"
+import type { YjsVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
 // Substrate tracking (module-scoped)
@@ -130,10 +138,7 @@ function isYDoc(value: unknown): value is Y.Doc {
  * @param doc - Optional `Y.Doc` instance to wrap. If omitted, a fresh
  *   empty Y.Doc is created with containers matching the schema.
  */
-type CreateYjsDoc = <S extends SchemaType>(
-  schema: S,
-  doc?: Y.Doc,
-) => Ref<S>
+type CreateYjsDoc = <S extends SchemaType>(schema: S, doc?: Y.Doc) => Ref<S>
 
 export const createYjsDoc: CreateYjsDoc = (schema, doc) => {
   if (doc !== undefined && isYDoc(doc)) {

@@ -26,8 +26,7 @@ export const MessageType = {
   Dismiss: 0x13,
 } as const
 
-export type MessageTypeValue =
-  (typeof MessageType)[keyof typeof MessageType]
+export type MessageTypeValue = (typeof MessageType)[keyof typeof MessageType]
 
 /**
  * Reverse lookup: integer discriminator → ChannelMsg type string.
@@ -70,7 +69,10 @@ export type PayloadKindValue = (typeof PayloadKind)[keyof typeof PayloadKind]
 /**
  * Reverse lookup: payload kind integer → string.
  */
-export const PayloadKindToString: Record<PayloadKindValue, "entirety" | "since"> = {
+export const PayloadKindToString: Record<
+  PayloadKindValue,
+  "entirety" | "since"
+> = {
   [PayloadKind.Entirety]: "entirety",
   [PayloadKind.Since]: "since",
 }

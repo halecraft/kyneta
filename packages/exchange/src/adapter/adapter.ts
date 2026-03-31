@@ -11,7 +11,6 @@
 // calls `_initialize()` to inject identity and callbacks, `_start()` to
 // begin operation, and `_stop()` to shut down.
 
-import type { AddressedEnvelope, ChannelMsg } from "../messages.js"
 import type {
   Channel,
   ChannelKind,
@@ -19,6 +18,7 @@ import type {
   GeneratedChannel,
 } from "../channel.js"
 import { ChannelDirectory } from "../channel-directory.js"
+import type { AddressedEnvelope, ChannelMsg } from "../messages.js"
 import type { AdapterType, ChannelId, PeerIdentityDetails } from "../types.js"
 
 export type AnyAdapter = Adapter<any>
@@ -117,7 +117,7 @@ export abstract class Adapter<G> {
       )
     }
 
-    const channel = this.channels.create(context, (message) =>
+    const channel = this.channels.create(context, message =>
       lifecycle.onChannelReceive(channel.channelId, message),
     )
 

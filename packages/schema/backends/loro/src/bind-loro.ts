@@ -15,13 +15,22 @@
 //
 //   const doc = exchange.get("my-doc", TodoDoc)
 
+import type {
+  BoundSchema,
+  ReplicaFactory,
+  Schema as SchemaNode,
+  Substrate,
+  SubstrateFactory,
+  SubstratePayload,
+} from "@kyneta/schema"
 import { bind } from "@kyneta/schema"
-import type { BoundSchema } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
-import type { Substrate, SubstrateFactory, SubstratePayload, ReplicaFactory } from "@kyneta/schema"
-import { LoroDoc } from "loro-crdt"
 import type { PeerID } from "loro-crdt"
-import { createLoroSubstrate, ensureRootContainer, loroReplicaFactory } from "./substrate.js"
+import { LoroDoc } from "loro-crdt"
+import {
+  createLoroSubstrate,
+  ensureRootContainer,
+  loroReplicaFactory,
+} from "./substrate.js"
 import { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
@@ -62,9 +71,7 @@ function hashPeerId(peerId: string): PeerID {
  * on every new LoroDoc with a deterministic numeric PeerID derived
  * from the exchange's string peerId.
  */
-function createLoroFactory(
-  peerId: string,
-): SubstrateFactory<LoroVersion> {
+function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
   const numericPeerId = hashPeerId(peerId)
 
   return {
@@ -149,7 +156,7 @@ function createLoroFactory(
 export function bindLoro<S extends SchemaNode>(schema: S): BoundSchema<S> {
   return bind({
     schema,
-    factory: (ctx) => createLoroFactory(ctx.peerId),
+    factory: ctx => createLoroFactory(ctx.peerId),
     strategy: "causal",
   })
 }

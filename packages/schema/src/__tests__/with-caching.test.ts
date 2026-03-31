@@ -18,8 +18,8 @@ import type {
   HasNavigation,
 } from "../interpreters/bottom.js"
 import { bottomInterpreter } from "../interpreters/bottom.js"
-import { INVALIDATE, withCaching } from "../interpreters/with-caching.js"
 import { withAddressing } from "../interpreters/with-addressing.js"
+import { INVALIDATE, withCaching } from "../interpreters/with-caching.js"
 import { withNavigation } from "../interpreters/with-navigation.js"
 import { withReadable } from "../interpreters/with-readable.js"
 import { RawPath } from "../path.js"
@@ -588,7 +588,9 @@ describe("INVALIDATE symbol", () => {
 
 describe("withCaching: prepare-pipeline invalidation", () => {
   const fullInterpreter = withWritable(
-    withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter)))),
+    withCaching(
+      withAddressing(withReadable(withNavigation(bottomInterpreter))),
+    ),
   )
 
   const docSchema = Schema.doc({

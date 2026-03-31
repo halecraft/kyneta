@@ -1652,7 +1652,12 @@ describe("generateDOM - filtered list regions", () => {
       span(4, 4, 4, 16),
     )
     const branch = createConditionalBranch(
-      createContent("recipe.vegetarian()", "reactive", [dep("recipe.vegetarian")], span(3, 8, 3, 30)),
+      createContent(
+        "recipe.vegetarian()",
+        "reactive",
+        [dep("recipe.vegetarian")],
+        span(3, 8, 3, 30),
+      ),
       [pElement],
       span(3, 4, 5, 5),
     )
@@ -1720,7 +1725,12 @@ describe("generateDOM - filtered list regions", () => {
       span(5, 4, 5, 15),
     )
     const branch = createConditionalBranch(
-      createContent("nameMatch", "reactive", [dep("recipe.name"), dep("filterText")], span(4, 8, 4, 18)),
+      createContent(
+        "nameMatch",
+        "reactive",
+        [dep("recipe.name"), dep("filterText")],
+        span(4, 8, 4, 18),
+      ),
       [pElement],
       span(4, 4, 6, 5),
     )
@@ -1762,5 +1772,4 @@ describe("generateDOM - filtered list regions", () => {
     expect(code).toContain("recipe.name")
     expect(code).toContain("itemRefs:")
   })
-
 })

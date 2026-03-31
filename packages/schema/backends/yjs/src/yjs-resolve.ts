@@ -14,9 +14,8 @@
 // Using a single root Y.Map enables one `observeDeep` call that
 // captures all mutations with correct relative paths.
 
+import type { Path, Schema as SchemaNode, Segment } from "@kyneta/schema"
 import { advanceSchema } from "@kyneta/schema"
-import type { Path, Segment } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
 import * as Y from "yjs"
 
 // ---------------------------------------------------------------------------
@@ -35,10 +34,7 @@ import * as Y from "yjs"
  * @param current - The current position (a Yjs shared type or plain value)
  * @param segment - The path segment to follow
  */
-export function stepIntoYjs(
-  current: unknown,
-  segment: Segment,
-): unknown {
+export function stepIntoYjs(current: unknown, segment: Segment): unknown {
   const resolved = segment.resolve()
 
   if (current instanceof Y.Map) {
@@ -50,9 +46,7 @@ export function stepIntoYjs(
   }
 
   if (current instanceof Y.Text) {
-    throw new Error(
-      `yjs-resolve: cannot step into Y.Text`,
-    )
+    throw new Error(`yjs-resolve: cannot step into Y.Text`)
   }
 
   // Plain value — terminal, cannot step further

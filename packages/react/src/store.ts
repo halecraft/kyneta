@@ -14,13 +14,13 @@
 // createSyncStore(syncRef) — subscribes to SyncRef.onReadyStateChange(),
 //   caches readyStates for referential stability.
 
+import type { ReadyState, SyncRef } from "@kyneta/exchange"
 import {
   CHANGEFEED,
-  hasComposedChangefeed,
-  type Changefeed,
   type ChangeBase,
+  type Changefeed,
+  hasComposedChangefeed,
 } from "@kyneta/schema"
-import type { SyncRef, ReadyState } from "@kyneta/exchange"
 
 // ---------------------------------------------------------------------------
 // ExternalStore — the useSyncExternalStore contract
@@ -136,13 +136,11 @@ export function createNullishStore<T extends null | undefined>(
  * @param syncRef - A SyncRef from `sync(doc)`.
  * @returns An ExternalStore<ReadyState[]>.
  */
-export function createSyncStore(
-  syncRef: SyncRef,
-): ExternalStore<ReadyState[]> {
+export function createSyncStore(syncRef: SyncRef): ExternalStore<ReadyState[]> {
   let snapshot: ReadyState[] = syncRef.readyStates
 
   const subscribe = (onStoreChange: () => void): (() => void) => {
-    return syncRef.onReadyStateChange((readyStates) => {
+    return syncRef.onReadyStateChange(readyStates => {
       snapshot = readyStates
       onStoreChange()
     })

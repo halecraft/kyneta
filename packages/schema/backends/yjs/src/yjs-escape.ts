@@ -19,9 +19,9 @@
 //   const yjsDoc = yjs(doc)  // Y.Doc
 //   yjsDoc.getMap("root").toJSON()  // raw Yjs inspection
 
-import type { Doc as YDoc } from "yjs"
 import type { Substrate } from "@kyneta/schema"
 import { unwrap } from "@kyneta/schema"
+import type { Doc as YDoc } from "yjs"
 
 // ---------------------------------------------------------------------------
 // Substrate → Y.Doc mapping

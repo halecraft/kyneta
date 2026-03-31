@@ -6,14 +6,14 @@
 // useExchange() retrieves the Exchange from context, throwing if
 // called outside a provider.
 
+import { Exchange, type ExchangeParams } from "@kyneta/exchange"
 import {
   createContext,
+  type ReactNode,
   useContext,
   useEffect,
   useMemo,
-  type ReactNode,
 } from "react"
-import { Exchange, type ExchangeParams } from "@kyneta/exchange"
 
 // ---------------------------------------------------------------------------
 // Context

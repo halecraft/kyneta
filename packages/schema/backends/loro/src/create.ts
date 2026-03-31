@@ -14,14 +14,16 @@
 //   createLoroDoc(schema, loroDoc)   — "bring your own doc" (wrap existing)
 //   createLoroDoc(schema)            — create a fresh empty LoroDoc
 
-import { interpret } from "@kyneta/schema"
-import { changefeed, readable, writable } from "@kyneta/schema"
-import type { Ref } from "@kyneta/schema"
-import type { Schema as SchemaType } from "@kyneta/schema"
-import type { Substrate, SubstratePayload } from "@kyneta/schema"
+import type {
+  Ref,
+  Schema as SchemaType,
+  Substrate,
+  SubstratePayload,
+} from "@kyneta/schema"
+import { changefeed, interpret, readable, writable } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
-import { LoroVersion } from "./version.js"
 import { createLoroSubstrate, loroSubstrateFactory } from "./substrate.js"
+import type { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
 // Substrate tracking (module-scoped)
@@ -126,10 +128,7 @@ function isLoroDoc(value: unknown): value is LoroDoc {
  * @param doc - Optional `LoroDoc` instance to wrap. If omitted, a fresh
  *   empty LoroDoc is created with containers matching the schema.
  */
-type CreateLoroDoc = <S extends SchemaType>(
-  schema: S,
-  doc?: LoroDoc,
-) => Ref<S>
+type CreateLoroDoc = <S extends SchemaType>(schema: S, doc?: LoroDoc) => Ref<S>
 
 export const createLoroDoc: CreateLoroDoc = (schema, doc) => {
   if (doc !== undefined && isLoroDoc(doc)) {

@@ -1,20 +1,20 @@
 // Exchange — unit tests for the public Exchange API.
 
-import { describe, expect, it, vi, afterEach } from "vitest"
+import { bindLoro, LoroSchema, loro } from "@kyneta/loro-schema"
 import {
-  Schema,
-  bindPlain,
-  bindEphemeral,
   bind,
+  bindEphemeral,
+  bindPlain,
   change,
-  plainSubstrateFactory,
   plainReplicaFactory,
+  plainSubstrateFactory,
+  Schema,
   unwrap,
 } from "@kyneta/schema"
-import { bindLoro, LoroSchema, loro } from "@kyneta/loro-schema"
-import { Exchange } from "../exchange.js"
-import { sync, hasSync } from "../sync.js"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
+import { Exchange } from "../exchange.js"
+import { hasSync, sync } from "../sync.js"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -40,14 +40,16 @@ const OtherDoc = bindPlain(otherSchema)
 
 async function drain(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i++) {
-    await new Promise<void>((r) => queueMicrotask(r))
-    await new Promise<void>((r) => setTimeout(r, 0))
+    await new Promise<void>(r => queueMicrotask(r))
+    await new Promise<void>(r => setTimeout(r, 0))
   }
 }
 
 const activeExchanges: Exchange[] = []
 
-function createExchange(params: ConstructorParameters<typeof Exchange>[0] = {}): Exchange {
+function createExchange(
+  params: ConstructorParameters<typeof Exchange>[0] = {},
+): Exchange {
   const ex = new Exchange(params)
   activeExchanges.push(ex)
   return ex
@@ -55,7 +57,11 @@ function createExchange(params: ConstructorParameters<typeof Exchange>[0] = {}):
 
 afterEach(async () => {
   for (const ex of activeExchanges) {
-    try { await ex.shutdown() } catch { /* ignore */ }
+    try {
+      await ex.shutdown()
+    } catch {
+      /* ignore */
+    }
   }
   activeExchanges.length = 0
 })
@@ -79,7 +85,6 @@ describe("Exchange", () => {
 
       expect(exchange.peerId).toBe("my-peer")
     })
-
   })
 
   describe("get()", () => {
@@ -138,7 +143,11 @@ describe("Exchange", () => {
   describe("factory builder lifecycle", () => {
     it("factory builder is called with the exchange's peerId", () => {
       const builder = vi.fn(() => plainSubstrateFactory)
-      const Doc = bind({ schema: testSchema, factory: builder, strategy: "sequential" })
+      const Doc = bind({
+        schema: testSchema,
+        factory: builder,
+        strategy: "sequential",
+      })
 
       const exchange = new Exchange({ identity: { peerId: "alice-123" } })
       exchange.get("doc-1", Doc)
@@ -148,8 +157,16 @@ describe("Exchange", () => {
 
     it("factory builder is called only once per unique builder (cached)", () => {
       const builder = vi.fn(() => plainSubstrateFactory)
-      const DocA = bind({ schema: testSchema, factory: builder, strategy: "sequential" })
-      const DocB = bind({ schema: otherSchema, factory: builder, strategy: "sequential" })
+      const DocA = bind({
+        schema: testSchema,
+        factory: builder,
+        strategy: "sequential",
+      })
+      const DocB = bind({
+        schema: otherSchema,
+        factory: builder,
+        strategy: "sequential",
+      })
 
       const exchange = new Exchange()
       exchange.get("doc-1", DocA)
@@ -166,7 +183,11 @@ describe("Exchange", () => {
         factories.push(f)
         return f
       })
-      const Doc = bind({ schema: testSchema, factory: builder, strategy: "sequential" })
+      const Doc = bind({
+        schema: testSchema,
+        factory: builder,
+        strategy: "sequential",
+      })
 
       const exchangeA = new Exchange({ identity: { peerId: "alice" } })
       const exchangeB = new Exchange({ identity: { peerId: "bob" } })
@@ -274,7 +295,10 @@ describe("Exchange", () => {
 
         const snapshot = substrate.exportEntirety()
         expect(snapshot.encoding).toBe("json")
-        expect(JSON.parse(snapshot.data as string)).toEqual({ title: "Hi", count: 1 })
+        expect(JSON.parse(snapshot.data as string)).toEqual({
+          title: "Hi",
+          count: 1,
+        })
       })
 
       it("loro(ref) returns the LoroDoc for a Loro-backed exchange doc", () => {
@@ -383,7 +407,5 @@ describe("Exchange", () => {
       expect(exchange.has("rep-doc")).toBe(true)
       expect(exchange.has("unknown")).toBe(false)
     })
-
-
   })
 })

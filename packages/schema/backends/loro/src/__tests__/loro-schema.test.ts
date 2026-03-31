@@ -1,12 +1,12 @@
-import { describe, it, expectTypeOf } from "vitest"
-import { LoroSchema } from "../loro-schema.js"
 import type {
   AnnotatedSchema,
   ProductSchema,
+  SchemaNode,
   SequenceSchema,
 } from "@kyneta/schema"
 import { Schema } from "@kyneta/schema"
-import type { SchemaNode } from "@kyneta/schema"
+import { describe, expectTypeOf, it } from "vitest"
+import { LoroSchema } from "../loro-schema.js"
 
 // ===========================================================================
 // LoroSchema.plain.* constructors enforce PlainSchema constraint
@@ -41,10 +41,7 @@ describe("type-level: LoroSchema.plain.* constructors enforce PlainSchema constr
   })
 
   it("plain.union accepts plain variants", () => {
-    const s = LoroSchema.plain.union(
-      Schema.string(),
-      Schema.number(),
-    )
+    const s = LoroSchema.plain.union(Schema.string(), Schema.number())
     expectTypeOf(s).toMatchTypeOf<SchemaNode>()
   })
 

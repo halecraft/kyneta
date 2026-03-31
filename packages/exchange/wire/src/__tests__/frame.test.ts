@@ -4,24 +4,29 @@
 // for both complete and fragment frames, using cborCodec only.
 // Batching is orthogonal to framing — not tested here.
 
+import type {
+  ChannelMsg,
+  DiscoverMsg,
+  InterestMsg,
+  OfferMsg,
+} from "@kyneta/exchange"
 import { describe, expect, it } from "vitest"
+import { cborCodec } from "../cbor.js"
 import {
-  encodeBinaryFrame,
+  BinaryFrameType,
+  FRAGMENT_META_SIZE,
+  HASH_ALGO,
+  HEADER_SIZE,
+  WIRE_VERSION,
+} from "../constants.js"
+import {
   decodeBinaryFrame,
+  encodeBinaryFrame,
   encodeComplete,
   encodeCompleteBatch,
   FrameDecodeError,
 } from "../frame.js"
-import { cborCodec } from "../cbor.js"
-import {
-  WIRE_VERSION,
-  HEADER_SIZE,
-  BinaryFrameType,
-  HASH_ALGO,
-  FRAGMENT_META_SIZE,
-} from "../constants.js"
 import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
-import type { ChannelMsg, DiscoverMsg, InterestMsg, OfferMsg } from "@kyneta/exchange"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -177,7 +182,11 @@ describe("Binary frame — batch (via complete frame)", () => {
       {
         type: "offer",
         docId: "d1",
-        payload: { kind: "since", encoding: "binary", data: new Uint8Array([1, 2, 3]) },
+        payload: {
+          kind: "since",
+          encoding: "binary",
+          data: new Uint8Array([1, 2, 3]),
+        },
         version: "6",
         reciprocate: false,
       },
@@ -213,7 +222,14 @@ describe("Binary frame — batch (via complete frame)", () => {
 describe("Binary frame — fragment", () => {
   it("encodes a fragment frame with correct header", () => {
     const payload = new Uint8Array([0xaa, 0xbb, 0xcc])
-    const frame = fragment(WIRE_VERSION, "abcdef0123456789", 2, 5, 1000, payload)
+    const frame = fragment(
+      WIRE_VERSION,
+      "abcdef0123456789",
+      2,
+      5,
+      1000,
+      payload,
+    )
     const encoded = encodeBinaryFrame(frame)
 
     const header = readHeader(encoded)
@@ -228,7 +244,9 @@ describe("Binary frame — fragment", () => {
     const frame = fragment(WIRE_VERSION, "abcdef0123456789", 0, 3, 126, payload)
     const encoded = encodeBinaryFrame(frame)
 
-    expect(encoded.length).toBe(HEADER_SIZE + FRAGMENT_META_SIZE + payload.length)
+    expect(encoded.length).toBe(
+      HEADER_SIZE + FRAGMENT_META_SIZE + payload.length,
+    )
   })
 
   it("round-trips a fragment frame", () => {
@@ -263,7 +281,14 @@ describe("Binary frame — fragment", () => {
   })
 
   it("handles max values for index and total", () => {
-    const frame = fragment(WIRE_VERSION, "ffffffffffffffff", 0xfffffffe, 0xffffffff, 0xffffffff, new Uint8Array([1]))
+    const frame = fragment(
+      WIRE_VERSION,
+      "ffffffffffffffff",
+      0xfffffffe,
+      0xffffffff,
+      0xffffffff,
+      new Uint8Array([1]),
+    )
     const encoded = encodeBinaryFrame(frame)
     const decoded = decodeBinaryFrame(encoded)
 
@@ -450,7 +475,14 @@ describe("Binary frame — edge cases", () => {
   })
 
   it("fragment frame with 1-byte payload", () => {
-    const frame = fragment(WIRE_VERSION, "1234567890abcdef", 0, 1, 1, new Uint8Array([0xff]))
+    const frame = fragment(
+      WIRE_VERSION,
+      "1234567890abcdef",
+      0,
+      1,
+      1,
+      new Uint8Array([0xff]),
+    )
     const encoded = encodeBinaryFrame(frame)
     const decoded = decodeBinaryFrame(encoded)
 

@@ -15,49 +15,47 @@
 // Batteries-included API — one import, one createLoroDoc call, done
 // ---------------------------------------------------------------------------
 
+// Types (re-exported for convenience)
+export type { Changeset, Op, Ref, SubstratePayload } from "@kyneta/schema"
+// Mutation & observation (re-exported from @kyneta/schema for convenience)
+// Schema definition (re-exported for convenience)
+export {
+  applyChanges,
+  change,
+  Schema,
+  subscribe,
+  subscribeNode,
+} from "@kyneta/schema"
 // Construction
 export { createLoroDoc, createLoroDocFromEntirety } from "./create.js"
-
+export { LoroSchema } from "./loro-schema.js"
 // Sync primitives (Loro-specific)
 export {
-  exportSince,
   exportEntirety,
+  exportSince,
   merge,
   version,
 } from "./sync.js"
-
-// Mutation & observation (re-exported from @kyneta/schema for convenience)
-export { applyChanges, change } from "@kyneta/schema"
-export { subscribe, subscribeNode } from "@kyneta/schema"
-
-// Schema definition (re-exported for convenience)
-export { Schema } from "@kyneta/schema"
-export { LoroSchema } from "./loro-schema.js"
-
-// Types (re-exported for convenience)
-export type { Changeset, Op, Ref, SubstratePayload } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Low-level primitives — for power users and custom substrate compositions
 // ---------------------------------------------------------------------------
 
-// Version
-export { LoroVersion } from "./version.js"
-
-// Store reader
-export { loroStoreReader } from "./store-reader.js"
-
-// Container resolution
-export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
-
-// Change mapping
-export { batchToOps, changeToDiff } from "./change-mapping.js"
-
-// Substrate
-export { createLoroSubstrate, loroReplicaFactory, loroSubstrateFactory } from "./substrate.js"
-
 // Bind — convenience wrapper for Loro CRDT substrate
 export { bindLoro } from "./bind-loro.js"
-
+// Change mapping
+export { batchToOps, changeToDiff } from "./change-mapping.js"
 // Escape hatch — access the underlying LoroDoc from a ref
 export { loro } from "./loro-escape.js"
+// Container resolution
+export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
+// Store reader
+export { loroStoreReader } from "./store-reader.js"
+// Substrate
+export {
+  createLoroSubstrate,
+  loroReplicaFactory,
+  loroSubstrateFactory,
+} from "./substrate.js"
+// Version
+export { LoroVersion } from "./version.js"

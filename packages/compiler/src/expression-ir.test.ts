@@ -1524,19 +1524,12 @@ describe("renderExpression — precedence", () => {
     })
 
     it("(a || b)() — call on binary", () => {
-      const expr = call(
-        binary(identifier("a"), "||", identifier("b")),
-        [],
-      )
+      const expr = call(binary(identifier("a"), "||", identifier("b")), [])
       expect(renderExpression(expr, ctx)).toBe("(a || b)()")
     })
 
     it("(!a).toString() — method on unary", () => {
-      const expr = methodCall(
-        unary("!", identifier("a")),
-        "toString",
-        [],
-      )
+      const expr = methodCall(unary("!", identifier("a")), "toString", [])
       expect(renderExpression(expr, ctx)).toBe("(!a).toString()")
     })
 
@@ -1572,11 +1565,7 @@ describe("renderExpression — precedence", () => {
   describe("Category G: binding expansion", () => {
     it("expand(a || b) in && context", () => {
       const inner = binary(identifier("b"), "||", identifier("c"))
-      const expr = binary(
-        identifier("a"),
-        "&&",
-        bindingRef("x", inner),
-      )
+      const expr = binary(identifier("a"), "&&", bindingRef("x", inner))
       expect(renderExpression(expr, expand)).toBe("a && (b || c)")
     })
 
@@ -1617,20 +1606,12 @@ describe("renderExpression — precedence", () => {
     })
 
     it("!a && b — unary as left child of binary", () => {
-      const expr = binary(
-        unary("!", identifier("a")),
-        "&&",
-        identifier("b"),
-      )
+      const expr = binary(unary("!", identifier("a")), "&&", identifier("b"))
       expect(renderExpression(expr, ctx)).toBe("!a && b")
     })
 
     it("a.b().c() — method chain stays clean", () => {
-      const expr = methodCall(
-        methodCall(identifier("a"), "b", []),
-        "c",
-        [],
-      )
+      const expr = methodCall(methodCall(identifier("a"), "b", []), "c", [])
       expect(renderExpression(expr, ctx)).toBe("a.b().c()")
     })
 
@@ -1674,10 +1655,7 @@ describe("renderExpression — precedence", () => {
       const veggieMatchExpr = binary(
         unary("!", refRead(identifier("veggieOnly"), "replace")),
         "||",
-        refRead(
-          propertyAccess(identifier("recipe"), "vegetarian"),
-          "replace",
-        ),
+        refRead(propertyAccess(identifier("recipe"), "vegetarian"), "replace"),
       )
 
       // nameMatch && veggieMatch (with binding expansion)

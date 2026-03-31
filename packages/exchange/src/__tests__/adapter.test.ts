@@ -1,8 +1,8 @@
 // Adapter and BridgeAdapter — unit tests for the adapter/channel infrastructure.
 
 import { describe, expect, it, vi } from "vitest"
-import { Adapter } from "../adapter/adapter.js"
 import type { AdapterContext } from "../adapter/adapter.js"
+import { Adapter } from "../adapter/adapter.js"
 import { AdapterManager } from "../adapter/adapter-manager.js"
 import { Bridge, BridgeAdapter } from "../adapter/bridge-adapter.js"
 import type { GeneratedChannel } from "../channel.js"
@@ -179,7 +179,7 @@ describe("AdapterManager", () => {
 
     manager.startAll()
     // Give microtask a chance to run
-    await new Promise<void>((r) => queueMicrotask(r))
+    await new Promise<void>(r => queueMicrotask(r))
 
     expect(adapter.started).toBe(true)
     expect(manager.hasAdapter("mgr-test")).toBe(true)
@@ -260,7 +260,7 @@ describe("AdapterManager", () => {
     })
 
     manager.startAll()
-    await new Promise<void>((r) => queueMicrotask(r))
+    await new Promise<void>(r => queueMicrotask(r))
 
     const msg: ChannelMsg = { type: "discover", docIds: ["doc-1"] }
     const sent = manager.send({
@@ -321,8 +321,8 @@ describe("BridgeAdapter", () => {
     bridge.routeMessage("peer-a", "peer-b", msg)
 
     // Wait for async delivery
-    await new Promise<void>((r) => queueMicrotask(r))
-    await new Promise<void>((r) => queueMicrotask(r))
+    await new Promise<void>(r => queueMicrotask(r))
+    await new Promise<void>(r => queueMicrotask(r))
 
     // adapterB should have received the message via deliverMessage → onReceive
     expect(receivedByB.length).toBe(1)
@@ -353,14 +353,14 @@ describe("BridgeAdapter", () => {
 
     const ctxA = createAdapterContext({
       identity: { peerId: "peer-a", type: "user" },
-      onChannelEstablish: (channel) => {
+      onChannelEstablish: channel => {
         establishedChannels.push(channel.channelId)
       },
     })
 
     const ctxB = createAdapterContext({
       identity: { peerId: "peer-b", type: "user" },
-      onChannelEstablish: (channel) => {
+      onChannelEstablish: channel => {
         establishedChannels.push(channel.channelId)
       },
     })

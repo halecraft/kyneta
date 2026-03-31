@@ -81,7 +81,11 @@ export type RefMode = "rw" | "rwc"
  * here propagates recursively to all nodes.
  */
 export type Wrap<T, M extends RefMode> = M extends "rwc"
-  ? T & HasTransact & HasChangefeed & { readonly isPopulated: (() => boolean) & HasChangefeed<boolean> }
+  ? T &
+      HasTransact &
+      HasChangefeed & {
+        readonly isPopulated: (() => boolean) & HasChangefeed<boolean>
+      }
   : T & HasTransact
 
 // ---------------------------------------------------------------------------

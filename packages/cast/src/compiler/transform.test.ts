@@ -490,7 +490,11 @@ describe("collectRequiredImports", () => {
         span,
       ),
       itemDeps: [
-        { source: "recipe.vegetarian", deltaKind: "replace", classification: "item" } satisfies ClassifiedDependency,
+        {
+          source: "recipe.vegetarian",
+          deltaKind: "replace",
+          classification: "item",
+        } satisfies ClassifiedDependency,
       ],
       externalDeps: [],
     }

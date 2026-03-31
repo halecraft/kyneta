@@ -8,22 +8,22 @@
 // 5. Universal version comparison — all strategies reject stale offers
 // 6. Plain replica snapshot import falls back to replicaFactory.fromSnapshot()
 
-import { describe, expect, it, afterEach } from "vitest"
-import {
-  Schema,
-  change,
-  bindPlain,
-  bindEphemeral,
-  Interpret,
-  Replicate,
-  TimestampVersion,
-  plainReplicaFactory,
-  PlainVersion,
-} from "@kyneta/schema"
 import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
+import {
+  bindEphemeral,
+  bindPlain,
+  change,
+  Interpret,
+  PlainVersion,
+  plainReplicaFactory,
+  Replicate,
+  Schema,
+  TimestampVersion,
+} from "@kyneta/schema"
+import { afterEach, describe, expect, it } from "vitest"
+import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
-import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
 
 // ---------------------------------------------------------------------------
 // Drain + cleanup helpers
@@ -404,7 +404,9 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
     // Alice — full interpreter with plain/sequential substrate
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+      adapters: [
+        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      ],
     })
 
     // Relay — plain replica (no schema)
@@ -438,7 +440,7 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
-      onDocDiscovered: (docId) => {
+      onDocDiscovered: docId => {
         if (docId === "config") return Interpret(SequentialDoc)
         return undefined
       },

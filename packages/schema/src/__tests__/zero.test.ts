@@ -166,7 +166,6 @@ describe("Zero.structural: doc (structural root)", () => {
   })
 })
 
-
 // Annotated tests — annotation-specific defaults
 // ===========================================================================
 
@@ -181,7 +180,9 @@ describe("Zero.structural: annotated schemas", () => {
 
   it("movableList → empty array", () => {
     expect(
-      Zero.structural(Schema.annotated("movable", Schema.list(Schema.string()))),
+      Zero.structural(
+        Schema.annotated("movable", Schema.list(Schema.string())),
+      ),
     ).toEqual([])
   })
 

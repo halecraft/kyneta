@@ -14,8 +14,8 @@
 
 import type {
   ChannelMsg,
-  DismissMsg,
   DiscoverMsg,
+  DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
   InterestMsg,

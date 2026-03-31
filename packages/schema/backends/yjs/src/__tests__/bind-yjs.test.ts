@@ -1,10 +1,10 @@
+import { change, RawPath, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { Schema, change, RawPath } from "@kyneta/schema"
 import { bindYjs } from "../bind-yjs.js"
-import { yjs } from "../yjs-escape.js"
 import { createYjsDoc } from "../create.js"
 import { yjsSubstrateFactory } from "../substrate.js"
+import { yjs } from "../yjs-escape.js"
 
 // ===========================================================================
 // Schemas used across tests
@@ -90,9 +90,7 @@ describe("bindYjs", () => {
 
       // Restore
       const substrate2 = factory.fromEntirety(snapshot, SimpleSchema)
-      expect(substrate2.store.read(RawPath.empty.field("title"))).toBe(
-        "Snap",
-      )
+      expect(substrate2.store.read(RawPath.empty.field("title"))).toBe("Snap")
       expect(substrate2.store.read(RawPath.empty.field("count"))).toBe(42)
     })
 
@@ -121,12 +119,8 @@ describe("bindYjs", () => {
       const s2 = factory.create(SimpleSchema)
 
       // Both docs should have the same clientID
-      const doc1 = yjs(
-        createYjsDocFromFactory(factory, SimpleSchema),
-      )
-      const doc2 = yjs(
-        createYjsDocFromFactory(factory, SimpleSchema),
-      )
+      const doc1 = yjs(createYjsDocFromFactory(factory, SimpleSchema))
+      const doc2 = yjs(createYjsDocFromFactory(factory, SimpleSchema))
 
       expect(doc1.clientID).toBe(doc2.clientID)
     })
@@ -238,9 +232,15 @@ describe("bindYjs", () => {
 // Helper — create a doc via a factory and return a ref with escape hatch
 // ===========================================================================
 
-import { interpret, readable, writable, changefeed, registerSubstrate, unwrap } from "@kyneta/schema"
-import type { SubstrateFactory } from "@kyneta/schema"
-import type { Schema as SchemaType } from "@kyneta/schema"
+import type { Schema as SchemaType, SubstrateFactory } from "@kyneta/schema"
+import {
+  changefeed,
+  interpret,
+  readable,
+  registerSubstrate,
+  unwrap,
+  writable,
+} from "@kyneta/schema"
 
 /**
  * Helper to create a kyneta ref from a factory (mimicking what exchange.get does).

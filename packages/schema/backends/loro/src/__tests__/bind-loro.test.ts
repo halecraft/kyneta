@@ -1,19 +1,18 @@
 // bindLoro and loro() escape hatch — unit tests.
 
-import { describe, expect, it } from "vitest"
 import {
+  change,
+  createPlainSubstrate,
   isBoundSchema,
   registerSubstrate,
-  createPlainSubstrate,
+  Schema,
   unwrap,
-  change,
 } from "@kyneta/schema"
+import { describe, expect, it } from "vitest"
 import { bindLoro } from "../bind-loro.js"
+import { createLoroDoc, getSubstrate } from "../create.js"
 import { loro } from "../loro-escape.js"
-import { Schema } from "@kyneta/schema"
 import { LoroSchema } from "../loro-schema.js"
-import { createLoroDoc } from "../create.js"
-import { getSubstrate } from "../create.js"
 
 const testSchema = LoroSchema.doc({
   title: LoroSchema.text(),

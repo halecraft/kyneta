@@ -72,7 +72,10 @@ describe("WebsocketClientStateMachine — valid transitions", () => {
   it("connecting → disconnected", () => {
     const sm = new WebsocketClientStateMachine()
     sm.transition({ status: "connecting", attempt: 1 })
-    sm.transition({ status: "disconnected", reason: { type: "error", error: new Error("fail") } })
+    sm.transition({
+      status: "disconnected",
+      reason: { type: "error", error: new Error("fail") },
+    })
     expect(sm.getStatus()).toBe("disconnected")
   })
 
@@ -104,7 +107,10 @@ describe("WebsocketClientStateMachine — valid transitions", () => {
     sm.transition({ status: "connecting", attempt: 1 })
     sm.transition({ status: "connected" })
     sm.transition({ status: "ready" })
-    sm.transition({ status: "disconnected", reason: { type: "closed", code: 1000, reason: "done" } })
+    sm.transition({
+      status: "disconnected",
+      reason: { type: "closed", code: 1000, reason: "done" },
+    })
     expect(sm.getStatus()).toBe("disconnected")
   })
 
@@ -130,7 +136,10 @@ describe("WebsocketClientStateMachine — valid transitions", () => {
     const sm = new WebsocketClientStateMachine()
     sm.transition({ status: "connecting", attempt: 1 })
     sm.transition({ status: "reconnecting", attempt: 1, nextAttemptMs: 1000 })
-    sm.transition({ status: "disconnected", reason: { type: "max-retries-exceeded", attempts: 10 } })
+    sm.transition({
+      status: "disconnected",
+      reason: { type: "max-retries-exceeded", attempts: 10 },
+    })
     expect(sm.getStatus()).toBe("disconnected")
   })
 
@@ -166,7 +175,11 @@ describe("WebsocketClientStateMachine — invalid transitions", () => {
   it("rejects disconnected → reconnecting", () => {
     const sm = new WebsocketClientStateMachine()
     expect(() =>
-      sm.transition({ status: "reconnecting", attempt: 1, nextAttemptMs: 1000 }),
+      sm.transition({
+        status: "reconnecting",
+        attempt: 1,
+        nextAttemptMs: 1000,
+      }),
     ).toThrow("Invalid state transition")
   })
 
@@ -379,9 +392,9 @@ describe("WebsocketClientStateMachine — waitForStatus", () => {
   it("rejects on timeout", async () => {
     const sm = new WebsocketClientStateMachine()
 
-    await expect(
-      sm.waitForStatus("ready", { timeoutMs: 50 }),
-    ).rejects.toThrow("Timeout")
+    await expect(sm.waitForStatus("ready", { timeoutMs: 50 })).rejects.toThrow(
+      "Timeout",
+    )
   })
 })
 

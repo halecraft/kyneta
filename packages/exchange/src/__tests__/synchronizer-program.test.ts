@@ -1,6 +1,7 @@
 // synchronizer-program — unit tests for the pure TEA update function.
 
 import { describe, expect, it } from "vitest"
+import type { ConnectedChannel, EstablishedChannel } from "../channel.js"
 import {
   type Command,
   createSynchronizerUpdate,
@@ -9,7 +10,6 @@ import {
   type SynchronizerModel,
 } from "../synchronizer-program.js"
 import type { PeerIdentityDetails } from "../types.js"
-import type { ConnectedChannel, EstablishedChannel } from "../channel.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -188,10 +188,7 @@ describe("synchronizer-program", () => {
 
       // Remove the channel
       const channel = m.channels.get(1)!
-      const [m2] = update(
-        { type: "synchronizer/channel-removed", channel },
-        m,
-      )
+      const [m2] = update({ type: "synchronizer/channel-removed", channel }, m)
       expect(m2.channels.has(1)).toBe(false)
       // Peer should be removed since it has no remaining channels
       expect(m2.peers.has("bob")).toBe(false)
@@ -232,7 +229,7 @@ describe("synchronizer-program", () => {
       // Should send establish-response
       const commands = flattenCommands(cmd)
       const responseCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "establish-response",
       )
@@ -292,7 +289,7 @@ describe("synchronizer-program", () => {
 
       // Should send discover to the established channel
       const discoverCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "discover",
       )
@@ -301,7 +298,7 @@ describe("synchronizer-program", () => {
       // Should also send interest — essential for pulling data into
       // empty docs created via onDocDiscovered
       const interestCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
@@ -381,7 +378,7 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       const interestCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
@@ -400,7 +397,7 @@ describe("synchronizer-program", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
-      let m = establishChannel(update, model, 1, bobIdentity)
+      const m = establishChannel(update, model, 1, bobIdentity)
 
       const [_m2, cmd] = update(
         {
@@ -453,14 +450,14 @@ describe("synchronizer-program", () => {
       expect(commands).toHaveLength(2)
 
       const interestCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
       expect(interestCmd).toBeDefined()
 
       const creationCmd = commands.find(
-        (c) => c.type === "cmd/request-doc-creation",
+        c => c.type === "cmd/request-doc-creation",
       )
       expect(creationCmd).toBeDefined()
       if (creationCmd && creationCmd.type === "cmd/request-doc-creation") {
@@ -498,7 +495,7 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       const creationCmds = commands.filter(
-        (c) => c.type === "cmd/request-doc-creation",
+        c => c.type === "cmd/request-doc-creation",
       )
       expect(creationCmds).toHaveLength(0)
       // Should still have the interest command
@@ -542,7 +539,7 @@ describe("synchronizer-program", () => {
       const commands = flattenCommands(cmd)
 
       // Should have a send-offer command
-      const offerCmd = commands.find((c) => c.type === "cmd/send-offer")
+      const offerCmd = commands.find(c => c.type === "cmd/send-offer")
       expect(offerCmd).toBeDefined()
       if (offerCmd && offerCmd.type === "cmd/send-offer") {
         expect(offerCmd.docId).toBe("doc-1")
@@ -551,7 +548,7 @@ describe("synchronizer-program", () => {
 
       // Should have a reciprocal interest (since causal + reciprocate=true)
       const reciprocalInterest = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
@@ -597,7 +594,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const offerCmd = commands.find((c) => c.type === "cmd/send-offer")
+      const offerCmd = commands.find(c => c.type === "cmd/send-offer")
       expect(offerCmd).toBeDefined()
       if (offerCmd && offerCmd.type === "cmd/send-offer") {
         expect(offerCmd.docId).toBe("doc-1")
@@ -606,7 +603,7 @@ describe("synchronizer-program", () => {
 
       // Sequential should NOT produce a reciprocal interest
       const reciprocal = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
@@ -645,7 +642,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const offerCmd = commands.find((c) => c.type === "cmd/send-offer")
+      const offerCmd = commands.find(c => c.type === "cmd/send-offer")
       expect(offerCmd).toBeDefined()
       if (offerCmd && offerCmd.type === "cmd/send-offer") {
         expect(offerCmd.docId).toBe("doc-1")
@@ -679,7 +676,11 @@ describe("synchronizer-program", () => {
             message: {
               type: "offer",
               docId: "doc-1",
-              payload: { kind: "entirety", encoding: "json", data: '{"title":"Hello"}' },
+              payload: {
+                kind: "entirety",
+                encoding: "json",
+                data: '{"title":"Hello"}',
+              },
               version: "v1",
             },
           },
@@ -688,7 +689,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const importCmd = commands.find((c) => c.type === "cmd/import-doc-data")
+      const importCmd = commands.find(c => c.type === "cmd/import-doc-data")
       expect(importCmd).toBeDefined()
       if (importCmd && importCmd.type === "cmd/import-doc-data") {
         expect(importCmd.docId).toBe("doc-1")
@@ -701,7 +702,7 @@ describe("synchronizer-program", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
-      let m = establishChannel(update, model, 1, bobIdentity)
+      const m = establishChannel(update, model, 1, bobIdentity)
 
       const [_m2, cmd] = update(
         {
@@ -720,7 +721,9 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      expect(commands.find((c) => c.type === "cmd/import-doc-data")).toBeUndefined()
+      expect(
+        commands.find(c => c.type === "cmd/import-doc-data"),
+      ).toBeUndefined()
     })
 
     it("offer with reciprocate=true triggers interest back", () => {
@@ -747,7 +750,11 @@ describe("synchronizer-program", () => {
             message: {
               type: "offer",
               docId: "doc-1",
-              payload: { kind: "since", encoding: "binary", data: new Uint8Array([1, 2, 3]) },
+              payload: {
+                kind: "since",
+                encoding: "binary",
+                data: new Uint8Array([1, 2, 3]),
+              },
               version: "v1",
               reciprocate: true,
             },
@@ -759,11 +766,11 @@ describe("synchronizer-program", () => {
       const commands = flattenCommands(cmd)
 
       // Should import
-      expect(commands.find((c) => c.type === "cmd/import-doc-data")).toBeDefined()
+      expect(commands.find(c => c.type === "cmd/import-doc-data")).toBeDefined()
 
       // Should send interest back
       const interestCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
@@ -817,7 +824,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const offerCmd = commands.find((c) => c.type === "cmd/send-offer")
+      const offerCmd = commands.find(c => c.type === "cmd/send-offer")
       expect(offerCmd).toBeDefined()
       if (offerCmd && offerCmd.type === "cmd/send-offer") {
         expect(offerCmd.docId).toBe("doc-1")
@@ -853,7 +860,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const offerCmd = commands.find((c) => c.type === "cmd/send-offer")
+      const offerCmd = commands.find(c => c.type === "cmd/send-offer")
       expect(offerCmd).toBeDefined()
       if (offerCmd && offerCmd.type === "cmd/send-offer") {
         expect(offerCmd.docId).toBe("presence")
@@ -981,7 +988,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const offerCmd = commands.find((c) => c.type === "cmd/send-offer")
+      const offerCmd = commands.find(c => c.type === "cmd/send-offer")
       expect(offerCmd).toBeDefined()
       if (offerCmd && offerCmd.type === "cmd/send-offer") {
         expect(offerCmd.docId).toBe("doc-1")
@@ -1025,7 +1032,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const offerCmd = commands.find((c) => c.type === "cmd/send-offer")
+      const offerCmd = commands.find(c => c.type === "cmd/send-offer")
       expect(offerCmd).toBeDefined()
       if (offerCmd && offerCmd.type === "cmd/send-offer") {
         expect(offerCmd.docId).toBe("doc-1")
@@ -1131,7 +1138,7 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       const interestCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
@@ -1174,7 +1181,7 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       const interestCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
@@ -1197,7 +1204,7 @@ describe("synchronizer-program", () => {
     it("handleEstablishRequest filters discover by route", () => {
       // Route denies "secret-doc" for bob
       const update = createSynchronizerUpdate({
-        route: (docId) => docId !== "secret-doc",
+        route: docId => docId !== "secret-doc",
       })
       const [model] = init(aliceIdentity)
 
@@ -1242,7 +1249,7 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       const discoverCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "discover",
       )
@@ -1259,7 +1266,7 @@ describe("synchronizer-program", () => {
 
     it("handleEstablishResponse filters discover by route", () => {
       const update = createSynchronizerUpdate({
-        route: (docId) => docId !== "secret-doc",
+        route: docId => docId !== "secret-doc",
       })
       const [model] = init(aliceIdentity)
 
@@ -1302,7 +1309,7 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       const discoverCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "discover",
       )
@@ -1341,7 +1348,7 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       // All outbound messages should target channel 1 (bob), not channel 2 (carol)
-      const sendMsgs = commands.filter((c) => c.type === "cmd/send-message")
+      const sendMsgs = commands.filter(c => c.type === "cmd/send-message")
       for (const c of sendMsgs) {
         if (c.type === "cmd/send-message") {
           expect(c.envelope.toChannelIds).toContain(1)
@@ -1386,7 +1393,7 @@ describe("synchronizer-program", () => {
 
       // Should produce no relay since carol is denied and bob is excluded as sender
       const commands = flattenCommands(cmd)
-      const offerCmds = commands.filter((c) => c.type === "cmd/send-offer")
+      const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
       // No offer should target carol's channel
       for (const c of offerCmds) {
         if (c.type === "cmd/send-offer") {
@@ -1426,7 +1433,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const offerCmds = commands.filter((c) => c.type === "cmd/send-offer")
+      const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
       expect(offerCmds.length).toBe(1)
       if (offerCmds[0] && offerCmds[0].type === "cmd/send-offer") {
         expect(offerCmds[0].toChannelIds).toContain(1) // bob allowed
@@ -1437,7 +1444,7 @@ describe("synchronizer-program", () => {
     it("handleDiscover checks route before request-doc-creation", () => {
       // Route denies "forbidden" doc from bob
       const update = createSynchronizerUpdate({
-        route: (docId) => docId !== "forbidden",
+        route: docId => docId !== "forbidden",
       })
       const [model] = init(aliceIdentity)
 
@@ -1457,7 +1464,7 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       const creationCmds = commands.filter(
-        (c) => c.type === "cmd/request-doc-creation",
+        c => c.type === "cmd/request-doc-creation",
       )
       expect(creationCmds).toHaveLength(0)
     })
@@ -1520,7 +1527,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const offerCmds = commands.filter((c) => c.type === "cmd/send-offer")
+      const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
       expect(offerCmds.length).toBe(1)
       if (offerCmds[0] && offerCmds[0].type === "cmd/send-offer") {
         // Storage channel kept despite route: () => false
@@ -1564,7 +1571,11 @@ describe("synchronizer-program", () => {
             message: {
               type: "offer",
               docId: "doc-1",
-              payload: { kind: "entirety" as const, encoding: "json" as const, data: "{}" },
+              payload: {
+                kind: "entirety" as const,
+                encoding: "json" as const,
+                data: "{}",
+              },
               version: "1",
               reciprocate: true,
             },
@@ -1575,14 +1586,12 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       // Import should be blocked
-      const importCmds = commands.filter(
-        (c) => c.type === "cmd/import-doc-data",
-      )
+      const importCmds = commands.filter(c => c.type === "cmd/import-doc-data")
       expect(importCmds).toHaveLength(0)
 
       // But reciprocation (interest back) should still happen
       const interestCmds = commands.filter(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
@@ -1617,7 +1626,11 @@ describe("synchronizer-program", () => {
             message: {
               type: "offer",
               docId: "doc-1",
-              payload: { kind: "entirety" as const, encoding: "json" as const, data: "{}" },
+              payload: {
+                kind: "entirety" as const,
+                encoding: "json" as const,
+                data: "{}",
+              },
               version: "1",
             },
           },
@@ -1626,9 +1639,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const importCmds = commands.filter(
-        (c) => c.type === "cmd/import-doc-data",
-      )
+      const importCmds = commands.filter(c => c.type === "cmd/import-doc-data")
       expect(importCmds).toHaveLength(1)
     })
   })
@@ -1669,7 +1680,7 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       const dismissCmd = commands.find(
-        (c) => c.type === "cmd/notify-doc-dismissed",
+        c => c.type === "cmd/notify-doc-dismissed",
       )
       expect(dismissCmd).toBeDefined()
       if (dismissCmd && dismissCmd.type === "cmd/notify-doc-dismissed") {
@@ -1759,7 +1770,7 @@ describe("synchronizer-program", () => {
 
       // Dismiss should only be sent to bob (channel 1), not carol (channel 2)
       const commands = flattenCommands(cmd)
-      const sendCmds = commands.filter((c) => c.type === "cmd/send-message")
+      const sendCmds = commands.filter(c => c.type === "cmd/send-message")
       expect(sendCmds.length).toBe(1)
       if (sendCmds[0] && sendCmds[0].type === "cmd/send-message") {
         expect(sendCmds[0].envelope.toChannelIds).toContain(1)
@@ -1798,7 +1809,7 @@ describe("synchronizer-program", () => {
 
       // Should send discover
       const discoverCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "discover",
       )
@@ -1806,7 +1817,7 @@ describe("synchronizer-program", () => {
 
       // Should send interest with reciprocate (causal)
       const interestCmd = commands.find(
-        (c) =>
+        c =>
           c.type === "cmd/send-message" &&
           c.envelope.message.type === "interest",
       )
@@ -1891,7 +1902,7 @@ describe("synchronizer-program", () => {
 
       // Should relay to carol (excluding bob)
       const commands = flattenCommands(cmd)
-      const sendOffer = commands.find((c) => c.type === "cmd/send-offer")
+      const sendOffer = commands.find(c => c.type === "cmd/send-offer")
       expect(sendOffer).toBeDefined()
       if (sendOffer && sendOffer.type === "cmd/send-offer") {
         expect(sendOffer.docId).toBe("rep-doc")
@@ -1900,7 +1911,5 @@ describe("synchronizer-program", () => {
         expect(sendOffer.toChannelIds).not.toContain(1)
       }
     })
-
-
   })
 })

@@ -10,11 +10,11 @@
 // Ported from @loro-extended/adapter-websocket's WsConnection with
 // kyneta naming conventions and the kyneta wire format.
 
-import type { ChannelMsg, Channel, PeerId } from "@kyneta/exchange"
+import type { Channel, ChannelMsg, PeerId } from "@kyneta/exchange"
 import {
   cborCodec,
-  encodeComplete,
   decodeBinaryFrame,
+  encodeComplete,
   FragmentReassembler,
   fragmentPayload,
   wrapCompleteMessage,
@@ -129,10 +129,7 @@ export class WebsocketConnection {
     const frame = encodeComplete(cborCodec, msg)
 
     // Fragment large payloads for cloud infrastructure compatibility
-    if (
-      this.#fragmentThreshold > 0 &&
-      frame.length > this.#fragmentThreshold
-    ) {
+    if (this.#fragmentThreshold > 0 && frame.length > this.#fragmentThreshold) {
       const fragments = fragmentPayload(frame, this.#fragmentThreshold)
       for (const fragment of fragments) {
         this.#socket.send(fragment)

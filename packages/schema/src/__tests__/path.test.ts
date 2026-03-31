@@ -1,16 +1,16 @@
-import { describe, expect, it, beforeEach } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import {
-  type Segment,
-  type RawSegment,
   type Address,
-  rawKey,
-  rawIndex,
-  RawPath,
   AddressedPath,
   AddressTableRegistry,
-  keyAddress,
   indexAddress,
+  keyAddress,
+  RawPath,
+  type RawSegment,
+  rawIndex,
+  rawKey,
   resetAddressIdCounter,
+  type Segment,
 } from "../path.js"
 import { writeByPath } from "../store.js"
 
@@ -148,9 +148,9 @@ describe("RawPath", () => {
     })
 
     it("nested key segments use dot notation", () => {
-      expect(
-        RawPath.empty.field("settings").field("darkMode").format(),
-      ).toBe("settings.darkMode")
+      expect(RawPath.empty.field("settings").field("darkMode").format()).toBe(
+        "settings.darkMode",
+      )
     })
 
     it("index segments use bracket notation", () => {
@@ -159,11 +159,7 @@ describe("RawPath", () => {
 
     it("mixed key and index segments", () => {
       expect(
-        RawPath.empty
-          .field("messages")
-          .item(2)
-          .field("author")
-          .format(),
+        RawPath.empty.field("messages").item(2).field("author").format(),
       ).toBe("messages[2].author")
     })
   })
@@ -185,8 +181,6 @@ describe("RawPath", () => {
     expect(RawPath.empty.length).toBe(0)
   })
 })
-
-
 
 // ===========================================================================
 // Address
@@ -365,8 +359,6 @@ describe("AddressedPath", () => {
   })
 })
 
-
-
 // ===========================================================================
 // Monoid laws
 // ===========================================================================
@@ -480,4 +472,3 @@ describe("dead address propagation", () => {
 // ===========================================================================
 // AddressTableRegistry
 // ===========================================================================
-

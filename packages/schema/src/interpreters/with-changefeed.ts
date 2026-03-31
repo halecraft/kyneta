@@ -44,8 +44,13 @@ import {
 } from "../changefeed.js"
 import { isPropertyHost } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
-import { AddressedPath, RawPath, resolveToAddressed, type SequenceAddressTable } from "../path.js"
 import type { RefContext } from "../interpreter-types.js"
+import {
+  AddressedPath,
+  RawPath,
+  resolveToAddressed,
+  type SequenceAddressTable,
+} from "../path.js"
 import type {
   AnnotatedSchema,
   MapSchema,
@@ -181,7 +186,6 @@ interface ContextWiringState {
   readonly originalFlush: (origin?: string) => void
   readonly populated: Set<string>
   readonly populatedListeners: Map<string, Set<() => void>>
-
 }
 
 /**
@@ -312,7 +316,14 @@ function ensurePrepareWiring(
   ctx.prepare = wrappedPrepare
   ctx.flush = wrappedFlush
 
-  state = { listeners, pending, originalPrepare, originalFlush, populated, populatedListeners }
+  state = {
+    listeners,
+    pending,
+    originalPrepare,
+    originalFlush,
+    populated,
+    populatedListeners,
+  }
   contextState.set(ctx, state)
   return listeners
 }
@@ -412,10 +423,14 @@ function createPopulatedChangefeed(
     get current(): boolean {
       return populated.has(key)
     },
-    subscribe(callback: (changeset: Changeset<ChangeBase>) => void): () => void {
+    subscribe(
+      callback: (changeset: Changeset<ChangeBase>) => void,
+    ): () => void {
       // Already populated — fire immediately via microtask
       if (populated.has(key)) {
-        Promise.resolve().then(() => callback({ changes: [], origin: "populated" }))
+        Promise.resolve().then(() =>
+          callback({ changes: [], origin: "populated" }),
+        )
         return () => {}
       }
 
@@ -480,21 +495,28 @@ function attachIsPopulated(
  * listeners map. For read-only stacks (no prepare pipeline), returns a
  * static empty set — `isPopulated` will always be false.
  */
-function getPopulatedState(
-  ctx: RefContext,
-): { populated: Set<string>; populatedListeners: Map<string, Set<() => void>> } {
+function getPopulatedState(ctx: RefContext): {
+  populated: Set<string>
+  populatedListeners: Map<string, Set<() => void>>
+} {
   if (!hasPreparePipeline(ctx)) {
     // Read-only stack — no mutations possible, nothing is ever populated
     return { populated: new Set(), populatedListeners: new Map() }
   }
   const state = contextState.get(ctx)
   if (state) {
-    return { populated: state.populated, populatedListeners: state.populatedListeners }
+    return {
+      populated: state.populated,
+      populatedListeners: state.populatedListeners,
+    }
   }
   // ensurePrepareWiring hasn't been called yet — call it to initialize
   ensurePrepareWiring(ctx)
   const state2 = contextState.get(ctx)!
-  return { populated: state2.populated, populatedListeners: state2.populatedListeners }
+  return {
+    populated: state2.populated,
+    populatedListeners: state2.populatedListeners,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -562,7 +584,10 @@ function createProductChangefeed(
     // Tree subscribers also see own-path changes with path []
     if (treeSubs.size > 0) {
       const treeChangeset: Changeset<Op> = {
-        changes: changeset.changes.map(change => ({ path: path.root(), change })),
+        changes: changeset.changes.map(change => ({
+          path: path.root(),
+          change,
+        })),
         origin: changeset.origin,
       }
       for (const cb of treeSubs) cb(treeChangeset)
@@ -810,7 +835,10 @@ function createSequenceChangefeed(
     // Tree subscribers see own-path structural changes with path []
     if (treeSubs.size > 0) {
       const treeChangeset: Changeset<Op> = {
-        changes: changeset.changes.map(change => ({ path: path.root(), change })),
+        changes: changeset.changes.map(change => ({
+          path: path.root(),
+          change,
+        })),
         origin: changeset.origin,
       }
       for (const cb of treeSubs) cb(treeChangeset)
@@ -937,7 +965,10 @@ function createMapChangefeed(
 
     if (treeSubs.size > 0) {
       const treeChangeset: Changeset<Op> = {
-        changes: changeset.changes.map(change => ({ path: path.root(), change })),
+        changes: changeset.changes.map(change => ({
+          path: path.root(),
+          change,
+        })),
         origin: changeset.origin,
       }
       for (const cb of treeSubs) cb(treeChangeset)
@@ -1047,7 +1078,12 @@ export function withChangefeed<A extends HasRead>(
         )
         attachChangefeed(result as object, cf)
         const ps = getPopulatedState(ctx)
-        attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
+        attachIsPopulated(
+          result as object,
+          path,
+          ps.populated,
+          ps.populatedListeners,
+        )
         return result as A & HasChangefeed
       }
 
@@ -1077,7 +1113,12 @@ export function withChangefeed<A extends HasRead>(
         )
         attachChangefeed(result as object, cf)
         const ps = getPopulatedState(ctx)
-        attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
+        attachIsPopulated(
+          result as object,
+          path,
+          ps.populated,
+          ps.populatedListeners,
+        )
         return result as A & HasChangefeed
       }
 
@@ -1110,14 +1151,19 @@ export function withChangefeed<A extends HasRead>(
             }
             throw new Error(
               "withChangefeed: sequence ref missing .at() method. " +
-              "Ensure withNavigation is in the interpreter stack.",
+                "Ensure withNavigation is in the interpreter stack.",
             )
           },
           () => ctx.store.arrayLength(path),
         )
         attachChangefeed(result as object, cf)
         const ps = getPopulatedState(ctx)
-        attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
+        attachIsPopulated(
+          result as object,
+          path,
+          ps.populated,
+          ps.populatedListeners,
+        )
         return result as A & HasChangefeed
       }
 
@@ -1147,14 +1193,19 @@ export function withChangefeed<A extends HasRead>(
             }
             throw new Error(
               "withChangefeed: map ref missing .at() method. " +
-              "Ensure withNavigation is in the interpreter stack.",
+                "Ensure withNavigation is in the interpreter stack.",
             )
           },
           () => ctx.store.keys(path),
         )
         attachChangefeed(result as object, cf)
         const ps = getPopulatedState(ctx)
-        attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
+        attachIsPopulated(
+          result as object,
+          path,
+          ps.populated,
+          ps.populatedListeners,
+        )
         return result as A & HasChangefeed
       }
 
@@ -1197,7 +1248,12 @@ export function withChangefeed<A extends HasRead>(
             )
             attachChangefeed(result as object, cf)
             const ps = getPopulatedState(ctx)
-            attachIsPopulated(result as object, path, ps.populated, ps.populatedListeners)
+            attachIsPopulated(
+              result as object,
+              path,
+              ps.populated,
+              ps.populatedListeners,
+            )
             return result as A & HasChangefeed
           }
           return result as A & HasChangefeed
@@ -1223,7 +1279,12 @@ export function withChangefeed<A extends HasRead>(
             )
             attachChangefeed(result as object, cf)
             const ps2 = getPopulatedState(ctx)
-            attachIsPopulated(result as object, path, ps2.populated, ps2.populatedListeners)
+            attachIsPopulated(
+              result as object,
+              path,
+              ps2.populated,
+              ps2.populatedListeners,
+            )
             return result as A & HasChangefeed
           }
           return result as A & HasChangefeed

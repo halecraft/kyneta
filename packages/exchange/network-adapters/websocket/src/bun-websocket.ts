@@ -156,11 +156,7 @@ export function createBunWebsocketHandlers(wsAdapter: {
             : msg
       ws.data.handlers.onMessage?.(data)
     },
-    close(
-      ws: ServerWebSocket<BunWebsocketData>,
-      code: number,
-      reason: string,
-    ) {
+    close(ws: ServerWebSocket<BunWebsocketData>, code: number, reason: string) {
       ws.data.handlers.onClose?.(code, reason)
     },
   }

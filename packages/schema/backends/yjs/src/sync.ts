@@ -10,8 +10,8 @@
 // and deltas — these are Yjs's native state-as-update bytes.
 
 import type { SubstratePayload } from "@kyneta/schema"
-import { YjsVersion } from "./version.js"
 import { getSubstrate } from "./create.js"
+import type { YjsVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
 // version — current YjsVersion

@@ -10,16 +10,8 @@
 // ConnectedChannel: registered with the synchronizer, has a channelId.
 // EstablishedChannel: completed the establish handshake, knows the remote peer.
 
-import type {
-  ChannelMsg,
-  EstablishmentMsg,
-  ExchangeMsg,
-} from "./messages.js"
-import type {
-  AdapterType,
-  ChannelId,
-  PeerId,
-} from "./types.js"
+import type { ChannelMsg, EstablishmentMsg, ExchangeMsg } from "./messages.js"
+import type { AdapterType, ChannelId, PeerId } from "./types.js"
 
 export type { ChannelId } from "./types.js"
 

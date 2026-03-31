@@ -17,9 +17,8 @@
 // stored in a single root LoroMap named PROPS_KEY ("_props"). This
 // avoids creating a separate root container per scalar field.
 
+import type { Path, Schema as SchemaNode, Segment } from "@kyneta/schema"
 import { advanceSchema } from "@kyneta/schema"
-import type { Path, Segment } from "@kyneta/schema"
-import type { Schema as SchemaNode } from "@kyneta/schema"
 import type { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
 
 // ---------------------------------------------------------------------------
@@ -152,10 +151,7 @@ function unwrapToStructural(schema: SchemaNode): SchemaNode {
  * Step into a child of a Loro container using the segment and runtime
  * container kind discrimination.
  */
-function stepFromContainer(
-  container: unknown,
-  segment: Segment,
-): unknown {
+function stepFromContainer(container: unknown, segment: Segment): unknown {
   if (!hasKind(container)) {
     // Plain value or unknown — cannot step further
     return undefined

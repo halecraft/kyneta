@@ -126,7 +126,7 @@ export class AdapterManager {
    */
   async flush(): Promise<void> {
     await Promise.all(
-      Array.from(this.#adapters.values()).map((adapter) => adapter.flush()),
+      Array.from(this.#adapters.values()).map(adapter => adapter.flush()),
     )
   }
 

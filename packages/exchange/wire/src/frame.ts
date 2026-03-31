@@ -20,17 +20,17 @@
 
 import type { ChannelMsg } from "@kyneta/exchange"
 import type { BinaryCodec } from "./codec.js"
-import type { Frame } from "./frame-types.js"
-import { complete, fragment as fragmentFrame } from "./frame-types.js"
 import {
   BinaryFrameType,
   type BinaryFrameTypeValue,
-  FRAME_ID_SIZE,
   FRAGMENT_META_SIZE,
+  FRAME_ID_SIZE,
   HASH_ALGO,
   HEADER_SIZE,
   WIRE_VERSION,
 } from "./constants.js"
+import type { Frame } from "./frame-types.js"
+import { complete, fragment as fragmentFrame } from "./frame-types.js"
 
 // ---------------------------------------------------------------------------
 // Encoding — generic
@@ -110,8 +110,7 @@ export function encodeBinaryFrame(frame: Frame<Uint8Array>): Uint8Array {
  */
 export function decodeBinaryFrame(data: Uint8Array): Frame<Uint8Array> {
   // Normalize Buffer subclasses (Bun/Node may provide these)
-  const frame =
-    data.constructor === Uint8Array ? data : new Uint8Array(data)
+  const frame = data.constructor === Uint8Array ? data : new Uint8Array(data)
 
   if (frame.length < HEADER_SIZE) {
     throw new FrameDecodeError(
@@ -178,7 +177,15 @@ export function decodeBinaryFrame(data: Uint8Array): Frame<Uint8Array> {
     offset += 4
 
     const payload = frame.slice(offset, offset + payloadLength)
-    return fragmentFrame(version, frameId, index, total, totalSize, payload, hash)
+    return fragmentFrame(
+      version,
+      frameId,
+      index,
+      total,
+      totalSize,
+      payload,
+      hash,
+    )
   }
 
   throw new FrameDecodeError(
