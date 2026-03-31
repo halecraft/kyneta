@@ -277,6 +277,7 @@ describe("synchronizer-program", () => {
       const [m2, cmd] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
@@ -324,6 +325,7 @@ describe("synchronizer-program", () => {
       const [m1] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
@@ -334,6 +336,7 @@ describe("synchronizer-program", () => {
       const [m2] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v2",
           mergeStrategy: "sequential",
@@ -356,6 +359,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
@@ -426,6 +430,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "known-doc",
           version: "v1",
           mergeStrategy: "sequential",
@@ -472,6 +477,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
@@ -509,6 +515,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "causal",
@@ -566,6 +573,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
@@ -613,6 +621,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "1000",
           mergeStrategy: "lww",
@@ -654,6 +663,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "sequential",
@@ -723,6 +733,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "causal",
@@ -779,6 +790,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "causal",
@@ -825,6 +837,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "presence",
           version: "1000",
           mergeStrategy: "lww",
@@ -860,6 +873,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "sequential",
@@ -891,6 +905,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "sequential",
@@ -929,6 +944,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "causal",
@@ -993,6 +1009,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "1000",
           mergeStrategy: "lww",
@@ -1033,6 +1050,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "causal",
@@ -1074,6 +1092,7 @@ describe("synchronizer-program", () => {
       let [m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "sequential",
@@ -1096,6 +1115,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "causal",
@@ -1138,6 +1158,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
@@ -1190,6 +1211,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "public-doc",
           version: "0",
           mergeStrategy: "sequential",
@@ -1199,6 +1221,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "secret-doc",
           version: "0",
           mergeStrategy: "sequential",
@@ -1249,6 +1272,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "public-doc",
           version: "0",
           mergeStrategy: "sequential",
@@ -1258,6 +1282,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "secret-doc",
           version: "0",
           mergeStrategy: "sequential",
@@ -1311,6 +1336,7 @@ describe("synchronizer-program", () => {
       const [m2, cmd] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
@@ -1344,6 +1370,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "presence",
           version: "0",
           mergeStrategy: "lww",
@@ -1386,6 +1413,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "0",
           mergeStrategy: "lww",
@@ -1451,6 +1479,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "0",
           mergeStrategy: "lww",
@@ -1482,6 +1511,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "0",
           mergeStrategy: "lww",
@@ -1523,6 +1553,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
@@ -1576,6 +1607,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
@@ -1623,6 +1655,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
@@ -1663,6 +1696,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
@@ -1714,6 +1748,7 @@ describe("synchronizer-program", () => {
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
+          mode: "interpret",
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
@@ -1739,5 +1774,140 @@ describe("synchronizer-program", () => {
         expect(sendCmds[0].envelope.message.type).toBe("dismiss")
       }
     })
+  })
+
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // Replicate mode — doc-ensure, offer handling, version tracking
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+  describe("replicate mode", () => {
+    it("doc-ensure with mode 'replicate' sends discover + interest", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+      const m = establishChannel(update, model, 1, bobIdentity)
+
+      const [m2, cmd] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          mode: "replicate",
+          docId: "replicated-doc",
+          version: "0",
+          mergeStrategy: "causal",
+        },
+        m,
+      )
+
+      expect(m2.documents.has("replicated-doc")).toBe(true)
+      expect(m2.documents.get("replicated-doc")!.mode).toBe("replicate")
+      expect(m2.documents.get("replicated-doc")!.version).toBe("0")
+
+      const commands = flattenCommands(cmd)
+
+      // Should send discover
+      const discoverCmd = commands.find(
+        (c) =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "discover",
+      )
+      expect(discoverCmd).toBeDefined()
+
+      // Should send interest with reciprocate (causal)
+      const interestCmd = commands.find(
+        (c) =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "interest",
+      )
+      expect(interestCmd).toBeDefined()
+      if (
+        interestCmd &&
+        interestCmd.type === "cmd/send-message" &&
+        interestCmd.envelope.message.type === "interest"
+      ) {
+        expect(interestCmd.envelope.message.docId).toBe("replicated-doc")
+        expect(interestCmd.envelope.message.version).toBe("0")
+        expect(interestCmd.envelope.message.reciprocate).toBe(true)
+      }
+    })
+
+    it("doc-imported for replicated doc updates version and relays", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Two peers connected
+      let m = establishChannel(update, model, 1, bobIdentity)
+      m = establishChannel(update, m, 2, carolIdentity)
+
+      // Register a replicated causal doc
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          mode: "replicate",
+          docId: "rep-doc",
+          version: "0",
+          mergeStrategy: "causal",
+        },
+        m,
+      )
+
+      // Simulate successful import from bob
+      // First, get both peers into synced state by handling interests
+      ;[m] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "interest",
+              docId: "rep-doc",
+              version: "0",
+              reciprocate: false,
+            },
+          },
+        },
+        m,
+      )
+      ;[m] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 2,
+            message: {
+              type: "interest",
+              docId: "rep-doc",
+              version: "0",
+              reciprocate: false,
+            },
+          },
+        },
+        m,
+      )
+
+      // doc-imported from bob
+      const [m2, cmd] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "rep-doc",
+          version: "v2",
+          fromPeerId: "bob",
+        },
+        m,
+      )
+
+      // Version updated
+      expect(m2.documents.get("rep-doc")!.version).toBe("v2")
+
+      // Should relay to carol (excluding bob)
+      const commands = flattenCommands(cmd)
+      const sendOffer = commands.find((c) => c.type === "cmd/send-offer")
+      expect(sendOffer).toBeDefined()
+      if (sendOffer && sendOffer.type === "cmd/send-offer") {
+        expect(sendOffer.docId).toBe("rep-doc")
+        // Should include carol's channel (2), not bob's (1)
+        expect(sendOffer.toChannelIds).toContain(2)
+        expect(sendOffer.toChannelIds).not.toContain(1)
+      }
+    })
+
+
   })
 })

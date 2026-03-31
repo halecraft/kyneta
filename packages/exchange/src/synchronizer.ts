@@ -10,7 +10,7 @@
 // Ported from @loro-extended/repo's Synchronizer with Loro-specific types
 // replaced by substrate-agnostic equivalents.
 
-import type { Substrate, SubstratePayload, SubstrateFactory, MergeStrategy, Op } from "@kyneta/schema"
+import type { Replica, ReplicaFactory, Substrate, SubstratePayload, SubstrateFactory, MergeStrategy, Op } from "@kyneta/schema"
 import { executeBatch, RawPath, replaceChange } from "@kyneta/schema"
 import type { AnyAdapter } from "./adapter/adapter.js"
 import { AdapterManager } from "./adapter/adapter-manager.js"
@@ -37,17 +37,35 @@ import type {
 // ---------------------------------------------------------------------------
 
 /**
- * Holds the runtime state for a document — the substrate, ref, and
- * factory that the pure synchronizer model doesn't track.
+ * Fields shared by both document modes — the uniform surface that
+ * `#executeSendOffer`, `#executeImportDocData`, `registerDoc`, and
+ * `notifyLocalChange` operate on without mode branching.
  */
-export type DocRuntime = {
+type DocRuntimeBase = {
   docId: DocId
-  substrate: Substrate<any>
-  factory: SubstrateFactory<any>
+  replica: Replica<any>
+  replicaFactory: ReplicaFactory<any>
   strategy: MergeStrategy
-  ref: any // The interpreted Ref<S>
-  schema: any // The schema (SchemaNode)
 }
+
+/**
+ * Runtime state for a document — discriminated by participation mode.
+ *
+ * The `"interpret"` mode narrows `replica` to `Substrate` and adds
+ * `factory` (for `#importSnapshot` strategy 2), `ref`, and `schema`.
+ * The `"replicate"` mode adds nothing beyond the base.
+ */
+export type DocRuntime =
+  | DocRuntimeBase & {
+      mode: "interpret"
+      replica: Substrate<any>        // narrows Replica to Substrate
+      factory: SubstrateFactory<any> // needed for #importSnapshot Strategy 2
+      ref: any
+      schema: any
+    }
+  | DocRuntimeBase & {
+      mode: "replicate"
+    }
 
 /**
  * Callback invoked when a peer discovers a document the local exchange
@@ -153,9 +171,9 @@ export class Synchronizer {
   /**
    * Register a document runtime with the synchronizer.
    *
-   * Called by Exchange.get() after creating the substrate and ref.
-   * The synchronizer tracks the runtime and dispatches doc-ensure
-   * to begin sync.
+   * Called by Exchange.get() or Exchange.replicate() after creating
+   * the substrate/replica. The synchronizer tracks the runtime and
+   * dispatches doc-ensure to begin sync.
    */
   registerDoc(runtime: DocRuntime): void {
     this.#docRuntimes.set(runtime.docId, runtime)
@@ -163,7 +181,8 @@ export class Synchronizer {
     this.#dispatch({
       type: "synchronizer/doc-ensure",
       docId: runtime.docId,
-      version: runtime.substrate.version().serialize(),
+      mode: runtime.mode,
+      version: runtime.replica.version().serialize(),
       mergeStrategy: runtime.strategy,
     })
   }
@@ -186,7 +205,7 @@ export class Synchronizer {
     this.#dispatch({
       type: "synchronizer/local-doc-change",
       docId,
-      version: runtime.substrate.version().serialize(),
+      version: runtime.replica.version().serialize(),
     })
   }
 
@@ -484,12 +503,16 @@ export class Synchronizer {
   }
 
   /**
-   * Build and send an offer from the substrate.
+   * Build and send an offer from the replica.
    *
-   * This is where the runtime interacts with the substrate to produce
+   * This is where the runtime interacts with the replica to produce
    * the actual payload. The pure model only knows about serialized
    * version strings — the runtime resolves them to real Version objects
-   * and calls exportSince/exportSnapshot on the substrate.
+   * and calls exportSince/exportSnapshot on the replica.
+   *
+   * No mode branching needed — `replica` exists on both modes.
+   * For interpreted docs, `runtime.replica` is the `Substrate` itself
+   * (since `Substrate extends Replica`).
    */
   #executeSendOffer(command: {
     type: "cmd/send-offer"
@@ -508,8 +531,8 @@ export class Synchronizer {
     // Try delta first if sinceVersion is provided and not forced to snapshot
     if (command.sinceVersion && !command.forceSnapshot) {
       try {
-        const sinceVer = runtime.factory.parseVersion(command.sinceVersion)
-        const currentVersion = runtime.substrate.version()
+        const sinceVer = runtime.replicaFactory.parseVersion(command.sinceVersion)
+        const currentVersion = runtime.replica.version()
         const comparison = currentVersion.compare(sinceVer)
 
         // If we're behind the requester, we have nothing useful to send —
@@ -524,7 +547,7 @@ export class Synchronizer {
         // but may have different content (e.g. one was seeded, one wasn't).
         // In that case, fall through to snapshot.
         if (comparison === "ahead" || comparison === "concurrent") {
-          payload = runtime.substrate.exportSince(sinceVer)
+          payload = runtime.replica.exportSince(sinceVer)
           if (payload) {
             // Check for trivially empty deltas (e.g. JSON "[]")
             const isEmpty =
@@ -546,11 +569,11 @@ export class Synchronizer {
 
     // Fallback to snapshot
     if (!payload) {
-      payload = runtime.substrate.exportSnapshot()
+      payload = runtime.replica.exportSnapshot()
       offerType = "snapshot"
     }
 
-    const version = runtime.substrate.version().serialize()
+    const version = runtime.replica.version().serialize()
 
     this.#outboundQueue.push({
       toChannelIds: command.toChannelIds,
@@ -568,12 +591,17 @@ export class Synchronizer {
   /**
    * Import document data from a peer.
    *
-   * For delta offers, calls substrate.importDelta().
-   * For snapshot offers, reconstructs the substrate from scratch via
-   * factory.fromSnapshot() and replaces the runtime's substrate and ref.
+   * Version comparison is universal — applied for all strategies via
+   * the `Version` algebra. `"behind"` and `"equal"` mean "nothing new"
+   * and skip import regardless of strategy.
    *
-   * For LWW substrates, the runtime compares timestamps before importing.
-   * For causal/sequential, the substrate handles merge internally.
+   * For delta offers, calls replica.importDelta().
+   * For snapshot offers:
+   *   - interpret mode: tries importDelta, falls back to strategy 2
+   *     (reconstruct via factory.fromSnapshot + executeBatch to keep
+   *     ref objects alive).
+   *   - replicate mode: tries importDelta, falls back to wholesale
+   *     replica replacement via replicaFactory.fromSnapshot().
    */
   #executeImportDocData(command: {
     type: "cmd/import-doc-data"
@@ -586,29 +614,36 @@ export class Synchronizer {
     const runtime = this.#docRuntimes.get(command.docId)
     if (!runtime) return
 
-    // For LWW: compare timestamps and reject stale
-    if (runtime.strategy === "lww") {
-      try {
-        const incomingVersion = runtime.factory.parseVersion(command.version)
-        const currentVersion = runtime.substrate.version()
-        const comparison = incomingVersion.compare(currentVersion)
-        if (comparison === "behind" || comparison === "equal") {
-          // Stale or duplicate — discard
-          return
-        }
-      } catch {
-        // If version parsing fails, still try to import
+    // Universal version comparison — a property of the Version algebra,
+    // not a strategy-specific concern.
+    try {
+      const incomingVersion = runtime.replicaFactory.parseVersion(command.version)
+      const currentVersion = runtime.replica.version()
+      const comparison = incomingVersion.compare(currentVersion)
+      if (comparison === "behind" || comparison === "equal") {
+        // Stale or duplicate — discard
+        return
       }
+    } catch {
+      // If version parsing fails, still try to import
     }
 
     try {
       if (command.offerType === "snapshot") {
-        // Snapshot: reconstruct the substrate from the payload and
-        // rebuild the interpreter stack. This is an epoch boundary.
-        this.#importSnapshot(runtime, command.payload)
+        if (runtime.mode === "interpret") {
+          // Interpret mode: try importDelta first (works for Loro),
+          // fall back to strategy 2 to keep ref objects alive.
+          this.#importSnapshot(runtime, command.payload)
+        } else {
+          // Replicate mode: try importDelta first, fall back to
+          // wholesale replica replacement (no refs to keep alive).
+          this.#importSnapshotReplica(runtime, command)
+        }
       } else {
-        // Delta: apply incrementally
-        runtime.substrate.importDelta(command.payload, "sync")
+        // Delta: apply incrementally via the shared replica surface.
+        // For interpreted substrates, this fires the changefeed.
+        // For bare replicas, it updates internal state only.
+        runtime.replica.importDelta(command.payload, "sync")
       }
     } catch (err) {
       // Import failed — log and continue
@@ -617,7 +652,7 @@ export class Synchronizer {
     }
 
     // Notify the model of successful import
-    const newVersion = runtime.substrate.version().serialize()
+    const newVersion = runtime.replica.version().serialize()
     this.#dispatch({
       type: "synchronizer/doc-imported",
       docId: command.docId,
@@ -627,7 +662,7 @@ export class Synchronizer {
   }
 
   /**
-   * Import a snapshot payload into an existing document runtime.
+   * Import a snapshot payload into an interpreted document runtime.
    *
    * This is an epoch boundary for substrates that can't handle snapshot
    * payloads via importDelta (e.g. PlainSubstrate).
@@ -640,11 +675,14 @@ export class Synchronizer {
    *    into the existing substrate via executeBatch. This keeps
    *    the original ref objects alive.
    */
-  #importSnapshot(runtime: DocRuntime, payload: SubstratePayload): void {
+  #importSnapshot(
+    runtime: DocRuntime & { mode: "interpret" },
+    payload: SubstratePayload,
+  ): void {
     // Strategy 1: try importDelta (works for Loro and any substrate
     // whose importDelta accepts snapshot payloads)
     try {
-      runtime.substrate.importDelta(payload, "sync")
+      runtime.replica.importDelta(payload, "sync")
       return
     } catch {
       // importDelta doesn't support this payload format — use strategy 2
@@ -660,7 +698,7 @@ export class Synchronizer {
       typeof tempSnapshot.data === "string"
     ) {
       const state = JSON.parse(tempSnapshot.data) as Record<string, unknown>
-      const ctx = runtime.substrate.context()
+      const ctx = runtime.replica.context()
 
       // Build ops: one ReplaceChange per top-level key
       const ops: Op[] = []
@@ -675,6 +713,31 @@ export class Synchronizer {
         executeBatch(ctx, ops, "sync")
       }
     }
+  }
+
+  /**
+   * Import a snapshot payload into a replicated document runtime.
+   *
+   * Try importDelta first (works for Loro/Yjs whose importDelta accepts
+   * both snapshots and updates). If that fails, replace the replica
+   * wholesale via replicaFactory.fromSnapshot(). This is safe because
+   * replicate mode has no refs, no changefeed subscribers, and no
+   * external observers — the synchronizer is the sole consumer.
+   */
+  #importSnapshotReplica(
+    runtime: DocRuntime & { mode: "replicate" },
+    command: { docId: DocId; payload: SubstratePayload },
+  ): void {
+    try {
+      runtime.replica.importDelta(command.payload, "sync")
+      return
+    } catch {
+      // importDelta doesn't support this payload format — replace wholesale
+    }
+
+    // Replace the replica in place. The runtime map entry is mutated directly.
+    const newReplica = runtime.replicaFactory.fromSnapshot(command.payload)
+    ;(runtime as { replica: Replica<any> }).replica = newReplica
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

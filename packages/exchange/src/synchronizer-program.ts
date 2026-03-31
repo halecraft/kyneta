@@ -41,7 +41,9 @@ import type {
  */
 export type DocEntry = {
   docId: DocId
-  /** Serialized version from substrate.version().serialize() */
+  /** Document participation mode — interpret (full stack) or replicate (headless). */
+  mode: "interpret" | "replicate"
+  /** Serialized version from replica.version().serialize() */
   version: string
   /** The merge strategy for this document's substrate */
   mergeStrategy: MergeStrategy
@@ -92,6 +94,7 @@ export type SynchronizerMessage =
   | {
       type: "synchronizer/doc-ensure"
       docId: DocId
+      mode: "interpret" | "replicate"
       version: string
       mergeStrategy: MergeStrategy
     }
@@ -368,6 +371,7 @@ function handleDocEnsure(
   msg: {
     type: "synchronizer/doc-ensure"
     docId: DocId
+    mode: "interpret" | "replicate"
     version: string
     mergeStrategy: MergeStrategy
   },
@@ -381,6 +385,7 @@ function handleDocEnsure(
   const documents = new Map(model.documents)
   documents.set(msg.docId, {
     docId: msg.docId,
+    mode: msg.mode,
     version: msg.version,
     mergeStrategy: msg.mergeStrategy,
   })

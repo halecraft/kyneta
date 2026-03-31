@@ -16,10 +16,14 @@
 
 import {
   interpret,
+  Interpret,
+  Replicate,
   type Ref,
   type Schema as SchemaNode,
   type BoundSchema,
   type FactoryBuilder,
+  type MergeStrategy,
+  type ReplicaFactory,
   type SubstrateFactory,
   isBoundSchema,
   registerSubstrate,
@@ -61,17 +65,21 @@ export type AuthorizePredicate = (
 
 /**
  * Callback invoked when a peer announces a document the local exchange
- * doesn't have. Return a `BoundSchema` to auto-create the document,
- * or `undefined` to ignore it.
+ * doesn't have. Return a disposition to determine how the document
+ * participates in the sync graph:
+ *
+ * - `Interpret(bound)` — full interpretation with schema, ref, changefeed.
+ * - `Replicate(replicaFactory, strategy)` — headless replication (relay, storage).
+ * - `undefined` — ignore the unknown document.
  *
  * @param docId - The document ID announced by the peer
  * @param peer - Identity of the peer that announced the document
- * @returns A BoundSchema to create the document, or undefined to ignore
+ * @returns A disposition (`Interpret | Replicate`), or `undefined` to ignore
  */
 export type OnDocDiscovered = (
   docId: DocId,
   peer: PeerIdentityDetails,
-) => BoundSchema | undefined
+) => Interpret | Replicate | undefined
 
 /**
  * Callback invoked when a peer sends a `dismiss` message for a document.
@@ -146,17 +154,28 @@ export type ExchangeParams = {
   /**
    * Called when a peer discovers a document this exchange doesn't have.
    *
-   * Return a `BoundSchema` to auto-create the document and begin sync,
-   * or `undefined` to ignore the unknown document.
+   * Return a disposition to determine how the document participates:
+   * - `Interpret(bound)` — full interpretation (client apps, game servers).
+   * - `Replicate(replicaFactory, strategy)` — headless replication (relay, storage).
+   * - `undefined` — ignore the unknown document.
    *
    * This enables dynamic document patterns where one peer creates a
    * document and the other materializes it on demand.
    *
    * @example
    * ```typescript
+   * import { Interpret, Replicate } from "@kyneta/schema"
+   * import { loroReplicaFactory } from "@kyneta/loro-schema"
+   *
    * const exchange = new Exchange({
+   *   // Relay server — replicate all discovered docs without schema knowledge
+   *   onDocDiscovered: (docId, peer) => Replicate(loroReplicaFactory, "causal"),
+   * })
+   *
+   * // Or: interpret specific docs, ignore the rest
+   * const exchange2 = new Exchange({
    *   onDocDiscovered: (docId, peer) => {
-   *     if (docId.startsWith("input:")) return PlayerInputDoc
+   *     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
    *     return undefined
    *   },
    * })
@@ -171,10 +190,9 @@ export type ExchangeParams = {
 // Doc cache entry
 // ---------------------------------------------------------------------------
 
-type DocCacheEntry = {
-  ref: any
-  bound: BoundSchema
-}
+type DocCacheEntry =
+  | { mode: "interpret"; ref: any; bound: BoundSchema }
+  | { mode: "replicate" }
 
 // ---------------------------------------------------------------------------
 // Exchange
@@ -251,23 +269,41 @@ export class Exchange {
     }
 
     // Create synchronizer — call each factory to produce fresh adapter instances
+    let warnedNoDiscoverCallback = false
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
       adapters: adapters.map(factory => factory()),
       route: route ?? (() => true),
       authorize: authorize ?? (() => true),
       onDocDismissed,
-      onDocCreationRequested: onDocDiscovered
-        ? (docId, peer) => {
-            const bound = onDocDiscovered(docId, peer)
-            if (bound) {
-              // Cast to avoid TS2589 — get()'s Ref<S> return type triggers
-              // excessively deep instantiation when S defaults to SchemaNode.
-              // We don't need the return value here.
-              ;(this as any).get(docId, bound)
-            }
+      onDocCreationRequested: (docId, peer) => {
+        const result = onDocDiscovered
+          ? onDocDiscovered(docId, peer)
+          : undefined
+
+        if (!result) {
+          if (!onDocDiscovered && !warnedNoDiscoverCallback) {
+            warnedNoDiscoverCallback = true
+            console.warn(
+              `[exchange] Peer "${peer.peerId}" discovered document "${docId}" but no onDocDiscovered ` +
+                `callback is configured. The document will be ignored. To accept peer-announced ` +
+                `documents, provide onDocDiscovered in ExchangeParams.`,
+            )
           }
-        : undefined,
+          return
+        }
+
+        switch (result.kind) {
+          case "interpret":
+            // Cast to avoid TS2589 — get()'s Ref<S> return type triggers
+            // excessively deep instantiation when S defaults to SchemaNode.
+            ;(this as any).get(docId, result.bound)
+            break
+          case "replicate":
+            this.replicate(docId, result.replicaFactory, result.strategy)
+            break
+        }
+      },
     })
   }
 
@@ -331,6 +367,13 @@ export class Exchange {
     const cached = this.#docCache.get(docId)
 
     if (cached) {
+      if (cached.mode === "replicate") {
+        throw new Error(
+          `Document '${docId}' is registered in replicate mode. ` +
+            `Cannot call exchange.get() on a replicated document — it has no schema or ref.`,
+        )
+      }
+
       // Validate BoundSchema matches — throw if different binding for same docId
       if (cached.bound !== bound) {
         throw new Error(
@@ -371,15 +414,18 @@ export class Exchange {
 
     // Cache
     this.#docCache.set(docId, {
+      mode: "interpret",
       ref,
       bound,
     })
 
     // Register with synchronizer
     this.#synchronizer.registerDoc({
+      mode: "interpret",
       docId,
-      substrate,
+      replica: substrate,           // Substrate extends Replica
       factory,
+      replicaFactory: factory.replica,
       strategy: bound.strategy,
       ref,
       schema: bound.schema,
@@ -397,7 +443,61 @@ export class Exchange {
   }
 
   /**
+   * Register a document for headless replication — no schema, no ref,
+   * no changefeed. The document participates in the sync graph via a
+   * bare `Replica<V>`, enabling version tracking, per-peer delta
+   * computation, and state accumulation.
+   *
+   * This is the correct tier for relay servers, storage adapters,
+   * routing servers, and audit logs — any participant that needs to
+   * accumulate and relay state without interpreting document fields.
+   *
+   * @param docId - The document ID
+   * @param replicaFactory - Factory for constructing headless replicas
+   * @param strategy - The merge strategy for this document
+   *
+   * @example
+   * ```typescript
+   * import { loroReplicaFactory } from "@kyneta/loro-schema"
+   *
+   * // Schema-free relay — replicate all docs without compile-time schema knowledge
+   * exchange.replicate("shared-doc", loroReplicaFactory, "causal")
+   * ```
+   */
+  replicate(
+    docId: DocId,
+    replicaFactory: ReplicaFactory<any>,
+    strategy: MergeStrategy,
+  ): void {
+    // Check cache — throw if already registered
+    if (this.#docCache.has(docId)) {
+      throw new Error(
+        `Document '${docId}' is already registered. ` +
+          `Cannot call exchange.replicate() on an existing document.`,
+      )
+    }
+
+    // Create headless replica — no schema, no interpreter stack
+    const replica = replicaFactory.createEmpty()
+
+    // Cache
+    this.#docCache.set(docId, { mode: "replicate" })
+
+    // Register with synchronizer
+    this.#synchronizer.registerDoc({
+      mode: "replicate",
+      docId,
+      replica,
+      replicaFactory,
+      strategy,
+    })
+  }
+
+  /**
    * Check if a document exists in the exchange.
+   *
+   * Returns `true` for documents registered via `get()` (interpret mode)
+   * or `replicate()` (replicate mode).
    *
    * @param docId - The document ID
    * @returns true if the document exists

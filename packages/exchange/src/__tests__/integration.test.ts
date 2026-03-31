@@ -13,8 +13,12 @@ import {
   change,
   bindPlain,
   bindEphemeral,
+  Interpret,
+  Replicate,
+  plainReplicaFactory,
+  lwwReplicaFactory,
 } from "@kyneta/schema"
-import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
+import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
 import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
 
@@ -492,7 +496,7 @@ describe("onDocDiscovered (dynamic document creation)", () => {
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
       onDocDiscovered: docId => {
-        if (docId === "dynamic-doc") return SequentialDoc
+        if (docId === "dynamic-doc") return Interpret(SequentialDoc)
         return undefined
       },
     })
@@ -547,7 +551,7 @@ describe("onDocDiscovered (dynamic document creation)", () => {
       identity: { peerId: "bob" },
       adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
       onDocDiscovered: docId => {
-        if (docId === "presence") return PresenceDoc
+        if (docId === "presence") return Interpret(PresenceDoc)
         return undefined
       },
     })
@@ -789,7 +793,7 @@ describe("route + onDocDiscovered interaction", () => {
       route: docId => docId !== "blocked-doc",
       onDocDiscovered: docId => {
         discoveredCallCount++
-        if (docId === "blocked-doc") return SequentialDoc
+        if (docId === "blocked-doc") return Interpret(SequentialDoc)
         return undefined
       },
     })
@@ -802,5 +806,272 @@ describe("route + onDocDiscovered interaction", () => {
     // Bob's onDocDiscovered should never have fired (route blocked it)
     expect(discoveredCallCount).toBe(0)
     expect(exchangeB.has("blocked-doc")).toBe(false)
+  })
+})
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// Relay via exchange.replicate() — schema-free relay tests
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+describe("relay via exchange.replicate()", () => {
+  it("causal doc syncs through a schema-free relay: peer A → relay → peer B", async () => {
+    const bridgeAR = new Bridge()
+    const bridgeRB = new Bridge()
+
+    // Peer A — full interpreter
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+    })
+
+    // Relay — headless replication, no schema knowledge
+    const relay = createExchange({
+      identity: { peerId: "relay" },
+      adapters: [
+        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
+        createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB }),
+      ],
+      onDocDiscovered: (_docId, _peer) =>
+        Replicate(loroReplicaFactory, "causal"),
+    })
+
+    // Peer B — full interpreter
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      onDocDiscovered: (docId) => {
+        if (docId === "shared") return Interpret(LoroDoc)
+        return undefined
+      },
+    })
+
+    // Alice creates the doc and writes
+    const docA = exchangeA.get("shared", LoroDoc)
+    change(docA, (d: any) => {
+      d.title.insert(0, "Hello from Alice")
+    })
+
+    await drain(60)
+
+    // Relay should have the doc (replicated)
+    expect(relay.has("shared")).toBe(true)
+
+    // Bob should have the doc (interpreted) with Alice's content
+    expect(exchangeB.has("shared")).toBe(true)
+    const docB = exchangeB.get("shared", LoroDoc)
+    expect(docB.title()).toBe("Hello from Alice")
+  })
+
+  it("sequential doc syncs through a schema-free relay", async () => {
+    const bridgeAR = new Bridge()
+    const bridgeRB = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+    })
+
+    const relay = createExchange({
+      identity: { peerId: "relay" },
+      adapters: [
+        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
+        createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB }),
+      ],
+      onDocDiscovered: (_docId, _peer) =>
+        Replicate(plainReplicaFactory, "sequential"),
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      onDocDiscovered: (docId) => {
+        if (docId === "config") return Interpret(SequentialDoc)
+        return undefined
+      },
+    })
+
+    const docA = exchangeA.get("config", SequentialDoc)
+    change(docA, (d: any) => {
+      d.title.set("Config Value")
+      d.count.set(42)
+    })
+
+    await drain(60)
+
+    expect(relay.has("config")).toBe(true)
+    expect(exchangeB.has("config")).toBe(true)
+    const docB = exchangeB.get("config", SequentialDoc)
+    expect(docB.title()).toBe("Config Value")
+    expect(docB.count()).toBe(42)
+  })
+
+  it("LWW doc syncs through a schema-free relay", async () => {
+    const bridgeAR = new Bridge()
+    const bridgeRB = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+    })
+
+    const relay = createExchange({
+      identity: { peerId: "relay" },
+      adapters: [
+        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
+        createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB }),
+      ],
+      onDocDiscovered: (_docId, _peer) =>
+        Replicate(lwwReplicaFactory, "lww"),
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      onDocDiscovered: (docId) => {
+        if (docId === "presence") return Interpret(PresenceDoc)
+        return undefined
+      },
+    })
+
+    const docA = exchangeA.get("presence", PresenceDoc)
+    change(docA, (d: any) => {
+      d.cursor.x.set(100)
+      d.cursor.y.set(200)
+      d.name.set("Alice")
+    })
+
+    await drain(60)
+
+    expect(relay.has("presence")).toBe(true)
+    expect(exchangeB.has("presence")).toBe(true)
+    const docB = exchangeB.get("presence", PresenceDoc)
+    expect(docB.cursor.x()).toBe(100)
+    expect(docB.cursor.y()).toBe(200)
+    expect(docB.name()).toBe("Alice")
+  })
+
+  it("onDocDiscovered returning Replicate() creates replicated doc from peer discovery", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    let discoveredDocId: string | undefined
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      onDocDiscovered: (docId, _peer) => {
+        discoveredDocId = docId
+        return Replicate(loroReplicaFactory, "causal")
+      },
+    })
+
+    // Alice creates a doc
+    exchangeA.get("test-doc", LoroDoc)
+
+    await drain(40)
+
+    // Bob should have discovered and replicated the doc
+    expect(discoveredDocId).toBe("test-doc")
+    expect(exchangeB.has("test-doc")).toBe(true)
+  })
+
+  it("late-joiner via relay: peer A pushes, peer B connects later, relay serves B", async () => {
+    const bridgeAR = new Bridge()
+
+    // Phase 1: Alice connects to relay, writes data
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+    })
+
+    const relay = createExchange({
+      identity: { peerId: "relay" },
+      adapters: [
+        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
+      ],
+      onDocDiscovered: (_docId, _peer) =>
+        Replicate(loroReplicaFactory, "causal"),
+    })
+
+    const docA = exchangeA.get("shared", LoroDoc)
+    change(docA, (d: any) => {
+      d.title.insert(0, "Written before Bob joined")
+    })
+
+    await drain(60)
+
+    // Relay should have accumulated Alice's state
+    expect(relay.has("shared")).toBe(true)
+
+    // Phase 2: Bob connects to relay AFTER Alice wrote
+    const bridgeRB = new Bridge()
+    await relay.addAdapter(
+      createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB })(),
+    )
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      onDocDiscovered: (docId) => {
+        if (docId === "shared") return Interpret(LoroDoc)
+        return undefined
+      },
+    })
+
+    await drain(60)
+
+    // Bob should have received Alice's content via the relay
+    expect(exchangeB.has("shared")).toBe(true)
+    const docB = exchangeB.get("shared", LoroDoc)
+    expect(docB.title()).toBe("Written before Bob joined")
+  })
+
+  it("mixed dispositions: one exchange with interpreted + replicated docs", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      onDocDiscovered: (docId, _peer) => {
+        // Interpret some docs, replicate others
+        if (docId === "app-doc") return Interpret(SequentialDoc)
+        if (docId === "relay-doc") return Replicate(loroReplicaFactory, "causal")
+        return undefined
+      },
+    })
+
+    // Alice creates both docs
+    const appDoc = exchangeA.get("app-doc", SequentialDoc)
+    const loroDoc = exchangeA.get("relay-doc", LoroDoc)
+
+    change(appDoc, (d: any) => {
+      d.title.set("App Data")
+      d.count.set(7)
+    })
+    change(loroDoc, (d: any) => {
+      d.title.insert(0, "Loro Data")
+    })
+
+    await drain(60)
+
+    // Bob should have both docs
+    expect(exchangeB.has("app-doc")).toBe(true)
+    expect(exchangeB.has("relay-doc")).toBe(true)
+
+    // The interpreted doc should be readable
+    const bobAppDoc = exchangeB.get("app-doc", SequentialDoc)
+    expect(bobAppDoc.title()).toBe("App Data")
+    expect(bobAppDoc.count()).toBe(7)
+
+    // The replicated doc should exist but not be gettable as interpreted
+    expect(() => exchangeB.get("relay-doc", LoroDoc)).toThrow(/replicate mode/)
   })
 })

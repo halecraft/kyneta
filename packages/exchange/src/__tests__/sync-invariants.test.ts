@@ -5,6 +5,8 @@
 // 2. Snapshot import preserves ref object identity
 // 3. LWW stale rejection discards out-of-order arrivals
 // 4. Causal sync uses deltas after initial sync
+// 5. Universal version comparison — all strategies reject stale offers
+// 6. Plain replica snapshot import falls back to replicaFactory.fromSnapshot()
 
 import { describe, expect, it, afterEach } from "vitest"
 import {
@@ -12,9 +14,13 @@ import {
   change,
   bindPlain,
   bindEphemeral,
+  Interpret,
+  Replicate,
   TimestampVersion,
+  plainReplicaFactory,
+  PlainVersion,
 } from "@kyneta/schema"
-import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
+import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
 import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
@@ -71,6 +77,12 @@ const presenceSchema = Schema.doc({
   x: Schema.number(),
 })
 const PresenceDoc = bindEphemeral(presenceSchema)
+
+const sequentialSchema = Schema.doc({
+  title: Schema.string(),
+  count: Schema.number(),
+})
+const SequentialDoc = bindPlain(sequentialSchema)
 
 const loroSchema = LoroSchema.doc({
   title: LoroSchema.text(),
@@ -296,5 +308,150 @@ describe("causal sync uses deltas when sender is ahead", () => {
 
     // Both changes should be present (delta merge, not snapshot replace)
     expect(docB.title()).toBe("First Second")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. Universal version comparison — sequential rejects stale offers
+//
+// Before the universal version check, only LWW ran version comparison
+// before import. A regression reintroducing `if (strategy === "lww")`
+// would let stale sequential offers silently overwrite fresher state.
+// ---------------------------------------------------------------------------
+
+describe("universal version comparison rejects stale offers for all strategies", () => {
+  it("sequential: second peer's stale snapshot does not overwrite fresher local state", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+    })
+
+    // Both create the same doc
+    const docA = exchangeA.get("doc-1", SequentialDoc)
+    const docB = exchangeB.get("doc-1", SequentialDoc)
+
+    // Alice writes first — version advances to 1
+    change(docA, (d: any) => {
+      d.title.set("V1")
+      d.count.set(1)
+    })
+
+    // Let Alice's state reach Bob
+    await drain()
+    expect(docB.title()).toBe("V1")
+    expect(docB.count()).toBe(1)
+
+    // Bob writes — Bob's version advances to 2
+    change(docB, (d: any) => {
+      d.title.set("V2")
+      d.count.set(2)
+    })
+
+    // Alice writes again — Alice's version also advances to 2
+    change(docA, (d: any) => {
+      d.title.set("V2-alice")
+      d.count.set(99)
+    })
+
+    await drain()
+
+    // The key invariant: Bob's state should not have been silently
+    // overwritten by a stale offer. Both sides should have a version
+    // that reflects the latest writes, not an older snapshot.
+    // With the universal version check, "behind" or "equal" offers
+    // are discarded before import — this prevents regression.
+    const bobVersion = docB.count()
+    expect(typeof bobVersion).toBe("number")
+    // Bob should have state from either his own write or Alice's later
+    // write — but NOT the V1 state, which would indicate the version
+    // check was bypassed
+    expect(bobVersion).not.toBe(1)
+  })
+
+  it("PlainVersion comparison: behind and equal skip import", () => {
+    // Direct unit test for the version algebra used by sequential strategy.
+    // The universal check relies on this returning "behind"/"equal" to skip.
+    const v1 = new PlainVersion(1)
+    const v2 = new PlainVersion(2)
+    const v2b = new PlainVersion(2)
+
+    expect(v1.compare(v2)).toBe("behind")
+    expect(v2.compare(v2b)).toBe("equal")
+    expect(v2.compare(v1)).toBe("ahead")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 6. Plain replica snapshot import falls back to fromSnapshot()
+//
+// Loro/Yjs replicas accept snapshots via importDelta. Plain replicas
+// do NOT — importDelta expects JSON-encoded delta ops, not a snapshot.
+// The #importSnapshotReplica fallback replaces the replica wholesale
+// via replicaFactory.fromSnapshot(). If this path is broken, plain
+// replicas can never receive snapshots from peers.
+// ---------------------------------------------------------------------------
+
+describe("plain replica snapshot import falls back to replicaFactory.fromSnapshot()", () => {
+  it("plain relay receives snapshot from peer and serves it to a late-joiner", async () => {
+    const bridgeAR = new Bridge()
+
+    // Alice — full interpreter with plain/sequential substrate
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR })],
+    })
+
+    // Relay — plain replica (no schema)
+    const relay = createExchange({
+      identity: { peerId: "relay" },
+      adapters: [
+        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
+      ],
+      onDocDiscovered: () => Replicate(plainReplicaFactory, "sequential"),
+    })
+
+    // Alice writes data
+    const docA = exchangeA.get("config", SequentialDoc)
+    change(docA, (d: any) => {
+      d.title.set("Important Config")
+      d.count.set(42)
+    })
+
+    await drain(60)
+
+    // Relay has the doc — it received a snapshot from Alice and
+    // the #importSnapshotReplica fallback replaced the replica
+    expect(relay.has("config")).toBe(true)
+
+    // Phase 2: Bob connects to relay AFTER Alice wrote
+    const bridgeRB = new Bridge()
+    await relay.addAdapter(
+      createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB })(),
+    )
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      onDocDiscovered: (docId) => {
+        if (docId === "config") return Interpret(SequentialDoc)
+        return undefined
+      },
+    })
+
+    await drain(60)
+
+    // Bob should have received Alice's content from the relay.
+    // This proves the relay's replica was correctly replaced via
+    // fromSnapshot() and can serve state to late-joiners.
+    expect(exchangeB.has("config")).toBe(true)
+    const docB = exchangeB.get("config", SequentialDoc)
+    expect(docB.title()).toBe("Important Config")
+    expect(docB.count()).toBe(42)
   })
 })

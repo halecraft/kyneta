@@ -21,7 +21,7 @@
 // - "lww": unidirectional broadcast, timestamp-based (Ephemeral)
 
 import type { Schema as SchemaNode } from "./schema.js"
-import type { SubstrateFactory, Version } from "./substrate.js"
+import type { ReplicaFactory, SubstrateFactory, Version } from "./substrate.js"
 import { lwwSubstrateFactory } from "./substrates/lww.js"
 import { plainSubstrateFactory } from "./substrates/plain.js"
 
@@ -90,6 +90,79 @@ export interface BoundSchema<S extends SchemaNode = SchemaNode> {
   readonly schema: S
   readonly factory: FactoryBuilder<any>
   readonly strategy: MergeStrategy
+}
+
+// ---------------------------------------------------------------------------
+// Disposition types — Interpret / Replicate
+// ---------------------------------------------------------------------------
+
+/**
+ * Disposition: full interpretation.
+ *
+ * The document is backed by a `Substrate` with a full interpreter stack:
+ * readable store, writable context, changefeed, `Ref<S>`. This is the
+ * default for client apps and application servers that read and write
+ * document state.
+ *
+ * Created via `exchange.get(docId, bound)` or returned from
+ * `onDocDiscovered` to auto-create an interpreted document.
+ */
+export type Interpret = {
+  readonly kind: "interpret"
+  readonly bound: BoundSchema
+}
+
+/**
+ * Disposition: headless replication.
+ *
+ * The document is backed by a bare `Replica<V>` — version tracking,
+ * export/import, per-peer delta computation — but no schema-driven
+ * interpretation, no `Ref`, no changefeed. This is the correct tier
+ * for conduit participants: relay servers, storage adapters, routing
+ * servers, audit logs.
+ *
+ * Created via `exchange.replicate(docId, replicaFactory, strategy)` or
+ * returned from `onDocDiscovered` to auto-create a replicated document.
+ */
+export type Replicate = {
+  readonly kind: "replicate"
+  readonly replicaFactory: ReplicaFactory<any>
+  readonly strategy: MergeStrategy
+}
+
+// ---------------------------------------------------------------------------
+// Disposition constructors — dual-namespace pattern
+// ---------------------------------------------------------------------------
+
+/**
+ * Construct an `Interpret` disposition from a `BoundSchema`.
+ *
+ * TypeScript dual-namespace pattern: `Interpret` is both a type and a
+ * same-named constructor function. Call-site reads naturally:
+ *
+ * ```ts
+ * onDocDiscovered: (docId) => Interpret(PlayerDoc)
+ * ```
+ */
+export function Interpret(bound: BoundSchema): Interpret {
+  return { kind: "interpret", bound }
+}
+
+/**
+ * Construct a `Replicate` disposition from a `ReplicaFactory` and strategy.
+ *
+ * TypeScript dual-namespace pattern: `Replicate` is both a type and a
+ * same-named constructor function. Call-site reads naturally:
+ *
+ * ```ts
+ * onDocDiscovered: (docId) => Replicate(loroReplicaFactory, "causal")
+ * ```
+ */
+export function Replicate(
+  replicaFactory: ReplicaFactory<any>,
+  strategy: MergeStrategy,
+): Replicate {
+  return { kind: "replicate", replicaFactory, strategy }
 }
 
 // ---------------------------------------------------------------------------

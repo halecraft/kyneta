@@ -19,6 +19,7 @@
 /// <reference types="bun-types" />
 
 import { Exchange } from "@kyneta/exchange"
+import { Interpret } from "@kyneta/schema"
 import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
 import {
   createBunWebsocketHandlers,
@@ -84,8 +85,8 @@ const exchange = new Exchange({
   // A client created input:${peerId} — materialize it server-side
   // and register the player with the game loop.
   //
-  // onDocDiscovered returns the BoundSchema; the Exchange then calls
-  // exchange.get(docId, bound) internally to create the doc. After
+  // onDocDiscovered returns an Interpret disposition; the Exchange then
+  // calls exchange.get(docId, bound) internally to create the doc. After
   // that call completes (synchronously), we can look the doc up.
   // We schedule a microtask to register the player so the Exchange
   // finishes its dispatch loop first.
@@ -101,7 +102,7 @@ const exchange = new Exchange({
       }
     })
 
-    return PlayerInputDoc
+    return Interpret(PlayerInputDoc)
   },
 
   // ── onDocDismissed ───────────────────────────────────────────────

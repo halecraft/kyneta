@@ -8,6 +8,7 @@ import {
   bind,
   change,
   plainSubstrateFactory,
+  plainReplicaFactory,
   unwrap,
 } from "@kyneta/schema"
 import { bindLoro, LoroSchema, loro } from "@kyneta/loro-schema"
@@ -331,5 +332,58 @@ describe("Exchange", () => {
         expect(docB.count()).toBe(2)
       })
     })
+  })
+
+  // =========================================================================
+  // exchange.replicate() — headless replication
+  // =========================================================================
+
+  describe("replicate()", () => {
+    it("registers a replicated doc visible via has()", () => {
+      const exchange = createExchange()
+      exchange.replicate("rep-doc", plainReplicaFactory, "sequential")
+      expect(exchange.has("rep-doc")).toBe(true)
+    })
+
+    it("replicate() throws if docId already registered via get()", () => {
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+      expect(() =>
+        exchange.replicate("doc-1", plainReplicaFactory, "sequential"),
+      ).toThrow(/already registered/)
+    })
+
+    it("replicate() throws if docId already registered via replicate()", () => {
+      const exchange = createExchange()
+      exchange.replicate("doc-1", plainReplicaFactory, "sequential")
+      expect(() =>
+        exchange.replicate("doc-1", plainReplicaFactory, "sequential"),
+      ).toThrow(/already registered/)
+    })
+
+    it("get() throws if docId is registered in replicate mode", () => {
+      const exchange = createExchange()
+      exchange.replicate("doc-1", plainReplicaFactory, "sequential")
+      expect(() => exchange.get("doc-1", TestDoc)).toThrow(/replicate mode/)
+    })
+
+    it("dismiss() works for replicated docs", () => {
+      const exchange = createExchange()
+      exchange.replicate("rep-doc", plainReplicaFactory, "sequential")
+      expect(exchange.has("rep-doc")).toBe(true)
+      exchange.dismiss("rep-doc")
+      expect(exchange.has("rep-doc")).toBe(false)
+    })
+
+    it("has() returns true for both interpret and replicate modes", () => {
+      const exchange = createExchange()
+      exchange.get("int-doc", TestDoc)
+      exchange.replicate("rep-doc", plainReplicaFactory, "sequential")
+      expect(exchange.has("int-doc")).toBe(true)
+      expect(exchange.has("rep-doc")).toBe(true)
+      expect(exchange.has("unknown")).toBe(false)
+    })
+
+
   })
 })
