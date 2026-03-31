@@ -10,7 +10,14 @@
 // Ported from @loro-extended/repo's Synchronizer with Loro-specific types
 // replaced by substrate-agnostic equivalents.
 
-import type { Replica, ReplicaFactory, Substrate, SubstratePayload, MergeStrategy } from "@kyneta/schema"
+import type {
+  Replica,
+  ReplicaFactory,
+  Substrate,
+  SubstratePayload,
+  MergeStrategy,
+  Version,
+} from "@kyneta/schema"
 import type { AnyAdapter } from "./adapter/adapter.js"
 import { AdapterManager } from "./adapter/adapter-manager.js"
 import type { Channel, ConnectedChannel } from "./channel.js"
@@ -55,13 +62,13 @@ type DocRuntimeBase = {
  * exists solely to narrow the type, not to carry extra baggage.
  */
 export type DocRuntime =
-  | DocRuntimeBase & {
+  | (DocRuntimeBase & {
       mode: "interpret"
-      replica: Substrate<any>        // narrows Replica to Substrate
-    }
-  | DocRuntimeBase & {
+      replica: Substrate<any> // narrows Replica to Substrate
+    })
+  | (DocRuntimeBase & {
       mode: "replicate"
-    }
+    })
 
 /**
  * Callback invoked when a peer discovers a document the local exchange
@@ -69,13 +76,19 @@ export type DocRuntime =
  * the Exchange wraps the user's `onDocDiscovered` callback to call
  * `exchange.get()` if a BoundSchema is returned.
  */
-export type DocCreationCallback = (docId: DocId, peer: PeerIdentityDetails) => void
+export type DocCreationCallback = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+) => void
 
 /**
  * Callback invoked when a peer sends a `dismiss` message for a document.
  * The Exchange wraps the user's `onDocDismissed` callback.
  */
-export type DocDismissedCallback = (docId: DocId, peer: PeerIdentityDetails) => void
+export type DocDismissedCallback = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+) => void
 
 export type SynchronizerParams = {
   identity: PeerIdentityDetails
@@ -84,6 +97,81 @@ export type SynchronizerParams = {
   authorize: AuthorizePredicate
   onDocCreationRequested?: DocCreationCallback
   onDocDismissed?: DocDismissedCallback
+}
+
+// ---------------------------------------------------------------------------
+// Version-gap planning helpers
+// ---------------------------------------------------------------------------
+
+type VersionGapResult =
+  | { kind: "parse-error"; error: unknown }
+  | { kind: "no-gap"; comparison: "behind" | "equal" }
+  | {
+      kind: "gap"
+      comparison: "ahead" | "concurrent"
+      parsed: Version
+    }
+
+/**
+ * Compare an incoming peer version against our current replica version.
+ *
+ * Semantics:
+ * - parse incoming serialized version
+ * - compare `incoming.compare(current)`
+ * - `"behind"` / `"equal"` → no action needed
+ * - `"ahead"` / `"concurrent"` → remote peer has data we may need to import
+ */
+function resolveInboundVersionGap(
+  replica: Replica<any>,
+  replicaFactory: ReplicaFactory<any>,
+  serializedVersion: string,
+): VersionGapResult {
+  let parsed: Version
+  try {
+    parsed = replicaFactory.parseVersion(serializedVersion)
+  } catch (error) {
+    return { kind: "parse-error", error }
+  }
+
+  const currentVersion = replica.version()
+  const comparison = parsed.compare(currentVersion)
+
+  if (comparison === "behind" || comparison === "equal") {
+    return { kind: "no-gap", comparison }
+  }
+
+  return { kind: "gap", comparison, parsed }
+}
+
+/**
+ * Compare our current replica version against a peer's declared version.
+ *
+ * Semantics:
+ * - parse peer serialized version
+ * - compare `current.compare(peerKnown)`
+ * - `"behind"` / `"equal"` → nothing useful to send
+ * - `"ahead"` / `"concurrent"` → we have data the peer is missing
+ */
+function resolveOutboundVersionGap(
+  replica: Replica<any>,
+  replicaFactory: ReplicaFactory<any>,
+  serializedVersion: string,
+): VersionGapResult {
+  let parsed: Version
+  try {
+    parsed = replicaFactory.parseVersion(serializedVersion)
+  } catch (error) {
+    return { kind: "parse-error", error }
+  }
+
+  const currentVersion = replica.version()
+  const comparison = currentVersion.compare(parsed)
+
+  if (comparison === "behind" || comparison === "equal") {
+    return { kind: "no-gap", comparison }
+  }
+
+  return { kind: "gap", comparison, parsed }
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +208,14 @@ export class Synchronizer {
     (docId: DocId, readyStates: ReadyState[]) => void
   >()
 
-  constructor({ identity, adapters = [], route, authorize, onDocCreationRequested, onDocDismissed }: SynchronizerParams) {
+  constructor({
+    identity,
+    adapters = [],
+    route,
+    authorize,
+    onDocCreationRequested,
+    onDocDismissed,
+  }: SynchronizerParams) {
     this.identity = identity
 
     this.#updateFn = createSynchronizerUpdate({ route, authorize })
@@ -499,18 +594,11 @@ export class Synchronizer {
   }
 
   /**
-   * Build and send an offer from the replica.
+   * Build and queue an outbound offer for a document.
    *
-   * The pure model provides `sinceVersion` when the peer declared a version
-   * (causal/sequential interest or push). The runtime resolves it to a real
-   * `Version` object and uses comparison to decide:
-   *
-   * - `"behind"` / `"equal"` → nothing new to send, early return.
-   * - `"ahead"` / `"concurrent"` → `exportSince()` for a minimal delta.
-   *
-   * When `sinceVersion` is absent (LWW, or peer with no version),
-   * `exportEntirety()` sends the full state — this is the only path
-   * to entirety export.
+   * Version-gap planning happens via `resolveOutboundVersionGap()`.
+   * Effect execution stays here in the shell: warnings, payload export,
+   * and outbound queue mutation.
    *
    * No mode branching needed — `replica` exists on both modes.
    * For interpreted docs, `runtime.replica` is the `Substrate` itself
@@ -524,65 +612,70 @@ export class Synchronizer {
     reciprocate?: boolean
   }): void {
     const runtime = this.#docRuntimes.get(command.docId)
-    if (!runtime) return
-
-    let payload: SubstratePayload
-
-    if (command.sinceVersion) {
-      // Peer provided a version — use version comparison to decide.
-      let sinceVer: ReturnType<typeof runtime.replicaFactory.parseVersion>
-      try {
-        sinceVer = runtime.replicaFactory.parseVersion(command.sinceVersion)
-      } catch (err) {
-        console.warn(`[exchange] version parse failed for doc '${command.docId}':`, err)
-        return
-      }
-
-      const currentVersion = runtime.replica.version()
-      const comparison = currentVersion.compare(sinceVer)
-
-      if (comparison === "behind" || comparison === "equal") {
-        // Nothing new to send — peer has the same state or more.
-        return
-      }
-
-      // "ahead" or "concurrent" — we have ops the peer doesn't.
-      const delta = runtime.replica.exportSince(sinceVer)
-      if (!delta) {
-        // Substrate says nothing to export despite version mismatch — unexpected.
-        console.warn(`[exchange] exportSince returned null for doc '${command.docId}' despite comparison '${comparison}'`)
-        return
-      }
-      payload = delta
-    } else {
-      // No sinceVersion — export entirety (LWW, or peer has no version to offer).
-      payload = runtime.replica.exportEntirety()
+    if (!runtime) {
+      console.warn(
+        `[exchange] doc runtime not found, offer not sent: ${command.docId}`,
+      )
+      return
     }
 
-    const version = runtime.replica.version().serialize()
+    const enqueueOffer = (payload: SubstratePayload): void => {
+      const version = runtime.replica.version().serialize()
 
-    this.#outboundQueue.push({
-      toChannelIds: command.toChannelIds,
-      message: {
-        type: "offer",
-        docId: command.docId,
-        payload,
-        version,
-        reciprocate: command.reciprocate,
-      },
-    })
+      this.#outboundQueue.push({
+        toChannelIds: command.toChannelIds,
+        message: {
+          type: "offer",
+          docId: command.docId,
+          payload,
+          version,
+          reciprocate: command.reciprocate,
+        },
+      })
+    }
+
+    if (command.sinceVersion) {
+      const gap = resolveOutboundVersionGap(
+        runtime.replica,
+        runtime.replicaFactory,
+        command.sinceVersion,
+      )
+
+      switch (gap.kind) {
+        case "parse-error":
+          console.warn(
+            `[exchange] version parse failed for doc '${command.docId}':`,
+            gap.error,
+          )
+          return
+
+        case "no-gap":
+          return
+
+        case "gap": {
+          const payload = runtime.replica.exportSince(gap.parsed)
+          if (!payload) {
+            console.warn(
+              `[exchange] exportSince returned null for doc '${command.docId}' despite comparison '${gap.comparison}'`,
+            )
+            return
+          }
+
+          enqueueOffer(payload)
+          return
+        }
+      }
+    }
+
+    enqueueOffer(runtime.replica.exportEntirety())
   }
 
   /**
-   * Import document data from a peer.
+   * Import document data from a peer and notify the model on success.
    *
-   * Version comparison is universal — applied for all strategies via
-   * the `Version` algebra. `"behind"` and `"equal"` mean "nothing new"
-   * and skip import regardless of strategy.
-   *
-   * The substrate's `merge()` method handles both payload kinds
-   * (`"entirety"` and `"since"`) internally — no mode branching,
-   * no try/catch probing, no strategy dispatch needed here.
+   * Version-gap planning happens via `resolveInboundVersionGap()`.
+   * Effect execution stays here in the shell: warnings, merge, and
+   * follow-up dispatch.
    */
   #executeImportDocData(command: {
     type: "cmd/import-doc-data"
@@ -594,20 +687,25 @@ export class Synchronizer {
     const runtime = this.#docRuntimes.get(command.docId)
     if (!runtime) return
 
-    // Universal version comparison — a property of the Version algebra,
-    // not a strategy-specific concern.
-    try {
-      const incomingVersion = runtime.replicaFactory.parseVersion(command.version)
-      const currentVersion = runtime.replica.version()
-      const comparison = incomingVersion.compare(currentVersion)
-      if (comparison === "behind" || comparison === "equal") {
-        // Stale or duplicate — discard
+    const gap = resolveInboundVersionGap(
+      runtime.replica,
+      runtime.replicaFactory,
+      command.version,
+    )
+
+    switch (gap.kind) {
+      case "parse-error":
+        console.warn(
+          `[exchange] version parse failed for doc '${command.docId}':`,
+          gap.error,
+        )
         return
-      }
-    } catch (err) {
-      // Version parsing failed — this is a genuine error, not a recoverable condition.
-      console.warn(`[exchange] version parse failed for doc '${command.docId}':`, err)
-      return
+
+      case "no-gap":
+        return
+
+      case "gap":
+        break
     }
 
     try {
