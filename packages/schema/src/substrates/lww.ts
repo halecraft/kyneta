@@ -83,10 +83,10 @@ function wrapWithTimestamp(
       return inner.exportEntirety()
     },
 
-    // LWW never uses deltas — the synchronizer always sets
-    // `forceSnapshot: true` for LWW pushes, so `exportSince` is never
-    // called in practice. Delegate to exportEntirety for defensive
-    // correctness rather than returning null.
+    // LWW never uses deltas — the synchronizer never provides
+    // `sinceVersion` for LWW docs, so `exportSince` is never called
+    // in practice. Delegate to exportEntirety for defensive correctness
+    // rather than returning null.
     exportSince(_since: TimestampVersion): SubstratePayload | null {
       return inner.exportEntirety()
     },

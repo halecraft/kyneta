@@ -387,7 +387,7 @@ The LWW substrate pattern is implemented by `lwwSubstrateFactory` in `@kyneta/sc
 
 - **State management**: delegates to the inner `PlainSubstrate` (same `StoreReader`, `applyChangeToStore`, interpreter stack)
 - **Version tracking**: `TimestampVersion` bumped on every `onFlush()` and `merge()`
-- **Export**: always `exportEntirety()` (full state). `exportSince()` delegates to `inner.exportEntirety()` for defensive correctness, but is never called in practice — the synchronizer always sets `forceEntirety: true` for LWW pushes.
+- **Export**: always `exportEntirety()` (full state). `exportSince()` delegates to `inner.exportEntirety()` for defensive correctness, but is never called in practice — the synchronizer never sets `sinceVersion` for LWW docs, so the runtime always falls through to `exportEntirety()`.
 - **Import**: delegates to inner `PlainSubstrate`
 
 **Critical:** The LWW substrate must override `context()` to return a `WritableContext` built from the **wrapper** substrate, not the inner one. This ensures `onFlush()` (which bumps the timestamp version) is called during `change()`. This is correct-by-construction in `wrapWithTimestamp` — the extracted helper eliminates the risk of copy-paste errors:

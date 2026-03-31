@@ -990,7 +990,6 @@ describe("synchronizer-program", () => {
         expect(offerCmd.toChannelIds).not.toContain(1)
         // sinceVersion must be the pre-import version (v2), not the new version (v3)
         expect(offerCmd.sinceVersion).toBe("v2")
-        expect(offerCmd.forceEntirety).toBeFalsy()
       }
     })
 
@@ -1033,7 +1032,6 @@ describe("synchronizer-program", () => {
         // Should target Carol's channel, NOT Bob's
         expect(offerCmd.toChannelIds).toContain(2)
         expect(offerCmd.toChannelIds).not.toContain(1)
-        expect(offerCmd.forceEntirety).toBe(true)
         expect(offerCmd.sinceVersion).toBeUndefined()
       }
     })

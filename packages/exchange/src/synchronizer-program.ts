@@ -176,8 +176,6 @@ export type Command =
       /** If set, export since this version. Otherwise, export entirety. */
       sinceVersion?: string
       reciprocate?: boolean
-      /** Whether to force entirety export (ignoring sinceVersion). Used by LWW. */
-      forceEntirety?: boolean
     }
 
   // Document operations
@@ -783,7 +781,6 @@ function handleInterest(
         toChannelIds: [fromChannelId],
         sinceVersion: message.version,
         reciprocate: false,
-        forceEntirety: false,
       })
 
       // If the peer asked for reciprocation, send our own interest
@@ -815,7 +812,6 @@ function handleInterest(
         toChannelIds: [fromChannelId],
         sinceVersion: message.version,
         reciprocate: false,
-        forceEntirety: false,
       })
       break
 
@@ -827,7 +823,6 @@ function handleInterest(
         toChannelIds: [fromChannelId],
         // No sinceVersion — always entirety for LWW
         reciprocate: false,
-        forceEntirety: true,
       })
       break
   }
@@ -944,7 +939,6 @@ function buildPush(
         docId,
         toChannelIds: channelIds,
         sinceVersion: docEntry.version,
-        forceEntirety: false,
       }
     }
 
@@ -958,7 +952,6 @@ function buildPush(
         type: "cmd/send-offer",
         docId,
         toChannelIds: channelIds,
-        forceEntirety: true,
       }
     }
   }

@@ -516,15 +516,14 @@ export class Synchronizer {
     toChannelIds: ChannelId[]
     sinceVersion?: string
     reciprocate?: boolean
-    forceEntirety?: boolean
   }): void {
     const runtime = this.#docRuntimes.get(command.docId)
     if (!runtime) return
 
     let payload: SubstratePayload | null = null
 
-    // Try relative export first if sinceVersion is provided and not forced to entirety
-    if (command.sinceVersion && !command.forceEntirety) {
+    // Try relative export first if sinceVersion is provided
+    if (command.sinceVersion) {
       try {
         const sinceVer = runtime.replicaFactory.parseVersion(command.sinceVersion)
         const currentVersion = runtime.replica.version()
