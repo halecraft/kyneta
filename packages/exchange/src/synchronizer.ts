@@ -501,10 +501,16 @@ export class Synchronizer {
   /**
    * Build and send an offer from the replica.
    *
-   * This is where the runtime interacts with the replica to produce
-   * the actual payload. The pure model only knows about serialized
-   * version strings — the runtime resolves them to real Version objects
-   * and calls exportSince/exportEntirety on the replica.
+   * The pure model provides `sinceVersion` when the peer declared a version
+   * (causal/sequential interest or push). The runtime resolves it to a real
+   * `Version` object and uses comparison to decide:
+   *
+   * - `"behind"` / `"equal"` → nothing new to send, early return.
+   * - `"ahead"` / `"concurrent"` → `exportSince()` for a minimal delta.
+   *
+   * When `sinceVersion` is absent (LWW, or peer with no version),
+   * `exportEntirety()` sends the full state — this is the only path
+   * to entirety export.
    *
    * No mode branching needed — `replica` exists on both modes.
    * For interpreted docs, `runtime.replica` is the `Substrate` itself
@@ -520,38 +526,36 @@ export class Synchronizer {
     const runtime = this.#docRuntimes.get(command.docId)
     if (!runtime) return
 
-    let payload: SubstratePayload | null = null
+    let payload: SubstratePayload
 
-    // Try relative export first if sinceVersion is provided
     if (command.sinceVersion) {
+      // Peer provided a version — use version comparison to decide.
+      let sinceVer: ReturnType<typeof runtime.replicaFactory.parseVersion>
       try {
-        const sinceVer = runtime.replicaFactory.parseVersion(command.sinceVersion)
-        const currentVersion = runtime.replica.version()
-        const comparison = currentVersion.compare(sinceVer)
-
-        // If we're behind the requester, we have nothing useful to send —
-        // they already have everything we have (and more).
-        if (comparison === "behind") {
-          return
-        }
-
-        // Only attempt relative export if we're strictly ahead or concurrent.
-        // If versions are equal, the requester has the same version counter
-        // but may have different content (e.g. one was seeded, one wasn't).
-        // In that case, fall through to entirety.
-        if (comparison === "ahead" || comparison === "concurrent") {
-          payload = runtime.replica.exportSince(sinceVer)
-          // exportSince returns null for empty deltas (nothing to send),
-          // which falls through to entirety below.
-        }
-        // If "equal", fall through to entirety
-      } catch {
-        // Fall through to entirety
+        sinceVer = runtime.replicaFactory.parseVersion(command.sinceVersion)
+      } catch (err) {
+        console.warn(`[exchange] version parse failed for doc '${command.docId}':`, err)
+        return
       }
-    }
 
-    // Fallback to entirety
-    if (!payload) {
+      const currentVersion = runtime.replica.version()
+      const comparison = currentVersion.compare(sinceVer)
+
+      if (comparison === "behind" || comparison === "equal") {
+        // Nothing new to send — peer has the same state or more.
+        return
+      }
+
+      // "ahead" or "concurrent" — we have ops the peer doesn't.
+      const delta = runtime.replica.exportSince(sinceVer)
+      if (!delta) {
+        // Substrate says nothing to export despite version mismatch — unexpected.
+        console.warn(`[exchange] exportSince returned null for doc '${command.docId}' despite comparison '${comparison}'`)
+        return
+      }
+      payload = delta
+    } else {
+      // No sinceVersion — export entirety (LWW, or peer has no version to offer).
       payload = runtime.replica.exportEntirety()
     }
 

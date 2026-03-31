@@ -377,7 +377,7 @@ The synchronizer calls `replica.merge(payload, "sync")`. The substrate dispatche
   - `"since"` payloads apply ops incrementally (Op[] format, path + change pairs).
   - `"entirety"` payloads decompose to `ReplaceChange` ops through `executeBatch` (preserving ref identity and firing the changefeed). This ensures the interpreter stack, caches, and changefeed subscriptions remain intact.
 
-Empty delta detection is handled inside `exportSince()` — it returns `null` when the delta is empty (e.g. same version counter but content differs due to seeding). The synchronizer falls back to `exportEntirety()` when `exportSince()` returns `null`.
+`exportSince()` returns `null` when there is nothing to export (e.g. the target version equals or exceeds the current version). The synchronizer treats `null` from `exportSince()` as a no-op: it logs a warning and sends nothing, since the version comparison should have caught this case first. The only path to `exportEntirety()` is when `sinceVersion` is absent (LWW pushes, or a peer that has no version to offer).
 
 ---
 

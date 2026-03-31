@@ -1,7 +1,7 @@
 // sync-invariants — high-value regression tests for sync protocol invariants.
 //
 // These tests protect against bugs discovered during development:
-// 1. Empty delta → snapshot fallback (seeded state with version 0)
+// 1. Initial content via change() syncs to peers (post-seed-removal)
 // 2. Snapshot import preserves ref object identity
 // 3. LWW stale rejection discards out-of-order arrivals
 // 4. Causal sync uses deltas after initial sync
