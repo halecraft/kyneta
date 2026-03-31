@@ -3,12 +3,12 @@ import * as Y from "yjs"
 import { Schema, change, subscribe, RawPath } from "@kyneta/schema"
 import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
 import { YjsVersion } from "../version.js"
-import { createYjsDoc, createYjsDocFromSnapshot } from "../create.js"
+import { createYjsDoc, createYjsDocFromEntirety } from "../create.js"
 import {
   version,
-  exportSnapshot,
+  exportEntirety,
   exportSince,
-  importDelta,
+  merge,
 } from "../sync.js"
 import { ensureContainers } from "../populate.js"
 
@@ -189,7 +189,7 @@ describe("YjsSubstrate", () => {
     it("exports a binary payload", () => {
       const doc = createYjsDoc(SimpleSchema)
       change(doc, (d: any) => { d.title.insert(0, "Snapshot") })
-      const payload = exportSnapshot(doc)
+      const payload = exportEntirety(doc)
       expect(payload.encoding).toBe("binary")
       expect(payload.data).toBeInstanceOf(Uint8Array)
     })
@@ -207,8 +207,8 @@ describe("YjsSubstrate", () => {
         d.title.insert(5, " World")
       })
 
-      const payload = exportSnapshot(doc1)
-      const doc2 = createYjsDocFromSnapshot(SimpleSchema, payload)
+      const payload = exportEntirety(doc1)
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
 
       expect(doc2.title()).toBe("Hello World")
       expect(doc2.count()).toBe(42)
@@ -221,12 +221,12 @@ describe("YjsSubstrate", () => {
   // -------------------------------------------------------------------------
 
   describe("delta sync", () => {
-    it("exportSince → importDelta syncs state", () => {
+    it("exportSince → merge syncs state", () => {
       const doc1 = createYjsDoc(SimpleSchema)
       change(doc1, (d: any) => { d.title.insert(0, "Start") })
-      const doc2 = createYjsDocFromSnapshot(
+      const doc2 = createYjsDocFromEntirety(
         SimpleSchema,
-        exportSnapshot(doc1),
+        exportEntirety(doc1),
       )
 
       const v1Before = version(doc1)
@@ -239,16 +239,16 @@ describe("YjsSubstrate", () => {
       const delta = exportSince(doc1, v1Before)
       expect(delta).not.toBeNull()
 
-      importDelta(doc2, delta!)
+      merge(doc2, delta!)
       expect(doc2.title()).toBe("Start Edited")
       expect(doc2.count()).toBe(99)
     })
 
     it("concurrent sync — two substrates converge after bidirectional sync", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      const doc2 = createYjsDocFromSnapshot(
+      const doc2 = createYjsDocFromEntirety(
         SimpleSchema,
-        exportSnapshot(doc1),
+        exportEntirety(doc1),
       )
 
       const v1Before = version(doc1)
@@ -271,8 +271,8 @@ describe("YjsSubstrate", () => {
       const d1to2 = exportSince(doc1, v2Before)
       const d2to1 = exportSince(doc2, v1Before)
 
-      importDelta(doc2, d1to2!)
-      importDelta(doc1, d2to1!)
+      merge(doc2, d1to2!)
+      merge(doc1, d2to1!)
 
       // Should now be equal
       expect(version(doc1).compare(version(doc2))).toBe("equal")
@@ -293,12 +293,12 @@ describe("YjsSubstrate", () => {
   // -------------------------------------------------------------------------
 
   describe("changefeed", () => {
-    it("fires on importDelta", () => {
+    it("fires on merge", () => {
       const doc1 = createYjsDoc(SimpleSchema)
       change(doc1, (d: any) => { d.title.insert(0, "A") })
-      const doc2 = createYjsDocFromSnapshot(
+      const doc2 = createYjsDocFromEntirety(
         SimpleSchema,
-        exportSnapshot(doc1),
+        exportEntirety(doc1),
       )
 
       const v2Before = version(doc2)
@@ -313,7 +313,7 @@ describe("YjsSubstrate", () => {
       })
 
       const delta = exportSince(doc1, v2Before)
-      importDelta(doc2, delta!)
+      merge(doc2, delta!)
 
       expect(received.length).toBeGreaterThanOrEqual(1)
       expect(doc2.count()).toBe(42)
@@ -354,19 +354,19 @@ describe("YjsSubstrate", () => {
       expect(received.length).toBe(1)
     })
 
-    it("nested struct field changefeed fires on importDelta", () => {
+    it("nested struct field changefeed fires on merge", () => {
       const doc1 = createYjsDoc(StructListSchema)
-      const doc2 = createYjsDocFromSnapshot(
+      const doc2 = createYjsDocFromEntirety(
         StructListSchema,
-        exportSnapshot(doc1),
+        exportEntirety(doc1),
       )
 
       // Add a struct item on doc1, sync to doc2
       change(doc1, (d: any) => {
         d.tasks.push({ name: "Buy milk", done: false })
       })
-      const snap = exportSnapshot(doc1)
-      const doc2b = createYjsDocFromSnapshot(StructListSchema, snap)
+      const snap = exportEntirety(doc1)
+      const doc2b = createYjsDocFromEntirety(StructListSchema, snap)
 
       const taskB = [...doc2b.tasks][0] as any
       expect(taskB.done()).toBe(false)
@@ -385,7 +385,7 @@ describe("YjsSubstrate", () => {
 
       // Sync the toggle to doc2b
       const delta = exportSince(doc1, v2)!
-      importDelta(doc2b, delta)
+      merge(doc2b, delta)
 
       // Value should be updated
       expect(taskB.done()).toBe(true)
@@ -396,16 +396,16 @@ describe("YjsSubstrate", () => {
       unsub()
     })
 
-    it("multi-key struct update fires per-field changefeeds on importDelta", () => {
+    it("multi-key struct update fires per-field changefeeds on merge", () => {
       const doc1 = createYjsDoc(StructListSchema)
 
       // Add a struct item, sync to doc2
       change(doc1, (d: any) => {
         d.tasks.push({ name: "Buy milk", done: false })
       })
-      const doc2 = createYjsDocFromSnapshot(
+      const doc2 = createYjsDocFromEntirety(
         StructListSchema,
-        exportSnapshot(doc1),
+        exportEntirety(doc1),
       )
 
       const taskB = [...doc2.tasks][0] as any
@@ -428,7 +428,7 @@ describe("YjsSubstrate", () => {
 
       // Sync to doc2
       const delta = exportSince(doc1, v2)!
-      importDelta(doc2, delta)
+      merge(doc2, delta)
 
       // Both field-level changefeeds should have fired
       expect(nameChanges.length).toBeGreaterThanOrEqual(1)
@@ -558,14 +558,14 @@ describe("YjsSubstrate", () => {
   })
 
   // -------------------------------------------------------------------------
-  // fromSnapshot
+  // fromEntirety
   // -------------------------------------------------------------------------
 
-  describe("fromSnapshot", () => {
+  describe("fromEntirety", () => {
     it("rejects non-binary payloads", () => {
       expect(() =>
-        yjsSubstrateFactory.fromSnapshot(
-          { encoding: "json", data: "{}" },
+        yjsSubstrateFactory.fromEntirety(
+          { kind: "entirety", encoding: "json", data: "{}" },
           SimpleSchema,
         ),
       ).toThrow("binary")
@@ -579,8 +579,8 @@ describe("YjsSubstrate", () => {
         d.items.push("x")
       })
 
-      const payload = exportSnapshot(doc)
-      const doc2 = createYjsDocFromSnapshot(SimpleSchema, payload)
+      const payload = exportEntirety(doc)
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
 
       expect(doc2.title()).toBe("Snapshot Test")
       expect(doc2.count()).toBe(77)

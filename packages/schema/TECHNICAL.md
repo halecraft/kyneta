@@ -79,11 +79,11 @@ In the old grammar, `text` and `counter` were node kinds alongside `list` and `s
 
 | Category | Exports |
 |----------|---------|
-| Document lifecycle | `createDoc`, `createDocFromSnapshot` |
+| Document lifecycle | `createDoc`, `createDocFromEntirety` |
 | Schema | `Schema` (re-exported constructor namespace) |
 | Mutation | `change`, `applyChanges` |
 | Observation | `subscribe`, `subscribeNode` |
-| Sync | `version`, `delta`, `exportSnapshot` |
+| Sync | `version`, `delta`, `exportEntirety` |
 | Validation | `validate`, `tryValidate` |
 | Utilities | `Zero`, `describe` |
 | Types | `Ref`, `RRef`, `Plain`, `Seed`, `Op`, `Changeset`, `SubstratePayload`, schema node types |
@@ -97,12 +97,12 @@ In the old grammar, `text` and `counter` were node kinds alongside `list` and `s
 
 #### `registerDoc` internal helper
 
-Both `createDoc` and `createDocFromSnapshot` delegate to a shared `registerDoc` helper in `basic/create.ts`. It:
+Both `createDoc` and `createDocFromEntirety` delegate to a shared `registerDoc` helper in `basic/create.ts`. It:
 
 1. Runs `interpret(schema, substrate.context()).with(readable).with(writable).with(changefeed).done()` to build the full five-layer interpreter stack.
 2. Stores the `substrate` in a **module-scoped `WeakMap`** keyed by the returned ref, enabling `basic/sync.ts` to retrieve the substrate for sync operations without exposing it to callers.
 
-`getSubstrate` is exported from `basic/create.ts` for cross-module use by `basic/sync.ts` (which needs the substrate for `version`, `delta`, `exportSnapshot`) but is **not** re-exported from the `basic/index.ts` barrel — it's an internal implementation detail.
+`getSubstrate` is exported from `basic/create.ts` for cross-module use by `basic/sync.ts` (which needs the substrate for `version`, `delta`, `exportEntirety`) but is **not** re-exported from the `basic/index.ts` barrel — it's an internal implementation detail.
 
 #### Naming rationale
 
@@ -580,8 +580,8 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
 **Morphisms:**
 - **project: State → Application** — substrate mutations become `Changeset`s delivered through the CHANGEFEED. The changefeed layer wraps `ctx.prepare`/`ctx.flush` to implement this automatically.
-- **export: State → Replication** — `substrate.exportSnapshot()` (full state) or `substrate.exportSince(version)` (delta since a version).
-- **import: Replication → State** — `substrate.importDelta(payload)` applies deltas through the prepare/flush pipeline, triggering `project` automatically. `factory.fromSnapshot(payload, schema)` constructs a new substrate from a snapshot.
+- **export: State → Replication** — `substrate.exportEntirety()` (full state) or `substrate.exportSince(version)` (delta since a version).
+- **import: Replication → State** — `substrate.merge(payload)` absorbs a payload into a live substrate using native merge semantics, preserving ref identity and firing the changefeed. `factory.fromEntirety(payload, schema)` constructs a new substrate from an entirety payload.
 
 **Commutativity law:** `snapshot(apply(state, M₁..Mₙ)) = fold(step, snapshot(state), project(M₁)..project(Mₙ))` — applying mutations then snapshotting equals stepping the snapshot through the projected changesets.
 
@@ -591,25 +591,51 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
 - **`StoreReader`** — the abstract read interface for the interpreter stack. All interpreters read from the store exclusively through this four-method interface (`read`, `arrayLength`, `keys`, `hasKey`), allowing substrates to provide their own read semantics. `plainStoreReader(obj)` wraps a plain JS object; a Loro substrate navigates the Loro container tree directly. The `StoreReader` returned by `plainStoreReader` is a *live view* — mutations to the backing object via `applyChangeToStore` are immediately visible through the reader.
 
-- **`SubstratePayload`** — an opaque blob with an encoding hint (`"json" | "binary"`). The meaning of a payload is determined by which method produced it and which method consumes it — `exportSnapshot()` → `factory.fromSnapshot()`, `exportSince()` → `substrate.importDelta()`. No `kind` discriminant; the method-level distinction is sufficient and substrate-universal (Loro's `import()` accepts both snapshots and updates through the same code path).
+- **`SubstratePayload`** — a three-field structure carrying data between peers:
 
-- **`Substrate<V>`** extends `SubstratePrepare` — adds `version()`, `exportSnapshot()`, `exportSince()`, `importDelta()`, and `context()`. The `SubstratePrepare` interface (Phase 0) provides the ground floor of the prepare/flush pipeline: `store: StoreReader`, `prepare(path, change)`, `onFlush(origin?)`.
+  ```ts
+  interface SubstratePayload {
+    readonly kind: "entirety" | "since"
+    readonly encoding: "json" | "binary"
+    readonly data: string | Uint8Array
+  }
+  ```
 
-- **`SubstrateFactory<V>`** — `create(schema)` for fresh substrates, `fromSnapshot(payload, schema)` for reconstruction from snapshots, `parseVersion(serialized)` for version deserialization.
+  `kind` is a discriminant set by the producer:
+  - `"entirety"` — self-sufficient payload (reconstruct from ∅). Produced by `exportEntirety()`. For Plain: a JSON state image. For Loro/Yjs: the complete oplog.
+  - `"since"` — relative payload (catch up from a version). Produced by `exportSince(v)`. For Plain: JSON-serialized `Op[]`. For Loro/Yjs: ops not in the peer's version vector.
 
-**Epoch boundaries.** Within a single substrate lifetime, all state transitions are deltas delivered as `Changeset`s through the changefeed. `Changeset` is and remains delta-only. State replacement (snapshot import) is an **epoch boundary** — a new substrate is constructed via `factory.fromSnapshot()`, and the application layer swaps the doc reference. The old interpreter tree is GC'd. The invariant: within an epoch, all transitions are deltas; between epochs, there is no continuity.
+  **Routing table:**
 
-**`PlainSubstrate`** is the first concrete implementation. It wraps a plain JS object store (the degenerate case — no CRDT runtime, no native oplog). The raw `Record<string, unknown>` is wrapped in a `plainStoreReader` for the interpreter stack, while mutations and export still operate on the raw object directly. Version tracking uses a **shadow buffer**: `prepare` accumulates `{path, change}` entries alongside `applyChangeToStore`, and `onFlush` drains the buffer into the version log and increments the version counter. The changefeed layer independently accumulates the same entries for notification planning — both hold the same object references and are drained every flush cycle. `PlainVersion` wraps a monotonic integer; `compare()` never returns `"concurrent"`.
+  | Producer | `kind` | Consumer(s) |
+  |---|---|---|
+  | `exportEntirety()` | `"entirety"` | `factory.fromEntirety()` or `replica.merge()` |
+  | `exportSince(v)` | `"since"` | `replica.merge()` |
 
-**`LoroSubstrate`** is the second concrete implementation, provided by the separate `@kyneta/loro-schema` package. It wraps a user-provided `LoroDoc` with schema-aware typed reads (via `LoroStoreReader`), `applyDiff`-based writes, and a persistent `doc.subscribe()` event bridge that ensures all mutations to the underlying LoroDoc — whether from kyneta, `importDelta`, or external systems — fire kyneta changefeed subscribers. See `packages/schema/loro/TECHNICAL.md` for the full architecture.
+  The `encoding` hint tells the transport layer whether `data` is a UTF-8 string (`"json"`) or raw bytes (`"binary"`). The framework never inspects `data` — only the substrate knows how to produce and consume it.
+
+- **`Substrate<V>`** extends `SubstratePrepare` — adds `version()`, `exportEntirety()`, `exportSince()`, `merge()`, and `context()`. The `SubstratePrepare` interface (Phase 0) provides the ground floor of the prepare/flush pipeline: `store: StoreReader`, `prepare(path, change)`, `onFlush(origin?)`.
+
+- **`SubstrateFactory<V>`** — `create(schema)` for fresh substrates, `fromEntirety(payload, schema)` for cold-start construction from an entirety payload, `parseVersion(serialized)` for version deserialization.
+
+**Two kinds of state absorption:**
+
+- **`merge(payload)`** — live absorption into an existing substrate. Preserves ref identity and fires the changefeed. Dispatches internally on `payload.kind`: an `"entirety"` payload replaces the store contents; a `"since"` payload applies incremental ops. This is the normal sync path — the exchange calls `merge()` for all incoming payloads regardless of kind.
+- **`factory.fromEntirety(payload, schema)`** — cold-start construction. Creates a NEW substrate from a self-sufficient payload. This is the entry point for SSR hydration, reconnection past log compaction, and schema migration. No continuity with any prior instance — the application layer swaps the doc reference and the old interpreter tree is GC'd.
+
+Within a single substrate lifetime, all state transitions are deltas delivered as `Changeset`s through the changefeed. `Changeset` is and remains delta-only. Between substrates (cold-start via `fromEntirety`), there is no continuity — that boundary is an **epoch boundary**.
+
+**`PlainSubstrate`** is the first concrete implementation. It wraps a plain JS object store (the degenerate case — no CRDT runtime, no native oplog). The raw `Record<string, unknown>` is wrapped in a `plainStoreReader` for the interpreter stack, while mutations and export still operate on the raw object directly. Version tracking uses a **shadow buffer**: `prepare` accumulates `{path, change}` entries alongside `applyChangeToStore`, and `onFlush` drains the buffer into the version log and increments the version counter. The changefeed layer independently accumulates the same entries for notification planning — both hold the same object references and are drained every flush cycle. `PlainVersion` wraps a monotonic integer; `compare()` never returns `"concurrent"`. `merge(payload)` dispatches on `payload.kind` internally: an `"entirety"` payload replaces the store via `executeBatch`; a `"since"` payload replays ops from the version log.
+
+**`LoroSubstrate`** is the second concrete implementation, provided by the separate `@kyneta/loro-schema` package. It wraps a user-provided `LoroDoc` with schema-aware typed reads (via `LoroStoreReader`), `applyDiff`-based writes, and a persistent `doc.subscribe()` event bridge that ensures all mutations to the underlying LoroDoc — whether from kyneta, `merge`, or external systems — fire kyneta changefeed subscribers. See `packages/schema/loro/TECHNICAL.md` for the full architecture.
 
 **`TimestampVersion`** wraps a wall-clock timestamp (milliseconds since epoch). Timestamps form a total order — `compare()` returns `"behind"`, `"equal"`, or `"ahead"` but never `"concurrent"`. This is the version type for LWW substrates: the receiver compares timestamps and discards stale arrivals. `serialize()` encodes to a decimal string; `TimestampVersion.parse()` is the inverse. `TimestampVersion.now()` creates a version from the current wall clock.
 
-**`LwwSubstrate`** (via `lwwSubstrateFactory`) is the third concrete implementation. It uses the **decorator pattern**: `wrapWithTimestamp()` takes any `Substrate<PlainVersion>` and returns a `Substrate<TimestampVersion>` that delegates all state operations to the inner plain substrate while maintaining its own timestamp-based version. On every `onFlush()` and `importDelta()`, the wrapper bumps `currentVersion = TimestampVersion.now()`.
+**`LwwSubstrate`** (via `lwwSubstrateFactory`) is the third concrete implementation. It uses the **decorator pattern**: `wrapWithTimestamp()` takes any `Substrate<PlainVersion>` and returns a `Substrate<TimestampVersion>` that delegates all state operations to the inner plain substrate while maintaining its own timestamp-based version. On every `onFlush()` and `merge()`, the wrapper bumps `currentVersion = TimestampVersion.now()`.
 
 **Critical `context()` gotcha.** The wrapper's `context()` must build its `WritableContext` from the *wrapper* substrate object, not the inner one. If `context()` delegated to `inner.context()`, only the inner plain substrate's `onFlush` would run and the wrapper's timestamp would never advance. This is correct-by-construction in `wrapWithTimestamp` — the extracted helper eliminates the risk of copy-paste errors. See `@kyneta/exchange` TECHNICAL.md §8 for the original design note.
 
-The `lwwSubstrateFactory` provides the `SubstrateFactory<TimestampVersion>` interface: `create(schema)` wraps a fresh plain substrate with initial timestamp 0; `fromSnapshot(payload, schema)` wraps a reconstructed plain substrate with `TimestampVersion.now()`; `parseVersion()` delegates to `TimestampVersion.parse()`. The factory is consumed by `bindEphemeral()` in `bind.ts`.
+The `lwwSubstrateFactory` provides the `SubstrateFactory<TimestampVersion>` interface: `create(schema)` wraps a fresh plain substrate with initial timestamp 0; `fromEntirety(payload, schema)` wraps a reconstructed plain substrate with `TimestampVersion.now()`; `parseVersion()` delegates to `TimestampVersion.parse()`. The factory is consumed by `bindEphemeral()` in `bind.ts`.
 
 | Version Type | Substrate | Order | History |
 |---|---|---|---|
@@ -638,8 +664,8 @@ interface BoundSchema<S extends Schema> {
 | Strategy | Protocol | `compare()` returns | Payload method |
 |---|---|---|---|
 | `"causal"` | Bidirectional exchange | May return `"concurrent"` | `exportSince()` deltas |
-| `"sequential"` | Request/response, total order | Never `"concurrent"` | `exportSince()` or `exportSnapshot()` |
-| `"lww"` | Unidirectional push/broadcast | Timestamp-based | Always `exportSnapshot()` |
+| `"sequential"` | Request/response, total order | Never `"concurrent"` | `exportSince()` or `exportEntirety()` |
+| `"lww"` | Unidirectional push/broadcast | Timestamp-based | Always `exportEntirety()` |
 
 **`FactoryBuilder<V>`** is `(context: { peerId: string }) => SubstrateFactory<V>` — a deferred factory constructor. The exchange calls it lazily on first use, passing its peer identity. Each exchange instance gets a fresh factory. Factories that don't need peer identity ignore the context: `() => plainSubstrateFactory`.
 
@@ -867,8 +893,8 @@ packages/schema/
 │   │   ├── change.ts            # Mutation protocol: change, applyChanges, ApplyChangesOptions
 │   │   └── observe.ts           # Observation protocol: subscribe, subscribeNode
 │   ├── basic/
-│   │   ├── create.ts            # createDoc, createDocFromSnapshot, registerDoc helper, WeakMap substrate tracking
-│   │   ├── sync.ts              # version, delta, exportSnapshot — PlainSubstrate sync primitives
+│   │   ├── create.ts            # createDoc, createDocFromEntirety, registerDoc helper, WeakMap substrate tracking
+│   │   ├── sync.ts              # version, delta, exportEntirety — PlainSubstrate sync primitives
 │   │   └── index.ts             # Curated barrel for @kyneta/schema/basic
 │   ├── layers.ts                # Pre-built InterpreterLayer instances for fluent composition
 │   ├── combinators.ts           # product, overlay, firstDefined

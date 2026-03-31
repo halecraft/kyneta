@@ -173,11 +173,11 @@ export type Command =
       type: "cmd/send-offer"
       docId: DocId
       toChannelIds: ChannelId[]
-      /** If set, export delta since this version. Otherwise, export snapshot. */
+      /** If set, export since this version. Otherwise, export entirety. */
       sinceVersion?: string
       reciprocate?: boolean
-      /** Whether to force snapshot (ignoring sinceVersion). Used by LWW. */
-      forceSnapshot?: boolean
+      /** Whether to force entirety export (ignoring sinceVersion). Used by LWW. */
+      forceEntirety?: boolean
     }
 
   // Document operations
@@ -191,8 +191,6 @@ export type Command =
       type: "cmd/import-doc-data"
       docId: DocId
       payload: SubstratePayload
-      /** Whether this is a full snapshot or an incremental delta. */
-      offerType: "snapshot" | "delta"
       version: string
       fromPeerId: PeerId
     }
@@ -785,7 +783,7 @@ function handleInterest(
         toChannelIds: [fromChannelId],
         sinceVersion: message.version,
         reciprocate: false,
-        forceSnapshot: false,
+        forceEntirety: false,
       })
 
       // If the peer asked for reciprocation, send our own interest
@@ -817,7 +815,7 @@ function handleInterest(
         toChannelIds: [fromChannelId],
         sinceVersion: message.version,
         reciprocate: false,
-        forceSnapshot: false,
+        forceEntirety: false,
       })
       break
 
@@ -827,9 +825,9 @@ function handleInterest(
         type: "cmd/send-offer",
         docId: message.docId,
         toChannelIds: [fromChannelId],
-        // No sinceVersion — always snapshot for LWW
+        // No sinceVersion — always entirety for LWW
         reciprocate: false,
-        forceSnapshot: true,
+        forceEntirety: true,
       })
       break
   }
@@ -858,7 +856,6 @@ function handleOffer(
   message: {
     type: "offer"
     docId: DocId
-    offerType: "snapshot" | "delta"
     payload: SubstratePayload
     version: string
     reciprocate?: boolean
@@ -886,15 +883,12 @@ function handleOffer(
     (peerState != null && authorize(message.docId, peerState.identity))
 
   if (authorized) {
-    // Import the payload — the runtime will handle version comparison
-    // and call substrate.importDelta() or factory.fromSnapshot() depending
-    // on the offerType. For LWW, the runtime compares timestamps. For
-    // causal, the CRDT handles merge. For sequential, the runtime checks ordering.
+    // Import the payload — the runtime calls replica.merge(payload)
+    // which dispatches internally based on payload.kind.
     commands.push({
       type: "cmd/import-doc-data",
       docId: message.docId,
       payload: message.payload,
-      offerType: message.offerType,
       version: message.version,
       fromPeerId: channel.peerId,
     })
@@ -950,7 +944,7 @@ function buildPush(
         docId,
         toChannelIds: channelIds,
         sinceVersion: docEntry.version,
-        forceSnapshot: false,
+        forceEntirety: false,
       }
     }
 
@@ -964,7 +958,7 @@ function buildPush(
         type: "cmd/send-offer",
         docId,
         toChannelIds: channelIds,
-        forceSnapshot: true,
+        forceEntirety: true,
       }
     }
   }

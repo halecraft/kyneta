@@ -184,9 +184,9 @@ describe("version tracking", () => {
 // ===========================================================================
 
 describe("export/import snapshot", () => {
-  it("exportSnapshot returns a binary payload", () => {
+  it("exportEntirety returns a binary payload", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
-    const snapshot = substrate.exportSnapshot()
+    const snapshot = substrate.exportEntirety()
     expect(snapshot.encoding).toBe("binary")
     expect(snapshot.data).toBeInstanceOf(Uint8Array)
   })
@@ -203,8 +203,8 @@ describe("export/import snapshot", () => {
       d.count.increment(42)
     })
 
-    const snapshot = substrateA.exportSnapshot()
-    const substrateB = loroSubstrateFactory.fromSnapshot(snapshot, TestSchema)
+    const snapshot = substrateA.exportEntirety()
+    const substrateB = loroSubstrateFactory.fromEntirety(snapshot, TestSchema)
 
     const readerB = substrateB.store
     expect(readerB.read(RawPath.empty.field("title"))).toBe("Original Title")
@@ -217,8 +217,8 @@ describe("export/import snapshot", () => {
     const docA = interpretSubstrate(TestSchema, substrateA)
     change(docA, (d) => d.title.insert(0, "Hello"))
 
-    const snapshot = substrateA.exportSnapshot()
-    const substrateB = loroSubstrateFactory.fromSnapshot(snapshot, TestSchema)
+    const snapshot = substrateA.exportEntirety()
+    const substrateB = loroSubstrateFactory.fromEntirety(snapshot, TestSchema)
 
     // Both substrates have equivalent state
     expect(substrateB.store.read(RawPath.empty.field("title"))).toBe("Hello")
@@ -230,7 +230,7 @@ describe("export/import snapshot", () => {
 // ===========================================================================
 
 describe("delta sync", () => {
-  it("exportSince → importDelta syncs state between substrates", () => {
+  it("exportSince → merge syncs state between substrates", () => {
     const substrateA = loroSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
@@ -248,7 +248,7 @@ describe("delta sync", () => {
     // Export delta and import into B
     const delta = substrateA.exportSince(sinceVV)
     expect(delta).not.toBeNull()
-    substrateB.importDelta(delta!, "sync")
+    substrateB.merge(delta!, "sync")
 
     // B should now have A's state
     expect(substrateB.store.read(RawPath.empty.field("title"))).toBe(
@@ -271,8 +271,8 @@ describe("concurrent sync", () => {
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     // Sync base state
-    const baseA = substrateA.exportSnapshot()
-    substrateB.importDelta({
+    const baseA = substrateA.exportEntirety()
+    substrateB.merge({
       encoding: "binary",
       data: baseA.data,
     } as SubstratePayload)
@@ -284,8 +284,8 @@ describe("concurrent sync", () => {
     // Bidirectional sync
     const deltaAtoB = substrateA.exportSince(substrateB.version())
     const deltaBtoA = substrateB.exportSince(substrateA.version())
-    if (deltaAtoB) substrateB.importDelta(deltaAtoB, "sync")
-    if (deltaBtoA) substrateA.importDelta(deltaBtoA, "sync")
+    if (deltaAtoB) substrateB.merge(deltaAtoB, "sync")
+    if (deltaBtoA) substrateA.merge(deltaBtoA, "sync")
 
     // Both should have converged
     expect(substrateA.store.read(RawPath.empty.field("title"))).toBe("A")
@@ -296,11 +296,11 @@ describe("concurrent sync", () => {
 })
 
 // ===========================================================================
-// Changefeed fires on importDelta
+// Changefeed fires on merge
 // ===========================================================================
 
-describe("changefeed fires on importDelta", () => {
-  it("subscribe fires when importDelta is called", () => {
+describe("changefeed fires on merge", () => {
+  it("subscribe fires when merge is called", () => {
     const substrateA = loroSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
@@ -316,13 +316,13 @@ describe("changefeed fires on importDelta", () => {
     // Mutate A, then sync to B
     change(docA, (d) => d.title.insert(0, "Remote"))
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.importDelta(delta, "sync")
+    substrateB.merge(delta, "sync")
 
     // B's subscriber should have fired
     expect(received.length).toBeGreaterThanOrEqual(1)
   })
 
-  it("nested struct field changefeed fires on importDelta (todo done toggle)", () => {
+  it("nested struct field changefeed fires on merge (todo done toggle)", () => {
     // Replicates: Client A toggles todo.done → syncs to Client B →
     // B's field-level changefeed for `done` should fire so the UI updates.
     const substrateA = loroSubstrateFactory.create(TestSchema)
@@ -335,8 +335,8 @@ describe("changefeed fires on importDelta", () => {
     change(docA, (d: any) => {
       d.items.push({ name: "Buy milk", done: false })
     })
-    const snapshot = substrateA.exportSnapshot()
-    substrateB.importDelta(snapshot, "sync")
+    const snapshot = substrateA.exportEntirety()
+    substrateB.merge(snapshot, "sync")
 
     // Verify B has the item
     expect([...docB.items]).toHaveLength(1)
@@ -357,7 +357,7 @@ describe("changefeed fires on importDelta", () => {
 
     // Sync the toggle to B
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.importDelta(delta, "sync")
+    substrateB.merge(delta, "sync")
 
     // B should see the updated value
     expect(itemB.done()).toBe(true)
@@ -368,7 +368,7 @@ describe("changefeed fires on importDelta", () => {
     unsub()
   })
 
-  it("multi-key struct update fires per-field changefeeds on importDelta", () => {
+  it("multi-key struct update fires per-field changefeeds on merge", () => {
     const substrateA = loroSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
@@ -379,8 +379,8 @@ describe("changefeed fires on importDelta", () => {
     change(docA, (d: any) => {
       d.items.push({ name: "Buy milk", done: false })
     })
-    const snapshot = substrateA.exportSnapshot()
-    substrateB.importDelta(snapshot, "sync")
+    const snapshot = substrateA.exportEntirety()
+    substrateB.merge(snapshot, "sync")
 
     const itemB = [...docB.items][0] as any
     const sinceVV = substrateB.version()
@@ -402,7 +402,7 @@ describe("changefeed fires on importDelta", () => {
 
     // Sync to B
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.importDelta(delta, "sync")
+    substrateB.merge(delta, "sync")
 
     // Both field-level changefeeds should have fired
     expect(nameChanges.length).toBeGreaterThanOrEqual(1)
@@ -427,7 +427,7 @@ describe("changefeed fires on importDelta", () => {
     change(docA, (d: any) => {
       d.items.push({ name: "Task", done: false })
     })
-    substrateB.importDelta(substrateA.exportSnapshot(), "sync")
+    substrateB.merge(substrateA.exportEntirety(), "sync")
 
     const sinceVV = substrateB.version()
 
@@ -449,7 +449,7 @@ describe("changefeed fires on importDelta", () => {
     const unsub = cf.subscribe((cs: unknown) => fieldChanges.push(cs))
 
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.importDelta(delta, "sync")
+    substrateB.merge(delta, "sync")
 
     // The inbound path should have reached the same leaf path
     // (proven by the field-level changefeed firing)
@@ -498,7 +498,7 @@ describe("outbound: multi-key struct mutation batching", () => {
     change(docA, (d: any) => {
       d.items.push({ name: "initial", done: false })
     })
-    substrateB.importDelta(substrateA.exportSnapshot(), "sync")
+    substrateB.merge(substrateA.exportEntirety(), "sync")
 
     const sinceVV = substrateB.version()
 
@@ -511,7 +511,7 @@ describe("outbound: multi-key struct mutation batching", () => {
 
     // Sync to B
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.importDelta(delta, "sync")
+    substrateB.merge(delta, "sync")
 
     const itemB = [...docB.items][0] as any
     expect(itemB.name()).toBe("updated")
@@ -546,7 +546,7 @@ describe("changefeed fires on external import", () => {
     const received: unknown[] = []
     subscribe(kDoc, (cs) => received.push(cs))
 
-    // External import — bypasses substrate.importDelta()
+    // External import — bypasses substrate.merge()
     doc2.import(update)
 
     // Kyneta subscriber should have fired

@@ -15,11 +15,11 @@
 import { describe, expect, it } from "vitest"
 import {
   createLoroDoc,
-  createLoroDocFromSnapshot,
+  createLoroDocFromEntirety,
   version,
-  exportSnapshot,
+  exportEntirety,
   exportSince,
-  importDelta,
+  merge,
   change,
   subscribe,
   LoroSchema,
@@ -122,8 +122,8 @@ describe("record-of-struct (plain baseline)", () => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000", points: 3 })
     })
 
-    const snapshot = exportSnapshot(docA)
-    const docB = createLoroDocFromSnapshot(PlainScoreboardSchema, snapshot)
+    const snapshot = exportEntirety(docA)
+    const docB = createLoroDocFromEntirety(PlainScoreboardSchema, snapshot)
 
     expect(docB.scores()).toEqual({
       alice: { name: "Alice", color: "#FF0000", points: 3 },
@@ -136,7 +136,7 @@ describe("record-of-struct (plain baseline)", () => {
     })
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    importDelta(docB, delta!, "sync")
+    merge(docB, delta!, "sync")
 
     expect(docB.scores()).toEqual({
       alice: { name: "Alice", color: "#FF0000", points: 3 },
@@ -251,8 +251,8 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
     })
     change(docA, (d: any) => d.scores.at("alice").bumps.increment(5))
 
-    const snapshot = exportSnapshot(docA)
-    const docB = createLoroDocFromSnapshot(ScoreboardSchema, snapshot)
+    const snapshot = exportEntirety(docA)
+    const docB = createLoroDocFromEntirety(ScoreboardSchema, snapshot)
 
     expect(docB.scores()).toEqual({
       alice: { name: "Alice", color: "#FF0000", bumps: 5 },
@@ -275,7 +275,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    importDelta(docB, delta!, "sync")
+    merge(docB, delta!, "sync")
 
     expect(docB.scores()).toEqual({
       alice: { name: "Alice", color: "#FF0000", bumps: 3 },
@@ -295,8 +295,8 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000" })
     })
 
-    const snapshot = exportSnapshot(docA)
-    importDelta(docB, snapshot, "sync")
+    const snapshot = exportEntirety(docA)
+    merge(docB, snapshot, "sync")
 
     // Both peers increment concurrently
     const vA = version(docA)
@@ -308,12 +308,12 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
     // Sync A → B
     const deltaAB = exportSince(docA, vB)
     expect(deltaAB).not.toBeNull()
-    importDelta(docB, deltaAB!, "sync")
+    merge(docB, deltaAB!, "sync")
 
     // Sync B → A
     const deltaBA = exportSince(docB, vA)
     expect(deltaBA).not.toBeNull()
-    importDelta(docA, deltaBA!, "sync")
+    merge(docA, deltaBA!, "sync")
 
     // Both converge: 3 + 7 = 10 (counters sum, not overwrite)
     expect((docA as any).scores.at("alice").bumps()).toBe(10)
@@ -332,9 +332,9 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
     })
 
     // Sync server → both clients
-    const snapshot = exportSnapshot(server)
-    importDelta(clientA, snapshot, "sync")
-    importDelta(clientB, snapshot, "sync")
+    const snapshot = exportEntirety(server)
+    merge(clientA, snapshot, "sync")
+    merge(clientB, snapshot, "sync")
 
     // Server detects collision: peerA scored
     const v0A = version(clientA)
@@ -346,8 +346,8 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
 
     // Sync server → both clients
     const delta1 = exportSince(server, v0A)
-    importDelta(clientA, delta1!, "sync")
-    importDelta(clientB, delta1!, "sync")
+    merge(clientA, delta1!, "sync")
+    merge(clientB, delta1!, "sync")
 
     expect((clientA as any).scores.at("peerA").bumps()).toBe(1)
     expect((clientB as any).scores.at("peerA").bumps()).toBe(1)
@@ -363,8 +363,8 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
     })
 
     const delta2 = exportSince(server, v1A)
-    importDelta(clientA, delta2!, "sync")
-    importDelta(clientB, delta2!, "sync")
+    merge(clientA, delta2!, "sync")
+    merge(clientB, delta2!, "sync")
 
     // Final state
     const expected = {
@@ -459,7 +459,7 @@ describe("list-of-struct-with-counter (generality check)", () => {
     })
 
     const delta = exportSince(docA, v0)
-    importDelta(docB, delta!, "sync")
+    merge(docB, delta!, "sync")
 
     expect(docB.players.length).toBe(1)
     expect((docB as any).players.at(0).name()).toBe("Alice")
@@ -542,7 +542,7 @@ describe("text-inside-struct-inside-record (generality check)", () => {
     })
 
     const delta = exportSince(docA, v0)
-    importDelta(docB, delta!, "sync")
+    merge(docB, delta!, "sync")
 
     expect((docB as any).profiles.at("alice").bio()).toBe("Collaborative bio")
   })
@@ -555,8 +555,8 @@ describe("text-inside-struct-inside-record (generality check)", () => {
     change(docA, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
     })
-    const snapshot = exportSnapshot(docA)
-    importDelta(docB, snapshot, "sync")
+    const snapshot = exportEntirety(docA)
+    merge(docB, snapshot, "sync")
 
     // Both peers edit concurrently
     const vA = version(docA)
@@ -572,8 +572,8 @@ describe("text-inside-struct-inside-record (generality check)", () => {
     // Sync both ways
     const deltaAB = exportSince(docA, vB)
     const deltaBA = exportSince(docB, vA)
-    importDelta(docB, deltaAB!, "sync")
-    importDelta(docA, deltaBA!, "sync")
+    merge(docB, deltaAB!, "sync")
+    merge(docA, deltaBA!, "sync")
 
     // Both converge to the same value (order depends on peer IDs)
     expect((docA as any).profiles.at("alice").bio()).toBe(

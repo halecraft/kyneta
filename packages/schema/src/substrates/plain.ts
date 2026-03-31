@@ -7,7 +7,7 @@
 //
 // `createPlainSubstrate(store)` returns a full `Substrate<PlainVersion>`
 // with version tracking via a shadow buffer in `prepare`/`onFlush`,
-// plus `version`, `exportSnapshot`, `exportSince`, `importDelta`.
+// plus `version`, `exportEntirety`, `exportSince`, `merge`.
 // `plainContext(store)` is a shorthand that returns just the
 // `WritableContext` — convenient for tests that don't need the
 // substrate reference.
@@ -17,7 +17,7 @@
 // (no concurrency), so `compare()` never returns "concurrent".
 //
 // `plainSubstrateFactory` is the canonical factory for constructing
-// plain substrates from schemas or snapshot payloads. It delegates
+// plain substrates from schemas or entirety payloads. It delegates
 // to `createPlainSubstrate` internally.
 //
 // Context: jj:wmyomqzw (Phase 0), jj:wqoqzzpp (Phase 2)
@@ -86,7 +86,7 @@ export class PlainVersion implements Version {
 
 /**
  * Creates a full `Substrate<PlainVersion>` wrapping a plain JS object
- * store, with version tracking, export/import, and the shadow buffer
+ * store, with version tracking, export/merge, and the shadow buffer
  * for op logging.
  *
  * This is the low-level entry point when you already have a store.
@@ -126,28 +126,38 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
       return replicaCore.version()
     },
 
-    exportSnapshot(): SubstratePayload {
-      return replicaCore.exportSnapshot()
+    exportEntirety(): SubstratePayload {
+      return replicaCore.exportEntirety()
     },
 
     exportSince(since: PlainVersion): SubstratePayload | null {
       return replicaCore.exportSince(since)
     },
 
-    importDelta(payload: SubstratePayload, origin?: string): void {
+    merge(payload: SubstratePayload, origin?: string): void {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
         throw new Error(
-          "PlainSubstrate.importDelta only supports JSON-encoded payloads",
+          "PlainSubstrate.merge only supports JSON-encoded payloads",
         )
       }
-      const raw = JSON.parse(payload.data) as SerializedOp[]
-      if (raw.length === 0) return
-      const ops = deserializeOps(raw)
 
-      // Apply through the prepare/flush pipeline so the changefeed
-      // layer delivers notifications to subscribers.
       const ctx = substrate.context()
-      executeBatch(ctx, ops, origin)
+
+      if (payload.kind === "entirety") {
+        // State image — decompose to ReplaceChange ops and apply through
+        // the prepare/flush pipeline so the changefeed fires and refs
+        // observe the transition.
+        const ops = stateImageToOps(payload.data)
+        if (ops.length > 0) {
+          executeBatch(ctx, ops, origin)
+        }
+      } else {
+        // Op array — apply incrementally through the prepare/flush pipeline.
+        const raw = JSON.parse(payload.data) as SerializedOp[]
+        if (raw.length === 0) return
+        const ops = deserializeOps(raw)
+        executeBatch(ctx, ops, origin)
+      }
     },
   }
 
@@ -155,13 +165,13 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
 }
 
 // ---------------------------------------------------------------------------
-// createPlainReplicaCore — shared versioning and export/import core
+// createPlainReplicaCore — shared versioning and export/merge core
 // ---------------------------------------------------------------------------
 
 /**
  * The shared replication core used by both `createPlainSubstrate` and
  * `createPlainReplica`. Holds the op log, version counter, and
- * export/import logic — the parts that don't require schema
+ * export/merge logic — the parts that don't require schema
  * interpretation or the changefeed pipeline.
  */
 function createPlainReplicaCore(storeObj: Store) {
@@ -173,7 +183,7 @@ function createPlainReplicaCore(storeObj: Store) {
   let versionCounter = 0
 
   // Pending ops buffer — filled by prepare (Substrate) or
-  // importDelta (Replica), drained by flush.
+  // merge (Replica), drained by flush.
   const pendingOps: Op[] = []
 
   return {
@@ -191,18 +201,18 @@ function createPlainReplicaCore(storeObj: Store) {
       return new PlainVersion(versionCounter)
     },
 
-    exportSnapshot(): SubstratePayload {
-      return { encoding: "json", data: JSON.stringify(storeObj) }
+    exportEntirety(): SubstratePayload {
+      return { kind: "entirety", encoding: "json", data: JSON.stringify(storeObj) }
     },
 
     exportSince(since: PlainVersion): SubstratePayload | null {
       const sinceValue = since.value
       if (sinceValue > versionCounter) return null
       if (sinceValue === versionCounter) {
-        return { encoding: "json", data: JSON.stringify([]) }
+        return null
       }
       const ops = log.slice(sinceValue).flat()
-      return { encoding: "json", data: JSON.stringify(serializeOps(ops)) }
+      return { kind: "since", encoding: "json", data: JSON.stringify(serializeOps(ops)) }
     },
   }
 }
@@ -213,7 +223,7 @@ function createPlainReplicaCore(storeObj: Store) {
 
 /**
  * Creates a headless `Replica<PlainVersion>` — a plain JS object with
- * version tracking and export/import, but no schema interpretation,
+ * version tracking and export/merge, but no schema interpretation,
  * no StoreReader, no WritableContext, no changefeed.
  *
  * Used by conduit participants (storage adapters, routing servers)
@@ -230,23 +240,27 @@ export function createPlainReplica(storeObj: Store): Replica<PlainVersion> {
       return core.version()
     },
 
-    exportSnapshot(): SubstratePayload {
-      return core.exportSnapshot()
+    exportEntirety(): SubstratePayload {
+      return core.exportEntirety()
     },
 
     exportSince(since: PlainVersion): SubstratePayload | null {
       return core.exportSince(since)
     },
 
-    importDelta(payload: SubstratePayload, _origin?: string): void {
+    merge(payload: SubstratePayload, _origin?: string): void {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
         throw new Error(
-          "PlainReplica.importDelta only supports JSON-encoded payloads",
+          "PlainReplica.merge only supports JSON-encoded payloads",
         )
       }
-      const raw = JSON.parse(payload.data) as SerializedOp[]
-      if (raw.length === 0) return
-      const ops = deserializeOps(raw)
+
+      // Dispatch on payload kind — the producer tagged it at creation time.
+      const ops: Op[] = payload.kind === "entirety"
+        ? stateImageToOps(payload.data)
+        : deserializeOps(JSON.parse(payload.data) as SerializedOp[])
+
+      if (ops.length === 0) return
 
       // Apply directly to the store — no changefeed, no prepare/flush.
       for (const op of ops) {
@@ -278,14 +292,38 @@ export function plainContext(storeObj: Store): WritableContext {
 }
 
 // ---------------------------------------------------------------------------
-// PlainSubstrateFactory — construction from schema or snapshot
+// stateImageToOps — shared helper for entirety payload absorption
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a JSON state image and build one `ReplaceChange` op per top-level key.
+ *
+ * Used by three call sites:
+ * - `PlainSubstrate.merge` (entirety path — apply via executeBatch)
+ * - `PlainReplica.merge` (entirety path — apply via applyChangeToStore)
+ * - `plainSubstrateFactory.fromEntirety` (cold-start construction)
+ */
+function stateImageToOps(json: string): Op[] {
+  const state = JSON.parse(json) as Record<string, unknown>
+  const ops: Op[] = []
+  for (const [key, value] of Object.entries(state)) {
+    ops.push({
+      path: RawPath.empty.field(key),
+      change: replaceChange(value),
+    })
+  }
+  return ops
+}
+
+// ---------------------------------------------------------------------------
+// PlainSubstrateFactory — construction from schema or entirety
 // ---------------------------------------------------------------------------
 
 /**
  * Factory for constructing plain JS object substrates.
  *
  * - `create(schema)` — fresh substrate with Zero.structural defaults.
- * - `fromSnapshot(payload, schema)` — reconstruct from a snapshot payload
+ * - `fromEntirety(payload, schema)` — reconstruct from an entirety payload
  *   via executeBatch (produces version > 0 with ops in the log).
  * - `parseVersion(serialized)` — deserialize a PlainVersion.
  */
@@ -301,10 +339,10 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
     return createPlainReplica({} as Store)
   },
 
-  fromSnapshot(payload: SubstratePayload): Replica<PlainVersion> {
+  fromEntirety(payload: SubstratePayload): Replica<PlainVersion> {
     if (payload.encoding !== "json" || typeof payload.data !== "string") {
       throw new Error(
-        "PlainReplicaFactory.fromSnapshot only supports JSON-encoded payloads",
+        "PlainReplicaFactory.fromEntirety only supports JSON-encoded payloads",
       )
     }
     const state = JSON.parse(payload.data) as Record<string, unknown>
@@ -330,28 +368,20 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     return createPlainSubstrate(storeObj)
   },
 
-  fromSnapshot(
+  fromEntirety(
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
     if (payload.encoding !== "json" || typeof payload.data !== "string") {
       throw new Error(
-        "PlainSubstrateFactory.fromSnapshot only supports JSON-encoded payloads",
+        "PlainSubstrateFactory.fromEntirety only supports JSON-encoded payloads",
       )
     }
-    const snapshotState = JSON.parse(payload.data) as Record<string, unknown>
-
-    // Create empty substrate, then apply snapshot state through the
+    // Create empty substrate, then apply entirety state through the
     // prepare/flush pipeline. This produces version > 0 with ops in
     // the log, so version comparison works correctly for sequential sync.
     const substrate = plainSubstrateFactory.create(schema)
-    const ops: Op[] = []
-    for (const [key, value] of Object.entries(snapshotState)) {
-      ops.push({
-        path: RawPath.empty.field(key),
-        change: replaceChange(value),
-      })
-    }
+    const ops = stateImageToOps(payload.data as string)
     if (ops.length > 0) {
       executeBatch(substrate.context(), ops)
     }

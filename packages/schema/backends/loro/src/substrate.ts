@@ -8,7 +8,7 @@
 // The event bridge contract: wrapping a LoroDoc in a kyneta substrate
 // means subscribing to the kyneta doc observes ALL mutations to the
 // underlying LoroDoc, regardless of source (local kyneta writes,
-// importDelta, external doc.import, external raw Loro API mutations).
+// merge, external doc.import, external raw Loro API mutations).
 
 import type {
   Replica,
@@ -158,7 +158,7 @@ export function createLoroSubstrate(
   // applied by Loro) and substrate.onFlush from calling applyDiff/commit.
   let inEventHandler = false
 
-  // Stashed origin from importDelta for the subscriber to pick up.
+  // Stashed origin from merge for the subscriber to pick up.
   let pendingImportOrigin: string | undefined
 
   // Lazy-built WritableContext (same pattern as PlainSubstrate).
@@ -226,8 +226,9 @@ export function createLoroSubstrate(
       return new LoroVersion(doc.version())
     },
 
-    exportSnapshot(): SubstratePayload {
+    exportEntirety(): SubstratePayload {
       return {
+        kind: "entirety",
         encoding: "binary",
         data: doc.export({ mode: "snapshot" }),
       }
@@ -236,19 +237,19 @@ export function createLoroSubstrate(
     exportSince(since: LoroVersion): SubstratePayload | null {
       try {
         const bytes = doc.export({ mode: "update", from: since.vv })
-        return { encoding: "binary", data: bytes }
+        return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null
       }
     },
 
-    importDelta(payload: SubstratePayload, origin?: string): void {
+    merge(payload: SubstratePayload, origin?: string): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "LoroSubstrate.importDelta only supports binary-encoded payloads",
+          "LoroSubstrate.merge only supports binary-encoded payloads",
         )
       }
       // Stash origin for the subscriber to pick up
@@ -282,7 +283,7 @@ export function createLoroSubstrate(
       return
     }
 
-    // Determine origin: prefer stashed kyneta origin (from importDelta),
+    // Determine origin: prefer stashed kyneta origin (from merge),
     // fall back to Loro's batch origin.
     const origin = pendingImportOrigin ?? batch.origin
 
@@ -328,26 +329,26 @@ function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       return new LoroVersion(doc.version())
     },
 
-    exportSnapshot(): SubstratePayload {
-      return { encoding: "binary", data: doc.export({ mode: "snapshot" }) }
+    exportEntirety(): SubstratePayload {
+      return { kind: "entirety", encoding: "binary", data: doc.export({ mode: "snapshot" }) }
     },
 
     exportSince(since: LoroVersion): SubstratePayload | null {
       try {
         const bytes = doc.export({ mode: "update", from: since.vv })
-        return { encoding: "binary", data: bytes }
+        return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null
       }
     },
 
-    importDelta(payload: SubstratePayload, _origin?: string): void {
+    merge(payload: SubstratePayload, _origin?: string): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "LoroReplica.importDelta only supports binary-encoded payloads",
+          "LoroReplica.merge only supports binary-encoded payloads",
         )
       }
       doc.import(payload.data)
@@ -360,13 +361,13 @@ export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
     return createLoroReplica(new LoroDoc())
   },
 
-  fromSnapshot(payload: SubstratePayload): Replica<LoroVersion> {
+  fromEntirety(payload: SubstratePayload): Replica<LoroVersion> {
     if (
       payload.encoding !== "binary" ||
       !(payload.data instanceof Uint8Array)
     ) {
       throw new Error(
-        "LoroReplicaFactory.fromSnapshot only supports binary-encoded payloads",
+        "LoroReplicaFactory.fromEntirety only supports binary-encoded payloads",
       )
     }
     const doc = new LoroDoc()
@@ -389,7 +390,7 @@ export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
  * - `create(schema)` — creates a fresh LoroDoc with empty containers
  *   matching the schema structure. No seed data — initial content
  *   should be applied via `change()` after construction.
- * - `fromSnapshot(payload, schema)` — creates a LoroDoc from a snapshot
+ * - `fromEntirety(payload, schema)` — creates a LoroDoc from an entirety
  *   payload, returns a substrate.
  * - `parseVersion(serialized)` — deserializes a LoroVersion.
  */
@@ -419,7 +420,7 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
     return createLoroSubstrate(doc, schema)
   },
 
-  fromSnapshot(
+  fromEntirety(
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<LoroVersion> {
@@ -428,7 +429,7 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
       !(payload.data instanceof Uint8Array)
     ) {
       throw new Error(
-        "LoroSubstrateFactory.fromSnapshot only supports binary-encoded payloads",
+        "LoroSubstrateFactory.fromEntirety only supports binary-encoded payloads",
       )
     }
     const doc = new LoroDoc()

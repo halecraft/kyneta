@@ -91,8 +91,7 @@ describe("Binary frame — complete", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-1",
-      offerType: "snapshot",
-      payload: { encoding: "binary", data: binaryData },
+      payload: { kind: "entirety", encoding: "binary", data: binaryData },
       version: "7",
     }
     const encoded = encodeComplete(cborCodec, msg)
@@ -110,8 +109,7 @@ describe("Binary frame — complete", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-2",
-      offerType: "delta",
-      payload: { encoding: "json", data: '{"key":"value"}' },
+      payload: { kind: "since", encoding: "json", data: '{"key":"value"}' },
       version: "3",
       reciprocate: false,
     }
@@ -179,8 +177,7 @@ describe("Binary frame — batch (via complete frame)", () => {
       {
         type: "offer",
         docId: "d1",
-        offerType: "delta",
-        payload: { encoding: "binary", data: new Uint8Array([1, 2, 3]) },
+        payload: { kind: "since", encoding: "binary", data: new Uint8Array([1, 2, 3]) },
         version: "6",
         reciprocate: false,
       },

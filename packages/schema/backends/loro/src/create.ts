@@ -1,10 +1,10 @@
 // create — batteries-included document construction backed by LoroSubstrate.
 //
-// Provides `createLoroDoc` and `createLoroDocFromSnapshot` functions that
+// Provides `createLoroDoc` and `createLoroDocFromEntirety` functions that
 // hide the interpret pipeline and layer composition behind a single call.
 //
 // Internally tracks substrates via a module-scoped WeakMap so that sync
-// primitives (`version`, `exportSnapshot`, `importDelta` in sync.ts)
+// primitives (`version`, `exportEntirety`, `merge` in sync.ts)
 // can retrieve the substrate from just a doc ref.
 //
 // `getSubstrate` is exported for use by `sync.ts` but is NOT re-exported
@@ -31,18 +31,18 @@ const substrates = new WeakMap<object, Substrate<LoroVersion>>()
 
 /**
  * Retrieve the substrate associated with a doc created by `createLoroDoc`
- * or `createLoroDocFromSnapshot`.
+ * or `createLoroDocFromEntirety`.
  *
  * Exported for `sync.ts` — NOT re-exported from the barrel.
  *
- * @throws If `doc` was not created by `createLoroDoc` / `createLoroDocFromSnapshot`.
+ * @throws If `doc` was not created by `createLoroDoc` / `createLoroDocFromEntirety`.
  */
 export function getSubstrate(doc: object): Substrate<LoroVersion> {
   const s = substrates.get(doc)
   if (!s) {
     throw new Error(
-      "version/exportSnapshot/importDelta called on an object without a LoroSubstrate. " +
-        "Use a doc created by createLoroDoc() or createLoroDocFromSnapshot().",
+      "version/exportEntirety/merge called on an object without a LoroSubstrate. " +
+        "Use a doc created by createLoroDoc() or createLoroDocFromEntirety().",
     )
   }
   return s
@@ -58,7 +58,7 @@ function registerDoc(
 ): any {
   // The `as any` on the builder avoids TS2589 — interpret's fluent API
   // produces deeply recursive types when S is the abstract SchemaType.
-  // The public createLoroDoc/createLoroDocFromSnapshot signatures provide
+  // The public createLoroDoc/createLoroDocFromEntirety signatures provide
   // the correct Ref<S> return type via interface call signature patterns.
   const doc: any = (interpret as any)(schema, substrate.context())
     .with(readable)
@@ -119,7 +119,7 @@ function isLoroDoc(value: unknown): value is LoroDoc {
  * CRDT collaboration support.
  *
  * The returned ref observes **all** mutations to the underlying LoroDoc,
- * regardless of source (local kyneta writes, importDelta, external
+ * regardless of source (local kyneta writes, merge, external
  * `doc.import()`, external raw Loro API mutations).
  *
  * @param schema - The schema describing the document structure.
@@ -141,10 +141,10 @@ export const createLoroDoc: CreateLoroDoc = (schema, doc) => {
 }
 
 // ---------------------------------------------------------------------------
-// createLoroDocFromSnapshot
+// createLoroDocFromEntirety
 // ---------------------------------------------------------------------------
 
-type CreateLoroDocFromSnapshot = <S extends SchemaType>(
+type CreateLoroDocFromEntirety = <S extends SchemaType>(
   schema: S,
   payload: SubstratePayload,
 ) => Ref<S>
@@ -152,17 +152,17 @@ type CreateLoroDocFromSnapshot = <S extends SchemaType>(
 /**
  * Reconstruct a live Loro-backed document from a substrate snapshot payload.
  *
- * The payload must have been produced by `exportSnapshot()` on a
+ * The payload must have been produced by `exportEntirety()` on a
  * compatible document. This is the entry point for SSR hydration
  * and reconnection past log compaction.
  *
  * ```ts
- * const payload = exportSnapshot(docA)
- * const docB = createLoroDocFromSnapshot(MySchema, payload)
+ * const payload = exportEntirety(docA)
+ * const docB = createLoroDocFromEntirety(MySchema, payload)
  * // docB has the same state as docA at the time of export
  * ```
  */
-export const createLoroDocFromSnapshot: CreateLoroDocFromSnapshot = (
+export const createLoroDocFromEntirety: CreateLoroDocFromEntirety = (
   schema,
   payload,
-) => registerDoc(schema, loroSubstrateFactory.fromSnapshot(payload, schema))
+) => registerDoc(schema, loroSubstrateFactory.fromEntirety(payload, schema))

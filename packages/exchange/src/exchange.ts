@@ -424,11 +424,8 @@ export class Exchange {
       mode: "interpret",
       docId,
       replica: substrate,           // Substrate extends Replica
-      factory,
       replicaFactory: factory.replica,
       strategy: bound.strategy,
-      ref,
-      schema: bound.schema,
     })
 
     // Auto-wire changefeed → synchronizer: when a local mutation fires

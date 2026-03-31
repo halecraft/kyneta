@@ -1,8 +1,8 @@
 // basic/create — document construction backed by PlainSubstrate.
 //
-// Provides the batteries-included `createDoc` and `createDocFromSnapshot`
+// Provides the batteries-included `createDoc` and `createDocFromEntirety`
 // functions. Internally tracks substrates via a module-scoped WeakMap so
-// that sync primitives (`version`, `delta`, `exportSnapshot` in sync.ts)
+// that sync primitives (`version`, `delta`, `exportEntirety` in sync.ts)
 // can retrieve the substrate from just a doc ref.
 //
 // `getSubstrate` is exported for use by `sync.ts` but is NOT re-exported
@@ -24,18 +24,18 @@ const substrates = new WeakMap<object, Substrate<PlainVersion>>()
 
 /**
  * Retrieve the substrate associated with a doc created by `createDoc`
- * or `createDocFromSnapshot`.
+ * or `createDocFromEntirety`.
  *
  * Exported for `sync.ts` — NOT re-exported from the barrel.
  *
- * @throws If `doc` was not created by `createDoc` or `createDocFromSnapshot`.
+ * @throws If `doc` was not created by `createDoc` or `createDocFromEntirety`.
  */
 export function getSubstrate(doc: object): Substrate<PlainVersion> {
   const s = substrates.get(doc)
   if (!s) {
     throw new Error(
-      "version/delta/exportSnapshot called on an object without a substrate. " +
-        "Use a doc created by createDoc() or createDocFromSnapshot().",
+      "version/delta/exportEntirety called on an object without a substrate. " +
+        "Use a doc created by createDoc() or createDocFromEntirety().",
     )
   }
   return s
@@ -51,7 +51,7 @@ function registerDoc(
 ): any {
   // The `as any` on the builder avoids TS2589 — interpret's fluent API
   // produces deeply recursive types when S is the abstract SchemaType.
-  // The public createDoc/createDocFromSnapshot signatures provide the
+  // The public createDoc/createDocFromEntirety signatures provide the
   // correct Ref<S> return type via interface call signature patterns.
   const doc: any = (interpret as any)(schema, substrate.context())
     .with(readable)
@@ -101,26 +101,26 @@ export const createDoc: CreateDoc = (schema) =>
   registerDoc(schema, plainSubstrateFactory.create(schema))
 
 // ---------------------------------------------------------------------------
-// createDocFromSnapshot
+// createDocFromEntirety
 // ---------------------------------------------------------------------------
 
-type CreateDocFromSnapshot = <S extends SchemaType>(
+type CreateDocFromEntirety = <S extends SchemaType>(
   schema: S,
   payload: SubstratePayload,
 ) => Ref<S>
 
 /**
- * Reconstruct a live document from a substrate snapshot payload.
+ * Reconstruct a live document from a substrate entirety payload.
  *
- * The payload must have been produced by `exportSnapshot()` on a
+ * The payload must have been produced by `exportEntirety()` on a
  * compatible document. This is the entry point for SSR hydration
  * and reconnection past log compaction.
  *
  * ```ts
- * const payload = exportSnapshot(docA)
- * const docB = createDocFromSnapshot(MySchema, payload)
+ * const payload = exportEntirety(docA)
+ * const docB = createDocFromEntirety(MySchema, payload)
  * // docB has the same state as docA at the time of export
  * ```
  */
-export const createDocFromSnapshot: CreateDocFromSnapshot = (schema, payload) =>
-  registerDoc(schema, plainSubstrateFactory.fromSnapshot(payload, schema))
+export const createDocFromEntirety: CreateDocFromEntirety = (schema, payload) =>
+  registerDoc(schema, plainSubstrateFactory.fromEntirety(payload, schema))

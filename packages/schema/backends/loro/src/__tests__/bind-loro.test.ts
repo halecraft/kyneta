@@ -36,7 +36,7 @@ describe("bindLoro()", () => {
     // Create a substrate and verify it works
     const substrate = factory.create(testSchema)
     expect(substrate.version().serialize()).toBeDefined()
-    expect(substrate.exportSnapshot()).toBeDefined()
+    expect(substrate.exportEntirety()).toBeDefined()
   })
 
   it("same peerId always produces the same Loro PeerID (deterministic hash)", () => {

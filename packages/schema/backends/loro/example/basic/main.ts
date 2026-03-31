@@ -12,13 +12,13 @@
 
 import {
   createLoroDoc,
-  createLoroDocFromSnapshot,
+  createLoroDocFromEntirety,
   change,
   subscribe,
   version,
-  exportSnapshot,
+  exportEntirety,
   exportSince,
-  importDelta,
+  merge,
   LoroSchema,
   Schema,
 } from "../../src/index.js"
@@ -119,9 +119,9 @@ log(`
 section(4, "Two Peers, Independent Edits")
 
 // Both peers start from the same snapshot
-const snapshot = exportSnapshot(doc)
-const peerA = createLoroDocFromSnapshot(NoteSchema, snapshot)
-const peerB = createLoroDocFromSnapshot(NoteSchema, snapshot)
+const snapshot = exportEntirety(doc)
+const peerA = createLoroDocFromEntirety(NoteSchema, snapshot)
+const peerB = createLoroDocFromEntirety(NoteSchema, snapshot)
 
 log(`Two peers created from the same snapshot.`)
 log(`Both start with: title="${peerA.title()}", likes=${peerA.likes()}\n`)
@@ -164,8 +164,8 @@ const vB = version(peerB)
 // Exchange deltas (just the changes since the other peer's version)
 const deltaAtoB = exportSince(peerA, vB)
 const deltaBtoA = exportSince(peerB, vA)
-if (deltaAtoB) importDelta(peerB, deltaAtoB)
-if (deltaBtoA) importDelta(peerA, deltaBtoA)
+if (deltaAtoB) merge(peerB, deltaAtoB)
+if (deltaBtoA) merge(peerA, deltaBtoA)
 
 log(`
     Synced! Both peers now have identical state:
@@ -210,13 +210,13 @@ change(peerA, d => d.title.insert(peerA.title().length, " ✅"))
 
 // Sync A → B
 const newDelta = exportSince(peerA, version(peerB))
-if (newDelta) importDelta(peerB, newDelta)
+if (newDelta) merge(peerB, newDelta)
 
 log(`
     subscribe(peerB, () => { ... })
 
     Peer A edits: d.title.insert(end, " ✅")
-    Sync A → B:   importDelta(peerB, delta)
+    Sync A → B:   merge(peerB, delta)
 
     Events received by peerB's subscriber:
 `)
@@ -240,12 +240,12 @@ log(`
 
 section(7, "Snapshot and Restore")
 
-const fullSnapshot = exportSnapshot(peerA)
-const peerC = createLoroDocFromSnapshot(NoteSchema, fullSnapshot)
+const fullSnapshot = exportEntirety(peerA)
+const peerC = createLoroDocFromEntirety(NoteSchema, fullSnapshot)
 
 log(`
-    const snapshot = exportSnapshot(peerA)
-    const peerC = createLoroDocFromSnapshot(NoteSchema, snapshot)
+    const snapshot = exportEntirety(peerA)
+    const peerC = createLoroDocFromEntirety(NoteSchema, snapshot)
 
     Snapshot size: ${(fullSnapshot.data as Uint8Array).byteLength} bytes (binary, compact)
 

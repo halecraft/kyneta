@@ -1,8 +1,8 @@
 // basic/sync — sync primitives for PlainSubstrate-backed documents.
 //
 // These functions provide version tracking, delta extraction, and
-// snapshot export for documents created via `createDoc` or
-// `createDocFromSnapshot`. They discover the substrate via the
+// entirety export for documents created via `createDoc` or
+// `createDocFromEntirety`. They discover the substrate via the
 // module-scoped WeakMap in `create.ts`.
 
 import type { Op } from "../changefeed.js"
@@ -19,8 +19,8 @@ import { getSubstrate } from "./create.js"
  * Current version — monotonic integer, increments on each flush cycle
  * that produces at least one Op.
  *
- * @param doc - A document created by `createDoc` or `createDocFromSnapshot`.
- * @throws If `doc` was not created by `createDoc` / `createDocFromSnapshot`.
+ * @param doc - A document created by `createDoc` or `createDocFromEntirety`.
+ * @throws If `doc` was not created by `createDoc` / `createDocFromEntirety`.
  */
 export function version(doc: object): number {
   return getSubstrate(doc).version().value
@@ -35,12 +35,12 @@ export function version(doc: object): number {
  *
  * This returns raw `Op[]` for wire compatibility — the live sync protocol
  * uses Op-level granularity. For bulk transfers (SSR, reconnection),
- * use `exportSnapshot()` instead.
+ * use `exportEntirety()` instead.
  *
- * @param doc - A document created by `createDoc` or `createDocFromSnapshot`.
+ * @param doc - A document created by `createDoc` or `createDocFromEntirety`.
  * @param fromVersion - The version to diff from (inclusive lower bound).
  * @returns The ops applied between `fromVersion` and the current version.
- * @throws If `doc` was not created by `createDoc` / `createDocFromSnapshot`.
+ * @throws If `doc` was not created by `createDoc` / `createDocFromEntirety`.
  */
 export function delta(doc: object, fromVersion: number): Op[] {
   const substrate = getSubstrate(doc)
@@ -62,17 +62,17 @@ export function delta(doc: object, fromVersion: number): Op[] {
 }
 
 // ---------------------------------------------------------------------------
-// exportSnapshot — full state for reconstruction
+// exportEntirety — full state for reconstruction
 // ---------------------------------------------------------------------------
 
 /**
- * Export the full substrate snapshot — sufficient for a new peer to
- * reconstruct an equivalent document via `createDocFromSnapshot()`.
+ * Export the full substrate entirety — sufficient for a new peer to
+ * reconstruct an equivalent document via `createDocFromEntirety()`.
  *
- * @param doc - A document created by `createDoc` or `createDocFromSnapshot`.
+ * @param doc - A document created by `createDoc` or `createDocFromEntirety`.
  * @returns An opaque `SubstratePayload` (JSON-encoded for PlainSubstrate).
- * @throws If `doc` was not created by `createDoc` / `createDocFromSnapshot`.
+ * @throws If `doc` was not created by `createDoc` / `createDocFromEntirety`.
  */
-export function exportSnapshot(doc: object): SubstratePayload {
-  return getSubstrate(doc).exportSnapshot()
+export function exportEntirety(doc: object): SubstratePayload {
+  return getSubstrate(doc).exportEntirety()
 }

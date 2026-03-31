@@ -20,14 +20,14 @@ import type {
 import {
   Schema,
   createDoc,
-  createDocFromSnapshot,
+  createDocFromEntirety,
   change,
   applyChanges,
   subscribe,
   subscribeNode,
   version,
   delta,
-  exportSnapshot,
+  exportEntirety,
   validate,
   tryValidate,
   SchemaValidationError,
@@ -370,7 +370,7 @@ unsub2()
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-section(10, "Sync: version, delta, exportSnapshot")
+section(10, "Sync: version, delta, exportEntirety")
 
 // Version tracking
 const v1 = version(doc)
@@ -388,12 +388,12 @@ const opsFromV1 = delta(doc, v1)
 log(`    delta(doc, ${v1}) → ${opsFromV1.length} op(s) since version ${v1}`)
 
 // Snapshot — export and reconstruct
-const snapshot: SubstratePayload = exportSnapshot(doc)
-const docClone = createDocFromSnapshot(ProjectSchema, snapshot)
+const snapshot: SubstratePayload = exportEntirety(doc)
+const docClone = createDocFromEntirety(ProjectSchema, snapshot)
 
 log(`
-    const snapshot = exportSnapshot(doc)
-    const docClone = createDocFromSnapshot(ProjectSchema, snapshot)
+    const snapshot = exportEntirety(doc)
+    const docClone = createDocFromEntirety(ProjectSchema, snapshot)
 
     docClone.name()  → "${docClone.name()}"
     docClone.stars() → ${docClone.stars()}

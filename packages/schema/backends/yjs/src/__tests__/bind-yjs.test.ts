@@ -75,7 +75,7 @@ describe("bindYjs", () => {
       expect(doc.count()).toBe(7)
     })
 
-    it("factory supports fromSnapshot", () => {
+    it("factory supports fromEntirety", () => {
       const bound = bindYjs(SimpleSchema)
       const factory = bound.factory({ peerId: "peer-1" })
 
@@ -86,10 +86,10 @@ describe("bindYjs", () => {
         d.count.set(42)
       })
       const substrate1 = (unwrap as any)(doc1)
-      const snapshot = substrate1.exportSnapshot()
+      const snapshot = substrate1.exportEntirety()
 
       // Restore
-      const substrate2 = factory.fromSnapshot(snapshot, SimpleSchema)
+      const substrate2 = factory.fromEntirety(snapshot, SimpleSchema)
       expect(substrate2.store.read(RawPath.empty.field("title"))).toBe(
         "Snap",
       )

@@ -1,12 +1,12 @@
 // sync — sync primitives for YjsSubstrate-backed documents.
 //
-// These functions provide version tracking, snapshot export, and delta
-// import for documents created via `createYjsDoc` or
-// `createYjsDocFromSnapshot`. They discover the substrate via the
+// These functions provide version tracking, entirety export, and merge
+// for documents created via `createYjsDoc` or
+// `createYjsDocFromEntirety`. They discover the substrate via the
 // module-scoped WeakMap in `create.ts`.
 //
 // Unlike PlainSubstrate's sync (which returns Op[] for deltas),
-// YjsSubstrate's sync uses binary SubstratePayload for both snapshots
+// YjsSubstrate's sync uses binary SubstratePayload for both entireties
 // and deltas — these are Yjs's native state-as-update bytes.
 
 import type { SubstratePayload } from "@kyneta/schema"
@@ -23,28 +23,28 @@ import { getSubstrate } from "./create.js"
  * Use `.serialize()` to get a text-safe string for embedding in HTML
  * meta tags, URL parameters, etc.
  *
- * @param doc - A document created by `createYjsDoc` or `createYjsDocFromSnapshot`.
- * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromSnapshot`.
+ * @param doc - A document created by `createYjsDoc` or `createYjsDocFromEntirety`.
+ * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromEntirety`.
  */
 export function version(doc: object): YjsVersion {
   return getSubstrate(doc).version()
 }
 
 // ---------------------------------------------------------------------------
-// exportSnapshot — full state for reconstruction
+// exportEntirety — full state for reconstruction
 // ---------------------------------------------------------------------------
 
 /**
- * Export the full substrate snapshot — sufficient for a new peer to
- * reconstruct an equivalent document via `createYjsDocFromSnapshot()`.
+ * Export the full substrate entirety — sufficient for a new peer to
+ * reconstruct an equivalent document via `createYjsDocFromEntirety()`.
  *
  * Returns a binary `SubstratePayload` (Yjs state-as-update bytes).
  *
- * @param doc - A document created by `createYjsDoc` or `createYjsDocFromSnapshot`.
- * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromSnapshot`.
+ * @param doc - A document created by `createYjsDoc` or `createYjsDocFromEntirety`.
+ * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromEntirety`.
  */
-export function exportSnapshot(doc: object): SubstratePayload {
-  return getSubstrate(doc).exportSnapshot()
+export function exportEntirety(doc: object): SubstratePayload {
+  return getSubstrate(doc).exportEntirety()
 }
 
 // ---------------------------------------------------------------------------
@@ -61,12 +61,12 @@ export function exportSnapshot(doc: object): SubstratePayload {
  * const v0 = version(docA)
  * change(docA, d => d.title.insert(0, "Hi"))
  * const delta = exportSince(docA, v0)
- * importDelta(docB, delta!)
+ * merge(docB, delta!)
  * ```
  *
- * @param doc - A document created by `createYjsDoc` or `createYjsDocFromSnapshot`.
+ * @param doc - A document created by `createYjsDoc` or `createYjsDocFromEntirety`.
  * @param since - The version to diff from.
- * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromSnapshot`.
+ * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromEntirety`.
  */
 export function exportSince(
   doc: object,
@@ -76,32 +76,32 @@ export function exportSince(
 }
 
 // ---------------------------------------------------------------------------
-// importDelta — apply a delta from another peer
+// merge — apply a delta from another peer
 // ---------------------------------------------------------------------------
 
 /**
  * Import a delta payload into a live document.
  *
  * The payload must have been produced by `exportSince()` or
- * `exportSnapshot()` on a compatible document.
+ * `exportEntirety()` on a compatible document.
  *
  * After import, the changefeed fires for all subscribers — the event
  * bridge handles this automatically.
  *
  * ```ts
  * const delta = exportSince(docA, sinceVersion)
- * importDelta(docB, delta!, "sync")
+ * merge(docB, delta!, "sync")
  * ```
  *
- * @param doc - A document created by `createYjsDoc` or `createYjsDocFromSnapshot`.
- * @param payload - The delta or snapshot payload to import.
+ * @param doc - A document created by `createYjsDoc` or `createYjsDocFromEntirety`.
+ * @param payload - The delta or entirety payload to merge.
  * @param origin - Optional provenance tag for the changeset.
- * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromSnapshot`.
+ * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromEntirety`.
  */
-export function importDelta(
+export function merge(
   doc: object,
   payload: SubstratePayload,
   origin?: string,
 ): void {
-  getSubstrate(doc).importDelta(payload, origin)
+  getSubstrate(doc).merge(payload, origin)
 }

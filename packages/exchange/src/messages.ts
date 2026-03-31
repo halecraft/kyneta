@@ -79,10 +79,9 @@ export type InterestMsg = {
  *
  * Carries an opaque `SubstratePayload` (the exchange never inspects
  * it — only the substrate knows how to produce and consume these).
- *
- * `offerType` distinguishes snapshots from deltas:
- * - `"snapshot"`: full state — receiver reconstructs via `factory.fromSnapshot()`
- * - `"delta"`: incremental — receiver applies via `substrate.importDelta()`
+ * The payload's `kind` discriminant (`"entirety"` or `"since"`)
+ * tells the receiver how it was produced — the receiver calls
+ * `replica.merge(payload)` which dispatches internally.
  *
  * `reciprocate` asks the receiver to send an `interest` back so that
  * the offerer can receive the receiver's state in turn. Used by causal
@@ -91,9 +90,7 @@ export type InterestMsg = {
 export type OfferMsg = {
   type: "offer"
   docId: DocId
-  /** Whether this is a full snapshot or an incremental delta. */
-  offerType: "snapshot" | "delta"
-  /** Opaque substrate payload (snapshot or delta). */
+  /** Opaque substrate payload — carries its own `kind` discriminant. */
   payload: SubstratePayload
   /** Serialized Version string of the sender's state. */
   version: string

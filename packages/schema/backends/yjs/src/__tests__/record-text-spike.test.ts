@@ -19,11 +19,11 @@
 import { describe, expect, it } from "vitest"
 import {
   createYjsDoc,
-  createYjsDocFromSnapshot,
+  createYjsDocFromEntirety,
   version,
-  exportSnapshot,
+  exportEntirety,
   exportSince,
-  importDelta,
+  merge,
   change,
   subscribe,
   text,
@@ -114,8 +114,8 @@ describe("record-of-struct (plain baseline)", () => {
       d.profiles.set("alice", { displayName: "Alice", age: 30 })
     })
 
-    const snapshot = exportSnapshot(docA)
-    const docB = createYjsDocFromSnapshot(PlainRecordSchema, snapshot)
+    const snapshot = exportEntirety(docA)
+    const docB = createYjsDocFromEntirety(PlainRecordSchema, snapshot)
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", age: 30 },
@@ -130,7 +130,7 @@ describe("record-of-struct (plain baseline)", () => {
     })
 
     // Establish docB from snapshot (avoids Yjs clientID collision)
-    const docB = createYjsDocFromSnapshot(PlainRecordSchema, exportSnapshot(docA))
+    const docB = createYjsDocFromEntirety(PlainRecordSchema, exportEntirety(docA))
 
     const v0 = version(docB)
 
@@ -140,7 +140,7 @@ describe("record-of-struct (plain baseline)", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    importDelta(docB, delta!, "sync")
+    merge(docB, delta!, "sync")
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", age: 30 },
@@ -265,8 +265,8 @@ describe("text-inside-struct-inside-record", () => {
       d.profiles.at("alice").bio.insert(0, "Collaborative bio")
     })
 
-    const snapshot = exportSnapshot(docA)
-    const docB = createYjsDocFromSnapshot(ProfileSchema, snapshot)
+    const snapshot = exportEntirety(docA)
+    const docB = createYjsDocFromEntirety(ProfileSchema, snapshot)
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", bio: "Collaborative bio" },
@@ -286,7 +286,7 @@ describe("text-inside-struct-inside-record", () => {
     // Establish docB from snapshot (consistent with Yjs test patterns —
     // two independently-created Y.Docs may share a clientID, causing
     // silent update drops)
-    const docB = createYjsDocFromSnapshot(ProfileSchema, exportSnapshot(docA))
+    const docB = createYjsDocFromEntirety(ProfileSchema, exportEntirety(docA))
     const v0 = version(docB)
 
     change(docA, (d: any) => {
@@ -295,7 +295,7 @@ describe("text-inside-struct-inside-record", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    importDelta(docB, delta!, "sync")
+    merge(docB, delta!, "sync")
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", bio: "Hello from A" },
@@ -315,7 +315,7 @@ describe("text-inside-struct-inside-record", () => {
     change(docA, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
     })
-    const docB = createYjsDocFromSnapshot(ProfileSchema, exportSnapshot(docA))
+    const docB = createYjsDocFromEntirety(ProfileSchema, exportEntirety(docA))
 
     // Both peers edit concurrently
     const vA = version(docA)
@@ -333,8 +333,8 @@ describe("text-inside-struct-inside-record", () => {
     const deltaBA = exportSince(docB, vA)
     expect(deltaAB).not.toBeNull()
     expect(deltaBA).not.toBeNull()
-    importDelta(docB, deltaAB!, "sync")
-    importDelta(docA, deltaBA!, "sync")
+    merge(docB, deltaAB!, "sync")
+    merge(docA, deltaBA!, "sync")
 
     // Both converge to the same value (order depends on client IDs)
     expect((docA as any).profiles.at("alice").bio()).toBe(
@@ -411,7 +411,7 @@ describe("text-inside-struct-inside-list", () => {
     })
 
     // Establish docB from snapshot (avoids Yjs clientID collision)
-    const docB = createYjsDocFromSnapshot(ListProfileSchema, exportSnapshot(docA))
+    const docB = createYjsDocFromEntirety(ListProfileSchema, exportEntirety(docA))
     const v0 = version(docB)
 
     change(docA, (d: any) => {
@@ -420,7 +420,7 @@ describe("text-inside-struct-inside-list", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    importDelta(docB, delta!, "sync")
+    merge(docB, delta!, "sync")
 
     expect(docB.players.length).toBe(1)
     expect((docB as any).players.at(0).name()).toBe("Alice")

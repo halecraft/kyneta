@@ -8,7 +8,7 @@
 // The event bridge contract: wrapping a Y.Doc in a kyneta substrate
 // means subscribing to the kyneta doc observes ALL mutations to the
 // underlying Y.Doc, regardless of source (local kyneta writes,
-// importDelta, external Y.applyUpdate, external raw Yjs API mutations).
+// merge, external Y.applyUpdate, external raw Yjs API mutations).
 
 import type {
   ChangeBase,
@@ -46,11 +46,11 @@ const KYNETA_ORIGIN = "kyneta-prepare"
  * This is the "bring your own doc" entry point. The user creates and
  * manages the Y.Doc (possibly via a Yjs provider); this function wraps
  * it with a schema-aware overlay providing typed reads, writes,
- * versioning, and export/import through the standard Substrate interface.
+ * versioning, and export/merge through the standard Substrate interface.
  *
  * **Event bridge contract:** A persistent `observeDeep` handler is
  * registered on the root Y.Map at construction time. All non-kyneta
- * mutations to the Y.Doc (imports, external local writes) are bridged
+ * mutations to the Y.Doc (merges, external local writes) are bridged
  * to the kyneta changefeed. Subscribing to the kyneta doc observes all
  * mutations regardless of source.
  *
@@ -73,8 +73,8 @@ export function createYjsSubstrate(
   // to be), and onFlush() skips transact/commit.
   let inOurTransaction = false
 
-  // Stashed origin from importDelta for the event bridge to pick up.
-  let pendingImportOrigin: string | undefined
+  // Stashed origin from merge for the event bridge to pick up.
+  let pendingMergeOrigin: string | undefined
 
   // Lazy-built WritableContext (same pattern as PlainSubstrate / LoroSubstrate).
   let cachedCtx: WritableContext | undefined
@@ -131,8 +131,9 @@ export function createYjsSubstrate(
       return new YjsVersion(Y.encodeStateVector(doc))
     },
 
-    exportSnapshot(): SubstratePayload {
+    exportEntirety(): SubstratePayload {
       return {
+        kind: "entirety",
         encoding: "binary",
         data: Y.encodeStateAsUpdate(doc),
       }
@@ -141,27 +142,27 @@ export function createYjsSubstrate(
     exportSince(since: YjsVersion): SubstratePayload | null {
       try {
         const bytes = Y.encodeStateAsUpdate(doc, since.sv)
-        return { encoding: "binary", data: bytes }
+        return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null
       }
     },
 
-    importDelta(payload: SubstratePayload, origin?: string): void {
+    merge(payload: SubstratePayload, origin?: string): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "YjsSubstrate.importDelta only supports binary-encoded payloads",
+          "YjsSubstrate.merge only supports binary-encoded payloads",
         )
       }
       // Stash origin for the event bridge to pick up
-      pendingImportOrigin = origin
+      pendingMergeOrigin = origin
       try {
         Y.applyUpdate(doc, payload.data, origin ?? "remote")
       } finally {
-        pendingImportOrigin = undefined
+        pendingMergeOrigin = undefined
       }
       // That's it — the observeDeep handler bridges events to the
       // changefeed via executeBatch.
@@ -182,10 +183,10 @@ export function createYjsSubstrate(
       return
     }
 
-    // Determine origin: prefer stashed kyneta origin (from importDelta),
+    // Determine origin: prefer stashed kyneta origin (from merge),
     // fall back to the transaction's origin if it's a string.
     const origin =
-      pendingImportOrigin ??
+      pendingMergeOrigin ??
       (typeof transaction.origin === "string"
         ? transaction.origin
         : undefined)
@@ -220,7 +221,7 @@ export function createYjsSubstrate(
  * - `create(schema)` — creates a fresh Y.Doc with empty containers
  *   matching the schema structure. No seed data — initial content
  *   should be applied via `change()` after construction.
- * - `fromSnapshot(payload, schema)` — creates a Y.Doc from a snapshot
+ * - `fromEntirety(payload, schema)` — creates a Y.Doc from an entirety
  *   payload, returns a substrate.
  * - `parseVersion(serialized)` — deserializes a YjsVersion.
  */
@@ -234,7 +235,7 @@ export function createYjsSubstrate(
  * Constructs headless `Replica<YjsVersion>` instances backed by bare
  * `Y.Doc`s — no schema walking, no container initialization, no
  * StoreReader, no event bridge, no changefeed. Just the CRDT runtime
- * with version tracking and export/import.
+ * with version tracking and export/merge.
  *
  * Used by conduit participants (storage adapters, routing servers)
  * that need to accumulate state, compute per-peer deltas, and compact
@@ -246,26 +247,26 @@ function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       return new YjsVersion(Y.encodeStateVector(doc))
     },
 
-    exportSnapshot(): SubstratePayload {
-      return { encoding: "binary", data: Y.encodeStateAsUpdate(doc) }
+    exportEntirety(): SubstratePayload {
+      return { kind: "entirety", encoding: "binary", data: Y.encodeStateAsUpdate(doc) }
     },
 
     exportSince(since: YjsVersion): SubstratePayload | null {
       try {
         const bytes = Y.encodeStateAsUpdate(doc, since.sv)
-        return { encoding: "binary", data: bytes }
+        return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null
       }
     },
 
-    importDelta(payload: SubstratePayload, _origin?: string): void {
+    merge(payload: SubstratePayload, _origin?: string): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "YjsReplica.importDelta only supports binary-encoded payloads",
+          "YjsReplica.merge only supports binary-encoded payloads",
         )
       }
       Y.applyUpdate(doc, payload.data)
@@ -278,13 +279,13 @@ export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
     return createYjsReplica(new Y.Doc())
   },
 
-  fromSnapshot(payload: SubstratePayload): Replica<YjsVersion> {
+  fromEntirety(payload: SubstratePayload): Replica<YjsVersion> {
     if (
       payload.encoding !== "binary" ||
       !(payload.data instanceof Uint8Array)
     ) {
       throw new Error(
-        "YjsReplicaFactory.fromSnapshot only supports binary-encoded payloads",
+        "YjsReplicaFactory.fromEntirety only supports binary-encoded payloads",
       )
     }
     const doc = new Y.Doc()
@@ -310,7 +311,7 @@ export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
     return createYjsSubstrate(doc, schema)
   },
 
-  fromSnapshot(
+  fromEntirety(
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<YjsVersion> {
@@ -319,7 +320,7 @@ export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
       !(payload.data instanceof Uint8Array)
     ) {
       throw new Error(
-        "YjsSubstrateFactory.fromSnapshot only supports binary-encoded payloads",
+        "YjsSubstrateFactory.fromEntirety only supports binary-encoded payloads",
       )
     }
     const doc = new Y.Doc()

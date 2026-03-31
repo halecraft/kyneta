@@ -94,7 +94,7 @@ function createLoroFactory(
       return createLoroSubstrate(doc, schema)
     },
 
-    fromSnapshot(
+    fromEntirety(
       payload: SubstratePayload,
       schema: SchemaNode,
     ): Substrate<LoroVersion> {
@@ -103,7 +103,7 @@ function createLoroFactory(
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "LoroSubstrateFactory.fromSnapshot only supports binary-encoded payloads",
+          "LoroSubstrateFactory.fromEntirety only supports binary-encoded payloads",
         )
       }
       const doc = new LoroDoc()

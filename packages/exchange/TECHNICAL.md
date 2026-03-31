@@ -14,7 +14,7 @@ The exchange operates at the boundary between three algebras defined by `@kyneta
 | **State** (Substrate) | State management, merge semantics | Substrate-native |
 | **Replication** (Exchange) | Peer-to-peer data transfer | `SubstratePayload`, `Version` |
 
-The exchange is the active sync algebra. The substrate is the passive state algebra. They compose at the boundary defined by five substrate methods: `version()`, `exportSnapshot()`, `exportSince()`, `importDelta()`, and `context()`.
+The exchange is the active sync algebra. The substrate is the passive state algebra. They compose at the boundary defined by five substrate methods: `version()`, `exportEntirety()`, `exportSince()`, `merge()`, and `context()`.
 
 **Key invariant:** The exchange never inspects `SubstratePayload` contents. It treats payloads as opaque blobs with an encoding hint (`"json" | "binary"`). Only the substrate knows how to produce and consume them.
 
@@ -48,7 +48,7 @@ LOCAL MUTATION                              REMOTE MUTATION
 ─────────────                               ───────────────
 change(doc, fn)                             adapter receives offer
   → wrappedFlush()                            → Synchronizer.#executeImportDocData()
-    → originalFlush() [substrate committed]     → substrate.importDelta(payload, "sync")
+    → originalFlush() [substrate committed]     → replica.merge(payload, "sync")
     → deliverNotifications()                      → changefeed fires with origin: "sync"
       → Exchange's subscriber fires                 → UI subscribers see update
         → origin !== "sync" ✓
@@ -58,7 +58,7 @@ change(doc, fn)                             adapter receives offer
               → adapter sends to peers
 ```
 
-**Echo prevention:** Remote imports arrive through `importDelta(payload, "sync")`, which propagates `"sync"` as the origin through `executeBatch` → `wrappedFlush` → `deliverNotifications`. The Exchange's changefeed subscriber checks `changeset.origin === "sync"` and skips the `notifyLocalChange` call, preventing a feedback loop where received data would be re-broadcast.
+**Echo prevention:** Remote imports arrive through `merge(payload, "sync")`, which propagates `"sync"` as the origin through `executeBatch` → `wrappedFlush` → `deliverNotifications`. The Exchange's changefeed subscriber checks `changeset.origin === "sync"` and skips the `notifyLocalChange` call, preventing a feedback loop where received data would be re-broadcast.
 
 **Timing:** The changefeed fires synchronously within `change()`. By the time the subscriber executes, `originalFlush` has already committed to the substrate, so `substrate.version()` reflects the new state — exactly what `notifyLocalChange` reads.
 
@@ -84,27 +84,27 @@ These are genuinely different protocols matched to the mathematical properties o
 | `compare()` results | `"concurrent"` possible | Never `"concurrent"` | Never `"concurrent"` |
 | Sync direction | Bidirectional | Unidirectional per cycle | Unidirectional push |
 | `exportSince()` used | Yes (primary) | Yes (when ahead) | Never |
-| `exportSnapshot()` used | Fallback | Fallback or primary | Always |
-| On local change | Push delta to synced peers | Push delta to synced peers | Broadcast snapshot to all peers |
+| `exportEntirety()` used | Fallback | Fallback or primary | Always |
+| On local change | Push delta to synced peers | Push delta to synced peers | Broadcast entirety to all peers |
 | `interest.reciprocate` | `true` (bidirectional) | `false` | N/A (no interest needed after initial) |
 
 ### Protocol Shapes
 
 **Causal (Loro):**
 1. A sends `interest { docId, version, reciprocate: true }` to B
-2. B sends `offer { docId, delta, version }` to A
+2. B sends `offer { docId, payload, version }` to A
 3. B sends `interest { docId, version, reciprocate: false }` to A (reciprocation)
-4. A sends `offer { docId, delta, version }` to B
+4. A sends `offer { docId, payload, version }` to B
 5. Both converged via CRDT merge.
 
 **Sequential (Plain):**
 1. A sends `interest { docId, version }` to B
-2. B compares versions → if ahead, sends `offer { docId, snapshot-or-delta, version }` to A
+2. B compares versions → if ahead, sends `offer { docId, payload, version }` to A
 3. If B was behind, B would have sent its own interest.
 
 **LWW (Ephemeral):**
 1. On connection: both sides send `interest` (version may be absent)
-2. Both respond with `offer { docId, snapshot, version: timestamp }`
+2. Both respond with `offer { docId, payload, version: timestamp }`
 3. On local change: broadcast `offer` to all peers (no interest needed)
 4. Receiver compares timestamps and discards stale arrivals.
 
@@ -150,18 +150,17 @@ State transfer. Carries an opaque `SubstratePayload` and the sender's version.
 type OfferMsg = {
   type: "offer"
   docId: DocId
-  offerType: "snapshot" | "delta"
-  payload: SubstratePayload
-  version: string         // serialized Version of sender's state
-  reciprocate?: boolean   // ask receiver to send interest back
+  payload: SubstratePayload  // carries its own `kind` discriminant
+  version: string            // serialized Version of sender's state
+  reciprocate?: boolean      // ask receiver to send interest back
 }
 ```
 
-The `offerType` field distinguishes snapshots from deltas:
-- **`"snapshot"`**: full state — receiver reconstructs via `#importSnapshot()`
-- **`"delta"`**: incremental — receiver applies via `substrate.importDelta()`
+The payload's `kind` discriminant (`"entirety"` or `"since"`) is the single source of truth for how the data was produced:
+- **`"entirety"`**: full state — produced by `exportEntirety()`
+- **`"since"`**: incremental — produced by `exportSince(peerVersion)`
 
-This distinction is necessary because `PlainSubstrate.importDelta()` expects Op[] format (path + change pairs), while `PlainSubstrate.exportSnapshot()` produces a JSON state image. For Loro substrates, `importDelta()` handles both formats natively.
+The receiver calls `replica.merge(payload, "sync")`, which dispatches internally on `payload.kind`. The exchange never inspects payload contents — only the substrate knows how to produce and consume them.
 
 ### `dismiss`
 
@@ -369,36 +368,16 @@ Three Version implementations span the full spectrum from causal history to pure
 
 ---
 
-## 7. Snapshot Import Strategy
+## 7. Merge Dispatch
 
-When the exchange receives an `offer` with `offerType: "snapshot"`, it must reconstruct the state in the existing substrate without replacing the ref objects (which the application holds references to).
+The synchronizer calls `replica.merge(payload, "sync")`. The substrate dispatches internally on `payload.kind`:
 
-### Strategy 1: Try `importDelta`
+- **Oplog substrates** (Loro): both `"since"` and `"entirety"` payloads are handled identically — Loro's `doc.import()` accepts updates and snapshots uniformly via oplog merge.
+- **State-image substrates** (Plain):
+  - `"since"` payloads apply ops incrementally (Op[] format, path + change pairs).
+  - `"entirety"` payloads decompose to `ReplaceChange` ops through `executeBatch` (preserving ref identity and firing the changefeed). This ensures the interpreter stack, caches, and changefeed subscriptions remain intact.
 
-For substrates whose `importDelta()` accepts snapshot payloads (e.g. Loro, where `doc.import()` handles both snapshots and updates), this works directly.
-
-### Strategy 2: Replay as ReplaceChange ops
-
-If `importDelta()` fails (e.g. PlainSubstrate, which expects Op[] format):
-
-1. Construct a temporary substrate via `factory.fromSnapshot(payload, schema)`
-2. Export its snapshot to get the JSON state image
-3. Parse the state and build one `ReplaceChange` per top-level key
-4. Replay through `executeBatch(ctx, ops, "sync")` on the existing substrate
-
-This preserves all ref identities — the interpreter stack, caches, and changefeed subscriptions remain intact.
-
-### Empty Delta Detection
-
-When two peers have the same version counter but different content (e.g. one was seeded, one wasn't), `exportSince()` returns an empty delta. The exchange detects this and falls back to snapshot:
-
-```
-exportSince(peer_version) → empty delta?
-  → yes: fall back to exportSnapshot()
-  → no: send the delta
-```
-
-This handles the common case where `PlainSubstrate.create(schema, seed)` writes seed values directly to the store without going through `prepare/flush`, so the version remains `0` but the state is non-empty.
+Empty delta detection is handled inside `exportSince()` — it returns `null` when the delta is empty (e.g. same version counter but content differs due to seeding). The synchronizer falls back to `exportEntirety()` when `exportSince()` returns `null`.
 
 ---
 
@@ -407,8 +386,8 @@ This handles the common case where `PlainSubstrate.create(schema, seed)` writes 
 The LWW substrate pattern is implemented by `lwwSubstrateFactory` in `@kyneta/schema` (`src/substrates/lww.ts`), consumed by `bindEphemeral()`. The internal `wrapWithTimestamp()` helper uses the decorator pattern to wrap a `PlainSubstrate` with `TimestampVersion`:
 
 - **State management**: delegates to the inner `PlainSubstrate` (same `StoreReader`, `applyChangeToStore`, interpreter stack)
-- **Version tracking**: `TimestampVersion` bumped on every `onFlush()` and `importDelta()`
-- **Export**: always `exportSnapshot()` (full state). `exportSince()` delegates to `inner.exportSnapshot()` for defensive correctness, but is never called in practice — the synchronizer always sets `forceSnapshot: true` for LWW pushes.
+- **Version tracking**: `TimestampVersion` bumped on every `onFlush()` and `merge()`
+- **Export**: always `exportEntirety()` (full state). `exportSince()` delegates to `inner.exportEntirety()` for defensive correctness, but is never called in practice — the synchronizer always sets `forceEntirety: true` for LWW pushes.
 - **Import**: delegates to inner `PlainSubstrate`
 
 **Critical:** The LWW substrate must override `context()` to return a `WritableContext` built from the **wrapper** substrate, not the inner one. This ensures `onFlush()` (which bumps the timestamp version) is called during `change()`. This is correct-by-construction in `wrapWithTimestamp` — the extracted helper eliminates the risk of copy-paste errors:
@@ -536,13 +515,17 @@ Fragments are fully self-describing — no separate "fragment header" message. T
 
 ### Wire Type Discriminators (CBOR)
 
+`OfferMsg` no longer carries an `offerType` field — the payload's `kind` discriminant (`PayloadKind`) is the single source of truth. On the wire, `pk` (PayloadKind) replaces the former `ot` (OfferType).
+
 | Message | Discriminator | Compact Fields |
 |---------|--------------|----------------|
 | `establish-request` | `0x01` | `t`, `id`, `n?`, `y` |
 | `establish-response` | `0x02` | `t`, `id`, `n?`, `y` |
 | `discover` | `0x10` | `t`, `docs` |
 | `interest` | `0x11` | `t`, `doc`, `v?`, `r?` |
-| `offer` | `0x12` | `t`, `doc`, `ot`, `pe`, `d`, `v`, `r?` |
+| `offer` | `0x12` | `t`, `doc`, `pk`, `pe`, `d`, `v`, `r?` |
+
+`PayloadKind` values: `0x00` = `"entirety"`, `0x01` = `"since"`.
 
 See `packages/exchange/wire/PROTOCOL.md` for the full wire protocol specification.
 

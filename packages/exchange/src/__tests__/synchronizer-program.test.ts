@@ -679,8 +679,7 @@ describe("synchronizer-program", () => {
             message: {
               type: "offer",
               docId: "doc-1",
-              offerType: "snapshot",
-              payload: { encoding: "json", data: '{"title":"Hello"}' },
+              payload: { kind: "entirety", encoding: "json", data: '{"title":"Hello"}' },
               version: "v1",
             },
           },
@@ -712,8 +711,7 @@ describe("synchronizer-program", () => {
             message: {
               type: "offer",
               docId: "unknown-doc",
-              offerType: "snapshot",
-              payload: { encoding: "json", data: "{}" },
+              payload: { kind: "entirety", encoding: "json", data: "{}" },
               version: "v1",
             },
           },
@@ -749,8 +747,7 @@ describe("synchronizer-program", () => {
             message: {
               type: "offer",
               docId: "doc-1",
-              offerType: "delta",
-              payload: { encoding: "binary", data: new Uint8Array([1, 2, 3]) },
+              payload: { kind: "since", encoding: "binary", data: new Uint8Array([1, 2, 3]) },
               version: "v1",
               reciprocate: true,
             },
@@ -993,7 +990,7 @@ describe("synchronizer-program", () => {
         expect(offerCmd.toChannelIds).not.toContain(1)
         // sinceVersion must be the pre-import version (v2), not the new version (v3)
         expect(offerCmd.sinceVersion).toBe("v2")
-        expect(offerCmd.forceSnapshot).toBeFalsy()
+        expect(offerCmd.forceEntirety).toBeFalsy()
       }
     })
 
@@ -1036,7 +1033,7 @@ describe("synchronizer-program", () => {
         // Should target Carol's channel, NOT Bob's
         expect(offerCmd.toChannelIds).toContain(2)
         expect(offerCmd.toChannelIds).not.toContain(1)
-        expect(offerCmd.forceSnapshot).toBe(true)
+        expect(offerCmd.forceEntirety).toBe(true)
         expect(offerCmd.sinceVersion).toBeUndefined()
       }
     })
@@ -1569,8 +1566,7 @@ describe("synchronizer-program", () => {
             message: {
               type: "offer",
               docId: "doc-1",
-              offerType: "snapshot" as const,
-              payload: { encoding: "json" as const, data: "{}" },
+              payload: { kind: "entirety" as const, encoding: "json" as const, data: "{}" },
               version: "1",
               reciprocate: true,
             },
@@ -1623,8 +1619,7 @@ describe("synchronizer-program", () => {
             message: {
               type: "offer",
               docId: "doc-1",
-              offerType: "snapshot" as const,
-              payload: { encoding: "json" as const, data: "{}" },
+              payload: { kind: "entirety" as const, encoding: "json" as const, data: "{}" },
               version: "1",
             },
           },

@@ -79,20 +79,20 @@ function wrapWithTimestamp(
       return currentVersion
     },
 
-    exportSnapshot(): SubstratePayload {
-      return inner.exportSnapshot()
+    exportEntirety(): SubstratePayload {
+      return inner.exportEntirety()
     },
 
     // LWW never uses deltas — the synchronizer always sets
     // `forceSnapshot: true` for LWW pushes, so `exportSince` is never
-    // called in practice. Delegate to exportSnapshot for defensive
+    // called in practice. Delegate to exportEntirety for defensive
     // correctness rather than returning null.
     exportSince(_since: TimestampVersion): SubstratePayload | null {
-      return inner.exportSnapshot()
+      return inner.exportEntirety()
     },
 
-    importDelta(payload: SubstratePayload, origin?: string): void {
-      inner.importDelta(payload, origin)
+    merge(payload: SubstratePayload, origin?: string): void {
+      inner.merge(payload, origin)
       currentVersion = TimestampVersion.now()
     },
   }
@@ -122,16 +122,16 @@ function wrapReplicaWithTimestamp(
       return currentVersion
     },
 
-    exportSnapshot(): SubstratePayload {
-      return inner.exportSnapshot()
+    exportEntirety(): SubstratePayload {
+      return inner.exportEntirety()
     },
 
     exportSince(_since: TimestampVersion): SubstratePayload | null {
-      return inner.exportSnapshot()
+      return inner.exportEntirety()
     },
 
-    importDelta(payload: SubstratePayload, origin?: string): void {
-      inner.importDelta(payload, origin)
+    merge(payload: SubstratePayload, origin?: string): void {
+      inner.merge(payload, origin)
       currentVersion = TimestampVersion.now()
     },
   }
@@ -154,8 +154,8 @@ export const lwwReplicaFactory: ReplicaFactory<TimestampVersion> = {
     return wrapReplicaWithTimestamp(inner, new TimestampVersion(0))
   },
 
-  fromSnapshot(payload: SubstratePayload): Replica<TimestampVersion> {
-    const inner = plainReplicaFactory.fromSnapshot(payload)
+  fromEntirety(payload: SubstratePayload): Replica<TimestampVersion> {
+    const inner = plainReplicaFactory.fromEntirety(payload)
     return wrapReplicaWithTimestamp(inner, TimestampVersion.now())
   },
 
@@ -175,7 +175,7 @@ export const lwwReplicaFactory: ReplicaFactory<TimestampVersion> = {
  * stale rejection. Used by `bindEphemeral()`.
  *
  * - `create(schema)` — fresh substrate, initial version timestamp 0
- * - `fromSnapshot(payload, schema)` — reconstructed from snapshot,
+ * - `fromEntirety(payload, schema)` — reconstructed from entirety,
  *   initial version `TimestampVersion.now()`
  * - `parseVersion(serialized)` — deserialize a `TimestampVersion`
  */
@@ -187,11 +187,11 @@ export const lwwSubstrateFactory: SubstrateFactory<TimestampVersion> = {
     return wrapWithTimestamp(inner, new TimestampVersion(0))
   },
 
-  fromSnapshot(
+  fromEntirety(
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<TimestampVersion> {
-    const inner = plainSubstrateFactory.fromSnapshot(payload, schema)
+    const inner = plainSubstrateFactory.fromEntirety(payload, schema)
     return wrapWithTimestamp(inner, TimestampVersion.now())
   },
 

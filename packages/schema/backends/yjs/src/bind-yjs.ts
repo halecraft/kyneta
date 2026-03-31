@@ -83,7 +83,7 @@ function createYjsFactory(
       return createYjsSubstrate(doc, schema)
     },
 
-    fromSnapshot(
+    fromEntirety(
       payload: SubstratePayload,
       schema: SchemaNode,
     ): Substrate<YjsVersion> {
@@ -92,7 +92,7 @@ function createYjsFactory(
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "YjsSubstrateFactory.fromSnapshot only supports binary-encoded payloads",
+          "YjsSubstrateFactory.fromEntirety only supports binary-encoded payloads",
         )
       }
       const doc = new Y.Doc()

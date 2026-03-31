@@ -192,12 +192,12 @@ doc.subscribe((batch) => {
 |---|---|---|
 | `"local"` + `inOurCommit` | kyneta's own `doc.commit()` | **Ignore** — changefeed already captured via `wrappedPrepare` |
 | `"local"` + `!inOurCommit` | External code called Loro API directly + committed | **Bridge** via `executeBatch` |
-| `"import"` | `doc.import()` or `doc.importDelta()` | **Bridge** via `executeBatch` |
+| `"import"` | `doc.import()` or `doc.merge()` | **Bridge** via `executeBatch` |
 | `"checkout"` | Version travel (time-travel) | **Ignore** |
 
 ### Origin threading
 
-For `importDelta` calls, the kyneta-level `origin` string is stashed in `pendingImportOrigin` before calling `doc.import()`. The subscriber picks it up and passes it to `executeBatch`, falling back to `batch.origin` for non-kyneta imports.
+For `merge` calls, the kyneta-level `origin` string is stashed in `pendingImportOrigin` before calling `doc.import()`. The subscriber picks it up and passes it to `executeBatch`, falling back to `batch.origin` for non-kyneta imports.
 
 ---
 
@@ -236,11 +236,11 @@ Mutation sources and their paths to the changefeed:
 | Source | Mechanism |
 |---|---|
 | kyneta `change()` / `batch()` | `prepare` → `onFlush` → `doc.applyDiff` + `doc.commit` → changefeed via `wrappedPrepare`/`wrappedFlush` (subscriber ignores via `inOurCommit`) |
-| `substrate.importDelta()` | `doc.import()` → subscriber fires → `batchToOps` → `executeBatch` → changefeed |
+| `substrate.merge()` | `doc.import()` → subscriber fires → `batchToOps` → `executeBatch` → changefeed |
 | External `doc.import()` | subscriber fires → `batchToOps` → `executeBatch` → changefeed |
 | External raw Loro API (`getText().insert()` + `doc.commit()`) | subscriber fires with `by: "local"`, `inOurCommit` is false → `batchToOps` → `executeBatch` → changefeed |
 
-This contract is tested by the `changefeed fires on importDelta`, `changefeed fires on external import`, and `changefeed fires on external local write` test suites.
+This contract is tested by the `changefeed fires on merge`, `changefeed fires on external import`, and `changefeed fires on external local write` test suites.
 
 ---
 
@@ -339,7 +339,7 @@ src/
 ├── index.ts              Public API surface. Re-exports from all modules.
 │
 ├── substrate.ts          createLoroSubstrate() — Substrate<LoroVersion> implementation.
-│                         loroSubstrateFactory — SubstrateFactory (create, fromSnapshot, parseVersion).
+│                         loroSubstrateFactory — SubstrateFactory (create, fromEntirety, parseVersion).
 │                         populateRootField / populateMap / populateList — seed initialization.
 │
 ├── store-reader.ts       loroStoreReader() — StoreReader via live schema-guided navigation.

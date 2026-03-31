@@ -61,7 +61,7 @@ export function registerSubstrate(
  * const doc = exchange.get("my-doc", MyDoc)
  * const substrate = unwrap(doc)
  * substrate.version().serialize()   // current version
- * substrate.exportSnapshot()         // full state snapshot
+ * substrate.exportEntirety()         // full state
  * ```
  */
 export function unwrap(ref: object): Substrate<any> {

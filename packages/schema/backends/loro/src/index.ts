@@ -4,8 +4,8 @@
 // with schema-aware typed reads, writes, versioning, and export/import.
 //
 // Batteries-included API (most users):
-//   createLoroDoc, createLoroDocFromSnapshot, version, exportSnapshot,
-//   exportSince, importDelta, change, subscribe, applyChanges
+//   createLoroDoc, createLoroDocFromEntirety, version, exportEntirety,
+//   exportSince, merge, change, subscribe, applyChanges
 //
 // Low-level primitives (power users):
 //   createLoroSubstrate, loroSubstrateFactory, loroStoreReader,
@@ -16,13 +16,13 @@
 // ---------------------------------------------------------------------------
 
 // Construction
-export { createLoroDoc, createLoroDocFromSnapshot } from "./create.js"
+export { createLoroDoc, createLoroDocFromEntirety } from "./create.js"
 
 // Sync primitives (Loro-specific)
 export {
   exportSince,
-  exportSnapshot,
-  importDelta,
+  exportEntirety,
+  merge,
   version,
 } from "./sync.js"
 

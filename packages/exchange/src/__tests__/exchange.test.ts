@@ -272,7 +272,7 @@ describe("Exchange", () => {
         const substrate = unwrap(doc)
         expect(substrate.version()).toBeDefined()
 
-        const snapshot = substrate.exportSnapshot()
+        const snapshot = substrate.exportEntirety()
         expect(snapshot.encoding).toBe("json")
         expect(JSON.parse(snapshot.data as string)).toEqual({ title: "Hi", count: 1 })
       })

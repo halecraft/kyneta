@@ -64,6 +64,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
  * When encoding is "json", the data field is the original string.
  */
 type JsonPayload = {
+  kind: "entirety" | "since"
   encoding: "json" | "binary"
   data: string
 }
@@ -75,7 +76,6 @@ type JsonPayload = {
 type JsonOfferMsg = {
   type: "offer"
   docId: string
-  offerType: "snapshot" | "delta"
   payload: JsonPayload
   version: string
   reciprocate?: boolean
@@ -101,6 +101,7 @@ function toJsonSafe(msg: ChannelMsg): unknown {
   // Offer message — handle SubstratePayload encoding
   const offer = msg as OfferMsg
   const jsonPayload: JsonPayload = {
+    kind: offer.payload.kind,
     encoding: offer.payload.encoding,
     data:
       offer.payload.encoding === "binary"
@@ -111,7 +112,6 @@ function toJsonSafe(msg: ChannelMsg): unknown {
   const result: JsonOfferMsg = {
     type: "offer",
     docId: offer.docId,
-    offerType: offer.offerType,
     payload: jsonPayload,
     version: offer.version,
   }
@@ -163,8 +163,8 @@ function fromJsonSafe(obj: unknown): ChannelMsg {
       const msg: OfferMsg = {
         type: "offer",
         docId: jsonOffer.docId,
-        offerType: jsonOffer.offerType,
         payload: {
+          kind: payload.kind,
           encoding: payload.encoding,
           data,
         },

@@ -6,6 +6,7 @@ import {
   changefeed,
   interpret,
   PlainVersion,
+  plainReplicaFactory,
   plainSubstrateFactory,
   readable,
   Schema,
@@ -20,7 +21,7 @@ import {
 function snapshotOf(
   substrate: Substrate<PlainVersion>,
 ): Record<string, unknown> {
-  return JSON.parse(substrate.exportSnapshot().data as string) as Record<
+  return JSON.parse(substrate.exportEntirety().data as string) as Record<
     string,
     unknown
   >
@@ -230,7 +231,7 @@ describe("PlainSubstrate lifecycle", () => {
     expect(opsPerNotification[1]?.[0]?.change.type).toBe("increment")
   })
 
-  it("exportSnapshot() returns a JSON payload matching the current store state", () => {
+  it("exportEntirety() returns a JSON payload matching the current store state", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
@@ -244,7 +245,7 @@ describe("PlainSubstrate lifecycle", () => {
       d.count.increment(10)
     })
 
-    const snapshot = substrate.exportSnapshot()
+    const snapshot = substrate.exportEntirety()
     expect(snapshot.encoding).toBe("json")
     expect(typeof snapshot.data).toBe("string")
 
@@ -260,16 +261,14 @@ describe("PlainSubstrate lifecycle", () => {
     expect(substrate.exportSince(futureVersion)).toBeNull()
   })
 
-  it("exportSince(version) returns empty ops when version matches current version", () => {
+  it("exportSince(version) returns null when version matches current version", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
     change(doc, d => d.count.increment(1))
 
     const payload = substrate.exportSince(substrate.version())
-    expect(payload).not.toBeNull()
-    const ops = JSON.parse(payload?.data as string)
-    expect(ops).toEqual([])
+    expect(payload).toBeNull()
   })
 
   it("exportSince(version) returns ops when version is behind", () => {
@@ -317,7 +316,7 @@ describe("PlainSubstrate lifecycle", () => {
 // ===========================================================================
 
 describe("Round-trip replication", () => {
-  it("snapshot round-trip: exportSnapshot → fromSnapshot → stores are equal", () => {
+  it("snapshot round-trip: exportEntirety → fromEntirety → stores are equal", () => {
     const substrateA = plainSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(substrateA)
 
@@ -332,8 +331,8 @@ describe("Round-trip replication", () => {
       d.items.push({ name: "Item 1", done: false })
     })
 
-    const snapshot = substrateA.exportSnapshot()
-    const substrateB = plainSubstrateFactory.fromSnapshot(snapshot, TestSchema)
+    const snapshot = substrateA.exportEntirety()
+    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
 
     // Snapshots should be deeply equal
     const snapA = snapshotOf(substrateA)
@@ -344,8 +343,8 @@ describe("Round-trip replication", () => {
     expect(snapB.items as unknown[]).toHaveLength(1)
   })
 
-  it("delta round-trip: exportSince → importDelta → stores are equal", () => {
-    // Both substrates start from the same snapshot (via fromSnapshot)
+  it("delta round-trip: exportSince → merge → stores are equal", () => {
+    // Both substrates start from the same snapshot (via fromEntirety)
     const substrateA = plainSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(substrateA)
 
@@ -355,8 +354,8 @@ describe("Round-trip replication", () => {
     })
 
     // Create B from A's snapshot so they start with the same state
-    const snapshot = substrateA.exportSnapshot()
-    const substrateB = plainSubstrateFactory.fromSnapshot(snapshot, TestSchema)
+    const snapshot = substrateA.exportEntirety()
+    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
     interpretSubstrate(substrateB)
 
     const f0 = substrateA.version()
@@ -370,7 +369,7 @@ describe("Round-trip replication", () => {
 
     // Export the delta and import into B
     const delta = substrateA.exportSince(f0)!
-    substrateB.importDelta(delta, "sync")
+    substrateB.merge(delta, "sync")
 
     // Snapshots should match
     expect(snapshotOf(substrateB)).toEqual(snapshotOf(substrateA))
@@ -378,7 +377,7 @@ describe("Round-trip replication", () => {
     expect(snapshotOf(substrateB).count).toBe(10)
   })
 
-  it("importDelta with origin 'sync' — changefeed fires with origin 'sync'", () => {
+  it("merge with origin 'sync' — changefeed fires with origin 'sync'", () => {
     const substrateA = plainSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(substrateA)
 
@@ -396,7 +395,7 @@ describe("Round-trip replication", () => {
 
     // Import into B
     const delta = substrateA.exportSince(f0)!
-    substrateB.importDelta(delta, "sync")
+    substrateB.merge(delta, "sync")
 
     // Changefeed should have fired with origin "sync"
     expect(received.length).toBeGreaterThanOrEqual(1)
@@ -405,7 +404,7 @@ describe("Round-trip replication", () => {
     }
   })
 
-  it("importDelta increments the version", () => {
+  it("merge increments the version", () => {
     const substrateA = plainSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(substrateA)
 
@@ -420,21 +419,178 @@ describe("Round-trip replication", () => {
     expect(substrateB.version().value).toBe(0)
 
     const delta = substrateA.exportSince(f0)!
-    substrateB.importDelta(delta)
+    substrateB.merge(delta)
 
-    // importDelta applies all ops in a single executeBatch call,
+    // merge applies all ops in a single executeBatch call,
     // which triggers one prepare×N + flush×1 cycle → one version bump
     expect(substrateB.version().value).toBe(1)
   })
 
-  it("importDelta with empty ops does not increment the version", () => {
+  it("merge with empty ops does not increment the version", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     interpretSubstrate(substrate)
 
-    const emptyPayload: SubstratePayload = { encoding: "json", data: "[]" }
-    substrate.importDelta(emptyPayload)
+    const emptyPayload: SubstratePayload = { kind: "since", encoding: "json", data: "[]" }
+    substrate.merge(emptyPayload)
 
     expect(substrate.version().value).toBe(0)
+  })
+})
+
+// ===========================================================================
+// merge with kind: "entirety" — live state absorption
+// ===========================================================================
+
+describe("merge with entirety payload (PlainSubstrate)", () => {
+  it("absorbs a state image and updates the store", () => {
+    const substrate = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(substrate)
+
+    change(doc, d => d.title.insert(0, "Original"))
+    change(doc, d => d.count.increment(5))
+
+    // Build an entirety payload representing different state
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "Replaced", count: 99, theme: "dark", items: [] }),
+    }
+    substrate.merge(entirety, "sync")
+
+    const snap = snapshotOf(substrate)
+    expect(snap.title).toBe("Replaced")
+    expect(snap.count).toBe(99)
+    expect(snap.theme).toBe("dark")
+  })
+
+  it("preserves ref identity after entirety merge", () => {
+    const substrate = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(substrate)
+
+    // Capture the ref before merge
+    const refBefore = doc
+
+    change(doc, d => d.title.insert(0, "Before"))
+
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "After", count: 0, theme: "light", items: [] }),
+    }
+    substrate.merge(entirety, "sync")
+
+    // The ref object is still the same identity
+    expect(refBefore).toBe(doc)
+    // And reads the new state
+    expect(doc.title()).toBe("After")
+  })
+
+  it("fires changefeed with origin on entirety merge", () => {
+    const substrate = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(substrate)
+
+    const received: { origin?: string }[] = []
+    subscribe(doc, (cs) => received.push({ origin: cs.origin }))
+
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "Synced", count: 42, theme: "dark", items: [] }),
+    }
+    substrate.merge(entirety, "sync")
+
+    expect(received.length).toBeGreaterThanOrEqual(1)
+    for (const cs of received) {
+      expect(cs.origin).toBe("sync")
+    }
+  })
+
+  it("bumps version after entirety merge", () => {
+    const substrate = plainSubstrateFactory.create(TestSchema)
+    interpretSubstrate(substrate)
+
+    expect(substrate.version().value).toBe(0)
+
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "V1", count: 1, theme: "", items: [] }),
+    }
+    substrate.merge(entirety)
+
+    expect(substrate.version().value).toBeGreaterThan(0)
+  })
+
+  it("empty state image does not bump version", () => {
+    const substrate = plainSubstrateFactory.create(TestSchema)
+    interpretSubstrate(substrate)
+
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({}),
+    }
+    substrate.merge(entirety)
+
+    expect(substrate.version().value).toBe(0)
+  })
+})
+
+describe("merge with entirety payload (PlainReplica)", () => {
+  it("absorbs a state image into a replica", () => {
+    const replica = plainReplicaFactory.createEmpty()
+
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "Hello", count: 7 }),
+    }
+    replica.merge(entirety)
+
+    // The replica should now serve the new state via exportEntirety
+    const snap = replica.exportEntirety()
+    const state = JSON.parse(snap.data as string)
+    expect(state.title).toBe("Hello")
+    expect(state.count).toBe(7)
+  })
+
+  it("bumps version after entirety merge on replica", () => {
+    const replica = plainReplicaFactory.createEmpty()
+    expect(replica.version().value).toBe(0)
+
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "V1" }),
+    }
+    replica.merge(entirety)
+
+    expect(replica.version().value).toBeGreaterThan(0)
+  })
+
+  it("handles since and entirety payloads on the same replica", () => {
+    // Start with entirety
+    const replica = plainReplicaFactory.createEmpty()
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "Start", count: 0 }),
+    }
+    replica.merge(entirety)
+
+    const v1 = replica.version()
+
+    // Now create a substrate, mutate, and send a since payload
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+    change(doc, d => d.title.insert(0, "Start"))
+    change(doc, d => d.count.increment(5))
+
+    const since = source.exportSince(new PlainVersion(0))!
+    expect(since.kind).toBe("since")
+    replica.merge(since)
+
+    expect(replica.version().value).toBeGreaterThan(v1.value)
   })
 })
 
@@ -443,7 +599,7 @@ describe("Round-trip replication", () => {
 // ===========================================================================
 
 describe("Epoch boundaries", () => {
-  it("fromSnapshot creates a fresh epoch: version > 0, store matches source", () => {
+  it("fromEntirety creates a fresh epoch: version > 0, store matches source", () => {
     const substrateA = plainSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(substrateA)
 
@@ -459,10 +615,10 @@ describe("Epoch boundaries", () => {
     expect(substrateA.version().value).toBe(4)
 
     // Export snapshot and create a new substrate
-    const snapshot = substrateA.exportSnapshot()
-    const substrateB = plainSubstrateFactory.fromSnapshot(snapshot, TestSchema)
+    const snapshot = substrateA.exportEntirety()
+    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
 
-    // fromSnapshot uses executeBatch internally, so version > 0
+    // fromEntirety uses executeBatch internally, so version > 0
     expect(substrateB.version().value).toBeGreaterThan(0)
 
     // But the snapshot matches the source's current state
@@ -483,11 +639,11 @@ describe("Epoch boundaries", () => {
     change(docA, d => d.count.increment(50))
 
     // Create new substrate from snapshot
-    const snapshot = substrateA.exportSnapshot()
-    const substrateB = plainSubstrateFactory.fromSnapshot(snapshot, TestSchema)
+    const snapshot = substrateA.exportEntirety()
+    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
     const docB = interpretSubstrate(substrateB)
 
-    // fromSnapshot produces version > 0 because it uses executeBatch
+    // fromEntirety produces version > 0 because it uses executeBatch
     const vAfterSnapshot = substrateB.version().value
     expect(vAfterSnapshot).toBeGreaterThan(0)
 
@@ -497,7 +653,7 @@ describe("Epoch boundaries", () => {
     expect(snapshotOf(substrateB).title).toBe("Source!")
 
     // Export from the new substrate works
-    const snapshot2 = substrateB.exportSnapshot()
+    const snapshot2 = substrateB.exportEntirety()
     expect(JSON.parse(snapshot2.data as string).title).toBe("Source!")
 
     // Export delta since the snapshot epoch version
@@ -516,8 +672,8 @@ describe("Epoch boundaries", () => {
     change(docA, d => d.count.increment(10))
 
     // Snapshot and create B
-    const snapshot = substrateA.exportSnapshot()
-    const substrateB = plainSubstrateFactory.fromSnapshot(snapshot, TestSchema)
+    const snapshot = substrateA.exportEntirety()
+    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
     const docB = interpretSubstrate(substrateB)
 
     // Mutate A — should not affect B

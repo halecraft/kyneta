@@ -3,9 +3,9 @@ import {
   applyChanges,
   change,
   createDoc,
-  createDocFromSnapshot,
+  createDocFromEntirety,
   delta,
-  exportSnapshot,
+  exportEntirety,
   Schema,
   subscribe,
   subscribeNode,
@@ -86,11 +86,11 @@ describe("createDoc", () => {
 })
 
 // ===========================================================================
-// createDocFromSnapshot
+// createDocFromEntirety
 // ===========================================================================
 
-describe("createDocFromSnapshot", () => {
-  it("round-trips with exportSnapshot", () => {
+describe("createDocFromEntirety", () => {
+  it("round-trips with exportEntirety", () => {
     const docA = createSeededDoc()
 
     // Mutate docA
@@ -101,8 +101,8 @@ describe("createDocFromSnapshot", () => {
       d.theme.set("light")
     })
 
-    const payload = exportSnapshot(docA)
-    const docB = createDocFromSnapshot(TestSchema, payload)
+    const payload = exportEntirety(docA)
+    const docB = createDocFromEntirety(TestSchema, payload)
 
     expect(docB()).toEqual(docA())
   })
@@ -162,10 +162,10 @@ describe("sync primitives", () => {
     expect(ops).toEqual([])
   })
 
-  it("exportSnapshot produces a payload with encoding json and string data", () => {
+  it("exportEntirety produces a payload with encoding json and string data", () => {
     const doc = createSeededDoc()
 
-    const payload: SubstratePayload = exportSnapshot(doc)
+    const payload: SubstratePayload = exportEntirety(doc)
 
     expect(payload.encoding).toBe("json")
     expect(typeof payload.data).toBe("string")
@@ -179,7 +179,7 @@ describe("sync primitives", () => {
 describe("change / applyChanges round-trip", () => {
   it("text insert round-trips correctly", () => {
     const docA = createSeededDoc()
-    const docB = createDocFromSnapshot(TestSchema, exportSnapshot(docA))
+    const docB = createDocFromEntirety(TestSchema, exportEntirety(docA))
 
     const ops = change(docA, d => {
       d.title.insert(5, " World")
@@ -192,7 +192,7 @@ describe("change / applyChanges round-trip", () => {
 
   it("counter increment round-trips correctly", () => {
     const docA = createSeededDoc()
-    const docB = createDocFromSnapshot(TestSchema, exportSnapshot(docA))
+    const docB = createDocFromEntirety(TestSchema, exportEntirety(docA))
 
     const ops = change(docA, d => {
       d.count.increment(10)
@@ -205,7 +205,7 @@ describe("change / applyChanges round-trip", () => {
 
   it("sequence push round-trips correctly", () => {
     const docA = createSeededDoc()
-    const docB = createDocFromSnapshot(TestSchema, exportSnapshot(docA))
+    const docB = createDocFromEntirety(TestSchema, exportEntirety(docA))
 
     const ops = change(docA, d => {
       d.items.push({ name: "Task B", done: true })
@@ -220,7 +220,7 @@ describe("change / applyChanges round-trip", () => {
 
   it("mixed mutations round-trip correctly", () => {
     const docA = createSeededDoc()
-    const docB = createDocFromSnapshot(TestSchema, exportSnapshot(docA))
+    const docB = createDocFromEntirety(TestSchema, exportEntirety(docA))
 
     const ops = change(docA, d => {
       d.title.insert(5, "!")
@@ -239,7 +239,7 @@ describe("change / applyChanges round-trip", () => {
     const changesets: Changeset<Op>[] = []
     subscribe(doc, cs => changesets.push(cs))
 
-    const otherDoc = createDocFromSnapshot(TestSchema, exportSnapshot(doc))
+    const otherDoc = createDocFromEntirety(TestSchema, exportEntirety(doc))
     const ops = change(otherDoc, d => {
       d.theme.set("light")
     })
@@ -470,7 +470,7 @@ describe("isPopulated", () => {
     expect(events).toEqual([true])
   })
 
-  it("works after importDelta (remote sync)", () => {
+  it("works after merge (remote sync)", () => {
     const docA = createDoc(TestSchema)
     const docB = createDoc(TestSchema)
 

@@ -156,8 +156,8 @@ describe("Text codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-config",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "json",
         data: JSON.stringify({ title: "Hello", count: 42 }),
       },
@@ -172,8 +172,8 @@ describe("Text codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-1",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "json",
         data: jsonData,
       },
@@ -193,8 +193,8 @@ describe("Text codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-crdt",
-      offerType: "delta",
       payload: {
+        kind: "since",
         encoding: "binary",
         data: binaryData,
       },
@@ -204,7 +204,6 @@ describe("Text codec — offer", () => {
     const decoded = roundTrip(msg) as OfferMsg
     expect(decoded.type).toBe("offer")
     expect(decoded.docId).toBe("doc-crdt")
-    expect(decoded.offerType).toBe("delta")
     expect(decoded.payload.encoding).toBe("binary")
     expect(decoded.version).toBe("AQ==:3")
     expect(decoded.reciprocate).toBe(true)
@@ -219,8 +218,8 @@ describe("Text codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-1",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "binary",
         data: binaryData,
       },
@@ -247,8 +246,8 @@ describe("Text codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-large",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "binary",
         data: largeData,
       },
@@ -263,8 +262,8 @@ describe("Text codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-1",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "json",
         data: "{}",
       },
@@ -314,8 +313,8 @@ describe("Text codec — batch", () => {
       {
         type: "offer",
         docId: "d1",
-        offerType: "delta",
         payload: {
+          kind: "since",
           encoding: "binary",
           data: new Uint8Array([1, 2, 3]),
         },
@@ -384,8 +383,8 @@ describe("Text codec — JSON-safe output", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-1",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "binary",
         data: new Uint8Array([1, 2, 3, 4, 5]),
       },
@@ -410,8 +409,7 @@ describe("Text codec — JSON-safe output", () => {
       {
         type: "offer",
         docId: "b",
-        offerType: "delta",
-        payload: { encoding: "binary", data: new Uint8Array([10, 20]) },
+        payload: { kind: "since", encoding: "binary", data: new Uint8Array([10, 20]) },
         version: "1",
       },
     ]

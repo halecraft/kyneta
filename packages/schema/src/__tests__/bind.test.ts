@@ -40,7 +40,7 @@ describe("bind()", () => {
     const result = bound.factory({ peerId: "test-peer-123" })
     expect(factory).toHaveBeenCalledWith({ peerId: "test-peer-123" })
     expect(typeof result.create).toBe("function")
-    expect(typeof result.fromSnapshot).toBe("function")
+    expect(typeof result.fromEntirety).toBe("function")
     expect(typeof result.parseVersion).toBe("function")
   })
 })
@@ -124,7 +124,7 @@ describe("bindEphemeral()", () => {
     expect(ts2).toBeGreaterThanOrEqual(ts1)
   })
 
-  it("fromSnapshot starts with a current timestamp (not zero)", () => {
+  it("fromEntirety starts with a current timestamp (not zero)", () => {
     const bound = bindEphemeral(testSchema)
     const factory = bound.factory({ peerId: "test-peer" })
 
@@ -133,12 +133,66 @@ describe("bindEphemeral()", () => {
     executeBatch(source.context(), [
       { path: RawPath.empty.field("title"), change: replaceChange("hello") },
     ])
-    const snapshot = source.exportSnapshot()
+    const snapshot = source.exportEntirety()
 
-    // Reconstruct from snapshot — version should be current wall clock, not 0
+    // Reconstruct from entirety — version should be current wall clock, not 0
     const before = Date.now()
-    const reconstructed = factory.fromSnapshot(snapshot, testSchema)
+    const reconstructed = factory.fromEntirety(snapshot, testSchema)
     const ts = (reconstructed.version() as TimestampVersion).timestamp
     expect(ts).toBeGreaterThanOrEqual(before)
+  })
+
+  it("merge with entirety payload absorbs state and bumps timestamp", () => {
+    const bound = bindEphemeral(testSchema)
+    const factory = bound.factory({ peerId: "test-peer" })
+    const substrate = factory.create(testSchema)
+
+    expect((substrate.version() as TimestampVersion).timestamp).toBe(0)
+
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "LWW merged", count: 42 }),
+    }
+    substrate.merge(entirety, "sync")
+
+    const ts = (substrate.version() as TimestampVersion).timestamp
+    expect(ts).toBeGreaterThan(0)
+
+    const snap = substrate.exportEntirety()
+    const state = JSON.parse(snap.data as string)
+    expect(state.title).toBe("LWW merged")
+    expect(state.count).toBe(42)
+  })
+
+  it("merge with since payload applies ops and bumps timestamp", () => {
+    const bound = bindEphemeral(testSchema)
+    const factory = bound.factory({ peerId: "test-peer" })
+
+    // Create source substrate, mutate, export delta
+    const source = factory.create(testSchema)
+    executeBatch(source.context(), [
+      { path: RawPath.empty.field("title"), change: replaceChange("delta") },
+    ])
+    const v0Before = source.version()
+    executeBatch(source.context(), [
+      { path: RawPath.empty.field("count"), change: replaceChange(7) },
+    ])
+    // LWW's exportSince delegates to exportEntirety — it always sends
+    // the full state. The kind is "entirety", not "since".
+    const payload = source.exportSince(v0Before)
+    expect(payload).not.toBeNull()
+    expect(payload!.kind).toBe("entirety")
+
+    // Apply to target — merge handles "entirety" payloads correctly
+    const target = factory.create(testSchema)
+    target.merge(payload!)
+
+    const ts = (target.version() as TimestampVersion).timestamp
+    expect(ts).toBeGreaterThan(0)
+
+    const snap = target.exportEntirety()
+    const state = JSON.parse(snap.data as string)
+    expect(state.count).toBe(7)
   })
 })

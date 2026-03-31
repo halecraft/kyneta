@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-`@kyneta/yjs-schema` implements `Substrate<YjsVersion>` by wrapping a `Y.Doc` with schema-aware typed reads, writes, versioning, and export/import. The architecture mirrors `@kyneta/loro-schema` but is structurally simpler due to Yjs's imperative mutation model (no intermediate diff format, no synthetic container IDs).
+`@kyneta/yjs-schema` implements `Substrate<YjsVersion>` by wrapping a `Y.Doc` with schema-aware typed reads, writes, versioning, and export/merge. The architecture mirrors `@kyneta/loro-schema` but is structurally simpler due to Yjs's imperative mutation model (no intermediate diff format, no synthetic container IDs).
 
 ### Core Design Decisions
 
@@ -105,8 +105,8 @@ rootMap.observeDeep((events, transaction) => {
   // 2. Convert Yjs events → kyneta Ops
   const ops = eventsToOps(events)
 
-  // 3. Determine origin (from importDelta or transaction)
-  const origin = pendingImportOrigin ?? transaction.origin
+  // 3. Determine origin (from merge or transaction)
+  const origin = pendingMergeOrigin ?? transaction.origin
 
   // 4. Feed through executeBatch for changefeed delivery
   inOurTransaction = true
@@ -204,8 +204,8 @@ packages/schema/yjs/
     ├── change-mapping.ts # applyChangeToYjs + eventsToOps (bidirectional)
     ├── populate.ts       # populateRoot + recursive helpers (shared)
     ├── substrate.ts      # createYjsSubstrate + yjsSubstrateFactory
-    ├── create.ts         # createYjsDoc + createYjsDocFromSnapshot
-    ├── sync.ts           # version, exportSnapshot, exportSince, importDelta
+    ├── create.ts         # createYjsDoc + createYjsDocFromEntirety
+    ├── sync.ts           # version, exportEntirety, exportSince, merge
     ├── bind-yjs.ts       # bindYjs + hashPeerId (FNV-1a 32-bit)
     ├── yjs-escape.ts     # yjs() escape hatch (WeakMap<Substrate, Y.Doc>)
     └── __tests__/
@@ -223,10 +223,10 @@ All 121 tests pass, covering:
 1. **Version round-trip**: serialize/parse preserves equality; compare produces correct partial order (equal, behind, ahead, concurrent)
 2. **Store reader liveness**: mutations via raw Yjs API are immediately visible through the StoreReader
 3. **Write round-trip**: text insert, scalar set, list push all round-trip through prepare/flush
-4. **Snapshot export/import**: binary payload reconstructs equivalent state
-5. **Delta sync**: `exportSince → importDelta` syncs incremental changes
+4. **Entirety export/import**: binary payload reconstructs equivalent state
+5. **Delta sync**: `exportSince → merge` syncs incremental changes
 6. **Concurrent sync**: two substrates with independent mutations converge after bidirectional sync
-7. **Changefeed bridge**: fires on `importDelta`, fires on external Y.Doc mutation, no double-fire on kyneta local writes
+7. **Changefeed bridge**: fires on `merge`, fires on external Y.Doc mutation, no double-fire on kyneta local writes
 8. **Transaction atomicity**: multi-op `change()` applies all mutations in a single Yjs transaction
 9. **Nested structures**: push struct into list, read back via navigation
 10. **Unsupported annotations**: counter, movable, tree all throw clear errors

@@ -20,11 +20,11 @@ import type {
 import type { BinaryCodec } from "./codec.js"
 import {
   MessageType,
-  OfferType,
-  OfferTypeToString,
+  PayloadKind,
+  PayloadKindToString,
   PayloadEncoding,
   PayloadEncodingToString,
-  StringToOfferType,
+  StringToPayloadKind,
   StringToPayloadEncoding,
   type WireDismissMsg,
   type WireDiscoverMsg,
@@ -154,7 +154,7 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
       const wire: WireOfferMsg = {
         t: MessageType.Offer,
         doc: msg.docId,
-        ot: StringToOfferType[msg.offerType]!,
+        pk: StringToPayloadKind[msg.payload.kind]!,
         pe: StringToPayloadEncoding[msg.payload.encoding]!,
         d: msg.payload.data,
         v: msg.version,
@@ -217,11 +217,11 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
     }
 
     case MessageType.Offer: {
-      const offerType = OfferTypeToString[wire.ot as keyof typeof OfferTypeToString]
+      const kind = PayloadKindToString[wire.pk as keyof typeof PayloadKindToString]
       const encoding = PayloadEncodingToString[wire.pe as keyof typeof PayloadEncodingToString]
 
-      if (!offerType) {
-        throw new Error(`Unknown wire offer type: ${wire.ot}`)
+      if (!kind) {
+        throw new Error(`Unknown wire payload kind: ${wire.pk}`)
       }
       if (!encoding) {
         throw new Error(`Unknown wire payload encoding: ${wire.pe}`)
@@ -230,8 +230,8 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
       const msg: OfferMsg = {
         type: "offer",
         docId: wire.doc,
-        offerType,
         payload: {
+          kind,
           encoding,
           data: wire.d,
         },

@@ -1,10 +1,10 @@
 // create — batteries-included document construction backed by YjsSubstrate.
 //
-// Provides `createYjsDoc` and `createYjsDocFromSnapshot` functions that
+// Provides `createYjsDoc` and `createYjsDocFromEntirety` functions that
 // hide the interpret pipeline and layer composition behind a single call.
 //
 // Internally tracks substrates via a module-scoped WeakMap so that sync
-// primitives (`version`, `exportSnapshot`, `importDelta` in sync.ts)
+// primitives (`version`, `exportEntirety`, `merge` in sync.ts)
 // can retrieve the substrate from just a doc ref.
 //
 // `getSubstrate` is exported for use by `sync.ts` but is NOT re-exported
@@ -31,18 +31,18 @@ const substrates = new WeakMap<object, Substrate<YjsVersion>>()
 
 /**
  * Retrieve the substrate associated with a doc created by `createYjsDoc`
- * or `createYjsDocFromSnapshot`.
+ * or `createYjsDocFromEntirety`.
  *
  * Exported for `sync.ts` — NOT re-exported from the barrel.
  *
- * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromSnapshot`.
+ * @throws If `doc` was not created by `createYjsDoc` / `createYjsDocFromEntirety`.
  */
 export function getSubstrate(doc: object): Substrate<YjsVersion> {
   const s = substrates.get(doc)
   if (!s) {
     throw new Error(
-      "version/exportSnapshot/importDelta called on an object without a YjsSubstrate. " +
-        "Use a doc created by createYjsDoc() or createYjsDocFromSnapshot().",
+      "version/exportEntirety/merge called on an object without a YjsSubstrate. " +
+        "Use a doc created by createYjsDoc() or createYjsDocFromEntirety().",
     )
   }
   return s
@@ -58,7 +58,7 @@ function registerDoc(
 ): any {
   // The `as any` on the builder avoids TS2589 — interpret's fluent API
   // produces deeply recursive types when S is the abstract SchemaType.
-  // The public createYjsDoc/createYjsDocFromSnapshot signatures provide
+  // The public createYjsDoc/createYjsDocFromEntirety signatures provide
   // the correct Ref<S> return type via interface call signature patterns.
   const doc: any = (interpret as any)(schema, substrate.context())
     .with(readable)
@@ -123,7 +123,7 @@ function isYDoc(value: unknown): value is Y.Doc {
  * CRDT collaboration support.
  *
  * The returned ref observes **all** mutations to the underlying Y.Doc,
- * regardless of source (local kyneta writes, importDelta, external
+ * regardless of source (local kyneta writes, merge, external
  * `Y.applyUpdate()`, external raw Yjs API mutations).
  *
  * @param schema - The schema describing the document structure.
@@ -145,28 +145,28 @@ export const createYjsDoc: CreateYjsDoc = (schema, doc) => {
 }
 
 // ---------------------------------------------------------------------------
-// createYjsDocFromSnapshot
+// createYjsDocFromEntirety
 // ---------------------------------------------------------------------------
 
-type CreateYjsDocFromSnapshot = <S extends SchemaType>(
+type CreateYjsDocFromEntirety = <S extends SchemaType>(
   schema: S,
   payload: SubstratePayload,
 ) => Ref<S>
 
 /**
- * Reconstruct a live Yjs-backed document from a substrate snapshot payload.
+ * Reconstruct a live Yjs-backed document from a substrate entirety payload.
  *
- * The payload must have been produced by `exportSnapshot()` on a
+ * The payload must have been produced by `exportEntirety()` on a
  * compatible document. This is the entry point for SSR hydration
  * and reconnection past log compaction.
  *
  * ```ts
- * const payload = exportSnapshot(docA)
- * const docB = createYjsDocFromSnapshot(MySchema, payload)
+ * const payload = exportEntirety(docA)
+ * const docB = createYjsDocFromEntirety(MySchema, payload)
  * // docB has the same state as docA at the time of export
  * ```
  */
-export const createYjsDocFromSnapshot: CreateYjsDocFromSnapshot = (
+export const createYjsDocFromEntirety: CreateYjsDocFromEntirety = (
   schema,
   payload,
-) => registerDoc(schema, yjsSubstrateFactory.fromSnapshot(payload, schema))
+) => registerDoc(schema, yjsSubstrateFactory.fromEntirety(payload, schema))

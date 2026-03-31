@@ -144,8 +144,8 @@ describe("CBOR codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-config",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "json",
         data: JSON.stringify({ title: "Hello", count: 42 }),
       },
@@ -160,8 +160,8 @@ describe("CBOR codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-crdt",
-      offerType: "delta",
       payload: {
+        kind: "since",
         encoding: "binary",
         data: binaryData,
       },
@@ -171,7 +171,6 @@ describe("CBOR codec — offer", () => {
     const decoded = roundTrip(msg) as OfferMsg
     expect(decoded.type).toBe("offer")
     expect(decoded.docId).toBe("doc-crdt")
-    expect(decoded.offerType).toBe("delta")
     expect(decoded.payload.encoding).toBe("binary")
     expect(decoded.version).toBe("AQ==:3")
     expect(decoded.reciprocate).toBe(true)
@@ -191,8 +190,8 @@ describe("CBOR codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-large",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "binary",
         data: largeData,
       },
@@ -207,8 +206,8 @@ describe("CBOR codec — offer", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-1",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "json",
         data: "{}",
       },
@@ -258,8 +257,8 @@ describe("CBOR codec — batch", () => {
       {
         type: "offer",
         docId: "d1",
-        offerType: "delta",
         payload: {
+          kind: "since",
           encoding: "binary",
           data: new Uint8Array([1, 2, 3]),
         },
@@ -325,19 +324,19 @@ describe("CBOR codec — error handling", () => {
     )
   })
 
-  it("throws on unknown offer type in offer message", () => {
+  it("throws on unknown payload kind in offer message", () => {
     const { encodeCBOR } = require("@levischuck/tiny-cbor")
     const wire = new Map<string, unknown>([
       ["t", 0x12], // Offer
       ["doc", "d1"],
-      ["ot", 0x99], // invalid offer type
+      ["pk", 0x99], // invalid payload kind
       ["pe", 0x00], // valid encoding
       ["d", "data"],
       ["v", "1"],
     ])
     const encoded = encodeCBOR(wire) as Uint8Array
     expect(() => cborCodec.decode(encoded)).toThrow(
-      "Unknown wire offer type: 153",
+      "Unknown wire payload kind: 153",
     )
   })
 
@@ -346,7 +345,7 @@ describe("CBOR codec — error handling", () => {
     const wire = new Map<string, unknown>([
       ["t", 0x12], // Offer
       ["doc", "d1"],
-      ["ot", 0x00], // valid offer type (snapshot)
+      ["pk", 0x00], // valid payload kind (entirety)
       ["pe", 0x99], // invalid encoding
       ["d", "data"],
       ["v", "1"],

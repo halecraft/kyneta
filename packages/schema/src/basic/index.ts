@@ -39,6 +39,6 @@ export type { SubstratePayload } from "../substrate.js"
 // --- Zero (default values) ---
 export { Zero } from "../zero.js"
 // --- Construction (PlainSubstrate-backed) ---
-export { createDoc, createDocFromSnapshot } from "./create.js"
+export { createDoc, createDocFromEntirety } from "./create.js"
 // --- Sync primitives (PlainSubstrate-specific) ---
-export { delta, exportSnapshot, version } from "./sync.js"
+export { delta, exportEntirety, version } from "./sync.js"

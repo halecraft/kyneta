@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest"
 import { LoroDoc } from "loro-crdt"
 import {
   createLoroDoc,
-  createLoroDocFromSnapshot,
+  createLoroDocFromEntirety,
   version,
-  exportSnapshot,
+  exportEntirety,
   exportSince,
-  importDelta,
+  merge,
   change,
   subscribe,
   LoroSchema,
@@ -183,10 +183,10 @@ describe("createLoroDoc (bring your own doc)", () => {
 })
 
 // ===========================================================================
-// createLoroDocFromSnapshot
+// createLoroDocFromEntirety
 // ===========================================================================
 
-describe("createLoroDocFromSnapshot", () => {
+describe("createLoroDocFromEntirety", () => {
   it("reconstructs from a snapshot", () => {
     const docA = createLoroDoc(TestSchema)
     change(docA, (d: any) => {
@@ -195,8 +195,8 @@ describe("createLoroDocFromSnapshot", () => {
       d.count.increment(10)
     })
 
-    const snapshot = exportSnapshot(docA)
-    const docB = createLoroDocFromSnapshot(TestSchema, snapshot)
+    const snapshot = exportEntirety(docA)
+    const docB = createLoroDocFromEntirety(TestSchema, snapshot)
 
     expect(docB.title()).toBe("Original")
     expect(docB.count()).toBe(10)
@@ -207,8 +207,8 @@ describe("createLoroDocFromSnapshot", () => {
     const docA = createLoroDoc(TestSchema)
     change(docA, (d: any) => d.title.insert(0, "Source"))
 
-    const snapshot = exportSnapshot(docA)
-    const docB = createLoroDocFromSnapshot(TestSchema, snapshot)
+    const snapshot = exportEntirety(docA)
+    const docB = createLoroDocFromEntirety(TestSchema, snapshot)
 
     change(docB, (d: any) => d.title.insert(6, "!"))
     expect(docB.title()).toBe("Source!")
@@ -216,7 +216,7 @@ describe("createLoroDocFromSnapshot", () => {
 })
 
 // ===========================================================================
-// Sync primitives: version, exportSnapshot, exportSince, importDelta
+// Sync primitives: version, exportEntirety, exportSince, merge
 // ===========================================================================
 
 describe("sync primitives", () => {
@@ -236,15 +236,15 @@ describe("sync primitives", () => {
     expect(v0.compare(v1)).toBe("behind")
   })
 
-  it("exportSnapshot() returns a binary payload", () => {
+  it("exportEntirety() returns a binary payload", () => {
     const doc = createLoroDoc(TestSchema)
     change(doc, (d: any) => d.title.insert(0, "Test"))
-    const snap = exportSnapshot(doc)
+    const snap = exportEntirety(doc)
     expect(snap.encoding).toBe("binary")
     expect(snap.data).toBeInstanceOf(Uint8Array)
   })
 
-  it("exportSince() + importDelta() syncs two docs", () => {
+  it("exportSince() + merge() syncs two docs", () => {
     const docA = createLoroDoc(TestSchema)
     const docB = createLoroDoc(TestSchema)
 
@@ -258,13 +258,13 @@ describe("sync primitives", () => {
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
 
-    importDelta(docB, delta!, "sync")
+    merge(docB, delta!, "sync")
 
     expect(docB.title()).toBe("Hello")
     expect(docB.count()).toBe(5)
   })
 
-  it("importDelta fires subscribers", () => {
+  it("merge fires subscribers", () => {
     const docA = createLoroDoc(TestSchema)
     const docB = createLoroDoc(TestSchema)
 
@@ -275,7 +275,7 @@ describe("sync primitives", () => {
 
     change(docA, (d: any) => d.title.insert(0, "Remote"))
     const delta = exportSince(docA, v0)!
-    importDelta(docB, delta, "sync")
+    merge(docB, delta, "sync")
 
     expect(received.length).toBeGreaterThanOrEqual(1)
   })
@@ -307,8 +307,8 @@ describe("full workflow", () => {
     expect(docA.items.length).toBe(1)
 
     // Peer B starts fresh and syncs from A's snapshot
-    const snapshot = exportSnapshot(docA)
-    const docB = createLoroDocFromSnapshot(TestSchema, snapshot)
+    const snapshot = exportEntirety(docA)
+    const docB = createLoroDocFromEntirety(TestSchema, snapshot)
 
     expect(docB.title()).toBe("Draft v1")
     expect(docB.count()).toBe(1)
@@ -323,7 +323,7 @@ describe("full workflow", () => {
     // Sync A → B via delta
     const delta = exportSince(docA, version(docB))
     expect(delta).not.toBeNull()
-    importDelta(docB, delta!, "sync")
+    merge(docB, delta!, "sync")
 
     // B observed the change
     expect(bChanges.length).toBeGreaterThanOrEqual(1)

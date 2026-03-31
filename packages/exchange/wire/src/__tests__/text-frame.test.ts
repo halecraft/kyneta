@@ -231,7 +231,7 @@ describe("fragmentTextPayload", () => {
   })
 
   it("concatenated chunks reconstruct the original payload", () => {
-    const payload = '{"type":"offer","docId":"doc-1","offerType":"snapshot","payload":{"encoding":"json","data":"hello"},"version":"1"}'
+    const payload = '{"type":"offer","docId":"doc-1","payload":{"encoding":"json","data":"hello"},"version":"1"}'
     const fragments = fragmentTextPayload(payload, 20)
 
     const chunks: string[] = []
@@ -337,8 +337,7 @@ describe("Text frame — convenience functions", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-1",
-      offerType: "snapshot",
-      payload: { encoding: "binary", data: new Uint8Array([1, 2, 3]) },
+      payload: { kind: "entirety", encoding: "binary", data: new Uint8Array([1, 2, 3]) },
       version: "1",
     }
     const wire = encodeTextComplete(textCodec, msg)
@@ -362,8 +361,8 @@ describe("Text frame — end-to-end with TextReassembler", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-large",
-      offerType: "snapshot",
       payload: {
+        kind: "entirety",
         encoding: "json",
         data: JSON.stringify({ items: Array.from({ length: 100 }, (_, i) => `item-${i}`) }),
       },
@@ -405,8 +404,7 @@ describe("Text frame — end-to-end with TextReassembler", () => {
       {
         type: "offer",
         docId: "d",
-        offerType: "delta",
-        payload: { encoding: "binary", data: new Uint8Array([10, 20, 30]) },
+        payload: { kind: "since", encoding: "binary", data: new Uint8Array([10, 20, 30]) },
         version: "1",
         reciprocate: true,
       },

@@ -4,8 +4,8 @@
 // with schema-aware typed reads, writes, versioning, and export/import.
 //
 // Batteries-included API (most users):
-//   createYjsDoc, createYjsDocFromSnapshot, version, exportSnapshot,
-//   exportSince, importDelta, change, subscribe, applyChanges
+//   createYjsDoc, createYjsDocFromEntirety, version, exportEntirety,
+//   exportSince, merge, change, subscribe, applyChanges
 //
 // Low-level primitives (power users):
 //   createYjsSubstrate, yjsSubstrateFactory, yjsStoreReader,
@@ -16,13 +16,13 @@
 // ---------------------------------------------------------------------------
 
 // Construction
-export { createYjsDoc, createYjsDocFromSnapshot } from "./create.js"
+export { createYjsDoc, createYjsDocFromEntirety } from "./create.js"
 
 // Sync primitives (Yjs-specific)
 export {
   exportSince,
-  exportSnapshot,
-  importDelta,
+  exportEntirety,
+  merge,
   version,
 } from "./sync.js"
 

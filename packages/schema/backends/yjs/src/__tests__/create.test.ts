@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
 import { Schema, change, subscribe } from "@kyneta/schema"
-import { createYjsDoc, createYjsDocFromSnapshot } from "../create.js"
-import { version, exportSnapshot, exportSince, importDelta } from "../sync.js"
+import { createYjsDoc, createYjsDocFromEntirety } from "../create.js"
+import { version, exportEntirety, exportSince, merge } from "../sync.js"
 import { YjsVersion } from "../version.js"
 import { ensureContainers } from "../populate.js"
 import { yjsSubstrateFactory } from "../substrate.js"
@@ -192,10 +192,10 @@ describe("createYjsDoc", () => {
 })
 
 // ===========================================================================
-// createYjsDocFromSnapshot
+// createYjsDocFromEntirety
 // ===========================================================================
 
-describe("createYjsDocFromSnapshot", () => {
+describe("createYjsDocFromEntirety", () => {
   it("reconstructs state from a snapshot", () => {
     const doc1 = createYjsDoc(SimpleSchema)
     change(doc1, (d: any) => {
@@ -205,8 +205,8 @@ describe("createYjsDocFromSnapshot", () => {
     change(doc1, (d: any) => d.items.push("a"))
     change(doc1, (d: any) => d.items.push("b"))
 
-    const payload = exportSnapshot(doc1)
-    const doc2 = createYjsDocFromSnapshot(SimpleSchema, payload)
+    const payload = exportEntirety(doc1)
+    const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
 
     expect(doc2.title()).toBe("Snapshot")
     expect(doc2.count()).toBe(42)
@@ -225,8 +225,8 @@ describe("createYjsDocFromSnapshot", () => {
       d.items.push("x")
     })
 
-    const payload = exportSnapshot(doc1)
-    const doc2 = createYjsDocFromSnapshot(SimpleSchema, payload)
+    const payload = exportEntirety(doc1)
+    const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
 
     expect(doc2.title()).toBe("Start End")
     expect(doc2.count()).toBe(99)
@@ -243,8 +243,8 @@ describe("createYjsDocFromSnapshot", () => {
     change(doc1, (d: any) => d.meta.tags.push("v1"))
     change(doc1, (d: any) => d.meta.tags.push("v2"))
 
-    const payload = exportSnapshot(doc1)
-    const doc2 = createYjsDocFromSnapshot(NestedSchema, payload)
+    const payload = exportEntirety(doc1)
+    const doc2 = createYjsDocFromEntirety(NestedSchema, payload)
 
     expect(doc2.title()).toBe("Nested")
     expect(doc2.meta.author()).toBe("Alice")
@@ -258,8 +258,8 @@ describe("createYjsDocFromSnapshot", () => {
     change(doc1, (d: any) => d.tasks.push({ name: "Task A", done: false }))
     change(doc1, (d: any) => d.tasks.push({ name: "Task B", done: true }))
 
-    const payload = exportSnapshot(doc1)
-    const doc2 = createYjsDocFromSnapshot(StructListSchema, payload)
+    const payload = exportEntirety(doc1)
+    const doc2 = createYjsDocFromEntirety(StructListSchema, payload)
 
     expect(doc2.tasks.length).toBe(2)
     expect((doc2.tasks.at(0) as any).name()).toBe("Task A")
@@ -271,8 +271,8 @@ describe("createYjsDocFromSnapshot", () => {
     change(doc1, (d: any) => {
       d.title.insert(0, "Original")
     })
-    const payload = exportSnapshot(doc1)
-    const doc2 = createYjsDocFromSnapshot(SimpleSchema, payload)
+    const payload = exportEntirety(doc1)
+    const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
 
     change(doc2, (d: any) => {
       d.title.insert(8, " Copy")
@@ -288,8 +288,8 @@ describe("createYjsDocFromSnapshot", () => {
     change(doc1, (d: any) => {
       d.title.insert(0, "Original")
     })
-    const payload = exportSnapshot(doc1)
-    const doc2 = createYjsDocFromSnapshot(SimpleSchema, payload)
+    const payload = exportEntirety(doc1)
+    const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
 
     const received: any[] = []
     subscribe(doc2, (changeset: any) => {
@@ -338,22 +338,22 @@ describe("sync primitives", () => {
     })
   })
 
-  describe("exportSnapshot", () => {
+  describe("exportEntirety", () => {
     it("returns a binary payload", () => {
       const doc = createYjsDoc(SimpleSchema)
       change(doc, (d: any) => { d.title.insert(0, "Snap") })
-      const payload = exportSnapshot(doc)
+      const payload = exportEntirety(doc)
       expect(payload.encoding).toBe("binary")
       expect(payload.data).toBeInstanceOf(Uint8Array)
       expect((payload.data as Uint8Array).byteLength).toBeGreaterThan(0)
     })
   })
 
-  describe("exportSince + importDelta", () => {
+  describe("exportSince + merge", () => {
     it("syncs incremental changes between two docs", () => {
       const doc1 = createYjsDoc(SimpleSchema)
       change(doc1, (d: any) => { d.title.insert(0, "Start") })
-      const doc2 = createYjsDocFromSnapshot(SimpleSchema, exportSnapshot(doc1))
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       const v2Before = version(doc2)
 
@@ -369,7 +369,7 @@ describe("sync primitives", () => {
       expect(delta).not.toBeNull()
       expect(delta!.encoding).toBe("binary")
 
-      importDelta(doc2, delta!)
+      merge(doc2, delta!)
 
       expect(doc2.title()).toBe("Start Edited")
       expect(doc2.count()).toBe(42)
@@ -378,37 +378,37 @@ describe("sync primitives", () => {
 
     it("syncs multiple incremental deltas", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      const doc2 = createYjsDocFromSnapshot(SimpleSchema, exportSnapshot(doc1))
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       // First round
       let vBefore = version(doc2)
       change(doc1, (d: any) => {
         d.title.insert(0, "A")
       })
-      importDelta(doc2, exportSince(doc1, vBefore)!)
+      merge(doc2, exportSince(doc1, vBefore)!)
 
       // Second round
       vBefore = version(doc2)
       change(doc1, (d: any) => {
         d.title.insert(1, "B")
       })
-      importDelta(doc2, exportSince(doc1, vBefore)!)
+      merge(doc2, exportSince(doc1, vBefore)!)
 
       // Third round
       vBefore = version(doc2)
       change(doc1, (d: any) => {
         d.count.set(3)
       })
-      importDelta(doc2, exportSince(doc1, vBefore)!)
+      merge(doc2, exportSince(doc1, vBefore)!)
 
       expect(doc2.title()).toBe("AB")
       expect(doc2.count()).toBe(3)
     })
 
-    it("changefeed fires on importDelta", () => {
+    it("changefeed fires on merge", () => {
       const doc1 = createYjsDoc(SimpleSchema)
       change(doc1, (d: any) => { d.title.insert(0, "Source") })
-      const doc2 = createYjsDocFromSnapshot(SimpleSchema, exportSnapshot(doc1))
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       const v2Before = version(doc2)
 
@@ -423,15 +423,15 @@ describe("sync primitives", () => {
         received.push(changeset)
       })
 
-      importDelta(doc2, delta!)
+      merge(doc2, delta!)
 
       expect(received.length).toBeGreaterThanOrEqual(1)
       expect(doc2.count()).toBe(77)
     })
 
-    it("importDelta passes origin to changefeed", () => {
+    it("merge passes origin to changefeed", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      const doc2 = createYjsDocFromSnapshot(SimpleSchema, exportSnapshot(doc1))
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       const v2Before = version(doc2)
       change(doc1, (d: any) => {
@@ -443,7 +443,7 @@ describe("sync primitives", () => {
         receivedOrigins.push(changeset.origin)
       })
 
-      importDelta(doc2, exportSince(doc1, v2Before)!, "my-sync-origin")
+      merge(doc2, exportSince(doc1, v2Before)!, "my-sync-origin")
 
       expect(receivedOrigins).toContain("my-sync-origin")
     })
@@ -457,14 +457,14 @@ describe("sync primitives", () => {
         d.count.set(42)
       })
 
-      const doc2 = createYjsDocFromSnapshot(SimpleSchema, exportSnapshot(doc1))
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       expect(version(doc1).compare(version(doc2))).toBe("equal")
     })
 
     it("versions equal after bidirectional delta sync", () => {
       const doc1 = createYjsDoc(SimpleSchema)
-      const doc2 = createYjsDocFromSnapshot(SimpleSchema, exportSnapshot(doc1))
+      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
       const v1Before = version(doc1)
       const v2Before = version(doc2)
@@ -480,8 +480,8 @@ describe("sync primitives", () => {
       // Bidirectional sync
       const d1to2 = exportSince(doc1, v2Before)
       const d2to1 = exportSince(doc2, v1Before)
-      importDelta(doc2, d1to2!)
-      importDelta(doc1, d2to1!)
+      merge(doc2, d1to2!)
+      merge(doc1, d2to1!)
 
       expect(version(doc1).compare(version(doc2))).toBe("equal")
     })
@@ -496,9 +496,9 @@ describe("full workflow", () => {
   it("create → mutate → sync → observe", () => {
     // 1. Create two docs
     const doc1 = createYjsDoc(StructListSchema)
-    const doc2 = createYjsDocFromSnapshot(
+    const doc2 = createYjsDocFromEntirety(
       StructListSchema,
-      exportSnapshot(doc1),
+      exportEntirety(doc1),
     )
 
     // 2. Set up observer on doc2
@@ -520,7 +520,7 @@ describe("full workflow", () => {
 
     // 4. Sync doc1 → doc2
     const delta = exportSince(doc1, vBefore)
-    importDelta(doc2, delta!)
+    merge(doc2, delta!)
 
     // 5. Verify state converged
     expect(doc2.tasks.length).toBe(2)
@@ -541,7 +541,7 @@ describe("full workflow", () => {
     })
 
     const delta2 = exportSince(doc2, v1Before)
-    importDelta(doc1, delta2!)
+    merge(doc1, delta2!)
 
     expect(doc1.tasks.length).toBe(3)
     expect((doc1.tasks.at(2) as any).name()).toBe("Read book")
@@ -561,10 +561,10 @@ describe("full workflow", () => {
     })
 
     // 2. Snapshot
-    const snapshot = exportSnapshot(doc1)
+    const snapshot = exportEntirety(doc1)
 
     // 3. Reconstruct
-    const doc2 = createYjsDocFromSnapshot(SimpleSchema, snapshot)
+    const doc2 = createYjsDocFromEntirety(SimpleSchema, snapshot)
     expect(doc2.title()).toBe("Start Middle")
     expect(doc2.count()).toBe(10)
     expect(doc2.items()).toEqual(["first"])
@@ -590,7 +590,7 @@ describe("full workflow", () => {
   it("concurrent edits converge correctly", () => {
     // 1. Create two peers from the same initial state
     const doc1 = createYjsDoc(SimpleSchema)
-    const doc2 = createYjsDocFromSnapshot(SimpleSchema, exportSnapshot(doc1))
+    const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
 
     const v1Before = version(doc1)
     const v2Before = version(doc2)
@@ -611,8 +611,8 @@ describe("full workflow", () => {
     // 4. Bidirectional sync
     const d1to2 = exportSince(doc1, v2Before)
     const d2to1 = exportSince(doc2, v1Before)
-    importDelta(doc2, d1to2!)
-    importDelta(doc1, d2to1!)
+    merge(doc2, d1to2!)
+    merge(doc1, d2to1!)
 
     // 5. Versions converge
     expect(version(doc1).compare(version(doc2))).toBe("equal")

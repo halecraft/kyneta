@@ -58,29 +58,29 @@ export const StringToMessageType: Record<string, MessageTypeValue> = {
 // ---------------------------------------------------------------------------
 
 /**
- * Integer discriminators for OfferMsg.offerType on the wire.
+ * Integer discriminators for SubstratePayload.kind on the wire.
  */
-export const OfferType = {
-  Snapshot: 0x00,
-  Delta: 0x01,
+export const PayloadKind = {
+  Entirety: 0x00,
+  Since: 0x01,
 } as const
 
-export type OfferTypeValue = (typeof OfferType)[keyof typeof OfferType]
+export type PayloadKindValue = (typeof PayloadKind)[keyof typeof PayloadKind]
 
 /**
- * Reverse lookup: offer type integer → string.
+ * Reverse lookup: payload kind integer → string.
  */
-export const OfferTypeToString: Record<OfferTypeValue, "snapshot" | "delta"> = {
-  [OfferType.Snapshot]: "snapshot",
-  [OfferType.Delta]: "delta",
+export const PayloadKindToString: Record<PayloadKindValue, "entirety" | "since"> = {
+  [PayloadKind.Entirety]: "entirety",
+  [PayloadKind.Since]: "since",
 }
 
 /**
- * Forward lookup: offer type string → integer.
+ * Forward lookup: payload kind string → integer.
  */
-export const StringToOfferType: Record<string, OfferTypeValue> = {
-  snapshot: OfferType.Snapshot,
-  delta: OfferType.Delta,
+export const StringToPayloadKind: Record<string, PayloadKindValue> = {
+  entirety: PayloadKind.Entirety,
+  since: PayloadKind.Since,
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ export const StringToPayloadEncoding: Record<string, PayloadEncodingValue> = {
  *   doc — docId (string)
  *   v   — version (string, serialized)
  *   r   — reciprocate (boolean, optional)
- *   ot  — offer type (OfferTypeValue)
+ *   pk  — payload kind (PayloadKindValue)
  *   pe  — payload encoding (PayloadEncodingValue)
  *   d   — payload data (string | Uint8Array)
  */
@@ -163,7 +163,7 @@ export type WireInterestMsg = {
 export type WireOfferMsg = {
   t: typeof MessageType.Offer
   doc: string
-  ot: OfferTypeValue
+  pk: PayloadKindValue
   pe: PayloadEncodingValue
   d: string | Uint8Array
   v: string

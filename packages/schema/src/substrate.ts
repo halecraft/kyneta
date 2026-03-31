@@ -82,16 +82,25 @@ export interface Version {
  * An opaque payload produced by a substrate for transfer to another peer.
  *
  * The sync/SSR layer never inspects the contents — only the substrate
- * knows how to produce and consume these. The meaning of a payload is
- * determined by which method produced it and which method consumes it:
+ * knows how to produce and consume these.
  *
- *   exportSnapshot() → SubstratePayload → factory.fromSnapshot()
- *   exportSince()    → SubstratePayload → replica.importDelta()
+ * `kind` is a discriminant set by the producer:
+ * - `"entirety"` — self-sufficient payload (reconstruct from ∅).
+ *   Produced by `exportEntirety()`. For Plain: a state image.
+ *   For Loro/Yjs: the complete oplog.
+ * - `"since"` — relative payload (catch up from a version).
+ *   Produced by `exportSince(v)`. For Plain: a log suffix of ops.
+ *   For Loro/Yjs: the set difference of operations.
+ *
+ * Routing table:
+ *   exportEntirety() → SubstratePayload { kind: "entirety" } → factory.fromEntirety() or replica.merge()
+ *   exportSince(v)   → SubstratePayload { kind: "since" }    → replica.merge()
  *
  * The `encoding` hint tells the transport layer whether the data is
  * text-safe (JSON) or binary (needs base64 for text contexts).
  */
 export interface SubstratePayload {
+  readonly kind: "entirety" | "since"
   readonly encoding: "json" | "binary"
   readonly data: string | Uint8Array
 }
@@ -128,40 +137,48 @@ export interface Replica<V extends Version = Version> {
   version(): V
 
   /**
-   * Full state — sufficient to construct an equivalent replica from
-   * scratch via `ReplicaFactory.fromSnapshot()`.
+   * Self-sufficient payload — everything needed to construct an
+   * equivalent replica from nothing via `ReplicaFactory.fromEntirety()`.
    *
-   * For PlainSubstrate: JSON-serialized store (a state image).
-   * For LoroSubstrate: doc.export({ mode: "snapshot" }) (a complete oplog).
+   * For Plain: JSON-serialized store (a state image).
+   * For Loro/Yjs: the complete oplog.
+   *
+   * Always produces `{ kind: "entirety", ... }`.
    */
-  exportSnapshot(): SubstratePayload
+  exportEntirety(): SubstratePayload
 
   /**
-   * Delta payload since a version — sufficient to catch up a live
-   * replica via `importDelta()`.
+   * Relative payload — what a peer at version `since` is missing.
    *
-   * Returns null if delta export is not possible (e.g. version too old,
-   * log compacted past that point, substrate doesn't support incremental).
+   * Returns null if the relative export is not possible (e.g. version
+   * too old, log compacted, or nothing to send).
    *
-   * For PlainSubstrate: JSON-serialized Op[] from the version log.
-   * For LoroSubstrate: doc.export({ mode: "update", from: vv }).
+   * For Plain: JSON-serialized Op[] from the version log.
+   * For Loro/Yjs: ops not in the peer's version vector.
+   *
+   * Always produces `{ kind: "since", ... }` when non-null.
    */
   exportSince(since: V): SubstratePayload | null
 
   /**
-   * Apply a delta payload to this live replica. The payload must have
-   * been produced by `exportSince()` or `exportSnapshot()` on a
-   * compatible replica/substrate.
+   * Merge a payload into this live replica.
    *
-   * For a full Substrate, import also fires the changefeed so that
+   * Accepts both `"entirety"` and `"since"` payloads. The replica
+   * determines how to integrate the incoming data based on its own
+   * structure and the payload's `kind` discriminant:
+   *
+   * Oplog substrates (Loro, Yjs): set union — idempotent, commutative.
+   *   Handles both payload kinds identically via `doc.import()`.
+   *
+   * State-image substrates (Plain): dispatches on `payload.kind`.
+   *   `"since"` → apply ops incrementally.
+   *   `"entirety"` → decompose state image to ReplaceChange ops.
+   *
+   * For a full Substrate, merge also fires the changefeed so that
    * subscribers observe the incoming mutations. For a bare Replica,
-   * no changefeed exists — import only updates the internal state
-   * and version.
-   *
-   * For PlainSubstrate: parses Op[], applies to the store.
-   * For LoroSubstrate: doc.import(bytes).
+   * no changefeed exists — merge only updates internal state and version.
    */
-  importDelta(payload: SubstratePayload, origin?: string): void
+  merge(payload: SubstratePayload, origin?: string): void
 }
 
 // ---------------------------------------------------------------------------
@@ -219,11 +236,13 @@ export interface SubstratePrepare {
  * mutation (local or imported), the resulting Ops are delivered through
  * the CHANGEFEED attached by the interpreter's changefeed layer.
  *
- * Epoch boundaries (snapshot import / state replacement) are NOT handled
- * by the substrate. They are an application-layer concern: the factory's
- * `fromSnapshot()` constructs a new substrate, and the application swaps
- * the doc reference. Within a substrate lifetime, all transitions are
- * deltas via `Changeset`. Between lifetimes, there is no continuity.
+ * Two kinds of state absorption:
+ * - `merge(payload)` absorbs a payload into a live substrate using
+ *   native merge semantics, preserving ref identity and firing the
+ *   changefeed. This is the normal sync path.
+ * - `factory.fromEntirety(payload, schema)` constructs a NEW substrate
+ *   for cold-start scenarios (SSR, first load, schema migration).
+ *   No continuity with any prior instance.
  */
 export interface Substrate<V extends Version = Version>
   extends Replica<V>,
@@ -250,23 +269,23 @@ export interface Substrate<V extends Version = Version>
  * walking, no container initialization. `fromSnapshot()` creates a
  * `LoroDoc()` and imports the payload. Both return replicas that
  * support `version()`, `exportSnapshot()`, `exportSince()`, and
- * `importDelta()` but NOT `store`, `prepare`, `onFlush`, or `context()`.
+ * `merge()` but NOT `store`, `prepare`, `onFlush`, or `context()`.
  *
  * For Plain: `createEmpty()` creates a fresh store with an empty op log.
- * `fromSnapshot()` parses the JSON state image into a store.
+ * `fromEntirety()` parses the JSON state image into a store.
  */
 export interface ReplicaFactory<V extends Version = Version> {
   /** Create a fresh, empty replica. No schema needed. */
   createEmpty(): Replica<V>
 
   /**
-   * Construct a replica from a snapshot payload.
+   * Construct a replica from a self-sufficient payload.
    *
-   * The payload must have been produced by `exportSnapshot()` on a
+   * The payload must have been produced by `exportEntirety()` on a
    * compatible replica or substrate. No schema needed — the payload
    * is self-describing for replication purposes.
    */
-  fromSnapshot(payload: SubstratePayload): Replica<V>
+  fromEntirety(payload: SubstratePayload): Replica<V>
 
   /** Deserialize a version from its string representation. */
   parseVersion(serialized: string): V
@@ -293,19 +312,20 @@ export interface SubstrateFactory<V extends Version = Version> {
   create(schema: SchemaNode): Substrate<V>
 
   /**
-   * Construct a new substrate from a snapshot payload.
+   * Construct a new substrate from a self-sufficient payload.
    *
-   * The payload must have been produced by `exportSnapshot()` on a
+   * The payload must have been produced by `exportEntirety()` on a
    * compatible substrate. This always creates a NEW substrate — it
    * does not mutate an existing one.
    *
-   * This is the entry point for epoch boundaries: SSR hydration,
-   * reconnection past log compaction, etc.
+   * This is the entry point for cold-start construction: SSR hydration,
+   * reconnection past log compaction, etc. For live absorption into an
+   * existing replica, use `replica.merge()` instead.
    *
    * For PlainSubstrate: parses JSON state image, applies via executeBatch.
    * For LoroSubstrate: LoroDoc.fromSnapshot(bytes).
    */
-  fromSnapshot(payload: SubstratePayload, schema: SchemaNode): Substrate<V>
+  fromEntirety(payload: SubstratePayload, schema: SchemaNode): Substrate<V>
 
   /** Deserialize a version from its string representation. */
   parseVersion(serialized: string): V
