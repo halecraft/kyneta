@@ -139,3 +139,14 @@ export { Exchange } from "./exchange.js"
 
 export type { SyncRef, WaitForSyncOptions } from "./sync.js"
 export { hasSync, sync } from "./sync.js"
+
+// ---------------------------------------------------------------------------
+// Storage — persistent storage adapters
+// ---------------------------------------------------------------------------
+
+export type { StorageBackend, StorageEntry } from "./storage/index.js"
+export {
+  InMemoryStorageBackend,
+  StorageAdapter,
+  createInMemoryStorage,
+} from "./storage/index.js"

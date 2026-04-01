@@ -353,7 +353,48 @@ function handleChannelRemoved(
     }
   }
 
-  return [{ ...model, channels, peers }]
+  // Storage-first sync cleanup: if this channel was in any document's
+  // pendingStorageChannels, remove it. If that empties the pending set,
+  // process the queued network interests.
+  const removedId = msg.channel.channelId
+  let documents = model.documents
+  const commands: Command[] = []
+
+  for (const [docId, docEntry] of documents) {
+    if (docEntry.pendingStorageChannels?.has(removedId)) {
+      if (documents === model.documents) {
+        documents = new Map(documents)
+      }
+      const newPending = new Set(docEntry.pendingStorageChannels)
+      newPending.delete(removedId)
+
+      if (newPending.size === 0) {
+        // All storage channels responded (or were removed) — process queued interests
+        const released = processQueuedInterests(docEntry, {
+          ...model,
+          documents,
+          channels,
+          peers,
+        })
+        commands.push(...released)
+        documents.set(docId, {
+          ...docEntry,
+          pendingStorageChannels: undefined,
+          pendingInterests: undefined,
+        })
+      } else {
+        documents.set(docId, {
+          ...docEntry,
+          pendingStorageChannels: newPending,
+        })
+      }
+    }
+  }
+
+  return [
+    { ...model, channels, peers, documents },
+    batchAsNeeded(...commands),
+  ]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -371,7 +412,13 @@ function handleDocEnsure(
   model: SynchronizerModel,
   route: RoutePredicate,
 ): [SynchronizerModel, Command?] {
-  if (model.documents.has(msg.docId)) {
+  const existing = model.documents.get(msg.docId)
+  // A placeholder entry (created by handleStorageFirstProbe) has
+  // pendingStorageChannels — it should be upgraded, not skipped.
+  const isPlaceholder =
+    existing?.pendingStorageChannels != null &&
+    existing.pendingStorageChannels.size > 0
+  if (existing && !isPlaceholder) {
     return [model]
   }
 
@@ -381,6 +428,9 @@ function handleDocEnsure(
     mode: msg.mode,
     version: msg.version,
     mergeStrategy: msg.mergeStrategy,
+    // Preserve pending storage-first sync state from the placeholder
+    pendingStorageChannels: existing?.pendingStorageChannels,
+    pendingInterests: existing?.pendingInterests,
   })
 
   // Announce new doc and request sync from all established channels.
@@ -552,7 +602,7 @@ function handleChannelReceiveMessage(
       return handleDiscover(fromChannelId, message, model, route)
 
     case "interest":
-      return handleInterest(fromChannelId, message, model)
+      return handleInterest(fromChannelId, message, model, route)
 
     case "offer":
       return handleOffer(fromChannelId, message, model, authorize)
@@ -723,7 +773,14 @@ function handleDiscover(
 
   for (const docId of message.docIds) {
     const docEntry = model.documents.get(docId)
-    if (docEntry) {
+    // A doc entry with pendingStorageChannels is a placeholder created by
+    // handleStorageFirstProbe — treat it as unknown for discovery purposes
+    // so that cmd/request-doc-creation fires and the Exchange creates the
+    // real substrate via onDocDiscovered → exchange.get().
+    const isPlaceholder =
+      docEntry?.pendingStorageChannels != null &&
+      docEntry.pendingStorageChannels.size > 0
+    if (docEntry && !isPlaceholder) {
       // We have this doc — send interest with our version
       const isCausal = docEntry.mergeStrategy === "causal"
       commands.push({
@@ -754,7 +811,7 @@ function handleDiscover(
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// HANDLER: Interest — merge-strategy dispatch
+// HANDLER: Interest — merge-strategy dispatch + storage-first sync
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 function handleInterest(
@@ -766,15 +823,94 @@ function handleInterest(
     reciprocate?: boolean
   },
   model: SynchronizerModel,
+  route: RoutePredicate,
 ): [SynchronizerModel, Command?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
 
   const docEntry = model.documents.get(message.docId)
+
   if (!docEntry) {
-    // We don't have this doc — nothing to offer
+    // We don't have this doc. Two paths:
+    //
+    // 1. Network interest + storage channels exist → storage-first sync:
+    //    queue the interest, probe storage channels with discover.
+    //
+    // 2. Otherwise → nothing to offer, drop the interest.
+    //
+    // Storage-originated interests for unknown docs are never queued
+    // (storage doesn't wait for itself).
+    if (channel.kind === "network") {
+      const storageChannelIds = getChannelIdsByKind(model, "storage")
+      if (storageChannelIds.length > 0) {
+        return handleStorageFirstProbe(
+          message.docId,
+          fromChannelId,
+          message,
+          storageChannelIds,
+          model,
+        )
+      }
+    }
     return [model]
   }
+
+  // If this doc has pendingStorageChannels, storage-first sync is in progress.
+  // Two sub-cases:
+  //
+  // 1. Storage channel sending interest → completion signal ("I'm done").
+  // 2. Network channel sending interest → queue it alongside existing pending interests.
+  if (
+    docEntry.pendingStorageChannels &&
+    docEntry.pendingStorageChannels.size > 0
+  ) {
+    if (
+      channel.kind === "storage" &&
+      docEntry.pendingStorageChannels.has(fromChannelId)
+    ) {
+      return handleStorageCompletionSignal(
+        fromChannelId,
+        message.docId,
+        docEntry,
+        model,
+      )
+    }
+
+    if (channel.kind === "network") {
+      // Queue this additional network interest
+      const pendingInterests = [...(docEntry.pendingInterests ?? [])]
+      pendingInterests.push({
+        channelId: fromChannelId,
+        version: message.version,
+        reciprocate: message.reciprocate ?? false,
+      })
+      const documents = new Map(model.documents)
+      documents.set(message.docId, { ...docEntry, pendingInterests })
+      return [{ ...model, documents }]
+    }
+  }
+
+  // Normal interest for a known doc — respond based on merge strategy
+  return handleInterestForKnownDoc(fromChannelId, message, docEntry, model)
+}
+
+/**
+ * Build commands to respond to an interest for a known doc.
+ * Shared by handleInterestForKnownDoc and processQueuedInterests.
+ */
+function buildInterestResponse(
+  fromChannelId: ChannelId,
+  message: {
+    type: "interest"
+    docId: DocId
+    version?: string
+    reciprocate?: boolean
+  },
+  docEntry: DocEntry,
+  model: SynchronizerModel,
+): Command[] {
+  const channel = model.channels.get(fromChannelId)
+  if (!channel || channel.type !== "established") return []
 
   const commands: Command[] = []
 
@@ -834,6 +970,34 @@ function handleInterest(
       break
   }
 
+  return commands
+}
+
+/**
+ * Handle a normal interest for a doc that exists (no pending storage).
+ * Responds based on merge strategy and updates peer sync state.
+ */
+function handleInterestForKnownDoc(
+  fromChannelId: ChannelId,
+  message: {
+    type: "interest"
+    docId: DocId
+    version?: string
+    reciprocate?: boolean
+  },
+  docEntry: DocEntry,
+  model: SynchronizerModel,
+): [SynchronizerModel, Command?] {
+  const channel = model.channels.get(fromChannelId)
+  if (!channel || channel.type !== "established") return [model]
+
+  const commands = buildInterestResponse(
+    fromChannelId,
+    message,
+    docEntry,
+    model,
+  )
+
   // Update peer sync state to "pending"
   const peers = new Map(model.peers)
   const peerState = peers.get(channel.peerId)
@@ -847,6 +1011,149 @@ function handleInterest(
   }
 
   return [{ ...model, peers }, batchAsNeeded(...commands)]
+}
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// Storage-first sync helpers
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+/**
+ * Storage-first probe: a network peer sent interest for an unknown doc,
+ * and we have storage channels. Create a pending doc entry, queue the
+ * network interest, and send discover to all storage channels.
+ */
+function handleStorageFirstProbe(
+  docId: DocId,
+  networkChannelId: ChannelId,
+  message: { version?: string; reciprocate?: boolean },
+  storageChannelIds: ChannelId[],
+  model: SynchronizerModel,
+): [SynchronizerModel, Command?] {
+  // Check if there's already a pending entry for this doc
+  // (another network peer may have already triggered the probe)
+  const existing = model.documents.get(docId)
+  const pendingStorageChannels = existing?.pendingStorageChannels
+    ? new Set(existing.pendingStorageChannels)
+    : new Set(storageChannelIds)
+  const pendingInterests = [...(existing?.pendingInterests ?? [])]
+
+  // Queue this network interest
+  pendingInterests.push({
+    channelId: networkChannelId,
+    version: message.version,
+    reciprocate: message.reciprocate ?? false,
+  })
+
+  const documents = new Map(model.documents)
+  documents.set(docId, {
+    ...(existing ?? {
+      docId,
+      mode: "replicate" as const,
+      version: "",
+      mergeStrategy: "causal" as MergeStrategy,
+    }),
+    pendingStorageChannels,
+    pendingInterests,
+  })
+
+  // Send discover to all storage channels: "do you have this doc?"
+  // Only send the probe on the first interest (when we create the entry),
+  // not on subsequent interests that piggyback on the existing probe.
+  const cmd: Command | undefined = !existing
+    ? {
+        type: "cmd/send-message",
+        envelope: {
+          toChannelIds: storageChannelIds,
+          message: {
+            type: "discover",
+            docIds: [docId],
+          },
+        },
+      }
+    : undefined
+
+  return [{ ...model, documents }, cmd]
+}
+
+/**
+ * Handle the completion signal from a storage channel: an interest message
+ * from a storage channel for a doc that has pendingStorageChannels.
+ *
+ * Removes the storage channel from the pending set. If all storage channels
+ * have responded, processes the queued network interests.
+ */
+function handleStorageCompletionSignal(
+  storageChannelId: ChannelId,
+  docId: DocId,
+  docEntry: DocEntry,
+  model: SynchronizerModel,
+): [SynchronizerModel, Command?] {
+  const newPending = new Set(docEntry.pendingStorageChannels!)
+  newPending.delete(storageChannelId)
+
+  const documents = new Map(model.documents)
+
+  if (newPending.size > 0) {
+    // Still waiting for other storage channels
+    documents.set(docId, {
+      ...docEntry,
+      pendingStorageChannels: newPending,
+    })
+    return [{ ...model, documents }]
+  }
+
+  // All storage channels have responded — process queued interests
+  const commands = processQueuedInterests(docEntry, model)
+
+  documents.set(docId, {
+    ...docEntry,
+    pendingStorageChannels: undefined,
+    pendingInterests: undefined,
+  })
+
+  return [{ ...model, documents }, batchAsNeeded(...commands)]
+}
+
+/**
+ * Process queued network interests that were waiting for storage.
+ *
+ * For each queued interest, dispatch the same logic as a normal interest
+ * for a known doc. If the doc was never created (storage had nothing,
+ * onDocDiscovered never fired), the interests are silently dropped.
+ */
+function processQueuedInterests(
+  docEntry: DocEntry,
+  model: SynchronizerModel,
+): Command[] {
+  const pending = docEntry.pendingInterests ?? []
+  if (pending.length === 0) return []
+
+  // Check whether the doc was actually created via doc-ensure, or is
+  // still the placeholder from handleStorageFirstProbe. Placeholders
+  // use version "" — doc-ensure sets the real substrate version (e.g.
+  // "0" for plain, a base64 VersionVector for Loro). If the entry is
+  // gone or still at "", there's nothing to offer.
+  const currentDoc = model.documents.get(docEntry.docId)
+  if (!currentDoc || currentDoc.version === "") {
+    return []
+  }
+
+  const commands: Command[] = []
+  for (const interest of pending) {
+    const interestCommands = buildInterestResponse(
+      interest.channelId,
+      {
+        type: "interest",
+        docId: docEntry.docId,
+        version: interest.version,
+        reciprocate: interest.reciprocate,
+      },
+      currentDoc,
+      model,
+    )
+    commands.push(...interestCommands)
+  }
+  return commands
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

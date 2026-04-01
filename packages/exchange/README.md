@@ -179,6 +179,61 @@ const exchange = new Exchange({
 
 This enables patterns where clients create per-peer documents (e.g. `input:${peerId}`) and the server materializes them automatically when the client connects. No pre-coordination required — the `route` predicate is checked first (the callback only fires if routing allows it), then returning `undefined` is equivalent to denying creation.
 
+### Storage
+
+The exchange supports persistent storage through storage adapters. Documents are automatically persisted on mutation and hydrated on restart — no manual save/load needed.
+
+```ts
+import { Exchange, createInMemoryStorage } from "@kyneta/exchange"
+
+// Create an exchange with storage
+const exchange = new Exchange({
+  adapters: [
+    createInMemoryStorage(),
+    createWebsocketClient({ url: "ws://localhost:3000/ws" }),
+  ],
+})
+
+const doc = exchange.get("my-doc", TodoDoc)
+// Mutations are automatically persisted to storage
+```
+
+For testing persist → restart → hydrate flows, use `sharedData` to share storage state between exchange instances:
+
+```ts
+const sharedData = new Map()
+
+// Exchange 1: create and mutate a document
+const exchange1 = new Exchange({
+  adapters: [createInMemoryStorage({ sharedData })],
+})
+const doc = exchange1.get("my-doc", TodoDoc)
+change(doc, d => d.title.set("Saved"))
+await exchange1.shutdown()
+
+// Exchange 2: hydrate from storage
+const exchange2 = new Exchange({
+  adapters: [createInMemoryStorage({ sharedData })],
+  onDocDiscovered: (docId) => TodoDoc,
+})
+// "my-doc" is restored from storage when a peer requests it
+```
+
+For production use, implement the `StorageBackend` interface for your persistence layer (Postgres, IndexedDB, S3, etc.) and wrap it in a `StorageAdapter`:
+
+```ts
+import { StorageAdapter } from "@kyneta/exchange"
+
+const exchange = new Exchange({
+  adapters: [
+    () => new StorageAdapter({
+      backend: new PostgresStorageBackend(connectionString),
+      adapterType: "postgres-storage",
+    }),
+  ],
+})
+```
+
 ### The `sync()` Function
 
 Sync capabilities are accessed via the `sync()` function:
@@ -271,6 +326,16 @@ loroDoc.version()                // VersionVector
 | `AdapterManager` | Manages adapter lifecycle and message routing. |
 | `BridgeAdapter` | In-process adapter for testing. |
 | `Bridge` | Message router connecting BridgeAdapters. |
+
+### Storage
+
+| Export | Description |
+|--------|-------------|
+| `StorageBackend` | Interface for persistent storage backends (6 methods). |
+| `StorageEntry` | Type for stored entries (`{ payload, version }`). |
+| `StorageAdapter` | Base class translating sync protocol ↔ StorageBackend. |
+| `InMemoryStorageBackend` | Map-backed backend for testing. |
+| `createInMemoryStorage(opts?)` | Factory function returning `AdapterFactory`. |
 
 ### TimestampVersion
 

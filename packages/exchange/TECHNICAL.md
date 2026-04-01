@@ -336,6 +336,27 @@ In-process adapter for testing. Messages are delivered asynchronously via `queue
 1. **Phase 1**: Create channels to all existing peers (no establishment)
 2. **Phase 2**: Only the joining adapter initiates establishment
 
+### StorageAdapter
+
+Persistent storage adapter that translates the 6-message sync protocol into `StorageBackend` operations. Creates a single channel with `kind: "storage"`, which causes the synchronizer to bypass route/authorize checks (§16) and recognize the channel for storage-first sync probes (§19).
+
+The adapter extends `Adapter<void>` and handles all protocol translation:
+- `establish-request` → responds with identity (`type: "service"`)
+- `discover` → checks `backend.has()` for each docId, replies with available
+- `interest` → loads entries via `backend.loadAll()`, sends offers, then completion `interest`
+- `offer` → persists via `backend.append()`
+- `dismiss` → deletes via `backend.delete()`
+
+Per-doc serialization ensures sequential backend access per document (concurrent across documents). A `flush()` method awaits all pending async operations for clean shutdown.
+
+Use `createInMemoryStorage()` for testing:
+
+```ts
+const exchange = new Exchange({
+  adapters: [createInMemoryStorage()],
+})
+```
+
 ---
 
 ## 6. TimestampVersion
@@ -448,6 +469,10 @@ Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingM
 | `src/synchronizer.ts` | Synchronizer runtime — dispatch, command execution, substrate interaction |
 | `src/exchange.ts` | `Exchange` class — public API, `RoutePredicate`, `AuthorizePredicate`, `OnDocDismissed` types |
 | `src/sync.ts` | `sync()` function and `SyncRef` — sync capabilities access |
+| `src/storage/storage-backend.ts` | `StorageBackend` interface and `StorageEntry` type |
+| `src/storage/storage-adapter.ts` | `StorageAdapter` base class — protocol translator |
+| `src/storage/in-memory-storage-backend.ts` | `InMemoryStorageBackend` + `createInMemoryStorage()` factory |
+| `src/storage/index.ts` | Storage module barrel export |
 | `src/index.ts` | Barrel export (re-exports `bind`, `BoundSchema`, `MergeStrategy`, etc. from `@kyneta/schema`) |
 
 Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`, `unwrap()`, `registerSubstrate()`, and `TimestampVersion` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` and `loro()` are defined in `@kyneta/loro-schema`.
@@ -458,6 +483,9 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`
 |------|----------|
 | `src/__tests__/adapter.test.ts` | Adapter lifecycle, AdapterManager, BridgeAdapter (13 tests) |
 | `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, and `cmd/request-doc-creation` (28 tests) |
+| `src/__tests__/storage-first-sync.test.ts` | Pure TEA tests for storage-first sync — queue+probe, completion signals, multi-storage, channel removal, placeholder upgrade (13 tests) |
+| `src/__tests__/storage-backend.test.ts` | InMemoryStorageBackend — StorageBackend contract: append, loadAll, has, replace, delete, listDocIds, sharedData (9 tests) |
+| `src/__tests__/storage-integration.test.ts` | End-to-end storage: persist+hydrate, interpreted docs, replicated docs, dismiss, multi-storage (5 tests) |
 | `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle (24 tests) |
 | `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, heterogeneous, and `onDocDiscovered` dynamic creation (12 tests) |
 | `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, LWW stale rejection, causal deltas (6 tests) |
@@ -708,6 +736,8 @@ Peer A (has doc)               Peer B (doesn't have doc)
      |                                |
 ```
 
+**Storage-first interaction**: When storage adapters are present, `onDocDiscovered` fires *after* the storage-first sync probe completes (§19). The synchronizer queues the network interest, probes storage with `discover`, and only when storage responds does `handleDiscover` fire `cmd/request-doc-creation` → `onDocDiscovered`. This ensures the callback sees the full picture of what storage has available.
+
 ### The `cmd/request-doc-creation` Command
 
 When `handleDiscover` encounters an unknown doc ID, the pure program emits:
@@ -791,6 +821,8 @@ When `authorize` rejects an offer, the peer's sync state is still updated to pre
 Both predicates are skipped for storage channels (`channel.kind === "storage"`). Storage is local infrastructure, not a policy boundary — you always want to persist and load your own docs. The predicates govern the network boundary only.
 
 Implementation: `filterChannelsByRoute(model, channelIds, docId, route)` encapsulates the storage-bypass + route-check pattern. For each channel ID, if `kind === "storage"`, keep unconditionally. Otherwise, resolve peer identity and call `route(docId, peer)`.
+
+The `StorageAdapter` (§18) creates channels with `kind: "storage"`, so all its offers bypass `authorize` and all its doc announcements bypass `route`.
 
 ### The `route` → `authorize` Invariant
 
@@ -879,3 +911,161 @@ When `handleDismiss` processes a `dismiss` message from a peer, it removes the d
 ```
 
 Follows the same fire-and-forget pattern as `cmd/request-doc-creation`. The Synchronizer runtime calls the `DocDismissedCallback`, which the Exchange wraps to invoke the user's `onDocDismissed` callback.
+
+---
+
+## 18. StorageBackend and StorageAdapter
+
+The exchange supports persistent storage through the `StorageBackend` interface and `StorageAdapter` base class. Storage participates as a **replication conduit** — it persists and hydrates opaque `SubstratePayload` blobs without interpreting document state, speaking the existing 6-message protocol by impersonating a peer on a `"storage"` channel.
+
+### StorageEntry
+
+The unit of persistence:
+
+```ts
+type StorageEntry = {
+  readonly payload: SubstratePayload
+  readonly version: string
+}
+```
+
+The `payload` carries its own `kind` discriminant (`"entirety"` or `"since"`), so no separate `entryType` field is needed. The `version` string is round-tripped faithfully from the original offer — storage never interprets it.
+
+### StorageBackend Interface
+
+Six document-level operations. Backends need no knowledge of the sync protocol, substrates, or schemas:
+
+```ts
+interface StorageBackend {
+  append(docId: DocId, entry: StorageEntry): Promise<void>
+  has(docId: DocId): Promise<boolean>
+  loadAll(docId: DocId): AsyncIterable<StorageEntry>
+  replace(docId: DocId, entry: StorageEntry): Promise<void>
+  delete(docId: DocId): Promise<void>
+  listDocIds(): AsyncIterable<DocId>
+}
+```
+
+**Design decisions:**
+
+- **Document-level, not chunk-level.** The vendor uses `StorageKey = string[]` with `[docId, "update", timestamp]` key-space. This was rejected because timestamp-based keys cause collisions in multi-pod deployments and `removeRange` is unsafe under concurrent writes. The document-level interface operates at the natural granularity.
+
+- **`AsyncIterable` for pagination.** `loadAll` and `listDocIds` return `AsyncIterable` rather than arrays. This supports million-doc stores (S3, Postgres) without loading everything into memory. In-memory backends trivially `yield*` from arrays.
+
+- **Atomic `replace`.** Required for safe compaction. A concurrent reader must never observe an empty intermediate state. Achievable on all target backends: Postgres (transaction), LevelDB (batch), IndexedDB (transaction), Redis (MULTI/EXEC), in-memory (synchronous swap), S3 (write-before-delete).
+
+- **Per-doc serialization.** The `StorageAdapter` guarantees sequential operations per docId — backends assume single-writer-per-document semantics. Cross-document operations remain concurrent for throughput.
+
+### StorageAdapter Protocol Translation
+
+The `StorageAdapter` extends `Adapter<void>` and translates between the sync protocol and `StorageBackend`:
+
+| Incoming message | StorageAdapter action |
+|-----------------|----------------------|
+| `establish-request` | Reply with `establish-response` (identity: `{ type: "service" }`) |
+| `discover [docIds]` | Check `backend.has()` for each, reply with available docIds |
+| `interest { docId }` | Load entries via `backend.loadAll()`, send one `offer` per entry, then send completion `interest` |
+| `offer { docId, payload, version }` | Call `backend.append(docId, { payload, version })` |
+| `dismiss { docId }` | Call `backend.delete(docId)` |
+
+**Completion signal protocol.** When a storage adapter finishes sending all offers for a document, it sends an `interest` message for that doc. This reuses the existing protocol vocabulary — "I'm done sending offers, subscribe me to future updates." No storage-specific message types are needed.
+
+**Synchronous reply.** The `#reply()` method delivers messages synchronously via `storageChannel.onReceive()`. The Synchronizer's serialized dispatch queue (§9) handles recursion prevention. During hydration, all offers and the completion interest are processed in a single dispatch cycle.
+
+**Flush tracking.** Each async backend operation is tracked in `#pendingOps: Set<Promise<void>>`. The `flush()` method awaits all pending operations. Called automatically during `onStop()` and available for explicit use before shutdown.
+
+### InMemoryStorageBackend
+
+A `Map<DocId, StorageEntry[]>`-backed implementation for testing. Supports a `sharedData` constructor argument so multiple instances can share the same underlying Map — useful for simulating persist → restart → hydrate:
+
+```ts
+const sharedData = new Map()
+
+// Exchange 1: persist data
+const exchange1 = new Exchange({
+  adapters: [createInMemoryStorage({ sharedData })],
+})
+// ... mutations happen, storage persists ...
+await exchange1.shutdown()
+
+// Exchange 2: hydrate from storage
+const exchange2 = new Exchange({
+  adapters: [createInMemoryStorage({ sharedData })],
+})
+// Documents are restored from the shared storage
+```
+
+---
+
+## 19. Storage-First Sync
+
+When a network peer sends `interest` for a document the exchange doesn't have in memory, and storage adapters are present, the synchronizer must consult storage before responding. Without this, a server with persistent storage would respond to clients as if documents don't exist.
+
+### The Full Flow
+
+```
+Network Peer                Synchronizer                  Storage Adapter
+     |                           |                              |
+     |── interest("doc-1") ───> |                              |
+     |                           | doc unknown + storage exists |
+     |                           | → create placeholder entry   |
+     |                           | → queue network interest     |
+     |                           |                              |
+     |                           |── discover(["doc-1"]) ─────>|
+     |                           |                              | backend.has("doc-1") → true
+     |                           | <── discover(["doc-1"]) ────|
+     |                           |                              |
+     |                           | handleDiscover: placeholder  |
+     |                           | → cmd/request-doc-creation   |
+     |                           | → onDocDiscovered fires      |
+     |                           | → exchange.get("doc-1", ...) |
+     |                           | → doc-ensure (upgrades       |
+     |                           |   placeholder, preserves     |
+     |                           |   pending state)             |
+     |                           |                              |
+     |                           |── interest("doc-1") ───────>|
+     |                           |                              | backend.loadAll("doc-1")
+     |                           | <── offer(entry1) ──────────|
+     |                           | <── offer(entry2) ──────────|
+     |                           | <── interest("doc-1") ──────| completion signal
+     |                           |                              |
+     |                           | all storage responded        |
+     |                           | → processQueuedInterests     |
+     |                           |                              |
+     | <── offer(hydrated) ─────|                              |
+     |                           |                              |
+```
+
+### Placeholder Doc Entries
+
+When `handleInterest` encounters an unknown doc from a network peer and storage channels exist, it creates a **placeholder** `DocEntry`:
+
+```ts
+{
+  docId,
+  mode: "replicate",
+  version: "",              // sentinel — indicates not yet ensured
+  mergeStrategy: "causal",  // temporary — overwritten by doc-ensure
+  pendingStorageChannels: Set<ChannelId>,  // storage channels to wait for
+  pendingInterests: PendingInterest[],     // queued network interests
+}
+```
+
+- `handleDocEnsure` recognizes placeholders (entries with `pendingStorageChannels`) and upgrades them instead of bailing early. It preserves the `pendingStorageChannels` and `pendingInterests` fields.
+- `handleDiscover` treats placeholders as unknown docs so `cmd/request-doc-creation` fires correctly when storage responds.
+
+### Completion Signal
+
+A storage channel's `interest` message for a doc with `pendingStorageChannels` serves as the completion signal. The `handleStorageCompletionSignal` function removes the storage channel from the pending set. When all storage channels have responded, `processQueuedInterests` releases the queued network interests.
+
+### Multi-Storage Coordination
+
+Multiple storage adapters are supported. The `pendingStorageChannels` set tracks all storage channel IDs. The synchronizer waits for **all** storage channels to send their completion signal before releasing queued interests. This supports deployments with multiple storage tiers (e.g., IndexedDB on client + Postgres via server relay).
+
+### Channel Removal During Pending State
+
+If a storage channel is removed while the synchronizer is waiting for its response (e.g., adapter crash, shutdown), `handleChannelRemoved` removes the channel from all documents' `pendingStorageChannels`. If that empties any document's pending set, the queued interests are processed immediately.
+
+### Storage-Originated Interests
+
+When a storage adapter sends `interest` for an unknown doc, it is **not** queued (storage doesn't wait for itself). Only network-originated interests trigger the storage-first probe.
