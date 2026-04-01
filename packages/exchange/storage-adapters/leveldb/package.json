@@ -1,0 +1,46 @@
+{
+  "name": "@kyneta/leveldb-storage-backend",
+  "version": "1.0.0",
+  "description": "LevelDB storage backend for @kyneta/exchange — server-side persistent storage",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/exchange/storage-adapters/leveldb"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "peerDependencies": {
+    "@kyneta/exchange": "^1.0.0",
+    "@kyneta/schema": "^1.0.0"
+  },
+  "dependencies": {
+    "classic-level": "^1.4.1"
+  },
+  "devDependencies": {
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.17"
+  }
+}

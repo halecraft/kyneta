@@ -486,6 +486,8 @@ Notifications are accumulated across the entire dispatch cycle into a `Set<DocId
 | `src/storage/storage-backend.ts` | `StorageBackend` interface and `StorageEntry` type |
 | `src/storage/in-memory-storage-backend.ts` | `InMemoryStorageBackend` + `createInMemoryStorage()` factory |
 | `src/storage/index.ts` | Storage module barrel export |
+| `src/testing/storage-backend-conformance.ts` | Reusable `describeStorageBackend()` conformance suite (exported via `@kyneta/exchange/testing`) |
+| `src/testing/index.ts` | Testing module barrel export |
 | `src/index.ts` | Barrel export (re-exports `bind`, `BoundSchema`, `MergeStrategy`, etc. from `@kyneta/schema`) |
 
 Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`, `unwrap()`, `registerSubstrate()`, and `TimestampVersion` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` is defined in `@kyneta/loro-schema`.
@@ -497,7 +499,8 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`
 | `src/__tests__/adapter.test.ts` | Adapter lifecycle, AdapterManager, BridgeAdapter |
 | `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, `cmd/request-doc-creation`, replicate mode |
 | `src/__tests__/storage-first-sync.test.ts` | Exchange-level storage hydration — get/replicate hydration, network import persistence, local change persistence, flush, round-trip restart |
-| `src/__tests__/storage-backend.test.ts` | InMemoryStorageBackend — StorageBackend contract: lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, sharedData |
+| `src/__tests__/storage-backend.test.ts` | InMemoryStorageBackend — conformance suite + InMemory-specific sharedData/getStorage tests |
+| `src/testing/storage-backend-conformance.ts` | Reusable StorageBackend contract suite: lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, JSON + binary payload round-trips, StorageEntry shape |
 | `src/__tests__/storage-integration.test.ts` | End-to-end storage: persist+hydrate for sequential/causal/LWW, replicate mode, dismiss+delete, onDocDiscovered+storage |
 | `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle |
 | `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, heterogeneous, and `onDocDiscovered` dynamic creation |
@@ -973,7 +976,7 @@ Registered via `ensureDoc()` before the first `append()`. Returned by `lookup()`
 
 ### StorageBackend Interface
 
-Eight document-level operations. Backends need no knowledge of the sync protocol, substrates, or schemas:
+Seven document-level operations plus an optional lifecycle hook. Backends need no knowledge of the sync protocol, substrates, or schemas:
 
 ```ts
 interface StorageBackend {
@@ -984,6 +987,7 @@ interface StorageBackend {
   replace(docId: DocId, entry: StorageEntry): Promise<void>
   delete(docId: DocId): Promise<void>
   listDocIds(): AsyncIterable<DocId>
+  close?(): Promise<void>
 }
 ```
 
@@ -1000,6 +1004,8 @@ interface StorageBackend {
 - **Atomic `replace`.** Required for safe compaction. A concurrent reader must never observe an empty intermediate state. Achievable on all target backends: Postgres (transaction), LevelDB (batch), IndexedDB (transaction), Redis (MULTI/EXEC), in-memory (synchronous swap), S3 (write-before-delete).
 
 - **Per-doc serialization.** The Exchange guarantees sequential operations per docId via promise chains (`#enqueueForDoc`) — backends assume single-writer-per-document semantics. Cross-document operations remain concurrent for throughput.
+
+- **Optional `close()`.** Backends with native handles (LevelDB file descriptors, Postgres connections) implement `close()` to release resources. `Exchange.shutdown()` calls `close()` on all storage backends after flushing pending operations. In-memory backends omit it — no ceremony for backends that don't need it.
 
 ### InMemoryStorageBackend
 
@@ -1082,3 +1088,67 @@ Every async storage operation is tracked in `#pendingStorageOps: Set<Promise<voi
 ### Per-Doc Sequential Access
 
 The Exchange guarantees sequential backend access per document via `#enqueueForDoc()` — a promise-chain pattern where each new operation for a docId awaits the previous one. Cross-document operations remain concurrent for throughput.
+
+### Backend Lifecycle
+
+`Exchange.shutdown()` calls `backend.close()` on all storage backends (if implemented) after flushing pending operations and disconnecting adapters. This ensures native handles (LevelDB file descriptors, database connections) are released cleanly.
+
+---
+
+## 20. LevelDB Storage Backend
+
+The `@kyneta/leveldb-storage-backend` package provides a server-side persistent `StorageBackend` using [classic-level](https://github.com/Level/classic-level). Located at `packages/exchange/storage-adapters/leveldb/`, imported via `@kyneta/leveldb-storage-backend/server`.
+
+```ts
+import { createLevelDBStorage } from "@kyneta/leveldb-storage-backend/server"
+
+const exchange = new Exchange({
+  storage: [createLevelDBStorage("./data/exchange-db")],
+})
+```
+
+### Key-Space Design
+
+LevelDB keys use `\x00` (null byte) as the separator — following the FoundationDB tuple-layer convention. Since null bytes cannot appear in valid UTF-8 strings, no docId validation is needed; the key-space imposes zero constraints on callers.
+
+| Prefix | Key format | Value |
+|--------|-----------|-------|
+| `meta` | `meta\x00{docId}` | JSON-encoded `DocMetadata` |
+| `entry` | `entry\x00{docId}\x00{seqNo}` | Binary-encoded `StorageEntry` |
+
+`seqNo` is a zero-padded 10-digit monotonic counter per doc, tracked in an in-memory `Map<DocId, number>`. After a reboot, the max seqNo for a doc is lazily discovered via a single reverse-iterator seek on the first `append()` call — one LevelDB seek per doc, O(log N) in SSTables.
+
+Prefix scans use the `\xff` sentinel pattern: `{ gte: "entry\x00docId\x00", lt: "entry\x00docId\x00\xff" }`.
+
+### Binary Envelope Serialization
+
+`StorageEntry` values are serialized as a compact binary envelope to avoid base64 inflation on binary payloads (Loro/Yjs documents are entirely binary):
+
+1. **1 byte**: flags — bit 0 = kind (0=entirety, 1=since), bit 1 = encoding (0=json, 1=binary), bit 2 = data type (0=string, 1=Uint8Array)
+2. **4 bytes**: version string length (uint32 big-endian)
+3. **N bytes**: version string (UTF-8)
+4. **remaining bytes**: payload data (raw bytes)
+
+`encodeStorageEntry()` and `decodeStorageEntry()` are pure functions with no dependencies — trivially unit-testable.
+
+### Atomicity
+
+`replace()` uses `db.batch()` to atomically delete all existing entry keys and write the single replacement. A concurrent reader never observes an empty intermediate state.
+
+`delete()` similarly uses `db.batch()` to atomically remove both the metadata key and all entry keys.
+
+### Conformance Testing
+
+The `StorageBackend` contract is validated by a reusable conformance test suite, available via `@kyneta/exchange/testing`:
+
+```ts
+import { describeStorageBackend } from "@kyneta/exchange/testing"
+
+describeStorageBackend(
+  "MyBackend",
+  () => new MyBackend(),
+  async (backend) => { if (backend.close) await backend.close() },
+)
+```
+
+Both `InMemoryStorageBackend` and `LevelDBStorageBackend` pass the same suite. The suite covers lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, and both JSON string and binary `Uint8Array` payload round-trips.

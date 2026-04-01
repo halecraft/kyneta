@@ -834,6 +834,10 @@ export class Exchange {
     await this.#flushStorage()
     this.#docCache.clear()
     await this.#synchronizer.shutdown()
+    // Close storage backends that hold native handles
+    for (const backend of this.#storageBackends) {
+      if (backend.close) await backend.close()
+    }
   }
 
   // =========================================================================

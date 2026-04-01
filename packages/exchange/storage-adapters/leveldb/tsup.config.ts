@@ -1,9 +1,10 @@
 import { defineConfig } from "tsup"
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/testing/index.ts"],
+  entry: ["src/server.ts"],
   format: ["esm"],
   dts: true,
   sourcemap: true,
   clean: true,
+  external: ["classic-level"],
 })

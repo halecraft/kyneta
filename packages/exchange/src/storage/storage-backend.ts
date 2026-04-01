@@ -119,4 +119,11 @@ export interface StorageBackend {
    * loading all IDs into memory.
    */
   listDocIds(): AsyncIterable<DocId>
+
+  /**
+   * Release resources held by this backend (file handles, connections).
+   * Called by `Exchange.shutdown()`. Optional — in-memory backends
+   * and backends without native handles may omit it.
+   */
+  close?(): Promise<void>
 }
