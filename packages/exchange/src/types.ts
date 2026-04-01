@@ -71,16 +71,4 @@ export type PeerState = {
   channels: Set<ChannelId>
 }
 
-// ---------------------------------------------------------------------------
-// Pending interest — interest messages waiting for storage response
-// ---------------------------------------------------------------------------
 
-/**
- * An interest message from a network peer that is waiting for storage
- * to be consulted before we can respond.
- */
-export type PendingInterest = {
-  channelId: ChannelId
-  version?: string
-  reciprocate: boolean
-}

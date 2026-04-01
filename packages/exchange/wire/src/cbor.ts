@@ -9,29 +9,31 @@
 
 import type {
   ChannelMsg,
-  DiscoverMsg,
   DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
   InterestMsg,
   OfferMsg,
+  PresentMsg,
 } from "@kyneta/exchange"
 import { type CBORType, decodeCBOR, encodeCBOR } from "@levischuck/tiny-cbor"
 import type { BinaryCodec } from "./codec.js"
 import {
+  MergeStrategyWireToString,
   MessageType,
   PayloadEncoding,
   PayloadEncodingToString,
   PayloadKind,
   PayloadKindToString,
+  StringToMergeStrategyWire,
   StringToPayloadEncoding,
   StringToPayloadKind,
-  type WireDiscoverMsg,
   type WireDismissMsg,
   type WireEstablishMsg,
   type WireInterestMsg,
   type WireMessage,
   type WireOfferMsg,
+  type WirePresentMsg,
 } from "./wire-types.js"
 
 // ---------------------------------------------------------------------------
@@ -134,11 +136,15 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
         y: msg.identity.type,
       } satisfies WireEstablishMsg
 
-    case "discover":
+    case "present":
       return {
-        t: MessageType.Discover,
-        docs: msg.docIds,
-      } satisfies WireDiscoverMsg
+        t: MessageType.Present,
+        docs: msg.docs.map(d => ({
+          d: d.docId,
+          rt: [...d.replicaType] as [string, number, number],
+          ms: StringToMergeStrategyWire[d.mergeStrategy]!,
+        })),
+      } satisfies WirePresentMsg
 
     case "interest": {
       const wire: WireInterestMsg = {
@@ -200,11 +206,17 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
         },
       } satisfies EstablishResponseMsg
 
-    case MessageType.Discover:
+    case MessageType.Present: {
+      const presentWire = wire as WirePresentMsg
       return {
-        type: "discover",
-        docIds: wire.docs,
-      } satisfies DiscoverMsg
+        type: "present",
+        docs: presentWire.docs.map(d => ({
+          docId: d.d,
+          replicaType: d.rt as readonly [string, number, number],
+          mergeStrategy: MergeStrategyWireToString[d.ms]!,
+        })),
+      } satisfies PresentMsg
+    }
 
     case MessageType.Interest: {
       const msg: InterestMsg = {

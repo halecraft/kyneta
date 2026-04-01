@@ -2,7 +2,7 @@
 //
 // Ports the channel abstraction from @loro-extended/repo with
 // Loro-specific types replaced by the substrate-agnostic message
-// vocabulary (discover, interest, offer).
+// vocabulary (present, interest, offer, dismiss).
 //
 // Channel lifecycle: GeneratedChannel → ConnectedChannel → EstablishedChannel
 //
@@ -19,17 +19,7 @@ export type { ChannelId } from "./types.js"
 // Channel metadata
 // ---------------------------------------------------------------------------
 
-/**
- * The kind of channel — determines how the sync engine treats it.
- *
- * - `"storage"`: backed by persistent storage (IndexedDB, Postgres, etc.)
- * - `"network"`: connected to a remote peer (WebSocket, SSE, WebRTC, etc.)
- * - `"other"`: custom channel kind
- */
-export type ChannelKind = "storage" | "network" | "other"
-
 export type ChannelMeta = {
-  kind: ChannelKind
   adapterType: AdapterType
 }
 
@@ -81,7 +71,7 @@ export type ConnectedChannel = GeneratedChannel & {
  * An `EstablishedChannel` has completed the establish handshake and
  * knows which peer it's connected to.
  *
- * Only exchange messages (discover, interest, offer) can be sent
+ * Only exchange messages (present, interest, offer, dismiss) can be sent
  * after establishment.
  */
 export type EstablishedChannel = GeneratedChannel & {

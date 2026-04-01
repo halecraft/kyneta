@@ -154,7 +154,8 @@ export function createYjsSubstrate(
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "YjsSubstrate.merge only supports binary-encoded payloads",
+          "YjsSubstrate.merge expects binary-encoded payloads. " +
+            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
       // Stash origin for the event bridge to pick up
@@ -268,7 +269,8 @@ function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "YjsReplica.merge only supports binary-encoded payloads",
+          "YjsReplica.merge expects binary-encoded payloads. " +
+            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
       Y.applyUpdate(doc, payload.data)
@@ -277,6 +279,8 @@ function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
 }
 
 export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
+  replicaType: ["yjs", 1, 0] as const,
+
   createEmpty(): Replica<YjsVersion> {
     return createYjsReplica(new Y.Doc())
   },

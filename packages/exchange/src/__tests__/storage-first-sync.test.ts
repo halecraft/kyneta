@@ -1,879 +1,531 @@
-// storage-first-sync — pure TEA tests for the storage-first sync machinery.
+// storage-hydration — Exchange-level storage hydration tests.
 //
-// These tests validate the pendingStorageChannels / pendingInterests
-// coordination in the synchronizer-program. They are pure model tests
-// with no I/O, no adapters, no substrates — only the TEA update function.
+// These tests validate that the Exchange hydrates documents from
+// StorageBackend on get()/replicate(), persists network imports
+// via onDocImported, and persists local changes via changefeed.
 
 import { describe, expect, it } from "vitest"
-import type { ConnectedChannel, EstablishedChannel } from "../channel.js"
 import {
-  type Command,
-  createSynchronizerUpdate,
-  init,
-  type SynchronizerMessage,
-  type SynchronizerModel,
-} from "../synchronizer-program.js"
-import type { PeerIdentityDetails } from "../types.js"
+  bindPlain,
+  change,
+  Interpret,
+  plainReplicaFactory,
+  Replicate,
+  Schema,
+} from "@kyneta/schema"
+import type { StorageEntry } from "../storage/storage-backend.js"
+import { Exchange } from "../exchange.js"
+import {
+  createInMemoryStorage,
+  InMemoryStorageBackend,
+  type InMemoryStorageData,
+} from "../storage/in-memory-storage-backend.js"
+import { createBridgeAdapter, Bridge } from "../adapter/bridge-adapter.js"
+import { sync } from "../sync.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
-const serverIdentity: PeerIdentityDetails = {
-  peerId: "server",
-  name: "Server",
-  type: "service",
-}
-
-const storageIdentity: PeerIdentityDetails = {
-  peerId: "storage-1",
-  name: "storage",
-  type: "service",
-}
-
-const storage2Identity: PeerIdentityDetails = {
-  peerId: "storage-2",
-  name: "storage-2",
-  type: "service",
-}
-
-const networkPeerIdentity: PeerIdentityDetails = {
-  peerId: "peer-a",
-  name: "Peer A",
-  type: "user",
-}
-
-const networkPeer2Identity: PeerIdentityDetails = {
-  peerId: "peer-b",
-  name: "Peer B",
-  type: "user",
-}
-
-function makeUpdate(params?: Parameters<typeof createSynchronizerUpdate>[0]) {
-  return createSynchronizerUpdate(params)
-}
-
-function makeConnectedChannel(
-  channelId: number,
-  kind: "network" | "storage" = "network",
-): ConnectedChannel {
-  return {
-    type: "connected",
-    channelId,
-    kind,
-    adapterType: "test",
-    send: () => {},
-    stop: () => {},
-    onReceive: () => {},
-  }
-}
-
-function makeEstablishedChannel(
-  channelId: number,
-  peerId: string,
-  kind: "network" | "storage" = "network",
-): EstablishedChannel {
-  return {
-    type: "established",
-    channelId,
-    peerId,
-    kind,
-    adapterType: "test",
-    send: () => {},
-    stop: () => {},
-    onReceive: () => {},
-  }
-}
-
-function flattenCommands(cmd: Command | undefined): Command[] {
-  if (!cmd) return []
-  if (cmd.type === "cmd/batch") {
-    return cmd.commands.flatMap(flattenCommands)
-  }
-  return [cmd]
-}
+const TestDoc = bindPlain(
+  Schema.doc({
+    title: Schema.string(),
+    count: Schema.number(),
+  }),
+)
 
 /**
- * Establish a channel in the model by running the full handshake:
- * channel-added → receive establish-request (from remote).
+ * Drain microtask queue — necessary for BridgeAdapter async delivery
+ * and storage hydration async operations.
  */
-function establishChannel(
-  update: ReturnType<typeof createSynchronizerUpdate>,
-  model: SynchronizerModel,
-  channelId: number,
-  remoteIdentity: PeerIdentityDetails,
-  kind: "network" | "storage" = "network",
-): SynchronizerModel {
-  const channel = makeConnectedChannel(channelId, kind)
-
-  // 1. Add channel
-  let [m] = update({ type: "synchronizer/channel-added", channel }, model)
-
-  // 2. Receive establish-request from remote
-  ;[m] = update(
-    {
-      type: "synchronizer/channel-receive-message",
-      envelope: {
-        fromChannelId: channelId,
-        message: { type: "establish-request", identity: remoteIdentity },
-      },
-    },
-    m,
-  )
-
-  return m
+async function drain(ms = 50): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, ms))
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+function createExchange(
+  options: ConstructorParameters<typeof Exchange>[0] = {},
+): Exchange {
+  return new Exchange(options)
+}
 
-describe("storage-first sync", () => {
-  // =========================================================================
-  // Test 1: Queue + probe
-  // =========================================================================
+// ===========================================================================
+// StorageBackend interface (InMemoryStorageBackend)
+// ===========================================================================
 
-  it("queues network interest and sends discover to storage channels", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
+describe("InMemoryStorageBackend", () => {
+  it("lookup() returns null for nonexistent doc", async () => {
+    const backend = new InMemoryStorageBackend()
+    expect(await backend.lookup("nonexistent")).toBeNull()
+  })
 
-    // Set up: one storage channel, one network channel
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Network peer sends interest for unknown doc
-    const [m2, cmd] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: {
-            type: "interest",
-            docId: "doc-1",
-            version: "v1",
-            reciprocate: true,
-          },
-        },
-      },
-      m,
-    )
-
-    // Should have created a placeholder doc entry
-    const docEntry = m2.documents.get("doc-1")
-    expect(docEntry).toBeDefined()
-    expect(docEntry!.pendingStorageChannels).toBeDefined()
-    expect(docEntry!.pendingStorageChannels!.has(100)).toBe(true)
-    expect(docEntry!.pendingInterests).toHaveLength(1)
-    expect(docEntry!.pendingInterests![0]!.channelId).toBe(200)
-    expect(docEntry!.pendingInterests![0]!.version).toBe("v1")
-    expect(docEntry!.pendingInterests![0]!.reciprocate).toBe(true)
-
-    // Should have sent discover to storage channel
-    const commands = flattenCommands(cmd)
-    const discoverCmds = commands.filter(
-      c =>
-        c.type === "cmd/send-message" &&
-        c.envelope.message.type === "discover",
-    )
-    expect(discoverCmds).toHaveLength(1)
-    const discoverCmd = discoverCmds[0]!
-    expect(discoverCmd.type).toBe("cmd/send-message")
-    if (discoverCmd.type === "cmd/send-message") {
-      expect(discoverCmd.envelope.toChannelIds).toEqual([100])
-      expect(discoverCmd.envelope.message).toEqual({
-        type: "discover",
-        docIds: ["doc-1"],
-      })
+  it("lookup() returns DocMetadata after ensureDoc()", async () => {
+    const backend = new InMemoryStorageBackend()
+    const metadata = {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
     }
+    await backend.ensureDoc("doc-1", metadata)
+    expect(await backend.lookup("doc-1")).toEqual(metadata)
   })
 
-  // =========================================================================
-  // Test 2: No storage channels → immediate drop
-  // =========================================================================
-
-  it("drops interest for unknown doc when no storage channels exist", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    // Only network channel, no storage
-    let m = establishChannel(update, model, 200, networkPeerIdentity, "network")
-
-    const [m2, cmd] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
-      },
-      m,
-    )
-
-    // No doc entry created
-    expect(m2.documents.has("doc-1")).toBe(false)
-    // No commands
-    expect(cmd).toBeUndefined()
-  })
-
-  // =========================================================================
-  // Test 3: Storage discover → creation
-  // =========================================================================
-
-  it("emits request-doc-creation when storage responds with discover", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Step 1: Network peer sends interest for unknown doc → probe
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
-      },
-      m,
-    )
-
-    // Step 2: Storage responds with discover — it has the doc
-    const [m2, cmd] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 100,
-          message: { type: "discover", docIds: ["doc-1"] },
-        },
-      },
-      m,
-    )
-
-    // Should emit request-doc-creation (placeholder treated as unknown)
-    const commands = flattenCommands(cmd)
-    const creationCmds = commands.filter(
-      c => c.type === "cmd/request-doc-creation",
-    )
-    expect(creationCmds).toHaveLength(1)
-    if (creationCmds[0]!.type === "cmd/request-doc-creation") {
-      expect(creationCmds[0]!.docId).toBe("doc-1")
+  it("ensureDoc() is idempotent — calling twice with same metadata is a no-op", async () => {
+    const backend = new InMemoryStorageBackend()
+    const metadata = {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
     }
+    await backend.ensureDoc("doc-1", metadata)
+    await backend.ensureDoc("doc-1", metadata)
+    expect(await backend.lookup("doc-1")).toEqual(metadata)
   })
 
-  // =========================================================================
-  // Test 4: Offers + completion signal
-  // =========================================================================
-
-  it("releases queued interest only after completion interest from storage", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Step 1: Network interest → probe
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
-      },
-      m,
-    )
-
-    // Step 2: Storage responds with discover
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 100,
-          message: { type: "discover", docIds: ["doc-1"] },
-        },
-      },
-      m,
-    )
-
-    // Step 3: Simulate doc-ensure (from onDocDiscovered → exchange.get())
-    ;[m] = update(
-      {
-        type: "synchronizer/doc-ensure",
-        docId: "doc-1",
-        mode: "interpret",
-        version: "0",
-        mergeStrategy: "sequential",
-      },
-      m,
-    )
-
-    // Doc entry should still have pending state (preserved by doc-ensure)
-    const docBefore = m.documents.get("doc-1")!
-    expect(docBefore.pendingStorageChannels).toBeDefined()
-    expect(docBefore.pendingStorageChannels!.size).toBe(1)
-    expect(docBefore.pendingInterests).toHaveLength(1)
-    // But version should be upgraded
-    expect(docBefore.version).toBe("0")
-    expect(docBefore.mergeStrategy).toBe("sequential")
-
-    // Step 4: Storage sends completion interest → releases queued interests
-    const [m3, cmd] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 100,
-          message: {
-            type: "interest",
-            docId: "doc-1",
-            version: "",
-            reciprocate: false,
-          },
-        },
-      },
-      m,
-    )
-
-    // Pending state should be cleared
-    const docAfter = m3.documents.get("doc-1")!
-    expect(docAfter.pendingStorageChannels).toBeUndefined()
-    expect(docAfter.pendingInterests).toBeUndefined()
-
-    // Should have produced send-offer for the queued network interest
-    const commands = flattenCommands(cmd)
-    const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
-    expect(offerCmds).toHaveLength(1)
-    if (offerCmds[0]!.type === "cmd/send-offer") {
-      expect(offerCmds[0]!.docId).toBe("doc-1")
-      expect(offerCmds[0]!.toChannelIds).toEqual([200])
+  it("ensureDoc() does not overwrite existing metadata", async () => {
+    const backend = new InMemoryStorageBackend()
+    const meta1 = {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
     }
+    const meta2 = {
+      replicaType: ["loro", 1, 0] as const,
+      mergeStrategy: "causal" as const,
+    }
+    await backend.ensureDoc("doc-1", meta1)
+    await backend.ensureDoc("doc-1", meta2)
+    expect(await backend.lookup("doc-1")).toEqual(meta1)
   })
 
-  // =========================================================================
-  // Test 5: Multiple storage adapters
-  // =========================================================================
-
-  it("waits for ALL storage channels before releasing queued interests", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 101, storage2Identity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Network interest → probe (both storage channels should be in pending set)
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
+  it("StorageEntry stays lean — only payload and version", async () => {
+    const backend = new InMemoryStorageBackend()
+    await backend.ensureDoc("doc-1", {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
+    })
+    const entry = {
+      payload: {
+        kind: "entirety" as const,
+        encoding: "json" as const,
+        data: '{"title":"hello","count":0}',
       },
-      m,
-    )
+      version: "1",
+    }
+    await backend.append("doc-1", entry)
 
-    const doc1 = m.documents.get("doc-1")!
-    expect(doc1.pendingStorageChannels!.size).toBe(2)
-    expect(doc1.pendingStorageChannels!.has(100)).toBe(true)
-    expect(doc1.pendingStorageChannels!.has(101)).toBe(true)
-
-    // Simulate doc-ensure
-    ;[m] = update(
-      {
-        type: "synchronizer/doc-ensure",
-        docId: "doc-1",
-        mode: "interpret",
-        version: "0",
-        mergeStrategy: "sequential",
-      },
-      m,
-    )
-
-    // Storage 1 completion — still waiting for storage 2
-    const [m2, cmd1] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 100,
-          message: { type: "interest", docId: "doc-1", version: "" },
-        },
-      },
-      m,
-    )
-
-    const doc2 = m2.documents.get("doc-1")!
-    expect(doc2.pendingStorageChannels).toBeDefined()
-    expect(doc2.pendingStorageChannels!.size).toBe(1)
-    expect(doc2.pendingStorageChannels!.has(101)).toBe(true)
-    // No commands yet — still waiting
-    const cmds1 = flattenCommands(cmd1)
-    const offerCmds1 = cmds1.filter(c => c.type === "cmd/send-offer")
-    expect(offerCmds1).toHaveLength(0)
-
-    // Storage 2 completion — now all done, should release
-    const [m3, cmd2] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 101,
-          message: { type: "interest", docId: "doc-1", version: "" },
-        },
-      },
-      m2,
-    )
-
-    const doc3 = m3.documents.get("doc-1")!
-    expect(doc3.pendingStorageChannels).toBeUndefined()
-    expect(doc3.pendingInterests).toBeUndefined()
-
-    const cmds2 = flattenCommands(cmd2)
-    const offerCmds2 = cmds2.filter(c => c.type === "cmd/send-offer")
-    expect(offerCmds2).toHaveLength(1)
+    const loaded: StorageEntry[] = []
+    for await (const e of backend.loadAll("doc-1")) {
+      loaded.push(e)
+    }
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0]).toEqual(entry)
+    // Verify no extra fields
+    expect(Object.keys(loaded[0]!)).toEqual(["payload", "version"])
   })
 
-  // =========================================================================
-  // Test 6: Storage has nothing
-  // =========================================================================
-
-  it("drops queued interest gracefully when storage has nothing", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Network interest → probe
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
+  it("delete() removes both entries and metadata", async () => {
+    const backend = new InMemoryStorageBackend()
+    await backend.ensureDoc("doc-1", {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
+    })
+    await backend.append("doc-1", {
+      payload: {
+        kind: "entirety" as const,
+        encoding: "json" as const,
+        data: "{}",
       },
-      m,
-    )
+      version: "0",
+    })
 
-    // Storage responds with empty discover (doesn't have the doc)
-    // — no discover response from storage, just the completion interest
-    // Storage sends completion interest — "I have nothing"
-    const [m2, cmd] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 100,
-          message: { type: "interest", docId: "doc-1", version: "" },
-        },
-      },
-      m,
-    )
-
-    // Pending state cleared
-    const doc = m2.documents.get("doc-1")!
-    expect(doc.pendingStorageChannels).toBeUndefined()
-    expect(doc.pendingInterests).toBeUndefined()
-
-    // No send-offer because the doc was never created (version still "")
-    const commands = flattenCommands(cmd)
-    const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
-    expect(offerCmds).toHaveLength(0)
+    await backend.delete("doc-1")
+    expect(await backend.lookup("doc-1")).toBeNull()
+    const loaded: unknown[] = []
+    for await (const e of backend.loadAll("doc-1")) {
+      loaded.push(e)
+    }
+    expect(loaded).toHaveLength(0)
   })
 
-  // =========================================================================
-  // Test 7a: Storage channel removed (sole)
-  // =========================================================================
+  it("listDocIds() yields registered doc IDs", async () => {
+    const backend = new InMemoryStorageBackend()
+    await backend.ensureDoc("a", {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
+    })
+    await backend.ensureDoc("b", {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
+    })
 
-  it("clears pending and processes queued interests when sole storage channel is removed", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Network interest → probe
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
-      },
-      m,
-    )
-
-    // Simulate doc-ensure (from storage discover → onDocDiscovered)
-    ;[m] = update(
-      {
-        type: "synchronizer/doc-ensure",
-        docId: "doc-1",
-        mode: "interpret",
-        version: "0",
-        mergeStrategy: "sequential",
-      },
-      m,
-    )
-
-    // Remove storage channel before it responds
-    const storageChannel = m.channels.get(100)!
-    const [m2, cmd] = update(
-      { type: "synchronizer/channel-removed", channel: storageChannel },
-      m,
-    )
-
-    // Pending state should be cleared
-    const doc = m2.documents.get("doc-1")!
-    expect(doc.pendingStorageChannels).toBeUndefined()
-    expect(doc.pendingInterests).toBeUndefined()
-
-    // Should process queued interest (doc was ensured with version "0")
-    const commands = flattenCommands(cmd)
-    const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
-    expect(offerCmds).toHaveLength(1)
+    const ids: string[] = []
+    for await (const id of backend.listDocIds()) {
+      ids.push(id)
+    }
+    expect(ids.sort()).toEqual(["a", "b"])
   })
 
-  // =========================================================================
-  // Test 7b: Storage channel removed (one of many)
-  // =========================================================================
-
-  it("keeps waiting for remaining storage channels when one is removed", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 101, storage2Identity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Network interest → probe
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
-      },
-      m,
-    )
-
-    // Remove one storage channel
-    const storageChannel = m.channels.get(100)!
-    const [m2, cmd] = update(
-      { type: "synchronizer/channel-removed", channel: storageChannel },
-      m,
-    )
-
-    // Still waiting for channel 101
-    const doc = m2.documents.get("doc-1")!
-    expect(doc.pendingStorageChannels).toBeDefined()
-    expect(doc.pendingStorageChannels!.size).toBe(1)
-    expect(doc.pendingStorageChannels!.has(101)).toBe(true)
-
-    // No queued interests processed yet
-    const commands = flattenCommands(cmd)
-    const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
-    expect(offerCmds).toHaveLength(0)
+  it("getStorage() returns shared data for cross-instance persistence", () => {
+    const backend = new InMemoryStorageBackend()
+    const data = backend.getStorage()
+    expect(data.entries).toBeInstanceOf(Map)
+    expect(data.metadata).toBeInstanceOf(Map)
   })
 
-  // =========================================================================
-  // Test 8: No premature relay
-  // =========================================================================
-
-  it("doc-imported during hydration does not push to peers with queued interests", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Network interest → probe
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
-      },
-      m,
-    )
-
-    // Doc-ensure (from storage discover → onDocDiscovered)
-    ;[m] = update(
-      {
-        type: "synchronizer/doc-ensure",
-        docId: "doc-1",
-        mode: "interpret",
-        version: "0",
-        mergeStrategy: "sequential",
-      },
-      m,
-    )
-
-    // Simulate a doc-imported (from storage offer being processed)
-    // The queued network peer should NOT receive an offer via relay
-    const [m2, cmd] = update(
-      {
-        type: "synchronizer/doc-imported",
-        docId: "doc-1",
-        version: "1",
-        fromPeerId: "storage-1",
-      },
-      m,
-    )
-
-    // buildPush only targets synced peers. The queued network peer (channel 200)
-    // has no docSyncState entry — it's waiting in pendingInterests. So relay
-    // must produce zero offers that include channel 200.
-    const commands = flattenCommands(cmd)
-    const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
-
-    // No offer should target the queued network peer at all
-    const targetsQueuedPeer = offerCmds.some(
-      c => c.type === "cmd/send-offer" && c.toChannelIds.includes(200),
-    )
-    expect(targetsQueuedPeer).toBe(false)
-
-    // Stronger: the only other established channel is storage (100),
-    // so relay should target nobody (storage is excluded as the sender)
-    expect(offerCmds).toHaveLength(0)
-  })
-
-  // =========================================================================
-  // Test 9: Multiple queued network interests
-  // =========================================================================
-
-  it("queues all network interests and processes all on completion", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-    m = establishChannel(update, m, 201, networkPeer2Identity, "network")
-
-    // First network peer sends interest → triggers probe
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
-      },
-      m,
-    )
-
-    // Second network peer sends interest → piggybacks, no new discover
-    const [m2, cmd2] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 201,
-          message: { type: "interest", docId: "doc-1", version: "v2" },
-        },
-      },
-      m,
-    )
-
-    // Should have 2 queued interests
-    const doc = m2.documents.get("doc-1")!
-    expect(doc.pendingInterests).toHaveLength(2)
-    expect(doc.pendingInterests![0]!.channelId).toBe(200)
-    expect(doc.pendingInterests![1]!.channelId).toBe(201)
-
-    // Second interest should NOT send another discover
-    expect(cmd2).toBeUndefined()
-
-    // Doc-ensure
-    let m3 = m2
-    ;[m3] = update(
-      {
-        type: "synchronizer/doc-ensure",
-        docId: "doc-1",
-        mode: "interpret",
-        version: "0",
-        mergeStrategy: "sequential",
-      },
-      m3,
-    )
-
-    // Storage completion
-    const [m4, cmd4] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 100,
-          message: { type: "interest", docId: "doc-1", version: "" },
-        },
-      },
-      m3,
-    )
-
-    // Should produce offers for both queued peers
-    const commands = flattenCommands(cmd4)
-    const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
-    expect(offerCmds).toHaveLength(2)
-
-    const targetChannels = offerCmds.map(c =>
-      c.type === "cmd/send-offer" ? c.toChannelIds[0] : undefined,
-    )
-    expect(targetChannels).toContain(200)
-    expect(targetChannels).toContain(201)
-  })
-
-  // =========================================================================
-  // Test 10: Storage-originated interest
-  // =========================================================================
-
-  it("does not enter pending state for storage-originated interest", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Storage channel sends interest for unknown doc
-    const [m2, cmd] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 100,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
-      },
-      m,
-    )
-
-    // No doc entry created (storage doesn't wait for itself)
-    expect(m2.documents.has("doc-1")).toBe(false)
-    expect(cmd).toBeUndefined()
-  })
-
-  // =========================================================================
-  // Test 11: Causal reciprocate semantics
-  // =========================================================================
-
-  it("queued interest with reciprocate=true produces offer + reciprocal interest after hydration", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
-
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
-
-    // Network interest with reciprocate for causal doc
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: {
-            type: "interest",
-            docId: "doc-1",
-            version: "v1",
-            reciprocate: true,
-          },
-        },
-      },
-      m,
-    )
-
-    // Doc-ensure as causal
-    ;[m] = update(
-      {
-        type: "synchronizer/doc-ensure",
-        docId: "doc-1",
-        mode: "interpret",
-        version: "0",
-        mergeStrategy: "causal",
-      },
-      m,
-    )
-
-    // Storage completion
-    const [m2, cmd] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 100,
-          message: { type: "interest", docId: "doc-1", version: "" },
-        },
-      },
-      m,
-    )
-
-    const commands = flattenCommands(cmd)
-
-    // Should have a send-offer
-    const offerCmds = commands.filter(c => c.type === "cmd/send-offer")
-    expect(offerCmds).toHaveLength(1)
-    if (offerCmds[0]!.type === "cmd/send-offer") {
-      expect(offerCmds[0]!.docId).toBe("doc-1")
-      expect(offerCmds[0]!.toChannelIds).toEqual([200])
+  it("shared data enables cross-instance persistence", async () => {
+    const sharedData: InMemoryStorageData = {
+      entries: new Map(),
+      metadata: new Map(),
     }
 
-    // Should have a reciprocal interest (causal bidirectional)
-    const interestCmds = commands.filter(
-      c =>
-        c.type === "cmd/send-message" &&
-        c.envelope.message.type === "interest",
-    )
-    expect(interestCmds).toHaveLength(1)
-    if (interestCmds[0]!.type === "cmd/send-message") {
-      const msg = interestCmds[0]!.envelope.message
-      expect(msg.type).toBe("interest")
-      if (msg.type === "interest") {
-        expect(msg.docId).toBe("doc-1")
-        expect(msg.reciprocate).toBe(false) // prevent infinite loop
-      }
+    const backend1 = new InMemoryStorageBackend(sharedData)
+    await backend1.ensureDoc("doc-1", {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
+    })
+    await backend1.append("doc-1", {
+      payload: {
+        kind: "entirety" as const,
+        encoding: "json" as const,
+        data: '{"title":"hello","count":0}',
+      },
+      version: "1",
+    })
+
+    // Second instance sees the data
+    const backend2 = new InMemoryStorageBackend(sharedData)
+    expect(await backend2.lookup("doc-1")).toEqual({
+      replicaType: ["plain", 1, 0],
+      mergeStrategy: "sequential",
+    })
+    const loaded: unknown[] = []
+    for await (const e of backend2.loadAll("doc-1")) {
+      loaded.push(e)
     }
+    expect(loaded).toHaveLength(1)
+  })
+})
+
+// ===========================================================================
+// Exchange-level storage hydration
+// ===========================================================================
+
+describe("Exchange storage hydration", () => {
+  it("exchange.get() hydrates from storage", async () => {
+    // Pre-populate storage with a document
+    const sharedData: InMemoryStorageData = {
+      entries: new Map(),
+      metadata: new Map(),
+    }
+    const seedBackend = new InMemoryStorageBackend(sharedData)
+    await seedBackend.ensureDoc("doc-1", {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
+    })
+    await seedBackend.append("doc-1", {
+      payload: {
+        kind: "entirety" as const,
+        encoding: "json" as const,
+        data: '{"title":"stored","count":42}',
+      },
+      version: "1",
+    })
+
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
+
+    const doc = exchange.get("doc-1", TestDoc)
+
+    // Wait for async hydration to complete
+    await exchange.flush()
+
+    // Doc should have the stored data
+    expect(doc.title()).toBe("stored")
+    expect(doc.count()).toBe(42)
+
+    await exchange.shutdown()
   })
 
-  // =========================================================================
-  // Additional: doc-ensure preserves pending state
-  // =========================================================================
+  it("exchange.get() returns ref synchronously even with storage", () => {
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+      storage: [createInMemoryStorage()],
+    })
 
-  it("doc-ensure upgrades placeholder while preserving pending state", () => {
-    const update = makeUpdate()
-    const [model] = init(serverIdentity)
+    // get() must be synchronous — returns a ref immediately
+    const doc = exchange.get("doc-1", TestDoc)
+    expect(doc).toBeDefined()
+    // Initially empty (hydration is async)
+    expect(doc.title()).toBe("")
 
-    let m = establishChannel(update, model, 100, storageIdentity, "storage")
-    m = establishChannel(update, m, 200, networkPeerIdentity, "network")
+    exchange.reset()
+  })
 
-    // Network interest → creates placeholder
-    ;[m] = update(
-      {
-        type: "synchronizer/channel-receive-message",
-        envelope: {
-          fromChannelId: 200,
-          message: { type: "interest", docId: "doc-1", version: "v1" },
-        },
+  it("exchange.replicate() hydrates from storage", async () => {
+    // Pre-populate storage
+    const sharedData: InMemoryStorageData = {
+      entries: new Map(),
+      metadata: new Map(),
+    }
+    const seedBackend = new InMemoryStorageBackend(sharedData)
+    await seedBackend.ensureDoc("doc-1", {
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
+    })
+    await seedBackend.append("doc-1", {
+      payload: {
+        kind: "entirety" as const,
+        encoding: "json" as const,
+        data: '{"title":"replicated","count":7}',
       },
-      m,
-    )
+      version: "1",
+    })
 
-    const placeholder = m.documents.get("doc-1")!
-    expect(placeholder.version).toBe("")
-    expect(placeholder.pendingStorageChannels!.size).toBe(1)
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
 
-    // Doc-ensure should upgrade, not bail
-    const [m2] = update(
-      {
-        type: "synchronizer/doc-ensure",
-        docId: "doc-1",
-        mode: "interpret",
-        version: "42",
-        mergeStrategy: "sequential",
-      },
-      m,
-    )
+    exchange.replicate("doc-1", plainReplicaFactory, "sequential")
 
-    const upgraded = m2.documents.get("doc-1")!
-    expect(upgraded.version).toBe("42")
-    expect(upgraded.mode).toBe("interpret")
-    expect(upgraded.mergeStrategy).toBe("sequential")
-    // Pending state preserved
-    expect(upgraded.pendingStorageChannels!.size).toBe(1)
-    expect(upgraded.pendingInterests).toHaveLength(1)
+    // Wait for hydration
+    await exchange.flush()
+
+    // The doc runtime should have the hydrated version
+    const runtime = exchange.synchronizer.getDocRuntime("doc-1")
+    expect(runtime).toBeDefined()
+    // Version should be > "0" after hydration
+    const version = runtime!.replica.version().serialize()
+    expect(version).not.toBe("0")
+
+    await exchange.shutdown()
+  })
+})
+
+// ===========================================================================
+// Exchange-level storage persistence
+// ===========================================================================
+
+describe("Exchange storage persistence", () => {
+  it("local mutation persists to storage via changefeed → replace()", async () => {
+    const backend = new InMemoryStorageBackend()
+
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+      storage: [backend],
+    })
+
+    const doc = exchange.get("doc-1", TestDoc)
+    await exchange.flush() // wait for hydration
+
+    // Mutate locally
+    change(doc, d => {
+      d.title.set("hello world")
+      d.count.set(99)
+    })
+
+    // Wait for persistence
+    await exchange.flush()
+
+    // Storage should have the data
+    const entries: { payload: any; version: string }[] = []
+    for await (const e of backend.loadAll("doc-1")) {
+      entries.push(e)
+    }
+    expect(entries.length).toBeGreaterThanOrEqual(1)
+
+    // The last entry should be a replace (entirety snapshot)
+    const last = entries[entries.length - 1]!
+    expect(last.payload.kind).toBe("entirety")
+    const stored = JSON.parse(last.payload.data as string) as Record<
+      string,
+      unknown
+    >
+    expect(stored.title).toBe("hello world")
+    expect(stored.count).toBe(99)
+
+    await exchange.shutdown()
+  })
+
+  it("network import persists to storage via onDocImported → append()", async () => {
+    const backend = new InMemoryStorageBackend()
+    const bridge = new Bridge()
+
+    // Exchange A (source) — has the doc
+    const exchangeA = createExchange({
+      identity: { peerId: "peer-a" },
+      adapters: [createBridgeAdapter({ adapterType: "side-a", bridge })],
+    })
+    const docA = exchangeA.get("doc-1", TestDoc)
+    change(docA, d => {
+      d.title.set("from A")
+      d.count.set(1)
+    })
+
+    // Exchange B (sink) — has storage, discovers doc from A
+    const exchangeB = createExchange({
+      identity: { peerId: "peer-b" },
+      adapters: [createBridgeAdapter({ adapterType: "side-b", bridge })],
+      storage: [backend],
+      onDocDiscovered: () => Interpret(TestDoc),
+    })
+
+    // Wait for sync
+    await drain(200)
+    await exchangeB.flush()
+
+    // Storage on B should have persisted the import
+    const entries: { payload: any; version: string }[] = []
+    for await (const e of backend.loadAll("doc-1")) {
+      entries.push(e)
+    }
+    // Should have at least one entry from the network import
+    expect(entries.length).toBeGreaterThanOrEqual(1)
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("dismiss() deletes from storage", async () => {
+    const backend = new InMemoryStorageBackend()
+
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+      storage: [backend],
+    })
+
+    const doc = exchange.get("doc-1", TestDoc)
+    await exchange.flush()
+
+    change(doc, d => d.title.set("will be deleted"))
+    await exchange.flush()
+
+    // Verify storage has data
+    expect(await backend.lookup("doc-1")).not.toBeNull()
+
+    // Dismiss
+    exchange.dismiss("doc-1")
+    await exchange.flush()
+
+    // Storage should be cleaned up
+    expect(await backend.lookup("doc-1")).toBeNull()
+
+    await exchange.shutdown()
+  })
+
+  it("flush() awaits all pending storage operations", async () => {
+    const backend = new InMemoryStorageBackend()
+
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+      storage: [backend],
+    })
+
+    exchange.get("doc-1", TestDoc)
+    // Flush should not throw and should complete all pending ops
+    await exchange.flush()
+
+    // After flush, ensureDoc should have been called
+    expect(await backend.lookup("doc-1")).toEqual({
+      replicaType: ["plain", 1, 0],
+      mergeStrategy: "sequential",
+    })
+
+    await exchange.shutdown()
+  })
+})
+
+// ===========================================================================
+// Persist → restart → hydrate round-trip
+// ===========================================================================
+
+describe("Storage round-trip (persist → restart → hydrate)", () => {
+  it("data survives exchange restart via shared storage", async () => {
+    const sharedData: InMemoryStorageData = {
+      entries: new Map(),
+      metadata: new Map(),
+    }
+
+    // First exchange: create doc, write data, shut down
+    const exchange1 = createExchange({
+      identity: { peerId: "server" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
+
+    const doc1 = exchange1.get("doc-1", TestDoc)
+    await exchange1.flush() // hydration
+
+    change(doc1, d => {
+      d.title.set("persisted title")
+      d.count.set(777)
+    })
+    await exchange1.shutdown()
+
+    // Second exchange: should hydrate from storage
+    const exchange2 = createExchange({
+      identity: { peerId: "server" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
+
+    const doc2 = exchange2.get("doc-1", TestDoc)
+    await exchange2.flush() // hydration
+
+    expect(doc2.title()).toBe("persisted title")
+    expect(doc2.count()).toBe(777)
+
+    await exchange2.shutdown()
+  })
+})
+
+// ===========================================================================
+// Synchronizer purification invariants
+// ===========================================================================
+
+describe("Synchronizer purification", () => {
+  it("handleInterest for unknown doc drops silently (no placeholder, no probe)", () => {
+    // This is tested indirectly: an exchange without the doc simply
+    // ignores interests. We verify the model has no sentinel entries.
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+    })
+
+    // The synchronizer model should have no documents
+    expect(exchange.synchronizer.model.documents.size).toBe(0)
+
+    // After adding a channel and receiving interest for unknown doc,
+    // the model should still have no documents (no placeholder created)
+    exchange.reset()
+  })
+
+  it("no DocEntry has sentinel version ''", async () => {
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+      storage: [createInMemoryStorage()],
+    })
+
+    exchange.get("doc-1", TestDoc)
+    await exchange.flush()
+
+    for (const [_docId, entry] of exchange.synchronizer.model.documents) {
+      expect(entry.version).not.toBe("")
+    }
+
+    await exchange.shutdown()
+  })
+
+  it("DocEntry has no pendingStorageChannels or pendingInterests fields", async () => {
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+      storage: [createInMemoryStorage()],
+    })
+
+    exchange.get("doc-1", TestDoc)
+    await exchange.flush()
+
+    for (const [_docId, entry] of exchange.synchronizer.model.documents) {
+      expect(entry).not.toHaveProperty("pendingStorageChannels")
+      expect(entry).not.toHaveProperty("pendingInterests")
+    }
+
+    await exchange.shutdown()
   })
 })

@@ -21,31 +21,17 @@
 // - "lww": unidirectional broadcast, timestamp-based (Ephemeral)
 
 import type { Schema as SchemaNode } from "./schema.js"
-import type { ReplicaFactory, SubstrateFactory, Version } from "./substrate.js"
+import type {
+  MergeStrategy,
+  ReplicaFactory,
+  SubstrateFactory,
+  Version,
+} from "./substrate.js"
 import { lwwSubstrateFactory } from "./substrates/lww.js"
 import { plainSubstrateFactory } from "./substrates/plain.js"
 
-// ---------------------------------------------------------------------------
-// MergeStrategy — dispatch key for the sync algorithm
-// ---------------------------------------------------------------------------
-
-/**
- * Declares the sync algorithm the exchange runs for a substrate type.
- *
- * These are genuinely different protocols matched to the mathematical
- * properties of the substrate, not transport optimizations:
- *
- * - **"causal"**: Bidirectional exchange. `compare()` may return
- *   `"concurrent"`. Uses `exportSince()` for fine-grained deltas.
- *
- * - **"sequential"**: Request/response. Total order — `compare()` never
- *   returns `"concurrent"`. Uses `exportSince()` or `exportSnapshot()`.
- *
- * - **"lww"**: Unidirectional push/broadcast. Timestamp-based. Always
- *   uses `exportSnapshot()`. Receiver compares timestamps and discards
- *   stale arrivals.
- */
-export type MergeStrategy = "causal" | "sequential" | "lww"
+// Re-export MergeStrategy so existing imports from "./bind.js" keep working.
+export type { MergeStrategy } from "./substrate.js"
 
 // ---------------------------------------------------------------------------
 // FactoryBuilder — deferred factory construction with peer identity

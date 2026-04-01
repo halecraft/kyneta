@@ -6,7 +6,7 @@
 
 import type {
   ChannelMsg,
-  DiscoverMsg,
+  PresentMsg,
   InterestMsg,
   OfferMsg,
 } from "@kyneta/exchange"
@@ -30,7 +30,7 @@ import { TextReassembler } from "../text-reassembler.js"
 
 describe("Text frame — prefix", () => {
   it("complete frame with no hash has prefix '0c'", () => {
-    const frame = complete(TEXT_WIRE_VERSION, '{"type":"discover","docIds":[]}')
+    const frame = complete(TEXT_WIRE_VERSION, '{"type":"present","docs":[]}')
     const wire = encodeTextFrame(frame)
     const arr = JSON.parse(wire)
     expect(arr[0]).toBe("0c")
@@ -39,7 +39,7 @@ describe("Text frame — prefix", () => {
   it("complete frame with hash has prefix '0C'", () => {
     const frame = complete(
       TEXT_WIRE_VERSION,
-      '{"type":"discover","docIds":[]}',
+      '{"type":"present","docs":[]}',
       "abcdef1234567890",
     )
     const wire = encodeTextFrame(frame)
@@ -76,7 +76,7 @@ describe("Text frame — prefix", () => {
 
 describe("Text frame — complete round-trip", () => {
   it("round-trips a complete frame with a JSON object payload", () => {
-    const payload = JSON.stringify({ type: "discover", docIds: ["doc-1"] })
+    const payload = JSON.stringify({ type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] })
     const frame = complete(TEXT_WIRE_VERSION, payload)
     const wire = encodeTextFrame(frame)
     const decoded = decodeTextFrame(wire)
@@ -89,7 +89,7 @@ describe("Text frame — complete round-trip", () => {
 
   it("round-trips a complete frame with a JSON array payload (batch)", () => {
     const payload = JSON.stringify([
-      { type: "discover", docIds: ["a"] },
+      { type: "present", docs: [{ docId: "a", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
       { type: "interest", docId: "b" },
     ])
     const frame = complete(TEXT_WIRE_VERSION, payload)
@@ -101,7 +101,7 @@ describe("Text frame — complete round-trip", () => {
   })
 
   it("round-trips a complete frame with hash", () => {
-    const payload = JSON.stringify({ type: "discover", docIds: [] })
+    const payload = JSON.stringify({ type: "present", docs: [] })
     const hash = "abc123def456"
     const frame = complete(TEXT_WIRE_VERSION, payload, hash)
     const wire = encodeTextFrame(frame)
@@ -113,7 +113,7 @@ describe("Text frame — complete round-trip", () => {
   })
 
   it("output is valid JSON", () => {
-    const payload = JSON.stringify({ type: "discover", docIds: ["x"] })
+    const payload = JSON.stringify({ type: "present", docs: [{ docId: "x", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] })
     const frame = complete(TEXT_WIRE_VERSION, payload)
     const wire = encodeTextFrame(frame)
 
@@ -123,14 +123,14 @@ describe("Text frame — complete round-trip", () => {
   })
 
   it("payload is embedded as a native JSON value (not a string within a string)", () => {
-    const payload = JSON.stringify({ type: "discover", docIds: ["x"] })
+    const payload = JSON.stringify({ type: "present", docs: [{ docId: "x", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] })
     const frame = complete(TEXT_WIRE_VERSION, payload)
     const wire = encodeTextFrame(frame)
     const arr = JSON.parse(wire)
 
     // arr[1] should be the parsed object, not a string
     expect(typeof arr[1]).toBe("object")
-    expect(arr[1].type).toBe("discover")
+    expect(arr[1].type).toBe("present")
   })
 })
 
@@ -210,7 +210,7 @@ describe("fragmentTextPayload", () => {
   })
 
   it("each fragment is valid JSON", () => {
-    const payload = '{"type":"discover","docIds":["a","b","c","d","e","f"]}'
+    const payload = '{"type":"present","docs":[{"docId":"a"},{"docId":"b"},{"docId":"c"},{"docId":"d"},{"docId":"e"},{"docId":"f"}]}'
     const fragments = fragmentTextPayload(payload, 10)
 
     for (const frag of fragments) {
@@ -330,7 +330,7 @@ describe("fragmentTextPayload", () => {
 
 describe("Text frame — convenience functions", () => {
   it("encodeTextComplete encodes a single message", () => {
-    const msg: DiscoverMsg = { type: "discover", docIds: ["doc-1", "doc-2"] }
+    const msg: PresentMsg = { type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "doc-2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }] }
     const wire = encodeTextComplete(textCodec, msg)
 
     const frame = decodeTextFrame(wire)
@@ -343,7 +343,7 @@ describe("Text frame — convenience functions", () => {
 
   it("encodeTextCompleteBatch encodes a batch", () => {
     const msgs: ChannelMsg[] = [
-      { type: "discover", docIds: ["a"] },
+      { type: "present", docs: [{ docId: "a", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
       { type: "interest", docId: "b", version: "1" },
     ]
     const wire = encodeTextCompleteBatch(textCodec, msgs)
@@ -353,7 +353,7 @@ describe("Text frame — convenience functions", () => {
 
     const decoded = textCodec.decode(JSON.parse(frame.content.payload))
     expect(decoded).toHaveLength(2)
-    expect(decoded[0]!.type).toBe("discover")
+    expect(decoded[0]!.type).toBe("present")
     expect(decoded[1]!.type).toBe("interest")
   })
 
@@ -430,7 +430,7 @@ describe("Text frame — end-to-end with TextReassembler", () => {
 
   it("batch: encode → fragment → reassemble → decode", () => {
     const msgs: ChannelMsg[] = [
-      { type: "discover", docIds: ["a", "b", "c"] },
+      { type: "present", docs: [{ docId: "a", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "b", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }, { docId: "c", replicaType: ["loro", 1, 0] as const, mergeStrategy: "lww" as const }] },
       {
         type: "offer",
         docId: "d",
@@ -459,7 +459,7 @@ describe("Text frame — end-to-end with TextReassembler", () => {
     if (result.status === "complete") {
       const decoded = textCodec.decode(JSON.parse(result.frame.content.payload))
       expect(decoded).toHaveLength(2)
-      expect(decoded[0]!.type).toBe("discover")
+      expect(decoded[0]!.type).toBe("present")
       const offer = decoded[1] as OfferMsg
       expect(offer.payload.data).toEqual(new Uint8Array([10, 20, 30]))
     }
@@ -494,7 +494,7 @@ describe("Text frame — end-to-end with TextReassembler", () => {
   })
 
   it("complete frames pass through reassembler without collection", () => {
-    const msg: DiscoverMsg = { type: "discover", docIds: ["x"] }
+    const msg: PresentMsg = { type: "present", docs: [{ docId: "x", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] }
     const wire = encodeTextComplete(textCodec, msg)
 
     const reassembler = new TextReassembler({ timeoutMs: 5000 })

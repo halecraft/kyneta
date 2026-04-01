@@ -4,7 +4,7 @@
 // schema interpreter algebra spike.
 
 // Bind — schema + factory + strategy binding
-export type { BoundSchema, FactoryBuilder, MergeStrategy } from "./bind.js"
+export type { BoundSchema, FactoryBuilder } from "./bind.js"
 // Interpret and Replicate are dual-namespace (type + value) — export from
 // the value line only; TypeScript resolves the type automatically.
 export {
@@ -271,14 +271,18 @@ export {
 } from "./store.js"
 // Substrate — state management, versioning, and transfer semantics
 export type {
+  DocMetadata,
+  MergeStrategy,
   Replica,
   ReplicaFactory,
+  ReplicaType,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
   SubstratePrepare,
   Version,
 } from "./substrate.js"
+export { replicaTypesCompatible } from "./substrate.js"
 // LWW substrate — plain substrate wrapped with TimestampVersion for ephemeral state
 export { lwwReplicaFactory, lwwSubstrateFactory } from "./substrates/lww.js"
 // Plain substrate — plain JS object store with version tracking

@@ -13,7 +13,6 @@
 
 import type {
   Channel,
-  ChannelKind,
   ConnectedChannel,
   GeneratedChannel,
 } from "../channel.js"
@@ -80,12 +79,6 @@ type AdapterLifecycleState =
   | { state: "stopped" }
 
 export abstract class Adapter<G> {
-  /**
-   * The kind of channels this adapter creates.
-   * Default is "network". StorageAdapter overrides this to "storage".
-   */
-  readonly kind: ChannelKind = "network"
-
   readonly adapterType: AdapterType
   readonly adapterId: string
   readonly channels: ChannelDirectory<G>
@@ -185,7 +178,6 @@ export abstract class Adapter<G> {
     const generated = this.generate(context)
     return {
       ...generated,
-      kind: this.kind,
       adapterType: this.adapterType,
     }
   }
@@ -251,7 +243,7 @@ export abstract class Adapter<G> {
 
   /**
    * Await all pending async operations in this adapter.
-   * Override in subclasses (e.g. StorageAdapter) to await in-flight saves.
+   * Override in subclasses to await in-flight operations.
    */
   async flush(): Promise<void> {
     // No-op by default

@@ -2,8 +2,8 @@
 //
 // Provides sync infrastructure for any @kyneta/schema substrate.
 // Three merge strategies (causal, sequential, lww) are dispatched
-// by factory declaration over a uniform three-message protocol
-// (discover, interest, offer).
+// by factory declaration over a uniform four-message protocol
+// (present, interest, offer, dismiss).
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -17,7 +17,6 @@ export type {
   PeerId,
   PeerIdentityDetails,
   PeerState,
-  PendingInterest,
   ReadyState,
 } from "./types.js"
 
@@ -47,7 +46,7 @@ export { TimestampVersion } from "@kyneta/schema"
 export type {
   AddressedEnvelope,
   ChannelMsg,
-  DiscoverMsg,
+  PresentMsg,
   DismissMsg,
   EstablishmentMsg,
   EstablishRequestMsg,
@@ -66,7 +65,6 @@ export { isEstablishmentMsg, isExchangeMsg } from "./messages.js"
 export type {
   Channel,
   ChannelActions,
-  ChannelKind,
   ChannelMeta,
   ConnectedChannel,
   EstablishedChannel,
@@ -109,6 +107,7 @@ export {
 
 export type {
   Command,
+  Notification,
   SynchronizerMessage,
   SynchronizerModel,
 } from "./synchronizer-program.js"
@@ -147,6 +146,6 @@ export { hasSync, sync } from "./sync.js"
 export type { StorageBackend, StorageEntry } from "./storage/index.js"
 export {
   InMemoryStorageBackend,
-  StorageAdapter,
+  type InMemoryStorageData,
   createInMemoryStorage,
 } from "./storage/index.js"

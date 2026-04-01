@@ -126,7 +126,6 @@ export class BridgeAdapter extends Adapter<BridgeAdapterContext> {
   generate(context: BridgeAdapterContext): GeneratedChannel {
     return {
       adapterType: this.adapterType,
-      kind: "network",
       send: msg => {
         // Route message through bridge to target adapter
         this.bridge.routeMessage(

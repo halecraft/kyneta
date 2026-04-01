@@ -13,7 +13,12 @@
 // Ported from @loro-extended/repo's synchronizer-program.ts with
 // Loro-specific types replaced by substrate-agnostic equivalents.
 
-import type { MergeStrategy, SubstratePayload } from "@kyneta/schema"
+import type {
+  MergeStrategy,
+  ReplicaType,
+  SubstratePayload,
+} from "@kyneta/schema"
+import { replicaTypesCompatible } from "@kyneta/schema"
 import type { Channel, ConnectedChannel } from "./channel.js"
 import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
 import type { AddressedEnvelope, ReturnEnvelope } from "./messages.js"
@@ -23,7 +28,6 @@ import type {
   PeerId,
   PeerIdentityDetails,
   PeerState,
-  PendingInterest,
 } from "./types.js"
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -44,17 +48,10 @@ export type DocEntry = {
   mode: "interpret" | "replicate"
   /** Serialized version from replica.version().serialize() */
   version: string
+  /** Identifies the binary format of this document's replica */
+  replicaType: ReplicaType
   /** The merge strategy for this document's substrate */
   mergeStrategy: MergeStrategy
-  /**
-   * Storage channels we're waiting to hear from before responding
-   * to network interests. When empty, we process pendingInterests.
-   */
-  pendingStorageChannels?: Set<ChannelId>
-  /**
-   * Network interest messages waiting for storage to be consulted.
-   */
-  pendingInterests?: PendingInterest[]
 }
 
 /**
@@ -95,6 +92,7 @@ export type SynchronizerMessage =
       docId: DocId
       mode: "interpret" | "replicate"
       version: string
+      replicaType: ReplicaType
       mergeStrategy: MergeStrategy
     }
   | { type: "synchronizer/local-doc-change"; docId: DocId; version: string }
@@ -115,10 +113,9 @@ export type SynchronizerMessage =
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 /**
- * Filter channel IDs by the route predicate, bypassing storage channels.
+ * Filter channel IDs by the route predicate.
  *
- * For each channel: if `kind === "storage"`, keep unconditionally.
- * Otherwise, resolve peer identity and call `route(docId, peer)`.
+ * For each channel: resolve peer identity and call `route(docId, peer)`.
  * Channels with unresolvable peer identity are dropped.
  */
 function filterChannelsByRoute(
@@ -130,8 +127,6 @@ function filterChannelsByRoute(
   return channelIds.filter(id => {
     const channel = model.channels.get(id)
     if (!channel || channel.type !== "established") return false
-    // Storage channels bypass route checks
-    if (channel.kind === "storage") return true
     const peerState = model.peers.get(channel.peerId)
     if (!peerState) return false
     return route(docId, peerState.identity)
@@ -153,12 +148,16 @@ function batchAsNeeded(
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// COMMANDS (outputs of the update function)
+// COMMANDS (outputs of the update function — effects on the world)
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 /**
  * Commands are side effects produced by the update function.
  * The synchronizer runtime executes them.
+ *
+ * Commands change the world: send messages, import data, stop channels,
+ * fire callbacks that may trigger reentrant dispatch. They are the
+ * effectful co-product of the state transition.
  */
 export type Command =
   // Channel operations
@@ -181,6 +180,8 @@ export type Command =
       type: "cmd/request-doc-creation"
       docId: DocId
       peer: PeerIdentityDetails
+      replicaType: ReplicaType
+      mergeStrategy: MergeStrategy
     }
   | {
       type: "cmd/import-doc-data"
@@ -200,6 +201,53 @@ export type Command =
   // Utilities
   | { type: "cmd/dispatch"; dispatch: SynchronizerMessage }
   | { type: "cmd/batch"; commands: Command[] }
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// NOTIFICATIONS (outputs of the update function — observations about the model)
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+/**
+ * Notifications are observations about model transitions produced by the
+ * update function. Unlike commands, they do not change the world — they
+ * declare what changed so the imperative shell can inform external
+ * listeners.
+ *
+ * This is the invalidation co-product of the state transition, parallel
+ * to commands (the effectful co-product). The pure program knows exactly
+ * which model data was touched; notifications carry that knowledge to
+ * the shell without the shell needing to diff the model.
+ *
+ * Analogous to Op[] in the schema changefeed: the changefeed declares
+ * what changed so subscribers don't poll; notifications declare what
+ * model state was invalidated so the shell doesn't brute-force.
+ */
+export type Notification =
+  | { type: "notify/ready-state-changed"; docIds: ReadonlySet<DocId> }
+  | { type: "notify/batch"; notifications: Notification[] }
+
+/**
+ * Collapse an array of notifications (possibly with undefined entries)
+ * into a single Notification or undefined. Mirrors `batchAsNeeded` for
+ * commands.
+ */
+function notifyAsNeeded(
+  ...notifications: (Notification | undefined)[]
+): Notification | undefined {
+  const filtered = notifications.filter(
+    (n): n is Notification => n !== undefined,
+  )
+  if (filtered.length === 0) return undefined
+  if (filtered.length === 1) return filtered[0]
+  return { type: "notify/batch", notifications: filtered }
+}
+
+/**
+ * Convenience: construct a ready-state-changed notification for one or
+ * more docIds.
+ */
+function readyStateChanged(...docIds: DocId[]): Notification {
+  return { type: "notify/ready-state-changed", docIds: new Set(docIds) }
+}
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // PROGRAM DEFINITION
@@ -225,12 +273,18 @@ export function init(
 
 /**
  * The update function signature — takes a message and current model,
- * returns the new model and an optional command.
+ * returns the new model, an optional command, and an optional notification.
+ *
+ * The triple `[Model, Command?, Notification?]` is the complete
+ * co-product of a state transition:
+ * - **Model**: the new state
+ * - **Command**: effects to execute (send messages, import data, etc.)
+ * - **Notification**: observations to broadcast (ready state invalidation)
  */
 export type SynchronizerUpdate = (
   msg: SynchronizerMessage,
   model: SynchronizerModel,
-) => [SynchronizerModel, Command?]
+) => [SynchronizerModel, Command?, Notification?]
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // UPDATE LOGIC
@@ -251,7 +305,7 @@ const defaultParams: CreateSynchronizerUpdateParams = {
  *
  * The returned function is the pure TEA update: (msg, model) → [model, cmd?].
  * The `route` and `authorize` predicates control information flow:
- * - `route`: gates all outbound messages (discover, push, relay)
+ * - `route`: gates all outbound messages (present, push, relay)
  * - `authorize`: gates inbound data import (offers)
  */
 export function createSynchronizerUpdate(
@@ -261,7 +315,7 @@ export function createSynchronizerUpdate(
   return function update(
     msg: SynchronizerMessage,
     model: SynchronizerModel,
-  ): [SynchronizerModel, Command?] {
+  ): [SynchronizerModel, Command?, Notification?] {
     switch (msg.type) {
       case "synchronizer/channel-added":
         return handleChannelAdded(msg, model)
@@ -300,7 +354,7 @@ export function createSynchronizerUpdate(
 function handleChannelAdded(
   msg: { type: "synchronizer/channel-added"; channel: ConnectedChannel },
   model: SynchronizerModel,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channels = new Map(model.channels)
   channels.set(msg.channel.channelId, msg.channel)
   return [{ ...model, channels }]
@@ -309,7 +363,7 @@ function handleChannelAdded(
 function handleEstablishChannel(
   msg: { type: "synchronizer/establish-channel"; channelId: ChannelId },
   model: SynchronizerModel,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(msg.channelId)
   if (!channel || channel.type !== "connected") {
     return [model]
@@ -333,12 +387,13 @@ function handleEstablishChannel(
 function handleChannelRemoved(
   msg: { type: "synchronizer/channel-removed"; channel: Channel },
   model: SynchronizerModel,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channels = new Map(model.channels)
   channels.delete(msg.channel.channelId)
 
   // Clean up peer state if this was an established channel
   let peers = model.peers
+  let notification: Notification | undefined
   if (msg.channel.type === "established") {
     peers = new Map(peers)
     const peerState = peers.get(msg.channel.peerId)
@@ -346,55 +401,27 @@ function handleChannelRemoved(
       const newChannels = new Set(peerState.channels)
       newChannels.delete(msg.channel.channelId)
       if (newChannels.size === 0) {
+        // Peer fully removed — all docs it had sync state for are affected
+        if (peerState.docSyncStates.size > 0) {
+          notification = readyStateChanged(
+            ...peerState.docSyncStates.keys(),
+          )
+        }
         peers.delete(msg.channel.peerId)
       } else {
+        // Channel count changed — affects ready state for docs this peer
+        // has synced, since #isReady checks channels.size > 0
+        if (peerState.docSyncStates.size > 0) {
+          notification = readyStateChanged(
+            ...peerState.docSyncStates.keys(),
+          )
+        }
         peers.set(msg.channel.peerId, { ...peerState, channels: newChannels })
       }
     }
   }
 
-  // Storage-first sync cleanup: if this channel was in any document's
-  // pendingStorageChannels, remove it. If that empties the pending set,
-  // process the queued network interests.
-  const removedId = msg.channel.channelId
-  let documents = model.documents
-  const commands: Command[] = []
-
-  for (const [docId, docEntry] of documents) {
-    if (docEntry.pendingStorageChannels?.has(removedId)) {
-      if (documents === model.documents) {
-        documents = new Map(documents)
-      }
-      const newPending = new Set(docEntry.pendingStorageChannels)
-      newPending.delete(removedId)
-
-      if (newPending.size === 0) {
-        // All storage channels responded (or were removed) — process queued interests
-        const released = processQueuedInterests(docEntry, {
-          ...model,
-          documents,
-          channels,
-          peers,
-        })
-        commands.push(...released)
-        documents.set(docId, {
-          ...docEntry,
-          pendingStorageChannels: undefined,
-          pendingInterests: undefined,
-        })
-      } else {
-        documents.set(docId, {
-          ...docEntry,
-          pendingStorageChannels: newPending,
-        })
-      }
-    }
-  }
-
-  return [
-    { ...model, channels, peers, documents },
-    batchAsNeeded(...commands),
-  ]
+  return [{ ...model, channels, peers }, undefined, notification]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -407,18 +434,14 @@ function handleDocEnsure(
     docId: DocId
     mode: "interpret" | "replicate"
     version: string
+    replicaType: ReplicaType
     mergeStrategy: MergeStrategy
   },
   model: SynchronizerModel,
   route: RoutePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const existing = model.documents.get(msg.docId)
-  // A placeholder entry (created by handleStorageFirstProbe) has
-  // pendingStorageChannels — it should be upgraded, not skipped.
-  const isPlaceholder =
-    existing?.pendingStorageChannels != null &&
-    existing.pendingStorageChannels.size > 0
-  if (existing && !isPlaceholder) {
+  if (existing) {
     return [model]
   }
 
@@ -427,25 +450,24 @@ function handleDocEnsure(
     docId: msg.docId,
     mode: msg.mode,
     version: msg.version,
+    replicaType: msg.replicaType,
     mergeStrategy: msg.mergeStrategy,
-    // Preserve pending storage-first sync state from the placeholder
-    pendingStorageChannels: existing?.pendingStorageChannels,
-    pendingInterests: existing?.pendingInterests,
   })
 
   // Announce new doc and request sync from all established channels.
-  // We send both discover (so peers learn we have the doc) and interest
+  // We send both present (so peers learn we have the doc) and interest
   // (so peers send us their state). This is essential for docs created
   // via onDocDiscovered — the local doc is empty and needs to pull data.
   const allEstablished = getEstablishedChannelIds(model)
+  const updatedModel = { ...model, documents }
   const establishedChannelIds = filterChannelsByRoute(
-    model,
+    updatedModel,
     allEstablished,
     msg.docId,
     route,
   )
   if (establishedChannelIds.length === 0) {
-    return [{ ...model, documents }]
+    return [updatedModel]
   }
 
   const isCausal = msg.mergeStrategy === "causal"
@@ -455,8 +477,14 @@ function handleDocEnsure(
       envelope: {
         toChannelIds: establishedChannelIds,
         message: {
-          type: "discover",
-          docIds: [msg.docId],
+          type: "present",
+          docs: [
+            {
+              docId: msg.docId,
+              replicaType: msg.replicaType,
+              mergeStrategy: msg.mergeStrategy,
+            },
+          ],
         },
       },
     },
@@ -474,14 +502,14 @@ function handleDocEnsure(
     },
   )
 
-  return [{ ...model, documents }, cmd]
+  return [updatedModel, cmd]
 }
 
 function handleLocalDocChange(
   msg: { type: "synchronizer/local-doc-change"; docId: DocId; version: string },
   model: SynchronizerModel,
   route: RoutePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
 
@@ -498,7 +526,7 @@ function handleLocalDocChange(
 function handleDocDelete(
   msg: { type: "synchronizer/doc-delete"; docId: DocId },
   model: SynchronizerModel,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const documents = new Map(model.documents)
   documents.delete(msg.docId)
   return [{ ...model, documents }]
@@ -508,7 +536,7 @@ function handleDocDismiss(
   msg: { type: "synchronizer/doc-dismiss"; docId: DocId },
   model: SynchronizerModel,
   route: RoutePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const documents = new Map(model.documents)
   documents.delete(msg.docId)
 
@@ -547,7 +575,7 @@ function handleDocImported(
   },
   model: SynchronizerModel,
   route: RoutePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
 
@@ -563,6 +591,7 @@ function handleDocImported(
   // Update peer sync state
   const peers = new Map(model.peers)
   const peerState = peers.get(msg.fromPeerId)
+  let notification: Notification | undefined
   if (peerState) {
     const docSyncStates = new Map(peerState.docSyncStates)
     docSyncStates.set(msg.docId, {
@@ -571,9 +600,10 @@ function handleDocImported(
       lastUpdated: new Date(),
     })
     peers.set(msg.fromPeerId, { ...peerState, docSyncStates })
+    notification = readyStateChanged(msg.docId)
   }
 
-  return [{ ...model, documents, peers }, cmd]
+  return [{ ...model, documents, peers }, cmd, notification]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -588,7 +618,7 @@ function handleChannelReceiveMessage(
   model: SynchronizerModel,
   route: RoutePredicate,
   authorize: AuthorizePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const { fromChannelId, message } = msg.envelope
 
   switch (message.type) {
@@ -598,8 +628,8 @@ function handleChannelReceiveMessage(
     case "establish-response":
       return handleEstablishResponse(fromChannelId, message, model, route)
 
-    case "discover":
-      return handleDiscover(fromChannelId, message, model, route)
+    case "present":
+      return handlePresent(fromChannelId, message, model, route)
 
     case "interest":
       return handleInterest(fromChannelId, message, model, route)
@@ -650,21 +680,34 @@ function upgradeChannel(
 }
 
 /**
- * Build a discover command for a set of doc IDs to a single channel.
+ * Build a present command for a set of doc IDs to a single channel.
  * Returns undefined if there are no docs to announce.
  */
-function buildDiscover(
+function buildPresent(
   docIds: DocId[],
   toChannelId: ChannelId,
+  model: SynchronizerModel,
 ): Command | undefined {
   if (docIds.length === 0) return undefined
+  const docs = docIds
+    .map(docId => {
+      const entry = model.documents.get(docId)
+      if (!entry) return null
+      return {
+        docId,
+        replicaType: entry.replicaType,
+        mergeStrategy: entry.mergeStrategy,
+      }
+    })
+    .filter((d): d is NonNullable<typeof d> => d !== null)
+  if (docs.length === 0) return undefined
   return {
     type: "cmd/send-message",
     envelope: {
       toChannelIds: [toChannelId],
       message: {
-        type: "discover",
-        docIds,
+        type: "present",
+        docs,
       },
     },
   }
@@ -675,7 +718,7 @@ function handleEstablishRequest(
   message: { type: "establish-request"; identity: PeerIdentityDetails },
   model: SynchronizerModel,
   route: RoutePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel) return [model]
 
@@ -697,7 +740,7 @@ function handleEstablishRequest(
         },
       },
     },
-    buildDiscover(docIds, fromChannelId),
+    buildPresent(docIds, fromChannelId, upgraded),
   )
 
   return [upgraded, cmd]
@@ -708,7 +751,7 @@ function handleEstablishResponse(
   message: { type: "establish-response"; identity: PeerIdentityDetails },
   model: SynchronizerModel,
   route: RoutePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel) return [model]
 
@@ -718,7 +761,7 @@ function handleEstablishResponse(
   const docIds = Array.from(model.documents.keys()).filter(id =>
     route(id, message.identity),
   )
-  const cmd = buildDiscover(docIds, fromChannelId)
+  const cmd = buildPresent(docIds, fromChannelId, upgraded)
 
   return [upgraded, cmd]
 }
@@ -731,7 +774,7 @@ function handleDismiss(
   fromChannelId: ChannelId,
   message: { type: "dismiss"; docId: DocId },
   model: SynchronizerModel,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
 
@@ -752,36 +795,44 @@ function handleDismiss(
     peer: peerState.identity,
   }
 
-  return [{ ...model, peers }, cmd]
+  return [{ ...model, peers }, cmd, readyStateChanged(message.docId)]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// HANDLER: Discover
+// HANDLER: Present — assertion handling with mismatch detection
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-function handleDiscover(
+function handlePresent(
   fromChannelId: ChannelId,
-  message: { type: "discover"; docIds: DocId[] },
+  message: {
+    type: "present"
+    docs: Array<{
+      docId: DocId
+      replicaType: ReplicaType
+      mergeStrategy: MergeStrategy
+    }>
+  },
   model: SynchronizerModel,
   route: RoutePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
 
   const commands: Command[] = []
   const peerState = model.peers.get(channel.peerId)
 
-  for (const docId of message.docIds) {
+  for (const { docId, replicaType, mergeStrategy } of message.docs) {
     const docEntry = model.documents.get(docId)
-    // A doc entry with pendingStorageChannels is a placeholder created by
-    // handleStorageFirstProbe — treat it as unknown for discovery purposes
-    // so that cmd/request-doc-creation fires and the Exchange creates the
-    // real substrate via onDocDiscovered → exchange.get().
-    const isPlaceholder =
-      docEntry?.pendingStorageChannels != null &&
-      docEntry.pendingStorageChannels.size > 0
-    if (docEntry && !isPlaceholder) {
-      // We have this doc — send interest with our version
+    if (docEntry) {
+      // Known doc — validate replicaType compatibility
+      if (!replicaTypesCompatible(docEntry.replicaType, replicaType)) {
+        console.warn(
+          `[exchange] replica type mismatch for doc '${docId}': ` +
+            `local [${docEntry.replicaType}] vs remote [${replicaType}] — skipping sync`,
+        )
+        continue
+      }
+      // Compatible — send interest with our version
       const isCausal = docEntry.mergeStrategy === "causal"
       commands.push({
         type: "cmd/send-message",
@@ -803,6 +854,8 @@ function handleDiscover(
         type: "cmd/request-doc-creation",
         docId,
         peer: peerState.identity,
+        replicaType,
+        mergeStrategy,
       })
     }
   }
@@ -824,73 +877,19 @@ function handleInterest(
   },
   model: SynchronizerModel,
   route: RoutePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
 
   const docEntry = model.documents.get(message.docId)
 
   if (!docEntry) {
-    // We don't have this doc. Two paths:
-    //
-    // 1. Network interest + storage channels exist → storage-first sync:
-    //    queue the interest, probe storage channels with discover.
-    //
-    // 2. Otherwise → nothing to offer, drop the interest.
-    //
-    // Storage-originated interests for unknown docs are never queued
-    // (storage doesn't wait for itself).
-    if (channel.kind === "network") {
-      const storageChannelIds = getChannelIdsByKind(model, "storage")
-      if (storageChannelIds.length > 0) {
-        return handleStorageFirstProbe(
-          message.docId,
-          fromChannelId,
-          message,
-          storageChannelIds,
-          model,
-        )
-      }
-    }
+    // Unknown doc — nothing to offer, drop silently.
+    // Storage hydration is handled by the Exchange directly, not here.
     return [model]
   }
 
-  // If this doc has pendingStorageChannels, storage-first sync is in progress.
-  // Two sub-cases:
-  //
-  // 1. Storage channel sending interest → completion signal ("I'm done").
-  // 2. Network channel sending interest → queue it alongside existing pending interests.
-  if (
-    docEntry.pendingStorageChannels &&
-    docEntry.pendingStorageChannels.size > 0
-  ) {
-    if (
-      channel.kind === "storage" &&
-      docEntry.pendingStorageChannels.has(fromChannelId)
-    ) {
-      return handleStorageCompletionSignal(
-        fromChannelId,
-        message.docId,
-        docEntry,
-        model,
-      )
-    }
-
-    if (channel.kind === "network") {
-      // Queue this additional network interest
-      const pendingInterests = [...(docEntry.pendingInterests ?? [])]
-      pendingInterests.push({
-        channelId: fromChannelId,
-        version: message.version,
-        reciprocate: message.reciprocate ?? false,
-      })
-      const documents = new Map(model.documents)
-      documents.set(message.docId, { ...docEntry, pendingInterests })
-      return [{ ...model, documents }]
-    }
-  }
-
-  // Normal interest for a known doc — respond based on merge strategy
+  // Known doc — respond based on merge strategy
   return handleInterestForKnownDoc(fromChannelId, message, docEntry, model)
 }
 
@@ -987,7 +986,7 @@ function handleInterestForKnownDoc(
   },
   docEntry: DocEntry,
   model: SynchronizerModel,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
 
@@ -1001,6 +1000,7 @@ function handleInterestForKnownDoc(
   // Update peer sync state to "pending"
   const peers = new Map(model.peers)
   const peerState = peers.get(channel.peerId)
+  let notification: Notification | undefined
   if (peerState) {
     const docSyncStates = new Map(peerState.docSyncStates)
     docSyncStates.set(message.docId, {
@@ -1008,152 +1008,10 @@ function handleInterestForKnownDoc(
       lastUpdated: new Date(),
     })
     peers.set(channel.peerId, { ...peerState, docSyncStates })
+    notification = readyStateChanged(message.docId)
   }
 
-  return [{ ...model, peers }, batchAsNeeded(...commands)]
-}
-
-// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// Storage-first sync helpers
-// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-
-/**
- * Storage-first probe: a network peer sent interest for an unknown doc,
- * and we have storage channels. Create a pending doc entry, queue the
- * network interest, and send discover to all storage channels.
- */
-function handleStorageFirstProbe(
-  docId: DocId,
-  networkChannelId: ChannelId,
-  message: { version?: string; reciprocate?: boolean },
-  storageChannelIds: ChannelId[],
-  model: SynchronizerModel,
-): [SynchronizerModel, Command?] {
-  // Check if there's already a pending entry for this doc
-  // (another network peer may have already triggered the probe)
-  const existing = model.documents.get(docId)
-  const pendingStorageChannels = existing?.pendingStorageChannels
-    ? new Set(existing.pendingStorageChannels)
-    : new Set(storageChannelIds)
-  const pendingInterests = [...(existing?.pendingInterests ?? [])]
-
-  // Queue this network interest
-  pendingInterests.push({
-    channelId: networkChannelId,
-    version: message.version,
-    reciprocate: message.reciprocate ?? false,
-  })
-
-  const documents = new Map(model.documents)
-  documents.set(docId, {
-    ...(existing ?? {
-      docId,
-      mode: "replicate" as const,
-      version: "",
-      mergeStrategy: "causal" as MergeStrategy,
-    }),
-    pendingStorageChannels,
-    pendingInterests,
-  })
-
-  // Send discover to all storage channels: "do you have this doc?"
-  // Only send the probe on the first interest (when we create the entry),
-  // not on subsequent interests that piggyback on the existing probe.
-  const cmd: Command | undefined = !existing
-    ? {
-        type: "cmd/send-message",
-        envelope: {
-          toChannelIds: storageChannelIds,
-          message: {
-            type: "discover",
-            docIds: [docId],
-          },
-        },
-      }
-    : undefined
-
-  return [{ ...model, documents }, cmd]
-}
-
-/**
- * Handle the completion signal from a storage channel: an interest message
- * from a storage channel for a doc that has pendingStorageChannels.
- *
- * Removes the storage channel from the pending set. If all storage channels
- * have responded, processes the queued network interests.
- */
-function handleStorageCompletionSignal(
-  storageChannelId: ChannelId,
-  docId: DocId,
-  docEntry: DocEntry,
-  model: SynchronizerModel,
-): [SynchronizerModel, Command?] {
-  const newPending = new Set(docEntry.pendingStorageChannels!)
-  newPending.delete(storageChannelId)
-
-  const documents = new Map(model.documents)
-
-  if (newPending.size > 0) {
-    // Still waiting for other storage channels
-    documents.set(docId, {
-      ...docEntry,
-      pendingStorageChannels: newPending,
-    })
-    return [{ ...model, documents }]
-  }
-
-  // All storage channels have responded — process queued interests
-  const commands = processQueuedInterests(docEntry, model)
-
-  documents.set(docId, {
-    ...docEntry,
-    pendingStorageChannels: undefined,
-    pendingInterests: undefined,
-  })
-
-  return [{ ...model, documents }, batchAsNeeded(...commands)]
-}
-
-/**
- * Process queued network interests that were waiting for storage.
- *
- * For each queued interest, dispatch the same logic as a normal interest
- * for a known doc. If the doc was never created (storage had nothing,
- * onDocDiscovered never fired), the interests are silently dropped.
- */
-function processQueuedInterests(
-  docEntry: DocEntry,
-  model: SynchronizerModel,
-): Command[] {
-  const pending = docEntry.pendingInterests ?? []
-  if (pending.length === 0) return []
-
-  // Check whether the doc was actually created via doc-ensure, or is
-  // still the placeholder from handleStorageFirstProbe. Placeholders
-  // use version "" — doc-ensure sets the real substrate version (e.g.
-  // "0" for plain, a base64 VersionVector for Loro). If the entry is
-  // gone or still at "", there's nothing to offer.
-  const currentDoc = model.documents.get(docEntry.docId)
-  if (!currentDoc || currentDoc.version === "") {
-    return []
-  }
-
-  const commands: Command[] = []
-  for (const interest of pending) {
-    const interestCommands = buildInterestResponse(
-      interest.channelId,
-      {
-        type: "interest",
-        docId: docEntry.docId,
-        version: interest.version,
-        reciprocate: interest.reciprocate,
-      },
-      currentDoc,
-      model,
-    )
-    commands.push(...interestCommands)
-  }
-  return commands
+  return [{ ...model, peers }, batchAsNeeded(...commands), notification]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -1171,7 +1029,7 @@ function handleOffer(
   },
   model: SynchronizerModel,
   authorize: AuthorizePredicate,
-): [SynchronizerModel, Command?] {
+): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
 
@@ -1183,13 +1041,12 @@ function handleOffer(
 
   const commands: Command[] = []
 
-  // Check authorize for network channels — storage channels bypass.
+  // Check authorize — reject silently if the peer isn't allowed.
   // Even when rejected, we still process reciprocation and update peer
   // state so we don't re-request from this peer.
   const peerState = model.peers.get(channel.peerId)
   const authorized =
-    channel.kind === "storage" ||
-    (peerState != null && authorize(message.docId, peerState.identity))
+    peerState != null && authorize(message.docId, peerState.identity)
 
   if (authorized) {
     // Import the payload — the runtime calls replica.merge(payload)
@@ -1289,18 +1146,7 @@ function getEstablishedChannelIds(
   return ids
 }
 
-function getChannelIdsByKind(
-  model: SynchronizerModel,
-  kind: "storage" | "network" | "other",
-): ChannelId[] {
-  const ids: ChannelId[] = []
-  for (const [id, channel] of model.channels) {
-    if (channel.kind === kind && channel.type === "established") {
-      ids.push(id)
-    }
-  }
-  return ids
-}
+
 
 /**
  * Get channel IDs of peers that have previously synced a specific doc.

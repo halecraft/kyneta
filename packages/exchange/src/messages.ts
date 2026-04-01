@@ -1,7 +1,7 @@
 // messages — substrate-agnostic message types for the exchange protocol.
 //
 // Three core message types form the sync vocabulary:
-// - `discover` — "What documents exist?" / "I have these documents."
+// - `present` — "I have these documents, here are their properties."
 // - `interest` — "I want document X. Here's my version."
 // - `offer` — "Here is state for document X."
 //
@@ -12,7 +12,11 @@
 // These are uniform across all merge strategies. The sync algorithm
 // determines *when* and *how* they are sent, not their shape.
 
-import type { SubstratePayload } from "@kyneta/schema"
+import type {
+  MergeStrategy,
+  ReplicaType,
+  SubstratePayload,
+} from "@kyneta/schema"
 import type { DocId, PeerIdentityDetails } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -40,18 +44,22 @@ export type EstablishResponseMsg = {
 // ---------------------------------------------------------------------------
 
 /**
- * Document discovery.
+ * Document presentation — assertion of document ownership with metadata.
  *
- * Bidirectional — both asking and answering are discovery. "What do you
- * have?" and "I have these" collapse into the same message type. The
- * direction is implicit in the content.
+ * "I have these docs, here are their properties." Sent by a peer to
+ * announce documents it holds. The receiver checks its own state and
+ * decides whether to send `interest`. No response expected.
  *
- * Future work: `docIds` may be replaced or augmented with query
- * predicates (e.g. glob patterns, schema-based filters).
+ * Each entry carries per-document metadata (replicaType, mergeStrategy)
+ * so the receiver can validate compatibility before any binary exchange.
  */
-export type DiscoverMsg = {
-  type: "discover"
-  docIds: DocId[]
+export type PresentMsg = {
+  type: "present"
+  docs: Array<{
+    docId: DocId
+    replicaType: ReplicaType
+    mergeStrategy: MergeStrategy
+  }>
 }
 
 /**
@@ -101,7 +109,7 @@ export type OfferMsg = {
 /**
  * Document dismissal — "I'm leaving the sync graph for this document."
  *
- * The dual of `discover`: discover announces presence, dismiss announces
+ * The dual of `present`: present announces presence, dismiss announces
  * departure. One-way announcement with no response needed. The receiving
  * exchange fires `onDocDismissed` if configured.
  */
@@ -118,7 +126,7 @@ export type DismissMsg = {
 export type EstablishmentMsg = EstablishRequestMsg | EstablishResponseMsg
 
 /** Messages valid after establishment is complete. */
-export type ExchangeMsg = DiscoverMsg | InterestMsg | OfferMsg | DismissMsg
+export type ExchangeMsg = PresentMsg | InterestMsg | OfferMsg | DismissMsg
 
 /** All channel messages. */
 export type ChannelMsg = EstablishmentMsg | ExchangeMsg

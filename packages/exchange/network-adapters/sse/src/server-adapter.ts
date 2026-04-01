@@ -101,7 +101,6 @@ export class SseServerAdapter extends Adapter<PeerId> {
 
   protected generate(peerId: PeerId): GeneratedChannel {
     return {
-      kind: "network",
       adapterType: this.adapterType,
       send: (msg: ChannelMsg) => {
         const connection = this.#connections.get(peerId)

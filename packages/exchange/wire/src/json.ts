@@ -10,16 +10,16 @@
 // as-is (the data is already a string).
 //
 // Human-readable — uses the ChannelMsg type strings directly
-// ("establish-request", "discover", etc.) without integer discriminators.
+// ("establish-request", "present", etc.) without integer discriminators.
 
 import type {
   ChannelMsg,
-  DiscoverMsg,
   DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
   InterestMsg,
   OfferMsg,
+  PresentMsg,
 } from "@kyneta/exchange"
 import type { TextCodec } from "./codec.js"
 
@@ -141,8 +141,8 @@ function fromJsonSafe(obj: unknown): ChannelMsg {
     case "establish-response":
       return record as unknown as EstablishResponseMsg
 
-    case "discover":
-      return record as unknown as DiscoverMsg
+    case "present":
+      return record as unknown as PresentMsg
 
     case "interest":
       return record as unknown as InterestMsg

@@ -90,7 +90,7 @@ const exchange = new Exchange({
   // that call completes (synchronously), we can look the doc up.
   // We schedule a microtask to register the player so the Exchange
   // finishes its dispatch loop first.
-  onDocDiscovered(docId, _peer) {
+  onDocDiscovered(docId, _peer, _replicaType, _mergeStrategy) {
     if (!docId.startsWith("input:")) return undefined
 
     const peerId = docId.slice("input:".length)

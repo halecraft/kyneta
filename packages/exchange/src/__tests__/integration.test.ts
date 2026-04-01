@@ -21,6 +21,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest"
 import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
 import { Exchange } from "../exchange.js"
+import { sync } from "../sync.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -508,7 +509,7 @@ describe("onDocDiscovered (dynamic document creation)", () => {
       d.count.set(7)
     })
 
-    // Drain — discover → request-doc-creation → callback → doc-ensure → discover → interest → offer
+    // Drain — present → request-doc-creation → callback → doc-ensure → present → interest → offer
     await drain(40)
 
     // Bob should now have the doc with Alice's content
@@ -1081,5 +1082,75 @@ describe("relay via exchange.replicate()", () => {
 
     // The replicated doc should exist but not be gettable as interpreted
     expect(() => exchangeB.get("relay-doc", LoroDoc)).toThrow(/replicate mode/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// waitForSync — targeted ready-state emission via notification co-product
+// ---------------------------------------------------------------------------
+
+describe("waitForSync", () => {
+  it("resolves after peer completes sync", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+    })
+
+    const docA = exchangeA.get("doc-1", SequentialDoc)
+    change(docA, (d: any) => {
+      d.title.set("hello")
+      d.count.set(1)
+    })
+
+    const docB = exchangeB.get("doc-1", SequentialDoc)
+
+    // waitForSync should resolve — not hang or time out
+    await sync(docB).waitForSync({ timeout: 5000 })
+
+    expect(docB.title()).toBe("hello")
+    expect(docB.count()).toBe(1)
+  })
+
+  it("onReadyStateChange fires only for the doc that synced", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+    })
+
+    // Alice has two docs
+    const docA1 = exchangeA.get("doc-1", SequentialDoc)
+    change(docA1, (d: any) => d.title.set("first"))
+    const docA2 = exchangeA.get("doc-2", SequentialDoc)
+    change(docA2, (d: any) => d.title.set("second"))
+
+    // Bob has both docs
+    exchangeB.get("doc-1", SequentialDoc)
+    exchangeB.get("doc-2", SequentialDoc)
+
+    // Track which docIds fire ready-state changes on Bob's synchronizer
+    const notifiedDocIds = new Set<string>()
+    exchangeB.synchronizer.onReadyStateChange((docId) => {
+      notifiedDocIds.add(docId)
+    })
+
+    await drain()
+
+    // Both docs should have been notified (they both synced)
+    expect(notifiedDocIds.has("doc-1")).toBe(true)
+    expect(notifiedDocIds.has("doc-2")).toBe(true)
   })
 })

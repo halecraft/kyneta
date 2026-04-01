@@ -1,6 +1,6 @@
 # @kyneta/exchange — Technical Reference
 
-Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastructure for any substrate type through a unified three-message protocol dispatched by merge strategy.
+Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastructure for any substrate type through a unified four-message protocol (`present`, `interest`, `offer`, `dismiss`) dispatched by merge strategy.
 
 ---
 
@@ -24,20 +24,39 @@ The synchronizer follows TEA:
 
 - **Model** (`SynchronizerModel`): immutable state — documents, channels, peers
 - **Messages** (`SynchronizerMessage`): inputs — channel lifecycle, document lifecycle, received messages
-- **Commands** (`Command`): outputs — side effects the runtime executes
+- **Commands** (`Command`): effectful co-product — side effects the runtime executes
+- **Notifications** (`Notification`): invalidation co-product — observations about model transitions
 
-The pure update function `(msg, model) → [model, cmd?]` contains all sync logic. The `Synchronizer` class is the imperative shell that dispatches messages, executes commands, and interacts with substrates.
+The pure update function `(msg, model) → [model, cmd?, notification?]` contains all sync logic. The `Synchronizer` class is the imperative shell that dispatches messages, executes commands, accumulates notifications, and interacts with substrates.
+
+The return type is a **triple** — two orthogonal co-products of the state transition:
+
+- **Commands** change the world: send messages, import data, stop channels, fire callbacks that may trigger reentrant dispatch.
+- **Notifications** declare what changed: which parts of the model were invalidated, so the shell can inform external listeners without brute-force diffing.
+
+This is analogous to `Op[]` in the schema changefeed: the changefeed declares what changed so subscribers don't poll; notifications declare what model state was invalidated so the shell doesn't scan.
 
 ```
-Message → update(msg, model) → [newModel, Command?]
-                                       ↓
-                               Synchronizer.#executeCommand()
-                                       ↓
-                        ┌──────────────┼──────────────┐
-                        ↓              ↓              ↓
-                   send message   import data    build offer
-                   (via adapter)  (via substrate) (via substrate)
+Message → update(msg, model) → [newModel, Command?, Notification?]
+                                       ↓                ↓
+                               #executeCommand()   #accumulateNotification()
+                                       ↓                ↓
+                        ┌──────────────┼──────┐    #dirtyDocIds
+                        ↓              ↓      ↓         ↓
+                   send message   import   build    (at quiescence)
+                   (via adapter)  data     offer    #emitReadyStateChanges()
+                                                    → targeted emission
 ```
+
+Currently one notification variant exists:
+
+```ts
+type Notification =
+  | { type: "notify/ready-state-changed"; docIds: ReadonlySet<DocId> }
+  | { type: "notify/batch"; notifications: Notification[] }
+```
+
+Four handlers emit `notify/ready-state-changed`: `handleDocImported` (peer synced), `handleInterestForKnownDoc` (peer pending), `handleDismiss` (peer departed), and `handleChannelRemoved` (peer disconnected — all its docs affected). All other handlers return `undefined` for the notification element.
 
 ### Changefeed ↔ Synchronizer Wiring
 
@@ -68,13 +87,10 @@ change(doc, fn)                             adapter receives offer
 
 ## 2. Merge Strategy as Dispatch Key
 
-Each `ExchangeSubstrateFactory<V>` declares a `MergeStrategy`:
+Each `BoundSchema` declares a `MergeStrategy`:
 
 ```ts
-type MergeStrategy =
-  | { type: "causal" }      // bidirectional exchange, concurrent possible
-  | { type: "sequential" }  // request/response, total order
-  | { type: "lww" }         // unidirectional broadcast, timestamp-based
+type MergeStrategy = "causal" | "sequential" | "lww"
 ```
 
 These are genuinely different protocols matched to the mathematical properties of the substrate, not transport optimizations:
@@ -114,20 +130,24 @@ These are genuinely different protocols matched to the mathematical properties o
 
 Six message types: two for channel establishment, four for document exchange.
 
-### `discover`
+### `present`
 
-Document existence announcement. Sent after channel establishment to announce all known documents, filtered by the `route` predicate (§16). The receiver sends `interest` messages for docs it also has.
+Document presentation — assertion of document ownership with metadata. Sent after channel establishment to announce all known documents, filtered by the `route` predicate (§16). Each entry carries per-document metadata (`replicaType`, `mergeStrategy`) so the receiver can validate compatibility before any binary exchange.
 
-When the receiver encounters an unknown doc ID, the `route` predicate is checked first — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted. If the Exchange has an `onDocDiscovered` callback configured, the callback fires with the doc ID and the announcing peer's identity. If the callback returns a `BoundSchema`, the Exchange creates the document and the normal interest → offer flow proceeds. See §15 for details.
+When the receiver encounters a known doc, it validates `replicaType` compatibility via `replicaTypesCompatible()` (same name + same major version). If compatible, it sends `interest`. If incompatible, the doc is skipped with a warning.
+
+When the receiver encounters an unknown doc ID, the `route` predicate is checked first — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted. If the Exchange has an `onDocDiscovered` callback configured, the callback fires with the doc ID, the announcing peer's identity, `replicaType`, and `mergeStrategy`. The callback returns a disposition (`Interpret | Replicate | undefined`). See §15 for details.
 
 ```ts
-type DiscoverMsg = {
-  type: "discover"
-  docIds: DocId[]
+type PresentMsg = {
+  type: "present"
+  docs: Array<{
+    docId: DocId
+    replicaType: ReplicaType      // [name, major, minor]
+    mergeStrategy: MergeStrategy  // "causal" | "sequential" | "lww"
+  }>
 }
 ```
-
-Future work: `docIds` may be replaced or augmented with query predicates (glob patterns, schema-based filters).
 
 ### `interest`
 
@@ -164,7 +184,7 @@ The receiver calls `replica.merge(payload, "sync")`, which dispatches internally
 
 ### `dismiss`
 
-Document departure announcement — the dual of `discover`. A peer sends `dismiss` when it's leaving the sync graph for a document. One-way announcement with no response needed.
+Document departure announcement — the dual of `present`. A peer sends `dismiss` when it's leaving the sync graph for a document. One-way announcement with no response needed.
 
 ```ts
 type DismissMsg = {
@@ -257,7 +277,7 @@ GeneratedChannel → ConnectedChannel → EstablishedChannel
      (adapter)       (synchronizer)      (after handshake)
 ```
 
-- **GeneratedChannel**: created by `Adapter.generate()`. Has `send`, `stop`, `kind`, `adapterType`.
+- **GeneratedChannel**: created by `Adapter.generate()`. Has `send`, `stop`, `adapterType`.
 - **ConnectedChannel**: registered with the synchronizer. Has `channelId`, `onReceive`.
 - **EstablishedChannel**: completed the establish handshake. Has `peerId` of the remote peer.
 
@@ -336,26 +356,17 @@ In-process adapter for testing. Messages are delivered asynchronously via `queue
 1. **Phase 1**: Create channels to all existing peers (no establishment)
 2. **Phase 2**: Only the joining adapter initiates establishment
 
-### StorageAdapter
+### Storage
 
-Persistent storage adapter that translates the 6-message sync protocol into `StorageBackend` operations. Creates a single channel with `kind: "storage"`, which causes the synchronizer to bypass route/authorize checks (§16) and recognize the channel for storage-first sync probes (§19).
-
-The adapter extends `Adapter<void>` and handles all protocol translation:
-- `establish-request` → responds with identity (`type: "service"`)
-- `discover` → checks `backend.has()` for each docId, replies with available
-- `interest` → loads entries via `backend.loadAll()`, sends offers, then completion `interest`
-- `offer` → persists via `backend.append()`
-- `dismiss` → deletes via `backend.delete()`
-
-Per-doc serialization ensures sequential backend access per document (concurrent across documents). A `flush()` method awaits all pending async operations for clean shutdown.
-
-Use `createInMemoryStorage()` for testing:
+Storage is a **direct Exchange dependency** — not an adapter, not a channel, not a participant in the sync protocol. The Exchange handles hydration (loading from storage on `get()`/`replicate()`) and persistence (saving on network imports and local changes) directly.
 
 ```ts
 const exchange = new Exchange({
-  adapters: [createInMemoryStorage()],
+  storage: [createInMemoryStorage()],
 })
 ```
+
+See §18 for the `StorageBackend` interface and §19 for the hydration/persistence architecture.
 
 ---
 
@@ -438,17 +449,21 @@ The `Synchronizer` processes messages one at a time via a serialized dispatch lo
   dispatching = true
   while pendingMessages.length > 0:
     msg = pendingMessages.shift()
-    [newModel, cmd] = updateFn(msg, model)
+    [newModel, cmd, notification] = updateFn(msg, model)
     model = newModel
-    if cmd: executeCommand(cmd)     // may push more messages
+    if notification: accumulateNotification(notification)  // collect into dirtyDocIds
+    if cmd: executeCommand(cmd)                            // may push more messages
 
   // Quiescence — all messages processed
   flushOutbound()                   // send accumulated envelopes
-  emitReadyStateChanges()           // notify listeners
+  emitReadyStateChanges()           // emit only for dirtyDocIds
+  dirtyDocIds.clear()
   dispatching = false
 ```
 
 Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingMessages` and processed in the same dispatch cycle. Outbound messages are accumulated in a queue and flushed only at quiescence, ensuring consistent model state before any messages leave the exchange.
+
+Notifications are accumulated across the entire dispatch cycle into a `Set<DocId>` (`#dirtyDocIds`). At quiescence, `#emitReadyStateChanges` emits only for docs in the dirty set — O(dirty × peers × listeners) instead of the previous O(docs × peers × listeners). Most dispatch cycles touch zero or one doc, so this is typically O(1) or O(P×L).
 
 ---
 
@@ -457,44 +472,43 @@ Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingM
 | File | Purpose |
 |------|---------|
 | `src/types.ts` | Core identity and state types (PeerId, DocId, ChannelId, PeerState, ReadyState) |
-| `src/messages.ts` | Sync protocol messages (discover, interest, offer, dismiss) + establishment messages |
+| `src/messages.ts` | Sync protocol messages (present, interest, offer, dismiss) + establishment messages |
 | `src/channel.ts` | Channel types and lifecycle (GeneratedChannel → ConnectedChannel → EstablishedChannel) |
 | `src/channel-directory.ts` | Channel ID generation and lifecycle management |
 | `src/adapter/adapter.ts` | Abstract `Adapter` base class |
 | `src/adapter/adapter-manager.ts` | `AdapterManager` — adapter lifecycle and message routing |
 | `src/adapter/bridge-adapter.ts` | `Bridge` + `BridgeAdapter` — in-process testing |
-
 | `src/utils.ts` | PeerId generation and validation |
 | `src/synchronizer-program.ts` | TEA state machine — model, messages, commands, sync algorithms |
 | `src/synchronizer.ts` | Synchronizer runtime — dispatch, command execution, substrate interaction |
 | `src/exchange.ts` | `Exchange` class — public API, `RoutePredicate`, `AuthorizePredicate`, `OnDocDismissed` types |
 | `src/sync.ts` | `sync()` function and `SyncRef` — sync capabilities access |
 | `src/storage/storage-backend.ts` | `StorageBackend` interface and `StorageEntry` type |
-| `src/storage/storage-adapter.ts` | `StorageAdapter` base class — protocol translator |
 | `src/storage/in-memory-storage-backend.ts` | `InMemoryStorageBackend` + `createInMemoryStorage()` factory |
 | `src/storage/index.ts` | Storage module barrel export |
 | `src/index.ts` | Barrel export (re-exports `bind`, `BoundSchema`, `MergeStrategy`, etc. from `@kyneta/schema`) |
 
-Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`, `unwrap()`, `registerSubstrate()`, and `TimestampVersion` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` and `loro()` are defined in `@kyneta/loro-schema`.
+Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`, `unwrap()`, `registerSubstrate()`, and `TimestampVersion` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` is defined in `@kyneta/loro-schema`.
 
 ### Test Files
 
 | File | Coverage |
 |------|----------|
-| `src/__tests__/adapter.test.ts` | Adapter lifecycle, AdapterManager, BridgeAdapter (13 tests) |
-| `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, and `cmd/request-doc-creation` (28 tests) |
-| `src/__tests__/storage-first-sync.test.ts` | Pure TEA tests for storage-first sync — queue+probe, completion signals, multi-storage, channel removal, placeholder upgrade (13 tests) |
-| `src/__tests__/storage-backend.test.ts` | InMemoryStorageBackend — StorageBackend contract: append, loadAll, has, replace, delete, listDocIds, sharedData (9 tests) |
-| `src/__tests__/storage-integration.test.ts` | End-to-end storage: persist+hydrate, interpreted docs, replicated docs, dismiss, multi-storage (5 tests) |
-| `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle (24 tests) |
-| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, heterogeneous, and `onDocDiscovered` dynamic creation (12 tests) |
-| `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, LWW stale rejection, causal deltas (6 tests) |
+| `src/__tests__/adapter.test.ts` | Adapter lifecycle, AdapterManager, BridgeAdapter |
+| `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, `cmd/request-doc-creation`, replicate mode |
+| `src/__tests__/storage-first-sync.test.ts` | Exchange-level storage hydration — get/replicate hydration, network import persistence, local change persistence, flush, round-trip restart |
+| `src/__tests__/storage-backend.test.ts` | InMemoryStorageBackend — StorageBackend contract: lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, sharedData |
+| `src/__tests__/storage-integration.test.ts` | End-to-end storage: persist+hydrate for sequential/causal/LWW, replicate mode, dismiss+delete, onDocDiscovered+storage |
+| `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle |
+| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, heterogeneous, and `onDocDiscovered` dynamic creation |
+| `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, LWW stale rejection, causal deltas |
+| `src/__tests__/client-state-machine.test.ts` | ClientStateMachine — transitions, subscriptions, waitForState, reset |
 
 ---
 
 ## 11. Wire Format (`@kyneta/wire`)
 
-The `@kyneta/wire` package provides serialization infrastructure for the exchange's 6-message protocol. It sits between the exchange and network adapters in the dependency graph:
+The `@kyneta/wire` package provides serialization infrastructure for the exchange's six-message protocol (two establishment + four exchange). It sits between the exchange and network adapters in the dependency graph:
 
 ```
 @kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-network-adapter
@@ -549,11 +563,16 @@ Fragments are fully self-describing — no separate "fragment header" message. T
 |---------|--------------|----------------|
 | `establish-request` | `0x01` | `t`, `id`, `n?`, `y` |
 | `establish-response` | `0x02` | `t`, `id`, `n?`, `y` |
-| `discover` | `0x10` | `t`, `docs` |
+| `present` | `0x10` | `t`, `docs` (array of `{ d, rt, ms }`) |
 | `interest` | `0x11` | `t`, `doc`, `v?`, `r?` |
 | `offer` | `0x12` | `t`, `doc`, `pk`, `pe`, `d`, `v`, `r?` |
+| `dismiss` | `0x13` | `t`, `doc` |
 
 `PayloadKind` values: `0x00` = `"entirety"`, `0x01` = `"since"`.
+`PayloadEncoding` values: `0x00` = `"json"`, `0x01` = `"binary"`.
+`MergeStrategyWire` values: `0x00` = `"causal"`, `0x01` = `"sequential"`, `0x02` = `"lww"`.
+
+`present` entries carry `rt` (ReplicaType as `[string, number, number]`) and `ms` (MergeStrategyWire integer) per document.
 
 See `packages/exchange/wire/PROTOCOL.md` for the full wire protocol specification.
 
@@ -702,15 +721,28 @@ The SSE adapter's functional core (`parseTextPostBody`, `SseConnection.send`) is
 ### Callback Signature
 
 ```ts
-type OnDocDiscovered = (docId: DocId, peer: PeerIdentityDetails) => BoundSchema | undefined
+type OnDocDiscovered = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+  replicaType: ReplicaType,
+  mergeStrategy: MergeStrategy,
+) => Interpret | Replicate | undefined
 ```
 
-The `onDocDiscovered` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `discover`) a document the local exchange doesn't have. Return a `BoundSchema` to auto-create the document and begin sync, or `undefined` to ignore it.
+The `onDocDiscovered` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `present`) a document the local exchange doesn't have. Return a disposition to determine how the document participates in the sync graph:
+
+- `Interpret(bound)` — full interpretation with schema, ref, changefeed.
+- `Replicate(replicaFactory, strategy)` — headless replication (relay, storage).
+- `undefined` — ignore the unknown document.
+
+The callback receives `replicaType` and `mergeStrategy` from the `present` message, enabling dynamic factory dispatch based on the remote peer's substrate type.
 
 ```ts
 const exchange = new Exchange({
-  onDocDiscovered: (docId, peer) => {
-    if (docId.startsWith("input:")) return PlayerInputDoc
+  onDocDiscovered: (docId, peer, replicaType, mergeStrategy) => {
+    if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
+    // Relay server — replicate without schema knowledge
+    if (replicaType[0] === "loro") return Replicate(loroReplicaFactory, mergeStrategy)
     return undefined
   },
 })
@@ -721,29 +753,33 @@ const exchange = new Exchange({
 ```
 Peer A (has doc)               Peer B (doesn't have doc)
      |                                |
-     |── discover ["input:alice"] ──> |
-     |                                | handleDiscover: unknown doc
+     |── present [{ docId:           >|
+     |     "input:alice",             |
+     |     replicaType: ["loro",1,0], |
+     |     mergeStrategy: "causal" }] |
+     |                                | handlePresent: unknown doc
      |                                | → cmd/request-doc-creation
-     |                                | → onDocDiscovered("input:alice", peerA)
-     |                                | → returns PlayerInputDoc
+     |                                | → onDocDiscovered("input:alice", peerA, ...)
+     |                                | → returns Interpret(PlayerInputDoc)
      |                                | → exchange.get("input:alice", PlayerInputDoc)
+     |                                | → storage hydration (if configured)
      |                                | → registerDoc → doc-ensure dispatched
      |                                |
-     | <── discover ["input:alice"] ──| doc-ensure: announce + interest
+     | <── present ["input:alice"] ───| doc-ensure: announce + interest
      | <── interest { version: "0" } ─|
      |                                |
-     |── offer { snapshot, data } ──> | handleOffer: import A's state
+     |── offer { payload, version } ─>| handleOffer: import A's state
      |                                |
 ```
 
-**Storage-first interaction**: When storage adapters are present, `onDocDiscovered` fires *after* the storage-first sync probe completes (§19). The synchronizer queues the network interest, probes storage with `discover`, and only when storage responds does `handleDiscover` fire `cmd/request-doc-creation` → `onDocDiscovered`. This ensures the callback sees the full picture of what storage has available.
+**Storage interaction**: When storage backends are configured, `exchange.get()` hydrates from storage before registering with the synchronizer. The synchronizer only learns about the doc after hydration, so `present`/`interest` messages carry the hydrated version — not an empty one.
 
 ### The `cmd/request-doc-creation` Command
 
-When `handleDiscover` encounters an unknown doc ID, the pure program emits:
+When `handlePresent` encounters an unknown doc ID, the pure program emits:
 
 ```ts
-{ type: "cmd/request-doc-creation", docId: DocId, peer: PeerIdentityDetails }
+{ type: "cmd/request-doc-creation", docId: DocId, peer: PeerIdentityDetails, replicaType: ReplicaType, mergeStrategy: MergeStrategy }
 ```
 
 The `Synchronizer` runtime executes this command by calling the `DocCreationCallback` provided by the Exchange. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
@@ -752,30 +788,28 @@ The `Synchronizer` runtime executes this command by calling the `DocCreationCall
 
 The reentrancy path is safe because of the serialized dispatch architecture (§9):
 
-1. `handleDiscover` returns `[model, cmd/request-doc-creation]`
+1. `handlePresent` returns `[model, cmd/request-doc-creation]`
 2. `#executeCommand` calls the callback
 3. Callback calls `exchange.get()` → `synchronizer.registerDoc()` → `#dispatch(doc-ensure)`
 4. `#dispatch` sees `#dispatching === true`, pushes `doc-ensure` to `#pendingMessages`, returns
 5. Control returns to the dispatch loop, which processes `doc-ensure` next
-6. `doc-ensure` emits `discover` + `interest` messages, accumulated in the outbound queue
+6. `doc-ensure` emits `present` + `interest` messages, accumulated in the outbound queue
 7. At quiescence, all messages are flushed together
 
-### `doc-ensure` Sends Both `discover` and `interest`
+### `doc-ensure` Sends Both `present` and `interest`
 
-When a document is registered after channels are established (the dynamic creation case), `handleDocEnsure` sends **both** `discover` and `interest` to all established channels:
+When a document is registered after channels are established (the dynamic creation case), `handleDocEnsure` sends **both** `present` and `interest` to all established channels:
 
-- **`discover`**: announces the doc to peers (they may create it via their own `onDocDiscovered`)
+- **`present`**: announces the doc to peers (they may create it via their own `onDocDiscovered`)
 - **`interest`**: requests data from peers who already have the doc (essential for pulling content into the newly created empty doc)
-
-Previously, `doc-ensure` only sent `discover` to network channels and `interest` to storage channels. This was insufficient for dynamic creation — the newly created doc was empty, and the `discover` → `interest` → `offer` round-trip resulted in the empty doc offering its empty state, rather than pulling the remote peer's data.
 
 ### Relationship to the Vendor Pattern
 
 The vendor (`@loro-extended/repo`) handles this in `handleSyncRequest` — when a `sync-request` arrives for an unknown doc, the doc is auto-created, gated by `permissions.creation`. Kyneta's approach differs:
 
-1. **Trigger point**: `discover` (not `interest`/`sync-request`), because kyneta's `interest` is only sent for docs the sender already has.
+1. **Trigger point**: `present` (not `interest`/`sync-request`), because kyneta's `interest` is only sent for docs the sender already has.
 2. **Route gating**: The `route` predicate (§16) is checked before `cmd/request-doc-creation` is emitted. If `route(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `onDocDiscovered` never fires.
-3. **Gating mechanism**: a callback returning `BoundSchema | undefined` (not a boolean permission predicate), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
+3. **Gating mechanism**: a callback returning a disposition (`Interpret | Replicate | undefined`), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
 4. **No separate `creation` permission**: the callback subsumes the permission check. Returning `undefined` is equivalent to denying creation.
 
 See `examples/bumper-cars/src/server.ts` for a concrete usage example — the server materializes `input:${peerId}` documents when players connect, and registers them with the game loop via a queued microtask.
@@ -793,7 +827,7 @@ type RoutePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
 type AuthorizePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
 ```
 
-Both default to `() => true` (open access), preserving backward compatibility.
+Both default to `() => true` (open access).
 
 ### `route` — Outbound Flow Control
 
@@ -801,10 +835,10 @@ The `route` predicate gates all outbound messages. It answers: "should this peer
 
 | Gate | Handler | What `route: false` does |
 |------|---------|--------------------------|
-| Initial discover | `handleEstablishRequest` / `handleEstablishResponse` | Doc omitted from `discover` message |
-| Doc-ensure broadcast | `handleDocEnsure` | Channel excluded from discover+interest |
+| Initial present | `handleEstablishRequest` / `handleEstablishResponse` | Doc omitted from `present` message |
+| Doc-ensure broadcast | `handleDocEnsure` | Channel excluded from present+interest |
 | Push (local change + relay) | `buildPush` | Channel excluded from offer |
-| `onDocDiscovered` gating | `handleDiscover` | `cmd/request-doc-creation` not emitted |
+| `onDocDiscovered` gating | `handlePresent` | `cmd/request-doc-creation` not emitted |
 
 ### `authorize` — Inbound Flow Control
 
@@ -816,27 +850,20 @@ The `authorize` predicate gates inbound data import. It answers: "should this pe
 
 When `authorize` rejects an offer, the peer's sync state is still updated to prevent re-requesting. Only the data import is suppressed.
 
-### Storage Channel Bypass
-
-Both predicates are skipped for storage channels (`channel.kind === "storage"`). Storage is local infrastructure, not a policy boundary — you always want to persist and load your own docs. The predicates govern the network boundary only.
-
-Implementation: `filterChannelsByRoute(model, channelIds, docId, route)` encapsulates the storage-bypass + route-check pattern. For each channel ID, if `kind === "storage"`, keep unconditionally. Otherwise, resolve peer identity and call `route(docId, peer)`.
-
-The `StorageAdapter` (§18) creates channels with `kind: "storage"`, so all its offers bypass `authorize` and all its doc announcements bypass `route`.
-
 ### The `route` → `authorize` Invariant
 
 `authorize` implies `route`: if you accept mutations from a peer, that peer must be in the routing topology. The converse is not true — a read-only subscriber is routed but not authorized. The system does not enforce this formally. If a developer sets `authorize: () => true` but `route: () => false`, nothing breaks — inbound data never arrives because the outbound announcement was suppressed.
 
 ### Relationship to `onDocDiscovered`
 
-`route` is checked **before** `onDocDiscovered` fires. When a peer announces an unknown doc in `handleDiscover`, the flow is:
+`route` is checked **before** `onDocDiscovered` fires. When a peer announces an unknown doc in `handlePresent`, the flow is:
 
 1. Check `route(docId, announcingPeer)` — if `false`, silently drop
 2. Emit `cmd/request-doc-creation`
-3. `onDocDiscovered` callback fires (factory decision)
-4. If callback returns `BoundSchema`, `exchange.get()` creates the doc
-5. Subsequent discover/interest/offer flow is subject to `route` normally
+3. `onDocDiscovered` callback fires (disposition decision)
+4. If callback returns `Interpret(bound)`, `exchange.get()` creates the doc
+5. If callback returns `Replicate(factory, strategy)`, `exchange.replicate()` creates the doc
+6. Subsequent present/interest/offer flow is subject to `route` normally
 
 This means `onDocDiscovered` can assume the announcing peer already passed the route check.
 
@@ -848,7 +875,7 @@ See `examples/bumper-cars/src/server.ts` for a concrete usage example — `route
 
 ### The `dismiss` Wire Message
 
-`dismiss` is the dual of `discover`: discover announces "I have this doc," dismiss announces "I'm leaving this doc." It is a one-way announcement with no response needed.
+`dismiss` is the dual of `present`: present announces "I have this doc," dismiss announces "I'm leaving this doc." It is a one-way announcement with no response needed.
 
 ```ts
 type DismissMsg = { type: "dismiss"; docId: DocId }
@@ -914,9 +941,9 @@ Follows the same fire-and-forget pattern as `cmd/request-doc-creation`. The Sync
 
 ---
 
-## 18. StorageBackend and StorageAdapter
+## 18. StorageBackend — Direct Exchange Dependency
 
-The exchange supports persistent storage through the `StorageBackend` interface and `StorageAdapter` base class. Storage participates as a **replication conduit** — it persists and hydrates opaque `SubstratePayload` blobs without interpreting document state, speaking the existing 6-message protocol by impersonating a peer on a `"storage"` channel.
+The exchange supports persistent storage through the `StorageBackend` interface. Storage is a **direct Exchange dependency** — not an adapter, not a channel, not a participant in the sync protocol. The Exchange handles hydration (loading from storage on `get()`/`replicate()`) and persistence (saving on network imports and local changes) directly. The synchronizer remains purely network-focused.
 
 ### StorageEntry
 
@@ -931,14 +958,28 @@ type StorageEntry = {
 
 The `payload` carries its own `kind` discriminant (`"entirety"` or `"since"`), so no separate `entryType` field is needed. The `version` string is round-tripped faithfully from the original offer — storage never interprets it.
 
+### DocMetadata
+
+Per-document metadata registered alongside entries:
+
+```ts
+type DocMetadata = {
+  readonly replicaType: ReplicaType
+  readonly mergeStrategy: MergeStrategy
+}
+```
+
+Registered via `ensureDoc()` before the first `append()`. Returned by `lookup()` for existence + metadata checks.
+
 ### StorageBackend Interface
 
-Six document-level operations. Backends need no knowledge of the sync protocol, substrates, or schemas:
+Eight document-level operations. Backends need no knowledge of the sync protocol, substrates, or schemas:
 
 ```ts
 interface StorageBackend {
+  lookup(docId: DocId): Promise<DocMetadata | null>
+  ensureDoc(docId: DocId, metadata: DocMetadata): Promise<void>
   append(docId: DocId, entry: StorageEntry): Promise<void>
-  has(docId: DocId): Promise<boolean>
   loadAll(docId: DocId): AsyncIterable<StorageEntry>
   replace(docId: DocId, entry: StorageEntry): Promise<void>
   delete(docId: DocId): Promise<void>
@@ -948,124 +989,96 @@ interface StorageBackend {
 
 **Design decisions:**
 
+- **`lookup()` replaces `has()`.** Returns `DocMetadata | null` — subsumes the existence check (`lookup(docId) !== null`) and provides metadata for free. This avoids a separate `has()` call followed by a metadata fetch.
+
+- **`ensureDoc()` for metadata registration.** Called once before the first `append()`. Idempotent — calling again with the same metadata is a no-op. For `InMemoryStorageBackend`, this is a `Map<DocId, DocMetadata>`. For real backends (Postgres, IndexedDB), it's a single metadata row per document.
+
 - **Document-level, not chunk-level.** The vendor uses `StorageKey = string[]` with `[docId, "update", timestamp]` key-space. This was rejected because timestamp-based keys cause collisions in multi-pod deployments and `removeRange` is unsafe under concurrent writes. The document-level interface operates at the natural granularity.
 
 - **`AsyncIterable` for pagination.** `loadAll` and `listDocIds` return `AsyncIterable` rather than arrays. This supports million-doc stores (S3, Postgres) without loading everything into memory. In-memory backends trivially `yield*` from arrays.
 
 - **Atomic `replace`.** Required for safe compaction. A concurrent reader must never observe an empty intermediate state. Achievable on all target backends: Postgres (transaction), LevelDB (batch), IndexedDB (transaction), Redis (MULTI/EXEC), in-memory (synchronous swap), S3 (write-before-delete).
 
-- **Per-doc serialization.** The `StorageAdapter` guarantees sequential operations per docId — backends assume single-writer-per-document semantics. Cross-document operations remain concurrent for throughput.
-
-### StorageAdapter Protocol Translation
-
-The `StorageAdapter` extends `Adapter<void>` and translates between the sync protocol and `StorageBackend`:
-
-| Incoming message | StorageAdapter action |
-|-----------------|----------------------|
-| `establish-request` | Reply with `establish-response` (identity: `{ type: "service" }`) |
-| `discover [docIds]` | Check `backend.has()` for each, reply with available docIds |
-| `interest { docId }` | Load entries via `backend.loadAll()`, send one `offer` per entry, then send completion `interest` |
-| `offer { docId, payload, version }` | Call `backend.append(docId, { payload, version })` |
-| `dismiss { docId }` | Call `backend.delete(docId)` |
-
-**Completion signal protocol.** When a storage adapter finishes sending all offers for a document, it sends an `interest` message for that doc. This reuses the existing protocol vocabulary — "I'm done sending offers, subscribe me to future updates." No storage-specific message types are needed.
-
-**Synchronous reply.** The `#reply()` method delivers messages synchronously via `storageChannel.onReceive()`. The Synchronizer's serialized dispatch queue (§9) handles recursion prevention. During hydration, all offers and the completion interest are processed in a single dispatch cycle.
-
-**Flush tracking.** Each async backend operation is tracked in `#pendingOps: Set<Promise<void>>`. The `flush()` method awaits all pending operations. Called automatically during `onStop()` and available for explicit use before shutdown.
+- **Per-doc serialization.** The Exchange guarantees sequential operations per docId via promise chains (`#enqueueForDoc`) — backends assume single-writer-per-document semantics. Cross-document operations remain concurrent for throughput.
 
 ### InMemoryStorageBackend
 
-A `Map<DocId, StorageEntry[]>`-backed implementation for testing. Supports a `sharedData` constructor argument so multiple instances can share the same underlying Map — useful for simulating persist → restart → hydrate:
+A `Map<DocId, StorageEntry[]>`-backed implementation for testing. Uses `Map<DocId, DocMetadata>` for per-document metadata. Supports a `sharedData` constructor argument so multiple instances can share the same underlying Maps — useful for simulating persist → restart → hydrate:
 
 ```ts
-const sharedData = new Map()
+const sharedData: InMemoryStorageData = {
+  entries: new Map(),
+  metadata: new Map(),
+}
 
 // Exchange 1: persist data
 const exchange1 = new Exchange({
-  adapters: [createInMemoryStorage({ sharedData })],
+  storage: [createInMemoryStorage({ sharedData })],
 })
 // ... mutations happen, storage persists ...
 await exchange1.shutdown()
 
 // Exchange 2: hydrate from storage
 const exchange2 = new Exchange({
-  adapters: [createInMemoryStorage({ sharedData })],
+  storage: [createInMemoryStorage({ sharedData })],
 })
 // Documents are restored from the shared storage
 ```
 
 ---
 
-## 19. Storage-First Sync
+## 19. Storage Persistence Architecture
 
-When a network peer sends `interest` for a document the exchange doesn't have in memory, and storage adapters are present, the synchronizer must consult storage before responding. Without this, a server with persistent storage would respond to clients as if documents don't exist.
+Storage is wired into the Exchange at two points: **hydration** (loading stored data into a fresh replica) and **persistence** (saving data as it changes). The synchronizer program is storage-free — keeping the FC/IS boundary clean.
 
-### The Full Flow
+### Hydration Flow
+
+When `exchange.get()` or `exchange.replicate()` is called with storage backends configured:
 
 ```
-Network Peer                Synchronizer                  Storage Adapter
-     |                           |                              |
-     |── interest("doc-1") ───> |                              |
-     |                           | doc unknown + storage exists |
-     |                           | → create placeholder entry   |
-     |                           | → queue network interest     |
-     |                           |                              |
-     |                           |── discover(["doc-1"]) ─────>|
-     |                           |                              | backend.has("doc-1") → true
-     |                           | <── discover(["doc-1"]) ────|
-     |                           |                              |
-     |                           | handleDiscover: placeholder  |
-     |                           | → cmd/request-doc-creation   |
-     |                           | → onDocDiscovered fires      |
-     |                           | → exchange.get("doc-1", ...) |
-     |                           | → doc-ensure (upgrades       |
-     |                           |   placeholder, preserves     |
-     |                           |   pending state)             |
-     |                           |                              |
-     |                           |── interest("doc-1") ───────>|
-     |                           |                              | backend.loadAll("doc-1")
-     |                           | <── offer(entry1) ──────────|
-     |                           | <── offer(entry2) ──────────|
-     |                           | <── interest("doc-1") ──────| completion signal
-     |                           |                              |
-     |                           | all storage responded        |
-     |                           | → processQueuedInterests     |
-     |                           |                              |
-     | <── offer(hydrated) ─────|                              |
-     |                           |                              |
+exchange.get(docId, bound)
+  → create substrate (empty)
+  → build interpreter stack, register sync ref
+  → cache in #docCache (ref returned synchronously)
+  → async #hydrateAndRegister(docId, replica, ...):
+      1. ensureDoc(docId, metadata) on all backends
+      2. loadAll(docId) on all backends → merge entries into replica
+      3. registerDoc with synchronizer (version reflects hydrated state)
+      4. wire changefeed → synchronizer + storage
 ```
 
-### Placeholder Doc Entries
+The ref is returned synchronously. Hydration happens asynchronously — the changefeed fires when stored data is merged. The synchronizer only learns about the doc after hydration, so `present`/`interest` messages carry the hydrated version.
 
-When `handleInterest` encounters an unknown doc from a network peer and storage channels exist, it creates a **placeholder** `DocEntry`:
+### Persistence — Two Paths
 
-```ts
-{
-  docId,
-  mode: "replicate",
-  version: "",              // sentinel — indicates not yet ensured
-  mergeStrategy: "causal",  // temporary — overwritten by doc-ensure
-  pendingStorageChannels: Set<ChannelId>,  // storage channels to wait for
-  pendingInterests: PendingInterest[],     // queued network interests
-}
+**Network imports** are persisted via the `onDocImported` callback:
+
+```
+adapter receives offer
+  → synchronizer.#executeImportDocData()
+    → replica.merge(payload, "sync")
+    → #docImportedCallback(docId, payload, version)
+      → Exchange.#persistToStorage(docId, backend.append(...))
 ```
 
-- `handleDocEnsure` recognizes placeholders (entries with `pendingStorageChannels`) and upgrades them instead of bailing early. It preserves the `pendingStorageChannels` and `pendingInterests` fields.
-- `handleDiscover` treats placeholders as unknown docs so `cmd/request-doc-creation` fires correctly when storage responds.
+Network imports use `append()` because they are incremental deltas that accumulate alongside existing entries.
 
-### Completion Signal
+**Local mutations** are persisted via the changefeed subscription:
 
-A storage channel's `interest` message for a doc with `pendingStorageChannels` serves as the completion signal. The `handleStorageCompletionSignal` function removes the storage channel from the pending set. When all storage channels have responded, `processQueuedInterests` releases the queued network interests.
+```
+change(doc, fn)
+  → changefeed fires (origin !== "sync")
+  → Exchange's subscriber:
+      → synchronizer.notifyLocalChange(docId)
+      → #persistToStorage(docId, backend.replace(..., exportEntirety()))
+```
 
-### Multi-Storage Coordination
+Local mutations use `replace()` because they produce a consolidated snapshot that supersedes all previous entries.
 
-Multiple storage adapters are supported. The `pendingStorageChannels` set tracks all storage channel IDs. The synchronizer waits for **all** storage channels to send their completion signal before releasing queued interests. This supports deployments with multiple storage tiers (e.g., IndexedDB on client + Postgres via server relay).
+### Flush Tracking
 
-### Channel Removal During Pending State
+Every async storage operation is tracked in `#pendingStorageOps: Set<Promise<void>>`. The `flush()` method awaits all pending operations (looping to handle operations that spawn new ones). `shutdown()` flushes storage before disconnecting adapters.
 
-If a storage channel is removed while the synchronizer is waiting for its response (e.g., adapter crash, shutdown), `handleChannelRemoved` removes the channel from all documents' `pendingStorageChannels`. If that empties any document's pending set, the queued interests are processed immediately.
+### Per-Doc Sequential Access
 
-### Storage-Originated Interests
-
-When a storage adapter sends `interest` for an unknown doc, it is **not** queued (storage doesn't wait for itself). Only network-originated interests trigger the storage-first probe.
+The Exchange guarantees sequential backend access per document via `#enqueueForDoc()` — a promise-chain pattern where each new operation for a docId awaits the previous one. Cross-document operations remain concurrent for throughput.

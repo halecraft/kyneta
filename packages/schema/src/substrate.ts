@@ -255,6 +255,72 @@ export interface Substrate<V extends Version = Version>
 }
 
 // ---------------------------------------------------------------------------
+// ReplicaType — substrate identity tuple
+// ---------------------------------------------------------------------------
+
+/**
+ * Identifies the binary format a replica produces and consumes.
+ *
+ * `[name, major, minor]` — semver-like tuple:
+ * - `name`: the CRDT runtime ("yjs", "loro", "plain")
+ * - `major`: breaking format change (incompatible payloads)
+ * - `minor`: backwards-compatible extension
+ *
+ * Two replicas are compatible iff `name` matches AND `major` matches.
+ * Minor version differences are tolerated (the newer side may produce
+ * richer payloads, but the older side can still decode them).
+ */
+export type ReplicaType = readonly [name: string, major: number, minor: number]
+
+/**
+ * Check whether two ReplicaType tuples are compatible.
+ *
+ * Compatible means: same name AND same major version.
+ * Minor version differences are allowed.
+ */
+export function replicaTypesCompatible(
+  a: ReplicaType,
+  b: ReplicaType,
+): boolean {
+  return a[0] === b[0] && a[1] === b[1]
+}
+
+// ---------------------------------------------------------------------------
+// MergeStrategy — dispatch key for the sync algorithm
+// ---------------------------------------------------------------------------
+
+/**
+ * Declares which sync algorithm the exchange runs on behalf of a substrate.
+ *
+ * - **"causal"**: Bidirectional exchange. `compare()` may return
+ *   `"concurrent"`. Uses `exportSince()` for fine-grained deltas.
+ *
+ * - **"sequential"**: Request/response. Total order — `compare()` never
+ *   returns `"concurrent"`. Uses `exportSince()` or `exportEntirety()`.
+ *
+ * - **"lww"**: Unidirectional push/broadcast. Timestamp-based. Always
+ *   uses `exportEntirety()`. Receiver compares timestamps and discards
+ *   stale arrivals.
+ */
+export type MergeStrategy = "causal" | "sequential" | "lww"
+
+// ---------------------------------------------------------------------------
+// DocMetadata — per-document metadata
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-document metadata — the replicaType + mergeStrategy pair.
+ *
+ * Used in StorageBackend, PresentMsg, DocEntry, cmd/request-doc-creation,
+ * and onDocDiscovered. Named as a first-class type because it appears
+ * across storage, wire protocol, synchronizer model, and public API.
+ */
+export type DocMetadata = {
+  readonly replicaType: ReplicaType
+  readonly mergeStrategy: MergeStrategy
+}
+
+// ---------------------------------------------------------------------------
 // ReplicaFactory<V> — schema-free construction
 // ---------------------------------------------------------------------------
 
@@ -275,6 +341,9 @@ export interface Substrate<V extends Version = Version>
  * `fromEntirety()` parses the JSON state image into a store.
  */
 export interface ReplicaFactory<V extends Version = Version> {
+  /** Identifies the binary format this factory produces and consumes. */
+  readonly replicaType: ReplicaType
+
   /** Create a fresh, empty replica. No schema needed. */
   createEmpty(): Replica<V>
 

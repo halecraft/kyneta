@@ -25,12 +25,6 @@ import type { DocId, PeerId, ReadyState } from "./types.js"
  */
 export type WaitForSyncOptions = {
   /**
-   * The kind of channel to wait for.
-   * @default "network"
-   */
-  kind?: "network" | "storage"
-
-  /**
    * Timeout in milliseconds. Set to 0 to disable timeout.
    * @default 30000
    */
@@ -108,10 +102,9 @@ class SyncRefImpl implements SyncRef {
   }
 
   async waitForSync(options?: WaitForSyncOptions): Promise<void> {
-    const kind = options?.kind ?? "network"
     const timeout = options?.timeout ?? 30000
 
-    return this.#synchronizer.waitUntilReady(this.docId, kind, timeout)
+    return this.#synchronizer.waitUntilReady(this.docId, timeout)
   }
 
   onReadyStateChange(cb: (readyStates: ReadyState[]) => void): () => void {

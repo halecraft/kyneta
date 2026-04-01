@@ -45,7 +45,6 @@ class TestAdapter extends Adapter<{ label: string }> {
 
   generate(context: { label: string }): GeneratedChannel {
     return {
-      kind: "network",
       adapterType: this.adapterType,
       send: vi.fn(),
       stop: vi.fn(),
@@ -111,7 +110,6 @@ describe("Adapter lifecycle", () => {
     class SendTestAdapter extends Adapter<void> {
       generate(): GeneratedChannel {
         return {
-          kind: "network",
           adapterType: this.adapterType,
           send: sendFn,
           stop: vi.fn(),
@@ -235,7 +233,6 @@ describe("AdapterManager", () => {
       channelIdPublic?: number
       generate(): GeneratedChannel {
         return {
-          kind: "network",
           adapterType: this.adapterType,
           send: sendFn,
           stop: vi.fn(),
@@ -262,7 +259,7 @@ describe("AdapterManager", () => {
     manager.startAll()
     await new Promise<void>(r => queueMicrotask(r))
 
-    const msg: ChannelMsg = { type: "discover", docIds: ["doc-1"] }
+    const msg: ChannelMsg = { type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] }
     const sent = manager.send({
       toChannelIds: [adapter.channelIdPublic!],
       message: msg,
@@ -311,7 +308,7 @@ describe("BridgeAdapter", () => {
     expect(bridge.adapters.size).toBe(2)
 
     // Send a message from A to B via the bridge directly
-    const msg: ChannelMsg = { type: "discover", docIds: ["test-doc"] }
+    const msg: ChannelMsg = { type: "present", docs: [{ docId: "test-doc", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] }
     adapterA.deliverMessage("peer-b", msg)
 
     // Message delivered async — wait for microtask

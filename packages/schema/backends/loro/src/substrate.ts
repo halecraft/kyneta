@@ -257,7 +257,8 @@ export function createLoroSubstrate(
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "LoroSubstrate.merge only supports binary-encoded payloads",
+          "LoroSubstrate.merge expects binary-encoded payloads. " +
+            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
       // Stash origin for the subscriber to pick up
@@ -360,7 +361,8 @@ function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
         !(payload.data instanceof Uint8Array)
       ) {
         throw new Error(
-          "LoroReplica.merge only supports binary-encoded payloads",
+          "LoroReplica.merge expects binary-encoded payloads. " +
+            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
       doc.import(payload.data)
@@ -369,6 +371,8 @@ function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
 }
 
 export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
+  replicaType: ["loro", 1, 0] as const,
+
   createEmpty(): Replica<LoroVersion> {
     return createLoroReplica(new LoroDoc())
   },

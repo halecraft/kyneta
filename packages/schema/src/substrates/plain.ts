@@ -137,7 +137,8 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
     merge(payload: SubstratePayload, origin?: string): void {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
         throw new Error(
-          "PlainSubstrate.merge only supports JSON-encoded payloads",
+          "PlainSubstrate.merge expects JSON-encoded payloads. " +
+            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
 
@@ -259,7 +260,8 @@ export function createPlainReplica(storeObj: Store): Replica<PlainVersion> {
     merge(payload: SubstratePayload, _origin?: string): void {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
         throw new Error(
-          "PlainReplica.merge only supports JSON-encoded payloads",
+          "PlainReplica.merge expects JSON-encoded payloads. " +
+            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
 
@@ -344,6 +346,8 @@ function stateImageToOps(json: string): Op[] {
  * `replica` accessor on `plainSubstrateFactory`.
  */
 export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
+  replicaType: ["plain", 1, 0] as const,
+
   createEmpty(): Replica<PlainVersion> {
     return createPlainReplica({} as Store)
   },

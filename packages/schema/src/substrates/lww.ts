@@ -153,6 +153,8 @@ function wrapReplicaWithTimestamp(
  * instances without requiring a schema.
  */
 export const lwwReplicaFactory: ReplicaFactory<TimestampVersion> = {
+  replicaType: ["plain", 1, 0] as const,
+
   createEmpty(): Replica<TimestampVersion> {
     const inner = plainReplicaFactory.createEmpty()
     return wrapReplicaWithTimestamp(inner, new TimestampVersion(0))

@@ -9,6 +9,7 @@ import {
   plainReplicaFactory,
   plainSubstrateFactory,
   readable,
+  replicaTypesCompatible,
   Schema,
   subscribe,
   writable,
@@ -717,5 +718,33 @@ describe("context() caching", () => {
     const ctx1 = substrate.context()
     const ctx2 = substrate.context()
     expect(ctx1).toBe(ctx2)
+  })
+})
+
+// ===========================================================================
+// ReplicaType
+// ===========================================================================
+
+describe("replicaTypesCompatible", () => {
+  it("same name and version → true", () => {
+    expect(replicaTypesCompatible(["yjs", 1, 0], ["yjs", 1, 0])).toBe(true)
+  })
+
+  it("minor mismatch → true (backwards-compatible)", () => {
+    expect(replicaTypesCompatible(["yjs", 1, 0], ["yjs", 1, 1])).toBe(true)
+  })
+
+  it("major mismatch → false", () => {
+    expect(replicaTypesCompatible(["yjs", 1, 0], ["yjs", 2, 0])).toBe(false)
+  })
+
+  it("name mismatch → false", () => {
+    expect(replicaTypesCompatible(["yjs", 1, 0], ["loro", 1, 0])).toBe(false)
+  })
+})
+
+describe("ReplicaFactory.replicaType", () => {
+  it("plainReplicaFactory identifies as plain", () => {
+    expect(plainReplicaFactory.replicaType).toEqual(["plain", 1, 0])
   })
 })

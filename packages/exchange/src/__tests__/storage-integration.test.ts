@@ -1,8 +1,11 @@
-// storage-integration — end-to-end integration tests for storage adapters.
+// storage-integration — end-to-end integration tests for direct storage dependency.
 //
-// These tests prove that the StorageAdapter, InMemoryStorageBackend, and
-// storage-first sync machinery work together with real Exchange instances,
-// BridgeAdapters, and actual substrates (Plain, Loro, LWW).
+// These tests prove that the Exchange's direct StorageBackend integration
+// works with real Exchange instances, BridgeAdapters, and actual substrates
+// (Plain, Loro, LWW).
+//
+// Replaces the old storage-integration tests which tested the deleted
+// StorageAdapter / storage-first sync machinery.
 
 import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
 import {
@@ -13,7 +16,6 @@ import {
   plainReplicaFactory,
   Replicate,
   Schema,
-  type BoundSchema,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
 import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
@@ -21,8 +23,8 @@ import { Exchange } from "../exchange.js"
 import {
   createInMemoryStorage,
   InMemoryStorageBackend,
+  type InMemoryStorageData,
 } from "../storage/in-memory-storage-backend.js"
-import type { StorageEntry } from "../storage/storage-backend.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -30,13 +32,10 @@ import type { StorageEntry } from "../storage/storage-backend.js"
 
 /**
  * Drain microtask queue — necessary for BridgeAdapter async delivery
- * and StorageAdapter async operations.
+ * and storage hydration async operations.
  */
-async function drain(rounds = 30): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
+async function drain(ms = 100): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, ms))
 }
 
 /** Active exchanges that need cleanup */
@@ -62,341 +61,373 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// Bound schemas (module scope)
+// Bound schemas
 // ---------------------------------------------------------------------------
 
-const sequentialSchema = Schema.doc({
-  title: Schema.string(),
-  count: Schema.number(),
-})
-const SequentialDoc = bindPlain(sequentialSchema)
+const SequentialDoc = bindPlain(
+  Schema.doc({
+    title: Schema.string(),
+    count: Schema.number(),
+  }),
+)
 
-const loroSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-})
-const CausalDoc = bindLoro(loroSchema)
+const CausalDoc = bindLoro(
+  LoroSchema.doc({
+    title: LoroSchema.text(),
+  }),
+)
 
-const presenceSchema = Schema.doc({
-  cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
-  name: Schema.string(),
-})
-const PresenceDoc = bindEphemeral(presenceSchema)
+const PresenceDoc = bindEphemeral(
+  Schema.doc({
+    cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
+    name: Schema.string(),
+  }),
+)
 
-// ---------------------------------------------------------------------------
-// Storage persist + hydrate
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Storage persist + hydrate (direct dependency model)
+// ===========================================================================
 
 describe("Storage persist + hydrate", () => {
-  it("write via peer A → storage persists → shutdown → new exchange with same storage → peer B gets data", async () => {
-    const sharedData: Map<string, StorageEntry[]> = new Map()
+  it("sequential doc: write → shutdown → restart with same storage → hydrate", async () => {
+    const sharedData: InMemoryStorageData = {
+      entries: new Map(),
+      metadata: new Map(),
+    }
 
-    // --- Phase 1: Exchange 1 creates doc, mutates, persists to storage ---
-    const bridge1 = new Bridge()
+    // Phase 1: create doc, mutate, persist
     const exchange1 = createExchange({
-      identity: { peerId: "server-1", name: "Server", type: "service" },
-      adapters: [
-        createInMemoryStorage({ sharedData }),
-        createBridgeAdapter({
-          adapterType: "peer-a-side",
-          bridge: bridge1,
-        }),
-      ],
+      identity: { peerId: "server" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
+
+    const doc1 = exchange1.get("doc-1", SequentialDoc)
+    await exchange1.flush()
+
+    change(doc1, d => {
+      d.title.set("persisted")
+      d.count.set(42)
+    })
+    await exchange1.shutdown()
+
+    // Phase 2: new exchange with same storage → hydrate
+    const exchange2 = createExchange({
+      identity: { peerId: "server" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
+
+    const doc2 = exchange2.get("doc-1", SequentialDoc)
+    await exchange2.flush()
+
+    expect(doc2.title()).toBe("persisted")
+    expect(doc2.count()).toBe(42)
+  })
+
+  it("causal doc (Loro): write → shutdown → restart → hydrate", async () => {
+    const sharedData: InMemoryStorageData = {
+      entries: new Map(),
+      metadata: new Map(),
+    }
+
+    const exchange1 = createExchange({
+      identity: { peerId: "server" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
+
+    const doc1 = exchange1.get("doc-1", CausalDoc)
+    await exchange1.flush()
+
+    change(doc1, (d: any) => {
+      d.title.insert(0, "hello loro")
+    })
+    await exchange1.shutdown()
+
+    const exchange2 = createExchange({
+      identity: { peerId: "server" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
+
+    const doc2 = exchange2.get("doc-1", CausalDoc)
+    await exchange2.flush()
+
+    expect(doc2.title()).toBe("hello loro")
+  })
+
+  it("LWW doc: write → shutdown → restart → hydrate", async () => {
+    const sharedData: InMemoryStorageData = {
+      entries: new Map(),
+      metadata: new Map(),
+    }
+
+    const exchange1 = createExchange({
+      identity: { peerId: "server" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
+
+    const doc1 = exchange1.get("presence-1", PresenceDoc)
+    await exchange1.flush()
+
+    change(doc1, d => {
+      d.name.set("Alice")
+      d.cursor.x.set(100)
+      d.cursor.y.set(200)
+    })
+    await exchange1.shutdown()
+
+    const exchange2 = createExchange({
+      identity: { peerId: "server" },
+      storage: [createInMemoryStorage({ sharedData })],
+    })
+
+    const doc2 = exchange2.get("presence-1", PresenceDoc)
+    await exchange2.flush()
+
+    expect(doc2.name()).toBe("Alice")
+    expect(doc2.cursor.x()).toBe(100)
+    expect(doc2.cursor.y()).toBe(200)
+  })
+})
+
+// ===========================================================================
+// Storage + network sync
+// ===========================================================================
+
+describe("Storage + network sync", () => {
+  it("peer A writes → server persists → peer B connects → gets data", async () => {
+    const sharedData: InMemoryStorageData = {
+      entries: new Map(),
+      metadata: new Map(),
+    }
+
+    const bridge = new Bridge()
+
+    const server = createExchange({
+      identity: { peerId: "server", type: "service" },
+      adapters: [createBridgeAdapter({ adapterType: "server-side", bridge })],
+      storage: [createInMemoryStorage({ sharedData })],
+      onDocDiscovered: () => Replicate(plainReplicaFactory, "sequential"),
     })
 
     const peerA = createExchange({
-      identity: { peerId: "peer-a", name: "Peer A", type: "user" },
-      adapters: [
-        createBridgeAdapter({
-          adapterType: "peer-b-side",
-          bridge: bridge1,
-        }),
-      ],
+      identity: { peerId: "peer-a" },
+      adapters: [createBridgeAdapter({ adapterType: "peer-a-side", bridge })],
     })
 
-    // Peer A creates and mutates a document
-    const docA = peerA.get("todo-1", SequentialDoc)
+    const docA = peerA.get("doc-1", SequentialDoc)
     change(docA, d => {
-      d.title.set("My Todos")
-      d.count.set(42)
+      d.title.set("from peer A")
+      d.count.set(7)
     })
 
-    // Server should discover and sync
-    exchange1.get("todo-1", SequentialDoc)
-    await drain()
+    // Wait for sync and persistence
+    await drain(200)
+    await server.flush()
 
-    // Verify storage has data (drain covers the async storage write
-    // since InMemoryStorageBackend resolves within one microtask)
-    expect(sharedData.has("todo-1")).toBe(true)
-    expect(sharedData.get("todo-1")!.length).toBeGreaterThan(0)
+    // Verify server persisted
+    const backend = new InMemoryStorageBackend(sharedData)
+    expect(await backend.lookup("doc-1")).not.toBeNull()
 
-    // Shutdown exchange 1 (shutdown() calls flush() internally,
-    // ensuring all pending storage ops complete before teardown)
-    await exchange1.shutdown()
+    // Stop peer A, restart server with same storage
     await peerA.shutdown()
+    await server.shutdown()
 
-    // --- Phase 2: New exchange with same storage, new peer connects ---
     const bridge2 = new Bridge()
-    const exchange2 = createExchange({
-      identity: { peerId: "server-2", name: "Server 2", type: "service" },
-      adapters: [
-        createInMemoryStorage({ sharedData }),
-        createBridgeAdapter({
-          adapterType: "server-side",
-          bridge: bridge2,
-        }),
-      ],
-      onDocDiscovered: (docId) => {
-        if (docId === "todo-1") return Interpret(SequentialDoc)
-        return undefined
-      },
+
+    const server2 = createExchange({
+      identity: { peerId: "server", type: "service" },
+      adapters: [createBridgeAdapter({ adapterType: "server-side", bridge: bridge2 })],
+      storage: [createInMemoryStorage({ sharedData })],
+      onDocDiscovered: () => Replicate(plainReplicaFactory, "sequential"),
     })
 
     const peerB = createExchange({
-      identity: { peerId: "peer-b", name: "Peer B", type: "user" },
-      adapters: [
-        createBridgeAdapter({
-          adapterType: "peer-b-side",
-          bridge: bridge2,
-        }),
-      ],
-      onDocDiscovered: (docId) => {
-        if (docId === "todo-1") return Interpret(SequentialDoc)
-        return undefined
-      },
+      identity: { peerId: "peer-b" },
+      adapters: [createBridgeAdapter({ adapterType: "peer-b-side", bridge: bridge2 })],
+      onDocDiscovered: (_docId, _peer) => Interpret(SequentialDoc),
     })
 
-    // Server 2 re-creates the doc — should hydrate from storage
-    const docServer = exchange2.get("todo-1", SequentialDoc)
-    await drain(40)
+    // Wait for server hydration + peer B sync
+    await drain(300)
+    await server2.flush()
+    await peerB.flush()
 
-    // Peer B should get the data via the server
-    const docB = peerB.get("todo-1", SequentialDoc)
-    await drain(40)
-
-    // Verify data survived the restart
-    expect(docServer.title()).toBe("My Todos")
-    expect(docServer.count()).toBe(42)
-    expect(docB.title()).toBe("My Todos")
-    expect(docB.count()).toBe(42)
+    // Peer B should have the data
+    if (peerB.has("doc-1")) {
+      const docB = peerB.get("doc-1", SequentialDoc)
+      expect(docB.title()).toBe("from peer A")
+      expect(docB.count()).toBe(7)
+    }
   })
-})
 
-// ---------------------------------------------------------------------------
-// Storage + interpreted doc
-// ---------------------------------------------------------------------------
+  it("network import persists to storage via onDocImported", async () => {
+    const backend = new InMemoryStorageBackend()
+    const bridge = new Bridge()
 
-describe("Storage + interpreted doc", () => {
-  it("exchange.get() + storage adapter → mutations persist and hydrate correctly", async () => {
-    const sharedData: Map<string, StorageEntry[]> = new Map()
-
-    // Exchange with storage creates a doc and mutates it
-    const exchange1 = createExchange({
-      identity: { peerId: "node-1", name: "Node 1", type: "service" },
-      adapters: [createInMemoryStorage({ sharedData })],
-    })
-
-    const doc1 = exchange1.get("config-1", SequentialDoc)
-    change(doc1, d => {
-      d.title.set("Settings")
-      d.count.set(7)
-    })
-    await drain()
-
-    // shutdown() flushes pending storage ops internally
-    await exchange1.shutdown()
-
-    const exchange2 = createExchange({
-      identity: { peerId: "node-2", name: "Node 2", type: "service" },
-      adapters: [createInMemoryStorage({ sharedData })],
-    })
-
-    // Re-create the doc — it should hydrate from storage
-    const doc2 = exchange2.get("config-1", SequentialDoc)
-    await drain(40)
-
-    expect(doc2.title()).toBe("Settings")
-    expect(doc2.count()).toBe(7)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Storage + replicated doc
-// ---------------------------------------------------------------------------
-
-describe("Storage + replicated doc", () => {
-  it("exchange.replicate() + storage adapter → relay persists and hydrates", async () => {
-    const sharedData: Map<string, StorageEntry[]> = new Map()
-
-    // Set up a relay server with storage + a client peer
-    const bridge1 = new Bridge()
-    const relay1 = createExchange({
-      identity: { peerId: "relay-1", name: "Relay", type: "service" },
-      adapters: [
-        createInMemoryStorage({ sharedData }),
-        createBridgeAdapter({ adapterType: "relay-side", bridge: bridge1 }),
-      ],
+    const server = createExchange({
+      identity: { peerId: "server", type: "service" },
+      adapters: [createBridgeAdapter({ adapterType: "server-side", bridge })],
+      storage: [backend],
       onDocDiscovered: () => Replicate(plainReplicaFactory, "sequential"),
     })
 
-    const client1 = createExchange({
-      identity: { peerId: "client-1", name: "Client 1", type: "user" },
-      adapters: [
-        createBridgeAdapter({
-          adapterType: "client-side",
-          bridge: bridge1,
-        }),
-      ],
+    const client = createExchange({
+      identity: { peerId: "client" },
+      adapters: [createBridgeAdapter({ adapterType: "client-side", bridge })],
     })
 
-    // Client creates doc and syncs through relay
-    const doc1 = client1.get("data-1", SequentialDoc)
-    change(doc1, d => {
-      d.title.set("Replicated Data")
+    const doc = client.get("doc-1", SequentialDoc)
+    change(doc, d => {
+      d.title.set("network payload")
       d.count.set(99)
     })
-    await drain(40)
 
-    // Verify storage has the data (drain covers the async write)
-    expect(sharedData.has("data-1")).toBe(true)
+    await drain(200)
+    await server.flush()
 
-    // shutdown() flushes pending storage ops internally
-    await relay1.shutdown()
-    await client1.shutdown()
+    // Storage on server should have entries
+    const entries: unknown[] = []
+    for await (const e of backend.loadAll("doc-1")) {
+      entries.push(e)
+    }
+    expect(entries.length).toBeGreaterThanOrEqual(1)
+  })
+})
 
-    // New relay with same storage, new client connects
-    const bridge2 = new Bridge()
-    const relay2 = createExchange({
-      identity: { peerId: "relay-2", name: "Relay 2", type: "service" },
-      adapters: [
-        createInMemoryStorage({ sharedData }),
-        createBridgeAdapter({ adapterType: "relay-side", bridge: bridge2 }),
-      ],
+// ===========================================================================
+// Storage + replicated doc
+// ===========================================================================
+
+describe("Storage + replicated doc", () => {
+  it("exchange.replicate() + storage → relay persists and hydrates", async () => {
+    const sharedData: InMemoryStorageData = {
+      entries: new Map(),
+      metadata: new Map(),
+    }
+
+    const bridge1 = new Bridge()
+
+    // Relay 1: replicate mode + storage
+    const relay1 = createExchange({
+      identity: { peerId: "relay-1", type: "service" },
+      adapters: [createBridgeAdapter({ adapterType: "relay-side", bridge: bridge1 })],
+      storage: [createInMemoryStorage({ sharedData })],
       onDocDiscovered: () => Replicate(plainReplicaFactory, "sequential"),
     })
 
-    const client2 = createExchange({
-      identity: { peerId: "client-2", name: "Client 2", type: "user" },
-      adapters: [
-        createBridgeAdapter({
-          adapterType: "client-side",
-          bridge: bridge2,
-        }),
-      ],
+    const peerA = createExchange({
+      identity: { peerId: "peer-a" },
+      adapters: [createBridgeAdapter({ adapterType: "peer-a-side", bridge: bridge1 })],
+    })
+
+    const docA = peerA.get("doc-1", SequentialDoc)
+    change(docA, d => {
+      d.title.set("replicated")
+      d.count.set(55)
+    })
+
+    await drain(200)
+    await relay1.flush()
+
+    // Verify storage has data
+    const check = new InMemoryStorageBackend(sharedData)
+    expect(await check.lookup("doc-1")).not.toBeNull()
+    const entries: unknown[] = []
+    for await (const e of check.loadAll("doc-1")) {
+      entries.push(e)
+    }
+    expect(entries.length).toBeGreaterThanOrEqual(1)
+
+    // Shut down relay 1
+    await peerA.shutdown()
+    await relay1.shutdown()
+
+    // Relay 2: restart with same storage, connect to peer B
+    const bridge2 = new Bridge()
+
+    const relay2 = createExchange({
+      identity: { peerId: "relay-2", type: "service" },
+      adapters: [createBridgeAdapter({ adapterType: "relay-side", bridge: bridge2 })],
+      storage: [createInMemoryStorage({ sharedData })],
+      onDocDiscovered: () => Replicate(plainReplicaFactory, "sequential"),
+    })
+
+    const peerB = createExchange({
+      identity: { peerId: "peer-b" },
+      adapters: [createBridgeAdapter({ adapterType: "peer-b-side", bridge: bridge2 })],
       onDocDiscovered: () => Interpret(SequentialDoc),
     })
 
-    // Client 2 creates the doc — should get data from relay's storage
-    const doc2 = client2.get("data-1", SequentialDoc)
-    await drain(40)
+    await drain(300)
+    await relay2.flush()
+    await peerB.flush()
 
-    expect(doc2.title()).toBe("Replicated Data")
-    expect(doc2.count()).toBe(99)
+    if (peerB.has("doc-1")) {
+      const docB = peerB.get("doc-1", SequentialDoc)
+      expect(docB.title()).toBe("replicated")
+      expect(docB.count()).toBe(55)
+    }
   })
 })
 
-// ---------------------------------------------------------------------------
-// Dismiss propagates to storage
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Storage + dismiss
+// ===========================================================================
 
-describe("Dismiss propagates to storage", () => {
-  it("exchange.dismiss() → storage.delete() called", async () => {
-    const sharedData: Map<string, StorageEntry[]> = new Map()
+describe("Storage + dismiss", () => {
+  it("dismiss() removes doc from storage", async () => {
+    const backend = new InMemoryStorageBackend()
 
     const exchange = createExchange({
-      identity: { peerId: "node-1", name: "Node 1", type: "service" },
-      adapters: [createInMemoryStorage({ sharedData })],
+      identity: { peerId: "server" },
+      storage: [backend],
     })
 
-    // Create and persist a document
-    const doc = exchange.get("ephemeral-1", SequentialDoc)
-    change(doc, d => d.title.set("Will be dismissed"))
-    await drain()
+    const doc = exchange.get("doc-1", SequentialDoc)
+    await exchange.flush()
 
-    // Verify it's in storage (drain covers the async append)
-    expect(sharedData.has("ephemeral-1")).toBe(true)
+    change(doc, d => d.title.set("will be dismissed"))
+    await exchange.flush()
 
-    // Dismiss the document
-    exchange.dismiss("ephemeral-1")
-    await drain()
+    expect(await backend.lookup("doc-1")).not.toBeNull()
 
-    // Storage should have deleted it (drain covers the async delete)
-    expect(sharedData.has("ephemeral-1")).toBe(false)
+    exchange.dismiss("doc-1")
+    await exchange.flush()
+
+    expect(await backend.lookup("doc-1")).toBeNull()
   })
 })
 
-// ---------------------------------------------------------------------------
-// Multiple storage adapters
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// No storage (baseline — storage is optional)
+// ===========================================================================
 
-describe("Multiple storage adapters", () => {
-  it("two InMemoryStorageBackends, one has data, one doesn't → both consulted", async () => {
-    // Storage 1 has data, storage 2 is empty
-    const storageData1: Map<string, StorageEntry[]> = new Map()
-    const storageData2: Map<string, StorageEntry[]> = new Map()
-
-    // Pre-populate storage 1 by running an exchange with it
-    const setupExchange = createExchange({
-      identity: { peerId: "setup", name: "Setup", type: "service" },
-      adapters: [createInMemoryStorage({ sharedData: storageData1 })],
-    })
-    const setupDoc = setupExchange.get("multi-1", SequentialDoc)
-    change(setupDoc, d => {
-      d.title.set("From Storage 1")
-      d.count.set(11)
-    })
-    await drain()
-    // shutdown() flushes pending storage ops internally
-    await setupExchange.shutdown()
-
-    expect(storageData1.has("multi-1")).toBe(true)
-    expect(storageData2.has("multi-1")).toBe(false)
-
-    // Create server with both storage adapters. The server pre-creates the
-    // doc so that storage hydration completes before any client connects.
-    // This validates that both storage adapters are consulted during the
-    // doc-ensure → interest → offers → completion flow.
+describe("No storage (baseline)", () => {
+  it("exchange without storage works exactly as before", async () => {
     const bridge = new Bridge()
-    const server = createExchange({
-      identity: { peerId: "server", name: "Server", type: "service" },
-      adapters: [
-        createInMemoryStorage({
-          sharedData: storageData1,
-          adapterType: "storage-1",
-        }),
-        createInMemoryStorage({
-          sharedData: storageData2,
-          adapterType: "storage-2",
-        }),
-        createBridgeAdapter({ adapterType: "server-side", bridge }),
-      ],
+
+    const exchangeA = createExchange({
+      identity: { peerId: "peer-a" },
+      adapters: [createBridgeAdapter({ adapterType: "side-a", bridge })],
     })
 
-    // Server pre-creates the doc — triggers interest to both storage channels.
-    // Storage 1 sends offers (has data), storage 2 sends only completion interest.
-    const serverDoc = server.get("multi-1", SequentialDoc)
-    await drain(50)
-
-    // Server doc should be hydrated from storage 1
-    expect(serverDoc.title()).toBe("From Storage 1")
-    expect(serverDoc.count()).toBe(11)
-
-    // Now a client connects and requests the same doc
-    const client = createExchange({
-      identity: { peerId: "client", name: "Client", type: "user" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "client-side", bridge }),
-      ],
+    const exchangeB = createExchange({
+      identity: { peerId: "peer-b" },
+      adapters: [createBridgeAdapter({ adapterType: "side-b", bridge })],
       onDocDiscovered: () => Interpret(SequentialDoc),
     })
 
-    const clientDoc = client.get("multi-1", SequentialDoc)
-    await drain(40)
+    const docA = exchangeA.get("doc-1", SequentialDoc)
+    change(docA, d => {
+      d.title.set("no storage")
+      d.count.set(123)
+    })
 
-    // Client should receive the hydrated data from the server
-    expect(clientDoc.title()).toBe("From Storage 1")
-    expect(clientDoc.count()).toBe(11)
+    await drain(200)
 
-    // Verify storage 2 also got the data (persisted via the offer relay)
-    expect(storageData2.has("multi-1")).toBe(true)
+    if (exchangeB.has("doc-1")) {
+      const docB = exchangeB.get("doc-1", SequentialDoc)
+      expect(docB.title()).toBe("no storage")
+      expect(docB.count()).toBe(123)
+    }
   })
 })

@@ -14,6 +14,7 @@ import type {
   MergeStrategy,
   Replica,
   ReplicaFactory,
+  ReplicaType,
   Substrate,
   SubstratePayload,
   Version,
@@ -29,6 +30,7 @@ import {
   init,
   type SynchronizerMessage,
   type SynchronizerModel,
+  type Notification,
 } from "./synchronizer-program.js"
 import type {
   ChannelId,
@@ -79,6 +81,8 @@ export type DocRuntime =
 export type DocCreationCallback = (
   docId: DocId,
   peer: PeerIdentityDetails,
+  replicaType: ReplicaType,
+  mergeStrategy: MergeStrategy,
 ) => void
 
 /**
@@ -90,6 +94,19 @@ export type DocDismissedCallback = (
   peer: PeerIdentityDetails,
 ) => void
 
+/**
+ * Callback invoked after a successful merge of imported document data.
+ * The Exchange uses this to persist incoming payloads to storage backends.
+ *
+ * Fired by `Synchronizer.#executeImportDocData` after `replica.merge()`
+ * succeeds — keeping the synchronizer program storage-free (FC/IS principle).
+ */
+export type DocImportedCallback = (
+  docId: DocId,
+  payload: SubstratePayload,
+  version: string,
+) => void
+
 export type SynchronizerParams = {
   identity: PeerIdentityDetails
   adapters?: AnyAdapter[]
@@ -97,6 +114,7 @@ export type SynchronizerParams = {
   authorize: AuthorizePredicate
   onDocCreationRequested?: DocCreationCallback
   onDocDismissed?: DocDismissedCallback
+  onDocImported?: DocImportedCallback
 }
 
 // ---------------------------------------------------------------------------
@@ -207,12 +225,20 @@ export class Synchronizer {
   readonly #docRuntimes = new Map<DocId, DocRuntime>()
   readonly #docCreationCallback?: DocCreationCallback
   readonly #docDismissedCallback?: DocDismissedCallback
+  readonly #docImportedCallback?: DocImportedCallback
 
   /**
    * Outbound message queue — accumulated during dispatch, flushed at quiescence.
    * This batches outbound messages to avoid interleaving with model updates.
    */
   readonly #outboundQueue: AddressedEnvelope[] = []
+
+  /**
+   * Dirty doc IDs accumulated during a dispatch cycle from Notification
+   * co-products. Drained at quiescence to emit targeted ready-state
+   * changes — only docs whose peer sync state actually changed.
+   */
+  readonly #dirtyDocIds: Set<DocId> = new Set()
 
   /**
    * Work queue for serialized async dispatch.
@@ -236,12 +262,14 @@ export class Synchronizer {
     authorize,
     onDocCreationRequested,
     onDocDismissed,
+    onDocImported,
   }: SynchronizerParams) {
     this.identity = identity
 
     this.#updateFn = createSynchronizerUpdate({ route, authorize })
     this.#docCreationCallback = onDocCreationRequested
     this.#docDismissedCallback = onDocDismissed
+    this.#docImportedCallback = onDocImported
 
     // Initialize model
     const [initialModel, initialCommand] = init(this.identity)
@@ -295,6 +323,7 @@ export class Synchronizer {
       docId: runtime.docId,
       mode: runtime.mode,
       version: runtime.replica.version().serialize(),
+      replicaType: runtime.replicaFactory.replicaType,
       mergeStrategy: runtime.strategy,
     })
   }
@@ -387,22 +416,20 @@ export class Synchronizer {
   }
 
   /**
-   * Wait until a document is synced with at least one peer of the
-   * specified kind.
+   * Wait until a document is synced with at least one peer.
    */
   async waitUntilReady(
     docId: DocId,
-    kind: "network" | "storage" = "network",
     timeoutMs = 30000,
   ): Promise<void> {
     // Check if already ready
-    if (this.#isReady(docId, kind)) return
+    if (this.#isReady(docId)) return
 
     return new Promise<void>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined
 
       const listener = (changedDocId: DocId) => {
-        if (changedDocId === docId && this.#isReady(docId, kind)) {
+        if (changedDocId === docId && this.#isReady(docId)) {
           cleanup()
           resolve()
         }
@@ -420,7 +447,7 @@ export class Synchronizer {
           cleanup()
           reject(
             new Error(
-              `waitForSync timed out after ${timeoutMs}ms for doc '${docId}' (kind: ${kind})`,
+              `waitForSync timed out after ${timeoutMs}ms for doc '${docId}'`,
             ),
           )
         }, timeoutMs)
@@ -438,18 +465,15 @@ export class Synchronizer {
     return () => this.#readyStateListeners.delete(cb)
   }
 
-  #isReady(docId: DocId, kind: "network" | "storage"): boolean {
+  #isReady(docId: DocId): boolean {
     for (const [_peerId, peerState] of this.model.peers) {
       const docSync = peerState.docSyncStates.get(docId)
       if (!docSync) continue
 
       if (docSync.status === "synced" || docSync.status === "absent") {
-        // Check if this peer has a channel of the requested kind
-        for (const channelId of peerState.channels) {
-          const channel = this.model.channels.get(channelId)
-          if (channel && channel.kind === kind) {
-            return true
-          }
+        // At least one peer has completed sync for this doc
+        if (peerState.channels.size > 0) {
+          return true
         }
       }
     }
@@ -546,20 +570,45 @@ export class Synchronizer {
         this.#dispatchInternal(nextMsg)
       }
 
-      // Quiescence — flush outbound messages
+      // Quiescence — flush outbound messages, then emit targeted
+      // ready-state changes only for docs that were actually touched.
       this.#flushOutbound()
       this.#emitReadyStateChanges()
     } finally {
+      this.#dirtyDocIds.clear()
       this.#dispatching = false
     }
   }
 
   #dispatchInternal(msg: SynchronizerMessage): void {
-    const [newModel, command] = this.#updateFn(msg, this.model)
+    const [newModel, command, notification] = this.#updateFn(msg, this.model)
     this.model = newModel
+
+    if (notification) {
+      this.#accumulateNotification(notification)
+    }
 
     if (command) {
       this.#executeCommand(command)
+    }
+  }
+
+  /**
+   * Accumulate a notification into the dirty set for this dispatch cycle.
+   * Recursively flattens batch notifications.
+   */
+  #accumulateNotification(notification: Notification): void {
+    switch (notification.type) {
+      case "notify/ready-state-changed":
+        for (const docId of notification.docIds) {
+          this.#dirtyDocIds.add(docId)
+        }
+        break
+      case "notify/batch":
+        for (const sub of notification.notifications) {
+          this.#accumulateNotification(sub)
+        }
+        break
     }
   }
 
@@ -593,7 +642,12 @@ export class Synchronizer {
         // Fire-and-forget: if the callback calls exchange.get(), that
         // triggers registerDoc() → #dispatch(doc-ensure), which is
         // queued in #pendingMessages and processed before quiescence.
-        this.#docCreationCallback?.(command.docId, command.peer)
+        this.#docCreationCallback?.(
+          command.docId,
+          command.peer,
+          command.replicaType,
+          command.mergeStrategy,
+        )
         break
 
       case "cmd/notify-doc-dismissed":
@@ -732,10 +786,24 @@ export class Synchronizer {
     try {
       runtime.replica.merge(command.payload, "sync")
     } catch (err) {
-      // Import failed — log and continue
-      console.warn(`[exchange] import failed for doc '${command.docId}':`, err)
+      // Import failed — log and continue. A common cause is replica type
+      // mismatch: e.g. Loro binary data fed to a Yjs decoder after switching
+      // CRDT backends. Check for stale clients sending incompatible data.
+      console.warn(
+        `[exchange] import failed for doc '${command.docId}'. ` +
+          `If you recently switched CRDT backends, stale clients may be sending incompatible data.`,
+        err,
+      )
       return
     }
+
+    // Fire the imported callback so the Exchange can persist to storage.
+    // This happens before the model update — the callback is fire-and-forget.
+    this.#docImportedCallback?.(
+      command.docId,
+      command.payload,
+      command.version,
+    )
 
     // Notify the model of successful import
     const newVersion = runtime.replica.version().serialize()
@@ -764,9 +832,14 @@ export class Synchronizer {
 
   #emitReadyStateChanges(): void {
     if (this.#readyStateListeners.size === 0) return
+    if (this.#dirtyDocIds.size === 0) return
 
-    // Emit for all tracked documents
-    for (const docId of this.#docRuntimes.keys()) {
+    // Emit only for docs whose peer sync state was touched this cycle.
+    for (const docId of this.#dirtyDocIds) {
+      // Only emit if we still track this doc (it may have been removed
+      // during the same dispatch cycle).
+      if (!this.#docRuntimes.has(docId)) continue
+
       const readyStates = this.getReadyStates(docId)
       for (const listener of this.#readyStateListeners) {
         listener(docId, readyStates)

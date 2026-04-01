@@ -6,7 +6,7 @@
 //
 // Wire type ranges:
 //   0x01–0x0F: Connection establishment
-//   0x10–0x1F: Exchange messages (discover, interest, offer)
+//   0x10–0x1F: Exchange messages (present, interest, offer)
 
 // ---------------------------------------------------------------------------
 // Message type discriminators
@@ -20,7 +20,7 @@
 export const MessageType = {
   EstablishRequest: 0x01,
   EstablishResponse: 0x02,
-  Discover: 0x10,
+  Present: 0x10,
   Interest: 0x11,
   Offer: 0x12,
   Dismiss: 0x13,
@@ -34,7 +34,7 @@ export type MessageTypeValue = (typeof MessageType)[keyof typeof MessageType]
 export const MessageTypeToString: Record<MessageTypeValue, string> = {
   [MessageType.EstablishRequest]: "establish-request",
   [MessageType.EstablishResponse]: "establish-response",
-  [MessageType.Discover]: "discover",
+  [MessageType.Present]: "present",
   [MessageType.Interest]: "interest",
   [MessageType.Offer]: "offer",
   [MessageType.Dismiss]: "dismiss",
@@ -46,7 +46,7 @@ export const MessageTypeToString: Record<MessageTypeValue, string> = {
 export const StringToMessageType: Record<string, MessageTypeValue> = {
   "establish-request": MessageType.EstablishRequest,
   "establish-response": MessageType.EstablishResponse,
-  discover: MessageType.Discover,
+  present: MessageType.Present,
   interest: MessageType.Interest,
   offer: MessageType.Offer,
   dismiss: MessageType.Dismiss,
@@ -120,6 +120,46 @@ export const StringToPayloadEncoding: Record<string, PayloadEncodingValue> = {
 }
 
 // ---------------------------------------------------------------------------
+// MergeStrategy discriminators
+// ---------------------------------------------------------------------------
+
+/**
+ * Integer discriminators for MergeStrategy on the wire.
+ */
+export const MergeStrategyWire = {
+  Causal: 0x00,
+  Sequential: 0x01,
+  Lww: 0x02,
+} as const
+
+export type MergeStrategyWireValue =
+  (typeof MergeStrategyWire)[keyof typeof MergeStrategyWire]
+
+/**
+ * Reverse lookup: merge strategy integer → string.
+ */
+export const MergeStrategyWireToString: Record<
+  MergeStrategyWireValue,
+  "causal" | "sequential" | "lww"
+> = {
+  [MergeStrategyWire.Causal]: "causal",
+  [MergeStrategyWire.Sequential]: "sequential",
+  [MergeStrategyWire.Lww]: "lww",
+}
+
+/**
+ * Forward lookup: merge strategy string → integer.
+ */
+export const StringToMergeStrategyWire: Record<
+  string,
+  MergeStrategyWireValue
+> = {
+  causal: MergeStrategyWire.Causal,
+  sequential: MergeStrategyWire.Sequential,
+  lww: MergeStrategyWire.Lww,
+}
+
+// ---------------------------------------------------------------------------
 // Compact wire object types (CBOR)
 // ---------------------------------------------------------------------------
 
@@ -130,13 +170,15 @@ export const StringToPayloadEncoding: Record<string, PayloadEncodingValue> = {
  *   id  — peerId (string)
  *   n   — name (string, optional)
  *   y   — peer type ("user" | "bot" | "service")
- *   docs — docIds (string[])
+ *   docs — present docs array
  *   doc — docId (string)
+ *   d   — docId within present entry / payload data
+ *   rt  — replicaType tuple [string, number, number]
+ *   ms  — mergeStrategy (MergeStrategyWireValue)
  *   v   — version (string, serialized)
  *   r   — reciprocate (boolean, optional)
  *   pk  — payload kind (PayloadKindValue)
  *   pe  — payload encoding (PayloadEncodingValue)
- *   d   — payload data (string | Uint8Array)
  */
 
 /** Compact wire format for establish-request / establish-response. */
@@ -147,10 +189,14 @@ export type WireEstablishMsg = {
   y: "user" | "bot" | "service"
 }
 
-/** Compact wire format for discover. */
-export type WireDiscoverMsg = {
-  t: typeof MessageType.Discover
-  docs: string[]
+/** Compact wire format for present. */
+export type WirePresentMsg = {
+  t: typeof MessageType.Present
+  docs: Array<{
+    d: string
+    rt: [string, number, number]
+    ms: MergeStrategyWireValue
+  }>
 }
 
 /** Compact wire format for interest. */
@@ -181,7 +227,7 @@ export type WireDismissMsg = {
 /** Union of all compact wire message types. */
 export type WireMessage =
   | WireEstablishMsg
-  | WireDiscoverMsg
+  | WirePresentMsg
   | WireInterestMsg
   | WireOfferMsg
   | WireDismissMsg

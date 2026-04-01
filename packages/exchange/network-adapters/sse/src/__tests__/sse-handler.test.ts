@@ -19,9 +19,12 @@ import { parseTextPostBody } from "../sse-handler.js"
 // Helpers
 // ---------------------------------------------------------------------------
 
-const discoverMsg: ChannelMsg = {
-  type: "discover",
-  docIds: ["doc-1", "doc-2"],
+const presentMsg: ChannelMsg = {
+  type: "present",
+  docs: [
+    { docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const },
+    { docId: "doc-2", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const },
+  ],
 }
 
 const interestMsg: ChannelMsg = {
@@ -40,16 +43,16 @@ function encodeAsTextFrame(msg: ChannelMsg): string {
 // ---------------------------------------------------------------------------
 
 describe("parseTextPostBody — complete frame", () => {
-  it("decodes a discover message from a complete text frame", () => {
+  it("decodes a present message from a complete text frame", () => {
     const reassembler = new TextReassembler()
-    const body = encodeAsTextFrame(discoverMsg)
+    const body = encodeAsTextFrame(presentMsg)
 
     const result = parseTextPostBody(reassembler, body)
 
     expect(result.type).toBe("messages")
     if (result.type !== "messages") throw new Error("unreachable")
     expect(result.messages).toHaveLength(1)
-    expect(result.messages[0]).toEqual(discoverMsg)
+    expect(result.messages[0]).toEqual(presentMsg)
     expect(result.response).toEqual({ status: 200, body: { ok: true } })
 
     reassembler.dispose()
@@ -78,7 +81,7 @@ describe("parseTextPostBody — fragments", () => {
     const reassembler = new TextReassembler()
 
     // Encode the message payload and fragment it into small chunks
-    const payload = JSON.stringify(textCodec.encode(discoverMsg))
+    const payload = JSON.stringify(textCodec.encode(presentMsg))
     const fragments = fragmentTextPayload(payload, 20) // very small chunks
 
     expect(fragments.length).toBeGreaterThan(1)
@@ -98,7 +101,7 @@ describe("parseTextPostBody — fragments", () => {
     expect(finalResult.type).toBe("messages")
     if (finalResult.type !== "messages") throw new Error("unreachable")
     expect(finalResult.messages).toHaveLength(1)
-    expect(finalResult.messages[0]).toEqual(discoverMsg)
+    expect(finalResult.messages[0]).toEqual(presentMsg)
     expect(finalResult.response).toEqual({ status: 200, body: { ok: true } })
 
     reassembler.dispose()
@@ -124,7 +127,7 @@ describe("parseTextPostBody — errors", () => {
   it("returns error for valid JSON that is not a text frame", () => {
     const reassembler = new TextReassembler()
 
-    const result = parseTextPostBody(reassembler, '{"type":"discover"}')
+    const result = parseTextPostBody(reassembler, '{"type":"present"}')
 
     expect(result.type).toBe("error")
     expect(result.response.status).toBe(400)

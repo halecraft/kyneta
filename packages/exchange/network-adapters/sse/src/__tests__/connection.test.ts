@@ -27,13 +27,16 @@ function createMockChannel() {
     onReceive: vi.fn(),
     send: vi.fn(),
     type: "connected" as const,
-    meta: { kind: "network" as const, adapterType: "sse-server" },
+    adapterType: "sse-server",
   }
 }
 
-const discoverMsg: ChannelMsg = {
-  type: "discover",
-  docIds: ["doc-1", "doc-2"],
+const presentMsg: ChannelMsg = {
+  type: "present",
+  docs: [
+    { docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const },
+    { docId: "doc-2", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const },
+  ],
 }
 
 const establishMsg: ChannelMsg = {
@@ -52,7 +55,7 @@ describe("SseConnection — send", () => {
     conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
-    conn.send(discoverMsg)
+    conn.send(presentMsg)
 
     expect(sent).toHaveLength(1)
 
@@ -62,7 +65,7 @@ describe("SseConnection — send", () => {
     const parsed = JSON.parse(frame.content.payload)
     const decoded = textCodec.decode(parsed)
     expect(decoded).toHaveLength(1)
-    expect(decoded[0]).toEqual(discoverMsg)
+    expect(decoded[0]).toEqual(presentMsg)
   })
 
   it("round-trips establish-request with identity", () => {
@@ -82,7 +85,7 @@ describe("SseConnection — send", () => {
     const conn = createConnection()
     conn._setChannel(createMockChannel() as any)
 
-    expect(() => conn.send(discoverMsg)).toThrow(
+    expect(() => conn.send(presentMsg)).toThrow(
       "Cannot send message: send function not set",
     )
   })
@@ -99,7 +102,7 @@ describe("SseConnection — fragmentation", () => {
     conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
-    conn.send(discoverMsg)
+    conn.send(presentMsg)
 
     // Small message → single call
     expect(sent).toHaveLength(1)
@@ -114,7 +117,7 @@ describe("SseConnection — fragmentation", () => {
     conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
-    conn.send(discoverMsg)
+    conn.send(presentMsg)
 
     // Should produce multiple fragments
     expect(sent.length).toBeGreaterThan(1)
@@ -130,7 +133,7 @@ describe("SseConnection — fragmentation", () => {
     conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
-    conn.send(discoverMsg)
+    conn.send(presentMsg)
 
     expect(sent).toHaveLength(1)
   })
@@ -146,16 +149,16 @@ describe("SseConnection — receive", () => {
     const channel = createMockChannel()
     conn._setChannel(channel as any)
 
-    conn.receive(discoverMsg)
+    conn.receive(presentMsg)
 
     expect(channel.onReceive).toHaveBeenCalledTimes(1)
-    expect(channel.onReceive).toHaveBeenCalledWith(discoverMsg)
+    expect(channel.onReceive).toHaveBeenCalledWith(presentMsg)
   })
 
   it("throws if channel not set", () => {
     const conn = createConnection()
 
-    expect(() => conn.receive(discoverMsg)).toThrow(
+    expect(() => conn.receive(presentMsg)).toThrow(
       "Cannot receive message: channel not set",
     )
   })

@@ -260,7 +260,6 @@ export class SseClientAdapter extends Adapter<void> {
 
   protected generate(): GeneratedChannel {
     return {
-      kind: "network",
       adapterType: this.adapterType,
       send: (msg: ChannelMsg) => {
         if (!this.#peerId) {

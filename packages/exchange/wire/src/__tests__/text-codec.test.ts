@@ -9,7 +9,7 @@
 
 import type {
   ChannelMsg,
-  DiscoverMsg,
+  PresentMsg,
   DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
@@ -94,20 +94,20 @@ describe("Text codec — establishment messages", () => {
 // Exchange messages
 // ---------------------------------------------------------------------------
 
-describe("Text codec — discover", () => {
-  it("round-trips discover with multiple docIds", () => {
-    const msg: DiscoverMsg = {
-      type: "discover",
-      docIds: ["doc-1", "doc-2", "doc-3"],
+describe("Text codec — present", () => {
+  it("round-trips present with multiple docIds", () => {
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "doc-2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }, { docId: "doc-3", replicaType: ["loro", 1, 0] as const, mergeStrategy: "lww" as const }],
     }
     const decoded = roundTrip(msg)
     expect(decoded).toEqual(msg)
   })
 
-  it("round-trips discover with empty docIds", () => {
-    const msg: DiscoverMsg = {
-      type: "discover",
-      docIds: [],
+  it("round-trips present with empty docIds", () => {
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [],
     }
     const decoded = roundTrip(msg)
     expect(decoded).toEqual(msg)
@@ -301,8 +301,8 @@ describe("Text codec — batch", () => {
         identity: { peerId: "p1", name: "Peer One", type: "user" },
       },
       {
-        type: "discover",
-        docIds: ["d1", "d2"],
+        type: "present",
+        docs: [{ docId: "d1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "d2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }],
       },
       {
         type: "interest",
@@ -332,7 +332,7 @@ describe("Text codec — batch", () => {
     const decoded = textCodec.decode(encoded)
     expect(decoded).toHaveLength(5)
     expect(decoded[0]!.type).toBe("establish-request")
-    expect(decoded[1]!.type).toBe("discover")
+    expect(decoded[1]!.type).toBe("present")
     expect(decoded[2]!.type).toBe("interest")
     expect(decoded[3]!.type).toBe("offer")
     expect(decoded[4]!.type).toBe("dismiss")
@@ -405,7 +405,7 @@ describe("Text codec — JSON-safe output", () => {
 
   it("encode(batch) output survives JSON.stringify → JSON.parse round-trip", () => {
     const msgs: ChannelMsg[] = [
-      { type: "discover", docIds: ["a"] },
+      { type: "present", docs: [{ docId: "a", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
       {
         type: "offer",
         docId: "b",
@@ -424,7 +424,7 @@ describe("Text codec — JSON-safe output", () => {
     const decoded = textCodec.decode(deserialized)
 
     expect(decoded).toHaveLength(2)
-    expect(decoded[0]!.type).toBe("discover")
+    expect(decoded[0]!.type).toBe("present")
     const offer = decoded[1] as OfferMsg
     expect(offer.payload.data).toEqual(new Uint8Array([10, 20]))
   })

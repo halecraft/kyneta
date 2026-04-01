@@ -6,7 +6,7 @@
 
 import type {
   ChannelMsg,
-  DiscoverMsg,
+  PresentMsg,
   DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
@@ -82,20 +82,20 @@ describe("CBOR codec — establishment messages", () => {
 // Exchange messages
 // ---------------------------------------------------------------------------
 
-describe("CBOR codec — discover", () => {
-  it("round-trips discover with multiple docIds", () => {
-    const msg: DiscoverMsg = {
-      type: "discover",
-      docIds: ["doc-1", "doc-2", "doc-3"],
+describe("CBOR codec — present", () => {
+  it("round-trips present with multiple docIds", () => {
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "doc-2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }, { docId: "doc-3", replicaType: ["loro", 1, 0] as const, mergeStrategy: "lww" as const }],
     }
     const decoded = roundTrip(msg)
     expect(decoded).toEqual(msg)
   })
 
-  it("round-trips discover with empty docIds", () => {
-    const msg: DiscoverMsg = {
-      type: "discover",
-      docIds: [],
+  it("round-trips present with empty docIds", () => {
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [],
     }
     const decoded = roundTrip(msg)
     expect(decoded).toEqual(msg)
@@ -245,8 +245,8 @@ describe("CBOR codec — batch", () => {
         identity: { peerId: "p1", name: "Peer One", type: "user" },
       },
       {
-        type: "discover",
-        docIds: ["d1", "d2"],
+        type: "present",
+        docs: [{ docId: "d1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "d2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }],
       },
       {
         type: "interest",
@@ -277,7 +277,7 @@ describe("CBOR codec — batch", () => {
     const decoded = cborCodec.decode(encoded)
     expect(decoded).toHaveLength(5)
     expect(decoded[0]!.type).toBe("establish-request")
-    expect(decoded[1]!.type).toBe("discover")
+    expect(decoded[1]!.type).toBe("present")
     expect(decoded[2]!.type).toBe("interest")
     expect(decoded[3]!.type).toBe("offer")
     expect(decoded[4]!.type).toBe("dismiss")

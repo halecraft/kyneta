@@ -59,7 +59,7 @@ export {
   StringToMessageType,
   StringToPayloadEncoding,
   StringToPayloadKind,
-  type WireDiscoverMsg,
+  type WirePresentMsg,
   type WireEstablishMsg,
   type WireInterestMsg,
   type WireMessage,
