@@ -1,6 +1,6 @@
-// store-reader — YjsStoreReader implementation.
+// store-reader — YjsReader implementation.
 //
-// Implements StoreReader via schema-guided live navigation of the
+// Implements Reader via schema-guided live navigation of the
 // Yjs shared type tree. Each read operation resolves the shared type
 // at the given path using resolveYjsType, then extracts the
 // appropriate value based on `instanceof` discrimination.
@@ -8,7 +8,7 @@
 // Y.Text → .toJSON() (string), Y.Map → .toJSON() (plain object),
 // Y.Array → .toJSON() (plain array), plain values → as-is.
 
-import type { Path, Schema as SchemaNode, StoreReader } from "@kyneta/schema"
+import type { Path, Schema as SchemaNode, Reader } from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
 
@@ -39,11 +39,11 @@ function extractValue(resolved: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
-// yjsStoreReader
+// yjsReader
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a StoreReader that navigates the Yjs shared type tree live,
+ * Creates a Reader that navigates the Yjs shared type tree live,
  * using the schema as a type witness to determine navigation at each
  * path segment.
  *
@@ -56,7 +56,7 @@ function extractValue(resolved: unknown): unknown {
  * @param doc - The Y.Doc to read from.
  * @param schema - The root schema for the document.
  */
-export function yjsStoreReader(doc: Y.Doc, schema: SchemaNode): StoreReader {
+export function yjsReader(doc: Y.Doc, schema: SchemaNode): Reader {
   const rootMap = doc.getMap("root")
 
   return {

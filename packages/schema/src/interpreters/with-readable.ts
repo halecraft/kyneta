@@ -73,11 +73,11 @@ export function withReadable<A extends HasNavigation>(
       const result = base.scalar(ctx, path, schema) as any
 
       // Fill CALL slot
-      result[CALL] = () => ctx.store.read(path)
+      result[CALL] = () => ctx.reader.read(path)
 
       // Hint-aware toPrimitive for template literal coercion
       result[Symbol.toPrimitive] = (hint: string) => {
-        const v = ctx.store.read(path)
+        const v = ctx.reader.read(path)
         return hint === "string" ? String(v) : v
       }
 
@@ -127,7 +127,7 @@ export function withReadable<A extends HasNavigation>(
       // calling ref() (e.g. in conditionalRegion) would bypass withCaching
       // and create fresh carriers that overwrite address table entries.
       result[CALL] = () => {
-        const len = ctx.store.arrayLength(path)
+        const len = ctx.reader.arrayLength(path)
         const snapshot: unknown[] = []
         for (let i = 0; i < len; i++) {
           const child: unknown = result.at(i)
@@ -168,7 +168,7 @@ export function withReadable<A extends HasNavigation>(
       // calling ref() would bypass withCaching and create fresh carriers
       // that overwrite address table entries.
       result[CALL] = () => {
-        const keys = ctx.store.keys(path)
+        const keys = ctx.reader.keys(path)
         const snapshot: Record<string, unknown> = {}
         for (const key of keys) {
           const child: unknown = result.at(key)
@@ -218,7 +218,7 @@ export function withReadable<A extends HasNavigation>(
           const result = base.annotated(ctx, path, schema, baseInner) as any
 
           result[CALL] = () => {
-            const v = ctx.store.read(path)
+            const v = ctx.reader.read(path)
             return typeof v === "string" ? v : String(v ?? "")
           }
           result[Symbol.toPrimitive] = (_hint: string) => result[CALL]()
@@ -231,7 +231,7 @@ export function withReadable<A extends HasNavigation>(
           const result = base.annotated(ctx, path, schema, baseInner) as any
 
           result[CALL] = () => {
-            const v = ctx.store.read(path)
+            const v = ctx.reader.read(path)
             return typeof v === "number" ? v : 0
           }
           result[Symbol.toPrimitive] = (hint: string) => {

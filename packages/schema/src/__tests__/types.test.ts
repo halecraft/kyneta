@@ -29,7 +29,7 @@ import {
   type ProductRef,
   type ProductSchema,
   plainContext,
-  plainStoreReader,
+  plainReader,
   type Readable,
   type ReadableBrand,
   type ReadableMapRef,
@@ -1451,7 +1451,7 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
   })
 
   it(".with(readable).done() → RRef<S>", () => {
-    const ctx: RefContext = { store: plainStoreReader({ x: 0, y: 0 }) }
+    const ctx: RefContext = { reader: plainReader({ x: 0, y: 0 }) }
     const result = interpret(pointSchema, ctx).with(readable).done()
     expectTypeOf(result).toEqualTypeOf<RRef<typeof pointSchema>>()
   })
@@ -1487,7 +1487,7 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
   })
 
   it("read-only result does NOT have .set or [TRANSACT]", () => {
-    const ctx: RefContext = { store: plainStoreReader({ x: 0, y: 0 }) }
+    const ctx: RefContext = { reader: plainReader({ x: 0, y: 0 }) }
     const result = interpret(pointSchema, ctx).with(readable).done()
     // RRef<S> = Readable<S> — no mutation, no transact
     type HasSet = typeof result extends { set: any } ? true : false
@@ -1503,7 +1503,7 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
         return base
       },
     }
-    const ctx: RefContext = { store: plainStoreReader({ x: 0, y: 0 }) }
+    const ctx: RefContext = { reader: plainReader({ x: 0, y: 0 }) }
     const result = interpret(pointSchema, ctx).with(tagging).done()
     expectTypeOf(result).toEqualTypeOf<unknown>()
   })
@@ -1607,7 +1607,7 @@ describe("type-level: withChangefeed contributes HasChangefeed to A", () => {
 describe("type-level: InterpretBuilder<S, Ctx, Brands>", () => {
   it("two-arg interpret returns InterpretBuilder with schema type", () => {
     const pointSchema = Schema.doc({ x: Schema.number(), y: Schema.number() })
-    const ctx: RefContext = { store: plainStoreReader({ x: 0, y: 0 }) }
+    const ctx: RefContext = { reader: plainReader({ x: 0, y: 0 }) }
     const builder = interpret(pointSchema, ctx)
     expectTypeOf(builder).toMatchTypeOf<
       InterpretBuilder<typeof pointSchema, RefContext, unknown>
@@ -1616,7 +1616,7 @@ describe("type-level: InterpretBuilder<S, Ctx, Brands>", () => {
 
   it("field access on inferred builder result is well-typed", () => {
     const docSchema = Schema.doc({ title: Schema.string() })
-    const ctx: RefContext = { store: plainStoreReader({ title: "hi" }) }
+    const ctx: RefContext = { reader: plainReader({ title: "hi" }) }
     const result = interpret(docSchema, ctx).with(readable).done()
     // RRef<S> = Readable<S> — should be callable
     expectTypeOf(result.title).toBeCallableWith()

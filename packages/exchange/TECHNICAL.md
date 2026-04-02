@@ -417,7 +417,7 @@ The synchronizer calls `replica.merge(payload, "sync")`. The substrate dispatche
 
 The LWW substrate pattern is implemented by `lwwSubstrateFactory` in `@kyneta/schema` (`src/substrates/lww.ts`), consumed by `bindEphemeral()`. The internal `wrapWithTimestamp()` helper uses the decorator pattern to wrap a `PlainSubstrate` with `TimestampVersion`:
 
-- **State management**: delegates to the inner `PlainSubstrate` (same `StoreReader`, `applyChangeToStore`, interpreter stack)
+- **State management**: delegates to the inner `PlainSubstrate` (same `Reader`, `applyChange`, interpreter stack)
 - **Version tracking**: `TimestampVersion` bumped on every `onFlush()` and `merge()`
 - **Export**: always `exportEntirety()` (full state). `exportSince()` delegates to `inner.exportEntirety()` for defensive correctness, but is never called in practice — the synchronizer never sets `sinceVersion` for LWW docs, so the runtime always falls through to `exportEntirety()`.
 - **Import**: delegates to inner `PlainSubstrate`

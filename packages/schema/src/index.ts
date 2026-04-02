@@ -259,16 +259,13 @@ export {
   stepSequence,
   stepText,
 } from "./step.js"
-export type { Store, StoreReader } from "./store.js"
-// Store — shared utilities for reading/writing plain JS object stores
+export type { PlainState, Reader } from "./reader.js"
+// Reader — shared utilities for reading/writing plain state objects
 export {
-  applyChangeToStore,
-  plainStoreReader,
-  storeArrayLength,
-  storeHasKey,
-  storeKeys,
+  applyChange,
+  plainReader,
   writeByPath,
-} from "./store.js"
+} from "./reader.js"
 // Substrate — state management, versioning, and transfer semantics
 export type {
   DocMetadata,

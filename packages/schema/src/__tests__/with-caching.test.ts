@@ -4,7 +4,7 @@ import {
   mapChange,
   plainContext,
   plainInterpreter,
-  plainStoreReader,
+  plainReader,
   replaceChange,
   Schema,
   sequenceChange,
@@ -62,7 +62,7 @@ function createDoc(
   schema: Parameters<typeof interpret>[0],
   store: Record<string, unknown>,
 ) {
-  const ctx: RefContext = { store: plainStoreReader(store) }
+  const ctx: RefContext = { reader: plainReader(store) }
   const doc = interpret(schema, cachedInterp, ctx) as any
   return { doc, store, ctx }
 }
@@ -71,7 +71,7 @@ function createDocNoAddressing(
   schema: Parameters<typeof interpret>[0],
   store: Record<string, unknown>,
 ) {
-  const ctx: RefContext = { store: plainStoreReader(store) }
+  const ctx: RefContext = { reader: plainReader(store) }
   const doc = interpret(schema, cachedInterpNoAddressing, ctx) as any
   return { doc, store, ctx }
 }
@@ -732,7 +732,7 @@ describe("withCaching: read-only stack backward compatibility", () => {
     const store = {
       settings: { darkMode: false, fontSize: 14 },
     }
-    const ctx: RefContext = { store: plainStoreReader(store) }
+    const ctx: RefContext = { reader: plainReader(store) }
     const schema = Schema.doc({
       settings: Schema.struct({
         darkMode: Schema.boolean(),
@@ -772,7 +772,7 @@ describe("type-level: withCaching", () => {
 
   it("result of cached interpreter satisfies HasCaching", () => {
     const cached = withCaching(withReadable(withNavigation(bottomInterpreter)))
-    const ctx: RefContext = { store: plainStoreReader({ n: 1 }) }
+    const ctx: RefContext = { reader: plainReader({ n: 1 }) }
     const result = interpret(Schema.struct({ n: Schema.number() }), cached, ctx)
     const _check: HasCaching = result
     void _check
@@ -780,7 +780,7 @@ describe("type-level: withCaching", () => {
 
   it("result of cached interpreter also satisfies HasNavigation and HasCall", () => {
     const cached = withCaching(withReadable(withNavigation(bottomInterpreter)))
-    const ctx: RefContext = { store: plainStoreReader("test" as any) }
+    const ctx: RefContext = { reader: plainReader("test" as any) }
     const result = interpret(Schema.string(), cached, ctx)
     const _checkNav: HasNavigation = result
     const _checkRead: HasCall = result

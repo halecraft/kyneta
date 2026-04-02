@@ -95,7 +95,7 @@ export function withNavigation<A extends HasCall>(
           const fieldPath = path.field(key)
           Object.defineProperty(result, key, {
             get() {
-              return ctx.store.read(fieldPath)
+              return ctx.reader.read(fieldPath)
             },
             enumerable: true,
             configurable: true,
@@ -131,7 +131,7 @@ export function withNavigation<A extends HasCall>(
       // Bounds checking: negative or out-of-bounds returns undefined.
       Object.defineProperty(result, "at", {
         value: (index: number): unknown => {
-          const len = ctx.store.arrayLength(path)
+          const len = ctx.reader.arrayLength(path)
           if (index < 0 || index >= len) return undefined
           return item(index)
         },
@@ -142,7 +142,7 @@ export function withNavigation<A extends HasCall>(
       // .length — live from store
       Object.defineProperty(result, "length", {
         get() {
-          return ctx.store.arrayLength(path)
+          return ctx.reader.arrayLength(path)
         },
         enumerable: false,
         configurable: true,
@@ -150,7 +150,7 @@ export function withNavigation<A extends HasCall>(
 
       // [Symbol.iterator] — yields child refs
       result[Symbol.iterator] = function* () {
-        const len = ctx.store.arrayLength(path)
+        const len = ctx.reader.arrayLength(path)
         for (let i = 0; i < len; i++) {
           yield result.at(i)
         }
@@ -176,7 +176,7 @@ export function withNavigation<A extends HasCall>(
       // Returns undefined for missing keys.
       Object.defineProperty(result, "at", {
         value: (key: string): unknown => {
-          if (!ctx.store.hasKey(path, key)) {
+          if (!ctx.reader.hasKey(path, key)) {
             return undefined
           }
           return item(key)
@@ -188,7 +188,7 @@ export function withNavigation<A extends HasCall>(
       // .has(key)
       Object.defineProperty(result, "has", {
         value: (key: string): boolean => {
-          return ctx.store.hasKey(path, key)
+          return ctx.reader.hasKey(path, key)
         },
         enumerable: false,
         configurable: true,
@@ -196,7 +196,7 @@ export function withNavigation<A extends HasCall>(
 
       // .keys()
       Object.defineProperty(result, "keys", {
-        value: (): string[] => ctx.store.keys(path),
+        value: (): string[] => ctx.reader.keys(path),
         enumerable: false,
         configurable: true,
       })
@@ -204,7 +204,7 @@ export function withNavigation<A extends HasCall>(
       // .size
       Object.defineProperty(result, "size", {
         get(): number {
-          return ctx.store.keys(path).length
+          return ctx.reader.keys(path).length
         },
         enumerable: false,
         configurable: true,
@@ -213,7 +213,7 @@ export function withNavigation<A extends HasCall>(
       // .entries()
       Object.defineProperty(result, "entries", {
         value: function* (): IterableIterator<[string, unknown]> {
-          for (const key of ctx.store.keys(path)) {
+          for (const key of ctx.reader.keys(path)) {
             yield [key, result.at(key)]
           }
         },
@@ -224,7 +224,7 @@ export function withNavigation<A extends HasCall>(
       // .values()
       Object.defineProperty(result, "values", {
         value: function* (): IterableIterator<unknown> {
-          for (const key of ctx.store.keys(path)) {
+          for (const key of ctx.reader.keys(path)) {
             yield result.at(key)
           }
         },
@@ -235,7 +235,7 @@ export function withNavigation<A extends HasCall>(
       // [Symbol.iterator]
       Object.defineProperty(result, Symbol.iterator, {
         value: function* (): IterableIterator<[string, unknown]> {
-          for (const key of ctx.store.keys(path)) {
+          for (const key of ctx.reader.keys(path)) {
             yield [key, result.at(key)]
           }
         },
@@ -255,7 +255,7 @@ export function withNavigation<A extends HasCall>(
       schema: SumSchema,
       variants: SumVariants<A & HasNavigation>,
     ): A & HasNavigation {
-      const value = ctx.store.read(path)
+      const value = ctx.reader.read(path)
       const resolved = dispatchSum(value, schema, variants)
       if (resolved !== undefined) {
         return resolved

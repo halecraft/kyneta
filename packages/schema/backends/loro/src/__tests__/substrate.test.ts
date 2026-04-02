@@ -61,7 +61,7 @@ const interpretSubstrate: InterpretSubstrate = (schema, substrate) =>
 describe("loroSubstrateFactory.create", () => {
   it("creates a substrate with default values", () => {
     const substrate = loroSubstrateFactory.create(TestSchema)
-    const reader = substrate.store
+    const reader = substrate.reader
 
     // Text defaults to empty string
     expect(reader.read(RawPath.empty.field("title"))).toBe("")
@@ -78,7 +78,7 @@ describe("loroSubstrateFactory.create", () => {
       d.title.insert(0, "Hello")
       d.theme.set("dark")
     })
-    const reader = substrate.store
+    const reader = substrate.reader
 
     expect(reader.read(RawPath.empty.field("title"))).toBe("Hello")
     expect(reader.read(RawPath.empty.field("theme"))).toBe("dark")
@@ -93,7 +93,7 @@ describe("loroSubstrateFactory.create", () => {
     change(doc, d => {
       d.items.push({ name: "Task 2", done: true })
     })
-    const reader = substrate.store
+    const reader = substrate.reader
 
     expect(reader.arrayLength(RawPath.empty.field("items"))).toBe(2)
     expect(
@@ -206,7 +206,7 @@ describe("export/import snapshot", () => {
     const snapshot = substrateA.exportEntirety()
     const substrateB = loroSubstrateFactory.fromEntirety(snapshot, TestSchema)
 
-    const readerB = substrateB.store
+    const readerB = substrateB.reader
     expect(readerB.read(RawPath.empty.field("title"))).toBe("Original Title")
     expect(readerB.read(RawPath.empty.field("count"))).toBe(42)
     expect(readerB.read(RawPath.empty.field("theme"))).toBe("dark")
@@ -221,7 +221,7 @@ describe("export/import snapshot", () => {
     const substrateB = loroSubstrateFactory.fromEntirety(snapshot, TestSchema)
 
     // Both substrates have equivalent state
-    expect(substrateB.store.read(RawPath.empty.field("title"))).toBe("Hello")
+    expect(substrateB.reader.read(RawPath.empty.field("title"))).toBe("Hello")
   })
 })
 
@@ -251,8 +251,8 @@ describe("delta sync", () => {
     substrateB.merge(delta!, "sync")
 
     // B should now have A's state
-    expect(substrateB.store.read(RawPath.empty.field("title"))).toBe("Hello!")
-    expect(substrateB.store.read(RawPath.empty.field("count"))).toBe(10)
+    expect(substrateB.reader.read(RawPath.empty.field("title"))).toBe("Hello!")
+    expect(substrateB.reader.read(RawPath.empty.field("count"))).toBe(10)
   })
 })
 
@@ -286,10 +286,10 @@ describe("concurrent sync", () => {
     if (deltaBtoA) substrateA.merge(deltaBtoA, "sync")
 
     // Both should have converged
-    expect(substrateA.store.read(RawPath.empty.field("title"))).toBe("A")
-    expect(substrateA.store.read(RawPath.empty.field("count"))).toBe(5)
-    expect(substrateB.store.read(RawPath.empty.field("title"))).toBe("A")
-    expect(substrateB.store.read(RawPath.empty.field("count"))).toBe(5)
+    expect(substrateA.reader.read(RawPath.empty.field("title"))).toBe("A")
+    expect(substrateA.reader.read(RawPath.empty.field("count"))).toBe(5)
+    expect(substrateB.reader.read(RawPath.empty.field("title"))).toBe("A")
+    expect(substrateB.reader.read(RawPath.empty.field("count"))).toBe(5)
   })
 })
 

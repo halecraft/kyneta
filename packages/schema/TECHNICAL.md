@@ -93,7 +93,7 @@ In the old grammar, `text` and `counter` were node kinds alongside `list` and `s
 - **Interpreter machinery** — `interpret`, `readable`, `writable`, `changefeed`, `bottomInterpreter`, `withNavigation`, `withReadable`, `withCaching`, `withWritable`, `withChangefeed`, `InterpretBuilder`, `InterpreterLayer`, etc.
 - **Substrate primitives** — `plainSubstrateFactory`, `createPlainSubstrate`, `plainContext`, `PlainVersion`.
 - **Symbols** — `CHANGEFEED`, `TRANSACT`, `CALL`, `INVALIDATE`.
-- **Other internals** — change constructors (`ChangeBase`, `ScalarChange`, etc.), step functions, store utilities (`readByPath`, `writeByPath`, `applyChangeToStore`), capability types (`HasCall`, `HasRead`, `HasTransact`, `HasChangefeed`).
+- **Other internals** — change constructors (`ChangeBase`, `ScalarChange`, etc.), step functions, store utilities (`readByPath`, `writeByPath`, `applyChange`), capability types (`HasCall`, `HasRead`, `HasTransact`, `HasChangefeed`).
 
 #### `registerDoc` internal helper
 
@@ -206,7 +206,7 @@ All interpreters use this single representation. The key-vs-index distinction en
 - Human-readable error paths: `messages[0].author` (not `messages.0.author`)
 - Correct store access for both objects and arrays
 
-The `readByPath(store, path)` utility (exported from `store.ts`) accepts `unknown` as its first parameter so all interpreters — including `plainInterpreter` with its `unknown` context and `validateInterpreter` with its `ValidateContext` — can use it without casts.
+The `readByPath(store, path)` utility (exported from `reader.ts`) accepts `unknown` as its first parameter so all interpreters — including `plainInterpreter` with its `unknown` context and `validateInterpreter` with its `ValidateContext` — can use it without casts.
 
 The `formatPath(path)` utility (exported from `validate.ts`) converts a typed `Path` to a human-readable string for error reporting. Empty path → `"root"`.
 
@@ -386,15 +386,15 @@ This module also defines the capability lattice interfaces (`HasCall`, `HasNavig
 
 The coalgebraic structural addressing transformer. Takes any `HasCall`-producing interpreter and adds structural navigation — "give me a handle to the child at position X" — without reading any values:
 
-- **Product:** Enumerable lazy getters for each field. **No caching** — each access forces the thunk afresh. **Discriminant short-circuit:** when `schema.discriminantKey` is set (i.e. this product is a variant of a discriminated union), the discriminant field's getter returns `readByPath(ctx.store, fieldPath)` directly — a raw string value from the store — instead of forcing the field thunk. This enables standard TS discriminated union narrowing (`if (ref.type === "text")`) and prevents discriminant mutation (no `.set()` on a plain string).
-- **Sequence:** `.at(i)` returns a child carrier (bounds-checked via `storeArrayLength`). `.length` reflects the store array length. `[Symbol.iterator]` yields child carriers.
-- **Map:** `.at(key)` returns a child carrier (checked via `storeHasKey`). `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`.
-- **Sum:** Uses `dispatchSum(value, schema, variants)` from `store.ts` for store-driven variant resolution. This is structural addressing — "which child position is active?" — not value reading.
+- **Product:** Enumerable lazy getters for each field. **No caching** — each access forces the thunk afresh. **Discriminant short-circuit:** when `schema.discriminantKey` is set (i.e. this product is a variant of a discriminated union), the discriminant field's getter returns `readByPath(ctx.reader, fieldPath)` directly — a raw string value from the store — instead of forcing the field thunk. This enables standard TS discriminated union narrowing (`if (ref.type === "text")`) and prevents discriminant mutation (no `.set()` on a plain string).
+- **Sequence:** `.at(i)` returns a child carrier (bounds-checked via `readArrayLength`). `.length` reflects the store array length. `[Symbol.iterator]` yields child carriers.
+- **Map:** `.at(key)` returns a child carrier (checked via `readHasKey`). `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`.
+- **Sum:** Uses `dispatchSum(value, schema, variants)` from `reader.ts` for store-driven variant resolution. This is structural addressing — "which child position is active?" — not value reading.
 - **Annotated:** `"doc"`/`"movable"`/`"tree"` → delegate to inner. `"text"`/`"counter"` → pass through to base (reading is `withReadable`'s job).
 
 Navigation is a coalgebra (`A → F(A)`): it reveals addressable child positions within a composite. The `[CALL]` slot is NOT filled — calling the carrier still throws after `withNavigation` alone.
 
-**Store inspection vs value reading.** Navigation uses `storeArrayLength`, `storeKeys`, `storeHasKey` (extracted into `store.ts`) to make structural decisions. These ask "what shape is here?" — not "what is the value?" This distinction keeps navigation independent from reading.
+**Reader inspection vs value reading.** Navigation uses `readArrayLength`, `readKeys`, `readHasKey` (extracted into `reader.ts`) to make structural decisions. These ask "what shape is here?" — not "what is the value?" This distinction keeps navigation independent from reading.
 
 #### withAddressing (`src/interpreters/with-addressing.ts`)
 
@@ -423,8 +423,8 @@ The refinement transformer. Requires `HasNavigation` input (structural navigatio
 
 - **Scalar:** `CALL` returns `readByPath(store, path)` (immutable primitive). Hint-aware `[Symbol.toPrimitive]`.
 - **Product:** `CALL` folds child values through the carrier's property getters (`result[key]()` for each field), producing a **fresh plain object**. This composes with `withCaching`'s memoized getters — the fold reuses cached child refs but always produces a distinct snapshot.
-- **Sequence:** `CALL` folds child values via the raw `item(i)()` closure (not `result.at()`), producing a **fresh array**. Uses `storeArrayLength` for structure discovery but never returns the store array directly. The raw closure is used instead of the cached `.at()` because `withCaching`'s cache shifting can leave refs with stale paths after insert/delete. Adds `.get(i)` convenience (returns plain value, not ref).
-- **Map:** `CALL` folds child values via the raw `item(key)()` closure, producing a **fresh record**. Same design as sequence — `storeKeys` for key discovery, raw closure for values. Adds `.get(key)` convenience.
+- **Sequence:** `CALL` folds child values via the raw `item(i)()` closure (not `result.at()`), producing a **fresh array**. Uses `readArrayLength` for structure discovery but never returns the store array directly. The raw closure is used instead of the cached `.at()` because `withCaching`'s cache shifting can leave refs with stale paths after insert/delete. Adds `.get(i)` convenience (returns plain value, not ref).
+- **Map:** `CALL` folds child values via the raw `item(key)()` closure, producing a **fresh record**. Same design as sequence — `readKeys` for key discovery, raw closure for values. Adds `.get(key)` convenience.
 - **Sum:** Pass-through — dispatch is already handled by `withNavigation`.
 - **Annotated:** `"text"` → string-coercing reader + toPrimitive. `"counter"` → number-coercing reader + hint-aware toPrimitive. `"doc"`/`"movable"`/`"tree"` → delegate to inner.
 
@@ -464,7 +464,7 @@ ctx.prepare(path, change)
       calls inner prepare:
         → withCaching's wrapper:
             invalidate cache at path
-            calls original: applyChangeToStore(store, path, change)
+            calls original: applyChange(store, path, change)
       accumulate {path, change} for notification
 ```
 
@@ -476,7 +476,7 @@ An extension transformer: `withWritable(base)` takes `Interpreter<RefContext, A>
 
 - **Scalar:** `.set(value)` — dispatches `ReplaceChange` at own path.
 - **Product:** `.set(plainObject)` — dispatches `ReplaceChange` at own path. Non-enumerable. Enables atomic subtree replacement.
-- **Text:** `.insert(index, content)`, `.delete(index, length)`, `.update(content)` — dispatches `TextChange`. `update()` reads current text via `readByPath(ctx.store, path)` (direct store inspection, not the carrier's `[CALL]` slot) so navigate+write stacks work without a reading layer.
+- **Text:** `.insert(index, content)`, `.delete(index, length)`, `.update(content)` — dispatches `TextChange`. `update()` reads current text via `readByPath(ctx.reader, path)` (direct reader inspection, not the carrier's `[CALL]` slot) so navigate+write stacks work without a reading layer.
 - **Counter:** `.increment(n?)`, `.decrement(n?)` — dispatches `IncrementChange`.
 - **Sequence:** `.push(...items)`, `.insert(index, ...items)`, `.delete(index, count?)` — dispatches `SequenceChange`.
 - **Map:** `.set(key, value)`, `.delete(key)`, `.clear()` — dispatches `MapChange`. All non-enumerable.
@@ -511,7 +511,7 @@ interface WritableContext extends RefContext {
 }
 ```
 
-**Context hierarchy:** `RefContext { store: StoreReader }` → `WritableContext { prepare, flush, dispatch, beginTransaction, commit, abort, inTransaction }`. Each layer adds only what it needs.
+**Context hierarchy:** `RefContext { reader: Reader }` → `WritableContext { prepare, flush, dispatch, beginTransaction, commit, abort, inTransaction }`. Each layer adds only what it needs.
 
 **Phase separation.** The dispatch pipeline splits into two phases:
 
@@ -589,7 +589,7 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
 - **`Version`** — the external version marker. Serializable (for SSR embedding in HTML meta tags) and comparable (partial order — plain substrates are totally ordered, CRDT substrates may have concurrent versions). This is the single type parameter on `Substrate<V>`. Substrates may use richer internal version tracking; the Version is what crosses the substrate boundary. Named `Version` (not `Frontier`) to avoid collision with Loro's `Frontiers` concept — Loro's `Frontiers` are DAG-leaf operation IDs used for checkpoints, while our `Version` corresponds to Loro's `VersionVector` (the complete peer state used for sync diffing).
 
-- **`StoreReader`** — the abstract read interface for the interpreter stack. All interpreters read from the store exclusively through this four-method interface (`read`, `arrayLength`, `keys`, `hasKey`), allowing substrates to provide their own read semantics. `plainStoreReader(obj)` wraps a plain JS object; a Loro substrate navigates the Loro container tree directly. The `StoreReader` returned by `plainStoreReader` is a *live view* — mutations to the backing object via `applyChangeToStore` are immediately visible through the reader.
+- **`Reader`** — the abstract read interface for the interpreter stack. All interpreters read from the store exclusively through this four-method interface (`read`, `arrayLength`, `keys`, `hasKey`), allowing substrates to provide their own read semantics. `plainReader(obj)` wraps a plain JS object; a Loro substrate navigates the Loro container tree directly. The `Reader` returned by `plainReader` is a *live view* — mutations to the backing object via `applyChange` are immediately visible through the reader.
 
 - **`SubstratePayload`** — a three-field structure carrying data between peers:
 
@@ -614,7 +614,7 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
   The `encoding` hint tells the transport layer whether `data` is a UTF-8 string (`"json"`) or raw bytes (`"binary"`). The framework never inspects `data` — only the substrate knows how to produce and consume it.
 
-- **`Substrate<V>`** extends `SubstratePrepare` — adds `version()`, `exportEntirety()`, `exportSince()`, `merge()`, and `context()`. The `SubstratePrepare` interface (Phase 0) provides the ground floor of the prepare/flush pipeline: `store: StoreReader`, `prepare(path, change)`, `onFlush(origin?)`.
+- **`Substrate<V>`** extends `SubstratePrepare` — adds `version()`, `exportEntirety()`, `exportSince()`, `merge()`, and `context()`. The `SubstratePrepare` interface (Phase 0) provides the ground floor of the prepare/flush pipeline: `reader: Reader`, `prepare(path, change)`, `onFlush(origin?)`.
 
 - **`SubstrateFactory<V>`** — `create(schema)` for fresh substrates, `fromEntirety(payload, schema)` for cold-start construction from an entirety payload, `parseVersion(serialized)` for version deserialization.
 
@@ -625,9 +625,9 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
 Within a single substrate lifetime, all state transitions are deltas delivered as `Changeset`s through the changefeed. `Changeset` is and remains delta-only. Between substrates (cold-start via `fromEntirety`), there is no continuity — that boundary is an **epoch boundary**.
 
-**`PlainSubstrate`** is the first concrete implementation. It wraps a plain JS object store (the degenerate case — no CRDT runtime, no native oplog). The raw `Record<string, unknown>` is wrapped in a `plainStoreReader` for the interpreter stack, while mutations and export still operate on the raw object directly. Version tracking uses a **shadow buffer**: `prepare` accumulates `{path, change}` entries alongside `applyChangeToStore`, and `onFlush` drains the buffer into the version log and increments the version counter. The changefeed layer independently accumulates the same entries for notification planning — both hold the same object references and are drained every flush cycle. `PlainVersion` wraps a monotonic integer; `compare()` never returns `"concurrent"`. `merge(payload)` dispatches on `payload.kind` internally: an `"entirety"` payload replaces the store via `executeBatch`; a `"since"` payload replays ops from the version log.
+**`PlainSubstrate`** is the first concrete implementation. It wraps a plain JS object store (the degenerate case — no CRDT runtime, no native oplog). The raw `Record<string, unknown>` is wrapped in a `plainReader` for the interpreter stack, while mutations and export still operate on the raw object directly. Version tracking uses a **shadow buffer**: `prepare` accumulates `{path, change}` entries alongside `applyChange`, and `onFlush` drains the buffer into the version log and increments the version counter. The changefeed layer independently accumulates the same entries for notification planning — both hold the same object references and are drained every flush cycle. `PlainVersion` wraps a monotonic integer; `compare()` never returns `"concurrent"`. `merge(payload)` dispatches on `payload.kind` internally: an `"entirety"` payload replaces the store via `executeBatch`; a `"since"` payload replays ops from the version log.
 
-**`LoroSubstrate`** is the second concrete implementation, provided by the separate `@kyneta/loro-schema` package. It wraps a user-provided `LoroDoc` with schema-aware typed reads (via `LoroStoreReader`), `applyDiff`-based writes, and a persistent `doc.subscribe()` event bridge that ensures all mutations to the underlying LoroDoc — whether from kyneta, `merge`, or external systems — fire kyneta changefeed subscribers. See `packages/schema/loro/TECHNICAL.md` for the full architecture.
+**`LoroSubstrate`** is the second concrete implementation, provided by the separate `@kyneta/loro-schema` package. It wraps a user-provided `LoroDoc` with schema-aware typed reads (via `LoroReader`), `applyDiff`-based writes, and a persistent `doc.subscribe()` event bridge that ensures all mutations to the underlying LoroDoc — whether from kyneta, `merge`, or external systems — fire kyneta changefeed subscribers. See `packages/schema/loro/TECHNICAL.md` for the full architecture.
 
 **`TimestampVersion`** wraps a wall-clock timestamp (milliseconds since epoch). Timestamps form a total order — `compare()` returns `"behind"`, `"equal"`, or `"ahead"` but never `"concurrent"`. This is the version type for LWW substrates: the receiver compares timestamps and discards stale arrivals. `serialize()` encodes to a decimal string; `TimestampVersion.parse()` is the inverse. `TimestampVersion.now()` creates a version from the current wall clock.
 
@@ -844,7 +844,7 @@ The spike validates these properties via 1,400+ tests across 27 test files:
 13. **Nullable dispatch**: the composed readable stack checks for `null`/`undefined` and dispatches to the correct positional variant.
 14. **Callable refs**: every ref produced by the composed stack is `typeof "function"` and returns its current plain value when called.
 15. **`toPrimitive` coercion**: `` `Stars: ${doc.count}` `` works via `[Symbol.toPrimitive]`; counter is hint-aware (number for default, string for string hint).
-16. **Read-only documents**: `interpret(schema, withCaching(withReadable(withNavigation(bottomInterpreter))), { store: plainStoreReader(store) })` produces a fully navigable, callable document with no mutation methods.
+16. **Read-only documents**: `interpret(schema, withCaching(withReadable(withNavigation(bottomInterpreter))), { store: plainReader(store) })` produces a fully navigable, callable document with no mutation methods.
 17. **Change-driven cache invalidation**: `[INVALIDATE](change)` interprets the change surgically — sequence shifts, map key deletes, product clears. Verified via `planCacheUpdate` table tests (31 cases).
 18. **Navigate vs Read vocabulary**: map and sequence refs expose two access verbs — `.at(key|index)` for navigation (returns a ref) and `.get(key|index)` for reading (returns a plain value). `.get()` is symmetric with `.set()`. `JSON.stringify(mapRef.get("x"))` returns the serialized value (not `undefined`). Iteration yields refs (not values). Map refs also expose `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`; `.set(key, value)`, `.delete(key)`, `.clear()` for writes. No Proxy, no string index signature. Navigation is provided by `withNavigation`; reading (`.get()`) is provided by `withReadable`.
 19. **Sequence `.at()` / `.get()` bounds check**: `.at(100)` on a 2-item array returns `undefined`; `.at(-1)` returns `undefined`. `.get(100)` and `.get(-1)` also return `undefined`. Matches `Array.prototype.at()` semantics.
@@ -903,7 +903,7 @@ packages/schema/
 │   ├── bind.ts                  # BoundSchema, bind(), bindPlain(), bindEphemeral(), isBoundSchema()
 │   ├── unwrap.ts                # registerSubstrate, unwrap — general escape hatch for substrate access
 │   ├── substrate.ts             # SubstratePrepare, Version, SubstratePayload, Substrate<F>, SubstrateFactory<F>
-│   ├── store.ts                 # Store type, StoreReader, plainStoreReader, readByPath, writeByPath, applyChangeToStore, pathKey
+│   ├── reader.ts                 # PlainState type, Reader, plainReader, readByPath, writeByPath, applyChange, pathKey
 │   ├── ref.ts                   # SchemaRef<S,M> parameterized core + Ref<S>, RWRef<S>, RRef<S> tier aliases
 │   ├── interpreters/
 │   │   ├── bottom.ts            # bottomInterpreter, makeCarrier, CALL symbol, capability lattice

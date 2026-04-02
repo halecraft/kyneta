@@ -1154,7 +1154,7 @@ export function withChangefeed<A extends HasRead>(
                 "Ensure withNavigation is in the interpreter stack.",
             )
           },
-          () => ctx.store.arrayLength(path),
+          () => ctx.reader.arrayLength(path),
         )
         attachChangefeed(result as object, cf)
         const ps = getPopulatedState(ctx)
@@ -1196,7 +1196,7 @@ export function withChangefeed<A extends HasRead>(
                 "Ensure withNavigation is in the interpreter stack.",
             )
           },
-          () => ctx.store.keys(path),
+          () => ctx.reader.keys(path),
         )
         attachChangefeed(result as object, cf)
         const ps = getPopulatedState(ctx)

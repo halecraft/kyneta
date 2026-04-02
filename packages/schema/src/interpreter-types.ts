@@ -20,7 +20,7 @@ import type {
   Schema,
   SequenceSchema,
 } from "./schema.js"
-import type { StoreReader } from "./store.js"
+import type { Reader } from "./reader.js"
 
 // ---------------------------------------------------------------------------
 // RefContext — minimal context for read-only interpretation
@@ -28,14 +28,14 @@ import type { StoreReader } from "./store.js"
 
 /**
  * The minimal context for read-only interpretation. Contains only a
- * store — enough to read values at any path.
+ * reader — enough to read values at any path.
  *
  * This is the base context type. `WritableContext` extends it with
  * dispatch and transaction support (`beginTransaction`/`commit`/`abort`).
  * Each layer adds only what it needs.
  */
 export interface RefContext {
-  readonly store: StoreReader
+  readonly reader: Reader
   /**
    * The root path for the interpreter stack. Determines the concrete
    * Path type for all descendants.

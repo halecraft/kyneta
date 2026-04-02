@@ -8,7 +8,7 @@
 //   exportSince, merge, change, subscribe, applyChanges
 //
 // Low-level primitives (power users):
-//   createLoroSubstrate, loroSubstrateFactory, loroStoreReader,
+//   createLoroSubstrate, loroSubstrateFactory, loroReader,
 //   resolveContainer, stepIntoLoro, changeToDiff, batchToOps, LoroVersion
 
 // ---------------------------------------------------------------------------
@@ -49,8 +49,8 @@ export { batchToOps, changeToDiff } from "./change-mapping.js"
 export { loro } from "./loro-escape.js"
 // Container resolution
 export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
-// Store reader
-export { loroStoreReader } from "./store-reader.js"
+// Reader
+export { loroReader } from "./reader.js"
 // Substrate
 export {
   createLoroSubstrate,

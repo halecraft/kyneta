@@ -9,7 +9,7 @@
 //                    routing servers, CDN edges, replication services.
 //
 //   Substrate<V>   — interpretation surface (schema-aware)
-//                    extends Replica with readable store, writable context,
+//                    extends Replica with readable reader, writable context,
 //                    prepare/flush pipeline. Required for participants that
 //                    read, write, or observe document state.
 //
@@ -39,7 +39,7 @@ import type { ChangeBase } from "./change.js"
 import type { Path } from "./interpret.js"
 import type { WritableContext } from "./interpreters/writable.js"
 import type { Schema as SchemaNode } from "./schema.js"
-import type { StoreReader } from "./store.js"
+import type { Reader } from "./reader.js"
 
 // ---------------------------------------------------------------------------
 // Version — external version marker
@@ -197,8 +197,8 @@ export interface Replica<V extends Version = Version> {
  * those layers.
  */
 export interface SubstratePrepare {
-  /** The readable store for the interpreter's RefContext. */
-  readonly store: StoreReader
+  /** The readable reader for the interpreter's RefContext. */
+  readonly reader: Reader
 
   /** Apply a single (path, change) to the backing state. */
   prepare(path: Path, change: ChangeBase): void
@@ -221,14 +221,14 @@ export interface SubstratePrepare {
  * and transfer semantics.
  *
  * Extends `Replica<V>` with the schema-driven interpretation surface:
- * readable store, writable context, prepare/flush pipeline. This is the
+ * readable reader, writable context, prepare/flush pipeline. This is the
  * full-stack interface required by participants that read, write, or
  * observe document state (clients, application servers with game logic,
  * etc.).
  *
  * Responsibilities:
- * 1. Provide a readable store + WritableContext for the interpreter stack
- *    (from SubstratePrepare: store, prepare, onFlush)
+ * 1. Provide a readable reader + WritableContext for the interpreter stack
+ *    (from SubstratePrepare: reader, prepare, onFlush)
  * 2. Track versioning via Version (from Replica)
  * 3. Export/import state for replication (from Replica)
  *
@@ -247,8 +247,8 @@ export interface SubstratePrepare {
 export interface Substrate<V extends Version = Version>
   extends Replica<V>,
     SubstratePrepare {
-  /** The readable store for the interpreter (from SubstratePrepare). */
-  readonly store: StoreReader
+  /** The readable reader for the interpreter (from SubstratePrepare). */
+  readonly reader: Reader
 
   /** Build a WritableContext for this substrate. */
   context(): WritableContext

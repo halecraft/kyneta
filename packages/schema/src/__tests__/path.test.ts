@@ -12,7 +12,7 @@ import {
   resetAddressIdCounter,
   type Segment,
 } from "../path.js"
-import { writeByPath } from "../store.js"
+import { writeByPath } from "../reader.js"
 
 // ===========================================================================
 // RawPath

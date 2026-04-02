@@ -24,7 +24,7 @@ import {
 import type { RefContext } from "../interpreter-types.js"
 import { bottomInterpreter } from "../interpreters/bottom.js"
 import { AddressedPath, AddressTableRegistry } from "../path.js"
-import { plainStoreReader } from "../store.js"
+import { plainReader } from "../reader.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -238,7 +238,7 @@ describe("withAddressing: composition", () => {
     const schema = Schema.doc({ x: Schema.number() })
     // Build a stack WITHOUT withAddressing
     const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
-    const ctx: RefContext = { store: plainStoreReader(store) }
+    const ctx: RefContext = { reader: plainReader(store) }
     const doc = interpret(schema, interp, ctx) as any
 
     expect(doc.x()).toBe(42)
@@ -337,7 +337,7 @@ describe("withAddressing: [ADDRESS_TABLE]", () => {
     const store = { items: ["a", "b"] }
     const schema = Schema.doc({ items: Schema.list(Schema.string()) })
     const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
-    const ctx: RefContext = { store: plainStoreReader(store) }
+    const ctx: RefContext = { reader: plainReader(store) }
     const doc = interpret(schema, interp, ctx) as any
 
     expect(ADDRESS_TABLE in doc.items).toBe(false)

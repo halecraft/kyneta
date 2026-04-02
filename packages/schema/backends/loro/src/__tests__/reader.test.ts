@@ -1,9 +1,9 @@
-import type { StoreReader } from "@kyneta/schema"
+import type { Reader } from "@kyneta/schema"
 import { RawPath, Schema } from "@kyneta/schema"
 import { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { LoroSchema } from "../loro-schema.js"
-import { loroStoreReader } from "../store-reader.js"
+import { loroReader } from "../reader.js"
 
 // ===========================================================================
 // Helpers
@@ -16,11 +16,11 @@ import { loroStoreReader } from "../store-reader.js"
 function createReader(
   schema: ReturnType<typeof Schema.doc | typeof LoroSchema.doc>,
   setup: (doc: LoroDoc) => void,
-): { doc: LoroDoc; reader: StoreReader } {
+): { doc: LoroDoc; reader: Reader } {
   const doc = new LoroDoc()
   setup(doc)
   doc.commit()
-  return { doc, reader: loroStoreReader(doc, schema) }
+  return { doc, reader: loroReader(doc, schema) }
 }
 
 /** Build a RawPath from variadic key/index segments. */
@@ -75,7 +75,7 @@ const MovableListDocSchema = LoroSchema.doc({
 // Tests
 // ===========================================================================
 
-describe("loroStoreReader", () => {
+describe("loroReader", () => {
   // -------------------------------------------------------------------------
   // Scalar reads (text, counter)
   // -------------------------------------------------------------------------
@@ -464,8 +464,8 @@ describe("loroStoreReader", () => {
       doc1.import(sync2)
 
       // Both docs should now have 2 items
-      const reader1 = loroStoreReader(doc1, schema)
-      const reader2 = loroStoreReader(doc2, schema)
+      const reader1 = loroReader(doc1, schema)
+      const reader2 = loroReader(doc2, schema)
 
       expect(reader1.arrayLength(p("items"))).toBe(2)
       expect(reader2.arrayLength(p("items"))).toBe(2)

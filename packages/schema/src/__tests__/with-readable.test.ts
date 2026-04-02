@@ -3,7 +3,7 @@ import {
   dispatchSum,
   interpret,
   plainInterpreter,
-  plainStoreReader,
+  plainReader,
   Schema,
 } from "../index.js"
 import type { Interpreter } from "../interpret.js"
@@ -42,7 +42,7 @@ function createDoc(
   schema: Parameters<typeof interpret>[0],
   store: Record<string, unknown>,
 ) {
-  const ctx: RefContext = { store: plainStoreReader(store) }
+  const ctx: RefContext = { reader: plainReader(store) }
   const doc = interpret(schema, readableInterp, ctx) as any
   return { doc, store, ctx }
 }
@@ -70,7 +70,7 @@ describe("withReadable: scalar", () => {
 
   it("[CALL] slot is present and functional", () => {
     const schema = Schema.string()
-    const ctx: RefContext = { store: plainStoreReader("hello" as any) }
+    const ctx: RefContext = { reader: plainReader("hello" as any) }
     const result = interpret(schema, readableInterp, ctx) as any
     expect(CALL in result).toBe(true)
     expect(result[CALL]()).toBe("hello")
@@ -144,7 +144,7 @@ describe("withReadable: product", () => {
 
   it("product field named 'name' shadows Function.prototype.name", () => {
     const schema = Schema.struct({ name: Schema.string() })
-    const ctx: RefContext = { store: plainStoreReader({ name: "test" }) }
+    const ctx: RefContext = { reader: plainReader({ name: "test" }) }
     const ref = interpret(schema, readableInterp, ctx) as any
     expect(typeof ref.name).toBe("function")
     expect(ref.name()).toBe("test")
@@ -152,7 +152,7 @@ describe("withReadable: product", () => {
 
   it("product field named 'length' shadows Function.prototype.length", () => {
     const schema = Schema.struct({ length: Schema.number() })
-    const ctx: RefContext = { store: plainStoreReader({ length: 42 }) }
+    const ctx: RefContext = { reader: plainReader({ length: 42 }) }
     const ref = interpret(schema, readableInterp, ctx) as any
     expect(typeof ref.length).toBe("function")
     expect(ref.length()).toBe(42)
@@ -787,7 +787,7 @@ describe("type-level: withReadable", () => {
 
   it("result satisfies HasRead", () => {
     const readable = withReadable(withNavigation(bottomInterpreter))
-    const ctx: RefContext = { store: plainStoreReader("test" as any) }
+    const ctx: RefContext = { reader: plainReader("test" as any) }
     const result = interpret(Schema.string(), readable, ctx)
     const _check: HasRead = result
     void _check
@@ -795,7 +795,7 @@ describe("type-level: withReadable", () => {
 
   it("result also satisfies HasNavigation and HasCall", () => {
     const readable = withReadable(withNavigation(bottomInterpreter))
-    const ctx: RefContext = { store: plainStoreReader("test" as any) }
+    const ctx: RefContext = { reader: plainReader("test" as any) }
     const result = interpret(Schema.string(), readable, ctx)
     const _checkNav: HasNavigation = result
     const _checkCall: HasCall = result

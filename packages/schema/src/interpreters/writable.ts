@@ -297,7 +297,7 @@ export function buildWritableContext(
   }
 
   const ctx: WritableContext = {
-    store: substrate.store,
+    reader: substrate.reader,
     prepare,
     flush,
     dispatch,
@@ -556,7 +556,7 @@ export function withWritable<A>(
       const result = base.sequence(ctx, path, schema, item) as any
 
       result.push = (...items: unknown[]): void => {
-        const length = ctx.store.arrayLength(path)
+        const length = ctx.reader.arrayLength(path)
         const change = sequenceChange([{ retain: length }, { insert: items }])
         ctx.dispatch(path, change)
       }
@@ -612,7 +612,7 @@ export function withWritable<A>(
 
       Object.defineProperty(result, "clear", {
         value: (): void => {
-          const allKeys = ctx.store.keys(path)
+          const allKeys = ctx.reader.keys(path)
           if (allKeys.length > 0) {
             const change = mapChange(undefined, allKeys)
             ctx.dispatch(path, change)
@@ -679,7 +679,7 @@ export function withWritable<A>(
           result.update = (content: string): void => {
             // Read current text length via store inspection (not carrier call)
             // so navigate+write stacks work without a reading layer.
-            const current = ctx.store.read(path)
+            const current = ctx.reader.read(path)
             const currentLength =
               typeof current === "string" ? current.length : 0
             ctx.dispatch(

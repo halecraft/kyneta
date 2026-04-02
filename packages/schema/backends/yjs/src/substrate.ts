@@ -16,7 +16,7 @@ import type {
   Replica,
   ReplicaFactory,
   Schema as SchemaNode,
-  StoreReader,
+  Reader,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
@@ -26,7 +26,7 @@ import { buildWritableContext, executeBatch } from "@kyneta/schema"
 import * as Y from "yjs"
 import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 import { ensureContainers } from "./populate.js"
-import { yjsStoreReader } from "./store-reader.js"
+import { yjsReader } from "./reader.js"
 import { YjsVersion } from "./version.js"
 import { registerYjsSubstrate } from "./yjs-escape.js"
 
@@ -82,13 +82,13 @@ export function createYjsSubstrate(
   // The root Y.Map — all schema fields are children of this single map.
   const rootMap = doc.getMap("root")
 
-  // The StoreReader — live view over the Yjs shared type tree.
-  const reader: StoreReader = yjsStoreReader(doc, schema)
+  // The Reader — live view over the Yjs shared type tree.
+  const reader: Reader = yjsReader(doc, schema)
 
   // --- Substrate object ---
 
   const substrate: Substrate<YjsVersion> = {
-    store: reader,
+    reader: reader,
 
     prepare(path: Path, change: ChangeBase): void {
       if (!inOurTransaction) {
@@ -233,7 +233,7 @@ export function createYjsSubstrate(
  *
  * Constructs headless `Replica<YjsVersion>` instances backed by bare
  * `Y.Doc`s — no schema walking, no container initialization, no
- * StoreReader, no event bridge, no changefeed. Just the CRDT runtime
+ * Reader, no event bridge, no changefeed. Just the CRDT runtime
  * with version tracking and export/merge.
  *
  * Used by conduit participants (storage adapters, routing servers)

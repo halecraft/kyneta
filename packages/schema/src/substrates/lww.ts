@@ -17,7 +17,7 @@ import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
 import type { Schema as SchemaNode } from "../schema.js"
-import type { Store } from "../store.js"
+import type { PlainState } from "../reader.js"
 import type {
   Replica,
   ReplicaFactory,
@@ -59,7 +59,7 @@ function wrapWithTimestamp(
   let cachedCtx: WritableContext | undefined
 
   const substrate: Substrate<TimestampVersion> = {
-    store: inner.store,
+    reader: inner.reader,
 
     prepare(path: Path, change: ChangeBase): void {
       inner.prepare(path, change)

@@ -37,7 +37,7 @@ import { LoroDoc } from "loro-crdt"
 import { batchToOps, changeToDiff } from "./change-mapping.js"
 import { registerLoroSubstrate } from "./loro-escape.js"
 import { PROPS_KEY } from "./loro-resolve.js"
-import { loroStoreReader } from "./store-reader.js"
+import { loroReader } from "./reader.js"
 import { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
@@ -172,13 +172,13 @@ export function createLoroSubstrate(
   // Lazy-built WritableContext (same pattern as PlainSubstrate).
   let cachedCtx: WritableContext | undefined
 
-  // The StoreReader — live view over the Loro container tree.
-  const reader = loroStoreReader(doc, schema)
+  // The Reader — live view over the Loro container tree.
+  const reader = loroReader(doc, schema)
 
   // --- Substrate object ---
 
   const substrate: Substrate<LoroVersion> = {
-    store: reader,
+    reader: reader,
 
     prepare(path: Path, change: ChangeBase): void {
       if (!inEventHandler) {
@@ -325,7 +325,7 @@ export function createLoroSubstrate(
  *
  * Constructs headless `Replica<LoroVersion>` instances backed by bare
  * `LoroDoc`s — no schema walking, no container initialization, no
- * StoreReader, no event bridge, no changefeed. Just the CRDT runtime
+ * Reader, no event bridge, no changefeed. Just the CRDT runtime
  * with version tracking and export/import.
  *
  * Used by conduit participants (storage adapters, routing servers)

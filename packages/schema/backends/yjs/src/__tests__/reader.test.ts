@@ -2,7 +2,7 @@ import { RawPath, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { ensureContainers } from "../populate.js"
-import { yjsStoreReader } from "../store-reader.js"
+import { yjsReader } from "../reader.js"
 
 // ===========================================================================
 // Helpers
@@ -27,7 +27,7 @@ function setup(
       populateSeed(rootMap, schema, seed)
     })
   }
-  const reader = yjsStoreReader(doc, schema)
+  const reader = yjsReader(doc, schema)
   return { doc, reader }
 }
 
@@ -298,7 +298,7 @@ const MixedSchema = Schema.doc({
 // Tests
 // ===========================================================================
 
-describe("YjsStoreReader", () => {
+describe("YjsReader", () => {
   // -------------------------------------------------------------------------
   // read
   // -------------------------------------------------------------------------

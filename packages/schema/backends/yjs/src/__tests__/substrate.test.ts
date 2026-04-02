@@ -59,10 +59,10 @@ describe("YjsSubstrate", () => {
   describe("factory create", () => {
     it("creates a substrate with empty containers", () => {
       const substrate = yjsSubstrateFactory.create(SimpleSchema)
-      expect(substrate.store.read(RawPath.empty.field("title"))).toBe("")
+      expect(substrate.reader.read(RawPath.empty.field("title"))).toBe("")
       // Plain scalars return structural zeros
-      expect(substrate.store.read(RawPath.empty.field("count"))).toBe(0)
-      expect(substrate.store.read(RawPath.empty.field("items"))).toEqual([])
+      expect(substrate.reader.read(RawPath.empty.field("count"))).toBe(0)
+      expect(substrate.reader.read(RawPath.empty.field("items"))).toEqual([])
     })
 
     it("creates a substrate and populates via change()", () => {

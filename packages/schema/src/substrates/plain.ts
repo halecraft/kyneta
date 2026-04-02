@@ -1,7 +1,7 @@
 // plain — the plain JS object substrate.
 //
 // The plain substrate wraps a passive `Record<string, unknown>` and
-// delegates mutations to `applyChangeToStore`. It is the degenerate
+// delegates mutations to `applyChange`. It is the degenerate
 // case of the Substrate abstraction — no CRDT runtime, no native
 // oplog, just a plain JS object.
 //
@@ -30,7 +30,7 @@ import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
 import { RawPath, rawIndex, rawKey } from "../path.js"
 import type { Schema as SchemaNode } from "../schema.js"
-import { applyChangeToStore, plainStoreReader, type Store } from "../store.js"
+import { applyChange, plainReader, type PlainState } from "../reader.js"
 import type {
   Replica,
   ReplicaFactory,
@@ -93,8 +93,8 @@ export class PlainVersion implements Version {
  * For schema-aware construction (with `Zero.structural` / `Zero.overlay`),
  * use `plainSubstrateFactory.create(schema, seed?)` instead.
  */
-export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
-  const reader = plainStoreReader(storeObj)
+export function createPlainSubstrate(storeObj: PlainState): Substrate<PlainVersion> {
+  const reader = plainReader(storeObj)
 
   // --- Shared replication core ---
   const replicaCore = createPlainReplicaCore(storeObj)
@@ -104,10 +104,10 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
   let cachedCtx: WritableContext | undefined
 
   const substrate: Substrate<PlainVersion> = {
-    store: reader,
+    reader: reader,
 
     prepare(path: Path, change: ChangeBase): void {
-      applyChangeToStore(storeObj, path, change)
+      applyChange(storeObj, path, change)
       replicaCore.pendingOps.push({ path, change })
     },
 
@@ -175,7 +175,7 @@ export function createPlainSubstrate(storeObj: Store): Substrate<PlainVersion> {
  * export/merge logic — the parts that don't require schema
  * interpretation or the changefeed pipeline.
  */
-function createPlainReplicaCore(storeObj: Store) {
+function createPlainReplicaCore(storeObj: PlainState) {
   // Version log: log[i] = batch of Ops from version i → i+1.
   const log: Op[][] = []
 
@@ -233,7 +233,7 @@ function createPlainReplicaCore(storeObj: Store) {
 /**
  * Creates a headless `Replica<PlainVersion>` — a plain JS object with
  * version tracking and export/merge, but no schema interpretation,
- * no StoreReader, no WritableContext, no changefeed.
+ * no Reader, no WritableContext, no changefeed.
  *
  * Used by conduit participants (storage adapters, routing servers)
  * that need to accumulate state, compute deltas, and compact storage
@@ -241,7 +241,7 @@ function createPlainReplicaCore(storeObj: Store) {
  *
  * @param storeObj - The backing plain JS object store.
  */
-export function createPlainReplica(storeObj: Store): Replica<PlainVersion> {
+export function createPlainReplica(storeObj: PlainState): Replica<PlainVersion> {
   const core = createPlainReplicaCore(storeObj)
 
   return {
@@ -275,7 +275,7 @@ export function createPlainReplica(storeObj: Store): Replica<PlainVersion> {
 
       // Apply directly to the store — no changefeed, no prepare/flush.
       for (const op of ops) {
-        applyChangeToStore(storeObj, op.path, op.change)
+        applyChange(storeObj, op.path, op.change)
         core.pendingOps.push(op)
       }
       core.flush()
@@ -298,7 +298,7 @@ export function createPlainReplica(storeObj: Store): Replica<PlainVersion> {
  * const doc = interpret(schema, ctx).with(readable).with(writable).done()
  * ```
  */
-export function plainContext(storeObj: Store): WritableContext {
+export function plainContext(storeObj: PlainState): WritableContext {
   return createPlainSubstrate(storeObj).context()
 }
 
@@ -311,7 +311,7 @@ export function plainContext(storeObj: Store): WritableContext {
  *
  * Used by three call sites:
  * - `PlainSubstrate.merge` (entirety path — apply via executeBatch)
- * - `PlainReplica.merge` (entirety path — apply via applyChangeToStore)
+ * - `PlainReplica.merge` (entirety path — apply via applyChange)
  * - `plainSubstrateFactory.fromEntirety` (cold-start construction)
  */
 function stateImageToOps(json: string): Op[] {
@@ -349,7 +349,7 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
   replicaType: ["plain", 1, 0] as const,
 
   createEmpty(): Replica<PlainVersion> {
-    return createPlainReplica({} as Store)
+    return createPlainReplica({} as PlainState)
   },
 
   fromEntirety(payload: SubstratePayload): Replica<PlainVersion> {
@@ -359,7 +359,7 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
       )
     }
     const state = JSON.parse(payload.data) as Record<string, unknown>
-    return createPlainReplica(state as Store)
+    return createPlainReplica(state as PlainState)
   },
 
   parseVersion(serialized: string): PlainVersion {
@@ -377,7 +377,7 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
 export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
   create(schema: SchemaNode): Substrate<PlainVersion> {
     const defaults = Zero.structural(schema) as Record<string, unknown>
-    const storeObj = { ...defaults } as Store
+    const storeObj = { ...defaults } as PlainState
     return createPlainSubstrate(storeObj)
   },
 

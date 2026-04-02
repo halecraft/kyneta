@@ -90,8 +90,8 @@ describe("bindYjs", () => {
 
       // Restore
       const substrate2 = factory.fromEntirety(snapshot, SimpleSchema)
-      expect(substrate2.store.read(RawPath.empty.field("title"))).toBe("Snap")
-      expect(substrate2.store.read(RawPath.empty.field("count"))).toBe(42)
+      expect(substrate2.reader.read(RawPath.empty.field("title"))).toBe("Snap")
+      expect(substrate2.reader.read(RawPath.empty.field("count"))).toBe(42)
     })
 
     it("factory supports parseVersion", () => {

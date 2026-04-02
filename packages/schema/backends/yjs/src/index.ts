@@ -8,7 +8,7 @@
 //   exportSince, merge, change, subscribe, applyChanges
 //
 // Low-level primitives (power users):
-//   createYjsSubstrate, yjsSubstrateFactory, yjsStoreReader,
+//   createYjsSubstrate, yjsSubstrateFactory, yjsReader,
 //   resolveYjsType, stepIntoYjs, applyChangeToYjs, eventsToOps, YjsVersion
 
 // ---------------------------------------------------------------------------
@@ -65,8 +65,8 @@ export { bindYjs } from "./bind-yjs.js"
 export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 // Container creation
 export { ensureContainers } from "./populate.js"
-// Store reader
-export { yjsStoreReader } from "./store-reader.js"
+// Reader
+export { yjsReader } from "./reader.js"
 // Substrate
 export { createYjsSubstrate, yjsSubstrateFactory } from "./substrate.js"
 // Version

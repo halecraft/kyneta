@@ -1,6 +1,6 @@
-// store-reader — LoroStoreReader implementation.
+// store-reader — LoroReader implementation.
 //
-// Implements StoreReader via schema-guided live navigation of the
+// Implements Reader via schema-guided live navigation of the
 // Loro container tree. Each read operation resolves the container
 // at the given path using resolveContainer, then extracts the
 // appropriate value based on the Loro container kind.
@@ -8,7 +8,7 @@
 // LoroText → .toString(), LoroCounter → .value, plain values as-is.
 // Collections: LoroList/LoroMovableList → .length, LoroMap → .keys().
 
-import type { Path, Schema as SchemaNode, StoreReader } from "@kyneta/schema"
+import type { Path, Schema as SchemaNode, Reader } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
 import { resolveContainer } from "./loro-resolve.js"
 
@@ -61,11 +61,11 @@ function extractValue(resolved: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
-// loroStoreReader
+// loroReader
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a StoreReader that navigates the Loro container tree live,
+ * Creates a Reader that navigates the Loro container tree live,
  * using the schema as a type witness to determine which Loro API call
  * to make at each path segment.
  *
@@ -76,7 +76,7 @@ function extractValue(resolved: unknown): unknown {
  * @param doc - The LoroDoc to read from.
  * @param schema - The root schema for the document.
  */
-export function loroStoreReader(doc: LoroDoc, schema: SchemaNode): StoreReader {
+export function loroReader(doc: LoroDoc, schema: SchemaNode): Reader {
   return {
     read(path: Path): unknown {
       if (path.length === 0) {

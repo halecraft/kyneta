@@ -5,7 +5,7 @@ import {
   hasTransact,
   interpret,
   plainContext,
-  plainStoreReader,
+  plainReader,
   readable,
   Schema,
   TRANSACT,
@@ -711,7 +711,7 @@ describe("writable: write-only stack", () => {
     const store = {} as any
     const dispatched: Array<{ path: any; change: any }> = []
     const ctx: WritableContext = {
-      store,
+      reader: store,
       prepare: (path, change) => dispatched.push({ path, change }),
       flush: () => {},
       dispatch: (path, change) => dispatched.push({ path, change }),
@@ -885,7 +885,7 @@ describe("writable: TRANSACT attachment", () => {
     const store = { n: 0 }
     const dispatched: unknown[] = []
     const ctx: WritableContext = {
-      store: plainStoreReader(store),
+      reader: plainReader(store),
       prepare: (path, change) => dispatched.push({ path, change }),
       flush: () => {},
       dispatch: (path, change) => dispatched.push({ path, change }),

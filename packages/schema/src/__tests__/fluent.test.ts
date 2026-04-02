@@ -17,7 +17,7 @@ import {
   hasTransact,
   interpret,
   plainContext,
-  plainStoreReader,
+  plainReader,
   RawPath,
   rawKey,
   readable,
@@ -68,7 +68,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
       settings: { darkMode: false, fontSize: 14 },
       metadata: {},
     }
-    const ctx: RefContext = { store: plainStoreReader(store) }
+    const ctx: RefContext = { reader: plainReader(store) }
     const doc = interpret(chatDocSchema, ctx).with(readable).done() as any
 
     // Callable
@@ -254,7 +254,7 @@ describe("fluent: custom layer", () => {
     }
 
     const store = { x: 10, y: 20 }
-    const ctx: RefContext = { store: plainStoreReader(store) }
+    const ctx: RefContext = { reader: plainReader(store) }
     const doc = interpret(pointSchema, ctx)
       .with(readable)
       .with(tagging)
@@ -280,7 +280,7 @@ describe("fluent: custom layer", () => {
 describe("fluent: error handling", () => {
   it(".done() with no layers throws", () => {
     const store = { x: 0 }
-    const ctx: RefContext = { store: plainStoreReader(store) }
+    const ctx: RefContext = { reader: plainReader(store) }
     const builder = interpret(pointSchema, ctx)
     expect(() => builder.done()).toThrow(/no layers added/i)
   })
@@ -309,7 +309,7 @@ describe("fluent: three-arg interpret regression", () => {
       a: Schema.number(),
     })
     const store = { nested: { a: 99 } }
-    const ctx: RefContext = { store: plainStoreReader(store) }
+    const ctx: RefContext = { reader: plainReader(store) }
     const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
     const doc = interpret(
       innerSchema,
