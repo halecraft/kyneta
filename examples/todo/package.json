@@ -12,7 +12,7 @@
     "@kyneta/loro-schema": "workspace:^",
     "@kyneta/yjs-schema": "workspace:^",
     "@kyneta/schema": "workspace:^",
-    "@kyneta/websocket-network-adapter": "workspace:^",
+    "@kyneta/websocket-transport": "workspace:^",
     "loro-crdt": "^1.10.0",
     "yjs": "^13.6.30"
   },

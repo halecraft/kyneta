@@ -19,8 +19,8 @@ import type {
   SubstratePayload,
   Version,
 } from "@kyneta/schema"
-import type { AnyAdapter } from "./adapter/adapter.js"
-import { AdapterManager } from "./adapter/adapter-manager.js"
+import type { AnyTransport } from "./transport/transport.js"
+import { TransportManager } from "./transport/transport-manager.js"
 import type { Channel, ConnectedChannel } from "./channel.js"
 import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
 import type { AddressedEnvelope, ChannelMsg } from "./messages.js"
@@ -109,7 +109,7 @@ export type DocImportedCallback = (
 
 export type SynchronizerParams = {
   identity: PeerIdentityDetails
-  adapters?: AnyAdapter[]
+  transports?: AnyTransport[]
   route: RoutePredicate
   authorize: AuthorizePredicate
   onDocCreationRequested?: DocCreationCallback
@@ -219,7 +219,7 @@ function resolveOutboundVersionGap(
 
 export class Synchronizer {
   readonly identity: PeerIdentityDetails
-  readonly adapters: AdapterManager
+  readonly transports: TransportManager
 
   readonly #updateFn: ReturnType<typeof createSynchronizerUpdate>
   readonly #docRuntimes = new Map<DocId, DocRuntime>()
@@ -257,7 +257,7 @@ export class Synchronizer {
 
   constructor({
     identity,
-    adapters = [],
+    transports = [],
     route,
     authorize,
     onDocCreationRequested,
@@ -276,7 +276,7 @@ export class Synchronizer {
     this.model = initialModel
 
     // Create adapter context
-    const adapterContext = {
+    const transportContext = {
       identity: this.identity,
       onChannelAdded: this.channelAdded.bind(this),
       onChannelRemoved: this.channelRemoved.bind(this),
@@ -284,12 +284,12 @@ export class Synchronizer {
       onChannelEstablish: this.channelEstablish.bind(this),
     }
 
-    // Create AdapterManager
-    this.adapters = new AdapterManager({
-      adapters,
-      context: adapterContext,
-      onReset: (adapter: AnyAdapter) => {
-        for (const channel of adapter.channels) {
+    // Create TransportManager
+    this.transports = new TransportManager({
+      transports,
+      context: transportContext,
+      onReset: (transport: AnyTransport) => {
+        for (const channel of transport.channels) {
           this.channelRemoved(channel)
         }
       },
@@ -301,7 +301,7 @@ export class Synchronizer {
     }
 
     // Start all adapters
-    this.adapters.startAll()
+    this.transports.startAll()
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -484,20 +484,20 @@ export class Synchronizer {
   // PUBLIC API — Adapter management
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  async addAdapter(adapter: AnyAdapter): Promise<void> {
-    await this.adapters.addAdapter(adapter)
+  async addTransport(adapter: AnyTransport): Promise<void> {
+    await this.transports.addTransport(adapter)
   }
 
-  async removeAdapter(adapterId: string): Promise<void> {
-    await this.adapters.removeAdapter(adapterId)
+  async removeTransport(transportId: string): Promise<void> {
+    await this.transports.removeTransport(transportId)
   }
 
-  hasAdapter(adapterId: string): boolean {
-    return this.adapters.hasAdapter(adapterId)
+  hasTransport(transportId: string): boolean {
+    return this.transports.hasTransport(transportId)
   }
 
-  getAdapter(adapterId: string): AnyAdapter | undefined {
-    return this.adapters.getAdapter(adapterId)
+  getTransport(transportId: string): AnyTransport | undefined {
+    return this.transports.getTransport(transportId)
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -505,25 +505,25 @@ export class Synchronizer {
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   async flush(): Promise<void> {
-    await this.adapters.flush()
+    await this.transports.flush()
   }
 
   reset(): void {
     this.#docRuntimes.clear()
     const [initialModel] = init(this.identity)
     this.model = initialModel
-    this.adapters.reset()
+    this.transports.reset()
   }
 
   async shutdown(): Promise<void> {
-    await this.adapters.flush()
+    await this.transports.flush()
     const [initialModel] = init(this.identity)
     this.model = initialModel
-    await this.adapters.shutdown()
+    await this.transports.shutdown()
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  // CHANNEL CALLBACKS — called by AdapterManager
+  // CHANNEL CALLBACKS — called by TransportManager
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   channelAdded(channel: ConnectedChannel): void {
@@ -822,7 +822,7 @@ export class Synchronizer {
   #flushOutbound(): void {
     while (this.#outboundQueue.length > 0) {
       const envelope = this.#outboundQueue.shift()!
-      this.adapters.send(envelope)
+      this.transports.send(envelope)
     }
   }
 

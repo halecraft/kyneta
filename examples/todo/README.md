@@ -59,18 +59,18 @@ export const TodoDoc = bindLoro(TodoSchema)
 
 ```ts
 // Server
-const wsServer = new WebsocketServerAdapter()
+const wsServer = new WebsocketServerTransport()
 const exchange = new Exchange({
   identity: { name: "server" },
-  adapters: [wsServer],
+  transports: [wsServer],
 })
 const doc = exchange.get("todos", TodoDoc)
 
 // Client
-const wsClient = new WebsocketClientAdapter({ url: `ws://${location.host}/ws` })
+const wsClient = new WebsocketClientTransport({ url: `ws://${location.host}/ws` })
 const exchange = new Exchange({
   identity: { name: "client" },
-  adapters: [wsClient]
+  transports: [wsClient]
 })
 const doc = exchange.get("todos", TodoDoc)
 ```
@@ -119,7 +119,7 @@ Everything else — schema, Exchange, transport, @kyneta/cast view — stays the
 
 ## Why Is This Interesting?
 
-This isn't just a todo app. You write ~200 lines of TypeScript and get server-side rendering, real-time collaborative sync, compiled reactive UI, pluggable network and storage adapters, and a swappable CRDT engine — with nothing between the data change and the DOM update (not even a DOM diff engine).
+This isn't just a todo app. You write ~200 lines of TypeScript and get server-side rendering, real-time collaborative sync, compiled reactive UI, pluggable network and stores, and a swappable CRDT engine — with nothing between the data change and the DOM update (not even a DOM diff engine).
 
 ### The compiled output is as fast as hand-written DOM code
 
@@ -192,7 +192,7 @@ The @kyneta/exchange, the @kyneta/wire protocol, the @kyneta/cast view, the serv
 
 ### The sync layer is pluggable end-to-end
 
-The @kyneta/exchange handles sync through pluggable **network adapters** and pluggable **storage adapters** — via the same five-message protocol (`establish`, `discover`, `interest`, `offer`) regardless of what's underneath. This todo uses WebSocket, but the adapter could be SSE, WebRTC, or HTTP polling without changing a line of application code.
+The @kyneta/exchange handles sync through pluggable **transports** and pluggable **stores** — via the same five-message protocol (`establish`, `discover`, `interest`, `offer`) regardless of what's underneath. This todo uses WebSocket, but the adapter could be SSE, WebRTC, or HTTP polling without changing a line of application code.
 
 The synchronizer itself is a pure **TEA (Elm Architecture) state machine**: immutable model in, commands out, no I/O. Multi-hop relay — server receives a change from Tab A, forwards to Tab B — falls out naturally from this design, because the state machine doesn't know or care where messages came from.
 
@@ -203,12 +203,12 @@ The application code is ~200 lines of TypeScript. Beneath it:
 - ~7,400 lines of @kyneta/compiler,
 - ~8,200 lines of @kyneta/cast browser runtime,
 - ~3,600 lines of @kyneta/exchange state bus,
-- ~2,800 lines of @kyneta/websocket-network-adapter transport,
+- ~2,800 lines of @kyneta/websocket-transport transport,
 - ~1,900 lines of @kyneta/wire protocol,
 - ~5,250 lines of @kyneta/loro or @kyneta/yjs CRDT substrate adapters.
 - Verified by 4,300+ tests.
 
-The complete built output ships at **753 KB** for Loro, or **58 KB** for Yjs (brotli compressed). That includes a full CRDT engine, the @kyneta/schema interpreter, the @kyneta/cast runtime, the @kyneta/exchange state bus, and the @kyneta/websocket-network-adapter.
+The complete built output ships at **753 KB** for Loro, or **58 KB** for Yjs (brotli compressed). That includes a full CRDT engine, the @kyneta/schema interpreter, the @kyneta/cast runtime, the @kyneta/exchange state bus, and the @kyneta/websocket-transport.
 
 ## What's NOT Here (Intentionally)
 

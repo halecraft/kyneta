@@ -104,7 +104,7 @@ export type Interpret = {
  * The document is backed by a bare `Replica<V>` — version tracking,
  * export/import, per-peer delta computation — but no schema-driven
  * interpretation, no `Ref`, no changefeed. This is the correct tier
- * for conduit participants: relay servers, storage adapters, routing
+ * for conduit participants: relay servers, stores, routing
  * servers, audit logs.
  *
  * Created via `exchange.replicate(docId, replicaFactory, strategy)` or

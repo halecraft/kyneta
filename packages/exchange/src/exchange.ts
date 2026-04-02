@@ -2,7 +2,7 @@
 //
 // The Exchange class is the central orchestrator for substrate-agnostic
 // state synchronization. It manages document lifecycle, coordinates
-// adapters and storage backends, and provides the main API for
+// transports and stores, and provides the main API for
 // document operations.
 //
 // Storage is a direct dependency — not an adapter, not a channel, not
@@ -13,8 +13,8 @@
 // Usage:
 //   const exchange = new Exchange({
 //     identity: { name: "alice" },
-//     adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
-//     storage: [createInMemoryStorage()],
+//     transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+//     stores: [createInMemoryStore()],
 //   })
 //
 //   const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))  // LoroSchema from @kyneta/loro-schema
@@ -43,10 +43,10 @@ import {
   subscribe,
   writable,
 } from "@kyneta/schema"
-import type { AdapterFactory, AnyAdapter } from "./adapter/adapter.js"
+import type { TransportFactory, AnyTransport } from "./transport/transport.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
-import type { StorageBackend } from "./storage/storage-backend.js"
+import type { Store } from "./store/store.js"
 import type { DocId, PeerIdentityDetails } from "./types.js"
 import { generatePeerId, validatePeerId } from "./utils.js"
 
@@ -127,13 +127,13 @@ export type ExchangeParams = {
    * a fresh adapter instance. Use `create*` helpers for low-friction setup:
    *
    * ```typescript
-   * adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })]
+   * transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })]
    * ```
    */
-  adapters?: AdapterFactory[]
+  transports?: TransportFactory[]
 
   /**
-   * Storage backends for persistent document storage.
+   * Stores for persistent document storage.
    *
    * Storage is a direct Exchange dependency — not an adapter, not a
    * channel, not a participant in the sync protocol. The Exchange
@@ -142,10 +142,10 @@ export type ExchangeParams = {
    * directly.
    *
    * ```typescript
-   * storage: [createInMemoryStorage()]
+   * stores: [createInMemoryStore()]
    * ```
    */
-  storage?: StorageBackend[]
+  stores?: Store[]
 
   /**
    * Outbound flow control. Determines which peers participate in the
@@ -226,8 +226,8 @@ type DocCacheEntry =
  * The Exchange class is the central orchestrator for substrate-agnostic
  * state synchronization.
  *
- * It manages the lifecycle of documents, coordinates subsystems (adapters,
- * synchronizer, storage backends), and provides the main public API for
+ * It manages the lifecycle of documents, coordinates subsystems (transports,
+ * synchronizer, stores), and provides the main public API for
  * document operations.
  *
  * A single Exchange can host documents backed by different substrate types
@@ -242,8 +242,8 @@ type DocCacheEntry =
  *
  * const exchange = new Exchange({
  *   identity: { name: "alice" },
- *   adapters: [createBridgeAdapter({ adapterType: "peer-a", bridge })],
- *   storage: [createInMemoryStorage()],
+ *   transports: [createBridgeTransport({ transportType: "peer-a", bridge })],
+ *   stores: [createInMemoryStore()],
  * })
  *
  * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
@@ -261,11 +261,11 @@ export class Exchange {
 
   readonly #synchronizer: Synchronizer
   readonly #docCache = new Map<DocId, DocCacheEntry>()
-  readonly #storageBackends: StorageBackend[]
+  readonly #stores: Store[]
 
   /**
-   * Pending async storage operations tracked for flush()/shutdown().
-   * Each promise is added when a storage write begins and removed
+   * Pending async store operations tracked for flush()/shutdown().
+   * Each promise is added when a store write begins and removed
    * when it settles.
    */
   readonly #pendingStorageOps: Set<Promise<void>> = new Set()
@@ -294,8 +294,8 @@ export class Exchange {
 
   constructor({
     identity = {},
-    adapters = [],
-    storage = [],
+    transports = [],
+    stores = [],
     route,
     authorize,
     onDocDismissed,
@@ -306,7 +306,7 @@ export class Exchange {
     validatePeerId(peerId)
     this.peerId = peerId
 
-    this.#storageBackends = storage
+    this.#stores = stores
 
     const fullIdentity: PeerIdentityDetails = {
       peerId,
@@ -318,7 +318,7 @@ export class Exchange {
     let warnedNoDiscoverCallback = false
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
-      adapters: adapters.map(factory => factory()),
+      transports: transports.map(factory => factory()),
       route: route ?? (() => true),
       authorize: authorize ?? (() => true),
       onDocDismissed,
@@ -351,10 +351,10 @@ export class Exchange {
         }
       },
       onDocImported: (docId, payload, version) => {
-        // Persist incoming network payloads to all storage backends.
+        // Persist incoming network payloads to all stores.
         // Uses append() because network imports are incremental deltas
         // that should accumulate alongside existing entries.
-        this.#persistToStorage(docId, backend =>
+        this.#persistToStore(docId, backend =>
           backend.append(docId, { payload, version }),
         )
       },
@@ -385,7 +385,7 @@ export class Exchange {
   // =========================================================================
 
   /**
-   * Track an async storage operation so flush() can await it.
+   * Track an async store operation so flush() can await it.
    */
   #trackOp(op: Promise<void>): void {
     this.#pendingStorageOps.add(op)
@@ -420,22 +420,22 @@ export class Exchange {
   }
 
   /**
-   * Run a storage operation against all backends for a document,
+   * Run a store operation against all backends for a document,
    * with per-doc sequencing and flush tracking.
    */
-  #persistToStorage(
+  #persistToStore(
     docId: DocId,
-    operation: (backend: StorageBackend) => Promise<void>,
+    operation: (backend: Store) => Promise<void>,
   ): void {
-    if (this.#storageBackends.length === 0) return
+    if (this.#stores.length === 0) return
 
     const op = this.#enqueueForDoc(docId, async () => {
-      for (const backend of this.#storageBackends) {
+      for (const backend of this.#stores) {
         try {
           await operation(backend)
         } catch (error) {
           console.error(
-            `[exchange] storage operation failed for doc '${docId}':`,
+            `[exchange] store operation failed for doc '${docId}':`,
             error,
           )
         }
@@ -445,7 +445,7 @@ export class Exchange {
   }
 
   /**
-   * Hydrate a replica from storage backends, then register with the
+   * Hydrate a replica from stores, then register with the
    * synchronizer and wire persistence.
    *
    * This is the async tail of get()/replicate(). The caller has already
@@ -466,7 +466,7 @@ export class Exchange {
     }
 
     // 1. Ensure doc metadata is registered in all backends
-    for (const backend of this.#storageBackends) {
+    for (const backend of this.#stores) {
       try {
         await backend.ensureDoc(docId, metadata)
       } catch (error) {
@@ -478,7 +478,7 @@ export class Exchange {
     }
 
     // 2. Hydrate from storage — load all entries and merge into the replica
-    for (const backend of this.#storageBackends) {
+    for (const backend of this.#stores) {
       try {
         const existing = await backend.lookup(docId)
         if (existing) {
@@ -495,7 +495,7 @@ export class Exchange {
         }
       } catch (error) {
         console.error(
-          `[exchange] storage hydration failed for doc '${docId}':`,
+          `[exchange] store hydration failed for doc '${docId}':`,
           error,
         )
       }
@@ -529,7 +529,7 @@ export class Exchange {
    * Multiple calls with the same `docId` return the same instance.
    * Calling with a different BoundSchema for the same `docId` throws.
    *
-   * The ref is returned synchronously. If storage backends are configured,
+   * The ref is returned synchronously. If stores are configured,
    * hydration happens asynchronously — the ref starts empty and the
    * changefeed fires when stored data is merged. The synchronizer only
    * learns about the doc after hydration completes, so present/interest
@@ -608,8 +608,8 @@ export class Exchange {
       bound,
     })
 
-    if (this.#storageBackends.length > 0) {
-      // Storage path: hydrate from storage, then register with synchronizer.
+    if (this.#stores.length > 0) {
+      // Store path: hydrate from storage, then register with synchronizer.
       // The ref is returned immediately (empty). The changefeed fires when
       // stored data is merged. The synchronizer learns about the doc only
       // after hydration, so present/interest carry the hydrated version.
@@ -622,7 +622,7 @@ export class Exchange {
       ).then(() => {
         // Wire changefeed → synchronizer + storage AFTER hydration so that
         // the merges during hydration (with origin "sync") don't trigger
-        // unnecessary notifyLocalChange calls or storage writes.
+        // unnecessary notifyLocalChange calls or store writes.
         subscribe(ref, changeset => {
           if (changeset.origin === "sync") return
 
@@ -631,7 +631,7 @@ export class Exchange {
           // Persist local mutations as consolidated snapshots via replace().
           const payload = substrate.exportEntirety()
           const version = substrate.version().serialize()
-          this.#persistToStorage(docId, backend =>
+          this.#persistToStore(docId, backend =>
             backend.replace(docId, { payload, version }),
           )
         })
@@ -700,8 +700,8 @@ export class Exchange {
     // Cache
     this.#docCache.set(docId, { mode: "replicate" })
 
-    if (this.#storageBackends.length > 0) {
-      // Storage path: hydrate from storage, then register with synchronizer.
+    if (this.#stores.length > 0) {
+      // Store path: hydrate from storage, then register with synchronizer.
       const hydrationOp = this.#hydrateAndRegister(
         docId,
         replica,
@@ -737,7 +737,7 @@ export class Exchange {
 
   /**
    * Dismiss a document — remove it locally, broadcast `dismiss` to
-   * all peers, and delete from storage backends.
+   * all peers, and delete from stores.
    *
    * This is the single public API for document removal. For bulk
    * teardown without per-doc notification, use `reset()` or `shutdown()`.
@@ -748,8 +748,8 @@ export class Exchange {
     this.#docCache.delete(docId)
     this.#synchronizer.dismissDocument(docId)
 
-    // Delete from all storage backends
-    this.#persistToStorage(docId, backend => backend.delete(docId))
+    // Delete from all stores
+    this.#persistToStore(docId, backend => backend.delete(docId))
   }
 
   // =========================================================================
@@ -758,32 +758,32 @@ export class Exchange {
 
   /**
    * Add an adapter at runtime.
-   * Idempotent: adding an adapter with the same adapterId is a no-op.
+   * Idempotent: adding an adapter with the same transportId is a no-op.
    */
-  async addAdapter(adapter: AnyAdapter): Promise<void> {
-    await this.#synchronizer.addAdapter(adapter)
+  async addTransport(adapter: AnyTransport): Promise<void> {
+    await this.#synchronizer.addTransport(adapter)
   }
 
   /**
    * Remove an adapter at runtime.
    * Idempotent: removing a non-existent adapter is a no-op.
    */
-  async removeAdapter(adapterId: string): Promise<void> {
-    await this.#synchronizer.removeAdapter(adapterId)
+  async removeTransport(transportId: string): Promise<void> {
+    await this.#synchronizer.removeTransport(transportId)
   }
 
   /**
    * Check if an adapter exists by ID.
    */
-  hasAdapter(adapterId: string): boolean {
-    return this.#synchronizer.hasAdapter(adapterId)
+  hasTransport(transportId: string): boolean {
+    return this.#synchronizer.hasTransport(transportId)
   }
 
   /**
    * Get an adapter by ID.
    */
-  getAdapter(adapterId: string): AnyAdapter | undefined {
-    return this.#synchronizer.getAdapter(adapterId)
+  getTransport(transportId: string): AnyTransport | undefined {
+    return this.#synchronizer.getTransport(transportId)
   }
 
   // =========================================================================
@@ -791,28 +791,28 @@ export class Exchange {
   // =========================================================================
 
   /**
-   * Await all pending storage operations. The loop handles operations
+   * Await all pending store operations. The loop handles operations
    * that spawn new operations (e.g. a hydration that triggers a save).
    */
-  async #flushStorage(): Promise<void> {
+  async #flushStores(): Promise<void> {
     while (this.#pendingStorageOps.size > 0) {
       await Promise.all(this.#pendingStorageOps)
     }
   }
 
   /**
-   * Await all pending storage operations without disconnecting adapters.
+   * Await all pending store operations without disconnecting transports.
    *
    * Use this when you want to ensure all data has been persisted but
    * plan to continue using the Exchange afterwards.
    */
   async flush(): Promise<void> {
-    await this.#flushStorage()
+    await this.#flushStores()
     await this.#synchronizer.flush()
   }
 
   /**
-   * Disconnects all network adapters and cleans up resources.
+   * Disconnects all network transports and cleans up resources.
    *
    * ⚠️ WARNING: This is synchronous and does NOT wait for pending storage
    * saves to complete. If you need to ensure data persistence, use
@@ -824,18 +824,18 @@ export class Exchange {
   }
 
   /**
-   * Gracefully shut down: flush all pending storage operations, then
-   * disconnect all adapters and clean up resources.
+   * Gracefully shut down: flush all pending store operations, then
+   * disconnect all transports and clean up resources.
    *
    * This is the recommended way to stop an Exchange when using persistent
-   * storage backends.
+   * stores.
    */
   async shutdown(): Promise<void> {
-    await this.#flushStorage()
+    await this.#flushStores()
     this.#docCache.clear()
     await this.#synchronizer.shutdown()
-    // Close storage backends that hold native handles
-    for (const backend of this.#storageBackends) {
+    // Close stores that hold native handles
+    for (const backend of this.#stores) {
       if (backend.close) await backend.close()
     }
   }

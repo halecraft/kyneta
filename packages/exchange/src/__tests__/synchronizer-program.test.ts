@@ -42,7 +42,7 @@ function makeConnectedChannel(channelId: number): ConnectedChannel {
   return {
     type: "connected",
     channelId,
-    adapterType: "test",
+    transportType: "test",
     send: () => {},
     stop: () => {},
     onReceive: () => {},
@@ -57,7 +57,7 @@ function makeEstablishedChannel(
     type: "established",
     channelId,
     peerId,
-    adapterType: "test",
+    transportType: "test",
     send: () => {},
     stop: () => {},
     onReceive: () => {},

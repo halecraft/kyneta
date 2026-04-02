@@ -5,7 +5,7 @@
 //
 //   Replica<V>     — replication surface (schema-free)
 //                    version tracking, export/import, payload transfer.
-//                    Sufficient for conduit participants: storage adapters,
+//                    Sufficient for conduit participants: stores,
 //                    routing servers, CDN edges, replication services.
 //
 //   Substrate<V>   — interpretation surface (schema-aware)

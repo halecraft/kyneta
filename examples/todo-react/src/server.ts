@@ -23,9 +23,9 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Exchange } from "@kyneta/exchange"
 import {
-  WebsocketServerAdapter,
+  WebsocketServerTransport,
   wrapNodeWebsocket,
-} from "@kyneta/websocket-network-adapter/server"
+} from "@kyneta/websocket-transport/server"
 import { createServer as createViteServer } from "vite"
 import { WebSocketServer } from "ws"
 import { TodoDoc } from "./schema.js"
@@ -36,11 +36,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // 1. Exchange — server-side sync hub
 // ─────────────────────────────────────────────────────────────────────────
 
-const serverAdapter = new WebsocketServerAdapter()
+const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
   identity: { name: "server" },
-  adapters: [() => serverAdapter],
+  transports: [() => serverTransport],
 })
 
 // Register the todo document. The server holds the authoritative copy.
@@ -85,7 +85,7 @@ httpServer.on("request", (req, res) => {
 const wss = new WebSocketServer({ noServer: true })
 
 wss.on("connection", ws => {
-  const { start } = serverAdapter.handleConnection({
+  const { start } = serverTransport.handleConnection({
     socket: wrapNodeWebsocket(ws),
   })
   start()

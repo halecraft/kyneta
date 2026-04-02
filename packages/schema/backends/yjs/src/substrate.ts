@@ -236,7 +236,7 @@ export function createYjsSubstrate(
  * Reader, no event bridge, no changefeed. Just the CRDT runtime
  * with version tracking and export/merge.
  *
- * Used by conduit participants (storage adapters, routing servers)
+ * Used by conduit participants (stores, routing servers)
  * that need to accumulate state, compute per-peer deltas, and compact
  * storage without ever interpreting document fields.
  */

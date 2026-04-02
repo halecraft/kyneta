@@ -5,8 +5,8 @@
 // tested in each adapter's own test file.
 
 import { describe, expect, it, vi } from "vitest"
-import type { StateTransition } from "../adapter/client-state-machine.js"
-import { ClientStateMachine } from "../adapter/client-state-machine.js"
+import type { StateTransition } from "../transport/client-state-machine.js"
+import { ClientStateMachine } from "../transport/client-state-machine.js"
 
 // ---------------------------------------------------------------------------
 // Test state type

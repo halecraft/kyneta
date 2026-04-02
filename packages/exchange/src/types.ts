@@ -17,7 +17,7 @@ export type DocId = string
 export type ChannelId = number
 
 /** Adapter type identifier — e.g. "bridge", "websocket", "indexeddb". */
-export type AdapterType = string
+export type TransportType = string
 
 /**
  * Peer identity details — the full identity of a peer in the network.

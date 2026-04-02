@@ -43,10 +43,10 @@ export interface ExchangeProviderProps {
  * unmounting.
  *
  * ```tsx
- * import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+ * import { createWebsocketClient } from "@kyneta/websocket-transport/client"
  *
  * const config = {
- *   adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+ *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
  * }
  *
  * <ExchangeProvider config={config}>
@@ -54,8 +54,8 @@ export interface ExchangeProviderProps {
  * </ExchangeProvider>
  * ```
  *
- * Adapter factories ensure StrictMode safety: each mount creates a fresh
- * Exchange with fresh adapter instances. The config object (containing
+ * Transport factories ensure StrictMode safety: each mount creates a fresh
+ * Exchange with fresh transport instances. The config object (containing
  * factory closures) is stable across renders.
  */
 export function ExchangeProvider({ config, children }: ExchangeProviderProps) {

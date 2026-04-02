@@ -52,7 +52,7 @@ todo-react/
 |---------|-----------|------------|
 | **Schema** | `Schema.doc({ todos: ... })` | Identical |
 | **Binding** | `bindLoro(TodoSchema)` | `bindYjs(TodoSchema)` |
-| **Exchange** | `new Exchange({ adapters: [...] })` | Identical |
+| **Exchange** | `new Exchange({ transports: [...] })` | Identical |
 | **Transport** | WebSocket | Identical |
 | **Sync protocol** | discover → interest → offer | Identical |
 
@@ -100,14 +100,14 @@ export const TodoDoc = bindYjs(TodoSchema)
 
 ```tsx
 import { ExchangeProvider } from "@kyneta/react"
-import { WebsocketClientAdapter } from "@kyneta/websocket-network-adapter/client"
+import { WebsocketClientTransport } from "@kyneta/websocket-transport/client"
 
-const wsAdapter = new WebsocketClientAdapter({
+const wsAdapter = new WebsocketClientTransport({
   url: `ws://${location.host}/ws`,
 })
 
 createRoot(document.getElementById("root")!).render(
-  <ExchangeProvider config={{ adapters: [wsAdapter] }}>
+  <ExchangeProvider config={{ transports: [wsAdapter] }}>
     <App />
   </ExchangeProvider>,
 )
@@ -180,7 +180,7 @@ A React developer needs two import sources:
 import { ExchangeProvider, useDocument, useValue, change } from "@kyneta/react"
 
 // The transport adapter (one per transport type)
-import { WebsocketClientAdapter } from "@kyneta/websocket-network-adapter/client"
+import { WebsocketClientTransport } from "@kyneta/websocket-transport/client"
 ```
 
 `@kyneta/react` re-exports `Exchange`, `change`, `Schema`, `subscribe`, and other commonly needed APIs from `@kyneta/schema` and `@kyneta/exchange`, so most application code only imports from one package.

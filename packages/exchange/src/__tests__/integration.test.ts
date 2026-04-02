@@ -1,7 +1,7 @@
 // Integration tests — two-peer sync for all three merge strategies.
 //
 // These tests prove documents converge across two Exchange instances
-// connected via BridgeAdapter, for each merge strategy:
+// connected via BridgeTransport, for each merge strategy:
 // - Sequential (PlainSubstrate via bindPlain)
 // - Causal (LoroSubstrate via bindLoro)
 // - LWW (TimestampVersion via bindEphemeral)
@@ -19,7 +19,7 @@ import {
   Schema,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
+import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
 
@@ -28,7 +28,7 @@ import { sync } from "../sync.js"
 // ---------------------------------------------------------------------------
 
 /**
- * Drain microtask queue — necessary for BridgeAdapter async delivery.
+ * Drain microtask queue — necessary for BridgeTransport async delivery.
  * We do multiple rounds because messages trigger responses which trigger
  * more async deliveries.
  */
@@ -97,12 +97,12 @@ describe("Sequential sync (PlainSubstrate)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Alice creates a doc and populates via change()
@@ -131,12 +131,12 @@ describe("Sequential sync (PlainSubstrate)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     const docA = exchangeA.get("doc-1", SequentialDoc)
@@ -174,12 +174,12 @@ describe("Causal sync (LoroSubstrate)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Alice creates a doc
@@ -204,12 +204,12 @@ describe("Causal sync (LoroSubstrate)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Both create the doc
@@ -251,12 +251,12 @@ describe("LWW sync (Ephemeral/Presence)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Alice sets presence with change() so the version bumps
@@ -284,12 +284,12 @@ describe("LWW sync (Ephemeral/Presence)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     const presA = exchangeA.get("presence", PresenceDoc)
@@ -339,12 +339,12 @@ describe("Heterogeneous documents", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Alice: plain config doc
@@ -382,22 +382,22 @@ describe("Multi-hop relay (three-peer topology)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH }),
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAH }),
       ],
     })
 
     const exchangeHub = createExchange({
       identity: { peerId: "hub" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
-        createBridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
+      transports: [
+        createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
+        createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
       ],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeHB })],
     })
 
     // All three open the same doc
@@ -428,22 +428,22 @@ describe("Multi-hop relay (three-peer topology)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH }),
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAH }),
       ],
     })
 
     const exchangeHub = createExchange({
       identity: { peerId: "hub" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
-        createBridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
+      transports: [
+        createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
+        createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
       ],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeHB })],
     })
 
     // Hub creates the doc with initial state (sequential needs a populated source)
@@ -490,12 +490,12 @@ describe("onDocDiscovered (dynamic document creation)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
       onDocDiscovered: docId => {
         if (docId === "dynamic-doc") return Interpret(SequentialDoc)
         return undefined
@@ -524,12 +524,12 @@ describe("onDocDiscovered (dynamic document creation)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
       onDocDiscovered: () => undefined,
     })
 
@@ -545,12 +545,12 @@ describe("onDocDiscovered (dynamic document creation)", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
       onDocDiscovered: docId => {
         if (docId === "presence") return Interpret(PresenceDoc)
         return undefined
@@ -597,14 +597,14 @@ describe("route predicate", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
       // Deny bob from seeing "secret"
       route: docId => docId !== "secret",
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Alice creates doc that bob shouldn't see
@@ -621,17 +621,17 @@ describe("route predicate", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAH }),
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAH }),
       ],
     })
 
     // Hub allows alice but denies bob for "private-doc"
     const exchangeHub = createExchange({
       identity: { peerId: "hub" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "hub-a", bridge: bridgeAH }),
-        createBridgeAdapter({ adapterType: "hub-b", bridge: bridgeHB }),
+      transports: [
+        createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
+        createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
       ],
       route: (docId, peer) => {
         if (docId === "private-doc" && peer.peerId === "bob") return false
@@ -641,7 +641,7 @@ describe("route predicate", () => {
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeHB })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeHB })],
     })
 
     // Hub creates doc
@@ -674,13 +674,13 @@ describe("authorize predicate", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     // Bob rejects all mutations
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
       authorize: () => false,
     })
 
@@ -712,12 +712,12 @@ describe("dismiss", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
       onDocDismissed: (docId, peer) => {
         dismissedDocId = docId
         dismissedPeerId = peer.peerId
@@ -744,12 +744,12 @@ describe("dismiss", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     exchangeA.get("doc-1", SequentialDoc)
@@ -784,12 +784,12 @@ describe("route + onDocDiscovered interaction", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
       // Route denies alice for "blocked-doc"
       route: docId => docId !== "blocked-doc",
       onDocDiscovered: docId => {
@@ -822,17 +822,17 @@ describe("relay via exchange.replicate()", () => {
     // Peer A — full interpreter
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
     })
 
     // Relay — headless replication, no schema knowledge
     const relay = createExchange({
       identity: { peerId: "relay" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
-        createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB }),
+      transports: [
+        createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
+        createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
       onDocDiscovered: (_docId, _peer) =>
         Replicate(loroReplicaFactory, "causal"),
@@ -841,7 +841,7 @@ describe("relay via exchange.replicate()", () => {
     // Peer B — full interpreter
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
       onDocDiscovered: docId => {
         if (docId === "shared") return Interpret(LoroDoc)
         return undefined
@@ -871,16 +871,16 @@ describe("relay via exchange.replicate()", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
     })
 
     const relay = createExchange({
       identity: { peerId: "relay" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
-        createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB }),
+      transports: [
+        createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
+        createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
       onDocDiscovered: (_docId, _peer) =>
         Replicate(plainReplicaFactory, "sequential"),
@@ -888,7 +888,7 @@ describe("relay via exchange.replicate()", () => {
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
       onDocDiscovered: docId => {
         if (docId === "config") return Interpret(SequentialDoc)
         return undefined
@@ -916,23 +916,23 @@ describe("relay via exchange.replicate()", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
     })
 
     const relay = createExchange({
       identity: { peerId: "relay" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
-        createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB }),
+      transports: [
+        createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
+        createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
       onDocDiscovered: (_docId, _peer) => Replicate(lwwReplicaFactory, "lww"),
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
       onDocDiscovered: docId => {
         if (docId === "presence") return Interpret(PresenceDoc)
         return undefined
@@ -961,13 +961,13 @@ describe("relay via exchange.replicate()", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     let discoveredDocId: string | undefined
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
       onDocDiscovered: (docId, _peer) => {
         discoveredDocId = docId
         return Replicate(loroReplicaFactory, "causal")
@@ -990,15 +990,15 @@ describe("relay via exchange.replicate()", () => {
     // Phase 1: Alice connects to relay, writes data
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
     })
 
     const relay = createExchange({
       identity: { peerId: "relay" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
+      transports: [
+        createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
       ],
       onDocDiscovered: (_docId, _peer) =>
         Replicate(loroReplicaFactory, "causal"),
@@ -1016,13 +1016,13 @@ describe("relay via exchange.replicate()", () => {
 
     // Phase 2: Bob connects to relay AFTER Alice wrote
     const bridgeRB = new Bridge()
-    await relay.addAdapter(
-      createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB })(),
+    await relay.addTransport(
+      createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB })(),
     )
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
       onDocDiscovered: docId => {
         if (docId === "shared") return Interpret(LoroDoc)
         return undefined
@@ -1042,12 +1042,12 @@ describe("relay via exchange.replicate()", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
       onDocDiscovered: (docId, _peer) => {
         // Interpret some docs, replicate others
         if (docId === "app-doc") return Interpret(SequentialDoc)
@@ -1095,12 +1095,12 @@ describe("waitForSync", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     const docA = exchangeA.get("doc-1", SequentialDoc)
@@ -1123,12 +1123,12 @@ describe("waitForSync", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Alice has two docs

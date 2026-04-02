@@ -20,11 +20,11 @@
 
 import { Exchange } from "@kyneta/exchange"
 import { Interpret } from "@kyneta/schema"
-import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
+import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import {
   createBunWebsocketHandlers,
   type BunWebsocketData,
-} from "@kyneta/websocket-network-adapter/bun"
+} from "@kyneta/websocket-transport/bun"
 import { GameStateDoc, PlayerInputDoc } from "./schema.js"
 import { GameLoop } from "./server/game-loop.js"
 import { buildClient } from "./build.js"
@@ -39,7 +39,7 @@ await buildClient()
 // 2. Exchange — server-side sync hub with access control
 // ─────────────────────────────────────────────────────────────────────────
 
-const serverAdapter = new WebsocketServerAdapter()
+const serverTransport = new WebsocketServerTransport()
 
 // GameLoop is declared before the Exchange so the callbacks can close
 // over it. It's assigned after exchange.get("game-state") returns.
@@ -49,7 +49,7 @@ let gameLoop: GameLoop
 
 const exchange = new Exchange({
   identity: { name: "bumper-cars-server", type: "service" },
-  adapters: [() => serverAdapter],
+  transports: [() => serverTransport],
 
   // ── route ────────────────────────────────────────────────────────
   // Outbound flow control: which peers see which documents?
@@ -164,7 +164,7 @@ Bun.serve<BunWebsocketData>({
       : new Response("Not found", { status: 404 })
   },
 
-  websocket: createBunWebsocketHandlers(serverAdapter),
+  websocket: createBunWebsocketHandlers(serverTransport),
 })
 
 console.log(`\n  ✅ Bumper Cars server`)

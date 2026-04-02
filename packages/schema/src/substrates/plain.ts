@@ -235,7 +235,7 @@ function createPlainReplicaCore(storeObj: PlainState) {
  * version tracking and export/merge, but no schema interpretation,
  * no Reader, no WritableContext, no changefeed.
  *
- * Used by conduit participants (storage adapters, routing servers)
+ * Used by conduit participants (stores, routing servers)
  * that need to accumulate state, compute deltas, and compact storage
  * without ever reading or writing document fields.
  *

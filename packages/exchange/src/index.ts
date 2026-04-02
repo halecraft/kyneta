@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 export type {
-  AdapterType,
+  TransportType,
   ChannelId,
   DocId,
   PeerDocSyncState,
@@ -73,33 +73,33 @@ export type {
 export { isEstablished } from "./channel.js"
 
 // ---------------------------------------------------------------------------
-// Adapter — base class and adapter manager
+// Transport — base class and transport manager
 // ---------------------------------------------------------------------------
 
 export type {
-  AdapterContext,
-  AdapterFactory,
-  AnyAdapter,
-} from "./adapter/adapter.js"
-export { Adapter } from "./adapter/adapter.js"
-export { AdapterManager } from "./adapter/adapter-manager.js"
+  TransportContext,
+  TransportFactory,
+  AnyTransport,
+} from "./transport/transport.js"
+export { Transport } from "./transport/transport.js"
+export { TransportManager } from "./transport/transport-manager.js"
 export {
   ClientStateMachine,
   type ClientStateMachineConfig,
   type StateTransition,
   type TransitionListener,
-} from "./adapter/client-state-machine.js"
+} from "./transport/client-state-machine.js"
 
 // ---------------------------------------------------------------------------
 // Bridge — in-process testing adapter
 // ---------------------------------------------------------------------------
 
-export type { BridgeAdapterParams } from "./adapter/bridge-adapter.js"
+export type { BridgeTransportParams } from "./transport/bridge-transport.js"
 export {
   Bridge,
-  BridgeAdapter,
-  createBridgeAdapter,
-} from "./adapter/bridge-adapter.js"
+  BridgeTransport,
+  createBridgeTransport,
+} from "./transport/bridge-transport.js"
 
 // ---------------------------------------------------------------------------
 // Synchronizer — TEA state machine
@@ -143,9 +143,9 @@ export { hasSync, sync } from "./sync.js"
 // Storage — persistent storage adapters
 // ---------------------------------------------------------------------------
 
-export type { StorageBackend, StorageEntry } from "./storage/index.js"
+export type { Store, StoreEntry } from "./store/index.js"
 export {
-  InMemoryStorageBackend,
-  type InMemoryStorageData,
-  createInMemoryStorage,
-} from "./storage/index.js"
+  InMemoryStore,
+  type InMemoryStoreData,
+  createInMemoryStore,
+} from "./store/index.js"

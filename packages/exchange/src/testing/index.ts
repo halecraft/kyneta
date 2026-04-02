@@ -5,9 +5,9 @@
 // re-exported from the main "." barrel.
 
 export {
-  describeStorageBackend,
+  describeStore,
   makeEntry,
   makeBinaryEntry,
   collectAll,
   plainMetadata,
-} from "./storage-backend-conformance.js"
+} from "./store-conformance.js"

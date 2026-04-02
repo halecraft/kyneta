@@ -10,7 +10,7 @@
     "@kyneta/react": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@kyneta/yjs-schema": "workspace:^",
-    "@kyneta/websocket-network-adapter": "workspace:^",
+    "@kyneta/websocket-transport": "workspace:^",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "yjs": "^13.6.30",

@@ -12,7 +12,7 @@ import {
   unwrap,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
+import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 import { Exchange } from "../exchange.js"
 import { hasSync, sync } from "../sync.js"
 
@@ -325,11 +325,11 @@ describe("Exchange", () => {
 
         const exchangeA = createExchange({
           identity: { peerId: "alice" },
-          adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+          transports: [createBridgeTransport({ transportType: "alice", bridge })],
         })
         const exchangeB = createExchange({
           identity: { peerId: "bob" },
-          adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+          transports: [createBridgeTransport({ transportType: "bob", bridge })],
         })
 
         const docA = exchangeA.get("doc-1", TestDoc)

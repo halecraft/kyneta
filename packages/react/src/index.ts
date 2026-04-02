@@ -52,7 +52,7 @@ export {
 // ---------------------------------------------------------------------------
 
 export type {
-  AdapterFactory,
+  TransportFactory,
   DocId,
   ExchangeParams,
   ReadyState,

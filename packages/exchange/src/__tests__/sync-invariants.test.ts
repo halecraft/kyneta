@@ -21,7 +21,7 @@ import {
   TimestampVersion,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import { Bridge, createBridgeAdapter } from "../adapter/bridge-adapter.js"
+import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
 
@@ -103,11 +103,11 @@ describe("initial content via change() syncs to peers", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Alice creates a doc and applies initial content via change()
@@ -144,11 +144,11 @@ describe("snapshot import preserves ref identity", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     const docA = exchangeA.get("doc-1", SimpleDoc)
@@ -173,11 +173,11 @@ describe("snapshot import preserves ref identity", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     const docB = exchangeB.get("doc-1", SimpleDoc)
@@ -206,11 +206,11 @@ describe("LWW stale rejection", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Alice sets initial presence
@@ -279,11 +279,11 @@ describe("causal sync uses deltas when sender is ahead", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     const docA = exchangeA.get("doc-1", LoroDoc)
@@ -325,11 +325,11 @@ describe("universal version comparison rejects stale offers for all strategies",
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [createBridgeAdapter({ adapterType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Both create the same doc
@@ -404,16 +404,16 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
     // Alice — full interpreter with plain/sequential substrate
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "alice", bridge: bridgeAR }),
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
     })
 
     // Relay — plain replica (no schema)
     const relay = createExchange({
       identity: { peerId: "relay" },
-      adapters: [
-        createBridgeAdapter({ adapterType: "relay-a", bridge: bridgeAR }),
+      transports: [
+        createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
       ],
       onDocDiscovered: () => Replicate(plainReplicaFactory, "sequential"),
     })
@@ -433,13 +433,13 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
 
     // Phase 2: Bob connects to relay AFTER Alice wrote
     const bridgeRB = new Bridge()
-    await relay.addAdapter(
-      createBridgeAdapter({ adapterType: "relay-b", bridge: bridgeRB })(),
+    await relay.addTransport(
+      createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB })(),
     )
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      adapters: [createBridgeAdapter({ adapterType: "bob", bridge: bridgeRB })],
+      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
       onDocDiscovered: docId => {
         if (docId === "config") return Interpret(SequentialDoc)
         return undefined

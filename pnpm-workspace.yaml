@@ -3,8 +3,8 @@ packages:
   - packages/*
   - packages/schema/backends/*
   - packages/exchange/wire
-  - packages/exchange/network-adapters/*
-  - packages/exchange/storage-adapters/*
+  - packages/exchange/transports/*
+  - packages/exchange/stores/*
   - tests/*
 
 onlyBuiltDependencies:

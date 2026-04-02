@@ -7,7 +7,7 @@
     "verify": "verify"
   },
   "devDependencies": {
-    "@kyneta/websocket-network-adapter": "workspace:^",
+    "@kyneta/websocket-transport": "workspace:^",
     "@kyneta/exchange": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",

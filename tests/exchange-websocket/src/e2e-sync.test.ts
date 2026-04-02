@@ -1,7 +1,7 @@
 // e2e-sync — integration tests proving full-stack sync over real Websocket connections.
 //
-// These tests spin up a Bun Websocket server with WebsocketServerAdapter,
-// connect a WebsocketClientAdapter, and verify that Exchange instances
+// These tests spin up a Bun Websocket server with WebsocketServerTransport,
+// connect a WebsocketClientTransport, and verify that Exchange instances
 // sync documents correctly over the real transport stack:
 //
 //   Exchange →
@@ -34,12 +34,12 @@ import {
 } from "@kyneta/schema"
 import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
 import { Exchange } from "@kyneta/exchange"
-import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
-import { WebsocketClientAdapter } from "@kyneta/websocket-network-adapter/client"
+import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
+import { WebsocketClientTransport } from "@kyneta/websocket-transport/client"
 import {
   createBunWebsocketHandlers,
   type BunWebsocketData,
-} from "@kyneta/websocket-network-adapter/bun"
+} from "@kyneta/websocket-transport/bun"
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -49,12 +49,12 @@ import {
  * Spin up a Bun Websocket server on a random port.
  * Returns the server, its URL, and the server adapter.
  */
-function createTestServer(serverAdapter: WebsocketServerAdapter): {
+function createTestServer(serverTransport: WebsocketServerTransport): {
   server: ReturnType<typeof Bun.serve>
   url: string
   shutdown: () => void
 } {
-  const handlers = createBunWebsocketHandlers(serverAdapter)
+  const handlers = createBunWebsocketHandlers(serverTransport)
 
   const server = Bun.serve<BunWebsocketData>({
     port: 0, // random port
@@ -83,7 +83,7 @@ function createTestServer(serverAdapter: WebsocketServerAdapter): {
  * Drain microtask queue and yield to event loop — necessary for async
  * message delivery through Websocket transport.
  *
- * Unlike BridgeAdapter's queueMicrotask delivery, real Websocket transport
+ * Unlike BridgeTransport's queueMicrotask delivery, real Websocket transport
  * involves actual I/O, so we need more aggressive draining.
  */
 async function drain(rounds = 40): Promise<void> {
@@ -97,7 +97,7 @@ async function drain(rounds = 40): Promise<void> {
  * Wait for a client adapter to reach the "ready" state.
  */
 async function waitForReady(
-  client: WebsocketClientAdapter,
+  client: WebsocketClientTransport,
   timeoutMs = 5000,
 ): Promise<void> {
   await client.waitForStatus("ready", { timeoutMs })
@@ -174,27 +174,27 @@ async function createConnectedPair(opts?: {
 }): Promise<{
   serverExchange: Exchange
   clientExchange: Exchange
-  serverAdapter: WebsocketServerAdapter
-  clientAdapter: WebsocketClientAdapter
+  serverTransport: WebsocketServerTransport
+  clientTransport: WebsocketClientTransport
   testServer: ReturnType<typeof createTestServer>
 }> {
   const serverPeerId = opts?.serverPeerId ?? "server"
   const clientPeerId = opts?.clientPeerId ?? "client"
   const fragmentThreshold = opts?.fragmentThreshold
 
-  const serverAdapter = new WebsocketServerAdapter(
+  const serverTransport = new WebsocketServerTransport(
     fragmentThreshold !== undefined ? { fragmentThreshold } : undefined,
   )
 
-  const testServer = createTestServer(serverAdapter)
+  const testServer = createTestServer(serverTransport)
   activeServers.push(testServer)
 
   const serverExchange = createExchange({
     identity: { peerId: serverPeerId },
-    adapters: [() => serverAdapter],
+    transports: [() => serverTransport],
   })
 
-  const clientAdapter = new WebsocketClientAdapter({
+  const clientTransport = new WebsocketClientTransport({
     url: testServer.url,
     reconnect: { enabled: false },
     fragmentThreshold,
@@ -202,11 +202,11 @@ async function createConnectedPair(opts?: {
 
   const clientExchange = createExchange({
     identity: { peerId: clientPeerId },
-    adapters: [() => clientAdapter],
+    transports: [() => clientTransport],
   })
 
   // Wait for the client to be fully ready
-  await waitForReady(clientAdapter)
+  await waitForReady(clientTransport)
 
   // Give the establishment handshake time to complete
   await drain(20)
@@ -214,8 +214,8 @@ async function createConnectedPair(opts?: {
   return {
     serverExchange,
     clientExchange,
-    serverAdapter,
-    clientAdapter,
+    serverTransport,
+    clientTransport,
     testServer,
   }
 }

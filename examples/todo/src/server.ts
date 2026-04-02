@@ -16,11 +16,11 @@
 /// <reference types="bun-types" />
 
 import { Exchange } from "@kyneta/exchange"
-import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
+import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import {
   createBunWebsocketHandlers,
   type BunWebsocketData,
-} from "@kyneta/websocket-network-adapter/bun"
+} from "@kyneta/websocket-transport/bun"
 import { TodoDoc } from "./schema.js"
 import { buildClient } from "./build.js"
 
@@ -28,11 +28,11 @@ import { buildClient } from "./build.js"
 // 1. Exchange — server-side sync hub
 // ─────────────────────────────────────────────────────────────────────────
 
-const serverAdapter = new WebsocketServerAdapter()
+const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
   identity: { name: "server" },
-  adapters: [() => serverAdapter],
+  transports: [() => serverTransport],
 })
 
 // Register the todo document. The server holds the authoritative copy.
@@ -88,7 +88,7 @@ Bun.serve<BunWebsocketData>({
       : new Response("Not found", { status: 404 })
   },
 
-  websocket: createBunWebsocketHandlers(serverAdapter),
+  websocket: createBunWebsocketHandlers(serverTransport),
 })
 
 console.log(`\n  ✅ Todo dev server`)
