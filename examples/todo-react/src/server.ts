@@ -26,6 +26,7 @@ import {
   WebsocketServerTransport,
   wrapNodeWebsocket,
 } from "@kyneta/websocket-transport/server"
+import { createLevelDBStore } from "@kyneta/leveldb-store/server"
 import { createServer as createViteServer } from "vite"
 import { WebSocketServer } from "ws"
 import { TodoDoc } from "./schema.js"
@@ -41,6 +42,9 @@ const serverTransport = new WebsocketServerTransport()
 const exchange = new Exchange({
   identity: { peerId: "todo-react-server", name: "server" },
   transports: [() => serverTransport],
+
+  /** Uncomment to add local storage persistence via LevelDB */
+  // stores: [createLevelDBStore("./todo.db")],
 })
 
 // Register the todo document. The server holds the authoritative copy.

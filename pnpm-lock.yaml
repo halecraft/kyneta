@@ -109,6 +109,9 @@ importers:
       '@kyneta/exchange':
         specifier: workspace:^
         version: link:../../packages/exchange
+      '@kyneta/leveldb-store':
+        specifier: workspace:^
+        version: link:../../packages/exchange/stores/leveldb
       '@kyneta/react':
         specifier: workspace:^
         version: link:../../packages/react
