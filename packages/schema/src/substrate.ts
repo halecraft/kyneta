@@ -42,6 +42,28 @@ import type { Schema as SchemaNode } from "./schema.js"
 import type { Reader } from "./reader.js"
 
 // ---------------------------------------------------------------------------
+// BACKING_DOC — universal accessor for the backing state of any replica
+// ---------------------------------------------------------------------------
+
+/**
+ * Symbol for accessing the backing document of a replica or substrate.
+ *
+ * Every kyneta-produced replica and substrate implementation places its
+ * backing state under this symbol key:
+ * - Plain/LWW: the `PlainState` object
+ * - Yjs: the `Y.Doc`
+ * - Loro: the `LoroDoc`
+ *
+ * This symbol is NOT on the `Replica<V>` or `Substrate<V>` interfaces —
+ * it's a convention that all kyneta-produced implementations follow.
+ * Factories recover the backing state via `(replica as any)[BACKING_DOC]`
+ * and cast to the concrete type they know they created.
+ *
+ * Context: jj:smmulzkm (two-phase substrate construction)
+ */
+export const BACKING_DOC = Symbol("kyneta.backingDoc")
+
+// ---------------------------------------------------------------------------
 // Version — external version marker
 // ---------------------------------------------------------------------------
 
@@ -377,7 +399,52 @@ export interface ReplicaFactory<V extends Version = Version> {
  * without depending on the schema infrastructure.
  */
 export interface SubstrateFactory<V extends Version = Version> {
-  /** Create a fresh substrate from a schema. Store starts with Zero.structural defaults. */
+  /**
+   * Create a bare replica with no schema, no identity, no structural
+   * initialization. Safe for hydration — no local writes.
+   *
+   * The backing CRDT document (Y.Doc, LoroDoc) is created with a
+   * default/random identity. For Plain/LWW, the backing store is
+   * an empty `PlainState`.
+   *
+   * Use `upgrade(replica, schema)` after hydration to transition
+   * the replica into a full Substrate.
+   *
+   * Context: jj:smmulzkm (two-phase substrate construction)
+   */
+  createReplica(): Replica<V>
+
+  /**
+   * Transition a hydrated replica into a full Substrate.
+   *
+   * The factory has the peerId (from the FactoryBuilder closure) and
+   * knows the concrete backing document type (because it produced the
+   * replica via `createReplica()`). The upgrade:
+   *
+   * 1. Sets peer identity on the underlying CRDT document (identity
+   *    must be set **after** hydration to avoid Yjs clientID conflict
+   *    detection).
+   * 2. Conditionally creates structural containers for schema fields
+   *    that don't already exist (skip containers present from hydrated
+   *    state).
+   * 3. Returns a Substrate wrapping the same backing document with the
+   *    full interpreter surface.
+   *
+   * @param replica - A replica previously created by `createReplica()`
+   *   on this factory (or a compatible one).
+   * @param schema - The root schema for the document.
+   *
+   * Context: jj:smmulzkm (two-phase substrate construction)
+   */
+  upgrade(replica: Replica<V>, schema: SchemaNode): Substrate<V>
+
+  /**
+   * Create a fresh substrate from a schema.
+   *
+   * Convenience that composes `upgrade(createReplica(), schema)`.
+   * Useful for tests and standalone scripts that don't need the
+   * two-phase lifecycle. Store starts with Zero.structural defaults.
+   */
   create(schema: SchemaNode): Substrate<V>
 
   /**

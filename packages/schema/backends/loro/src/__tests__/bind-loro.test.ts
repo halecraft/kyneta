@@ -2,8 +2,8 @@
 
 import {
   change,
-  createPlainSubstrate,
   isBoundSchema,
+  plainSubstrateFactory,
   registerSubstrate,
   Schema,
   unwrap,
@@ -91,7 +91,7 @@ describe("loro() escape hatch", () => {
   })
 
   it("throws for refs with a non-Loro substrate", () => {
-    const substrate = createPlainSubstrate({ title: "Hello" })
+    const substrate = plainSubstrateFactory.create(Schema.doc({ title: Schema.string() }))
     const fakeRef = { _fake: true }
     registerSubstrate(fakeRef, substrate)
 

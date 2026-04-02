@@ -235,6 +235,9 @@ importers:
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../schema
+      '@kyneta/yjs-schema':
+        specifier: workspace:^
+        version: link:../schema/backends/yjs
       loro-crdt:
         specifier: ^1.10.0
         version: 1.10.8
@@ -247,6 +250,9 @@ importers:
       vitest:
         specifier: ^4.0.17
         version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)(tsx@4.21.0)
+      yjs:
+        specifier: ^13.6.30
+        version: 13.6.30
 
   packages/exchange/stores/leveldb:
     dependencies:

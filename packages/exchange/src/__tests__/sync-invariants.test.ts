@@ -41,7 +41,11 @@ const activeExchanges: Exchange[] = []
 function createExchange(
   params: ConstructorParameters<typeof Exchange>[0] = {},
 ): Exchange {
-  const ex = new Exchange(params)
+  const merged = {
+    ...params,
+    identity: { peerId: "test", ...params?.identity },
+  }
+  const ex = new Exchange(merged)
   activeExchanges.push(ex)
   return ex
 }

@@ -3,14 +3,15 @@
 //
 // `yjs(ref)` returns the `Y.Doc` backing a root document ref.
 //
-// The mapping is maintained via a WeakMap from Substrate → Y.Doc,
-// populated by `registerYjsSubstrate()` (called during substrate
-// creation). The `yjs()` function uses `unwrap()` from `@kyneta/schema`
-// to get the substrate, then looks up the Y.Doc.
+// The substrate exposes its backing Y.Doc via the `BACKING_DOC` symbol
+// (from `@kyneta/schema`). The `yjs()` function uses `unwrap()` to get
+// the substrate, then reads `[BACKING_DOC]` to get the Y.Doc.
 //
 // This two-step approach (ref → substrate → Y.Doc) avoids duplicating
 // the ref-tracking WeakMap and composes cleanly with the general
 // `unwrap()` escape hatch.
+//
+// Context: jj:smmulzkm (BACKING_DOC replaces WeakMap + registerYjsSubstrate)
 //
 // Usage:
 //   import { yjs } from "@kyneta/yjs-schema"
@@ -19,33 +20,8 @@
 //   const yjsDoc = yjs(doc)  // Y.Doc
 //   yjsDoc.getMap("root").toJSON()  // raw Yjs inspection
 
-import type { Substrate } from "@kyneta/schema"
-import { unwrap } from "@kyneta/schema"
+import { BACKING_DOC, unwrap } from "@kyneta/schema"
 import type { Doc as YDoc } from "yjs"
-
-// ---------------------------------------------------------------------------
-// Substrate → Y.Doc mapping
-// ---------------------------------------------------------------------------
-
-const substrateToYjsDoc = new WeakMap<Substrate<any>, YDoc>()
-
-// ---------------------------------------------------------------------------
-// registerYjsSubstrate — called during substrate creation
-// ---------------------------------------------------------------------------
-
-/**
- * Register the Y.Doc backing a Yjs substrate.
- *
- * Called by `createYjsSubstrate()` and by `bindYjs`'s factory builder
- * to enable the `yjs()` escape hatch. Must be called once per substrate
- * at construction time.
- */
-export function registerYjsSubstrate(
-  substrate: Substrate<any>,
-  doc: YDoc,
-): void {
-  substrateToYjsDoc.set(substrate, doc)
-}
 
 // ---------------------------------------------------------------------------
 // yjs — Yjs-specific escape hatch
@@ -77,7 +53,7 @@ export function registerYjsSubstrate(
  * ```
  */
 export function yjs(ref: object): YDoc {
-  let substrate: Substrate<any>
+  let substrate: any
   try {
     substrate = unwrap(ref)
   } catch {
@@ -88,13 +64,21 @@ export function yjs(ref: object): YDoc {
     )
   }
 
-  const doc = substrateToYjsDoc.get(substrate)
-  if (!doc) {
+  const doc = substrate[BACKING_DOC]
+  // Duck-type check: Y.Doc has getMap, encodeStateVector-compatible API,
+  // and a numeric clientID. A PlainState (plain object) or LoroDoc would
+  // not have getMap as a function.
+  if (
+    !doc ||
+    typeof doc !== "object" ||
+    typeof (doc as any).getMap !== "function" ||
+    typeof (doc as any).clientID !== "number"
+  ) {
     throw new Error(
       "yjs() requires a ref backed by a Yjs substrate. " +
         "The ref has a substrate but it is not a Yjs substrate. " +
         "Use a doc created with a bindYjs() schema or createYjsDoc().",
     )
   }
-  return doc
+  return doc as YDoc
 }

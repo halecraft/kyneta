@@ -1024,51 +1024,82 @@ const exchange2 = new Exchange({
 
 ## 19. Storage Persistence Architecture
 
-Storage is wired into the Exchange at two points: **hydration** (loading stored data into a fresh replica) and **persistence** (saving data as it changes). The synchronizer program is storage-free — keeping the FC/IS boundary clean.
+Storage is wired into the Exchange at two points: **hydration** (loading stored data into a fresh replica) and **persistence** (saving data as it changes). The synchronizer program is storage-free — keeping the FC/IS boundary clean. Persistence is unified through a single mechanism: the `notify/state-advanced` notification from the synchronizer program.
 
-### Hydration Flow
+### Stable peerId Requirement
 
-When `exchange.get()` or `exchange.replicate()` is called with storage backends configured:
+`exchange.get()` requires an explicit `peerId` in `ExchangeParams.identity`. The peerId identifies the exchange as a participant in causal history — it must be stable across restarts for correct CRDT operation. Without a stable peerId, each boot produces a different clientID/PeerID, the version vector grows unboundedly, and there is no causal continuity across restarts.
+
+`exchange.replicate()` does NOT require a stable peerId — replicate mode has no local writes and needs no stable identity.
+
+### Hydration Flow — Two-Phase Substrate Construction
+
+When `exchange.get()` is called with storage backends configured, it uses two-phase substrate construction to avoid CRDT identity conflicts:
 
 ```
 exchange.get(docId, bound)
-  → create substrate (empty)
-  → build interpreter stack, register sync ref
-  → cache in #docCache (ref returned synchronously)
-  → async #hydrateAndRegister(docId, replica, ...):
+  → factory.createReplica() — bare CRDT doc, no identity, no structural writes
+  → factory.create(schema) — temporary substrate for the synchronous ref
+  → build interpreter stack from temporary substrate
+  → cache ref in #docCache (returned synchronously)
+  → async #hydrateUpgradeAndRegister(docId, ref, replica, factory, bound):
       1. ensureDoc(docId, metadata) on all backends
-      2. loadAll(docId) on all backends → merge entries into replica
-      3. registerDoc with synchronizer (version reflects hydrated state)
-      4. wire changefeed → synchronizer + storage
+      2. loadAll(docId) → merge entries into the bare replica
+      3. factory.upgrade(replica, schema) — set identity, conditional structure
+      4. merge hydrated entirety into the live ref's substrate (changefeed fires)
+      5. if first boot: append entirety base entry to store
+      6. record storeVersion for incremental persistence
+      7. registerDoc with synchronizer (version reflects hydrated state)
+      8. wire changefeed → synchronizer (sync-only, no persistence)
 ```
 
-The ref is returned synchronously. Hydration happens asynchronously — the changefeed fires when stored data is merged. The synchronizer only learns about the doc after hydration, so `present`/`interest` messages carry the hydrated version.
+The two-phase separation (`createReplica` → hydrate → `upgrade`) is critical:
+- **Identity after hydration:** For Yjs, setting `doc.clientID` before hydrating stored data triggers Yjs's conflict detection (`"Changed the client-id because another client seems to be using it"`), silently reassigning to a random value. Setting identity after hydration avoids this.
+- **Conditional structure:** `ensureContainers` in Yjs is a CRDT write (`rootMap.set(key, new Y.Text())` generates ops). After hydration, containers already exist from stored state — unconditional creation would produce conflicting ops. The `conditional` flag skips fields that already exist.
 
-### Persistence — Two Paths
+For `exchange.replicate()`, the flow is simpler — no upgrade step, no schema, no interpreter stack. The bare replica is hydrated directly and registered.
 
-**Network imports** are persisted via the `onDocImported` callback:
+### Persistence — Unified via `notify/state-advanced`
 
-```
-adapter receives offer
-  → synchronizer.#executeImportDocData()
-    → replica.merge(payload, "sync")
-    → #docImportedCallback(docId, payload, version)
-      → Exchange.#persistToStorage(docId, backend.append(...))
-```
+All persistence flows through a single mechanism: the `notify/state-advanced` notification emitted by the synchronizer program at quiescence.
 
-Network imports use `append()` because they are incremental deltas that accumulate alongside existing entries.
-
-**Local mutations** are persisted via the changefeed subscription:
+The Exchange subscribes to `synchronizer.onStateAdvanced(docId => ...)` in its constructor. The listener:
 
 ```
-change(doc, fn)
-  → changefeed fires (origin !== "sync")
-  → Exchange's subscriber:
-      → synchronizer.notifyLocalChange(docId)
-      → #persistToStorage(docId, backend.replace(..., exportEntirety()))
+onStateAdvanced(docId):
+  1. Look up storeVersion from #storeVersions
+  2. If not found → return (doc still hydrating)
+  3. Get runtime from synchronizer.getDocRuntime(docId)
+  4. delta = runtime.replica.exportSince(storeVersion)
+  5. If delta is null → return (version didn't advance)
+  6. newVersion = runtime.replica.version()
+  7. #storeVersions.set(docId, newVersion)
+  8. #persistToStore(docId, backend.append(docId, { payload: delta, version }))
 ```
 
-Local mutations use `replace()` because they produce a consolidated snapshot that supersedes all previous entries.
+This handles **both** local mutations and network imports:
+
+- **Local mutation:** `change(doc, fn)` → changefeed fires → `notifyLocalChange(docId)` → `handleLocalDocChange` → `notify/state-advanced` → `onStateAdvanced` → `exportSince(storeVersion)` → `append(since delta)`
+- **Network import:** adapter receives offer → `#executeImportDocData` → `replica.merge(payload)` → `handleDocImported` → `notify/state-advanced` → `onStateAdvanced` → `exportSince(storeVersion)` → `append(since delta)`
+
+Both paths produce small incremental `since` deltas via `append()` — not full `exportEntirety()` snapshots via `replace()`. The `replace()` operation is reserved for future compaction (collapsing accumulated deltas into a single entirety).
+
+The changefeed subscriber is sync-only — it notifies the synchronizer but performs no persistence:
+
+```ts
+subscribe(ref, changeset => {
+  if (changeset.origin === "sync") return
+  this.#synchronizer.notifyLocalChange(docId)
+})
+```
+
+### storeVersion Lifecycle
+
+Each document tracks its last-persisted version in `#storeVersions: Map<DocId, Version>`. This is set:
+- After hydration completes (to the replica's version post-hydration)
+- After each successful `append()` (to the new version from `exportSince`)
+
+The `storeVersion` enables incremental persistence: `exportSince(storeVersion)` produces only the operations not yet stored. Multiple state transitions in one dispatch cycle are batched — the notification fires once at quiescence, and the single `exportSince` covers all transitions.
 
 ### Flush Tracking
 

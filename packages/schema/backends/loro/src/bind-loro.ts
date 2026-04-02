@@ -17,16 +17,17 @@
 
 import type {
   BoundSchema,
-  ReplicaFactory,
+  Replica,
   Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
 } from "@kyneta/schema"
-import { bind } from "@kyneta/schema"
-import type { PeerID } from "loro-crdt"
+import { BACKING_DOC, bind } from "@kyneta/schema"
+import type { PeerID, LoroDoc as LoroDocType } from "loro-crdt"
 import { LoroDoc } from "loro-crdt"
 import {
+  createLoroReplica,
   createLoroSubstrate,
   ensureRootContainer,
   loroReplicaFactory,
@@ -74,29 +75,64 @@ function hashPeerId(peerId: string): PeerID {
 function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
   const numericPeerId = hashPeerId(peerId)
 
+  // ---------------------------------------------------------------------------
+  // ensureLoroContainers — schema walking helper
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Walk a schema and ensure all root-level Loro containers exist.
+   *
+   * Unwraps the root product schema and calls `ensureRootContainer` for
+   * each field. When `conditional` is true, scalar/sum defaults are
+   * skipped for keys that already exist in the props map.
+   */
+  function ensureLoroContainers(
+    doc: LoroDocType,
+    schema: SchemaNode,
+    conditional: boolean,
+  ): void {
+    let rootProduct = schema
+    while (
+      rootProduct._kind === "annotated" &&
+      rootProduct.schema !== undefined
+    ) {
+      rootProduct = rootProduct.schema
+    }
+
+    if (rootProduct._kind === "product") {
+      for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
+        ensureRootContainer(doc, key, fieldSchema as SchemaNode, conditional)
+      }
+    }
+  }
+
   return {
     replica: loroReplicaFactory,
 
+    createReplica(): Replica<LoroVersion> {
+      // Default random PeerID — safe for hydration (no local writes).
+      // Identity is set at upgrade() time, after hydration.
+      return createLoroReplica(new LoroDoc())
+    },
+
+    upgrade(replica: Replica<LoroVersion>, schema: SchemaNode): Substrate<LoroVersion> {
+      const doc = (replica as any)[BACKING_DOC] as LoroDocType
+      // Set stable identity AFTER hydration — avoids any PeerID
+      // conflict with operations in hydrated state.
+      doc.setPeerId(numericPeerId)
+      // Conditional ensureRootContainer: container-type getXxx() calls
+      // are idempotent in Loro, but scalar propsMap.set() produces ops.
+      // Skip scalar defaults for keys already present from hydration.
+      ensureLoroContainers(doc, schema, true)
+      doc.commit()
+      return createLoroSubstrate(doc, schema)
+    },
+
     create(schema: SchemaNode): Substrate<LoroVersion> {
+      // Fresh doc — set identity immediately, unconditional containers.
       const doc = new LoroDoc()
       doc.setPeerId(numericPeerId)
-
-      // Ensure root containers exist (lazy creation). No seed data —
-      // initial content should be applied via change() after construction.
-      let rootProduct = schema
-      while (
-        rootProduct._kind === "annotated" &&
-        rootProduct.schema !== undefined
-      ) {
-        rootProduct = rootProduct.schema
-      }
-
-      if (rootProduct._kind === "product") {
-        for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
-          ensureRootContainer(doc, key, fieldSchema as SchemaNode)
-        }
-      }
-
+      ensureLoroContainers(doc, schema, false)
       doc.commit()
       return createLoroSubstrate(doc, schema)
     },
@@ -105,18 +141,12 @@ function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
       payload: SubstratePayload,
       schema: SchemaNode,
     ): Substrate<LoroVersion> {
-      if (
-        payload.encoding !== "binary" ||
-        !(payload.data instanceof Uint8Array)
-      ) {
-        throw new Error(
-          "LoroSubstrateFactory.fromEntirety only supports binary-encoded payloads",
-        )
-      }
-      const doc = new LoroDoc()
-      doc.setPeerId(numericPeerId)
-      doc.import(payload.data)
-      return createLoroSubstrate(doc, schema)
+      // Two-phase path: createReplica → merge → upgrade
+      // Identity is set at upgrade() time, after hydration —
+      // avoids any PeerID conflict with operations in hydrated state.
+      const replica = this.createReplica()
+      replica.merge(payload)
+      return this.upgrade(replica, schema)
     },
 
     parseVersion(serialized: string): LoroVersion {

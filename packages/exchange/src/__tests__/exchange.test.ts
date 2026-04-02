@@ -50,7 +50,11 @@ const activeExchanges: Exchange[] = []
 function createExchange(
   params: ConstructorParameters<typeof Exchange>[0] = {},
 ): Exchange {
-  const ex = new Exchange(params)
+  const merged = {
+    ...params,
+    identity: { peerId: "test", ...params?.identity },
+  }
+  const ex = new Exchange(merged)
   activeExchanges.push(ex)
   return ex
 }
@@ -89,7 +93,7 @@ describe("Exchange", () => {
 
   describe("get()", () => {
     it("returns a Ref<S> that can be read", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
       const doc = exchange.get("doc-1", TestDoc)
 
       // The ref should be callable (returns plain value)
@@ -98,7 +102,7 @@ describe("Exchange", () => {
     })
 
     it("returns a Ref<S> with navigation and change()-applied values", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
       const doc = exchange.get("doc-1", TestDoc)
       change(doc, (d: any) => {
         d.title.set("Hello")
@@ -110,7 +114,7 @@ describe("Exchange", () => {
     })
 
     it("same docId returns same instance", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
 
       const doc1 = exchange.get("doc-1", TestDoc)
       const doc2 = exchange.get("doc-1", TestDoc)
@@ -119,7 +123,7 @@ describe("Exchange", () => {
     })
 
     it("different BoundSchema for same docId throws", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
 
       exchange.get("doc-1", TestDoc)
       expect(() => exchange.get("doc-1", OtherDoc)).toThrow(
@@ -128,7 +132,7 @@ describe("Exchange", () => {
     })
 
     it("change() values are applied", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
       const doc = exchange.get("doc-1", TestDoc)
       change(doc, (d: any) => {
         d.title.set("Changed")
@@ -168,7 +172,7 @@ describe("Exchange", () => {
         strategy: "sequential",
       })
 
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
       exchange.get("doc-1", DocA)
       exchange.get("doc-2", DocB)
 
@@ -213,7 +217,7 @@ describe("Exchange", () => {
     })
 
     it("returns true after get()", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
     })
@@ -221,7 +225,7 @@ describe("Exchange", () => {
 
   describe("dismiss()", () => {
     it("removes a document", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
@@ -242,7 +246,7 @@ describe("Exchange", () => {
     })
 
     it("hasSync returns true for exchange docs", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
       const doc = exchange.get("doc-1", TestDoc)
       expect(hasSync(doc)).toBe(true)
     })
@@ -256,7 +260,7 @@ describe("Exchange", () => {
     })
 
     it("readyStates is initially empty", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
       const doc = exchange.get("doc-1", TestDoc)
       expect(sync(doc).readyStates).toEqual([])
     })
@@ -264,7 +268,7 @@ describe("Exchange", () => {
 
   describe("lifecycle", () => {
     it("reset() clears doc cache", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
@@ -274,7 +278,7 @@ describe("Exchange", () => {
     })
 
     it("shutdown() clears doc cache", async () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ identity: { peerId: "test" } })
 
       exchange.get("doc-1", TestDoc)
       await exchange.shutdown()
@@ -283,7 +287,7 @@ describe("Exchange", () => {
 
     describe("escape hatches", () => {
       it("unwrap(ref) returns the substrate for an exchange-created doc", () => {
-        const exchange = new Exchange()
+        const exchange = new Exchange({ identity: { peerId: "test" } })
         const doc = exchange.get("doc-1", TestDoc)
         change(doc, (d: any) => {
           d.title.set("Hi")
@@ -303,7 +307,7 @@ describe("Exchange", () => {
 
       it("loro(ref) returns the LoroDoc for a Loro-backed exchange doc", () => {
         const LoroDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
-        const exchange = new Exchange()
+        const exchange = new Exchange({ identity: { peerId: "test" } })
         const doc = exchange.get("doc-1", LoroDoc)
 
         const loroDoc = loro(doc)
@@ -312,7 +316,7 @@ describe("Exchange", () => {
       })
 
       it("loro(ref) throws for a plain-backed exchange doc", () => {
-        const exchange = new Exchange()
+        const exchange = new Exchange({ identity: { peerId: "test" } })
         const doc = exchange.get("doc-1", TestDoc)
 
         expect(() => loro(doc)).toThrow("not a Loro substrate")

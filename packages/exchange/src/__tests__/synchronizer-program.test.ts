@@ -104,6 +104,8 @@ function collectNotifiedDocIds(
   switch (notification.type) {
     case "notify/ready-state-changed":
       return new Set(notification.docIds)
+    case "notify/state-advanced":
+      return new Set(notification.docIds)
     case "notify/batch": {
       const result = new Set<string>()
       for (const sub of notification.notifications) {
@@ -2323,7 +2325,12 @@ describe("synchronizer-program", () => {
           m,
         )
 
-        expect(notification).toBeUndefined()
+        // local-doc-change now emits notify/state-advanced for unified
+        // persistence (jj:smmulzkm). Verify it notifies the correct docId.
+        expect(notification).toBeDefined()
+        expect(notification!.type).toBe("notify/state-advanced")
+        const docIds = collectNotifiedDocIds(notification)
+        expect(docIds).toEqual(new Set(["doc-1"]))
       })
     })
   })

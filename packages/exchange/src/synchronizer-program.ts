@@ -223,6 +223,7 @@ export type Command =
  */
 export type Notification =
   | { type: "notify/ready-state-changed"; docIds: ReadonlySet<DocId> }
+  | { type: "notify/state-advanced"; docIds: ReadonlySet<DocId> }
   | { type: "notify/batch"; notifications: Notification[] }
 
 /**
@@ -247,6 +248,17 @@ function notifyAsNeeded(
  */
 function readyStateChanged(...docIds: DocId[]): Notification {
   return { type: "notify/ready-state-changed", docIds: new Set(docIds) }
+}
+
+/**
+ * Convenience: construct a state-advanced notification for one or
+ * more docIds. Emitted when a document's state advances — either
+ * from a local mutation or a network import.
+ *
+ * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+ */
+function stateAdvanced(...docIds: DocId[]): Notification {
+  return { type: "notify/state-advanced", docIds: new Set(docIds) }
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -520,7 +532,7 @@ function handleLocalDocChange(
   // Push to synced peers based on merge strategy
   const cmd = buildPush(msg.docId, docEntry, model, route)
 
-  return [{ ...model, documents }, cmd]
+  return [{ ...model, documents }, cmd, stateAdvanced(msg.docId)]
 }
 
 function handleDocDelete(
@@ -600,7 +612,12 @@ function handleDocImported(
       lastUpdated: new Date(),
     })
     peers.set(msg.fromPeerId, { ...peerState, docSyncStates })
-    notification = readyStateChanged(msg.docId)
+    notification = notifyAsNeeded(
+      readyStateChanged(msg.docId),
+      stateAdvanced(msg.docId),
+    )
+  } else {
+    notification = stateAdvanced(msg.docId)
   }
 
   return [{ ...model, documents, peers }, cmd, notification]

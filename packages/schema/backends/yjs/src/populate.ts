@@ -30,14 +30,25 @@ import * as Y from "yjs"
  * schema, and creates empty containers for each field within a single
  * `doc.transact()` call for atomicity.
  *
- * No values are written — the containers are empty after this call.
- * Initial content should be applied via `change()` after substrate
- * construction.
+ * When `conditional` is true, fields that already exist in the root map
+ * are skipped. This is the correct mode after hydration — containers
+ * present from stored state must not be overwritten (each `rootMap.set()`
+ * is a CRDT write that advances the version vector and may conflict
+ * with stored operations).
+ *
+ * When `conditional` is false (default), all fields are created
+ * unconditionally. This is the correct mode for fresh documents.
  *
  * @param doc - The Y.Doc to prepare
  * @param schema - The root document schema (typically annotated("doc", product))
+ * @param conditional - If true, skip fields that already exist in the root map.
+ *   Context: jj:smmulzkm (two-phase substrate construction)
  */
-export function ensureContainers(doc: Y.Doc, schema: SchemaNode): void {
+export function ensureContainers(
+  doc: Y.Doc,
+  schema: SchemaNode,
+  conditional = false,
+): void {
   const rootMap = doc.getMap("root")
 
   let rootProduct = schema
@@ -54,6 +65,7 @@ export function ensureContainers(doc: Y.Doc, schema: SchemaNode): void {
 
   doc.transact(() => {
     for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
+      if (conditional && rootMap.has(key)) continue
       ensureRootField(rootMap, key, fieldSchema as SchemaNode)
     }
   })

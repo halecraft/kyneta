@@ -24,6 +24,7 @@ import type {
   SubstrateFactory,
   SubstratePayload,
 } from "../substrate.js"
+import { BACKING_DOC } from "../substrate.js"
 import {
   createPlainReplica,
   createPlainSubstrate,
@@ -94,18 +95,36 @@ export const lwwReplicaFactory: ReplicaFactory<TimestampVersion> = {
  * `timestampVersionStrategy` for cross-peer stale rejection.
  * Consumed by `bindEphemeral()`.
  *
- * - `create(schema)` — fresh substrate, initial version timestamp 0
- * - `fromEntirety(payload, schema)` — reconstructed from entirety,
- *   version advances to `TimestampVersion.now()` during executeBatch
+ * Supports two-phase construction:
+ * - `createReplica()` → bare replica (empty doc, timestamp strategy)
+ * - `upgrade(replica, schema)` → full substrate (conditional defaults)
+ *
+ * Convenience:
+ * - `create(schema)` — composes `upgrade(createReplica(), schema)`
+ * - `fromEntirety(payload, schema)` — reconstruct from entirety
  * - `parseVersion(serialized)` — deserialize a `TimestampVersion`
  */
 export const lwwSubstrateFactory: SubstrateFactory<TimestampVersion> = {
   replica: lwwReplicaFactory,
 
-  create(schema: SchemaNode): Substrate<TimestampVersion> {
+  createReplica(): Replica<TimestampVersion> {
+    return createPlainReplica({} as PlainState, timestampVersionStrategy)
+  },
+
+  upgrade(replica: Replica<TimestampVersion>, schema: SchemaNode): Substrate<TimestampVersion> {
+    const doc = (replica as any)[BACKING_DOC] as PlainState
+    // Apply Zero.structural defaults for keys not already present
     const defaults = Zero.structural(schema) as Record<string, unknown>
-    const storeObj = { ...defaults } as PlainState
-    return createPlainSubstrate(storeObj, timestampVersionStrategy)
+    for (const key of Object.keys(defaults)) {
+      if (!(key in doc)) {
+        ;(doc as Record<string, unknown>)[key] = defaults[key]
+      }
+    }
+    return createPlainSubstrate(doc, timestampVersionStrategy)
+  },
+
+  create(schema: SchemaNode): Substrate<TimestampVersion> {
+    return this.upgrade(this.createReplica(), schema)
   },
 
   fromEntirety(

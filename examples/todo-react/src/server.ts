@@ -39,7 +39,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
-  identity: { name: "server" },
+  identity: { peerId: "todo-react-server", name: "server" },
   transports: [() => serverTransport],
 })
 

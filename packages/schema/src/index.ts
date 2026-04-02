@@ -279,7 +279,7 @@ export type {
   SubstratePrepare,
   Version,
 } from "./substrate.js"
-export { replicaTypesCompatible } from "./substrate.js"
+export { BACKING_DOC, replicaTypesCompatible } from "./substrate.js"
 // LWW substrate — plain substrate wrapped with TimestampVersion for ephemeral state
 export { lwwReplicaFactory, lwwSubstrateFactory } from "./substrates/lww.js"
 // Plain substrate — plain JS object store with version tracking

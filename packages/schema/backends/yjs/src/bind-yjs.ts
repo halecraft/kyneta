@@ -21,15 +21,16 @@
 
 import type {
   BoundSchema,
+  Replica,
   Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
 } from "@kyneta/schema"
-import { bind } from "@kyneta/schema"
+import { BACKING_DOC, bind } from "@kyneta/schema"
 import * as Y from "yjs"
 import { ensureContainers } from "./populate.js"
-import { createYjsSubstrate, yjsReplicaFactory } from "./substrate.js"
+import { createYjsReplica, createYjsSubstrate, yjsReplicaFactory } from "./substrate.js"
 import { YjsVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
@@ -73,10 +74,27 @@ function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
   return {
     replica: yjsReplicaFactory,
 
+    createReplica(): Replica<YjsVersion> {
+      // Default random clientID — safe for hydration (no local writes).
+      // Identity is set at upgrade() time, after hydration.
+      return createYjsReplica(new Y.Doc())
+    },
+
+    upgrade(replica: Replica<YjsVersion>, schema: SchemaNode): Substrate<YjsVersion> {
+      const doc = (replica as any)[BACKING_DOC] as Y.Doc
+      // Set stable identity AFTER hydration — avoids Yjs clientID
+      // conflict detection that would reassign to a random value.
+      doc.clientID = numericClientId
+      // Conditional ensureContainers: skip fields that already exist
+      // from hydrated state (each set() is a CRDT write).
+      ensureContainers(doc, schema, true)
+      return createYjsSubstrate(doc, schema)
+    },
+
     create(schema: SchemaNode): Substrate<YjsVersion> {
+      // Fresh doc — set identity immediately, unconditional containers.
       const doc = new Y.Doc()
       doc.clientID = numericClientId
-
       ensureContainers(doc, schema)
       return createYjsSubstrate(doc, schema)
     },
@@ -85,18 +103,12 @@ function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
       payload: SubstratePayload,
       schema: SchemaNode,
     ): Substrate<YjsVersion> {
-      if (
-        payload.encoding !== "binary" ||
-        !(payload.data instanceof Uint8Array)
-      ) {
-        throw new Error(
-          "YjsSubstrateFactory.fromEntirety only supports binary-encoded payloads",
-        )
-      }
-      const doc = new Y.Doc()
-      doc.clientID = numericClientId
-      Y.applyUpdate(doc, payload.data)
-      return createYjsSubstrate(doc, schema)
+      // Two-phase path: createReplica → merge → upgrade
+      // Identity is set at upgrade() time, after hydration —
+      // avoids Yjs clientID conflict detection.
+      const replica = this.createReplica()
+      replica.merge(payload)
+      return this.upgrade(replica, schema)
     },
 
     parseVersion(serialized: string): YjsVersion {

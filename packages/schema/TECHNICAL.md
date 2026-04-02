@@ -616,7 +616,20 @@ The Substrate abstraction formalizes the boundary between three algebras:
 
 - **`Substrate<V>`** extends `SubstratePrepare` — adds `version()`, `exportEntirety()`, `exportSince()`, `merge()`, and `context()`. The `SubstratePrepare` interface (Phase 0) provides the ground floor of the prepare/flush pipeline: `reader: Reader`, `prepare(path, change)`, `onFlush(origin?)`.
 
-- **`SubstrateFactory<V>`** — `create(schema)` for fresh substrates, `fromEntirety(payload, schema)` for cold-start construction from an entirety payload, `parseVersion(serialized)` for version deserialization.
+- **`SubstrateFactory<V>`** — supports two-phase construction via `createReplica()` and `upgrade(replica, schema)`, plus convenience methods `create(schema)` (composes both), `fromEntirety(payload, schema)` for cold-start construction, and `parseVersion(serialized)` for version deserialization.
+
+- **`BACKING_DOC`** — a `Symbol("kyneta.backingDoc")` exported from `substrate.ts`. Every kyneta-produced replica and substrate implementation places its backing state under this symbol key: `PlainState` for Plain/LWW, `Y.Doc` for Yjs, `LoroDoc` for Loro. The symbol is NOT on the `Replica<V>` or `Substrate<V>` interfaces — it's a convention that all kyneta-produced implementations follow. Factories recover the backing state via `(replica as any)[BACKING_DOC]` and cast to the concrete type they know they created. This eliminates the WeakMap-based escape hatch registration (`registerYjsSubstrate`, `registerLoroSubstrate`) in favor of a single, collision-proof accessor.
+
+**Two-phase substrate construction:**
+
+The `SubstrateFactory` interface provides a two-phase lifecycle for constructing substrates that need hydration from stored state:
+
+1. **`createReplica()`** — creates a bare CRDT document with a default/random identity and no structural initialization. Safe for hydration — no local writes that could conflict with stored operations.
+2. **`upgrade(replica, schema)`** — transitions a hydrated replica into a full Substrate. The factory has the peerId (from the `FactoryBuilder` closure) and knows the concrete backing document type. The upgrade: (a) sets peer identity on the underlying CRDT document (after hydration, to avoid Yjs clientID conflict detection), (b) conditionally creates structural containers for schema fields that don't already exist (preserving hydrated state), (c) returns a Substrate wrapping the same backing document with the full interpreter surface.
+
+`create(schema)` is retained as a convenience that composes `upgrade(createReplica(), schema)`. It remains useful for tests and standalone scripts that don't need the two-phase lifecycle.
+
+This separation is critical for CRDT substrates where `ensureContainers` is a write operation (Yjs `rootMap.set()` generates CRDT ops), and peer identity must be set after hydration to avoid clientID conflict detection. For Plain/LWW substrates, the separation is harmless — `upgrade()` applies `Zero.structural` defaults for missing keys and wraps in a substrate.
 
 **Two kinds of state absorption:**
 
@@ -635,7 +648,7 @@ Within a single substrate lifetime, all state transitions are deltas delivered a
 
 **`LwwSubstrate`** (via `lwwSubstrateFactory`) is the third concrete implementation. It passes `timestampVersionStrategy` to the same `createPlainSubstrate`/`createPlainReplica` constructors used by `plainSubstrateFactory` — same state management, reader, and interpreter stack, but with wall-clock timestamps instead of monotonic counters. `timestampVersionStrategy.current()` returns `TimestampVersion.now()` (ignoring the flush count), and `logOffset()` returns `null` (timestamps have no relationship to the op log array — the core falls back to `exportEntirety()`). There is no decorator, no wrapper object, and no `context()` gotcha — each substrate is a single object produced by a single constructor call.
 
-The `lwwSubstrateFactory` provides the `SubstrateFactory<TimestampVersion>` interface: `create(schema)` constructs a plain substrate with `timestampVersionStrategy` (initial version is timestamp 0); `fromEntirety(payload, schema)` delegates to the shared `buildPlainSubstrateFromEntirety` helper with `timestampVersionStrategy`; `parseVersion()` delegates to `TimestampVersion.parse()`. The factory is consumed by `bindEphemeral()` in `bind.ts`.
+The `lwwSubstrateFactory` provides the full `SubstrateFactory<TimestampVersion>` interface including two-phase construction: `createReplica()` creates a bare plain replica with `timestampVersionStrategy`; `upgrade(replica, schema)` reads the backing doc via `BACKING_DOC`, applies conditional defaults, and creates a substrate; `create(schema)` composes both; `fromEntirety(payload, schema)` delegates to `buildPlainSubstrateFromEntirety`; `parseVersion()` delegates to `TimestampVersion.parse()`. The factory is consumed by `bindEphemeral()` in `bind.ts`.
 
 | Version Type | Substrate | Order | History |
 |---|---|---|---|
@@ -902,7 +915,7 @@ packages/schema/
 │   ├── interpreter-types.ts     # RefContext, Plain<S> — shared types across interpreters
 │   ├── bind.ts                  # BoundSchema, bind(), bindPlain(), bindEphemeral(), isBoundSchema()
 │   ├── unwrap.ts                # registerSubstrate, unwrap — general escape hatch for substrate access
-│   ├── substrate.ts             # SubstratePrepare, Version, SubstratePayload, Substrate<F>, SubstrateFactory<F>
+│   ├── substrate.ts             # BACKING_DOC, SubstratePrepare, Version, SubstratePayload, Substrate<V>, SubstrateFactory<V>
 │   ├── reader.ts                 # PlainState type, Reader, plainReader, readByPath, writeByPath, applyChange, pathKey
 │   ├── ref.ts                   # SchemaRef<S,M> parameterized core + Ref<S>, RWRef<S>, RRef<S> tier aliases
 │   ├── interpreters/

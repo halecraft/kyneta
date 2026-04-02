@@ -5,10 +5,10 @@
 // case of the Substrate abstraction — no CRDT runtime, no native
 // oplog, just a plain JS object.
 //
-// `createPlainSubstrate(store, strategy)` returns a full `Substrate<V>`
+// `createPlainSubstrate(doc, strategy)` returns a full `Substrate<V>`
 // with version tracking via a shadow buffer in `prepare`/`onFlush`,
 // plus `version`, `exportEntirety`, `exportSince`, `merge`.
-// `plainContext(store)` is a shorthand that returns just the
+// `plainContext(doc)` is a shorthand that returns just the
 // `WritableContext` — convenient for tests that don't need the
 // substrate reference.
 //
@@ -44,6 +44,7 @@ import type {
   SubstratePayload,
   Version,
 } from "../substrate.js"
+import { BACKING_DOC } from "../substrate.js"
 import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
@@ -138,11 +139,11 @@ export const plainVersionStrategy: VersionStrategy<PlainVersion> = {
 }
 
 // ---------------------------------------------------------------------------
-// createPlainSubstrate — full Substrate<V> from a bare store + strategy
+// createPlainSubstrate — full Substrate<V> from a bare doc + strategy
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a full `Substrate<V>` wrapping a plain JS object store,
+ * Creates a full `Substrate<V>` wrapping a plain JS object document,
  * with version tracking, export/merge, and the shadow buffer
  * for op logging.
  *
@@ -150,30 +151,30 @@ export const plainVersionStrategy: VersionStrategy<PlainVersion> = {
  * `plainVersionStrategy` for sequential substrates,
  * `timestampVersionStrategy` (from lww.ts) for LWW/ephemeral substrates.
  *
- * This is the low-level entry point when you already have a store.
+ * This is the low-level entry point when you already have a document.
  * For schema-aware construction (with `Zero.structural`),
  * use `plainSubstrateFactory.create(schema)` instead.
  */
 export function createPlainSubstrate<V extends Version>(
-  storeObj: PlainState,
+  doc: PlainState,
   strategy: VersionStrategy<V>,
 ): Substrate<V> {
-  const reader = plainReader(storeObj)
+  const reader = plainReader(doc)
 
   // --- Shared replication core ---
-  const replicaCore = createPlainReplicaCore(storeObj, strategy)
+  const replicaCore = createPlainReplicaCore(doc, strategy)
 
   // The WritableContext is built lazily and cached — the same context
   // is returned on every call to `context()`.
   let cachedCtx: WritableContext | undefined
 
-  const substrate: Substrate<V> & { store: PlainState } = {
-    store: storeObj,
+  const substrate = {
+    [BACKING_DOC]: doc,
 
     reader: reader,
 
     prepare(path: Path, change: ChangeBase): void {
-      applyChange(storeObj, path, change)
+      applyChange(doc, path, change)
       replicaCore.pendingOps.push({ path, change })
     },
 
@@ -228,7 +229,7 @@ export function createPlainSubstrate<V extends Version>(
     },
   }
 
-  return substrate
+  return substrate as Substrate<V>
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +247,7 @@ export function createPlainSubstrate<V extends Version>(
  * `TimestampVersion` directly.
  */
 function createPlainReplicaCore<V extends Version>(
-  storeObj: PlainState,
+  doc: PlainState,
   strategy: VersionStrategy<V>,
 ) {
   // Version log: log[i] = batch of Ops from flush cycle i.
@@ -271,7 +272,7 @@ function createPlainReplicaCore<V extends Version>(
   const exportEntirety = (): SubstratePayload => ({
     kind: "entirety",
     encoding: "json",
-    data: JSON.stringify(storeObj),
+    data: JSON.stringify(doc),
   })
 
   return {
@@ -327,17 +328,17 @@ function createPlainReplicaCore<V extends Version>(
  * that need to accumulate state, compute deltas, and compact storage
  * without ever reading or writing document fields.
  *
- * @param storeObj - The backing plain JS object store.
+ * @param doc - The backing plain JS object document.
  * @param strategy - The version algebra (plain or timestamp).
  */
 export function createPlainReplica<V extends Version>(
-  storeObj: PlainState,
+  doc: PlainState,
   strategy: VersionStrategy<V>,
 ): Replica<V> {
-  const core = createPlainReplicaCore(storeObj, strategy)
+  const core = createPlainReplicaCore(doc, strategy)
 
-  const replica: Replica<V> & { store: PlainState } = {
-    store: storeObj,
+  const replica = {
+    [BACKING_DOC]: doc,
 
     version(): V {
       return core.version()
@@ -367,16 +368,16 @@ export function createPlainReplica<V extends Version>(
 
       if (ops.length === 0) return
 
-      // Apply directly to the store — no changefeed, no prepare/flush.
+      // Apply directly to the doc — no changefeed, no prepare/flush.
       for (const op of ops) {
-        applyChange(storeObj, op.path, op.change)
+        applyChange(doc, op.path, op.change)
         core.pendingOps.push(op)
       }
       core.flush()
     },
   }
 
-  return replica
+  return replica as Replica<V>
 }
 
 // ---------------------------------------------------------------------------
@@ -384,18 +385,20 @@ export function createPlainReplica<V extends Version>(
 // ---------------------------------------------------------------------------
 
 /**
- * Shorthand: wraps a plain store in a substrate and returns its
+ * Shorthand: wraps a plain document in a substrate and returns its
  * WritableContext.
  *
  * Useful in tests where you don't need the substrate reference:
  *
  * ```ts
- * const ctx = plainContext(store)
- * const doc = interpret(schema, ctx).with(readable).with(writable).done()
+ * const ctx = plainContext(doc)
+ * const ref = interpret(schema, ctx).with(readable).with(writable).done()
  * ```
  */
-export function plainContext(storeObj: PlainState): WritableContext {
-  return createPlainSubstrate(storeObj, plainVersionStrategy).context()
+export function plainContext(
+  doc: PlainState,
+): WritableContext {
+  return createPlainSubstrate(doc, plainVersionStrategy).context()
 }
 
 // ---------------------------------------------------------------------------
@@ -448,9 +451,13 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
       "PlainSubstrateFactory.fromEntirety only supports JSON-encoded payloads",
     )
   }
+  // Plain substrates track version via log length — creating a fresh
+  // substrate and applying ops via executeBatch advances the version
+  // correctly. (CRDT substrates use the two-phase path instead because
+  // their version is inherent in the document state.)
   const defaults = Zero.structural(schema) as Record<string, unknown>
-  const storeObj = { ...defaults } as PlainState
-  const substrate = createPlainSubstrate(storeObj, strategy)
+  const doc = { ...defaults } as PlainState
+  const substrate = createPlainSubstrate(doc, strategy)
   const ops = stateImageToOps(payload.data as string)
   if (ops.length > 0) {
     executeBatch(substrate.context(), ops)
@@ -522,16 +529,34 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
 /**
  * Factory for constructing plain JS object substrates.
  *
- * - `create(schema)` — fresh substrate with Zero.structural defaults.
+ * Supports two-phase construction:
+ * - `createReplica()` → bare replica (empty doc)
+ * - `upgrade(replica, schema)` → full substrate (conditional defaults)
+ *
+ * Convenience:
+ * - `create(schema)` — composes `upgrade(createReplica(), schema)`
  * - `fromEntirety(payload, schema)` — reconstruct from an entirety payload
- *   via executeBatch (produces version > 0 with ops in the log).
- * - `parseVersion(serialized)` — deserialize a PlainVersion.
+ * - `parseVersion(serialized)` — deserialize a PlainVersion
  */
 export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
-  create(schema: SchemaNode): Substrate<PlainVersion> {
+  createReplica(): Replica<PlainVersion> {
+    return createPlainReplica({} as PlainState, plainVersionStrategy)
+  },
+
+  upgrade(replica: Replica<PlainVersion>, schema: SchemaNode): Substrate<PlainVersion> {
+    const doc = (replica as any)[BACKING_DOC] as PlainState
+    // Apply Zero.structural defaults for keys not already present
     const defaults = Zero.structural(schema) as Record<string, unknown>
-    const storeObj = { ...defaults } as PlainState
-    return createPlainSubstrate(storeObj, plainVersionStrategy)
+    for (const key of Object.keys(defaults)) {
+      if (!(key in doc)) {
+        ;(doc as Record<string, unknown>)[key] = defaults[key]
+      }
+    }
+    return createPlainSubstrate(doc, plainVersionStrategy)
+  },
+
+  create(schema: SchemaNode): Substrate<PlainVersion> {
+    return this.upgrade(this.createReplica(), schema)
   },
 
   fromEntirety(

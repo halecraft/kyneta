@@ -45,7 +45,10 @@ async function drain(ms = 50): Promise<void> {
 function createExchange(
   options: ConstructorParameters<typeof Exchange>[0] = {},
 ): Exchange {
-  return new Exchange(options)
+  return new Exchange({
+    ...options,
+    identity: { peerId: "test", ...options?.identity },
+  })
 }
 
 // ===========================================================================
@@ -306,7 +309,7 @@ describe("Exchange storage hydration", () => {
 // ===========================================================================
 
 describe("Exchange storage persistence", () => {
-  it("local mutation persists to storage via changefeed → replace()", async () => {
+  it("local mutation persists to storage via onStateAdvanced → append(since)", async () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
@@ -326,22 +329,33 @@ describe("Exchange storage persistence", () => {
     // Wait for persistence
     await exchange.flush()
 
-    // Storage should have the data
+    // Storage should have the data — the first entry is the base entirety
+    // from initial hydration (first boot), and the second is a since delta
+    // from the local mutation via onStateAdvanced.
     const entries: { payload: any; version: string }[] = []
     for await (const e of backend.loadAll("doc-1")) {
       entries.push(e)
     }
-    expect(entries.length).toBeGreaterThanOrEqual(1)
+    expect(entries.length).toBeGreaterThanOrEqual(2)
 
-    // The last entry should be a replace (entirety snapshot)
+    // First entry: base entirety from first boot
+    expect(entries[0]!.payload.kind).toBe("entirety")
+
+    // Last entry: since delta from local mutation (not an entirety snapshot)
     const last = entries[entries.length - 1]!
-    expect(last.payload.kind).toBe("entirety")
-    const stored = JSON.parse(last.payload.data as string) as Record<
-      string,
-      unknown
-    >
-    expect(stored.title).toBe("hello world")
-    expect(stored.count).toBe(99)
+    expect(last.payload.kind).toBe("since")
+
+    // Verify the data round-trips: create a new replica, merge all entries,
+    // and check that the state is correct.
+    const replica = plainReplicaFactory.createEmpty()
+    for (const entry of entries) {
+      replica.merge(entry.payload)
+    }
+    const state = JSON.parse(
+      replica.exportEntirety().data as string,
+    ) as Record<string, unknown>
+    expect(state.title).toBe("hello world")
+    expect(state.count).toBe(99)
 
     await exchange.shutdown()
   })

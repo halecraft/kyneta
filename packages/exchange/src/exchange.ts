@@ -41,6 +41,8 @@ import {
   type SubstrateFactory,
   type SubstratePayload,
   subscribe,
+  unwrap,
+  type Version,
   writable,
 } from "@kyneta/schema"
 import type { TransportFactory, AnyTransport } from "./transport/transport.js"
@@ -258,10 +260,20 @@ type DocCacheEntry =
  */
 export class Exchange {
   readonly peerId: string
+  readonly #peerIdIsExplicit: boolean
 
   readonly #synchronizer: Synchronizer
   readonly #docCache = new Map<DocId, DocCacheEntry>()
   readonly #stores: Store[]
+
+  /**
+   * Per-doc store version — the version at which the store was last
+   * persisted. Used by `onStateAdvanced` to compute incremental deltas
+   * via `exportSince(storeVersion)`.
+   *
+   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+   */
+  readonly #storeVersions = new Map<DocId, Version>()
 
   /**
    * Pending async store operations tracked for flush()/shutdown().
@@ -305,6 +317,7 @@ export class Exchange {
     const peerId = identity.peerId ?? generatePeerId()
     validatePeerId(peerId)
     this.peerId = peerId
+    this.#peerIdIsExplicit = identity.peerId !== undefined
 
     this.#stores = stores
 
@@ -350,15 +363,40 @@ export class Exchange {
             break
         }
       },
-      onDocImported: (docId, payload, version) => {
-        // Persist incoming network payloads to all stores.
-        // Uses append() because network imports are incremental deltas
-        // that should accumulate alongside existing entries.
-        this.#persistToStore(docId, backend =>
-          backend.append(docId, { payload, version }),
-        )
-      },
     })
+
+    // ── Unified persistence via onStateAdvanced ──
+    // Subscribe to state-advanced events from the synchronizer. This fires
+    // at quiescence when any document's state has advanced — either from a
+    // local mutation (changefeed → notifyLocalChange → handleLocalDocChange)
+    // or a network import (handleOffer → cmd/import-doc-data → handleDocImported).
+    //
+    // The listener computes an incremental delta via exportSince(storeVersion)
+    // and appends it to all stores. This replaces both:
+    // - The old onDocImported callback (which stored orphaned raw deltas)
+    // - The old changefeed-based replace() (which stored full snapshots per keystroke)
+    //
+    // Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+    if (this.#stores.length > 0) {
+      this.#synchronizer.onStateAdvanced((docId: DocId) => {
+        const storeVersion = this.#storeVersions.get(docId)
+        if (!storeVersion) return // Doc not yet initialized — still hydrating
+
+        const runtime = this.#synchronizer.getDocRuntime(docId)
+        if (!runtime) return
+
+        const delta = runtime.replica.exportSince(storeVersion)
+        if (!delta) return // Version didn't actually advance — deduplication
+
+        const newVersion = runtime.replica.version()
+        this.#storeVersions.set(docId, newVersion)
+
+        const versionStr = newVersion.serialize()
+        this.#persistToStore(docId, backend =>
+          backend.append(docId, { payload: delta, version: versionStr }),
+        )
+      })
+    }
   }
 
   // =========================================================================
@@ -453,6 +491,118 @@ export class Exchange {
    * data, registers with the synchronizer (so present/interest carry
    * the hydrated version), and wires ongoing persistence.
    */
+  /**
+   * Hydrate a bare replica from stores, upgrade to a full substrate,
+   * replace the ref's backing substrate, and register with the synchronizer.
+   *
+   * This is the async tail of get() when stores are configured.
+   * The caller has already created the ref (backed by a temporary substrate)
+   * and cached it. This function:
+   * 1. Ensures doc metadata in all backends
+   * 2. Loads stored entries and merges into the bare replica
+   * 3. If store was empty (first boot), appends an entirety base entry
+   * 4. Upgrades the replica to a full Substrate (identity set, conditional structure)
+   * 5. Replaces the ref's backing substrate via merge (so changefeed fires)
+   * 6. Records storeVersion for incremental persistence
+   * 7. Registers with the synchronizer
+   *
+   * Context: jj:smmulzkm (two-phase substrate construction)
+   */
+  async #hydrateUpgradeAndRegister<S extends SchemaNode>(
+    docId: DocId,
+    ref: any,
+    replica: Replica<any>,
+    factory: SubstrateFactory<any>,
+    bound: BoundSchema<S>,
+  ): Promise<void> {
+    const metadata: DocMetadata = {
+      replicaType: factory.replica.replicaType,
+      mergeStrategy: bound.strategy,
+    }
+
+    // 1. Ensure doc metadata is registered in all backends
+    for (const backend of this.#stores) {
+      try {
+        await backend.ensureDoc(docId, metadata)
+      } catch (error) {
+        console.error(
+          `[exchange] ensureDoc failed for doc '${docId}':`,
+          error,
+        )
+      }
+    }
+
+    // 2. Hydrate from storage — load all entries and merge into the bare replica
+    let hadStoredEntries = false
+    for (const backend of this.#stores) {
+      try {
+        const existing = await backend.lookup(docId)
+        if (existing) {
+          for await (const entry of backend.loadAll(docId)) {
+            try {
+              replica.merge(entry.payload, "sync")
+              hadStoredEntries = true
+            } catch (err) {
+              console.warn(
+                `[exchange] failed to merge stored entry for doc '${docId}':`,
+                err,
+              )
+            }
+          }
+        }
+      } catch (error) {
+        console.error(
+          `[exchange] store hydration failed for doc '${docId}':`,
+          error,
+        )
+      }
+    }
+
+    // 3. Upgrade the hydrated replica to a full Substrate.
+    //    Identity is set here (after hydration, before structural writes).
+    //    Conditional ensureContainers skips fields present from hydration.
+    const substrate = factory.upgrade(replica, bound.schema)
+
+    // 4. Merge hydrated state into the live ref's substrate so the
+    //    changefeed fires and subscribers observe the transition.
+    //    The ref was built with a temporary substrate (Zero.structural defaults).
+    //    We merge the hydrated entirety into it.
+    if (hadStoredEntries) {
+      const currentSubstrate = unwrap(ref)
+      const entirety = substrate.exportEntirety()
+      currentSubstrate.merge(entirety, "sync")
+    }
+
+    // 5. If store was empty (first boot), persist an entirety base entry
+    //    so future deltas have a base to build on.
+    if (!hadStoredEntries) {
+      const payload = substrate.exportEntirety()
+      const version = substrate.version().serialize()
+      this.#persistToStore(docId, backend =>
+        backend.append(docId, { payload, version }),
+      )
+    }
+
+    // 6. Record storeVersion for incremental persistence via onStateAdvanced
+    this.#storeVersions.set(docId, substrate.version())
+
+    // 7. Register with synchronizer — present/interest messages carry
+    //    the hydrated version, not an empty one.
+    //    Use the live ref's substrate (which now has hydrated state).
+    const liveSubstrate = unwrap(ref)
+    this.#synchronizer.registerDoc({
+      mode: "interpret",
+      docId,
+      replica: liveSubstrate, // Substrate extends Replica
+      replicaFactory: factory.replica,
+      strategy: bound.strategy,
+    })
+  }
+
+  /**
+   * Hydrate a replica from stores, then register with the
+   * synchronizer. Used by replicate() — no upgrade needed.
+   */
   async #hydrateAndRegister(
     docId: DocId,
     replica: Replica<any>,
@@ -501,7 +651,10 @@ export class Exchange {
       }
     }
 
-    // 3. Register with synchronizer — present/interest messages carry
+    // 3. Record storeVersion for incremental persistence via onStateAdvanced
+    this.#storeVersions.set(docId, replica.version())
+
+    // 4. Register with synchronizer — present/interest messages carry
     //    the hydrated version, not an empty one
     this.#synchronizer.registerDoc({
       mode,
@@ -552,6 +705,19 @@ export class Exchange {
    * ```
    */
   get<S extends SchemaNode>(docId: DocId, bound: BoundSchema<S>): Ref<S> {
+    // Require explicit peerId for interpret mode — the peerId identifies
+    // this exchange as a participant in causal history and must be stable
+    // across restarts for correct CRDT operation.
+    // Context: jj:smmulzkm (two-phase substrate construction)
+    if (!this.#peerIdIsExplicit) {
+      throw new Error(
+        `exchange.get() requires an explicit peerId. ` +
+          `Provide identity: { peerId: "..." } in ExchangeParams. ` +
+          `The peerId identifies this exchange as a participant in causal history — ` +
+          `it must be stable across restarts for correct CRDT operation.`,
+      )
+    }
+
     // Check cache first
     const cached = this.#docCache.get(docId)
 
@@ -577,68 +743,90 @@ export class Exchange {
     // Resolve factory from the BoundSchema's builder
     const factory = this.#resolveFactory(bound.factory)
 
-    // Create substrate — empty, with Zero.structural defaults.
-    // Initial content should be applied via change() after get().
-    const substrate = factory.create(bound.schema)
-
-    // Build the full interpreter stack
-    // The `as any` avoids TS2589 — interpret's fluent API produces deeply
-    // recursive types when S is the abstract SchemaNode. The public
-    // get<S>() signature provides the correct Ref<S> return type.
-    const ref: any = (interpret as any)(bound.schema, substrate.context())
-      .with(readable)
-      .with(writable)
-      .with(changefeed)
-      .done()
-
-    // Register substrate for unwrap() escape hatch
-    registerSubstrate(ref, substrate)
-
-    // Register sync capabilities
-    registerSync(ref, {
-      peerId: this.peerId,
-      docId,
-      synchronizer: this.#synchronizer,
-    })
-
-    // Cache — must happen before the async hydration tail
-    this.#docCache.set(docId, {
-      mode: "interpret",
-      ref,
-      bound,
-    })
-
     if (this.#stores.length > 0) {
-      // Store path: hydrate from storage, then register with synchronizer.
-      // The ref is returned immediately (empty). The changefeed fires when
-      // stored data is merged. The synchronizer learns about the doc only
-      // after hydration, so present/interest carry the hydrated version.
-      const hydrationOp = this.#hydrateAndRegister(
+      // ── Store path: two-phase construction ──
+      // 1. createReplica() — bare CRDT doc, no identity, no structural writes
+      // 2. Hydrate from store (async)
+      // 3. upgrade(replica, schema) — set identity, conditional structure
+      // 4. Build interpreter stack from the substrate
+      //
+      // The ref is returned synchronously (empty). The async tail populates
+      // it. This preserves the contract where the ref is immediately usable
+      // but empty until hydration completes.
+      //
+      // Context: jj:smmulzkm (two-phase substrate construction)
+
+      // Create a bare replica for hydration — no identity, no schema writes.
+      const replica = factory.createReplica()
+
+      // Build a temporary substrate for the ref so it's immediately usable.
+      // This uses the one-step create() path — the ref starts with
+      // Zero.structural defaults and will be replaced by hydrated data.
+      const tempSubstrate = factory.create(bound.schema)
+
+      const ref: any = (interpret as any)(bound.schema, tempSubstrate.context())
+        .with(readable)
+        .with(writable)
+        .with(changefeed)
+        .done()
+
+      registerSubstrate(ref, tempSubstrate)
+      registerSync(ref, {
+        peerId: this.peerId,
         docId,
-        substrate,
-        factory.replica,
-        bound.strategy,
-        "interpret",
+        synchronizer: this.#synchronizer,
+      })
+
+      // Cache — must happen before the async hydration tail
+      this.#docCache.set(docId, {
+        mode: "interpret",
+        ref,
+        bound,
+      })
+
+      const hydrationOp = this.#hydrateUpgradeAndRegister(
+        docId,
+        ref,
+        replica,
+        factory,
+        bound,
       ).then(() => {
-        // Wire changefeed → synchronizer + storage AFTER hydration so that
+        // Wire changefeed → synchronizer AFTER hydration so that
         // the merges during hydration (with origin "sync") don't trigger
-        // unnecessary notifyLocalChange calls or store writes.
+        // unnecessary notifyLocalChange calls.
+        // Persistence is handled by onStateAdvanced — not the changefeed.
         subscribe(ref, changeset => {
           if (changeset.origin === "sync") return
-
           this.#synchronizer.notifyLocalChange(docId)
-
-          // Persist local mutations as consolidated snapshots via replace().
-          const payload = substrate.exportEntirety()
-          const version = substrate.version().serialize()
-          this.#persistToStore(docId, backend =>
-            backend.replace(docId, { payload, version }),
-          )
         })
       })
       this.#trackOp(hydrationOp)
+
+      return ref as Ref<S>
     } else {
-      // No storage: register with synchronizer immediately
+      // ── No storage: one-step construction ──
+      // No hydration needed — create substrate directly and register.
+      const substrate = factory.create(bound.schema)
+
+      const ref: any = (interpret as any)(bound.schema, substrate.context())
+        .with(readable)
+        .with(writable)
+        .with(changefeed)
+        .done()
+
+      registerSubstrate(ref, substrate)
+      registerSync(ref, {
+        peerId: this.peerId,
+        docId,
+        synchronizer: this.#synchronizer,
+      })
+
+      this.#docCache.set(docId, {
+        mode: "interpret",
+        ref,
+        bound,
+      })
+
       this.#synchronizer.registerDoc({
         mode: "interpret",
         docId,
@@ -654,9 +842,9 @@ export class Exchange {
         if (changeset.origin === "sync") return
         this.#synchronizer.notifyLocalChange(docId)
       })
-    }
 
-    return ref as Ref<S>
+      return ref as Ref<S>
+    }
   }
 
   /**

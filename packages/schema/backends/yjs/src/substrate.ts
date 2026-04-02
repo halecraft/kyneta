@@ -22,13 +22,12 @@ import type {
   SubstratePayload,
   WritableContext,
 } from "@kyneta/schema"
-import { buildWritableContext, executeBatch } from "@kyneta/schema"
+import { BACKING_DOC, buildWritableContext, executeBatch } from "@kyneta/schema"
 import * as Y from "yjs"
 import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 import { ensureContainers } from "./populate.js"
 import { yjsReader } from "./reader.js"
 import { YjsVersion } from "./version.js"
-import { registerYjsSubstrate } from "./yjs-escape.js"
 
 // ---------------------------------------------------------------------------
 // Origin tag — used to suppress echo from our own transactions
@@ -87,7 +86,9 @@ export function createYjsSubstrate(
 
   // --- Substrate object ---
 
-  const substrate: Substrate<YjsVersion> = {
+  const substrate = {
+    [BACKING_DOC]: doc,
+
     reader: reader,
 
     prepare(path: Path, change: ChangeBase): void {
@@ -204,10 +205,7 @@ export function createYjsSubstrate(
     }
   })
 
-  // Register for the yjs() escape hatch
-  registerYjsSubstrate(substrate, doc)
-
-  return substrate
+  return substrate as Substrate<YjsVersion>
 }
 
 // ---------------------------------------------------------------------------
@@ -240,8 +238,10 @@ export function createYjsSubstrate(
  * that need to accumulate state, compute per-peer deltas, and compact
  * storage without ever interpreting document fields.
  */
-function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
-  return {
+export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
+  return ({
+    [BACKING_DOC]: doc,
+
     version(): YjsVersion {
       return new YjsVersion(Y.encodeStateVector(doc))
     },
@@ -275,7 +275,7 @@ function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       }
       Y.applyUpdate(doc, payload.data)
     },
-  }
+  }) as Replica<YjsVersion>
 }
 
 export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
@@ -311,7 +311,22 @@ export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
 export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
   replica: yjsReplicaFactory,
 
+  createReplica(): Replica<YjsVersion> {
+    // Default random clientID — safe for hydration (no local writes).
+    return createYjsReplica(new Y.Doc())
+  },
+
+  upgrade(replica: Replica<YjsVersion>, schema: SchemaNode): Substrate<YjsVersion> {
+    const doc = (replica as any)[BACKING_DOC] as Y.Doc
+    // No identity injection for the standalone factory (no peerId).
+    // Conditional ensureContainers: skip fields that already exist
+    // from hydrated state.
+    ensureContainers(doc, schema, true)
+    return createYjsSubstrate(doc, schema)
+  },
+
   create(schema: SchemaNode): Substrate<YjsVersion> {
+    // Fresh doc — unconditional ensureContainers (nothing to conflict with).
     const doc = new Y.Doc()
     ensureContainers(doc, schema)
     return createYjsSubstrate(doc, schema)
@@ -321,17 +336,10 @@ export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<YjsVersion> {
-    if (
-      payload.encoding !== "binary" ||
-      !(payload.data instanceof Uint8Array)
-    ) {
-      throw new Error(
-        "YjsSubstrateFactory.fromEntirety only supports binary-encoded payloads",
-      )
-    }
-    const doc = new Y.Doc()
-    Y.applyUpdate(doc, payload.data)
-    return createYjsSubstrate(doc, schema)
+    // Two-phase path: createReplica → merge → upgrade
+    const replica = this.createReplica()
+    replica.merge(payload)
+    return this.upgrade(replica, schema)
   },
 
   parseVersion(serialized: string): YjsVersion {

@@ -19,6 +19,7 @@ import type {
   SubstratePayload,
 } from "@kyneta/schema"
 import {
+  BACKING_DOC,
   buildWritableContext,
   type ChangeBase,
   executeBatch,
@@ -35,7 +36,6 @@ import type {
 } from "loro-crdt"
 import { LoroDoc } from "loro-crdt"
 import { batchToOps, changeToDiff } from "./change-mapping.js"
-import { registerLoroSubstrate } from "./loro-escape.js"
 import { PROPS_KEY } from "./loro-resolve.js"
 import { loroReader } from "./reader.js"
 import { LoroVersion } from "./version.js"
@@ -177,7 +177,9 @@ export function createLoroSubstrate(
 
   // --- Substrate object ---
 
-  const substrate: Substrate<LoroVersion> = {
+  const substrate = {
+    [BACKING_DOC]: doc,
+
     reader: reader,
 
     prepare(path: Path, change: ChangeBase): void {
@@ -310,10 +312,7 @@ export function createLoroSubstrate(
     }
   })
 
-  // Register for the loro() escape hatch
-  registerLoroSubstrate(substrate, doc)
-
-  return substrate
+  return substrate as Substrate<LoroVersion>
 }
 
 // ---------------------------------------------------------------------------
@@ -332,8 +331,10 @@ export function createLoroSubstrate(
  * that need to accumulate state, compute per-peer deltas, and compact
  * storage without ever interpreting document fields.
  */
-function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
-  return {
+export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
+  return ({
+    [BACKING_DOC]: doc,
+
     version(): LoroVersion {
       return new LoroVersion(doc.version())
     },
@@ -367,7 +368,7 @@ function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       }
       doc.import(payload.data)
     },
-  }
+  }) as Replica<LoroVersion>
 }
 
 export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
@@ -413,25 +414,24 @@ export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
 export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
   replica: loroReplicaFactory,
 
+  createReplica(): Replica<LoroVersion> {
+    // Default random PeerID — safe for hydration (no local writes).
+    return createLoroReplica(new LoroDoc())
+  },
+
+  upgrade(replica: Replica<LoroVersion>, schema: SchemaNode): Substrate<LoroVersion> {
+    const doc = (replica as any)[BACKING_DOC] as LoroDocType
+    // No identity injection for the standalone factory (no peerId).
+    // Conditional ensureRootContainer: skip scalar defaults that
+    // already exist from hydrated state.
+    ensureLoroContainers(doc, schema, true)
+    return createLoroSubstrate(doc, schema)
+  },
+
   create(schema: SchemaNode): Substrate<LoroVersion> {
     const doc = new LoroDoc()
-
-    // Walk the schema to ensure root containers exist (lazy creation).
-    // The root schema should be an annotated("doc", product) — unwrap to get fields.
-    let rootProduct = schema
-    while (
-      rootProduct._kind === "annotated" &&
-      rootProduct.schema !== undefined
-    ) {
-      rootProduct = rootProduct.schema
-    }
-
-    if (rootProduct._kind === "product") {
-      for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
-        ensureRootContainer(doc, key, fieldSchema)
-      }
-    }
-
+    // Fresh doc — unconditional container creation.
+    ensureLoroContainers(doc, schema, false)
     doc.commit()
     return createLoroSubstrate(doc, schema)
   },
@@ -440,17 +440,10 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<LoroVersion> {
-    if (
-      payload.encoding !== "binary" ||
-      !(payload.data instanceof Uint8Array)
-    ) {
-      throw new Error(
-        "LoroSubstrateFactory.fromEntirety only supports binary-encoded payloads",
-      )
-    }
-    const doc = new LoroDoc()
-    doc.import(payload.data)
-    return createLoroSubstrate(doc, schema)
+    // Two-phase path: createReplica → merge → upgrade
+    const replica = this.createReplica()
+    replica.merge(payload)
+    return this.upgrade(replica, schema)
   },
 
   parseVersion(serialized: string): LoroVersion {
@@ -463,6 +456,41 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
 // ---------------------------------------------------------------------------
 
 /**
+ * Walk a schema and ensure all root-level Loro containers exist.
+ *
+ * Unwraps the root product schema and calls `ensureRootContainer` for
+ * each field. When `conditional` is true, scalar/sum defaults are
+ * skipped for keys that already exist in the props map (preserving
+ * hydrated state). Container-type fields (text, counter, list, map,
+ * tree) are always idempotent in Loro — `doc.getText(key)` etc.
+ * returns the existing container without generating ops.
+ *
+ * @param doc - The LoroDoc to prepare
+ * @param schema - The root document schema
+ * @param conditional - If true, skip scalar defaults for existing keys.
+ *   Context: jj:smmulzkm (two-phase substrate construction)
+ */
+function ensureLoroContainers(
+  doc: LoroDocType,
+  schema: SchemaNode,
+  conditional: boolean,
+): void {
+  let rootProduct = schema
+  while (
+    rootProduct._kind === "annotated" &&
+    rootProduct.schema !== undefined
+  ) {
+    rootProduct = rootProduct.schema
+  }
+
+  if (rootProduct._kind === "product") {
+    for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
+      ensureRootContainer(doc, key, fieldSchema as SchemaNode, conditional)
+    }
+  }
+}
+
+/**
  * Ensure a root-level Loro container exists for a schema field.
  *
  * Loro containers are lazily created — calling `doc.getText(key)` etc.
@@ -470,11 +498,16 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
  * to create the right container type for each root field, but does NOT
  * populate any values. Initial content should be applied via `change()`
  * after construction.
+ *
+ * When `conditional` is true, scalar/sum defaults are skipped for keys
+ * that already have a value in the props map (preserving hydrated state).
+ * Container-type fields are always safe — Loro's `getXxx()` is idempotent.
  */
 export function ensureRootContainer(
   doc: LoroDocType,
   key: string,
   fieldSchema: SchemaNode,
+  conditional = false,
 ): void {
   const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
 
@@ -517,6 +550,9 @@ export function ensureRootContainer(
       // data — it's structural completeness, matching what PlainSubstrate
       // does with Zero.structural.
       const propsMap = doc.getMap(PROPS_KEY)
+      // When conditional, skip if key already exists from hydrated state
+      // (propsMap.set is a real CRDT write that produces ops).
+      if (conditional && propsMap.get(key) !== undefined) return
       const zero = Zero.structural(fieldSchema)
       if (zero !== undefined) {
         propsMap.set(key, zero as any)

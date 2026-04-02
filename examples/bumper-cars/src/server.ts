@@ -48,7 +48,7 @@ const serverTransport = new WebsocketServerTransport()
 let gameLoop: GameLoop
 
 const exchange = new Exchange({
-  identity: { name: "bumper-cars-server", type: "service" },
+  identity: { peerId: "bumper-cars-server", name: "bumper-cars-server", type: "service" },
   transports: [() => serverTransport],
 
   // ── route ────────────────────────────────────────────────────────

@@ -94,19 +94,6 @@ export type DocDismissedCallback = (
   peer: PeerIdentityDetails,
 ) => void
 
-/**
- * Callback invoked after a successful merge of imported document data.
- * The Exchange uses this to persist incoming payloads to storage backends.
- *
- * Fired by `Synchronizer.#executeImportDocData` after `replica.merge()`
- * succeeds — keeping the synchronizer program storage-free (FC/IS principle).
- */
-export type DocImportedCallback = (
-  docId: DocId,
-  payload: SubstratePayload,
-  version: string,
-) => void
-
 export type SynchronizerParams = {
   identity: PeerIdentityDetails
   transports?: AnyTransport[]
@@ -114,7 +101,6 @@ export type SynchronizerParams = {
   authorize: AuthorizePredicate
   onDocCreationRequested?: DocCreationCallback
   onDocDismissed?: DocDismissedCallback
-  onDocImported?: DocImportedCallback
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +211,16 @@ export class Synchronizer {
   readonly #docRuntimes = new Map<DocId, DocRuntime>()
   readonly #docCreationCallback?: DocCreationCallback
   readonly #docDismissedCallback?: DocDismissedCallback
-  readonly #docImportedCallback?: DocImportedCallback
+
+  /**
+   * Dirty doc IDs accumulated during a dispatch cycle from
+   * `notify/state-advanced` notifications. Drained at quiescence
+   * to fire `onStateAdvanced` listeners — only docs whose state
+   * actually advanced (local mutation or network import).
+   *
+   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+   */
+  readonly #dirtyStateAdvanced: Set<DocId> = new Set()
 
   /**
    * Outbound message queue — accumulated during dispatch, flushed at quiescence.
@@ -255,6 +250,15 @@ export class Synchronizer {
     (docId: DocId, readyStates: ReadyState[]) => void
   >()
 
+  /**
+   * Listeners for state-advanced events. Fired at quiescence when
+   * a document's state has advanced — either from a local mutation
+   * or a network import. The Exchange subscribes to persist deltas.
+   *
+   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+   */
+  readonly #stateAdvancedListeners = new Set<(docId: DocId) => void>()
+
   constructor({
     identity,
     transports = [],
@@ -262,14 +266,12 @@ export class Synchronizer {
     authorize,
     onDocCreationRequested,
     onDocDismissed,
-    onDocImported,
   }: SynchronizerParams) {
     this.identity = identity
 
     this.#updateFn = createSynchronizerUpdate({ route, authorize })
     this.#docCreationCallback = onDocCreationRequested
     this.#docDismissedCallback = onDocDismissed
-    this.#docImportedCallback = onDocImported
 
     // Initialize model
     const [initialModel, initialCommand] = init(this.identity)
@@ -458,6 +460,25 @@ export class Synchronizer {
   /**
    * Subscribe to ready state changes.
    */
+  /**
+   * Subscribe to state-advanced events.
+   *
+   * The callback fires once per docId at quiescence when the document's
+   * state has advanced — either from a local mutation (changefeed →
+   * notifyLocalChange → handleLocalDocChange) or a network import
+   * (handleOffer → cmd/import-doc-data → handleDocImported).
+   *
+   * Returns an unsubscribe function.
+   *
+   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+   */
+  onStateAdvanced(cb: (docId: DocId) => void): () => void {
+    this.#stateAdvancedListeners.add(cb)
+    return () => {
+      this.#stateAdvancedListeners.delete(cb)
+    }
+  }
+
   onReadyStateChange(
     cb: (docId: DocId, readyStates: ReadyState[]) => void,
   ): () => void {
@@ -571,11 +592,14 @@ export class Synchronizer {
       }
 
       // Quiescence — flush outbound messages, then emit targeted
-      // ready-state changes only for docs that were actually touched.
+      // ready-state changes and state-advanced events only for docs
+      // that were actually touched.
       this.#flushOutbound()
       this.#emitReadyStateChanges()
+      this.#emitStateAdvanced()
     } finally {
       this.#dirtyDocIds.clear()
+      this.#dirtyStateAdvanced.clear()
       this.#dispatching = false
     }
   }
@@ -602,6 +626,11 @@ export class Synchronizer {
       case "notify/ready-state-changed":
         for (const docId of notification.docIds) {
           this.#dirtyDocIds.add(docId)
+        }
+        break
+      case "notify/state-advanced":
+        for (const docId of notification.docIds) {
+          this.#dirtyStateAdvanced.add(docId)
         }
         break
       case "notify/batch":
@@ -797,14 +826,6 @@ export class Synchronizer {
       return
     }
 
-    // Fire the imported callback so the Exchange can persist to storage.
-    // This happens before the model update — the callback is fire-and-forget.
-    this.#docImportedCallback?.(
-      command.docId,
-      command.payload,
-      command.version,
-    )
-
     // Notify the model of successful import
     const newVersion = runtime.replica.version().serialize()
     this.#dispatch({
@@ -829,6 +850,28 @@ export class Synchronizer {
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
   // READY STATE — emit changes after quiescence
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+  /**
+   * Emit state-advanced events for docs touched this dispatch cycle.
+   * Fires listeners at quiescence — multiple imports in one cycle
+   * produce one event per docId.
+   *
+   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+   */
+  #emitStateAdvanced(): void {
+    if (this.#stateAdvancedListeners.size === 0) return
+    if (this.#dirtyStateAdvanced.size === 0) return
+
+    for (const docId of this.#dirtyStateAdvanced) {
+      // Only emit if we still track this doc (it may have been removed
+      // during the same dispatch cycle).
+      if (!this.#docRuntimes.has(docId)) continue
+
+      for (const listener of this.#stateAdvancedListeners) {
+        listener(docId)
+      }
+    }
+  }
 
   #emitReadyStateChanges(): void {
     if (this.#readyStateListeners.size === 0) return
