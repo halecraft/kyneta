@@ -157,6 +157,15 @@ export {
 } from "./reassembler.js"
 
 // ---------------------------------------------------------------------------
+// Binary transport helpers — shared encode/decode for binary transports
+// ---------------------------------------------------------------------------
+
+export {
+  decodeBinaryMessages,
+  encodeBinaryAndSend,
+} from "./binary-transport.js"
+
+// ---------------------------------------------------------------------------
 // Text reassembler — stateful fragment reassembly (text wrapper)
 // ---------------------------------------------------------------------------
 

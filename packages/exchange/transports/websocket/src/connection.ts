@@ -12,12 +12,9 @@
 
 import type { Channel, ChannelMsg, PeerId } from "@kyneta/exchange"
 import {
-  cborCodec,
-  decodeBinaryFrame,
-  encodeComplete,
+  decodeBinaryMessages,
+  encodeBinaryAndSend,
   FragmentReassembler,
-  fragmentPayload,
-  wrapCompleteMessage,
 } from "@kyneta/wire"
 import type { Socket } from "./types.js"
 
@@ -126,18 +123,9 @@ export class WebsocketConnection {
       return
     }
 
-    const frame = encodeComplete(cborCodec, msg)
-
-    // Fragment large payloads for cloud infrastructure compatibility
-    if (this.#fragmentThreshold > 0 && frame.length > this.#fragmentThreshold) {
-      const fragments = fragmentPayload(frame, this.#fragmentThreshold)
-      for (const fragment of fragments) {
-        this.#socket.send(fragment)
-      }
-    } else {
-      // Wrap with MESSAGE_COMPLETE prefix for transport layer consistency
-      this.#socket.send(wrapCompleteMessage(frame))
-    }
+    encodeBinaryAndSend(msg, this.#fragmentThreshold, data =>
+      this.#socket.send(data),
+    )
   }
 
   /**
@@ -176,23 +164,17 @@ export class WebsocketConnection {
       return
     }
 
-    // Handle binary protocol messages through reassembler
-    const result = this.#reassembler.receiveRaw(data)
-
-    if (result.status === "complete") {
-      try {
-        const frame = decodeBinaryFrame(result.data)
-        const messages = cborCodec.decode(frame.content.payload)
+    // Handle binary protocol messages through shared decode pipeline
+    try {
+      const messages = decodeBinaryMessages(data, this.#reassembler)
+      if (messages) {
         for (const msg of messages) {
           this.#handleChannelMessage(msg)
         }
-      } catch (error) {
-        console.error("Failed to decode wire message:", error)
       }
-    } else if (result.status === "error") {
-      console.error("Fragment reassembly error:", result.error)
+    } catch (error) {
+      console.error("Failed to decode wire message:", error)
     }
-    // "pending" status means we're waiting for more fragments — nothing to do
   }
 
   /**

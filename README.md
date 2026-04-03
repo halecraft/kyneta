@@ -13,9 +13,10 @@ A collaborative-first application platform where CRDTs meet compiled UI. Kyneta 
 | [`@kyneta/react`](./packages/react) | Thin React bindings over `@kyneta/schema` + `@kyneta/exchange`. Hooks for document access, sync status, and reactive value observation via `useSyncExternalStore`. | 29 |
 | [`@kyneta/loro-schema`](./packages/schema/backends/loro) | Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge that observes all mutations regardless of source. | 134 |
 | [`@kyneta/yjs-schema`](./packages/schema/backends/yjs) | Yjs CRDT substrate for `@kyneta/schema`. Wraps a `Y.Doc` with schema-aware typed reads, Yjs-native writes, and a persistent event bridge. | 143 |
-| [`@kyneta/wire`](./packages/exchange/wire) | Wire format codecs, framing, and fragmentation for `@kyneta/exchange`. CBOR and JSON codecs, 6-byte binary frames, and a fragmentation protocol for cloud WebSocket gateways. | 181 |
+| [`@kyneta/wire`](./packages/exchange/wire) | Wire format codecs, framing, and fragmentation for `@kyneta/exchange`. CBOR and JSON codecs, 6-byte binary frames, and a fragmentation protocol for cloud WebSocket gateways. | 187 |
 | [`@kyneta/websocket-network-adapter`](./packages/exchange/network-adapters/websocket) | WebSocket network adapter for `@kyneta/exchange`. Client, server, and Bun-specific handlers with connection lifecycle, keepalive, and reconnection. | 41 |
 | [`@kyneta/sse-network-adapter`](./packages/exchange/network-adapters/sse) | SSE network adapter for `@kyneta/exchange`. Client, server, and Express integration with text wire format and custom reconnection state machine. | 33 |
+| [`@kyneta/webrtc-transport`](./packages/exchange/transports/webrtc) | WebRTC data channel transport for `@kyneta/exchange`. BYODC (Bring Your Own Data Channel) with `DataChannelLike` minimal interface. Binary CBOR encoding with transport-level fragmentation. | 27 |
 
 ### Dependencies
 
@@ -31,7 +32,8 @@ A collaborative-first application platform where CRDTs meet compiled UI. Kyneta 
     │        ├──► @kyneta/wire          (+ tiny-cbor)
     │        │        │
     │        │        ├──► @kyneta/websocket-network-adapter
-    │        │        └──► @kyneta/sse-network-adapter
+    │        │        ├──► @kyneta/sse-network-adapter
+    │        │        └──► @kyneta/webrtc-transport
     │        │
     │        └──► @kyneta/react         (+ react)
     │
@@ -96,3 +98,4 @@ MIT — see [LICENSE](./LICENSE).
 | `@kyneta/wire` | MIT |
 | `@kyneta/websocket-network-adapter` | MIT |
 | `@kyneta/sse-network-adapter` | MIT |
+| `@kyneta/webrtc-transport` | MIT |

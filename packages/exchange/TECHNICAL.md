@@ -566,6 +566,15 @@ Generic stateful fragment collector parameterized on chunk type `T`. Uses a pure
 
 Fragments are fully self-describing — no separate "fragment header" message. The collector auto-creates tracking state on first contact with a new frame ID. Configurable timeouts (default 10s), max concurrent frames (32), max total size (50MB), and oldest-first eviction.
 
+### Binary Transport Helpers
+
+Two shared helpers eliminate encode/decode duplication across binary transports:
+
+- `encodeBinaryAndSend(msg, fragmentThreshold, sendFn)` — Encode a `ChannelMsg`, optionally fragment, and call `sendFn` for each piece. The FC/IS boundary: pure planning (what bytes to produce) with an injected `sendFn` (the transport-specific effectful operation).
+- `decodeBinaryMessages(bytes, reassembler)` — Feed raw transport bytes through the reassembler and decode to `ChannelMsg[]`. Returns the decoded messages, `null` if pending fragments, or throws on error.
+
+Both WebSocket and WebRTC transports use these helpers instead of inline encode/decode logic. Located in `binary-transport.ts`.
+
 ### Wire Type Discriminators (CBOR)
 
 `OfferMsg` no longer carries an `offerType` field — the payload's `kind` discriminant (`PayloadKind`) is the single source of truth. On the wire, `pk` (PayloadKind) replaces the former `ot` (OfferType).
@@ -591,7 +600,7 @@ See `packages/exchange/wire/PROTOCOL.md` for the full wire protocol specificatio
 
 ## 12. Websocket Network Adapter (`@kyneta/websocket-transport`)
 
-The first real transport. Framework-agnostic via the `Socket` interface, with platform-specific wrappers for browser, Node.js `ws`, and Bun.
+The first real transport. Framework-agnostic via the `Socket` interface, with platform-specific wrappers for browser, Node.js `ws`, and Bun. Inline encode/decode logic has been refactored to use the shared binary transport helpers (`encodeBinaryAndSend` / `decodeBinaryMessages`) from `@kyneta/wire`.
 
 ### Package Structure
 
@@ -1306,3 +1315,65 @@ A single peer may connect through multiple transports (e.g. both WebSocket and S
 - **Leave:** `handleChannelRemoved()` removes the channel from the set. If `newChannels.size === 0` (last channel gone), it deletes the peer from `model.peers` and emits `notify/peer-left`. Otherwise, only `notify/ready-state-changed` fires for affected docs (the peer lost a transport but is still present).
 
 This means `peer-joined` fires exactly once per peer identity regardless of how many channels connect, and `peer-left` fires only when the peer is truly unreachable.
+
+---
+
+## 22. WebRTC Transport (`@kyneta/webrtc-transport`)
+
+BYODC (Bring Your Own Data Channel) transport for peer-to-peer document synchronization over WebRTC data channels. The application manages WebRTC connections (signaling, ICE, media streams); this transport attaches to already-established data channels for kyneta sync.
+
+### Package Structure
+
+Single `"."` export — WebRTC data channels are symmetric (no client/server distinction):
+
+| Export | Key Exports |
+|--------|-------------|
+| `"."` | `WebrtcTransport`, `createWebrtcTransport`, `DataChannelLike`, `WebrtcTransportOptions` |
+
+### `DataChannelLike` — Minimal Interface, Not DOM Type
+
+The vendor adapter (`@loro-extended/adapter-webrtc`) types `attachDataChannel` as `(peerId, channel: RTCDataChannel)`. This forces library-specific wrappers to implement `Partial<RTCDataChannel>` (~30 members) and cast via `as unknown as RTCDataChannel`. Analysis of the vendor video-conference example revealed several friction points:
+
+1. **`binaryType` write is silently lost** — the adapter writes `"arraybuffer"` but wrappers often lack this property
+2. **`instanceof ArrayBuffer` check fails for `Uint8Array`/`Buffer` data** — simple-peer delivers `Buffer` (a `Uint8Array` subclass) which doesn't pass `instanceof ArrayBuffer`
+3. **Single-listener-per-type** — the wrapper's `addEventListener` overwrites previous listeners
+4. **~160-line wrapper class** required for simple-peer integration
+
+`DataChannelLike` captures the exact surface the transport uses — 5 members:
+
+| Member | Usage |
+|--------|-------|
+| `readyState: string` | Read — check `=== "open"` before sending |
+| `binaryType: string` | Write — best-effort hint, not a correctness requirement |
+| `send(data: Uint8Array)` | Call — deliver encoded wire frames |
+| `addEventListener(type, listener)` | Call — register for `"open"`, `"close"`, `"error"`, `"message"` |
+| `removeEventListener(type, listener)` | Call — clean up on detach |
+
+Native `RTCDataChannel` satisfies this structurally (no wrapper needed). Libraries like simple-peer can bridge in ~20 lines via a factory function that maps EventEmitter events to `addEventListener` calls.
+
+### `addEventListener` vs `onMessage` Design Asymmetry
+
+The WebSocket transport defines an internal `Socket` interface with `onMessage(handler)` — callback registration. `DataChannelLike` uses `addEventListener` / `removeEventListener` (DOM EventTarget pattern). The difference is intentional:
+
+- `Socket` is an **internal** interface wrapping things the transport creates and owns. Single callback is fine.
+- `DataChannelLike` is a **user-provided** interface wrapping things the application creates. The transport needs `removeEventListener` to clean up on detach — something the `onMessage` pattern doesn't support. And native `RTCDataChannel` uses `addEventListener`, so conformance is structural.
+
+### Binary Pipeline
+
+Uses the same shared binary pipeline as the WebSocket transport via `encodeBinaryAndSend` and `decodeBinaryMessages` from `@kyneta/wire`. Zero code duplication.
+
+### Fragment Threshold
+
+Default: 200KB (SCTP's ~256KB message limit). This differs from WebSocket's 100KB default which targets AWS API Gateway's 128KB limit. WebRTC has no such gateway.
+
+### Ownership Contract
+
+The transport does NOT own the data channel. `detachDataChannel()` removes the sync channel and event listeners but does NOT close the data channel or the peer connection. The application manages the WebRTC connection lifecycle independently.
+
+### Robustness: `ArrayBuffer | Uint8Array`
+
+The message handler accepts both `ArrayBuffer` (native `RTCDataChannel` with `binaryType: "arraybuffer"`) and `Uint8Array` (simple-peer and other wrappers). The `binaryType` write on attach is a best-effort hint — the handler does not depend on it being respected.
+
+### Relationship to Video Conference Example
+
+The examples roadmap plans a video-conference example that uses SSE for server-mediated sync and WebRTC for low-latency peer-to-peer sync (dual-transport). Signaling flows through ephemeral documents (`bindEphemeral`), not a dedicated signaling server. The `fromSimplePeer()` bridge pattern demonstrated in the test suite shows how to connect `simple-peer` to the transport.

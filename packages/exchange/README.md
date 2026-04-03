@@ -454,12 +454,13 @@ Transports provide pluggable network connectivity. They create channels — the 
 |---------|----------|----------|
 | `@kyneta/websocket-transport` | WebSocket | Binary CBOR via `@kyneta/wire` |
 | `@kyneta/sse-transport` | SSE + HTTP POST | Text JSON via `@kyneta/wire` |
+| `@kyneta/webrtc-transport` | WebRTC Data Channel | Binary CBOR via `@kyneta/wire` |
 
-Both packages export `/client` and `/server` entry points. The websocket transport also exports `/bun` for Bun-native WebSocket servers.
+The websocket and SSE packages export `/client` and `/server` entry points. The websocket transport also exports `/bun` for Bun-native WebSocket servers. The WebRTC transport uses a BYODC (Bring Your Own Data Channel) pattern — you provide an `RTCDataChannel` and the transport wraps it as an exchange channel.
 
 ### Creating Custom Transports
 
-Extend the `Transport<G>` base class:
+Extend the `Transport<G>` base class. The generic parameter `G` represents the arguments needed to generate a channel — for example, `@kyneta/webrtc-transport` uses `G = RTCDataChannel`, implementing the BYODC (Bring Your Own Data Channel) pattern where callers supply an externally-negotiated data channel:
 
 ```ts
 import { Transport } from "@kyneta/exchange"

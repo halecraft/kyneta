@@ -28,12 +28,9 @@ import type {
 } from "@kyneta/exchange"
 import { Transport } from "@kyneta/exchange"
 import {
-  cborCodec,
-  decodeBinaryFrame,
-  encodeComplete,
+  decodeBinaryMessages,
+  encodeBinaryAndSend,
   FragmentReassembler,
-  fragmentPayload,
-  wrapCompleteMessage,
 } from "@kyneta/wire"
 import { WebsocketClientStateMachine } from "./client-state-machine.js"
 import type {
@@ -278,23 +275,9 @@ export class WebsocketClientTransport extends Transport<void> {
           return
         }
 
-        const frame = encodeComplete(cborCodec, msg)
-
-        // Fragment large payloads for cloud infrastructure compatibility
-        if (
-          this.#fragmentThreshold > 0 &&
-          frame.length > this.#fragmentThreshold
-        ) {
-          const fragments = fragmentPayload(frame, this.#fragmentThreshold)
-          for (const fragment of fragments) {
-            this.#socket.send(fragment as Uint8Array<ArrayBuffer>)
-          }
-        } else {
-          // Wrap with MESSAGE_COMPLETE prefix for transport layer consistency
-          this.#socket.send(
-            wrapCompleteMessage(frame) as Uint8Array<ArrayBuffer>,
-          )
-        }
+        encodeBinaryAndSend(msg, this.#fragmentThreshold, data =>
+          this.#socket!.send(data),
+        )
       },
       stop: () => {
         // Don't call disconnect() here — channel.stop() is called when
@@ -477,24 +460,21 @@ export class WebsocketClientTransport extends Transport<void> {
       return
     }
 
-    // Handle binary messages through reassembler
+    // Handle binary messages through shared decode pipeline
     if (data instanceof ArrayBuffer) {
-      const result = this.#reassembler.receiveRaw(new Uint8Array(data))
-
-      if (result.status === "complete") {
-        try {
-          const frame = decodeBinaryFrame(result.data)
-          const messages = cborCodec.decode(frame.content.payload)
+      try {
+        const messages = decodeBinaryMessages(
+          new Uint8Array(data),
+          this.#reassembler,
+        )
+        if (messages) {
           for (const msg of messages) {
             this.#handleChannelMessage(msg)
           }
-        } catch (error) {
-          console.error("Failed to decode message:", error)
         }
-      } else if (result.status === "error") {
-        console.error("Fragment reassembly error:", result.error)
+      } catch (error) {
+        console.error("Failed to decode message:", error)
       }
-      // "pending" status means we're waiting for more fragments — nothing to do
     }
   }
 

@@ -1,0 +1,45 @@
+{
+  "name": "@kyneta/webrtc-transport",
+  "version": "1.1.0",
+  "description": "WebRTC data channel transport for @kyneta/exchange — BYODC (Bring Your Own Data Channel) with DataChannelLike interface",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/exchange/transports/webrtc"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "peerDependencies": {
+    "@kyneta/exchange": "^1.1.0",
+    "@kyneta/wire": "^1.1.0"
+  },
+  "devDependencies": {
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/wire": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@types/node": "^22",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.17"
+  }
+}
