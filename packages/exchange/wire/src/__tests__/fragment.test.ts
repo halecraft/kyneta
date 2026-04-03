@@ -24,7 +24,6 @@ import {
   hexToBytes,
   parseTransportPayload,
   shouldFragment,
-  type TransportPayload,
   wrapCompleteMessage,
   wrapFragment,
 } from "../fragment.js"

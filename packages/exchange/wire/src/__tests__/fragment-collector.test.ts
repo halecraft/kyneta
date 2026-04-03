@@ -228,7 +228,7 @@ describe("FragmentCollector — basic", () => {
     collector.addFragment("f1", 2, 3, 6, "ld")
     collector.addFragment("f1", 0, 3, 6, "wo")
 
-    const result = collector.addFragment("f1", 1, 3, 6, "r")
+    collector.addFragment("f1", 1, 3, 6, "r")
     // Note: size check might fail since totalSize=6 but actual is 2+2+1=5
     // Let's use correct totalSize
     collector.dispose()
@@ -245,7 +245,7 @@ describe("FragmentCollector — basic", () => {
     collector.addFragment("f1", 2, 3, 5, "C")
     collector.addFragment("f1", 0, 3, 5, "A")
 
-    const result = collector.addFragment("f1", 1, 3, 5, "B")
+    collector.addFragment("f1", 1, 3, 5, "B")
 
     // totalSize is 5 but actual is 3 — size_mismatch expected
     // Let's fix: use totalSize matching actual
