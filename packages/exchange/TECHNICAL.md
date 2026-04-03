@@ -239,7 +239,7 @@ The factory is always a **builder function**, not a static instance. This solves
 3. **Each exchange gets a fresh factory** — two exchanges sharing the same BoundSchema produce independent factory instances with their own peer identity.
 4. **Factories are cached per-exchange** — a `WeakMap<FactoryBuilder, SubstrateFactory>` ensures the builder is called at most once per exchange.
 
-For Loro substrates, the builder hashes the string peerId to a deterministic numeric Loro PeerID and returns a factory that calls `doc.setPeerId()` on every new LoroDoc. For plain/sequential substrates, the builder ignores the context: `() => plainSubstrateFactory`. For LWW/ephemeral substrates, the builder returns `lwwSubstrateFactory` (which wraps `plainSubstrateFactory` with `TimestampVersion`).
+For Loro substrates, the builder hashes the string peerId to a deterministic numeric Loro PeerID and returns a factory that calls `doc.setPeerId()` on every new LoroDoc. For plain/sequential substrates, the builder ignores the context: `() => plainSubstrateFactory`. For LWW/ephemeral substrates, the builder returns `lwwSubstrateFactory` (which uses the same plain substrate constructors parameterized with `timestampVersionStrategy`).
 
 ### Convenience Wrappers
 
@@ -415,25 +415,14 @@ The synchronizer calls `replica.merge(payload, "sync")`. The substrate dispatche
 
 ## 8. LWW Substrate Pattern
 
-The LWW substrate pattern is implemented by `lwwSubstrateFactory` in `@kyneta/schema` (`src/substrates/lww.ts`), consumed by `bindEphemeral()`. The internal `wrapWithTimestamp()` helper uses the decorator pattern to wrap a `PlainSubstrate` with `TimestampVersion`:
+The LWW substrate pattern is implemented by `lwwSubstrateFactory` in `@kyneta/schema` (`src/substrates/lww.ts`), consumed by `bindEphemeral()`. LWW substrates are plain substrates parameterized with `timestampVersionStrategy` — same state management, same construction functions, different version algebra:
 
-- **State management**: delegates to the inner `PlainSubstrate` (same `Reader`, `applyChange`, interpreter stack)
-- **Version tracking**: `TimestampVersion` bumped on every `onFlush()` and `merge()`
-- **Export**: always `exportEntirety()` (full state). `exportSince()` delegates to `inner.exportEntirety()` for defensive correctness, but is never called in practice — the synchronizer never sets `sinceVersion` for LWW docs, so the runtime always falls through to `exportEntirety()`.
-- **Import**: delegates to inner `PlainSubstrate`
+- **State management**: shared with `plainSubstrateFactory` — same `Reader`, `applyChange`, interpreter stack, op log. The `createPlainSubstrate<V>` and `createPlainReplica<V>` constructors accept a `VersionStrategy<V>` parameter; LWW passes `timestampVersionStrategy`.
+- **Version tracking**: `TimestampVersion` produced by `strategy.current(flushCount)`. Returns `TimestampVersion(0)` when no flushes have occurred, `TimestampVersion.now()` after the first flush. The flush count parameter is ignored — LWW versions are wall-clock timestamps, not counters.
+- **Export**: `strategy.logOffset()` returns `null` (timestamps have no relationship to the op log array index), so the replication core falls back to `exportEntirety()`. The synchronizer never sets `sinceVersion` for LWW docs, so this fallback is unreachable in practice.
+- **Import**: same as plain — `merge()` dispatches on `payload.kind` and applies through `executeBatch` (substrate) or `applyChange` (replica).
 
-**Critical:** The LWW substrate must override `context()` to return a `WritableContext` built from the **wrapper** substrate, not the inner one. This ensures `onFlush()` (which bumps the timestamp version) is called during `change()`. This is correct-by-construction in `wrapWithTimestamp` — the extracted helper eliminates the risk of copy-paste errors:
-
-```ts
-context(): WritableContext {
-  if (!cachedCtx) {
-    cachedCtx = buildWritableContext(substrate)  // the wrapper, NOT inner
-  }
-  return cachedCtx
-}
-```
-
-If `context()` delegated to `inner.context()`, the inner plain substrate's `onFlush` would run but the wrapper's version would never be bumped, causing LWW timestamp comparison to use stale timestamps.
+There is no decorator, no wrapper object, and no `context()` gotcha. Each LWW substrate is a single object produced by a single `createPlainSubstrate(storeObj, timestampVersionStrategy)` call. The `VersionStrategy<V>` interface has three pure members: `zero`, `current(flushCount)`, and `logOffset(since)`.
 
 ---
 

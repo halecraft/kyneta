@@ -2,13 +2,13 @@
 
 import { describe, expect, it } from "vitest"
 import { Schema } from "../schema.js"
-import { createPlainSubstrate } from "../substrates/plain.js"
+import { createPlainSubstrate, plainVersionStrategy } from "../substrates/plain.js"
 import { registerSubstrate, unwrap } from "../unwrap.js"
 
 describe("unwrap()", () => {
   it("returns the registered substrate", () => {
     const store = { title: "Hello" }
-    const substrate = createPlainSubstrate(store)
+    const substrate = createPlainSubstrate(store, plainVersionStrategy)
     const fakeRef = { _fake: true }
 
     registerSubstrate(fakeRef, substrate)
@@ -23,8 +23,8 @@ describe("unwrap()", () => {
   it("overwrites previous registration for the same ref", () => {
     const storeA = { title: "A" }
     const storeB = { title: "B" }
-    const substrateA = createPlainSubstrate(storeA)
-    const substrateB = createPlainSubstrate(storeB)
+    const substrateA = createPlainSubstrate(storeA, plainVersionStrategy)
+    const substrateB = createPlainSubstrate(storeB, plainVersionStrategy)
     const ref = { _fake: true }
 
     registerSubstrate(ref, substrateA)

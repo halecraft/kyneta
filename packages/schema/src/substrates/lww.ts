@@ -1,144 +1,58 @@
-// lww — LWW substrate factory wrapping PlainSubstrate with TimestampVersion.
+// lww — LWW substrate factory using TimestampVersion strategy.
 //
 // The LWW (last-writer-wins) substrate delegates all state management to
-// a PlainSubstrate but replaces version tracking with wall-clock timestamps.
-// This enables cross-peer stale rejection in the synchronizer: incoming
-// offers with older timestamps are discarded.
+// the parameterized plain substrate constructors, passing
+// `timestampVersionStrategy` instead of `plainVersionStrategy`. This
+// replaces version tracking with wall-clock timestamps, enabling
+// cross-peer stale rejection in the synchronizer: incoming offers with
+// older timestamps are discarded.
 //
 // The factory is consumed by `bindEphemeral()` in `bind.ts`.
 //
-// Architecture: decorator pattern — `wrapWithTimestamp` takes any
-// `Substrate<PlainVersion>` and returns a `Substrate<TimestampVersion>`
-// that delegates all operations to the inner substrate while maintaining
-// its own timestamp-based version.
+// Architecture: the plain substrate constructors (`createPlainSubstrate`,
+// `createPlainReplica`) accept a `VersionStrategy<V>` that governs
+// version construction and log-to-delta mapping. LWW passes
+// `timestampVersionStrategy` — same state management, different version
+// algebra. No decorator, no wrapper, no `context()` gotcha.
 
-import type { ChangeBase } from "../change.js"
-import type { Path } from "../interpret.js"
-import type { WritableContext } from "../interpreters/writable.js"
-import { buildWritableContext } from "../interpreters/writable.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type { PlainState } from "../reader.js"
 import type {
-  Replica,
   ReplicaFactory,
+  Replica,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
 } from "../substrate.js"
-import type { PlainVersion } from "./plain.js"
 import {
   createPlainReplica,
-  plainReplicaFactory,
-  plainSubstrateFactory,
+  createPlainSubstrate,
+  buildPlainReplicaFromEntirety,
+  buildPlainSubstrateFromEntirety,
 } from "./plain.js"
+import type { VersionStrategy } from "./plain.js"
+import { Zero } from "../zero.js"
 import { TimestampVersion } from "./timestamp-version.js"
 
 // ---------------------------------------------------------------------------
-// wrapWithTimestamp — decorator: PlainSubstrate → LWW Substrate
+// timestampVersionStrategy — the TimestampVersion algebra
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap a plain substrate with timestamp-based versioning for LWW semantics.
+ * Version strategy for LWW substrates: wall-clock timestamp, no log
+ * index mapping.
  *
- * The wrapper delegates all state operations (store, prepare, export, import)
- * to the inner plain substrate. It overrides version tracking to use
- * `TimestampVersion` (wall clock) instead of `PlainVersion` (monotonic counter).
+ * `current()` returns `TimestampVersion.now()` — the flush count is
+ * ignored because LWW versions are wall-clock timestamps, not counters.
  *
- * **Critical: `context()` gotcha.** The wrapper builds its `WritableContext`
- * from the *wrapper* substrate object, not the inner one. This ensures
- * `onFlush()` on the wrapper (which bumps the timestamp) is called during
- * `change()`. If `context()` delegated to `inner.context()`, only the
- * inner plain substrate's `onFlush` would run and the timestamp would
- * never advance. See exchange TECHNICAL.md §8 for details.
+ * `logOffset()` always returns `null` — a wall-clock timestamp has no
+ * relationship to the op log array index. The core falls back to
+ * `exportEntirety()` when `logOffset` returns `null`.
  */
-function wrapWithTimestamp(
-  inner: Substrate<PlainVersion>,
-  initialVersion: TimestampVersion,
-): Substrate<TimestampVersion> {
-  let currentVersion = initialVersion
-  let cachedCtx: WritableContext | undefined
-
-  const substrate: Substrate<TimestampVersion> = {
-    reader: inner.reader,
-
-    prepare(path: Path, change: ChangeBase): void {
-      inner.prepare(path, change)
-    },
-
-    onFlush(origin?: string): void {
-      inner.onFlush(origin)
-      currentVersion = TimestampVersion.now()
-    },
-
-    // CRITICAL: build from `substrate` (the wrapper), not `inner`.
-    // See docstring above for why this matters.
-    context(): WritableContext {
-      if (!cachedCtx) {
-        cachedCtx = buildWritableContext(substrate)
-      }
-      return cachedCtx
-    },
-
-    version(): TimestampVersion {
-      return currentVersion
-    },
-
-    exportEntirety(): SubstratePayload {
-      return inner.exportEntirety()
-    },
-
-    // LWW never uses deltas — the synchronizer never provides
-    // `sinceVersion` for LWW docs, so `exportSince` is never called
-    // in practice. Delegate to exportEntirety for defensive correctness
-    // rather than returning null.
-    exportSince(_since: TimestampVersion): SubstratePayload | null {
-      return inner.exportEntirety()
-    },
-
-    merge(payload: SubstratePayload, origin?: string): void {
-      inner.merge(payload, origin)
-      currentVersion = TimestampVersion.now()
-    },
-  }
-
-  return substrate
-}
-
-// ---------------------------------------------------------------------------
-// wrapReplicaWithTimestamp — decorator: PlainReplica → LWW Replica
-// ---------------------------------------------------------------------------
-
-/**
- * Wrap a plain replica with timestamp-based versioning for LWW semantics.
- *
- * The headless counterpart of `wrapWithTimestamp` — wraps a
- * `Replica<PlainVersion>` as `Replica<TimestampVersion>` without
- * requiring schema interpretation, changefeed, or WritableContext.
- */
-function wrapReplicaWithTimestamp(
-  inner: Replica<PlainVersion>,
-  initialVersion: TimestampVersion,
-): Replica<TimestampVersion> {
-  let currentVersion = initialVersion
-
-  return {
-    version(): TimestampVersion {
-      return currentVersion
-    },
-
-    exportEntirety(): SubstratePayload {
-      return inner.exportEntirety()
-    },
-
-    exportSince(_since: TimestampVersion): SubstratePayload | null {
-      return inner.exportEntirety()
-    },
-
-    merge(payload: SubstratePayload, origin?: string): void {
-      inner.merge(payload, origin)
-      currentVersion = TimestampVersion.now()
-    },
-  }
+const timestampVersionStrategy: VersionStrategy<TimestampVersion> = {
+  zero: new TimestampVersion(0),
+  current: (flushCount) => flushCount === 0 ? new TimestampVersion(0) : TimestampVersion.now(),
+  logOffset: (_since) => null,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,21 +62,20 @@ function wrapReplicaWithTimestamp(
 /**
  * Schema-free replica factory for LWW substrates.
  *
- * Wraps `plainReplicaFactory` with `TimestampVersion` for cross-peer
- * stale rejection. Constructs headless `Replica<TimestampVersion>`
- * instances without requiring a schema.
+ * Constructs headless `Replica<TimestampVersion>` instances using the
+ * parameterized plain replica constructors with `timestampVersionStrategy`.
+ * Used by conduit participants and as the `replica` accessor on
+ * `lwwSubstrateFactory`.
  */
 export const lwwReplicaFactory: ReplicaFactory<TimestampVersion> = {
   replicaType: ["plain", 1, 0] as const,
 
   createEmpty(): Replica<TimestampVersion> {
-    const inner = plainReplicaFactory.createEmpty()
-    return wrapReplicaWithTimestamp(inner, new TimestampVersion(0))
+    return createPlainReplica({} as PlainState, timestampVersionStrategy)
   },
 
   fromEntirety(payload: SubstratePayload): Replica<TimestampVersion> {
-    const inner = plainReplicaFactory.fromEntirety(payload)
-    return wrapReplicaWithTimestamp(inner, TimestampVersion.now())
+    return buildPlainReplicaFromEntirety(payload, timestampVersionStrategy)
   },
 
   parseVersion(serialized: string): TimestampVersion {
@@ -177,28 +90,33 @@ export const lwwReplicaFactory: ReplicaFactory<TimestampVersion> = {
 /**
  * Factory for LWW (last-writer-wins) substrates.
  *
- * Wraps `plainSubstrateFactory` with `TimestampVersion` for cross-peer
- * stale rejection. Used by `bindEphemeral()`.
+ * Uses the parameterized plain substrate constructors with
+ * `timestampVersionStrategy` for cross-peer stale rejection.
+ * Consumed by `bindEphemeral()`.
  *
  * - `create(schema)` — fresh substrate, initial version timestamp 0
  * - `fromEntirety(payload, schema)` — reconstructed from entirety,
- *   initial version `TimestampVersion.now()`
+ *   version advances to `TimestampVersion.now()` during executeBatch
  * - `parseVersion(serialized)` — deserialize a `TimestampVersion`
  */
 export const lwwSubstrateFactory: SubstrateFactory<TimestampVersion> = {
   replica: lwwReplicaFactory,
 
   create(schema: SchemaNode): Substrate<TimestampVersion> {
-    const inner = plainSubstrateFactory.create(schema)
-    return wrapWithTimestamp(inner, new TimestampVersion(0))
+    const defaults = Zero.structural(schema) as Record<string, unknown>
+    const storeObj = { ...defaults } as PlainState
+    return createPlainSubstrate(storeObj, timestampVersionStrategy)
   },
 
   fromEntirety(
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<TimestampVersion> {
-    const inner = plainSubstrateFactory.fromEntirety(payload, schema)
-    return wrapWithTimestamp(inner, TimestampVersion.now())
+    return buildPlainSubstrateFromEntirety(
+      payload,
+      schema,
+      timestampVersionStrategy,
+    )
   },
 
   parseVersion(serialized: string): TimestampVersion {

@@ -631,11 +631,11 @@ Within a single substrate lifetime, all state transitions are deltas delivered a
 
 **`TimestampVersion`** wraps a wall-clock timestamp (milliseconds since epoch). Timestamps form a total order — `compare()` returns `"behind"`, `"equal"`, or `"ahead"` but never `"concurrent"`. This is the version type for LWW substrates: the receiver compares timestamps and discards stale arrivals. `serialize()` encodes to a decimal string; `TimestampVersion.parse()` is the inverse. `TimestampVersion.now()` creates a version from the current wall clock.
 
-**`LwwSubstrate`** (via `lwwSubstrateFactory`) is the third concrete implementation. It uses the **decorator pattern**: `wrapWithTimestamp()` takes any `Substrate<PlainVersion>` and returns a `Substrate<TimestampVersion>` that delegates all state operations to the inner plain substrate while maintaining its own timestamp-based version. On every `onFlush()` and `merge()`, the wrapper bumps `currentVersion = TimestampVersion.now()`.
+**`VersionStrategy<V>`** parameterizes the version algebra for plain-backed substrates. Both `createPlainSubstrate<V>` and `createPlainReplica<V>` accept a `VersionStrategy<V>` that governs version construction and log-to-delta mapping via three pure members: `zero` (the initial version), `current(flushCount)` (the version after N flush cycles), and `logOffset(since)` (map a since-version to an op log index, or `null` if unmappable). The strategy never mentions `SubstratePayload` or serialization — those concerns live in the replication core.
 
-**Critical `context()` gotcha.** The wrapper's `context()` must build its `WritableContext` from the *wrapper* substrate object, not the inner one. If `context()` delegated to `inner.context()`, only the inner plain substrate's `onFlush` would run and the wrapper's timestamp would never advance. This is correct-by-construction in `wrapWithTimestamp` — the extracted helper eliminates the risk of copy-paste errors. See `@kyneta/exchange` TECHNICAL.md §8 for the original design note.
+**`LwwSubstrate`** (via `lwwSubstrateFactory`) is the third concrete implementation. It passes `timestampVersionStrategy` to the same `createPlainSubstrate`/`createPlainReplica` constructors used by `plainSubstrateFactory` — same state management, reader, and interpreter stack, but with wall-clock timestamps instead of monotonic counters. `timestampVersionStrategy.current()` returns `TimestampVersion.now()` (ignoring the flush count), and `logOffset()` returns `null` (timestamps have no relationship to the op log array — the core falls back to `exportEntirety()`). There is no decorator, no wrapper object, and no `context()` gotcha — each substrate is a single object produced by a single constructor call.
 
-The `lwwSubstrateFactory` provides the `SubstrateFactory<TimestampVersion>` interface: `create(schema)` wraps a fresh plain substrate with initial timestamp 0; `fromEntirety(payload, schema)` wraps a reconstructed plain substrate with `TimestampVersion.now()`; `parseVersion()` delegates to `TimestampVersion.parse()`. The factory is consumed by `bindEphemeral()` in `bind.ts`.
+The `lwwSubstrateFactory` provides the `SubstrateFactory<TimestampVersion>` interface: `create(schema)` constructs a plain substrate with `timestampVersionStrategy` (initial version is timestamp 0); `fromEntirety(payload, schema)` delegates to the shared `buildPlainSubstrateFromEntirety` helper with `timestampVersionStrategy`; `parseVersion()` delegates to `TimestampVersion.parse()`. The factory is consumed by `bindEphemeral()` in `bind.ts`.
 
 | Version Type | Substrate | Order | History |
 |---|---|---|---|
@@ -918,9 +918,9 @@ packages/schema/
 │   │   ├── with-changefeed.ts   # Changefeed transformer — observation + batched notification
 │   │   └── validate.ts          # Validate interpreter + validate/tryValidate
 │   ├── substrates/
-│   │   ├── plain.ts             # PlainVersion, createPlainSubstrate, plainContext, plainSubstrateFactory
+│   │   ├── plain.ts             # PlainVersion, VersionStrategy, plainVersionStrategy, createPlainSubstrate, plainContext, plainSubstrateFactory
 │   │   ├── timestamp-version.ts # TimestampVersion — wall-clock version for LWW/ephemeral substrates
-│   │   └── lww.ts               # wrapWithTimestamp, lwwSubstrateFactory — PlainSubstrate + TimestampVersion decorator
+│   │   └── lww.ts               # lwwSubstrateFactory — plain substrate + TimestampVersion strategy
 │   ├── __tests__/
 │   │   ├── basic.test.ts        # Integration tests for @kyneta/schema/basic API
 │   │   ├── types.test.ts        # Type-level tests (expectTypeOf)
