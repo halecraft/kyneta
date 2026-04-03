@@ -25,9 +25,10 @@ const GROUPS = {
 	backends: ["packages/schema/backends/loro", "packages/schema/backends/yjs"],
 	transport: [
 		"packages/exchange/wire",
-		"packages/exchange/network-adapters/sse",
-		"packages/exchange/network-adapters/websocket",
+		"packages/exchange/transports/sse",
+		"packages/exchange/transports/websocket",
 	],
+	stores: ["packages/exchange/stores/leveldb"],
 	bindings: ["packages/react"],
 } as const
 
@@ -47,11 +48,16 @@ const PUBLISH_TIERS: string[][] = [
 		"packages/schema/backends/yjs",
 	],
 	// Tier 2: depends on tier 1
-	["packages/cast", "packages/exchange/wire", "packages/react"],
+	[
+		"packages/cast",
+		"packages/exchange/wire",
+		"packages/exchange/stores/leveldb",
+		"packages/react",
+	],
 	// Tier 3: depends on tier 2
 	[
-		"packages/exchange/network-adapters/sse",
-		"packages/exchange/network-adapters/websocket",
+		"packages/exchange/transports/sse",
+		"packages/exchange/transports/websocket",
 	],
 ]
 
@@ -287,7 +293,7 @@ async function status(): Promise<void> {
 function usage(): never {
 	console.log(`
 Usage:
-  bun scripts/release.ts bump <version> [--group core|backends|transport|bindings|all]
+  bun scripts/release.ts bump <version> [--group core|backends|transport|stores|bindings|all]
   bun scripts/release.ts publish [--dry-run]
   bun scripts/release.ts status
 
@@ -299,7 +305,8 @@ Commands:
 Groups (for bump):
   core       schema, compiler, exchange, cast (locked versions)
   backends   loro-schema, yjs-schema
-  transport  wire, sse-network-adapter, websocket-network-adapter
+  transport  wire, sse-transport, websocket-transport
+  stores     leveldb-store
   bindings   react
   all        all of the above (default)
 `)

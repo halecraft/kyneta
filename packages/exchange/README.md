@@ -1,11 +1,12 @@
 # @kyneta/exchange
 
-Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastructure for any substrate type — Loro CRDTs, plain JS objects, LWW ephemeral state — through a four-message sync protocol (discover, interest, offer, dismiss) over a two-message handshake (establish-request, establish-response).
+Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastructure for any substrate type — Loro CRDTs, Yjs CRDTs, plain JS objects, LWW ephemeral state — through a four-message sync protocol (`present`, `interest`, `offer`, `dismiss`) over a two-message handshake (`establish-request`, `establish-response`).
 
 ## Getting Started
 
 ```ts
 import { Exchange, sync } from "@kyneta/exchange"
+import { createWebsocketClient } from "@kyneta/websocket-transport/client"
 import { Schema, bindPlain, change } from "@kyneta/schema"
 
 // 1. Define your document type (schema + substrate + strategy)
@@ -18,21 +19,20 @@ const TodoDoc = bindPlain(Schema.doc({
 
 // 2. Create an Exchange
 const exchange = new Exchange({
-  identity: { name: "alice" },
-  adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+  identity: { peerId: "alice", name: "Alice" },
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 })
 
 // 3. Get a typed document
-const doc = exchange.get("my-todos", TodoDoc, {
-  seed: { title: "My Todos", items: [] },
-})
+const doc = exchange.get("my-todos", TodoDoc)
 
-// 4. Read and write
-doc.title()  // "My Todos"
+// 4. Read and write (starts with Zero defaults — empty strings, 0, false, [])
 change(doc, d => {
-  d.title.set("Updated")
+  d.title.set("My Todos")
   d.items.push({ text: "Learn Exchange", done: false })
 })
+
+doc.title()  // "My Todos"
 
 // 5. Access sync capabilities
 await sync(doc).waitForSync()
@@ -53,13 +53,19 @@ A `BoundSchema` captures three choices that define a document type:
 BoundSchemas are defined at module scope and passed to `exchange.get()`:
 
 ```ts
-import { bindPlain, bindEphemeral } from "@kyneta/schema"
-import { bindLoro } from "@kyneta/loro-schema"
+import { Schema, bindPlain, bindEphemeral } from "@kyneta/schema"
+import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
+import { bindYjs } from "@kyneta/yjs-schema"
 
 // Collaborative text — Loro CRDT with causal merge
 const TodoDoc = bindLoro(LoroSchema.doc({
   title: LoroSchema.text(),
   items: Schema.list(Schema.struct({ name: Schema.string() })),
+}))
+
+// Collaborative text — Yjs CRDT with causal merge
+const NoteDoc = bindYjs(Schema.doc({
+  body: Schema.annotated("text"),
 }))
 
 // Config data — plain substrate with sequential sync
@@ -96,7 +102,7 @@ Each BoundSchema declares a merge strategy that determines how the exchange sync
 
 | Strategy | Protocol | Version Order | Use Case |
 |----------|----------|---------------|----------|
-| `"causal"` | Bidirectional exchange | Partial (concurrent possible) | Loro CRDTs |
+| `"causal"` | Bidirectional exchange | Partial (concurrent possible) | Loro / Yjs CRDTs |
 | `"sequential"` | Request/response | Total (no concurrency) | Plain substrates |
 | `"lww"` | Unidirectional broadcast | Total (timestamp-based) | Ephemeral/presence |
 
@@ -104,10 +110,10 @@ Each BoundSchema declares a merge strategy that determines how the exchange sync
 
 Four exchange message types handle document sync:
 
-- **`discover`** — "I have these documents." (filtered by `route`)
-- **`interest`** — "I want document X. Here's my version."
-- **`offer`** — "Here is state for document X." (gated by `authorize`)
-- **`dismiss`** — "I'm leaving document X." (triggers `onDocDismissed`)
+- **`present`** — "I have these documents." Each entry carries `docId`, `replicaType`, `mergeStrategy`, and `schemaHash` so the receiver can validate compatibility before any binary exchange. Filtered by `route`.
+- **`interest`** — "I want document X. Here's my version." Carries `reciprocate` for causal bidirectional exchange.
+- **`offer`** — "Here is state for document X." Carries an opaque `SubstratePayload` (the exchange never inspects it). Gated by `authorize`.
+- **`dismiss`** — "I'm leaving document X." Triggers `onDocDismissed`.
 
 Two additional messages (`establish-request`, `establish-response`) handle channel handshake. The merge strategy determines *when* and *how* messages are sent, not their shape.
 
@@ -117,8 +123,8 @@ A single exchange can host documents backed by different substrate types simulta
 
 ```ts
 const exchange = new Exchange({
-  identity: { name: "alice" },
-  adapters: [networkAdapter],
+  identity: { peerId: "alice", name: "Alice" },
+  transports: [networkTransport],
 })
 
 const doc = exchange.get("collab-doc", TodoDoc)       // Loro CRDT
@@ -130,12 +136,13 @@ No `substrates` record needed — each document's substrate is determined by its
 
 ### The Exchange
 
-The `Exchange` class is the central orchestrator. It manages document lifecycle, coordinates adapters, and runs sync algorithms on behalf of passive substrates.
+The `Exchange` class is the central orchestrator. It manages document lifecycle, coordinates transports and stores, and runs sync algorithms on behalf of passive substrates.
 
 ```ts
 const exchange = new Exchange({
   identity: { peerId: "alice", name: "Alice", type: "user" },
-  adapters: [networkAdapter, storageAdapter],
+  transports: [networkTransport],
+  stores: [createInMemoryStore()],
   route: (docId, peer) => {
     // Control which peers see which documents
     if (docId.startsWith("input:")) return peer.peerId === docId.slice(6)
@@ -149,63 +156,101 @@ const exchange = new Exchange({
 })
 ```
 
+> **Note:** `exchange.get()` requires an explicit `peerId` in the identity. The peerId identifies this exchange as a participant in causal history and must be stable across restarts for correct CRDT operation. For browser clients, use `persistentPeerId(storageKey)` — it generates a random peerId on first visit and caches it in `localStorage`.
+
 ### Route and Authorize
 
 Two predicates control information flow through the sync protocol:
 
-- **`route(docId, peer) → boolean`** — Outbound flow control. Determines which peers participate in the sync graph for each document. Checked at every outbound gate: initial discover, doc-ensure broadcast, relay push, local change push. Also gates `onDocDiscovered` — if `route` returns `false` for the announcing peer, the callback never fires. Storage channels bypass this check. Defaults to `() => true`.
+- **`route(docId, peer) → boolean`** — Outbound flow control. Determines which peers participate in the sync graph for each document. Checked at every outbound gate: initial `present`, doc-ensure broadcast, relay push, local change push. Also gates `onDocDiscovered` — if `route` returns `false` for the announcing peer, the callback never fires. Defaults to `() => true`.
 
-- **`authorize(docId, peer) → boolean`** — Inbound flow control. Determines whose mutations are accepted. Checked before importing offers from network peers. When rejected, the offer is silently dropped but peer sync state is still updated to prevent re-requesting. Storage channels bypass this check. Defaults to `() => true`.
+- **`authorize(docId, peer) → boolean`** — Inbound flow control. Determines whose mutations are accepted. Checked before importing offers from network peers. When rejected, the offer is silently dropped but peer sync state is still updated to prevent re-requesting. Defaults to `() => true`.
+
+### Interpret vs. Replicate
+
+Documents participate in the exchange at one of two tiers:
+
+- **Interpret** — Full schema-driven interpretation with `Ref<S>`, changefeed, reads and writes. Created via `exchange.get(docId, bound)`. This is the default for client apps and application servers.
+
+- **Replicate** — Headless replication with a bare `Replica<V>`: version tracking, export/import, per-peer delta computation — but no schema, no ref, no changefeed. Created via `exchange.replicate(docId, replicaFactory, strategy, schemaHash)`. This is the correct tier for relay servers, routing servers, and storage services.
+
+```ts
+import { Interpret, Replicate } from "@kyneta/schema"
+import { loroReplicaFactory } from "@kyneta/loro-schema"
+
+// Client — full interpretation
+exchange.get("shared-doc", TodoDoc)
+
+// Relay server — headless replication (no schema knowledge needed)
+exchange.replicate("shared-doc", loroReplicaFactory, "causal", schemaHash)
+```
 
 ### Dynamic Document Creation (`onDocDiscovered`)
 
-When a peer announces a document your exchange doesn't have, the `onDocDiscovered` callback lets you create it on demand. Return a `BoundSchema` to auto-create and sync, or `undefined` to ignore:
+When a peer announces a document your exchange doesn't have, the `onDocDiscovered` callback lets you create it on demand. Return a disposition — `Interpret(bound)` for full interpretation, `Replicate(replicaFactory, strategy, schemaHash)` for headless replication, or `undefined` to ignore:
 
 ```ts
+import { Interpret, Replicate } from "@kyneta/schema"
+import { loroReplicaFactory } from "@kyneta/loro-schema"
+
 const PlayerInputDoc = bindEphemeral(Schema.doc({
   force: Schema.number(),
   angle: Schema.number(),
 }))
 
-const exchange = new Exchange({
-  identity: { name: "server" },
-  adapters: [serverAdapter],
+// Game server — interpret player inputs
+const gameExchange = new Exchange({
+  identity: { peerId: "game-server", name: "server" },
+  transports: [serverTransport],
   onDocDiscovered: (docId, peer) => {
-    if (docId.startsWith("input:")) return PlayerInputDoc
+    if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
     return undefined
+  },
+})
+
+// Relay server — replicate everything without schema knowledge
+const relayExchange = new Exchange({
+  identity: { peerId: "relay", name: "relay", type: "service" },
+  transports: [upstreamTransport, downstreamTransport],
+  onDocDiscovered: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
+    return Replicate(loroReplicaFactory, mergeStrategy, schemaHash)
   },
 })
 ```
 
-This enables patterns where clients create per-peer documents (e.g. `input:${peerId}`) and the server materializes them automatically when the client connects. No pre-coordination required — the `route` predicate is checked first (the callback only fires if routing allows it), then returning `undefined` is equivalent to denying creation.
+The `onDocDiscovered` callback receives `(docId, peer, replicaType, mergeStrategy, schemaHash)` — the full metadata from the peer's `present` message — so the receiver can make an informed decision without compile-time schema knowledge.
 
 ### Storage
 
-The exchange supports persistent storage through storage adapters. Documents are automatically persisted on mutation and hydrated on restart — no manual save/load needed.
+The exchange supports persistent storage through **stores** — a first-class constructor parameter, separate from transports. Documents are automatically persisted on mutation and hydrated on restart — no manual save/load needed.
 
 ```ts
-import { Exchange, createInMemoryStorage } from "@kyneta/exchange"
+import { Exchange, createInMemoryStore } from "@kyneta/exchange"
 
-// Create an exchange with storage
 const exchange = new Exchange({
-  adapters: [
-    createInMemoryStorage(),
-    createWebsocketClient({ url: "ws://localhost:3000/ws" }),
-  ],
+  identity: { peerId: "server", name: "server" },
+  transports: [networkTransport],
+  stores: [createInMemoryStore()],
 })
 
 const doc = exchange.get("my-doc", TodoDoc)
-// Mutations are automatically persisted to storage
+// Mutations are automatically persisted via onStateAdvanced
 ```
 
 For testing persist → restart → hydrate flows, use `sharedData` to share storage state between exchange instances:
 
 ```ts
-const sharedData = new Map()
+import type { InMemoryStoreData } from "@kyneta/exchange"
+
+const sharedData: InMemoryStoreData = {
+  entries: new Map(),
+  metadata: new Map(),
+}
 
 // Exchange 1: create and mutate a document
 const exchange1 = new Exchange({
-  adapters: [createInMemoryStorage({ sharedData })],
+  identity: { peerId: "server", name: "server" },
+  stores: [createInMemoryStore({ sharedData })],
 })
 const doc = exchange1.get("my-doc", TodoDoc)
 change(doc, d => d.title.set("Saved"))
@@ -213,24 +258,22 @@ await exchange1.shutdown()
 
 // Exchange 2: hydrate from storage
 const exchange2 = new Exchange({
-  adapters: [createInMemoryStorage({ sharedData })],
-  onDocDiscovered: (docId) => TodoDoc,
+  identity: { peerId: "server", name: "server" },
+  stores: [createInMemoryStore({ sharedData })],
+  onDocDiscovered: (docId) => Interpret(TodoDoc),
 })
-// "my-doc" is restored from storage when a peer requests it
+// "my-doc" is restored from storage automatically
 ```
 
-For production use, implement the `StorageBackend` interface for your persistence layer (Postgres, IndexedDB, S3, etc.) and wrap it in a `StorageAdapter`:
+For production persistence, implement the `Store` interface for your backend (Postgres, IndexedDB, S3, etc.) or use `@kyneta/leveldb-store` for server-side LevelDB storage:
 
 ```ts
-import { StorageAdapter } from "@kyneta/exchange"
+import { createLevelDBStore } from "@kyneta/leveldb-store/server"
 
 const exchange = new Exchange({
-  adapters: [
-    () => new StorageAdapter({
-      backend: new PostgresStorageBackend(connectionString),
-      adapterType: "postgres-storage",
-    }),
-  ],
+  identity: { peerId: "server", name: "server" },
+  stores: [createLevelDBStore("./data/exchange-db")],
+  transports: [networkTransport],
 })
 ```
 
@@ -248,7 +291,7 @@ sync(doc).docId         // Document ID
 sync(doc).readyStates   // Sync status with peers
 
 await sync(doc).waitForSync()
-await sync(doc).waitForSync({ kind: "storage", timeout: 5000 })
+await sync(doc).waitForSync({ timeout: 5000 })
 
 sync(doc).onReadyStateChange(states => {
   console.log("Sync status:", states)
@@ -287,8 +330,8 @@ Two escape hatches provide access to the underlying substrate:
 // General — returns the Substrate<any> backing a ref
 import { unwrap } from "@kyneta/schema"
 const substrate = unwrap(doc)
-substrate.frontier().serialize()  // current version
-substrate.exportSnapshot()       // full state
+substrate.version().serialize()  // current version string
+substrate.exportEntirety()       // full state payload
 
 // Loro-specific — returns the LoroDoc backing a ref
 import { loro } from "@kyneta/loro-schema"
@@ -303,18 +346,24 @@ loroDoc.version()                // VersionVector
 
 | Method / Option | Description |
 |----------------|-------------|
-| `get(docId, boundSchema)` | Get or create a document. Returns `Ref<S>`. |
-| `has(docId)` | Check if a document exists. |
-| `dismiss(docId)` | Leave the sync graph for a document — removes locally and broadcasts `dismiss` to peers. |
-| `flush()` | Await all pending storage operations. |
-| `shutdown()` | Flush + disconnect all adapters. |
-| `reset()` | Disconnect adapters and clear state (synchronous). |
-| `addAdapter(adapter)` | Add an adapter at runtime. |
-| `removeAdapter(adapterId)` | Remove an adapter at runtime. |
+| `get(docId, boundSchema)` | Get or create a document in interpret mode. Returns `Ref<S>`. Requires explicit `peerId`. |
+| `replicate(docId, replicaFactory, strategy, schemaHash)` | Register a document for headless replication. No schema, no ref, no changefeed. |
+| `has(docId)` | Check if a document exists (interpret or replicate mode). |
+| `dismiss(docId)` | Leave the sync graph — removes locally, broadcasts `dismiss`, deletes from stores. |
 | `peers` | `CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>` — reactive peer presence feed. Callable as a function, subscribable for changes. |
+| `flush()` | Await all pending storage operations without disconnecting. |
+| `shutdown()` | Flush stores, disconnect transports, close store handles. The recommended graceful teardown. |
+| `reset()` | Disconnect transports and clear state (synchronous). Does NOT flush pending storage. |
+| `addTransport(transport)` | Add a transport at runtime. |
+| `removeTransport(transportId)` | Remove a transport at runtime. |
+| `hasTransport(transportId)` | Check if a transport exists by ID. |
+| `getTransport(transportId)` | Get a transport by ID. |
+| `identity` | Constructor option. `{ peerId, name?, type? }` — peer identity. `peerId` required for `get()`. |
+| `transports` | Constructor option. `TransportFactory[]` — network connectivity. |
+| `stores` | Constructor option. `Store[]` — persistent storage backends. |
 | `route` | Constructor option. `(docId, peer) → boolean` — outbound flow control. Default: `() => true`. |
 | `authorize` | Constructor option. `(docId, peer) → boolean` — inbound flow control. Default: `() => true`. |
-| `onDocDiscovered` | Constructor option. `(docId, peer) → BoundSchema \| undefined` — dynamic doc creation. |
+| `onDocDiscovered` | Constructor option. `(docId, peer, replicaType, mergeStrategy, schemaHash) → Interpret \| Replicate \| undefined`. |
 | `onDocDismissed` | Constructor option. `(docId, peer) → void` — react to peer leaving a document. |
 
 ### sync()
@@ -323,8 +372,8 @@ loroDoc.version()                // VersionVector
 |----------------|-------------|
 | `peerId` | The local peer ID. |
 | `docId` | The document ID. |
-| `readyStates` | Current sync status with all peers. |
-| `waitForSync(opts?)` | Wait for sync with a peer of the specified kind. |
+| `readyStates` | Current `ReadyState[]` — sync status with all peers. Each entry has `{ docId, identity, status }` where status is `"pending" \| "synced" \| "absent"`. |
+| `waitForSync(opts?)` | Wait for sync to complete. Options: `{ timeout?: number }` (default 30000ms). |
 | `onReadyStateChange(cb)` | Subscribe to sync status changes. Returns unsubscribe function. |
 
 ### Bind Functions
@@ -335,6 +384,14 @@ loroDoc.version()                // VersionVector
 | `bindPlain(schema)` | `@kyneta/schema` | Plain substrate + sequential strategy. |
 | `bindEphemeral(schema)` | `@kyneta/schema` | LWW substrate (TimestampVersion) + LWW broadcast strategy. Ideal for ephemeral/presence state. |
 | `bindLoro(schema)` | `@kyneta/loro-schema` | Loro substrate + causal strategy. |
+| `bindYjs(schema)` | `@kyneta/yjs-schema` | Yjs substrate + causal strategy. |
+
+### Disposition Constructors
+
+| Function | Package | Description |
+|----------|---------|-------------|
+| `Interpret(bound)` | `@kyneta/schema` | Full interpretation — schema, ref, changefeed. For `onDocDiscovered`. |
+| `Replicate(replicaFactory, strategy, schemaHash)` | `@kyneta/schema` | Headless replication — no schema, no ref. For `onDocDiscovered`. |
 
 ### Escape Hatches
 
@@ -343,24 +400,27 @@ loroDoc.version()                // VersionVector
 | `unwrap(ref)` | `@kyneta/schema` | Returns the `Substrate<any>` backing a ref. |
 | `loro(ref)` | `@kyneta/loro-schema` | Returns the `LoroDoc` backing a Loro-backed ref. |
 
-### Adapters
+### Transports
 
 | Export | Description |
 |--------|-------------|
-| `Adapter<G>` | Abstract base class for adapters. |
-| `AdapterManager` | Manages adapter lifecycle and message routing. |
-| `BridgeAdapter` | In-process adapter for testing. |
-| `Bridge` | Message router connecting BridgeAdapters. |
+| `Transport<G>` | Abstract base class for transports. |
+| `TransportManager` | Manages transport lifecycle and message routing. |
+| `TransportFactory` | `() => Transport<any>` — factory function for lazy construction. |
+| `BridgeTransport` | In-process transport for testing. |
+| `Bridge` | Message router connecting BridgeTransports. |
+| `createBridgeTransport(params)` | Factory function for `BridgeTransport`. |
+| `ClientStateMachine` | Reconnecting client state machine (connect → open → closed → reconnect). |
 
 ### Storage
 
 | Export | Description |
 |--------|-------------|
-| `StorageBackend` | Interface for persistent storage backends (6 methods). |
-| `StorageEntry` | Type for stored entries (`{ payload, version }`). |
-| `StorageAdapter` | Base class translating sync protocol ↔ StorageBackend. |
-| `InMemoryStorageBackend` | Map-backed backend for testing. |
-| `createInMemoryStorage(opts?)` | Factory function returning `AdapterFactory`. |
+| `Store` | Interface for persistent storage backends (8 methods: `lookup`, `ensureDoc`, `append`, `loadAll`, `replace`, `delete`, `listDocIds`, `close?`). |
+| `StoreEntry` | Type for stored entries: `{ payload: SubstratePayload, version: string }`. |
+| `InMemoryStore` | Map-backed store for testing. |
+| `InMemoryStoreData` | Shared data type (`{ entries, metadata }`) for cross-instance persistence in tests. |
+| `createInMemoryStore(opts?)` | Factory returning a `Store`. Pass `{ sharedData }` for shared state. |
 
 ### TimestampVersion
 
@@ -372,40 +432,47 @@ loroDoc.version()                // VersionVector
 | `serialize()` | Serialize to decimal string. |
 | `compare(other)` | `"behind"`, `"equal"`, or `"ahead"` (never `"concurrent"`). |
 
-## Adapters
+### Utility
 
-Adapters provide pluggable network and storage connectivity. They create channels — the communication primitive — which the exchange uses for message routing.
+| Export | Description |
+|--------|-------------|
+| `persistentPeerId(storageKey)` | Browser-only: generate a random peerId on first visit, cache in `localStorage` for stability across reloads. |
+
+## Transports
+
+Transports provide pluggable network connectivity. They create channels — the communication primitive — which the exchange uses for message routing. Storage is handled separately via the `stores` constructor parameter.
 
 ### Built-in
 
-| Adapter | Kind | Use Case |
-|---------|------|----------|
-| `BridgeAdapter` | Network | In-process testing of multi-peer scenarios |
+| Transport | Use Case |
+|-----------|----------|
+| `BridgeTransport` | In-process testing of multi-peer scenarios |
 
-### Network Adapters
+### Network Transports
 
-| Adapter | Transport | Package |
-|---------|-----------|---------|
-| `@kyneta/websocket-network-adapter` | WebSocket (binary CBOR) | `packages/exchange/network-adapters/websocket` |
-| `@kyneta/sse-network-adapter` | SSE + HTTP POST (text JSON) | `packages/exchange/network-adapters/sse` |
+| Package | Protocol | Encoding |
+|---------|----------|----------|
+| `@kyneta/websocket-transport` | WebSocket | Binary CBOR via `@kyneta/wire` |
+| `@kyneta/sse-transport` | SSE + HTTP POST | Text JSON via `@kyneta/wire` |
 
-### Creating Custom Adapters
+Both packages export `/client` and `/server` entry points. The websocket transport also exports `/bun` for Bun-native WebSocket servers.
 
-Extend the `Adapter<G>` base class:
+### Creating Custom Transports
+
+Extend the `Transport<G>` base class:
 
 ```ts
-import { Adapter } from "@kyneta/exchange"
+import { Transport } from "@kyneta/exchange"
 
-class MyAdapter extends Adapter<void> {
+class MyTransport extends Transport<void> {
   constructor() {
-    super({ adapterType: "my-adapter" })
+    super({ transportType: "my-transport" })
   }
 
   generate() {
     return {
-      kind: "network",
-      adapterType: this.adapterType,
-      send: (msg) => { /* send over your transport */ },
+      transportType: this.transportType,
+      send: (msg) => { /* send over your wire */ },
       stop: () => { /* cleanup */ },
     }
   }
@@ -426,7 +493,7 @@ class MyAdapter extends Adapter<void> {
 ```json
 {
   "peerDependencies": {
-    "@kyneta/schema": ">=0.0.1"
+    "@kyneta/schema": "^1.1.0"
   }
 }
 ```
