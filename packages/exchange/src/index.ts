@@ -83,6 +83,14 @@ export {
   type StateTransition,
   type TransitionListener,
 } from "./transport/client-state-machine.js"
+export {
+  computeBackoffDelay,
+  createReconnectScheduler,
+  DEFAULT_RECONNECT,
+  type ReconnectOptions,
+  type ReconnectScheduler,
+  type ReconnectSchedulerParams,
+} from "./transport/reconnect.js"
 export type {
   AnyTransport,
   TransportContext,

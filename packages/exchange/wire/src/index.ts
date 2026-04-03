@@ -175,3 +175,14 @@ export {
   TextReassembler,
   type TextReassemblerConfig,
 } from "./text-reassembler.js"
+
+// ---------------------------------------------------------------------------
+// Stream frame parser — byte stream → binary frames (for stream transports)
+// ---------------------------------------------------------------------------
+
+export {
+  feedBytes,
+  type FeedBytesResult,
+  initialParserState,
+  type StreamParserState,
+} from "./stream-frame-parser.js"

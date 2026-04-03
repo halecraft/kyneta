@@ -65,8 +65,9 @@ Sub-packages:
 - **`@kyneta/websocket-network-adapter`** (`exchange/network-adapters/websocket/`) — WebSocket network adapters. Client adapter (browser `WebSocket`), server adapter (abstract), and Bun-specific handlers (`createBunWebsocketHandlers`). Handles connection lifecycle, keepalive pings, ready signaling, and reconnection. 41 tests.
 - **`@kyneta/sse-network-adapter`** (`exchange/network-adapters/sse/`) — SSE (Server-Sent Events) network adapter. Symmetric text encoding, asymmetric transport (SSE downstream, POST upstream). Client, server, and Express integration. Custom reconnection state machine with `sendFn` pattern for framework-agnostic server integration. 33 tests.
 - **`@kyneta/webrtc-transport`** (`exchange/transports/webrtc/`) — WebRTC data channel transport. BYODC (Bring Your Own Data Channel) with `DataChannelLike` minimal interface. Binary CBOR encoding with transport-level fragmentation. 27 tests.
+- **`@kyneta/unix-socket-transport`** (`exchange/transports/unix-socket/`) — Unix domain socket transport for server-to-server sync. Stream-oriented, backpressure-aware, no fragmentation. Client and server entry points with `StreamFrameParser` and reconnecting `ClientStateMachine`. Binary CBOR encoding via `@kyneta/wire`. 42 tests.
 
-127 tests (+ 187 wire + 41 websocket + 33 sse + 27 webrtc).
+127 tests (+ 187 wire + 41 websocket + 33 sse + 27 webrtc + 42 unix-socket).
 
 ### `@kyneta/react`
 
@@ -98,14 +99,15 @@ Convergent Constraint Systems — a constraint-based approach to CRDTs. Agents a
     │        │        │
     │        │        ├──► @kyneta/websocket-network-adapter
     │        │        ├──► @kyneta/sse-network-adapter
-    │        │        └──► @kyneta/webrtc-transport
+    │        │        ├──► @kyneta/webrtc-transport
+    │        │        └──► @kyneta/unix-socket-transport
     │        │
     │        └──► @kyneta/react         (+ react)
     │
     └──► @kyneta/perspective            (standalone, no @kyneta deps — private)
 ```
 
-`@kyneta/schema` is the foundation — it defines the CHANGEFEED protocol, delta types, the interpreter algebra, and the `Substrate` interface. `@kyneta/loro-schema` and `@kyneta/yjs-schema` are CRDT substrate backends that implement `Substrate` for Loro and Yjs respectively; each exports its own constructor namespace (`LoroSchema`, `YjsSchema`). `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/cast` is the web rendering target that consumes compiler IR and produces DOM/HTML output. `@kyneta/exchange` orchestrates sync via adapters and the synchronizer state machine; its sub-packages `@kyneta/wire` (binary encoding and framing), `@kyneta/websocket-network-adapter` (WebSocket adapter pair), `@kyneta/sse-network-adapter` (SSE adapter), and `@kyneta/webrtc-transport` (WebRTC data channel transport) live under the exchange directory. `@kyneta/react` bridges the CHANGEFEED protocol to React's rendering cycle. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
+`@kyneta/schema` is the foundation — it defines the CHANGEFEED protocol, delta types, the interpreter algebra, and the `Substrate` interface. `@kyneta/loro-schema` and `@kyneta/yjs-schema` are CRDT substrate backends that implement `Substrate` for Loro and Yjs respectively; each exports its own constructor namespace (`LoroSchema`, `YjsSchema`). `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/cast` is the web rendering target that consumes compiler IR and produces DOM/HTML output. `@kyneta/exchange` orchestrates sync via adapters and the synchronizer state machine; its sub-packages `@kyneta/wire` (binary encoding and framing), `@kyneta/websocket-network-adapter` (WebSocket adapter pair), `@kyneta/sse-network-adapter` (SSE adapter), `@kyneta/webrtc-transport` (WebRTC data channel transport), and `@kyneta/unix-socket-transport` (Unix domain socket transport for server-to-server sync) live under the exchange directory. `@kyneta/react` bridges the CHANGEFEED protocol to React's rendering cycle. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
 
 The `examples/todo` app exercises the full vertical slice:
 

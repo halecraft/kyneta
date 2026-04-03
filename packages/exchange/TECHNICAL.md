@@ -525,6 +525,8 @@ The `@kyneta/wire` package provides serialization infrastructure for the exchang
 @kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-transport
    (messages)         (codecs)          (transport)
                                         @kyneta/sse-transport
+                                        @kyneta/webrtc-transport
+                                        @kyneta/unix-socket-transport
 ```
 
 ### Frame<T> — Universal Abstraction
@@ -542,7 +544,7 @@ Batching is **orthogonal to framing**. The frame layer does not distinguish sing
 
 The `BinaryCodec` operates on raw bytes (`encode`/`decode`/`encodeBatch`/`decodeBatch` with `Uint8Array`). The `TextCodec` operates on JSON-safe objects (`encode` returns `unknown`, `decode` accepts `unknown`).
 
-### Two Pipelines
+### Three Pipelines
 
 ```
 Binary: BinaryCodec (CBOR) → binary frame (7B header) → binary fragmentation → FragmentReassembler
@@ -550,7 +552,11 @@ Binary: BinaryCodec (CBOR) → binary frame (7B header) → binary fragmentation
 
 Text:   TextCodec (JSON)   → text frame ("Vx" prefix) → text fragmentation   → TextReassembler
                                                                                  └→ FragmentCollector<string>
+
+Stream: BinaryCodec (CBOR) → binary frame (7B header) → StreamFrameParser (byte stream → frames)
 ```
+
+The **Binary** and **Text** pipelines serve message-oriented transports (WebSocket, WebRTC, SSE) where the transport delivers discrete messages with inherent boundaries. The **Stream** pipeline serves stream-oriented transports (Unix domain sockets) where the transport delivers a continuous byte stream with no message boundaries. The `StreamFrameParser` replaces both the fragmentation layer and the `FragmentCollector` — stream transports have no message size limits, so fragmentation is unnecessary. The 7-byte header's payload length field provides all the framing needed to extract messages from the byte stream.
 
 ### Binary Frame Format
 
@@ -1377,3 +1383,141 @@ The message handler accepts both `ArrayBuffer` (native `RTCDataChannel` with `bi
 ### Relationship to Video Conference Example
 
 The examples roadmap plans a video-conference example that uses SSE for server-mediated sync and WebRTC for low-latency peer-to-peer sync (dual-transport). Signaling flows through ephemeral documents (`bindEphemeral`), not a dedicated signaling server. The `fromSimplePeer()` bridge pattern demonstrated in the test suite shows how to connect `simple-peer` to the transport.
+
+---
+
+## 22. Unix Socket Transport (`@kyneta/unix-socket-transport`)
+
+Stream-oriented server-to-server transport over Unix domain sockets (UDS). Designed for same-machine microservice topologies where TCP/WebSocket overhead is unnecessary. Uses the Stream pipeline (§11) — CBOR encoding with `StreamFrameParser` for byte-stream framing.
+
+### Stream vs Message Transport — Why It Matters
+
+WebSocket, WebRTC, and SSE are **message-oriented** transports: each `send()` delivers a discrete message with inherent boundaries. Unix domain sockets are **stream-oriented**: the kernel coalesces writes and delivers bytes in arbitrary chunks. A single `read()` may contain half of one message, three complete messages, or one and a half messages.
+
+This distinction determines the entire framing strategy. Message-oriented transports need fragmentation (splitting large messages to fit transport limits) and reassembly. Stream transports need the opposite — a parser that extracts message boundaries from a continuous byte stream. Fragmentation is unnecessary because UDS has no message size limits, and the `FragmentCollector` is unnecessary because there are no fragments to collect. The 7-byte binary frame header's payload length field is sufficient: read the header, read that many payload bytes, emit the frame.
+
+### `StreamFrameParser` — FC/IS Design (Pure Step Function `feedBytes`)
+
+The `StreamFrameParser` is implemented as a pure step function in `@kyneta/wire`:
+
+```
+feedBytes(state: StreamParserState, chunk: Uint8Array) → { state: StreamParserState, frames: Uint8Array[] }
+```
+
+`StreamParserState` is a discriminated union with two phases:
+
+| Phase | Accumulating | Transitions When |
+|-------|-------------|-----------------|
+| `"header"` | Bytes 0–6 of the next frame | 7 header bytes accumulated → read payload length → enter `"payload"` |
+| `"payload"` | Payload bytes (length from header) | All payload bytes accumulated → emit complete frame → enter `"header"` |
+
+The FC/IS boundary is clean:
+
+- **Functional core** (`feedBytes`): pure, no side effects, no mutation of inputs. Accepts the current state and a new chunk, returns the next state and zero or more complete frames. Handles all chunk-boundary scenarios: partial headers, partial payloads, write coalescing (multiple frames in one chunk), empty chunks, byte-at-a-time delivery.
+- **Imperative shell** (`UnixSocketConnection.#handleData`): calls `feedBytes` on each socket `data` event, then decodes each emitted frame via `decodeBinaryFrame` + `cborCodec.decode` and delivers the resulting `ChannelMsg` to the channel.
+
+The parser's state is carried explicitly — no closures, no mutable parser object. Each `feedBytes` call returns a fresh state value, making the parser trivially testable and composable.
+
+### No Fragmentation, No Transport Prefixes, No "Ready" Handshake
+
+Three simplifications relative to the WebSocket and WebRTC transports, each with a specific justification:
+
+| Omission | WebSocket/WebRTC Has It Because | UDS Doesn't Need It Because |
+|----------|--------------------------------|----------------------------|
+| **Fragmentation** | AWS API Gateway: 128KB limit (WS). SCTP: ~256KB limit (WebRTC). | UDS has no message size limits. The kernel handles arbitrarily large writes. |
+| **Transport prefix bytes** (`0x00`/`0x01`) | Distinguishes complete vs fragment frames at the transport level, before parsing. | No fragments exist. Every frame is complete. The 7-byte header is the only framing. |
+| **"Ready" handshake** | WebSocket's `open` event fires on TCP connect, but the server's message handler may not be wired up yet. The text `"ready"` signal prevents the race. | UDS connections are bidirectionally ready immediately. `connect()` resolves only when the server's `accept()` completes, so both sides are wired up. |
+
+The result is the simplest binary pipeline in the transport family: `encodeComplete(cborCodec, msg)` produces a complete binary frame (7-byte header + CBOR payload), `socket.write()` sends it, `feedBytes` extracts it on the other side.
+
+### `UnixSocket` Interface (Parallel to WebSocket's `Socket` Interface)
+
+The WebSocket transport defines an internal `Socket` interface (message-oriented: `send`, `onMessage`). The unix socket transport defines an analogous `UnixSocket` interface (stream-oriented: `write`, `onData`, `onDrain`):
+
+| Member | Type | Purpose |
+|--------|------|---------|
+| `write(data: Uint8Array)` | `→ boolean` | Write bytes. Returns `false` when the kernel buffer is full (backpressure). |
+| `end()` | `→ void` | Signal end-of-stream and close gracefully. |
+| `onData(handler)` | callback | Register handler for incoming byte chunks. |
+| `onClose(handler)` | callback | Register handler for connection close. |
+| `onError(handler)` | callback | Register handler for errors. |
+| `onDrain(handler)` | callback | Register handler for backpressure drain (buffer available again). |
+
+The key difference from `Socket` is the `write` return value and `onDrain` — stream sockets expose kernel buffer pressure, which message-oriented WebSocket APIs abstract away. Platform-specific wrappers (`wrapNodeUnixSocket`, `wrapBunUnixSocket`) adapt concrete implementations to this interface.
+
+### Backpressure Handling (Write Queue + Drain)
+
+`UnixSocketConnection` maintains a write queue for backpressure:
+
+1. `send(msg)` encodes the message to a binary frame and calls `socket.write(frameBytes)`.
+2. If `write()` returns `false`, the connection enters **draining mode**. Subsequent `send()` calls queue frames instead of writing.
+3. When the kernel buffer drains, the socket emits a `drain` event. The connection's `#flushWriteQueue()` writes queued frames in order until either the queue is empty (exit draining mode) or `write()` returns `false` again (remain in draining mode, wait for next drain).
+
+This is the standard Node.js/Bun backpressure pattern. The write queue is imperative state; encoding is pure. The FC/IS boundary holds: `encodeComplete` (pure) produces bytes, the write queue + drain handler (imperative) manages delivery timing.
+
+### Socket Path Lifecycle (Stale Cleanup, Permissions)
+
+The server transport manages the socket file through its full lifecycle:
+
+- **`onStart()`**: If `cleanup: true` (the default), checks whether a socket file already exists at the configured path. If it does and `stat()` confirms it's a socket, removes it before calling `listen()`. This handles `EADDRINUSE` from a previous process that crashed without cleanup. If the file doesn't exist (`ENOENT`), the cleanup is a no-op.
+- **`onStop()`**: Closes all active connections, stops the listener, and `unlink()`s the socket file. Errors during unlink are logged but do not throw — stop should be as graceful as possible.
+- **Permissions**: Socket file permissions are inherited from the process `umask`. The transport does not set explicit permissions — the deployer controls access via `umask` or filesystem ACLs.
+
+Client-side, `connect()` failures surface specific `errno` codes (`ENOENT` = no socket file, `ECONNREFUSED` = file exists but no listener, `EACCES` = permission denied) via the `DisconnectReason` discriminated union's `errno` field.
+
+### Node vs Bun API Differences and the Wrapper Pattern
+
+Both the client `connect()` and server `listen()` functions use runtime detection (`typeof globalThis.Bun !== "undefined"`) to select between two implementations:
+
+| Concern | Node.js (`net` module) | Bun (`Bun.connect` / `Bun.listen`) |
+|---------|----------------------|-----------------------------------|
+| **Socket creation** | `net.createConnection(path)` — returns a `net.Socket` | `Bun.connect({ unix: path, socket: { ... } })` — callbacks in options |
+| **Event model** | EventEmitter: `socket.on("data", handler)` | Callback-based: handlers passed at creation time |
+| **Backpressure signal** | `socket.write()` returns `boolean` | `socket.write()` returns `number` (bytes written; 0 = full) |
+| **Incoming data type** | `Buffer` (a `Uint8Array` subclass) | `Uint8Array` |
+
+The `wrapNodeUnixSocket` wrapper is thin — it maps `socket.on(event, handler)` to the `UnixSocket` interface and wraps `Buffer` → `Uint8Array` on incoming data. The `wrapBunUnixSocket` wrapper is structurally different: because Bun's socket API is callback-based (handlers must be provided at creation time, not registered after), it returns both a `UnixSocket` and a `BunSocketHandlers` object. The caller wires the handlers into Bun's callback structure by storing them on the socket's `data` property.
+
+This dual-wrapper pattern avoids importing either `node:net` or Bun types at the module level — both paths use dynamic `import()` and structural typing (`NodeUnixSocketLike`, `BunUnixSocketLike`) instead of concrete runtime types.
+
+### Package Structure
+
+Two subpath exports (no combined `"."` entry) — same pattern as WebSocket and SSE:
+
+| Subpath | Entry | Key Exports |
+|---------|-------|-------------|
+| `./client` | `src/client.ts` | `UnixSocketClientTransport`, `createUnixSocketClient`, `UnixSocketClientOptions`, `UnixSocketClientState` |
+| `./server` | `src/server.ts` | `UnixSocketServerTransport`, `UnixSocketServerOptions`, `UnixSocketConnection`, `UnixSocketListener` |
+
+Both subpaths re-export the shared types and wrapper functions (`UnixSocket`, `wrapNodeUnixSocket`, `wrapBunUnixSocket`).
+
+### Client State Machine
+
+4-state machine — identical to SSE, no "ready" phase:
+
+```
+disconnected → connecting → connected
+                   ↓            ↓
+              reconnecting ← ─ ─┘
+                   ↓
+              connecting (retry)
+                   ↓
+              disconnected (max retries)
+```
+
+Uses the shared `ClientStateMachine<UnixSocketClientState>` and `createReconnectScheduler` from `@kyneta/exchange` — the same infrastructure as the WebSocket and SSE clients. Reconnection uses exponential backoff with jitter. The `DisconnectReason` discriminated union carries socket-specific `errno` codes (`ENOENT`, `ECONNREFUSED`, `EADDRINUSE`, `EACCES`), enabling callers to distinguish socket-specific failures from generic errors.
+
+### Benchmarks
+
+Measured on the same-machine path (loopback) comparing unix socket transport to WebSocket transport over `ws://localhost`:
+
+| Message Size | WebSocket (msg/s) | Unix Socket (msg/s) | Speedup |
+|-------------|-------------------|---------------------|---------|
+| 256 B | baseline | 3.8× | **3.8×** |
+| 1 KB | baseline | 1.8× | **1.8×** |
+
+The speedup comes from three sources: (1) no TCP/HTTP upgrade overhead — UDS `connect()` is a single syscall, (2) no per-message WebSocket framing (masking, opcode, extended length) — just the 7-byte binary frame header, and (3) no fragmentation/reassembly overhead. The advantage narrows at larger message sizes because the payload dominates the per-message overhead. For same-machine service-to-service communication, the unix socket transport is the preferred choice.
+
+### Integration Tests
+
+End-to-end tests in `transports/unix-socket/src/__tests__/` prove the full stack over real unix sockets: channel establishment, client reconnection after server restart, stale socket cleanup, `ENOENT` handling (no server), socket file cleanup on shutdown, and multiple simultaneous clients. Tests use `os.tmpdir()` with random suffixes for socket paths to avoid collisions.

@@ -28,10 +28,11 @@ import type {
   ChannelMsg,
   GeneratedChannel,
   PeerId,
+  ReconnectScheduler,
   TransitionListener,
   TransportFactory,
 } from "@kyneta/exchange"
-import { Transport } from "@kyneta/exchange"
+import { createReconnectScheduler, Transport } from "@kyneta/exchange"
 import {
   encodeTextComplete,
   fragmentTextPayload,
@@ -92,16 +93,6 @@ export interface SseClientOptions {
 }
 
 /**
- * Default reconnection options.
- */
-const DEFAULT_RECONNECT = {
-  enabled: true,
-  maxAttempts: 10,
-  baseDelay: 1000,
-  maxDelay: 30000,
-}
-
-/**
  * Default POST retry options.
  */
 const DEFAULT_POST_RETRY = {
@@ -143,9 +134,8 @@ export class SseClientTransport extends Transport<void> {
   #peerId?: PeerId
   #eventSource?: EventSource
   #serverChannel?: Channel
-  #reconnectTimer?: ReturnType<typeof setTimeout>
   #options: SseClientOptions
-  #shouldReconnect = true
+  #reconnect: ReconnectScheduler
   #wasConnectedBefore = false
 
   // State machine
@@ -167,6 +157,11 @@ export class SseClientTransport extends Transport<void> {
       options.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
     this.#reassembler = new TextReassembler({
       timeoutMs: 10_000,
+    })
+    this.#reconnect = createReconnectScheduler({
+      stateMachine: this.#stateMachine,
+      connectFn: () => this.#connect(),
+      options: this.#options.reconnect ?? {},
     })
 
     // Set up lifecycle event forwarding
@@ -312,13 +307,13 @@ export class SseClientTransport extends Transport<void> {
       )
     }
     this.#peerId = this.identity.peerId
-    this.#shouldReconnect = true
+    this.#reconnect.setEnabled(true)
     this.#wasConnectedBefore = false
     this.#connect()
   }
 
   async onStop(): Promise<void> {
-    this.#shouldReconnect = false
+    this.#reconnect.setEnabled(false)
     this.#reassembler.dispose()
     this.#currentRetryAbortController?.abort()
     this.#currentRetryAbortController = undefined
@@ -370,7 +365,7 @@ export class SseClientTransport extends Transport<void> {
       }
     } catch (error) {
       // EventSource constructor threw (e.g. invalid URL)
-      this.#scheduleReconnect({
+      this.#reconnect.schedule({
         type: "error",
         error: error instanceof Error ? error : new Error(String(error)),
       })
@@ -381,7 +376,7 @@ export class SseClientTransport extends Transport<void> {
    * Disconnect from the SSE server.
    */
   #disconnect(reason: DisconnectReason): void {
-    this.#clearReconnectTimer()
+    this.#reconnect.cancel()
 
     if (this.#eventSource) {
       this.#eventSource.onopen = null
@@ -509,7 +504,7 @@ export class SseClientTransport extends Transport<void> {
     }
 
     // Schedule reconnect or transition to disconnected
-    this.#scheduleReconnect({
+    this.#reconnect.schedule({
       type: "error",
       error: new Error("EventSource connection error"),
     })
@@ -628,72 +623,6 @@ export class SseClientTransport extends Transport<void> {
     }
   }
 
-  // ==========================================================================
-  // Reconnection
-  // ==========================================================================
-
-  /**
-   * Schedule a reconnection attempt or transition to disconnected.
-   */
-  #scheduleReconnect(reason: DisconnectReason): void {
-    const currentState = this.#stateMachine.getState()
-
-    // If already disconnected, don't transition again
-    if (currentState.status === "disconnected") {
-      return
-    }
-
-    const reconnectOpts = {
-      ...DEFAULT_RECONNECT,
-      ...this.#options.reconnect,
-    }
-
-    if (!this.#shouldReconnect || !reconnectOpts.enabled) {
-      this.#stateMachine.transition({ status: "disconnected", reason })
-      return
-    }
-
-    // Get current attempt count from state
-    const currentAttempt =
-      currentState.status === "reconnecting"
-        ? currentState.attempt
-        : currentState.status === "connecting"
-          ? (currentState as { attempt: number }).attempt
-          : 0
-
-    if (currentAttempt >= reconnectOpts.maxAttempts) {
-      this.#stateMachine.transition({
-        status: "disconnected",
-        reason: { type: "max-retries-exceeded", attempts: currentAttempt },
-      })
-      return
-    }
-
-    const nextAttempt = currentAttempt + 1
-
-    // Exponential backoff with jitter
-    const delay = Math.min(
-      reconnectOpts.baseDelay * 2 ** (nextAttempt - 1) + Math.random() * 1000,
-      reconnectOpts.maxDelay,
-    )
-
-    this.#stateMachine.transition({
-      status: "reconnecting",
-      attempt: nextAttempt,
-      nextAttemptMs: delay,
-    })
-
-    this.#reconnectTimer = setTimeout(() => {
-      this.#connect()
-    }, delay)
-  }
-
-  #clearReconnectTimer(): void {
-    if (this.#reconnectTimer) {
-      clearTimeout(this.#reconnectTimer)
-      this.#reconnectTimer = undefined
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------

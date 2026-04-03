@@ -455,8 +455,9 @@ Transports provide pluggable network connectivity. They create channels — the 
 | `@kyneta/websocket-transport` | WebSocket | Binary CBOR via `@kyneta/wire` |
 | `@kyneta/sse-transport` | SSE + HTTP POST | Text JSON via `@kyneta/wire` |
 | `@kyneta/webrtc-transport` | WebRTC Data Channel | Binary CBOR via `@kyneta/wire` |
+| `@kyneta/unix-socket-transport` | Unix Domain Socket | Binary CBOR via `@kyneta/wire` |
 
-The websocket and SSE packages export `/client` and `/server` entry points. The websocket transport also exports `/bun` for Bun-native WebSocket servers. The WebRTC transport uses a BYODC (Bring Your Own Data Channel) pattern — you provide an `RTCDataChannel` and the transport wraps it as an exchange channel.
+The websocket and SSE packages export `/client` and `/server` entry points. The websocket transport also exports `/bun` for Bun-native WebSocket servers. The WebRTC transport uses a BYODC (Bring Your Own Data Channel) pattern — you provide an `RTCDataChannel` and the transport wraps it as an exchange channel. The unix socket transport exports `/client` and `/server` entry points — stream-oriented, backpressure-aware, no fragmentation. Designed for server-to-server sync over Unix domain sockets.
 
 ### Creating Custom Transports
 

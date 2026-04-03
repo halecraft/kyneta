@@ -1,0 +1,50 @@
+{
+  "name": "@kyneta/unix-socket-transport",
+  "version": "1.1.0",
+  "description": "Unix domain socket transport for @kyneta/exchange — stream-oriented server-to-server transport with StreamFrameParser",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/exchange/transports/unix-socket"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "peerDependencies": {
+    "@kyneta/exchange": "^1.1.0",
+    "@kyneta/wire": "^1.1.0"
+  },
+  "devDependencies": {
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/wire": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@types/node": "^22",
+    "bun-types": "latest",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.17"
+  }
+}

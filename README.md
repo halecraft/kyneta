@@ -17,6 +17,7 @@ A collaborative-first application platform where CRDTs meet compiled UI. Kyneta 
 | [`@kyneta/websocket-network-adapter`](./packages/exchange/network-adapters/websocket) | WebSocket network adapter for `@kyneta/exchange`. Client, server, and Bun-specific handlers with connection lifecycle, keepalive, and reconnection. | 41 |
 | [`@kyneta/sse-network-adapter`](./packages/exchange/network-adapters/sse) | SSE network adapter for `@kyneta/exchange`. Client, server, and Express integration with text wire format and custom reconnection state machine. | 33 |
 | [`@kyneta/webrtc-transport`](./packages/exchange/transports/webrtc) | WebRTC data channel transport for `@kyneta/exchange`. BYODC (Bring Your Own Data Channel) with `DataChannelLike` minimal interface. Binary CBOR encoding with transport-level fragmentation. | 27 |
+| [`@kyneta/unix-socket-transport`](./packages/exchange/transports/unix-socket) | Unix domain socket transport for `@kyneta/exchange`. Stream-oriented, backpressure-aware server-to-server sync with no fragmentation. Client/server entry points. | 42 |
 
 ### Dependencies
 
@@ -33,7 +34,8 @@ A collaborative-first application platform where CRDTs meet compiled UI. Kyneta 
     │        │        │
     │        │        ├──► @kyneta/websocket-network-adapter
     │        │        ├──► @kyneta/sse-network-adapter
-    │        │        └──► @kyneta/webrtc-transport
+    │        │        ├──► @kyneta/webrtc-transport
+    │        │        └──► @kyneta/unix-socket-transport
     │        │
     │        └──► @kyneta/react         (+ react)
     │
@@ -99,3 +101,4 @@ MIT — see [LICENSE](./LICENSE).
 | `@kyneta/websocket-network-adapter` | MIT |
 | `@kyneta/sse-network-adapter` | MIT |
 | `@kyneta/webrtc-transport` | MIT |
+| `@kyneta/unix-socket-transport` | MIT |
