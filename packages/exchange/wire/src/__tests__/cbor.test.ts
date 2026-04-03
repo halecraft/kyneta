@@ -14,6 +14,7 @@ import type {
   PresentMsg,
 } from "@kyneta/exchange"
 import { describe, expect, it } from "vitest"
+import { type CBORType, encodeCBOR } from "@levischuck/tiny-cbor"
 import { cborCodec } from "../cbor.js"
 
 // ---------------------------------------------------------------------------
@@ -348,8 +349,7 @@ describe("CBOR codec — error handling", () => {
   it("throws on unknown message type discriminator", () => {
     // Craft a valid CBOR payload with an unrecognized type discriminator.
     // This simulates receiving a message from a newer protocol version.
-    const { encodeCBOR } = require("@levischuck/tiny-cbor")
-    const wire = new Map<string, unknown>([["t", 0xff]])
+    const wire = new Map<string, CBORType>([["t", 0xff]])
     const encoded = encodeCBOR(wire) as Uint8Array
     expect(() => cborCodec.decode(encoded)).toThrow(
       "Unknown wire message type: 255",
@@ -357,8 +357,7 @@ describe("CBOR codec — error handling", () => {
   })
 
   it("throws on unknown payload kind in offer message", () => {
-    const { encodeCBOR } = require("@levischuck/tiny-cbor")
-    const wire = new Map<string, unknown>([
+    const wire = new Map<string, CBORType>([
       ["t", 0x12], // Offer
       ["doc", "d1"],
       ["pk", 0x99], // invalid payload kind
@@ -373,8 +372,7 @@ describe("CBOR codec — error handling", () => {
   })
 
   it("throws on unknown payload encoding in offer message", () => {
-    const { encodeCBOR } = require("@levischuck/tiny-cbor")
-    const wire = new Map<string, unknown>([
+    const wire = new Map<string, CBORType>([
       ["t", 0x12], // Offer
       ["doc", "d1"],
       ["pk", 0x00], // valid payload kind (entirety)

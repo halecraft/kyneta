@@ -44,14 +44,20 @@ import type {
  */
 export type DocEntry = {
   docId: DocId
+
   /** Document participation mode — interpret (full stack) or replicate (headless). */
   mode: "interpret" | "replicate"
+
   /** Serialized version from replica.version().serialize() */
   version: string
+
   /** Identifies the binary format of this document's replica */
   replicaType: ReplicaType
+
   /** The merge strategy for this document's substrate */
   mergeStrategy: MergeStrategy
+
+  /** A deterministic hash representing the document's schema */
   schemaHash: string
 }
 
@@ -786,7 +792,11 @@ function handleEstablishRequest(
   const channel = model.channels.get(fromChannelId)
   if (!channel) return [model]
 
-  const warning = detectPeerIdentityWarning(model, fromChannelId, message.identity.peerId)
+  const warning = detectPeerIdentityWarning(
+    model,
+    fromChannelId,
+    message.identity.peerId,
+  )
   const upgraded = upgradeChannel(model, fromChannelId, message.identity)
 
   // Filter docs by route — only announce docs this peer is allowed to see
@@ -820,7 +830,11 @@ function handleEstablishResponse(
   const channel = model.channels.get(fromChannelId)
   if (!channel) return [model]
 
-  const warning = detectPeerIdentityWarning(model, fromChannelId, message.identity.peerId)
+  const warning = detectPeerIdentityWarning(
+    model,
+    fromChannelId,
+    message.identity.peerId,
+  )
   const upgraded = upgradeChannel(model, fromChannelId, message.identity)
 
   // Filter docs by route — only announce docs this peer is allowed to see
@@ -946,11 +960,7 @@ function handlePresent(
     }
   }
 
-  return [
-    model,
-    batchAsNeeded(...commands),
-    notifyAsNeeded(...warnings),
-  ]
+  return [model, batchAsNeeded(...commands), notifyAsNeeded(...warnings)]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
