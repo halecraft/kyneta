@@ -12,6 +12,7 @@
 
 import { createRoot } from "react-dom/client"
 import { ExchangeProvider } from "@kyneta/react"
+import { persistentPeerId } from "@kyneta/exchange"
 import { createWebsocketClient } from "@kyneta/websocket-transport/client"
 import BumperCarsApp from "./client/bumper-cars-app.js"
 import "./index.css"
@@ -20,7 +21,6 @@ import "./index.css"
 // Persistent peer identity
 // ─────────────────────────────────────────────────────────────────────────
 
-const PEER_ID_KEY = "bumper-cars-peer-id"
 const NAME_KEY = "bumper-cars-name"
 const COLOR_KEY = "bumper-cars-color"
 
@@ -33,9 +33,7 @@ function getOrCreate(key: string, fallback: () => string): string {
   return value
 }
 
-const peerId = getOrCreate(PEER_ID_KEY, () =>
-  crypto.randomUUID().replace(/-/g, "").slice(0, 16),
-)
+const peerId = persistentPeerId("bumper-cars-peer-id")
 
 const initialName = getOrCreate(NAME_KEY, () => `Player-${peerId.slice(-4)}`)
 const initialColor = localStorage.getItem(COLOR_KEY)

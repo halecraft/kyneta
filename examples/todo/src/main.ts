@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { mount } from "@kyneta/cast"
-import { Exchange } from "@kyneta/exchange"
+import { Exchange, persistentPeerId } from "@kyneta/exchange"
 import { createWebsocketClient } from "@kyneta/websocket-transport/client"
 import { createApp } from "./app.js"
 import { TodoDoc } from "./schema.js"
@@ -18,7 +18,7 @@ import { TodoDoc } from "./schema.js"
 // ─────────────────────────────────────────────────────────────────────────
 
 const exchange = new Exchange({
-  identity: { peerId: "hi" },
+  identity: { peerId: persistentPeerId("todo-peer-id") },
   transports: [createWebsocketClient({ url: `ws://${location.host}/ws` })],
 })
 

@@ -633,6 +633,9 @@ export class Synchronizer {
           this.#dirtyStateAdvanced.add(docId)
         }
         break
+      case "notify/warning":
+        console.warn(notification.message)
+        break
       case "notify/batch":
         for (const sub of notification.notifications) {
           this.#accumulateNotification(sub)

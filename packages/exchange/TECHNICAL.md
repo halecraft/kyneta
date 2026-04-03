@@ -282,6 +282,11 @@ GeneratedChannel → ConnectedChannel → EstablishedChannel
 - **ConnectedChannel**: registered with the synchronizer. Has `channelId`, `onReceive`.
 - **EstablishedChannel**: completed the establish handshake. Has `peerId` of the remote peer.
 
+At establishment time, the synchronizer checks for two identity issues and emits `notify/warning` notifications (not direct `console.warn` — the pure program produces data, the imperative shell handles I/O):
+
+- **Duplicate peerId:** The remote peer's identity already has active channels from a different connection. This indicates two participants sharing the same peerId, which corrupts CRDT state.
+- **Self-connection:** The remote peer's peerId matches the local exchange's identity. Syncing with yourself is always a misconfiguration.
+
 ### Transport Base Class
 
 Adapters follow a linear lifecycle: **create → initialize → start → stop → discard**. They cannot be restarted after `_stop()` — internal resources (`readonly` reassemblers, state machines) are disposed and not recreated. If you need a new adapter, create a new instance.
@@ -1031,9 +1036,21 @@ const exchange2 = new Exchange({
 
 Storage is wired into the Exchange at two points: **hydration** (loading stored data into a fresh replica) and **persistence** (saving data as it changes). The synchronizer program is storage-free — keeping the FC/IS boundary clean. Persistence is unified through a single mechanism: the `notify/state-advanced` notification from the synchronizer program.
 
-### Stable peerId Requirement
+### Peer Identity Requirements
 
-`exchange.get()` requires an explicit `peerId` in `ExchangeParams.identity`. The peerId identifies the exchange as a participant in causal history — it must be stable across restarts for correct CRDT operation. Without a stable peerId, each boot produces a different clientID/PeerID, the version vector grows unboundedly, and there is no causal continuity across restarts.
+The `peerId` in `ExchangeParams.identity` must satisfy two invariants:
+
+1. **Stability:** The same participant must use the same peerId across restarts. Without stability, each boot produces a different clientID/PeerID, the version vector grows unboundedly, and there is no causal continuity across restarts. `exchange.get()` requires an explicit peerId for this reason.
+
+2. **Uniqueness:** Different participants must use different peerIds. Two peers sharing a peerId will silently corrupt CRDT state — the version vector conflates their operations and `exportSince` produces wrong deltas (missing ops, duplicate ops, or cross-client references). There is no error, no exception — just silent data loss.
+
+**Duplicate detection:** The synchronizer detects duplicate peerIds at channel establishment time. When a second channel establishes with a peerId that already has active channels from a different connection, the synchronizer emits a `notify/warning` notification (surfaced as `console.warn` by the imperative shell). This catches the most common case — two browser tabs hitting the same server with the same peerId. The warning is not a rejection: legitimate reconnection (where the old channel hasn't timed out yet) may trigger it transiently.
+
+**Self-connection detection:** When a peer connects to itself (remote peerId matches `model.identity.peerId`), the synchronizer emits a `notify/warning`. This is always a misconfiguration — syncing with yourself produces no useful result.
+
+**Browser clients:** Use `persistentPeerId(storageKey)` from `@kyneta/exchange` to generate a random 16-char hex peerId on first visit and cache it in `localStorage`. This satisfies both stability (survives page reloads) and uniqueness (each browser profile gets its own peerId).
+
+**Servers:** Use an explicit string (e.g. `"my-server"`). Servers don't need generation helpers.
 
 `exchange.replicate()` does NOT require a stable peerId — replicate mode has no local writes and needs no stable identity.
 

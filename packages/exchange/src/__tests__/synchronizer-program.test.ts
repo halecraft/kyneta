@@ -106,6 +106,8 @@ function collectNotifiedDocIds(
       return new Set(notification.docIds)
     case "notify/state-advanced":
       return new Set(notification.docIds)
+    case "notify/warning":
+      return new Set()
     case "notify/batch": {
       const result = new Set<string>()
       for (const sub of notification.notifications) {
@@ -278,6 +280,152 @@ describe("synchronizer-program", () => {
 
       expect(m2.channels.get(1)!.type).toBe("established")
       expect(m2.peers.has("bob")).toBe(true)
+    })
+  })
+
+  // =========================================================================
+  // Peer identity detection
+  // =========================================================================
+
+  describe("peer identity detection", () => {
+    it("duplicate peerId emits warning notification on second channel establishment", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Establish channel 1 with bob
+      let m = establishChannel(update, model, 1, bobIdentity)
+
+      // Establish channel 2 (different channelId) with the same bob identity
+      const channel2 = makeConnectedChannel(2)
+      ;[m] = update({ type: "synchronizer/channel-added", channel: channel2 }, m)
+
+      const [_m2, _cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 2,
+            message: { type: "establish-request", identity: bobIdentity },
+          },
+        },
+        m,
+      )
+
+      expect(notification).toBeDefined()
+      expect(notification!.type).toBe("notify/warning")
+      if (notification!.type === "notify/warning") {
+        expect(notification!.message).toContain("duplicate peerId")
+        expect(notification!.message).toContain("bob")
+      }
+    })
+
+    it("self-connection emits warning notification", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Connect a channel where remote peer claims to be alice (our own identity)
+      const channel = makeConnectedChannel(1)
+      let [m] = update({ type: "synchronizer/channel-added", channel }, model)
+
+      const [_m2, _cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "establish-request", identity: aliceIdentity },
+          },
+        },
+        m,
+      )
+
+      expect(notification).toBeDefined()
+      expect(notification!.type).toBe("notify/warning")
+      if (notification!.type === "notify/warning") {
+        expect(notification!.message).toContain("self-connection")
+        expect(notification!.message).toContain("alice")
+      }
+    })
+
+    it("reconnection after channel removal does not emit warning", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Establish channel 1 with bob
+      let m = establishChannel(update, model, 1, bobIdentity)
+
+      // Remove channel 1
+      const removedChannel = m.channels.get(1)!
+      ;[m] = update({ type: "synchronizer/channel-removed", channel: removedChannel }, m)
+
+      // Establish channel 2 with bob — old channel is gone, no duplicate
+      const channel2 = makeConnectedChannel(2)
+      ;[m] = update({ type: "synchronizer/channel-added", channel: channel2 }, m)
+
+      const [_m2, _cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 2,
+            message: { type: "establish-request", identity: bobIdentity },
+          },
+        },
+        m,
+      )
+
+      // No warning — the old channel was cleaned up before the new one arrived
+      expect(notification).toBeUndefined()
+    })
+
+    it("replicaType mismatch emits warning notification (not console.warn)", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "00test",
+        },
+        m,
+      )
+
+      // Remote peer announces same doc but with incompatible replicaType
+      const [_m2, cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "doc-1",
+                  replicaType: ["loro", 1, 0] as const,
+                  mergeStrategy: "causal" as const,
+                  schemaHash: "00test",
+                },
+              ],
+            },
+          },
+        },
+        m,
+      )
+
+      // No commands — mismatch means skip
+      const commands = flattenCommands(cmd)
+      expect(commands).toHaveLength(0)
+
+      // Warning notification emitted (not a direct console.warn)
+      expect(notification).toBeDefined()
+      expect(notification!.type).toBe("notify/warning")
+      if (notification!.type === "notify/warning") {
+        expect(notification!.message).toContain("replica type mismatch")
+        expect(notification!.message).toContain("doc-1")
+      }
     })
   })
 

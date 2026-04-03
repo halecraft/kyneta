@@ -149,3 +149,9 @@ export {
   InMemoryStore,
   type InMemoryStoreData,
 } from "./store/index.js"
+
+// ---------------------------------------------------------------------------
+// Peer identity — browser-only persistent peerId generation
+// ---------------------------------------------------------------------------
+
+export { persistentPeerId } from "./persistent-peer-id.js"

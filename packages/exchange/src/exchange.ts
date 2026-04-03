@@ -120,6 +120,24 @@ export type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails) => void
 export type ExchangeParams = {
   /**
    * Peer identity. If `peerId` is omitted, one is auto-generated.
+   *
+   * The `peerId` must satisfy two invariants:
+   *
+   * - **Stability:** The same participant must use the same peerId across
+   *   restarts. Without stability, each boot fragments the CRDT version
+   *   vector with phantom peer entries and breaks causal continuity.
+   *
+   * - **Uniqueness:** Different participants must use different peerIds.
+   *   Two peers sharing a peerId will silently corrupt CRDT state —
+   *   the version vector conflates their operations and `exportSince`
+   *   produces wrong deltas. The synchronizer warns at channel
+   *   establishment when a duplicate peerId is detected.
+   *
+   * For browser clients, use `persistentPeerId(storageKey)` from
+   * `@kyneta/exchange` — it generates a random peerId on first visit
+   * and caches it in `localStorage` for stability across reloads.
+   *
+   * For servers, use an explicit string (e.g. `"my-server"`).
    */
   identity?: Partial<PeerIdentityDetails>
 

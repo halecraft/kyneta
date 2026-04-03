@@ -227,6 +227,7 @@ export type Command =
 export type Notification =
   | { type: "notify/ready-state-changed"; docIds: ReadonlySet<DocId> }
   | { type: "notify/state-advanced"; docIds: ReadonlySet<DocId> }
+  | { type: "notify/warning"; message: string }
   | { type: "notify/batch"; notifications: Notification[] }
 
 /**
@@ -733,6 +734,49 @@ function buildPresent(
   }
 }
 
+/**
+ * Detect peer identity issues at channel establishment time.
+ * Returns a `notify/warning` notification if a problem is found, or undefined.
+ *
+ * Two checks:
+ * 1. **Self-connection:** remote peerId matches our own identity.
+ * 2. **Duplicate peerId:** remote peerId already has active channels
+ *    that are not the channel being upgraded (genuinely new connection).
+ */
+function detectPeerIdentityWarning(
+  model: SynchronizerModel,
+  fromChannelId: ChannelId,
+  remotePeerId: string,
+): Notification | undefined {
+  // Self-connection: peer connecting to itself
+  if (remotePeerId === model.identity.peerId) {
+    return {
+      type: "notify/warning",
+      message:
+        `[exchange] self-connection detected — remote peer "${remotePeerId}" has the same peerId as this exchange. ` +
+        `This will cause sync failures. Ensure server and client have different peerIds.`,
+    }
+  }
+
+  // Duplicate peerId: another connection already established with this identity
+  const existingPeer = model.peers.get(remotePeerId)
+  if (existingPeer) {
+    const otherChannels = new Set(existingPeer.channels)
+    otherChannels.delete(fromChannelId)
+    if (otherChannels.size > 0) {
+      return {
+        type: "notify/warning",
+        message:
+          `[exchange] duplicate peerId "${remotePeerId}" — peer already has ${otherChannels.size} active channel(s). ` +
+          `Two participants sharing the same peerId will corrupt CRDT state. ` +
+          `Ensure each browser tab / client has a unique peerId.`,
+      }
+    }
+  }
+
+  return undefined
+}
+
 function handleEstablishRequest(
   fromChannelId: ChannelId,
   message: { type: "establish-request"; identity: PeerIdentityDetails },
@@ -742,6 +786,7 @@ function handleEstablishRequest(
   const channel = model.channels.get(fromChannelId)
   if (!channel) return [model]
 
+  const warning = detectPeerIdentityWarning(model, fromChannelId, message.identity.peerId)
   const upgraded = upgradeChannel(model, fromChannelId, message.identity)
 
   // Filter docs by route — only announce docs this peer is allowed to see
@@ -763,7 +808,7 @@ function handleEstablishRequest(
     buildPresent(docIds, fromChannelId, upgraded),
   )
 
-  return [upgraded, cmd]
+  return [upgraded, cmd, warning]
 }
 
 function handleEstablishResponse(
@@ -775,6 +820,7 @@ function handleEstablishResponse(
   const channel = model.channels.get(fromChannelId)
   if (!channel) return [model]
 
+  const warning = detectPeerIdentityWarning(model, fromChannelId, message.identity.peerId)
   const upgraded = upgradeChannel(model, fromChannelId, message.identity)
 
   // Filter docs by route — only announce docs this peer is allowed to see
@@ -783,7 +829,7 @@ function handleEstablishResponse(
   )
   const cmd = buildPresent(docIds, fromChannelId, upgraded)
 
-  return [upgraded, cmd]
+  return [upgraded, cmd, warning]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -840,6 +886,7 @@ function handlePresent(
   if (!channel || channel.type !== "established") return [model]
 
   const commands: Command[] = []
+  const warnings: Notification[] = []
   const peerState = model.peers.get(channel.peerId)
 
   for (const {
@@ -852,18 +899,22 @@ function handlePresent(
     if (docEntry) {
       // Known doc — validate replicaType compatibility
       if (!replicaTypesCompatible(docEntry.replicaType, replicaType)) {
-        console.warn(
-          `[exchange] replica type mismatch for doc '${docId}': ` +
+        warnings.push({
+          type: "notify/warning",
+          message:
+            `[exchange] replica type mismatch for doc '${docId}': ` +
             `local [${docEntry.replicaType}] vs remote [${replicaType}] — skipping sync`,
-        )
+        })
         continue
       }
       // Check schema hash compatibility
       if (docEntry.schemaHash !== schemaHash) {
-        console.warn(
-          `[exchange] schema hash mismatch for doc '${docId}': ` +
+        warnings.push({
+          type: "notify/warning",
+          message:
+            `[exchange] schema hash mismatch for doc '${docId}': ` +
             `local '${docEntry.schemaHash}' vs remote '${schemaHash}' — skipping sync`,
-        )
+        })
         continue
       }
       // Compatible — send interest with our version
@@ -895,7 +946,11 @@ function handlePresent(
     }
   }
 
-  return [model, batchAsNeeded(...commands)]
+  return [
+    model,
+    batchAsNeeded(...commands),
+    notifyAsNeeded(...warnings),
+  ]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
