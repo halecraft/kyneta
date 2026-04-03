@@ -838,6 +838,81 @@ The nullable pattern match is: `V extends readonly [ScalarSchema<"null", any>, i
 
 **General positional sums** — `Schema.union(a, b, ...)` where the pattern is not nullable distributes normally: `SchemaRef<V[number], M>`, `Readable<V[number]>`, `Writable<V[number]>`. This produces a union of variant ref types where `.set()` parameter types intersect (contravariant). This is correct — for heterogeneous unions like `union(string, struct)`, the distributed union accurately reflects that each variant has a different mutation surface.
 
+## Structural Merge Protocol
+
+<!-- Context: jj:ptyzqoul -->
+
+CRDT substrates (Yjs, Loro) require structural containers to exist before application-level reads and writes can occur. The structural merge protocol ensures that all peers produce identical structural operations — deterministic container creation that converges without conflict.
+
+### Structural Identity Constant
+
+```ts
+export const STRUCTURAL_YJS_CLIENT_ID = 0
+```
+
+Exported from `@kyneta/schema`. All Yjs container creation uses this reserved clientID. Because every peer uses the same identity for structural ops, the resulting CRDT operations are identical across peers and merge idempotently.
+
+Loro does not need a structural identity constant. Loro container creation is inherently idempotent — `getOrCreateContainerByKey` returns an existing container or creates one without generating CRDT ops that could conflict.
+
+### Canonical Field Ordering
+
+`ensureContainers` (Yjs) and `ensureLoroContainers` (Loro) iterate schema fields in **alphabetical order** via:
+
+```ts
+Object.entries(fields).sort(([a], [b]) => a.localeCompare(b))
+```
+
+This ensures all peers produce the same structural ops in the same order regardless of `Object.entries` iteration order (which the spec ties to insertion order, but defensive code should not rely on schemas being defined identically across source files). Alphabetical sort is a total order on field names — deterministic, locale-independent with the default comparator, and stable across platforms.
+
+### Structural Identity Encapsulation
+
+`ensureContainers` (Yjs) internally manages the `doc.clientID` lifecycle around container creation:
+
+1. Save the current `doc.clientID`
+2. Set `doc.clientID = STRUCTURAL_YJS_CLIENT_ID`
+3. Create all structural containers (in canonical order)
+4. Restore the original `doc.clientID`
+
+Callers never need to manage identity switching. The structural identity is an implementation detail of container creation — the public API is simply `ensureContainers(doc, schema)`.
+
+### `hashPeerId` Guard
+
+The Yjs `hashPeerId` function hashes a peer identity string to a numeric clientID. If the hash happens to collide with `STRUCTURAL_YJS_CLIENT_ID` (0), the function returns `1` instead:
+
+```ts
+const hash = fnv1a32(peerId)
+return hash === STRUCTURAL_YJS_CLIENT_ID ? 1 : hash
+```
+
+This guarantees that real peer identities never occupy the structural identity slot. The collision is astronomically unlikely (1 in 2³²), but the guard makes it impossible.
+
+### Schema Fingerprint
+
+`computeSchemaHash(schema)` produces a deterministic **34-character hex string**: a 2-character version prefix concatenated with a 32-character FNV-1a-128 hash of the schema's canonical representation.
+
+```
+v1 + fnv1a128(canonicalize(schema))
+──   ────────────────────────────────
+2ch         32ch hex
+```
+
+The hash is computed once at bind time and cached on `BoundSchema.schemaHash`. It is stored in `DocMetadata.schemaHash` for every document, serving as a **versioning commitment** — if the schema changes, the hash changes, and peers can detect the mismatch. The 2-character version prefix allows future changes to the hashing algorithm without ambiguity.
+
+The hash is stable across releases for the same schema definition. It depends only on the schema's structural content, not on runtime artifacts like object identity or definition order.
+
+### Schema Evolution
+
+Adding fields to a schema extends the structural op sequence. The `ensureContainers` / `ensureLoroContainers` functions are **conditional** — after hydration from stored state, they skip fields whose containers already exist and create containers only for new fields.
+
+This means schema evolution follows a simple protocol:
+
+1. A new schema version adds fields.
+2. On hydration, existing containers are preserved (no re-creation, no duplicate ops).
+3. New containers are created at the end of the structural clock, continuing from where the previous schema left off.
+4. The canonical alphabetical sort ensures the new containers are created in a consistent order across all peers, even if they upgrade at different times.
+
+The structural merge protocol guarantees convergence: a peer running schema v2 and a peer still on v1 will agree on all v1 containers. When the v1 peer upgrades, its `ensureContainers` call produces identical ops for the new fields — same identity, same order, same result.
+
 ## Verified Properties
 
 The spike validates these properties via 1,400+ tests across 27 test files:

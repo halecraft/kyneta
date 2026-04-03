@@ -10,7 +10,6 @@
 // ---------------------------------------------------------------------------
 
 export type {
-  TransportType,
   ChannelId,
   DocId,
   PeerDocSyncState,
@@ -18,6 +17,7 @@ export type {
   PeerIdentityDetails,
   PeerState,
   ReadyState,
+  TransportType,
 } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,6 @@ export { TimestampVersion } from "@kyneta/schema"
 export type {
   AddressedEnvelope,
   ChannelMsg,
-  PresentMsg,
   DismissMsg,
   EstablishmentMsg,
   EstablishRequestMsg,
@@ -54,6 +53,7 @@ export type {
   ExchangeMsg,
   InterestMsg,
   OfferMsg,
+  PresentMsg,
   ReturnEnvelope,
 } from "./messages.js"
 export { isEstablishmentMsg, isExchangeMsg } from "./messages.js"
@@ -76,19 +76,19 @@ export { isEstablished } from "./channel.js"
 // Transport — base class and transport manager
 // ---------------------------------------------------------------------------
 
-export type {
-  TransportContext,
-  TransportFactory,
-  AnyTransport,
-} from "./transport/transport.js"
-export { Transport } from "./transport/transport.js"
-export { TransportManager } from "./transport/transport-manager.js"
 export {
   ClientStateMachine,
   type ClientStateMachineConfig,
   type StateTransition,
   type TransitionListener,
 } from "./transport/client-state-machine.js"
+export type {
+  AnyTransport,
+  TransportContext,
+  TransportFactory,
+} from "./transport/transport.js"
+export { Transport } from "./transport/transport.js"
+export { TransportManager } from "./transport/transport-manager.js"
 
 // ---------------------------------------------------------------------------
 // Bridge — in-process testing adapter
@@ -145,7 +145,7 @@ export { hasSync, sync } from "./sync.js"
 
 export type { Store, StoreEntry } from "./store/index.js"
 export {
+  createInMemoryStore,
   InMemoryStore,
   type InMemoryStoreData,
-  createInMemoryStore,
 } from "./store/index.js"

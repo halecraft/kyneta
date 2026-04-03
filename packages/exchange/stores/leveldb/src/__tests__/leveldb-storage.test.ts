@@ -7,19 +7,15 @@
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { afterAll, describe, expect, it } from "vitest"
+import type { StoreEntry } from "@kyneta/exchange/src/store/store.js"
 import {
+  collectAll,
   describeStore,
   makeEntry,
-  collectAll,
   plainMetadata,
 } from "@kyneta/exchange/src/testing/store-conformance.js"
-import {
-  LevelDBStore,
-  encodeStoreEntry,
-  decodeStoreEntry,
-} from "../server.js"
-import type { StoreEntry } from "@kyneta/exchange/src/store/store.js"
+import { afterAll, describe, expect, it } from "vitest"
+import { decodeStoreEntry, encodeStoreEntry, LevelDBStore } from "../server.js"
 
 // ---------------------------------------------------------------------------
 // Temp directory management
@@ -142,7 +138,11 @@ describe("LevelDBStore — close + reopen", () => {
 describe("encodeStoreEntry / decodeStoreEntry", () => {
   it("round-trips a JSON string payload (entirety)", () => {
     const entry: StoreEntry = {
-      payload: { kind: "entirety", encoding: "json", data: '{"hello":"world"}' },
+      payload: {
+        kind: "entirety",
+        encoding: "json",
+        data: '{"hello":"world"}',
+      },
       version: "42",
     }
     const decoded = decodeStoreEntry(encodeStoreEntry(entry))
@@ -204,5 +204,4 @@ describe("encodeStoreEntry / decodeStoreEntry", () => {
     const decoded = decodeStoreEntry(encodeStoreEntry(entry))
     expect(decoded.payload.data).toEqual(largeData)
   })
-
 })

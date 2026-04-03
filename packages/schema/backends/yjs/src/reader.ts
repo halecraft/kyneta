@@ -8,7 +8,7 @@
 // Y.Text → .toJSON() (string), Y.Map → .toJSON() (plain object),
 // Y.Array → .toJSON() (plain array), plain values → as-is.
 
-import type { Path, Schema as SchemaNode, Reader } from "@kyneta/schema"
+import type { Path, Reader, Schema as SchemaNode } from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
 

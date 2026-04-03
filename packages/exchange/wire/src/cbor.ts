@@ -21,9 +21,7 @@ import type { BinaryCodec } from "./codec.js"
 import {
   MergeStrategyWireToString,
   MessageType,
-  PayloadEncoding,
   PayloadEncodingToString,
-  PayloadKind,
   PayloadKindToString,
   StringToMergeStrategyWire,
   StringToPayloadEncoding,
@@ -143,6 +141,7 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
           d: d.docId,
           rt: [...d.replicaType] as [string, number, number],
           ms: StringToMergeStrategyWire[d.mergeStrategy]!,
+          sh: d.schemaHash,
         })),
       } satisfies WirePresentMsg
 
@@ -214,6 +213,7 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
           docId: d.d,
           replicaType: d.rt as readonly [string, number, number],
           mergeStrategy: MergeStrategyWireToString[d.ms]!,
+          schemaHash: d.sh,
         })),
       } satisfies PresentMsg
     }

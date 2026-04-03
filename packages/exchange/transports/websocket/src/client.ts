@@ -13,11 +13,11 @@ export {
   DEFAULT_FRAGMENT_THRESHOLD,
   type DisconnectReason,
   type ServiceWebsocketClientOptions,
-  WebsocketClientTransport,
   type WebsocketClientLifecycleEvents,
   type WebsocketClientOptions,
   type WebsocketClientState,
   type WebsocketClientStateTransition,
+  WebsocketClientTransport,
 } from "./client-transport.js"
 
 // ---------------------------------------------------------------------------

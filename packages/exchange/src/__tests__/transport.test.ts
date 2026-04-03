@@ -1,12 +1,12 @@
 // Adapter and BridgeTransport — unit tests for the adapter/channel infrastructure.
 
 import { describe, expect, it, vi } from "vitest"
+import type { GeneratedChannel } from "../channel.js"
+import type { ChannelMsg } from "../messages.js"
+import { Bridge, BridgeTransport } from "../transport/bridge-transport.js"
 import type { TransportContext } from "../transport/transport.js"
 import { Transport } from "../transport/transport.js"
 import { TransportManager } from "../transport/transport-manager.js"
-import { Bridge, BridgeTransport } from "../transport/bridge-transport.js"
-import type { GeneratedChannel } from "../channel.js"
-import type { ChannelMsg } from "../messages.js"
 import type { PeerIdentityDetails } from "../types.js"
 
 // ---------------------------------------------------------------------------
@@ -259,7 +259,17 @@ describe("TransportManager", () => {
     manager.startAll()
     await new Promise<void>(r => queueMicrotask(r))
 
-    const msg: ChannelMsg = { type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] }
+    const msg: ChannelMsg = {
+      type: "present",
+      docs: [
+        {
+          docId: "doc-1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+      ],
+    }
     const sent = manager.send({
       toChannelIds: [adapter.channelIdPublic!],
       message: msg,
@@ -308,7 +318,17 @@ describe("BridgeTransport", () => {
     expect(bridge.transports.size).toBe(2)
 
     // Send a message from A to B via the bridge directly
-    const msg: ChannelMsg = { type: "present", docs: [{ docId: "test-doc", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] }
+    const msg: ChannelMsg = {
+      type: "present",
+      docs: [
+        {
+          docId: "test-doc",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+      ],
+    }
     adapterA.deliverMessage("peer-b", msg)
 
     // Message delivered async — wait for microtask

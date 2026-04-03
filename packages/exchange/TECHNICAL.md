@@ -132,11 +132,11 @@ Six message types: two for channel establishment, four for document exchange.
 
 ### `present`
 
-Document presentation — assertion of document ownership with metadata. Sent after channel establishment to announce all known documents, filtered by the `route` predicate (§16). Each entry carries per-document metadata (`replicaType`, `mergeStrategy`) so the receiver can validate compatibility before any binary exchange.
+Document presentation — assertion of document ownership with metadata. Sent after channel establishment to announce all known documents, filtered by the `route` predicate (§16). Each entry carries per-document metadata (`replicaType`, `mergeStrategy`, `schemaHash`) so the receiver can validate compatibility before any binary exchange.
 
-When the receiver encounters a known doc, it validates `replicaType` compatibility via `replicaTypesCompatible()` (same name + same major version). If compatible, it sends `interest`. If incompatible, the doc is skipped with a warning.
+When the receiver encounters a known doc, it validates `replicaType` compatibility via `replicaTypesCompatible()` (same name + same major version) and `schemaHash` equality. If both match, it sends `interest`. If either is incompatible, the doc is skipped with a warning — same pattern for both checks.
 
-When the receiver encounters an unknown doc ID, the `route` predicate is checked first — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted. If the Exchange has an `onDocDiscovered` callback configured, the callback fires with the doc ID, the announcing peer's identity, `replicaType`, and `mergeStrategy`. The callback returns a disposition (`Interpret | Replicate | undefined`). See §15 for details.
+When the receiver encounters an unknown doc ID, the `route` predicate is checked first — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted (carrying `schemaHash` through). If the Exchange has an `onDocDiscovered` callback configured, the callback fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | undefined`). See §15 for details.
 
 ```ts
 type PresentMsg = {
@@ -145,6 +145,7 @@ type PresentMsg = {
     docId: DocId
     replicaType: ReplicaType      // [name, major, minor]
     mergeStrategy: MergeStrategy  // "causal" | "sequential" | "lww"
+    schemaHash: string            // schema fingerprint for compatibility check
   }>
 }
 ```
@@ -718,23 +719,26 @@ type OnDocDiscovered = (
   peer: PeerIdentityDetails,
   replicaType: ReplicaType,
   mergeStrategy: MergeStrategy,
+  schemaHash: string,
 ) => Interpret | Replicate | undefined
 ```
 
 The `onDocDiscovered` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `present`) a document the local exchange doesn't have. Return a disposition to determine how the document participates in the sync graph:
 
 - `Interpret(bound)` — full interpretation with schema, ref, changefeed.
-- `Replicate(replicaFactory, strategy)` — headless replication (relay, storage).
+- `Replicate(replicaFactory, strategy, schemaHash)` — headless replication (relay, storage). The 3rd parameter forwards the schema fingerprint so it can be re-announced in the relay's own `present` messages.
 - `undefined` — ignore the unknown document.
 
-The callback receives `replicaType` and `mergeStrategy` from the `present` message, enabling dynamic factory dispatch based on the remote peer's substrate type.
+The callback receives `replicaType`, `mergeStrategy`, and `schemaHash` from the `present` message, enabling dynamic factory dispatch based on the remote peer's substrate type and schema fingerprint verification at the interpret peer on the far side.
+
+**Schema fingerprint verification flow:** The interpret peer computes `schemaHash` at bind time (`computeSchemaHash(schema)` → stored on `BoundSchema`). The `present` message carries it. A relay forwards it faithfully (via `Replicate(factory, strategy, schemaHash)`). The interpret peer on the other end compares it against its own `BoundSchema.schemaHash` for the same docId — a mismatch means the two peers disagree on document structure and sync is skipped.
 
 ```ts
 const exchange = new Exchange({
-  onDocDiscovered: (docId, peer, replicaType, mergeStrategy) => {
+  onDocDiscovered: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
-    // Relay server — replicate without schema knowledge
-    if (replicaType[0] === "loro") return Replicate(loroReplicaFactory, mergeStrategy)
+    // Relay server — replicate without schema knowledge, forward schemaHash
+    if (replicaType[0] === "loro") return Replicate(loroReplicaFactory, mergeStrategy, schemaHash)
     return undefined
   },
 })
@@ -771,7 +775,7 @@ Peer A (has doc)               Peer B (doesn't have doc)
 When `handlePresent` encounters an unknown doc ID, the pure program emits:
 
 ```ts
-{ type: "cmd/request-doc-creation", docId: DocId, peer: PeerIdentityDetails, replicaType: ReplicaType, mergeStrategy: MergeStrategy }
+{ type: "cmd/request-doc-creation", docId: DocId, peer: PeerIdentityDetails, replicaType: ReplicaType, mergeStrategy: MergeStrategy, schemaHash: string }
 ```
 
 The `Synchronizer` runtime executes this command by calling the `DocCreationCallback` provided by the Exchange. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
@@ -958,10 +962,11 @@ Per-document metadata registered alongside entries:
 type DocMetadata = {
   readonly replicaType: ReplicaType
   readonly mergeStrategy: MergeStrategy
+  readonly schemaHash: string
 }
 ```
 
-Registered via `ensureDoc()` before the first `append()`. Returned by `lookup()` for existence + metadata checks.
+Registered via `ensureDoc()` before the first `append()`. Returned by `lookup()` for existence + metadata checks. The `schemaHash` field records the schema fingerprint at registration time — used by the synchronizer to validate compatibility on incoming `present` messages (§3).
 
 ### Store Interface
 
@@ -1032,32 +1037,30 @@ Storage is wired into the Exchange at two points: **hydration** (loading stored 
 
 `exchange.replicate()` does NOT require a stable peerId — replicate mode has no local writes and needs no stable identity.
 
-### Hydration Flow — Two-Phase Substrate Construction
+### Hydration Flow — Single Substrate with Structural Merge
 
-When `exchange.get()` is called with storage backends configured, it uses two-phase substrate construction to avoid CRDT identity conflicts:
+When `exchange.get()` is called with storage backends configured, the exchange store path uses a single substrate — no temp/bare replica split. With structural clientID 0 (jj:ptyzqoul), `factory.create(schema)` produces structural ops at `(0, 0..N)` — identical to the structural ops in any stored state. Merging stored entries into this substrate deduplicates structural ops via CRDT semantics and applies application ops into the shared containers.
 
 ```
 exchange.get(docId, bound)
-  → factory.createReplica() — bare CRDT doc, no identity, no structural writes
-  → factory.create(schema) — temporary substrate for the synchronous ref
-  → build interpreter stack from temporary substrate
+  → factory.create(schema) — live substrate (structural ops at clientID 0)
+  → build interpreter stack from substrate
   → cache ref in #docCache (returned synchronously)
-  → async #hydrateUpgradeAndRegister(docId, ref, replica, factory, bound):
+  → async #hydrateAndRegister(docId, substrate, factory, bound):
       1. ensureDoc(docId, metadata) on all backends
-      2. loadAll(docId) → merge entries into the bare replica
-      3. factory.upgrade(replica, schema) — set identity, conditional structure
-      4. merge hydrated entirety into the live ref's substrate (changefeed fires)
-      5. if first boot: append entirety base entry to store
-      6. record storeVersion for incremental persistence
-      7. registerDoc with synchronizer (version reflects hydrated state)
-      8. wire changefeed → synchronizer (sync-only, no persistence)
+      2. loadAll(docId) → merge entries into the live substrate (changefeed fires)
+      3. if first boot: append entirety base entry to store
+      4. record storeVersion for incremental persistence
+      5. registerDoc with synchronizer (version reflects hydrated state)
+      6. wire changefeed → synchronizer (sync-only, no persistence)
 ```
 
-The two-phase separation (`createReplica` → hydrate → `upgrade`) is critical:
-- **Identity after hydration:** For Yjs, setting `doc.clientID` before hydrating stored data triggers Yjs's conflict detection (`"Changed the client-id because another client seems to be using it"`), silently reassigning to a random value. Setting identity after hydration avoids this.
-- **Conditional structure:** `ensureContainers` in Yjs is a CRDT write (`rootMap.set(key, new Y.Text())` generates ops). After hydration, containers already exist from stored state — unconditional creation would produce conflicting ops. The `conditional` flag skips fields that already exist.
+The single-substrate design is enabled by the structural merge protocol (jj:ptyzqoul):
+- **Deterministic structural ops:** `factory.create(schema)` with clientID 0 produces ops at `(0, 0), (0, 1), ...` — the same ops present in any stored state that was also created from the same schema. Merging stored data into this substrate is a no-op for structural ops and additive for application ops.
+- **No identity conflict:** ClientID 0 is a reserved structural identity. The exchange sets the real peerId-derived clientID after hydration — structural ops remain at 0 regardless.
+- **No upgrade step:** The old `#hydrateUpgradeAndRegister` two-phase flow (`createReplica` → hydrate bare → `upgrade` → merge into temp) is replaced by the unified `#hydrateAndRegister`. One substrate, one merge, no intermediate replica.
 
-For `exchange.replicate()`, the flow is simpler — no upgrade step, no schema, no interpreter stack. The bare replica is hydrated directly and registered.
+For `exchange.replicate()`, the flow is similar — no schema or interpreter stack, but the same single-substrate hydration via `#hydrateAndRegister`.
 
 ### Persistence — Unified via `notify/state-advanced`
 

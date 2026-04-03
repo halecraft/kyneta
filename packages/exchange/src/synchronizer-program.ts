@@ -52,6 +52,7 @@ export type DocEntry = {
   replicaType: ReplicaType
   /** The merge strategy for this document's substrate */
   mergeStrategy: MergeStrategy
+  schemaHash: string
 }
 
 /**
@@ -94,6 +95,7 @@ export type SynchronizerMessage =
       version: string
       replicaType: ReplicaType
       mergeStrategy: MergeStrategy
+      schemaHash: string
     }
   | { type: "synchronizer/local-doc-change"; docId: DocId; version: string }
   | { type: "synchronizer/doc-delete"; docId: DocId }
@@ -182,6 +184,7 @@ export type Command =
       peer: PeerIdentityDetails
       replicaType: ReplicaType
       mergeStrategy: MergeStrategy
+      schemaHash: string
     }
   | {
       type: "cmd/import-doc-data"
@@ -415,18 +418,14 @@ function handleChannelRemoved(
       if (newChannels.size === 0) {
         // Peer fully removed — all docs it had sync state for are affected
         if (peerState.docSyncStates.size > 0) {
-          notification = readyStateChanged(
-            ...peerState.docSyncStates.keys(),
-          )
+          notification = readyStateChanged(...peerState.docSyncStates.keys())
         }
         peers.delete(msg.channel.peerId)
       } else {
         // Channel count changed — affects ready state for docs this peer
         // has synced, since #isReady checks channels.size > 0
         if (peerState.docSyncStates.size > 0) {
-          notification = readyStateChanged(
-            ...peerState.docSyncStates.keys(),
-          )
+          notification = readyStateChanged(...peerState.docSyncStates.keys())
         }
         peers.set(msg.channel.peerId, { ...peerState, channels: newChannels })
       }
@@ -448,6 +447,7 @@ function handleDocEnsure(
     version: string
     replicaType: ReplicaType
     mergeStrategy: MergeStrategy
+    schemaHash: string
   },
   model: SynchronizerModel,
   route: RoutePredicate,
@@ -464,6 +464,7 @@ function handleDocEnsure(
     version: msg.version,
     replicaType: msg.replicaType,
     mergeStrategy: msg.mergeStrategy,
+    schemaHash: msg.schemaHash,
   })
 
   // Announce new doc and request sync from all established channels.
@@ -495,6 +496,7 @@ function handleDocEnsure(
               docId: msg.docId,
               replicaType: msg.replicaType,
               mergeStrategy: msg.mergeStrategy,
+              schemaHash: msg.schemaHash,
             },
           ],
         },
@@ -714,6 +716,7 @@ function buildPresent(
         docId,
         replicaType: entry.replicaType,
         mergeStrategy: entry.mergeStrategy,
+        schemaHash: entry.schemaHash,
       }
     })
     .filter((d): d is NonNullable<typeof d> => d !== null)
@@ -827,6 +830,7 @@ function handlePresent(
       docId: DocId
       replicaType: ReplicaType
       mergeStrategy: MergeStrategy
+      schemaHash: string
     }>
   },
   model: SynchronizerModel,
@@ -838,7 +842,12 @@ function handlePresent(
   const commands: Command[] = []
   const peerState = model.peers.get(channel.peerId)
 
-  for (const { docId, replicaType, mergeStrategy } of message.docs) {
+  for (const {
+    docId,
+    replicaType,
+    mergeStrategy,
+    schemaHash,
+  } of message.docs) {
     const docEntry = model.documents.get(docId)
     if (docEntry) {
       // Known doc — validate replicaType compatibility
@@ -846,6 +855,14 @@ function handlePresent(
         console.warn(
           `[exchange] replica type mismatch for doc '${docId}': ` +
             `local [${docEntry.replicaType}] vs remote [${replicaType}] — skipping sync`,
+        )
+        continue
+      }
+      // Check schema hash compatibility
+      if (docEntry.schemaHash !== schemaHash) {
+        console.warn(
+          `[exchange] schema hash mismatch for doc '${docId}': ` +
+            `local '${docEntry.schemaHash}' vs remote '${schemaHash}' — skipping sync`,
         )
         continue
       }
@@ -873,6 +890,7 @@ function handlePresent(
         peer: peerState.identity,
         replicaType,
         mergeStrategy,
+        schemaHash,
       })
     }
   }
@@ -1162,8 +1180,6 @@ function getEstablishedChannelIds(
   }
   return ids
 }
-
-
 
 /**
  * Get channel IDs of peers that have previously synced a specific doc.

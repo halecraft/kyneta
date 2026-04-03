@@ -24,12 +24,12 @@ import type {
   SubstratePayload,
 } from "@kyneta/schema"
 import { BACKING_DOC, bind } from "@kyneta/schema"
-import type { PeerID, LoroDoc as LoroDocType } from "loro-crdt"
+import type { LoroDoc as LoroDocType, PeerID } from "loro-crdt"
 import { LoroDoc } from "loro-crdt"
 import {
   createLoroReplica,
   createLoroSubstrate,
-  ensureRootContainer,
+  ensureLoroContainers,
   loroReplicaFactory,
 } from "./substrate.js"
 import { LoroVersion } from "./version.js"
@@ -75,37 +75,6 @@ function hashPeerId(peerId: string): PeerID {
 function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
   const numericPeerId = hashPeerId(peerId)
 
-  // ---------------------------------------------------------------------------
-  // ensureLoroContainers — schema walking helper
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Walk a schema and ensure all root-level Loro containers exist.
-   *
-   * Unwraps the root product schema and calls `ensureRootContainer` for
-   * each field. When `conditional` is true, scalar/sum defaults are
-   * skipped for keys that already exist in the props map.
-   */
-  function ensureLoroContainers(
-    doc: LoroDocType,
-    schema: SchemaNode,
-    conditional: boolean,
-  ): void {
-    let rootProduct = schema
-    while (
-      rootProduct._kind === "annotated" &&
-      rootProduct.schema !== undefined
-    ) {
-      rootProduct = rootProduct.schema
-    }
-
-    if (rootProduct._kind === "product") {
-      for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
-        ensureRootContainer(doc, key, fieldSchema as SchemaNode, conditional)
-      }
-    }
-  }
-
   return {
     replica: loroReplicaFactory,
 
@@ -115,7 +84,10 @@ function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
       return createLoroReplica(new LoroDoc())
     },
 
-    upgrade(replica: Replica<LoroVersion>, schema: SchemaNode): Substrate<LoroVersion> {
+    upgrade(
+      replica: Replica<LoroVersion>,
+      schema: SchemaNode,
+    ): Substrate<LoroVersion> {
       const doc = (replica as any)[BACKING_DOC] as LoroDocType
       // Set stable identity AFTER hydration — avoids any PeerID
       // conflict with operations in hydrated state.

@@ -20,11 +20,11 @@
 // with kyneta naming conventions and the kyneta 5-message protocol.
 
 import type {
-  TransportFactory,
   Channel,
   ChannelMsg,
   GeneratedChannel,
   PeerId,
+  TransportFactory,
 } from "@kyneta/exchange"
 import { Transport } from "@kyneta/exchange"
 import {

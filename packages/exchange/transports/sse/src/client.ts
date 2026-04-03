@@ -11,10 +11,10 @@ export {
   createSseClient,
   DEFAULT_FRAGMENT_THRESHOLD,
   type DisconnectReason,
-  SseClientTransport,
   type SseClientLifecycleEvents,
   type SseClientOptions,
   type SseClientState,
+  SseClientTransport,
 } from "./client-transport.js"
 
 // ---------------------------------------------------------------------------

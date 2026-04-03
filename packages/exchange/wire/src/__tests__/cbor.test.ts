@@ -6,12 +6,12 @@
 
 import type {
   ChannelMsg,
-  PresentMsg,
   DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
   InterestMsg,
   OfferMsg,
+  PresentMsg,
 } from "@kyneta/exchange"
 import { describe, expect, it } from "vitest"
 import { cborCodec } from "../cbor.js"
@@ -86,7 +86,26 @@ describe("CBOR codec — present", () => {
   it("round-trips present with multiple docIds", () => {
     const msg: PresentMsg = {
       type: "present",
-      docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "doc-2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }, { docId: "doc-3", replicaType: ["loro", 1, 0] as const, mergeStrategy: "lww" as const }],
+      docs: [
+        {
+          docId: "doc-1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+        {
+          docId: "doc-2",
+          schemaHash: "00test",
+          replicaType: ["yjs", 1, 0] as const,
+          mergeStrategy: "causal" as const,
+        },
+        {
+          docId: "doc-3",
+          schemaHash: "00test",
+          replicaType: ["loro", 1, 0] as const,
+          mergeStrategy: "lww" as const,
+        },
+      ],
     }
     const decoded = roundTrip(msg)
     expect(decoded).toEqual(msg)
@@ -246,7 +265,20 @@ describe("CBOR codec — batch", () => {
       },
       {
         type: "present",
-        docs: [{ docId: "d1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "d2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }],
+        docs: [
+          {
+            docId: "d1",
+            schemaHash: "00test",
+            replicaType: ["plain", 1, 0] as const,
+            mergeStrategy: "sequential" as const,
+          },
+          {
+            docId: "d2",
+            schemaHash: "00test",
+            replicaType: ["yjs", 1, 0] as const,
+            mergeStrategy: "causal" as const,
+          },
+        ],
       },
       {
         type: "interest",

@@ -15,24 +15,24 @@
 // `timestampVersionStrategy` — same state management, different version
 // algebra. No decorator, no wrapper, no `context()` gotcha.
 
-import type { Schema as SchemaNode } from "../schema.js"
 import type { PlainState } from "../reader.js"
+import type { Schema as SchemaNode } from "../schema.js"
 import type {
-  ReplicaFactory,
   Replica,
+  ReplicaFactory,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
 } from "../substrate.js"
 import { BACKING_DOC } from "../substrate.js"
+import { Zero } from "../zero.js"
+import type { VersionStrategy } from "./plain.js"
 import {
-  createPlainReplica,
-  createPlainSubstrate,
   buildPlainReplicaFromEntirety,
   buildPlainSubstrateFromEntirety,
+  createPlainReplica,
+  createPlainSubstrate,
 } from "./plain.js"
-import type { VersionStrategy } from "./plain.js"
-import { Zero } from "../zero.js"
 import { TimestampVersion } from "./timestamp-version.js"
 
 // ---------------------------------------------------------------------------
@@ -52,8 +52,9 @@ import { TimestampVersion } from "./timestamp-version.js"
  */
 const timestampVersionStrategy: VersionStrategy<TimestampVersion> = {
   zero: new TimestampVersion(0),
-  current: (flushCount) => flushCount === 0 ? new TimestampVersion(0) : TimestampVersion.now(),
-  logOffset: (_since) => null,
+  current: flushCount =>
+    flushCount === 0 ? new TimestampVersion(0) : TimestampVersion.now(),
+  logOffset: _since => null,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +112,10 @@ export const lwwSubstrateFactory: SubstrateFactory<TimestampVersion> = {
     return createPlainReplica({} as PlainState, timestampVersionStrategy)
   },
 
-  upgrade(replica: Replica<TimestampVersion>, schema: SchemaNode): Substrate<TimestampVersion> {
+  upgrade(
+    replica: Replica<TimestampVersion>,
+    schema: SchemaNode,
+  ): Substrate<TimestampVersion> {
     const doc = (replica as any)[BACKING_DOC] as PlainState
     // Apply Zero.structural defaults for keys not already present
     const defaults = Zero.structural(schema) as Record<string, unknown>

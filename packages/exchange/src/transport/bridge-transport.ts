@@ -18,7 +18,7 @@
 
 import type { GeneratedChannel } from "../channel.js"
 import type { ChannelMsg } from "../messages.js"
-import type { TransportType, ChannelId } from "../types.js"
+import type { ChannelId, TransportType } from "../types.js"
 import type { TransportFactory } from "./transport.js"
 import { Transport } from "./transport.js"
 

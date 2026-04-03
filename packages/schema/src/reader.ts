@@ -101,7 +101,11 @@ function readHasKey(state: unknown, path: Path, key: string): boolean {
  * Uses `seg.resolve()` for each segment — for dead addresses this
  * throws, which is the correct behavior (writes to dead refs should fail).
  */
-export function writeByPath(state: PlainState, path: Path, value: unknown): void {
+export function writeByPath(
+  state: PlainState,
+  path: Path,
+  value: unknown,
+): void {
   if (path.length === 0) return
   const segments = path.segments
   let current: Record<string | number, unknown> = state

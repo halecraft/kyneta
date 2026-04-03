@@ -5,7 +5,7 @@
 // dependency is removed.
 
 import type { AddressedEnvelope } from "../messages.js"
-import type { TransportContext, AnyTransport } from "./transport.js"
+import type { AnyTransport, TransportContext } from "./transport.js"
 
 type TransportManagerParams = {
   transports?: AnyTransport[]

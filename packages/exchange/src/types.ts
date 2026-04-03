@@ -70,5 +70,3 @@ export type PeerState = {
   subscriptions: Set<DocId>
   channels: Set<ChannelId>
 }
-
-

@@ -19,9 +19,9 @@ import {
   Schema,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
+import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -401,7 +401,9 @@ describe("Multi-hop relay (three-peer topology)", () => {
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeHB })],
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
+      ],
     })
 
     // All three open the same doc
@@ -447,7 +449,9 @@ describe("Multi-hop relay (three-peer topology)", () => {
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeHB })],
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
+      ],
     })
 
     // Hub creates the doc with initial state (sequential needs a populated source)
@@ -645,7 +649,9 @@ describe("route predicate", () => {
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeHB })],
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
+      ],
     })
 
     // Hub creates doc
@@ -838,14 +844,16 @@ describe("relay via exchange.replicate()", () => {
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
-      onDocDiscovered: (_docId, _peer) =>
-        Replicate(loroReplicaFactory, "causal"),
+      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
+        Replicate(loroReplicaFactory, "causal", schemaHash),
     })
 
     // Peer B — full interpreter
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
+      ],
       onDocDiscovered: docId => {
         if (docId === "shared") return Interpret(LoroDoc)
         return undefined
@@ -886,13 +894,15 @@ describe("relay via exchange.replicate()", () => {
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
-      onDocDiscovered: (_docId, _peer) =>
-        Replicate(plainReplicaFactory, "sequential"),
+      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
+        Replicate(plainReplicaFactory, "sequential", schemaHash),
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
+      ],
       onDocDiscovered: docId => {
         if (docId === "config") return Interpret(SequentialDoc)
         return undefined
@@ -931,12 +941,15 @@ describe("relay via exchange.replicate()", () => {
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
-      onDocDiscovered: (_docId, _peer) => Replicate(lwwReplicaFactory, "lww"),
+      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
+        Replicate(lwwReplicaFactory, "lww", schemaHash),
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
+      ],
       onDocDiscovered: docId => {
         if (docId === "presence") return Interpret(PresenceDoc)
         return undefined
@@ -972,9 +985,9 @@ describe("relay via exchange.replicate()", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: (docId, _peer) => {
+      onDocDiscovered: (docId, _peer, _rt, _ms, schemaHash) => {
         discoveredDocId = docId
-        return Replicate(loroReplicaFactory, "causal")
+        return Replicate(loroReplicaFactory, "causal", schemaHash)
       },
     })
 
@@ -1004,8 +1017,8 @@ describe("relay via exchange.replicate()", () => {
       transports: [
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
       ],
-      onDocDiscovered: (_docId, _peer) =>
-        Replicate(loroReplicaFactory, "causal"),
+      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
+        Replicate(loroReplicaFactory, "causal", schemaHash),
     })
 
     const docA = exchangeA.get("shared", LoroDoc)
@@ -1026,7 +1039,9 @@ describe("relay via exchange.replicate()", () => {
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
+      ],
       onDocDiscovered: docId => {
         if (docId === "shared") return Interpret(LoroDoc)
         return undefined
@@ -1052,11 +1067,11 @@ describe("relay via exchange.replicate()", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: (docId, _peer) => {
+      onDocDiscovered: (docId, _peer, _rt, _ms, schemaHash) => {
         // Interpret some docs, replicate others
         if (docId === "app-doc") return Interpret(SequentialDoc)
         if (docId === "relay-doc")
-          return Replicate(loroReplicaFactory, "causal")
+          return Replicate(loroReplicaFactory, "causal", schemaHash)
         return undefined
       },
     })
@@ -1147,7 +1162,7 @@ describe("waitForSync", () => {
 
     // Track which docIds fire ready-state changes on Bob's synchronizer
     const notifiedDocIds = new Set<string>()
-    exchangeB.synchronizer.onReadyStateChange((docId) => {
+    exchangeB.synchronizer.onReadyStateChange(docId => {
       notifiedDocIds.add(docId)
     })
 

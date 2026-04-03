@@ -19,8 +19,6 @@ import type {
   SubstratePayload,
   Version,
 } from "@kyneta/schema"
-import type { AnyTransport } from "./transport/transport.js"
-import { TransportManager } from "./transport/transport-manager.js"
 import type { Channel, ConnectedChannel } from "./channel.js"
 import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
 import type { AddressedEnvelope, ChannelMsg } from "./messages.js"
@@ -28,10 +26,12 @@ import {
   type Command,
   createSynchronizerUpdate,
   init,
+  type Notification,
   type SynchronizerMessage,
   type SynchronizerModel,
-  type Notification,
 } from "./synchronizer-program.js"
+import type { AnyTransport } from "./transport/transport.js"
+import { TransportManager } from "./transport/transport-manager.js"
 import type {
   ChannelId,
   DocId,
@@ -54,6 +54,7 @@ type DocRuntimeBase = {
   replica: Replica<any>
   replicaFactory: ReplicaFactory<any>
   strategy: MergeStrategy
+  schemaHash: string
 }
 
 /**
@@ -83,6 +84,7 @@ export type DocCreationCallback = (
   peer: PeerIdentityDetails,
   replicaType: ReplicaType,
   mergeStrategy: MergeStrategy,
+  schemaHash: string,
 ) => void
 
 /**
@@ -327,6 +329,7 @@ export class Synchronizer {
       version: runtime.replica.version().serialize(),
       replicaType: runtime.replicaFactory.replicaType,
       mergeStrategy: runtime.strategy,
+      schemaHash: runtime.schemaHash,
     })
   }
 
@@ -420,10 +423,7 @@ export class Synchronizer {
   /**
    * Wait until a document is synced with at least one peer.
    */
-  async waitUntilReady(
-    docId: DocId,
-    timeoutMs = 30000,
-  ): Promise<void> {
+  async waitUntilReady(docId: DocId, timeoutMs = 30000): Promise<void> {
     // Check if already ready
     if (this.#isReady(docId)) return
 
@@ -676,6 +676,7 @@ export class Synchronizer {
           command.peer,
           command.replicaType,
           command.mergeStrategy,
+          command.schemaHash,
         )
         break
 

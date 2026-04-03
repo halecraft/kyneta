@@ -9,12 +9,12 @@
 
 import type {
   ChannelMsg,
-  PresentMsg,
   DismissMsg,
   EstablishRequestMsg,
   EstablishResponseMsg,
   InterestMsg,
   OfferMsg,
+  PresentMsg,
 } from "@kyneta/exchange"
 import { describe, expect, it } from "vitest"
 import { textCodec } from "../json.js"
@@ -98,7 +98,26 @@ describe("Text codec — present", () => {
   it("round-trips present with multiple docIds", () => {
     const msg: PresentMsg = {
       type: "present",
-      docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "doc-2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }, { docId: "doc-3", replicaType: ["loro", 1, 0] as const, mergeStrategy: "lww" as const }],
+      docs: [
+        {
+          docId: "doc-1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+        {
+          docId: "doc-2",
+          schemaHash: "00test",
+          replicaType: ["yjs", 1, 0] as const,
+          mergeStrategy: "causal" as const,
+        },
+        {
+          docId: "doc-3",
+          schemaHash: "00test",
+          replicaType: ["loro", 1, 0] as const,
+          mergeStrategy: "lww" as const,
+        },
+      ],
     }
     const decoded = roundTrip(msg)
     expect(decoded).toEqual(msg)
@@ -302,7 +321,20 @@ describe("Text codec — batch", () => {
       },
       {
         type: "present",
-        docs: [{ docId: "d1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "d2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }],
+        docs: [
+          {
+            docId: "d1",
+            schemaHash: "00test",
+            replicaType: ["plain", 1, 0] as const,
+            mergeStrategy: "sequential" as const,
+          },
+          {
+            docId: "d2",
+            schemaHash: "00test",
+            replicaType: ["yjs", 1, 0] as const,
+            mergeStrategy: "causal" as const,
+          },
+        ],
       },
       {
         type: "interest",
@@ -405,7 +437,17 @@ describe("Text codec — JSON-safe output", () => {
 
   it("encode(batch) output survives JSON.stringify → JSON.parse round-trip", () => {
     const msgs: ChannelMsg[] = [
-      { type: "present", docs: [{ docId: "a", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+      {
+        type: "present",
+        docs: [
+          {
+            docId: "a",
+            schemaHash: "00test",
+            replicaType: ["plain", 1, 0] as const,
+            mergeStrategy: "sequential" as const,
+          },
+        ],
+      },
       {
         type: "offer",
         docId: "b",

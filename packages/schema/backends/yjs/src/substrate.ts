@@ -13,10 +13,10 @@
 import type {
   ChangeBase,
   Path,
+  Reader,
   Replica,
   ReplicaFactory,
   Schema as SchemaNode,
-  Reader,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
@@ -239,7 +239,7 @@ export function createYjsSubstrate(
  * storage without ever interpreting document fields.
  */
 export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
-  return ({
+  return {
     [BACKING_DOC]: doc,
 
     version(): YjsVersion {
@@ -275,7 +275,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       }
       Y.applyUpdate(doc, payload.data)
     },
-  }) as Replica<YjsVersion>
+  } as Replica<YjsVersion>
 }
 
 export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
@@ -316,7 +316,10 @@ export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
     return createYjsReplica(new Y.Doc())
   },
 
-  upgrade(replica: Replica<YjsVersion>, schema: SchemaNode): Substrate<YjsVersion> {
+  upgrade(
+    replica: Replica<YjsVersion>,
+    schema: SchemaNode,
+  ): Substrate<YjsVersion> {
     const doc = (replica as any)[BACKING_DOC] as Y.Doc
     // No identity injection for the standalone factory (no peerId).
     // Conditional ensureContainers: skip fields that already exist

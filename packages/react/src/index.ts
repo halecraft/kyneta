@@ -52,10 +52,10 @@ export {
 // ---------------------------------------------------------------------------
 
 export type {
-  TransportFactory,
   DocId,
   ExchangeParams,
   ReadyState,
   SyncRef,
+  TransportFactory,
 } from "@kyneta/exchange"
 export { Exchange, hasSync, sync } from "@kyneta/exchange"

@@ -12,9 +12,9 @@ import {
   unwrap,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 import { Exchange } from "../exchange.js"
 import { hasSync, sync } from "../sync.js"
+import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -329,7 +329,9 @@ describe("Exchange", () => {
 
         const exchangeA = createExchange({
           identity: { peerId: "alice" },
-          transports: [createBridgeTransport({ transportType: "alice", bridge })],
+          transports: [
+            createBridgeTransport({ transportType: "alice", bridge }),
+          ],
         })
         const exchangeB = createExchange({
           identity: { peerId: "bob" },
@@ -369,7 +371,7 @@ describe("Exchange", () => {
   describe("replicate()", () => {
     it("registers a replicated doc visible via has()", () => {
       const exchange = createExchange()
-      exchange.replicate("rep-doc", plainReplicaFactory, "sequential")
+      exchange.replicate("rep-doc", plainReplicaFactory, "sequential", "00test")
       expect(exchange.has("rep-doc")).toBe(true)
     })
 
@@ -377,27 +379,37 @@ describe("Exchange", () => {
       const exchange = createExchange()
       exchange.get("doc-1", TestDoc)
       expect(() =>
-        exchange.replicate("doc-1", plainReplicaFactory, "sequential"),
+        exchange.replicate(
+          "doc-1",
+          plainReplicaFactory,
+          "sequential",
+          "00test",
+        ),
       ).toThrow(/already registered/)
     })
 
     it("replicate() throws if docId already registered via replicate()", () => {
       const exchange = createExchange()
-      exchange.replicate("doc-1", plainReplicaFactory, "sequential")
+      exchange.replicate("doc-1", plainReplicaFactory, "sequential", "00test")
       expect(() =>
-        exchange.replicate("doc-1", plainReplicaFactory, "sequential"),
+        exchange.replicate(
+          "doc-1",
+          plainReplicaFactory,
+          "sequential",
+          "00test",
+        ),
       ).toThrow(/already registered/)
     })
 
     it("get() throws if docId is registered in replicate mode", () => {
       const exchange = createExchange()
-      exchange.replicate("doc-1", plainReplicaFactory, "sequential")
+      exchange.replicate("doc-1", plainReplicaFactory, "sequential", "00test")
       expect(() => exchange.get("doc-1", TestDoc)).toThrow(/replicate mode/)
     })
 
     it("dismiss() works for replicated docs", () => {
       const exchange = createExchange()
-      exchange.replicate("rep-doc", plainReplicaFactory, "sequential")
+      exchange.replicate("rep-doc", plainReplicaFactory, "sequential", "00test")
       expect(exchange.has("rep-doc")).toBe(true)
       exchange.dismiss("rep-doc")
       expect(exchange.has("rep-doc")).toBe(false)
@@ -406,7 +418,7 @@ describe("Exchange", () => {
     it("has() returns true for both interpret and replicate modes", () => {
       const exchange = createExchange()
       exchange.get("int-doc", TestDoc)
-      exchange.replicate("rep-doc", plainReplicaFactory, "sequential")
+      exchange.replicate("rep-doc", plainReplicaFactory, "sequential", "00test")
       expect(exchange.has("int-doc")).toBe(true)
       expect(exchange.has("rep-doc")).toBe(true)
       expect(exchange.has("unknown")).toBe(false)

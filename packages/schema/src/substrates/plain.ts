@@ -34,8 +34,8 @@ import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
 import { RawPath, rawIndex, rawKey } from "../path.js"
+import { applyChange, type PlainState, plainReader } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
-import { applyChange, plainReader, type PlainState } from "../reader.js"
 import type {
   Replica,
   ReplicaFactory,
@@ -134,8 +134,8 @@ export class PlainVersion implements Version {
  */
 export const plainVersionStrategy: VersionStrategy<PlainVersion> = {
   zero: new PlainVersion(0),
-  current: (flushCount) => new PlainVersion(flushCount),
-  logOffset: (since) => since.value,
+  current: flushCount => new PlainVersion(flushCount),
+  logOffset: since => since.value,
 }
 
 // ---------------------------------------------------------------------------
@@ -395,9 +395,7 @@ export function createPlainReplica<V extends Version>(
  * const ref = interpret(schema, ctx).with(readable).with(writable).done()
  * ```
  */
-export function plainContext(
-  doc: PlainState,
-): WritableContext {
+export function plainContext(doc: PlainState): WritableContext {
   return createPlainSubstrate(doc, plainVersionStrategy).context()
 }
 
@@ -543,7 +541,10 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     return createPlainReplica({} as PlainState, plainVersionStrategy)
   },
 
-  upgrade(replica: Replica<PlainVersion>, schema: SchemaNode): Substrate<PlainVersion> {
+  upgrade(
+    replica: Replica<PlainVersion>,
+    schema: SchemaNode,
+  ): Substrate<PlainVersion> {
     const doc = (replica as any)[BACKING_DOC] as PlainState
     // Apply Zero.structural defaults for keys not already present
     const defaults = Zero.structural(schema) as Record<string, unknown>
@@ -563,7 +564,11 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
-    return buildPlainSubstrateFromEntirety(payload, schema, plainVersionStrategy)
+    return buildPlainSubstrateFromEntirety(
+      payload,
+      schema,
+      plainVersionStrategy,
+    )
   },
 
   parseVersion(serialized: string): PlainVersion {

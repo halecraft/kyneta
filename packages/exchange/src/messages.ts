@@ -59,6 +59,7 @@ export type PresentMsg = {
     docId: DocId
     replicaType: ReplicaType
     mergeStrategy: MergeStrategy
+    schemaHash: string
   }>
 }
 

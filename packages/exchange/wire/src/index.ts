@@ -59,11 +59,11 @@ export {
   StringToMessageType,
   StringToPayloadEncoding,
   StringToPayloadKind,
-  type WirePresentMsg,
   type WireEstablishMsg,
   type WireInterestMsg,
   type WireMessage,
   type WireOfferMsg,
+  type WirePresentMsg,
 } from "./wire-types.js"
 
 // ---------------------------------------------------------------------------

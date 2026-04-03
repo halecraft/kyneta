@@ -8,14 +8,17 @@
 //   import { describeStore } from "@kyneta/exchange/testing"
 //   describeStore("MyBackend", () => new MyBackend(), async (b) => { ... })
 
-import { describe, expect, it, beforeEach, afterEach } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { Store, StoreEntry } from "../store/store.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-export function makeEntry(kind: "entirety" | "since", version: string): StoreEntry {
+export function makeEntry(
+  kind: "entirety" | "since",
+  version: string,
+): StoreEntry {
   return {
     payload: {
       kind,
@@ -52,6 +55,7 @@ export async function collectAll<T>(iter: AsyncIterable<T>): Promise<T[]> {
 export const plainMetadata = {
   replicaType: ["plain", 1, 0] as const,
   mergeStrategy: "sequential" as const,
+  schemaHash: "00test",
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +108,7 @@ export function describeStore(
       const meta2 = {
         replicaType: ["loro", 1, 0] as const,
         mergeStrategy: "causal" as const,
+        schemaHash: "00test2",
       }
       await backend.ensureDoc("doc-1", plainMetadata)
       await backend.ensureDoc("doc-1", meta2)

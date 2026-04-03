@@ -11,9 +11,9 @@ import {
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 import {
+  collectAll,
   describeStore,
   makeEntry,
-  collectAll,
   plainMetadata,
 } from "../testing/store-conformance.js"
 
@@ -21,10 +21,7 @@ import {
 // Conformance suite — validates the full Store contract
 // ---------------------------------------------------------------------------
 
-describeStore(
-  "InMemoryStore",
-  () => new InMemoryStore(),
-)
+describeStore("InMemoryStore", () => new InMemoryStore())
 
 // ---------------------------------------------------------------------------
 // InMemory-specific tests — sharedData / getStorage()

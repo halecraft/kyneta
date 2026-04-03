@@ -45,10 +45,10 @@ import {
   type Version,
   writable,
 } from "@kyneta/schema"
-import type { TransportFactory, AnyTransport } from "./transport/transport.js"
+import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
-import type { Store } from "./store/store.js"
+import type { AnyTransport, TransportFactory } from "./transport/transport.js"
 import type { DocId, PeerIdentityDetails } from "./types.js"
 import { generatePeerId, validatePeerId } from "./utils.js"
 
@@ -99,6 +99,7 @@ export type OnDocDiscovered = (
   peer: PeerIdentityDetails,
   replicaType: ReplicaType,
   mergeStrategy: MergeStrategy,
+  schemaHash: string,
 ) => Interpret | Replicate | undefined
 
 /**
@@ -335,9 +336,15 @@ export class Exchange {
       route: route ?? (() => true),
       authorize: authorize ?? (() => true),
       onDocDismissed,
-      onDocCreationRequested: (docId, peer, replicaType, mergeStrategy) => {
+      onDocCreationRequested: (
+        docId,
+        peer,
+        replicaType,
+        mergeStrategy,
+        schemaHash,
+      ) => {
         const result = onDocDiscovered
-          ? onDocDiscovered(docId, peer, replicaType, mergeStrategy)
+          ? onDocDiscovered(docId, peer, replicaType, mergeStrategy, schemaHash)
           : undefined
 
         if (!result) {
@@ -359,7 +366,12 @@ export class Exchange {
             ;(this as any).get(docId, result.bound)
             break
           case "replicate":
-            this.replicate(docId, result.replicaFactory, result.strategy)
+            this.replicate(
+              docId,
+              result.replicaFactory,
+              result.strategy,
+              result.schemaHash,
+            )
             break
         }
       },
@@ -483,41 +495,38 @@ export class Exchange {
   }
 
   /**
-   * Hydrate a replica from stores, then register with the
-   * synchronizer and wire persistence.
+   * Hydrate a replica/substrate from stores, then register with the
+   * synchronizer.
    *
-   * This is the async tail of get()/replicate(). The caller has already
-   * created the replica and cached the ref — this function loads stored
-   * data, registers with the synchronizer (so present/interest carry
-   * the hydrated version), and wires ongoing persistence.
-   */
-  /**
-   * Hydrate a bare replica from stores, upgrade to a full substrate,
-   * replace the ref's backing substrate, and register with the synchronizer.
-   *
-   * This is the async tail of get() when stores are configured.
-   * The caller has already created the ref (backed by a temporary substrate)
-   * and cached it. This function:
+   * This is the async tail of get() and replicate() when stores are
+   * configured. The caller has already created the replica/substrate
+   * and cached the ref (if interpret mode). This function:
    * 1. Ensures doc metadata in all backends
-   * 2. Loads stored entries and merges into the bare replica
-   * 3. If store was empty (first boot), appends an entirety base entry
-   * 4. Upgrades the replica to a full Substrate (identity set, conditional structure)
-   * 5. Replaces the ref's backing substrate via merge (so changefeed fires)
-   * 6. Records storeVersion for incremental persistence
-   * 7. Registers with the synchronizer
+   * 2. Loads stored entries and merges into the replica
+   * 3. If store was empty (first boot), persists an entirety base entry
+   * 4. Records storeVersion for incremental persistence
+   * 5. Registers with the synchronizer
    *
-   * Context: jj:smmulzkm (two-phase substrate construction)
+   * For interpret mode with structural clientID 0, `factory.create(schema)`
+   * produces structural ops at `(0, 0..N)` — identical to what any stored
+   * state has. Merging stored data into this substrate deduplicates the
+   * structural ops and applies application ops into the shared containers.
+   * No separate replica, no upgrade step, no merge-into-temp.
+   *
+   * Context: jj:ptyzqoul (structural merge protocol)
    */
-  async #hydrateUpgradeAndRegister<S extends SchemaNode>(
+  async #hydrateAndRegister(
     docId: DocId,
-    ref: any,
     replica: Replica<any>,
-    factory: SubstrateFactory<any>,
-    bound: BoundSchema<S>,
+    replicaFactory: ReplicaFactory<any>,
+    strategy: MergeStrategy,
+    schemaHash: string,
+    mode: "interpret" | "replicate",
   ): Promise<void> {
     const metadata: DocMetadata = {
-      replicaType: factory.replica.replicaType,
-      mergeStrategy: bound.strategy,
+      replicaType: replicaFactory.replicaType,
+      mergeStrategy: strategy,
+      schemaHash,
     }
 
     // 1. Ensure doc metadata is registered in all backends
@@ -525,14 +534,11 @@ export class Exchange {
       try {
         await backend.ensureDoc(docId, metadata)
       } catch (error) {
-        console.error(
-          `[exchange] ensureDoc failed for doc '${docId}':`,
-          error,
-        )
+        console.error(`[exchange] ensureDoc failed for doc '${docId}':`, error)
       }
     }
 
-    // 2. Hydrate from storage — load all entries and merge into the bare replica
+    // 2. Hydrate from storage — load all entries and merge into the replica
     let hadStoredEntries = false
     for (const backend of this.#stores) {
       try {
@@ -558,103 +564,20 @@ export class Exchange {
       }
     }
 
-    // 3. Upgrade the hydrated replica to a full Substrate.
-    //    Identity is set here (after hydration, before structural writes).
-    //    Conditional ensureContainers skips fields present from hydration.
-    const substrate = factory.upgrade(replica, bound.schema)
-
-    // 4. Merge hydrated state into the live ref's substrate so the
-    //    changefeed fires and subscribers observe the transition.
-    //    The ref was built with a temporary substrate (Zero.structural defaults).
-    //    We merge the hydrated entirety into it.
-    if (hadStoredEntries) {
-      const currentSubstrate = unwrap(ref)
-      const entirety = substrate.exportEntirety()
-      currentSubstrate.merge(entirety, "sync")
-    }
-
-    // 5. If store was empty (first boot), persist an entirety base entry
+    // 3. If store was empty (first boot), persist an entirety base entry
     //    so future deltas have a base to build on.
     if (!hadStoredEntries) {
-      const payload = substrate.exportEntirety()
-      const version = substrate.version().serialize()
+      const payload = replica.exportEntirety()
+      const version = replica.version().serialize()
       this.#persistToStore(docId, backend =>
         backend.append(docId, { payload, version }),
       )
     }
 
-    // 6. Record storeVersion for incremental persistence via onStateAdvanced
-    this.#storeVersions.set(docId, substrate.version())
-
-    // 7. Register with synchronizer — present/interest messages carry
-    //    the hydrated version, not an empty one.
-    //    Use the live ref's substrate (which now has hydrated state).
-    const liveSubstrate = unwrap(ref)
-    this.#synchronizer.registerDoc({
-      mode: "interpret",
-      docId,
-      replica: liveSubstrate, // Substrate extends Replica
-      replicaFactory: factory.replica,
-      strategy: bound.strategy,
-    })
-  }
-
-  /**
-   * Hydrate a replica from stores, then register with the
-   * synchronizer. Used by replicate() — no upgrade needed.
-   */
-  async #hydrateAndRegister(
-    docId: DocId,
-    replica: Replica<any>,
-    replicaFactory: ReplicaFactory<any>,
-    strategy: MergeStrategy,
-    mode: "interpret" | "replicate",
-  ): Promise<void> {
-    const metadata: DocMetadata = {
-      replicaType: replicaFactory.replicaType,
-      mergeStrategy: strategy,
-    }
-
-    // 1. Ensure doc metadata is registered in all backends
-    for (const backend of this.#stores) {
-      try {
-        await backend.ensureDoc(docId, metadata)
-      } catch (error) {
-        console.error(
-          `[exchange] ensureDoc failed for doc '${docId}':`,
-          error,
-        )
-      }
-    }
-
-    // 2. Hydrate from storage — load all entries and merge into the replica
-    for (const backend of this.#stores) {
-      try {
-        const existing = await backend.lookup(docId)
-        if (existing) {
-          for await (const entry of backend.loadAll(docId)) {
-            try {
-              replica.merge(entry.payload, "sync")
-            } catch (err) {
-              console.warn(
-                `[exchange] failed to merge stored entry for doc '${docId}':`,
-                err,
-              )
-            }
-          }
-        }
-      } catch (error) {
-        console.error(
-          `[exchange] store hydration failed for doc '${docId}':`,
-          error,
-        )
-      }
-    }
-
-    // 3. Record storeVersion for incremental persistence via onStateAdvanced
+    // 4. Record storeVersion for incremental persistence via onStateAdvanced
     this.#storeVersions.set(docId, replica.version())
 
-    // 4. Register with synchronizer — present/interest messages carry
+    // 5. Register with synchronizer — present/interest messages carry
     //    the hydrated version, not an empty one
     this.#synchronizer.registerDoc({
       mode,
@@ -662,6 +585,7 @@ export class Exchange {
       replica,
       replicaFactory,
       strategy,
+      schemaHash,
     } as DocRuntime)
   }
 
@@ -744,33 +668,26 @@ export class Exchange {
     const factory = this.#resolveFactory(bound.factory)
 
     if (this.#stores.length > 0) {
-      // ── Store path: two-phase construction ──
-      // 1. createReplica() — bare CRDT doc, no identity, no structural writes
-      // 2. Hydrate from store (async)
-      // 3. upgrade(replica, schema) — set identity, conditional structure
-      // 4. Build interpreter stack from the substrate
+      // ── Store path: single substrate ──
+      // With structural clientID 0 (jj:ptyzqoul), factory.create(schema)
+      // produces structural ops at (0, 0..N) — identical to any stored
+      // state's structural ops. Merging stored data into this substrate
+      // deduplicates structural ops and applies application ops into the
+      // shared containers. No second Y.Doc, no merge-into-temp.
       //
-      // The ref is returned synchronously (empty). The async tail populates
-      // it. This preserves the contract where the ref is immediately usable
-      // but empty until hydration completes.
-      //
-      // Context: jj:smmulzkm (two-phase substrate construction)
+      // The ref is returned synchronously (Zero.structural defaults).
+      // The async tail merges stored data — the changefeed fires and
+      // subscribers observe the transition.
 
-      // Create a bare replica for hydration — no identity, no schema writes.
-      const replica = factory.createReplica()
+      const substrate = factory.create(bound.schema)
 
-      // Build a temporary substrate for the ref so it's immediately usable.
-      // This uses the one-step create() path — the ref starts with
-      // Zero.structural defaults and will be replaced by hydrated data.
-      const tempSubstrate = factory.create(bound.schema)
-
-      const ref: any = (interpret as any)(bound.schema, tempSubstrate.context())
+      const ref: any = (interpret as any)(bound.schema, substrate.context())
         .with(readable)
         .with(writable)
         .with(changefeed)
         .done()
 
-      registerSubstrate(ref, tempSubstrate)
+      registerSubstrate(ref, substrate)
       registerSync(ref, {
         peerId: this.peerId,
         docId,
@@ -784,12 +701,13 @@ export class Exchange {
         bound,
       })
 
-      const hydrationOp = this.#hydrateUpgradeAndRegister(
+      const hydrationOp = this.#hydrateAndRegister(
         docId,
-        ref,
-        replica,
-        factory,
-        bound,
+        substrate,
+        factory.replica,
+        bound.strategy,
+        bound.schemaHash,
+        "interpret",
       ).then(() => {
         // Wire changefeed → synchronizer AFTER hydration so that
         // the merges during hydration (with origin "sync") don't trigger
@@ -833,6 +751,7 @@ export class Exchange {
         replica: substrate, // Substrate extends Replica
         replicaFactory: factory.replica,
         strategy: bound.strategy,
+        schemaHash: bound.schemaHash,
       })
 
       // Auto-wire changefeed → synchronizer: when a local mutation fires
@@ -873,6 +792,7 @@ export class Exchange {
     docId: DocId,
     replicaFactory: ReplicaFactory<any>,
     strategy: MergeStrategy,
+    schemaHash: string,
   ): void {
     // Check cache — throw if already registered
     if (this.#docCache.has(docId)) {
@@ -895,6 +815,7 @@ export class Exchange {
         replica,
         replicaFactory,
         strategy,
+        schemaHash,
         "replicate",
       )
       this.#trackOp(hydrationOp)
@@ -906,6 +827,7 @@ export class Exchange {
         replica,
         replicaFactory,
         strategy,
+        schemaHash,
       })
     }
   }

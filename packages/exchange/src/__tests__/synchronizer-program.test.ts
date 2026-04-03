@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest"
 import type { ConnectedChannel, EstablishedChannel } from "../channel.js"
 import {
   type Command,
-  type Notification,
   createSynchronizerUpdate,
   init,
+  type Notification,
   type SynchronizerMessage,
   type SynchronizerModel,
 } from "../synchronizer-program.js"
@@ -298,6 +298,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -348,6 +349,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         model,
       )
@@ -360,6 +362,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v2",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m1,
       )
@@ -384,6 +387,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -394,7 +398,17 @@ describe("synchronizer-program", () => {
           type: "synchronizer/channel-receive-message",
           envelope: {
             fromChannelId: 1,
-            message: { type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "doc-1",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "00test",
+                },
+              ],
+            },
           },
         },
         m,
@@ -428,7 +442,17 @@ describe("synchronizer-program", () => {
           type: "synchronizer/channel-receive-message",
           envelope: {
             fromChannelId: 1,
-            message: { type: "present", docs: [{ docId: "unknown-doc", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "unknown-doc",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "00test",
+                },
+              ],
+            },
           },
         },
         m,
@@ -456,6 +480,7 @@ describe("synchronizer-program", () => {
           docId: "known-doc",
           version: "v1",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -465,7 +490,23 @@ describe("synchronizer-program", () => {
           type: "synchronizer/channel-receive-message",
           envelope: {
             fromChannelId: 1,
-            message: { type: "present", docs: [{ docId: "known-doc", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "unknown-doc", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "known-doc",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "00test",
+                },
+                {
+                  docId: "unknown-doc",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "00test",
+                },
+              ],
+            },
           },
         },
         m,
@@ -504,6 +545,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -513,7 +555,17 @@ describe("synchronizer-program", () => {
           type: "synchronizer/channel-receive-message",
           envelope: {
             fromChannelId: 1,
-            message: { type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "doc-1",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "00test",
+                },
+              ],
+            },
           },
         },
         m,
@@ -542,6 +594,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -559,6 +612,7 @@ describe("synchronizer-program", () => {
                   docId: "doc-1",
                   replicaType: ["loro", 1, 0] as const,
                   mergeStrategy: "causal" as const,
+                  schemaHash: "00test",
                 },
               ],
             },
@@ -585,6 +639,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -602,6 +657,7 @@ describe("synchronizer-program", () => {
                   docId: "doc-1",
                   replicaType: ["yjs", 2, 0] as const,
                   mergeStrategy: "causal" as const,
+                  schemaHash: "00test",
                 },
               ],
             },
@@ -627,6 +683,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -644,6 +701,7 @@ describe("synchronizer-program", () => {
                   docId: "doc-1",
                   replicaType: ["yjs", 1, 3] as const,
                   mergeStrategy: "causal" as const,
+                  schemaHash: "00test",
                 },
               ],
             },
@@ -659,6 +717,51 @@ describe("synchronizer-program", () => {
           c.envelope.message.type === "interest",
       )
       expect(interestCmd).toBeDefined()
+    })
+
+    it("receiving present with schema hash mismatch for known doc skips sync (no interest)", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "00aaaa",
+        },
+        m,
+      )
+
+      // Remote peer announces same doc, same replicaType, but different schemaHash
+      const [_m2, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "doc-1",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "00bbbb",
+                },
+              ],
+            },
+          },
+        },
+        m,
+      )
+
+      // Should produce NO commands — schema hash mismatch means skip
+      const commands = flattenCommands(cmd)
+      expect(commands).toHaveLength(0)
     })
 
     it("request-doc-creation carries replicaType and mergeStrategy from present", () => {
@@ -679,6 +782,7 @@ describe("synchronizer-program", () => {
                   docId: "new-doc",
                   replicaType: ["loro", 1, 0] as const,
                   mergeStrategy: "causal" as const,
+                  schemaHash: "00test",
                 },
               ],
             },
@@ -713,6 +817,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -772,6 +877,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -821,6 +927,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "1000",
           mergeStrategy: "lww",
+          schemaHash: "00test",
         },
         m,
       )
@@ -864,6 +971,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -939,6 +1047,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1000,6 +1109,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1048,6 +1158,7 @@ describe("synchronizer-program", () => {
           docId: "presence",
           version: "1000",
           mergeStrategy: "lww",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1085,6 +1196,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1118,6 +1230,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1158,6 +1271,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1223,6 +1337,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "1000",
           mergeStrategy: "lww",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1264,6 +1379,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1307,6 +1423,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         model,
       )
@@ -1331,6 +1448,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1340,7 +1458,17 @@ describe("synchronizer-program", () => {
           type: "synchronizer/channel-receive-message",
           envelope: {
             fromChannelId: 1,
-            message: { type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "doc-1",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "00test",
+                },
+              ],
+            },
           },
         },
         m,
@@ -1375,6 +1503,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "v1",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1384,7 +1513,17 @@ describe("synchronizer-program", () => {
           type: "synchronizer/channel-receive-message",
           envelope: {
             fromChannelId: 1,
-            message: { type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "doc-1",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "00test",
+                },
+              ],
+            },
           },
         },
         m,
@@ -1429,6 +1568,7 @@ describe("synchronizer-program", () => {
           docId: "public-doc",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1440,6 +1580,7 @@ describe("synchronizer-program", () => {
           docId: "secret-doc",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1472,8 +1613,12 @@ describe("synchronizer-program", () => {
         presentCmd.type === "cmd/send-message" &&
         presentCmd.envelope.message.type === "present"
       ) {
-        expect(presentCmd.envelope.message.docs.map((d: any) => d.docId)).toContain("public-doc")
-        expect(presentCmd.envelope.message.docs.map((d: any) => d.docId)).not.toContain("secret-doc")
+        expect(
+          presentCmd.envelope.message.docs.map((d: any) => d.docId),
+        ).toContain("public-doc")
+        expect(
+          presentCmd.envelope.message.docs.map((d: any) => d.docId),
+        ).not.toContain("secret-doc")
       }
     })
 
@@ -1492,6 +1637,7 @@ describe("synchronizer-program", () => {
           docId: "public-doc",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1503,6 +1649,7 @@ describe("synchronizer-program", () => {
           docId: "secret-doc",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1534,8 +1681,12 @@ describe("synchronizer-program", () => {
         presentCmd.type === "cmd/send-message" &&
         presentCmd.envelope.message.type === "present"
       ) {
-        expect(presentCmd.envelope.message.docs.map((d: any) => d.docId)).toContain("public-doc")
-        expect(presentCmd.envelope.message.docs.map((d: any) => d.docId)).not.toContain("secret-doc")
+        expect(
+          presentCmd.envelope.message.docs.map((d: any) => d.docId),
+        ).toContain("public-doc")
+        expect(
+          presentCmd.envelope.message.docs.map((d: any) => d.docId),
+        ).not.toContain("secret-doc")
       }
     })
 
@@ -1558,6 +1709,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1593,6 +1745,7 @@ describe("synchronizer-program", () => {
           docId: "presence",
           version: "0",
           mergeStrategy: "lww",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1637,6 +1790,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "0",
           mergeStrategy: "lww",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1674,7 +1828,17 @@ describe("synchronizer-program", () => {
           type: "synchronizer/channel-receive-message",
           envelope: {
             fromChannelId: 1,
-            message: { type: "present", docs: [{ docId: "forbidden", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "forbidden",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "00test",
+                },
+              ],
+            },
           },
         },
         m,
@@ -1704,6 +1868,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "0",
           mergeStrategy: "lww",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1742,6 +1907,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1798,6 +1964,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1848,6 +2015,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1890,6 +2058,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1943,6 +2112,7 @@ describe("synchronizer-program", () => {
           docId: "doc-1",
           version: "0",
           mergeStrategy: "sequential",
+          schemaHash: "00test",
         },
         m,
       )
@@ -1985,6 +2155,7 @@ describe("synchronizer-program", () => {
           docId: "replicated-doc",
           version: "0",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -2038,6 +2209,7 @@ describe("synchronizer-program", () => {
           docId: "rep-doc",
           version: "0",
           mergeStrategy: "causal",
+          schemaHash: "00test",
         },
         m,
       )
@@ -2102,235 +2274,242 @@ describe("synchronizer-program", () => {
     })
   })
 
-    // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    // Notification co-product — ready-state invalidation
-    // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // Notification co-product — ready-state invalidation
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-    describe("notification co-product", () => {
-      it("doc-imported returns ready-state-changed notification for the imported docId", () => {
-        const update = makeUpdate()
-        const [model] = init(aliceIdentity)
+  describe("notification co-product", () => {
+    it("doc-imported returns ready-state-changed notification for the imported docId", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
 
-        let m = establishChannel(update, model, 1, bobIdentity)
-        ;[m] = update(
-          {
-            type: "synchronizer/doc-ensure",
-            replicaType: ["plain", 1, 0] as const,
-            mode: "interpret",
-            docId: "doc-1",
-            version: "v1",
-            mergeStrategy: "sequential",
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "00test",
+        },
+        m,
+      )
+
+      const [_m2, _cmd, notification] = update(
+        {
+          type: "synchronizer/doc-imported",
+          docId: "doc-1",
+          version: "v2",
+          fromPeerId: "bob",
+        },
+        m,
+      )
+
+      const docIds = collectNotifiedDocIds(notification)
+      expect(docIds).toEqual(new Set(["doc-1"]))
+    })
+
+    it("interest for known doc returns ready-state-changed notification", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "00test",
+        },
+        m,
+      )
+
+      const [_m2, _cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "interest", docId: "doc-1", version: "v0" },
           },
-          m,
-        )
+        },
+        m,
+      )
 
-        const [_m2, _cmd, notification] = update(
-          {
-            type: "synchronizer/doc-imported",
-            docId: "doc-1",
-            version: "v2",
-            fromPeerId: "bob",
+      const docIds = collectNotifiedDocIds(notification)
+      expect(docIds).toEqual(new Set(["doc-1"]))
+    })
+
+    it("dismiss returns ready-state-changed notification for the dismissed docId", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "00test",
+        },
+        m,
+      )
+
+      const [_m2, _cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "dismiss", docId: "doc-1" },
           },
-          m,
-        )
+        },
+        m,
+      )
 
-        const docIds = collectNotifiedDocIds(notification)
-        expect(docIds).toEqual(new Set(["doc-1"]))
-      })
+      const docIds = collectNotifiedDocIds(notification)
+      expect(docIds).toEqual(new Set(["doc-1"]))
+    })
 
-      it("interest for known doc returns ready-state-changed notification", () => {
-        const update = makeUpdate()
-        const [model] = init(aliceIdentity)
+    it("channel-removed for last channel of a peer notifies all docs the peer had sync state for", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
 
-        let m = establishChannel(update, model, 1, bobIdentity)
-        ;[m] = update(
-          {
-            type: "synchronizer/doc-ensure",
-            replicaType: ["plain", 1, 0] as const,
-            mode: "interpret",
-            docId: "doc-1",
-            version: "v1",
-            mergeStrategy: "sequential",
+      let m = establishChannel(update, model, 1, bobIdentity)
+
+      // Ensure two docs so bob gets sync state for both
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "00test",
+        },
+        m,
+      )
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-2",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "00test",
+        },
+        m,
+      )
+
+      // Bob sends interest for both docs → creates pending sync state
+      ;[m] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "interest", docId: "doc-1", version: "v0" },
           },
-          m,
-        )
-
-        const [_m2, _cmd, notification] = update(
-          {
-            type: "synchronizer/channel-receive-message",
-            envelope: {
-              fromChannelId: 1,
-              message: { type: "interest", docId: "doc-1", version: "v0" },
-            },
+        },
+        m,
+      )
+      ;[m] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "interest", docId: "doc-2", version: "v0" },
           },
-          m,
-        )
+        },
+        m,
+      )
 
-        const docIds = collectNotifiedDocIds(notification)
-        expect(docIds).toEqual(new Set(["doc-1"]))
-      })
+      // Remove the channel — bob's only channel
+      const channel = m.channels.get(1)!
+      const [_m2, _cmd, notification] = update(
+        { type: "synchronizer/channel-removed", channel },
+        m,
+      )
 
-      it("dismiss returns ready-state-changed notification for the dismissed docId", () => {
-        const update = makeUpdate()
-        const [model] = init(aliceIdentity)
+      const docIds = collectNotifiedDocIds(notification)
+      expect(docIds).toEqual(new Set(["doc-1", "doc-2"]))
+    })
 
-        let m = establishChannel(update, model, 1, bobIdentity)
-        ;[m] = update(
-          {
-            type: "synchronizer/doc-ensure",
-            replicaType: ["plain", 1, 0] as const,
-            mode: "interpret",
-            docId: "doc-1",
-            version: "v1",
-            mergeStrategy: "sequential",
-          },
-          m,
-        )
+    it("channel-added returns no notification", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+      const channel = makeConnectedChannel(1)
 
-        const [_m2, _cmd, notification] = update(
-          {
-            type: "synchronizer/channel-receive-message",
-            envelope: {
-              fromChannelId: 1,
-              message: { type: "dismiss", docId: "doc-1" },
-            },
-          },
-          m,
-        )
+      const [_m, _cmd, notification] = update(
+        { type: "synchronizer/channel-added", channel },
+        model,
+      )
 
-        const docIds = collectNotifiedDocIds(notification)
-        expect(docIds).toEqual(new Set(["doc-1"]))
-      })
+      expect(notification).toBeUndefined()
+    })
 
-      it("channel-removed for last channel of a peer notifies all docs the peer had sync state for", () => {
-        const update = makeUpdate()
-        const [model] = init(aliceIdentity)
+    it("doc-ensure returns no notification", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
 
-        let m = establishChannel(update, model, 1, bobIdentity)
+      const m = establishChannel(update, model, 1, bobIdentity)
 
-        // Ensure two docs so bob gets sync state for both
-        ;[m] = update(
-          {
-            type: "synchronizer/doc-ensure",
-            replicaType: ["plain", 1, 0] as const,
-            mode: "interpret",
-            docId: "doc-1",
-            version: "v1",
-            mergeStrategy: "sequential",
-          },
-          m,
-        )
-        ;[m] = update(
-          {
-            type: "synchronizer/doc-ensure",
-            replicaType: ["plain", 1, 0] as const,
-            mode: "interpret",
-            docId: "doc-2",
-            version: "v1",
-            mergeStrategy: "sequential",
-          },
-          m,
-        )
+      const [_m2, _cmd, notification] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "00test",
+        },
+        m,
+      )
 
-        // Bob sends interest for both docs → creates pending sync state
-        ;[m] = update(
-          {
-            type: "synchronizer/channel-receive-message",
-            envelope: {
-              fromChannelId: 1,
-              message: { type: "interest", docId: "doc-1", version: "v0" },
-            },
-          },
-          m,
-        )
-        ;[m] = update(
-          {
-            type: "synchronizer/channel-receive-message",
-            envelope: {
-              fromChannelId: 1,
-              message: { type: "interest", docId: "doc-2", version: "v0" },
-            },
-          },
-          m,
-        )
+      expect(notification).toBeUndefined()
+    })
 
-        // Remove the channel — bob's only channel
-        const channel = m.channels.get(1)!
-        const [_m2, _cmd, notification] = update(
-          { type: "synchronizer/channel-removed", channel },
-          m,
-        )
+    it("local-doc-change returns no notification", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
 
-        const docIds = collectNotifiedDocIds(notification)
-        expect(docIds).toEqual(new Set(["doc-1", "doc-2"]))
-      })
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "00test",
+        },
+        m,
+      )
 
-      it("channel-added returns no notification", () => {
-        const update = makeUpdate()
-        const [model] = init(aliceIdentity)
-        const channel = makeConnectedChannel(1)
+      const [_m2, _cmd, notification] = update(
+        {
+          type: "synchronizer/local-doc-change",
+          docId: "doc-1",
+          version: "v2",
+        },
+        m,
+      )
 
-        const [_m, _cmd, notification] = update(
-          { type: "synchronizer/channel-added", channel },
-          model,
-        )
-
-        expect(notification).toBeUndefined()
-      })
-
-      it("doc-ensure returns no notification", () => {
-        const update = makeUpdate()
-        const [model] = init(aliceIdentity)
-
-        const m = establishChannel(update, model, 1, bobIdentity)
-
-        const [_m2, _cmd, notification] = update(
-          {
-            type: "synchronizer/doc-ensure",
-            replicaType: ["plain", 1, 0] as const,
-            mode: "interpret",
-            docId: "doc-1",
-            version: "v1",
-            mergeStrategy: "sequential",
-          },
-          m,
-        )
-
-        expect(notification).toBeUndefined()
-      })
-
-      it("local-doc-change returns no notification", () => {
-        const update = makeUpdate()
-        const [model] = init(aliceIdentity)
-
-        let m = establishChannel(update, model, 1, bobIdentity)
-        ;[m] = update(
-          {
-            type: "synchronizer/doc-ensure",
-            replicaType: ["plain", 1, 0] as const,
-            mode: "interpret",
-            docId: "doc-1",
-            version: "v1",
-            mergeStrategy: "sequential",
-          },
-          m,
-        )
-
-        const [_m2, _cmd, notification] = update(
-          {
-            type: "synchronizer/local-doc-change",
-            docId: "doc-1",
-            version: "v2",
-          },
-          m,
-        )
-
-        // local-doc-change now emits notify/state-advanced for unified
-        // persistence (jj:smmulzkm). Verify it notifies the correct docId.
-        expect(notification).toBeDefined()
-        expect(notification!.type).toBe("notify/state-advanced")
-        const docIds = collectNotifiedDocIds(notification)
-        expect(docIds).toEqual(new Set(["doc-1"]))
-      })
+      // local-doc-change now emits notify/state-advanced for unified
+      // persistence (jj:smmulzkm). Verify it notifies the correct docId.
+      expect(notification).toBeDefined()
+      expect(notification!.type).toBe("notify/state-advanced")
+      const docIds = collectNotifiedDocIds(notification)
+      expect(docIds).toEqual(new Set(["doc-1"]))
     })
   })
+})

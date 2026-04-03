@@ -207,6 +207,13 @@ export {
   resetAddressIdCounter,
   resolveToAddressed,
 } from "./path.js"
+export type { PlainState, Reader } from "./reader.js"
+// Reader — shared utilities for reading/writing plain state objects
+export {
+  applyChange,
+  plainReader,
+  writeByPath,
+} from "./reader.js"
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
 export type {
   Ref,
@@ -259,13 +266,6 @@ export {
   stepSequence,
   stepText,
 } from "./step.js"
-export type { PlainState, Reader } from "./reader.js"
-// Reader — shared utilities for reading/writing plain state objects
-export {
-  applyChange,
-  plainReader,
-  writeByPath,
-} from "./reader.js"
 // Substrate — state management, versioning, and transfer semantics
 export type {
   DocMetadata,
@@ -279,7 +279,12 @@ export type {
   SubstratePrepare,
   Version,
 } from "./substrate.js"
-export { BACKING_DOC, replicaTypesCompatible } from "./substrate.js"
+export {
+  BACKING_DOC,
+  computeSchemaHash,
+  replicaTypesCompatible,
+  STRUCTURAL_YJS_CLIENT_ID,
+} from "./substrate.js"
 // LWW substrate — plain substrate wrapped with TimestampVersion for ephemeral state
 export { lwwReplicaFactory, lwwSubstrateFactory } from "./substrates/lww.js"
 // Plain substrate — plain JS object store with version tracking

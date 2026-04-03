@@ -22,8 +22,16 @@ import { parseTextPostBody } from "../sse-handler.js"
 const presentMsg: ChannelMsg = {
   type: "present",
   docs: [
-    { docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const },
-    { docId: "doc-2", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const },
+    {
+      docId: "doc-1",
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
+    },
+    {
+      docId: "doc-2",
+      replicaType: ["plain", 1, 0] as const,
+      mergeStrategy: "sequential" as const,
+    },
   ],
 }
 

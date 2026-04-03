@@ -160,19 +160,22 @@ reassembler.dispose() // clean up timers when done
 
 The CBOR codec uses integer type discriminators and short field names to minimize payload size:
 
-| Field | Meaning |
-|-------|---------|
-| `t` | Message type discriminator |
-| `id` | Peer ID |
-| `n` | Peer name |
-| `y` | Peer type (`"user"` / `"bot"` / `"service"`) |
-| `docs` | Document IDs array |
-| `doc` | Document ID |
-| `v` | Version |
-| `r` | Reciprocate flag |
-| `ot` | Offer type (`0x00` snapshot, `0x01` delta) |
-| `pe` | Payload encoding (`0x00` json, `0x01` binary) |
-| `d` | Payload data |
+| Field | Meaning | Used by |
+|-------|---------|---------|
+| `t` | Message type discriminator | All messages |
+| `id` | Peer ID | establish-request, establish-response |
+| `n` | Peer name (optional) | establish-request, establish-response |
+| `y` | Peer type (`"user"` / `"bot"` / `"service"`) | establish-request, establish-response |
+| `docs` | Present doc entries array (`Array<{d, rt, ms, sh}>`) | present |
+| `d` | Doc ID (within present entry) / payload data (offer) | present, offer |
+| `rt` | Replica type tuple `[string, number, number]` | present (doc entry) |
+| `ms` | Merge strategy (`0x00` causal, `0x01` sequential, `0x02` lww) | present (doc entry) |
+| `sh` | Schema hash (34-char hex string, required) | present (doc entry) |
+| `doc` | Document ID | interest, offer, dismiss |
+| `v` | Version | interest (optional), offer |
+| `r` | Reciprocate flag (optional) | interest, offer |
+| `pk` | Payload kind (`0x00` entirety, `0x01` since) | offer |
+| `pe` | Payload encoding (`0x00` json, `0x01` binary) | offer |
 
 See [PROTOCOL.md](./PROTOCOL.md) for the full wire protocol specification.
 

@@ -6,9 +6,9 @@
 
 import type {
   ChannelMsg,
-  PresentMsg,
   InterestMsg,
   OfferMsg,
+  PresentMsg,
 } from "@kyneta/exchange"
 import { describe, expect, it } from "vitest"
 import { cborCodec } from "../cbor.js"
@@ -49,7 +49,17 @@ function readHeader(frame: Uint8Array) {
 
 describe("Binary frame — complete", () => {
   it("encodes a complete frame with correct 7-byte header", () => {
-    const msg: PresentMsg = { type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] }
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [
+        {
+          docId: "doc-1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+      ],
+    }
     const frame = encodeComplete(cborCodec, msg)
 
     expect(frame).toBeInstanceOf(Uint8Array)
@@ -63,7 +73,29 @@ describe("Binary frame — complete", () => {
   })
 
   it("round-trips a present message", () => {
-    const msg: PresentMsg = { type: "present", docs: [{ docId: "a", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "b", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }, { docId: "c", replicaType: ["loro", 1, 0] as const, mergeStrategy: "lww" as const }] }
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [
+        {
+          docId: "a",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+        {
+          docId: "b",
+          schemaHash: "00test",
+          replicaType: ["yjs", 1, 0] as const,
+          mergeStrategy: "causal" as const,
+        },
+        {
+          docId: "c",
+          schemaHash: "00test",
+          replicaType: ["loro", 1, 0] as const,
+          mergeStrategy: "lww" as const,
+        },
+      ],
+    }
     const encoded = encodeComplete(cborCodec, msg)
     const frame = decodeBinaryFrame(encoded)
 
@@ -160,7 +192,17 @@ describe("Binary frame — complete", () => {
 describe("Binary frame — batch (via complete frame)", () => {
   it("encodes a batch as a complete frame (no BATCH flag)", () => {
     const msgs: ChannelMsg[] = [
-      { type: "present", docs: [{ docId: "d1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+      {
+        type: "present",
+        docs: [
+          {
+            docId: "d1",
+            schemaHash: "00test",
+            replicaType: ["plain", 1, 0] as const,
+            mergeStrategy: "sequential" as const,
+          },
+        ],
+      },
       { type: "interest", docId: "d1", version: "0" },
     ]
     const encoded = encodeCompleteBatch(cborCodec, msgs)
@@ -177,7 +219,23 @@ describe("Binary frame — batch (via complete frame)", () => {
         type: "establish-request",
         identity: { peerId: "p1", name: "One", type: "user" },
       },
-      { type: "present", docs: [{ docId: "d1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "d2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }] },
+      {
+        type: "present",
+        docs: [
+          {
+            docId: "d1",
+            schemaHash: "00test",
+            replicaType: ["plain", 1, 0] as const,
+            mergeStrategy: "sequential" as const,
+          },
+          {
+            docId: "d2",
+            schemaHash: "00test",
+            replicaType: ["yjs", 1, 0] as const,
+            mergeStrategy: "causal" as const,
+          },
+        ],
+      },
       { type: "interest", docId: "d1", version: "5", reciprocate: true },
       {
         type: "offer",
@@ -306,7 +364,17 @@ describe("Binary frame — fragment", () => {
 
 describe("Binary frame — encodeBinaryFrame generic", () => {
   it("encodes a complete frame from Frame<Uint8Array>", () => {
-    const payload = cborCodec.encode({ type: "present", docs: [{ docId: "x", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] })
+    const payload = cborCodec.encode({
+      type: "present",
+      docs: [
+        {
+          docId: "x",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+      ],
+    })
     const frame = complete(WIRE_VERSION, payload)
     const encoded = encodeBinaryFrame(frame)
 
@@ -450,7 +518,17 @@ describe("Binary frame — error handling", () => {
 
 describe("Binary frame — edge cases", () => {
   it("normalizes Buffer subclass input", () => {
-    const msg: PresentMsg = { type: "present", docs: [{ docId: "test", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] }
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [
+        {
+          docId: "test",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+      ],
+    }
     const encoded = encodeComplete(cborCodec, msg)
 
     // Create a copy via ArrayBuffer (simulates Buffer → Uint8Array path)

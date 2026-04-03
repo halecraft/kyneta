@@ -332,7 +332,7 @@ export function createLoroSubstrate(
  * storage without ever interpreting document fields.
  */
 export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
-  return ({
+  return {
     [BACKING_DOC]: doc,
 
     version(): LoroVersion {
@@ -368,7 +368,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       }
       doc.import(payload.data)
     },
-  }) as Replica<LoroVersion>
+  } as Replica<LoroVersion>
 }
 
 export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
@@ -419,7 +419,10 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
     return createLoroReplica(new LoroDoc())
   },
 
-  upgrade(replica: Replica<LoroVersion>, schema: SchemaNode): Substrate<LoroVersion> {
+  upgrade(
+    replica: Replica<LoroVersion>,
+    schema: SchemaNode,
+  ): Substrate<LoroVersion> {
     const doc = (replica as any)[BACKING_DOC] as LoroDocType
     // No identity injection for the standalone factory (no peerId).
     // Conditional ensureRootContainer: skip scalar defaults that
@@ -470,7 +473,7 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
  * @param conditional - If true, skip scalar defaults for existing keys.
  *   Context: jj:smmulzkm (two-phase substrate construction)
  */
-function ensureLoroContainers(
+export function ensureLoroContainers(
   doc: LoroDocType,
   schema: SchemaNode,
   conditional: boolean,
@@ -484,7 +487,9 @@ function ensureLoroContainers(
   }
 
   if (rootProduct._kind === "product") {
-    for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
+    for (const [key, fieldSchema] of Object.entries(rootProduct.fields).sort(
+      ([a], [b]) => a.localeCompare(b),
+    )) {
       ensureRootContainer(doc, key, fieldSchema as SchemaNode, conditional)
     }
   }

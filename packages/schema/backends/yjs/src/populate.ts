@@ -15,7 +15,7 @@
 // shared types (Y.Text, Y.Array, Y.Map) and plain value slots uniformly.
 
 import type { Schema as SchemaNode } from "@kyneta/schema"
-import { Zero } from "@kyneta/schema"
+import { STRUCTURAL_YJS_CLIENT_ID, Zero } from "@kyneta/schema"
 import * as Y from "yjs"
 
 // ---------------------------------------------------------------------------
@@ -38,6 +38,11 @@ import * as Y from "yjs"
  *
  * When `conditional` is false (default), all fields are created
  * unconditionally. This is the correct mode for fresh documents.
+ *
+ * **Structural identity:** This function temporarily sets `doc.clientID`
+ * to `STRUCTURAL_YJS_CLIENT_ID` (0) for the duration of container creation,
+ * then restores the caller's clientID. This produces byte-identical
+ * structural ops across all peers, enabling Yjs deduplication on merge.
  *
  * @param doc - The Y.Doc to prepare
  * @param schema - The root document schema (typically annotated("doc", product))
@@ -63,12 +68,24 @@ export function ensureContainers(
     return
   }
 
-  doc.transact(() => {
-    for (const [key, fieldSchema] of Object.entries(rootProduct.fields)) {
-      if (conditional && rootMap.has(key)) continue
-      ensureRootField(rootMap, key, fieldSchema as SchemaNode)
-    }
-  })
+  // Switch to structural identity for deterministic container creation.
+  // All peers produce byte-identical structural ops at clientID 0.
+  const savedClientID = doc.clientID
+  doc.clientID = STRUCTURAL_YJS_CLIENT_ID
+
+  try {
+    doc.transact(() => {
+      for (const [key, fieldSchema] of Object.entries(rootProduct.fields).sort(
+        ([a], [b]) => a.localeCompare(b),
+      )) {
+        if (conditional && rootMap.has(key)) continue
+        ensureRootField(rootMap, key, fieldSchema as SchemaNode)
+      }
+    })
+  } finally {
+    // Restore the caller's identity for application writes.
+    doc.clientID = savedClientID
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +186,7 @@ function ensureMapContainers(schema: SchemaNode): Y.Map<unknown> {
 
   for (const [key, fieldSchema] of Object.entries(
     structural.fields as Record<string, SchemaNode>,
-  )) {
+  ).sort(([a], [b]) => a.localeCompare(b))) {
     const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
 
     if (tag === "text") {

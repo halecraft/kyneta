@@ -21,9 +21,9 @@ import {
   TimestampVersion,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
+import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 
 // ---------------------------------------------------------------------------
 // Drain + cleanup helpers
@@ -419,7 +419,8 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
       transports: [
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
       ],
-      onDocDiscovered: () => Replicate(plainReplicaFactory, "sequential"),
+      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
+        Replicate(plainReplicaFactory, "sequential", schemaHash),
     })
 
     // Alice writes data
@@ -443,7 +444,9 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge: bridgeRB })],
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
+      ],
       onDocDiscovered: docId => {
         if (docId === "config") return Interpret(SequentialDoc)
         return undefined
@@ -459,5 +462,119 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
     const docB = exchangeB.get("config", SequentialDoc)
     expect(docB.title()).toBe("Important Config")
     expect(docB.count()).toBe(42)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 7. Schema hash compatibility
+//
+// When two peers use different schemas for the same docId, the schema
+// hashes will differ. The sync protocol must reject imports when the
+// schema hash doesn't match — preventing corrupt state from being
+// applied to an incompatible schema.
+// ---------------------------------------------------------------------------
+
+describe("schema hash compatibility", () => {
+  it("schema hash mismatch rejects sync — no import, warning logged", async () => {
+    const bridge = new Bridge()
+
+    // Schema A
+    const SchemaA = bindLoro(
+      LoroSchema.doc({
+        title: LoroSchema.text(),
+      }),
+    )
+
+    // Schema B — different structure, same docId
+    const SchemaB = bindLoro(
+      LoroSchema.doc({
+        content: LoroSchema.text(),
+        count: Schema.number(),
+      }),
+    )
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+
+    // Both try to use "doc-1" but with different schemas
+    const refA = exchangeA.get("doc-1", SchemaA)
+    const refB = exchangeB.get("doc-1", SchemaB)
+
+    // Write data on A
+    change(refA, (d: any) => {
+      d.title.insert(0, "Hello")
+    })
+
+    await drain()
+
+    // B should NOT have received A's data — schema hash mismatch
+    // The ref B should still have its Zero.structural defaults
+    // content() is a Loro text field → empty string; count() → 0
+    expect(refB.content()).toBe("")
+    expect(refB.count()).toBe(0)
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("schema hash forwarded through relay: A → relay → C", async () => {
+    const bridgeAR = new Bridge()
+    const bridgeRC = new Bridge()
+
+    const TodoDoc = bindLoro(
+      LoroSchema.doc({
+        title: LoroSchema.text(),
+      }),
+    )
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
+      ],
+    })
+
+    // Relay — replicate mode, forwards schemaHash faithfully
+    const relay = createExchange({
+      identity: { peerId: "relay" },
+      transports: [
+        createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
+        createBridgeTransport({ transportType: "relay-c", bridge: bridgeRC }),
+      ],
+      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
+        Replicate(loroReplicaFactory, "causal", schemaHash),
+    })
+
+    // Peer C — interpret mode with same schema
+    const exchangeC = createExchange({
+      identity: { peerId: "charlie" },
+      transports: [
+        createBridgeTransport({ transportType: "charlie", bridge: bridgeRC }),
+      ],
+      onDocDiscovered: () => Interpret(TodoDoc),
+    })
+
+    // A creates and writes
+    const refA = exchangeA.get("doc-1", TodoDoc)
+    change(refA, (d: any) => {
+      d.title.insert(0, "Through the relay")
+    })
+
+    // Wait for sync to propagate A → relay → C
+    await drain()
+
+    // C should have the data — schema hashes match (both computed from same schema)
+    expect(exchangeC.has("doc-1")).toBe(true)
+
+    await exchangeA.shutdown()
+    await relay.shutdown()
+    await exchangeC.shutdown()
   })
 })

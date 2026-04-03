@@ -10,6 +10,7 @@
 // and Plain<S> lived in writable.ts (forcing readable.ts to duplicate it as ReadablePlain<S>).
 
 import type { Path } from "./path.js"
+import type { Reader } from "./reader.js"
 import type {
   AnnotatedSchema,
   DiscriminatedSumSchema,
@@ -20,7 +21,6 @@ import type {
   Schema,
   SequenceSchema,
 } from "./schema.js"
-import type { Reader } from "./reader.js"
 
 // ---------------------------------------------------------------------------
 // RefContext — minimal context for read-only interpretation

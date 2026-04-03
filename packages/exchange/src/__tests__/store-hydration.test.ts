@@ -4,7 +4,6 @@
 // Store on get()/replicate(), persists network imports
 // via onDocImported, and persists local changes via changefeed.
 
-import { describe, expect, it } from "vitest"
 import {
   bindPlain,
   change,
@@ -13,15 +12,17 @@ import {
   Replicate,
   Schema,
 } from "@kyneta/schema"
-import type { StoreEntry } from "../store/store.js"
+import { bindYjs } from "@kyneta/yjs-schema"
+import { describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
 import {
   createInMemoryStore,
   InMemoryStore,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
-import { createBridgeTransport, Bridge } from "../transport/bridge-transport.js"
+import type { StoreEntry } from "../store/store.js"
 import { sync } from "../sync.js"
+import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -66,6 +67,7 @@ describe("InMemoryStore", () => {
     const metadata = {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     }
     await backend.ensureDoc("doc-1", metadata)
     expect(await backend.lookup("doc-1")).toEqual(metadata)
@@ -76,6 +78,7 @@ describe("InMemoryStore", () => {
     const metadata = {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     }
     await backend.ensureDoc("doc-1", metadata)
     await backend.ensureDoc("doc-1", metadata)
@@ -87,10 +90,12 @@ describe("InMemoryStore", () => {
     const meta1 = {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     }
     const meta2 = {
       replicaType: ["loro", 1, 0] as const,
       mergeStrategy: "causal" as const,
+      schemaHash: "00test",
     }
     await backend.ensureDoc("doc-1", meta1)
     await backend.ensureDoc("doc-1", meta2)
@@ -102,6 +107,7 @@ describe("InMemoryStore", () => {
     await backend.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     })
     const entry = {
       payload: {
@@ -128,6 +134,7 @@ describe("InMemoryStore", () => {
     await backend.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     })
     await backend.append("doc-1", {
       payload: {
@@ -152,10 +159,12 @@ describe("InMemoryStore", () => {
     await backend.ensureDoc("a", {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     })
     await backend.ensureDoc("b", {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     })
 
     const ids: string[] = []
@@ -182,6 +191,7 @@ describe("InMemoryStore", () => {
     await backend1.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     })
     await backend1.append("doc-1", {
       payload: {
@@ -197,6 +207,7 @@ describe("InMemoryStore", () => {
     expect(await backend2.lookup("doc-1")).toEqual({
       replicaType: ["plain", 1, 0],
       mergeStrategy: "sequential",
+      schemaHash: "00test",
     })
     const loaded: unknown[] = []
     for await (const e of backend2.loadAll("doc-1")) {
@@ -221,6 +232,7 @@ describe("Exchange storage hydration", () => {
     await seedBackend.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     })
     await seedBackend.append("doc-1", {
       payload: {
@@ -273,6 +285,7 @@ describe("Exchange storage hydration", () => {
     await seedBackend.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
       mergeStrategy: "sequential" as const,
+      schemaHash: "00test",
     })
     await seedBackend.append("doc-1", {
       payload: {
@@ -288,7 +301,7 @@ describe("Exchange storage hydration", () => {
       stores: [createInMemoryStore({ sharedData })],
     })
 
-    exchange.replicate("doc-1", plainReplicaFactory, "sequential")
+    exchange.replicate("doc-1", plainReplicaFactory, "sequential", "00test")
 
     // Wait for hydration
     await exchange.flush()
@@ -351,9 +364,10 @@ describe("Exchange storage persistence", () => {
     for (const entry of entries) {
       replica.merge(entry.payload)
     }
-    const state = JSON.parse(
-      replica.exportEntirety().data as string,
-    ) as Record<string, unknown>
+    const state = JSON.parse(replica.exportEntirety().data as string) as Record<
+      string,
+      unknown
+    >
     expect(state.title).toBe("hello world")
     expect(state.count).toBe(99)
 
@@ -442,6 +456,7 @@ describe("Exchange storage persistence", () => {
     expect(await backend.lookup("doc-1")).toEqual({
       replicaType: ["plain", 1, 0],
       mergeStrategy: "sequential",
+      schemaHash: TestDoc.schemaHash,
     })
 
     await exchange.shutdown()
@@ -541,5 +556,80 @@ describe("Synchronizer purification", () => {
     }
 
     await exchange.shutdown()
+  })
+})
+
+// ===========================================================================
+// exchange.get() without explicit peerId
+// ===========================================================================
+
+describe("exchange.get() without explicit peerId", () => {
+  it("throws when no peerId is provided", () => {
+    // Exchange created without identity.peerId — gets an auto-generated one,
+    // but #peerIdIsExplicit is false → get() must throw.
+    const exchange = new Exchange()
+
+    const Doc = bindPlain(
+      Schema.doc({
+        title: Schema.string(),
+      }),
+    )
+
+    expect(() => exchange.get("doc-1", Doc)).toThrow(
+      /exchange\.get\(\) requires an explicit peerId/,
+    )
+
+    exchange.reset()
+  })
+})
+
+// ===========================================================================
+// Yjs doc: write → shutdown → restart → hydrate → data preserved
+// ===========================================================================
+
+describe("Yjs storage round-trip", () => {
+  it("Yjs doc: write → shutdown → restart → hydrate → data preserved", async () => {
+    const YjsDoc = bindYjs(
+      Schema.doc({
+        title: Schema.annotated("text"),
+        count: Schema.number(),
+      }),
+    )
+
+    const sharedData: InMemoryStoreData = {
+      entries: new Map(),
+      metadata: new Map(),
+    }
+
+    // First exchange: create doc, write data, shut down
+    const exchange1 = createExchange({
+      identity: { peerId: "yjs-peer" },
+      stores: [createInMemoryStore({ sharedData })],
+    })
+
+    const doc1 = exchange1.get("doc-1", YjsDoc)
+    await exchange1.flush() // hydration
+
+    change(doc1, (d: any) => {
+      d.title.insert(0, "Yjs persisted")
+      d.count.set(123)
+    })
+
+    await exchange1.flush() // persist
+    await exchange1.shutdown()
+
+    // Second exchange: should hydrate from storage
+    const exchange2 = createExchange({
+      identity: { peerId: "yjs-peer" },
+      stores: [createInMemoryStore({ sharedData })],
+    })
+
+    const doc2 = exchange2.get("doc-1", YjsDoc)
+    await exchange2.flush() // hydration
+
+    expect(doc2.title()).toBe("Yjs persisted")
+    expect(doc2.count()).toBe(123)
+
+    await exchange2.shutdown()
   })
 })

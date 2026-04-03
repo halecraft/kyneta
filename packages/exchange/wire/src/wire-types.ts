@@ -150,14 +150,12 @@ export const MergeStrategyWireToString: Record<
 /**
  * Forward lookup: merge strategy string → integer.
  */
-export const StringToMergeStrategyWire: Record<
-  string,
-  MergeStrategyWireValue
-> = {
-  causal: MergeStrategyWire.Causal,
-  sequential: MergeStrategyWire.Sequential,
-  lww: MergeStrategyWire.Lww,
-}
+export const StringToMergeStrategyWire: Record<string, MergeStrategyWireValue> =
+  {
+    causal: MergeStrategyWire.Causal,
+    sequential: MergeStrategyWire.Sequential,
+    lww: MergeStrategyWire.Lww,
+  }
 
 // ---------------------------------------------------------------------------
 // Compact wire object types (CBOR)
@@ -177,6 +175,7 @@ export const StringToMergeStrategyWire: Record<
  *   ms  — mergeStrategy (MergeStrategyWireValue)
  *   v   — version (string, serialized)
  *   r   — reciprocate (boolean, optional)
+ *   sh  — schemaHash (string, 34-char hex, required in present doc entries)
  *   pk  — payload kind (PayloadKindValue)
  *   pe  — payload encoding (PayloadEncodingValue)
  */
@@ -196,6 +195,7 @@ export type WirePresentMsg = {
     d: string
     rt: [string, number, number]
     ms: MergeStrategyWireValue
+    sh: string
   }>
 }
 

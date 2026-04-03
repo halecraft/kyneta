@@ -27,10 +27,14 @@ import type {
   SubstrateFactory,
   SubstratePayload,
 } from "@kyneta/schema"
-import { BACKING_DOC, bind } from "@kyneta/schema"
+import { BACKING_DOC, bind, STRUCTURAL_YJS_CLIENT_ID } from "@kyneta/schema"
 import * as Y from "yjs"
 import { ensureContainers } from "./populate.js"
-import { createYjsReplica, createYjsSubstrate, yjsReplicaFactory } from "./substrate.js"
+import {
+  createYjsReplica,
+  createYjsSubstrate,
+  yjsReplicaFactory,
+} from "./substrate.js"
 import { YjsVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
@@ -56,7 +60,9 @@ function hashPeerId(peerId: string): number {
     hash = Math.imul(hash, 0x01000193)
   }
   // Ensure unsigned 32-bit integer
-  return hash >>> 0
+  const result = hash >>> 0
+  // Reserve 0 for structural ops — real peers never collide
+  return result === STRUCTURAL_YJS_CLIENT_ID ? 1 : result
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +86,10 @@ function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
       return createYjsReplica(new Y.Doc())
     },
 
-    upgrade(replica: Replica<YjsVersion>, schema: SchemaNode): Substrate<YjsVersion> {
+    upgrade(
+      replica: Replica<YjsVersion>,
+      schema: SchemaNode,
+    ): Substrate<YjsVersion> {
       const doc = (replica as any)[BACKING_DOC] as Y.Doc
       // Set stable identity AFTER hydration — avoids Yjs clientID
       // conflict detection that would reassign to a random value.

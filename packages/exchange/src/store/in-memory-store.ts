@@ -117,9 +117,7 @@ export class InMemoryStore implements Store {
  * @param options.sharedData - Shared data maps for cross-instance persistence
  */
 export function createInMemoryStore(
-  options: {
-    sharedData?: InMemoryStoreData
-  } = {},
+  options: { sharedData?: InMemoryStoreData } = {},
 ): Store {
   return new InMemoryStore(options.sharedData)
 }

@@ -8,7 +8,7 @@
 // LoroText → .toString(), LoroCounter → .value, plain values as-is.
 // Collections: LoroList/LoroMovableList → .length, LoroMap → .keys().
 
-import type { Path, Schema as SchemaNode, Reader } from "@kyneta/schema"
+import type { Path, Reader, Schema as SchemaNode } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
 import { resolveContainer } from "./loro-resolve.js"
 

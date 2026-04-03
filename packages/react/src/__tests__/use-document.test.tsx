@@ -4,7 +4,6 @@
 // and that repeated calls with the same docId + BoundSchema return
 // the same ref identity.
 
-import { Exchange } from "@kyneta/exchange"
 import { bindPlain, Schema } from "@kyneta/schema"
 import { renderHook } from "@testing-library/react"
 import type { ReactNode } from "react"
@@ -28,7 +27,7 @@ const TestDoc = bindPlain(TestSchema)
 // ---------------------------------------------------------------------------
 
 function createWrapper() {
-  const config = {}
+  const config = { identity: { peerId: "test" } }
   return ({ children }: { children: ReactNode }) => (
     <ExchangeProvider config={config}>{children}</ExchangeProvider>
   )

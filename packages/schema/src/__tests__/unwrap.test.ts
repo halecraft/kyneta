@@ -2,7 +2,10 @@
 
 import { describe, expect, it } from "vitest"
 import { Schema } from "../schema.js"
-import { createPlainSubstrate, plainVersionStrategy } from "../substrates/plain.js"
+import {
+  createPlainSubstrate,
+  plainVersionStrategy,
+} from "../substrates/plain.js"
 import { registerSubstrate, unwrap } from "../unwrap.js"
 
 describe("unwrap()", () => {

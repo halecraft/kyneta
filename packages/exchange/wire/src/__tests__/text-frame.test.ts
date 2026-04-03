@@ -6,9 +6,9 @@
 
 import type {
   ChannelMsg,
-  PresentMsg,
   InterestMsg,
   OfferMsg,
+  PresentMsg,
 } from "@kyneta/exchange"
 import { describe, expect, it } from "vitest"
 import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
@@ -76,7 +76,17 @@ describe("Text frame — prefix", () => {
 
 describe("Text frame — complete round-trip", () => {
   it("round-trips a complete frame with a JSON object payload", () => {
-    const payload = JSON.stringify({ type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] })
+    const payload = JSON.stringify({
+      type: "present",
+      docs: [
+        {
+          docId: "doc-1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+      ],
+    })
     const frame = complete(TEXT_WIRE_VERSION, payload)
     const wire = encodeTextFrame(frame)
     const decoded = decodeTextFrame(wire)
@@ -89,7 +99,17 @@ describe("Text frame — complete round-trip", () => {
 
   it("round-trips a complete frame with a JSON array payload (batch)", () => {
     const payload = JSON.stringify([
-      { type: "present", docs: [{ docId: "a", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+      {
+        type: "present",
+        docs: [
+          {
+            docId: "a",
+            schemaHash: "00test",
+            replicaType: ["plain", 1, 0] as const,
+            mergeStrategy: "sequential" as const,
+          },
+        ],
+      },
       { type: "interest", docId: "b" },
     ])
     const frame = complete(TEXT_WIRE_VERSION, payload)
@@ -113,7 +133,17 @@ describe("Text frame — complete round-trip", () => {
   })
 
   it("output is valid JSON", () => {
-    const payload = JSON.stringify({ type: "present", docs: [{ docId: "x", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] })
+    const payload = JSON.stringify({
+      type: "present",
+      docs: [
+        {
+          docId: "x",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+      ],
+    })
     const frame = complete(TEXT_WIRE_VERSION, payload)
     const wire = encodeTextFrame(frame)
 
@@ -123,7 +153,17 @@ describe("Text frame — complete round-trip", () => {
   })
 
   it("payload is embedded as a native JSON value (not a string within a string)", () => {
-    const payload = JSON.stringify({ type: "present", docs: [{ docId: "x", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] })
+    const payload = JSON.stringify({
+      type: "present",
+      docs: [
+        {
+          docId: "x",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+      ],
+    })
     const frame = complete(TEXT_WIRE_VERSION, payload)
     const wire = encodeTextFrame(frame)
     const arr = JSON.parse(wire)
@@ -210,7 +250,8 @@ describe("fragmentTextPayload", () => {
   })
 
   it("each fragment is valid JSON", () => {
-    const payload = '{"type":"present","docs":[{"docId":"a"},{"docId":"b"},{"docId":"c"},{"docId":"d"},{"docId":"e"},{"docId":"f"}]}'
+    const payload =
+      '{"type":"present","docs":[{"docId":"a"},{"docId":"b"},{"docId":"c"},{"docId":"d"},{"docId":"e"},{"docId":"f"}]}'
     const fragments = fragmentTextPayload(payload, 10)
 
     for (const frag of fragments) {
@@ -330,7 +371,23 @@ describe("fragmentTextPayload", () => {
 
 describe("Text frame — convenience functions", () => {
   it("encodeTextComplete encodes a single message", () => {
-    const msg: PresentMsg = { type: "present", docs: [{ docId: "doc-1", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "doc-2", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }] }
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [
+        {
+          docId: "doc-1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+        {
+          docId: "doc-2",
+          schemaHash: "00test",
+          replicaType: ["yjs", 1, 0] as const,
+          mergeStrategy: "causal" as const,
+        },
+      ],
+    }
     const wire = encodeTextComplete(textCodec, msg)
 
     const frame = decodeTextFrame(wire)
@@ -343,7 +400,17 @@ describe("Text frame — convenience functions", () => {
 
   it("encodeTextCompleteBatch encodes a batch", () => {
     const msgs: ChannelMsg[] = [
-      { type: "present", docs: [{ docId: "a", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] },
+      {
+        type: "present",
+        docs: [
+          {
+            docId: "a",
+            schemaHash: "00test",
+            replicaType: ["plain", 1, 0] as const,
+            mergeStrategy: "sequential" as const,
+          },
+        ],
+      },
       { type: "interest", docId: "b", version: "1" },
     ]
     const wire = encodeTextCompleteBatch(textCodec, msgs)
@@ -430,7 +497,29 @@ describe("Text frame — end-to-end with TextReassembler", () => {
 
   it("batch: encode → fragment → reassemble → decode", () => {
     const msgs: ChannelMsg[] = [
-      { type: "present", docs: [{ docId: "a", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }, { docId: "b", replicaType: ["yjs", 1, 0] as const, mergeStrategy: "causal" as const }, { docId: "c", replicaType: ["loro", 1, 0] as const, mergeStrategy: "lww" as const }] },
+      {
+        type: "present",
+        docs: [
+          {
+            docId: "a",
+            schemaHash: "00test",
+            replicaType: ["plain", 1, 0] as const,
+            mergeStrategy: "sequential" as const,
+          },
+          {
+            docId: "b",
+            schemaHash: "00test",
+            replicaType: ["yjs", 1, 0] as const,
+            mergeStrategy: "causal" as const,
+          },
+          {
+            docId: "c",
+            schemaHash: "00test",
+            replicaType: ["loro", 1, 0] as const,
+            mergeStrategy: "lww" as const,
+          },
+        ],
+      },
       {
         type: "offer",
         docId: "d",
@@ -494,7 +583,17 @@ describe("Text frame — end-to-end with TextReassembler", () => {
   })
 
   it("complete frames pass through reassembler without collection", () => {
-    const msg: PresentMsg = { type: "present", docs: [{ docId: "x", replicaType: ["plain", 1, 0] as const, mergeStrategy: "sequential" as const }] }
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [
+        {
+          docId: "x",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+        },
+      ],
+    }
     const wire = encodeTextComplete(textCodec, msg)
 
     const reassembler = new TextReassembler({ timeoutMs: 5000 })

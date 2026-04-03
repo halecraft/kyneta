@@ -13,12 +13,9 @@
 // memory. On reboot, the max seqNo for a doc is lazily discovered via a
 // single reverse-iterator seek on first append.
 
-import type { DocMetadata } from "@kyneta/schema"
-import type {
-  Store,
-  StoreEntry,
-} from "@kyneta/exchange/src/store/store.js"
+import type { Store, StoreEntry } from "@kyneta/exchange/src/store/store.js"
 import type { DocId } from "@kyneta/exchange/src/types.js"
+import type { DocMetadata } from "@kyneta/schema"
 import { ClassicLevel } from "classic-level"
 
 // ---------------------------------------------------------------------------
@@ -71,11 +68,7 @@ export function encodeStoreEntry(entry: StoreEntry): Uint8Array {
 }
 
 export function decodeStoreEntry(bytes: Uint8Array): StoreEntry {
-  const view = new DataView(
-    bytes.buffer,
-    bytes.byteOffset,
-    bytes.byteLength,
-  )
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 
   const flags = bytes[0]!
   const kind = (flags & 0x01) !== 0 ? "since" : "entirety"

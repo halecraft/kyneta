@@ -27,6 +27,7 @@ import type {
   SubstrateFactory,
   Version,
 } from "./substrate.js"
+import { computeSchemaHash } from "./substrate.js"
 import { lwwSubstrateFactory } from "./substrates/lww.js"
 import { plainSubstrateFactory } from "./substrates/plain.js"
 
@@ -76,6 +77,7 @@ export interface BoundSchema<S extends SchemaNode = SchemaNode> {
   readonly schema: S
   readonly factory: FactoryBuilder<any>
   readonly strategy: MergeStrategy
+  readonly schemaHash: string
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +116,7 @@ export type Replicate = {
   readonly kind: "replicate"
   readonly replicaFactory: ReplicaFactory<any>
   readonly strategy: MergeStrategy
+  readonly schemaHash: string
 }
 
 // ---------------------------------------------------------------------------
@@ -147,8 +150,9 @@ export function Interpret(bound: BoundSchema): Interpret {
 export function Replicate(
   replicaFactory: ReplicaFactory<any>,
   strategy: MergeStrategy,
+  schemaHash: string,
 ): Replicate {
-  return { kind: "replicate", replicaFactory, strategy }
+  return { kind: "replicate", replicaFactory, strategy, schemaHash }
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +184,7 @@ export function bind<S extends SchemaNode>(config: {
     schema: config.schema,
     factory: config.factory,
     strategy: config.strategy,
+    schemaHash: computeSchemaHash(config.schema),
   }
 }
 

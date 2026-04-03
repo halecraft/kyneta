@@ -24,13 +24,13 @@
 // letting the browser's built-in EventSource reconnection run.
 
 import type {
-  TransportFactory,
   Channel,
   ChannelMsg,
   GeneratedChannel,
   PeerId,
   StateTransition,
   TransitionListener,
+  TransportFactory,
 } from "@kyneta/exchange"
 import { Transport } from "@kyneta/exchange"
 import {

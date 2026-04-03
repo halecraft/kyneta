@@ -11,7 +11,7 @@
 // EstablishedChannel: completed the establish handshake, knows the remote peer.
 
 import type { ChannelMsg, EstablishmentMsg, ExchangeMsg } from "./messages.js"
-import type { TransportType, ChannelId, PeerId } from "./types.js"
+import type { ChannelId, PeerId, TransportType } from "./types.js"
 
 export type { ChannelId } from "./types.js"
 
