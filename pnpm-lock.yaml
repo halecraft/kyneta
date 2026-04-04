@@ -340,6 +340,9 @@ importers:
       '@kyneta/exchange':
         specifier: workspace:^
         version: link:../..
+      '@kyneta/machine':
+        specifier: workspace:^
+        version: link:../../../machine
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../../schema
@@ -433,6 +436,9 @@ importers:
       '@kyneta/exchange':
         specifier: workspace:^
         version: link:../..
+      '@kyneta/machine':
+        specifier: workspace:^
+        version: link:../../../machine
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../../schema
@@ -600,6 +606,9 @@ importers:
 
   packages/transport:
     devDependencies:
+      '@kyneta/machine':
+        specifier: workspace:^
+        version: link:../machine
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../schema

@@ -1,13 +1,20 @@
-// client-adapter — SSE client adapter for @kyneta/exchange.
+// client-transport — SSE client transport for @kyneta/exchange.
 //
-// Connects to an SSE server using two HTTP channels:
+// Thin imperative shell around the pure client program (client-program.ts).
+// The program produces data effects; this module interprets them as I/O.
+//
+// FC/IS design:
+// - client-program.ts: pure Mealy machine (functional core)
+// - client-transport.ts: effect executor (imperative shell)
+//
+// Uses two HTTP channels:
 // - EventSource (GET) for server→client messages
 // - fetch POST for client→server messages
 //
 // Both directions use the text wire format (textCodec + text framing).
 //
 // Features:
-// - State machine with validated transitions (disconnected → connecting → connected)
+// - Pure Mealy machine for connection lifecycle (client-program.ts)
 // - Exponential backoff reconnection with jitter
 // - POST retry with exponential backoff
 // - Text-level fragmentation for large payloads
@@ -20,26 +27,34 @@
 // 3. Synchronizer exchanges establish-request / establish-response via POST + SSE
 //
 // On EventSource.onerror, the adapter closes the EventSource immediately and
-// takes over reconnection via the state machine's backoff logic, rather than
+// takes over reconnection via the program's backoff logic, rather than
 // letting the browser's built-in EventSource reconnection run.
 
+import type {
+  ObservableHandle,
+  StateTransition,
+  TransitionListener,
+} from "@kyneta/machine"
+import { createObservableProgram } from "@kyneta/machine"
 import type {
   Channel,
   ChannelMsg,
   GeneratedChannel,
   PeerId,
-  ReconnectScheduler,
-  TransitionListener,
   TransportFactory,
 } from "@kyneta/transport"
-import { createReconnectScheduler, Transport } from "@kyneta/transport"
+import { Transport } from "@kyneta/transport"
 import {
   encodeTextComplete,
   fragmentTextPayload,
   TextReassembler,
   textCodec,
 } from "@kyneta/wire"
-import { SseClientStateMachine } from "./client-state-machine.js"
+import {
+  createSseClientProgram,
+  type SseClientEffect,
+  type SseClientMsg,
+} from "./client-program.js"
 import type {
   DisconnectReason,
   SseClientLifecycleEvents,
@@ -102,6 +117,15 @@ const DEFAULT_POST_RETRY = {
 }
 
 // ---------------------------------------------------------------------------
+// State transition type alias
+// ---------------------------------------------------------------------------
+
+/**
+ * State transition event for SSE client states.
+ */
+export type SseClientStateTransition = StateTransition<SseClientState>
+
+// ---------------------------------------------------------------------------
 // SseClientTransport
 // ---------------------------------------------------------------------------
 
@@ -114,32 +138,35 @@ const DEFAULT_POST_RETRY = {
  *
  * Both directions use the text wire format (`textCodec` + text framing).
  *
+ * Internally, the connection lifecycle is a `Program<Msg, Model, Fx>` —
+ * a pure Mealy machine whose transitions are deterministically testable.
+ * This class is the imperative shell that interprets data effects as I/O.
+ *
  * @example
  * ```typescript
- * import { createSseClient } from "@kyneta/sse-network-adapter/client"
- *
- * const adapter = createSseClient({
- *   postUrl: "/sync",
- *   eventSourceUrl: (peerId) => `/events?peerId=${peerId}`,
- *   reconnect: { enabled: true },
- * })
+ * import { createSseClient } from "@kyneta/sse-transport/client"
  *
  * const exchange = new Exchange({
  *   identity: { peerId: "browser-client" },
- *   transports: [adapter],
+ *   transports: [createSseClient({
+ *     postUrl: "/sync",
+ *     eventSourceUrl: (peerId) => `/events?peerId=${peerId}`,
+ *     reconnect: { enabled: true },
+ *   })],
  * })
  * ```
  */
 export class SseClientTransport extends Transport<void> {
   #peerId?: PeerId
+  #options: SseClientOptions
+
+  // Observable program handle — created in onStart(), drives all state
+  #handle: ObservableHandle<SseClientMsg, SseClientState>
+
+  // Executor-local I/O state — not in the program model
   #eventSource?: EventSource
   #serverChannel?: Channel
-  #options: SseClientOptions
-  #reconnect: ReconnectScheduler
-  #wasConnectedBefore = false
-
-  // State machine
-  readonly #stateMachine = new SseClientStateMachine()
+  #reconnectTimer?: ReturnType<typeof setTimeout>
 
   // Fragmentation
   readonly #fragmentThreshold: number
@@ -158,10 +185,17 @@ export class SseClientTransport extends Transport<void> {
     this.#reassembler = new TextReassembler({
       timeoutMs: 10_000,
     })
-    this.#reconnect = createReconnectScheduler({
-      stateMachine: this.#stateMachine,
-      connectFn: () => this.#connect(),
-      options: this.#options.reconnect ?? {},
+
+    // Create the program with a placeholder URL — the executor resolves the
+    // real eventSourceUrl (which may be a function of peerId) at effect time.
+    // The URL in the program is used only as a marker; the executor overrides it.
+    const program = createSseClientProgram({
+      url: "__deferred__",
+      reconnect: options.reconnect,
+    })
+
+    this.#handle = createObservableProgram(program, (effect, dispatch) => {
+      this.#executeEffect(effect, dispatch)
     })
 
     // Set up lifecycle event forwarding
@@ -172,8 +206,15 @@ export class SseClientTransport extends Transport<void> {
   // Lifecycle event forwarding
   // ==========================================================================
 
+  /**
+   * Subscribe to the observable handle's transitions and forward them to
+   * the lifecycle callbacks. `wasConnectedBefore` is observer-local state,
+   * not in the program model.
+   */
   #setupLifecycleEvents(): void {
-    this.#stateMachine.subscribeToTransitions(transition => {
+    let wasConnectedBefore = false
+
+    this.#handle.subscribeToTransitions(transition => {
       // Forward to onStateChange callback
       this.#options.lifecycle?.onStateChange?.(transition)
 
@@ -191,34 +232,151 @@ export class SseClientTransport extends Transport<void> {
 
       // onReconnected: from reconnecting/connecting TO connected (after prior connection)
       if (
-        this.#wasConnectedBefore &&
+        wasConnectedBefore &&
         (from.status === "reconnecting" || from.status === "connecting") &&
         to.status === "connected"
       ) {
         this.#options.lifecycle?.onReconnected?.()
       }
+
+      // Track whether we've ever been connected
+      if (to.status === "connected") {
+        wasConnectedBefore = true
+      }
+
+      // Reset on intentional disconnect (stop)
+      if (to.status === "disconnected" && to.reason?.type === "intentional") {
+        wasConnectedBefore = false
+      }
     })
   }
 
   // ==========================================================================
-  // State observation API
+  // Effect executor — interprets data effects as I/O
+  // ==========================================================================
+
+  #executeEffect(
+    effect: SseClientEffect,
+    dispatch: (msg: SseClientMsg) => void,
+  ): void {
+    switch (effect.type) {
+      case "create-event-source": {
+        this.#doCreateEventSource(dispatch)
+        break
+      }
+
+      case "close-event-source": {
+        if (this.#eventSource) {
+          this.#eventSource.onopen = null
+          this.#eventSource.onmessage = null
+          this.#eventSource.onerror = null
+          this.#eventSource.close()
+          this.#eventSource = undefined
+        }
+        break
+      }
+
+      case "add-channel-and-establish": {
+        // Remove any stale channel from a previous connection
+        if (this.#serverChannel) {
+          this.removeChannel(this.#serverChannel.channelId)
+          this.#serverChannel = undefined
+        }
+
+        this.#serverChannel = this.addChannel()
+
+        // No "ready" handshake — establish immediately
+        this.establishChannel(this.#serverChannel.channelId)
+        break
+      }
+
+      case "remove-channel": {
+        if (this.#serverChannel) {
+          this.removeChannel(this.#serverChannel.channelId)
+          this.#serverChannel = undefined
+        }
+        break
+      }
+
+      case "start-reconnect-timer": {
+        this.#reconnectTimer = setTimeout(() => {
+          this.#reconnectTimer = undefined
+          dispatch({ type: "reconnect-timer-fired" })
+        }, effect.delayMs)
+        break
+      }
+
+      case "cancel-reconnect-timer": {
+        if (this.#reconnectTimer !== undefined) {
+          clearTimeout(this.#reconnectTimer)
+          this.#reconnectTimer = undefined
+        }
+        break
+      }
+
+      case "abort-pending-posts": {
+        if (this.#currentRetryAbortController) {
+          this.#currentRetryAbortController.abort()
+          this.#currentRetryAbortController = undefined
+        }
+        break
+      }
+    }
+  }
+
+  /**
+   * Create an EventSource and wire up event handlers.
+   * The URL is resolved here (may be a function of peerId).
+   */
+  #doCreateEventSource(dispatch: (msg: SseClientMsg) => void): void {
+    if (!this.#peerId) {
+      throw new Error("Cannot connect: peerId not set")
+    }
+
+    // Resolve URL — may be a string or function of peerId
+    const url =
+      typeof this.#options.eventSourceUrl === "function"
+        ? this.#options.eventSourceUrl(this.#peerId)
+        : this.#options.eventSourceUrl
+
+    try {
+      this.#eventSource = new EventSource(url)
+
+      this.#eventSource.onopen = () => {
+        dispatch({ type: "event-source-opened" })
+      }
+
+      this.#eventSource.onmessage = (event: MessageEvent) => {
+        this.#handleMessage(event)
+      }
+
+      this.#eventSource.onerror = () => {
+        dispatch({ type: "event-source-error" })
+      }
+    } catch (_error) {
+      // EventSource constructor threw (e.g. invalid URL) — treat as error
+      dispatch({ type: "event-source-error" })
+    }
+  }
+
+  // ==========================================================================
+  // State observation — delegated to the observable handle
   // ==========================================================================
 
   /**
-   * Get the current state of the connection.
+   * Get the current connection state.
    */
   getState(): SseClientState {
-    return this.#stateMachine.getState()
+    return this.#handle.getState()
   }
 
   /**
    * Subscribe to state transitions.
-   * @returns Unsubscribe function
    */
   subscribeToTransitions(
     listener: TransitionListener<SseClientState>,
   ): () => void {
-    return this.#stateMachine.subscribeToTransitions(listener)
+    return this.#handle.subscribeToTransitions(listener)
   }
 
   /**
@@ -228,7 +386,7 @@ export class SseClientTransport extends Transport<void> {
     predicate: (state: SseClientState) => boolean,
     options?: { timeoutMs?: number },
   ): Promise<SseClientState> {
-    return this.#stateMachine.waitForState(predicate, options)
+    return this.#handle.waitForState(predicate, options)
   }
 
   /**
@@ -238,18 +396,18 @@ export class SseClientTransport extends Transport<void> {
     status: SseClientState["status"],
     options?: { timeoutMs?: number },
   ): Promise<SseClientState> {
-    return this.#stateMachine.waitForStatus(status, options)
+    return this.#handle.waitForStatus(status, options)
   }
 
   /**
-   * Check if the client is connected (EventSource open, channel established).
+   * Whether the client is connected and ready to send/receive.
    */
   get isConnected(): boolean {
-    return this.#stateMachine.isConnected()
+    return this.#handle.getState().status === "connected"
   }
 
   // ==========================================================================
-  // Adapter abstract method implementations
+  // Transport abstract method implementations
   // ==========================================================================
 
   protected generate(): GeneratedChannel {
@@ -293,9 +451,9 @@ export class SseClientTransport extends Transport<void> {
         }
       },
       stop: () => {
-        // Don't call disconnect() here — channel.stop() is called when
-        // the channel is removed, which can happen during handleClose().
-        // The actual disconnect is handled by onStop() or handleClose().
+        // Don't call disconnect here — channel.stop() is called when
+        // the channel is removed, which can happen during effect execution.
+        // The actual disconnect is handled by onStop() or the program.
       },
     }
   }
@@ -307,142 +465,17 @@ export class SseClientTransport extends Transport<void> {
       )
     }
     this.#peerId = this.identity.peerId
-    this.#reconnect.setEnabled(true)
-    this.#wasConnectedBefore = false
-    this.#connect()
+    this.#handle.dispatch({ type: "start" })
   }
 
   async onStop(): Promise<void> {
-    this.#reconnect.setEnabled(false)
     this.#reassembler.dispose()
-    this.#currentRetryAbortController?.abort()
-    this.#currentRetryAbortController = undefined
-    this.#disconnect({ type: "intentional" })
+    this.#handle.dispatch({ type: "stop" })
   }
 
   // ==========================================================================
-  // Connection management
+  // Inbound message handling
   // ==========================================================================
-
-  /**
-   * Connect to the SSE server by creating an EventSource.
-   */
-  #connect(): void {
-    const currentState = this.#stateMachine.getState()
-    if (currentState.status === "connecting") {
-      return
-    }
-
-    if (!this.#peerId) {
-      throw new Error("Cannot connect: peerId not set")
-    }
-
-    // Determine attempt number
-    const attempt =
-      currentState.status === "reconnecting" ? currentState.attempt : 1
-
-    this.#stateMachine.transition({ status: "connecting", attempt })
-
-    // Resolve URL
-    const url =
-      typeof this.#options.eventSourceUrl === "function"
-        ? this.#options.eventSourceUrl(this.#peerId)
-        : this.#options.eventSourceUrl
-
-    try {
-      this.#eventSource = new EventSource(url)
-
-      this.#eventSource.onopen = () => {
-        this.#handleOpen()
-      }
-
-      this.#eventSource.onmessage = (event: MessageEvent) => {
-        this.#handleMessage(event)
-      }
-
-      this.#eventSource.onerror = () => {
-        this.#handleError()
-      }
-    } catch (error) {
-      // EventSource constructor threw (e.g. invalid URL)
-      this.#reconnect.schedule({
-        type: "error",
-        error: error instanceof Error ? error : new Error(String(error)),
-      })
-    }
-  }
-
-  /**
-   * Disconnect from the SSE server.
-   */
-  #disconnect(reason: DisconnectReason): void {
-    this.#reconnect.cancel()
-
-    if (this.#eventSource) {
-      this.#eventSource.onopen = null
-      this.#eventSource.onmessage = null
-      this.#eventSource.onerror = null
-      this.#eventSource.close()
-      this.#eventSource = undefined
-    }
-
-    if (this.#serverChannel) {
-      this.removeChannel(this.#serverChannel.channelId)
-      this.#serverChannel = undefined
-    }
-
-    // Only transition if not already disconnected
-    const currentState = this.#stateMachine.getState()
-    if (currentState.status !== "disconnected") {
-      this.#stateMachine.transition({ status: "disconnected", reason })
-    }
-  }
-
-  // ==========================================================================
-  // Event handlers
-  // ==========================================================================
-
-  /**
-   * Handle EventSource open event.
-   *
-   * The SSE connection is usable immediately — no "ready" signal needed.
-   * Create the channel and initiate establishment.
-   */
-  #handleOpen(): void {
-    const currentState = this.#stateMachine.getState()
-
-    // Handle potential race: onopen before state machine caught up
-    if (
-      currentState.status !== "connecting" &&
-      currentState.status !== "connected"
-    ) {
-      // Might be in reconnecting → connecting path; just ignore
-      return
-    }
-
-    if (currentState.status === "connecting") {
-      this.#stateMachine.transition({ status: "connected" })
-    }
-
-    this.#wasConnectedBefore = true
-
-    // Cancel any pending POST retries from previous connection
-    if (this.#currentRetryAbortController) {
-      this.#currentRetryAbortController.abort()
-      this.#currentRetryAbortController = undefined
-    }
-
-    // Create channel if not exists
-    if (this.#serverChannel) {
-      this.removeChannel(this.#serverChannel.channelId)
-      this.#serverChannel = undefined
-    }
-
-    this.#serverChannel = this.addChannel()
-
-    // Initiate establishment handshake
-    this.establishChannel(this.#serverChannel.channelId)
-  }
 
   /**
    * Handle incoming SSE message.
@@ -479,35 +512,6 @@ export class SseClientTransport extends Transport<void> {
       console.error("SSE message reassembly error:", result.error)
     }
     // "pending" status means we're waiting for more fragments — nothing to do
-  }
-
-  /**
-   * Handle EventSource error.
-   *
-   * Closes the EventSource immediately and takes over reconnection
-   * via the state machine's backoff logic. This prevents the browser's
-   * built-in EventSource reconnection from running.
-   */
-  #handleError(): void {
-    // Close immediately to prevent browser auto-reconnect
-    if (this.#eventSource) {
-      this.#eventSource.onopen = null
-      this.#eventSource.onmessage = null
-      this.#eventSource.onerror = null
-      this.#eventSource.close()
-      this.#eventSource = undefined
-    }
-
-    if (this.#serverChannel) {
-      this.removeChannel(this.#serverChannel.channelId)
-      this.#serverChannel = undefined
-    }
-
-    // Schedule reconnect or transition to disconnected
-    this.#reconnect.schedule({
-      type: "error",
-      error: new Error("EventSource connection error"),
-    })
   }
 
   // ==========================================================================
@@ -566,7 +570,7 @@ export class SseClientTransport extends Transport<void> {
           throw error
         }
 
-        // If controller was cleared (e.g. by onopen), stop retrying
+        // If controller was cleared (e.g. by abort-pending-posts effect), stop retrying
         if (!this.#currentRetryAbortController) {
           const abortError = new Error("Retry aborted by connection reset")
           abortError.name = "AbortError"
@@ -633,7 +637,7 @@ export class SseClientTransport extends Transport<void> {
  *
  * @example
  * ```typescript
- * import { createSseClient } from "@kyneta/sse-network-adapter/client"
+ * import { createSseClient } from "@kyneta/sse-transport/client"
  *
  * const exchange = new Exchange({
  *   transports: [createSseClient({

@@ -1,61 +1,42 @@
 // client-transport — Unix socket client transport for @kyneta/exchange.
 //
-// Connects to a unix domain socket path and manages a single connection
-// with reconnection via the shared `createReconnectScheduler` from
-// `@kyneta/exchange`.
+// Thin imperative shell around the pure client program (client-program.ts).
+// The program produces data effects; this module interprets them as I/O.
+//
+// FC/IS design:
+// - client-program.ts: pure Mealy machine (functional core)
+// - client-transport.ts: effect executor (imperative shell)
 //
 // Uses `UnixSocketConnection` for stream framing (StreamFrameParser)
 // and backpressure-aware writes. No fragmentation, no transport prefixes,
-// no "ready" handshake — UDS connections are bidirectionally ready
-// immediately.
-//
-// The client has a 4-state machine (same as SSE):
-//   disconnected → connecting → connected
-//                      ↓            ↓
-//                 reconnecting ← ─ ─┘
-//                      ↓
-//                 connecting (retry)
-//                      ↓
-//                 disconnected (max retries)
+// no "ready" handshake — unix socket connections are bidirectionally
+// ready immediately.
 
+import type {
+  ObservableHandle,
+  StateTransition,
+  TransitionListener,
+} from "@kyneta/machine"
+import { createObservableProgram } from "@kyneta/machine"
 import type {
   Channel,
   ChannelMsg,
   GeneratedChannel,
   PeerId,
-  ReconnectScheduler,
-  StateTransition,
-  TransitionListener,
   TransportFactory,
 } from "@kyneta/transport"
+import { Transport } from "@kyneta/transport"
 import {
-  ClientStateMachine,
-  createReconnectScheduler,
-  Transport,
-} from "@kyneta/transport"
+  createUnixSocketClientProgram,
+  type UnixSocketClientEffect,
+  type UnixSocketClientMsg,
+} from "./client-program.js"
 import { connect } from "./connect.js"
 import { UnixSocketConnection } from "./connection.js"
 import type { DisconnectReason, UnixSocketClientState } from "./types.js"
 
 // Re-export state types for convenience
 export type { DisconnectReason, UnixSocketClientState }
-
-// ---------------------------------------------------------------------------
-// State machine
-// ---------------------------------------------------------------------------
-
-/**
- * Valid transitions for the unix socket client state machine.
- *
- * Identical to SSE's 4-state transition map — no "ready" phase because
- * UDS connections are bidirectionally ready immediately.
- */
-const UDS_VALID_TRANSITIONS: Record<string, string[]> = {
-  disconnected: ["connecting"],
-  connecting: ["connected", "disconnected", "reconnecting"],
-  connected: ["disconnected", "reconnecting"],
-  reconnecting: ["connecting", "disconnected"],
-}
 
 // ---------------------------------------------------------------------------
 // Options
@@ -95,8 +76,12 @@ export type UnixSocketClientStateTransition =
  *
  * Connects to a unix domain socket path and manages a single connection.
  * Uses `UnixSocketConnection` for stream framing and backpressure-aware
- * writes. Reconnects with exponential backoff via the shared
- * `createReconnectScheduler`.
+ * writes. Reconnects with exponential backoff via a pure Mealy machine
+ * program (`client-program.ts`).
+ *
+ * Internally, the connection lifecycle is a `Program<Msg, Model, Fx>` —
+ * a pure Mealy machine whose transitions are deterministically testable.
+ * This class is the imperative shell that interprets data effects as I/O.
  *
  * ## Usage
  *
@@ -114,39 +99,145 @@ export type UnixSocketClientStateTransition =
  */
 export class UnixSocketClientTransport extends Transport<void> {
   #peerId?: PeerId
+
+  // Observable program handle — created in constructor, drives all state
+  #handle: ObservableHandle<UnixSocketClientMsg, UnixSocketClientState>
+
+  // Executor-local I/O state — not in the program model
   #connection?: UnixSocketConnection
   #serverChannel?: Channel
-  #options: UnixSocketClientOptions
-  #reconnect: ReconnectScheduler
-
-  // State machine
-  readonly #stateMachine: ClientStateMachine<UnixSocketClientState>
+  #reconnectTimer?: ReturnType<typeof setTimeout>
 
   constructor(options: UnixSocketClientOptions) {
     super({ transportType: "unix-socket-client" })
-    this.#options = options
 
-    this.#stateMachine = new ClientStateMachine<UnixSocketClientState>({
-      initialState: { status: "disconnected" },
-      validTransitions: UDS_VALID_TRANSITIONS,
+    const program = createUnixSocketClientProgram({
+      path: options.path,
+      reconnect: options.reconnect,
     })
 
-    this.#reconnect = createReconnectScheduler({
-      stateMachine: this.#stateMachine,
-      connectFn: () => this.#connect(),
-      options: this.#options.reconnect ?? {},
+    this.#handle = createObservableProgram(program, (effect, dispatch) => {
+      this.#executeEffect(effect, dispatch)
     })
   }
 
   // ==========================================================================
-  // State observation
+  // Effect executor — interprets data effects as I/O
+  // ==========================================================================
+
+  #executeEffect(
+    effect: UnixSocketClientEffect,
+    dispatch: (msg: UnixSocketClientMsg) => void,
+  ): void {
+    switch (effect.type) {
+      case "connect": {
+        void this.#doConnect(effect.path, dispatch)
+        break
+      }
+
+      case "close-connection": {
+        if (this.#connection) {
+          this.#connection.close()
+          this.#connection = undefined
+        }
+        break
+      }
+
+      case "add-channel-and-establish": {
+        this.#serverChannel = this.addChannel()
+
+        this.#connection = new UnixSocketConnection(
+          this.#peerId ?? "unknown",
+          this.#serverChannel.channelId,
+          // The socket is stored transiently on the instance during #doConnect.
+          // By the time this effect runs, #pendingSocket is set.
+          this.#pendingSocket!,
+        )
+        this.#connection._setChannel(this.#serverChannel)
+        this.#connection.start()
+        this.#pendingSocket = undefined
+
+        // No "ready" handshake — establish immediately
+        this.establishChannel(this.#serverChannel.channelId)
+        break
+      }
+
+      case "remove-channel": {
+        if (this.#serverChannel) {
+          this.removeChannel(this.#serverChannel.channelId)
+          this.#serverChannel = undefined
+        }
+        // Also clean up the connection reference
+        if (this.#connection) {
+          this.#connection = undefined
+        }
+        break
+      }
+
+      case "start-reconnect-timer": {
+        this.#reconnectTimer = setTimeout(() => {
+          this.#reconnectTimer = undefined
+          dispatch({ type: "reconnect-timer-fired" })
+        }, effect.delayMs)
+        break
+      }
+
+      case "cancel-reconnect-timer": {
+        if (this.#reconnectTimer !== undefined) {
+          clearTimeout(this.#reconnectTimer)
+          this.#reconnectTimer = undefined
+        }
+        break
+      }
+    }
+  }
+
+  // Transient socket storage — set during #doConnect, consumed by add-channel-and-establish effect
+  #pendingSocket?: import("./types.js").UnixSocket
+
+  /**
+   * Perform the actual socket connection (async I/O).
+   * On success, dispatches connection-opened.
+   * On failure, dispatches connection-error.
+   */
+  async #doConnect(
+    path: string,
+    dispatch: (msg: UnixSocketClientMsg) => void,
+  ): Promise<void> {
+    try {
+      const socket = await connect(path)
+
+      // Store the socket for the add-channel-and-establish effect
+      this.#pendingSocket = socket
+
+      // Set up error and close handlers
+      socket.onClose(() => {
+        dispatch({ type: "connection-closed" })
+      })
+
+      socket.onError((error: Error) => {
+        const errno = (error as NodeJS.ErrnoException).code
+        dispatch({ type: "connection-error", error, errno })
+      })
+
+      dispatch({ type: "connection-opened" })
+    } catch (error) {
+      const wrappedError =
+        error instanceof Error ? error : new Error(String(error))
+      const errno = (error as NodeJS.ErrnoException).code
+      dispatch({ type: "connection-error", error: wrappedError, errno })
+    }
+  }
+
+  // ==========================================================================
+  // State observation — delegated to the observable handle
   // ==========================================================================
 
   /**
    * Get the current connection state.
    */
   getState(): UnixSocketClientState {
-    return this.#stateMachine.getState()
+    return this.#handle.getState()
   }
 
   /**
@@ -155,7 +246,7 @@ export class UnixSocketClientTransport extends Transport<void> {
   subscribeToTransitions(
     listener: TransitionListener<UnixSocketClientState>,
   ): () => void {
-    return this.#stateMachine.subscribeToTransitions(listener)
+    return this.#handle.subscribeToTransitions(listener)
   }
 
   /**
@@ -165,7 +256,7 @@ export class UnixSocketClientTransport extends Transport<void> {
     predicate: (state: UnixSocketClientState) => boolean,
     options?: { timeoutMs?: number },
   ): Promise<UnixSocketClientState> {
-    return this.#stateMachine.waitForState(predicate, options)
+    return this.#handle.waitForState(predicate, options)
   }
 
   /**
@@ -175,14 +266,14 @@ export class UnixSocketClientTransport extends Transport<void> {
     status: UnixSocketClientState["status"],
     options?: { timeoutMs?: number },
   ): Promise<UnixSocketClientState> {
-    return this.#stateMachine.waitForStatus(status, options)
+    return this.#handle.waitForStatus(status, options)
   }
 
   /**
    * Whether the client is connected and ready to send/receive.
    */
   get isConnected(): boolean {
-    return this.#stateMachine.getStatus() === "connected"
+    return this.#handle.getState().status === "connected"
   }
 
   // ==========================================================================
@@ -198,9 +289,9 @@ export class UnixSocketClientTransport extends Transport<void> {
         }
       },
       stop: () => {
-        // Don't call disconnect() here — channel.stop() is called when
-        // the channel is removed, which can happen during handleClose().
-        // The actual disconnect is handled by onStop() or handleClose().
+        // Don't call disconnect here — channel.stop() is called when
+        // the channel is removed, which can happen during effect execution.
+        // The actual disconnect is handled by onStop() or the program.
       },
     }
   }
@@ -212,141 +303,11 @@ export class UnixSocketClientTransport extends Transport<void> {
       )
     }
     this.#peerId = this.identity.peerId
-    this.#reconnect.setEnabled(true)
-    await this.#connect()
+    this.#handle.dispatch({ type: "start" })
   }
 
   async onStop(): Promise<void> {
-    this.#reconnect.setEnabled(false)
-    this.#disconnect({ type: "intentional" })
-  }
-
-  // ==========================================================================
-  // Connection management
-  // ==========================================================================
-
-  /**
-   * Connect to the unix socket server.
-   */
-  async #connect(): Promise<void> {
-    const currentState = this.#stateMachine.getState()
-    if (currentState.status === "connecting") {
-      return
-    }
-
-    // Determine attempt number
-    const attempt =
-      currentState.status === "reconnecting" ? currentState.attempt : 1
-
-    this.#stateMachine.transition({ status: "connecting", attempt })
-
-    try {
-      const socket = await connect(this.#options.path)
-
-      // Set up error and close handlers
-      socket.onClose(() => {
-        this.#handleClose()
-      })
-
-      socket.onError(error => {
-        this.#handleError(error)
-      })
-
-      // Transition to connected
-      this.#stateMachine.transition({ status: "connected" })
-
-      // Create channel and connection
-      this.#serverChannel = this.addChannel()
-
-      this.#connection = new UnixSocketConnection(
-        this.#peerId ?? "unknown",
-        this.#serverChannel.channelId,
-        socket,
-      )
-      this.#connection._setChannel(this.#serverChannel)
-      this.#connection.start()
-
-      // No "ready" handshake — establish immediately
-      this.establishChannel(this.#serverChannel.channelId)
-    } catch (error) {
-      // Wrap error with errno context for socket-specific failures
-      const wrappedError =
-        error instanceof Error ? error : new Error(String(error))
-      const errno = (error as NodeJS.ErrnoException).code
-
-      this.#reconnect.schedule({
-        type: "error",
-        error: wrappedError,
-        errno,
-      })
-    }
-  }
-
-  /**
-   * Disconnect from the unix socket server.
-   */
-  #disconnect(reason: DisconnectReason): void {
-    this.#reconnect.cancel()
-
-    if (this.#connection) {
-      this.#connection.close()
-      this.#connection = undefined
-    }
-
-    if (this.#serverChannel) {
-      this.removeChannel(this.#serverChannel.channelId)
-      this.#serverChannel = undefined
-    }
-
-    // Only transition if not already disconnected
-    const currentState = this.#stateMachine.getState()
-    if (currentState.status !== "disconnected") {
-      this.#stateMachine.transition({ status: "disconnected", reason })
-    }
-  }
-
-  // ==========================================================================
-  // Event handlers
-  // ==========================================================================
-
-  /**
-   * Handle socket close event.
-   */
-  #handleClose(): void {
-    if (this.#connection) {
-      this.#connection = undefined
-    }
-
-    if (this.#serverChannel) {
-      this.removeChannel(this.#serverChannel.channelId)
-      this.#serverChannel = undefined
-    }
-
-    // Schedule reconnect or transition to disconnected
-    this.#reconnect.schedule({ type: "closed" })
-  }
-
-  /**
-   * Handle socket error event.
-   */
-  #handleError(error: Error): void {
-    if (this.#connection) {
-      this.#connection = undefined
-    }
-
-    if (this.#serverChannel) {
-      this.removeChannel(this.#serverChannel.channelId)
-      this.#serverChannel = undefined
-    }
-
-    const errno = (error as NodeJS.ErrnoException).code
-
-    // Schedule reconnect or transition to disconnected
-    this.#reconnect.schedule({
-      type: "error",
-      error,
-      errno,
-    })
+    this.#handle.dispatch({ type: "stop" })
   }
 }
 

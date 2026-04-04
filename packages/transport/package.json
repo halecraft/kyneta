@@ -35,9 +35,11 @@
     "verify": "verify"
   },
   "peerDependencies": {
+    "@kyneta/machine": "^1.0.0",
     "@kyneta/schema": "^1.1.0"
   },
   "devDependencies": {
+    "@kyneta/machine": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",

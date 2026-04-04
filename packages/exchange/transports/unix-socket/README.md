@@ -184,7 +184,11 @@ interface UnixSocket {
 
 ## Connection Lifecycle
 
-The client uses a 4-state machine (no "ready" phase — UDS connections are bidirectionally ready immediately):
+The client connection lifecycle is a `Program<Msg, Model, Fx>` from `@kyneta/machine` — a pure Mealy machine with data effects. The transport class (`UnixSocketClientTransport`) is a thin imperative shell that interprets data effects as I/O (FC/IS design). The program is deterministically testable — every state × event combination is covered by pure data tests (no sockets, no timing, never flaky).
+
+The public observation API (`getState`, `subscribeToTransitions`, `waitForState`, `waitForStatus`) is preserved, powered by `createObservableProgram`.
+
+UDS uses a 4-state lifecycle (no "ready" phase — UDS connections are bidirectionally ready immediately, and there is no ready handshake). Stream framing via `StreamFrameParser` handles message boundaries on the raw byte stream.
 
 ```/dev/null/state-machine.txt#L1-7
 disconnected → connecting → connected
@@ -251,7 +255,7 @@ On stop, the server always unlinks the socket file.
 
 ## Reconnection
 
-The client uses the shared `createReconnectScheduler` from `@kyneta/exchange` — the same exponential backoff with jitter used by the WebSocket and SSE transports.
+Reconnection is encoded as effects within the pure program — `start-reconnect-timer` and `cancel-reconnect-timer` are data effects interpreted by the imperative shell. Backoff delay is computed by the shared `computeBackoffDelay` from `@kyneta/transport` (exponential backoff with jitter), the same algorithm used by the WebSocket and SSE transports.
 
 The `DisconnectReason` discriminated union carries socket-specific context:
 

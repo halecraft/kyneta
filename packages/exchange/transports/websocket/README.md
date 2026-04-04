@@ -132,7 +132,9 @@ const exchange = new Exchange({
 
 ## Connection Lifecycle
 
-The client adapter manages connection state through a validated state machine with async-observable transitions:
+The connection lifecycle is a `Program<WsClientMsg, WebsocketClientState, WsClientEffect>` from `@kyneta/machine` — a pure Mealy machine with data effects. The transport class (`WebsocketClientTransport`) is a thin imperative shell that interprets data effects as I/O (FC/IS design). Every state × event combination is covered by pure data tests — no sockets, no timing, never flaky.
+
+The WebSocket client has a **5-state lifecycle** with an extra `ready` state compared to SSE and Unix Socket transports. The server sends a text `"ready"` signal after the TCP connection opens, and only then does the client create a channel and begin the establishment handshake.
 
 ```/dev/null/state-machine.txt#L1-8
 disconnected → connecting → connected → ready
@@ -152,6 +154,19 @@ disconnected → connecting → connected → ready
 | `ready` | Server sent `"ready"` text frame — protocol messages can flow. |
 | `reconnecting` | Connection lost, scheduling next attempt. Tracks `attempt` and `nextAttemptMs`. |
 
+### Program Architecture
+
+The program (`createWsClientProgram`) encodes all transitions and side effects as inspectable data:
+
+- **Messages** (`WsClientMsg`): `start`, `socket-opened`, `server-ready`, `socket-closed`, `socket-error`, `reconnect-timer-fired`, `stop`
+- **Effects** (`WsClientEffect`): `create-websocket`, `close-websocket`, `add-channel-and-establish`, `remove-channel`, `start-reconnect-timer`, `cancel-reconnect-timer`, `start-keepalive`, `stop-keepalive`
+
+The imperative shell interprets each effect as real I/O — creating `WebSocket` instances, scheduling timers, sending keepalive pings. Keepalive is modeled as `start-keepalive` / `stop-keepalive` effects rather than internal timer logic.
+
+### Race Condition Handling
+
+The server may send `"ready"` before the client's `open` event fires (server-ready while still `connecting`). The program handles this by transitioning directly from `connecting` → `ready`, skipping the `connected` state entirely.
+
 ### Connection Handshake
 
 1. Client opens Websocket, transitions to `connecting`
@@ -161,6 +176,8 @@ disconnected → connecting → connected → ready
 5. Synchronizer exchanges `establish-request` / `establish-response`
 
 ### Observing State
+
+The public observation API is powered by `createObservableProgram` from `@kyneta/machine`:
 
 ```/dev/null/observe-state.ts#L1-18
 import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"

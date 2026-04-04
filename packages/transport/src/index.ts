@@ -1,7 +1,7 @@
 // @kyneta/transport — transport infrastructure for @kyneta/exchange.
 //
 // Base class, channel types, message vocabulary, identity types,
-// client state machine, reconnection utilities, and bridge transport.
+// reconnection utilities, and bridge transport.
 
 // ---------------------------------------------------------------------------
 // Identity types
@@ -68,15 +68,10 @@ export type {
 export { Transport } from "./transport.js"
 
 // ---------------------------------------------------------------------------
-// Client state machine
+// State machine types — re-exported from @kyneta/machine
 // ---------------------------------------------------------------------------
 
-export {
-  ClientStateMachine,
-  type ClientStateMachineConfig,
-  type StateTransition,
-  type TransitionListener,
-} from "./client-state-machine.js"
+export type { StateTransition, TransitionListener } from "@kyneta/machine"
 
 // ---------------------------------------------------------------------------
 // Reconnection utilities
@@ -84,11 +79,8 @@ export {
 
 export {
   computeBackoffDelay,
-  createReconnectScheduler,
   DEFAULT_RECONNECT,
   type ReconnectOptions,
-  type ReconnectScheduler,
-  type ReconnectSchedulerParams,
 } from "./reconnect.js"
 
 // ---------------------------------------------------------------------------

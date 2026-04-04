@@ -38,6 +38,7 @@
     "verify": "verify"
   },
   "peerDependencies": {
+    "@kyneta/machine": "^1.0.0",
     "@kyneta/transport": "^1.0.0",
     "@kyneta/wire": "^1.1.0"
   },
@@ -48,6 +49,7 @@
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
+    "@kyneta/machine": "workspace:^",
     "@kyneta/transport": "workspace:^",
     "@kyneta/wire": "workspace:^",
     "@kyneta/schema": "workspace:^",

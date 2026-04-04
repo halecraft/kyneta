@@ -1,42 +1,38 @@
-// client-adapter — Websocket client adapter for @kyneta/exchange.
+// client-transport — Websocket client transport for @kyneta/exchange.
 //
-// Connects to a Websocket server and handles bidirectional communication
-// using the kyneta wire format (CBOR codec + framing + fragmentation).
+// Thin imperative shell around the pure client program (client-program.ts).
+// The program produces data effects; this module interprets them as I/O.
 //
-// Features:
-// - State machine with validated transitions (disconnected → connecting → connected → ready)
-// - Exponential backoff reconnection with jitter
-// - Keepalive ping/pong (text frames, default 30s)
-// - Transport-level fragmentation for large payloads
-// - Observable connection state via subscribeToTransitions()
+// FC/IS design:
+// - client-program.ts: pure Mealy machine (functional core)
+// - client-transport.ts: effect executor (imperative shell)
 //
-// The connection handshake:
-// 1. Client creates Websocket, waits for open
-// 2. Server sends text "ready" signal
-// 3. Client creates channel + calls establishChannel()
-// 4. Synchronizer exchanges establish-request / establish-response
-//
-// Ported from @loro-extended/adapter-websocket's WsClientNetworkAdapter
-// with kyneta naming conventions and the kyneta 5-message protocol.
+// Uses the kyneta wire format (CBOR codec + framing + fragmentation)
+// for binary messages. Text frames carry the "ready" handshake and
+// keepalive ping/pong.
 
+import type { ObservableHandle, TransitionListener } from "@kyneta/machine"
+import { createObservableProgram } from "@kyneta/machine"
 import type {
   Channel,
   ChannelMsg,
   GeneratedChannel,
   PeerId,
-  ReconnectScheduler,
   TransportFactory,
 } from "@kyneta/transport"
-import { createReconnectScheduler, Transport } from "@kyneta/transport"
+import { Transport } from "@kyneta/transport"
 import {
   decodeBinaryMessages,
   encodeBinaryAndSend,
   FragmentReassembler,
 } from "@kyneta/wire"
-import { WebsocketClientStateMachine } from "./client-state-machine.js"
+import {
+  createWsClientProgram,
+  type WsClientEffect,
+  type WsClientMsg,
+} from "./client-program.js"
 import type {
   DisconnectReason,
-  TransitionListener,
   WebsocketClientState,
   WebsocketClientStateTransition,
 } from "./types.js"
@@ -70,7 +66,7 @@ export interface WebsocketClientOptions {
 
   /** Reconnection options. */
   reconnect?: {
-    enabled: boolean
+    enabled?: boolean
     maxAttempts?: number
     baseDelay?: number
     maxDelay?: number
@@ -135,22 +131,27 @@ export interface ServiceWebsocketClientOptions extends WebsocketClientOptions {
  * Connects to a Websocket server, sends and receives ChannelMsg via
  * the kyneta wire format (CBOR codec + framing + fragmentation).
  *
+ * Internally, the connection lifecycle is a `Program<Msg, Model, Fx>` —
+ * a pure Mealy machine whose transitions are deterministically testable.
+ * This class is the imperative shell that interprets data effects as I/O.
+ *
  * Prefer the factory functions for construction:
  * - `createWebsocketClient()` — browser-to-server
  * - `createServiceWebsocketClient()` — service-to-service (with headers)
  */
 export class WebsocketClientTransport extends Transport<void> {
   #peerId?: PeerId
+  #options: ServiceWebsocketClientOptions
+  #WebSocketImpl: typeof globalThis.WebSocket
+
+  // Observable program handle — created in constructor, drives all state
+  #handle: ObservableHandle<WsClientMsg, WebsocketClientState>
+
+  // Executor-local I/O state — not in the program model
   #socket?: WebSocket
   #serverChannel?: Channel
   #keepaliveTimer?: ReturnType<typeof setInterval>
-  #options: ServiceWebsocketClientOptions
-  #WebSocketImpl: typeof globalThis.WebSocket
-  #reconnect: ReconnectScheduler
-  #wasConnectedBefore = false
-
-  // State machine
-  readonly #stateMachine = new WebsocketClientStateMachine()
+  #reconnectTimer?: ReturnType<typeof setTimeout>
 
   // Fragmentation
   readonly #fragmentThreshold: number
@@ -165,10 +166,13 @@ export class WebsocketClientTransport extends Transport<void> {
     this.#reassembler = new FragmentReassembler({
       timeoutMs: 10_000,
     })
-    this.#reconnect = createReconnectScheduler({
-      stateMachine: this.#stateMachine,
-      connectFn: () => this.#connect(),
-      options: this.#options.reconnect ?? {},
+
+    const program = createWsClientProgram({
+      reconnect: options.reconnect,
+    })
+
+    this.#handle = createObservableProgram(program, (effect, dispatch) => {
+      this.#executeEffect(effect, dispatch)
     })
 
     // Set up lifecycle event forwarding
@@ -176,158 +180,102 @@ export class WebsocketClientTransport extends Transport<void> {
   }
 
   // ==========================================================================
-  // Lifecycle event forwarding
+  // Effect executor — interprets data effects as I/O
   // ==========================================================================
 
-  #setupLifecycleEvents(): void {
-    this.#stateMachine.subscribeToTransitions(transition => {
-      // Forward to onStateChange callback
-      this.#options.lifecycle?.onStateChange?.(transition)
-
-      const { from, to } = transition
-
-      // onDisconnect: transitioning TO disconnected
-      if (to.status === "disconnected" && to.reason) {
-        this.#options.lifecycle?.onDisconnect?.(to.reason)
+  #executeEffect(
+    effect: WsClientEffect,
+    dispatch: (msg: WsClientMsg) => void,
+  ): void {
+    switch (effect.type) {
+      case "create-websocket": {
+        this.#doCreateWebsocket(dispatch)
+        break
       }
 
-      // onReconnecting: transitioning TO reconnecting
-      if (to.status === "reconnecting") {
-        this.#options.lifecycle?.onReconnecting?.(to.attempt, to.nextAttemptMs)
+      case "close-websocket": {
+        if (this.#socket) {
+          this.#socket.close(1000, "Client disconnecting")
+          this.#socket = undefined
+        }
+        break
       }
 
-      // onReconnected: from reconnecting/connecting TO connected/ready (after prior connection)
-      if (
-        this.#wasConnectedBefore &&
-        (from.status === "reconnecting" || from.status === "connecting") &&
-        (to.status === "connected" || to.status === "ready")
-      ) {
-        this.#options.lifecycle?.onReconnected?.()
-      }
-
-      // onReady: transitioning TO ready
-      if (to.status === "ready") {
-        this.#options.lifecycle?.onReady?.()
-      }
-    })
-  }
-
-  // ==========================================================================
-  // State observation API
-  // ==========================================================================
-
-  /**
-   * Get the current state of the connection.
-   */
-  getState(): WebsocketClientState {
-    return this.#stateMachine.getState()
-  }
-
-  /**
-   * Subscribe to state transitions.
-   * @returns Unsubscribe function
-   */
-  subscribeToTransitions(listener: TransitionListener): () => void {
-    return this.#stateMachine.subscribeToTransitions(listener)
-  }
-
-  /**
-   * Wait for a specific state.
-   */
-  waitForState(
-    predicate: (state: WebsocketClientState) => boolean,
-    options?: { timeoutMs?: number },
-  ): Promise<WebsocketClientState> {
-    return this.#stateMachine.waitForState(predicate, options)
-  }
-
-  /**
-   * Wait for a specific status.
-   */
-  waitForStatus(
-    status: WebsocketClientState["status"],
-    options?: { timeoutMs?: number },
-  ): Promise<WebsocketClientState> {
-    return this.#stateMachine.waitForStatus(status, options)
-  }
-
-  /**
-   * Check if the client is ready (server ready signal received).
-   */
-  get isReady(): boolean {
-    return this.#stateMachine.isReady()
-  }
-
-  // ==========================================================================
-  // Adapter abstract method implementations
-  // ==========================================================================
-
-  protected generate(): GeneratedChannel {
-    return {
-      transportType: this.transportType,
-      send: (msg: ChannelMsg) => {
-        const socket = this.#socket
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-          return
+      case "add-channel-and-establish": {
+        // Clean up previous channel if it exists (e.g. after reconnect)
+        if (this.#serverChannel) {
+          this.removeChannel(this.#serverChannel.channelId)
+          this.#serverChannel = undefined
         }
 
-        encodeBinaryAndSend(msg, this.#fragmentThreshold, data =>
-          socket.send(new Uint8Array(data).buffer),
-        )
-      },
-      stop: () => {
-        // Don't call disconnect() here — channel.stop() is called when
-        // the channel is removed, which can happen during handleClose().
-        // The actual disconnect is handled by onStop() or handleClose().
-      },
-    }
-  }
+        this.#serverChannel = this.addChannel()
 
-  async onStart(): Promise<void> {
-    if (!this.identity) {
-      throw new Error(
-        "Adapter not properly initialized — identity not available",
-      )
-    }
-    this.#peerId = this.identity.peerId
-    this.#reconnect.setEnabled(true)
-    this.#wasConnectedBefore = false
-    await this.#connect()
-  }
+        // Establish immediately — the server already signaled ready
+        this.establishChannel(this.#serverChannel.channelId)
+        break
+      }
 
-  async onStop(): Promise<void> {
-    this.#reconnect.setEnabled(false)
-    this.#reassembler.dispose()
-    this.#disconnect({ type: "intentional" })
+      case "remove-channel": {
+        if (this.#serverChannel) {
+          this.removeChannel(this.#serverChannel.channelId)
+          this.#serverChannel = undefined
+        }
+        break
+      }
+
+      case "start-reconnect-timer": {
+        this.#reconnectTimer = setTimeout(() => {
+          this.#reconnectTimer = undefined
+          dispatch({ type: "reconnect-timer-fired" })
+        }, effect.delayMs)
+        break
+      }
+
+      case "cancel-reconnect-timer": {
+        if (this.#reconnectTimer !== undefined) {
+          clearTimeout(this.#reconnectTimer)
+          this.#reconnectTimer = undefined
+        }
+        break
+      }
+
+      case "start-keepalive": {
+        this.#startKeepalive()
+        break
+      }
+
+      case "stop-keepalive": {
+        this.#stopKeepalive()
+        break
+      }
+    }
   }
 
   // ==========================================================================
-  // Connection management
+  // WebSocket creation — the core I/O operation
   // ==========================================================================
 
   /**
-   * Connect to the Websocket server.
+   * Create a WebSocket and wire up event handlers to dispatch messages.
+   *
+   * The message handler is set up IMMEDIATELY after creation (before
+   * the open event) to handle the race condition where the server sends
+   * "ready" before the client's open promise resolves.
    */
-  async #connect(): Promise<void> {
-    const currentState = this.#stateMachine.getState()
-    if (currentState.status === "connecting") {
+  #doCreateWebsocket(dispatch: (msg: WsClientMsg) => void): void {
+    const peerId = this.#peerId
+    if (!peerId) {
+      dispatch({
+        type: "socket-error",
+        error: new Error("Cannot connect: peerId not set"),
+      })
       return
     }
-
-    if (!this.#peerId) {
-      throw new Error("Cannot connect: peerId not set")
-    }
-
-    // Determine attempt number
-    const attempt =
-      currentState.status === "reconnecting" ? currentState.attempt : 1
-
-    this.#stateMachine.transition({ status: "connecting", attempt })
 
     // Resolve URL
     const url =
       typeof this.#options.url === "function"
-        ? this.#options.url(this.#peerId)
+        ? this.#options.url(peerId)
         : this.#options.url
 
     try {
@@ -336,7 +284,6 @@ export class WebsocketClientTransport extends Transport<void> {
         this.#options.headers &&
         Object.keys(this.#options.headers).length > 0
       ) {
-        // Bun extends the standard WebSocket API with a non-standard constructor
         type BunWebSocketConstructor = new (
           url: string,
           options: { headers: Record<string, string> },
@@ -351,108 +298,91 @@ export class WebsocketClientTransport extends Transport<void> {
       }
       this.#socket.binaryType = "arraybuffer"
 
-      // IMPORTANT: Set up message handler IMMEDIATELY after creating the socket.
-      // This must happen BEFORE waiting for the open event to avoid a race
-      // condition where the server sends "ready" before the handler is attached.
-      this.#socket.addEventListener("message", event => {
-        this.#handleMessage(event)
+      const socket = this.#socket
+
+      // Set up message handler IMMEDIATELY to handle the "ready" race condition.
+      // The server may send "ready" before the open event fires.
+      socket.addEventListener("message", (event: MessageEvent) => {
+        this.#handleMessage(event, dispatch)
       })
 
-      await new Promise<void>((resolve, reject) => {
-        if (!this.#socket) {
-          reject(new Error("Socket not created"))
-          return
-        }
+      // Track whether we've dispatched a terminal event for this connection attempt
+      let settled = false
 
-        const onOpen = () => {
-          cleanup()
-          resolve()
-        }
+      const onOpen = () => {
+        cleanup()
+        settled = true
+        dispatch({ type: "socket-opened" })
 
-        const onError = (event: Event) => {
-          cleanup()
-          reject(new Error(`WebSocket connection failed: ${event}`))
-        }
+        // After open, set up permanent close handler for post-connection closes
+        socket.addEventListener("close", (event: CloseEvent) => {
+          dispatch({
+            type: "socket-closed",
+            code: event.code,
+            reason: event.reason,
+          })
+        })
+      }
 
-        const onClose = () => {
-          cleanup()
-          reject(new Error("WebSocket closed during connection"))
-        }
+      const onError = () => {
+        if (settled) return
+        cleanup()
+        settled = true
+        dispatch({
+          type: "socket-error",
+          error: new Error("WebSocket connection failed"),
+        })
+      }
 
-        const cleanup = () => {
-          this.#socket?.removeEventListener("open", onOpen)
-          this.#socket?.removeEventListener("error", onError)
-          this.#socket?.removeEventListener("close", onClose)
-        }
+      const onClose = () => {
+        if (settled) return
+        cleanup()
+        settled = true
+        dispatch({
+          type: "socket-error",
+          error: new Error("WebSocket closed during connection"),
+        })
+      }
 
-        this.#socket.addEventListener("open", onOpen)
-        this.#socket.addEventListener("error", onError)
-        this.#socket.addEventListener("close", onClose)
-      })
+      const cleanup = () => {
+        socket.removeEventListener("open", onOpen)
+        socket.removeEventListener("error", onError)
+        socket.removeEventListener("close", onClose)
+      }
 
-      // Socket is now open — transition to connected
-      this.#stateMachine.transition({ status: "connected" })
-
-      // Set up close handler for disconnections after connection is established
-      this.#socket.addEventListener("close", event => {
-        this.#handleClose(event.code, event.reason)
-      })
-
-      // Start keepalive
-      this.#startKeepalive()
-
-      // Note: Channel creation is deferred until we receive the "ready" signal
-      // from the server. This ensures the server is fully set up before we
-      // start sending messages.
+      socket.addEventListener("open", onOpen)
+      socket.addEventListener("error", onError)
+      socket.addEventListener("close", onClose)
     } catch (error) {
-      // Transition to reconnecting or disconnected
-      this.#reconnect.schedule({
-        type: "error",
+      dispatch({
+        type: "socket-error",
         error: error instanceof Error ? error : new Error(String(error)),
       })
     }
   }
 
-  /**
-   * Disconnect from the Websocket server.
-   */
-  #disconnect(reason: DisconnectReason): void {
-    this.#stopKeepalive()
-    this.#reconnect.cancel()
-
-    if (this.#socket) {
-      this.#socket.close(1000, "Client disconnecting")
-      this.#socket = undefined
-    }
-
-    if (this.#serverChannel) {
-      this.removeChannel(this.#serverChannel.channelId)
-      this.#serverChannel = undefined
-    }
-
-    // Only transition if not already disconnected
-    const currentState = this.#stateMachine.getState()
-    if (currentState.status !== "disconnected") {
-      this.#stateMachine.transition({ status: "disconnected", reason })
-    }
-  }
-
   // ==========================================================================
-  // Message handling
+  // Message handling — I/O parsing logic
   // ==========================================================================
 
   /**
    * Handle incoming Websocket messages.
+   *
+   * Text frames carry the "ready" handshake and keepalive pong.
+   * Binary frames carry CBOR-encoded ChannelMsg.
    */
-  #handleMessage(event: MessageEvent): void {
+  #handleMessage(
+    event: MessageEvent,
+    dispatch: (msg: WsClientMsg) => void,
+  ): void {
     const data = event.data
 
     // Handle text messages (keepalive and ready signal)
     if (typeof data === "string") {
       if (data === "ready") {
-        this.#handleServerReady()
+        dispatch({ type: "server-ready" })
       }
-      // Ignore pong responses
+      // Ignore pong responses and other text
       return
     }
 
@@ -475,45 +405,6 @@ export class WebsocketClientTransport extends Transport<void> {
   }
 
   /**
-   * Handle the "ready" signal from the server.
-   *
-   * Creates the channel and starts the establishment handshake.
-   * The "ready" signal is a transport-level indicator that the server's
-   * Websocket handler is ready. After receiving it, we create our channel
-   * and send a real establish-request.
-   */
-  #handleServerReady(): void {
-    const currentState = this.#stateMachine.getState()
-    if (currentState.status === "ready") {
-      // Already received ready signal, ignore duplicate
-      return
-    }
-
-    // Handle race condition: if we receive "ready" while still in "connecting" state,
-    // the server sent the ready signal before our open promise resolved.
-    // Transition through "connected" first to maintain valid state machine transitions.
-    if (currentState.status === "connecting") {
-      this.#stateMachine.transition({ status: "connected" })
-    }
-
-    // Transition to ready state
-    this.#stateMachine.transition({ status: "ready" })
-    this.#wasConnectedBefore = true
-
-    // Create channel if not exists
-    if (this.#serverChannel) {
-      this.removeChannel(this.#serverChannel.channelId)
-      this.#serverChannel = undefined
-    }
-
-    this.#serverChannel = this.addChannel()
-
-    // Send real establish-request over the wire
-    // The server will respond with establish-response containing its actual identity
-    this.establishChannel(this.#serverChannel.channelId)
-  }
-
-  /**
    * Handle a decoded channel message.
    */
   #handleChannelMessage(msg: ChannelMsg): void {
@@ -523,21 +414,6 @@ export class WebsocketClientTransport extends Transport<void> {
 
     // Deliver synchronously — the Synchronizer's receive queue prevents recursion
     this.#serverChannel.onReceive(msg)
-  }
-
-  /**
-   * Handle Websocket close.
-   */
-  #handleClose(code: number, reason: string): void {
-    this.#stopKeepalive()
-
-    if (this.#serverChannel) {
-      this.removeChannel(this.#serverChannel.channelId)
-      this.#serverChannel = undefined
-    }
-
-    // Schedule reconnect or transition to disconnected
-    this.#reconnect.schedule({ type: "closed", code, reason })
   }
 
   // ==========================================================================
@@ -561,6 +437,134 @@ export class WebsocketClientTransport extends Transport<void> {
       clearInterval(this.#keepaliveTimer)
       this.#keepaliveTimer = undefined
     }
+  }
+
+  // ==========================================================================
+  // Lifecycle event forwarding
+  // ==========================================================================
+
+  #setupLifecycleEvents(): void {
+    // wasConnectedBefore is observer-local state, not in the program model
+    let wasConnectedBefore = false
+
+    this.#handle.subscribeToTransitions(transition => {
+      // Forward to onStateChange callback
+      this.#options.lifecycle?.onStateChange?.(transition)
+
+      const { from, to } = transition
+
+      // onDisconnect: transitioning TO disconnected
+      if (to.status === "disconnected" && to.reason) {
+        this.#options.lifecycle?.onDisconnect?.(to.reason)
+      }
+
+      // onReconnecting: transitioning TO reconnecting
+      if (to.status === "reconnecting") {
+        this.#options.lifecycle?.onReconnecting?.(to.attempt, to.nextAttemptMs)
+      }
+
+      // onReconnected: from reconnecting/connecting TO connected/ready (after prior connection)
+      if (
+        wasConnectedBefore &&
+        (from.status === "reconnecting" || from.status === "connecting") &&
+        (to.status === "connected" || to.status === "ready")
+      ) {
+        this.#options.lifecycle?.onReconnected?.()
+      }
+
+      // onReady: transitioning TO ready
+      if (to.status === "ready") {
+        this.#options.lifecycle?.onReady?.()
+        wasConnectedBefore = true
+      }
+    })
+  }
+
+  // ==========================================================================
+  // State observation — delegated to the observable handle
+  // ==========================================================================
+
+  /**
+   * Get the current connection state.
+   */
+  getState(): WebsocketClientState {
+    return this.#handle.getState()
+  }
+
+  /**
+   * Subscribe to state transitions.
+   */
+  subscribeToTransitions(
+    listener: TransitionListener<WebsocketClientState>,
+  ): () => void {
+    return this.#handle.subscribeToTransitions(listener)
+  }
+
+  /**
+   * Wait for a specific state.
+   */
+  waitForState(
+    predicate: (state: WebsocketClientState) => boolean,
+    options?: { timeoutMs?: number },
+  ): Promise<WebsocketClientState> {
+    return this.#handle.waitForState(predicate, options)
+  }
+
+  /**
+   * Wait for a specific status.
+   */
+  waitForStatus(
+    status: WebsocketClientState["status"],
+    options?: { timeoutMs?: number },
+  ): Promise<WebsocketClientState> {
+    return this.#handle.waitForStatus(status, options)
+  }
+
+  /**
+   * Whether the client is ready (server ready signal received).
+   */
+  get isReady(): boolean {
+    return this.#handle.getState().status === "ready"
+  }
+
+  // ==========================================================================
+  // Transport abstract method implementations
+  // ==========================================================================
+
+  protected generate(): GeneratedChannel {
+    return {
+      transportType: this.transportType,
+      send: (msg: ChannelMsg) => {
+        const socket = this.#socket
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          return
+        }
+
+        encodeBinaryAndSend(msg, this.#fragmentThreshold, data =>
+          socket.send(new Uint8Array(data).buffer),
+        )
+      },
+      stop: () => {
+        // Don't call disconnect here — channel.stop() is called when
+        // the channel is removed, which can happen during effect execution.
+        // The actual disconnect is handled by onStop() or the program.
+      },
+    }
+  }
+
+  async onStart(): Promise<void> {
+    if (!this.identity) {
+      throw new Error(
+        "Adapter not properly initialized — identity not available",
+      )
+    }
+    this.#peerId = this.identity.peerId
+    this.#handle.dispatch({ type: "start" })
+  }
+
+  async onStop(): Promise<void> {
+    this.#reassembler.dispose()
+    this.#handle.dispatch({ type: "stop" })
   }
 }
 

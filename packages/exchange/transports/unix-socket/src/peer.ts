@@ -9,6 +9,7 @@
 
 import type { Exchange } from "@kyneta/exchange"
 import type { Dispatch } from "@kyneta/machine"
+import { createObservableProgram } from "@kyneta/machine"
 import {
   type UnixSocketClientOptions,
   UnixSocketClientTransport,
@@ -17,7 +18,6 @@ import { connect } from "./connect.js"
 import {
   createPeerProgram,
   type PeerEffect,
-  type PeerModel,
   type PeerMsg,
   type ProbeResult,
 } from "./peer-program.js"
@@ -163,7 +163,7 @@ function createEffectExecutor(exchange: Exchange) {
  * transports at runtime — the Exchange, all documents, and all CRDT state
  * survive across transport swaps.
  *
- * Internally, the peer is a `Program<PeerMsg, PeerModel, PeerEffect>` —
+ * Internally, the peer is a `Program<PeerMsg, Model, PeerEffect>` —
  * a pure Mealy machine whose transitions are deterministically testable.
  * This function is the imperative shell that interprets data effects as I/O.
  */
@@ -173,44 +173,7 @@ export function createUnixSocketPeer(
 ): UnixSocketPeer {
   const program = createPeerProgram(options)
   const execute = createEffectExecutor(exchange)
-
-  // --- Mini runtime for data-effect programs ---
-  // We don't use `runtime()` from @kyneta/machine directly because our
-  // effects are data (PeerEffect), not closures (Effect<Msg>). Instead
-  // we run a simple dispatch loop that interprets effects via the executor.
-
-  let state: PeerModel
-  let isRunning = true
-  const pending: PeerMsg[] = []
-  let isDispatching = false
-
-  function dispatch(msg: PeerMsg): void {
-    if (!isRunning) return
-
-    pending.push(msg)
-    if (isDispatching) return
-
-    isDispatching = true
-    try {
-      while (pending.length > 0) {
-        const next = pending.shift() as PeerMsg
-        const [newModel, ...effects] = program.update(next, state)
-        state = newModel
-        for (const effect of effects) {
-          execute(effect, dispatch)
-        }
-      }
-    } finally {
-      isDispatching = false
-    }
-  }
-
-  // Initialize
-  const [initialModel, ...initialEffects] = program.init
-  state = initialModel
-  for (const effect of initialEffects) {
-    execute(effect, dispatch)
-  }
+  const handle = createObservableProgram(program, execute)
 
   // Dispose returns a promise for backward compatibility — the program's
   // dispose transition may produce remove-transport effects that are async.
@@ -218,14 +181,12 @@ export function createUnixSocketPeer(
 
   return {
     get role() {
-      return state.role
+      return handle.getState().role
     },
     dispose() {
       if (disposePromise) return disposePromise
-
-      dispatch({ type: "dispose" })
-      isRunning = false
-
+      handle.dispatch({ type: "dispose" })
+      handle.dispose()
       // Give async effects (remove-transport) a moment to settle
       disposePromise = new Promise(resolve => setTimeout(resolve, 0))
       return disposePromise

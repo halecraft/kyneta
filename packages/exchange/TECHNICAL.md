@@ -52,6 +52,8 @@ Message → update(msg, model) → [newModel, Command?, Notification?]
 
 The TEA algebra is formalized in `@kyneta/machine` as `Program<Msg, Model, Fx>` — a universal Mealy machine with parameterized effect type. The Synchronizer's `update` function conforms to the `Program` shape with `Fx = Command | Notification` and a custom batched interpreter that accumulates notifications and drains at quiescence. The `runtime()` function in `@kyneta/machine` provides a simpler interpreter for programs with closure effects (`Effect<Msg>`) — synchronous dispatch, immediate effect execution, no batching. Programs with data effects (like the peer negotiator) use a custom executor that maps data to I/O, following the free monad interpreter pattern.
 
+The three client transports (WebSocket, SSE, Unix Socket) also use `Program<Msg, Model, Fx>` for their connection lifecycle. Each client transport has a pure Mealy machine program (`client-program.ts`) that produces **data effects** — the transport class interprets these as I/O via `createObservableProgram` from `@kyneta/machine`. This gives every transport observable state, `subscribeToTransitions`, `waitForState`/`waitForStatus`, and deterministic testability (assert on data, no sockets, no timing).
+
 Currently one notification variant exists:
 
 ```ts
@@ -350,16 +352,15 @@ const exchange = new Exchange({
 
 This is safe because server-side Exchanges are typically created once and never reset. The factory returns the same pre-created instance — the Exchange calls it once during construction.
 
-### ClientStateMachine\<S\>
+### Transport Client Programs
 
-Generic observable state machine for transport client reconnection lifecycle. Extracted from the websocket transport to eliminate duplication across adapters.
+Each client transport's connection lifecycle is a `Program<Msg, Model, Fx>` from `@kyneta/machine`, instantiated via `createObservableProgram`. The program's `update` function is the single source of truth for valid state transitions — no separate transition map is needed because `update` only produces valid states by construction. The observable handle provides `subscribeToTransitions`, `waitForState`/`waitForStatus`, `getState()`, and `dispose()`.
 
-Parameterized on the state type `S extends { status: string }` and constructed with a transition map. Provides validated transitions, async delivery via microtask queue, `subscribeToTransitions`, `waitForState`/`waitForStatus`, and `reset()`. Both the websocket and SSE adapters instantiate it with their specific state types:
+- **WebSocket** (`createWsClientProgram`) — 5 states (disconnected, connecting, connected, ready, reconnecting)
+- **SSE** (`createSseClientProgram`) — 4 states (disconnected, connecting, connected, reconnecting)
+- **Unix Socket** (`createUnixSocketClientProgram`) — 4 states (disconnected, connecting, connected, reconnecting)
 
-- `WebsocketClientStateMachine extends ClientStateMachine<WebsocketClientState>` — 5 states (disconnected, connecting, connected, ready, reconnecting)
-- `SseClientStateMachine extends ClientStateMachine<SseClientState>` — 4 states (disconnected, connecting, connected, reconnecting)
-
-Exported from `@kyneta/exchange` as shared infrastructure.
+Reconnection logic (exponential backoff with jitter, max attempts) lives inside each program's `update` function via a `tryReconnect` helper, producing `start-reconnect-timer` and `reconnect-timer-fired` effects/messages. The imperative shell maps timer effects to `setTimeout` calls that dispatch back into the program.
 
 ### BridgeTransport
 
@@ -439,6 +440,8 @@ There is no decorator, no wrapper object, and no `context()` gotcha. Each LWW su
 ---
 
 ## 9. Serialized Dispatch with Quiescence Drain
+
+> **Historical note:** This section previously documented `ClientStateMachine<S>` and `createReconnectScheduler` as shared infrastructure for transport client reconnection. These have been replaced by `Program`-based transports using `createObservableProgram` from `@kyneta/machine` (see §5 "Transport Client Programs"). The validated transition map is superseded by each program's `update` function (which only produces valid states by construction), and the reconnect scheduler is superseded by reconnection logic in each program's `update` + timer effects.
 
 The `Synchronizer` processes messages one at a time via a serialized dispatch loop:
 
@@ -629,9 +632,11 @@ The Websocket connection handshake is two-phase to avoid race conditions:
 
 The server does NOT call `establishChannel()` — it waits for the client's establish-request. This prevents a race condition where the server's binary establish-request could arrive before the client has processed `"ready"` and created its channel.
 
-### Client State Machine
+### Client Program (`createWsClientProgram`)
 
-The `WebsocketClientStateMachine` provides validated, observable state transitions:
+The WebSocket client lifecycle is a pure Mealy machine: `Program<WsClientMsg, WebsocketClientState, WsClientEffect>`. The transport class instantiates it via `createObservableProgram` and interprets data effects as I/O.
+
+**5-state lifecycle** (unique among the three client transports — SSE and Unix Socket have 4 states):
 
 ```
 disconnected → connecting → connected → ready
@@ -639,7 +644,13 @@ disconnected → connecting → connected → ready
               reconnecting ← ─ ┴ ─ ─ ─ ─ ┘
 ```
 
-Transitions are delivered asynchronously via microtask queue. Reconnection uses exponential backoff with jitter.
+The extra `ready` state exists because the server sends a text `"ready"` signal after the WebSocket opens, and only then does the client create a channel and start the establishment handshake.
+
+**Ready race condition:** The server may send `"ready"` before the client's `open` event fires (server-ready while still connecting). The program handles this by transitioning directly from `connecting` → `ready`, skipping the `connected` state entirely — both `start-keepalive` and `add-channel-and-establish` effects are produced in a single transition.
+
+**Lifecycle event forwarding:** The transport class subscribes to the program's transitions via `subscribeToTransitions` and forwards them to user-provided callbacks (`onStateChange`, `onDisconnect`, `onReconnecting`, `onReconnected`, `onReady`). The `wasConnectedBefore` flag — used to distinguish initial connection from reconnection — is **observer-local state** (a closure variable in the transition listener), not part of the program model. This keeps the pure program free of presentation concerns.
+
+Reconnection uses exponential backoff with jitter, computed by the pure `tryReconnect` helper inside the program's `update` function.
 
 ### Integration Tests
 
@@ -708,14 +719,26 @@ The WebSocket adapter has a two-phase handshake: server sends text `"ready"` →
 
 SSE doesn't need this. The `EventSource.onopen` event fires only after the server has sent the HTTP response headers, which means the server's route handler is already executing and the connection is registered. The client transitions directly from `connecting` → `connected` and immediately creates its channel.
 
-### Custom Reconnection (No `reconnecting-eventsource`)
+### Client Program (`createSseClientProgram`) and Custom Reconnection
 
-The browser's native `EventSource` has built-in reconnection. The adapter **closes the EventSource immediately** on `onerror` and takes over reconnection via the `SseClientStateMachine`'s backoff logic. This prevents two reconnection systems from fighting and gives full control over:
+The SSE client lifecycle is a pure Mealy machine: `Program<SseClientMsg, SseClientState, SseClientEffect>`. The transport class instantiates it via `createObservableProgram` and interprets data effects as I/O.
+
+**4-state lifecycle** (no `ready` state — SSE's `EventSource.onopen` fires only after the server has sent HTTP response headers, so the connection is immediately usable):
+
+```
+disconnected → connecting → connected
+                   ↓            ↓
+              reconnecting ← ─ ─┘
+```
+
+The browser's native `EventSource` has built-in reconnection. The adapter **closes the EventSource immediately** on `onerror` and lets the program handle reconnection via its `tryReconnect` logic. This prevents two reconnection systems from fighting and gives full control over:
 
 - Exponential backoff timing with jitter
 - Attempt counting and max attempts
 - Channel lifecycle (preserve vs. recreate)
 - Observable state transitions for UI feedback
+
+On `event-source-error`, the program produces `close-event-source`, `remove-channel`, and `abort-pending-posts` effects (if connected), then transitions to `reconnecting` with a timer effect — the imperative shell never decides reconnection policy.
 
 ### The `sendFn` Pattern
 
@@ -1526,9 +1549,11 @@ This follows the same FC/IS split as the Synchronizer's `#executeCommand`. The p
 
 The returned `UnixSocketPeer` exposes `role` (reactive `"listener" | "connector" | "negotiating" | "disposed"`) and `dispose()` for cleanup.
 
-### Client State Machine
+### Client Program (`createUnixSocketClientProgram`)
 
-4-state machine — identical to SSE, no "ready" phase:
+The Unix Socket client lifecycle is a pure Mealy machine: `Program<UnixSocketClientMsg, UnixSocketClientState, UnixSocketClientEffect>`. The transport class instantiates it via `createObservableProgram` and interprets data effects as I/O.
+
+**4-state lifecycle** — identical to SSE, no "ready" phase (UDS connections are bidirectionally ready immediately — `connect()` resolves only when the server's `accept()` completes):
 
 ```
 disconnected → connecting → connected
@@ -1540,7 +1565,7 @@ disconnected → connecting → connected
               disconnected (max retries)
 ```
 
-Uses the shared `ClientStateMachine<UnixSocketClientState>` and `createReconnectScheduler` from `@kyneta/exchange` — the same infrastructure as the WebSocket and SSE clients. Reconnection uses exponential backoff with jitter. The `DisconnectReason` discriminated union carries socket-specific `errno` codes (`ENOENT`, `ECONNREFUSED`, `EADDRINUSE`, `EACCES`), enabling callers to distinguish socket-specific failures from generic errors.
+Reconnection uses exponential backoff with jitter, computed by the pure `tryReconnect` helper inside the program's `update` function. The `DisconnectReason` discriminated union carries socket-specific `errno` codes (`ENOENT`, `ECONNREFUSED`, `EADDRINUSE`, `EACCES`), enabling callers to distinguish socket-specific failures from generic errors. The `connection-error` message includes an optional `errno` field that the imperative shell extracts from the underlying socket error.
 
 ### Benchmarks
 

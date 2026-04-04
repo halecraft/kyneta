@@ -4,7 +4,18 @@
 // to create a Websocket client adapter for browser or service connections.
 
 // ---------------------------------------------------------------------------
-// Client adapter + factory functions
+// Client program (pure Mealy machine)
+// ---------------------------------------------------------------------------
+
+export {
+  createWsClientProgram,
+  type WsClientEffect,
+  type WsClientMsg,
+  type WsClientProgramOptions,
+} from "./client-program.js"
+
+// ---------------------------------------------------------------------------
+// Client transport + factory functions
 // ---------------------------------------------------------------------------
 
 export {
@@ -19,12 +30,6 @@ export {
   type WebsocketClientStateTransition,
   WebsocketClientTransport,
 } from "./client-transport.js"
-
-// ---------------------------------------------------------------------------
-// State machine
-// ---------------------------------------------------------------------------
-
-export { WebsocketClientStateMachine } from "./client-state-machine.js"
 
 // ---------------------------------------------------------------------------
 // Shared types

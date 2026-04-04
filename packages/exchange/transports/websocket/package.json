@@ -39,11 +39,13 @@
   },
   "peerDependencies": {
     "@kyneta/transport": "^1.0.0",
+    "@kyneta/machine": "^1.0.0",
     "@kyneta/wire": "^1.1.0"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
     "@kyneta/transport": "workspace:^",
+    "@kyneta/machine": "workspace:^",
     "@kyneta/wire": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@types/node": "^22",

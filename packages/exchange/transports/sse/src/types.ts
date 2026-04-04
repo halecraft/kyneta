@@ -9,8 +9,8 @@
 
 import type { PeerId } from "@kyneta/transport"
 
-// Re-export specialized transition types from generic state machine
-export type { StateTransition, TransitionListener } from "@kyneta/transport"
+// Re-export transition types from @kyneta/machine
+export type { StateTransition, TransitionListener } from "@kyneta/machine"
 
 // ---------------------------------------------------------------------------
 // Disconnect reason
@@ -51,12 +51,6 @@ export type SseClientState =
   | { status: "connecting"; attempt: number }
   | { status: "connected" }
   | { status: "reconnecting"; attempt: number; nextAttemptMs: number }
-
-/**
- * A state transition event for SSE client states.
- * Specialized from the generic `StateTransition<S>`.
- */
-export type { StateTransition as SseClientStateTransition } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Connection handle — used by server adapter

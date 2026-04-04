@@ -116,7 +116,9 @@ const exchange = new Exchange({
 
 ## Connection Lifecycle
 
-The client adapter manages connection state through a validated state machine. Unlike the WebSocket adapter, SSE has no separate "ready" signal — the connection is usable as soon as `EventSource.onopen` fires.
+The client connection lifecycle is a `Program<SseClientMsg, SseClientState, SseClientEffect>` from `@kyneta/machine` — a pure Mealy machine with data effects. Unlike the WebSocket adapter, SSE has no separate "ready" signal — the connection is usable as soon as `EventSource.onopen` fires, giving a 4-state lifecycle.
+
+The `SseClientTransport` class is a thin imperative shell that interprets data effects as I/O (FC/IS design). The program itself is deterministically testable — every state × event combination is covered by pure data tests (no `EventSource`, no timing, never flaky).
 
 ```/dev/null/state-machine.txt#L1-7
 disconnected → connecting → connected
@@ -142,11 +144,17 @@ disconnected → connecting → connected
 3. Client creates its channel, calls `establishChannel()`
 4. Synchronizer exchanges `establish-request` / `establish-response`
 
-### EventSource Reconnection
+### EventSource Error Handling
 
-On `EventSource.onerror`, the adapter **closes the EventSource immediately** and takes over reconnection via the state machine's backoff logic. This prevents the browser's built-in `EventSource` reconnection from running, giving full control over backoff timing and attempt counting.
+On `EventSource.onerror`, the program produces a `close-event-source` effect and transitions to `reconnecting` (or `disconnected` if retries are exhausted). The imperative shell **closes the EventSource immediately**, preventing the browser's built-in `EventSource` reconnection from running. This gives the program full control over backoff timing and attempt counting — reconnect delays are computed purely as data effects (`start-reconnect-timer`).
+
+### POST Retry
+
+Client→server messages are sent via HTTP POST. POST failures (network errors, non-2xx responses) are retried with exponential backoff at the transport level — this is an imperative-shell concern, not part of the connection lifecycle program.
 
 ### Observing State
+
+The public observation API is powered by `createObservableProgram` from `@kyneta/machine`:
 
 ```/dev/null/observe-state.ts#L1-18
 import { createSseClient } from "@kyneta/sse-network-adapter/client"

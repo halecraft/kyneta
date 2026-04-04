@@ -90,14 +90,9 @@ export type {
   TransportFactory,
 } from "@kyneta/transport"
 export {
-  ClientStateMachine,
-  type ClientStateMachineConfig,
   computeBackoffDelay,
-  createReconnectScheduler,
   DEFAULT_RECONNECT,
   type ReconnectOptions,
-  type ReconnectScheduler,
-  type ReconnectSchedulerParams,
   type StateTransition,
   type TransitionListener,
   Transport,
