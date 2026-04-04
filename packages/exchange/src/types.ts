@@ -70,3 +70,24 @@ export type PeerState = {
   subscriptions: Set<DocId>
   channels: Set<ChannelId>
 }
+
+// ---------------------------------------------------------------------------
+// Peer lifecycle changes
+// ---------------------------------------------------------------------------
+
+import type { ChangeBase } from "@kyneta/changefeed"
+
+/**
+ * A change in the peer lifecycle — a peer joining or leaving the
+ * sync graph. Delivered through `exchange.peers.subscribe()` as
+ * part of a `Changeset<PeerChange>`.
+ *
+ * - `peer-joined`: a remote peer's first channel completed the
+ *   establish handshake.
+ * - `peer-left`: a remote peer's last channel was removed (graceful
+ *   departure, crash, transport stop, or exchange shutdown).
+ */
+export interface PeerChange extends ChangeBase {
+  readonly type: "peer-joined" | "peer-left"
+  readonly peer: PeerIdentityDetails
+}

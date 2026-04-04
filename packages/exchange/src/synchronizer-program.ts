@@ -234,6 +234,8 @@ export type Notification =
   | { type: "notify/ready-state-changed"; docIds: ReadonlySet<DocId> }
   | { type: "notify/state-advanced"; docIds: ReadonlySet<DocId> }
   | { type: "notify/warning"; message: string }
+  | { type: "notify/peer-joined"; peer: PeerIdentityDetails }
+  | { type: "notify/peer-left"; peer: PeerIdentityDetails }
   | { type: "notify/batch"; notifications: Notification[] }
 
 /**
@@ -410,31 +412,39 @@ function handleChannelRemoved(
   msg: { type: "synchronizer/channel-removed"; channel: Channel },
   model: SynchronizerModel,
 ): [SynchronizerModel, Command?, Notification?] {
+  // Look up the channel from the model — the transport directory may hold
+  // a stale "connected" reference even after the synchronizer has upgraded
+  // it to "established" during the handshake.
+  const modelChannel = model.channels.get(msg.channel.channelId) ?? msg.channel
+
   const channels = new Map(model.channels)
   channels.delete(msg.channel.channelId)
 
   // Clean up peer state if this was an established channel
   let peers = model.peers
   let notification: Notification | undefined
-  if (msg.channel.type === "established") {
+  if (modelChannel.type === "established") {
     peers = new Map(peers)
-    const peerState = peers.get(msg.channel.peerId)
+    const peerState = peers.get(modelChannel.peerId)
     if (peerState) {
       const newChannels = new Set(peerState.channels)
       newChannels.delete(msg.channel.channelId)
       if (newChannels.size === 0) {
         // Peer fully removed — all docs it had sync state for are affected
+        const peerLeftNotification: Notification = { type: "notify/peer-left", peer: peerState.identity }
         if (peerState.docSyncStates.size > 0) {
-          notification = readyStateChanged(...peerState.docSyncStates.keys())
+          notification = notifyAsNeeded(readyStateChanged(...peerState.docSyncStates.keys()), peerLeftNotification)
+        } else {
+          notification = peerLeftNotification
         }
-        peers.delete(msg.channel.peerId)
+        peers.delete(modelChannel.peerId)
       } else {
         // Channel count changed — affects ready state for docs this peer
         // has synced, since #isReady checks channels.size > 0
         if (peerState.docSyncStates.size > 0) {
           notification = readyStateChanged(...peerState.docSyncStates.keys())
         }
-        peers.set(msg.channel.peerId, { ...peerState, channels: newChannels })
+        peers.set(modelChannel.peerId, { ...peerState, channels: newChannels })
       }
     }
   }
@@ -680,9 +690,9 @@ function upgradeChannel(
   model: SynchronizerModel,
   channelId: ChannelId,
   peerIdentity: PeerIdentityDetails,
-): SynchronizerModel {
+): [SynchronizerModel, Notification?] {
   const channel = model.channels.get(channelId)
-  if (!channel) return model
+  if (!channel) return [model]
 
   const channels = new Map(model.channels)
   channels.set(channelId, {
@@ -702,7 +712,11 @@ function upgradeChannel(
     channels: peerChannels,
   })
 
-  return { ...model, channels, peers }
+  const updated: SynchronizerModel = { ...model, channels, peers }
+  if (!existingPeer) {
+    return [updated, { type: "notify/peer-joined", peer: peerIdentity }]
+  }
+  return [updated]
 }
 
 /**
@@ -797,7 +811,7 @@ function handleEstablishRequest(
     fromChannelId,
     message.identity.peerId,
   )
-  const upgraded = upgradeChannel(model, fromChannelId, message.identity)
+  const [upgraded, peerNotification] = upgradeChannel(model, fromChannelId, message.identity)
 
   // Filter docs by route — only announce docs this peer is allowed to see
   const docIds = Array.from(model.documents.keys()).filter(id =>
@@ -818,7 +832,7 @@ function handleEstablishRequest(
     buildPresent(docIds, fromChannelId, upgraded),
   )
 
-  return [upgraded, cmd, warning]
+  return [upgraded, cmd, notifyAsNeeded(warning, peerNotification)]
 }
 
 function handleEstablishResponse(
@@ -835,7 +849,7 @@ function handleEstablishResponse(
     fromChannelId,
     message.identity.peerId,
   )
-  const upgraded = upgradeChannel(model, fromChannelId, message.identity)
+  const [upgraded, peerNotification] = upgradeChannel(model, fromChannelId, message.identity)
 
   // Filter docs by route — only announce docs this peer is allowed to see
   const docIds = Array.from(model.documents.keys()).filter(id =>
@@ -843,7 +857,7 @@ function handleEstablishResponse(
   )
   const cmd = buildPresent(docIds, fromChannelId, upgraded)
 
-  return [upgraded, cmd, warning]
+  return [upgraded, cmd, notifyAsNeeded(warning, peerNotification)]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

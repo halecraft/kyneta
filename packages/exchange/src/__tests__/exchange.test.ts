@@ -1,5 +1,7 @@
 // Exchange — unit tests for the public Exchange API.
 
+import { hasChangefeed } from "@kyneta/changefeed"
+import type { Changeset } from "@kyneta/changefeed"
 import { bindLoro, LoroSchema, loro } from "@kyneta/loro-schema"
 import {
   bind,
@@ -14,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
 import { hasSync, sync } from "../sync.js"
 import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
+import type { PeerChange, PeerIdentityDetails } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -360,6 +363,221 @@ describe("Exchange", () => {
         expect(docB.title()).toBe("V2")
         expect(docB.count()).toBe(2)
       })
+    })
+  })
+
+  // =========================================================================
+  // exchange.peers — peer lifecycle changefeed
+  // =========================================================================
+
+  describe("peers", () => {
+    it("exchange.peers() starts empty", () => {
+      const exchange = createExchange()
+      expect(exchange.peers()).toEqual(new Map())
+      expect(exchange.peers.current).toEqual(new Map())
+    })
+
+    it("hasChangefeed(exchange.peers) returns true", () => {
+      const exchange = createExchange()
+      expect(hasChangefeed(exchange.peers)).toBe(true)
+    })
+
+    it("peer-joined fires when a remote peer connects via Bridge", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [
+          createBridgeTransport({ transportType: "alice", bridge }),
+        ],
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob", name: "Bob" },
+        transports: [
+          createBridgeTransport({ transportType: "bob", bridge }),
+        ],
+      })
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe((cs) => {
+        changes.push(...cs.changes)
+      })
+
+      await drain()
+
+      // Alice should see bob as a peer
+      expect(exchange1.peers().size).toBe(1)
+      expect(exchange1.peers().has("bob")).toBe(true)
+      const bobIdentity = exchange1.peers().get("bob")!
+      expect(bobIdentity.peerId).toBe("bob")
+      expect(bobIdentity.name).toBe("Bob")
+
+      // Should have received a peer-joined change
+      expect(changes.length).toBe(1)
+      expect(changes[0].type).toBe("peer-joined")
+      expect(changes[0].peer.peerId).toBe("bob")
+    })
+
+    it("peer-left fires when a remote peer disconnects", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [
+          createBridgeTransport({ transportType: "alice", bridge }),
+        ],
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [
+          createBridgeTransport({ transportType: "bob", bridge }),
+        ],
+      })
+
+      await drain()
+      expect(exchange1.peers().size).toBe(1)
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe((cs) => {
+        changes.push(...cs.changes)
+      })
+
+      // Shutdown bob
+      await exchange2.shutdown()
+
+      await drain()
+
+      // Alice should see no peers
+      expect(exchange1.peers().size).toBe(0)
+
+      // Should have received a peer-left change
+      expect(changes.length).toBe(1)
+      expect(changes[0].type).toBe("peer-left")
+      expect(changes[0].peer.peerId).toBe("bob")
+    })
+
+    it("exchange.peers() reflects correct state during subscriber callback", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [
+          createBridgeTransport({ transportType: "alice", bridge }),
+        ],
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [
+          createBridgeTransport({ transportType: "bob", bridge }),
+        ],
+      })
+
+      let peersDuringCallback:
+        | ReadonlyMap<string, PeerIdentityDetails>
+        | undefined
+      exchange1.peers.subscribe(() => {
+        peersDuringCallback = exchange1.peers()
+      })
+
+      await drain()
+
+      // During the callback, peers() should reflect the updated state
+      expect(peersDuringCallback).toBeDefined()
+      expect(peersDuringCallback!.size).toBe(1)
+      expect(peersDuringCallback!.has("bob")).toBe(true)
+    })
+
+    it("multi-transport: one peer-joined on first bridge, no second on second bridge", async () => {
+      const bridge1 = new Bridge()
+      const bridge2 = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [
+          createBridgeTransport({ transportType: "alice", bridge: bridge1 }),
+          createBridgeTransport({ transportType: "alice", bridge: bridge2 }),
+        ],
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [
+          createBridgeTransport({ transportType: "bob", bridge: bridge1 }),
+          createBridgeTransport({ transportType: "bob", bridge: bridge2 }),
+        ],
+      })
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe((cs) => {
+        changes.push(...cs.changes)
+      })
+
+      await drain()
+
+      // Only one peer-joined, even though two bridges connect the same peer
+      expect(exchange1.peers().size).toBe(1)
+      const joinedChanges = changes.filter((c) => c.type === "peer-joined")
+      expect(joinedChanges.length).toBe(1)
+      expect(joinedChanges[0].peer.peerId).toBe("bob")
+    })
+
+    it("shutdown emits peer-left for all connected peers", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [
+          createBridgeTransport({ transportType: "alice", bridge }),
+        ],
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [
+          createBridgeTransport({ transportType: "bob", bridge }),
+        ],
+      })
+
+      await drain()
+      expect(exchange1.peers().size).toBe(1)
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe((cs) => {
+        changes.push(...cs.changes)
+      })
+
+      // Shutdown alice's own exchange — should emit peer-left for bob
+      await exchange1.shutdown()
+
+      expect(changes.length).toBe(1)
+      expect(changes[0].type).toBe("peer-left")
+      expect(changes[0].peer.peerId).toBe("bob")
+      expect(exchange1.peers().size).toBe(0)
+    })
+
+    it("reset() emits peer-left for all connected peers", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [
+          createBridgeTransport({ transportType: "alice", bridge }),
+        ],
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [
+          createBridgeTransport({ transportType: "bob", bridge }),
+        ],
+      })
+
+      await drain()
+      expect(exchange1.peers().size).toBe(1)
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe((cs) => {
+        changes.push(...cs.changes)
+      })
+
+      // Reset is synchronous — should emit peer-left for bob
+      exchange1.reset()
+
+      expect(changes.length).toBe(1)
+      expect(changes[0].type).toBe("peer-left")
+      expect(changes[0].peer.peerId).toBe("bob")
+      expect(exchange1.peers().size).toBe(0)
     })
   })
 

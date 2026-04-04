@@ -94,6 +94,24 @@ function flattenCommands(cmd: Command | undefined): Command[] {
 }
 
 /**
+ * Find a notification of a specific type within a potentially batched notification.
+ * Returns undefined if not found.
+ */
+function findNotification<T extends Notification["type"]>(
+  notification: Notification,
+  type: T,
+): Extract<Notification, { type: T }> | undefined {
+  if (notification.type === type) return notification as Extract<Notification, { type: T }>
+  if (notification.type === "notify/batch") {
+    for (const sub of notification.notifications) {
+      const found = findNotification(sub, type)
+      if (found) return found
+    }
+  }
+  return undefined
+}
+
+/**
  * Collect all docIds from a Notification (recursively flattening batches).
  * Returns an empty set if the notification is undefined.
  */
@@ -107,6 +125,8 @@ function collectNotifiedDocIds(
     case "notify/state-advanced":
       return new Set(notification.docIds)
     case "notify/warning":
+    case "notify/peer-joined":
+    case "notify/peer-left":
       return new Set()
     case "notify/batch": {
       const result = new Set<string>()
@@ -341,10 +361,21 @@ describe("synchronizer-program", () => {
       )
 
       expect(notification).toBeDefined()
-      expect(notification?.type).toBe("notify/warning")
-      if (notification?.type === "notify/warning") {
-        expect(notification?.message).toContain("self-connection")
-        expect(notification?.message).toContain("alice")
+      // The warning is batched with a peer-joined notification
+      expect(notification?.type).toBe("notify/batch")
+      if (notification?.type === "notify/batch") {
+        const warning = notification.notifications.find(
+          (n) => n.type === "notify/warning",
+        )
+        expect(warning).toBeDefined()
+        if (warning?.type === "notify/warning") {
+          expect(warning.message).toContain("self-connection")
+          expect(warning.message).toContain("alice")
+        }
+        const peerJoined = notification.notifications.find(
+          (n) => n.type === "notify/peer-joined",
+        )
+        expect(peerJoined).toBeDefined()
       }
     })
 
@@ -380,8 +411,10 @@ describe("synchronizer-program", () => {
         m,
       )
 
-      // No warning — the old channel was cleaned up before the new one arrived
-      expect(notification).toBeUndefined()
+      // No warning — the old channel was cleaned up before the new one arrived.
+      // But we do get a peer-joined notification since this is a new connection.
+      expect(notification).toBeDefined()
+      expect(notification?.type).toBe("notify/peer-joined")
     })
 
     it("replicaType mismatch emits warning notification (not console.warn)", () => {
@@ -2667,6 +2700,218 @@ describe("synchronizer-program", () => {
       expect(notification?.type).toBe("notify/state-advanced")
       const docIds = collectNotifiedDocIds(notification)
       expect(docIds).toEqual(new Set(["doc-1"]))
+    })
+  })
+
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // Peer lifecycle notifications — peer-joined / peer-left
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+  describe("peer lifecycle notifications", () => {
+    it("peer-joined fires on first channel establishment", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Add channel 1
+      const channel = makeConnectedChannel(1)
+      let [m] = update({ type: "synchronizer/channel-added", channel }, model)
+
+      // Receive establish-request from bob
+      const [_m2, _cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "establish-request", identity: bobIdentity },
+          },
+        },
+        m,
+      )
+
+      expect(notification).toBeDefined()
+      const peerJoined = findNotification(notification!, "notify/peer-joined")
+      expect(peerJoined).toBeDefined()
+      expect(peerJoined!.peer).toEqual(bobIdentity)
+    })
+
+    it("peer-joined does NOT fire on second channel for same peer", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Establish bob on channel 1
+      const m = establishChannel(update, model, 1, bobIdentity)
+
+      // Add a second channel for bob
+      const channel2 = makeConnectedChannel(2)
+      let [m2] = update(
+        { type: "synchronizer/channel-added", channel: channel2 },
+        m,
+      )
+
+      const [_m3, _cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 2,
+            message: { type: "establish-request", identity: bobIdentity },
+          },
+        },
+        m2,
+      )
+
+      // Should have no peer-joined (may have a duplicate-peerId warning)
+      const peerJoined = notification
+        ? findNotification(notification, "notify/peer-joined")
+        : undefined
+      expect(peerJoined).toBeUndefined()
+    })
+
+    it("peer-left fires when last channel for a peer is removed", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Establish bob on channel 1
+      const m = establishChannel(update, model, 1, bobIdentity)
+
+      // Remove the channel — bob's only channel
+      const channel = m.channels.get(1)!
+
+      const [_m2, _cmd, notification] = update(
+        { type: "synchronizer/channel-removed", channel },
+        m,
+      )
+
+      expect(notification).toBeDefined()
+      const peerLeft = findNotification(notification!, "notify/peer-left")
+      expect(peerLeft).toBeDefined()
+      expect(peerLeft!.peer).toEqual(bobIdentity)
+    })
+
+    it("peer-left does NOT fire when peer still has remaining channels", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Establish bob on channel 1
+      let m = establishChannel(update, model, 1, bobIdentity)
+
+      // Add second channel for bob
+      const channel2 = makeConnectedChannel(2)
+      ;[m] = update(
+        { type: "synchronizer/channel-added", channel: channel2 },
+        m,
+      )
+      ;[m] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 2,
+            message: { type: "establish-request", identity: bobIdentity },
+          },
+        },
+        m,
+      )
+
+      // Remove channel 1 — bob still has channel 2
+      const channel1 = m.channels.get(1)!
+
+      const [_m2, _cmd, notification] = update(
+        { type: "synchronizer/channel-removed", channel: channel1 },
+        m,
+      )
+
+      // Should have no peer-left notification (may have readyStateChanged)
+      const peerLeft = notification
+        ? findNotification(notification, "notify/peer-left")
+        : undefined
+      expect(peerLeft).toBeUndefined()
+    })
+
+    it("peer-left composes with readyStateChanged notification", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Establish bob on channel 1
+      let m = establishChannel(update, model, 1, bobIdentity)
+
+      // Register a doc so bob can get doc sync state
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "doc-1",
+          mode: "interpret",
+          version: "v1",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "causal",
+          schemaHash: "hash1",
+        },
+        m,
+      )
+
+      // Simulate interest from bob so he gets doc sync state
+      ;[m] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: { type: "interest", docId: "doc-1", version: "v1" },
+          },
+        },
+        m,
+      )
+
+      // Remove bob's channel
+      const channel = m.channels.get(1)!
+      const [_m2, _cmd, notification] = update(
+        { type: "synchronizer/channel-removed", channel },
+        m,
+      )
+
+      expect(notification).toBeDefined()
+      // Should have both peer-left and ready-state-changed
+      const peerLeft = findNotification(notification!, "notify/peer-left")
+      const readyState = findNotification(
+        notification!,
+        "notify/ready-state-changed",
+      )
+      expect(peerLeft).toBeDefined()
+      expect(peerLeft!.peer).toEqual(bobIdentity)
+      expect(readyState).toBeDefined()
+    })
+
+    it("channel-removed with stale 'connected' reference still cleans up peer", () => {
+      // Regression: transports hold the original "connected" channel object
+      // in their ChannelDirectory. When a transport shuts down, onReset
+      // passes that stale reference to channelRemoved — not the model's
+      // upgraded "established" version. handleChannelRemoved must look up
+      // the channel from the model to find the correct type and peerId.
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      // Establish bob — model upgrades channel 1 to "established"
+      const m = establishChannel(update, model, 1, bobIdentity)
+      expect(m.channels.get(1)?.type).toBe("established")
+      expect(m.peers.has("bob")).toBe(true)
+
+      // Simulate transport shutdown: pass the ORIGINAL connected channel,
+      // not the model's established version. This is what the transport's
+      // ChannelDirectory holds.
+      const staleConnectedChannel = makeConnectedChannel(1)
+
+      const [m2, _cmd, notification] = update(
+        { type: "synchronizer/channel-removed", channel: staleConnectedChannel },
+        m,
+      )
+
+      // Peer must still be cleaned up despite the stale reference
+      expect(m2.peers.has("bob")).toBe(false)
+      expect(m2.channels.has(1)).toBe(false)
+
+      // And peer-left must still fire
+      const peerLeft = notification
+        ? findNotification(notification, "notify/peer-left")
+        : undefined
+      expect(peerLeft).toBeDefined()
+      expect(peerLeft!.peer).toEqual(bobIdentity)
     })
   })
 })

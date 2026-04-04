@@ -12,6 +12,7 @@
 export type {
   ChannelId,
   DocId,
+  PeerChange,
   PeerDocSyncState,
   PeerId,
   PeerIdentityDetails,

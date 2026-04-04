@@ -44,7 +44,7 @@ Message → update(msg, model) → [newModel, Command?, Notification?]
                         ┌──────────────┼──────┐    #dirtyDocIds
                         ↓              ↓      ↓         ↓
                    send message   import   build    (at quiescence)
-                   (via adapter)  data     offer    #emitReadyStateChanges()
+                   (via adapter)  data     offer    #drainReadyStateChanges()
                                                     → targeted emission
 ```
 
@@ -432,7 +432,7 @@ There is no decorator, no wrapper object, and no `context()` gotcha. Each LWW su
 
 ---
 
-## 9. Serialized Dispatch with Quiescence Flush
+## 9. Serialized Dispatch with Quiescence Drain
 
 The `Synchronizer` processes messages one at a time via a serialized dispatch loop:
 
@@ -446,19 +446,27 @@ The `Synchronizer` processes messages one at a time via a serialized dispatch lo
     msg = pendingMessages.shift()
     [newModel, cmd, notification] = updateFn(msg, model)
     model = newModel
-    if notification: accumulateNotification(notification)  // collect into dirtyDocIds
+    if notification: accumulateNotification(notification)  // collect into typed sets
     if cmd: executeCommand(cmd)                            // may push more messages
 
   // Quiescence — all messages processed
-  flushOutbound()                   // send accumulated envelopes
-  emitReadyStateChanges()           // emit only for dirtyDocIds
-  dirtyDocIds.clear()
+  #drainOutbound()                  // send accumulated envelopes
+  #drainReadyStateChanges()         // emit only for dirtyDocIds
+  #drainStateAdvanced()             // emit only for dirtyStateAdvanced
+  #drainPeerEvents()                // emit accumulated peer-joined/peer-left
   dispatching = false
 ```
 
 Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingMessages` and processed in the same dispatch cycle. Outbound messages are accumulated in a queue and flushed only at quiescence, ensuring consistent model state before any messages leave the exchange.
 
-Notifications are accumulated across the entire dispatch cycle into a `Set<DocId>` (`#dirtyDocIds`). At quiescence, `#emitReadyStateChanges` emits only for docs in the dirty set — O(dirty × peers × listeners) instead of the previous O(docs × peers × listeners). Most dispatch cycles touch zero or one doc, so this is typically O(1) or O(P×L).
+Notifications are accumulated across the entire dispatch cycle into typed sets. At quiescence, four drain methods fire in order:
+
+1. **`#drainOutbound()`** — sends accumulated wire envelopes. Uses a shift-loop (the outbound queue may grow during sends).
+2. **`#drainReadyStateChanges()`** — emits only for docs in `#dirtyDocIds`. O(dirty × peers × listeners). Most dispatch cycles touch zero or one doc, so this is typically O(1) or O(P×L).
+3. **`#drainStateAdvanced()`** — emits only for docs in `#dirtyStateAdvanced`. Drives unified persistence via the Exchange's `onStateAdvanced` listener.
+4. **`#drainPeerEvents()`** — emits accumulated `PeerChange` events via the peer lifecycle changefeed (§21).
+
+All drain methods (except `#drainOutbound`, which uses a shift-loop) follow the **snapshot-then-clear** pattern: snapshot the pending set, reset the field to empty, then process the snapshot. This ensures the accumulation field is clean before any subscriber code runs — subscribers that trigger reentrant dispatch accumulate into a fresh set, not the one being drained.
 
 ---
 
@@ -466,7 +474,7 @@ Notifications are accumulated across the entire dispatch cycle into a `Set<DocId
 
 | File | Purpose |
 |------|---------|
-| `src/types.ts` | Core identity and state types (PeerId, DocId, ChannelId, PeerState, ReadyState) |
+| `src/types.ts` | Core identity and state types (PeerId, DocId, ChannelId, PeerState, ReadyState, PeerChange) |
 | `src/messages.ts` | Sync protocol messages (present, interest, offer, dismiss) + establishment messages |
 | `src/channel.ts` | Channel types and lifecycle (GeneratedChannel → ConnectedChannel → EstablishedChannel) |
 | `src/channel-directory.ts` | Channel ID generation and lifecycle management |
@@ -1197,3 +1205,104 @@ describeStore(
 ```
 
 Both `InMemoryStore` and `LevelDBStore` pass the same suite. The suite covers lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, and both JSON string and binary `Uint8Array` payload round-trips.
+
+---
+
+## 21. Peer Lifecycle Feed
+
+The exchange exposes a reactive feed of peer presence via `exchange.peers` — a `CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>`. Peers join when their first channel completes the establish handshake; they leave when their last channel is removed.
+
+### The `PeerChange` Type
+
+```ts
+interface PeerChange extends ChangeBase {
+  readonly type: "peer-joined" | "peer-left"
+  readonly peer: PeerIdentityDetails
+}
+```
+
+`PeerChange` is defined in `src/types.ts` alongside the other core identity types. It extends `ChangeBase` from `@kyneta/changefeed`, making it compatible with the standard `Changeset<PeerChange>` envelope.
+
+### The `exchange.peers` Changefeed
+
+`exchange.peers` is a `CallableChangefeed` — callable as a function, with `.current` and `.subscribe()`, and the `[CHANGEFEED]` marker for protocol detection:
+
+```ts
+// Read current peers (callable)
+const peers = exchange.peers()  // ReadonlyMap<PeerId, PeerIdentityDetails>
+
+// Read current peers (property)
+const peers = exchange.peers.current
+
+// Subscribe to changes
+const unsub = exchange.peers.subscribe((changeset) => {
+  for (const change of changeset.changes) {
+    if (change.type === "peer-joined") { /* ... */ }
+    else { /* peer-left */ }
+  }
+})
+
+// Protocol detection
+hasChangefeed(exchange.peers) // true
+```
+
+The feed is created lazily by `Synchronizer.createPeerFeed()`, which calls `createChangefeed()` with a snapshot function `() => this.#peerMap` and stores the emit callback for later use.
+
+### TEA Flow
+
+Peer lifecycle notifications flow through the standard TEA pipeline:
+
+```
+upgradeChannel()          handleChannelRemoved()
+  → first channel for        → last channel for
+    a new peer                  a departing peer
+  → notify/peer-joined       → notify/peer-left
+          ↓                           ↓
+    #accumulateNotification()
+      → push PeerChange to #pendingPeerEvents
+          ↓
+    (at quiescence)
+    #drainPeerEvents()
+      → snapshot #pendingPeerEvents, clear field
+      → rebuild #peerMap from model.peers (single source of truth)
+      → emit Changeset<PeerChange> via the changefeed
+```
+
+The `#peerMap` is rebuilt from the model at quiescence rather than maintained incrementally. This ensures the map is always consistent with the model — even if multiple join/leave events occurred within a single dispatch cycle.
+
+### Relationship to `onDocDismissed`
+
+`onDocDismissed` (§17) and `peer-left` operate at different granularities:
+
+| | `onDocDismissed` | `peer-left` |
+|---|---|---|
+| **Scope** | Per-document | Per-exchange |
+| **Trigger** | Peer sends an explicit `dismiss` message for a specific document | All channels for a peer are removed (disconnect, shutdown, etc.) |
+| **Requires peer cooperation** | Yes — the remote peer must send `dismiss` | No — fires on any channel loss |
+| **Use case** | React to a peer voluntarily leaving a document's sync graph | Track peer presence for UI, cleanup, etc. |
+
+A peer can `dismiss` a document while remaining connected to the exchange (other documents still syncing). Conversely, a peer can vanish (network failure, crash) without sending any `dismiss` — `peer-left` fires but `onDocDismissed` does not.
+
+### Cast Integration
+
+Because `exchange.peers` carries the `[CHANGEFEED]` marker, Cast's automatic changefeed detection wires it into compiled views without explicit configuration. The delta kind falls back to `"replace"` — each changeset triggers a full re-read of the `ReadonlyMap`. This is appropriate because the peer map is small (typically single-digit entries) and changes infrequently.
+
+### Reset and Shutdown — Synthetic Emission
+
+Both `exchange.reset()` and `exchange.shutdown()` call `#emitSyntheticPeerLeftEvents()` before wiping the model. This method:
+
+1. Returns immediately if there are no peers or no emit callback.
+2. Builds a `PeerChange[]` array with `type: "peer-left"` for every peer in `model.peers`.
+3. Clears `#peerMap` to an empty map (consistent with the about-to-be-wiped model).
+4. Emits the full array as a single `Changeset<PeerChange>`.
+
+This guarantees that subscribers always observe a balanced join/leave lifecycle — every `peer-joined` is eventually paired with a `peer-left`, even during teardown. The synthetic events bypass the normal quiescence drain because `reset()` is synchronous and `shutdown()` needs to emit before the model is cleared.
+
+### Multi-Transport Deduplication
+
+A single peer may connect through multiple transports (e.g. both WebSocket and SSE). The model tracks a `channels: Set<ChannelId>` per peer in `model.peers`. The deduplication is straightforward:
+
+- **Join:** `upgradeChannel()` adds the channel to the peer's channel set. If `!existingPeer` (this is the first channel), it emits `notify/peer-joined`. Otherwise, the channel is simply added to the existing set — no notification.
+- **Leave:** `handleChannelRemoved()` removes the channel from the set. If `newChannels.size === 0` (last channel gone), it deletes the peer from `model.peers` and emits `notify/peer-left`. Otherwise, only `notify/ready-state-changed` fires for affected docs (the peer lost a transport but is still present).
+
+This means `peer-joined` fires exactly once per peer identity regardless of how many channels connect, and `peer-left` fires only when the peer is truly unreachable.

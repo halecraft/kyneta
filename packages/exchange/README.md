@@ -255,6 +255,30 @@ sync(doc).onReadyStateChange(states => {
 })
 ```
 
+### Peer Lifecycle
+
+The exchange tracks which peers are currently connected via `exchange.peers` — a `CallableChangefeed` that emits join/leave events. A peer "joins" when its first channel completes the establish handshake; it "leaves" when its last channel is removed.
+
+```ts
+// Read current peers
+const peers = exchange.peers()  // ReadonlyMap<PeerId, PeerIdentityDetails>
+
+// Subscribe to changes
+exchange.peers.subscribe((changeset) => {
+  for (const change of changeset.changes) {
+    if (change.type === "peer-joined") {
+      console.log(`${change.peer.name ?? change.peer.peerId} joined`)
+    } else {
+      console.log(`${change.peer.name ?? change.peer.peerId} left`)
+    }
+  }
+})
+```
+
+When a peer connects through multiple transports (e.g. both WebSocket and SSE), the exchange deduplicates at the peer level — `peer-joined` fires once on the first channel, and `peer-left` fires only when *all* channels for that peer are gone.
+
+On `exchange.shutdown()` or `exchange.reset()`, synthetic `peer-left` events are emitted for all currently connected peers before state is wiped, so subscribers always see a clean leave for every join.
+
 ### Escape Hatches
 
 Two escape hatches provide access to the underlying substrate:
@@ -287,6 +311,7 @@ loroDoc.version()                // VersionVector
 | `reset()` | Disconnect adapters and clear state (synchronous). |
 | `addAdapter(adapter)` | Add an adapter at runtime. |
 | `removeAdapter(adapterId)` | Remove an adapter at runtime. |
+| `peers` | `CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>` — reactive peer presence feed. Callable as a function, subscribable for changes. |
 | `route` | Constructor option. `(docId, peer) → boolean` — outbound flow control. Default: `() => true`. |
 | `authorize` | Constructor option. `(docId, peer) → boolean` — inbound flow control. Default: `() => true`. |
 | `onDocDiscovered` | Constructor option. `(docId, peer) → BoundSchema \| undefined` — dynamic doc creation. |

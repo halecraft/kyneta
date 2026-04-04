@@ -19,6 +19,8 @@ import type {
   SubstratePayload,
   Version,
 } from "@kyneta/schema"
+import type { CallableChangefeed, Changeset } from "@kyneta/changefeed"
+import { createCallable, createChangefeed } from "@kyneta/changefeed"
 import type { Channel, ConnectedChannel } from "./channel.js"
 import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
 import type { AddressedEnvelope, ChannelMsg } from "./messages.js"
@@ -35,6 +37,7 @@ import { TransportManager } from "./transport/transport-manager.js"
 import type {
   ChannelId,
   DocId,
+  PeerChange,
   PeerId,
   PeerIdentityDetails,
   ReadyState,
@@ -246,6 +249,11 @@ export class Synchronizer {
   readonly #pendingMessages: SynchronizerMessage[] = []
 
   model: SynchronizerModel
+
+  // Peer lifecycle — event accumulation and changefeed
+  #pendingPeerEvents: PeerChange[] = []
+  #peerMap: Map<PeerId, PeerIdentityDetails> = new Map()
+  #emitPeerEvents: ((changeset: Changeset<PeerChange>) => void) | null = null
 
   // Event emitter for ready state changes
   readonly #readyStateListeners = new Set<
@@ -530,6 +538,7 @@ export class Synchronizer {
   }
 
   reset(): void {
+    this.#emitSyntheticPeerLeftEvents()
     this.#docRuntimes.clear()
     const [initialModel] = init(this.identity)
     this.model = initialModel
@@ -538,9 +547,16 @@ export class Synchronizer {
 
   async shutdown(): Promise<void> {
     await this.transports.flush()
+    this.#emitSyntheticPeerLeftEvents()
     const [initialModel] = init(this.identity)
     this.model = initialModel
     await this.transports.shutdown()
+  }
+
+  createPeerFeed(): CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange> {
+    const [feed, emit] = createChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>(() => this.#peerMap)
+    this.#emitPeerEvents = emit
+    return createCallable(feed)
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -591,15 +607,13 @@ export class Synchronizer {
         this.#dispatchInternal(nextMsg)
       }
 
-      // Quiescence — flush outbound messages, then emit targeted
-      // ready-state changes and state-advanced events only for docs
-      // that were actually touched.
-      this.#flushOutbound()
-      this.#emitReadyStateChanges()
-      this.#emitStateAdvanced()
+      // Quiescence — drain all accumulators. Each drain snapshots its
+      // buffer, clears the field, then pushes to listeners/transports.
+      this.#drainOutbound()
+      this.#drainReadyStateChanges()
+      this.#drainStateAdvanced()
+      this.#drainPeerEvents()
     } finally {
-      this.#dirtyDocIds.clear()
-      this.#dirtyStateAdvanced.clear()
       this.#dispatching = false
     }
   }
@@ -632,6 +646,12 @@ export class Synchronizer {
         for (const docId of notification.docIds) {
           this.#dirtyStateAdvanced.add(docId)
         }
+        break
+      case "notify/peer-joined":
+        this.#pendingPeerEvents.push({ type: "peer-joined", peer: notification.peer })
+        break
+      case "notify/peer-left":
+        this.#pendingPeerEvents.push({ type: "peer-left", peer: notification.peer })
         break
       case "notify/warning":
         console.warn(notification.message)
@@ -844,7 +864,7 @@ export class Synchronizer {
   // OUTBOUND — flush accumulated messages
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  #flushOutbound(): void {
+  #drainOutbound(): void {
     while (this.#outboundQueue.length > 0) {
       const envelope = this.#outboundQueue.shift()!
       this.transports.send(envelope)
@@ -856,17 +876,56 @@ export class Synchronizer {
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   /**
+   * Drain accumulated peer lifecycle events at quiescence.
+   *
+   * Follows the snapshot-then-clear pattern: snapshot the pending events,
+   * reset the field, then rebuild #peerMap from the model and emit.
+   * The field is clean before any subscriber code runs.
+   *
+   * Context: jj:qpurktzy (peer lifecycle feed)
+   */
+  #drainPeerEvents(): void {
+    const events = this.#pendingPeerEvents
+    this.#pendingPeerEvents = []
+
+    if (events.length === 0) return
+
+    // Rebuild #peerMap from model (single source of truth at quiescence)
+    this.#peerMap = new Map(
+      Array.from(this.model.peers).map(([peerId, peerState]) => [peerId, peerState.identity])
+    )
+
+    // Emit to subscribers
+    this.#emitPeerEvents?.({ changes: events })
+  }
+
+  #emitSyntheticPeerLeftEvents(): void {
+    if (this.model.peers.size === 0 || !this.#emitPeerEvents) return
+
+    const events: PeerChange[] = Array.from(this.model.peers.values()).map(
+      (peerState) => ({ type: "peer-left" as const, peer: peerState.identity })
+    )
+
+    // Clear peer map (consistent with the about-to-be-wiped model)
+    this.#peerMap = new Map()
+
+    this.#emitPeerEvents({ changes: events })
+  }
+
+  /**
    * Emit state-advanced events for docs touched this dispatch cycle.
    * Fires listeners at quiescence — multiple imports in one cycle
    * produce one event per docId.
    *
    * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
    */
-  #emitStateAdvanced(): void {
-    if (this.#stateAdvancedListeners.size === 0) return
-    if (this.#dirtyStateAdvanced.size === 0) return
+  #drainStateAdvanced(): void {
+    const docIds = new Set(this.#dirtyStateAdvanced)
+    this.#dirtyStateAdvanced.clear()
 
-    for (const docId of this.#dirtyStateAdvanced) {
+    if (this.#stateAdvancedListeners.size === 0 || docIds.size === 0) return
+
+    for (const docId of docIds) {
       // Only emit if we still track this doc (it may have been removed
       // during the same dispatch cycle).
       if (!this.#docRuntimes.has(docId)) continue
@@ -877,12 +936,14 @@ export class Synchronizer {
     }
   }
 
-  #emitReadyStateChanges(): void {
-    if (this.#readyStateListeners.size === 0) return
-    if (this.#dirtyDocIds.size === 0) return
+  #drainReadyStateChanges(): void {
+    const docIds = new Set(this.#dirtyDocIds)
+    this.#dirtyDocIds.clear()
+
+    if (this.#readyStateListeners.size === 0 || docIds.size === 0) return
 
     // Emit only for docs whose peer sync state was touched this cycle.
-    for (const docId of this.#dirtyDocIds) {
+    for (const docId of docIds) {
       // Only emit if we still track this doc (it may have been removed
       // during the same dispatch cycle).
       if (!this.#docRuntimes.has(docId)) continue
