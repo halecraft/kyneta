@@ -1,7 +1,7 @@
+import { hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import {
   bottomInterpreter,
-  hasChangefeed,
   interpret,
   plainContext,
   Schema,

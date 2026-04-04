@@ -509,6 +509,11 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`
 The `@kyneta/wire` package provides serialization infrastructure for the exchange's six-message protocol (two establishment + four exchange). It sits between the exchange and transports in the dependency graph:
 
 ```
+@kyneta/changefeed   @kyneta/schema
+   (contract)           (grammar)
+        ↑                   ↑
+        └───────┬───────────┘
+                ↓
 @kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-transport
    (messages)         (codecs)          (transport)
                                         @kyneta/sse-transport

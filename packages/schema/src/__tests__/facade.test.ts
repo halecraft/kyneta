@@ -1,11 +1,12 @@
+import type { Changeset } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
-import type { Changeset, Op } from "../index.js"
+import type { Op } from "../index.js"
 import {
   applyChanges,
   change,
-  observation,
   incrementChange,
   interpret,
+  observation,
   plainContext,
   RawPath,
   readable,

@@ -15,12 +15,10 @@
 // (tree-level). The facade translates between developer-facing and
 // protocol-level naming.
 
-import type { Changeset, Op } from "../changefeed.js"
-import {
-  CHANGEFEED,
-  hasChangefeed,
-  hasComposedChangefeed,
-} from "../changefeed.js"
+import type { Changeset } from "@kyneta/changefeed"
+import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
+import type { Op } from "../changefeed.js"
+import { hasComposedChangefeed } from "../changefeed.js"
 
 // ---------------------------------------------------------------------------
 // subscribe — observe changes at a ref and all descendants (deep default)

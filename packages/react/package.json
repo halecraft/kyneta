@@ -36,12 +36,14 @@
   },
   "peerDependencies": {
     "react": ">=18",
+    "@kyneta/changefeed": "^1.0.0",
     "@kyneta/schema": "^1.0.0",
     "@kyneta/exchange": "^1.0.0"
   },
   "devDependencies": {
     "react": "^19.1.0",
     "@types/react": "^19.1.8",
+    "@kyneta/changefeed": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@kyneta/exchange": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",

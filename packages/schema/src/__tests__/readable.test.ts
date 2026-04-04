@@ -1,8 +1,8 @@
+import { hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import type { Readable, RefContext } from "../index.js"
 import {
   bottomInterpreter,
-  hasChangefeed,
   INVALIDATE,
   interpret,
   mapChange,

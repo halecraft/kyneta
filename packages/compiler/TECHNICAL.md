@@ -150,7 +150,7 @@ Detects reactive types by checking for the `[CHANGEFEED]` symbol property at the
 - `isChangefeedType(type)` — does this type have `[CHANGEFEED]`?
 - `isComponentFactoryType(type)` — is this a `ComponentFactory<T>`?
 - `getDeltaKind(type)` — extract the delta kind from `ChangefeedProtocol<S, C>`'s second type argument
-- `resolveReactiveImports(sourceFile)` — resolve which imported modules provide reactive types
+- `resolveReactiveImports(sourceFile)` — resolve which imported modules provide reactive types. Always resolves `@kyneta/changefeed` first (the canonical reactive contract), then scans for any other `@kyneta/*` imports in the source file.
 
 **Delta Kind Extraction (`getDeltaKind`)**
 
@@ -321,7 +321,7 @@ packages/compiler/src/
 @kyneta/cast         # IR → DOM/HTML codegen, runtime, build plugins
 ```
 
-The compiler depends only on `@kyneta/schema` (for the `CHANGEFEED` symbol and change types used in reactive detection) and `ts-morph` (for TypeScript AST analysis). It has no runtime, DOM, or rendering dependencies.
+The compiler depends on `@kyneta/changefeed` (the canonical home of `CHANGEFEED` and `HasChangefeed` for reactive detection), `@kyneta/schema` (for change types used in delta kind extraction), and `ts-morph` (for TypeScript AST analysis). It has no runtime, DOM, or rendering dependencies.
 
 ## Design Principles
 

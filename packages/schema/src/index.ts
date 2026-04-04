@@ -53,24 +53,15 @@ export {
   treeChange,
 } from "./change.js"
 export type {
-  Changefeed,
-  ChangefeedProtocol,
-  Changeset,
   ComposedChangefeedProtocol,
-  HasChangefeed,
   HasComposedChangefeed,
   Op,
 } from "./changefeed.js"
-// Changefeed — the unified reactive protocol
+// Changefeed — schema-specific extensions (contract symbols live in @kyneta/changefeed)
 export {
-  CHANGEFEED,
-  changefeed,
-  createChangefeed,
   expandMapOpsToLeaves,
   getOrCreateChangefeed,
-  hasChangefeed,
   hasComposedChangefeed,
-  staticChangefeed,
 } from "./changefeed.js"
 export type { MergeFn } from "./combinators.js"
 // Interpreter composition combinators

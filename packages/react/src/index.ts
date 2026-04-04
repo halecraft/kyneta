@@ -27,12 +27,18 @@ export { useSyncStatus } from "./use-sync-status.js"
 export { useValue } from "./use-value.js"
 
 // ---------------------------------------------------------------------------
+// Thin re-exports from @kyneta/changefeed
+// ---------------------------------------------------------------------------
+
+export type { Changeset } from "@kyneta/changefeed"
+export { CHANGEFEED } from "@kyneta/changefeed"
+
+// ---------------------------------------------------------------------------
 // Thin re-exports from @kyneta/schema
 // ---------------------------------------------------------------------------
 
 export type {
   BoundSchema,
-  Changeset,
   Op,
   Plain,
   Ref,
@@ -40,7 +46,6 @@ export type {
 } from "@kyneta/schema"
 export {
   applyChanges,
-  CHANGEFEED,
   change,
   Schema,
   subscribe,

@@ -1,8 +1,8 @@
 import type { Substrate, SubstratePayload } from "@kyneta/schema"
 import {
   change,
-  observation,
   interpret,
+  observation,
   RawPath,
   type Ref,
   readable,

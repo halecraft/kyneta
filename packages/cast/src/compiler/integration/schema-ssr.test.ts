@@ -12,10 +12,10 @@
 import { LoroSchema } from "@kyneta/loro-schema"
 import {
   CHANGEFEED,
-  observation,
   hasChangefeed,
   interpret,
   isIncrementChange,
+  observation,
   plainContext,
   readable,
   Schema,

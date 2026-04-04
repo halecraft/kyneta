@@ -5,7 +5,7 @@
  * understands without compilation.
  */
 
-import type { HasChangefeed } from "@kyneta/schema"
+import type { HasChangefeed } from "@kyneta/changefeed"
 
 // =============================================================================
 // Element Types

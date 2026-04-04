@@ -16,7 +16,7 @@
 //   the catamorphism: `interpret(schema, ctx).with(readable).with(writable).done()`
 // - Pre-built layers live in `./layers.ts` to avoid circular imports.
 
-import type { HasChangefeed } from "./changefeed.js"
+import type { HasChangefeed } from "@kyneta/changefeed"
 import { isNonNullObject } from "./guards.js"
 import type { HasRead } from "./interpreters/bottom.js"
 import { bottomInterpreter } from "./interpreters/bottom.js"

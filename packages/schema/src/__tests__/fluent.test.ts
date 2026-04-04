@@ -1,6 +1,7 @@
+import type { Changeset } from "@kyneta/changefeed"
+import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import type {
-  Changeset,
   Interpreter,
   InterpreterLayer,
   Op,
@@ -10,12 +11,10 @@ import type {
 } from "../index.js"
 import {
   bottomInterpreter,
-  CHANGEFEED,
-  observation,
-  hasChangefeed,
   hasComposedChangefeed,
   hasTransact,
   interpret,
+  observation,
   plainContext,
   plainReader,
   RawPath,

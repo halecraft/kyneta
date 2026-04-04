@@ -6,12 +6,8 @@
  * `ref()` returns the current value.
  */
 
-import {
-  CHANGEFEED,
-  type Changeset,
-  hasChangefeed,
-  type ReplaceChange,
-} from "@kyneta/schema"
+import { CHANGEFEED, type Changeset, hasChangefeed } from "@kyneta/changefeed"
+import type { ReplaceChange } from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
 import { isLocalRef, state } from "./local-ref.js"
 

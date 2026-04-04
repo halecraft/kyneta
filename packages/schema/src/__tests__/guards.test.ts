@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest"
-import {
-  CHANGEFEED,
-  hasChangefeed,
-  isNonNullObject,
-  isPropertyHost,
-} from "../index.js"
+import { isNonNullObject, isPropertyHost } from "../index.js"
 
 // ===========================================================================
 // isPropertyHost — accepts objects AND functions
@@ -100,60 +95,5 @@ describe("isNonNullObject (unchanged)", () => {
     expect(isNonNullObject("hello")).toBe(false)
     expect(isNonNullObject(true)).toBe(false)
     expect(isNonNullObject(undefined)).toBe(false)
-  })
-})
-
-// ===========================================================================
-// hasChangefeed — accepts functions with [CHANGEFEED]
-// ===========================================================================
-
-describe("hasChangefeed with functions", () => {
-  it("returns true for a function with [CHANGEFEED] attached", () => {
-    const fn = () => 42
-    Object.defineProperty(fn, CHANGEFEED, {
-      value: {
-        get current() {
-          return 42
-        },
-        subscribe: () => () => {},
-      },
-      enumerable: false,
-      configurable: true,
-    })
-    expect(hasChangefeed(fn)).toBe(true)
-  })
-
-  it("returns false for a plain function without [CHANGEFEED]", () => {
-    const fn = () => 42
-    expect(hasChangefeed(fn)).toBe(false)
-  })
-
-  it("still returns true for objects with [CHANGEFEED]", () => {
-    const obj: Record<symbol, unknown> = {}
-    Object.defineProperty(obj, CHANGEFEED, {
-      value: {
-        get current() {
-          return "hello"
-        },
-        subscribe: () => () => {},
-      },
-      enumerable: false,
-      configurable: true,
-    })
-    expect(hasChangefeed(obj)).toBe(true)
-  })
-
-  it("still returns false for null", () => {
-    expect(hasChangefeed(null)).toBe(false)
-  })
-
-  it("still returns false for undefined", () => {
-    expect(hasChangefeed(undefined)).toBe(false)
-  })
-
-  it("still returns false for primitives", () => {
-    expect(hasChangefeed(42)).toBe(false)
-    expect(hasChangefeed("hello")).toBe(false)
-    expect(hasChangefeed(true)).toBe(false)
   })
 })

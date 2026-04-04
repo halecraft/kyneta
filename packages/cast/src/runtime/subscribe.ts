@@ -17,7 +17,7 @@ import {
   type Changeset,
   type HasChangefeed,
   hasChangefeed,
-} from "@kyneta/schema"
+} from "@kyneta/changefeed"
 import type { Scope } from "./scope.js"
 
 /**

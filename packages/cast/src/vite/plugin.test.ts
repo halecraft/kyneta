@@ -244,7 +244,7 @@ describe("Vite Plugin", () => {
 
       // Source with a for-of loop that needs listRegion
       const source = `
-        import { type HasChangefeed } from "@kyneta/schema"
+        import { type HasChangefeed } from "@kyneta/changefeed"
         type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
         interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { readonly length: number; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }
         declare const items: ListRef<string>

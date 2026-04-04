@@ -1,3 +1,5 @@
+import type { Changeset } from "@kyneta/changefeed"
+import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import {
   applyChanges,
@@ -11,8 +13,8 @@ import {
   subscribeNode,
   version,
 } from "../basic/index.js"
-import type { Changeset, Op, SubstratePayload } from "../index.js"
-import { CHANGEFEED, hasChangefeed, hasTransact, TRANSACT } from "../index.js"
+import type { Op, SubstratePayload } from "../index.js"
+import { hasTransact, TRANSACT } from "../index.js"
 
 // ===========================================================================
 // Shared fixtures

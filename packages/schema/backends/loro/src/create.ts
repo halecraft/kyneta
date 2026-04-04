@@ -20,7 +20,7 @@ import type {
   Substrate,
   SubstratePayload,
 } from "@kyneta/schema"
-import { observation, interpret, readable, writable } from "@kyneta/schema"
+import { interpret, observation, readable, writable } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
 import { createLoroSubstrate, loroSubstrateFactory } from "./substrate.js"
 import type { LoroVersion } from "./version.js"

@@ -43,7 +43,7 @@ function createSourceFile(
 }
 
 /**
- * Add the shared changefeed type definitions (CHANGEFEED symbol, Changefeed interface).
+ * Add the shared changefeed type definitions (CHANGEFEED symbol, ChangefeedProtocol interface).
  */
 function addBaseChangefeedTypes(project: Project) {
   project.createSourceFile(
@@ -60,13 +60,13 @@ function addBaseChangefeedTypes(project: Project) {
       readonly origin?: string
     }
 
-    export interface Changefeed<S, C extends ChangeBase = ChangeBase> {
+    export interface ChangefeedProtocol<S, C extends ChangeBase = ChangeBase> {
       readonly current: S
       subscribe(callback: (changeset: Changeset<C>) => void): () => void
     }
 
     export interface HasChangefeed<S = unknown, C extends ChangeBase = ChangeBase> {
-      readonly [CHANGEFEED]: Changefeed<S, C>
+      readonly [CHANGEFEED]: ChangefeedProtocol<S, C>
     }
   `,
     { overwrite: true },
@@ -81,7 +81,7 @@ function addSchemaTypes(project: Project) {
   project.createSourceFile(
     "schema-types.d.ts",
     `
-    import { CHANGEFEED, ChangeBase, Changefeed, HasChangefeed } from "./changefeed-base"
+    import { CHANGEFEED, ChangeBase, ChangefeedProtocol, HasChangefeed } from "./changefeed-base"
 
     export type TextChange = { readonly type: "text"; readonly ops: readonly unknown[] }
     export type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
@@ -90,7 +90,7 @@ function addSchemaTypes(project: Project) {
     export type IncrementChange = { readonly type: "increment"; readonly amount: number }
 
     export interface TextRef extends HasChangefeed<string, TextChange> {
-      readonly [CHANGEFEED]: Changefeed<string, TextChange>
+      readonly [CHANGEFEED]: ChangefeedProtocol<string, TextChange>
       (): string
       insert(pos: number, text: string): void
       delete(pos: number, len: number): void
@@ -98,13 +98,13 @@ function addSchemaTypes(project: Project) {
     }
 
     export interface CounterRef extends HasChangefeed<number, IncrementChange> {
-      readonly [CHANGEFEED]: Changefeed<number, IncrementChange>
+      readonly [CHANGEFEED]: ChangefeedProtocol<number, IncrementChange>
       (): number
       increment(n: number): void
     }
 
     export interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {
-      readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>
+      readonly [CHANGEFEED]: ChangefeedProtocol<T[], SequenceChange<T>>
       (): T[]
       get(index: number): T | undefined
       push(item: T): void
@@ -115,12 +115,12 @@ function addSchemaTypes(project: Project) {
     }
 
     export interface StructRef<T> extends HasChangefeed<T, MapChange> {
-      readonly [CHANGEFEED]: Changefeed<T, MapChange>
+      readonly [CHANGEFEED]: ChangefeedProtocol<T, MapChange>
       (): T
     }
 
     export type TypedDoc<Shape> = Shape & HasChangefeed<unknown, MapChange> & {
-      readonly [CHANGEFEED]: Changefeed<unknown, MapChange>
+      readonly [CHANGEFEED]: ChangefeedProtocol<unknown, MapChange>
       toJSON(): unknown
     }
 
@@ -138,14 +138,14 @@ function addReactiveTypes(project: Project) {
   project.createSourceFile(
     "reactive-types.d.ts",
     `
-    import { CHANGEFEED, ChangeBase, Changefeed, HasChangefeed } from "./changefeed-base"
-    export { CHANGEFEED, ChangeBase, Changefeed, HasChangefeed }
+    import { CHANGEFEED, ChangeBase, ChangefeedProtocol, HasChangefeed } from "./changefeed-base"
+    export { CHANGEFEED, ChangeBase, ChangefeedProtocol, HasChangefeed }
 
     export type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
 
     export interface LocalRef<T> extends HasChangefeed<T, ReplaceChange<T>> {
       (): T
-      readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
+      readonly [CHANGEFEED]: ChangefeedProtocol<T, ReplaceChange<T>>
       set(value: T): void
     }
     export declare function state<T>(initial: T): LocalRef<T>

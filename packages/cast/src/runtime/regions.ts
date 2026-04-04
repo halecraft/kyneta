@@ -29,11 +29,8 @@
  * @packageDocumentation
  */
 
-import {
-  type ChangeBase,
-  isSequenceChange,
-  type SequenceInstruction,
-} from "@kyneta/schema"
+import type { ChangeBase } from "@kyneta/changefeed"
+import { isSequenceChange, type SequenceInstruction } from "@kyneta/schema"
 import type {
   ConditionalRegionHandlers,
   ConditionalRegionOp,

@@ -40,7 +40,7 @@ import {
  * Usage: prepend to test source strings that need reactive types.
  */
 const CHANGEFEED_TYPE_STUBS = `
-import { type HasChangefeed } from "@kyneta/schema"
+import { type HasChangefeed } from "@kyneta/changefeed"
 
 type TextChange = { readonly type: "text"; readonly ops: readonly unknown[] }
 type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
@@ -952,7 +952,7 @@ describe("mergeImports", () => {
   it("should preserve other imports", () => {
     const lines = [
       'import { describe } from "vitest"',
-      'import { CHANGEFEED } from "@kyneta/schema"',
+      'import { CHANGEFEED } from "@kyneta/changefeed"',
       "",
       "const x = 1",
     ]
@@ -1072,7 +1072,7 @@ describe("transformSourceInPlace", () => {
 
   it("should return correct required imports for list regions", () => {
     const lines = [
-      'import { type HasChangefeed } from "@kyneta/schema"',
+      'import { type HasChangefeed } from "@kyneta/changefeed"',
       'type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }',
       "interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {",
       "  readonly length: number",
@@ -1134,7 +1134,7 @@ describe("transformSourceInPlace", () => {
   it("should preserve existing imports", () => {
     const lines = [
       'import { describe } from "vitest"',
-      'import { CHANGEFEED } from "@kyneta/schema"',
+      'import { CHANGEFEED } from "@kyneta/changefeed"',
       "",
       "const x = 1",
       "",
@@ -1216,7 +1216,7 @@ describe("transformSourceInPlace - HTML target", () => {
 
   it("should generate list map expression for for-of loops", () => {
     const lines = [
-      'import { type HasChangefeed } from "@kyneta/schema"',
+      'import { type HasChangefeed } from "@kyneta/changefeed"',
       'type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }',
       "interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> { readonly length: number; at(index: number): T | undefined; [Symbol.iterator](): Iterator<T> }",
       "declare const items: ListRef<string>",
@@ -1242,7 +1242,7 @@ describe("transformSourceInPlace - HTML target", () => {
 
   it("should generate ternary for conditional regions", () => {
     const lines = [
-      'import { type HasChangefeed } from "@kyneta/schema"',
+      'import { type HasChangefeed } from "@kyneta/changefeed"',
       'type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }',
       'type IncrementChange = { readonly type: "increment"; readonly amount: number }',
       "interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number }",
@@ -1273,7 +1273,7 @@ describe("transformSourceInPlace - HTML target", () => {
 
   it("should dissolve conditional on template cloning path (DOM target)", () => {
     const lines = [
-      'import { type HasChangefeed } from "@kyneta/schema"',
+      'import { type HasChangefeed } from "@kyneta/changefeed"',
       'type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }',
       'type IncrementChange = { readonly type: "increment"; readonly amount: number }',
       "interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number }",
@@ -1326,7 +1326,7 @@ describe("transformSourceInPlace - HTML target", () => {
 describe("reactive type resolution from @kyneta/schema", () => {
   it("should resolve CounterRef type with CHANGEFEED protocol", () => {
     const source = `
-      import { type HasChangefeed } from "@kyneta/schema"
+      import { type HasChangefeed } from "@kyneta/changefeed"
       type IncrementChange = { readonly type: "increment"; readonly amount: number }
       interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number }
       declare const count: CounterRef
@@ -1347,7 +1347,7 @@ describe("reactive type resolution from @kyneta/schema", () => {
 
   it("should resolve createTypedDoc return type", () => {
     const source = `
-      import { type HasChangefeed } from "@kyneta/schema"
+      import { type HasChangefeed } from "@kyneta/changefeed"
       type SequenceChange<T = unknown> = { readonly type: "sequence"; readonly ops: readonly unknown[] }
       type MapChange = { readonly type: "map"; readonly set?: Record<string, unknown>; readonly delete?: readonly string[] }
       type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
@@ -1414,7 +1414,7 @@ describe("reactive type resolution from @kyneta/schema", () => {
 
   it("should produce deltaKind 'text' and valueRegion for TextRef template coercion", () => {
     const source = `
-      import { type HasChangefeed } from "@kyneta/schema"
+      import { type HasChangefeed } from "@kyneta/changefeed"
       interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { (): string; [Symbol.toPrimitive](hint: string): string }
       declare const title: TextRef
       div(() => { h1(\`\${title}\`) })
@@ -1461,7 +1461,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
   it("should work with createTypedDoc options parameter", () => {
     const source = `
-      import { type HasChangefeed } from "@kyneta/schema"
+      import { type HasChangefeed } from "@kyneta/changefeed"
       type IncrementChange = { readonly type: "increment"; readonly amount: number }
       type MapChange = { readonly type: "map" }
       interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number }
@@ -1492,7 +1492,7 @@ describe("schema-inferred reactive detection (zero ceremony)", () => {
 
   it("should produce both DOM and HTML targets from same schema-inferred source", () => {
     const source = `
-      import { type HasChangefeed } from "@kyneta/schema"
+      import { type HasChangefeed } from "@kyneta/changefeed"
       type IncrementChange = { readonly type: "increment"; readonly amount: number }
       type MapChange = { readonly type: "map" }
       interface CounterRef extends HasChangefeed<number, IncrementChange> { (): number }
@@ -1557,7 +1557,7 @@ describe("bare reactive ref in content position", () => {
 
   it("still supports explicit String() coercion with snapshot", () => {
     const source = `
-      import { type HasChangefeed } from "@kyneta/schema"
+      import { type HasChangefeed } from "@kyneta/changefeed"
       interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { (): string; [Symbol.toPrimitive](hint: string): string }
       declare const doc: { title: TextRef }
       div(() => {
@@ -1573,7 +1573,7 @@ describe("bare reactive ref in content position", () => {
 
   it("bare ref inside expression is not an implicit read", () => {
     const source = `
-      import { type HasChangefeed } from "@kyneta/schema"
+      import { type HasChangefeed } from "@kyneta/changefeed"
       interface TextRef extends HasChangefeed<string, { readonly type: "text"; readonly ops: readonly unknown[] }> { (): string; [Symbol.toPrimitive](hint: string): string }
       declare const doc: { first: TextRef, last: TextRef }
       div(() => {

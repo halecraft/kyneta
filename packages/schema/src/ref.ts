@@ -26,7 +26,7 @@
 //
 // See .plans/navigation-layer.md §Phase 3, Task 3.3.
 
-import type { HasChangefeed } from "./changefeed.js"
+import type { HasChangefeed } from "@kyneta/changefeed"
 import type { Plain } from "./interpreter-types.js"
 import type {
   Readable,

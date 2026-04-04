@@ -13,6 +13,8 @@ import {
   type ChangeBase,
   type ChangefeedProtocol,
   type Changeset,
+} from "@kyneta/changefeed"
+import {
   incrementChange,
   replaceChange,
   type SequenceInstruction,
@@ -111,7 +113,7 @@ export function installDOMGlobals(): void {
  * change types for proper deltaKind extraction.
  */
 export const CHANGEFEED_TYPE_STUBS = `
-import { type HasChangefeed } from "@kyneta/schema"
+import { type HasChangefeed } from "@kyneta/changefeed"
 
 type TextChange = { readonly type: "text"; readonly instructions: readonly TextInstruction[] }
 type TextInstruction = { readonly retain: number } | { readonly insert: string } | { readonly delete: number }
@@ -558,8 +560,13 @@ export function createMockSequenceRef<T>(initialItems: T[]): {
  * a mock ref; the doc itself has [CHANGEFEED] so the compiler can detect it.
  */
 export function createMockDoc<
-  T extends Record<string, { [CHANGEFEED]: ChangefeedProtocol<unknown, ChangeBase> }>,
->(fields: T): T & { readonly [CHANGEFEED]: ChangefeedProtocol<unknown, ChangeBase> } {
+  T extends Record<
+    string,
+    { [CHANGEFEED]: ChangefeedProtocol<unknown, ChangeBase> }
+  >,
+>(
+  fields: T,
+): T & { readonly [CHANGEFEED]: ChangefeedProtocol<unknown, ChangeBase> } {
   const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
 
   return Object.assign(Object.create(null), fields, {

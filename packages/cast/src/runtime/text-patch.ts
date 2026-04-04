@@ -18,12 +18,8 @@
  * @packageDocumentation
  */
 
-import {
-  type ChangeBase,
-  type HasChangefeed,
-  isTextChange,
-  type TextInstruction,
-} from "@kyneta/schema"
+import type { ChangeBase, HasChangefeed } from "@kyneta/changefeed"
+import { isTextChange, type TextInstruction } from "@kyneta/schema"
 import type { Scope } from "./scope.js"
 import { read, subscribe } from "./subscribe.js"
 

@@ -10,8 +10,8 @@ import {
   type ChangeBase,
   type ChangefeedProtocol,
   type Changeset,
-  type SequenceInstruction,
-} from "@kyneta/schema"
+} from "@kyneta/changefeed"
+import type { SequenceInstruction } from "@kyneta/schema"
 import { JSDOM } from "jsdom"
 import { beforeEach, describe, expect, it } from "vitest"
 import { state } from "../reactive/local-ref.js"

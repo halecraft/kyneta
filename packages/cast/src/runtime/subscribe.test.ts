@@ -4,7 +4,7 @@
  * These tests use LocalRef from src/reactive as the reactive primitive.
  */
 
-import { CHANGEFEED, type ChangeBase, type Changeset } from "@kyneta/schema"
+import { CHANGEFEED, type ChangeBase, type Changeset } from "@kyneta/changefeed"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { state } from "../reactive/local-ref.js"
 import { resetScopeIdCounter, Scope } from "./scope.js"

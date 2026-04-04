@@ -1,12 +1,12 @@
+import { CHANGEFEED } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import {
   ADDRESS_TABLE,
   applyChanges,
-  CHANGEFEED,
   change,
-  observation,
   interpret,
   mapChange,
+  observation,
   plainContext,
   RawPath,
   readable,

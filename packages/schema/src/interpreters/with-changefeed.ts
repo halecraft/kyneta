@@ -28,20 +28,17 @@
 //
 // See .plans/navigation-layer.md §Phase 2, Task 2.2b.
 
+import type { HasChangefeed } from "@kyneta/changefeed"
+import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import type { ChangeBase } from "../change.js"
 import { isReplaceChange, isSequenceChange } from "../change.js"
 import type {
   ChangefeedProtocol,
   Changeset,
   ComposedChangefeedProtocol,
-  HasChangefeed,
   Op,
 } from "../changefeed.js"
-import {
-  CHANGEFEED,
-  hasChangefeed,
-  hasComposedChangefeed,
-} from "../changefeed.js"
+import { hasComposedChangefeed } from "../changefeed.js"
 import { isPropertyHost } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"

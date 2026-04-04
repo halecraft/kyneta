@@ -10,9 +10,8 @@ import {
   type ChangeBase,
   type ChangefeedProtocol,
   type Changeset,
-  type TextChange,
-  type TextInstruction,
-} from "@kyneta/schema"
+} from "@kyneta/changefeed"
+import type { TextChange, TextInstruction } from "@kyneta/schema"
 import { JSDOM } from "jsdom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { resetScopeIdCounter, Scope } from "./scope.js"

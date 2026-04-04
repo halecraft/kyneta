@@ -35,10 +35,12 @@
     "verify": "verify"
   },
   "peerDependencies": {
+    "@kyneta/changefeed": "^1.0.0",
     "@kyneta/schema": "^1.0.0",
     "yjs": ">=13.6.0"
   },
   "devDependencies": {
+    "@kyneta/changefeed": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",

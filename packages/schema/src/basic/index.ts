@@ -6,7 +6,8 @@
 // Backed by PlainSubstrate (plain JS object store with version tracking).
 // For the composable interpreter toolkit, import from "@kyneta/schema".
 
-export type { Changeset, Op } from "../changefeed.js"
+export type { Changeset } from "@kyneta/changefeed"
+export type { Op } from "../changefeed.js"
 // --- Describe (human-readable schema view) ---
 export { describe } from "../describe.js"
 export type { ApplyChangesOptions } from "../facade/change.js"

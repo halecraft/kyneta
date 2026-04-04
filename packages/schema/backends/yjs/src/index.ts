@@ -53,7 +53,8 @@ export function text(): AnnotatedSchema<"text", undefined> {
 }
 
 // Types (re-exported for convenience)
-export type { Changeset, Op, Ref, SubstratePayload } from "@kyneta/schema"
+export type { Changeset } from "@kyneta/changefeed"
+export type { Op, Ref, SubstratePayload } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Low-level primitives — for power users and custom substrate compositions

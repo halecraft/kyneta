@@ -1,10 +1,11 @@
+import type { Changeset } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
-import type { Changeset, Op, Substrate, SubstratePayload } from "../index.js"
+import type { Op, Substrate, SubstratePayload } from "../index.js"
 import {
   applyChanges,
   change,
-  observation,
   interpret,
+  observation,
   PlainVersion,
   plainReplicaFactory,
   plainSubstrateFactory,

@@ -223,30 +223,32 @@ Changes are **interpretation-level** — the schema says "sequence," the backend
 
 Changes are an open protocol (`ChangeBase` with string `type` discriminant). Third-party backends extend with their own types.
 
-### Changefeed (`src/changefeed.ts`)
+### Changefeed (`src/changefeed.ts`) — schema-specific extensions
 
-One symbol (`CHANGEFEED = Symbol.for("kyneta:changefeed")`) replaces the previous two-symbol `SNAPSHOT` + `REACTIVE` design. WeakMap-based caching preserves referential identity (`ref[CHANGEFEED] === ref[CHANGEFEED]`). The type hierarchy separates internal protocol from developer-facing surface:
+The universal reactive contract (`CHANGEFEED` symbol, `ChangeBase`, `Changeset`, `ChangefeedProtocol`, `Changefeed`, `HasChangefeed`, `hasChangefeed`, `staticChangefeed`, `changefeed` projector, `createChangefeed`, `createCallable`, `CallableChangefeed`) lives in `@kyneta/changefeed` — a zero-dependency package. Schema depends on it and extends it with tree-structured observation. Schema does **not** re-export contract symbols — consumers import them from `@kyneta/changefeed` directly.
 
-**`ChangefeedProtocol<S, C>`** — the protocol object behind the `[CHANGEFEED]` symbol. A coalgebra: `{ current: S, subscribe(cb: (changeset: Changeset<C>) => void): () => void }`. This is internal plumbing — the raw interface that interpreter layers attach to refs.
+The contract types form a hierarchy:
 
-**`Changefeed<S, C>`** — the developer-facing type that combines `[CHANGEFEED]: ChangefeedProtocol<S, C>`, `.current`, and `.subscribe()` in one interface. Developers write `readonly peers: Changefeed<PeerMap, PeerChange>` — no need to reach through the symbol.
+- **`ChangeBase`** (`@kyneta/changefeed`) — `{ readonly type: string }`. The universal base for all changes.
+- **`Changeset<C>`** (`@kyneta/changefeed`) — batch delivery: `{ changes: readonly C[], origin?: string }`.
+- **`ChangefeedProtocol<S, C>`** (`@kyneta/changefeed`) — the protocol coalgebra: `{ current: S, subscribe(cb) }`.
+- **`Changefeed<S, C>`** (`@kyneta/changefeed`) — developer-facing type: `[CHANGEFEED]` + `.current` + `.subscribe()`.
+- **`HasChangefeed<S, C>`** (`@kyneta/changefeed`) — marker contract for compiler detection.
+- **`CallableChangefeed<S, C>`** (`@kyneta/changefeed`) — `Changefeed<S, C> & (() => S)`. Created via `createCallable(feed)`.
 
-**`HasChangefeed<S, C>`** — the marker contract: `{ [CHANGEFEED]: ChangefeedProtocol<S, C> }`. What the compiler detects when determining whether a carrier supports observation.
+Schema's `changefeed.ts` contains only schema-specific extensions:
 
-**`changefeed(source)`** — projector function: takes any `HasChangefeed<S, C>` and returns a `Changefeed<S, C>`, lifting the hidden protocol surface to direct accessibility.
+- **`getOrCreateChangefeed(ref, factory)`** — WeakMap-based caching for lazy protocol creation. Preserves referential identity (`ref[CHANGEFEED] === ref[CHANGEFEED]`). Used by `withChangefeed` and Cast's `LocalRef`.
+- **`Op<C>`** — addressed delta: `{ path: Path, change: C }`. Requires `Path` from `interpret.ts`.
+- **`ComposedChangefeedProtocol<S, C>`** — extends `ChangefeedProtocol` with `subscribeTree(cb: (changeset: Changeset<Op<C>>) => void)` for tree-level observation.
+- **`HasComposedChangefeed<S, C>`** and **`hasComposedChangefeed()`** — marker and type guard for composed changefeed.
+- **`expandMapOpsToLeaves(ops)`** — expands container-level map ops into leaf-level replace ops.
 
-**`createChangefeed(getCurrent)`** — factory: creates a standalone `Changefeed<S, C>` with push semantics, returning `[feed, emit]`.
-
-**`Changeset<C>` — the unit of batch delivery.** Subscribers always receive a `Changeset`, never an individual change. A changeset wraps one or more changes with optional batch-level metadata:
-
-- `changes: readonly C[]` — the individual changes in the batch.
-- `origin?: string` — provenance of the batch (e.g. `"sync"`, `"undo"`, `"local"`). Individual changes do not carry provenance — the batch does.
-
-Auto-commit (single mutation outside a transaction) delivers a degenerate `Changeset` of exactly one change. Transactions and `applyChanges` deliver multi-change batches. The subscriber API is uniform regardless of batch size.
-
-**`Op<C>` — relative path for tree observation.** Composite refs (products, sequences, maps) implement `ComposedChangefeedProtocol`, which extends `ChangefeedProtocol` with `subscribeTree(cb: (changeset: Changeset<Op<C>>) => void)`. Each `Op` carries `{ path: Path, change: C }` — the path is relative from the subscription point to where the change occurred. `subscribeTree` is a strict superset of `subscribe` (tree subscribers also see own-path changes with `path: []`).
+**`Op<C>` — relative path for tree observation.** Composite refs (products, sequences, maps) implement `ComposedChangefeedProtocol`. Each `Op` carries `{ path: Path, change: C }` — the path is relative from the subscription point to where the change occurred. `subscribeTree` is a strict superset of `subscribe` (tree subscribers also see own-path changes with `path: []`).
 
 **`Changeset<Op>` ≅ `(Op[], origin)` isomorphism.** When subscribing at the root, `Op.path` equals the absolute path. The output of tree-level observation (the facade's `subscribe`, which delegates to `ComposedChangefeedProtocol.subscribeTree`) can be round-tripped as input to `applyChanges` (modulo path relativity for subtree subscriptions). This is a powerful property for sync: capture tree events on one document, reconstruct `Op[]`, apply to another. Note: tree subscribers receive one `Changeset<Op>` per affected child path (not one combined changeset per flush), so reconstruction uses `flatMap` across changesets.
+
+**Internal imports:** Schema-internal files import contract symbols directly from `@kyneta/changefeed` (e.g. `import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"`). Schema-specific symbols are imported from `"../changefeed.js"`. Files that only use `Op` (e.g. `facade/change.ts`, `substrates/plain.ts`) import from the local module unchanged.
 
 ### Step (`src/step.ts`)
 

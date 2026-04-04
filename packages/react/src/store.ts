@@ -15,12 +15,9 @@
 //   caches readyStates for referential stability.
 
 import type { ReadyState, SyncRef } from "@kyneta/exchange"
-import {
-  CHANGEFEED,
-  type ChangeBase,
-  type Changefeed,
-  hasComposedChangefeed,
-} from "@kyneta/schema"
+import type { ChangeBase, Changefeed } from "@kyneta/changefeed"
+import { CHANGEFEED } from "@kyneta/changefeed"
+import { hasComposedChangefeed } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // ExternalStore — the useSyncExternalStore contract

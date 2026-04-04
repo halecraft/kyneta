@@ -1,3 +1,5 @@
+import type { Changeset } from "@kyneta/changefeed"
+import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import type {
   IncrementChange,
@@ -6,15 +8,13 @@ import type {
   SequenceChange,
   TextChange,
 } from "../change.js"
-import type { Changeset, Op } from "../index.js"
+import type { Op } from "../index.js"
 import {
-  CHANGEFEED,
   change,
-  observation,
   expandMapOpsToLeaves,
-  hasChangefeed,
   hasComposedChangefeed,
   interpret,
+  observation,
   plainContext,
   readable,
   Schema,

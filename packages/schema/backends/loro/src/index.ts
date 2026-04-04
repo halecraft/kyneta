@@ -16,7 +16,8 @@
 // ---------------------------------------------------------------------------
 
 // Types (re-exported for convenience)
-export type { Changeset, Op, Ref, SubstratePayload } from "@kyneta/schema"
+export type { Changeset } from "@kyneta/changefeed"
+export type { Op, Ref, SubstratePayload } from "@kyneta/schema"
 // Mutation & observation (re-exported from @kyneta/schema for convenience)
 // Schema definition (re-exported for convenience)
 export {

@@ -35,6 +35,8 @@ import {
   CHANGEFEED,
   type ChangefeedProtocol,
   type Changeset,
+} from "@kyneta/changefeed"
+import {
   getOrCreateChangefeed,
   type ReplaceChange,
   replaceChange,

@@ -101,8 +101,8 @@ export function resolveReactiveImports(
   project: Project,
   sourceFile: SourceFile,
 ): void {
-  // Always resolve @kyneta/schema — it defines CHANGEFEED and all change types
-  resolveAndAddModule(project, "@kyneta/schema", sourceFile)
+  // Always resolve @kyneta/changefeed — the canonical reactive contract (CHANGEFEED, HasChangefeed)
+  resolveAndAddModule(project, "@kyneta/changefeed", sourceFile)
 
   // Scan imports and resolve any @kyneta packages
   for (const importDecl of sourceFile.getImportDeclarations()) {
@@ -338,10 +338,7 @@ export function getDeltaKind(type: Type): DeltaKind {
 
       // Hop 2: Second type argument is C (the change type)
       if (typeArgs.length >= 2) {
-        const deltaKind = extractDeltaKindFromChangeType(
-          checker,
-          typeArgs[1],
-        )
+        const deltaKind = extractDeltaKindFromChangeType(checker, typeArgs[1])
         if (deltaKind) return deltaKind
       }
 

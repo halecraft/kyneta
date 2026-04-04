@@ -1,13 +1,13 @@
 {
-  "name": "@kyneta/compiler",
-  "version": "1.0.0",
-  "description": "Incremental view maintenance compiler for structured deltas",
+  "name": "@kyneta/changefeed",
+  "version": "1.1.0",
+  "description": "Universal reactive contract — a Moore machine identified by [CHANGEFEED]",
   "author": "Duane Johnson",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",
-    "directory": "packages/compiler"
+    "directory": "packages/changefeed"
   },
   "publishConfig": {
     "access": "public"
@@ -22,12 +22,9 @@
   ],
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    },
-    "./transforms": {
-      "import": "./dist/transforms.js",
-      "types": "./dist/transforms.d.ts"
+      "default": "./dist/index.js"
     },
     "./src": "./src/index.ts",
     "./src/*": "./src/*"
@@ -36,11 +33,6 @@
     "build": "tsup",
     "test": "verify logic",
     "verify": "verify"
-  },
-  "dependencies": {
-    "@kyneta/changefeed": "workspace:^",
-    "@kyneta/schema": "workspace:^",
-    "ts-morph": "^25.0.0"
   },
   "devDependencies": {
     "tsup": "^8.5.0",

@@ -12,21 +12,12 @@
 // Third-party backends extend ChangeBase with their own types.
 
 // ---------------------------------------------------------------------------
-// Base protocol
+// Base protocol — re-exported from @kyneta/changefeed
 // ---------------------------------------------------------------------------
 
-/**
- * All actions carry a string `type` discriminant. Built-in action types
- * use well-known strings ("text", "sequence", "map", "replace", "tree").
- * Third-party backends extend this with their own types.
- *
- * Provenance metadata (e.g. "local", "sync") is carried at the batch
- * level on `Changeset.origin`, not on individual changes. See
- * `Changeset` in `changefeed.ts`.
- */
-export interface ChangeBase {
-  readonly type: string
-}
+export type { ChangeBase } from "@kyneta/changefeed"
+
+import type { ChangeBase } from "@kyneta/changefeed"
 
 // ---------------------------------------------------------------------------
 // Text actions — cursor-based retain/insert/delete over characters

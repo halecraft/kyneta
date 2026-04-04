@@ -40,9 +40,11 @@
     "verify": "verify"
   },
   "peerDependencies": {
+    "@kyneta/changefeed": "^1.0.0",
     "@kyneta/schema": "^1.0.0"
   },
   "devDependencies": {
+    "@kyneta/changefeed": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@kyneta/yjs-schema": "workspace:^",
