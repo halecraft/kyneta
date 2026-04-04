@@ -363,11 +363,11 @@ describe("Text codec — batch", () => {
 
     const decoded = textCodec.decode(encoded)
     expect(decoded).toHaveLength(5)
-    expect(decoded[0]!.type).toBe("establish-request")
-    expect(decoded[1]!.type).toBe("present")
-    expect(decoded[2]!.type).toBe("interest")
-    expect(decoded[3]!.type).toBe("offer")
-    expect(decoded[4]!.type).toBe("dismiss")
+    expect(decoded[0]?.type).toBe("establish-request")
+    expect(decoded[1]?.type).toBe("present")
+    expect(decoded[2]?.type).toBe("interest")
+    expect(decoded[3]?.type).toBe("offer")
+    expect(decoded[4]?.type).toBe("dismiss")
 
     // Verify the offer's binary payload survived
     const decodedOffer = decoded[3] as OfferMsg
@@ -466,7 +466,7 @@ describe("Text codec — JSON-safe output", () => {
     const decoded = textCodec.decode(deserialized)
 
     expect(decoded).toHaveLength(2)
-    expect(decoded[0]!.type).toBe("present")
+    expect(decoded[0]?.type).toBe("present")
     const offer = decoded[1] as OfferMsg
     expect(offer.payload.data).toEqual(new Uint8Array([10, 20]))
   })

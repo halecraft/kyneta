@@ -45,7 +45,7 @@ describe("InMemoryStore — shared state", () => {
     // Second instance sees entries
     const entries = await collectAll(backend2.loadAll("doc-1"))
     expect(entries).toHaveLength(1)
-    expect(entries[0]!.version).toBe("1")
+    expect(entries[0]?.version).toBe("1")
   })
 
   it("getStorage() returns data for late sharing across instances", async () => {
@@ -58,6 +58,6 @@ describe("InMemoryStore — shared state", () => {
     expect(await backend2.lookup("doc-1")).toEqual(plainMetadata)
     const entries = await collectAll(backend2.loadAll("doc-1"))
     expect(entries).toHaveLength(1)
-    expect(entries[0]!.version).toBe("1")
+    expect(entries[0]?.version).toBe("1")
   })
 })

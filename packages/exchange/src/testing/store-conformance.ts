@@ -156,11 +156,11 @@ export function describeStore(
 
       const entries = await collectAll(backend.loadAll("doc-1"))
       expect(entries).toHaveLength(1)
-      expect(entries[0]!.version).toBe("bin-1")
-      expect(entries[0]!.payload.kind).toBe("entirety")
-      expect(entries[0]!.payload.encoding).toBe("binary")
-      expect(entries[0]!.payload.data).toBeInstanceOf(Uint8Array)
-      expect(entries[0]!.payload.data).toEqual(bytes)
+      expect(entries[0]?.version).toBe("bin-1")
+      expect(entries[0]?.payload.kind).toBe("entirety")
+      expect(entries[0]?.payload.encoding).toBe("binary")
+      expect(entries[0]?.payload.data).toBeInstanceOf(Uint8Array)
+      expect(entries[0]?.payload.data).toEqual(bytes)
     })
 
     it("append + loadAll round-trips mixed JSON and binary entries", async () => {
@@ -180,15 +180,15 @@ export function describeStore(
       expect(entries).toHaveLength(2)
 
       // JSON entry
-      expect(entries[0]!.payload.encoding).toBe("json")
-      expect(typeof entries[0]!.payload.data).toBe("string")
-      expect(entries[0]!.version).toBe("v1")
+      expect(entries[0]?.payload.encoding).toBe("json")
+      expect(typeof entries[0]?.payload.data).toBe("string")
+      expect(entries[0]?.version).toBe("v1")
 
       // Binary entry
-      expect(entries[1]!.payload.encoding).toBe("binary")
-      expect(entries[1]!.payload.data).toBeInstanceOf(Uint8Array)
-      expect(entries[1]!.payload.data).toEqual(new Uint8Array([10, 20, 30]))
-      expect(entries[1]!.version).toBe("v2")
+      expect(entries[1]?.payload.encoding).toBe("binary")
+      expect(entries[1]?.payload.data).toBeInstanceOf(Uint8Array)
+      expect(entries[1]?.payload.data).toEqual(new Uint8Array([10, 20, 30]))
+      expect(entries[1]?.version).toBe("v2")
     })
 
     // =======================================================================
@@ -279,8 +279,8 @@ export function describeStore(
 
       const entries = await collectAll(backend.loadAll("doc-1"))
       expect(entries).toHaveLength(2)
-      expect(entries[0]!.version).toBe("3")
-      expect(entries[1]!.version).toBe("4")
+      expect(entries[0]?.version).toBe("3")
+      expect(entries[1]?.version).toBe("4")
     })
 
     // =======================================================================
@@ -299,11 +299,11 @@ export function describeStore(
       // loadAll for "doc" must not include entries from "doc-extra" or "doc2"
       const docEntries = await collectAll(backend.loadAll("doc"))
       expect(docEntries).toHaveLength(1)
-      expect(docEntries[0]!.version).toBe("a")
+      expect(docEntries[0]?.version).toBe("a")
 
       const extraEntries = await collectAll(backend.loadAll("doc-extra"))
       expect(extraEntries).toHaveLength(1)
-      expect(extraEntries[0]!.version).toBe("b")
+      expect(extraEntries[0]?.version).toBe("b")
     })
   })
 }

@@ -976,7 +976,7 @@ function handleInterest(
     reciprocate?: boolean
   },
   model: SynchronizerModel,
-  route: RoutePredicate,
+  _route: RoutePredicate,
 ): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]

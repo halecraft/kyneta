@@ -6,6 +6,7 @@ import { replaceChange } from "../change.js"
 import { executeBatch } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
 import { Schema } from "../schema.js"
+import type { SubstratePayload } from "../substrate.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 import { TimestampVersion } from "../substrates/timestamp-version.js"
 
@@ -182,7 +183,7 @@ describe("bindEphemeral()", () => {
     // the full state. The kind is "entirety", not "since".
     const payload = source.exportSince(v0Before)
     expect(payload).not.toBeNull()
-    expect(payload!.kind).toBe("entirety")
+    expect(payload?.kind).toBe("entirety")
 
     // Apply to target — merge handles "entirety" payloads correctly
     const target = factory.create(testSchema)

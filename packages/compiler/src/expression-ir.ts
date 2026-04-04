@@ -695,7 +695,7 @@ const TERNARY_PRECEDENCE = 2
 const UNARY_PRECEDENCE = 15
 
 /** Precedence level for member access, call, ref-read (highest). */
-const MEMBER_PRECEDENCE = 20
+const _MEMBER_PRECEDENCE = 20
 
 function getOperatorPrecedence(op: string): number {
   return BINARY_PRECEDENCE[op] ?? 0

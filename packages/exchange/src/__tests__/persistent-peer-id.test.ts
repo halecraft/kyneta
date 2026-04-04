@@ -1,7 +1,7 @@
 // persistent-peer-id — unit tests for the browser-only localStorage-backed
 // peerId generation utility.
 
-import { describe, expect, it, beforeEach } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { persistentPeerId } from "../persistent-peer-id.js"
 
 // ---------------------------------------------------------------------------

@@ -5,10 +5,7 @@
 
 import { describe, expect, it, vi } from "vitest"
 import { WebsocketClientStateMachine } from "../client-state-machine.js"
-import type {
-  WebsocketClientState,
-  WebsocketClientStateTransition,
-} from "../types.js"
+import type { WebsocketClientStateTransition } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -227,8 +224,8 @@ describe("WebsocketClientStateMachine — async delivery", () => {
     // After microtask — listener is called
     await flush()
     expect(transitions).toHaveLength(1)
-    expect(transitions[0]!.from.status).toBe("disconnected")
-    expect(transitions[0]!.to.status).toBe("connecting")
+    expect(transitions[0]?.from.status).toBe("disconnected")
+    expect(transitions[0]?.to.status).toBe("connecting")
   })
 
   it("batches multiple transitions in the same synchronous call stack", async () => {
@@ -248,9 +245,9 @@ describe("WebsocketClientStateMachine — async delivery", () => {
     // All three delivered in one batch
     await flush()
     expect(transitions).toHaveLength(3)
-    expect(transitions[0]!.to.status).toBe("connecting")
-    expect(transitions[1]!.to.status).toBe("connected")
-    expect(transitions[2]!.to.status).toBe("ready")
+    expect(transitions[0]?.to.status).toBe("connecting")
+    expect(transitions[1]?.to.status).toBe("connected")
+    expect(transitions[2]?.to.status).toBe("ready")
   })
 
   it("transitions have timestamps", async () => {
@@ -261,8 +258,8 @@ describe("WebsocketClientStateMachine — async delivery", () => {
     sm.transition({ status: "connecting", attempt: 1 })
 
     await flush()
-    expect(transitions[0]!.timestamp).toBeGreaterThan(0)
-    expect(typeof transitions[0]!.timestamp).toBe("number")
+    expect(transitions[0]?.timestamp).toBeGreaterThan(0)
+    expect(typeof transitions[0]?.timestamp).toBe("number")
   })
 
   it("unsubscribe stops delivery", async () => {

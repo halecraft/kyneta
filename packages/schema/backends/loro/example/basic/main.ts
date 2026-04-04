@@ -23,7 +23,7 @@ import {
   version,
 } from "../../src/index.js"
 
-import { json, log, peer, section } from "../helpers.js"
+import { log, peer, section } from "../helpers.js"
 
 // ═══════════════════════════════════════════════════════════════════════════
 //

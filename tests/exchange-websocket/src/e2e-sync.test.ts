@@ -25,21 +25,16 @@
 
 /// <reference types="bun-types" />
 
-import { describe, expect, it, afterEach } from "vitest"
-import {
-  Schema,
-  change,
-  bindPlain,
-  bindEphemeral,
-} from "@kyneta/schema"
-import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
 import { Exchange } from "@kyneta/exchange"
-import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
-import { WebsocketClientTransport } from "@kyneta/websocket-transport/client"
+import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
+import { bindEphemeral, bindPlain, change, Schema } from "@kyneta/schema"
 import {
-  createBunWebsocketHandlers,
   type BunWebsocketData,
+  createBunWebsocketHandlers,
 } from "@kyneta/websocket-transport/bun"
+import { WebsocketClientTransport } from "@kyneta/websocket-transport/client"
+import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
+import { afterEach, describe, expect, it } from "vitest"
 
 // ---------------------------------------------------------------------------
 // Test infrastructure

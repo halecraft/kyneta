@@ -1,9 +1,4 @@
-import type {
-  AnnotatedSchema,
-  ProductSchema,
-  SchemaNode,
-  SequenceSchema,
-} from "@kyneta/schema"
+import type { ProductSchema, SchemaNode, SequenceSchema } from "@kyneta/schema"
 import { Schema } from "@kyneta/schema"
 import { describe, expectTypeOf, it } from "vitest"
 import { LoroSchema } from "../loro-schema.js"

@@ -652,8 +652,8 @@ describe("nested structure", () => {
     expect(doc.items.length).toBe(1)
     const item = doc.items.at(0)
     expect(item).toBeDefined()
-    expect(item!.name()).toBe("New task")
-    expect(item!.done()).toBe(false)
+    expect(item?.name()).toBe("New task")
+    expect(item?.done()).toBe(false)
   })
 
   it("push multiple structs and navigate", () => {
@@ -668,9 +668,9 @@ describe("nested structure", () => {
     })
 
     expect(doc.items.length).toBe(2)
-    expect(doc.items.at(0)!.name()).toBe("First")
-    expect(doc.items.at(1)!.name()).toBe("Second")
-    expect(doc.items.at(1)!.done()).toBe(true)
+    expect(doc.items.at(0)?.name()).toBe("First")
+    expect(doc.items.at(1)?.name()).toBe("Second")
+    expect(doc.items.at(1)?.done()).toBe(true)
   })
 })
 

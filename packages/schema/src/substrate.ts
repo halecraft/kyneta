@@ -103,7 +103,7 @@ export const STRUCTURAL_YJS_CLIENT_ID = 0
 export function computeSchemaHash(schema: SchemaNode): string {
   const canonical = canonicalizeSchema(schema)
   const hash = fnv1a128(canonical)
-  return "00" + hash
+  return `00${hash}`
 }
 
 // ---------------------------------------------------------------------------

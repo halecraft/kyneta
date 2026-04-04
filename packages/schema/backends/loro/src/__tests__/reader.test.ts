@@ -1,6 +1,6 @@
 import type { Reader } from "@kyneta/schema"
 import { RawPath, Schema } from "@kyneta/schema"
-import { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
+import { LoroDoc, LoroMap } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { LoroSchema } from "../loro-schema.js"
 import { loroReader } from "../reader.js"

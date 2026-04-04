@@ -28,7 +28,6 @@ import type {
   ChannelMsg,
   GeneratedChannel,
   PeerId,
-  StateTransition,
   TransitionListener,
   TransportFactory,
 } from "@kyneta/exchange"

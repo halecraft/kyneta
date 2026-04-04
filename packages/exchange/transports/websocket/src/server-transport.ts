@@ -33,10 +33,8 @@ import { Transport } from "@kyneta/exchange"
 import {
   DEFAULT_FRAGMENT_THRESHOLD,
   WebsocketConnection,
-  type WebsocketConnectionConfig,
 } from "./connection.js"
 import type {
-  Socket,
   WebsocketConnectionOptions,
   WebsocketConnectionResult,
 } from "./types.js"

@@ -43,7 +43,7 @@ class TestAdapter extends Transport<{ label: string }> {
     super({ transportType, transportId: transportType })
   }
 
-  generate(context: { label: string }): GeneratedChannel {
+  generate(_context: { label: string }): GeneratedChannel {
     return {
       transportType: this.transportType,
       send: vi.fn(),
@@ -117,7 +117,7 @@ describe("Transport lifecycle", () => {
       }
 
       async onStart(): Promise<void> {
-        this.addChannel(undefined as void)
+        this.addChannel(undefined as undefined)
       }
       async onStop(): Promise<void> {}
     }
@@ -133,7 +133,7 @@ describe("Transport lifecycle", () => {
     // Get the channel that was created during onStart
     const channels = [...adapter.channels]
     expect(channels.length).toBe(1)
-    const channelId = channels[0]!.channelId
+    const channelId = channels[0]?.channelId
 
     const msg: ChannelMsg = {
       type: "establish-request",
@@ -239,7 +239,7 @@ describe("TransportManager", () => {
         }
       }
       async onStart(): Promise<void> {
-        const ch = this.addChannel(undefined as void)
+        const ch = this.addChannel(undefined as undefined)
         this.channelIdPublic = ch.channelId
       }
       async onStop(): Promise<void> {}

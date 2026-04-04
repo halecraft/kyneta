@@ -13,8 +13,8 @@ import type {
   OfferMsg,
   PresentMsg,
 } from "@kyneta/exchange"
-import { describe, expect, it } from "vitest"
 import { type CBORType, encodeCBOR } from "@levischuck/tiny-cbor"
+import { describe, expect, it } from "vitest"
 import { cborCodec } from "../cbor.js"
 
 // ---------------------------------------------------------------------------
@@ -309,11 +309,11 @@ describe("CBOR codec — batch", () => {
 
     const decoded = cborCodec.decode(encoded)
     expect(decoded).toHaveLength(5)
-    expect(decoded[0]!.type).toBe("establish-request")
-    expect(decoded[1]!.type).toBe("present")
-    expect(decoded[2]!.type).toBe("interest")
-    expect(decoded[3]!.type).toBe("offer")
-    expect(decoded[4]!.type).toBe("dismiss")
+    expect(decoded[0]?.type).toBe("establish-request")
+    expect(decoded[1]?.type).toBe("present")
+    expect(decoded[2]?.type).toBe("interest")
+    expect(decoded[3]?.type).toBe("offer")
+    expect(decoded[4]?.type).toBe("dismiss")
 
     // Verify deep equality
     expect(decoded[0]).toEqual(msgs[0])

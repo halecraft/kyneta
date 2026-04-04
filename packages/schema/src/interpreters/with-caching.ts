@@ -26,7 +26,6 @@
 // directly — the pipeline handles it.
 
 import type { ChangeBase } from "../change.js"
-import { isReplaceChange } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type {

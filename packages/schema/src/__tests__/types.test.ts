@@ -1,14 +1,13 @@
+import { CHANGEFEED, type HasChangefeed } from "@kyneta/changefeed"
 import { describe, expectTypeOf, it } from "vitest"
 import {
   type AnnotatedSchema,
   bottomInterpreter,
-  CHANGEFEED,
   type ChangefeedBrand,
   type CounterRef,
   change,
   type HasCaching,
   type HasCall,
-  type HasChangefeed,
   type HasRead,
   type HasTransact,
   type InterpretBuilder,

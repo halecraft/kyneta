@@ -340,7 +340,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
 
     // Server detects collision: peerA scored
     const v0A = version(clientA)
-    const v0B = version(clientB)
+    const _v0B = version(clientB)
 
     change(server, (d: any) => {
       d.scores.at("peerA").bumps.increment(1)

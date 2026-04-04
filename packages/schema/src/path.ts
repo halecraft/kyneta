@@ -425,7 +425,7 @@ export class AddressTableRegistry {
    * Address object.
    */
   getOrCreateKeyAddress(parentKey: string, childKey: string): Address {
-    const lookupKey = parentKey + "\0" + childKey
+    const lookupKey = `${parentKey}\0${childKey}`
     let addr = this.keyAddresses.get(lookupKey)
     if (!addr) {
       addr = keyAddress(childKey)
@@ -521,7 +521,7 @@ export class AddressTableRegistry {
    * Returns undefined if no address exists.
    */
   getKeyAddress(parentKey: string, childKey: string): Address | undefined {
-    return this.keyAddresses.get(parentKey + "\0" + childKey)
+    return this.keyAddresses.get(`${parentKey}\0${childKey}`)
   }
 }
 
@@ -560,7 +560,7 @@ export class AddressedPath extends AbstractPath {
 
   protected computeKey(): string {
     return this.segments
-      .map(seg => (seg.kind === "index" ? "@" + seg.id : seg.key))
+      .map(seg => (seg.kind === "index" ? `@${seg.id}` : seg.key))
       .join("\0")
   }
 

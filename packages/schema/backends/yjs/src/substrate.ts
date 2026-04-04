@@ -101,7 +101,7 @@ export function createYjsSubstrate(
       // wrappedPrepare (changefeed layer) still buffers the op.
     },
 
-    onFlush(origin?: string): void {
+    onFlush(_origin?: string): void {
       if (!inOurTransaction && pendingChanges.length > 0) {
         // Local write: apply accumulated changes within a single
         // Yjs transaction tagged with our origin for echo suppression.

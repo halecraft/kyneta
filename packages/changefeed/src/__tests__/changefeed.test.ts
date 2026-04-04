@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 import { createCallable } from "../callable.js"
-import type { ChangeBase, Changeset } from "../change.js"
+import type { ChangeBase } from "../change.js"
 import {
   CHANGEFEED,
+  type Changeset,
   changefeed,
   createChangefeed,
   hasChangefeed,
@@ -101,9 +102,9 @@ describe("createChangefeed", () => {
     emit({ changes: [{ type: "replace" }], origin: "sync" })
 
     expect(received).toHaveLength(2)
-    expect(received[0]!.changes).toEqual([{ type: "replace" }])
-    expect(received[0]!.origin).toBeUndefined()
-    expect(received[1]!.origin).toBe("sync")
+    expect(received[0]?.changes).toEqual([{ type: "replace" }])
+    expect(received[0]?.origin).toBeUndefined()
+    expect(received[1]?.origin).toBe("sync")
   })
 
   it("hasChangefeed() returns true for the feed", () => {
@@ -176,7 +177,7 @@ describe("changefeed() projector", () => {
 
   it("delegates .subscribe() to source protocol", () => {
     const cb = vi.fn()
-    let storedCb: ((cs: Changeset) => void) | null = null
+    const box: { cb: ((cs: Changeset) => void) | null } = { cb: null }
 
     const source = {
       [CHANGEFEED]: {
@@ -184,9 +185,9 @@ describe("changefeed() projector", () => {
           return 0
         },
         subscribe: (callback: (cs: Changeset) => void) => {
-          storedCb = callback
+          box.cb = callback
           return () => {
-            storedCb = null
+            box.cb = null
           }
         },
       },
@@ -195,12 +196,12 @@ describe("changefeed() projector", () => {
     const feed = changefeed(source)
     const unsub = feed.subscribe(cb)
 
-    expect(storedCb).not.toBeNull()
-    storedCb!({ changes: [{ type: "replace" }] })
+    expect(box.cb).not.toBeNull()
+    if (box.cb) box.cb({ changes: [{ type: "replace" }] })
     expect(cb).toHaveBeenCalledTimes(1)
 
     unsub()
-    expect(storedCb).toBeNull()
+    expect(box.cb).toBeNull()
   })
 
   it("[CHANGEFEED] on projected feed is the source protocol", () => {
@@ -307,7 +308,7 @@ describe("createCallable", () => {
 
   it("feed() reflects source value changes", () => {
     let value = 0
-    const [source, emit] = createChangefeed<number, ChangeBase>(() => value)
+    const [source, _emit] = createChangefeed<number, ChangeBase>(() => value)
     const feed = createCallable(source)
 
     expect(feed()).toBe(0)

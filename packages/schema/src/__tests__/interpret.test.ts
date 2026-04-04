@@ -4,7 +4,6 @@ import {
   createInterpreter,
   interpret,
   plainInterpreter,
-  RawPath,
   Schema,
 } from "../index.js"
 

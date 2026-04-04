@@ -415,8 +415,8 @@ describe("Text frame — convenience functions", () => {
 
     const decoded = textCodec.decode(JSON.parse(frame.content.payload))
     expect(decoded).toHaveLength(2)
-    expect(decoded[0]!.type).toBe("present")
-    expect(decoded[1]!.type).toBe("interest")
+    expect(decoded[0]?.type).toBe("present")
+    expect(decoded[1]?.type).toBe("interest")
   })
 
   it("encodeTextComplete handles offer with binary payload", () => {
@@ -543,7 +543,7 @@ describe("Text frame — end-to-end with TextReassembler", () => {
     if (result.status === "complete") {
       const decoded = textCodec.decode(JSON.parse(result.frame.content.payload))
       expect(decoded).toHaveLength(2)
-      expect(decoded[0]!.type).toBe("present")
+      expect(decoded[0]?.type).toBe("present")
       const offer = decoded[1] as OfferMsg
       expect(offer.payload.data).toEqual(new Uint8Array([10, 20, 30]))
     }

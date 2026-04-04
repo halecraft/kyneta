@@ -110,13 +110,13 @@ export function writeByPath(
   const segments = path.segments
   let current: Record<string | number, unknown> = state
   for (let i = 0; i < segments.length - 1; i++) {
-    const k = segments[i]!.resolve()
+    const k = segments[i]?.resolve()
     if (!isNonNullObject(current[k])) {
       current[k] = {}
     }
     current = current[k] as Record<string | number, unknown>
   }
-  current[segments[segments.length - 1]!.resolve()] = value
+  current[segments[segments.length - 1]?.resolve()] = value
 }
 
 // ---------------------------------------------------------------------------

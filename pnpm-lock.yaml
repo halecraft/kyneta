@@ -293,6 +293,9 @@ importers:
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../../schema
+      '@types/node':
+        specifier: ^22
+        version: 22.19.15
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)

@@ -9,7 +9,6 @@ import {
   change,
   Interpret,
   plainReplicaFactory,
-  Replicate,
   Schema,
 } from "@kyneta/schema"
 import { bindYjs } from "@kyneta/yjs-schema"
@@ -21,7 +20,6 @@ import {
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 import type { StoreEntry } from "../store/store.js"
-import { sync } from "../sync.js"
 import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 
 // ---------------------------------------------------------------------------
@@ -310,7 +308,7 @@ describe("Exchange storage hydration", () => {
     const runtime = exchange.synchronizer.getDocRuntime("doc-1")
     expect(runtime).toBeDefined()
     // Version should be > "0" after hydration
-    const version = runtime!.replica.version().serialize()
+    const version = runtime?.replica.version().serialize()
     expect(version).not.toBe("0")
 
     await exchange.shutdown()
@@ -352,7 +350,7 @@ describe("Exchange storage persistence", () => {
     expect(entries.length).toBeGreaterThanOrEqual(2)
 
     // First entry: base entirety from first boot
-    expect(entries[0]!.payload.kind).toBe("entirety")
+    expect(entries[0]?.payload.kind).toBe("entirety")
 
     // Last entry: since delta from local mutation (not an entirety snapshot)
     const last = entries[entries.length - 1]!

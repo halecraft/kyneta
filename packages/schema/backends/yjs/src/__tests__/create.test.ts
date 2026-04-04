@@ -1,9 +1,8 @@
 import { change, Schema, subscribe } from "@kyneta/schema"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { createYjsDoc, createYjsDocFromEntirety } from "../create.js"
 import { ensureContainers } from "../populate.js"
-import { yjsSubstrateFactory } from "../substrate.js"
 import { exportEntirety, exportSince, merge, version } from "../sync.js"
 import { YjsVersion } from "../version.js"
 import { yjs } from "../yjs-escape.js"
@@ -373,7 +372,7 @@ describe("sync primitives", () => {
       // Export delta and apply to doc2
       const delta = exportSince(doc1, v2Before)
       expect(delta).not.toBeNull()
-      expect(delta!.encoding).toBe("binary")
+      expect(delta?.encoding).toBe("binary")
 
       merge(doc2, delta!)
 

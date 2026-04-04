@@ -14,9 +14,9 @@
 // createSyncStore(syncRef) — subscribes to SyncRef.onReadyStateChange(),
 //   caches readyStates for referential stability.
 
-import type { ReadyState, SyncRef } from "@kyneta/exchange"
-import type { ChangeBase, Changefeed } from "@kyneta/changefeed"
+import type { ChangeBase, ChangefeedProtocol } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
+import type { ReadyState, SyncRef } from "@kyneta/exchange"
 import { hasComposedChangefeed } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ export interface ExternalStore<T> {
  * to recover Plain<S> without threading generics through HasChangefeed.
  */
 export type CallableRef = ((...args: any[]) => any) & {
-  readonly [CHANGEFEED]: Changefeed<any, ChangeBase>
+  readonly [CHANGEFEED]: ChangefeedProtocol<any, ChangeBase>
 }
 
 // ---------------------------------------------------------------------------

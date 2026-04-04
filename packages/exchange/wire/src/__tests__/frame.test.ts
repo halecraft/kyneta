@@ -181,7 +181,7 @@ describe("Binary frame — complete", () => {
     const decoded = cborCodec.decode(frame.content.payload)
 
     expect(decoded).toHaveLength(1)
-    expect(decoded[0]!.type).toBe("establish-response")
+    expect(decoded[0]?.type).toBe("establish-response")
   })
 })
 
@@ -256,10 +256,10 @@ describe("Binary frame — batch (via complete frame)", () => {
     const decoded = cborCodec.decode(frame.content.payload)
 
     expect(decoded).toHaveLength(4)
-    expect(decoded[0]!.type).toBe("establish-request")
-    expect(decoded[1]!.type).toBe("present")
-    expect(decoded[2]!.type).toBe("interest")
-    expect(decoded[3]!.type).toBe("offer")
+    expect(decoded[0]?.type).toBe("establish-request")
+    expect(decoded[1]?.type).toBe("present")
+    expect(decoded[2]?.type).toBe("interest")
+    expect(decoded[3]?.type).toBe("offer")
 
     const offer = decoded[3] as OfferMsg
     expect(offer.payload.data).toEqual(new Uint8Array([1, 2, 3]))

@@ -7,7 +7,7 @@
 // Replaces the old storage-integration tests which tested the deleted
 // StorageAdapter / storage-first sync machinery.
 
-import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
+import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
 import {
   bindEphemeral,
   bindPlain,

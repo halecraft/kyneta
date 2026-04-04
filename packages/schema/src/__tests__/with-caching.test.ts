@@ -429,7 +429,7 @@ describe("withCaching: INVALIDATE sequence", () => {
   it("sequence INVALIDATE is a no-op (addressing layer handles advancement)", () => {
     const { doc } = createListDoc([{ name: "a" }, { name: "b" }])
     const refA = doc.items.at(0)
-    const refB = doc.items.at(1)
+    const _refB = doc.items.at(1)
 
     // Calling INVALIDATE with a sequence change should be a no-op —
     // the addressing layer handles all advancement in prepare.

@@ -1,9 +1,9 @@
 import { change, RawPath, Schema, subscribe } from "@kyneta/schema"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { createYjsDoc, createYjsDocFromEntirety } from "../create.js"
 import { ensureContainers } from "../populate.js"
-import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
+import { yjsSubstrateFactory } from "../substrate.js"
 import { exportEntirety, exportSince, merge, version } from "../sync.js"
 import { YjsVersion } from "../version.js"
 
@@ -346,7 +346,7 @@ describe("YjsSubstrate", () => {
 
     it("nested struct field changefeed fires on merge", () => {
       const doc1 = createYjsDoc(StructListSchema)
-      const doc2 = createYjsDocFromEntirety(
+      const _doc2 = createYjsDocFromEntirety(
         StructListSchema,
         exportEntirety(doc1),
       )

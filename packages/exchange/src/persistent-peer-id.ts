@@ -37,9 +37,7 @@ import { generatePeerId } from "./utils.js"
  * })
  * ```
  */
-export function persistentPeerId(
-  storageKey = "kyneta-peer-id",
-): string {
+export function persistentPeerId(storageKey = "kyneta-peer-id"): string {
   const existing = localStorage.getItem(storageKey)
   if (existing) return existing
 

@@ -28,7 +28,6 @@ import { isPropertyHost } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import {
-  type Address,
   AddressedPath,
   AddressTableRegistry,
   type IndexAddress,
@@ -202,7 +201,7 @@ function handleMapChange(table: MapAddressTable, change: ChangeBase): void {
   if (change.set) {
     for (const key of Object.keys(change.set)) {
       const entry = table.byKey.get(key)
-      if (entry && entry.address.dead) {
+      if (entry?.address.dead) {
         entry.address.dead = false
       }
     }
@@ -284,13 +283,13 @@ export function withAddressing<A extends HasNavigation>(
         if (lastAddr.kind === "index") {
           // Sequence item — find the parent path key
           const parentKey = addrPath.slice(0, addrPath.length - 1).key
-          registry!.registerSequenceRef(parentKey, lastAddr, ref)
+          registry?.registerSequenceRef(parentKey, lastAddr, ref)
         } else if (lastAddr.kind === "key") {
           // Map/product entry — register in the map table
           const parentKey = addrPath.slice(0, addrPath.length - 1).key
           const childKey = lastAddr.key
-          registry!.ensureMapEntry(parentKey, childKey, lastAddr)
-          registry!.registerMapRef(parentKey, childKey, ref)
+          registry?.ensureMapEntry(parentKey, childKey, lastAddr)
+          registry?.registerMapRef(parentKey, childKey, ref)
         }
       }
     }

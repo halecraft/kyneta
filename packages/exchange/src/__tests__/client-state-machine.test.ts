@@ -148,8 +148,8 @@ describe("ClientStateMachine — async delivery", () => {
     // After microtask — listener is called
     await flush()
     expect(transitions).toHaveLength(1)
-    expect(transitions[0]!.from.status).toBe("idle")
-    expect(transitions[0]!.to.status).toBe("running")
+    expect(transitions[0]?.from.status).toBe("idle")
+    expect(transitions[0]?.to.status).toBe("running")
   })
 
   it("batches multiple transitions in the same synchronous call stack", async () => {
@@ -168,9 +168,9 @@ describe("ClientStateMachine — async delivery", () => {
     // All three delivered in one batch
     await flush()
     expect(transitions).toHaveLength(3)
-    expect(transitions[0]!.to.status).toBe("running")
-    expect(transitions[1]!.to.status).toBe("done")
-    expect(transitions[2]!.to.status).toBe("idle")
+    expect(transitions[0]?.to.status).toBe("running")
+    expect(transitions[1]?.to.status).toBe("done")
+    expect(transitions[2]?.to.status).toBe("idle")
   })
 
   it("transitions have timestamps", async () => {
@@ -181,8 +181,8 @@ describe("ClientStateMachine — async delivery", () => {
     sm.transition({ status: "running", count: 1 })
 
     await flush()
-    expect(transitions[0]!.timestamp).toBeGreaterThan(0)
-    expect(typeof transitions[0]!.timestamp).toBe("number")
+    expect(transitions[0]?.timestamp).toBeGreaterThan(0)
+    expect(typeof transitions[0]?.timestamp).toBe("number")
   })
 
   it("unsubscribe stops delivery", async () => {

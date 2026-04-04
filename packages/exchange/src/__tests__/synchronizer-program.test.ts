@@ -49,7 +49,7 @@ function makeConnectedChannel(channelId: number): ConnectedChannel {
   }
 }
 
-function makeEstablishedChannel(
+function _makeEstablishedChannel(
   channelId: number,
   peerId: string,
 ): EstablishedChannel {
@@ -67,7 +67,7 @@ function makeEstablishedChannel(
 /**
  * Apply a sequence of messages to a model and return the final model + last command.
  */
-function applyMessages(
+function _applyMessages(
   update: ReturnType<typeof createSynchronizerUpdate>,
   model: SynchronizerModel,
   messages: SynchronizerMessage[],
@@ -175,7 +175,7 @@ describe("synchronizer-program", () => {
       const [m] = update({ type: "synchronizer/channel-added", channel }, model)
       expect(m.channels.size).toBe(1)
       expect(m.channels.get(1)).toBeDefined()
-      expect(m.channels.get(1)!.type).toBe("connected")
+      expect(m.channels.get(1)?.type).toBe("connected")
     })
 
     it("establish-channel produces establish-request command", () => {
@@ -193,7 +193,7 @@ describe("synchronizer-program", () => {
       )
 
       expect(cmd).toBeDefined()
-      expect(cmd!.type).toBe("cmd/send-message")
+      expect(cmd?.type).toBe("cmd/send-message")
       const sendCmd = cmd as Extract<Command, { type: "cmd/send-message" }>
       expect(sendCmd.envelope.message.type).toBe("establish-request")
     })
@@ -204,7 +204,7 @@ describe("synchronizer-program", () => {
 
       // Establish a channel with bob
       const m = establishChannel(update, model, 1, bobIdentity)
-      expect(m.channels.get(1)!.type).toBe("established")
+      expect(m.channels.get(1)?.type).toBe("established")
       expect(m.peers.has("bob")).toBe(true)
 
       // Remove the channel
@@ -239,13 +239,13 @@ describe("synchronizer-program", () => {
       )
 
       // Channel should be established
-      expect(m2.channels.get(1)!.type).toBe("established")
+      expect(m2.channels.get(1)?.type).toBe("established")
       const established = m2.channels.get(1) as EstablishedChannel
       expect(established.peerId).toBe("bob")
 
       // Peer should be tracked
       expect(m2.peers.has("bob")).toBe(true)
-      expect(m2.peers.get("bob")!.channels.has(1)).toBe(true)
+      expect(m2.peers.get("bob")?.channels.has(1)).toBe(true)
 
       // Should send establish-response
       const commands = flattenCommands(cmd)
@@ -278,7 +278,7 @@ describe("synchronizer-program", () => {
         m1,
       )
 
-      expect(m2.channels.get(1)!.type).toBe("established")
+      expect(m2.channels.get(1)?.type).toBe("established")
       expect(m2.peers.has("bob")).toBe(true)
     })
   })
@@ -297,7 +297,10 @@ describe("synchronizer-program", () => {
 
       // Establish channel 2 (different channelId) with the same bob identity
       const channel2 = makeConnectedChannel(2)
-      ;[m] = update({ type: "synchronizer/channel-added", channel: channel2 }, m)
+      ;[m] = update(
+        { type: "synchronizer/channel-added", channel: channel2 },
+        m,
+      )
 
       const [_m2, _cmd, notification] = update(
         {
@@ -311,10 +314,10 @@ describe("synchronizer-program", () => {
       )
 
       expect(notification).toBeDefined()
-      expect(notification!.type).toBe("notify/warning")
-      if (notification!.type === "notify/warning") {
-        expect(notification!.message).toContain("duplicate peerId")
-        expect(notification!.message).toContain("bob")
+      expect(notification?.type).toBe("notify/warning")
+      if (notification?.type === "notify/warning") {
+        expect(notification?.message).toContain("duplicate peerId")
+        expect(notification?.message).toContain("bob")
       }
     })
 
@@ -324,7 +327,7 @@ describe("synchronizer-program", () => {
 
       // Connect a channel where remote peer claims to be alice (our own identity)
       const channel = makeConnectedChannel(1)
-      let [m] = update({ type: "synchronizer/channel-added", channel }, model)
+      const [m] = update({ type: "synchronizer/channel-added", channel }, model)
 
       const [_m2, _cmd, notification] = update(
         {
@@ -338,10 +341,10 @@ describe("synchronizer-program", () => {
       )
 
       expect(notification).toBeDefined()
-      expect(notification!.type).toBe("notify/warning")
-      if (notification!.type === "notify/warning") {
-        expect(notification!.message).toContain("self-connection")
-        expect(notification!.message).toContain("alice")
+      expect(notification?.type).toBe("notify/warning")
+      if (notification?.type === "notify/warning") {
+        expect(notification?.message).toContain("self-connection")
+        expect(notification?.message).toContain("alice")
       }
     })
 
@@ -354,11 +357,17 @@ describe("synchronizer-program", () => {
 
       // Remove channel 1
       const removedChannel = m.channels.get(1)!
-      ;[m] = update({ type: "synchronizer/channel-removed", channel: removedChannel }, m)
+      ;[m] = update(
+        { type: "synchronizer/channel-removed", channel: removedChannel },
+        m,
+      )
 
       // Establish channel 2 with bob — old channel is gone, no duplicate
       const channel2 = makeConnectedChannel(2)
-      ;[m] = update({ type: "synchronizer/channel-added", channel: channel2 }, m)
+      ;[m] = update(
+        { type: "synchronizer/channel-added", channel: channel2 },
+        m,
+      )
 
       const [_m2, _cmd, notification] = update(
         {
@@ -421,10 +430,10 @@ describe("synchronizer-program", () => {
 
       // Warning notification emitted (not a direct console.warn)
       expect(notification).toBeDefined()
-      expect(notification!.type).toBe("notify/warning")
-      if (notification!.type === "notify/warning") {
-        expect(notification!.message).toContain("replica type mismatch")
-        expect(notification!.message).toContain("doc-1")
+      expect(notification?.type).toBe("notify/warning")
+      if (notification?.type === "notify/warning") {
+        expect(notification?.message).toContain("replica type mismatch")
+        expect(notification?.message).toContain("doc-1")
       }
     })
   })
@@ -452,8 +461,8 @@ describe("synchronizer-program", () => {
       )
 
       expect(m2.documents.has("doc-1")).toBe(true)
-      expect(m2.documents.get("doc-1")!.version).toBe("v1")
-      expect(m2.documents.get("doc-1")!.replicaType).toEqual(["plain", 1, 0])
+      expect(m2.documents.get("doc-1")?.version).toBe("v1")
+      expect(m2.documents.get("doc-1")?.replicaType).toEqual(["plain", 1, 0])
 
       const commands = flattenCommands(cmd)
 
@@ -516,7 +525,7 @@ describe("synchronizer-program", () => {
       )
 
       // Version should NOT change — idempotent
-      expect(m2.documents.get("doc-1")!.version).toBe("v1")
+      expect(m2.documents.get("doc-1")?.version).toBe("v1")
     })
   })
 
@@ -1393,7 +1402,7 @@ describe("synchronizer-program", () => {
         m,
       )
 
-      expect(m2.documents.get("doc-1")!.version).toBe("v1")
+      expect(m2.documents.get("doc-1")?.version).toBe("v1")
       const bobState = m2.peers.get("bob")!
       const docSync = bobState.docSyncStates.get("doc-1")!
       expect(docSync.status).toBe("synced")
@@ -1738,7 +1747,7 @@ describe("synchronizer-program", () => {
       ;[m] = update({ type: "synchronizer/channel-added", channel }, m)
 
       // Receive establish-request from bob
-      const [m2, cmd] = update(
+      const [_m2, cmd] = update(
         {
           type: "synchronizer/channel-receive-message",
           envelope: {
@@ -1841,7 +1850,7 @@ describe("synchronizer-program", () => {
     it("handleDocEnsure filters channels by route", () => {
       // Route allows "doc-1" for bob but not carol
       const update = createSynchronizerUpdate({
-        route: (docId, peer) => peer.peerId !== "carol",
+        route: (_docId, peer) => peer.peerId !== "carol",
       })
       const [model] = init(aliceIdentity)
 
@@ -1849,7 +1858,7 @@ describe("synchronizer-program", () => {
       m = establishChannel(update, m, 1, bobIdentity)
       m = establishChannel(update, m, 2, carolIdentity)
 
-      const [m2, cmd] = update(
+      const [_m2, cmd] = update(
         {
           type: "synchronizer/doc-ensure",
           replicaType: ["plain", 1, 0] as const,
@@ -2309,8 +2318,8 @@ describe("synchronizer-program", () => {
       )
 
       expect(m2.documents.has("replicated-doc")).toBe(true)
-      expect(m2.documents.get("replicated-doc")!.mode).toBe("replicate")
-      expect(m2.documents.get("replicated-doc")!.version).toBe("0")
+      expect(m2.documents.get("replicated-doc")?.mode).toBe("replicate")
+      expect(m2.documents.get("replicated-doc")?.version).toBe("0")
 
       const commands = flattenCommands(cmd)
 
@@ -2407,7 +2416,7 @@ describe("synchronizer-program", () => {
       )
 
       // Version updated
-      expect(m2.documents.get("rep-doc")!.version).toBe("v2")
+      expect(m2.documents.get("rep-doc")?.version).toBe("v2")
 
       // Should relay to carol (excluding bob)
       const commands = flattenCommands(cmd)
@@ -2655,7 +2664,7 @@ describe("synchronizer-program", () => {
       // local-doc-change now emits notify/state-advanced for unified
       // persistence (jj:smmulzkm). Verify it notifies the correct docId.
       expect(notification).toBeDefined()
-      expect(notification!.type).toBe("notify/state-advanced")
+      expect(notification?.type).toBe("notify/state-advanced")
       const docIds = collectNotifiedDocIds(notification)
       expect(docIds).toEqual(new Set(["doc-1"]))
     })

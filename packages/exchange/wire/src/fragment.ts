@@ -79,7 +79,7 @@ export function generateFrameId(): string {
 export function bytesToHex(bytes: Uint8Array): string {
   let hex = ""
   for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i]!.toString(16).padStart(2, "0")
+    hex += bytes[i]?.toString(16).padStart(2, "0")
   }
   return hex
 }
@@ -171,7 +171,7 @@ export function parseTransportPayload(data: Uint8Array): TransportPayload {
     default:
       throw new FragmentParseError(
         "unknown_prefix",
-        `Unknown transport payload prefix: 0x${prefix!.toString(16).padStart(2, "0")}`,
+        `Unknown transport payload prefix: 0x${prefix?.toString(16).padStart(2, "0")}`,
       )
   }
 }

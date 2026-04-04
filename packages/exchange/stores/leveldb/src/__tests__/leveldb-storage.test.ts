@@ -72,8 +72,8 @@ describe("LevelDBStore — close + reopen", () => {
 
     const entries = await collectAll(backend2.loadAll("doc-1"))
     expect(entries).toHaveLength(2)
-    expect(entries[0]!.version).toBe("v1")
-    expect(entries[1]!.version).toBe("v2")
+    expect(entries[0]?.version).toBe("v1")
+    expect(entries[1]?.version).toBe("v2")
     await backend2.close()
   })
 
@@ -92,9 +92,9 @@ describe("LevelDBStore — close + reopen", () => {
 
     const entries = await collectAll(backend2.loadAll("doc-1"))
     expect(entries).toHaveLength(3)
-    expect(entries[0]!.version).toBe("v1")
-    expect(entries[1]!.version).toBe("v2")
-    expect(entries[2]!.version).toBe("v3")
+    expect(entries[0]?.version).toBe("v1")
+    expect(entries[1]?.version).toBe("v2")
+    expect(entries[2]?.version).toBe("v3")
     await backend2.close()
   })
 
@@ -111,7 +111,7 @@ describe("LevelDBStore — close + reopen", () => {
     const backend2 = new LevelDBStore(dir)
     const entries = await collectAll(backend2.loadAll("doc-1"))
     expect(entries).toHaveLength(1)
-    expect(entries[0]!.version).toBe("v3")
+    expect(entries[0]?.version).toBe("v3")
     await backend2.close()
   })
 

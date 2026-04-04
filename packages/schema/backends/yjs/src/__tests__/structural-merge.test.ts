@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { bindYjs } from "../bind-yjs.js"
 import { ensureContainers } from "../populate.js"
-import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
+import { yjsSubstrateFactory } from "../substrate.js"
 
 // ===========================================================================
 // Schemas used across tests

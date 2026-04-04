@@ -167,7 +167,9 @@ export type TransitionListener = GenericTransitionListener<WebsocketClientState>
 export function wrapStandardWebsocket(ws: WebSocket): Socket {
   return {
     send(data: Uint8Array | string): void {
-      ws.send(data)
+      ws.send(
+        typeof data === "string" ? data : (data as Uint8Array<ArrayBuffer>),
+      )
     },
 
     close(code?: number, reason?: string): void {

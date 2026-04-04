@@ -23,13 +23,12 @@
 
 import {
   type BoundSchema,
-  observation,
   type DocMetadata,
   type FactoryBuilder,
   type Interpret,
   interpret,
-  isBoundSchema,
   type MergeStrategy,
+  observation,
   type Ref,
   type Replica,
   type ReplicaFactory,
@@ -39,9 +38,7 @@ import {
   registerSubstrate,
   type Schema as SchemaNode,
   type SubstrateFactory,
-  type SubstratePayload,
   subscribe,
-  unwrap,
   type Version,
   writable,
 } from "@kyneta/schema"

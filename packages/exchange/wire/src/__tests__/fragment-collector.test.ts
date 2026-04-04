@@ -511,7 +511,7 @@ describe("FragmentCollector — timeouts", () => {
     collector.addFragment("f1", 0, 2, 4, "ab")
 
     const timerEntry = [...timer.timers.values()][0]
-    expect(timerEntry!.ms).toBe(3000)
+    expect(timerEntry?.ms).toBe(3000)
 
     collector.dispose()
   })

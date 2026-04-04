@@ -23,7 +23,6 @@ import {
   buildWritableContext,
   type ChangeBase,
   executeBatch,
-  type Op,
   type Path,
   type WritableContext,
   Zero,

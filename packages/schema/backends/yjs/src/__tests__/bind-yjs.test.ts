@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { bindYjs } from "../bind-yjs.js"
 import { createYjsDoc } from "../create.js"
-import { yjsSubstrateFactory } from "../substrate.js"
 import { yjs } from "../yjs-escape.js"
 
 // ===========================================================================
@@ -62,7 +61,7 @@ describe("bindYjs", () => {
       const bound = bindYjs(SimpleSchema)
       const factory = bound.factory({ peerId: "peer-1" })
 
-      const substrate = factory.create(SimpleSchema)
+      const _substrate = factory.create(SimpleSchema)
 
       // Populate via the substrate's writable context
       const doc = createYjsDocFromFactory(factory, SimpleSchema)
@@ -115,8 +114,8 @@ describe("bindYjs", () => {
       const bound = bindYjs(SimpleSchema)
       const factory = bound.factory({ peerId: "stable-peer-id" })
 
-      const s1 = factory.create(SimpleSchema)
-      const s2 = factory.create(SimpleSchema)
+      const _s1 = factory.create(SimpleSchema)
+      const _s2 = factory.create(SimpleSchema)
 
       // Both docs should have the same clientID
       const doc1 = yjs(createYjsDocFromFactory(factory, SimpleSchema))

@@ -287,11 +287,13 @@ export class WebsocketClientTransport extends Transport<void> {
         ) {
           const fragments = fragmentPayload(frame, this.#fragmentThreshold)
           for (const fragment of fragments) {
-            this.#socket.send(fragment)
+            this.#socket.send(fragment as Uint8Array<ArrayBuffer>)
           }
         } else {
           // Wrap with MESSAGE_COMPLETE prefix for transport layer consistency
-          this.#socket.send(wrapCompleteMessage(frame))
+          this.#socket.send(
+            wrapCompleteMessage(frame) as Uint8Array<ArrayBuffer>,
+          )
         }
       },
       stop: () => {

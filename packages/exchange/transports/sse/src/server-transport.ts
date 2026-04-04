@@ -21,11 +21,7 @@
 
 import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/exchange"
 import { Transport } from "@kyneta/exchange"
-import {
-  DEFAULT_FRAGMENT_THRESHOLD,
-  SseConnection,
-  type SseConnectionConfig,
-} from "./connection.js"
+import { DEFAULT_FRAGMENT_THRESHOLD, SseConnection } from "./connection.js"
 
 // ---------------------------------------------------------------------------
 // Options

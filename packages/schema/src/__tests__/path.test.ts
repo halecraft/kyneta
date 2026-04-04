@@ -6,11 +6,7 @@ import {
   indexAddress,
   keyAddress,
   RawPath,
-  type RawSegment,
-  rawIndex,
-  rawKey,
   resetAddressIdCounter,
-  type Segment,
 } from "../path.js"
 import { writeByPath } from "../reader.js"
 
@@ -23,24 +19,24 @@ describe("RawPath", () => {
     const p = RawPath.empty.field("title")
     expect(p).toBeInstanceOf(RawPath)
     expect(p.length).toBe(1)
-    expect(p.segments[0]!.role).toBe("key")
-    expect(p.segments[0]!.resolve()).toBe("title")
+    expect(p.segments[0]?.role).toBe("key")
+    expect(p.segments[0]?.resolve()).toBe("title")
   })
 
   it("item(index) produces a new RawPath with appended index segment", () => {
     const p = RawPath.empty.item(3)
     expect(p).toBeInstanceOf(RawPath)
     expect(p.length).toBe(1)
-    expect(p.segments[0]!.role).toBe("index")
-    expect(p.segments[0]!.resolve()).toBe(3)
+    expect(p.segments[0]?.role).toBe("index")
+    expect(p.segments[0]?.resolve()).toBe(3)
   })
 
   it("field() and item() can be chained", () => {
     const p = RawPath.empty.field("todos").item(2).field("done")
     expect(p.length).toBe(3)
-    expect(p.segments[0]!.resolve()).toBe("todos")
-    expect(p.segments[1]!.resolve()).toBe(2)
-    expect(p.segments[2]!.resolve()).toBe("done")
+    expect(p.segments[0]?.resolve()).toBe("todos")
+    expect(p.segments[1]?.resolve()).toBe(2)
+    expect(p.segments[2]?.resolve()).toBe("done")
   })
 
   it("does not mutate the parent path", () => {
@@ -54,7 +50,7 @@ describe("RawPath", () => {
     it("produces positional strings using null-byte delimiter", () => {
       const NUL = String.fromCharCode(0)
       const p = RawPath.empty.field("todos").item(2).field("done")
-      expect(p.key).toBe("todos" + NUL + "2" + NUL + "done")
+      expect(p.key).toBe(`todos${NUL}2${NUL}done`)
     })
 
     it("empty path produces empty string key", () => {

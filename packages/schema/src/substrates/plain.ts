@@ -33,7 +33,7 @@ import type { Op } from "../changefeed.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
-import { RawPath, rawIndex, rawKey } from "../path.js"
+import { RawPath } from "../path.js"
 import { applyChange, type PlainState, plainReader } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {

@@ -36,7 +36,6 @@ import type {
   ListDiff,
   ListJsonDiff,
   LoroDoc,
-  LoroEvent,
   LoroEventBatch,
   MapDiff,
   MapJsonDiff,
@@ -615,8 +614,6 @@ function materializeCIDForSchema(schema: SchemaNode): ContainerID {
   switch (s._kind) {
     case "sequence":
       return syntheticCID("List")
-    case "product":
-    case "map":
     default:
       return syntheticCID("Map")
   }
@@ -820,6 +817,8 @@ function treeDiffToChange(
           parent: item.parent,
           index: item.index,
         }
+      default:
+        throw new Error(`Unknown tree action: ${(item as any).action}`)
     }
   })
   return { type: "tree", instructions }

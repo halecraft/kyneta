@@ -211,7 +211,7 @@ describe("fragmentPayload", () => {
 
     for (let i = 0; i < fragments.length; i++) {
       // Strip transport prefix
-      const frameData = fragments[i]!.slice(1)
+      const frameData = fragments[i]?.slice(1)
       const frame = decodeBinaryFrame(frameData)
 
       expect(frame.content.kind).toBe("fragment")
@@ -271,7 +271,7 @@ describe("fragmentPayload", () => {
 
     expect(fragments.length).toBe(1)
 
-    const frameData = fragments[0]!.slice(1)
+    const frameData = fragments[0]?.slice(1)
     const frame = decodeBinaryFrame(frameData)
     if (frame.content.kind === "fragment") {
       expect(frame.content.index).toBe(0)
@@ -296,8 +296,8 @@ describe("fragmentPayload", () => {
       }
     }
 
-    expect(chunks[0]!.length).toBe(50)
-    expect(chunks[1]!.length).toBe(50)
+    expect(chunks[0]?.length).toBe(50)
+    expect(chunks[1]?.length).toBe(50)
   })
 
   it("throws on zero maxChunkSize", () => {

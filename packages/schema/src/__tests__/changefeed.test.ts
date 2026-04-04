@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest"
 import type {
   IncrementChange,
   MapChange,
-  ReplaceChange,
   SequenceChange,
   TextChange,
 } from "../change.js"
@@ -21,7 +20,7 @@ import {
   TRANSACT,
   writable,
 } from "../index.js"
-import { RawPath, type RawSegment } from "../path.js"
+import { RawPath } from "../path.js"
 
 /** Narrowed helper: return the key variant of RawSegment. */
 function keySeg(

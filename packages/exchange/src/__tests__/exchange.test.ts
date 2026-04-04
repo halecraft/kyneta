@@ -3,7 +3,6 @@
 import { bindLoro, LoroSchema, loro } from "@kyneta/loro-schema"
 import {
   bind,
-  bindEphemeral,
   bindPlain,
   change,
   plainReplicaFactory,

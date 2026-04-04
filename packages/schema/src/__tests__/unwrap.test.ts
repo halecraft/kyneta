@@ -1,7 +1,6 @@
 // unwrap — unit tests for the general escape hatch.
 
 import { describe, expect, it } from "vitest"
-import { Schema } from "../schema.js"
 import {
   createPlainSubstrate,
   plainVersionStrategy,

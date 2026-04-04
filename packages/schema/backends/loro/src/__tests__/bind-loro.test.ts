@@ -1,12 +1,10 @@
 // bindLoro and loro() escape hatch — unit tests.
 
 import {
-  change,
   isBoundSchema,
   plainSubstrateFactory,
   registerSubstrate,
   Schema,
-  unwrap,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { bindLoro } from "../bind-loro.js"

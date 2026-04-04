@@ -9,10 +9,9 @@
  * Requires the schema package to be built (`npx tsup` in packages/schema).
  */
 
+import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import { LoroSchema } from "@kyneta/loro-schema"
 import {
-  CHANGEFEED,
-  hasChangefeed,
   interpret,
   isIncrementChange,
   observation,

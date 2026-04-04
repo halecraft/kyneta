@@ -5,7 +5,6 @@ import {
   applyChanges,
   change,
   interpret,
-  mapChange,
   observation,
   plainContext,
   RawPath,
@@ -13,9 +12,6 @@ import {
   replaceChange,
   resolveToAddressed,
   Schema,
-  sequenceChange,
-  subscribe,
-  withAddressing,
   withCaching,
   withNavigation,
   withReadable,
@@ -249,14 +245,14 @@ describe("withAddressing: composition", () => {
   it("readable layer includes withAddressing — paths are addressed", () => {
     const store = { todos: [{ text: "test", done: false }] }
     const ctx = plainContext(store)
-    const doc = interpret(todoSchema, ctx)
+    const _doc = interpret(todoSchema, ctx)
       .with(readable)
       .with(writable)
       .done() as any
 
     // ctx.rootPath should be set by withAddressing
     expect(ctx.rootPath).toBeDefined()
-    expect(ctx.rootPath!.isAddressed).toBe(true)
+    expect(ctx.rootPath?.isAddressed).toBe(true)
     expect(ctx.rootPath).toBeInstanceOf(AddressedPath)
   })
 
@@ -652,7 +648,7 @@ describe("withAddressing: subscription survival after structural change", () => 
   })
 
   it("external mutation via applyChanges invalidates cached product field", () => {
-    const { doc, store } = createTodoDoc([{ text: "alpha", done: false }])
+    const { doc } = createTodoDoc([{ text: "alpha", done: false }])
 
     const item = doc.todos.at(0)
     // Read to populate the cache

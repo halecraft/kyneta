@@ -735,7 +735,7 @@ describe("dismiss", () => {
     })
 
     // Both create and sync a doc
-    const docA = exchangeA.get("shared-doc", SequentialDoc)
+    const _docA = exchangeA.get("shared-doc", SequentialDoc)
     exchangeB.get("shared-doc", SequentialDoc)
 
     await drain(40)

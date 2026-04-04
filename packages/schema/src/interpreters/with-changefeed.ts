@@ -31,7 +31,7 @@
 import type { HasChangefeed } from "@kyneta/changefeed"
 import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import type { ChangeBase } from "../change.js"
-import { isReplaceChange, isSequenceChange } from "../change.js"
+import { isReplaceChange } from "../change.js"
 import type {
   ChangefeedProtocol,
   Changeset,
@@ -44,7 +44,6 @@ import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import {
   AddressedPath,
-  RawPath,
   resolveToAddressed,
   type SequenceAddressTable,
 } from "../path.js"
@@ -691,7 +690,7 @@ function createSequenceChangefeed(
   const itemUnsubs = new Map<number, () => void>()
 
   // Symbol.for so we don't need a runtime import from with-addressing.ts
-  const ADDRESS_TABLE_SYM = Symbol.for("kyneta:addressTable")
+  const _ADDRESS_TABLE_SYM = Symbol.for("kyneta:addressTable")
 
   /**
    * Get the sequence address table from the parent ref, if available.
@@ -804,7 +803,7 @@ function createSequenceChangefeed(
     // SequenceChange: unsubscribe only dead items
     for (const [addrId, unsub] of itemUnsubs) {
       const entry = table.byId.get(addrId)
-      if (entry && entry.address.dead) {
+      if (entry?.address.dead) {
         unsub()
         itemUnsubs.delete(addrId)
       }
