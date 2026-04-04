@@ -70,7 +70,9 @@ export function encodeStoreEntry(entry: StoreEntry): Uint8Array {
 export function decodeStoreEntry(bytes: Uint8Array): StoreEntry {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 
-  const flags = bytes[0]!
+  const flagByte = bytes[0]
+  if (flagByte === undefined) throw new Error("empty store entry bytes")
+  const flags = flagByte
   const kind = (flags & 0x01) !== 0 ? "since" : "entirety"
   const encoding = (flags & 0x02) !== 0 ? "binary" : "json"
   const isDataBinary = (flags & 0x04) !== 0

@@ -29,7 +29,9 @@ function roundTrip(msg: ChannelMsg): ChannelMsg {
   expect(encoded).not.toBeInstanceOf(Uint8Array)
   const decoded = textCodec.decode(encoded)
   expect(decoded).toHaveLength(1)
-  return decoded[0]!
+  const first = decoded.at(0)
+  if (!first) throw new Error("Expected decoded[0] to exist")
+  return first
 }
 
 // ---------------------------------------------------------------------------

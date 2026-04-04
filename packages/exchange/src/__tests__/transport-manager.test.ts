@@ -171,8 +171,10 @@ describe("TransportManager", () => {
         },
       ],
     }
+    if (adapter.channelIdPublic === undefined)
+      throw new Error("expected channelId")
     const sent = manager.send({
-      toChannelIds: [adapter.channelIdPublic!],
+      toChannelIds: [adapter.channelIdPublic],
       message: msg,
     })
 

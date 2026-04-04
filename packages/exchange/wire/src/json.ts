@@ -36,7 +36,9 @@ import type { TextCodec } from "./codec.js"
 function uint8ArrayToBase64(data: Uint8Array): string {
   let binary = ""
   for (let i = 0; i < data.length; i++) {
-    binary += String.fromCharCode(data[i]!)
+    const byte = data.at(i)
+    if (byte === undefined) throw new Error(`Missing byte at index ${i}`)
+    binary += String.fromCharCode(byte)
   }
   return btoa(binary)
 }

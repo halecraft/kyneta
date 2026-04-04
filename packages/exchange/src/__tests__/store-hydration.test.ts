@@ -124,7 +124,8 @@ describe("InMemoryStore", () => {
     expect(loaded).toHaveLength(1)
     expect(loaded[0]).toEqual(entry)
     // Verify no extra fields
-    expect(Object.keys(loaded[0]!)).toEqual(["payload", "version"])
+    if (!loaded[0]) throw new Error("expected loaded entry")
+    expect(Object.keys(loaded[0])).toEqual(["payload", "version"])
   })
 
   it("delete() removes both entries and metadata", async () => {
@@ -353,7 +354,8 @@ describe("Exchange storage persistence", () => {
     expect(entries[0]?.payload.kind).toBe("entirety")
 
     // Last entry: since delta from local mutation (not an entirety snapshot)
-    const last = entries[entries.length - 1]!
+    const last = entries.at(-1)
+    if (!last) throw new Error("expected at least one entry")
     expect(last.payload.kind).toBe("since")
 
     // Verify the data round-trips: create a new replica, merge all entries,

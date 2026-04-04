@@ -342,27 +342,39 @@ export class FragmentCollector<T> {
           error: { type: "invalid_index", frameId, index, max: total - 1 },
         }
 
-      case "reject_total_mismatch":
+      case "reject_total_mismatch": {
+        if (batch === undefined) {
+          throw new Error(
+            `FragmentCollector bug: reject_total_mismatch for frameId=${frameId} but batch is undefined`,
+          )
+        }
         return {
           status: "error",
           error: {
             type: "total_mismatch",
             frameId,
-            expected: batch!.expectedTotal,
+            expected: batch.expectedTotal,
             got: total,
           },
         }
+      }
 
-      case "reject_size_mismatch":
+      case "reject_size_mismatch": {
+        if (batch === undefined) {
+          throw new Error(
+            `FragmentCollector bug: reject_size_mismatch for frameId=${frameId} but batch is undefined`,
+          )
+        }
         return {
           status: "error",
           error: {
             type: "size_mismatch",
             frameId,
-            expected: batch!.expectedTotalSize,
+            expected: batch.expectedTotalSize,
             actual: totalSize,
           },
         }
+      }
 
       case "create_and_accept": {
         // Enforce max concurrent frames — evict oldest if at capacity
@@ -376,7 +388,12 @@ export class FragmentCollector<T> {
       }
 
       case "accept": {
-        this.#addChunkToBatch(batch!, index, chunk)
+        if (batch === undefined) {
+          throw new Error(
+            `FragmentCollector bug: accept for frameId=${frameId} but batch is undefined`,
+          )
+        }
+        this.#addChunkToBatch(batch, index, chunk)
 
         // Enforce memory limit — evict oldest until under the cap
         while (this.#totalSize > this.#config.maxTotalSize) {
@@ -472,7 +489,13 @@ export class FragmentCollector<T> {
     // Concatenate chunks in index order
     const ordered: T[] = []
     for (let i = 0; i < batch.expectedTotal; i++) {
-      ordered.push(batch.receivedChunks.get(i)!)
+      const chunk = batch.receivedChunks.get(i)
+      if (chunk === undefined) {
+        throw new Error(
+          `FragmentCollector bug: missing chunk at index ${i} for frameId=${frameId} (expected ${batch.expectedTotal} chunks, received ${batch.receivedChunks.size})`,
+        )
+      }
+      ordered.push(chunk)
     }
 
     const data = this.#ops.concatenate(ordered)

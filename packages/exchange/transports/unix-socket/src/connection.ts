@@ -217,7 +217,9 @@ export class UnixSocketConnection {
    */
   #flushWriteQueue(): void {
     while (this.#writeQueue.length > 0) {
-      const frame = this.#writeQueue[0]!
+      const frame = this.#writeQueue[0]
+      if (!frame) continue
+
       const ok = this.#socket.write(frame)
       if (!ok) {
         // Still under backpressure — wait for next drain

@@ -266,12 +266,13 @@ export class WebsocketClientTransport extends Transport<void> {
     return {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
-        if (!this.#socket || this.#socket.readyState !== WebSocket.OPEN) {
+        const socket = this.#socket
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
           return
         }
 
         encodeBinaryAndSend(msg, this.#fragmentThreshold, data =>
-          this.#socket!.send(data),
+          socket.send(new Uint8Array(data).buffer),
         )
       },
       stop: () => {

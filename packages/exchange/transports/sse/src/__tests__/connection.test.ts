@@ -70,7 +70,9 @@ describe("SseConnection — send", () => {
     expect(sent).toHaveLength(1)
 
     // The sent string should be a valid text frame that round-trips
-    const frame = decodeTextFrame(sent[0]!)
+    const sentFrame = sent.at(0)
+    if (!sentFrame) throw new Error("expected sent frame")
+    const frame = decodeTextFrame(sentFrame)
     expect(frame.content.kind).toBe("complete")
     const parsed = JSON.parse(frame.content.payload)
     const decoded = textCodec.decode(parsed)
@@ -86,7 +88,9 @@ describe("SseConnection — send", () => {
 
     conn.send(establishMsg)
 
-    const frame = decodeTextFrame(sent[0]!)
+    const sentFrame = sent.at(0)
+    if (!sentFrame) throw new Error("expected sent frame")
+    const frame = decodeTextFrame(sentFrame)
     const decoded = textCodec.decode(JSON.parse(frame.content.payload))
     expect(decoded[0]).toEqual(establishMsg)
   })

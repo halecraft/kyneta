@@ -1,6 +1,5 @@
 // Exchange — unit tests for the public Exchange API.
 
-import type { Changeset } from "@kyneta/changefeed"
 import { hasChangefeed } from "@kyneta/changefeed"
 import { bindLoro, LoroSchema, loro } from "@kyneta/loro-schema"
 import {
@@ -392,7 +391,7 @@ describe("Exchange", () => {
         identity: { peerId: "alice" },
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
-      const exchange2 = createExchange({
+      const _exchange2 = createExchange({
         identity: { peerId: "bob", name: "Bob" },
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
@@ -407,9 +406,10 @@ describe("Exchange", () => {
       // Alice should see bob as a peer
       expect(exchange1.peers().size).toBe(1)
       expect(exchange1.peers().has("bob")).toBe(true)
-      const bobIdentity = exchange1.peers().get("bob")!
-      expect(bobIdentity.peerId).toBe("bob")
-      expect(bobIdentity.name).toBe("Bob")
+      const bobIdentity = exchange1.peers().get("bob")
+      expect(bobIdentity).toBeDefined()
+      expect(bobIdentity?.peerId).toBe("bob")
+      expect(bobIdentity?.name).toBe("Bob")
 
       // Should have received a peer-joined change
       expect(changes.length).toBe(1)
@@ -456,7 +456,7 @@ describe("Exchange", () => {
         identity: { peerId: "alice" },
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
-      const exchange2 = createExchange({
+      const _exchange2 = createExchange({
         identity: { peerId: "bob" },
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
@@ -472,8 +472,8 @@ describe("Exchange", () => {
 
       // During the callback, peers() should reflect the updated state
       expect(peersDuringCallback).toBeDefined()
-      expect(peersDuringCallback!.size).toBe(1)
-      expect(peersDuringCallback!.has("bob")).toBe(true)
+      expect(peersDuringCallback?.size).toBe(1)
+      expect(peersDuringCallback?.has("bob")).toBe(true)
     })
 
     it("multi-transport: one peer-joined on first bridge, no second on second bridge", async () => {
@@ -486,7 +486,7 @@ describe("Exchange", () => {
           createBridgeTransport({ transportType: "alice", bridge: bridge2 }),
         ],
       })
-      const exchange2 = createExchange({
+      const _exchange2 = createExchange({
         identity: { peerId: "bob" },
         transports: [
           createBridgeTransport({ transportType: "bob", bridge: bridge1 }),
@@ -514,7 +514,7 @@ describe("Exchange", () => {
         identity: { peerId: "alice" },
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
-      const exchange2 = createExchange({
+      const _exchange2 = createExchange({
         identity: { peerId: "bob" },
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
@@ -542,7 +542,7 @@ describe("Exchange", () => {
         identity: { peerId: "alice" },
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
-      const exchange2 = createExchange({
+      const _exchange2 = createExchange({
         identity: { peerId: "bob" },
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })

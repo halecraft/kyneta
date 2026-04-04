@@ -109,7 +109,9 @@ describe("feedBytes", () => {
     expect(result.frames).toHaveLength(3)
 
     for (let i = 0; i < 3; i++) {
-      const decoded = decodeBinaryFrame(result.frames[i]!)
+      const frameBytes = result.frames.at(i)
+      if (!frameBytes) throw new Error(`Expected frame at index ${i}`)
+      const decoded = decodeBinaryFrame(frameBytes)
       expect(decoded.content.kind).toBe("complete")
       if (decoded.content.kind === "complete") {
         const decoded_msgs = cborCodec.decode(decoded.content.payload)
@@ -215,7 +217,9 @@ describe("feedBytes", () => {
     expect(allFrames[0]).toEqual(frameBytes)
 
     // Verify round-trip decode
-    const decoded = decodeBinaryFrame(allFrames[0]!)
+    const firstFrame = allFrames.at(0)
+    if (!firstFrame) throw new Error("Expected at least one frame")
+    const decoded = decodeBinaryFrame(firstFrame)
     expect(decoded.content.kind).toBe("complete")
     if (decoded.content.kind === "complete") {
       const messages = cborCodec.decode(decoded.content.payload)

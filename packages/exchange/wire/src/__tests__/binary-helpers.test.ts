@@ -42,7 +42,7 @@ describe("encodeBinaryAndSend", () => {
     encodeBinaryAndSend(SMALL_MSG, 100_000, sendFn)
 
     expect(sendFn).toHaveBeenCalledTimes(1)
-    expect(sendFn.mock.calls[0]![0]).toBeInstanceOf(Uint8Array)
+    expect(sendFn.mock.calls.at(0)?.[0]).toBeInstanceOf(Uint8Array)
   })
 
   it("fragments a large message when payload exceeds threshold", () => {
@@ -60,7 +60,7 @@ describe("encodeBinaryAndSend", () => {
     encodeBinaryAndSend(LARGE_MSG, 0, sendFn)
 
     expect(sendFn).toHaveBeenCalledTimes(1)
-    expect(sendFn.mock.calls[0]![0]).toBeInstanceOf(Uint8Array)
+    expect(sendFn.mock.calls.at(0)?.[0]).toBeInstanceOf(Uint8Array)
   })
 })
 
@@ -76,14 +76,19 @@ describe("decodeBinaryMessages", () => {
     expect(sent).toHaveLength(1)
 
     const reassembler = new FragmentReassembler({ timeoutMs: 5000 })
-    const result = decodeBinaryMessages(sent[0]!, reassembler)
+    const first = sent.at(0)
+    if (!first) throw new Error("expected at least one sent buffer")
+    const result = decodeBinaryMessages(first, reassembler)
 
     expect(result).not.toBeNull()
+    if (!result) throw new Error("expected non-null result")
     expect(result).toHaveLength(1)
-    expect(result![0]!.type).toBe("establish-request")
-    expect(
-      (result![0] as { identity: { peerId: string } }).identity.peerId,
-    ).toBe("test")
+    const msg0 = result.at(0)
+    if (!msg0) throw new Error("expected at least one decoded message")
+    expect(msg0.type).toBe("establish-request")
+    expect((msg0 as { identity: { peerId: string } }).identity.peerId).toBe(
+      "test",
+    )
     reassembler.dispose()
   })
 
@@ -96,22 +101,29 @@ describe("decodeBinaryMessages", () => {
     const reassembler = new FragmentReassembler({ timeoutMs: 5000 })
 
     // Feed only the first fragment — should return null (pending)
-    const pending = decodeBinaryMessages(sent[0]!, reassembler)
+    const firstFrag = sent.at(0)
+    if (!firstFrag) throw new Error("expected at least one sent fragment")
+    const pending = decodeBinaryMessages(firstFrag, reassembler)
     expect(pending).toBeNull()
 
     // Feed the remaining fragments; the last one should return the decoded messages
     let result: ChannelMsg[] | null = null
     for (let i = 1; i < sent.length; i++) {
-      result = decodeBinaryMessages(sent[i]!, reassembler)
+      const frag = sent.at(i)
+      if (!frag) throw new Error(`expected sent fragment at index ${i}`)
+      result = decodeBinaryMessages(frag, reassembler)
       if (i < sent.length - 1) {
         expect(result).toBeNull()
       }
     }
 
     expect(result).not.toBeNull()
+    if (!result) throw new Error("expected non-null result after all fragments")
     expect(result).toHaveLength(1)
-    expect(result![0]!.type).toBe("offer")
-    expect((result![0] as { docId: string }).docId).toBe("doc-1")
+    const msg0 = result.at(0)
+    if (!msg0) throw new Error("expected at least one decoded message")
+    expect(msg0.type).toBe("offer")
+    expect((msg0 as { docId: string }).docId).toBe("doc-1")
     reassembler.dispose()
   })
 

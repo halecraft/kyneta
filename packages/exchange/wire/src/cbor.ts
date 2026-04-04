@@ -137,12 +137,18 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
     case "present":
       return {
         t: MessageType.Present,
-        docs: msg.docs.map(d => ({
-          d: d.docId,
-          rt: [...d.replicaType] as [string, number, number],
-          ms: StringToMergeStrategyWire[d.mergeStrategy]!,
-          sh: d.schemaHash,
-        })),
+        docs: msg.docs.map(d => {
+          const ms = StringToMergeStrategyWire[d.mergeStrategy]
+          if (ms === undefined) {
+            throw new Error(`Unknown merge strategy: ${d.mergeStrategy}`)
+          }
+          return {
+            d: d.docId,
+            rt: [...d.replicaType] as [string, number, number],
+            ms,
+            sh: d.schemaHash,
+          }
+        }),
       } satisfies WirePresentMsg
 
     case "interest": {
@@ -156,11 +162,19 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
     }
 
     case "offer": {
+      const pk = StringToPayloadKind[msg.payload.kind]
+      if (pk === undefined) {
+        throw new Error(`Unknown payload kind: ${msg.payload.kind}`)
+      }
+      const pe = StringToPayloadEncoding[msg.payload.encoding]
+      if (pe === undefined) {
+        throw new Error(`Unknown payload encoding: ${msg.payload.encoding}`)
+      }
       const wire: WireOfferMsg = {
         t: MessageType.Offer,
         doc: msg.docId,
-        pk: StringToPayloadKind[msg.payload.kind]!,
-        pe: StringToPayloadEncoding[msg.payload.encoding]!,
+        pk,
+        pe,
         d: msg.payload.data,
         v: msg.version,
       }
@@ -209,12 +223,18 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
       const presentWire = wire as WirePresentMsg
       return {
         type: "present",
-        docs: presentWire.docs.map(d => ({
-          docId: d.d,
-          replicaType: d.rt as readonly [string, number, number],
-          mergeStrategy: MergeStrategyWireToString[d.ms]!,
-          schemaHash: d.sh,
-        })),
+        docs: presentWire.docs.map(d => {
+          const mergeStrategy = MergeStrategyWireToString[d.ms]
+          if (!mergeStrategy) {
+            throw new Error(`Unknown wire merge strategy: ${d.ms}`)
+          }
+          return {
+            docId: d.d,
+            replicaType: d.rt as readonly [string, number, number],
+            mergeStrategy,
+            schemaHash: d.sh,
+          }
+        }),
       } satisfies PresentMsg
     }
 

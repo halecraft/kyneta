@@ -167,12 +167,12 @@ describe("Send", () => {
     const syncChannel = [...transport.channels].find(
       ch => ch.type === "connected",
     )
-    expect(syncChannel).toBeDefined()
+    if (!syncChannel) throw new Error("expected syncChannel to be defined")
 
-    syncChannel!.send(TEST_MSG)
+    syncChannel.send(TEST_MSG)
 
     expect(dc.send).toHaveBeenCalledOnce()
-    expect(dc.send.mock.calls[0]![0]).toBeInstanceOf(Uint8Array)
+    expect(dc.send.mock.calls.at(0)?.at(0)).toBeInstanceOf(Uint8Array)
   })
 })
 
@@ -206,7 +206,10 @@ describe("Receive", () => {
     dc.emit("message", { data: ab })
 
     expect(ctx.onChannelReceive).toHaveBeenCalled()
-    const [, receivedMsg] = ctx.onChannelReceive.mock.calls[0]!
+    const callArgs = ctx.onChannelReceive.mock.calls.at(0)
+    if (!callArgs)
+      throw new Error("expected onChannelReceive to have been called")
+    const [, receivedMsg] = callArgs
     expect(receivedMsg.type).toBe("establish-request")
     expect((receivedMsg as any).identity.peerId).toBe("remote")
   })
@@ -222,7 +225,10 @@ describe("Receive", () => {
     dc.emit("message", { data: wrapped })
 
     expect(ctx.onChannelReceive).toHaveBeenCalled()
-    const [, receivedMsg] = ctx.onChannelReceive.mock.calls[0]!
+    const callArgs = ctx.onChannelReceive.mock.calls.at(0)
+    if (!callArgs)
+      throw new Error("expected onChannelReceive to have been called")
+    const [, receivedMsg] = callArgs
     expect(receivedMsg.type).toBe("establish-request")
     expect((receivedMsg as any).identity.peerId).toBe("remote")
   })
@@ -265,12 +271,12 @@ describe("readyState", () => {
     const syncChannel = [...transport.channels].find(
       ch => ch.type === "connected",
     )
-    expect(syncChannel).toBeDefined()
+    if (!syncChannel) throw new Error("expected syncChannel to be defined")
 
     // Simulate the channel transitioning to closing
     dc.readyState = "closing"
 
-    syncChannel!.send(TEST_MSG)
+    syncChannel.send(TEST_MSG)
     expect(dc.send).not.toHaveBeenCalled()
   })
 })
@@ -291,7 +297,7 @@ describe("Fragmentation", () => {
     const syncChannel = [...transport.channels].find(
       ch => ch.type === "connected",
     )
-    expect(syncChannel).toBeDefined()
+    if (!syncChannel) throw new Error("expected syncChannel to be defined")
 
     // Send a message — with a 200-byte threshold, even a small message's
     // binary frame may exceed it if the CBOR encoding + frame header is large enough.
@@ -299,13 +305,13 @@ describe("Fragmentation", () => {
     const largeMsg: ChannelMsg = {
       type: "establish-request",
       identity: {
-        peerId: "a]very-long-peer-id-" + "x".repeat(200),
-        name: "A Long Name " + "y".repeat(200),
+        peerId: `a]very-long-peer-id-${"x".repeat(200)}`,
+        name: `A Long Name ${"y".repeat(200)}`,
         type: "user",
       },
     }
 
-    syncChannel!.send(largeMsg)
+    syncChannel.send(largeMsg)
 
     // Should have been called more than once (multiple fragments)
     expect(dc.send.mock.calls.length).toBeGreaterThan(1)
@@ -322,8 +328,8 @@ describe("Fragmentation", () => {
     const largeMsg: ChannelMsg = {
       type: "establish-request",
       identity: {
-        peerId: "peer-" + "z".repeat(200),
-        name: "Name-" + "w".repeat(200),
+        peerId: `peer-${"z".repeat(200)}`,
+        name: `Name-${"w".repeat(200)}`,
         type: "user",
       },
     }
@@ -334,7 +340,8 @@ describe("Fragmentation", () => {
 
     // Emit all but the last fragment — should NOT trigger receive yet
     for (let i = 0; i < fragments.length - 1; i++) {
-      const frag = fragments[i]!
+      const frag = fragments.at(i)
+      if (!frag) throw new Error(`expected fragment at index ${i}`)
       const ab = frag.buffer.slice(
         frag.byteOffset,
         frag.byteOffset + frag.byteLength,
@@ -344,7 +351,8 @@ describe("Fragmentation", () => {
     expect(ctx.onChannelReceive).not.toHaveBeenCalled()
 
     // Emit the last fragment — should complete reassembly
-    const lastFrag = fragments[fragments.length - 1]!
+    const lastFrag = fragments.at(-1)
+    if (!lastFrag) throw new Error("expected last fragment to exist")
     const ab = lastFrag.buffer.slice(
       lastFrag.byteOffset,
       lastFrag.byteOffset + lastFrag.byteLength,
@@ -352,9 +360,12 @@ describe("Fragmentation", () => {
     dc.emit("message", { data: ab })
 
     expect(ctx.onChannelReceive).toHaveBeenCalledTimes(1)
-    const [, receivedMsg] = ctx.onChannelReceive.mock.calls[0]!
+    const callArgs = ctx.onChannelReceive.mock.calls.at(0)
+    if (!callArgs)
+      throw new Error("expected onChannelReceive to have been called")
+    const [, receivedMsg] = callArgs
     expect(receivedMsg.type).toBe("establish-request")
-    expect((receivedMsg as any).identity.peerId).toBe("peer-" + "z".repeat(200))
+    expect((receivedMsg as any).identity.peerId).toBe(`peer-${"z".repeat(200)}`)
   })
 })
 
@@ -382,16 +393,20 @@ describe("Multi-peer", () => {
     expect(transport.channels.size).toBe(2)
 
     const channels = [...transport.channels]
-    channels[0]!.send(TEST_MSG)
-    channels[1]!.send(TEST_MSG)
+    const ch0 = channels.at(0)
+    const ch1 = channels.at(1)
+    if (!ch0) throw new Error("expected channel at index 0")
+    if (!ch1) throw new Error("expected channel at index 1")
+    ch0.send(TEST_MSG)
+    ch1.send(TEST_MSG)
 
     // Each data channel received its own send call
     expect(dc1.send).toHaveBeenCalledOnce()
     expect(dc2.send).toHaveBeenCalledOnce()
 
     // Payloads are distinct Uint8Array instances (not shared references)
-    const bytes1 = dc1.send.mock.calls[0]![0] as Uint8Array
-    const bytes2 = dc2.send.mock.calls[0]![0] as Uint8Array
+    const bytes1 = dc1.send.mock.calls.at(0)?.at(0) as Uint8Array
+    const bytes2 = dc2.send.mock.calls.at(0)?.at(0) as Uint8Array
     expect(bytes1).not.toBe(bytes2)
   })
 })

@@ -232,7 +232,8 @@ describe("synchronizer-program", () => {
       expect(m.peers.has("bob")).toBe(true)
 
       // Remove the channel
-      const channel = m.channels.get(1)!
+      const channel = m.channels.get(1)
+      if (!channel) throw new Error("Expected channel 1 to exist")
       const [m2] = update({ type: "synchronizer/channel-removed", channel }, m)
       expect(m2.channels.has(1)).toBe(false)
       // Peer should be removed since it has no remaining channels
@@ -391,7 +392,8 @@ describe("synchronizer-program", () => {
       let m = establishChannel(update, model, 1, bobIdentity)
 
       // Remove channel 1
-      const removedChannel = m.channels.get(1)!
+      const removedChannel = m.channels.get(1)
+      if (!removedChannel) throw new Error("Expected channel 1 to exist")
       ;[m] = update(
         { type: "synchronizer/channel-removed", channel: removedChannel },
         m,
@@ -987,7 +989,8 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       expect(commands).toHaveLength(1)
-      const creation = commands[0]!
+      const creation = commands.at(0)
+      if (!creation) throw new Error("Expected at least one command")
       expect(creation.type).toBe("cmd/request-doc-creation")
       if (creation.type === "cmd/request-doc-creation") {
         expect(creation.docId).toBe("new-doc")
@@ -1440,8 +1443,10 @@ describe("synchronizer-program", () => {
       )
 
       expect(m2.documents.get("doc-1")?.version).toBe("v1")
-      const bobState = m2.peers.get("bob")!
-      const docSync = bobState.docSyncStates.get("doc-1")!
+      const bobState = m2.peers.get("bob")
+      if (!bobState) throw new Error("Expected bob peer state to exist")
+      const docSync = bobState.docSyncStates.get("doc-1")
+      if (!docSync) throw new Error("Expected doc-1 sync state to exist")
       expect(docSync.status).toBe("synced")
       if (docSync.status === "synced") {
         expect(docSync.lastKnownVersion).toBe("v1")
@@ -2626,7 +2631,8 @@ describe("synchronizer-program", () => {
       )
 
       // Remove the channel — bob's only channel
-      const channel = m.channels.get(1)!
+      const channel = m.channels.get(1)
+      if (!channel) throw new Error("Expected channel 1 to exist")
       const [_m2, _cmd, notification] = update(
         { type: "synchronizer/channel-removed", channel },
         m,
@@ -2732,10 +2738,10 @@ describe("synchronizer-program", () => {
         m,
       )
 
-      expect(notification).toBeDefined()
-      const peerJoined = findNotification(notification!, "notify/peer-joined")
-      expect(peerJoined).toBeDefined()
-      expect(peerJoined!.peer).toEqual(bobIdentity)
+      if (!notification) throw new Error("Expected notification to be defined")
+      const peerJoined = findNotification(notification, "notify/peer-joined")
+      if (!peerJoined) throw new Error("Expected peer-joined notification")
+      expect(peerJoined.peer).toEqual(bobIdentity)
     })
 
     it("peer-joined does NOT fire on second channel for same peer", () => {
@@ -2778,17 +2784,18 @@ describe("synchronizer-program", () => {
       const m = establishChannel(update, model, 1, bobIdentity)
 
       // Remove the channel — bob's only channel
-      const channel = m.channels.get(1)!
+      const channel = m.channels.get(1)
+      if (!channel) throw new Error("Expected channel 1 to exist")
 
       const [_m2, _cmd, notification] = update(
         { type: "synchronizer/channel-removed", channel },
         m,
       )
 
-      expect(notification).toBeDefined()
-      const peerLeft = findNotification(notification!, "notify/peer-left")
-      expect(peerLeft).toBeDefined()
-      expect(peerLeft!.peer).toEqual(bobIdentity)
+      if (!notification) throw new Error("Expected notification to be defined")
+      const peerLeft = findNotification(notification, "notify/peer-left")
+      if (!peerLeft) throw new Error("Expected peer-left notification")
+      expect(peerLeft.peer).toEqual(bobIdentity)
     })
 
     it("peer-left does NOT fire when peer still has remaining channels", () => {
@@ -2816,7 +2823,8 @@ describe("synchronizer-program", () => {
       )
 
       // Remove channel 1 — bob still has channel 2
-      const channel1 = m.channels.get(1)!
+      const channel1 = m.channels.get(1)
+      if (!channel1) throw new Error("Expected channel 1 to exist")
 
       const [_m2, _cmd, notification] = update(
         { type: "synchronizer/channel-removed", channel: channel1 },
@@ -2864,21 +2872,22 @@ describe("synchronizer-program", () => {
       )
 
       // Remove bob's channel
-      const channel = m.channels.get(1)!
+      const channel = m.channels.get(1)
+      if (!channel) throw new Error("Expected channel 1 to exist")
       const [_m2, _cmd, notification] = update(
         { type: "synchronizer/channel-removed", channel },
         m,
       )
 
-      expect(notification).toBeDefined()
+      if (!notification) throw new Error("Expected notification to be defined")
       // Should have both peer-left and ready-state-changed
-      const peerLeft = findNotification(notification!, "notify/peer-left")
+      const peerLeft = findNotification(notification, "notify/peer-left")
       const readyState = findNotification(
-        notification!,
+        notification,
         "notify/ready-state-changed",
       )
-      expect(peerLeft).toBeDefined()
-      expect(peerLeft!.peer).toEqual(bobIdentity)
+      if (!peerLeft) throw new Error("Expected peer-left notification")
+      expect(peerLeft.peer).toEqual(bobIdentity)
       expect(readyState).toBeDefined()
     })
 
@@ -2917,8 +2926,8 @@ describe("synchronizer-program", () => {
       const peerLeft = notification
         ? findNotification(notification, "notify/peer-left")
         : undefined
-      expect(peerLeft).toBeDefined()
-      expect(peerLeft!.peer).toEqual(bobIdentity)
+      if (!peerLeft) throw new Error("Expected peer-left notification")
+      expect(peerLeft.peer).toEqual(bobIdentity)
     })
   })
 })

@@ -610,7 +610,8 @@ export class Synchronizer {
     this.#dispatching = true
     try {
       while (this.#pendingMessages.length > 0) {
-        const nextMsg = this.#pendingMessages.shift()!
+        const nextMsg = this.#pendingMessages.shift()
+        if (!nextMsg) break
         this.#dispatchInternal(nextMsg)
       }
 
@@ -879,7 +880,8 @@ export class Synchronizer {
 
   #drainOutbound(): void {
     while (this.#outboundQueue.length > 0) {
-      const envelope = this.#outboundQueue.shift()!
+      const envelope = this.#outboundQueue.shift()
+      if (!envelope) break
       this.transports.send(envelope)
     }
   }

@@ -118,7 +118,6 @@ export class UnixSocketClientTransport extends Transport<void> {
   #serverChannel?: Channel
   #options: UnixSocketClientOptions
   #reconnect: ReconnectScheduler
-  #wasConnectedBefore = false
 
   // State machine
   readonly #stateMachine: ClientStateMachine<UnixSocketClientState>
@@ -214,7 +213,6 @@ export class UnixSocketClientTransport extends Transport<void> {
     }
     this.#peerId = this.identity.peerId
     this.#reconnect.setEnabled(true)
-    this.#wasConnectedBefore = false
     await this.#connect()
   }
 
@@ -258,7 +256,7 @@ export class UnixSocketClientTransport extends Transport<void> {
       this.#stateMachine.transition({ status: "connected" })
 
       // Create channel and connection
-      this.#serverChannel = this.addChannel(undefined as void)
+      this.#serverChannel = this.addChannel()
 
       this.#connection = new UnixSocketConnection(
         this.#peerId ?? "unknown",
@@ -270,8 +268,6 @@ export class UnixSocketClientTransport extends Transport<void> {
 
       // No "ready" handshake — establish immediately
       this.establishChannel(this.#serverChannel.channelId)
-
-      this.#wasConnectedBefore = true
     } catch (error) {
       // Wrap error with errno context for socket-specific failures
       const wrappedError =

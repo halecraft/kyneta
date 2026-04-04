@@ -92,13 +92,16 @@ describe("UnixSocketConnection", () => {
     connection.send(msg)
 
     expect(socket.write).toHaveBeenCalledOnce()
-    const writtenBytes = socket.write.mock.calls[0]![0]!
+    const writtenBytes = socket.write.mock.calls.at(0)?.at(0)
+    if (!writtenBytes) throw new Error("expected written bytes")
 
     // Parse the written bytes through the same pipeline the receiver uses
     const result = feedBytes(initialParserState(), writtenBytes)
     expect(result.frames).toHaveLength(1)
 
-    const decoded = decodeBinaryFrame(result.frames[0]!)
+    const frame = result.frames.at(0)
+    if (!frame) throw new Error("expected a frame")
+    const decoded = decodeBinaryFrame(frame)
     expect(decoded.content.kind).toBe("complete")
     if (decoded.content.kind === "complete") {
       const messages = cborCodec.decode(decoded.content.payload)
@@ -199,7 +202,7 @@ describe("UnixSocketConnection", () => {
     expect(socket.write).toHaveBeenCalledTimes(2)
 
     // Verify second write is msg2 (not msg1 again)
-    const secondWriteBytes = socket.write.mock.calls[1]![0]!
+    const secondWriteBytes = socket.write.mock.calls.at(1)?.at(0)
     expect(secondWriteBytes).toEqual(encodeComplete(cborCodec, msg2))
   })
 

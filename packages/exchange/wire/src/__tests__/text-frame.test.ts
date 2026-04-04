@@ -275,7 +275,9 @@ describe("fragmentTextPayload", () => {
     // 4 fragments: "012", "345", "678", "9"
 
     for (let i = 0; i < fragments.length; i++) {
-      const frame = decodeTextFrame(fragments[i]!)
+      const frag = fragments.at(i)
+      if (!frag) throw new Error(`Missing fragment at index ${i}`)
+      const frame = decodeTextFrame(frag)
       expect(frame.content.kind).toBe("fragment")
       if (frame.content.kind === "fragment") {
         expect(frame.content.index).toBe(i)
@@ -308,7 +310,9 @@ describe("fragmentTextPayload", () => {
 
     expect(fragments.length).toBe(1)
 
-    const frame = decodeTextFrame(fragments[0]!)
+    const first = fragments.at(0)
+    if (!first) throw new Error("Expected at least one fragment")
+    const frame = decodeTextFrame(first)
     if (frame.content.kind === "fragment") {
       expect(frame.content.index).toBe(0)
       expect(frame.content.total).toBe(1)
@@ -356,7 +360,13 @@ describe("fragmentTextPayload", () => {
       return frame.content.kind === "fragment" ? frame.content.frameId : ""
     }
 
-    expect(getFrameId(fragments1[0]!)).not.toBe(getFrameId(fragments2[0]!))
+    const f1first = fragments1.at(0)
+    if (!f1first)
+      throw new Error("Expected at least one fragment in fragments1")
+    const f2first = fragments2.at(0)
+    if (!f2first)
+      throw new Error("Expected at least one fragment in fragments2")
+    expect(getFrameId(f1first)).not.toBe(getFrameId(f2first))
   })
 })
 
@@ -470,10 +480,14 @@ describe("Text frame — end-to-end with TextReassembler", () => {
 
     // Feed to reassembler
     const reassembler = new TextReassembler({ timeoutMs: 5000 })
-    let result = reassembler.receive(fragments[0]!)
+    const firstFrag = fragments.at(0)
+    if (!firstFrag) throw new Error("Expected at least one fragment")
+    let result = reassembler.receive(firstFrag)
 
     for (let i = 1; i < fragments.length; i++) {
-      result = reassembler.receive(fragments[i]!)
+      const frag = fragments.at(i)
+      if (!frag) throw new Error(`Missing fragment at index ${i}`)
+      result = reassembler.receive(frag)
     }
 
     expect(result.status).toBe("complete")
@@ -533,10 +547,14 @@ describe("Text frame — end-to-end with TextReassembler", () => {
     expect(fragments.length).toBeGreaterThan(1)
 
     const reassembler = new TextReassembler({ timeoutMs: 5000 })
-    let result = reassembler.receive(fragments[0]!)
+    const firstFrag = fragments.at(0)
+    if (!firstFrag) throw new Error("Expected at least one fragment")
+    let result = reassembler.receive(firstFrag)
 
     for (let i = 1; i < fragments.length; i++) {
-      result = reassembler.receive(fragments[i]!)
+      const frag = fragments.at(i)
+      if (!frag) throw new Error(`Missing fragment at index ${i}`)
+      result = reassembler.receive(frag)
     }
 
     expect(result.status).toBe("complete")
@@ -560,10 +578,15 @@ describe("Text frame — end-to-end with TextReassembler", () => {
     const shuffled = [...fragments].reverse()
 
     const reassembler = new TextReassembler({ timeoutMs: 5000 })
-    let finalResult = reassembler.receive(shuffled[0]!)
+    const firstShuffled = shuffled.at(0)
+    if (!firstShuffled)
+      throw new Error("Expected at least one shuffled fragment")
+    let finalResult = reassembler.receive(firstShuffled)
 
     for (let i = 1; i < shuffled.length; i++) {
-      const result = reassembler.receive(shuffled[i]!)
+      const frag = shuffled.at(i)
+      if (!frag) throw new Error(`Missing shuffled fragment at index ${i}`)
+      const result = reassembler.receive(frag)
       if (result.status === "complete") {
         finalResult = result
       }
@@ -615,17 +638,28 @@ describe("Text frame — end-to-end with TextReassembler", () => {
     const reassembler = new TextReassembler({ timeoutMs: 5000 })
 
     // Interleave: f1[0], f2[0], f1[1], f2[1], f1[2]
-    reassembler.receive(frags1[0]!)
-    reassembler.receive(frags2[0]!)
-    reassembler.receive(frags1[1]!)
+    const f1_0 = frags1.at(0)
+    if (!f1_0) throw new Error("Missing frags1[0]")
+    const f2_0 = frags2.at(0)
+    if (!f2_0) throw new Error("Missing frags2[0]")
+    const f1_1 = frags1.at(1)
+    if (!f1_1) throw new Error("Missing frags1[1]")
+    const f2_1 = frags2.at(1)
+    if (!f2_1) throw new Error("Missing frags2[1]")
+    const f1_2 = frags1.at(2)
+    if (!f1_2) throw new Error("Missing frags1[2]")
 
-    const r2 = reassembler.receive(frags2[1]!)
+    reassembler.receive(f1_0)
+    reassembler.receive(f2_0)
+    reassembler.receive(f1_1)
+
+    const r2 = reassembler.receive(f2_1)
     expect(r2.status).toBe("complete")
     if (r2.status === "complete") {
       expect(r2.frame.content.payload).toBe(payload2)
     }
 
-    const r1 = reassembler.receive(frags1[2]!)
+    const r1 = reassembler.receive(f1_2)
     expect(r1.status).toBe("complete")
     if (r1.status === "complete") {
       expect(r1.frame.content.payload).toBe(payload1)

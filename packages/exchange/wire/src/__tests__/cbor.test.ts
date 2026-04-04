@@ -27,7 +27,9 @@ function roundTrip(msg: ChannelMsg): ChannelMsg {
   expect(encoded.length).toBeGreaterThan(0)
   const decoded = cborCodec.decode(encoded)
   expect(decoded).toHaveLength(1)
-  return decoded[0]!
+  const first = decoded.at(0)
+  if (!first) throw new Error("expected decoded[0] to exist")
+  return first
 }
 
 // ---------------------------------------------------------------------------

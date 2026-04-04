@@ -322,7 +322,12 @@ describe("fragmentPayload", () => {
       return frame.content.kind === "fragment" ? frame.content.frameId : ""
     }
 
-    expect(getFrameId(frags1[0]!)).not.toBe(getFrameId(frags2[0]!))
+    const first1 = frags1.at(0)
+    const first2 = frags2.at(0)
+    if (!first1 || !first2)
+      throw new Error("Expected fragments to be non-empty")
+
+    expect(getFrameId(first1)).not.toBe(getFrameId(first2))
   })
 })
 

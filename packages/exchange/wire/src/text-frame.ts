@@ -74,8 +74,8 @@ function parsePrefix(prefix: string): PrefixInfo {
     )
   }
 
-  const versionChar = prefix[0]!
-  const typeChar = prefix[1]!
+  const versionChar = prefix.charAt(0)
+  const typeChar = prefix.charAt(1)
 
   const version = Number.parseInt(versionChar, 10)
   if (Number.isNaN(version)) {

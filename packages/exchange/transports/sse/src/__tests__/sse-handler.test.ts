@@ -98,16 +98,17 @@ describe("parseTextPostBody — fragments", () => {
 
     // All but the last fragment should return pending
     for (let i = 0; i < fragments.length - 1; i++) {
-      const result = parseTextPostBody(reassembler, fragments[i]!)
+      const fragment = fragments[i]
+      if (!fragment) throw new Error("expected fragment")
+      const result = parseTextPostBody(reassembler, fragment)
       expect(result.type).toBe("pending")
       expect(result.response).toEqual({ status: 202, body: { pending: true } })
     }
 
     // The last fragment should complete and return messages
-    const finalResult = parseTextPostBody(
-      reassembler,
-      fragments[fragments.length - 1]!,
-    )
+    const lastFragment = fragments.at(-1)
+    if (!lastFragment) throw new Error("expected last fragment")
+    const finalResult = parseTextPostBody(reassembler, lastFragment)
     expect(finalResult.type).toBe("messages")
     if (finalResult.type !== "messages") throw new Error("unreachable")
     expect(finalResult.messages).toHaveLength(1)
