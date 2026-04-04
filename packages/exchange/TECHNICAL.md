@@ -1482,14 +1482,29 @@ This dual-wrapper pattern avoids importing either `node:net` or Bun types at the
 
 ### Package Structure
 
-Two subpath exports (no combined `"."` entry) — same pattern as WebSocket and SSE:
+Single `"."` export — everything available from `@kyneta/unix-socket-transport`:
 
-| Subpath | Entry | Key Exports |
-|---------|-------|-------------|
-| `./client` | `src/client.ts` | `UnixSocketClientTransport`, `createUnixSocketClient`, `UnixSocketClientOptions`, `UnixSocketClientState` |
-| `./server` | `src/server.ts` | `UnixSocketServerTransport`, `UnixSocketServerOptions`, `UnixSocketConnection`, `UnixSocketListener` |
+| Export | Entry | Key Exports |
+|--------|-------|-------------|
+| `.` | `src/index.ts` | `createUnixSocketPeer`, `UnixSocketPeer`, `UnixSocketServerTransport`, `UnixSocketClientTransport`, `createUnixSocketClient`, `UnixSocketConnection`, `connect`, `listen`, `UnixSocket`, `wrapNodeUnixSocket`, `wrapBunUnixSocket` |
 
-Both subpaths re-export the shared types and wrapper functions (`UnixSocket`, `wrapNodeUnixSocket`, `wrapBunUnixSocket`).
+The top-level barrel re-exports server, client, peer negotiation, connection, platform wrappers, and all shared types.
+
+### `createUnixSocketPeer` — Leaderless Topology Negotiation
+
+`createUnixSocketPeer(exchange, { path })` encapsulates the connect-or-listen-then-heal pattern. FC/IS design: `decideRole(probeResult)` is a pure decision function; the imperative shell probes, decides, and executes.
+
+**Negotiation flow:**
+
+1. Probe the socket path with a test `connect()`.
+2. `decideRole` maps the probe result to an action:
+   - `"connected"` → become connector (add `UnixSocketClientTransport`)
+   - `"enoent"` / `"econnrefused"` → become listener (add `UnixSocketServerTransport`)
+   - `"eaddrinuse"` → retry after delay
+3. If the connector's client transport exhausts reconnection attempts (listener died), it re-enters negotiation and promotes itself to listener.
+4. Transport swaps use `exchange.addTransport()` / `exchange.removeTransport()` — the Exchange, all documents, and all CRDT state survive across swaps.
+
+The returned `UnixSocketPeer` exposes `role` (a reactive `"listener" | "connector" | "negotiating"`) and `dispose()` for cleanup.
 
 ### Client State Machine
 

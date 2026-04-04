@@ -1,0 +1,19 @@
+{
+  "name": "example-unix-socket-sync",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "peer": "bun src/peer.ts"
+  },
+  "dependencies": {
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/loro-schema": "workspace:^",
+    "@kyneta/unix-socket-transport": "workspace:^",
+    "loro-crdt": "^1.10.0"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "typescript": "^5.9.2"
+  }
+}

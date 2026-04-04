@@ -8,14 +8,16 @@ Stream-oriented Unix domain socket transport for `@kyneta/exchange` — server-t
 - **Binary CBOR encoding** with stream framing via `StreamFrameParser` from `@kyneta/wire`. No fragmentation — UDS has no message size limits.
 - **No transport prefixes** — stream framing handles message boundaries directly.
 - **No "ready" handshake** — UDS connections are bidirectionally ready immediately (unlike WebSocket which needs a text `"ready"` signal). The client calls `establishChannel` directly after connect.
+- **Leaderless topology** — `createUnixSocketPeer` handles connect-or-listen negotiation automatically. First peer listens, subsequent peers connect, survivors heal when the listener dies.
 - **FC/IS boundary** — `feedBytes` (pure) produces frames from the byte stream; connection handlers (imperative) dispatch decoded messages and manage the write queue.
 
-## Subpath Exports
+## Export
 
-| Export | Entry point | Environment |
-|--------|-------------|-------------|
-| `@kyneta/unix-socket-transport/server` | `./dist/server.js` | Bun, Node.js |
-| `@kyneta/unix-socket-transport/client` | `./dist/client.js` | Bun, Node.js |
+| Export | Entry point |
+|--------|-------------|
+| `@kyneta/unix-socket-transport` | `./dist/index.js` |
+
+Everything is available from the top-level import — server, client, peer negotiation, connection, types, and platform wrappers.
 
 ## Install
 
@@ -25,11 +27,36 @@ pnpm add @kyneta/unix-socket-transport
 
 ## Quick Start
 
-### Server
+### Leaderless Peer (Recommended)
+
+The simplest way to use the transport — `createUnixSocketPeer` handles role negotiation, transport swaps, and healing automatically:
+
+```/dev/null/peer-example.ts#L1-14
+import { Exchange } from "@kyneta/exchange"
+import { createUnixSocketPeer } from "@kyneta/unix-socket-transport"
+
+const exchange = new Exchange({
+  identity: { peerId: "service-a", name: "Service A" },
+})
+
+const peer = createUnixSocketPeer(exchange, {
+  path: "/tmp/kyneta.sock",
+})
+
+// peer.role is "listener" | "connector" | "negotiating"
+// Kill the listener → a connector re-negotiates and takes over
+// No code changes needed — healing is automatic
+```
+
+### Explicit Server + Client
+
+For cases where you need direct control over server and client roles:
+
+#### Server
 
 ```/dev/null/server-example.ts#L1-12
 import { Exchange } from "@kyneta/exchange"
-import { UnixSocketServerTransport } from "@kyneta/unix-socket-transport/server"
+import { UnixSocketServerTransport } from "@kyneta/unix-socket-transport"
 
 const serverTransport = new UnixSocketServerTransport({
   path: "/tmp/kyneta.sock",
@@ -42,11 +69,11 @@ const exchange = new Exchange({
 })
 ```
 
-### Client
+#### Client
 
 ```/dev/null/client-example.ts#L1-13
 import { Exchange } from "@kyneta/exchange"
-import { createUnixSocketClient } from "@kyneta/unix-socket-transport/client"
+import { createUnixSocketClient } from "@kyneta/unix-socket-transport"
 
 const exchange = new Exchange({
   identity: { peerId: "service-a", name: "Service A", type: "service" },
@@ -61,6 +88,35 @@ await client.waitForStatus("connected")
 ```
 
 ## API Reference
+
+### `createUnixSocketPeer(exchange, options)`
+
+Create a leaderless unix socket peer that manages topology negotiation automatically.
+
+The first peer to start becomes the listener; subsequent peers become connectors. If the listener dies, a connector re-negotiates and becomes the new listener. Uses `exchange.addTransport()` / `exchange.removeTransport()` to swap transports at runtime — the Exchange, all documents, and all CRDT state survive across transport swaps.
+
+Returns a `UnixSocketPeer`.
+
+#### `UnixSocketPeerOptions`
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `path` | — | Path to the unix socket file. |
+| `reconnect.enabled` | `true` | Enable automatic reconnection (for connector role). |
+| `reconnect.maxAttempts` | `5` | Maximum reconnection attempts before re-negotiating. |
+| `reconnect.baseDelay` | `1000` | Base delay in ms for exponential backoff. |
+| `reconnect.maxDelay` | `30000` | Maximum delay cap in ms. |
+
+#### `UnixSocketPeer`
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `role` | `"listener" \| "connector" \| "negotiating"` | Current role — changes over time as healing occurs. |
+| `dispose()` | `() => Promise<void>` | Remove the transport from the Exchange and clean up the socket file. |
+
+#### `decideRole(probe)`
+
+Pure decision function: given a `ProbeResult` (`"connected"` | `"enoent"` | `"econnrefused"` | `"eaddrinuse"`), returns a `NegotiationDecision` (`{ action: "connect" }` | `{ action: "listen" }` | `{ action: "retry" }`).
 
 ### `UnixSocketServerOptions`
 
@@ -121,10 +177,10 @@ interface UnixSocket {
 
 ### Platform Wrappers
 
-| Wrapper | Input | Export |
-|---------|-------|--------|
-| `wrapNodeUnixSocket(socket)` | Node.js `net.Socket` | `./server`, `./client` |
-| `wrapBunUnixSocket(socket)` | Bun unix socket | `./server`, `./client` |
+| Wrapper | Input |
+|---------|-------|
+| `wrapNodeUnixSocket(socket)` | Node.js `net.Socket` |
+| `wrapBunUnixSocket(socket)` | Bun unix socket |
 
 `wrapBunUnixSocket` returns `{ unixSocket, handlers }` — the caller wires `handlers` into Bun's callback-based socket structure.
 
@@ -149,10 +205,25 @@ disconnected → connecting → connected
 | `connected` | Connection open, messages can flow immediately. |
 | `reconnecting` | Connection lost, scheduling next attempt. Tracks `attempt` and `nextAttemptMs`. |
 
+### Peer Negotiation Lifecycle
+
+`createUnixSocketPeer` layers on top of the client state machine:
+
+```/dev/null/peer-lifecycle.txt#L1-8
+negotiate → probe socket path
+             ├── connected     → become connector (add client transport)
+             ├── enoent        → become listener  (add server transport)
+             ├── econnrefused  → become listener  (add server transport)
+             └── eaddrinuse    → retry after delay
+
+connector: client disconnects (max retries) → re-negotiate
+listener:  runs until dispose
+```
+
 ### Observing State
 
 ```/dev/null/observe-state.ts#L1-12
-import { createUnixSocketClient } from "@kyneta/unix-socket-transport/client"
+import { createUnixSocketClient } from "@kyneta/unix-socket-transport"
 
 const transport = createUnixSocketClient({
   path: "/tmp/kyneta.sock",
@@ -206,6 +277,10 @@ WebSocket multiplexes text and binary frames and uses a text `"ready"` signal. U
 ### Why No "Ready" Handshake?
 
 WebSocket connections need a server-sent `"ready"` signal after the HTTP upgrade completes. UDS connections are bidirectionally ready the moment `connect` resolves — the client sends `establish-request` immediately.
+
+### Why Leaderless?
+
+Fixed server/client roles require external coordination — someone decides who listens. `createUnixSocketPeer` eliminates this: every peer runs the same code, the first one to arrive listens, and survivors heal when the listener dies. This makes the topology symmetric and self-organizing.
 
 ## Peer Dependencies
 

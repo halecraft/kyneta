@@ -19,6 +19,15 @@ A collaborative-first application platform where CRDTs meet compiled UI. Kyneta 
 | [`@kyneta/webrtc-transport`](./packages/exchange/transports/webrtc) | WebRTC data channel transport for `@kyneta/exchange`. BYODC (Bring Your Own Data Channel) with `DataChannelLike` minimal interface. Binary CBOR encoding with transport-level fragmentation. | 27 |
 | [`@kyneta/unix-socket-transport`](./packages/exchange/transports/unix-socket) | Unix domain socket transport for `@kyneta/exchange`. Stream-oriented, backpressure-aware server-to-server sync with no fragmentation. Client/server entry points. | 42 |
 
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [`bumper-cars`](./examples/bumper-cars) | Ephemeral presence demo — animated peers bouncing around a shared canvas |
+| [`todo`](./examples/todo) | Minimal collaborative todo list with Exchange + Loro CRDT |
+| [`todo-react`](./examples/todo-react) | React-based collaborative todo list with `@kyneta/react` bindings |
+| [`unix-socket-sync`](./examples/unix-socket-sync) | Leaderless TUI config sync over unix sockets with Loro CRDT — N identical processes sharing state through a single socket path |
+
 ### Dependencies
 
 ```
