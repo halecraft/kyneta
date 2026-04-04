@@ -1,22 +1,30 @@
 // peer — leaderless unix socket topology negotiation.
 //
-// `createUnixSocketPeer` encapsulates the connect-or-listen-then-heal
-// pattern. The first peer to start becomes the listener; subsequent
-// peers become connectors. If the listener dies, a connector takes
-// over. The Exchange's addTransport/removeTransport API enables
-// transport swaps without destroying documents or CRDT state.
+// Thin imperative shell around the pure peer program (peer-program.ts).
+// The program produces data effects; this module interprets them as I/O.
 //
 // FC/IS design:
-// - decideRole(probeResult) is a pure decision function
-// - The imperative shell probes, decides, and executes
+// - peer-program.ts: pure Mealy machine (functional core)
+// - peer.ts: effect executor (imperative shell)
 
 import type { Exchange } from "@kyneta/exchange"
+import type { Dispatch } from "@kyneta/machine"
+import {
+  type UnixSocketClientOptions,
+  UnixSocketClientTransport,
+} from "./client-transport.js"
 import { connect } from "./connect.js"
 import {
-  UnixSocketClientTransport,
-  type UnixSocketClientOptions,
-} from "./client-transport.js"
+  createPeerProgram,
+  type PeerEffect,
+  type PeerModel,
+  type PeerMsg,
+  type ProbeResult,
+} from "./peer-program.js"
 import { UnixSocketServerTransport } from "./server-transport.js"
+
+// Re-export types from peer-program (canonical source)
+export type { ProbeResult } from "./peer-program.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,43 +39,118 @@ export interface UnixSocketPeerOptions {
 
 export interface UnixSocketPeer {
   /** Current role — changes over time as healing occurs. */
-  readonly role: "listener" | "connector" | "negotiating"
+  readonly role: "listener" | "connector" | "negotiating" | "disposed"
   /** Dispose the peer — remove transport and clean up. */
   dispose(): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
-// Pure decision function
+// Effect executor — interprets PeerEffect data as I/O
 // ---------------------------------------------------------------------------
 
-export type ProbeResult = "connected" | "enoent" | "econnrefused" | "eaddrinuse"
+function createEffectExecutor(exchange: Exchange) {
+  // Mutable state for transition subscriptions — the executor owns this
+  // because it's an I/O concern, not a model concern.
+  let unsubscribeTransitions: (() => void) | undefined
 
-export type NegotiationDecision =
-  | { action: "connect" }
-  | { action: "listen" }
-  | { action: "retry" }
+  return function executePeerEffect(
+    effect: PeerEffect,
+    dispatch: Dispatch<PeerMsg>,
+  ): void {
+    switch (effect.type) {
+      case "probe": {
+        void probe(effect.path).then(result => {
+          dispatch({ type: "probe-result", result })
+        })
+        break
+      }
 
-/**
- * Pure decision: given the result of probing the socket path,
- * decide whether to connect, listen, or retry.
- */
-export function decideRole(probe: ProbeResult): NegotiationDecision {
-  switch (probe) {
-    case "connected":
-      return { action: "connect" }
-    case "enoent":
-    case "econnrefused":
-      return { action: "listen" }
-    case "eaddrinuse":
-      return { action: "retry" }
+      case "start-listener": {
+        void (async () => {
+          try {
+            const transport = new UnixSocketServerTransport({
+              path: effect.path,
+              cleanup: true,
+            })
+            await exchange.addTransport(transport)
+            dispatch({
+              type: "transport-added",
+              transportId: transport.transportId,
+              role: "listener",
+            })
+          } catch {
+            dispatch({ type: "listen-failed" })
+          }
+        })()
+        break
+      }
+
+      case "start-connector": {
+        void (async () => {
+          const transport = new UnixSocketClientTransport({
+            path: effect.path,
+            reconnect: {
+              ...effect.reconnect,
+              // Use a finite maxAttempts so that when the listener dies,
+              // the client eventually reaches "disconnected" and triggers
+              // re-negotiation rather than retrying forever.
+              maxAttempts: effect.reconnect?.maxAttempts ?? 5,
+            },
+          })
+
+          // Watch for death — when max retries exhausted, re-negotiate
+          if (unsubscribeTransitions) {
+            unsubscribeTransitions()
+          }
+          unsubscribeTransitions = transport.subscribeToTransitions(
+            transition => {
+              if (transition.to.status === "disconnected") {
+                // Client gave up reconnecting — re-negotiate
+                dispatch({ type: "transport-disconnected" })
+              }
+            },
+          )
+
+          await exchange.addTransport(transport)
+          dispatch({
+            type: "transport-added",
+            transportId: transport.transportId,
+            role: "connector",
+          })
+        })()
+        break
+      }
+
+      case "remove-transport": {
+        if (unsubscribeTransitions) {
+          unsubscribeTransitions()
+          unsubscribeTransitions = undefined
+        }
+        void (async () => {
+          try {
+            await exchange.removeTransport(effect.transportId)
+          } catch {
+            // Ignore — transport may already be removed
+          }
+        })()
+        break
+      }
+
+      case "delay-then-probe": {
+        setTimeout(() => {
+          void probe(effect.path).then(result => {
+            dispatch({ type: "probe-result", result })
+          })
+        }, effect.ms)
+        break
+      }
+    }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Imperative shell
+// Public API
 // ---------------------------------------------------------------------------
-
-const RETRY_DELAY_MS = 200
 
 /**
  * Create a unix socket peer that manages leaderless topology negotiation.
@@ -79,115 +162,73 @@ const RETRY_DELAY_MS = 200
  * Uses `exchange.addTransport()` / `exchange.removeTransport()` to swap
  * transports at runtime — the Exchange, all documents, and all CRDT state
  * survive across transport swaps.
+ *
+ * Internally, the peer is a `Program<PeerMsg, PeerModel, PeerEffect>` —
+ * a pure Mealy machine whose transitions are deterministically testable.
+ * This function is the imperative shell that interprets data effects as I/O.
  */
 export function createUnixSocketPeer(
   exchange: Exchange,
   options: UnixSocketPeerOptions,
 ): UnixSocketPeer {
-  let role: "listener" | "connector" | "negotiating" = "negotiating"
-  let disposed = false
-  let currentTransportId: string | undefined
-  let unsubscribeTransitions: (() => void) | undefined
+  const program = createPeerProgram(options)
+  const execute = createEffectExecutor(exchange)
 
-  // Start negotiation immediately
-  void negotiate()
+  // --- Mini runtime for data-effect programs ---
+  // We don't use `runtime()` from @kyneta/machine directly because our
+  // effects are data (PeerEffect), not closures (Effect<Msg>). Instead
+  // we run a simple dispatch loop that interprets effects via the executor.
 
-  async function negotiate(): Promise<void> {
-    // Clean up previous transport if any
-    if (currentTransportId) {
-      if (unsubscribeTransitions) {
-        unsubscribeTransitions()
-        unsubscribeTransitions = undefined
-      }
-      try {
-        await exchange.removeTransport(currentTransportId)
-      } catch {
-        // Ignore — transport may already be removed
-      }
-      currentTransportId = undefined
-    }
+  let state: PeerModel
+  let isRunning = true
+  const pending: PeerMsg[] = []
+  let isDispatching = false
 
-    role = "negotiating"
+  function dispatch(msg: PeerMsg): void {
+    if (!isRunning) return
 
-    while (!disposed) {
-      const probeResult = await probe(options.path)
-      if (disposed) return
+    pending.push(msg)
+    if (isDispatching) return
 
-      const decision = decideRole(probeResult)
-
-      switch (decision.action) {
-        case "connect": {
-          const transport = new UnixSocketClientTransport({
-            path: options.path,
-            reconnect: {
-              ...options.reconnect,
-              // Use a finite maxAttempts so that when the listener dies,
-              // the client eventually reaches "disconnected" and triggers
-              // re-negotiation rather than retrying forever.
-              maxAttempts: options.reconnect?.maxAttempts ?? 5,
-            },
-          })
-          currentTransportId = transport.transportId
-          role = "connector"
-
-          // Watch for death — when max retries exhausted, re-negotiate
-          unsubscribeTransitions = transport.subscribeToTransitions(
-            (transition) => {
-              if (transition.to.status === "disconnected" && !disposed) {
-                // Client gave up reconnecting — re-negotiate
-                void negotiate()
-              }
-            },
-          )
-
-          await exchange.addTransport(transport)
-          return
-        }
-
-        case "listen": {
-          try {
-            const transport = new UnixSocketServerTransport({
-              path: options.path,
-              cleanup: true,
-            })
-            currentTransportId = transport.transportId
-            role = "listener"
-            await exchange.addTransport(transport)
-            return
-          } catch {
-            // Listen failed (e.g. EADDRINUSE race) — retry
-            if (disposed) return
-            await delay(RETRY_DELAY_MS)
-            continue
-          }
-        }
-
-        case "retry": {
-          await delay(RETRY_DELAY_MS)
-          continue
+    isDispatching = true
+    try {
+      while (pending.length > 0) {
+        const next = pending.shift() as PeerMsg
+        const [newModel, ...effects] = program.update(next, state)
+        state = newModel
+        for (const effect of effects) {
+          execute(effect, dispatch)
         }
       }
+    } finally {
+      isDispatching = false
     }
   }
 
+  // Initialize
+  const [initialModel, ...initialEffects] = program.init
+  state = initialModel
+  for (const effect of initialEffects) {
+    execute(effect, dispatch)
+  }
+
+  // Dispose returns a promise for backward compatibility — the program's
+  // dispose transition may produce remove-transport effects that are async.
+  let disposePromise: Promise<void> | undefined
+
   return {
     get role() {
-      return role
+      return state.role
     },
-    async dispose() {
-      disposed = true
-      if (unsubscribeTransitions) {
-        unsubscribeTransitions()
-        unsubscribeTransitions = undefined
-      }
-      if (currentTransportId) {
-        try {
-          await exchange.removeTransport(currentTransportId)
-        } catch {
-          // Ignore — transport may already be removed
-        }
-        currentTransportId = undefined
-      }
+    dispose() {
+      if (disposePromise) return disposePromise
+
+      dispatch({ type: "dispose" })
+      isRunning = false
+
+      // Give async effects (remove-transport) a moment to settle
+      disposePromise = new Promise(resolve => setTimeout(resolve, 0))
+      return disposePromise
     },
   }
 }
@@ -217,8 +258,4 @@ async function probe(path: string): Promise<ProbeResult> {
         return "enoent"
     }
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }

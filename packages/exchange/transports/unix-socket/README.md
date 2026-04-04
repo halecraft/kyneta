@@ -95,6 +95,8 @@ Create a leaderless unix socket peer that manages topology negotiation automatic
 
 The first peer to start becomes the listener; subsequent peers become connectors. If the listener dies, a connector re-negotiates and becomes the new listener. Uses `exchange.addTransport()` / `exchange.removeTransport()` to swap transports at runtime — the Exchange, all documents, and all CRDT state survive across transport swaps.
 
+Internally, the peer is a `Program<PeerMsg, PeerModel, PeerEffect>` from `@kyneta/machine` — a pure Mealy machine whose transitions are deterministically testable. The imperative shell interprets data effects as I/O. All negotiation logic lives in the pure `createPeerProgram()` function; this wrapper just wires the executor to the Exchange.
+
 Returns a `UnixSocketPeer`.
 
 #### `UnixSocketPeerOptions`
@@ -111,12 +113,8 @@ Returns a `UnixSocketPeer`.
 
 | Member | Type | Description |
 |--------|------|-------------|
-| `role` | `"listener" \| "connector" \| "negotiating"` | Current role — changes over time as healing occurs. |
+| `role` | `"listener" \| "connector" \| "negotiating" \| "disposed"` | Current role — changes over time as healing occurs. |
 | `dispose()` | `() => Promise<void>` | Remove the transport from the Exchange and clean up the socket file. |
-
-#### `decideRole(probe)`
-
-Pure decision function: given a `ProbeResult` (`"connected"` | `"enoent"` | `"econnrefused"` | `"eaddrinuse"`), returns a `NegotiationDecision` (`{ action: "connect" }` | `{ action: "listen" }` | `{ action: "retry" }`).
 
 ### `UnixSocketServerOptions`
 
@@ -288,6 +286,7 @@ Fixed server/client roles require external coordination — someone decides who 
 {
   "peerDependencies": {
     "@kyneta/exchange": "^1.1.0",
+    "@kyneta/machine": "^1.0.0",
     "@kyneta/wire": "^1.1.0"
   }
 }

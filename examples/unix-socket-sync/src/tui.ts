@@ -24,7 +24,7 @@ const WHITE = "\x1b[37m"
 
 export interface PeerInfo {
   peerIds: string[]
-  role: "listener" | "connector" | "negotiating"
+  role: "listener" | "connector" | "negotiating" | "disposed"
 }
 
 export function render(

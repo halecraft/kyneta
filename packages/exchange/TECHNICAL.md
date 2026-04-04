@@ -48,6 +48,8 @@ Message → update(msg, model) → [newModel, Command?, Notification?]
                                                     → targeted emission
 ```
 
+The TEA algebra is formalized in `@kyneta/machine` as `Program<Msg, Model, Fx>` — a universal Mealy machine with parameterized effect type. The Synchronizer's `update` function conforms to the `Program` shape with `Fx = Command | Notification` and a custom batched interpreter that accumulates notifications and drains at quiescence. The `runtime()` function in `@kyneta/machine` provides a simpler interpreter for programs with closure effects (`Effect<Msg>`) — synchronous dispatch, immediate effect execution, no batching. Programs with data effects (like the peer negotiator) use a custom executor that maps data to I/O, following the free monad interpreter pattern.
+
 Currently one notification variant exists:
 
 ```ts
@@ -1492,19 +1494,38 @@ The top-level barrel re-exports server, client, peer negotiation, connection, pl
 
 ### `createUnixSocketPeer` — Leaderless Topology Negotiation
 
-`createUnixSocketPeer(exchange, { path })` encapsulates the connect-or-listen-then-heal pattern. FC/IS design: `decideRole(probeResult)` is a pure decision function; the imperative shell probes, decides, and executes.
+`createUnixSocketPeer(exchange, { path })` encapsulates the connect-or-listen-then-heal pattern as a `Program<PeerMsg, PeerModel, PeerEffect>` from `@kyneta/machine`. The pure program (`peer-program.ts`) encodes every state transition and effect as data; the imperative shell (`peer.ts`) interprets effects as I/O.
+
+**Pure program (functional core):**
+
+The peer program defines:
+- `PeerModel`: `{ role: "negotiating" | "listener" | "connector" | "disposed", transportId: string | undefined }`
+- `PeerMsg`: `probe-result`, `transport-added`, `listen-failed`, `transport-disconnected`, `dispose`
+- `PeerEffect`: `probe`, `start-listener`, `start-connector`, `remove-transport`, `delay-then-probe`
+
+Every state × event transition is a pure function returning `[PeerModel, ...PeerEffect[]]`. The decision logic formerly in `decideRole` is inlined into the `update` function.
+
+**Effect executor (imperative shell):**
+
+The executor in `peer.ts` pattern-matches each `PeerEffect` and performs I/O:
+- `probe` → test-connect to the socket path, dispatch `probe-result`
+- `start-listener` → create `UnixSocketServerTransport`, add to Exchange, dispatch `transport-added`
+- `start-connector` → create `UnixSocketClientTransport`, subscribe to transitions, add to Exchange, dispatch `transport-added`
+- `remove-transport` → `exchange.removeTransport()`
+- `delay-then-probe` → `setTimeout` + probe
+
+This follows the same FC/IS split as the Synchronizer's `#executeCommand`. The program uses data effects (not closure effects) because data is inspectable in tests — `expect(effects).toEqual([{ type: "probe", path: "/tmp/test.sock" }])`.
 
 **Negotiation flow:**
 
-1. Probe the socket path with a test `connect()`.
-2. `decideRole` maps the probe result to an action:
-   - `"connected"` → become connector (add `UnixSocketClientTransport`)
-   - `"enoent"` / `"econnrefused"` → become listener (add `UnixSocketServerTransport`)
-   - `"eaddrinuse"` → retry after delay
-3. If the connector's client transport exhausts reconnection attempts (listener died), it re-enters negotiation and promotes itself to listener.
-4. Transport swaps use `exchange.addTransport()` / `exchange.removeTransport()` — the Exchange, all documents, and all CRDT state survive across swaps.
+1. Init → `{ role: "negotiating" }` + `probe` effect
+2. `probe-result "connected"` → `start-connector` effect
+3. `probe-result "enoent"/"econnrefused"` → `start-listener` effect
+4. `probe-result "eaddrinuse"` → `delay-then-probe` effect (retry)
+5. `transport-disconnected` (connector) → `remove-transport` + `probe` (healing)
+6. `dispose` → `{ role: "disposed" }` + optional `remove-transport`
 
-The returned `UnixSocketPeer` exposes `role` (a reactive `"listener" | "connector" | "negotiating"`) and `dispose()` for cleanup.
+The returned `UnixSocketPeer` exposes `role` (reactive `"listener" | "connector" | "negotiating" | "disposed"`) and `dispose()` for cleanup.
 
 ### Client State Machine
 
