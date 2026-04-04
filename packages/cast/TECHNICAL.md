@@ -496,12 +496,12 @@ The compiler detects reactive types by checking whether a candidate type has a p
 ```typescript
 // @kyneta/schema
 export const CHANGEFEED = Symbol.for("kyneta:changefeed")
-export interface Changefeed<S = unknown, C extends ChangeBase = ChangeBase> {
+export interface ChangefeedProtocol<S = unknown, C extends ChangeBase = ChangeBase> {
   readonly current: S
-  subscribe(callback: (change: C) => void): () => void
+  subscribe(callback: (changeset: Changeset<C>) => void): () => void
 }
 export interface HasChangefeed<S = unknown, C extends ChangeBase = ChangeBase> {
-  readonly [CHANGEFEED]: Changefeed<S, C>
+  readonly [CHANGEFEED]: ChangefeedProtocol<S, C>
 }
 ```
 
@@ -535,7 +535,7 @@ This approach replaced an earlier `isTypeAssignableTo(candidate, Reactive)` stra
 | Function | Checks For | Used By |
 |----------|-----------|---------|
 | `isChangefeedType(type)` | `[CHANGEFEED]` property | `expressionIsReactive`, `extractDependencies`, `analyzeExpression` |
-| `getDeltaKind(type)` | Delta kind from `Changefeed<S, C>`'s `C` type parameter | Codegen optimization dispatch |
+| `getDeltaKind(type)` | Delta kind from `ChangefeedProtocol<S, C>`'s `C` type parameter | Codegen optimization dispatch |
 
 `isChangefeedType` excludes `any`/`unknown`, handles union types (checks each branch), and uses property-level detection via `isChangefeedSymbolProperty`.
 
@@ -545,26 +545,39 @@ The compiler uses `skipFileDependencyResolution: true` for fast project creation
 
 ### Delta Kind Extraction (`getDeltaKind`)
 
-Once a type is confirmed as a Changefeed, the compiler extracts its **delta kind** via `getDeltaKind()` in `reactive-detection.ts`. This determines what optimizations codegen can apply:
+Once a type is confirmed as a Changefeed, the compiler extracts its **delta kind** via `getDeltaKind()` in `reactive-detection.ts`. This determines what optimizations codegen can apply.
 
-1. Find the `[CHANGEFEED]` property on the type
-2. Get the `Changefeed<S, C>` type
-3. Extract the `subscribe` method's callback parameter type `C`
-4. Read the `type` property from `C`
-5. If it's a single string literal (`"text"`, `"sequence"`, etc.), return it as the `DeltaKind`
-6. Otherwise fall back to `"replace"`
+**Primary path (3 hops via TypeReference):**
 
-**Critical requirement:** Step 5 only works when `C` is a **narrowed** single-member type (e.g., `TextChange`), not the full `BuiltinChange` union. If `C` defaults to `ChangeBase`, the `type` property resolves to `string` — not a string literal — and `isStringLiteral()` returns false, causing a silent fallback to `"replace"`.
+1. `[CHANGEFEED]` property → property type (`ChangefeedProtocol<S, C>`)
+2. → `getTypeArguments()` → second type argument `C`
+3. → `.type` property → string literal value
 
-Each typed ref must therefore declare its specific change type:
+This works because the `[CHANGEFEED]` property type is a `TypeReference` — an instantiation of the generic interface `ChangefeedProtocol<S, C>`. TypeScript preserves concrete type arguments through interface inheritance, so `extends HasChangefeed<S, C>` alone is sufficient — no explicit `readonly [CHANGEFEED]` declaration is needed on each ref type:
 
 ```typescript
-// TextRef narrows C to TextChange — getDeltaKind returns "text"
-readonly [CHANGEFEED]: Changefeed<string, TextChange>
-
-// Without narrowing, C defaults to ChangeBase — getDeltaKind returns "replace"
-readonly [CHANGEFEED]: Changefeed<string, ChangeBase>  // ← WRONG: silently breaks delta dispatch
+// HasChangefeed<string, TextChange> is sufficient — getDeltaKind returns "text"
+interface TextRef extends HasChangefeed<string, TextChange> {
+  // No need to redeclare [CHANGEFEED]; the TypeReference extraction
+  // resolves ChangefeedProtocol<string, TextChange> from the inherited property.
+}
 ```
+
+**Structural fallback path (9 hops via `getDeltaKindStructural()`):**
+
+Used when the property type is NOT a TypeReference (e.g., inline object literal types in tests). Walks the subscribe callback structurally:
+
+1. `[CHANGEFEED]` property type
+2. → `.subscribe` method
+3. → call signature
+4. → callback parameter type `(changeset: Changeset<C>) => void`
+5. → callback's call signature
+6. → changeset parameter type `Changeset<C>`
+7. → `.changes` property → `readonly C[]`
+8. → array element type → `C`
+9. → `.type` property → string literal value
+
+Both paths share `extractDeltaKindFromChangeType()` for the final step: reading the `.type` string literal from the change type `C`. If `C` defaults to `ChangeBase`, the `type` property resolves to `string` (not a literal) and extraction returns `undefined`, causing a fallback to `"replace"`.
 
 ### Caveats
 

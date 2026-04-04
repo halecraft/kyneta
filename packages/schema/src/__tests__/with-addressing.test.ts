@@ -4,7 +4,7 @@ import {
   applyChanges,
   CHANGEFEED,
   change,
-  changefeed,
+  observation,
   interpret,
   mapChange,
   plainContext,
@@ -49,7 +49,7 @@ function createTodoDoc(initialTodos: Array<{ text: string; done: boolean }>) {
   const doc = interpret(todoSchema, ctx)
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done() as any
   return { doc, store, ctx }
 }
@@ -60,7 +60,7 @@ function createMapDoc(initialMetadata: Record<string, string>) {
   const doc = interpret(mapSchema, ctx)
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done() as any
   return { doc, store, ctx }
 }

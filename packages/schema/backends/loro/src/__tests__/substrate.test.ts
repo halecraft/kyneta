@@ -1,7 +1,7 @@
 import type { Substrate, SubstratePayload } from "@kyneta/schema"
 import {
   change,
-  changefeed,
+  observation,
   interpret,
   RawPath,
   type Ref,
@@ -51,7 +51,7 @@ const interpretSubstrate: InterpretSubstrate = (schema, substrate) =>
   interpret(schema, substrate.context())
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done()
 
 // ===========================================================================

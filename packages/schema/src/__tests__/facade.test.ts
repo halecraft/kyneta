@@ -3,7 +3,7 @@ import type { Changeset, Op } from "../index.js"
 import {
   applyChanges,
   change,
-  changefeed,
+  observation,
   incrementChange,
   interpret,
   plainContext,
@@ -54,7 +54,7 @@ function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
   const doc = interpret(chatDocSchema, ctx)
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done()
   return { store, ctx, doc }
 }

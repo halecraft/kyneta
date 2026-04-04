@@ -11,7 +11,7 @@
 import {
   CHANGEFEED,
   type ChangeBase,
-  type Changefeed,
+  type ChangefeedProtocol,
   type Changeset,
   incrementChange,
   replaceChange,
@@ -57,7 +57,7 @@ export {
   assertMaxMutations,
   CHANGEFEED,
   type ChangeBase,
-  type Changefeed,
+  type ChangefeedProtocol,
   conditionalRegion,
   createCountingContainer,
   getActiveSubscriptionCount,
@@ -111,7 +111,7 @@ export function installDOMGlobals(): void {
  * change types for proper deltaKind extraction.
  */
 export const CHANGEFEED_TYPE_STUBS = `
-import { CHANGEFEED, type Changefeed, type HasChangefeed } from "@kyneta/schema"
+import { type HasChangefeed } from "@kyneta/schema"
 
 type TextChange = { readonly type: "text"; readonly instructions: readonly TextInstruction[] }
 type TextInstruction = { readonly retain: number } | { readonly insert: string } | { readonly delete: number }
@@ -123,7 +123,6 @@ type IncrementChange = { readonly type: "increment"; readonly amount: number }
 
 interface TextRef extends HasChangefeed<string, TextChange> {
   (): string
-  readonly [CHANGEFEED]: Changefeed<string, TextChange>
   insert(pos: number, text: string): void
   delete(pos: number, len: number): void
   [Symbol.toPrimitive](hint: string): string
@@ -131,7 +130,6 @@ interface TextRef extends HasChangefeed<string, TextChange> {
 
 interface CounterRef extends HasChangefeed<number, IncrementChange> {
   (): number
-  readonly [CHANGEFEED]: Changefeed<number, IncrementChange>
   increment(n: number): void
   decrement(n: number): void
   [Symbol.toPrimitive](hint: string): number | string
@@ -139,7 +137,6 @@ interface CounterRef extends HasChangefeed<number, IncrementChange> {
 
 interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {
   (): T[]
-  readonly [CHANGEFEED]: Changefeed<T[], SequenceChange<T>>
   readonly length: number
   at(index: number): T | undefined
   get(index: number): T | undefined
@@ -152,7 +149,6 @@ interface ListRef<T> extends HasChangefeed<T[], SequenceChange<T>> {
 
 interface StructRef<T> extends HasChangefeed<T, MapChange> {
   (): T
-  readonly [CHANGEFEED]: Changefeed<T, MapChange>
 }
 `
 
@@ -339,7 +335,7 @@ export function createMockTextRef(initial: string = ""): {
   ref: {
     insert(pos: number, text: string): void
     delete(pos: number, len: number): void
-    readonly [CHANGEFEED]: Changefeed<string, ChangeBase>
+    readonly [CHANGEFEED]: ChangefeedProtocol<string, ChangeBase>
   }
   /** Access current value */
   value(): string
@@ -375,7 +371,7 @@ export function createMockTextRef(initial: string = ""): {
       }
     },
 
-    get [CHANGEFEED](): Changefeed<string, ChangeBase> {
+    get [CHANGEFEED](): ChangefeedProtocol<string, ChangeBase> {
       return {
         get current(): string {
           return content
@@ -406,7 +402,7 @@ export function createMockCounterRef(initial: number = 0): {
   ref: {
     get(): number
     increment(n: number): void
-    readonly [CHANGEFEED]: Changefeed<number, ChangeBase>
+    readonly [CHANGEFEED]: ChangefeedProtocol<number, ChangeBase>
   }
 } {
   let count = initial
@@ -424,7 +420,7 @@ export function createMockCounterRef(initial: number = 0): {
         cb(changeset)
       }
     },
-    get [CHANGEFEED](): Changefeed<number, ChangeBase> {
+    get [CHANGEFEED](): ChangefeedProtocol<number, ChangeBase> {
       return {
         get current(): number {
           return count
@@ -458,7 +454,7 @@ export function createMockSequenceRef<T>(initialItems: T[]): {
     set(index: number, value: T): void
     toArray(): T[]
     entries(): IterableIterator<[number, T]>
-    readonly [CHANGEFEED]: Changefeed<T[], ChangeBase>
+    readonly [CHANGEFEED]: ChangefeedProtocol<T[], ChangeBase>
     [Symbol.iterator](): Iterator<T>
   }
   /** Manually emit a change (bypasses mutation methods) */
@@ -530,7 +526,7 @@ export function createMockSequenceRef<T>(initialItems: T[]): {
         },
       }
     },
-    get [CHANGEFEED](): Changefeed<T[], ChangeBase> {
+    get [CHANGEFEED](): ChangefeedProtocol<T[], ChangeBase> {
       return {
         get current(): T[] {
           return items
@@ -562,12 +558,12 @@ export function createMockSequenceRef<T>(initialItems: T[]): {
  * a mock ref; the doc itself has [CHANGEFEED] so the compiler can detect it.
  */
 export function createMockDoc<
-  T extends Record<string, { [CHANGEFEED]: Changefeed<unknown, ChangeBase> }>,
->(fields: T): T & { readonly [CHANGEFEED]: Changefeed<unknown, ChangeBase> } {
+  T extends Record<string, { [CHANGEFEED]: ChangefeedProtocol<unknown, ChangeBase> }>,
+>(fields: T): T & { readonly [CHANGEFEED]: ChangefeedProtocol<unknown, ChangeBase> } {
   const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
 
   return Object.assign(Object.create(null), fields, {
-    get [CHANGEFEED](): Changefeed<unknown, ChangeBase> {
+    get [CHANGEFEED](): ChangefeedProtocol<unknown, ChangeBase> {
       return {
         get current(): unknown {
           return fields
@@ -593,7 +589,7 @@ export function createMockPlainRef<T>(initial: T): {
   ref: {
     get(): T
     set(value: T): void
-    readonly [CHANGEFEED]: Changefeed<T, ChangeBase>
+    readonly [CHANGEFEED]: ChangefeedProtocol<T, ChangeBase>
   }
 } {
   let value = initial
@@ -612,7 +608,7 @@ export function createMockPlainRef<T>(initial: T): {
         cb(changeset)
       }
     },
-    get [CHANGEFEED](): Changefeed<T, ChangeBase> {
+    get [CHANGEFEED](): ChangefeedProtocol<T, ChangeBase> {
       return {
         get current(): T {
           return value

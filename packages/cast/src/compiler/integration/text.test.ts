@@ -821,9 +821,8 @@ describe("compiler integration - text patching", () => {
       // the real @kyneta/cast module resolution (which may not fully chain
       // through LocalRef → CHANGEFEED in the in-memory ts-morph project).
       const source = withTypes(`
-        interface LocalRef<T> {
+        interface LocalRef<T> extends HasChangefeed<T, ReplaceChange<T>> {
           (): T
-          readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
           set(value: T): void
         }
         declare function state<T>(initial: T): LocalRef<T>
@@ -847,9 +846,8 @@ describe("compiler integration - text patching", () => {
 
     it("should classify chained x().toString() as reactive in IR", () => {
       const source = withTypes(`
-        interface LocalRef<T> {
+        interface LocalRef<T> extends HasChangefeed<T, ReplaceChange<T>> {
           (): T
-          readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
           set(value: T): void
         }
         declare function state<T>(initial: T): LocalRef<T>

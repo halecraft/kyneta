@@ -11,7 +11,7 @@ import type {
 import {
   bottomInterpreter,
   CHANGEFEED,
-  changefeed,
+  observation,
   hasChangefeed,
   hasComposedChangefeed,
   hasTransact,
@@ -110,7 +110,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
     const doc = interpret(chatDocSchema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     // Readable
@@ -156,7 +156,7 @@ describe("fluent: transactions", () => {
     const doc = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     // TRANSACT points to the correct context
@@ -336,8 +336,8 @@ describe("fluent: type-level", () => {
     expectTypeOf(writable).toMatchTypeOf<
       InterpreterLayer<RefContext, WritableContext>
     >()
-    // changefeed: WritableContext → WritableContext (requires writable first)
-    expectTypeOf(changefeed).toMatchTypeOf<
+    // observation: WritableContext → WritableContext (requires writable first)
+    expectTypeOf(observation).toMatchTypeOf<
       InterpreterLayer<WritableContext, WritableContext>
     >()
   })

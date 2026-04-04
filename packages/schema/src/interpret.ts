@@ -287,16 +287,16 @@ export type ResolveCarrier<S extends Schema, A> = [A] extends [
  *
  * The `Brand` type parameter (default `unknown`) is a phantom type used
  * by the fluent builder to accumulate capability information via `.with()`.
- * Pre-built layers (`readable`, `writable`, `changefeed`) carry specific
+ * Pre-built layers (`readable`, `writable`, `observation`) carry specific
  * brands; custom/user-defined layers keep the default `unknown`.
  *
  * ```ts
- * import { readable, writable, changefeed } from "@kyneta/schema"
+ * import { readable, writable, observation } from "@kyneta/schema"
  *
  * interpret(schema, ctx)
  *   .with(readable)
  *   .with(writable)
- *   .with(changefeed)
+ *   .with(observation)
  *   .done()
  * ```
  *
@@ -331,7 +331,7 @@ export interface InterpreterLayer<InCtx, OutCtx, _Brand = unknown> {
  * const doc = interpret(schema, ctx)
  *   .with(readable)    // Brands = unknown & ReadableBrand = ReadableBrand
  *   .with(writable)    // Brands = ReadableBrand & WritableBrand
- *   .with(changefeed)  // Brands = ReadableBrand & WritableBrand & ChangefeedBrand
+ *   .with(observation)  // Brands = ReadableBrand & WritableBrand & ChangefeedBrand
  *   .done()            // → Ref<typeof schema>
  * ```
  *
@@ -360,7 +360,7 @@ export interface InterpretBuilder<S extends Schema, Ctx, Brands> {
    * the accumulated brands. For standard compositions:
    * - `readable` → `RRef<S>`
    * - `readable + writable` → `RWRef<S>`
-   * - `readable + writable + changefeed` → `Ref<S>`
+   * - `readable + writable + observation` → `Ref<S>`
    * - Custom/unbranded → `unknown`
    */
   done(): Resolve<S, Brands>
@@ -386,7 +386,7 @@ export interface InterpretBuilder<S extends Schema, Ctx, Brands> {
  * const doc = interpret(schema, ctx)
  *   .with(readable)
  *   .with(writable)
- *   .with(changefeed)
+ *   .with(observation)
  *   .done()
  * ```
  *

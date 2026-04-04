@@ -10,7 +10,7 @@ import type { Changeset, Op } from "../index.js"
 import {
   CHANGEFEED,
   change,
-  changefeed,
+  observation,
   expandMapOpsToLeaves,
   hasChangefeed,
   hasComposedChangefeed,
@@ -86,7 +86,7 @@ function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
   const doc = interpret(chatDocSchema, ctx)
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done()
   return { store, ctx, doc }
 }
@@ -626,7 +626,7 @@ describe("changefeed: transaction integration", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     const xChangesets: Changeset[] = []
@@ -698,7 +698,7 @@ describe("changefeed: transaction integration", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     ctx.beginTransaction()
@@ -724,7 +724,7 @@ describe("changefeed: transaction integration", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     const xChangesets: Changeset[] = []
@@ -794,7 +794,7 @@ describe("changefeed: batched notification", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     const xChangesets: Changeset[] = []
@@ -824,7 +824,7 @@ describe("changefeed: batched notification", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     let observedX: unknown
@@ -867,7 +867,7 @@ describe("changefeed: batched notification", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     const xChangesets: Changeset[] = []
@@ -920,7 +920,7 @@ describe("changefeed: batched notification", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     const xChangesets: Changeset[] = []
@@ -953,7 +953,7 @@ describe("changefeed: batched notification", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     // Only subscribe to x, not y
@@ -1032,7 +1032,7 @@ describe("changefeed: edge cases", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     const changesets: Changeset[] = []
@@ -1052,7 +1052,7 @@ describe("changefeed: edge cases", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     expect(hasComposedChangefeed(doc.items)).toBe(true)
@@ -1067,7 +1067,7 @@ describe("changefeed: edge cases", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     expect(hasComposedChangefeed(doc.labels)).toBe(true)
@@ -1205,7 +1205,7 @@ describe("changefeed: flush boundary enforcement", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     // Subscribe with a callback that throws
@@ -1232,7 +1232,7 @@ describe("changefeed: flush boundary enforcement", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     // Subscribe to x; when x changes, try to mutate y via change()

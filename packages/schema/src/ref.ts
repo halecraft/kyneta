@@ -264,7 +264,7 @@ export type RWRef<S extends Schema> = SchemaRef<S, "rw">
 /**
  * Full-stack ref type: read + write + transact + changefeed. The common case.
  *
- * Produced by `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()`.
+ * Produced by `interpret(schema, ctx).with(readable).with(writable).with(observation).done()`.
  * Every node is callable, navigable, writable, transactable, and observable.
  *
  * ```ts

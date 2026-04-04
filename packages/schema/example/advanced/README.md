@@ -19,7 +19,7 @@ The interpreter stack decomposes into **five composable layers**, each independe
 | `readable` | Fills the `[CALL]` slot — `ref()` returns the current plain value | `RefContext { store }` |
 | `caching` | Identity-preserving memoization — `doc.name === doc.name` | `RefContext { store }` |
 | `writable` | Mutation methods — `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` | `WritableContext { store, dispatch, … }` |
-| `changefeed` | Observation protocol — `[CHANGEFEED]`, `subscribe`, `subscribeNode` | `RefContext` (works on read-only stacks too) |
+| `observation` | Observation protocol — `[CHANGEFEED]`, `subscribe`, `subscribeNode` | `RefContext` (works on read-only stacks too) |
 
 The pre-built `readable` layer bundles navigation + reading + caching in one step:
 
@@ -28,7 +28,7 @@ The pre-built `readable` layer bundles navigation + reading + caching in one ste
 const doc = interpret(schema, ctx)
   .with(readable)
   .with(writable)
-  .with(changefeed)
+  .with(observation)
   .done()   // → Ref<typeof schema>
 
 // Manual composition (equivalent):

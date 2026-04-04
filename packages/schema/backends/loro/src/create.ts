@@ -20,7 +20,7 @@ import type {
   Substrate,
   SubstratePayload,
 } from "@kyneta/schema"
-import { changefeed, interpret, readable, writable } from "@kyneta/schema"
+import { observation, interpret, readable, writable } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
 import { createLoroSubstrate, loroSubstrateFactory } from "./substrate.js"
 import type { LoroVersion } from "./version.js"
@@ -65,7 +65,7 @@ function registerDoc(
   const doc: any = (interpret as any)(schema, substrate.context())
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done()
   substrates.set(doc, substrate)
   return doc

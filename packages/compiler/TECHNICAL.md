@@ -149,8 +149,26 @@ Detects reactive types by checking for the `[CHANGEFEED]` symbol property at the
 
 - `isChangefeedType(type)` — does this type have `[CHANGEFEED]`?
 - `isComponentFactoryType(type)` — is this a `ComponentFactory<T>`?
-- `getDeltaKind(type)` — extract the delta kind from a `Changefeed<V, C>` type parameter
+- `getDeltaKind(type)` — extract the delta kind from `ChangefeedProtocol<S, C>`'s second type argument
 - `resolveReactiveImports(sourceFile)` — resolve which imported modules provide reactive types
+
+**Delta Kind Extraction (`getDeltaKind`)**
+
+Once a type is confirmed as a Changefeed, `getDeltaKind()` extracts the delta kind — `"text"`, `"sequence"`, `"map"`, `"tree"`, `"increment"`, or `"replace"` — which determines codegen optimization dispatch.
+
+*Primary path (3 hops via TypeReference):*
+
+1. `[CHANGEFEED]` property → property type (`ChangefeedProtocol<S, C>`)
+2. → `getTypeArguments()` → second type argument `C`
+3. → `.type` property → string literal value
+
+This works because the property type is a `TypeReference` — an instantiation of the generic interface `ChangefeedProtocol<S, C>`. TypeScript preserves concrete type arguments through interface inheritance, so `extends HasChangefeed<S, C>` alone is sufficient — no explicit `readonly [CHANGEFEED]` redeclaration is needed.
+
+*Structural fallback path (9 hops via `getDeltaKindStructural()`):*
+
+Used when the property type is NOT a TypeReference (e.g., inline object literal types in tests). Walks subscribe → call signature → callback param → callback signature → changeset param → `Changeset.changes` → array element → `.type`.
+
+Both paths share the `extractDeltaKindFromChangeType()` helper for the final step: reading the `.type` string literal from the change type `C`. If `C` defaults to `ChangeBase`, `.type` resolves to `string` (not a literal) and extraction returns `undefined`, causing a fallback to `"replace"`.
 
 ### Binding Scope (`binding-scope.ts`)
 

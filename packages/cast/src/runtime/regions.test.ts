@@ -8,7 +8,7 @@
 import {
   CHANGEFEED,
   type ChangeBase,
-  type Changefeed,
+  type ChangefeedProtocol,
   type Changeset,
   type SequenceInstruction,
 } from "@kyneta/schema"
@@ -59,7 +59,7 @@ global.Comment = dom.window.Comment
  * - `setItems(items)` to update the backing array (test helper)
  */
 function createMockSequenceRef<T>(initialItems: T[]): {
-  ref: ListRefLike<T> & { [CHANGEFEED]: Changefeed<T[], ChangeBase> }
+  ref: ListRefLike<T> & { [CHANGEFEED]: ChangefeedProtocol<T[], ChangeBase> }
   emit: (change: ChangeBase) => void
   setItems: (items: T[]) => void
 } {

@@ -54,8 +54,9 @@ export {
 } from "./change.js"
 export type {
   Changefeed,
+  ChangefeedProtocol,
   Changeset,
-  ComposedChangefeed,
+  ComposedChangefeedProtocol,
   HasChangefeed,
   HasComposedChangefeed,
   Op,
@@ -63,6 +64,8 @@ export type {
 // Changefeed — the unified reactive protocol
 export {
   CHANGEFEED,
+  changefeed,
+  createChangefeed,
   expandMapOpsToLeaves,
   getOrCreateChangefeed,
   hasChangefeed,
@@ -183,8 +186,8 @@ export {
 // Pre-built interpreter layers for fluent composition
 export {
   addressing,
-  changefeed,
   navigation,
+  observation,
   readable,
   writable,
 } from "./layers.js"

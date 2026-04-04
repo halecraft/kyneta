@@ -6,7 +6,7 @@ import {
   type ChangefeedBrand,
   type CounterRef,
   change,
-  changefeed,
+  observation,
   type HasCaching,
   type HasCall,
   type HasChangefeed,
@@ -1465,12 +1465,12 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
     expectTypeOf(result).toEqualTypeOf<RWRef<typeof pointSchema>>()
   })
 
-  it(".with(readable).with(writable).with(changefeed).done() → Ref<S>", () => {
+  it(".with(readable).with(writable).with(observation).done() → Ref<S>", () => {
     const ctx = plainContext({ x: 0, y: 0 })
     const result = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
     expectTypeOf(result).toEqualTypeOf<Ref<typeof pointSchema>>()
   })
@@ -1480,7 +1480,7 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
     const result = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
     expectTypeOf(result).toHaveProperty(TRANSACT)
     expectTypeOf(result).toHaveProperty(CHANGEFEED)
@@ -1647,7 +1647,7 @@ describe("type-level: change() callback infers draft type from fluent-built doc"
     const doc = interpret(docSchema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     // change() should accept doc without any cast — D is inferred as Ref<S>
@@ -1664,7 +1664,7 @@ describe("type-level: change() callback infers draft type from fluent-built doc"
     const doc = interpret(docSchema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     // The callback d should have the same type as doc — verify typed methods exist.
@@ -1707,7 +1707,7 @@ describe("type-level: fluent results are accepted by facade functions", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     // subscribeNode requires HasChangefeed — Ref<S> children have it
@@ -1719,7 +1719,7 @@ describe("type-level: fluent results are accepted by facade functions", () => {
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     // subscribe requires HasComposedChangefeed on composite refs

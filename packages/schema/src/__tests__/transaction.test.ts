@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
-  changefeed,
   hasTransact,
   interpret,
+  observation,
   plainContext,
   readable,
   Schema,
@@ -187,7 +187,7 @@ describe("transaction: commit delivers batched changefeed notifications", () => 
     const doc = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
-      .with(changefeed)
+      .with(observation)
       .done()
 
     const CF_SYM = Symbol.for("kyneta:changefeed")

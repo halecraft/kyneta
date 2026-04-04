@@ -129,13 +129,15 @@ export function expandMapOpsToLeaves(
 }
 
 // ---------------------------------------------------------------------------
-// Core interfaces
+// Core interfaces — protocol layer
 // ---------------------------------------------------------------------------
 
 /**
- * A changefeed is a coalgebra: `current` gives the live state,
- * `subscribe` gives the stream of future changes. In automata-theory
- * terms this is a Moore machine with a push-based transition stream.
+ * The protocol object that sits behind the `[CHANGEFEED]` symbol.
+ *
+ * A coalgebra: `current` gives the live state, `subscribe` gives the
+ * stream of future changes. In automata-theory terms this is a Moore
+ * machine with a push-based transition stream.
  *
  * Properties:
  * - `current` is a getter — always returns the live current value
@@ -143,10 +145,41 @@ export function expandMapOpsToLeaves(
  * - Subscribers receive a `Changeset<C>` — a batch of changes with
  *   optional provenance. For auto-commit (single mutation), the
  *   changeset contains exactly one change.
- * - Static (non-reactive) sources return a changefeed whose tail never emits:
+ * - Static (non-reactive) sources return a protocol whose tail never emits:
  *   `{ current: value, subscribe: () => () => {} }`
+ *
+ * This is internal plumbing — developers interact with `Changefeed<S, C>`
+ * (the developer-facing type that includes `[CHANGEFEED]`, `.current`,
+ * and `.subscribe()` in one interface).
+ */
+export interface ChangefeedProtocol<S, C extends ChangeBase = ChangeBase> {
+  /** The current value, always live (a getter). */
+  readonly current: S
+  /** Subscribe to future changes. Returns an unsubscribe function. */
+  subscribe(callback: (changeset: Changeset<C>) => void): () => void
+}
+
+// ---------------------------------------------------------------------------
+// Core interfaces — developer-facing type
+// ---------------------------------------------------------------------------
+
+/**
+ * The developer-facing changefeed type: a reactive value with direct
+ * access to `.current`, `.subscribe()`, and the `[CHANGEFEED]` marker.
+ *
+ * Developers write `readonly peers: Changefeed<PeerMap, PeerChange>` —
+ * no `Has` prefix, no separate protocol object, no triple declaration.
+ *
+ * A `Changefeed<S, C>` is the intersection of:
+ * - The `[CHANGEFEED]` marker (for compiler detection and runtime protocol)
+ * - Direct `.current` and `.subscribe()` access (for developer ergonomics)
+ *
+ * Use `changefeed(source)` to project any `HasChangefeed` into a
+ * `Changefeed`, or `createChangefeed()` to build one from scratch.
  */
 export interface Changefeed<S, C extends ChangeBase = ChangeBase> {
+  /** The protocol object behind the symbol. */
+  readonly [CHANGEFEED]: ChangefeedProtocol<S, C>
   /** The current value, always live (a getter). */
   readonly current: S
   /** Subscribe to future changes. Returns an unsubscribe function. */
@@ -154,13 +187,14 @@ export interface Changefeed<S, C extends ChangeBase = ChangeBase> {
 }
 
 /**
- * An object that carries a changefeed under the `[CHANGEFEED]` symbol.
+ * An object that carries a changefeed protocol under the `[CHANGEFEED]`
+ * symbol.
  *
  * Any ref, interpreted node, or enriched value can implement this
  * interface to participate in the reactive protocol.
  */
 export interface HasChangefeed<S = unknown, A extends ChangeBase = ChangeBase> {
-  readonly [CHANGEFEED]: Changefeed<S, A>
+  readonly [CHANGEFEED]: ChangefeedProtocol<S, A>
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +202,7 @@ export interface HasChangefeed<S = unknown, A extends ChangeBase = ChangeBase> {
 // ---------------------------------------------------------------------------
 
 /**
- * Extension of `Changefeed` for tree-structured (composite) refs.
+ * Extension of `ChangefeedProtocol` for tree-structured (composite) refs.
  *
  * `subscribe` remains node-level — it fires only for changes at this
  * node's own path (e.g., `SequenceChange` for lists, `ReplaceChange`
@@ -183,23 +217,25 @@ export interface HasChangefeed<S = unknown, A extends ChangeBase = ChangeBase> {
  * in the batch carries the relative path where the change occurred.
  *
  * Only composite refs (products, sequences, maps) implement this.
- * Leaf refs (scalars, text, counters) implement plain `Changefeed`.
+ * Leaf refs (scalars, text, counters) implement plain `ChangefeedProtocol`.
  */
-export interface ComposedChangefeed<S, C extends ChangeBase = ChangeBase>
-  extends Changefeed<S, C> {
+export interface ComposedChangefeedProtocol<
+  S,
+  C extends ChangeBase = ChangeBase,
+> extends ChangefeedProtocol<S, C> {
   /** Subscribe to changes at this node and all descendants. */
   subscribeTree(callback: (changeset: Changeset<Op<C>>) => void): () => void
 }
 
 /**
- * An object that carries a composed changefeed under the `[CHANGEFEED]`
- * symbol — i.e. a composite ref with tree-level observation.
+ * An object that carries a composed changefeed protocol under the
+ * `[CHANGEFEED]` symbol — i.e. a composite ref with tree-level observation.
  */
 export interface HasComposedChangefeed<
   S = unknown,
   A extends ChangeBase = ChangeBase,
 > {
-  readonly [CHANGEFEED]: ComposedChangefeed<S, A>
+  readonly [CHANGEFEED]: ComposedChangefeedProtocol<S, A>
 }
 
 // ---------------------------------------------------------------------------
@@ -207,23 +243,24 @@ export interface HasComposedChangefeed<
 // ---------------------------------------------------------------------------
 
 /**
- * Module-scoped WeakMap that caches Changefeed instances per object reference.
+ * Module-scoped WeakMap that caches ChangefeedProtocol instances per object
+ * reference.
  *
  * Properties:
  * - No per-instance allocation at construction time
- * - Changefeed created lazily on first access
+ * - ChangefeedProtocol created lazily on first access
  * - Referential identity: `ref[CHANGEFEED] === ref[CHANGEFEED]`
  * - GC-safe: WeakMap entry disappears when ref is collected
  */
-const changefeeds = new WeakMap<object, Changefeed<any, any>>()
+const changefeeds = new WeakMap<object, ChangefeedProtocol<any, any>>()
 
 /**
- * Returns the cached changefeed for `ref`, or creates one via `factory`
- * and caches it.
+ * Returns the cached changefeed protocol for `ref`, or creates one via
+ * `factory` and caches it.
  *
  * Usage (on a ref class prototype):
  * ```ts
- * get [CHANGEFEED](): Changefeed<S, C> {
+ * get [CHANGEFEED](): ChangefeedProtocol<S, C> {
  *   return getOrCreateChangefeed(this, () => ({
  *     get current() { return readCurrentValue(self) },
  *     subscribe: (cb) => subscribeToChanges(self, cb),
@@ -233,9 +270,9 @@ const changefeeds = new WeakMap<object, Changefeed<any, any>>()
  */
 export function getOrCreateChangefeed<S, A extends ChangeBase>(
   ref: object,
-  factory: () => Changefeed<S, A>,
-): Changefeed<S, A> {
-  let cf = changefeeds.get(ref) as Changefeed<S, A> | undefined
+  factory: () => ChangefeedProtocol<S, A>,
+): ChangefeedProtocol<S, A> {
+  let cf = changefeeds.get(ref) as ChangefeedProtocol<S, A> | undefined
   if (!cf) {
     cf = factory()
     changefeeds.set(ref, cf)
@@ -280,11 +317,13 @@ export function hasComposedChangefeed<
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a changefeed that never emits changes — useful for static/
- * non-reactive data sources that still need to participate in the
- * changefeed protocol.
+ * Creates a changefeed protocol that never emits changes — useful for
+ * static/non-reactive data sources that still need to participate in
+ * the changefeed protocol.
  */
-export function staticChangefeed<S>(head: S): Changefeed<S, never> {
+export function staticChangefeed<S>(
+  head: S,
+): ChangefeedProtocol<S, never> {
   return {
     get current() {
       return head
@@ -293,4 +332,96 @@ export function staticChangefeed<S>(head: S): Changefeed<S, never> {
       return () => {}
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// Projector — lift HasChangefeed to Changefeed
+// ---------------------------------------------------------------------------
+
+/**
+ * Project any object with `[CHANGEFEED]` into a developer-facing
+ * `Changefeed<S, C>` — lifting the hidden protocol surface to direct
+ * `.current` and `.subscribe()` accessibility.
+ *
+ * ```ts
+ * const feed = changefeed(doc.title)
+ * feed.current          // live value
+ * feed.subscribe(cb)    // subscribe to changes
+ * feed[CHANGEFEED]      // the protocol object (same as doc.title[CHANGEFEED])
+ * ```
+ */
+export function changefeed<S, C extends ChangeBase>(
+  source: HasChangefeed<S, C>,
+): Changefeed<S, C> {
+  const protocol = source[CHANGEFEED]
+  return {
+    [CHANGEFEED]: protocol,
+    get current(): S {
+      return protocol.current
+    },
+    subscribe(
+      callback: (changeset: Changeset<C>) => void,
+    ): () => void {
+      return protocol.subscribe(callback)
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Factory — create standalone Changefeed values
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a standalone `Changefeed<S, C>` with push semantics.
+ *
+ * Returns a tuple of the feed and an emit function. The feed's
+ * `[CHANGEFEED]` returns the protocol view of itself. Manages its
+ * own subscriber set internally.
+ *
+ * ```ts
+ * const [feed, emit] = createChangefeed(() => count)
+ * feed.current                       // read live value
+ * feed.subscribe(cs => { ... })      // subscribe
+ * hasChangefeed(feed)                 // true
+ * emit({ changes: [{ type: "replace", value: 42 }] })  // push
+ * ```
+ */
+export function createChangefeed<S, C extends ChangeBase = ChangeBase>(
+  getCurrent: () => S,
+): [feed: Changefeed<S, C>, emit: (changeset: Changeset<C>) => void] {
+  const subscribers = new Set<(changeset: Changeset<C>) => void>()
+
+  const protocol: ChangefeedProtocol<S, C> = {
+    get current(): S {
+      return getCurrent()
+    },
+    subscribe(
+      callback: (changeset: Changeset<C>) => void,
+    ): () => void {
+      subscribers.add(callback)
+      return () => {
+        subscribers.delete(callback)
+      }
+    },
+  }
+
+  const feed: Changefeed<S, C> = {
+    [CHANGEFEED]: protocol,
+    get current(): S {
+      return getCurrent()
+    },
+    subscribe(
+      callback: (changeset: Changeset<C>) => void,
+    ): () => void {
+      return protocol.subscribe(callback)
+    },
+  }
+
+  const emit = (changeset: Changeset<C>): void => {
+    for (const cb of subscribers) {
+      cb(changeset)
+    }
+  }
+
+  return [feed, emit]
 }

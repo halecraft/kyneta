@@ -8,12 +8,12 @@
 // interpret.ts (types) and interpreters/* (runtime values).
 //
 // Usage:
-//   import { interpret, readable, writable, changefeed } from "@kyneta/schema"
+//   import { interpret, readable, writable, observation } from "@kyneta/schema"
 //
 //   const doc = interpret(schema, ctx)
 //     .with(readable)
 //     .with(writable)
-//     .with(changefeed)
+//     .with(observation)
 //     .done()
 
 import type {
@@ -134,11 +134,11 @@ export const writable: InterpreterLayer<
 }
 
 // ---------------------------------------------------------------------------
-// changefeed — compositional observation protocol
+// observation — compositional observation protocol
 // ---------------------------------------------------------------------------
 
 /**
- * Changefeed layer: compositional observation protocol (`[CHANGEFEED]`,
+ * Observation layer: compositional observation protocol (`[CHANGEFEED]`,
  * `subscribeTree`).
  *
  * Wraps `withChangefeed(base)`. Accepts `RefContext` — works on both
@@ -149,7 +149,7 @@ export const writable: InterpreterLayer<
  * interpret(schema, ctx)
  *   .with(readable)
  *   .with(writable)
- *   .with(changefeed)
+ *   .with(observation)
  *   .done()
  * // equivalent to:
  * interpret(
@@ -159,12 +159,12 @@ export const writable: InterpreterLayer<
  * )
  * ```
  */
-export const changefeed: InterpreterLayer<
+export const observation: InterpreterLayer<
   RefContext,
   RefContext,
   ChangefeedBrand
 > = {
-  name: "changefeed",
+  name: "observation",
   transform(base) {
     return withChangefeed(base)
   },

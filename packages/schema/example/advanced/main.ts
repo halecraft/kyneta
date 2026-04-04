@@ -24,7 +24,7 @@ import type {
 import {
   applyChanges,
   change,
-  changefeed,
+  observation,
   describe,
   formatPath,
   hasChangefeed,
@@ -101,7 +101,7 @@ log(`
     Step 3: interpret(schema, ctx)
               .with(readable)     // navigation + reading + caching
               .with(writable)     // .set, .insert, .increment
-              .with(changefeed)   // subscribe / subscribeNode
+              .with(observation)  // subscribe / subscribeNode
               .done()
 
     Each .with() appends a transformer. .done() composes left-to-right
@@ -118,7 +118,7 @@ const ctx = substrate.context()
 const doc: Ref<typeof ProjectSchema> = interpret(ProjectSchema, ctx)
   .with(readable)
   .with(writable)
-  .with(changefeed)
+  .with(observation)
   .done() as any
 
 log(`    doc.name() → "${doc.name()}"    doc.stars() → ${doc.stars()}`)
@@ -158,10 +158,10 @@ log(`
     │ navigation  │ Structural addressing (field getters, .at(), .keys) │
     │ readable    │ [CALL] filled with store reader + caching           │
     │ writable    │ .set(), .insert(), .increment(), .delete()          │
-    │ changefeed  │ [CHANGEFEED] protocol — subscribe / subscribeNode   │
+    │ observation │ [CHANGEFEED] protocol — subscribe / subscribeNode   │
     └─────────────┴──────────────────────────────────────────────────────┘
 
-    Fluent:  .with(readable).with(writable).with(changefeed).done()
+    Fluent:  .with(readable).with(writable).with(observation).done()
 
     The 'readable' layer itself composes three sub-transformers:
       withCaching(withReadable(withNavigation(base)))
@@ -332,7 +332,7 @@ log(`
 
   const replicaDoc: Ref<typeof ProjectSchema> = interpret(
     ProjectSchema, replicaSub.context(),
-  ).with(readable).with(writable).with(changefeed).done() as any
+  ).with(readable).with(writable).with(observation).done() as any
 
   const events: string[] = []
   subscribe(replicaDoc, cs => {
@@ -358,7 +358,7 @@ log(`
     Stack cheat sheet:
       readable                           → snapshot rendering, validation
       readable + writable                → local mutation, no observation
-      readable + writable + changefeed   → full reactive document (default)
+      readable + writable + observation  → full reactive document (default)
 `)
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -380,11 +380,11 @@ log(`
 
   const subA = plainSubstrateFactory.create(ProjectSchema, seed)
   const docA: Ref<typeof ProjectSchema> = interpret(ProjectSchema, subA.context())
-    .with(readable).with(writable).with(changefeed).done() as any
+    .with(readable).with(writable).with(observation).done() as any
 
   const subB = plainSubstrateFactory.create(ProjectSchema, seed)
   const docB: Ref<typeof ProjectSchema> = interpret(ProjectSchema, subB.context())
-    .with(readable).with(writable).with(changefeed).done() as any
+    .with(readable).with(writable).with(observation).done() as any
 
   const syncOps = change(docA, d => {
     d.name.insert(d.name().length, " (synced)")
@@ -425,7 +425,7 @@ log(`
 
     • Need read-only?       .with(readable).done()
     • Need mutation?        .with(readable).with(writable).done()
-    • Need observation?     Add .with(changefeed)
+    • Need observation?     Add .with(observation)
     • Need custom layers?   Implement InterpreterLayer and .with() it
 
     Every combination is valid. Capabilities compose, not configure.

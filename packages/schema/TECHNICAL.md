@@ -99,7 +99,7 @@ In the old grammar, `text` and `counter` were node kinds alongside `list` and `s
 
 Both `createDoc` and `createDocFromEntirety` delegate to a shared `registerDoc` helper in `basic/create.ts`. It:
 
-1. Runs `interpret(schema, substrate.context()).with(readable).with(writable).with(changefeed).done()` to build the full five-layer interpreter stack.
+1. Runs `interpret(schema, substrate.context()).with(readable).with(writable).with(observation).done()` to build the full five-layer interpreter stack.
 2. Stores the `substrate` in a **module-scoped `WeakMap`** keyed by the returned ref, enabling `basic/sync.ts` to retrieve the substrate for sync operations without exposing it to callers.
 
 `getSubstrate` is exported from `basic/create.ts` for cross-module use by `basic/sync.ts` (which needs the substrate for `version`, `delta`, `exportEntirety`) but is **not** re-exported from the `basic/index.ts` barrel — it's an internal implementation detail.
@@ -225,7 +225,17 @@ Changes are an open protocol (`ChangeBase` with string `type` discriminant). Thi
 
 ### Changefeed (`src/changefeed.ts`)
 
-A changefeed is a coalgebra: `{ current: S, subscribe(cb: (changeset: Changeset<C>) => void): () => void }`. One symbol (`CHANGEFEED = Symbol.for("kyneta:changefeed")`) replaces the previous two-symbol `SNAPSHOT` + `REACTIVE` design. WeakMap-based caching preserves referential identity (`ref[CHANGEFEED] === ref[CHANGEFEED]`).
+One symbol (`CHANGEFEED = Symbol.for("kyneta:changefeed")`) replaces the previous two-symbol `SNAPSHOT` + `REACTIVE` design. WeakMap-based caching preserves referential identity (`ref[CHANGEFEED] === ref[CHANGEFEED]`). The type hierarchy separates internal protocol from developer-facing surface:
+
+**`ChangefeedProtocol<S, C>`** — the protocol object behind the `[CHANGEFEED]` symbol. A coalgebra: `{ current: S, subscribe(cb: (changeset: Changeset<C>) => void): () => void }`. This is internal plumbing — the raw interface that interpreter layers attach to refs.
+
+**`Changefeed<S, C>`** — the developer-facing type that combines `[CHANGEFEED]: ChangefeedProtocol<S, C>`, `.current`, and `.subscribe()` in one interface. Developers write `readonly peers: Changefeed<PeerMap, PeerChange>` — no need to reach through the symbol.
+
+**`HasChangefeed<S, C>`** — the marker contract: `{ [CHANGEFEED]: ChangefeedProtocol<S, C> }`. What the compiler detects when determining whether a carrier supports observation.
+
+**`changefeed(source)`** — projector function: takes any `HasChangefeed<S, C>` and returns a `Changefeed<S, C>`, lifting the hidden protocol surface to direct accessibility.
+
+**`createChangefeed(getCurrent)`** — factory: creates a standalone `Changefeed<S, C>` with push semantics, returning `[feed, emit]`.
 
 **`Changeset<C>` — the unit of batch delivery.** Subscribers always receive a `Changeset`, never an individual change. A changeset wraps one or more changes with optional batch-level metadata:
 
@@ -234,9 +244,9 @@ A changefeed is a coalgebra: `{ current: S, subscribe(cb: (changeset: Changeset<
 
 Auto-commit (single mutation outside a transaction) delivers a degenerate `Changeset` of exactly one change. Transactions and `applyChanges` deliver multi-change batches. The subscriber API is uniform regardless of batch size.
 
-**`Op<C>` — relative path for tree observation.** Composite refs (products, sequences, maps) implement `ComposedChangefeed`, which adds `subscribeTree(cb: (changeset: Changeset<Op<C>>) => void)`. Each `Op` carries `{ path: Path, change: C }` — the path is relative from the subscription point to where the change occurred. `subscribeTree` is a strict superset of `subscribe` (tree subscribers also see own-path changes with `path: []`).
+**`Op<C>` — relative path for tree observation.** Composite refs (products, sequences, maps) implement `ComposedChangefeedProtocol`, which extends `ChangefeedProtocol` with `subscribeTree(cb: (changeset: Changeset<Op<C>>) => void)`. Each `Op` carries `{ path: Path, change: C }` — the path is relative from the subscription point to where the change occurred. `subscribeTree` is a strict superset of `subscribe` (tree subscribers also see own-path changes with `path: []`).
 
-**`Changeset<Op>` ≅ `(Op[], origin)` isomorphism.** When subscribing at the root, `Op.path` equals the absolute path. The output of tree-level observation (the facade's `subscribe`, which delegates to `ComposedChangefeed.subscribeTree`) can be round-tripped as input to `applyChanges` (modulo path relativity for subtree subscriptions). This is a powerful property for sync: capture tree events on one document, reconstruct `Op[]`, apply to another. Note: tree subscribers receive one `Changeset<Op>` per affected child path (not one combined changeset per flush), so reconstruction uses `flatMap` across changesets.
+**`Changeset<Op>` ≅ `(Op[], origin)` isomorphism.** When subscribing at the root, `Op.path` equals the absolute path. The output of tree-level observation (the facade's `subscribe`, which delegates to `ComposedChangefeedProtocol.subscribeTree`) can be round-tripped as input to `applyChanges` (modulo path relativity for subtree subscriptions). This is a powerful property for sync: capture tree events on one document, reconstruct `Op[]`, apply to another. Note: tree subscribers receive one `Changeset<Op>` per affected child path (not one combined changeset per flush), so reconstruction uses `flatMap` across changesets.
 
 ### Step (`src/step.ts`)
 
@@ -288,7 +298,7 @@ Standard usage needs no cast:
 const doc = interpret(schema, ctx)
   .with(readable)
   .with(writable)
-  .with(changefeed)
+  .with(observation)
   .done()   // → Ref<typeof schema>
 ```
 
@@ -556,7 +566,7 @@ An interpreter transformer: `withChangefeed(base)` takes `Interpreter<RefContext
 
 Requires `HasRead` (the `[CALL]` slot must be filled) because `.current` reads values through the carrier. Context type is `RefContext` (not `WritableContext`) — it duck-types for `prepare`/`flush` via `hasPreparePipeline()`, enabling both writable and read-only stacks.
 
-For leaf refs, attaches a plain `Changefeed` with `subscribe` (node-level). For composite refs (product, sequence, map), attaches a `ComposedChangefeed` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition). Note: the facade exports `subscribe` (tree-level, delegates to `subscribeTree`) and `subscribeNode` (node-level, delegates to `subscribe`) — see §Facade above for the naming rationale.
+For leaf refs, attaches a plain `ChangefeedProtocol` with `subscribe` (node-level). For composite refs (product, sequence, map), attaches a `ComposedChangefeedProtocol` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition). Note: the facade exports `subscribe` (tree-level, delegates to `subscribeTree`) and `subscribeNode` (node-level, delegates to `subscribe`) — see §Facade above for the naming rationale.
 
 **Read-only Moore machines.** A `Changefeed` defines a Moore machine: `.current` (output function) + `.subscribe` (transition observer). On read-only stacks (no `prepare`/`flush`), subscribers register but never fire — a valid static Moore machine. `.current` still works because it routes through the carrier's `[CALL]` slot.
 
@@ -782,7 +792,7 @@ Three named aliases provide the user-facing ref tiers:
 |---|---|---|
 | `RRef<S>` | `Readable<S>` | `.with(readable).done()` |
 | `RWRef<S>` | `SchemaRef<S, "rw">` | `.with(readable).with(writable).done()` |
-| `Ref<S>` | `SchemaRef<S, "rwc">` | `.with(readable).with(writable).with(changefeed).done()` |
+| `Ref<S>` | `SchemaRef<S, "rwc">` | `.with(readable).with(writable).with(observation).done()` |
 
 **`Ref<S>`** is the **primary user-facing type** for the full interpreter stack. Unifies navigation, reading, writing, `HasTransact`, and `HasChangefeed` in a single recursive type. Children are `Ref<Child>` — no `Readable<Child> & Writable<Child>` intersection needed. This eliminates the `.at()` overload conflict that plagued `Readable<S> & Writable<S>` on sequences and maps (where `ReadableSequenceRef.at()` returns `Readable<I>` but `SequenceRef.at()` returned `Writable<I>`).
 
@@ -793,7 +803,7 @@ type Doc = Ref<typeof mySchema>
 // doc.title.set("new")                       (writing)
 // doc.items.at(0) → Ref<ItemSchema>          (navigation — unified child type)
 // doc[TRANSACT]   → WritableContext           (transaction access)
-// doc[CHANGEFEED] → Changefeed               (observation)
+// doc[CHANGEFEED] → ChangefeedProtocol        (observation)
 ```
 
 The type hierarchy for collections:
@@ -802,9 +812,7 @@ The type hierarchy for collections:
 - `SequenceRef` — mutation only (`.push()`, `.insert()`, `.delete()`) — no `.at()`, no type parameter
 - `Ref<SequenceSchema<I>>` = `ReadableSequenceRef<Ref<I>, Plain<I>> & SequenceRef & HasTransact & HasChangefeed`
 
-`RRef<S>` is a naming alias for `Readable<S>` — it is not a `SchemaRef` mode because read-only refs have a fundamentally different structure (no mutation interfaces, no `WithTransact`). `Readable<S>` and `Writable<S>` remain for partial-stack scenarios (read-only documents, mutation-only code paths). All types account for constrained scalars.
-
-`WithTransact<T>` is a deprecated alias for `Wrap<T, "rw">`, kept for backward compatibility.
+`RRef<S>` is a naming alias for `Readable<S>` — it is not a `SchemaRef` mode because read-only refs have a fundamentally different structure (no mutation interfaces, no `HasTransact`). `Readable<S>` and `Writable<S>` remain for partial-stack scenarios (read-only documents, mutation-only code paths). All types account for constrained scalars.
 
 #### Sum Type Resolution
 
@@ -951,7 +959,7 @@ The spike validates these properties via 1,400+ tests across 27 test files:
 32. **`Ref<S>` type correctness**: `Ref<SequenceSchema<ScalarSchema<"string">>>` has `.at(0)` returning `Ref<ScalarSchema>` with both `.set()` and `()` call signature — no overload conflict. `.push()`, `.insert()`, `.delete()` from `SequenceRef` (mutation-only, no `.at()`). `[TRANSACT]` and `[CHANGEFEED]` present at every level.
 33. **`CALL` rename**: the carrier delegation slot is `Symbol.for("kyneta:call")`. The name honestly reflects the abstraction: call delegation, not reading.
 34. **`RWRef<S>` type correctness**: `RWRef<S>` has `[TRANSACT]` but not `[CHANGEFEED]`. Children also lack `[CHANGEFEED]` — the mode threads recursively.
-35. **Fluent `.done()` inference**: `interpret(schema, ctx).with(readable).with(writable).with(changefeed).done()` infers `Ref<S>` without cast. `.with(readable).with(writable).done()` infers `RWRef<S>`. `.with(readable).done()` infers `RRef<S>`.
+35. **Fluent `.done()` inference**: `interpret(schema, ctx).with(readable).with(writable).with(observation).done()` infers `Ref<S>` without cast. `.with(readable).with(writable).done()` infers `RWRef<S>`. `.with(readable).done()` infers `RRef<S>`.
 36. **Honest transformer returns**: `withWritable` contributes `HasTransact` to `A`. `withChangefeed` contributes `HasChangefeed` to `A`. These are compile-time-verified via `expectTypeOf` on the interpreter return types.
 37. **`change()` callback inference**: `change(doc, d => { ... })` infers `d` from the doc ref type — no `(d: any)` annotation needed when `doc` is typed as `Ref<S>` or `RWRef<S>`.
 38. **Discriminated sum type resolution**: `Ref<DiscriminatedSumSchema>`, `RRef<DiscriminatedSumSchema>`, `RWRef<DiscriminatedSumSchema>`, and `Writable<DiscriminatedSumSchema>` all resolve to the union of variant ref types (not `unknown`). The discriminant field is a raw string literal (`Plain<F[D]>`), enabling native TS narrowing — see properties 42–45. `Plain<DiscriminatedSumSchema>` was already correct.

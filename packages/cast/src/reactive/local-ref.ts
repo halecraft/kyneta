@@ -33,7 +33,7 @@
 
 import {
   CHANGEFEED,
-  type Changefeed,
+  type ChangefeedProtocol,
   type Changeset,
   getOrCreateChangefeed,
   type ReplaceChange,
@@ -69,8 +69,8 @@ export interface LocalRefBase<T> {
   /** Write a new value and notify all subscribers. */
   set(value: T): void
 
-  /** The changefeed for this ref. */
-  readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
+  /** The changefeed protocol for this ref. */
+  readonly [CHANGEFEED]: ChangefeedProtocol<T, ReplaceChange<T>>
 
   /** @internal Brand for isLocalRef detection. */
   readonly [LOCAL_REF_BRAND]: true
@@ -173,7 +173,7 @@ export function state<T>(initial: T): LocalRef<T> {
   // [CHANGEFEED] — uses getOrCreateChangefeed for WeakMap-based caching
   // (ensures referential identity: ref[CHANGEFEED] === ref[CHANGEFEED])
   Object.defineProperty(ref, CHANGEFEED, {
-    get(): Changefeed<T, ReplaceChange<T>> {
+    get(): ChangefeedProtocol<T, ReplaceChange<T>> {
       return getOrCreateChangefeed(ref, () => ({
         get current(): T {
           return value

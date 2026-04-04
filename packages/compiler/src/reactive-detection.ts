@@ -269,17 +269,18 @@ export function isChangefeedType(type: Type): boolean {
  *
  * This inspects the `[CHANGEFEED]` property's type to determine what kind
  * of changes the changefeed emits. The property type is
- * `Changefeed<S, C>` which has a `subscribe` method whose callback
- * receives `C`. We extract the `type` literal from `C`.
+ * `ChangefeedProtocol<S, C>` — a TypeReference whose second type argument
+ * is the change type `C`. We extract the `type` literal from `C`.
  *
- * Extraction path (7 hops):
- * 1. `[CHANGEFEED]` property → property type (`Changefeed<S, C>`)
- * 2. → `.subscribe` method
- * 3. → subscribe call signature
- * 4. → `params[0]` (callback `(change: C) => void`)
- * 5. → callback call signature
- * 6. → `params[0]` (change `C`)
- * 7. → `.type` property → string literal value
+ * Primary extraction path (3 hops via TypeReference):
+ * 1. `[CHANGEFEED]` property → property type (`ChangefeedProtocol<S, C>`)
+ * 2. → `getTypeArguments()` → second type argument `C`
+ * 3. → `.type` property → string literal value
+ *
+ * Fallback extraction path (structural walk, 9 hops):
+ * Used when the property type is NOT a TypeReference (e.g., inline object
+ * literal types in tests). Walks through `.subscribe` → callback →
+ * `Changeset.changes` → array element → `.type`.
  *
  * Falls back to "replace" for unknown types or extraction failures.
  *
@@ -320,97 +321,132 @@ export function getDeltaKind(type: Type): DeltaKind {
       return "replace"
     }
 
-    // Hop 1: Get the [CHANGEFEED] property type → Changefeed<S, C>
+    // Hop 1: Get the [CHANGEFEED] property type → ChangefeedProtocol<S, C>
     const changefeedType = checker.getTypeOfSymbol(changefeedProperty)
 
-    // Hop 2: Get the `.subscribe` method on Changefeed<S, C>
-    const subscribeProp = changefeedType.getProperty("subscribe")
-    if (!subscribeProp) {
-      return "replace"
-    }
+    // ── Primary path: TypeReference extraction (3 hops) ──
+    // If the property type is a TypeReference (i.e., an instantiation of a
+    // generic interface like ChangefeedProtocol<S, C>), extract the second
+    // type argument directly. This works for both explicitly declared
+    // [CHANGEFEED] properties AND inherited ones from HasChangefeed<S, C>.
+    const objectFlags = (changefeedType as any).objectFlags as
+      | number
+      | undefined
+    if (objectFlags !== undefined && objectFlags & ts.ObjectFlags.Reference) {
+      const typeRef = changefeedType as ts.TypeReference
+      const typeArgs = checker.getTypeArguments(typeRef)
 
-    const subscribeType = checker.getTypeOfSymbol(subscribeProp)
-
-    // Hop 3: Get the call signature of subscribe
-    const subscribeSignatures = subscribeType.getCallSignatures()
-    if (subscribeSignatures.length === 0) {
-      return "replace"
-    }
-
-    const subscribeSig = subscribeSignatures[0]
-    const subscribeParams = subscribeSig.getParameters()
-    if (subscribeParams.length === 0) {
-      return "replace"
-    }
-
-    // Hop 4: Get the callback parameter type → (change: C) => void
-    const callbackParam = subscribeParams[0]
-    const callbackType = checker.getTypeOfSymbol(callbackParam)
-
-    // Hop 5: Get the callback's call signature
-    const callbackSignatures = callbackType.getCallSignatures()
-    if (callbackSignatures.length === 0) {
-      return "replace"
-    }
-
-    const callbackSig = callbackSignatures[0]
-    const changeParams = callbackSig.getParameters()
-    if (changeParams.length === 0) {
-      return "replace"
-    }
-
-    // Hop 6: Get the changeset parameter type → Changeset<C>
-    // (Previously this was the change type C directly, but the
-    // Changefeed protocol now delivers Changeset<C> batches.)
-    const changesetParam = changeParams[0]
-    const changesetType = checker.getTypeOfSymbol(changesetParam)
-
-    // Hop 7: Get the `changes` property on Changeset<C> → readonly C[]
-    const changesProp = changesetType.getProperty("changes")
-    if (!changesProp) {
-      return "replace"
-    }
-
-    const changesArrayType = checker.getTypeOfSymbol(changesProp)
-
-    // Hop 8: Get the array element type → C
-    // The `changes` property is `readonly C[]`. We need to extract C
-    // by getting the number index type of the array.
-    const changeType = changesArrayType.getNumberIndexType?.()
-    if (!changeType) {
-      return "replace"
-    }
-
-    // Hop 9: Extract the "type" property from the change type C
-    const typeProperty = changeType.getProperty("type")
-    if (!typeProperty) {
-      return "replace"
-    }
-
-    const typePropertyType = checker.getTypeOfSymbol(typeProperty)
-
-    // Check if it's a string literal type
-    if (typePropertyType.isStringLiteral()) {
-      const value = typePropertyType.value as string
-      if (
-        value === "replace" ||
-        value === "text" ||
-        value === "sequence" ||
-        value === "map" ||
-        value === "tree" ||
-        value === "increment"
-      ) {
-        return value
+      // Hop 2: Second type argument is C (the change type)
+      if (typeArgs.length >= 2) {
+        const deltaKind = extractDeltaKindFromChangeType(
+          checker,
+          typeArgs[1],
+        )
+        if (deltaKind) return deltaKind
       }
+
+      // TypeReference but couldn't extract → fall back to replace
+      // (e.g., default C = ChangeBase where .type is `string`, not a literal)
+      return "replace"
     }
 
-    // For union types like "replace" | "text" | ..., we can't determine a single kind
-    // Fall back to replace
-    return "replace"
+    // ── Fallback path: structural walk (9 hops) ──
+    // Used when the property type is NOT a TypeReference (e.g., an inline
+    // object literal type `{ current: string; subscribe(...): ... }`).
+    return getDeltaKindStructural(checker, changefeedType)
   } catch {
     // Any extraction failure falls back to replace
     return "replace"
   }
+}
+
+/**
+ * Extract a DeltaKind from a change type `C` by reading its `.type` property.
+ *
+ * Shared by both the primary (TypeReference) and fallback (structural) paths.
+ *
+ * @returns The delta kind string, or `undefined` if extraction fails.
+ */
+function extractDeltaKindFromChangeType(
+  checker: ts.TypeChecker,
+  changeType: ts.Type,
+): DeltaKind | undefined {
+  const typeProperty = changeType.getProperty("type")
+  if (!typeProperty) return undefined
+
+  const typePropertyType = checker.getTypeOfSymbol(typeProperty)
+
+  if (typePropertyType.isStringLiteral()) {
+    const value = (typePropertyType as ts.StringLiteralType).value
+    if (
+      value === "replace" ||
+      value === "text" ||
+      value === "sequence" ||
+      value === "map" ||
+      value === "tree" ||
+      value === "increment"
+    ) {
+      return value
+    }
+  }
+
+  // Non-literal .type (e.g., ChangeBase where type is `string`) → no match
+  return undefined
+}
+
+/**
+ * Structural fallback for getDeltaKind when the [CHANGEFEED] property type
+ * is not a TypeReference (e.g., inline object literal types in tests).
+ *
+ * Walks: subscribe → call signature → callback param → callback signature →
+ * changeset param → Changeset.changes → array element → .type
+ */
+function getDeltaKindStructural(
+  checker: ts.TypeChecker,
+  changefeedType: ts.Type,
+): DeltaKind {
+  // Hop 2: Get the `.subscribe` method
+  const subscribeProp = changefeedType.getProperty("subscribe")
+  if (!subscribeProp) return "replace"
+
+  const subscribeType = checker.getTypeOfSymbol(subscribeProp)
+
+  // Hop 3: Get the call signature of subscribe
+  const subscribeSignatures = subscribeType.getCallSignatures()
+  if (subscribeSignatures.length === 0) return "replace"
+
+  const subscribeSig = subscribeSignatures[0]
+  const subscribeParams = subscribeSig.getParameters()
+  if (subscribeParams.length === 0) return "replace"
+
+  // Hop 4: Get the callback parameter type → (changeset: Changeset<C>) => void
+  const callbackParam = subscribeParams[0]
+  const callbackType = checker.getTypeOfSymbol(callbackParam)
+
+  // Hop 5: Get the callback's call signature
+  const callbackSignatures = callbackType.getCallSignatures()
+  if (callbackSignatures.length === 0) return "replace"
+
+  const callbackSig = callbackSignatures[0]
+  const changeParams = callbackSig.getParameters()
+  if (changeParams.length === 0) return "replace"
+
+  // Hop 6: Get the changeset parameter type → Changeset<C>
+  const changesetParam = changeParams[0]
+  const changesetType = checker.getTypeOfSymbol(changesetParam)
+
+  // Hop 7: Get the `changes` property on Changeset<C> → readonly C[]
+  const changesProp = changesetType.getProperty("changes")
+  if (!changesProp) return "replace"
+
+  const changesArrayType = checker.getTypeOfSymbol(changesProp)
+
+  // Hop 8: Get the array element type → C
+  const changeType = changesArrayType.getNumberIndexType?.()
+  if (!changeType) return "replace"
+
+  // Hop 9: Extract the "type" property from the change type C
+  return extractDeltaKindFromChangeType(checker, changeType) ?? "replace"
 }
 
 // =============================================================================

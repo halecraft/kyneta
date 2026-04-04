@@ -9,7 +9,7 @@
 // from the barrel (`basic/index.ts`). It is an internal cross-module helper.
 
 import { interpret } from "../interpret.js"
-import { changefeed, readable, writable } from "../layers.js"
+import { observation, readable, writable } from "../layers.js"
 import type { Ref } from "../ref.js"
 import type { Schema as SchemaType } from "../schema.js"
 import type { Substrate, SubstratePayload } from "../substrate.js"
@@ -56,7 +56,7 @@ function registerDoc(
   const doc: any = (interpret as any)(schema, substrate.context())
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done()
   substrates.set(doc, substrate)
   return doc

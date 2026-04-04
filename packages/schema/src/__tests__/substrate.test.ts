@@ -3,7 +3,7 @@ import type { Changeset, Op, Substrate, SubstratePayload } from "../index.js"
 import {
   applyChanges,
   change,
-  changefeed,
+  observation,
   interpret,
   PlainVersion,
   plainReplicaFactory,
@@ -49,7 +49,7 @@ function interpretSubstrate(substrate: Substrate<PlainVersion>) {
   return interpret(TestSchema, substrate.context())
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done()
 }
 

@@ -31,9 +31,9 @@
 import type { ChangeBase } from "../change.js"
 import { isReplaceChange, isSequenceChange } from "../change.js"
 import type {
-  Changefeed,
+  ChangefeedProtocol,
   Changeset,
-  ComposedChangefeed,
+  ComposedChangefeedProtocol,
   HasChangefeed,
   Op,
 } from "../changefeed.js"
@@ -73,7 +73,9 @@ import { CALL } from "./bottom.js"
  */
 export function attachChangefeed(
   target: object,
-  cf: Changefeed<unknown, ChangeBase> | ComposedChangefeed<unknown, ChangeBase>,
+  cf:
+    | ChangefeedProtocol<unknown, ChangeBase>
+    | ComposedChangefeedProtocol<unknown, ChangeBase>,
 ): asserts target is HasChangefeed {
   Object.defineProperty(target, CHANGEFEED, {
     value: cf,
@@ -405,7 +407,7 @@ function firePopulatedListeners(
 }
 
 /**
- * Create a `Changefeed<boolean>` for the `isPopulated` property at a path.
+ * Create a `ChangefeedProtocol<boolean>` for the `isPopulated` property at a path.
  *
  * - `.current` reads from the populated set (true if this path key is in the set)
  * - `.subscribe` fires exactly once when the path transitions from
@@ -416,7 +418,7 @@ function createPopulatedChangefeed(
   path: Path,
   populated: Set<string>,
   populatedListeners: Map<string, Set<() => void>>,
-): Changefeed<boolean, ChangeBase> {
+): ChangefeedProtocol<boolean, ChangeBase> {
   const key = path.key
 
   return {
@@ -454,7 +456,7 @@ function createPopulatedChangefeed(
  * Attach the `isPopulated` property to a ref as a non-enumerable object
  * carrying its own `[CHANGEFEED]`.
  *
- * The property is an object with `[CHANGEFEED]: Changefeed<boolean>`.
+ * The property is an object with `[CHANGEFEED]: ChangefeedProtocol<boolean>`.
  * The compiler detects `[CHANGEFEED]` on the type and emits reactive
  * regions (e.g. `conditionalRegion` for `if (ref.isPopulated)`).
  */
@@ -524,7 +526,7 @@ function getPopulatedState(ctx: RefContext): {
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a leaf Changefeed (no children, no subscribeTree).
+ * Creates a leaf ChangefeedProtocol (no children, no subscribeTree).
  * `subscribe` fires on any change at this path.
  *
  * Subscribers receive batched `Changeset` objects directly from
@@ -534,7 +536,7 @@ function createLeafChangefeed(
   listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
   path: Path,
   readCurrent: () => unknown,
-): Changefeed<unknown, ChangeBase> {
+): ChangefeedProtocol<unknown, ChangeBase> {
   return {
     get current() {
       return readCurrent()
@@ -549,7 +551,7 @@ function createLeafChangefeed(
 }
 
 /**
- * Creates a ComposedChangefeed for a product (struct) node.
+ * Creates a ComposedChangefeedProtocol for a product (struct) node.
  *
  * - `subscribe` fires only on changes at this node's own path.
  * - `subscribeTree` fires for all descendant changes with relative
@@ -569,7 +571,7 @@ function createProductChangefeed(
   readCurrent: () => unknown,
   productRef: object,
   fieldKeys: readonly string[],
-): ComposedChangefeed<unknown, ChangeBase> {
+): ComposedChangefeedProtocol<unknown, ChangeBase> {
   // Per-node shallow subscribers (node-level) — receive Changeset
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
   // Per-node tree subscribers — receive Changeset<Op>
@@ -663,7 +665,7 @@ function createProductChangefeed(
 }
 
 /**
- * Creates a ComposedChangefeed for a sequence (list) node.
+ * Creates a ComposedChangefeedProtocol for a sequence (list) node.
  *
  * - `subscribe` fires on SequenceChange at this path (structural changes).
  * - `subscribeTree` fires for structural changes (with path []) AND
@@ -679,7 +681,7 @@ function createSequenceChangefeed(
   readCurrent: () => unknown,
   getItemRef: (index: number) => unknown,
   getLength: () => number,
-): ComposedChangefeed<unknown, ChangeBase> {
+): ComposedChangefeedProtocol<unknown, ChangeBase> {
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
   const treeSubs = new Set<(changeset: Changeset<Op>) => void>()
 
@@ -882,7 +884,7 @@ function createSequenceChangefeed(
 }
 
 /**
- * Creates a ComposedChangefeed for a map (record) node.
+ * Creates a ComposedChangefeedProtocol for a map (record) node.
  *
  * Similar to sequence but keyed by string instead of number.
  * Dynamic subscription management for map entries.
@@ -893,7 +895,7 @@ function createMapChangefeed(
   readCurrent: () => unknown,
   getEntryRef: (key: string) => unknown,
   getKeys: () => string[],
-): ComposedChangefeed<unknown, ChangeBase> {
+): ComposedChangefeedProtocol<unknown, ChangeBase> {
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
   const treeSubs = new Set<(changeset: Changeset<Op>) => void>()
 
@@ -1017,10 +1019,10 @@ function createMapChangefeed(
  * An interpreter transformer that attaches `[CHANGEFEED]` to every ref
  * produced by the base interpreter.
  *
- * - **Leaf refs** (scalar, text, counter) get a plain `Changefeed`:
+ * - **Leaf refs** (scalar, text, counter) get a plain `ChangefeedProtocol`:
  *   `subscribe` fires on any change dispatched at that path.
  *
- * - **Composite refs** (product, sequence, map) get a `ComposedChangefeed`:
+ * - **Composite refs** (product, sequence, map) get a `ComposedChangefeedProtocol`:
  *   `subscribe` fires only for changes at the node's own path (node-level).
  *   `subscribeTree` fires for all descendant changes with relative
  *   paths (tree-level), making it a strict superset of `subscribe`.

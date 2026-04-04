@@ -23,7 +23,7 @@
 
 import {
   type BoundSchema,
-  changefeed,
+  observation,
   type DocMetadata,
   type FactoryBuilder,
   type Interpret,
@@ -702,7 +702,7 @@ export class Exchange {
       const ref: any = (interpret as any)(bound.schema, substrate.context())
         .with(readable)
         .with(writable)
-        .with(changefeed)
+        .with(observation)
         .done()
 
       registerSubstrate(ref, substrate)
@@ -747,7 +747,7 @@ export class Exchange {
       const ref: any = (interpret as any)(bound.schema, substrate.context())
         .with(readable)
         .with(writable)
-        .with(changefeed)
+        .with(observation)
         .done()
 
       registerSubstrate(ref, substrate)

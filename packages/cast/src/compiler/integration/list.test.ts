@@ -311,14 +311,12 @@ describe("compiler integration - list regions", () => {
 
         interface BooleanRef extends HasChangefeed<boolean, ReplaceChange<boolean>> {
           (): boolean
-          readonly [CHANGEFEED]: Changefeed<boolean, ReplaceChange<boolean>>
         }
 
         type ReplaceChange<T = unknown> = { readonly type: "replace"; readonly value: T }
 
         interface LocalRef<T> extends HasChangefeed<T, ReplaceChange<T>> {
           (): T
-          readonly [CHANGEFEED]: Changefeed<T, ReplaceChange<T>>
         }
 
         declare const doc: { recipes: ListRef<RecipeRef> }

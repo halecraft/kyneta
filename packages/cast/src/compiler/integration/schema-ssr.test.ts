@@ -12,7 +12,7 @@
 import { LoroSchema } from "@kyneta/loro-schema"
 import {
   CHANGEFEED,
-  changefeed,
+  observation,
   hasChangefeed,
   interpret,
   isIncrementChange,
@@ -69,7 +69,7 @@ function createDoc(initial?: Record<string, unknown>) {
   const doc = interpret(todoSchema, ctx)
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done()
   // Apply initial values via change() — real operations, not seed
   if (initial) {

@@ -21,8 +21,8 @@ import type {
   SubstratePayload,
 } from "@kyneta/schema"
 import {
-  changefeed,
   interpret,
+  observation,
   readable,
   registerSubstrate,
   writable,
@@ -71,7 +71,7 @@ function registerDoc(
   const doc: any = (interpret as any)(schema, substrate.context())
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done()
   substrates.set(doc, substrate)
   // Also register in the general unwrap() registry so that the

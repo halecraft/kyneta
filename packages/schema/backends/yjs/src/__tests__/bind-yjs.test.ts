@@ -234,8 +234,8 @@ describe("bindYjs", () => {
 
 import type { Schema as SchemaType, SubstrateFactory } from "@kyneta/schema"
 import {
-  changefeed,
   interpret,
+  observation,
   readable,
   registerSubstrate,
   unwrap,
@@ -254,7 +254,7 @@ function createYjsDocFromFactory(
   const doc: any = (interpret as any)(schema, substrate.context())
     .with(readable)
     .with(writable)
-    .with(changefeed)
+    .with(observation)
     .done()
 
   // Register for escape hatch — createYjsSubstrate already registered

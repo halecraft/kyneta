@@ -8,7 +8,7 @@
 import {
   CHANGEFEED,
   type ChangeBase,
-  type Changefeed,
+  type ChangefeedProtocol,
   type Changeset,
   type TextChange,
   type TextInstruction,
@@ -45,7 +45,7 @@ global.HTMLTextAreaElement = dom.window.HTMLTextAreaElement
  * Allows manual triggering of changes to verify region behavior.
  */
 function createMockTextRef(initialValue: string): {
-  ref: { [CHANGEFEED]: Changefeed<string, TextChange> }
+  ref: { [CHANGEFEED]: ChangefeedProtocol<string, TextChange> }
   emit: <C extends ChangeBase>(change: C, origin?: string) => void
   setValue: (value: string) => void
 } {
