@@ -12,8 +12,7 @@
 // covered in stream-frame-parser.test.ts. The connection is a thin
 // imperative shell over feedBytes; we test the glue, not the parser.
 
-import { describe, expect, it, vi } from "vitest"
-import type { ChannelMsg, PresentMsg } from "@kyneta/exchange"
+import type { ChannelMsg, PresentMsg } from "@kyneta/transport"
 import {
   cborCodec,
   decodeBinaryFrame,
@@ -21,6 +20,7 @@ import {
   feedBytes,
   initialParserState,
 } from "@kyneta/wire"
+import { describe, expect, it, vi } from "vitest"
 import { UnixSocketConnection } from "../connection.js"
 import { MockUnixSocket } from "./mock-unix-socket.js"
 
@@ -302,10 +302,10 @@ describe("UnixSocketConnection", () => {
     // Valid 7-byte header with payloadLength=13, followed by garbage payload
     const garbage = new Uint8Array(20)
     const view = new DataView(garbage.buffer)
-    view.setUint8(0, 0)           // version
-    view.setUint8(1, 0x00)        // type COMPLETE
-    view.setUint8(2, 0x00)        // hash NONE
-    view.setUint32(3, 13, false)  // payload length
+    view.setUint8(0, 0) // version
+    view.setUint8(1, 0x00) // type COMPLETE
+    view.setUint8(2, 0x00) // hash NONE
+    view.setUint32(3, 13, false) // payload length
     for (let i = 7; i < 20; i++) garbage[i] = 0xff
 
     socket.emitData(garbage)

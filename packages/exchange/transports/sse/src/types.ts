@@ -7,10 +7,10 @@
 // DisconnectReason is SSE-specific: no "closed" variant (SSE doesn't have
 // close codes) and no "not-started" variant (no "ready" gate).
 
-import type { PeerId } from "@kyneta/exchange"
+import type { PeerId } from "@kyneta/transport"
 
 // Re-export specialized transition types from generic state machine
-export type { StateTransition, TransitionListener } from "@kyneta/exchange"
+export type { StateTransition, TransitionListener } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Disconnect reason
@@ -56,7 +56,7 @@ export type SseClientState =
  * A state transition event for SSE client states.
  * Specialized from the generic `StateTransition<S>`.
  */
-export type { StateTransition as SseClientStateTransition } from "@kyneta/exchange"
+export type { StateTransition as SseClientStateTransition } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Connection handle — used by server adapter

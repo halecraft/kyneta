@@ -10,6 +10,8 @@
 // Ported from @loro-extended/repo's Synchronizer with Loro-specific types
 // replaced by substrate-agnostic equivalents.
 
+import type { CallableChangefeed, Changeset } from "@kyneta/changefeed"
+import { createCallable, createChangefeed } from "@kyneta/changefeed"
 import type {
   MergeStrategy,
   Replica,
@@ -19,11 +21,18 @@ import type {
   SubstratePayload,
   Version,
 } from "@kyneta/schema"
-import type { CallableChangefeed, Changeset } from "@kyneta/changefeed"
-import { createCallable, createChangefeed } from "@kyneta/changefeed"
-import type { Channel, ConnectedChannel } from "./channel.js"
+import type {
+  AddressedEnvelope,
+  AnyTransport,
+  Channel,
+  ChannelId,
+  ChannelMsg,
+  ConnectedChannel,
+  DocId,
+  PeerId,
+  PeerIdentityDetails,
+} from "@kyneta/transport"
 import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
-import type { AddressedEnvelope, ChannelMsg } from "./messages.js"
 import {
   type Command,
   createSynchronizerUpdate,
@@ -32,16 +41,8 @@ import {
   type SynchronizerMessage,
   type SynchronizerModel,
 } from "./synchronizer-program.js"
-import type { AnyTransport } from "./transport/transport.js"
 import { TransportManager } from "./transport/transport-manager.js"
-import type {
-  ChannelId,
-  DocId,
-  PeerChange,
-  PeerId,
-  PeerIdentityDetails,
-  ReadyState,
-} from "./types.js"
+import type { PeerChange, ReadyState } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -553,8 +554,14 @@ export class Synchronizer {
     await this.transports.shutdown()
   }
 
-  createPeerFeed(): CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange> {
-    const [feed, emit] = createChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>(() => this.#peerMap)
+  createPeerFeed(): CallableChangefeed<
+    ReadonlyMap<PeerId, PeerIdentityDetails>,
+    PeerChange
+  > {
+    const [feed, emit] = createChangefeed<
+      ReadonlyMap<PeerId, PeerIdentityDetails>,
+      PeerChange
+    >(() => this.#peerMap)
     this.#emitPeerEvents = emit
     return createCallable(feed)
   }
@@ -648,10 +655,16 @@ export class Synchronizer {
         }
         break
       case "notify/peer-joined":
-        this.#pendingPeerEvents.push({ type: "peer-joined", peer: notification.peer })
+        this.#pendingPeerEvents.push({
+          type: "peer-joined",
+          peer: notification.peer,
+        })
         break
       case "notify/peer-left":
-        this.#pendingPeerEvents.push({ type: "peer-left", peer: notification.peer })
+        this.#pendingPeerEvents.push({
+          type: "peer-left",
+          peer: notification.peer,
+        })
         break
       case "notify/warning":
         console.warn(notification.message)
@@ -892,7 +905,10 @@ export class Synchronizer {
 
     // Rebuild #peerMap from model (single source of truth at quiescence)
     this.#peerMap = new Map(
-      Array.from(this.model.peers).map(([peerId, peerState]) => [peerId, peerState.identity])
+      Array.from(this.model.peers).map(([peerId, peerState]) => [
+        peerId,
+        peerState.identity,
+      ]),
     )
 
     // Emit to subscribers
@@ -903,7 +919,7 @@ export class Synchronizer {
     if (this.model.peers.size === 0 || !this.#emitPeerEvents) return
 
     const events: PeerChange[] = Array.from(this.model.peers.values()).map(
-      (peerState) => ({ type: "peer-left" as const, peer: peerState.identity })
+      peerState => ({ type: "peer-left" as const, peer: peerState.identity }),
     )
 
     // Clear peer map (consistent with the about-to-be-wiped model)

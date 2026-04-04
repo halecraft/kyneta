@@ -19,8 +19,8 @@
 //   // Wire up GET /events and POST /sync manually using
 //   // serverAdapter.registerConnection() and parseTextPostBody()
 
-import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/exchange"
-import { Transport } from "@kyneta/exchange"
+import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/transport"
+import { Transport } from "@kyneta/transport"
 import { DEFAULT_FRAGMENT_THRESHOLD, SseConnection } from "./connection.js"
 
 // ---------------------------------------------------------------------------

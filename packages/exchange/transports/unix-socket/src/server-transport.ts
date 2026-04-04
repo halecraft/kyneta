@@ -11,14 +11,14 @@
 // No "ready" handshake — UDS connections are bidirectionally ready
 // immediately. The client calls `establishChannel` directly after connect.
 
-import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/exchange"
-import { Transport } from "@kyneta/exchange"
+import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/transport"
+import { Transport } from "@kyneta/transport"
 import { UnixSocketConnection } from "./connection.js"
 import { listen, type UnixSocketListener } from "./listen.js"
 import type { UnixSocket } from "./types.js"
 
 // Re-export listener types for convenience
-export type { UnixSocketListener, OnConnectionCallback } from "./listen.js"
+export type { OnConnectionCallback, UnixSocketListener } from "./listen.js"
 
 // ---------------------------------------------------------------------------
 // Options
@@ -148,7 +148,11 @@ export class UnixSocketServerTransport extends Transport<PeerId> {
     const channel = this.addChannel(peerId)
 
     // Create connection
-    const connection = new UnixSocketConnection(peerId, channel.channelId, socket)
+    const connection = new UnixSocketConnection(
+      peerId,
+      channel.channelId,
+      socket,
+    )
     connection._setChannel(channel)
 
     // Store connection
@@ -266,4 +270,3 @@ export class UnixSocketServerTransport extends Transport<PeerId> {
     }
   }
 }
-

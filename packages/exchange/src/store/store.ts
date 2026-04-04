@@ -9,7 +9,7 @@
 // single-writer-per-document semantics.
 
 import type { DocMetadata, SubstratePayload } from "@kyneta/schema"
-import type { DocId } from "../types.js"
+import type { DocId } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // StoreEntry — the unit of persistence

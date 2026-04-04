@@ -1,35 +1,21 @@
-// types — core identity and state types for @kyneta/exchange.
+// types — sync-specific types for @kyneta/exchange.
 //
-// These are the foundational types used across the exchange package.
-// They are substrate-agnostic — no Loro, no plain-specific concepts.
+// Transport identity types (PeerId, DocId, ChannelId, TransportType,
+// PeerIdentityDetails) are defined in @kyneta/transport.
+// This file defines sync-specific types that depend on them.
 
-// ---------------------------------------------------------------------------
-// Identity
-// ---------------------------------------------------------------------------
+import type { ChangeBase } from "@kyneta/changefeed"
+import type { ChannelId, DocId, PeerIdentityDetails } from "@kyneta/transport"
 
-/** Peer identifier — a string unique within the exchange network. */
-export type PeerId = string
-
-/** Document identifier — a string unique within an exchange. */
-export type DocId = string
-
-/** Channel identifier — a monotonic integer assigned by the adapter. */
-export type ChannelId = number
-
-/** Adapter type identifier — e.g. "bridge", "websocket", "indexeddb". */
-export type TransportType = string
-
-/**
- * Peer identity details — the full identity of a peer in the network.
- *
- * `peerId` is the globally unique, stable identifier. `name` is an
- * optional human-readable label. `type` classifies the peer's role.
- */
-export type PeerIdentityDetails = {
-  peerId: PeerId
-  name?: string
-  type: "user" | "bot" | "service"
-}
+// Re-export transport identity types so existing `from "./types.js"` imports
+// within exchange (e.g. sync.ts) continue to resolve.
+export type {
+  ChannelId,
+  DocId,
+  PeerId,
+  PeerIdentityDetails,
+  TransportType,
+} from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Ready state — per-doc sync status
@@ -74,8 +60,6 @@ export type PeerState = {
 // ---------------------------------------------------------------------------
 // Peer lifecycle changes
 // ---------------------------------------------------------------------------
-
-import type { ChangeBase } from "@kyneta/changefeed"
 
 /**
  * A change in the peer lifecycle — a peer joining or leaving the

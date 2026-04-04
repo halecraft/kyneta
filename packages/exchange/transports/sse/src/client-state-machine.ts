@@ -11,7 +11,7 @@
 //                            ↓
 //                       disconnected (max retries)
 
-import { ClientStateMachine } from "@kyneta/exchange"
+import { ClientStateMachine } from "@kyneta/transport"
 import type { SseClientState } from "./types.js"
 
 // ---------------------------------------------------------------------------

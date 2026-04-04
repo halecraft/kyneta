@@ -7,8 +7,8 @@
 // "open"/"message"/"close"/"error").
 
 import { describe, expect, it, vi } from "vitest"
-import { WebrtcTransport } from "../webrtc-transport.js"
 import type { DataChannelLike } from "../data-channel-like.js"
+import { WebrtcTransport } from "../webrtc-transport.js"
 
 // ---------------------------------------------------------------------------
 // MockSimplePeer — mimics simple-peer's EventEmitter-style API

@@ -12,7 +12,7 @@
 //   Express: res.write(`data: ${textFrame}\n\n`)
 //   Hono:    stream.writeSSE({ data: textFrame })
 
-import type { Channel, ChannelMsg, PeerId } from "@kyneta/exchange"
+import type { Channel, ChannelMsg, PeerId } from "@kyneta/transport"
 import {
   encodeTextComplete,
   fragmentTextPayload,

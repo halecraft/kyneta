@@ -13,8 +13,9 @@
 //   s.readyStates   // current sync status
 //   await s.waitForSync()
 
+import type { DocId, PeerId } from "@kyneta/transport"
 import type { Synchronizer } from "./synchronizer.js"
-import type { DocId, PeerId, ReadyState } from "./types.js"
+import type { ReadyState } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // SyncRef — what sync() returns

@@ -4,7 +4,7 @@
 // x=type/hash via case), JSON array envelope, fragment fields,
 // fragmentTextPayload splitting, and end-to-end with TextReassembler.
 
-import type { ChannelMsg, OfferMsg, PresentMsg } from "@kyneta/exchange"
+import type { ChannelMsg, OfferMsg, PresentMsg } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
 import { textCodec } from "../json.js"

@@ -20,10 +20,10 @@ import {
   Schema,
   TimestampVersion,
 } from "@kyneta/schema"
+import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
-import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 
 // ---------------------------------------------------------------------------
 // Drain + cleanup helpers

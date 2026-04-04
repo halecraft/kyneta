@@ -12,11 +12,11 @@
 // The byte-at-a-time test subsumes all partial-header / partial-payload /
 // boundary-crossing variants — if it passes, every possible split point works.
 
+import type { ChannelMsg, InterestMsg, PresentMsg } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
-import type { ChannelMsg, InterestMsg, PresentMsg } from "@kyneta/exchange"
+import { cborCodec } from "../cbor.js"
 import { HEADER_SIZE, WIRE_VERSION } from "../constants.js"
 import { decodeBinaryFrame, encodeComplete } from "../frame.js"
-import { cborCodec } from "../cbor.js"
 import { feedBytes, initialParserState } from "../stream-frame-parser.js"
 
 // ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ describe("feedBytes", () => {
     const frame = encodeComplete(cborCodec, makePresent("byte-by-byte"))
 
     let state = initialParserState()
-    let allFrames: Uint8Array[] = []
+    const allFrames: Uint8Array[] = []
 
     for (let i = 0; i < frame.length; i++) {
       const result = feedBytes(state, frame.slice(i, i + 1))
@@ -124,7 +124,7 @@ describe("feedBytes", () => {
     const empty = new Uint8Array(0)
 
     // Empty at start
-    let state = initialParserState()
+    const state = initialParserState()
     const r1 = feedBytes(state, empty)
     expect(r1.frames).toHaveLength(0)
 
@@ -152,9 +152,9 @@ describe("feedBytes", () => {
     const frame = new Uint8Array(HEADER_SIZE)
     const view = new DataView(frame.buffer)
     view.setUint8(0, WIRE_VERSION) // version
-    view.setUint8(1, 0x00)        // type COMPLETE
-    view.setUint8(2, 0x00)        // hash NONE
-    view.setUint32(3, 0, false)   // payloadLength = 0
+    view.setUint8(1, 0x00) // type COMPLETE
+    view.setUint8(2, 0x00) // hash NONE
+    view.setUint32(3, 0, false) // payloadLength = 0
 
     const result = feedBytes(initialParserState(), frame)
 
@@ -199,7 +199,7 @@ describe("feedBytes", () => {
     // Feed in 4KB chunks
     const chunkSize = 4096
     let state = initialParserState()
-    let allFrames: Uint8Array[] = []
+    const allFrames: Uint8Array[] = []
 
     for (let offset = 0; offset < frameBytes.length; offset += chunkSize) {
       const chunk = frameBytes.slice(

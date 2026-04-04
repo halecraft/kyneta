@@ -16,14 +16,14 @@
 // - connection.#handleData (imperative) dispatches decoded messages
 // - The write queue is imperative state; encoding is pure
 
-import type { Channel, ChannelMsg } from "@kyneta/exchange"
+import type { Channel, ChannelMsg } from "@kyneta/transport"
 import {
   cborCodec,
   decodeBinaryFrame,
   encodeComplete,
-  type StreamParserState,
   feedBytes,
   initialParserState,
+  type StreamParserState,
 } from "@kyneta/wire"
 import type { UnixSocket } from "./types.js"
 

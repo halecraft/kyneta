@@ -1,6 +1,6 @@
 # Kyneta Wire Protocol Specification
 
-Wire protocol for `@kyneta/exchange` message transport. Defines the universal `Frame<T>` abstraction, two encoding pipelines (binary and text), framing, fragmentation, and reassembly for the exchange's 5-message protocol.
+Wire protocol for `@kyneta/transport` message transport. Defines the universal `Frame<T>` abstraction, two encoding pipelines (binary and text), framing, fragmentation, and reassembly for the exchange's 5-message protocol.
 
 ## Overview
 

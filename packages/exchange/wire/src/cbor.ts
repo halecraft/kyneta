@@ -15,7 +15,7 @@ import type {
   InterestMsg,
   OfferMsg,
   PresentMsg,
-} from "@kyneta/exchange"
+} from "@kyneta/transport"
 import { type CBORType, decodeCBOR, encodeCBOR } from "@levischuck/tiny-cbor"
 import type { BinaryCodec } from "./codec.js"
 import {

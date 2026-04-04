@@ -13,17 +13,15 @@
 // The Exchange auto-starts on construction — no `.start()` call needed.
 // Use `.shutdown()` for teardown.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import * as crypto from "node:crypto"
+import * as fs from "node:fs"
+import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
-import * as fs from "node:fs"
-import * as crypto from "node:crypto"
-import * as net from "node:net"
-
 import { Exchange } from "@kyneta/exchange"
-
-import { UnixSocketServerTransport } from "../server-transport.js"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { UnixSocketClientTransport } from "../client-transport.js"
+import { UnixSocketServerTransport } from "../server-transport.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -162,7 +160,11 @@ describe("Unix Socket Transport — integration", () => {
     await waitFor(
       () => {
         const status = clientTransport.getState().status
-        return status === "reconnecting" || status === "connecting" || status === "disconnected"
+        return (
+          status === "reconnecting" ||
+          status === "connecting" ||
+          status === "disconnected"
+        )
       },
       { timeoutMs: 5000 },
     )
@@ -187,7 +189,9 @@ describe("Unix Socket Transport — integration", () => {
     expect(clientTransport.isConnected).toBe(true)
 
     // Verify server sees the new connection
-    await waitFor(() => serverTransport2.connectionCount > 0, { timeoutMs: 5000 })
+    await waitFor(() => serverTransport2.connectionCount > 0, {
+      timeoutMs: 5000,
+    })
     expect(serverTransport2.connectionCount).toBe(1)
   })
 
@@ -349,7 +353,9 @@ describe("Unix Socket Transport — integration", () => {
     expect(clientTransport1.isConnected).toBe(true)
     expect(clientTransport2.isConnected).toBe(true)
 
-    await waitFor(() => serverTransport.connectionCount >= 2, { timeoutMs: 5000 })
+    await waitFor(() => serverTransport.connectionCount >= 2, {
+      timeoutMs: 5000,
+    })
     expect(serverTransport.connectionCount).toBe(2)
   })
 })

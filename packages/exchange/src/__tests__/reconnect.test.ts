@@ -9,16 +9,18 @@
 // 6. Attempt counting reads from current state machine state
 // 7. Timer fires connectFn after delay
 
+import { ClientStateMachine, createReconnectScheduler } from "@kyneta/transport"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { ClientStateMachine } from "../transport/client-state-machine.js"
-import { createReconnectScheduler } from "../transport/reconnect.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 type TestState =
-  | { status: "disconnected"; reason?: { type: string; [key: string]: unknown } }
+  | {
+      status: "disconnected"
+      reason?: { type: string; [key: string]: unknown }
+    }
   | { status: "connecting"; attempt: number }
   | { status: "connected" }
   | { status: "reconnecting"; attempt: number; nextAttemptMs: number }
@@ -72,14 +74,18 @@ describe("createReconnectScheduler", () => {
         delays.push(state.nextAttemptMs)
       }
 
-      vi.advanceTimersByTime(state.status === "reconnecting" ? state.nextAttemptMs : 0)
+      vi.advanceTimersByTime(
+        state.status === "reconnecting" ? state.nextAttemptMs : 0,
+      )
       if (i < 9) {
         sm.transition({ status: "connecting", attempt: i + 1 })
       }
     }
 
     // 100, 200, 400, 800, 1600, 3200, 5000, 5000, 5000, 5000
-    expect(delays).toEqual([100, 200, 400, 800, 1600, 3200, 5000, 5000, 5000, 5000])
+    expect(delays).toEqual([
+      100, 200, 400, 800, 1600, 3200, 5000, 5000, 5000, 5000,
+    ])
   })
 
   it("jitter is added to the base exponential delay", () => {

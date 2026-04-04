@@ -34,7 +34,13 @@ import { HEADER_SIZE } from "./constants.js"
  */
 export type StreamParserState =
   | { phase: "header"; buffer: Uint8Array; offset: number }
-  | { phase: "payload"; header: Uint8Array; payloadLength: number; buffer: Uint8Array; offset: number }
+  | {
+      phase: "payload"
+      header: Uint8Array
+      payloadLength: number
+      buffer: Uint8Array
+      offset: number
+    }
 
 /**
  * Create a fresh parser state in the "header" phase.

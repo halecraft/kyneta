@@ -26,8 +26,8 @@ import type {
   PeerId,
   ReconnectScheduler,
   TransportFactory,
-} from "@kyneta/exchange"
-import { createReconnectScheduler, Transport } from "@kyneta/exchange"
+} from "@kyneta/transport"
+import { createReconnectScheduler, Transport } from "@kyneta/transport"
 import {
   decodeBinaryMessages,
   encodeBinaryAndSend,

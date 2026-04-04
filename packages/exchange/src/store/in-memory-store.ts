@@ -13,7 +13,7 @@
 // `Store` directly for use in Exchange({ stores: [...] }).
 
 import type { DocMetadata } from "@kyneta/schema"
-import type { DocId } from "../types.js"
+import type { DocId } from "@kyneta/transport"
 import type { Store, StoreEntry } from "./store.js"
 
 export type InMemoryStoreData = {

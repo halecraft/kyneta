@@ -1,6 +1,6 @@
 # @kyneta/wire
 
-Wire format codecs, framing, and fragmentation for `@kyneta/exchange`. Serializes the exchange's 5-message protocol (`establish-request`, `establish-response`, `discover`, `interest`, `offer`) for transport over binary and text channels.
+Wire format codecs, framing, and fragmentation for `@kyneta/transport`. Serializes the transport's 5-message protocol (`establish-request`, `establish-response`, `discover`, `interest`, `offer`) for transport over binary and text channels.
 
 ## Codecs
 
@@ -35,7 +35,7 @@ export interface MessageCodec {
 
 ```/dev/null/codec-example.ts#L1-L14
 import { cborCodec, jsonCodec } from "@kyneta/wire"
-import type { ChannelMsg } from "@kyneta/exchange"
+import type { ChannelMsg } from "@kyneta/transport"
 
 const msg: ChannelMsg = {
   type: "discover",
@@ -184,7 +184,7 @@ See [PROTOCOL.md](./PROTOCOL.md) for the full wire protocol specification.
 ```/dev/null/package.json#L1-3
 {
   "peerDependencies": {
-    "@kyneta/exchange": ">=0.0.1"
+    "@kyneta/transport": ">=1.0.0"
   }
 }
 ```

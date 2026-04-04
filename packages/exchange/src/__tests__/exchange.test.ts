@@ -1,7 +1,7 @@
 // Exchange — unit tests for the public Exchange API.
 
-import { hasChangefeed } from "@kyneta/changefeed"
 import type { Changeset } from "@kyneta/changefeed"
+import { hasChangefeed } from "@kyneta/changefeed"
 import { bindLoro, LoroSchema, loro } from "@kyneta/loro-schema"
 import {
   bind,
@@ -12,11 +12,15 @@ import {
   Schema,
   unwrap,
 } from "@kyneta/schema"
+import {
+  Bridge,
+  createBridgeTransport,
+  type PeerIdentityDetails,
+} from "@kyneta/transport"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
 import { hasSync, sync } from "../sync.js"
-import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
-import type { PeerChange, PeerIdentityDetails } from "../types.js"
+import type { PeerChange } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -386,19 +390,15 @@ describe("Exchange", () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
         identity: { peerId: "alice" },
-        transports: [
-          createBridgeTransport({ transportType: "alice", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchange2 = createExchange({
         identity: { peerId: "bob", name: "Bob" },
-        transports: [
-          createBridgeTransport({ transportType: "bob", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
       const changes: PeerChange[] = []
-      exchange1.peers.subscribe((cs) => {
+      exchange1.peers.subscribe(cs => {
         changes.push(...cs.changes)
       })
 
@@ -421,22 +421,18 @@ describe("Exchange", () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
         identity: { peerId: "alice" },
-        transports: [
-          createBridgeTransport({ transportType: "alice", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchange2 = createExchange({
         identity: { peerId: "bob" },
-        transports: [
-          createBridgeTransport({ transportType: "bob", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
       await drain()
       expect(exchange1.peers().size).toBe(1)
 
       const changes: PeerChange[] = []
-      exchange1.peers.subscribe((cs) => {
+      exchange1.peers.subscribe(cs => {
         changes.push(...cs.changes)
       })
 
@@ -458,15 +454,11 @@ describe("Exchange", () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
         identity: { peerId: "alice" },
-        transports: [
-          createBridgeTransport({ transportType: "alice", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchange2 = createExchange({
         identity: { peerId: "bob" },
-        transports: [
-          createBridgeTransport({ transportType: "bob", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
       let peersDuringCallback:
@@ -503,7 +495,7 @@ describe("Exchange", () => {
       })
 
       const changes: PeerChange[] = []
-      exchange1.peers.subscribe((cs) => {
+      exchange1.peers.subscribe(cs => {
         changes.push(...cs.changes)
       })
 
@@ -511,7 +503,7 @@ describe("Exchange", () => {
 
       // Only one peer-joined, even though two bridges connect the same peer
       expect(exchange1.peers().size).toBe(1)
-      const joinedChanges = changes.filter((c) => c.type === "peer-joined")
+      const joinedChanges = changes.filter(c => c.type === "peer-joined")
       expect(joinedChanges.length).toBe(1)
       expect(joinedChanges[0].peer.peerId).toBe("bob")
     })
@@ -520,22 +512,18 @@ describe("Exchange", () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
         identity: { peerId: "alice" },
-        transports: [
-          createBridgeTransport({ transportType: "alice", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchange2 = createExchange({
         identity: { peerId: "bob" },
-        transports: [
-          createBridgeTransport({ transportType: "bob", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
       await drain()
       expect(exchange1.peers().size).toBe(1)
 
       const changes: PeerChange[] = []
-      exchange1.peers.subscribe((cs) => {
+      exchange1.peers.subscribe(cs => {
         changes.push(...cs.changes)
       })
 
@@ -552,22 +540,18 @@ describe("Exchange", () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
         identity: { peerId: "alice" },
-        transports: [
-          createBridgeTransport({ transportType: "alice", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchange2 = createExchange({
         identity: { peerId: "bob" },
-        transports: [
-          createBridgeTransport({ transportType: "bob", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
       await drain()
       expect(exchange1.peers().size).toBe(1)
 
       const changes: PeerChange[] = []
-      exchange1.peers.subscribe((cs) => {
+      exchange1.peers.subscribe(cs => {
         changes.push(...cs.changes)
       })
 

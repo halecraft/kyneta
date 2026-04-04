@@ -5,7 +5,7 @@
 // 2. Fragment text frame body → returns pending, then complete on final fragment
 // 3. Malformed body → returns error
 
-import type { ChannelMsg } from "@kyneta/exchange"
+import type { ChannelMsg } from "@kyneta/transport"
 import {
   encodeTextComplete,
   fragmentTextPayload,

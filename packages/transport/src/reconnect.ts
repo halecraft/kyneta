@@ -123,7 +123,11 @@ export interface ReconnectSchedulerParams {
 export function createReconnectScheduler(
   params: ReconnectSchedulerParams,
 ): ReconnectScheduler {
-  const { stateMachine, connectFn, jitterFn = () => Math.random() * 1000 } = params
+  const {
+    stateMachine,
+    connectFn,
+    jitterFn = () => Math.random() * 1000,
+  } = params
   const opts: ReconnectOptions = { ...DEFAULT_RECONNECT, ...params.options }
 
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined

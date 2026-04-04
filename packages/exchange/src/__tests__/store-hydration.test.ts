@@ -11,6 +11,7 @@ import {
   plainReplicaFactory,
   Schema,
 } from "@kyneta/schema"
+import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { bindYjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
@@ -20,7 +21,6 @@ import {
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 import type { StoreEntry } from "../store/store.js"
-import { Bridge, createBridgeTransport } from "../transport/bridge-transport.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers

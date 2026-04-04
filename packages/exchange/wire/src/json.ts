@@ -20,7 +20,7 @@ import type {
   InterestMsg,
   OfferMsg,
   PresentMsg,
-} from "@kyneta/exchange"
+} from "@kyneta/transport"
 import type { TextCodec } from "./codec.js"
 
 // ---------------------------------------------------------------------------

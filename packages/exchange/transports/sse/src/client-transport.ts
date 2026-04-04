@@ -31,8 +31,8 @@ import type {
   ReconnectScheduler,
   TransitionListener,
   TransportFactory,
-} from "@kyneta/exchange"
-import { createReconnectScheduler, Transport } from "@kyneta/exchange"
+} from "@kyneta/transport"
+import { createReconnectScheduler, Transport } from "@kyneta/transport"
 import {
   encodeTextComplete,
   fragmentTextPayload,
@@ -622,7 +622,6 @@ export class SseClientTransport extends Transport<void> {
       }
     }
   }
-
 }
 
 // ---------------------------------------------------------------------------

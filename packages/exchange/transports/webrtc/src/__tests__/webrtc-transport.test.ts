@@ -4,16 +4,16 @@
 // lifecycle, send/receive pipelines, fragmentation, and multi-peer
 // channel management.
 
-import { describe, expect, it, vi, beforeEach } from "vitest"
-import { WebrtcTransport } from "../webrtc-transport.js"
-import { MockDataChannel } from "./mock-data-channel.js"
+import type { ChannelMsg } from "@kyneta/transport"
 import {
   cborCodec,
   encodeComplete,
   fragmentPayload,
   wrapCompleteMessage,
 } from "@kyneta/wire"
-import type { ChannelMsg } from "@kyneta/exchange"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { WebrtcTransport } from "../webrtc-transport.js"
+import { MockDataChannel } from "./mock-data-channel.js"
 
 // ---------------------------------------------------------------------------
 // Helpers

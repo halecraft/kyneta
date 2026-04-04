@@ -1,7 +1,7 @@
 {
   "name": "@kyneta/wire",
   "version": "1.1.0",
-  "description": "Wire format codecs, framing, and fragmentation for @kyneta/exchange",
+  "description": "Wire format codecs, framing, and fragmentation for @kyneta/transport",
   "author": "Duane Johnson",
   "license": "MIT",
   "repository": {
@@ -35,13 +35,13 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": "^1.1.0"
+    "@kyneta/transport": "^1.0.0"
   },
   "dependencies": {
     "@levischuck/tiny-cbor": "^0.3.2"
   },
   "devDependencies": {
-    "@kyneta/exchange": "workspace:^",
+    "@kyneta/transport": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",

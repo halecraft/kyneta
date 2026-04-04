@@ -17,8 +17,8 @@ import type {
   ChannelMsg,
   GeneratedChannel,
   TransportFactory,
-} from "@kyneta/exchange"
-import { Transport } from "@kyneta/exchange"
+} from "@kyneta/transport"
+import { Transport } from "@kyneta/transport"
 import {
   decodeBinaryMessages,
   encodeBinaryAndSend,

@@ -13,7 +13,7 @@
 //   1. TextReassembler.receive(body) → Frame<string>
 //   2. JSON.parse(frame.content.payload) → textCodec.decode(parsed) → ChannelMsg[]
 
-import type { ChannelMsg } from "@kyneta/exchange"
+import type { ChannelMsg } from "@kyneta/transport"
 import { type TextReassembler, textCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------

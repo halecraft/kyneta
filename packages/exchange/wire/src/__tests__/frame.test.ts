@@ -9,7 +9,7 @@ import type {
   InterestMsg,
   OfferMsg,
   PresentMsg,
-} from "@kyneta/exchange"
+} from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import { cborCodec } from "../cbor.js"
 import {

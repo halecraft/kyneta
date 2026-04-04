@@ -4,8 +4,11 @@
 // types replaced by substrate-agnostic equivalents. The @logtape/logtape
 // dependency is removed.
 
-import type { AddressedEnvelope } from "../messages.js"
-import type { AnyTransport, TransportContext } from "./transport.js"
+import type {
+  AddressedEnvelope,
+  AnyTransport,
+  TransportContext,
+} from "@kyneta/transport"
 
 type TransportManagerParams = {
   transports?: AnyTransport[]

@@ -6,20 +6,27 @@
 // (present, interest, offer, dismiss).
 
 // ---------------------------------------------------------------------------
-// Core types
+// Core types — sync-specific (defined here)
+// ---------------------------------------------------------------------------
+
+export type {
+  PeerChange,
+  PeerDocSyncState,
+  PeerState,
+  ReadyState,
+} from "./types.js"
+
+// ---------------------------------------------------------------------------
+// Core types — transport identity (re-exported from @kyneta/transport)
 // ---------------------------------------------------------------------------
 
 export type {
   ChannelId,
   DocId,
-  PeerChange,
-  PeerDocSyncState,
   PeerId,
   PeerIdentityDetails,
-  PeerState,
-  ReadyState,
   TransportType,
-} from "./types.js"
+} from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Bind — re-exported from @kyneta/schema for convenience
@@ -41,7 +48,7 @@ export { registerSubstrate, unwrap } from "@kyneta/schema"
 export { TimestampVersion } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
-// Messages — the three-message sync vocabulary
+// Messages — re-exported from @kyneta/transport
 // ---------------------------------------------------------------------------
 
 export type {
@@ -56,11 +63,11 @@ export type {
   OfferMsg,
   PresentMsg,
   ReturnEnvelope,
-} from "./messages.js"
-export { isEstablishmentMsg, isExchangeMsg } from "./messages.js"
+} from "@kyneta/transport"
+export { isEstablishmentMsg, isExchangeMsg } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
-// Channel — channel types and lifecycle
+// Channel — re-exported from @kyneta/transport
 // ---------------------------------------------------------------------------
 
 export type {
@@ -70,45 +77,43 @@ export type {
   ConnectedChannel,
   EstablishedChannel,
   GeneratedChannel,
-} from "./channel.js"
-export { isEstablished } from "./channel.js"
+} from "@kyneta/transport"
+export { ChannelDirectory, isEstablished } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
-// Transport — base class and transport manager
+// Transport — base class (re-exported from @kyneta/transport) and manager
 // ---------------------------------------------------------------------------
 
+export type {
+  AnyTransport,
+  TransportContext,
+  TransportFactory,
+} from "@kyneta/transport"
 export {
   ClientStateMachine,
   type ClientStateMachineConfig,
-  type StateTransition,
-  type TransitionListener,
-} from "./transport/client-state-machine.js"
-export {
   computeBackoffDelay,
   createReconnectScheduler,
   DEFAULT_RECONNECT,
   type ReconnectOptions,
   type ReconnectScheduler,
   type ReconnectSchedulerParams,
-} from "./transport/reconnect.js"
-export type {
-  AnyTransport,
-  TransportContext,
-  TransportFactory,
-} from "./transport/transport.js"
-export { Transport } from "./transport/transport.js"
+  type StateTransition,
+  type TransitionListener,
+  Transport,
+} from "@kyneta/transport"
 export { TransportManager } from "./transport/transport-manager.js"
 
 // ---------------------------------------------------------------------------
-// Bridge — in-process testing adapter
+// Bridge — re-exported from @kyneta/transport
 // ---------------------------------------------------------------------------
 
-export type { BridgeTransportParams } from "./transport/bridge-transport.js"
+export type { BridgeTransportParams } from "@kyneta/transport"
 export {
   Bridge,
   BridgeTransport,
   createBridgeTransport,
-} from "./transport/bridge-transport.js"
+} from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Synchronizer — TEA state machine

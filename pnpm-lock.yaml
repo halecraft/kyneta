@@ -277,6 +277,10 @@ importers:
         version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)(tsx@4.21.0)
 
   packages/exchange:
+    dependencies:
+      '@kyneta/transport':
+        specifier: workspace:^
+        version: link:../transport
     devDependencies:
       '@kyneta/changefeed':
         specifier: workspace:^
@@ -339,6 +343,9 @@ importers:
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../../schema
+      '@kyneta/transport':
+        specifier: workspace:^
+        version: link:../../../transport
       '@kyneta/wire':
         specifier: workspace:^
         version: link:../../wire
@@ -372,6 +379,9 @@ importers:
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../../schema
+      '@kyneta/transport':
+        specifier: workspace:^
+        version: link:../../../transport
       '@kyneta/wire':
         specifier: workspace:^
         version: link:../../wire
@@ -399,6 +409,9 @@ importers:
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../../schema
+      '@kyneta/transport':
+        specifier: workspace:^
+        version: link:../../../transport
       '@kyneta/wire':
         specifier: workspace:^
         version: link:../../wire
@@ -423,6 +436,9 @@ importers:
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../../schema
+      '@kyneta/transport':
+        specifier: workspace:^
+        version: link:../../../transport
       '@kyneta/wire':
         specifier: workspace:^
         version: link:../../wire
@@ -448,12 +464,12 @@ importers:
         specifier: ^0.3.2
         version: 0.3.2
     devDependencies:
-      '@kyneta/exchange':
-        specifier: workspace:^
-        version: link:..
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../schema
+      '@kyneta/transport':
+        specifier: workspace:^
+        version: link:../../transport
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)
@@ -581,6 +597,21 @@ importers:
       yjs:
         specifier: ^13.6.30
         version: 13.6.30
+
+  packages/transport:
+    devDependencies:
+      '@kyneta/schema':
+        specifier: workspace:^
+        version: link:../schema
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.17
+        version: 4.0.18(@types/node@22.19.15)(jsdom@26.1.0)(tsx@4.21.0)
 
   tests/exchange-websocket:
     devDependencies:

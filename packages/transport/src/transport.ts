@@ -11,10 +11,10 @@
 // calls `_initialize()` to inject identity and callbacks, `_start()` to
 // begin operation, and `_stop()` to shut down.
 
-import type { Channel, ConnectedChannel, GeneratedChannel } from "../channel.js"
-import { ChannelDirectory } from "../channel-directory.js"
-import type { AddressedEnvelope, ChannelMsg } from "../messages.js"
-import type { ChannelId, PeerIdentityDetails, TransportType } from "../types.js"
+import type { Channel, ConnectedChannel, GeneratedChannel } from "./channel.js"
+import { ChannelDirectory } from "./channel-directory.js"
+import type { AddressedEnvelope, ChannelMsg } from "./messages.js"
+import type { ChannelId, PeerIdentityDetails, TransportType } from "./types.js"
 
 export type AnyTransport = Transport<any>
 

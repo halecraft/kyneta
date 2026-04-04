@@ -258,10 +258,7 @@ describe("peer program — lifecycle sequence", () => {
     expect(fx0).toEqual([{ type: "probe", path: PATH }])
 
     // 2. Probe finds no socket → start listener
-    const [m1, ...fx1] = update(
-      { type: "probe-result", result: "enoent" },
-      m0,
-    )
+    const [m1, ...fx1] = update({ type: "probe-result", result: "enoent" }, m0)
     expect(fx1[0]).toEqual({ type: "start-listener", path: PATH })
 
     // 3. Listener added
@@ -299,9 +296,7 @@ describe("peer program — lifecycle sequence", () => {
     // 7. Dispose while connector → remove transport
     const [m6, ...fx6] = update({ type: "dispose" }, m5)
     expect(m6).toEqual({ role: "disposed", transportId: undefined })
-    expect(fx6).toEqual([
-      { type: "remove-transport", transportId: "cli-1" },
-    ])
+    expect(fx6).toEqual([{ type: "remove-transport", transportId: "cli-1" }])
 
     // 8. Further messages are absorbed
     const [m7, ...fx7] = update(

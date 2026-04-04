@@ -1,18 +1,21 @@
 {
-  "name": "@kyneta/unix-socket-transport",
-  "version": "1.1.0",
-  "description": "Unix domain socket transport for @kyneta/exchange — stream-oriented server-to-server transport with StreamFrameParser",
+  "name": "@kyneta/transport",
+  "version": "1.0.0",
+  "description": "Transport infrastructure — base class, channel types, message vocabulary, and client utilities for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",
-    "directory": "packages/exchange/transports/unix-socket"
+    "directory": "packages/transport"
   },
   "publishConfig": {
     "access": "public"
   },
   "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": [
     "dist",
     "src"
@@ -20,8 +23,10 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
+    "./src": "./src/index.ts",
     "./src/*": "./src/*"
   },
   "scripts": {
@@ -30,18 +35,10 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/transport": "^1.0.0",
-    "@kyneta/machine": "^1.0.0",
-    "@kyneta/wire": "^1.1.0"
+    "@kyneta/schema": "^1.1.0"
   },
   "devDependencies": {
-    "@kyneta/exchange": "workspace:^",
-    "@kyneta/transport": "workspace:^",
-    "@kyneta/machine": "workspace:^",
-    "@kyneta/wire": "workspace:^",
     "@kyneta/schema": "workspace:^",
-    "@types/node": "^22",
-    "bun-types": "latest",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"

@@ -11,7 +11,7 @@
 // caller passes either a single message or an array and the codec handles
 // both. The frame layer never needs to know.
 
-import type { ChannelMsg } from "@kyneta/exchange"
+import type { ChannelMsg } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // BinaryCodec — for binary transports

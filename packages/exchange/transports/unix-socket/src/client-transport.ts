@@ -27,18 +27,15 @@ import type {
   StateTransition,
   TransitionListener,
   TransportFactory,
-} from "@kyneta/exchange"
+} from "@kyneta/transport"
 import {
   ClientStateMachine,
   createReconnectScheduler,
   Transport,
-} from "@kyneta/exchange"
+} from "@kyneta/transport"
 import { connect } from "./connect.js"
 import { UnixSocketConnection } from "./connection.js"
-import type {
-  DisconnectReason,
-  UnixSocketClientState,
-} from "./types.js"
+import type { DisconnectReason, UnixSocketClientState } from "./types.js"
 
 // Re-export state types for convenience
 export type { DisconnectReason, UnixSocketClientState }
@@ -86,7 +83,8 @@ export interface UnixSocketClientOptions {
 /**
  * State transition event for unix socket client states.
  */
-export type UnixSocketClientStateTransition = StateTransition<UnixSocketClientState>
+export type UnixSocketClientStateTransition =
+  StateTransition<UnixSocketClientState>
 
 // ---------------------------------------------------------------------------
 // UnixSocketClientTransport

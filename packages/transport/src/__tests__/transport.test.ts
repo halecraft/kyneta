@@ -1,12 +1,11 @@
-// Adapter and BridgeTransport — unit tests for the adapter/channel infrastructure.
+// Transport and BridgeTransport — unit tests for the transport/channel infrastructure.
 
 import { describe, expect, it, vi } from "vitest"
+import { Bridge, BridgeTransport } from "../bridge.js"
 import type { GeneratedChannel } from "../channel.js"
 import type { ChannelMsg } from "../messages.js"
-import { Bridge, BridgeTransport } from "../transport/bridge-transport.js"
-import type { TransportContext } from "../transport/transport.js"
-import { Transport } from "../transport/transport.js"
-import { TransportManager } from "../transport/transport-manager.js"
+import type { TransportContext } from "../transport.js"
+import { Transport } from "../transport.js"
 import type { PeerIdentityDetails } from "../types.js"
 
 // ---------------------------------------------------------------------------
@@ -161,126 +160,6 @@ describe("Transport lifecycle", () => {
 })
 
 // ---------------------------------------------------------------------------
-// TransportManager
-// ---------------------------------------------------------------------------
-
-describe("TransportManager", () => {
-  it("initializes and starts adapters", async () => {
-    const adapter = new TestAdapter("mgr-test")
-    const ctx = createTransportContext()
-
-    const manager = new TransportManager({
-      transports: [adapter],
-      context: ctx,
-      onReset: vi.fn(),
-    })
-
-    manager.startAll()
-    // Give microtask a chance to run
-    await new Promise<void>(r => queueMicrotask(r))
-
-    expect(adapter.started).toBe(true)
-    expect(manager.hasTransport("mgr-test")).toBe(true)
-    expect(manager.transports.length).toBe(1)
-  })
-
-  it("add/remove adapter dynamically", async () => {
-    const ctx = createTransportContext()
-    const manager = new TransportManager({
-      context: ctx,
-      onReset: vi.fn(),
-    })
-
-    const adapter = new TestAdapter("dynamic")
-    await manager.addTransport(adapter)
-    expect(manager.hasTransport("dynamic")).toBe(true)
-    expect(adapter.started).toBe(true)
-
-    await manager.removeTransport("dynamic")
-    expect(manager.hasTransport("dynamic")).toBe(false)
-    expect(adapter.stopped).toBe(true)
-  })
-
-  it("addTransport is idempotent", async () => {
-    const ctx = createTransportContext()
-    const manager = new TransportManager({
-      context: ctx,
-      onReset: vi.fn(),
-    })
-
-    const adapter = new TestAdapter("idem")
-    await manager.addTransport(adapter)
-    await manager.addTransport(adapter) // no-op
-    expect(manager.transports.length).toBe(1)
-  })
-
-  it("removeTransport is idempotent for non-existent IDs", async () => {
-    const ctx = createTransportContext()
-    const manager = new TransportManager({
-      context: ctx,
-      onReset: vi.fn(),
-    })
-
-    // Should not throw
-    await manager.removeTransport("nonexistent")
-  })
-
-  it("sends envelopes across all adapters", async () => {
-    const ctx = createTransportContext()
-    const sendFn = vi.fn()
-
-    class ChannelAdapter extends Transport<void> {
-      channelIdPublic?: number
-      generate(): GeneratedChannel {
-        return {
-          transportType: this.transportType,
-          send: sendFn,
-          stop: vi.fn(),
-        }
-      }
-      async onStart(): Promise<void> {
-        const ch = this.addChannel(undefined as undefined)
-        this.channelIdPublic = ch.channelId
-      }
-      async onStop(): Promise<void> {}
-    }
-
-    const adapter = new ChannelAdapter({
-      transportType: "ch-adapter",
-      transportId: "ch-adapter",
-    })
-
-    const manager = new TransportManager({
-      transports: [adapter],
-      context: ctx,
-      onReset: vi.fn(),
-    })
-
-    manager.startAll()
-    await new Promise<void>(r => queueMicrotask(r))
-
-    const msg: ChannelMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "doc-1",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "sequential" as const,
-        },
-      ],
-    }
-    const sent = manager.send({
-      toChannelIds: [adapter.channelIdPublic!],
-      message: msg,
-    })
-
-    expect(sent).toBe(1)
-    expect(sendFn).toHaveBeenCalledWith(msg)
-  })
-})
-
-// ---------------------------------------------------------------------------
 // BridgeTransport — two adapters exchange messages
 // ---------------------------------------------------------------------------
 
@@ -311,7 +190,7 @@ describe("BridgeTransport", () => {
     await adapterB._start()
 
     // At this point, both adapters should have channels to each other.
-    // adapterB's onStart established channels to adapterA.
+    // adapterB's onStart creates channels to adapterA and establishes them.
     // The establish handshake triggers onChannelEstablish — but our mock
     // doesn't complete the handshake. Let's verify channels were created.
 

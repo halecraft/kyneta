@@ -12,7 +12,7 @@ import type {
   InterestMsg,
   OfferMsg,
   PresentMsg,
-} from "@kyneta/exchange"
+} from "@kyneta/transport"
 import { type CBORType, encodeCBOR } from "@levischuck/tiny-cbor"
 import { describe, expect, it } from "vitest"
 import { cborCodec } from "../cbor.js"

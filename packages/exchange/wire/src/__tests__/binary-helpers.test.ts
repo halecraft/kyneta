@@ -4,7 +4,7 @@
 // - encodeBinaryAndSend: encode → optional fragment → sendFn per piece
 // - decodeBinaryMessages: reassemble → decode → ChannelMsg[] | null
 
-import type { ChannelMsg } from "@kyneta/exchange"
+import type { ChannelMsg } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
 import {
   decodeBinaryMessages,
@@ -24,7 +24,11 @@ const SMALL_MSG: ChannelMsg = {
 const LARGE_MSG: ChannelMsg = {
   type: "offer",
   docId: "doc-1",
-  payload: { kind: "entirety", encoding: "binary", data: new Uint8Array(300_000) },
+  payload: {
+    kind: "entirety",
+    encoding: "binary",
+    data: new Uint8Array(300_000),
+  },
   version: "1",
 }
 
@@ -77,7 +81,9 @@ describe("decodeBinaryMessages", () => {
     expect(result).not.toBeNull()
     expect(result).toHaveLength(1)
     expect(result![0]!.type).toBe("establish-request")
-    expect((result![0] as { identity: { peerId: string } }).identity.peerId).toBe("test")
+    expect(
+      (result![0] as { identity: { peerId: string } }).identity.peerId,
+    ).toBe("test")
     reassembler.dispose()
   })
 

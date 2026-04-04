@@ -12,7 +12,7 @@ import type {
   TransitionListener as GenericTransitionListener,
   PeerId,
   StateTransition,
-} from "@kyneta/exchange"
+} from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Socket ready states

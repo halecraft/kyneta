@@ -7,7 +7,7 @@
 // 4. Guard: send() throws if sendFn not set
 // 5. Guard: receive() throws if channel not set
 
-import type { ChannelMsg } from "@kyneta/exchange"
+import type { ChannelMsg } from "@kyneta/transport"
 import { decodeTextFrame, textCodec } from "@kyneta/wire"
 import { describe, expect, it, vi } from "vitest"
 import { SseConnection } from "../connection.js"

@@ -4,7 +4,7 @@
 // carries a version, optional hash, and content (Complete or Fragment).
 // Binary: Frame<Uint8Array>. Text: Frame<string>.
 //
-// Two pipelines for @kyneta/exchange's 5-message protocol
+// Two pipelines for @kyneta/transport's 5-message protocol
 // (establish-request, establish-response, discover, interest, offer):
 //
 // Binary pipeline (WebSocket, WebRTC):
@@ -181,8 +181,8 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  feedBytes,
   type FeedBytesResult,
+  feedBytes,
   initialParserState,
   type StreamParserState,
 } from "./stream-frame-parser.js"

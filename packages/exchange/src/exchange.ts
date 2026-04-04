@@ -21,6 +21,7 @@
 //   const doc = exchange.get("my-doc", TodoDoc)
 //   sync(doc).waitForSync()
 
+import type { CallableChangefeed } from "@kyneta/changefeed"
 import {
   type BoundSchema,
   type DocMetadata,
@@ -42,12 +43,17 @@ import {
   type Version,
   writable,
 } from "@kyneta/schema"
-import type { CallableChangefeed } from "@kyneta/changefeed"
+import type {
+  AnyTransport,
+  DocId,
+  PeerId,
+  PeerIdentityDetails,
+  TransportFactory,
+} from "@kyneta/transport"
 import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
-import type { AnyTransport, TransportFactory } from "./transport/transport.js"
-import type { DocId, PeerChange, PeerId, PeerIdentityDetails } from "./types.js"
+import type { PeerChange } from "./types.js"
 import { generatePeerId, validatePeerId } from "./utils.js"
 
 // ---------------------------------------------------------------------------
@@ -280,7 +286,10 @@ export class Exchange {
   readonly #peerIdIsExplicit: boolean
 
   readonly #synchronizer: Synchronizer
-  readonly peers: CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>
+  readonly peers: CallableChangefeed<
+    ReadonlyMap<PeerId, PeerIdentityDetails>,
+    PeerChange
+  >
   readonly #docCache = new Map<DocId, DocCacheEntry>()
   readonly #stores: Store[]
 

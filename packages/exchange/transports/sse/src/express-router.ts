@@ -10,7 +10,7 @@
 // Design: Imperative Shell — delegates parsing to parseTextPostBody()
 // (functional core) and message delivery to SseConnection.
 
-import type { PeerId } from "@kyneta/exchange"
+import type { PeerId } from "@kyneta/transport"
 import type { Request, Response, Router } from "express"
 import express from "express"
 import type { SseServerTransport } from "./server-transport.js"

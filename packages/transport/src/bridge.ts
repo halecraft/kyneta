@@ -16,11 +16,11 @@
 //     transports: [createBridgeTransport({ transportType: "peer-b", bridge })],
 //   })
 
-import type { GeneratedChannel } from "../channel.js"
-import type { ChannelMsg } from "../messages.js"
-import type { ChannelId, TransportType } from "../types.js"
+import type { GeneratedChannel } from "./channel.js"
+import type { ChannelMsg } from "./messages.js"
 import type { TransportFactory } from "./transport.js"
 import { Transport } from "./transport.js"
+import type { ChannelId, TransportType } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Bridge — message router connecting multiple BridgeTransports in-process

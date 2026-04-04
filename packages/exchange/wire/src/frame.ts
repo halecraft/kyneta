@@ -18,7 +18,7 @@
 // Batching is orthogonal — the payload is self-describing (CBOR array
 // vs map). The frame layer never needs to know.
 
-import type { ChannelMsg } from "@kyneta/exchange"
+import type { ChannelMsg } from "@kyneta/transport"
 import type { BinaryCodec } from "./codec.js"
 import {
   BinaryFrameType,

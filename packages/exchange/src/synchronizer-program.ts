@@ -19,16 +19,18 @@ import type {
   SubstratePayload,
 } from "@kyneta/schema"
 import { replicaTypesCompatible } from "@kyneta/schema"
-import type { Channel, ConnectedChannel } from "./channel.js"
-import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
-import type { AddressedEnvelope, ReturnEnvelope } from "./messages.js"
 import type {
+  AddressedEnvelope,
+  Channel,
   ChannelId,
+  ConnectedChannel,
   DocId,
   PeerId,
   PeerIdentityDetails,
-  PeerState,
-} from "./types.js"
+  ReturnEnvelope,
+} from "@kyneta/transport"
+import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
+import type { PeerState } from "./types.js"
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // STATE
@@ -431,9 +433,15 @@ function handleChannelRemoved(
       newChannels.delete(msg.channel.channelId)
       if (newChannels.size === 0) {
         // Peer fully removed — all docs it had sync state for are affected
-        const peerLeftNotification: Notification = { type: "notify/peer-left", peer: peerState.identity }
+        const peerLeftNotification: Notification = {
+          type: "notify/peer-left",
+          peer: peerState.identity,
+        }
         if (peerState.docSyncStates.size > 0) {
-          notification = notifyAsNeeded(readyStateChanged(...peerState.docSyncStates.keys()), peerLeftNotification)
+          notification = notifyAsNeeded(
+            readyStateChanged(...peerState.docSyncStates.keys()),
+            peerLeftNotification,
+          )
         } else {
           notification = peerLeftNotification
         }
@@ -811,7 +819,11 @@ function handleEstablishRequest(
     fromChannelId,
     message.identity.peerId,
   )
-  const [upgraded, peerNotification] = upgradeChannel(model, fromChannelId, message.identity)
+  const [upgraded, peerNotification] = upgradeChannel(
+    model,
+    fromChannelId,
+    message.identity,
+  )
 
   // Filter docs by route — only announce docs this peer is allowed to see
   const docIds = Array.from(model.documents.keys()).filter(id =>
@@ -849,7 +861,11 @@ function handleEstablishResponse(
     fromChannelId,
     message.identity.peerId,
   )
-  const [upgraded, peerNotification] = upgradeChannel(model, fromChannelId, message.identity)
+  const [upgraded, peerNotification] = upgradeChannel(
+    model,
+    fromChannelId,
+    message.identity,
+  )
 
   // Filter docs by route — only announce docs this peer is allowed to see
   const docIds = Array.from(model.documents.keys()).filter(id =>

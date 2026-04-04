@@ -18,7 +18,7 @@
 // Fragments carry JSON substring chunks. The receiver concatenates
 // chunks in index order and JSON.parse the result.
 
-import type { ChannelMsg } from "@kyneta/exchange"
+import type { ChannelMsg } from "@kyneta/transport"
 import type { TextCodec } from "./codec.js"
 import { generateFrameId } from "./fragment.js"
 import type { Frame } from "./frame-types.js"

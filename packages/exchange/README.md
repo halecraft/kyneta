@@ -442,6 +442,8 @@ loroDoc.version()                // VersionVector
 
 Transports provide pluggable network connectivity. They create channels — the communication primitive — which the exchange uses for message routing. Storage is handled separately via the `stores` constructor parameter.
 
+> **Package split:** Transport infrastructure (`Transport<G>`, channel types, message vocabulary) is defined in `@kyneta/transport` and re-exported from `@kyneta/exchange`. Transport authors should depend on `@kyneta/transport`, not `@kyneta/exchange`.
+
 ### Built-in
 
 | Transport | Use Case |
@@ -464,7 +466,7 @@ The websocket and SSE packages export `/client` and `/server` entry points. The 
 Extend the `Transport<G>` base class. The generic parameter `G` represents the arguments needed to generate a channel — for example, `@kyneta/webrtc-transport` uses `G = RTCDataChannel`, implementing the BYODC (Bring Your Own Data Channel) pattern where callers supply an externally-negotiated data channel:
 
 ```ts
-import { Transport } from "@kyneta/exchange"
+import { Transport } from "@kyneta/transport"
 
 class MyTransport extends Transport<void> {
   constructor() {
@@ -495,7 +497,11 @@ class MyTransport extends Transport<void> {
 ```json
 {
   "peerDependencies": {
+    "@kyneta/changefeed": "^1.0.0",
     "@kyneta/schema": "^1.1.0"
+  },
+  "dependencies": {
+    "@kyneta/transport": "^1.0.0"
   }
 }
 ```

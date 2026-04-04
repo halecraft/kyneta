@@ -14,7 +14,7 @@
 // imported by reassembler.ts, and decodeBinaryMessages needs
 // FragmentReassembler.
 
-import type { ChannelMsg } from "@kyneta/exchange"
+import type { ChannelMsg } from "@kyneta/transport"
 import { cborCodec } from "./cbor.js"
 import { fragmentPayload, wrapCompleteMessage } from "./fragment.js"
 import { decodeBinaryFrame, encodeComplete } from "./frame.js"

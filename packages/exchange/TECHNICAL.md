@@ -14,6 +14,8 @@ The exchange operates at the boundary between three algebras defined by `@kyneta
 | **State** (Substrate) | State management, merge semantics | Substrate-native |
 | **Replication** (Exchange) | Peer-to-peer data transfer | `SubstratePayload`, `Version` |
 
+> **Package split:** Transport infrastructure (`Transport<G>`, channel types, message vocabulary, identity types, client state machine, reconnection utilities) lives in `@kyneta/transport`. The sync runtime (`Synchronizer`, `Exchange`, `TransportManager`) lives in `@kyneta/exchange`. Transport implementations peer-depend on `@kyneta/transport`, not `@kyneta/exchange`.
+
 The exchange is the active sync algebra. The substrate is the passive state algebra. They compose at the boundary defined by five substrate methods: `version()`, `exportEntirety()`, `exportSince()`, `merge()`, and `context()`.
 
 **Key invariant:** The exchange never inspects `SubstratePayload` contents. It treats payloads as opaque blobs with an encoding hint (`"json" | "binary"`). Only the substrate knows how to produce and consume them.
@@ -273,6 +275,8 @@ The two-step approach (ref → substrate → LoroDoc) avoids duplicating trackin
 
 ## 5. Channel and Transport Abstraction
 
+> **Note:** `Transport<G>`, channel types (`Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`), `ChannelDirectory`, and the message vocabulary (`ChannelMsg`, etc.) are defined in `@kyneta/transport`. `@kyneta/exchange` re-exports them for backwards compatibility.
+
 ### Channel Lifecycle
 
 ```
@@ -476,13 +480,8 @@ All drain methods (except `#drainOutbound`, which uses a shift-loop) follow the 
 
 | File | Purpose |
 |------|---------|
-| `src/types.ts` | Core identity and state types (PeerId, DocId, ChannelId, PeerState, ReadyState, PeerChange) |
-| `src/messages.ts` | Sync protocol messages (present, interest, offer, dismiss) + establishment messages |
-| `src/channel.ts` | Channel types and lifecycle (GeneratedChannel → ConnectedChannel → EstablishedChannel) |
-| `src/channel-directory.ts` | Channel ID generation and lifecycle management |
-| `src/transport/transport.ts` | Abstract `Transport` base class |
+| `src/types.ts` | Sync-specific types (PeerState, ReadyState, PeerChange) — re-exports transport identity types from `@kyneta/transport` |
 | `src/transport/transport-manager.ts` | `TransportManager` — transport lifecycle and message routing |
-| `src/transport/bridge-transport.ts` | `Bridge` + `BridgeTransport` — in-process testing |
 | `src/utils.ts` | PeerId generation and validation |
 | `src/synchronizer-program.ts` | TEA state machine — model, messages, commands, sync algorithms |
 | `src/synchronizer.ts` | Synchronizer runtime — dispatch, command execution, substrate interaction |
@@ -493,7 +492,7 @@ All drain methods (except `#drainOutbound`, which uses a shift-loop) follow the 
 | `src/store/index.ts` | Storage module barrel export |
 | `src/testing/store-conformance.ts` | Reusable `describeStore()` conformance suite (exported via `@kyneta/exchange/testing`) |
 | `src/testing/index.ts` | Testing module barrel export |
-| `src/index.ts` | Barrel export (re-exports `bind`, `BoundSchema`, `MergeStrategy`, etc. from `@kyneta/schema`) |
+| `src/index.ts` | Barrel export — re-exports from `@kyneta/transport` and `@kyneta/schema` |
 
 Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`, `unwrap()`, `registerSubstrate()`, and `TimestampVersion` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` is defined in `@kyneta/loro-schema`.
 
@@ -501,7 +500,7 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`
 
 | File | Coverage |
 |------|----------|
-| `src/__tests__/transport.test.ts` | Transport lifecycle, TransportManager, BridgeTransport |
+| `src/__tests__/transport-manager.test.ts` | TransportManager lifecycle and message routing |
 | `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, `cmd/request-doc-creation`, replicate mode |
 | `src/__tests__/store-hydration.test.ts` | Exchange-level storage hydration — get/replicate hydration, network import persistence, local change persistence, flush, round-trip restart |
 | `src/__tests__/store.test.ts` | InMemoryStore — conformance suite + InMemory-specific sharedData/getStorage tests |

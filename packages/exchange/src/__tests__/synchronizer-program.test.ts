@@ -1,7 +1,11 @@
 // synchronizer-program — unit tests for the pure TEA update function.
 
+import type {
+  ConnectedChannel,
+  EstablishedChannel,
+  PeerIdentityDetails,
+} from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
-import type { ConnectedChannel, EstablishedChannel } from "../channel.js"
 import {
   type Command,
   createSynchronizerUpdate,
@@ -10,7 +14,6 @@ import {
   type SynchronizerMessage,
   type SynchronizerModel,
 } from "../synchronizer-program.js"
-import type { PeerIdentityDetails } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -101,7 +104,8 @@ function findNotification<T extends Notification["type"]>(
   notification: Notification,
   type: T,
 ): Extract<Notification, { type: T }> | undefined {
-  if (notification.type === type) return notification as Extract<Notification, { type: T }>
+  if (notification.type === type)
+    return notification as Extract<Notification, { type: T }>
   if (notification.type === "notify/batch") {
     for (const sub of notification.notifications) {
       const found = findNotification(sub, type)
@@ -365,7 +369,7 @@ describe("synchronizer-program", () => {
       expect(notification?.type).toBe("notify/batch")
       if (notification?.type === "notify/batch") {
         const warning = notification.notifications.find(
-          (n) => n.type === "notify/warning",
+          n => n.type === "notify/warning",
         )
         expect(warning).toBeDefined()
         if (warning?.type === "notify/warning") {
@@ -373,7 +377,7 @@ describe("synchronizer-program", () => {
           expect(warning.message).toContain("alice")
         }
         const peerJoined = notification.notifications.find(
-          (n) => n.type === "notify/peer-joined",
+          n => n.type === "notify/peer-joined",
         )
         expect(peerJoined).toBeDefined()
       }
@@ -2714,7 +2718,7 @@ describe("synchronizer-program", () => {
 
       // Add channel 1
       const channel = makeConnectedChannel(1)
-      let [m] = update({ type: "synchronizer/channel-added", channel }, model)
+      const [m] = update({ type: "synchronizer/channel-added", channel }, model)
 
       // Receive establish-request from bob
       const [_m2, _cmd, notification] = update(
@@ -2743,7 +2747,7 @@ describe("synchronizer-program", () => {
 
       // Add a second channel for bob
       const channel2 = makeConnectedChannel(2)
-      let [m2] = update(
+      const [m2] = update(
         { type: "synchronizer/channel-added", channel: channel2 },
         m,
       )
@@ -2898,7 +2902,10 @@ describe("synchronizer-program", () => {
       const staleConnectedChannel = makeConnectedChannel(1)
 
       const [m2, _cmd, notification] = update(
-        { type: "synchronizer/channel-removed", channel: staleConnectedChannel },
+        {
+          type: "synchronizer/channel-removed",
+          channel: staleConnectedChannel,
+        },
         m,
       )
 

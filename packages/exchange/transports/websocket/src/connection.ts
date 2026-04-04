@@ -10,7 +10,7 @@
 // Ported from @loro-extended/adapter-websocket's WsConnection with
 // kyneta naming conventions and the kyneta wire format.
 
-import type { Channel, ChannelMsg, PeerId } from "@kyneta/exchange"
+import type { Channel, ChannelMsg, PeerId } from "@kyneta/transport"
 import {
   decodeBinaryMessages,
   encodeBinaryAndSend,

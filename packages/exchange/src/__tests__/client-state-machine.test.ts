@@ -4,9 +4,8 @@
 // Transport-specific concerns (transition maps, convenience helpers) are
 // tested in each adapter's own test file.
 
+import { ClientStateMachine, type StateTransition } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
-import type { StateTransition } from "../transport/client-state-machine.js"
-import { ClientStateMachine } from "../transport/client-state-machine.js"
 
 // ---------------------------------------------------------------------------
 // Test state type

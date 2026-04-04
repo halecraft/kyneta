@@ -43,6 +43,9 @@
     "@kyneta/changefeed": "^1.0.0",
     "@kyneta/schema": "^1.1.0"
   },
+  "dependencies": {
+    "@kyneta/transport": "workspace:^"
+  },
   "devDependencies": {
     "@kyneta/changefeed": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
