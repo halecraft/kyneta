@@ -50,6 +50,8 @@ import type {
   PeerIdentityDetails,
   TransportFactory,
 } from "@kyneta/transport"
+import type { Scope } from "./scope.js"
+import { ScopeRegistry } from "./scope.js"
 import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
@@ -180,6 +182,9 @@ export type ExchangeParams = {
    * Also gates `onDocDiscovered`: if `route` returns `false` for
    * the announcing peer, the callback never fires.
    *
+   * This field is syntactic sugar for the initial scope. For dynamic
+   * rule composition, use {@link Exchange.register | exchange.register()}.
+   *
    * @default () => true (open routing)
    */
   route?: RoutePredicate
@@ -187,6 +192,9 @@ export type ExchangeParams = {
   /**
    * Inbound flow control. Determines whose mutations are accepted.
    * Checked before importing offers from network peers.
+   *
+   * This field is syntactic sugar for the initial scope. For dynamic
+   * rule composition, use {@link Exchange.register | exchange.register()}.
    *
    * @default () => true (accept all)
    */
@@ -197,6 +205,9 @@ export type ExchangeParams = {
    * it's leaving the sync graph. The callback handles the application
    * response — it can call `exchange.dismiss(docId)` to also leave,
    * or ignore the event.
+   *
+   * This field is syntactic sugar for the initial scope. For dynamic
+   * rule composition, use {@link Exchange.register | exchange.register()}.
    *
    * @default undefined (dismiss messages are no-ops)
    */
@@ -212,6 +223,9 @@ export type ExchangeParams = {
    *
    * This enables dynamic document patterns where one peer creates a
    * document and the other materializes it on demand.
+   *
+   * This field is syntactic sugar for the initial scope. For dynamic
+   * rule composition, use {@link Exchange.register | exchange.register()}.
    *
    * @example
    * ```typescript
@@ -285,6 +299,7 @@ export class Exchange {
   readonly peerId: string
   readonly #peerIdIsExplicit: boolean
 
+  readonly #scopes: ScopeRegistry
   readonly #synchronizer: Synchronizer
   readonly peers: CallableChangefeed<
     ReadonlyMap<PeerId, PeerIdentityDetails>,
@@ -354,14 +369,34 @@ export class Exchange {
       type: identity.type ?? "user",
     }
 
-    // Create synchronizer — call each factory to produce fresh adapter instances
+    // ── ScopeRegistry — must be initialized before the Synchronizer,
+    // because the Synchronizer may call onDocCreationRequested during
+    // _start() if a transport immediately discovers peers.
+    this.#scopes = new ScopeRegistry()
+
+    // Register the initial scope from ExchangeParams (syntactic sugar).
+    // Only include fields that were actually provided — omitted fields
+    // let the ScopeRegistry defaults take effect.
+    const initialScope: Scope = {}
+    if (route) initialScope.route = route
+    if (authorize) initialScope.authorize = authorize
+    if (onDocDiscovered) initialScope.onDocDiscovered = onDocDiscovered
+    if (onDocDismissed) initialScope.onDocDismissed = onDocDismissed
+    if (route || authorize || onDocDiscovered || onDocDismissed) {
+      this.#scopes.register(initialScope)
+    }
+
+    // Create synchronizer — call each factory to produce fresh adapter instances.
+    // The route and authorize predicates delegate to the live ScopeRegistry,
+    // so dynamically registered scopes are visible without recreating the
+    // synchronizer's update function.
     let warnedNoDiscoverCallback = false
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
       transports: transports.map(factory => factory()),
-      route: route ?? (() => true),
-      authorize: authorize ?? (() => true),
-      onDocDismissed,
+      route: this.#scopes.route.bind(this.#scopes),
+      authorize: this.#scopes.authorize.bind(this.#scopes),
+      onDocDismissed: this.#scopes.docDismissed.bind(this.#scopes),
       onDocCreationRequested: (
         docId,
         peer,
@@ -369,17 +404,21 @@ export class Exchange {
         mergeStrategy,
         schemaHash,
       ) => {
-        const result = onDocDiscovered
-          ? onDocDiscovered(docId, peer, replicaType, mergeStrategy, schemaHash)
-          : undefined
+        const result = this.#scopes.docDiscovered(
+          docId,
+          peer,
+          replicaType,
+          mergeStrategy,
+          schemaHash,
+        )
 
         if (!result) {
-          if (!onDocDiscovered && !warnedNoDiscoverCallback) {
+          if (!this.#scopes.hasDocDiscovered && !warnedNoDiscoverCallback) {
             warnedNoDiscoverCallback = true
             console.warn(
               `[exchange] Peer "${peer.peerId}" discovered document "${docId}" but no onDocDiscovered ` +
                 `callback is configured. The document will be ignored. To accept peer-announced ` +
-                `documents, provide onDocDiscovered in ExchangeParams.`,
+                `documents, provide onDocDiscovered in ExchangeParams or via exchange.register().`,
             )
           }
           return
@@ -956,6 +995,7 @@ export class Exchange {
    * {@link shutdown} instead.
    */
   reset(): void {
+    this.#scopes.clear()
     this.#docCache.clear()
     this.#synchronizer.reset()
   }
@@ -969,6 +1009,7 @@ export class Exchange {
    */
   async shutdown(): Promise<void> {
     await this.#flushStores()
+    this.#scopes.clear()
     this.#docCache.clear()
     await this.#synchronizer.shutdown()
     // Close stores that hold native handles
@@ -980,6 +1021,20 @@ export class Exchange {
   // =========================================================================
   // Internal access (for testing)
   // =========================================================================
+
+  /**
+   * Register a scope. Returns a dispose function that removes the
+   * scope from all compositions.
+   *
+   * A Scope bundles predicates and handlers governing a region of
+   * the document space. Multiple scopes compose via three-valued logic:
+   * - `false` from any scope → deny (short-circuit)
+   * - `true` from at least one scope, no `false` → allow
+   * - all `undefined` → default (open for both route and authorize)
+   */
+  register(scope: Scope): () => void {
+    return this.#scopes.register(scope)
+  }
 
   /** @internal */
   get synchronizer(): Synchronizer {

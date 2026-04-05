@@ -873,6 +873,8 @@ See `examples/bumper-cars/src/server.ts` for a concrete usage example — the se
 
 Two predicates on `ExchangeParams` control information flow through the sync protocol. They replace the vendor's four-predicate model (`visibility`, `mutability`, `creation`, `deletion`) with a cleaner two-axis decomposition: outbound flow (routing) and inbound flow (authority).
 
+The `ExchangeParams` fields (`route`, `authorize`) are syntactic sugar for the initial scope. For dynamic rule composition — where multiple independent concerns register and remove their own predicates at runtime — see §23 (Composable Scope Registration).
+
 ### Predicate Signatures
 
 ```ts
@@ -906,6 +908,8 @@ When `authorize` rejects an offer, the peer's sync state is still updated to pre
 ### The `route` → `authorize` Invariant
 
 `authorize` implies `route`: if you accept mutations from a peer, that peer must be in the routing topology. The converse is not true — a read-only subscriber is routed but not authorized. The system does not enforce this formally. If a developer sets `authorize: () => true` but `route: () => false`, nothing breaks — inbound data never arrives because the outbound announcement was suppressed.
+
+With composable scopes (§23), the invariant holds *in aggregate* — the composed `authorize` returning `true` only matters if the composed `route` also returns `true` for that peer. Individual scopes can safely have `authorize` without `route` (or vice versa) because the composition evaluates all scopes independently per field. The synchronizer only reaches `authorize` evaluation if the message was already routed.
 
 ### Relationship to `onDocDiscovered`
 
@@ -1581,3 +1585,126 @@ The speedup comes from three sources: (1) no TCP/HTTP upgrade overhead — UDS `
 ### Integration Tests
 
 End-to-end tests in `transports/unix-socket/src/__tests__/` prove the full stack over real unix sockets: channel establishment, client reconnection after server restart, stale socket cleanup, `ENOENT` handling (no server), socket file cleanup on shutdown, and multiple simultaneous clients. Tests use `os.tmpdir()` with random suffixes for socket paths to avoid collisions.
+
+---
+
+## 23. Composable Scope Registration
+
+The Exchange accepts `route`, `authorize`, `onDocDiscovered`, and `onDocDismissed` as fixed functions in `ExchangeParams`. These work well when all document access rules are known at construction time. But higher-level primitives (Lines, rooms, game loops) need to register their own rules dynamically and remove them when done. The scope registration system generalizes the fixed predicates into a composable, dynamic model.
+
+### The Scope Type
+
+A **Scope** is a bundle of predicates and handlers governing a region of the document space:
+
+```ts
+interface Scope {
+  name?: string
+  route?: RulePredicate
+  authorize?: RulePredicate
+  onDocDiscovered?: OnDocDiscovered
+  onDocDismissed?: OnDocDismissed
+}
+```
+
+All fields are optional — a scope only provides the predicates it cares about.
+
+### `RulePredicate` — Three-Valued Logic
+
+```ts
+type RulePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean | undefined
+```
+
+- `true` — this scope explicitly allows the operation.
+- `false` — this scope explicitly denies the operation (short-circuits evaluation).
+- `undefined` — this scope has no opinion (the doc is outside its concern).
+
+The existing `RoutePredicate` and `AuthorizePredicate` types return `boolean`, which is a subtype of `boolean | undefined`. No adapter or wrapper is needed — existing predicates work as scope fields directly.
+
+### `composeRule` — Pure Functional Core
+
+A single pure function handles three-valued predicate composition for both `route` and `authorize`:
+
+```ts
+function composeRule(
+  scopes: readonly Scope[],
+  field: "route" | "authorize",
+  docId: DocId,
+  peer: PeerIdentityDetails,
+  defaultWhenAllUndefined: boolean,
+): boolean
+```
+
+Evaluation semantics (with short-circuit):
+
+1. If any scope returns `false` → return `false` immediately (deny wins).
+2. If at least one scope returns `true` and none return `false` → return `true`.
+3. If all scopes return `undefined` → return `defaultWhenAllUndefined`.
+
+### `ScopeRegistry` — Imperative Shell
+
+The `ScopeRegistry` manages the mutable scope list and delegates composition to `composeRule`:
+
+- **`register(scope): () => void`** — adds a scope, returns a dispose function.
+- **`route(docId, peer): boolean`** — composed route, defaults to open (`true`).
+- **`authorize(docId, peer): boolean`** — composed authorize, defaults to open (`true`).
+- **`docDiscovered(...): Interpret | Replicate | undefined`** — first non-`undefined` wins.
+- **`docDismissed(docId, peer): void`** — all handlers invoked (broadcast, not gate).
+- **`clear(): void`** — removes all scopes. Called during `reset()` and `shutdown()`.
+- **`get names: readonly string[]`** — names of all named scopes, in registration order.
+
+### `exchange.register(scope)` — Public API
+
+```ts
+const dispose = exchange.register({
+  name: "line:bob",
+  route: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
+  authorize: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
+  onDocDiscovered: (docId) => docId.startsWith("line:bob:") ? Interpret(LineDoc) : undefined,
+})
+
+// Later, when the line is no longer needed:
+dispose()
+```
+
+The dispose function removes the scope from all compositions. After disposal, the composed predicates no longer include that scope's rules.
+
+### Composition Semantics by Field
+
+| Field | Composition | Default (all `undefined`) |
+|-------|------------|--------------------------|
+| `route` | Deny wins, short-circuit | `true` (open) |
+| `authorize` | Deny wins, short-circuit | `true` (open) |
+| `onDocDiscovered` | First non-`undefined` wins (registration order) | `undefined` (ignore) |
+| `onDocDismissed` | All handlers invoked (broadcast) | no-op |
+
+### Default Values — Both Open
+
+Both `route` and `authorize` default to `true` (open) when all scopes return `undefined`. This matches the current Exchange behavior where both default to `() => true`. Dynamic scopes that want to restrict access return `false` for specific docs; the open default preserves backward compatibility.
+
+If a future use case requires closed-by-default authorize, register a base scope with `authorize: () => false` and then register permissive scopes for specific docs. The infrastructure supports both patterns; the default matches the existing Exchange contract.
+
+### Named Scopes
+
+If a scope has a `name`:
+
+- **Debuggability**: the Exchange can log which named scope was responsible for a denial.
+- **Introspection**: `registry.names` returns the list of registered scope names.
+- **Replacement**: registering a scope with a name that already exists replaces the previous scope in-place (preserving its position in the evaluation order). This enables hot-reload patterns where a module re-registers its rules without accumulating stale scopes.
+
+### Relationship to `ExchangeParams`
+
+The constructor fields (`route`, `authorize`, `onDocDiscovered`, `onDocDismissed`) are syntactic sugar for the initial scope. At construction time, if any are provided, they are bundled into a `Scope` and registered with the `ScopeRegistry`. This is backward compatible — existing code that passes these params works identically.
+
+The difference: previously, `route: () => true` was the only predicate. Now it's one scope among potentially many. A later `exchange.register({ route: ... })` adds a second scope whose `route` participates in the composition.
+
+### Synchronizer Integration
+
+The `ScopeRegistry` is transparent to the synchronizer layer. The Exchange passes `this.#scopes.route.bind(this.#scopes)` and `this.#scopes.authorize.bind(this.#scopes)` to the Synchronizer constructor. The synchronizer-program's `createSynchronizerUpdate()` closes over these functions and calls them on every message — the handlers don't know or care that the predicate is composed. Dynamic scope registration and disposal are visible through the bound closures without recreating the update function.
+
+### Performance
+
+Scopes scale with the number of *concerns* (typically single digits to low tens), not the number of *documents*. Short-circuit evaluation on the first `false` bounds the per-message cost. The `composeRule` function iterates the scope array once per evaluation — no allocations, no closures created at evaluation time.
+
+### `reset()` and `shutdown()`
+
+Both operations clear all scopes (including the initial one). After either, the Exchange is inert — all scopes are cleared, all transports are torn down, and the Exchange should not be reused.

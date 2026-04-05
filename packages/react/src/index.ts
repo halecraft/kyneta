@@ -60,7 +60,9 @@ export type {
   DocId,
   ExchangeParams,
   ReadyState,
+  RulePredicate,
+  Scope,
   SyncRef,
   TransportFactory,
 } from "@kyneta/exchange"
-export { Exchange, hasSync, sync } from "@kyneta/exchange"
+export { Exchange, hasSync, ScopeRegistry, sync } from "@kyneta/exchange"

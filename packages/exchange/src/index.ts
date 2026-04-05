@@ -129,6 +129,13 @@ export { createSynchronizerUpdate, init } from "./synchronizer-program.js"
 export { Synchronizer } from "./synchronizer.js"
 
 // ---------------------------------------------------------------------------
+// Scope — composable rule registration
+// ---------------------------------------------------------------------------
+
+export type { RulePredicate, Scope } from "./scope.js"
+export { composeRule, ScopeRegistry } from "./scope.js"
+
+// ---------------------------------------------------------------------------
 // Exchange — the public API
 // ---------------------------------------------------------------------------
 
