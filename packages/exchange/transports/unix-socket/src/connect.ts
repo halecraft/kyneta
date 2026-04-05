@@ -55,7 +55,7 @@ async function connectBun(path: string): Promise<UnixSocket> {
   return new Promise((resolve, reject) => {
     let resolved = false
 
-    ;(globalThis as any).Bun.connect({
+    const bunPromise = (globalThis as any).Bun.connect({
       unix: path,
       socket: {
         open(rawSocket: any) {
@@ -89,6 +89,17 @@ async function connectBun(path: string): Promise<UnixSocket> {
           rawSocket.data?.onDrain?.()
         },
       },
+    })
+
+    // Bun.connect() returns a promise that rejects independently on
+    // connection failure (e.g. ENOENT). Without this catch, the rejection
+    // is unhandled and crashes the process — even though the socket error
+    // handler above would also fire.
+    bunPromise.catch((error: Error) => {
+      if (!resolved) {
+        resolved = true
+        reject(error)
+      }
     })
   })
 }
