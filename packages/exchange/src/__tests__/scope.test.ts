@@ -5,9 +5,9 @@
 
 import { describe, expect, it, vi } from "vitest"
 import type { PeerIdentityDetails } from "@kyneta/transport"
-import type { OnDocDiscovered } from "../exchange.js"
+import type { Classify } from "../exchange.js"
 import { composeRule, ScopeRegistry, type Scope } from "../scope.js"
-import { bindPlain, Interpret, Schema } from "@kyneta/schema"
+import { bindPlain, Interpret, Reject, Schema } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -226,22 +226,22 @@ describe("ScopeRegistry", () => {
   })
 
   // -----------------------------------------------------------------------
-  // onDocDiscovered: first-wins, short-circuit
+  // classify: first-wins, short-circuit
   // -----------------------------------------------------------------------
 
-  describe("onDocDiscovered composition", () => {
+  describe("classify composition", () => {
     const bound = bindPlain(Schema.doc({ value: Schema.string() }))
 
     it("first non-undefined result wins; later scopes not called", () => {
       const registry = new ScopeRegistry()
       const disposition = Interpret(bound)
-      const second = vi.fn((): ReturnType<OnDocDiscovered> => Interpret(bound))
+      const second = vi.fn((): ReturnType<Classify> => Interpret(bound))
 
-      registry.register({ onDocDiscovered: () => undefined })
-      registry.register({ onDocDiscovered: () => disposition })
-      registry.register({ onDocDiscovered: second })
+      registry.register({ classify: () => undefined })
+      registry.register({ classify: () => disposition })
+      registry.register({ classify: second })
 
-      const result = registry.docDiscovered(
+      const result = registry.classify(
         doc,
         alice,
         ["plain", 1, 0],
@@ -254,9 +254,9 @@ describe("ScopeRegistry", () => {
 
     it("all undefined → undefined", () => {
       const registry = new ScopeRegistry()
-      registry.register({ onDocDiscovered: () => undefined })
+      registry.register({ classify: () => undefined })
 
-      const result = registry.docDiscovered(
+      const result = registry.classify(
         doc,
         alice,
         ["plain", 1, 0],
@@ -266,15 +266,15 @@ describe("ScopeRegistry", () => {
       expect(result).toBeUndefined()
     })
 
-    it("hasDocDiscovered tracks handler presence across register/dispose", () => {
+    it("hasClassify tracks handler presence across register/dispose", () => {
       const registry = new ScopeRegistry()
-      expect(registry.hasDocDiscovered).toBe(false)
+      expect(registry.hasClassify).toBe(false)
 
-      const dispose = registry.register({ onDocDiscovered: () => undefined })
-      expect(registry.hasDocDiscovered).toBe(true)
+      const dispose = registry.register({ classify: () => undefined })
+      expect(registry.hasClassify).toBe(true)
 
       dispose()
-      expect(registry.hasDocDiscovered).toBe(false)
+      expect(registry.hasClassify).toBe(false)
     })
   })
 

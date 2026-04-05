@@ -12,10 +12,12 @@ import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
 import {
   bindEphemeral,
   bindPlain,
+  BoundReplica,
   change,
   Interpret,
   PlainVersion,
   plainReplicaFactory,
+  Reject,
   Replicate,
   Schema,
   TimestampVersion,
@@ -284,10 +286,12 @@ describe("causal sync uses deltas when sender is ahead", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [LoroDoc],
     })
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [LoroDoc],
     })
 
     const docA = exchangeA.get("doc-1", LoroDoc)
@@ -419,8 +423,7 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
       transports: [
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
       ],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(plainReplicaFactory, "sequential", schemaHash),
+      classify: () => Replicate(),
     })
 
     // Alice writes data
@@ -447,9 +450,9 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
       ],
-      onDocDiscovered: docId => {
+      classify: docId => {
         if (docId === "config") return Interpret(SequentialDoc)
-        return undefined
+        return Reject()
       },
     })
 
@@ -496,11 +499,13 @@ describe("schema hash compatibility", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [SchemaA],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [SchemaB],
     })
 
     // Both try to use "doc-1" but with different schemas
@@ -539,6 +544,7 @@ describe("schema hash compatibility", () => {
       transports: [
         createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
+      schemas: [TodoDoc],
     })
 
     // Relay — replicate mode, forwards schemaHash faithfully
@@ -548,8 +554,8 @@ describe("schema hash compatibility", () => {
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-c", bridge: bridgeRC }),
       ],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(loroReplicaFactory, "causal", schemaHash),
+      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      classify: () => Replicate(),
     })
 
     // Peer C — interpret mode with same schema
@@ -558,7 +564,8 @@ describe("schema hash compatibility", () => {
       transports: [
         createBridgeTransport({ transportType: "charlie", bridge: bridgeRC }),
       ],
-      onDocDiscovered: () => Interpret(TodoDoc),
+      schemas: [TodoDoc],
+      classify: () => Interpret(TodoDoc),
     })
 
     // A creates and writes

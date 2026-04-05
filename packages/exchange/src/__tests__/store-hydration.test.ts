@@ -9,6 +9,7 @@ import {
   change,
   Interpret,
   plainReplicaFactory,
+  Reject,
   Schema,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
@@ -394,7 +395,7 @@ describe("Exchange storage persistence", () => {
       identity: { peerId: "peer-b" },
       transports: [createBridgeTransport({ transportType: "side-b", bridge })],
       stores: [backend],
-      onDocDiscovered: () => Interpret(TestDoc),
+      classify: () => Interpret(TestDoc),
     })
 
     // Wait for sync
@@ -605,6 +606,7 @@ describe("Yjs storage round-trip", () => {
     const exchange1 = createExchange({
       identity: { peerId: "yjs-peer" },
       stores: [createInMemoryStore({ sharedData })],
+      schemas: [YjsDoc],
     })
 
     const doc1 = exchange1.get("doc-1", YjsDoc)
@@ -622,6 +624,7 @@ describe("Yjs storage round-trip", () => {
     const exchange2 = createExchange({
       identity: { peerId: "yjs-peer" },
       stores: [createInMemoryStore({ sharedData })],
+      schemas: [YjsDoc],
     })
 
     const doc2 = exchange2.get("doc-1", YjsDoc)

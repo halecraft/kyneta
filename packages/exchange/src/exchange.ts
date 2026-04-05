@@ -23,7 +23,9 @@
 
 import type { CallableChangefeed } from "@kyneta/changefeed"
 import {
+  BoundReplica,
   type BoundSchema,
+  type Defer,
   type DocMetadata,
   type FactoryBuilder,
   type Interpret,
@@ -31,6 +33,7 @@ import {
   type MergeStrategy,
   observation,
   type Ref,
+  type Reject,
   type Replica,
   type ReplicaFactory,
   type ReplicaType,
@@ -50,6 +53,8 @@ import type {
   PeerIdentityDetails,
   TransportFactory,
 } from "@kyneta/transport"
+import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
+import type { Capabilities } from "./capabilities.js"
 import type { Scope } from "./scope.js"
 import { ScopeRegistry } from "./scope.js"
 import type { Store } from "./store/store.js"
@@ -86,27 +91,34 @@ export type AuthorizePredicate = (
 ) => boolean
 
 /**
+ * The four possible dispositions when classifying a discovered document.
+ */
+export type Disposition = Interpret | Replicate | Defer | Reject
+
+/**
  * Callback invoked when a peer announces a document the local exchange
  * doesn't have. Return a disposition to determine how the document
  * participates in the sync graph:
  *
  * - `Interpret(bound)` — full interpretation with schema, ref, changefeed.
  * - `Replicate(replicaFactory, strategy)` — headless replication (relay, storage).
- * - `undefined` — ignore the unknown document.
+ * - `Defer()` — skip for now, re-evaluate later.
+ * - `Reject()` — explicitly refuse to track this document.
  *
  * @param docId - The document ID announced by the peer
  * @param peer - Identity of the peer that announced the document
  * @param replicaType - The replica type the remote peer uses for this document
  * @param mergeStrategy - The merge strategy the remote peer uses for this document
- * @returns A disposition (`Interpret | Replicate`), or `undefined` to ignore
+ * @param schemaHash - The schema hash the remote peer uses for this document
+ * @returns A disposition (`Interpret | Replicate | Defer | Reject`)
  */
-export type OnDocDiscovered = (
+export type Classify = (
   docId: DocId,
   peer: PeerIdentityDetails,
   replicaType: ReplicaType,
   mergeStrategy: MergeStrategy,
   schemaHash: string,
-) => Interpret | Replicate | undefined
+) => Disposition
 
 /**
  * Callback invoked when a peer sends a `dismiss` message for a document.
@@ -179,8 +191,8 @@ export type ExchangeParams = {
    * sync graph for each document. Checked at every outbound gate:
    * initial present, doc-ensure broadcast, relay push, local change push.
    *
-   * Also gates `onDocDiscovered`: if `route` returns `false` for
-   * the announcing peer, the callback never fires.
+   * Also gates `classify`: if `route` returns `false` for
+   * the announcing peer, the classify callback never fires.
    *
    * This field is syntactic sugar for the initial scope. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
@@ -214,39 +226,40 @@ export type ExchangeParams = {
   onDocDismissed?: OnDocDismissed
 
   /**
-   * Called when a peer discovers a document this exchange doesn't have.
+   * Declares document types this Exchange can interpret.
    *
-   * Return a disposition to determine how the document participates:
+   * Sugar for calling `registerSchema()` at construction time. Each
+   * `BoundSchema` is indexed by its `schemaHash` under the appropriate
+   * `ReplicaKey`, enabling automatic resolution in `onDocCreationRequested`.
+   */
+  schemas?: BoundSchema[]
+
+  /**
+   * Declares replication modes for headless participation.
+   *
+   * Each `BoundReplica` pairs a `ReplicaFactory` with a `MergeStrategy`,
+   * defining a replication tier the Exchange can service. The defaults
+   * cover plain/sequential and lww/lww — extend this set for CRDT-backed
+   * relay or storage participants.
+   *
+   * @default DEFAULT_REPLICAS
+   */
+  replicas?: readonly BoundReplica[]
+
+  /**
+   * Policy gate for docs not auto-resolved by the registries.
+   *
+   * Called when a peer announces a document whose `schemaHash` doesn't
+   * match any registered `BoundSchema`. Return a disposition:
    * - `Interpret(bound)` — full interpretation (client apps, game servers).
-   * - `Replicate(replicaFactory, strategy)` — headless replication (relay, storage).
-   * - `undefined` — ignore the unknown document.
-   *
-   * This enables dynamic document patterns where one peer creates a
-   * document and the other materializes it on demand.
+   * - `Replicate()` — headless replication (relay, storage).
+   * - `Defer()` — track for routing but don't replicate yet.
+   * - `Reject()` — explicitly refuse to track this document.
    *
    * This field is syntactic sugar for the initial scope. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
-   *
-   * @example
-   * ```typescript
-   * import { Interpret, Replicate } from "@kyneta/schema"
-   * import { loroReplicaFactory } from "@kyneta/loro-schema"
-   *
-   * const exchange = new Exchange({
-   *   // Relay server — replicate all discovered docs without schema knowledge
-   *   onDocDiscovered: (docId, peer) => Replicate(loroReplicaFactory, "causal"),
-   * })
-   *
-   * // Or: interpret specific docs, ignore the rest
-   * const exchange2 = new Exchange({
-   *   onDocDiscovered: (docId, peer) => {
-   *     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
-   *     return undefined
-   *   },
-   * })
-   * ```
    */
-  onDocDiscovered?: OnDocDiscovered
+  classify?: Classify
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +269,7 @@ export type ExchangeParams = {
 type DocCacheEntry =
   | { mode: "interpret"; ref: any; bound: BoundSchema }
   | { mode: "replicate" }
+  | { mode: "deferred" }
 
 // ---------------------------------------------------------------------------
 // Exchange
@@ -300,6 +314,7 @@ export class Exchange {
   readonly #peerIdIsExplicit: boolean
 
   readonly #scopes: ScopeRegistry
+  readonly #capabilities: Capabilities
   readonly #synchronizer: Synchronizer
   readonly peers: CallableChangefeed<
     ReadonlyMap<PeerId, PeerIdentityDetails>,
@@ -353,7 +368,9 @@ export class Exchange {
     route,
     authorize,
     onDocDismissed,
-    onDocDiscovered,
+    schemas = [],
+    replicas = DEFAULT_REPLICAS,
+    classify,
   }: ExchangeParams = {}) {
     // Resolve peer identity
     const peerId = identity.peerId ?? generatePeerId()
@@ -380,11 +397,18 @@ export class Exchange {
     const initialScope: Scope = {}
     if (route) initialScope.route = route
     if (authorize) initialScope.authorize = authorize
-    if (onDocDiscovered) initialScope.onDocDiscovered = onDocDiscovered
+    if (classify) initialScope.classify = classify
     if (onDocDismissed) initialScope.onDocDismissed = onDocDismissed
-    if (route || authorize || onDocDiscovered || onDocDismissed) {
+    if (route || authorize || classify || onDocDismissed) {
       this.#scopes.register(initialScope)
     }
+
+    // Build the capabilities registry from declared schemas and replicas.
+    this.#capabilities = createCapabilities({
+      schemas,
+      replicas: [...replicas],
+      resolveFactory: this.#resolveFactory.bind(this),
+    })
 
     // Create synchronizer — call each factory to produce fresh adapter instances.
     // The route and authorize predicates delegate to the live ScopeRegistry,
@@ -396,29 +420,27 @@ export class Exchange {
       transports: transports.map(factory => factory()),
       route: this.#scopes.route.bind(this.#scopes),
       authorize: this.#scopes.authorize.bind(this.#scopes),
+      supports: this.#capabilities.supportsReplicaType.bind(this.#capabilities),
       onDocDismissed: this.#scopes.docDismissed.bind(this.#scopes),
-      onDocCreationRequested: (
-        docId,
-        peer,
-        replicaType,
-        mergeStrategy,
-        schemaHash,
-      ) => {
-        const result = this.#scopes.docDiscovered(
-          docId,
-          peer,
-          replicaType,
-          mergeStrategy,
-          schemaHash,
-        )
+      onDocCreationRequested: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
+        // 1. Schema auto-resolve
+        const resolvedBound = this.#capabilities.resolveSchema(schemaHash, replicaType, mergeStrategy)
+        if (resolvedBound) {
+          ;(this as any).get(docId, resolvedBound)
+          return
+        }
+
+        // 2. Classify callback
+        const result = this.#scopes.classify(docId, peer, replicaType, mergeStrategy, schemaHash)
 
         if (!result) {
-          if (!this.#scopes.hasDocDiscovered && !warnedNoDiscoverCallback) {
+          if (!this.#scopes.hasClassify && !warnedNoDiscoverCallback) {
             warnedNoDiscoverCallback = true
             console.warn(
-              `[exchange] Peer "${peer.peerId}" discovered document "${docId}" but no onDocDiscovered ` +
-                `callback is configured. The document will be ignored. To accept peer-announced ` +
-                `documents, provide onDocDiscovered in ExchangeParams or via exchange.register().`,
+              `[exchange] Peer "${peer.peerId}" discovered document "${docId}" but no classify ` +
+                `callback is configured and no matching schema is registered. The document will be rejected. ` +
+                `To accept peer-announced documents, provide classify in ExchangeParams, register schemas, ` +
+                `or use exchange.register().`,
             )
           }
           return
@@ -426,17 +448,27 @@ export class Exchange {
 
         switch (result.kind) {
           case "interpret":
-            // Cast to avoid TS2589 — get()'s Ref<S> return type triggers
-            // excessively deep instantiation when S defaults to SchemaNode.
             ;(this as any).get(docId, result.bound)
             break
-          case "replicate":
-            this.replicate(
-              docId,
-              result.replicaFactory,
-              result.strategy,
-              result.schemaHash,
-            )
+          case "replicate": {
+            const boundReplica = this.#capabilities.resolveReplica(replicaType, mergeStrategy)
+            if (!boundReplica) {
+              console.warn(
+                `[exchange] classify returned Replicate() for doc "${docId}" but no BoundReplica ` +
+                  `is registered for replicaType [${replicaType}] with strategy "${mergeStrategy}". ` +
+                  `Add the appropriate BoundReplica to ExchangeParams.replicas.`,
+              )
+              return
+            }
+            this.replicate(docId, boundReplica.factory, mergeStrategy, schemaHash)
+            break
+          }
+          case "defer":
+            this.#synchronizer.deferDoc(docId, replicaType, mergeStrategy, schemaHash)
+            this.#docCache.set(docId, { mode: "deferred" })
+            break
+          case "reject":
+            // Explicitly rejected — do nothing
             break
         }
       },
@@ -719,19 +751,45 @@ export class Exchange {
         )
       }
 
-      // Validate BoundSchema matches — throw if different binding for same docId
-      if (cached.bound !== bound) {
-        throw new Error(
-          `Document '${docId}' already exists with a different BoundSchema. ` +
-            `Use the same BoundSchema object when calling exchange.get() for the same document.`,
-        )
-      }
+      if (cached.mode === "deferred") {
+        // Promote deferred → interpret: retrieve metadata for diagnostics
+        const metadata = this.#synchronizer.getDocMetadata(docId)
+        if (metadata && bound.schemaHash !== metadata.schemaHash) {
+          console.warn(
+            `[exchange] Promoting deferred doc "${docId}": local schemaHash "${bound.schemaHash}" ` +
+              `differs from discovery schemaHash "${metadata.schemaHash}". ` +
+              `Local schema is authoritative, but this indicates protocol disagreement.`,
+          )
+        }
+        // Delete deferred entry and fall through to normal get() creation.
+        // registerDoc() → doc-ensure handles the deferred→promoted transition
+        // in the synchronizer model.
+        this.#docCache.delete(docId)
+      } else {
+        // mode === "interpret" — validate BoundSchema match
+        if (cached.bound !== bound) {
+          throw new Error(
+            `Document '${docId}' already exists with a different BoundSchema. ` +
+              `Use the same BoundSchema object when calling exchange.get() for the same document.`,
+          )
+        }
 
-      return cached.ref as Ref<S>
+        return cached.ref as Ref<S>
+      }
     }
 
     // Resolve factory from the BoundSchema's builder
     const factory = this.#resolveFactory(bound.factory)
+
+    // Validate that the Exchange supports this factory's replicaType
+    const replicaType = factory.replica.replicaType
+    if (!this.#capabilities.supportsReplicaType(replicaType)) {
+      throw new Error(
+        `exchange.get() requires a supported replicaType. The BoundSchema's factory produces ` +
+          `replicaType [${replicaType}], but this Exchange has no compatible capability. ` +
+          `Add the appropriate BoundReplica to ExchangeParams.replicas or the BoundSchema to ExchangeParams.schemas.`,
+      )
+    }
 
     if (this.#stores.length > 0) {
       // ── Store path: single substrate ──
@@ -842,29 +900,71 @@ export class Exchange {
    * audit logs — any participant that needs to accumulate and relay
    * state without interpreting document fields.
    *
+   * **Overloaded:**
+   * - `replicate(docId)` — promote a deferred document, resolving the
+   *   factory from the capabilities registry.
+   * - `replicate(docId, replicaFactory, strategy, schemaHash)` — full
+   *   registration with explicit arguments.
+   *
    * @param docId - The document ID
    * @param replicaFactory - Factory for constructing headless replicas
    * @param strategy - The merge strategy for this document
+   * @param schemaHash - The schema hash for this document
    *
    * @example
    * ```typescript
    * import { loroReplicaFactory } from "@kyneta/loro-schema"
    *
    * // Schema-free relay — replicate all docs without compile-time schema knowledge
-   * exchange.replicate("shared-doc", loroReplicaFactory, "causal")
+   * exchange.replicate("shared-doc", loroReplicaFactory, "causal", "v1:abc123")
+   *
+   * // Promote a deferred doc — factory resolved from capabilities registry
+   * exchange.replicate("deferred-doc")
    * ```
    */
+  replicate(docId: DocId): void
   replicate(
     docId: DocId,
     replicaFactory: ReplicaFactory<any>,
     strategy: MergeStrategy,
     schemaHash: string,
+  ): void
+  replicate(
+    docId: DocId,
+    replicaFactory?: ReplicaFactory<any>,
+    strategy?: MergeStrategy,
+    schemaHash?: string,
   ): void {
-    // Check cache — throw if already registered
-    if (this.#docCache.has(docId)) {
+    // Handle deferred promotion or throw on duplicate
+    const cached = this.#docCache.get(docId)
+    if (cached?.mode === "deferred") {
+      // Promote deferred → replicate
+      this.#docCache.delete(docId)
+      const metadata = this.#synchronizer.getDocMetadata(docId)
+      if (!metadata) {
+        throw new Error(`Document '${docId}' is deferred but has no synchronizer metadata.`)
+      }
+      const bound = this.#capabilities.resolveReplica(metadata.replicaType, metadata.mergeStrategy)
+      if (!bound) {
+        throw new Error(
+          `Document '${docId}' is deferred with replicaType [${metadata.replicaType}] and ` +
+            `strategy "${metadata.mergeStrategy}" but no matching BoundReplica is registered.`,
+        )
+      }
+      replicaFactory = bound.factory
+      strategy = metadata.mergeStrategy
+      schemaHash = metadata.schemaHash
+    } else if (cached) {
       throw new Error(
         `Document '${docId}' is already registered. ` +
           `Cannot call exchange.replicate() on an existing document.`,
+      )
+    }
+
+    if (!replicaFactory || !strategy || !schemaHash) {
+      throw new Error(
+        `exchange.replicate() requires (docId, replicaFactory, strategy, schemaHash) ` +
+          `or a deferred document to promote.`,
       )
     }
 
@@ -912,6 +1012,20 @@ export class Exchange {
   }
 
   /**
+   * The set of deferred document IDs.
+   *
+   * Deferred docs participate in routing but have no local representation.
+   * They can be promoted via `exchange.get()` or `exchange.replicate()`.
+   */
+  get deferred(): ReadonlySet<DocId> {
+    const result = new Set<DocId>()
+    for (const [docId, entry] of this.#docCache) {
+      if (entry.mode === "deferred") result.add(docId)
+    }
+    return result
+  }
+
+  /**
    * Dismiss a document — remove it locally, broadcast `dismiss` to
    * all peers, and delete from stores.
    *
@@ -926,6 +1040,38 @@ export class Exchange {
 
     // Delete from all stores
     this.#persistToStore(docId, backend => backend.delete(docId))
+  }
+
+  /**
+   * Register a BoundSchema at runtime.
+   *
+   * Indexes the schema by its `schemaHash` under the appropriate
+   * `ReplicaKey` in the capabilities registry. Future
+   * `onDocCreationRequested` calls with a matching `schemaHash` will
+   * auto-resolve to this schema.
+   *
+   * @param bound - A BoundSchema to register
+   */
+  registerSchema(bound: BoundSchema): void {
+    this.#capabilities.registerSchema(bound, this.#resolveFactory.bind(this))
+
+    // Auto-promote deferred docs that match the newly registered schema
+    const factory = this.#resolveFactory(bound.factory)
+    const replicaType = factory.replica.replicaType
+    for (const [docId, entry] of this.#docCache) {
+      if (entry.mode !== "deferred") continue
+      const metadata = this.#synchronizer.getDocMetadata(docId)
+      if (!metadata) continue
+      // Check if the new schema matches the deferred doc's triple
+      if (
+        bound.schemaHash === metadata.schemaHash &&
+        replicaType[0] === metadata.replicaType[0] &&
+        replicaType[1] === metadata.replicaType[1] &&
+        bound.strategy === metadata.mergeStrategy
+      ) {
+        ;(this as any).get(docId, bound)
+      }
+    }
   }
 
   // =========================================================================
@@ -1031,6 +1177,11 @@ export class Exchange {
    * - `false` from any scope → deny (short-circuit)
    * - `true` from at least one scope, no `false` → allow
    * - all `undefined` → default (open for both route and authorize)
+   *
+   * Scopes may include a `classify` handler for policy-gating documents
+   * not auto-resolved by the capabilities registry. Multiple classify
+   * handlers are evaluated in registration order — first non-`undefined`
+   * disposition wins.
    */
   register(scope: Scope): () => void {
     return this.#scopes.register(scope)

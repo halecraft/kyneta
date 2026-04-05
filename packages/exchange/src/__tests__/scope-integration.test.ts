@@ -13,6 +13,7 @@ import {
   bindPlain,
   change,
   Interpret,
+  Reject,
   Schema,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
@@ -87,7 +88,7 @@ describe("dynamic scope route", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: () => Interpret(SequentialDoc),
+      classify: () => Interpret(SequentialDoc),
     })
 
     // Register a scope that blocks docs starting with "secret-"
@@ -133,7 +134,7 @@ describe("dynamic scope route", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: () => Interpret(SequentialDoc),
+      classify: () => Interpret(SequentialDoc),
     })
 
     const dispose1 = exchangeA.register({
@@ -183,7 +184,7 @@ describe("dynamic scope route", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: () => Interpret(SequentialDoc),
+      classify: () => Interpret(SequentialDoc),
     })
 
     const dispose = exchangeA.register({
@@ -256,10 +257,10 @@ describe("dynamic scope authorize", () => {
 })
 
 // ---------------------------------------------------------------------------
-// onDocDiscovered via dynamic scope
+// classify via dynamic scope
 // ---------------------------------------------------------------------------
 
-describe("dynamic scope onDocDiscovered", () => {
+describe("dynamic scope classify", () => {
   it("dynamically registered handler materializes peer-announced docs", async () => {
     const bridge = new Bridge()
 
@@ -273,11 +274,11 @@ describe("dynamic scope onDocDiscovered", () => {
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
-    // Register onDocDiscovered dynamically via scope
+    // Register classify dynamically via scope
     const dispose = exchangeB.register({
-      onDocDiscovered: (docId) => {
+      classify: (docId) => {
         if (docId === "discovered") return Interpret(SequentialDoc)
-        return undefined
+        return Reject()
       },
     })
 
@@ -350,7 +351,7 @@ describe("named scope replacement", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: () => Interpret(SequentialDoc),
+      classify: () => Interpret(SequentialDoc),
     })
 
     // Named scope blocks everything
@@ -402,7 +403,7 @@ describe("relay topology", () => {
         createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
         createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
       ],
-      onDocDiscovered: () => Interpret(SequentialDoc),
+      classify: () => Interpret(SequentialDoc),
     })
 
     const exchangeB = createExchange({
@@ -410,7 +411,7 @@ describe("relay topology", () => {
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
       ],
-      onDocDiscovered: () => Interpret(SequentialDoc),
+      classify: () => Interpret(SequentialDoc),
     })
 
     // Hub blocks relay of "private" to bob

@@ -514,7 +514,7 @@ describe("synchronizer-program", () => {
       expect(presentCmd).toBeDefined()
 
       // Should also send interest — essential for pulling data into
-      // empty docs created via onDocDiscovered
+      // empty docs created via classify
       const interestCmd = commands.find(
         c =>
           c.type === "cmd/send-message" &&
@@ -1663,7 +1663,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "causal" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -2928,6 +2928,330 @@ describe("synchronizer-program", () => {
         : undefined
       if (!peerLeft) throw new Error("Expected peer-left notification")
       expect(peerLeft.peer).toEqual(bobIdentity)
+    })
+  })
+
+  describe("capability gate and deferred documents", () => {
+    it("handlePresent for unknown doc with unsupported replicaType emits warning, no creation", () => {
+      const update = createSynchronizerUpdate({
+        supports: (rt) => rt[0] === "plain" && rt[1] === 1,
+      })
+      const [model] = init(aliceIdentity)
+
+      const m = establishChannel(update, model, 1, bobIdentity)
+
+      // Bob announces a Loro doc — unsupported by our supports predicate
+      const [_result, cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "loro-doc",
+                  replicaType: ["loro", 1, 0] as const,
+                  mergeStrategy: "causal" as const,
+                  schemaHash: "abc",
+                },
+              ],
+            },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const creationCmds = commands.filter(
+        c => c.type === "cmd/request-doc-creation",
+      )
+      expect(creationCmds).toHaveLength(0)
+
+      // Should have a warning notification about unsupported replicaType
+      expect(notification).toBeDefined()
+      expect(notification?.type).toBe("notify/warning")
+      if (notification?.type === "notify/warning") {
+        expect(notification.message).toContain("unsupported")
+      }
+    })
+
+    it("handlePresent for known doc with mismatched mergeStrategy emits warning, no interest", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          replicaType: ["plain", 1, 0] as const,
+          mode: "interpret",
+          docId: "doc-1",
+          version: "v1",
+          mergeStrategy: "sequential",
+          schemaHash: "hash1",
+        },
+        m,
+      )
+
+      // Bob announces the same doc but claims "causal" mergeStrategy
+      const [_result, cmd, notification] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "doc-1",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "causal" as const,
+                  schemaHash: "hash1",
+                },
+              ],
+            },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const interestCmds = commands.filter(
+        c =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "interest",
+      )
+      expect(interestCmds).toHaveLength(0)
+
+      // Notification should be a warning about mergeStrategy mismatch
+      expect(notification).toBeDefined()
+      expect(notification?.type).toBe("notify/warning")
+      if (notification?.type === "notify/warning") {
+        expect(notification.message).toContain("mergeStrategy mismatch")
+      }
+    })
+
+    it("handleDocDefer adds deferred doc, sends present without interest", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      const m = establishChannel(update, model, 1, bobIdentity)
+
+      const [result, cmd] = update(
+        {
+          type: "synchronizer/doc-defer",
+          docId: "deferred-doc",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+          schemaHash: "hash1",
+        },
+        m,
+      )
+
+      // Doc is in the model with mode "deferred"
+      const entry = result.documents.get("deferred-doc")
+      expect(entry).toBeDefined()
+      expect(entry!.mode).toBe("deferred")
+      expect(entry!.version).toBe("")
+
+      // present was sent (for routing)
+      const commands = flattenCommands(cmd)
+      const presentCmds = commands.filter(
+        c =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "present",
+      )
+      expect(presentCmds.length).toBeGreaterThan(0)
+
+      // But no interest was sent
+      const interestCmds = commands.filter(
+        c =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "interest",
+      )
+      expect(interestCmds).toHaveLength(0)
+    })
+
+    it("handlePresent for deferred doc does not send interest", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-defer",
+          docId: "deferred-doc",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+          schemaHash: "hash1",
+        },
+        m,
+      )
+
+      // Peer announces the same doc
+      const [_result, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "present",
+              docs: [
+                {
+                  docId: "deferred-doc",
+                  replicaType: ["plain", 1, 0] as const,
+                  mergeStrategy: "sequential" as const,
+                  schemaHash: "hash1",
+                },
+              ],
+            },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const interestCmds = commands.filter(
+        c =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "interest",
+      )
+      expect(interestCmds).toHaveLength(0)
+    })
+
+    it("handleDocEnsure promotes deferred doc to interpret, sends present + interest", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-defer",
+          docId: "deferred-doc",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+          schemaHash: "hash1",
+        },
+        m,
+      )
+
+      const [result, cmd] = update(
+        {
+          type: "synchronizer/doc-ensure",
+          docId: "deferred-doc",
+          mode: "interpret",
+          version: "1",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+          schemaHash: "hash1",
+        },
+        m,
+      )
+
+      // Doc is now in "interpret" mode
+      const entry = result.documents.get("deferred-doc")
+      expect(entry).toBeDefined()
+      expect(entry!.mode).toBe("interpret")
+      expect(entry!.version).toBe("1")
+
+      // Both present and interest were sent
+      const commands = flattenCommands(cmd)
+      const presentCmds = commands.filter(
+        c =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "present",
+      )
+      const interestCmds = commands.filter(
+        c =>
+          c.type === "cmd/send-message" &&
+          c.envelope.message.type === "interest",
+      )
+      expect(presentCmds.length).toBeGreaterThan(0)
+      expect(interestCmds.length).toBeGreaterThan(0)
+    })
+
+    it("handleOffer for deferred doc returns model unchanged", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-defer",
+          docId: "deferred-doc",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+          schemaHash: "hash1",
+        },
+        m,
+      )
+
+      const [result, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "offer",
+              docId: "deferred-doc",
+              payload: { kind: "entirety", encoding: "json", data: "{}" },
+              version: "v1",
+            },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const importCmds = commands.filter(
+        c => c.type === "cmd/import-doc-data",
+      )
+      expect(importCmds).toHaveLength(0)
+
+      // Model should be unchanged — deferred doc still deferred
+      expect(result.documents.get("deferred-doc")?.mode).toBe("deferred")
+    })
+
+    it("handleInterest for deferred doc returns model unchanged", () => {
+      const update = makeUpdate()
+      const [model] = init(aliceIdentity)
+
+      let m = establishChannel(update, model, 1, bobIdentity)
+      ;[m] = update(
+        {
+          type: "synchronizer/doc-defer",
+          docId: "deferred-doc",
+          replicaType: ["plain", 1, 0] as const,
+          mergeStrategy: "sequential" as const,
+          schemaHash: "hash1",
+        },
+        m,
+      )
+
+      const [result, cmd] = update(
+        {
+          type: "synchronizer/channel-receive-message",
+          envelope: {
+            fromChannelId: 1,
+            message: {
+              type: "interest",
+              docId: "deferred-doc",
+              version: "v0",
+            },
+          },
+        },
+        m,
+      )
+
+      const commands = flattenCommands(cmd)
+      const sendOfferCmds = commands.filter(
+        c => c.type === "cmd/send-offer",
+      )
+      expect(sendOfferCmds).toHaveLength(0)
+
+      // Model should be unchanged — deferred doc still deferred
+      expect(result.documents.get("deferred-doc")?.mode).toBe("deferred")
     })
   })
 })

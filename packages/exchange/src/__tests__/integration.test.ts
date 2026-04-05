@@ -11,10 +11,13 @@ import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
 import {
   bindEphemeral,
   bindPlain,
+  BoundReplica,
   change,
+  Defer,
   Interpret,
   lwwReplicaFactory,
   plainReplicaFactory,
+  Reject,
   Replicate,
   Schema,
 } from "@kyneta/schema"
@@ -181,11 +184,13 @@ describe("Causal sync (LoroSubstrate)", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [LoroDoc],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [LoroDoc],
     })
 
     // Alice creates a doc
@@ -211,11 +216,13 @@ describe("Causal sync (LoroSubstrate)", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [LoroDoc],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [LoroDoc],
     })
 
     // Both create the doc
@@ -346,11 +353,13 @@ describe("Heterogeneous documents", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [CollabDoc],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [CollabDoc],
     })
 
     // Alice: plain config doc
@@ -391,6 +400,7 @@ describe("Multi-hop relay (three-peer topology)", () => {
       transports: [
         createBridgeTransport({ transportType: "alice", bridge: bridgeAH }),
       ],
+      schemas: [LoroDoc],
     })
 
     const exchangeHub = createExchange({
@@ -399,6 +409,7 @@ describe("Multi-hop relay (three-peer topology)", () => {
         createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
         createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
       ],
+      schemas: [LoroDoc],
     })
 
     const exchangeB = createExchange({
@@ -406,6 +417,7 @@ describe("Multi-hop relay (three-peer topology)", () => {
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
       ],
+      schemas: [LoroDoc],
     })
 
     // All three open the same doc
@@ -491,11 +503,11 @@ describe("Multi-hop relay (three-peer topology)", () => {
 })
 
 // ---------------------------------------------------------------------------
-// onDocDiscovered — dynamic document creation
+// classify — dynamic document creation
 // ---------------------------------------------------------------------------
 
-describe("onDocDiscovered (dynamic document creation)", () => {
-  it("peer A creates doc, peer B materializes it via onDocDiscovered", async () => {
+describe("classify (dynamic document creation)", () => {
+  it("peer A creates doc, peer B materializes it via classify", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -506,9 +518,9 @@ describe("onDocDiscovered (dynamic document creation)", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: docId => {
+      classify: docId => {
         if (docId === "dynamic-doc") return Interpret(SequentialDoc)
-        return undefined
+        return Reject()
       },
     })
 
@@ -529,7 +541,7 @@ describe("onDocDiscovered (dynamic document creation)", () => {
     expect(docB.count()).toBe(7)
   })
 
-  it("onDocDiscovered returning undefined does not create the doc", async () => {
+  it("classify returning Reject() does not create the doc", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -540,7 +552,7 @@ describe("onDocDiscovered (dynamic document creation)", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: () => undefined,
+      classify: () => Reject(),
     })
 
     exchangeA.get("ignored-doc", SequentialDoc)
@@ -561,9 +573,9 @@ describe("onDocDiscovered (dynamic document creation)", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: docId => {
+      classify: docId => {
         if (docId === "presence") return Interpret(PresenceDoc)
-        return undefined
+        return Reject()
       },
     })
 
@@ -786,11 +798,11 @@ describe("dismiss", () => {
 })
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// Route + onDocDiscovered interaction
+// Route + classify interaction
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-describe("route + onDocDiscovered interaction", () => {
-  it("route denying a peer prevents onDocDiscovered from firing", async () => {
+describe("route + classify interaction", () => {
+  it("route denying a peer prevents classify from firing", async () => {
     const bridge = new Bridge()
     let discoveredCallCount = 0
 
@@ -804,10 +816,10 @@ describe("route + onDocDiscovered interaction", () => {
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       // Route denies alice for "blocked-doc"
       route: docId => docId !== "blocked-doc",
-      onDocDiscovered: docId => {
+      classify: docId => {
         discoveredCallCount++
         if (docId === "blocked-doc") return Interpret(SequentialDoc)
-        return undefined
+        return Reject()
       },
     })
 
@@ -816,7 +828,7 @@ describe("route + onDocDiscovered interaction", () => {
 
     await drain(40)
 
-    // Bob's onDocDiscovered should never have fired (route blocked it)
+    // Bob's classify should never have fired (route blocked it)
     expect(discoveredCallCount).toBe(0)
     expect(exchangeB.has("blocked-doc")).toBe(false)
   })
@@ -837,6 +849,7 @@ describe("relay via exchange.replicate()", () => {
       transports: [
         createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
+      schemas: [LoroDoc],
     })
 
     // Relay — headless replication, no schema knowledge
@@ -846,8 +859,8 @@ describe("relay via exchange.replicate()", () => {
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(loroReplicaFactory, "causal", schemaHash),
+      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      classify: () => Replicate(),
     })
 
     // Peer B — full interpreter
@@ -856,9 +869,10 @@ describe("relay via exchange.replicate()", () => {
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
       ],
-      onDocDiscovered: docId => {
+      schemas: [LoroDoc],
+      classify: docId => {
         if (docId === "shared") return Interpret(LoroDoc)
-        return undefined
+        return Reject()
       },
     })
 
@@ -896,8 +910,7 @@ describe("relay via exchange.replicate()", () => {
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(plainReplicaFactory, "sequential", schemaHash),
+      classify: () => Replicate(),
     })
 
     const exchangeB = createExchange({
@@ -905,9 +918,9 @@ describe("relay via exchange.replicate()", () => {
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
       ],
-      onDocDiscovered: docId => {
+      classify: docId => {
         if (docId === "config") return Interpret(SequentialDoc)
-        return undefined
+        return Reject()
       },
     })
 
@@ -943,8 +956,7 @@ describe("relay via exchange.replicate()", () => {
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(lwwReplicaFactory, "lww", schemaHash),
+      classify: () => Replicate(),
     })
 
     const exchangeB = createExchange({
@@ -952,9 +964,9 @@ describe("relay via exchange.replicate()", () => {
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
       ],
-      onDocDiscovered: docId => {
+      classify: docId => {
         if (docId === "presence") return Interpret(PresenceDoc)
-        return undefined
+        return Reject()
       },
     })
 
@@ -975,21 +987,23 @@ describe("relay via exchange.replicate()", () => {
     expect(docB.name()).toBe("Alice")
   })
 
-  it("onDocDiscovered returning Replicate() creates replicated doc from peer discovery", async () => {
+  it("classify returning Replicate() creates replicated doc from peer discovery", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [LoroDoc],
     })
 
     let discoveredDocId: string | undefined
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: (docId, _peer, _rt, _ms, schemaHash) => {
+      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      classify: (docId) => {
         discoveredDocId = docId
-        return Replicate(loroReplicaFactory, "causal", schemaHash)
+        return Replicate()
       },
     })
 
@@ -1012,6 +1026,7 @@ describe("relay via exchange.replicate()", () => {
       transports: [
         createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
+      schemas: [LoroDoc],
     })
 
     const relay = createExchange({
@@ -1019,8 +1034,8 @@ describe("relay via exchange.replicate()", () => {
       transports: [
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
       ],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(loroReplicaFactory, "causal", schemaHash),
+      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      classify: () => Replicate(),
     })
 
     const docA = exchangeA.get("shared", LoroDoc)
@@ -1044,9 +1059,10 @@ describe("relay via exchange.replicate()", () => {
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
       ],
-      onDocDiscovered: docId => {
+      schemas: [LoroDoc],
+      classify: docId => {
         if (docId === "shared") return Interpret(LoroDoc)
-        return undefined
+        return Reject()
       },
     })
 
@@ -1064,17 +1080,19 @@ describe("relay via exchange.replicate()", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [LoroDoc],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDiscovered: (docId, _peer, _rt, _ms, schemaHash) => {
+      schemas: [SequentialDoc],
+      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      classify: (docId) => {
         // Interpret some docs, replicate others
         if (docId === "app-doc") return Interpret(SequentialDoc)
-        if (docId === "relay-doc")
-          return Replicate(loroReplicaFactory, "causal", schemaHash)
-        return undefined
+        if (docId === "relay-doc") return Replicate()
+        return Reject()
       },
     })
 
@@ -1173,5 +1191,205 @@ describe("waitForSync", () => {
     // Both docs should have been notified (they both synced)
     expect(notifiedDocIds.has("doc-1")).toBe(true)
     expect(notifiedDocIds.has("doc-2")).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Capability gate — unsupported replicaType is invisible
+// ---------------------------------------------------------------------------
+
+describe("capability gate", () => {
+  it("unsupported replicaType makes doc invisible — classify never fires", async () => {
+    // Peer A uses Loro. Peer B has default capabilities (no Loro).
+    // B should never see A's doc.
+    const bridge = new Bridge()
+    let classifyCallCount = 0
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [LoroDoc],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      // No Loro capability — default replicas only
+      classify: () => {
+        classifyCallCount++
+        return Reject()
+      },
+    })
+
+    exchangeA.get("loro-doc", LoroDoc)
+    await drain(40)
+
+    expect(classifyCallCount).toBe(0) // classify never fires
+    expect(exchangeB.has("loro-doc")).toBe(false)
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Auto-interpretation from schema registry
+// ---------------------------------------------------------------------------
+
+describe("auto-interpretation from schema registry", () => {
+  it("registered schema auto-interprets without classify", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [SequentialDoc],
+      // No classify callback at all
+    })
+
+    const docA = exchangeA.get("auto-doc", SequentialDoc)
+    change(docA, (d: any) => d.title.set("hello"))
+
+    await drain(40)
+
+    expect(exchangeB.has("auto-doc")).toBe(true)
+    const docB = exchangeB.get("auto-doc", SequentialDoc)
+    expect(docB.title()).toBe("hello")
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Deferred document lifecycle
+// ---------------------------------------------------------------------------
+
+describe("deferred document lifecycle", () => {
+  it("Defer() defers doc, exchange.get() promotes it and syncs data", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      classify: () => Defer(),
+    })
+
+    const docA = exchangeA.get("deferred-doc", SequentialDoc)
+    change(docA, (d: any) => d.title.set("deferred-value"))
+
+    await drain(40)
+
+    // B has deferred the doc — visible in deferred set
+    expect(exchangeB.deferred.has("deferred-doc")).toBe(true)
+
+    // Promote via get()
+    const docB = exchangeB.get("deferred-doc", SequentialDoc)
+    await drain(40)
+
+    expect(exchangeB.has("deferred-doc")).toBe(true)
+    expect(exchangeB.deferred.has("deferred-doc")).toBe(false)
+    expect(docB.title()).toBe("deferred-value")
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("registerSchema() auto-promotes matching deferred docs", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      classify: () => Defer(),
+    })
+
+    const docA = exchangeA.get("auto-promote-doc", SequentialDoc)
+    change(docA, (d: any) => d.title.set("auto-promoted"))
+
+    await drain(40)
+
+    // B has deferred the doc
+    expect(exchangeB.deferred.has("auto-promote-doc")).toBe(true)
+
+    // Register the schema — should auto-promote
+    exchangeB.registerSchema(SequentialDoc)
+    await drain(40)
+
+    expect(exchangeB.deferred.has("auto-promote-doc")).toBe(false)
+    expect(exchangeB.has("auto-promote-doc")).toBe(true)
+    const docB = exchangeB.get("auto-promote-doc", SequentialDoc)
+    expect(docB.title()).toBe("auto-promoted")
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("exchange.deferred accessor tracks deferred state", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      classify: () => Defer(),
+    })
+
+    expect(exchangeB.deferred.size).toBe(0)
+
+    exchangeA.get("d1", SequentialDoc)
+    exchangeA.get("d2", SequentialDoc)
+    await drain(40)
+
+    expect(exchangeB.deferred.size).toBe(2)
+    expect(exchangeB.deferred.has("d1")).toBe(true)
+    expect(exchangeB.deferred.has("d2")).toBe(true)
+
+    // Promote one
+    exchangeB.get("d1", SequentialDoc)
+    await drain(20)
+
+    expect(exchangeB.deferred.size).toBe(1)
+    expect(exchangeB.deferred.has("d1")).toBe(false)
+    expect(exchangeB.deferred.has("d2")).toBe(true)
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// exchange.get() validation
+// ---------------------------------------------------------------------------
+
+describe("exchange.get() validation", () => {
+  it("throws when BoundSchema replicaType is not supported", () => {
+    const exchange = createExchange({
+      identity: { peerId: "test" },
+      // Default replicas — no Loro
+    })
+
+    expect(() => exchange.get("doc", LoroDoc)).toThrow(/supported replicaType/)
+
+    exchange.reset()
   })
 })

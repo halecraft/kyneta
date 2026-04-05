@@ -13,6 +13,7 @@
 import type { CallableChangefeed, Changeset } from "@kyneta/changefeed"
 import { createCallable, createChangefeed } from "@kyneta/changefeed"
 import type {
+  DocMetadata,
   MergeStrategy,
   Replica,
   ReplicaFactory,
@@ -105,6 +106,7 @@ export type SynchronizerParams = {
   transports?: AnyTransport[]
   route: RoutePredicate
   authorize: AuthorizePredicate
+  supports?: (replicaType: ReplicaType) => boolean
   onDocCreationRequested?: DocCreationCallback
   onDocDismissed?: DocDismissedCallback
 }
@@ -275,12 +277,13 @@ export class Synchronizer {
     transports = [],
     route,
     authorize,
+    supports,
     onDocCreationRequested,
     onDocDismissed,
   }: SynchronizerParams) {
     this.identity = identity
 
-    this.#updateFn = createSynchronizerUpdate({ route, authorize })
+    this.#updateFn = createSynchronizerUpdate({ route, authorize, supports })
     this.#docCreationCallback = onDocCreationRequested
     this.#docDismissedCallback = onDocDismissed
 
@@ -340,6 +343,45 @@ export class Synchronizer {
       mergeStrategy: runtime.strategy,
       schemaHash: runtime.schemaHash,
     })
+  }
+
+  /**
+   * Register a deferred document — routing participation only, no replica.
+   *
+   * The document will be added to `model.documents` with `mode: "deferred"`.
+   * It participates in routing (`present` messages) but does not send
+   * `interest` or handle `offer`/`interest` messages.
+   */
+  deferDoc(
+    docId: DocId,
+    replicaType: ReplicaType,
+    mergeStrategy: MergeStrategy,
+    schemaHash: string,
+  ): void {
+    this.#dispatch({
+      type: "synchronizer/doc-defer",
+      docId,
+      replicaType,
+      mergeStrategy,
+      schemaHash,
+    })
+  }
+
+  /**
+   * Get the metadata for a document in the synchronizer model.
+   *
+   * Returns `undefined` if the doc is not in the model. Used by the
+   * Exchange to retrieve discovery metadata for deferred docs during
+   * promotion.
+   */
+  getDocMetadata(docId: DocId): DocMetadata | undefined {
+    const entry = this.model.documents.get(docId)
+    if (!entry) return undefined
+    return {
+      replicaType: entry.replicaType,
+      mergeStrategy: entry.mergeStrategy,
+      schemaHash: entry.schemaHash,
+    }
   }
 
   /**

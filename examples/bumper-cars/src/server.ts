@@ -7,7 +7,7 @@
 //   2. Creates a server-side Exchange with:
 //      - route:           input docs only visible to owner
 //      - authorize:       clients can only write their own input doc
-//      - onDocDiscovered: materializes input:${peerId} docs on player connect
+//      - classify:        materializes input:${peerId} docs on player connect
 //      - onDocDismissed:  cleans up when players disconnect
 //   3. Runs the game loop at 60fps
 //   4. Serves static files from dist/ and upgrades /ws to WebSocket
@@ -19,7 +19,7 @@
 /// <reference types="bun-types" />
 
 import { Exchange } from "@kyneta/exchange"
-import { Interpret } from "@kyneta/schema"
+import { Interpret, Reject } from "@kyneta/schema"
 import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import {
   createBunWebsocketHandlers,
@@ -48,7 +48,11 @@ const serverTransport = new WebsocketServerTransport()
 let gameLoop: GameLoop
 
 const exchange = new Exchange({
-  identity: { peerId: "bumper-cars-server", name: "bumper-cars-server", type: "service" },
+  identity: {
+    peerId: "bumper-cars-server",
+    name: "bumper-cars-server",
+    type: "service",
+  },
   transports: [() => serverTransport],
 
   // ── route ────────────────────────────────────────────────────────
@@ -81,17 +85,17 @@ const exchange = new Exchange({
     return false
   },
 
-  // ── onDocDiscovered ──────────────────────────────────────────────
+  // ── classify ─────────────────────────────────────────────────────
   // A client created input:${peerId} — materialize it server-side
   // and register the player with the game loop.
   //
-  // onDocDiscovered returns an Interpret disposition; the Exchange then
+  // classify returns an Interpret disposition; the Exchange then
   // calls exchange.get(docId, bound) internally to create the doc. After
   // that call completes (synchronously), we can look the doc up.
   // We schedule a microtask to register the player so the Exchange
   // finishes its dispatch loop first.
-  onDocDiscovered(docId, _peer, _replicaType, _mergeStrategy) {
-    if (!docId.startsWith("input:")) return undefined
+  classify(docId, _peer, _replicaType, _mergeStrategy) {
+    if (!docId.startsWith("input:")) return Reject()
 
     const peerId = docId.slice("input:".length)
 

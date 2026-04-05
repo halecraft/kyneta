@@ -312,7 +312,7 @@ describe("Exchange", () => {
 
       it("loro(ref) returns the LoroDoc for a Loro-backed exchange doc", () => {
         const LoroDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
-        const exchange = new Exchange({ identity: { peerId: "test" } })
+        const exchange = new Exchange({ identity: { peerId: "test" }, schemas: [LoroDoc] })
         const doc = exchange.get("doc-1", LoroDoc)
 
         const loroDoc = loro(doc)

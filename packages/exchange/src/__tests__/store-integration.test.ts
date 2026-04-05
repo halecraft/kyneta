@@ -14,6 +14,7 @@ import {
   change,
   Interpret,
   plainReplicaFactory,
+  Reject,
   Replicate,
   Schema,
 } from "@kyneta/schema"
@@ -136,6 +137,7 @@ describe("Storage persist + hydrate", () => {
     const exchange1 = createExchange({
       identity: { peerId: "server" },
       stores: [createInMemoryStore({ sharedData })],
+      schemas: [CausalDoc],
     })
 
     const doc1 = exchange1.get("doc-1", CausalDoc)
@@ -149,6 +151,7 @@ describe("Storage persist + hydrate", () => {
     const exchange2 = createExchange({
       identity: { peerId: "server" },
       stores: [createInMemoryStore({ sharedData })],
+      schemas: [CausalDoc],
     })
 
     const doc2 = exchange2.get("doc-1", CausalDoc)
@@ -211,8 +214,7 @@ describe("Storage + network sync", () => {
         createBridgeTransport({ transportType: "server-side", bridge }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(plainReplicaFactory, "sequential", schemaHash),
+      classify: () => Replicate(),
     })
 
     const peerA = createExchange({
@@ -251,8 +253,7 @@ describe("Storage + network sync", () => {
         }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(plainReplicaFactory, "sequential", schemaHash),
+      classify: () => Replicate(),
     })
 
     const peerB = createExchange({
@@ -263,7 +264,7 @@ describe("Storage + network sync", () => {
           bridge: bridge2,
         }),
       ],
-      onDocDiscovered: (_docId, _peer) => Interpret(SequentialDoc),
+      classify: () => Interpret(SequentialDoc),
     })
 
     // Wait for server hydration + peer B sync
@@ -289,8 +290,7 @@ describe("Storage + network sync", () => {
         createBridgeTransport({ transportType: "server-side", bridge }),
       ],
       stores: [backend],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(plainReplicaFactory, "sequential", schemaHash),
+      classify: () => Replicate(),
     })
 
     const client = createExchange({
@@ -338,8 +338,7 @@ describe("Storage + replicated doc", () => {
         createBridgeTransport({ transportType: "relay-side", bridge: bridge1 }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(plainReplicaFactory, "sequential", schemaHash),
+      classify: () => Replicate(),
     })
 
     const peerA = createExchange({
@@ -383,8 +382,7 @@ describe("Storage + replicated doc", () => {
         createBridgeTransport({ transportType: "relay-side", bridge: bridge2 }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      onDocDiscovered: (_docId, _peer, _rt, _ms, schemaHash) =>
-        Replicate(plainReplicaFactory, "sequential", schemaHash),
+      classify: () => Replicate(),
     })
 
     const peerB = createExchange({
@@ -395,7 +393,7 @@ describe("Storage + replicated doc", () => {
           bridge: bridge2,
         }),
       ],
-      onDocDiscovered: () => Interpret(SequentialDoc),
+      classify: () => Interpret(SequentialDoc),
     })
 
     await drain(300)
@@ -454,7 +452,7 @@ describe("No storage (baseline)", () => {
     const exchangeB = createExchange({
       identity: { peerId: "peer-b" },
       transports: [createBridgeTransport({ transportType: "side-b", bridge })],
-      onDocDiscovered: () => Interpret(SequentialDoc),
+      classify: () => Interpret(SequentialDoc),
     })
 
     const docA = exchangeA.get("doc-1", SequentialDoc)

@@ -47,8 +47,8 @@ import type { PeerState } from "./types.js"
 export type DocEntry = {
   docId: DocId
 
-  /** Document participation mode — interpret (full stack) or replicate (headless). */
-  mode: "interpret" | "replicate"
+  /** Document participation mode — interpret (full stack), replicate (headless), or deferred (routing only). */
+  mode: "interpret" | "replicate" | "deferred"
 
   /** Serialized version from replica.version().serialize() */
   version: string
@@ -113,6 +113,15 @@ export type SynchronizerMessage =
       docId: DocId
       version: string
       fromPeerId: PeerId
+    }
+
+  // Deferred document registration
+  | {
+      type: "synchronizer/doc-defer"
+      docId: DocId
+      replicaType: ReplicaType
+      mergeStrategy: MergeStrategy
+      schemaHash: string
     }
 
   // Channel message received (from network or storage)
@@ -319,11 +328,13 @@ export type SynchronizerUpdate = (
 type CreateSynchronizerUpdateParams = {
   route: RoutePredicate
   authorize: AuthorizePredicate
+  supports: (replicaType: ReplicaType) => boolean
 }
 
 const defaultParams: CreateSynchronizerUpdateParams = {
   route: () => true,
   authorize: () => true,
+  supports: () => true,
 }
 
 /**
@@ -337,7 +348,7 @@ const defaultParams: CreateSynchronizerUpdateParams = {
 export function createSynchronizerUpdate(
   params: Partial<CreateSynchronizerUpdateParams> = {},
 ): SynchronizerUpdate {
-  const { route, authorize } = { ...defaultParams, ...params }
+  const { route, authorize, supports } = { ...defaultParams, ...params }
   return function update(
     msg: SynchronizerMessage,
     model: SynchronizerModel,
@@ -355,6 +366,9 @@ export function createSynchronizerUpdate(
       case "synchronizer/doc-ensure":
         return handleDocEnsure(msg, model, route)
 
+      case "synchronizer/doc-defer":
+        return handleDocDefer(msg, model, route)
+
       case "synchronizer/local-doc-change":
         return handleLocalDocChange(msg, model, route)
 
@@ -368,7 +382,7 @@ export function createSynchronizerUpdate(
         return handleDocImported(msg, model, route)
 
       case "synchronizer/channel-receive-message":
-        return handleChannelReceiveMessage(msg, model, route, authorize)
+        return handleChannelReceiveMessage(msg, model, route, authorize, supports)
     }
   }
 }
@@ -464,6 +478,48 @@ function handleChannelRemoved(
 // HANDLER: Document lifecycle
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
+/**
+ * Compute routed channel IDs and build a present command for a document.
+ * Extracted from handleDocEnsure so handleDocDefer can reuse the logic.
+ */
+function announceDoc(
+  docId: DocId,
+  replicaType: ReplicaType,
+  mergeStrategy: MergeStrategy,
+  schemaHash: string,
+  model: SynchronizerModel,
+  route: RoutePredicate,
+): { channelIds: ChannelId[]; present: Command | undefined } {
+  const allEstablished = getEstablishedChannelIds(model)
+  const channelIds = filterChannelsByRoute(
+    model,
+    allEstablished,
+    docId,
+    route,
+  )
+  if (channelIds.length === 0) {
+    return { channelIds, present: undefined }
+  }
+  const present: Command = {
+    type: "cmd/send-message",
+    envelope: {
+      toChannelIds: channelIds,
+      message: {
+        type: "present",
+        docs: [
+          {
+            docId,
+            replicaType,
+            mergeStrategy,
+            schemaHash,
+          },
+        ],
+      },
+    },
+  }
+  return { channelIds, present }
+}
+
 function handleDocEnsure(
   msg: {
     type: "synchronizer/doc-ensure"
@@ -479,7 +535,10 @@ function handleDocEnsure(
 ): [SynchronizerModel, Command?, Notification?] {
   const existing = model.documents.get(msg.docId)
   if (existing) {
-    return [model]
+    if (existing.mode !== "deferred") return [model]
+    // Promote deferred → the new mode
+    // Fall through to the normal doc-ensure logic below,
+    // which will overwrite the entry with the new mode/version
   }
 
   const documents = new Map(model.documents)
@@ -496,52 +555,70 @@ function handleDocEnsure(
   // We send both present (so peers learn we have the doc) and interest
   // (so peers send us their state). This is essential for docs created
   // via onDocDiscovered — the local doc is empty and needs to pull data.
-  const allEstablished = getEstablishedChannelIds(model)
   const updatedModel = { ...model, documents }
-  const establishedChannelIds = filterChannelsByRoute(
-    updatedModel,
-    allEstablished,
+  const { channelIds, present } = announceDoc(
     msg.docId,
+    msg.replicaType,
+    msg.mergeStrategy,
+    msg.schemaHash,
+    updatedModel,
     route,
   )
-  if (establishedChannelIds.length === 0) {
+  if (channelIds.length === 0) {
     return [updatedModel]
   }
 
   const isCausal = msg.mergeStrategy === "causal"
-  const cmd = batchAsNeeded(
-    {
-      type: "cmd/send-message",
-      envelope: {
-        toChannelIds: establishedChannelIds,
-        message: {
-          type: "present",
-          docs: [
-            {
-              docId: msg.docId,
-              replicaType: msg.replicaType,
-              mergeStrategy: msg.mergeStrategy,
-              schemaHash: msg.schemaHash,
-            },
-          ],
-        },
+  const interest: Command = {
+    type: "cmd/send-message",
+    envelope: {
+      toChannelIds: channelIds,
+      message: {
+        type: "interest",
+        docId: msg.docId,
+        version: msg.version,
+        reciprocate: isCausal,
       },
     },
-    {
-      type: "cmd/send-message",
-      envelope: {
-        toChannelIds: establishedChannelIds,
-        message: {
-          type: "interest",
-          docId: msg.docId,
-          version: msg.version,
-          reciprocate: isCausal,
-        },
-      },
-    },
+  }
+
+  return [updatedModel, batchAsNeeded(present, interest)]
+}
+
+function handleDocDefer(
+  msg: {
+    type: "synchronizer/doc-defer"
+    docId: DocId
+    replicaType: ReplicaType
+    mergeStrategy: MergeStrategy
+    schemaHash: string
+  },
+  model: SynchronizerModel,
+  route: RoutePredicate,
+): [SynchronizerModel, Command?, Notification?] {
+  if (model.documents.has(msg.docId)) return [model]
+
+  const documents = new Map(model.documents)
+  documents.set(msg.docId, {
+    docId: msg.docId,
+    mode: "deferred",
+    version: "",
+    replicaType: msg.replicaType,
+    mergeStrategy: msg.mergeStrategy,
+    schemaHash: msg.schemaHash,
+  })
+
+  const updatedModel = { ...model, documents }
+  const { present } = announceDoc(
+    msg.docId,
+    msg.replicaType,
+    msg.mergeStrategy,
+    msg.schemaHash,
+    updatedModel,
+    route,
   )
 
-  return [updatedModel, cmd]
+  return [updatedModel, present]
 }
 
 function handleLocalDocChange(
@@ -662,6 +739,7 @@ function handleChannelReceiveMessage(
   model: SynchronizerModel,
   route: RoutePredicate,
   authorize: AuthorizePredicate,
+  supports: (replicaType: ReplicaType) => boolean,
 ): [SynchronizerModel, Command?, Notification?] {
   const { fromChannelId, message } = msg.envelope
 
@@ -673,7 +751,7 @@ function handleChannelReceiveMessage(
       return handleEstablishResponse(fromChannelId, message, model, route)
 
     case "present":
-      return handlePresent(fromChannelId, message, model, route)
+      return handlePresent(fromChannelId, message, model, route, supports)
 
     case "interest":
       return handleInterest(fromChannelId, message, model, route)
@@ -925,6 +1003,7 @@ function handlePresent(
   },
   model: SynchronizerModel,
   route: RoutePredicate,
+  supports: (replicaType: ReplicaType) => boolean,
 ): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
@@ -961,6 +1040,19 @@ function handlePresent(
         })
         continue
       }
+      // Check mergeStrategy compatibility
+      if (docEntry.mergeStrategy !== mergeStrategy) {
+        warnings.push({
+          type: "notify/warning",
+          message:
+            `[exchange] mergeStrategy mismatch for doc '${docId}': ` +
+            `local '${docEntry.mergeStrategy}' vs remote '${mergeStrategy}' — skipping sync`,
+        })
+        continue
+      }
+      // Deferred docs participate in routing but don't request data
+      if (docEntry.mode === "deferred") continue
+
       // Compatible — send interest with our version
       const isCausal = docEntry.mergeStrategy === "causal"
       commands.push({
@@ -977,6 +1069,17 @@ function handlePresent(
         },
       })
     } else if (peerState) {
+      // Capability check — must be before route
+      if (!supports(replicaType)) {
+        warnings.push({
+          type: "notify/warning",
+          message:
+            `[exchange] Peer "${peerState.identity.peerId}" announced doc "${docId}" ` +
+            `with unsupported replicaType [${replicaType}]. Add the appropriate ` +
+            `BoundReplica to ExchangeParams.replicas or a BoundSchema to ExchangeParams.schemas.`,
+        })
+        continue
+      }
       // Unknown doc — check route before requesting creation
       if (!route(docId, peerState.identity)) continue
       commands.push({
@@ -1013,11 +1116,8 @@ function handleInterest(
 
   const docEntry = model.documents.get(message.docId)
 
-  if (!docEntry) {
-    // Unknown doc — nothing to offer, drop silently.
-    // Storage hydration is handled by the Exchange directly, not here.
-    return [model]
-  }
+  if (!docEntry) return [model]
+  if (docEntry.mode === "deferred") return [model]
 
   // Known doc — respond based on merge strategy
   return handleInterestForKnownDoc(fromChannelId, message, docEntry, model)
@@ -1164,10 +1264,8 @@ function handleOffer(
   if (!channel || channel.type !== "established") return [model]
 
   const docEntry = model.documents.get(message.docId)
-  if (!docEntry) {
-    // We don't have this doc — ignore the offer
-    return [model]
-  }
+  if (!docEntry) return [model]
+  if (docEntry.mode === "deferred") return [model]
 
   const commands: Command[] = []
 

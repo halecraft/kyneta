@@ -11,8 +11,11 @@ export {
   bind,
   bindEphemeral,
   bindPlain,
+  BoundReplica,
+  Defer,
   Interpret,
   isBoundSchema,
+  Reject,
   Replicate,
 } from "./bind.js"
 // Change types — the universal currency of change

@@ -141,12 +141,20 @@ export { composeRule, ScopeRegistry } from "./scope.js"
 
 export type {
   AuthorizePredicate,
+  Classify,
+  Disposition,
   ExchangeParams,
-  OnDocDiscovered,
   OnDocDismissed,
   RoutePredicate,
 } from "./exchange.js"
 export { Exchange } from "./exchange.js"
+
+// ---------------------------------------------------------------------------
+// Capabilities — registry of supported replica types and schema bindings
+// ---------------------------------------------------------------------------
+
+export type { Capabilities } from "./capabilities.js"
+export { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 
 // ---------------------------------------------------------------------------
 // Sync — sync capabilities access

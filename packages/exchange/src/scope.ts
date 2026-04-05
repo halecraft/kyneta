@@ -11,8 +11,7 @@
 //   scope list and delegates composition to the pure function.
 
 import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
-import type { Interpret, Replicate } from "@kyneta/schema"
-import type { OnDocDiscovered, OnDocDismissed } from "./exchange.js"
+import type { Classify, Disposition, OnDocDismissed } from "./exchange.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,7 +35,7 @@ export type RulePredicate = (
  * of the document space. All fields are optional — a scope only
  * provides the predicates it cares about.
  *
- * The `onDocDiscovered` and `onDocDismissed` fields reuse the existing
+ * The `classify` and `onDocDismissed` fields reuse the existing
  * types from `exchange.ts` — no wrapper types needed.
  */
 export interface Scope {
@@ -44,7 +43,7 @@ export interface Scope {
   name?: string
   route?: RulePredicate
   authorize?: RulePredicate
-  onDocDiscovered?: OnDocDiscovered
+  classify?: (...args: Parameters<Classify>) => Disposition | undefined
   onDocDismissed?: OnDocDismissed
 }
 
@@ -91,7 +90,7 @@ export function composeRule(
  * composition to the pure `composeRule` function.
  *
  * Internal storage: an ordered array of Scope entries (preserves
- * registration order for `onDocDiscovered` evaluation). A parallel
+ * registration order for `classify` evaluation). A parallel
  * Map indexes named scopes for O(1) replacement lookup.
  */
 export class ScopeRegistry {
@@ -160,20 +159,20 @@ export class ScopeRegistry {
   }
 
   /**
-   * Composed onDocDiscovered — evaluate scopes in registration order.
+   * Composed classify — evaluate scopes in registration order.
    * First non-`undefined` disposition wins. If all return `undefined`,
    * the result is `undefined`.
    */
-  docDiscovered(
+  classify(
     docId: DocId,
     peer: PeerIdentityDetails,
-    replicaType: Parameters<OnDocDiscovered>[2],
-    mergeStrategy: Parameters<OnDocDiscovered>[3],
+    replicaType: Parameters<Classify>[2],
+    mergeStrategy: Parameters<Classify>[3],
     schemaHash: string,
-  ): Interpret | Replicate | undefined {
+  ): Disposition | undefined {
     for (const scope of this.#scopes) {
-      if (!scope.onDocDiscovered) continue
-      const result = scope.onDocDiscovered(
+      if (!scope.classify) continue
+      const result = scope.classify(
         docId,
         peer,
         replicaType,
@@ -186,11 +185,11 @@ export class ScopeRegistry {
   }
 
   /**
-   * Whether any registered scope has an `onDocDiscovered` handler.
+   * Whether any registered scope has a `classify` handler.
    * Used by the Exchange to decide whether to emit the "no callback" warning.
    */
-  get hasDocDiscovered(): boolean {
-    return this.#scopes.some(s => s.onDocDiscovered != null)
+  get hasClassify(): boolean {
+    return this.#scopes.some(s => s.classify != null)
   }
 
   /**

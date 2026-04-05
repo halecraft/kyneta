@@ -55,7 +55,7 @@ export type {
 export const DEFAULT_FRAGMENT_THRESHOLD = 100 * 1024
 
 /**
- * Options for the Websocket client adapter (browser connections).
+ * Options for the Websocket client transport (browser connections).
  */
 export interface WebsocketClientOptions {
   /** Websocket URL to connect to. Can be a string or a function of peerId. */
@@ -126,7 +126,7 @@ export interface ServiceWebsocketClientOptions extends WebsocketClientOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Websocket client network adapter for @kyneta/exchange.
+ * Websocket client network transport for @kyneta/exchange.
  *
  * Connects to a Websocket server, sends and receives ChannelMsg via
  * the kyneta wire format (CBOR codec + framing + fragmentation).
@@ -555,7 +555,7 @@ export class WebsocketClientTransport extends Transport<void> {
   async onStart(): Promise<void> {
     if (!this.identity) {
       throw new Error(
-        "Adapter not properly initialized — identity not available",
+        "Transport not properly initialized — identity not available",
       )
     }
     this.#peerId = this.identity.peerId
@@ -573,14 +573,15 @@ export class WebsocketClientTransport extends Transport<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a Websocket client adapter factory for browser-to-server connections.
+ * Create a Websocket client transport factory for browser-to-server
+ * connections.
  *
- * Returns an `TransportFactory` — a closure that creates a fresh adapter
+ * Returns an `TransportFactory` — a closure that creates a fresh transport
  * instance when called. Pass directly to `Exchange({ transports: [...] })`.
  *
  * @example
  * ```typescript
- * import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+ * import { createWebsocketClient } from "@kyneta/websocket-transport/client"
  *
  * const exchange = new Exchange({
  *   transports: [createWebsocketClient({
@@ -597,7 +598,7 @@ export function createWebsocketClient(
 }
 
 /**
- * Create a Websocket client adapter for service-to-service connections.
+ * Create a Websocket client transport for service-to-service connections.
  *
  * This factory is for backend environments (Bun, Node.js) where you need
  * to pass authentication headers during the Websocket upgrade.
@@ -608,7 +609,7 @@ export function createWebsocketClient(
  *
  * @example
  * ```typescript
- * import { createServiceWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+ * import { createServiceWebsocketClient } from "@kyneta/websocket-transport/client"
  *
  * const exchange = new Exchange({
  *   transports: [createServiceWebsocketClient({

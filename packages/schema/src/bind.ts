@@ -81,6 +81,32 @@ export interface BoundSchema<S extends SchemaNode = SchemaNode> {
 }
 
 // ---------------------------------------------------------------------------
+// BoundReplica — replication binding (factory + strategy)
+// ---------------------------------------------------------------------------
+
+/**
+ * The replication binding: the pair of `ReplicaFactory` and `MergeStrategy`
+ * that fully determines headless replication behavior.
+ *
+ * A `BoundReplica` captures everything the exchange needs to create and
+ * sync a bare replica without schema interpretation.
+ */
+export interface BoundReplica {
+  readonly factory: ReplicaFactory
+  readonly strategy: MergeStrategy
+}
+
+/**
+ * Construct a `BoundReplica` from a `ReplicaFactory` and `MergeStrategy`.
+ *
+ * TypeScript dual-namespace pattern: `BoundReplica` is both a type and a
+ * same-named constructor function.
+ */
+export function BoundReplica(factory: ReplicaFactory, strategy: MergeStrategy): BoundReplica {
+  return { factory, strategy }
+}
+
+// ---------------------------------------------------------------------------
 // Disposition types — Interpret / Replicate
 // ---------------------------------------------------------------------------
 
@@ -109,15 +135,28 @@ export type Interpret = {
  * for conduit participants: relay servers, stores, routing
  * servers, audit logs.
  *
- * Created via `exchange.replicate(docId, replicaFactory, strategy)` or
- * returned from `onDocDiscovered` to auto-create a replicated document.
+ * The caller declares intent to replicate; the Exchange resolves the
+ * concrete `ReplicaFactory` and `MergeStrategy` from its capabilities
+ * registry.
  */
-export type Replicate = {
-  readonly kind: "replicate"
-  readonly replicaFactory: ReplicaFactory<any>
-  readonly strategy: MergeStrategy
-  readonly schemaHash: string
-}
+export type Replicate = { readonly kind: "replicate" }
+
+/**
+ * Disposition: explicit rejection.
+ *
+ * Returned from `onDocDiscovered` to indicate that the exchange should
+ * not track or replicate the discovered document at all.
+ */
+export type Reject = { readonly kind: "reject" }
+
+/**
+ * Disposition: deferral.
+ *
+ * Track the document for routing purposes but do not interpret or
+ * replicate it yet. The document can be promoted to a full disposition
+ * later.
+ */
+export type Defer = { readonly kind: "defer" }
 
 // ---------------------------------------------------------------------------
 // Disposition constructors — dual-namespace pattern
@@ -138,21 +177,40 @@ export function Interpret(bound: BoundSchema): Interpret {
 }
 
 /**
- * Construct a `Replicate` disposition from a `ReplicaFactory` and strategy.
+ * Construct a `Replicate` disposition.
+ *
+ * The Exchange resolves the factory from its capabilities registry —
+ * the caller just declares intent.
  *
  * TypeScript dual-namespace pattern: `Replicate` is both a type and a
  * same-named constructor function. Call-site reads naturally:
  *
  * ```ts
- * onDocDiscovered: (docId) => Replicate(loroReplicaFactory, "causal")
+ * onDocDiscovered: (docId) => Replicate()
  * ```
  */
-export function Replicate(
-  replicaFactory: ReplicaFactory<any>,
-  strategy: MergeStrategy,
-  schemaHash: string,
-): Replicate {
-  return { kind: "replicate", replicaFactory, strategy, schemaHash }
+export function Replicate(): Replicate {
+  return { kind: "replicate" }
+}
+
+/**
+ * Construct a `Reject` disposition.
+ *
+ * TypeScript dual-namespace pattern: `Reject` is both a type and a
+ * same-named constructor function.
+ */
+export function Reject(): Reject {
+  return { kind: "reject" }
+}
+
+/**
+ * Construct a `Defer` disposition.
+ *
+ * TypeScript dual-namespace pattern: `Defer` is both a type and a
+ * same-named constructor function.
+ */
+export function Defer(): Defer {
+  return { kind: "defer" }
 }
 
 // ---------------------------------------------------------------------------

@@ -15,8 +15,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { change } from "@kyneta/schema"
-import type { Ref } from "@kyneta/schema"
+import type { Plain, Ref } from "@kyneta/schema"
 import { TICK_INTERVAL } from "../constants.js"
+import { GameStateSchema, type PlayerInputSchema } from "../schema.js"
 import type { CarState, InputState } from "../types.js"
 import { getSpawnPosition } from "./physics.js"
 import { tick, type TickOutput } from "./tick.js"
@@ -25,8 +26,12 @@ import { tick, type TickOutput } from "./tick.js"
 // Types
 // ─────────────────────────────────────────────────────────────────────────
 
+type GameState = Plain<typeof GameStateSchema>
+type GameStateRef = Ref<typeof GameStateSchema>
+type PlayerInputRef = Ref<typeof PlayerInputSchema>
+
 type PlayerEntry = {
-  inputDoc: Ref<any>
+  inputDoc: PlayerInputRef
   car: CarState
 }
 
@@ -35,7 +40,7 @@ type PlayerEntry = {
 // ─────────────────────────────────────────────────────────────────────────
 
 export class GameLoop {
-  readonly #gameStateDoc: Ref<any>
+  readonly #gameStateDoc: GameStateRef
   readonly #players = new Map<string, PlayerEntry>()
   readonly #scores = new Map<string, number>()
 
@@ -43,7 +48,7 @@ export class GameLoop {
   #intervalId: ReturnType<typeof setInterval> | null = null
   #recentCollisions = new Map<string, number>()
 
-  constructor(gameStateDoc: Ref<any>) {
+  constructor(gameStateDoc: GameStateRef) {
     this.#gameStateDoc = gameStateDoc
   }
 
@@ -69,14 +74,14 @@ export class GameLoop {
   // Player management — called from server.ts callbacks
   // ═══════════════════════════════════════════════════════════════════════
 
-  addPlayer(peerId: string, inputDoc: Ref<any>): void {
+  addPlayer(peerId: string, inputDoc: PlayerInputRef): void {
     if (this.#players.has(peerId)) return
 
     const existingCars = Array.from(this.#players.values()).map(e => e.car)
     const spawn = getSpawnPosition(existingCars)
 
     // Read initial identity from the input doc
-    const input = inputDoc() as { name: string; color: string; force: number; angle: number }
+    const input = inputDoc()
 
     const car: CarState = {
       x: spawn.x,
@@ -120,12 +125,7 @@ export class GameLoop {
 
     for (const [peerId, entry] of this.#players) {
       // Read the input doc — same callable ref API as the client
-      const raw = entry.inputDoc() as {
-        name: string
-        color: string
-        force: number
-        angle: number
-      }
+      const raw = entry.inputDoc()
 
       // Update car metadata if player changed name/color
       if (raw.name && raw.name !== entry.car.name) entry.car.name = raw.name
@@ -163,7 +163,7 @@ export class GameLoop {
     // dead, which causes "Ref access on deleted map entry" when the
     // changefeed fires on the receiving side. A single ReplaceChange at
     // the root replaces the entire store cleanly.
-    const carsObject: Record<string, object> = {}
+    const carsObject: GameState["cars"] = {}
     for (const [peerId, car] of cars) {
       carsObject[peerId] = {
         x: car.x,
@@ -177,7 +177,7 @@ export class GameLoop {
       }
     }
 
-    const scoresObject: Record<string, object> = {}
+    const scoresObject: GameState["scores"] = {}
     for (const [peerId, bumps] of this.#scores) {
       const entry = this.#players.get(peerId)
       scoresObject[peerId] = {
@@ -187,7 +187,7 @@ export class GameLoop {
       }
     }
 
-    change(this.#gameStateDoc, (d: any) => {
+    change(this.#gameStateDoc, d => {
       d.set({
         cars: carsObject,
         scores: scoresObject,
