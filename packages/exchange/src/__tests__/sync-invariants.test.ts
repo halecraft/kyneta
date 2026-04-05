@@ -10,9 +10,9 @@
 
 import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
 import {
+  BoundReplica,
   bindEphemeral,
   bindPlain,
-  BoundReplica,
   change,
   Interpret,
   PlainVersion,

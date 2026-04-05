@@ -382,7 +382,13 @@ export function createSynchronizerUpdate(
         return handleDocImported(msg, model, route)
 
       case "synchronizer/channel-receive-message":
-        return handleChannelReceiveMessage(msg, model, route, authorize, supports)
+        return handleChannelReceiveMessage(
+          msg,
+          model,
+          route,
+          authorize,
+          supports,
+        )
     }
   }
 }
@@ -491,12 +497,7 @@ function announceDoc(
   route: RoutePredicate,
 ): { channelIds: ChannelId[]; present: Command | undefined } {
   const allEstablished = getEstablishedChannelIds(model)
-  const channelIds = filterChannelsByRoute(
-    model,
-    allEstablished,
-    docId,
-    route,
-  )
+  const channelIds = filterChannelsByRoute(model, allEstablished, docId, route)
   if (channelIds.length === 0) {
     return { channelIds, present: undefined }
   }

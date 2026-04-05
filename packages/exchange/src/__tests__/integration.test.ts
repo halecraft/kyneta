@@ -9,9 +9,9 @@
 
 import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
 import {
+  BoundReplica,
   bindEphemeral,
   bindPlain,
-  BoundReplica,
   change,
   Defer,
   Interpret,
@@ -1001,7 +1001,7 @@ describe("relay via exchange.replicate()", () => {
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       replicas: [BoundReplica(loroReplicaFactory, "causal")],
-      classify: (docId) => {
+      classify: docId => {
         discoveredDocId = docId
         return Replicate()
       },
@@ -1088,7 +1088,7 @@ describe("relay via exchange.replicate()", () => {
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       schemas: [SequentialDoc],
       replicas: [BoundReplica(loroReplicaFactory, "causal")],
-      classify: (docId) => {
+      classify: docId => {
         // Interpret some docs, replicate others
         if (docId === "app-doc") return Interpret(SequentialDoc)
         if (docId === "relay-doc") return Replicate()

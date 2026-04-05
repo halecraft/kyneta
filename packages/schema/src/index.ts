@@ -8,10 +8,10 @@ export type { BoundSchema, FactoryBuilder } from "./bind.js"
 // Interpret and Replicate are dual-namespace (type + value) — export from
 // the value line only; TypeScript resolves the type automatically.
 export {
+  BoundReplica,
   bind,
   bindEphemeral,
   bindPlain,
-  BoundReplica,
   Defer,
   Interpret,
   isBoundSchema,

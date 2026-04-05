@@ -102,7 +102,10 @@ export interface BoundReplica {
  * TypeScript dual-namespace pattern: `BoundReplica` is both a type and a
  * same-named constructor function.
  */
-export function BoundReplica(factory: ReplicaFactory, strategy: MergeStrategy): BoundReplica {
+export function BoundReplica(
+  factory: ReplicaFactory,
+  strategy: MergeStrategy,
+): BoundReplica {
   return { factory, strategy }
 }
 

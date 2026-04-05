@@ -14,17 +14,15 @@ import type {
   BoundSchema,
   FactoryBuilder,
   MergeStrategy,
+  ReplicaFactory,
+  ReplicaType,
+  SubstrateFactory,
 } from "@kyneta/schema"
 import {
   BoundReplica,
   lwwReplicaFactory,
   plainReplicaFactory,
   replicaTypesCompatible,
-} from "@kyneta/schema"
-import type {
-  ReplicaFactory,
-  ReplicaType,
-  SubstrateFactory,
 } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
@@ -58,7 +56,10 @@ type ReplicaEntry = {
  * `MergeStrategy`. Two entries share a key iff they are replication-
  * compatible (same name, same major) and use the same sync algorithm.
  */
-function replicaKey(replicaType: ReplicaType, strategy: MergeStrategy): ReplicaKey {
+function replicaKey(
+  replicaType: ReplicaType,
+  strategy: MergeStrategy,
+): ReplicaKey {
   return `${replicaType[0]}:${replicaType[1]}:${strategy}`
 }
 

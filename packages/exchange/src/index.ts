@@ -179,3 +179,24 @@ export {
 // ---------------------------------------------------------------------------
 
 export { persistentPeerId } from "./persistent-peer-id.js"
+
+// ---------------------------------------------------------------------------
+// Line — reliable bidirectional message stream between two peers
+// ---------------------------------------------------------------------------
+
+export type { LineOptions } from "./line.js"
+export {
+  createLineDocSchema,
+  isLineDocId,
+  Line,
+  lineDocId,
+  openLine,
+  parseLineDocId,
+  routeLine,
+} from "./line.js"
+
+// ---------------------------------------------------------------------------
+// AsyncQueue — push/pull bridge for async iteration
+// ---------------------------------------------------------------------------
+
+export { AsyncQueue } from "./async-queue.js"

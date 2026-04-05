@@ -9,13 +9,7 @@
 // covered by the 204 pre-existing integration tests — no need to
 // duplicate that coverage here.
 
-import {
-  bindPlain,
-  change,
-  Interpret,
-  Reject,
-  Schema,
-} from "@kyneta/schema"
+import { bindPlain, change, Interpret, Reject, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
@@ -93,7 +87,8 @@ describe("dynamic scope route", () => {
 
     // Register a scope that blocks docs starting with "secret-"
     const dispose = exchangeA.register({
-      route: (docId) => (docId as string).startsWith("secret-") ? false : undefined,
+      route: docId =>
+        (docId as string).startsWith("secret-") ? false : undefined,
     })
 
     // Public doc — should sync
@@ -120,7 +115,9 @@ describe("dynamic scope route", () => {
     await drain(40)
 
     expect(exchangeB.has("secret-beta")).toBe(true)
-    expect(exchangeB.get("secret-beta", SequentialDoc).title()).toBe("now visible")
+    expect(exchangeB.get("secret-beta", SequentialDoc).title()).toBe(
+      "now visible",
+    )
   })
 
   it("multiple scopes compose — false from any scope denies", async () => {
@@ -138,11 +135,11 @@ describe("dynamic scope route", () => {
     })
 
     const dispose1 = exchangeA.register({
-      route: (docId) => docId === "blocked-by-1" ? false : undefined,
+      route: docId => (docId === "blocked-by-1" ? false : undefined),
     })
 
     const dispose2 = exchangeA.register({
-      route: (docId) => docId === "blocked-by-2" ? false : undefined,
+      route: docId => (docId === "blocked-by-2" ? false : undefined),
     })
 
     exchangeA.get("blocked-by-1", SequentialDoc)
@@ -178,7 +175,7 @@ describe("dynamic scope route", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
-      route: (docId) => docId !== "params-blocked",
+      route: docId => docId !== "params-blocked",
     })
 
     const exchangeB = createExchange({
@@ -188,7 +185,7 @@ describe("dynamic scope route", () => {
     })
 
     const dispose = exchangeA.register({
-      route: (docId) => docId === "dynamic-blocked" ? false : undefined,
+      route: docId => (docId === "dynamic-blocked" ? false : undefined),
     })
 
     exchangeA.get("params-blocked", SequentialDoc)
@@ -234,7 +231,8 @@ describe("dynamic scope authorize", () => {
 
     // Bob blocks all mutations from alice
     const dispose = exchangeB.register({
-      authorize: (_docId, peer) => peer.peerId === "alice" ? false : undefined,
+      authorize: (_docId, peer) =>
+        peer.peerId === "alice" ? false : undefined,
     })
 
     const docA = exchangeA.get("shared", SequentialDoc)
@@ -276,7 +274,7 @@ describe("dynamic scope classify", () => {
 
     // Register classify dynamically via scope
     const dispose = exchangeB.register({
-      classify: (docId) => {
+      classify: docId => {
         if (docId === "discovered") return Interpret(SequentialDoc)
         return Reject()
       },

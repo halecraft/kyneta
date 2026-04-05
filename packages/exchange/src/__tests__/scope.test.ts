@@ -3,11 +3,11 @@
 // Architecture mirrors scope.ts: pure function tests first (composeRule),
 // then imperative shell tests (ScopeRegistry).
 
-import { describe, expect, it, vi } from "vitest"
-import type { PeerIdentityDetails } from "@kyneta/transport"
-import type { Classify } from "../exchange.js"
-import { composeRule, ScopeRegistry, type Scope } from "../scope.js"
 import { bindPlain, Interpret, Reject, Schema } from "@kyneta/schema"
+import type { PeerIdentityDetails } from "@kyneta/transport"
+import { describe, expect, it, vi } from "vitest"
+import type { Classify } from "../exchange.js"
+import { composeRule, type Scope, ScopeRegistry } from "../scope.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,18 +43,18 @@ describe("composeRule", () => {
     })
 
     it("deny wins regardless of order", () => {
-      expect(
-        compose([{ route: () => true }, { route: () => false }]),
-      ).toBe(false)
-      expect(
-        compose([{ route: () => false }, { route: () => true }]),
-      ).toBe(false)
+      expect(compose([{ route: () => true }, { route: () => false }])).toBe(
+        false,
+      )
+      expect(compose([{ route: () => false }, { route: () => true }])).toBe(
+        false,
+      )
     })
 
     it("true and undefined → true", () => {
-      expect(
-        compose([{ route: () => undefined }, { route: () => true }]),
-      ).toBe(true)
+      expect(compose([{ route: () => undefined }, { route: () => true }])).toBe(
+        true,
+      )
     })
 
     it("all undefined → default", () => {
@@ -86,9 +86,9 @@ describe("composeRule", () => {
     })
 
     it("single true overrides closed default", () => {
-      expect(
-        compose([{ route: () => true }, { route: () => undefined }]),
-      ).toBe(true)
+      expect(compose([{ route: () => true }, { route: () => undefined }])).toBe(
+        true,
+      )
     })
   })
 

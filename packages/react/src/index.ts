@@ -59,10 +59,24 @@ export {
 export type {
   DocId,
   ExchangeParams,
+  LineOptions,
   ReadyState,
   RulePredicate,
   Scope,
   SyncRef,
   TransportFactory,
 } from "@kyneta/exchange"
-export { Exchange, hasSync, ScopeRegistry, sync } from "@kyneta/exchange"
+export {
+  AsyncQueue,
+  createLineDocSchema,
+  Exchange,
+  hasSync,
+  isLineDocId,
+  Line,
+  lineDocId,
+  openLine,
+  parseLineDocId,
+  routeLine,
+  ScopeRegistry,
+  sync,
+} from "@kyneta/exchange"

@@ -2934,7 +2934,7 @@ describe("synchronizer-program", () => {
   describe("capability gate and deferred documents", () => {
     it("handlePresent for unknown doc with unsupported replicaType emits warning, no creation", () => {
       const update = createSynchronizerUpdate({
-        supports: (rt) => rt[0] === "plain" && rt[1] === 1,
+        supports: rt => rt[0] === "plain" && rt[1] === 1,
       })
       const [model] = init(aliceIdentity)
 
@@ -3204,9 +3204,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const importCmds = commands.filter(
-        c => c.type === "cmd/import-doc-data",
-      )
+      const importCmds = commands.filter(c => c.type === "cmd/import-doc-data")
       expect(importCmds).toHaveLength(0)
 
       // Model should be unchanged — deferred doc still deferred
@@ -3245,9 +3243,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const sendOfferCmds = commands.filter(
-        c => c.type === "cmd/send-offer",
-      )
+      const sendOfferCmds = commands.filter(c => c.type === "cmd/send-offer")
       expect(sendOfferCmds).toHaveLength(0)
 
       // Model should be unchanged — deferred doc still deferred

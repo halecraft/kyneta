@@ -23,7 +23,7 @@
 
 import type { CallableChangefeed } from "@kyneta/changefeed"
 import {
-  BoundReplica,
+  type BoundReplica,
   type BoundSchema,
   type Defer,
   type DocMetadata,
@@ -53,8 +53,8 @@ import type {
   PeerIdentityDetails,
   TransportFactory,
 } from "@kyneta/transport"
-import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 import type { Capabilities } from "./capabilities.js"
+import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 import type { Scope } from "./scope.js"
 import { ScopeRegistry } from "./scope.js"
 import type { Store } from "./store/store.js"
@@ -422,16 +422,32 @@ export class Exchange {
       authorize: this.#scopes.authorize.bind(this.#scopes),
       supports: this.#capabilities.supportsReplicaType.bind(this.#capabilities),
       onDocDismissed: this.#scopes.docDismissed.bind(this.#scopes),
-      onDocCreationRequested: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
+      onDocCreationRequested: (
+        docId,
+        peer,
+        replicaType,
+        mergeStrategy,
+        schemaHash,
+      ) => {
         // 1. Schema auto-resolve
-        const resolvedBound = this.#capabilities.resolveSchema(schemaHash, replicaType, mergeStrategy)
+        const resolvedBound = this.#capabilities.resolveSchema(
+          schemaHash,
+          replicaType,
+          mergeStrategy,
+        )
         if (resolvedBound) {
           ;(this as any).get(docId, resolvedBound)
           return
         }
 
         // 2. Classify callback
-        const result = this.#scopes.classify(docId, peer, replicaType, mergeStrategy, schemaHash)
+        const result = this.#scopes.classify(
+          docId,
+          peer,
+          replicaType,
+          mergeStrategy,
+          schemaHash,
+        )
 
         if (!result) {
           if (!this.#scopes.hasClassify && !warnedNoDiscoverCallback) {
@@ -451,7 +467,10 @@ export class Exchange {
             ;(this as any).get(docId, result.bound)
             break
           case "replicate": {
-            const boundReplica = this.#capabilities.resolveReplica(replicaType, mergeStrategy)
+            const boundReplica = this.#capabilities.resolveReplica(
+              replicaType,
+              mergeStrategy,
+            )
             if (!boundReplica) {
               console.warn(
                 `[exchange] classify returned Replicate() for doc "${docId}" but no BoundReplica ` +
@@ -460,11 +479,21 @@ export class Exchange {
               )
               return
             }
-            this.replicate(docId, boundReplica.factory, mergeStrategy, schemaHash)
+            this.replicate(
+              docId,
+              boundReplica.factory,
+              mergeStrategy,
+              schemaHash,
+            )
             break
           }
           case "defer":
-            this.#synchronizer.deferDoc(docId, replicaType, mergeStrategy, schemaHash)
+            this.#synchronizer.deferDoc(
+              docId,
+              replicaType,
+              mergeStrategy,
+              schemaHash,
+            )
             this.#docCache.set(docId, { mode: "deferred" })
             break
           case "reject":
@@ -942,9 +971,14 @@ export class Exchange {
       this.#docCache.delete(docId)
       const metadata = this.#synchronizer.getDocMetadata(docId)
       if (!metadata) {
-        throw new Error(`Document '${docId}' is deferred but has no synchronizer metadata.`)
+        throw new Error(
+          `Document '${docId}' is deferred but has no synchronizer metadata.`,
+        )
       }
-      const bound = this.#capabilities.resolveReplica(metadata.replicaType, metadata.mergeStrategy)
+      const bound = this.#capabilities.resolveReplica(
+        metadata.replicaType,
+        metadata.mergeStrategy,
+      )
       if (!bound) {
         throw new Error(
           `Document '${docId}' is deferred with replicaType [${metadata.replicaType}] and ` +

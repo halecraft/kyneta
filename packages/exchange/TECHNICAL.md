@@ -1465,7 +1465,7 @@ The message handler accepts both `ArrayBuffer` (native `RTCDataChannel` with `bi
 
 ### Relationship to Video Conference Example
 
-The examples roadmap plans a video-conference example that uses SSE for server-mediated sync and WebRTC for low-latency peer-to-peer sync (dual-transport). Signaling flows through ephemeral documents (`bindEphemeral`), not a dedicated signaling server. The `fromSimplePeer()` bridge pattern demonstrated in the test suite shows how to connect `simple-peer` to the transport.
+The examples roadmap plans a video-conference example that uses SSE for server-mediated sync and WebRTC for low-latency peer-to-peer sync (dual-transport). Signaling (offer/answer/ICE candidates) flows through the `Line` primitive (§25) — reliable ordered bidirectional messaging between peer pairs, with automatic ack-based pruning. This replaces the earlier ephemeral-document approach, which suffered from signal accumulation and broadcast inefficiency. The `fromSimplePeer()` bridge pattern demonstrated in the test suite shows how to connect `simple-peer` to the transport.
 
 ---
 
@@ -1904,3 +1904,100 @@ The two registries create a two-tier trust model:
 - **Replicated docs**: The Exchange **trusts peer claims** for `mergeStrategy` and `schemaHash`. The `replicaType` is validated (it must match a registered `BoundReplica`), but the Exchange has no local source of truth for the other fields. A relay forwards `schemaHash` faithfully so interpreting peers on the far side can validate it against their own schemas.
 
 This trust asymmetry is inherent: a relay cannot validate a schema it doesn't understand. The schema registry makes the trust boundary explicit — what's validated vs. what's forwarded is determined by which registry the doc was resolved from.
+
+## 25. Line — Reliable Bidirectional Messaging
+
+The `Line` class provides reliable ordered bidirectional message streams between two Exchange peers. It composes two `bindPlain` sequential documents — one per direction — with automatic sequence numbering and acknowledgement-based pruning.
+
+### Motivation
+
+WebRTC signaling, RPC interactions, and command streams are **reliable ordered messaging** — not state synchronization. Modeling messages as CRDT state (ephemeral presence, LWW docs) creates signal accumulation, broadcast inefficiency, and deduplication overhead. The Line primitive provides message-passing semantics on top of the Exchange's document sync infrastructure, inheriting reconnection, offline resilience, and unified routing for free.
+
+### Document Model
+
+Each Line creates two plain sequential documents:
+
+- `line:${topic}:${a}→${b}` — peer A's outbox (A writes, B reads)
+- `line:${topic}:${b}→${a}` — peer B's outbox (B writes, A reads)
+
+Each document has an invariant envelope schema built by `createLineDocSchema(payloadSchema)`:
+
+```
+doc {
+  messages: list(struct({ seq: number, payload: <application schema> }))
+  ack: number
+}
+```
+
+- `seq` — monotonically increasing per direction, assigned by the sender at `send()` time
+- `payload` — the application message, typed by the schema
+- `ack` — the highest `seq` processed from the *other* direction's document
+
+### Asymmetric Schemas
+
+Lines support different message types per direction via `{ send, recv }` options:
+
+```typescript
+const line = openLine(exchange, {
+  peer: "server",
+  topic: "rpc",
+  send: RequestSchema,
+  recv: ResponseSchema,
+})
+```
+
+The coordination constraint: peer A's `send` schema must match peer B's `recv` schema, and vice versa. Enforced by convention — both peers agree on the protocol.
+
+### Consumer API
+
+Two complementary interfaces share one ack cursor:
+
+**Push-based callback:**
+```typescript
+const unsub = line.onReceive(msg => { ... })  // msg is Plain<Recv>
+```
+
+**Pull-based async generator:**
+```typescript
+for await (const msg of line) { ... }  // msg is Plain<Recv>
+```
+
+Both consumers see every message. The ack advances to the highest delivered seq. If both are active, `onReceive` fires eagerly while the generator yields on `next()`.
+
+### Ack Protocol and Pruning
+
+When the receiver processes messages (seq > lastProcessedSeq), it writes `ack: lastProcessedSeq` to its own outbox. The sender reads this ack from the inbox changefeed and prunes all outbox messages with `seq <= ack`. In steady state, each document holds 0–1 messages.
+
+### Topics
+
+The `topic` field (optional, defaults to `"default"`) distinguishes multiple independent Lines between the same peers:
+
+```typescript
+const signaling = openLine(exchange, { peer: "bob", topic: "signaling", schema: S1 })
+const rpc = openLine(exchange, { peer: "bob", topic: "rpc", schema: S2 })
+```
+
+Each topic produces distinct doc IDs (`line:signaling:...` vs `line:rpc:...`), distinct scopes, and distinct registry entries. Opening a Line with the same peer + topic as an already-open Line throws — close first, then reopen.
+
+### Scope Integration
+
+Line is a standalone class — it composes with the Exchange via public API only (`register()`, `registerSchema()`, `get()`, `dismiss()`). No Exchange modification needed.
+
+**Infrastructure scope** (`__line-infrastructure`): Registered on the first `openLine()` call. Provides a `classify` handler that returns `Defer()` for Line doc IDs. This handles the early-arrival case — when a remote peer's outbox arrives before the local peer opens a Line. The deferred doc is auto-promoted when `openLine()` calls `registerSchema()`.
+
+**Per-line scope** (`line:${topic}:${remotePeerId}`): Registered per `openLine()` call. Provides `authorize` — only the `from` peer can write to each doc. Routing is open by default. Applications that want endpoint-only routing register their own scope using the exported `routeLine` predicate.
+
+### Standalone Design
+
+The Line class has zero coupling to Exchange internals. It uses only:
+- `exchange.register()` — scope registration
+- `exchange.registerSchema()` — capabilities registry population + deferred doc auto-promotion
+- `exchange.get()` — document creation
+- `exchange.dismiss()` — document removal on close
+- `exchange.peers` — peer lifecycle subscription
+
+This validates the scope + capabilities architecture: higher-level primitives compose cleanly as external consumers of the Exchange's public API.
+
+### Type Safety
+
+The `Line<SendMsg, RecvMsg>` class is parameterized over concrete plain types (not schema types) to avoid deep recursive `Plain<S>` expansion. The `openLine()` function provides the typed entry point — it accepts schema types and returns `Line<Plain<Send>, Plain<Recv>>` using an interface call signature pattern that defers type evaluation.

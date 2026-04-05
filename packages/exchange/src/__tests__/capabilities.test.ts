@@ -2,9 +2,9 @@
 
 import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
 import {
+  BoundReplica,
   bindEphemeral,
   bindPlain,
-  BoundReplica,
   type FactoryBuilder,
   lwwReplicaFactory,
   plainReplicaFactory,
@@ -125,7 +125,11 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const resolved = caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "sequential")
+    const resolved = caps.resolveSchema(
+      bound.schemaHash,
+      ["plain", 1, 0],
+      "sequential",
+    )
     expect(resolved).toBe(bound)
   })
 
@@ -139,7 +143,11 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const resolved = caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "lww")
+    const resolved = caps.resolveSchema(
+      bound.schemaHash,
+      ["plain", 1, 0],
+      "lww",
+    )
     expect(resolved).toBeUndefined()
   })
 
@@ -153,7 +161,11 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const resolved = caps.resolveSchema("nonexistent", ["plain", 1, 0], "sequential")
+    const resolved = caps.resolveSchema(
+      "nonexistent",
+      ["plain", 1, 0],
+      "sequential",
+    )
     expect(resolved).toBeUndefined()
   })
 
@@ -196,14 +208,18 @@ describe("Capabilities", () => {
     const bound = bindPlain(schema)
 
     // Before registration: nothing resolves
-    expect(caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "sequential")).toBeUndefined()
+    expect(
+      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "sequential"),
+    ).toBeUndefined()
     expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(false)
 
     // Register dynamically
     caps.registerSchema(bound, resolveFactory)
 
     // After registration: schema resolves and replica type is supported
-    expect(caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "sequential")).toBe(bound)
+    expect(
+      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "sequential"),
+    ).toBe(bound)
     expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(true)
   })
 
