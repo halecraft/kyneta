@@ -9,7 +9,6 @@ import {
   LoroSchema,
   LoroVersion,
   merge,
-  Schema,
   subscribe,
   version,
 } from "../index.js"
@@ -21,13 +20,13 @@ import {
 const TestSchema = LoroSchema.doc({
   title: LoroSchema.text(),
   count: LoroSchema.counter(),
-  items: Schema.list(
-    Schema.struct({
-      name: Schema.string(),
-      done: Schema.boolean(),
+  items: LoroSchema.list(
+    LoroSchema.plain.struct({
+      name: LoroSchema.plain.string(),
+      done: LoroSchema.plain.boolean(),
     }),
   ),
-  theme: Schema.string(),
+  theme: LoroSchema.plain.string(),
 })
 
 // ===========================================================================

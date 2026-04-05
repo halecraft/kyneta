@@ -1,9 +1,7 @@
 // LoroSchema — Loro-specific constructor namespace.
 //
-// Re-exports everything from the backend-agnostic Schema grammar, plus
-// Loro-specific annotation constructors (text, counter, movableList, tree)
-// and a `plain` sub-namespace that enforces composition constraints
-// (no CRDT containers inside value blobs).
+// Only Loro container constructors are available at the top level.
+// Plain values (scalars, sums) are available via `LoroSchema.plain.*`.
 //
 // Loro developers import only LoroSchema — one namespace, one import:
 //
@@ -17,6 +15,7 @@
 //         done: LoroSchema.plain.boolean(),
 //       }),
 //     ),
+//     darkMode: LoroSchema.plain.boolean(),  // → stored in _props
 //   })
 
 import type { Schema as SchemaType } from "@kyneta/schema"
@@ -32,6 +31,35 @@ import {
   Schema,
   type SequenceSchema,
 } from "@kyneta/schema"
+
+// ---------------------------------------------------------------------------
+// LoroDocFieldSchema — what is valid as a direct child of LoroSchema.doc()
+// ---------------------------------------------------------------------------
+
+/**
+ * Schema types that are valid as direct children of a `LoroDoc`.
+ *
+ * **Loro containers** — map to real Loro CRDT containers at the root:
+ * - `ProductSchema` → `LoroMap` (via `LoroSchema.struct`)
+ * - `SequenceSchema` → `LoroList` (via `LoroSchema.list`)
+ * - `MapSchema` → `LoroMap` (via `LoroSchema.record`)
+ * - `AnnotatedSchema` → `LoroText`, `LoroCounter`, `LoroMovableList`,
+ *   `LoroTree` (via `LoroSchema.text`, `.counter`, `.movableList`, `.tree`)
+ *
+ * **Plain values** — stored in the shared `_props` `LoroMap`:
+ * - `PlainSchema` — scalars (`LoroSchema.plain.boolean()`, etc.) and
+ *   plain structural types (`LoroSchema.plain.struct(...)`, etc.)
+ *
+ * This excludes non-plain `SumSchema` (sums containing annotations),
+ * which cannot be stored as root fields. Plain sums are allowed via
+ * `PlainSchema` (e.g. `LoroSchema.plain.nullable(LoroSchema.plain.string())`).
+ */
+export type LoroDocFieldSchema =
+  | ProductSchema
+  | SequenceSchema
+  | MapSchema
+  | AnnotatedSchema
+  | PlainSchema
 
 // ---------------------------------------------------------------------------
 // Loro-specific annotation constructors
@@ -75,6 +103,35 @@ function movableList<I extends SchemaType>(
  */
 function tree<S extends SchemaType>(nodeData: S): AnnotatedSchema<"tree", S> {
   return Schema.annotated("tree", nodeData)
+}
+
+// ---------------------------------------------------------------------------
+// Root document constructor (constrained to LoroDocFieldSchema)
+// ---------------------------------------------------------------------------
+
+/**
+ * Loro document root. Constrains fields to `LoroDocFieldSchema` —
+ * only Loro containers and plain values are accepted.
+ *
+ * Loro containers (struct, list, record, text, counter, etc.) get their
+ * own root-level Loro container. Plain values (scalars, plain sums) are
+ * stored in the shared `_props` LoroMap.
+ *
+ * ```ts
+ * LoroSchema.doc({
+ *   title: LoroSchema.text(),              // → LoroText
+ *   items: LoroSchema.list(...),           // → LoroList
+ *   darkMode: LoroSchema.plain.boolean(),  // → _props.darkMode
+ * })
+ * ```
+ */
+function doc<F extends Record<string, LoroDocFieldSchema>>(
+  fields: F,
+): AnnotatedSchema<"doc", ProductSchema<F>> {
+  return Schema.doc(fields as Record<string, SchemaType>) as AnnotatedSchema<
+    "doc",
+    ProductSchema<F>
+  >
 }
 
 // ---------------------------------------------------------------------------
@@ -164,16 +221,31 @@ const plain = {
   ): DiscriminatedSumSchema<D, V> {
     return Schema.discriminatedUnion(discriminant, variants)
   },
+
+  /**
+   * Nullable plain value. Produces `sum([inner, null()])`.
+   *
+   * Only plain schemas are accepted — Loro containers (text, counter, etc.)
+   * cannot be null. A `LoroText` is always a `LoroText`; if you need
+   * "this field might not exist", use a `LoroSchema.record()` where the
+   * key may or may not be present.
+   */
+  nullable<S extends PlainSchema>(
+    inner: S,
+  ): PositionalSumSchema<[ScalarSchema<"null">, S]> {
+    return Schema.nullable(inner)
+  },
 } as const
 
 // ---------------------------------------------------------------------------
-// LoroSchema namespace — Schema + Loro annotations + plain
+// LoroSchema namespace
 // ---------------------------------------------------------------------------
 
 /**
- * Loro-specific schema constructors. Re-exports the backend-agnostic
- * `Schema` grammar and adds Loro-specific annotations and composition
- * constraints.
+ * Loro-specific schema constructors.
+ *
+ * Only Loro container constructors are available at the top level.
+ * Plain values (scalars, sums, nullable) are available via `LoroSchema.plain.*`.
  *
  * ```ts
  * const myDoc = LoroSchema.doc({
@@ -185,69 +257,38 @@ const plain = {
  *       done: LoroSchema.plain.boolean(),
  *     }),
  *   ),
- *   labels: LoroSchema.plain.record(LoroSchema.plain.string()),
+ *   labels: LoroSchema.record(LoroSchema.plain.string()),
+ *   darkMode: LoroSchema.plain.boolean(),  // → stored in _props
  * })
  * ```
  *
- * **Scalars (leaf values):**
- * `LoroSchema.string`, `LoroSchema.number`, `LoroSchema.boolean`,
- * `LoroSchema.null`, `LoroSchema.undefined`, `LoroSchema.bytes`,
- * `LoroSchema.any`
- *
- * **Structural composites:**
- * `LoroSchema.struct`, `LoroSchema.list`, `LoroSchema.record`,
- * `LoroSchema.union`, `LoroSchema.discriminatedUnion`,
- * `LoroSchema.nullable`
+ * **Loro containers (root-level):**
+ * `LoroSchema.struct`, `LoroSchema.list`, `LoroSchema.record`
  *
  * **Loro-specific annotations:**
  * `LoroSchema.text`, `LoroSchema.counter`,
  * `LoroSchema.movableList`, `LoroSchema.tree`
  *
  * **Root:**
- * `LoroSchema.doc`
+ * `LoroSchema.doc` — constrained to `LoroDocFieldSchema`
  *
  * **Plain values (composition-constrained):**
- * `LoroSchema.plain.string`, `LoroSchema.plain.number`, etc.
- * `LoroSchema.plain.struct`, `LoroSchema.plain.record`,
- * `LoroSchema.plain.array`, `LoroSchema.plain.union`,
- * `LoroSchema.plain.discriminatedUnion`
- *
- * **Low-level (grammar-native, power users):**
- * `LoroSchema.scalar`, `LoroSchema.product`, `LoroSchema.sequence`,
- * `LoroSchema.map`, `LoroSchema.sum`, `LoroSchema.discriminatedSum`,
- * `LoroSchema.annotated`
+ * `LoroSchema.plain.string`, `LoroSchema.plain.number`,
+ * `LoroSchema.plain.boolean`, `LoroSchema.plain.null`,
+ * `LoroSchema.plain.undefined`, `LoroSchema.plain.bytes`,
+ * `LoroSchema.plain.any`, `LoroSchema.plain.struct`,
+ * `LoroSchema.plain.record`, `LoroSchema.plain.array`,
+ * `LoroSchema.plain.union`, `LoroSchema.plain.discriminatedUnion`,
+ * `LoroSchema.plain.nullable`
  */
 export const LoroSchema = {
-  // --- Re-exported from Schema (backend-agnostic base grammar) ---
-
-  // Low-level structural constructors
-  scalar: Schema.scalar,
-  product: Schema.product,
-  sequence: Schema.sequence,
-  map: Schema.map,
-  sum: Schema.sum,
-  discriminatedSum: Schema.discriminatedSum,
-  annotated: Schema.annotated,
-
-  // Scalars (leaf values)
-  string: Schema.string,
-  number: Schema.number,
-  boolean: Schema.boolean,
-  null: Schema.null,
-  undefined: Schema.undefined,
-  bytes: Schema.bytes,
-  any: Schema.any,
-
-  // Structural composites
+  // --- Structural composites (map to real Loro containers) ---
   struct: Schema.struct,
   list: Schema.list,
   record: Schema.record,
-  union: Schema.union,
-  discriminatedUnion: Schema.discriminatedUnion,
-  nullable: Schema.nullable,
 
-  // Root
-  doc: Schema.doc,
+  // --- Root ---
+  doc,
 
   // --- Loro-specific annotations ---
   text,

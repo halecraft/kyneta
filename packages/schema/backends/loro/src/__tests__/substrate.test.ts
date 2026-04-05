@@ -6,7 +6,6 @@ import {
   RawPath,
   type Ref,
   readable,
-  Schema,
   type SchemaNode,
   subscribe,
   writable,
@@ -27,13 +26,13 @@ import { LoroSchema } from "../loro-schema.js"
 const TestSchema = LoroSchema.doc({
   title: LoroSchema.text(),
   count: LoroSchema.counter(),
-  items: Schema.list(
-    Schema.struct({
-      name: Schema.string(),
-      done: Schema.boolean(),
+  items: LoroSchema.list(
+    LoroSchema.plain.struct({
+      name: LoroSchema.plain.string(),
+      done: LoroSchema.plain.boolean(),
     }),
   ),
-  theme: Schema.string(),
+  theme: LoroSchema.plain.string(),
 })
 
 // ===========================================================================
@@ -455,6 +454,70 @@ describe("changefeed fires on merge", () => {
     expect(itemB.done()).toBe(true)
 
     unsub()
+  })
+
+  it("root scalar field changefeed fires on merge (_props path fix)", () => {
+    // Root scalar fields (Schema.string(), Schema.number(), etc.) are stored
+    // in the shared _props LoroMap. When a remote peer mutates a scalar,
+    // Loro fires an event at path ["_props"]. The event bridge must strip
+    // the _props prefix so the changefeed path matches the listener at
+    // RawPath.empty.field("theme"), not RawPath.empty.field("_props").field("theme").
+    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const docA = interpretSubstrate(TestSchema, substrateA)
+
+    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const docB = interpretSubstrate(TestSchema, substrateB)
+
+    const sinceVV = substrateB.version()
+
+    // Subscribe to B's tree-level changefeed
+    const received: unknown[] = []
+    subscribe(docB, cs => received.push(cs))
+
+    // Mutate the root scalar field on A
+    change(docA, (d: any) => {
+      d.theme.set("dark")
+    })
+
+    // Sync to B
+    const delta = substrateA.exportSince(sinceVV)!
+    substrateB.merge(delta, "sync")
+
+    // B's subscriber should have fired
+    expect(received.length).toBeGreaterThanOrEqual(1)
+
+    // And the value should be updated
+    expect((docB as any).theme()).toBe("dark")
+  })
+
+  it("mixed scalar + container mutation fires both changefeeds on merge", () => {
+    // Scalars go through _props (path stripping), containers get their own
+    // root container (no stripping). Both must fire in a single merge.
+    // Regression guard: overly aggressive _props stripping could break
+    // container paths; missing stripping breaks scalar paths.
+    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const docA = interpretSubstrate(TestSchema, substrateA)
+
+    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const docB = interpretSubstrate(TestSchema, substrateB)
+
+    const sinceVV = substrateB.version()
+
+    let treeFireCount = 0
+    subscribe(docB, () => { treeFireCount++ })
+
+    // Mutate both a scalar (_props) and a container (LoroText) in one batch
+    change(docA, (d: any) => {
+      d.theme.set("dark")
+      d.title.insert(0, "Hello")
+    })
+
+    const delta = substrateA.exportSince(sinceVV)!
+    substrateB.merge(delta, "sync")
+
+    expect(treeFireCount).toBeGreaterThanOrEqual(1)
+    expect((docB as any).theme()).toBe("dark")
+    expect(docB.title()).toBe("Hello")
   })
 })
 

@@ -489,7 +489,7 @@ describe("schema hash compatibility", () => {
     const SchemaB = bindLoro(
       LoroSchema.doc({
         content: LoroSchema.text(),
-        count: Schema.number(),
+        count: LoroSchema.plain.number(),
       }),
     )
 

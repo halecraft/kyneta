@@ -78,7 +78,9 @@ const SequentialDoc = bindPlain(sequentialSchema)
 
 const loroSchema = LoroSchema.doc({
   title: LoroSchema.text(),
-  items: Schema.list(Schema.struct({ name: Schema.string() })),
+  items: LoroSchema.list(
+    LoroSchema.plain.struct({ name: LoroSchema.plain.string() }),
+  ),
 })
 const LoroDoc = bindLoro(loroSchema)
 

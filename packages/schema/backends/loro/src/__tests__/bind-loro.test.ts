@@ -15,7 +15,9 @@ import { LoroSchema } from "../loro-schema.js"
 const testSchema = LoroSchema.doc({
   title: LoroSchema.text(),
   count: LoroSchema.counter(),
-  items: Schema.list(Schema.struct({ name: Schema.string() })),
+  items: LoroSchema.list(
+    LoroSchema.plain.struct({ name: LoroSchema.plain.string() }),
+  ),
 })
 
 describe("bindLoro()", () => {

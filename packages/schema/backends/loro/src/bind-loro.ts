@@ -10,7 +10,7 @@
 //
 //   const TodoDoc = bindLoro(LoroSchema.doc({
 //     title: LoroSchema.text(),
-//     items: Schema.list(Schema.struct({ name: Schema.string() })),
+//     items: LoroSchema.list(LoroSchema.plain.struct({ name: LoroSchema.plain.string() })),
 //   }))
 //
 //   const doc = exchange.get("my-doc", TodoDoc)
@@ -141,14 +141,13 @@ function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
  *
  * @example
  * ```ts
- * import { bindLoro } from "@kyneta/loro-schema"
- * import { LoroSchema, Schema } from "@kyneta/schema"
+ * import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
  *
  * const TodoDoc = bindLoro(LoroSchema.doc({
  *   title: LoroSchema.text(),
- *   items: Schema.list(Schema.struct({
- *     name: Schema.string(),
- *     done: Schema.boolean(),
+ *   items: LoroSchema.list(LoroSchema.plain.struct({
+ *     name: LoroSchema.plain.string(),
+ *     done: LoroSchema.plain.boolean(),
  *   })),
  * }))
  *

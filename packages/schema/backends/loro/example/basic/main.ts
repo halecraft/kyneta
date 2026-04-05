@@ -18,7 +18,6 @@ import {
   exportSince,
   LoroSchema,
   merge,
-  Schema,
   subscribe,
   version,
 } from "../../src/index.js"
@@ -36,23 +35,23 @@ section(1, "Define a Schema")
 const NoteSchema = LoroSchema.doc({
   title: LoroSchema.text(),
   likes: LoroSchema.counter(),
-  tags: Schema.list(Schema.string()),
-  tasks: Schema.list(
-    Schema.struct({
-      text: Schema.string(),
-      done: Schema.boolean(),
+  tags: LoroSchema.list(LoroSchema.plain.string()),
+  tasks: LoroSchema.list(
+    LoroSchema.plain.struct({
+      text: LoroSchema.plain.string(),
+      done: LoroSchema.plain.boolean(),
     }),
   ),
 })
 
 log(`
     const NoteSchema = LoroSchema.doc({
-      title: LoroSchema.text(),       // collaborative rich text
-      likes: LoroSchema.counter(),    // convergent counter
-      tags:  Schema.list(string()),   // plain list
-      tasks: Schema.list(struct({     // list of structs
-        text: Schema.string(),
-        done: Schema.boolean(),
+      title: LoroSchema.text(),                    // collaborative rich text
+      likes: LoroSchema.counter(),                 // convergent counter
+      tags:  LoroSchema.list(LoroSchema.plain.string()),  // plain list
+      tasks: LoroSchema.list(LoroSchema.plain.struct({    // list of structs
+        text: LoroSchema.plain.string(),
+        done: LoroSchema.plain.boolean(),
       })),
     })
 `)

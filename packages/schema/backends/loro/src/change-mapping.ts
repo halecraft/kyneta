@@ -655,12 +655,24 @@ export function batchToOps(batch: LoroEventBatch, _schema: SchemaNode): Op[] {
 /**
  * Convert a Loro event path (array of string | number | TreeID) to a
  * kyneta RawPath.
+ *
+ * Root scalar fields are stored in the shared `_props` LoroMap (see
+ * TECHNICAL.md §11). Loro fires events at path `["_props", ...]` for
+ * these fields, but the kyneta schema tree treats them as direct
+ * children of the root — `RawPath.empty.field("darkMode")`, not
+ * `RawPath.empty.field("_props").field("darkMode")`. Strip the
+ * `_props` prefix so changefeed paths match listener registration.
  */
 function loroPathToKynetaPath(
   loroPath: (string | number | unknown)[],
 ): RawPath {
+  // Strip _props prefix — root scalars live in _props but their
+  // kyneta paths are direct children of the root product.
+  const startIndex = loroPath.length > 0 && loroPath[0] === PROPS_KEY ? 1 : 0
+
   let path = RawPath.empty
-  for (const segment of loroPath) {
+  for (let i = startIndex; i < loroPath.length; i++) {
+    const segment = loroPath[i]
     if (typeof segment === "string") {
       path = path.field(segment)
     } else if (typeof segment === "number") {

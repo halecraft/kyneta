@@ -330,13 +330,67 @@ This avoids creating a separate root container per scalar field. The `_props` ma
 
 Container-typed root fields (`text`, `counter`, `product`, `sequence`, `map`, `movable`, `tree`) each get their own root container via `doc.getText(key)`, `doc.getMap(key)`, etc.
 
+### Event bridge path stripping
+
+When a remote peer mutates a root scalar field, Loro fires an event at path `["_props"]` with a `MapDiff` containing the changed keys. The `batchToOps` function calls `loroPathToKynetaPath` to convert Loro's event path to a kyneta `RawPath`. Without special handling, this would produce `RawPath.empty.field("_props").field("darkMode")` — but the changefeed listener is registered at `RawPath.empty.field("darkMode")` (no `_props` prefix). The path mismatch would cause the changefeed to never fire for remote scalar changes.
+
+`loroPathToKynetaPath` detects when the first path segment is `PROPS_KEY` and strips it. The remaining segments become the kyneta path, matching the schema tree where scalar fields are direct children of the root product.
+
+```ts
+// Loro event path: ["_props"]  →  kyneta path: RawPath.empty
+// After expandMapOpsToLeaves:  →  RawPath.empty.field("darkMode")
+// Matches listener at:            RawPath.empty.field("darkMode")  ✓
+```
+
+This stripping is safe because `_props` only exists as a root-level container. It never appears as a nested path segment.
+
 ---
 
-## 12. File Map
+## 12. `LoroDocFieldSchema` and Namespace Partitioning
+
+The `LoroSchema` namespace exposes **only Loro container constructors** at the top level. Plain values (scalars, sums) are available exclusively via `LoroSchema.plain.*`.
+
+### Namespace structure
+
+| Level | Constructors | Produces |
+|---|---|---|
+| `LoroSchema.*` | `struct`, `list`, `record` | Loro containers (`LoroMap`, `LoroList`) |
+| `LoroSchema.*` | `text`, `counter`, `movableList`, `tree` | Loro annotation containers |
+| `LoroSchema.*` | `doc` | Document root (constrained to `LoroDocFieldSchema`) |
+| `LoroSchema.plain.*` | `string`, `number`, `boolean`, `null`, `undefined`, `bytes`, `any` | Scalars (stored in `_props` at root) |
+| `LoroSchema.plain.*` | `struct`, `record`, `array`, `union`, `discriminatedUnion`, `nullable` | Plain composites (constrained to `PlainSchema` children) |
+
+### `LoroDocFieldSchema`
+
+The `LoroDocFieldSchema` type constrains what `LoroSchema.doc()` accepts as root fields:
+
+```ts
+type LoroDocFieldSchema =
+  | ProductSchema      // → LoroMap
+  | SequenceSchema     // → LoroList
+  | MapSchema          // → LoroMap
+  | AnnotatedSchema    // → LoroText, LoroCounter, etc.
+  | PlainSchema        // → stored in _props LoroMap
+```
+
+This excludes non-plain `SumSchema` (sums containing CRDT annotations), which cannot be meaningfully stored as root fields. For example, `nullable(text())` is rejected — a `LoroText` cannot be null. Plain sums are allowed via `PlainSchema` (e.g. `LoroSchema.plain.nullable(LoroSchema.plain.string())`).
+
+### Rationale
+
+Loro's data model requires named containers at the document root. The `_props` mechanism (§11) transparently stores plain values, but exposing `LoroSchema.boolean()` at the top level was misleading — it is identical to `Schema.boolean()` and has no Loro container backing. Requiring `LoroSchema.plain.boolean()` signals explicitly that the value is plain JSON stored inside the `_props` container, not a first-class Loro CRDT.
+
+---
+
+## 13. File Map
 
 ```
 src/
 ├── index.ts              Public API surface. Re-exports from all modules.
+│
+├── loro-schema.ts        LoroSchema namespace — container constructors at top level,
+│                         plain values via `plain.*` sub-namespace.
+│                         LoroDocFieldSchema type — constrains LoroSchema.doc() fields.
+│                         doc() override — narrowed from Record<string, Schema>.
 │
 ├── substrate.ts          createLoroSubstrate() — Substrate<LoroVersion> implementation.
 │                         loroSubstrateFactory — SubstrateFactory (create, fromEntirety, parseVersion).
@@ -354,6 +408,7 @@ src/
 │
 ├── change-mapping.ts     changeToDiff() — kyneta Change → Loro [ContainerID, Diff][] groups.
 │                         batchToOps() — Loro LoroEventBatch → kyneta Op[].
+│                         loroPathToKynetaPath() — strips _props prefix for root scalars.
 │                         Per-type converters in both directions.
 │                         syntheticCID / jsonCID — 🦜: prefix mechanism.
 │                         materializeValueDiffs — recursive structured insert expansion.

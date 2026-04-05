@@ -29,7 +29,7 @@ export {
 } from "@kyneta/schema"
 // Construction
 export { createLoroDoc, createLoroDocFromEntirety } from "./create.js"
-export { LoroSchema } from "./loro-schema.js"
+export { type LoroDocFieldSchema, LoroSchema } from "./loro-schema.js"
 // Sync primitives (Loro-specific)
 export {
   exportEntirety,

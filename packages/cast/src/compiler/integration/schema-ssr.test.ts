@@ -53,7 +53,7 @@ installDOMGlobals()
 const todoSchema = LoroSchema.doc({
   title: LoroSchema.text(),
   count: LoroSchema.counter(),
-  items: Schema.list(
+  items: LoroSchema.list(
     Schema.struct({
       text: LoroSchema.text(),
       done: LoroSchema.plain.boolean(),
