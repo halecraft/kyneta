@@ -380,7 +380,7 @@ function createStructuredMap(
  *
  * @param events - The events from the `observeDeep` callback
  */
-export function eventsToOps(events: Y.YEvent<any>[]): Op[] {
+export function eventsToOps(events: Y.YEvent<any>[], schema: SchemaNode): Op[] {
   const ops: Op[] = []
 
   for (const event of events) {
@@ -391,7 +391,7 @@ export function eventsToOps(events: Y.YEvent<any>[]): Op[] {
     }
   }
 
-  return expandMapOpsToLeaves(ops)
+  return expandMapOpsToLeaves(ops, schema)
 }
 
 // ---------------------------------------------------------------------------

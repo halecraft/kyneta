@@ -632,9 +632,9 @@ function materializeCIDForSchema(schema: SchemaNode): ContainerID {
  * and the Loro Diff to a kyneta Change.
  *
  * @param batch - The Loro event batch from doc.subscribe()
- * @param _schema - The root document schema (for future use in disambiguation)
+ * @param schema - The root document schema (used for leaf expansion)
  */
-export function batchToOps(batch: LoroEventBatch, _schema: SchemaNode): Op[] {
+export function batchToOps(batch: LoroEventBatch, schema: SchemaNode): Op[] {
   const ops: Op[] = []
 
   for (const event of batch.events) {
@@ -645,7 +645,7 @@ export function batchToOps(batch: LoroEventBatch, _schema: SchemaNode): Op[] {
     }
   }
 
-  return expandMapOpsToLeaves(ops)
+  return expandMapOpsToLeaves(ops, schema)
 }
 
 // ---------------------------------------------------------------------------

@@ -273,6 +273,10 @@ These are **conceptual inverses** mapping between kyneta's `Change` types and Lo
 
 `changeToDiff` dispatches `ReplaceChange` before resolving the target container, since it needs the parent, not the scalar itself.
 
+### Schema-informed expansion
+
+`batchToOps` passes the document schema to `expandMapOpsToLeaves`, which uses `advanceSchema` to walk the schema tree to each `MapChange` op's path. Products (structs stored as `LoroMap`) are expanded into per-key `ReplaceChange` ops for leaf-level changefeed delivery. Maps (records stored as `LoroMap`) are preserved as `MapChange` — the map changefeed requires structural events at its own path for dynamic subscription management (`handleStructuralChange`).
+
 ---
 
 ## 10. Version Semantics

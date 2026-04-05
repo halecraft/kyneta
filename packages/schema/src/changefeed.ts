@@ -22,6 +22,7 @@ import {
 } from "@kyneta/changefeed"
 import type { ReplaceChange } from "./change.js"
 import type { Path } from "./interpret.js"
+import { advanceSchema, type Schema as SchemaNode } from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // Re-exports from @kyneta/changefeed used by schema internals
@@ -56,27 +57,46 @@ export interface Op<C extends ChangeBase = ChangeBase> {
 // ---------------------------------------------------------------------------
 
 /**
- * Expand container-level map ops into leaf-level replace ops.
+ * Expand container-level map ops into leaf-level replace ops, informed
+ * by the document schema.
  *
  * CRDT substrates (Loro, Yjs) fire events at container boundaries —
  * a map/struct container fires a single event with per-key diffs.
- * Kyneta's changefeed model subscribes at leaf paths. This function
- * bridges the gap: a `MapChange` at path `p` with `{ set: { k: v } }`
- * becomes a `ReplaceChange` at path `[...p, k]` with `{ value: v }`.
+ * Products (structs) and maps (records) both produce `MapChange`, but
+ * their changefeed contracts differ:
  *
- * Non-map ops (text, sequence, counter, tree) pass through unchanged —
- * their event paths already match their changefeed subscription paths.
+ * - **Product** (fixed keys): expand `MapChange` → per-key `ReplaceChange`
+ *   at child paths. The product changefeed wires static child listeners.
+ * - **Map** (dynamic keys): preserve `MapChange` at the map's own path.
+ *   The map changefeed needs the structural event for dynamic subscription
+ *   management (`handleStructuralChange`).
  *
- * This is the right adjoint to the implicit leaf→container composition
- * that happens on the outbound path (e.g., `replaceChangeToDiff`).
+ * The schema determines which case applies. `advanceSchema` walks the
+ * schema tree to the op's path; the structural kind there decides.
+ *
+ * Root path (length 0) is always expanded — this covers `_props` scalar
+ * fields whose path was stripped by the Loro event bridge.
+ *
+ * Non-map ops (text, sequence, counter, tree) pass through unchanged.
  */
 export function expandMapOpsToLeaves(
   ops: readonly Op[],
+  schema: SchemaNode,
 ): Op<ReplaceChange | ChangeBase>[] {
   const result: Op<ReplaceChange | ChangeBase>[] = []
 
   for (const op of ops) {
     if (op.change.type !== "map") {
+      result.push(op)
+      continue
+    }
+
+    // Determine whether to expand based on the schema kind at the op's path.
+    // Products → expand. Maps → preserve. Root (length 0) → always expand.
+    if (
+      op.path.length > 0 &&
+      resolveSchemaKindAtPath(schema, op.path) === "map"
+    ) {
       result.push(op)
       continue
     }
@@ -107,6 +127,42 @@ export function expandMapOpsToLeaves(
   }
 
   return result
+}
+
+/**
+ * Walk the schema tree to the given path and return the structural kind.
+ *
+ * Returns `"product"` for structs (expand), `"map"` for records (preserve),
+ * or `"other"` as a fallback (expand as safe default).
+ *
+ * Pure function — no I/O, no mutation.
+ */
+function resolveSchemaKindAtPath(
+  schema: SchemaNode,
+  path: Path,
+): "product" | "map" | "other" {
+  try {
+    let current = schema
+    // Unwrap the root annotation (e.g. doc → product)
+    while (current._kind === "annotated" && current.schema !== undefined) {
+      current = current.schema
+    }
+    // Walk each segment except the last — we want the schema AT the path,
+    // not the schema of the path's child.
+    for (const segment of path.segments) {
+      current = advanceSchema(current, segment)
+    }
+    // Unwrap annotations at the target position
+    while (current._kind === "annotated" && current.schema !== undefined) {
+      current = current.schema
+    }
+    if (current._kind === "product") return "product"
+    if (current._kind === "map") return "map"
+    return "other"
+  } catch {
+    // Schema walk failed (e.g. sum mid-path, unknown field) — safe fallback
+    return "other"
+  }
 }
 
 // ---------------------------------------------------------------------------

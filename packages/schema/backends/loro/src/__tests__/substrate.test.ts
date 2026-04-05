@@ -33,6 +33,7 @@ const TestSchema = LoroSchema.doc({
     }),
   ),
   theme: LoroSchema.plain.string(),
+  peers: LoroSchema.record(LoroSchema.plain.boolean()),
 })
 
 // ===========================================================================
@@ -490,6 +491,36 @@ describe("changefeed fires on merge", () => {
     expect((docB as any).theme()).toBe("dark")
   })
 
+  it("record field changefeed fires on merge (dynamic key insertion)", () => {
+    // MapSchema (record) fields must receive MapChange at their own path
+    // so the map changefeed's handleStructuralChange wires dynamic child
+    // subscriptions. expandMapOpsToLeaves must NOT expand MapChange ops
+    // at map paths — only at product paths.
+    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const docA = interpretSubstrate(TestSchema, substrateA)
+
+    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const docB = interpretSubstrate(TestSchema, substrateB)
+
+    const sinceVV = substrateB.version()
+
+    let treeFireCount = 0
+    subscribe(docB, () => {
+      treeFireCount++
+    })
+
+    // Insert a new dynamic key on A
+    change(docA, (d: any) => {
+      d.peers.set("alice", true)
+    })
+
+    const delta = substrateA.exportSince(sinceVV)!
+    substrateB.merge(delta, "sync")
+
+    expect(treeFireCount).toBeGreaterThanOrEqual(1)
+    expect((docB as any).peers()).toEqual({ alice: true })
+  })
+
   it("mixed scalar + container mutation fires both changefeeds on merge", () => {
     // Scalars go through _props (path stripping), containers get their own
     // root container (no stripping). Both must fire in a single merge.
@@ -504,7 +535,9 @@ describe("changefeed fires on merge", () => {
     const sinceVV = substrateB.version()
 
     let treeFireCount = 0
-    subscribe(docB, () => { treeFireCount++ })
+    subscribe(docB, () => {
+      treeFireCount++
+    })
 
     // Mutate both a scalar (_props) and a container (LoroText) in one batch
     change(docA, (d: any) => {

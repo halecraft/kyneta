@@ -242,7 +242,7 @@ Schema's `changefeed.ts` contains only schema-specific extensions:
 - **`Op<C>`** — addressed delta: `{ path: Path, change: C }`. Requires `Path` from `interpret.ts`.
 - **`ComposedChangefeedProtocol<S, C>`** — extends `ChangefeedProtocol` with `subscribeTree(cb: (changeset: Changeset<Op<C>>) => void)` for tree-level observation.
 - **`HasComposedChangefeed<S, C>`** and **`hasComposedChangefeed()`** — marker and type guard for composed changefeed.
-- **`expandMapOpsToLeaves(ops)`** — expands container-level map ops into leaf-level replace ops.
+- **`expandMapOpsToLeaves(ops, schema)`** — expands container-level map ops into leaf-level replace ops, informed by the document schema. `MapChange` ops at `ProductSchema` paths (structs) are expanded into per-key `ReplaceChange` ops. `MapChange` ops at `MapSchema` paths (records) pass through unchanged — the map changefeed requires structural events at its own path for dynamic subscription management. Root-path ops (length 0) are always expanded (covers `_props` scalar fields).
 
 **`Op<C>` — relative path for tree observation.** Composite refs (products, sequences, maps) implement `ComposedChangefeedProtocol`. Each `Op` carries `{ path: Path, change: C }` — the path is relative from the subscription point to where the change occurred. `subscribeTree` is a strict superset of `subscribe` (tree subscribers also see own-path changes with `path: []`).
 

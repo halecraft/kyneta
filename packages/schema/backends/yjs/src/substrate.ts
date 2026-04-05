@@ -180,7 +180,7 @@ export function createYjsSubstrate(
     }
 
     // Convert Yjs events → kyneta Ops
-    const ops = eventsToOps(events)
+    const ops = eventsToOps(events, schema)
     if (ops.length === 0) {
       return
     }
