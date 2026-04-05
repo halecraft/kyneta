@@ -1,7 +1,7 @@
 // tui — terminal UI rendering and input.
 //
 // Pure render function + imperative input handler. No framework dependency.
-// Raw ANSI escape codes for a 6-row config editor with header and footer.
+// Composable box-drawing primitives with dynamic width calculation.
 
 import type { Field, StringField } from "./fields.js"
 
@@ -18,58 +18,50 @@ const GREEN = "\x1b[32m"
 const YELLOW = "\x1b[33m"
 const WHITE = "\x1b[37m"
 
-// ---------------------------------------------------------------------------
-// Render
-// ---------------------------------------------------------------------------
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;]*m/g
 
-export interface PeerInfo {
-  peerIds: string[]
-  role: "listener" | "connector" | "negotiating" | "disposed"
+/** Visible character width of a string, ignoring ANSI escape sequences. */
+function visibleWidth(s: string): number {
+  return s.replace(ANSI_RE, "").length
 }
 
-export function render(
-  fields: Field[],
-  values: Record<string, unknown>,
-  selectedIndex: number,
-  peerInfo: PeerInfo,
-): string {
-  const lines: string[] = []
-
-  // Header
-  const roleTag = peerInfo.role === "listener" ? `${DIM}(listening)${RESET}`
-    : peerInfo.role === "connector" ? `${DIM}(connected)${RESET}`
-    : `${DIM}(negotiating...)${RESET}`
-  lines.push(`${BOLD}${CYAN}  ╭─── unix-socket-sync ───╮${RESET}  ${roleTag}`)
-  lines.push(`${CYAN}  │${RESET}                         ${CYAN}│${RESET}`)
-
-  // Fields
-  for (let i = 0; i < fields.length; i++) {
-    const field = fields[i]
-    const value = values[field.key]
-    const selected = i === selectedIndex
-    const prefix = selected ? `${INVERSE}` : ""
-    const suffix = selected ? `${RESET}` : ""
-
-    const label = field.label.padEnd(14)
-    const display = formatValue(field, value)
-
-    lines.push(`${CYAN}  │${RESET} ${prefix}  ${label} ${display.padEnd(8)}${suffix}  ${CYAN}│${RESET}`)
-  }
-
-  // Footer
-  lines.push(`${CYAN}  │${RESET}                         ${CYAN}│${RESET}`)
-  const peerCount = peerInfo.peerIds.length
-  const peerLabel = peerCount === 1 ? "1 peer" : `${peerCount} peers`
-  const peerNames = peerInfo.peerIds.length > 0
-    ? peerInfo.peerIds.join(", ")
-    : "none"
-  lines.push(`${CYAN}  ╰─────────────────────────╯${RESET}`)
-  lines.push(`${DIM}  ${peerLabel}: ${peerNames}${RESET}`)
-  lines.push("")
-  lines.push(`${DIM}  ↑↓/jk navigate  ←→/hl change  q quit${RESET}`)
-
-  return "\x1b[2J\x1b[H" + lines.join("\n")
+/** Pad `s` on the right with spaces to reach `width` visible characters. */
+function padVisible(s: string, width: number): string {
+  const deficit = width - visibleWidth(s)
+  return deficit > 0 ? s + " ".repeat(deficit) : s
 }
+
+// ---------------------------------------------------------------------------
+// Box primitives
+// ---------------------------------------------------------------------------
+
+function boxTop(title: string, innerWidth: number): string {
+  // ╭─── title ───╮
+  // We want at least 3 ─ on each side of the title.
+  const titleText = ` ${title} `
+  const remaining = innerWidth - titleText.length
+  const left = Math.max(3, Math.floor(remaining / 2))
+  const right = Math.max(3, remaining - left)
+  return `${CYAN}╭${"─".repeat(left)}${titleText}${"─".repeat(right)}╮${RESET}`
+}
+
+function boxBottom(innerWidth: number): string {
+  return `${CYAN}╰${"─".repeat(innerWidth)}╯${RESET}`
+}
+
+/** Wrap visible content inside box walls, padded to `innerWidth`. */
+function boxLine(content: string, innerWidth: number): string {
+  return `${CYAN}│${RESET}${padVisible(content, innerWidth)}${CYAN}│${RESET}`
+}
+
+function boxEmpty(innerWidth: number): string {
+  return boxLine(" ".repeat(innerWidth), innerWidth)
+}
+
+// ---------------------------------------------------------------------------
+// Field formatting
+// ---------------------------------------------------------------------------
 
 function formatValue(field: Field, value: unknown): string {
   switch (field.type) {
@@ -80,6 +72,83 @@ function formatValue(field: Field, value: unknown): string {
     case "number":
       return `${WHITE}${String(value ?? 0)}${RESET}`
   }
+}
+
+/** Format a single field row's content (no box chrome). */
+function formatField(
+  field: Field,
+  value: unknown,
+  selected: boolean,
+  labelWidth: number,
+): string {
+  const label = padVisible(field.label, labelWidth)
+  const display = formatValue(field, value)
+  const content = `  ${label}  ${display}`
+  if (selected) return `${INVERSE}${content}${RESET}`
+  return content
+}
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+
+export interface PeerInfo {
+  peerIds: string[]
+  role: "listener" | "connector" | "negotiating" | "disposed"
+}
+
+const TITLE = "unix-socket-sync"
+const PAD = 2 // horizontal padding inside box walls
+const MIN_INNER = 20
+
+export function render(
+  fields: Field[],
+  values: Record<string, unknown>,
+  selectedIndex: number,
+  peerInfo: PeerInfo,
+): string {
+  const labelWidth = Math.max(...fields.map((f) => f.label.length))
+
+  // Pre-format all field rows to measure their widths.
+  const fieldRows = fields.map((field, i) =>
+    formatField(field, values[field.key], i === selectedIndex, labelWidth),
+  )
+
+  // Inner width = max visible content width + padding on each side.
+  const maxContentWidth = Math.max(...fieldRows.map(visibleWidth))
+  const innerWidth = Math.max(
+    MIN_INNER,
+    maxContentWidth + PAD * 2,
+    TITLE.length + 8, // room for ─── on each side of the title
+  )
+
+  // Role tag (displayed outside the box, after the top border).
+  const roleTag = peerInfo.role === "listener" ? `${DIM}(listening)${RESET}`
+    : peerInfo.role === "connector" ? `${DIM}(connected)${RESET}`
+    : `${DIM}(negotiating...)${RESET}`
+
+  // Peer info (displayed below the box).
+  const peerCount = peerInfo.peerIds.length
+  const peerLabel = peerCount === 1 ? "1 peer" : `${peerCount} peers`
+  const peerNames = peerInfo.peerIds.length > 0
+    ? peerInfo.peerIds.join(", ")
+    : "none"
+
+  // Compose.
+  const lines = [
+    `${BOLD}${boxTop(TITLE, innerWidth)}  ${roleTag}`,
+    boxEmpty(innerWidth),
+    ...fieldRows.map((row) =>
+      boxLine(padVisible(` ${row} `, innerWidth), innerWidth),
+    ),
+    boxEmpty(innerWidth),
+    boxBottom(innerWidth),
+    `${DIM}${peerLabel}: ${peerNames}${RESET}`,
+    "",
+    `${DIM}↑↓/jk navigate  ←→/hl change  q quit${RESET}`,
+  ]
+
+  return "\x1b[2J\x1b[H" + lines.join("\n")
 }
 
 // ---------------------------------------------------------------------------
